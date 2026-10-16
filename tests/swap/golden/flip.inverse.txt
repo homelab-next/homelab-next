@@ -1,0 +1,5 @@
+flip lake-query (alias lake-query.svc.example.internal)
+  services.lake-query.host: lake-core-2 -> lake-core
+  services.lake-query.impl: duckdb -> trino
+  services.lake-query.version: 1.5 -> 450.0
+  target: lake-core-2:8443 -> lake-core:8443
