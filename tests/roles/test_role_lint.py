@@ -56,6 +56,15 @@ def test_shipped_roles_pass(role):
     assert role_lint.lint_role(ROOT / "ansible" / "roles" / role) == []
 
 
+def test_a_directory_of_roles_is_expanded_not_read_as_one_role(capsys):
+    assert role_lint.main([str(ROOT / "ansible" / "roles")]) == 0
+    assert "0 finding(s)" in capsys.readouterr().out
+    assert [p.name for p in role_lint.expand_roles(ROOT / "ansible" / "roles")] == [
+        "compose_app",
+        "example_service",
+    ]
+
+
 def test_loopback_and_unspecified_are_allowed(tmp_path):
     import shutil
 
