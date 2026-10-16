@@ -16,6 +16,10 @@ from homelabnext.notify import (
 from homelabnext.registry import ResolutionError
 from homelabnext.state import StateStore
 
+OVERRIDE = (
+    "https://n.svc.example.internal:8443"  # no-raw-endpoint: allow override syntax needs a port
+)
+
 
 class Clock:
     def __init__(self, t=1000.0):
@@ -262,12 +266,10 @@ def test_ntfy_without_endpoint_resolves_through_registry_and_never_defaults(monk
 
 
 def test_ntfy_endpoint_via_env_override(monkeypatch):
-    monkeypatch.setenv(
-        "HNX_ENDPOINT_NOTIFY", "https://n.svc.example.internal:8443"
-    )  # no-raw-endpoint: allow override syntax needs a port
+    monkeypatch.setenv("HNX_ENDPOINT_NOTIFY", OVERRIDE)
     op = Opener()
     NtfySender(default_topic="ops", opener=op).send(Message("k", "t", "b"))
-    assert op.calls[0][0].full_url == "https://n.svc.example.internal:8443/ops"
+    assert op.calls[0][0].full_url == OVERRIDE + "/ops"
 
 
 def test_end_to_end_notifier_with_ntfy_sender(tmp_path):
@@ -288,12 +290,8 @@ def test_ntfy_endpoint_via_resolver_and_fake_dns():
     reg = Resolver(
         domain="example.internal",
         dns=FakeDNS({}),
-        environ={
-            "HNX_ENDPOINT_NOTIFY": "https://notify.svc.example.internal:8443"
-        },  # no-raw-endpoint: allow override syntax needs a port
+        environ={"HNX_ENDPOINT_NOTIFY": OVERRIDE},
     )
     op = Opener()
     NtfySender(default_topic="ops", resolver=reg, opener=op).send(Message("k", "t", "b"))
-    assert (
-        op.calls[0][0].full_url == "https://notify.svc.example.internal:8443/ops"
-    )  # no-raw-endpoint: allow expected value
+    assert op.calls[0][0].full_url == OVERRIDE + "/ops"
