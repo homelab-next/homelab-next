@@ -363,6 +363,18 @@ def lint_playbook(playbook: Path, inventory: Path | None = None) -> list[Finding
     return findings
 
 
+def expand_roles(path: Path) -> list[Path]:
+    """A role directory is itself; a directory of roles (``ansible/roles``) is its sub-roles.
+
+    Without this, ``role_lint.py ansible/roles`` read the roles directory as one role and reported
+    its ``meta`` and ``tasks`` children as findings.
+    """
+    if (path / "tasks").is_dir() or (path / "meta").is_dir() or (path / "defaults").is_dir():
+        return [path]
+    children = sorted(p for p in path.iterdir() if p.is_dir() and not p.name.startswith("."))
+    return children or [path]
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -388,7 +400,7 @@ def main(argv: list[str] | None = None) -> int:
             if not Path(r).is_dir():
                 print(f"not a directory: {r}", file=sys.stderr)
                 return 2
-            findings += lint_role(Path(r))
+            findings += [f for role in expand_roles(Path(r)) for f in lint_role(role)]
         for p in args.playbook:
             findings += lint_playbook(Path(p), Path(args.inventory) if args.inventory else None)
     except OSError as exc:
