@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Registry the example site (site.yml in this directory) resolves against.
+# Same shape as schemas/platform/service.json; synthetic documentation addresses only.
+registry_version: 1
+
+lab:
+  name: northwind
+  domain: example.internal
+  svc_label: svc
+  owner: platform-team
+
+zones:
+  mgmt:    {cidr: 192.0.2.0/26,     description: management and shared infrastructure}
+  data:    {cidr: 192.0.2.64/26,    description: storage and bus}
+  compute: {cidr: 192.0.2.128/26,   description: inference}
+  edge:    {cidr: 198.51.100.0/26,  description: reverse proxy and public entry}
+  sandbox: {cidr: 198.51.100.64/26, description: "malware analysis (one-way)"}
+
+hosts:
+  edge-router: {address: 192.0.2.1,       zone: mgmt,    role: router}
+  dns-core:    {address: 192.0.2.5,       zone: mgmt,    role: resolver}
+  idp-core:    {address: 192.0.2.6,       zone: mgmt,    role: identity}
+  lake-core:   {address: 192.0.2.70,      zone: data,    role: lake}
+  bus-core:    {address: 192.0.2.71,      zone: data,    role: events}
+  infer-core:  {address: 192.0.2.140,     zone: compute, role: inference}
+  edge-core:   {address: 198.51.100.10,   zone: edge,    role: edge}
+
+services:
+  router-console:
+    capability: router-console
+    impl: unifi
+    host: edge-router
+    protocol: https
+    port: 443
+    health: {kind: none}
+    owner: platform-team
+    version: "1.0"
+    tls: internal
+  dns:
+    capability: dns
+    impl: technitium
+    host: dns-core
+    protocol: dns
+    port: 53
+    health: {kind: none}
+    owner: platform-team
+    version: "13.0"
+    tls: none
+  idp:
+    capability: idp
+    impl: authentik
+    host: idp-core
+    protocol: https
+    port: 9443
+    health: {kind: http, path: /-/health/live/, expect_status: 204}
+    owner: identity-team
+    version: "2024.8"
+    tls: internal
+    auth: own
+    public_hostname: login.lab.example
+  object-store:
+    capability: object-store
+    impl: minio
+    host: lake-core
+    protocol: https
+    port: 9000
+    health: {kind: tcp}
+    owner: data-team
+    version: "2024.9"
+    tls: internal
+  events:
+    capability: events
+    impl: nats
+    host: bus-core
+    protocol: nats
+    port: 4222
+    health: {kind: tcp}
+    owner: data-team
+    version: "2.10.20"
+    tls: mtls
+  inference:
+    capability: inference
+    impl: vllm
+    host: infer-core
+    protocol: http
+    port: 8000
+    health: {kind: tcp}
+    owner: ml-team
+    version: "0.6.1"
+    tls: none
+  edge-proxy:
+    capability: edge-proxy
+    impl: caddy
+    host: edge-core
+    protocol: https
+    port: 443
+    health: {kind: tcp}
+    owner: platform-team
+    version: "2.8.4"
+    tls: public
+    public_hostname: portal.lab.example

@@ -22,3 +22,4 @@ secrets/
 *.pem
 *.key
 *.egg-info/
+/homelabnext/_data/

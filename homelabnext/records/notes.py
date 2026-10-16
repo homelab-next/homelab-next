@@ -4,18 +4,19 @@
 Validation is the JSON Schema ``schemas/records/note.schema.json`` plus the filename rule
 ``<YYYY-MM-DD>-<agent>-<slug>.md`` (date equals ``created``, agent equals the ``requesting_agent``
 slug), which JSON Schema cannot express.  The schema directory is found next to the package in a
-source checkout, or through ``HNX_SCHEMA_DIR``.
+package data, or the source checkout (``homelabnext.paths``; override ``HNX_SCHEMAS_DIR``).
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
+from homelabnext import paths
 
 AGENT_LANE = "inbox"
 DECIDED_LANES = ("decided/approved", "decided/denied", "decided/completed")
@@ -109,8 +110,7 @@ def check_filename(name: str, frontmatter: dict[str, Any]) -> list[str]:
 
 # ---------------------------------------------------------------- schema
 def schema_dir() -> Path:
-    env = os.environ.get("HNX_SCHEMA_DIR")
-    return Path(env) if env else Path(__file__).resolve().parents[2] / "schemas"
+    return paths.schemas_dir()
 
 
 @lru_cache(maxsize=4)
@@ -127,7 +127,8 @@ def _validator(sdir: str):
     note_path = root / "records" / "note.schema.json"
     if not note_path.is_file():
         raise FileNotFoundError(
-            f"{note_path} not found; run from a source checkout or set HNX_SCHEMA_DIR"
+            f"{note_path} not found; set HNX_SCHEMAS_DIR to a schemas directory "
+            "(installed wheels and source checkouts need no setting)"
         )
     reg = Registry()
     for p in sorted(root.glob("*/*.json")):

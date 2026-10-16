@@ -47,9 +47,16 @@ hnx --help          # registry, new, gen, detections, registers, invariants, ids
 hnx registry validate examples/services.yml
 ```
 
-Install from a source checkout (`pip install -e .`): the schemas under `schemas/` and the shipped
-`profiles/` are read from the checkout (override the schema directory with `HNX_SCHEMAS_DIR`), and a
-wheel carries the code, templates and example specs but not those directories.
+`pip install homelabnext` (a wheel or sdist) is self-contained: it carries the schemas, the shipped
+profiles and a minimal example lab (`examples/minimal/`) inside the package, so `hnx site validate`,
+`hnx guests validate`, `hnx registry validate` and `hnx custom list` work without a checkout. An
+editable install (`pip install -e .`) reads the same directories from the checkout instead. Every
+lookup goes through `homelabnext/paths.py`: an explicit override (`HNX_SCHEMAS_DIR`,
+`HNX_PROFILES_DIR`, `HNX_EXAMPLES_DIR`, or `HNX_DATA_DIR` for all three), then the packaged copy,
+then the source tree; a miss prints every place that was tried. The top-level `schemas/`,
+`profiles/` and `examples/` stay the single source of truth (the build copies them into the wheel,
+and a test fails if the copy ever differs). The developer gates under `tools/` (`hnx schema-check`,
+`hnx new` linting) still need a checkout.
 
 `make check` is the one command CI also runs. It needs `ruff` importable as a module; pass
 `RUFF=/path/to/ruff` if yours lives elsewhere. A fuller walkthrough (conformance against fakes, then

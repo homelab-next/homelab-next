@@ -28,6 +28,8 @@ from typing import Any
 
 import yaml
 
+from homelabnext import paths
+
 from .model import Customization, Finding
 
 __all__ = [
@@ -43,7 +45,12 @@ __all__ = [
 
 ENV_DIR = "HNX_CUSTOMIZATIONS_DIR"
 ENV_CONFIG = "HNX_CUSTOMIZATIONS_CONFIG"
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# A directory laid out as <root>/schemas, <root>/profiles, <root>/examples: the checkout for a
+# source tree, homelabnext/_data for an installed wheel (homelabnext.paths decides).
+try:
+    REPO_ROOT = paths.data_root()
+except paths.ResourceNotFound:  # reported with the full list of places when the data is needed
+    REPO_ROOT = paths.source_root()
 _SUFFIXES = (".yml", ".yaml", ".json")
 
 
@@ -85,7 +92,7 @@ def read_document(path: Path) -> Any:
 
 
 def schema_path() -> Path:
-    return REPO_ROOT / "schemas" / "platform" / "customization.schema.json"
+    return paths.schema_file("platform", "customization.schema.json")
 
 
 _VALIDATOR = None
@@ -101,7 +108,7 @@ def _validator():
         from referencing.jsonschema import DRAFT202012
 
         reg: Registry = Registry()
-        for p in sorted((REPO_ROOT / "schemas").rglob("*.json")):
+        for p in sorted(paths.schemas_dir().rglob("*.json")):
             if "_frozen" in p.parts:
                 continue
             doc = json.loads(p.read_text(encoding="utf-8"))
@@ -183,7 +190,7 @@ def resolve_settings(
     public_dir: Path | None = None,
 ) -> Settings:
     env = dict(os.environ) if env is None else env
-    s = Settings(public_dir=public_dir or REPO_ROOT / "profiles")
+    s = Settings(public_dir=public_dir or paths.profiles_dir())
     cfg_file = config or env.get(ENV_CONFIG)
     if cfg_file:
         cfg = yaml.load(Path(cfg_file).read_text(encoding="utf-8"), Loader=_StrLoader) or {}
