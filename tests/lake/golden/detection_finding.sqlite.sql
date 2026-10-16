@@ -1,0 +1,19 @@
+CREATE TABLE IF NOT EXISTS "detection_finding" (
+    "uid" TEXT NOT NULL,
+    "time" TEXT NOT NULL,
+    "class_uid" INTEGER NOT NULL,
+    "category_uid" INTEGER NOT NULL,
+    "activity_id" INTEGER NOT NULL,
+    "type_uid" INTEGER,
+    "severity_id" INTEGER NOT NULL,
+    "status_id" INTEGER,
+    "message" TEXT,
+    "metadata" TEXT,
+    "finding_uid" TEXT NOT NULL,
+    "finding_title" TEXT,
+    "detection_id" TEXT NOT NULL,
+    "risk_score" INTEGER,
+    "confidence_id" INTEGER,
+    "attack_techniques" TEXT,
+    "host_name" TEXT
+);

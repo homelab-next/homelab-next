@@ -1,0 +1,17 @@
+1: uid: string not null
+2: time: timestamp not null
+3: class_uid: long not null
+4: category_uid: long not null
+5: activity_id: long not null
+6: type_uid: long
+7: severity_id: long not null
+8: status_id: long
+9: message: string
+10: metadata: struct<version: string not null, product: string, log_source: string>
+14: src_endpoint: struct<ip: string, port: long, hostname: string> not null
+18: dst_endpoint: struct<ip: string, port: long, hostname: string> not null
+22: protocol_name: string
+23: connection_uid: string
+24: direction_id: long
+25: bytes_in: long
+26: bytes_out: long

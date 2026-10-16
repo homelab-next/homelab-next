@@ -1,0 +1,511 @@
+{
+ "version": 1,
+ "recordings": [
+  {
+   "name": "q01-count-auth",
+   "sql": "SELECT count(*) AS n FROM authentication",
+   "params": {},
+   "rows": [
+    {
+     "n": 60
+    }
+   ]
+  },
+  {
+   "name": "q02-users",
+   "sql": "SELECT user_name, count(*) AS n FROM authentication GROUP BY user_name ORDER BY user_name",
+   "params": {},
+   "rows": [
+    {
+     "user_name": "alice",
+     "n": 12
+    },
+    {
+     "user_name": "bob",
+     "n": 12
+    },
+    {
+     "user_name": "carol",
+     "n": 12
+    },
+    {
+     "user_name": "dave",
+     "n": 12
+    },
+    {
+     "user_name": "erin",
+     "n": 12
+    }
+   ]
+  },
+  {
+   "name": "q03-failures",
+   "sql": "SELECT count(*) AS n FROM authentication WHERE status_id = 2",
+   "params": {},
+   "rows": [
+    {
+     "n": 15
+    }
+   ]
+  },
+  {
+   "name": "q04-param-user",
+   "sql": "SELECT uid FROM authentication WHERE user_name = :u ORDER BY uid LIMIT 5",
+   "params": {
+    "u": "alice"
+   },
+   "rows": [
+    {
+     "uid": "auth-000000"
+    },
+    {
+     "uid": "auth-000005"
+    },
+    {
+     "uid": "auth-000010"
+    },
+    {
+     "uid": "auth-000015"
+    },
+    {
+     "uid": "auth-000020"
+    }
+   ]
+  },
+  {
+   "name": "q05-window",
+   "sql": "SELECT uid FROM authentication WHERE time >= '2026-03-01 02:00:00' AND time < '2026-03-01 03:00:00' ORDER BY uid",
+   "params": {},
+   "rows": [
+    {
+     "uid": "auth-000018"
+    },
+    {
+     "uid": "auth-000019"
+    },
+    {
+     "uid": "auth-000020"
+    },
+    {
+     "uid": "auth-000021"
+    },
+    {
+     "uid": "auth-000022"
+    },
+    {
+     "uid": "auth-000023"
+    },
+    {
+     "uid": "auth-000024"
+    },
+    {
+     "uid": "auth-000025"
+    }
+   ]
+  },
+  {
+   "name": "q06-param-time",
+   "sql": "SELECT count(*) AS n FROM authentication WHERE time >= :t0",
+   "params": {
+    "t0": "2026-03-01 04:00:00"
+   },
+   "rows": [
+    {
+     "n": 25
+    }
+   ]
+  },
+  {
+   "name": "q07-min-max-time",
+   "sql": "SELECT min(time) AS first_seen, max(time) AS last_seen FROM authentication",
+   "params": {},
+   "rows": [
+    {
+     "first_seen": "2026-03-01T00:00:00Z",
+     "last_seen": "2026-03-01T06:53:00Z"
+    }
+   ]
+  },
+  {
+   "name": "q08-by-activity",
+   "sql": "SELECT activity_id, count(*) AS n FROM authentication GROUP BY activity_id ORDER BY activity_id",
+   "params": {},
+   "rows": [
+    {
+     "activity_id": 1,
+     "n": 40
+    },
+    {
+     "activity_id": 2,
+     "n": 20
+    }
+   ]
+  },
+  {
+   "name": "q09-mfa-bool",
+   "sql": "SELECT is_mfa, count(*) AS n FROM authentication GROUP BY is_mfa ORDER BY is_mfa",
+   "params": {},
+   "rows": [
+    {
+     "is_mfa": false,
+     "n": 30
+    },
+    {
+     "is_mfa": true,
+     "n": 30
+    }
+   ]
+  },
+  {
+   "name": "q10-having",
+   "sql": "SELECT user_name, count(*) AS n FROM authentication WHERE status_id = 2 GROUP BY user_name HAVING count(*) >= 3 ORDER BY n DESC, user_name",
+   "params": {},
+   "rows": [
+    {
+     "user_name": "alice",
+     "n": 3
+    },
+    {
+     "user_name": "bob",
+     "n": 3
+    },
+    {
+     "user_name": "carol",
+     "n": 3
+    },
+    {
+     "user_name": "dave",
+     "n": 3
+    },
+    {
+     "user_name": "erin",
+     "n": 3
+    }
+   ]
+  },
+  {
+   "name": "q11-protocols",
+   "sql": "SELECT DISTINCT auth_protocol FROM authentication ORDER BY auth_protocol",
+   "params": {},
+   "rows": [
+    {
+     "auth_protocol": "kerberos"
+    },
+    {
+     "auth_protocol": "rdp"
+    },
+    {
+     "auth_protocol": "ssh"
+    }
+   ]
+  },
+  {
+   "name": "q12-like",
+   "sql": "SELECT count(*) AS n FROM authentication WHERE message LIKE 'login f%'",
+   "params": {},
+   "rows": [
+    {
+     "n": 15
+    }
+   ]
+  },
+  {
+   "name": "q13-in",
+   "sql": "SELECT count(*) AS n FROM authentication WHERE user_name IN ('alice', 'bob')",
+   "params": {},
+   "rows": [
+    {
+     "n": 24
+    }
+   ]
+  },
+  {
+   "name": "q14-net-sums",
+   "sql": "SELECT protocol_name, sum(bytes_in) AS bi, sum(bytes_out) AS bo FROM network_activity GROUP BY protocol_name ORDER BY protocol_name",
+   "params": {},
+   "rows": [
+    {
+     "protocol_name": "tcp",
+     "bi": 13243,
+     "bo": 6737
+    },
+    {
+     "protocol_name": "udp",
+     "bi": 6229,
+     "bo": 3586
+    }
+   ]
+  },
+  {
+   "name": "q15-net-top",
+   "sql": "SELECT uid, bytes_in FROM network_activity ORDER BY bytes_in DESC, uid LIMIT 5",
+   "params": {},
+   "rows": [
+    {
+     "uid": "net-000038",
+     "bytes_in": 969
+    },
+    {
+     "uid": "net-000028",
+     "bytes_in": 946
+    },
+    {
+     "uid": "net-000018",
+     "bytes_in": 923
+    },
+    {
+     "uid": "net-000008",
+     "bytes_in": 900
+    },
+    {
+     "uid": "net-000037",
+     "bytes_in": 869
+    }
+   ]
+  },
+  {
+   "name": "q16-net-null-conn",
+   "sql": "SELECT count(*) AS n FROM network_activity WHERE connection_uid IS NULL",
+   "params": {},
+   "rows": [
+    {
+     "n": 8
+    }
+   ]
+  },
+  {
+   "name": "q17-net-avg",
+   "sql": "SELECT round(avg(bytes_in), 2) AS avg_in FROM network_activity",
+   "params": {},
+   "rows": [
+    {
+     "avg_in": 486.8
+    }
+   ]
+  },
+  {
+   "name": "q18-dns-top",
+   "sql": "SELECT query_hostname, count(*) AS n FROM dns_activity GROUP BY query_hostname ORDER BY n DESC, query_hostname LIMIT 3",
+   "params": {},
+   "rows": [
+    {
+     "query_hostname": "mail.example.org",
+     "n": 8
+    },
+    {
+     "query_hostname": "www.example.com",
+     "n": 8
+    },
+    {
+     "query_hostname": "api.example.net",
+     "n": 7
+    }
+   ]
+  },
+  {
+   "name": "q19-dns-nx",
+   "sql": "SELECT count(*) AS n FROM dns_activity WHERE rcode_id <> 0",
+   "params": {},
+   "rows": [
+    {
+     "n": 5
+    }
+   ]
+  },
+  {
+   "name": "q20-dns-types",
+   "sql": "SELECT query_type, count(*) AS n FROM dns_activity GROUP BY query_type ORDER BY query_type",
+   "params": {},
+   "rows": [
+    {
+     "query_type": "A",
+     "n": 10
+    },
+    {
+     "query_type": "AAAA",
+     "n": 10
+    },
+    {
+     "query_type": "TXT",
+     "n": 10
+    }
+   ]
+  },
+  {
+   "name": "q21-det-by-id",
+   "sql": "SELECT detection_id, count(*) AS n FROM detection_finding GROUP BY detection_id ORDER BY detection_id",
+   "params": {},
+   "rows": [
+    {
+     "detection_id": "det:auth-failure-burst",
+     "n": 4
+    },
+    {
+     "detection_id": "det:large-egress",
+     "n": 4
+    },
+    {
+     "detection_id": "det:rare-dns-type",
+     "n": 4
+    }
+   ]
+  },
+  {
+   "name": "q22-det-max-risk",
+   "sql": "SELECT max(risk_score) AS top FROM detection_finding",
+   "params": {},
+   "rows": [
+    {
+     "top": 87
+    }
+   ]
+  },
+  {
+   "name": "q23-det-host-avg",
+   "sql": "SELECT host_name, round(avg(risk_score), 1) AS avg_risk FROM detection_finding GROUP BY host_name ORDER BY host_name",
+   "params": {},
+   "rows": [
+    {
+     "host_name": "srv-01.example.internal",
+     "avg_risk": 38.0
+    },
+    {
+     "host_name": "srv-02.example.internal",
+     "avg_risk": 45.0
+    },
+    {
+     "host_name": "srv-03.example.internal",
+     "avg_risk": 52.0
+    },
+    {
+     "host_name": "srv-04.example.internal",
+     "avg_risk": 59.0
+    }
+   ]
+  },
+  {
+   "name": "q24-det-list-col",
+   "sql": "SELECT uid, attack_techniques FROM detection_finding ORDER BY uid LIMIT 4",
+   "params": {},
+   "rows": [
+    {
+     "uid": "det-000000",
+     "attack_techniques": [
+      "T1110"
+     ]
+    },
+    {
+     "uid": "det-000001",
+     "attack_techniques": [
+      "T1071",
+      "T1071.004"
+     ]
+    },
+    {
+     "uid": "det-000002",
+     "attack_techniques": [
+      "T1041"
+     ]
+    },
+    {
+     "uid": "det-000003",
+     "attack_techniques": [
+      "T1110"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "q25-vuln-high",
+   "sql": "SELECT count(*) AS n FROM vulnerability_finding WHERE cvss_score >= 7.0",
+   "params": {},
+   "rows": [
+    {
+     "n": 4
+    }
+   ]
+  },
+  {
+   "name": "q26-vuln-fixable",
+   "sql": "SELECT fix_available, count(*) AS n FROM vulnerability_finding GROUP BY fix_available ORDER BY fix_available",
+   "params": {},
+   "rows": [
+    {
+     "fix_available": false,
+     "n": 4
+    },
+    {
+     "fix_available": true,
+     "n": 8
+    }
+   ]
+  },
+  {
+   "name": "q27-vuln-distinct-cve",
+   "sql": "SELECT count(DISTINCT cve_uid) AS n FROM vulnerability_finding",
+   "params": {},
+   "rows": [
+    {
+     "n": 8
+    }
+   ]
+  },
+  {
+   "name": "q28-vuln-pkg-avg",
+   "sql": "SELECT package_name, round(avg(cvss_score), 2) AS avg_cvss FROM vulnerability_finding GROUP BY package_name ORDER BY package_name",
+   "params": {},
+   "rows": [
+    {
+     "package_name": "demo-server",
+     "avg_cvss": 5.85
+    },
+    {
+     "package_name": "examplelib",
+     "avg_cvss": 5.15
+    },
+    {
+     "package_name": "sample-agent",
+     "avg_cvss": 6.55
+    }
+   ]
+  },
+  {
+   "name": "q29-join-host",
+   "sql": "SELECT d.host_name, count(*) AS pairs FROM detection_finding d JOIN vulnerability_finding v ON d.host_name = v.host_name GROUP BY d.host_name ORDER BY d.host_name",
+   "params": {},
+   "rows": [
+    {
+     "host_name": "srv-01.example.internal",
+     "pairs": 9
+    },
+    {
+     "host_name": "srv-02.example.internal",
+     "pairs": 9
+    },
+    {
+     "host_name": "srv-03.example.internal",
+     "pairs": 9
+    },
+    {
+     "host_name": "srv-04.example.internal",
+     "pairs": 9
+    }
+   ]
+  },
+  {
+   "name": "q30-case-cte",
+   "sql": "WITH b AS (SELECT CASE WHEN severity_id >= 3 THEN 'high' ELSE 'low' END AS band, coalesce(message, 'none') AS msg FROM authentication) SELECT band, count(*) AS n FROM b GROUP BY band ORDER BY band",
+   "params": {},
+   "rows": [
+    {
+     "band": "high",
+     "n": 15
+    },
+    {
+     "band": "low",
+     "n": 45
+    }
+   ]
+  }
+ ]
+}
