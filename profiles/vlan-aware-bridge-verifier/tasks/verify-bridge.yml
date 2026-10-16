@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# Read-only: inspects and asserts, never changes the bridge.
+- name: Read bridge VLAN filtering state
+  ansible.builtin.command: "cat /sys/class/net/{{ vlan_aware_bridge_verifier_bridge }}/bridge/vlan_filtering"
+  register: vlan_aware_bridge_verifier_state
+  changed_when: false
+
+- name: Assert VLAN filtering is on
+  ansible.builtin.assert:
+    that: vlan_aware_bridge_verifier_state.stdout | trim == "1"
+    fail_msg: "bridge {{ vlan_aware_bridge_verifier_bridge }} is not VLAN-aware"

@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+id: custom:vlan-aware-bridge-verifier
+title: Verify the hypervisor bridge is VLAN-aware after network changes
+kind: profile
+optional: true
+scope:
+  capabilities: ["cap:edge"]
+contract: adr:hypervisor-is-not-modular
+reason: >-
+  A bridge rebuilt as a plain bridge half-works: tagged and untagged traffic mix and the
+  management network can drop only after the next guest restart. The hypervisor layer is not a
+  swappable capability, so the check lives here as a read-only verifier rather than in a role.
+owner: platform-team
+created: "2026-10-15"
+review_by: "2027-04-30"
+links:
+  lesson: LL-901
+upstream: none
+action:
+  profile: vlan-aware-bridge-verifier
+  tasks:
+    - name: Fail unless the named bridge has VLAN filtering enabled
+      file: tasks/verify-bridge.yml
+  vars:
+    vlan_aware_bridge_verifier_bridge: vmbr0

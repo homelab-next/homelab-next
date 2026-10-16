@@ -1,0 +1,4 @@
+{# SPDX-License-Identifier: Apache-2.0 #}
+{# Appended to config.yml.j2 by the template-overlay mechanism; the core template is untouched. #}
+tunnel_workaround:
+  max_segment_size: {{ example_service_tunnel_mss | default(1360) }}

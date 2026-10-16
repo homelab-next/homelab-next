@@ -126,6 +126,10 @@ COMMANDS: dict[str, tuple[str, Main]] = {
     "site": ("validate, plan and render the site/network model (site validate|plan|render)", _site),
     "guests": ("validate/render/plan the guest (compute) model", _guests),
     "schema-check": ("check schemas, examples, negatives and frozen baselines", _schema_check),
+    "custom": (
+        "list|check|plan|register lab/vendor customizations",
+        lambda a: importlib.import_module("homelabnext.customization.cli").main(a),
+    ),
 }
 
 

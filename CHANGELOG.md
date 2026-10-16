@@ -9,6 +9,7 @@ has no section below.
 ### Added
 
 - `homelabnext.notify`, `homelabnext.state` and `homelabnext.records`: state-diffed paging with registered recovery pairs and an ntfy-style sender, crash-safe versioned state files with a keyed check API, and the records lifecycle (single validated agent write path, separate operator movers).
+- Customizations: schema, loader, linter, plan-only applier, invariant X-09, register view, three synthetic optional profiles and `hnx custom list|check|plan|register` (`docs/customization.md`).
 - Schemas, logical-id library, service registry and generators, role interface and linter,
   detections as code, register generators and invariants runner (first wave of workers).
 - `hnx` console script (`homelabnext/cli.py`) dispatching to registry, new, gen, detections,
