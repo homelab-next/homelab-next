@@ -1,0 +1,28 @@
+{
+  "id": "custom:example-override",
+  "title": "Example customization",
+  "kind": "override",
+  "scope": {
+    "capabilities": [
+      "cap:monitoring"
+    ]
+  },
+  "contract": "cap:monitoring",
+  "reason": "The core default does not cover this synthetic case, so the deviation is held here.",
+  "owner": "platform-team",
+  "created": "2026-09-01",
+  "review_by": "2026-12-01",
+  "upstream": "proposed",
+  "action": {
+    "role": "example_service",
+    "vars": {
+      "example_service_listen_port": 8443
+    }
+  },
+  "links": {
+    "lesson": "LL-900",
+    "runbook": "RB-900"
+  },
+  "upstream_ref": "proposal 12 in the public tracker",
+  "optional": true
+}
