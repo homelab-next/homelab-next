@@ -133,6 +133,9 @@ COMMANDS: dict[str, tuple[str, Main]] = {
     "swap": (
         "run the swap procedure (plan|start|status|advance|rollback|record)",
         lambda a: importlib.import_module("homelabnext.swap.cli").main(a),
+    "conform": (
+        "capability conformance suites: list|run|mutants|report",
+        lambda a: importlib.import_module("homelabnext.conform.cli").main(a),
     ),
     "custom": (
         "list|check|plan|register lab/vendor customizations",

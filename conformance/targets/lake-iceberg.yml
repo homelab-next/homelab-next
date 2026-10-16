@@ -1,0 +1,9 @@
+# The real Iceberg adapter on a temporary SQLite catalog (needs: pip install 'homelabnext[lake]').
+#   hnx conform run lake-query --target lake-iceberg
+#   hnx conform run lake-catalog --target lake-iceberg
+name: lake-iceberg
+capabilities:
+  lake-query:
+    adapter: conformance.fakes.lake_iceberg:make
+  lake-catalog:
+    adapter: conformance.fakes.lake_iceberg:make
