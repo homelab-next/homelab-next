@@ -3,7 +3,7 @@ id: guest:lake-core
 display_name: lake-core
 kind: vm
 provisioning: terraform
-placement: {node: hv-a, vmid: 40, vmid_scheme: octet}
+placement: {node: hv-a, vmid: 140, vmid_scheme: freeform}
 resources:
   cpu: {cores: 4, type: host}
   memory: {size_mb: 16384}

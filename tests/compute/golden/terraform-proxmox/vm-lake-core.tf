@@ -2,7 +2,7 @@
 resource "proxmox_virtual_environment_vm" "lake_core" {
   name      = "lake-core"
   node_name = "hv-a"
-  vm_id     = 40
+  vm_id     = 140
   tags      = ["prod", "stateful"]
   on_boot   = true
 

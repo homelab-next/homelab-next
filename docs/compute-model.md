@@ -16,7 +16,7 @@ whole chain is tested with golden files from a synthetic fleet.
 id: guest:lake-core            # the slug is the hostname and the file name (lake-core.yml)
 kind: vm                       # vm | lxc | host
 provisioning: terraform        # terraform | manual | host-only
-placement: {node: hv-a, vmid: 40, vmid_scheme: octet}
+placement: {node: hv-a, vmid: 140, vmid_scheme: freeform}
 resources:
   cpu: {cores: 4, type: host}
   memory: {size_mb: 16384}
@@ -50,7 +50,7 @@ Schema first, then `homelabnext.compute.validate`:
 |---|---|
 | `network.zone` exists in the site model | no guest on an undeclared network |
 | `ip` inside the zone subnet, outside the DHCP pool, not network/broadcast/gateway | no collisions with leases |
-| `vmid_scheme: octet` means `vmid` equals the last octet of `ip` | the id is predictable from the address |
+| `vmid_scheme: freeform` is the default; `octet` pins `vmid` to the last octet of `ip` for a readable id | pick whichever reads better for your layout |
 | ids, `(node, vmid)` and ips are unique | |
 | `gpu` requires `kind: vm` | passthrough is a VM feature |
 | `provisioning: manual` requires `requires_root_steps` | the hand work is written down |
@@ -83,7 +83,7 @@ have a zones file. Tests can also pass a stub.
 | `registry-hosts` | a `zones:`/`hosts:` fragment for `services.yml` |
 | `backup-jobs` | members, retention and export hooks per policy |
 
-Output is a pure function of the files: no clock, no randomness, no environment. SSH keys are
+Output is a pure function of the files: no clock, no randomness, no environment.  The `terraform-proxmox` target was validated against the real `bpg/proxmox` provider **version 0.116.1** (`terraform init && terraform validate` plus a one-guest live `plan` / `apply` / `destroy` cycle on a scoped scratch pool).  A trimmed snapshot of the provider's resource schemas is committed at `tests/compute/fixtures/bpg_proxmox_schema.json` and used by `tests/compute/test_terraform_proxmox_schema.py` as a CI-safe shape check.  Note that the real provider enforces `vm_id >= 100`, so the example fleet uses vmids in the `110-230` range; the `octet` scheme is still available but requires IPs whose last octet is `>= 100`. SSH keys are
 rendered from a name-to-public-key file, or as `<ssh-key:NAME>` placeholders; storage pool ids,
 template ids, the default bridge and the API endpoint stay Terraform variables.
 

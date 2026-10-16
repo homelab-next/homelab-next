@@ -2,7 +2,7 @@
 id: guest:infer-core
 kind: vm
 provisioning: terraform
-placement: {node: hv-a, vmid: 130, vmid_scheme: octet}
+placement: {node: hv-a, vmid: 230, vmid_scheme: freeform}
 resources:
   cpu: {cores: 16}
   memory: {size_mb: 65536}

@@ -10,6 +10,6 @@ hnx_node: "hv-a"
 hnx_oncall: "platform-team"
 hnx_owner: "identity-team"
 hnx_provisioning: "terraform"
-hnx_vmid: 30
+hnx_vmid: 130
 hnx_zone: "mgmt"
 hnx_tags: ["identity", "prod"]

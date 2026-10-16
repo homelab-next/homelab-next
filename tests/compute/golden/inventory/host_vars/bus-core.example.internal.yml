@@ -8,6 +8,6 @@ hnx_kind: "vm"
 hnx_node: "hv-a"
 hnx_owner: "platform-team"
 hnx_provisioning: "terraform"
-hnx_vmid: 50
+hnx_vmid: 150
 hnx_zone: "data"
 hnx_tags: ["legacy-net", "prod"]

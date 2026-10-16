@@ -3,7 +3,7 @@
 
 ## guest:secrets-core
 
-Node `hv-a`, vmid `31`, address `192.0.2.31`.
+Node `hv-a`, vmid `131`, address `192.0.2.31`.
 
-1. pct create 31 as a privileged container (hardware token passthrough)
-2. append the device allow-list lines to the container config for 31
+1. pct create 131 as a privileged container (hardware token passthrough)
+2. append the device allow-list lines to the container config for 131
