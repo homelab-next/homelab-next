@@ -1,0 +1,20 @@
+{
+  "adapter": "unifi",
+  "dry_run": true,
+  "note": "dry-run payload; live application is SERVER-only (see docs/network-model.md)",
+  "site": "northwind",
+  "controller": {
+    "endpoint": "router-console.svc.example.internal",
+    "tls_pin": "REPLACE_WITH_CONSOLE_CERT_FINGERPRINT",
+    "auth": {
+      "reads": {
+        "mode": "api_key",
+        "secret_ref": "secret:network/router/api-key"
+      },
+      "writes": {
+        "mode": "local_admin",
+        "secret_ref": "secret:network/router/local-admin"
+      }
+    }
+  }
+}
