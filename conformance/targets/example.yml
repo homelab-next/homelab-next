@@ -1,0 +1,12 @@
+# Example target file for `hnx conform run CAPABILITY --target example --root .`
+# Each capability names an adapter factory (callable(**config) -> subject) and its options.
+# Endpoints are resolved by the adapter through the registry resolver; never put a URL here.
+name: example
+capabilities:
+  object-store:
+    adapter: conformance.fakes.object_store:FakeObjectStore    # stands in for a real adapter
+    features: [metadata]
+  secrets:
+    adapter: conformance.fakes.secret_store:FakeSecretStore
+    features: [clock-control]
+    waive: {}                     # SHOULD checks only: {check-id: "reason"}

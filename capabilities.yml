@@ -1,0 +1,15 @@
+capabilities:
+  - lake-query
+  - lake-catalog
+  - object-store
+  - inference
+  - fast-classifier
+  - notify
+  - cases
+  - events
+  - orchestration
+  - broker
+  - secrets
+  - idp
+  - records
+  - detections
