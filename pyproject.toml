@@ -27,12 +27,17 @@ schema = ["jsonschema>=4.18", "referencing>=0.30"]
 # everything the contracts-and-libraries drop needs at run time
 core = ["PyYAML>=6", "jsonschema>=4.18", "referencing>=0.30"]
 detections = ["PyYAML>=6"]
-test = ["pytest>=8", "PyYAML>=6", "jsonschema>=4.18", "referencing>=0.30"]
-dev = ["pytest>=8", "ruff>=0.6", "PyYAML>=6", "jsonschema>=4.18", "referencing>=0.30"]
+test = ["pytest>=8", "setuptools>=68", "PyYAML>=6", "jsonschema>=4.18", "referencing>=0.30"]
+dev = ["pytest>=8", "setuptools>=68", "ruff>=0.6", "PyYAML>=6", "jsonschema>=4.18", "referencing>=0.30"]
 # optional: only needed to run the role/playbook tests that shell out to ansible
 ansible = ["ansible-core>=2.16"]
+# the lake library: DuckDB local queries, Iceberg tables over a SQLite catalog, Arrow batches
+lake = [
+  "duckdb>=1.5",
+  "pyarrow>=26",
+  "pyiceberg[sql-sqlite,pyiceberg-core]>=0.12",
+]
 # planned families (declared so names are stable; their packages arrive in later waves)
-lake = ["duckdb>=1.0", "pyarrow>=15", "pyiceberg[sql-sqlite]>=0.7"]
 trino = ["trino>=0.328"]
 records = ["pydantic>=2"]
 decide = ["pydantic>=2"]
@@ -41,6 +46,10 @@ nats = ["nats-py>=2.7"]
 
 [project.scripts]
 hnx = "homelabnext.cli:main"
+
+# Optional invariants plugins are discovered through this group (see homelabnext.invariants.api).
+[project.entry-points."homelabnext.invariants.checks"]
+x09_customizations = "homelabnext.customization.plugins.x09_customizations:register"
 
 [project.urls]
 Homepage = "https://github.com/homelab-next/homelab-next"
@@ -53,7 +62,11 @@ version = { attr = "homelabnext._version.VERSION" }
 include = ["homelabnext*"]
 
 [tool.setuptools.package-data]
-homelabnext = ["generators/templates/*.tmpl"]
+homelabnext = [
+  "generators/templates/*.tmpl",
+  "decide/examples/*.yml",
+  "golden/examples/*.yml",
+]
 
 [tool.ruff]
 line-length = 100

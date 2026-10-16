@@ -273,11 +273,12 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 | X-02 | Registry rows match live listeners | Every registry row has health, metrics, backup, auth mode, and every live listener has a row | SERVER |
 | X-03 | Schemas version-pinned, examples valid | Each schema has $schema, $id, a version; examples validate; negatives are rejected | PUBLIC-NOW |
 | X-04 | Every capability has a conformance test | Each capability has a `conformance/<cap>/test_*.py` | PUBLIC-NOW |
-| X-05 | Role linter clean | `tools/role_lint.py ansible/roles` exits 0 | PUBLIC-NOW |
+| X-05 | Role linter clean | `tools/role_lint.py ansible/roles` exits 0 (a directory of roles is expanded) | PUBLIC-NOW |
 | X-06 | Detection ids are logical | No raw rule number in charters, profiles, decisions or schedules; every `det:` id resolves in `det_map.yml` | PUBLIC-NOW |
 | X-07 | Export hooks are exercised | Every stateful product's export restored once in a drill | SERVER |
 | X-08 | Cutover commits are audited | Each cutover has a swap record with parity, rollback and flip commits | SERVER |
+| X-09 | Customizations are owned and not expired | Every customization has reason, owner and `review_by`, none is past its date, none conflicts (`hnx custom check`; plugin `homelabnext.customization.plugins.x09_customizations`, loaded through the `homelabnext.invariants.checks` entry point) | PUBLIC-NOW |
 
 ---
 
-**Totals:** 157 criteria across 16 pillars; 75 PUBLIC-NOW, 82 SERVER.
+**Totals:** 158 criteria across 16 pillars; 76 PUBLIC-NOW, 82 SERVER.

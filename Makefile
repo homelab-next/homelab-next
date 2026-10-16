@@ -34,11 +34,13 @@ test:
 schemas:
 	$(PY) $(SCHEMA_CHECK) --strict
 
-# endpoints come from the registry; role and playbook rules come from the role interface
+# endpoints come from the registry; role and playbook rules come from the role interface;
+# `custom check` fails on an unowned or expired customization
 gates:
 	$(PY) $(ENDPOINT_GATE) .
 	$(PY) $(ROLE_LINT) $(ROLES)
 	$(PY) $(ROLE_LINT) --playbook $(PLAYBOOKS) --inventory ansible/inventory/example/hosts.yml
+	$(PY) -m homelabnext.cli custom check
 
 detections:
 	$(PY) -m homelabnext.detections lint
