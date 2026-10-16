@@ -55,3 +55,8 @@ criteria:
   evidence: plugin
   plugin: X-02
   remediation: Add the missing registry row or remove the stray listener.
+- id: X-09
+  statement: Every customization is owned and none is expired.
+  evidence: plugin
+  plugin: X-09
+  remediation: Renew the customization with a new review_by and reason, or remove it and its profile.

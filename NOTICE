@@ -3,3 +3,14 @@ Copyright 2026 The HomelabNext contributors
 
 This product includes software developed by the HomelabNext contributors.
 Licensed under the Apache License, Version 2.0.
+
+Third-party material
+--------------------
+- schemas/ocsf/ holds pinned subsets of event classes from the Open Cybersecurity Schema
+  Framework (OCSF), schema version 1.3.0, https://schema.ocsf.io, licensed under the
+  Apache License, Version 2.0.
+- CODE_OF_CONDUCT.md is adapted from the Contributor Covenant, version 2.1,
+  https://www.contributor-covenant.org, licensed under CC BY 4.0.
+- Detection tags and the ATT&CK coverage map reference MITRE ATT&CK(R) technique identifiers.
+  MITRE ATT&CK is a registered trademark of The MITRE Corporation; the identifiers are used under
+  the ATT&CK terms of use, https://attack.mitre.org/resources/terms-of-use/.
