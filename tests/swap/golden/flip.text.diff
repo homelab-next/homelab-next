@@ -1,0 +1,14 @@
+--- services.yml
++++ services.yml
+@@ -128,4 +128,4 @@
+     capability: lake-query
+-    impl: trino
+-    host: lake-core
++    impl: duckdb
++    host: lake-core-2
+     protocol: https
+@@ -136,3 +136,3 @@
+     owner: data-team
+-    version: "450.0"
++    version: "1.5"
+     tls: internal
