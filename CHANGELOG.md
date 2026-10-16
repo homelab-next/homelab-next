@@ -24,6 +24,7 @@ has no section below.
 - Pinned OCSF 1.3.0 schema subsets (`schemas/ocsf/`) and the `homelabnext.lake` library: `LakeClient` protocol, `FakeLake`, DuckDB/Iceberg/Trino adapters, cassette parity, and commit-then-checkpoint idempotent writes.
 - Site/network model: `schemas/platform/site.schema.json`, `homelabnext/network/` (validation, vendor-neutral IR, `linux`, `dnsmasq`, `zonefile` and dry-run `unifi` adapters, `opnsense` deferred) and `hnx site validate|plan|render`, with golden files from a synthetic site.
 - Guest (compute) model: `guest.schema.json`, `homelabnext.compute` loader, validation and renderers (Terraform for a Proxmox-style provider, libvirt, cloud-init, Ansible inventory, registry hosts, backup jobs, plan diff) and `hnx guests validate|render|plan`.
+- Swap kit: `hnx swap plan|start|status|advance|rollback|record` (nine-step resumable state machine with gates, evidence and a hash-chained `swap_record` schema), `homelabnext.parity` (row, table, schema-drift, event-stream and notification parity), a dual-write helper, the registry flip with its exact inverse, and `tools/decommission_check.py` (`docs/swap.md`).
 
 ### Changed
 
