@@ -10,14 +10,33 @@ in-memory fakes, a conformance harness, a role interface for Ansible, detections
 generators and a swap kit. Everything runs on a laptop or a CI runner. Items that are not built yet
 are listed as such in [docs/checklist.md](docs/checklist.md).
 
-> **Status: pre-alpha.** This drop is contracts and libraries only: JSON Schemas (including pinned
-> OCSF subsets), the service registry and generators, the role interface and linter, detections as
-> code, register and invariant tooling, shared libraries with in-memory fakes (lake, notify, state,
-> records, decision cascade, golden tasks), the site/network, guest/compute and customization
-> models, and the `hnx` command line. All of it is proven by unit tests, golden files and fakes on a
-> laptop or CI runner. **Nothing here has been tested on real hardware or against a live
-> deployment**, the conformance harness and the swap kit are not in this drop yet, and parts that
-> need a real server are tagged SERVER and ship an interface and a fake only. Expect breaking changes.
+> **Status: pre-alpha.** Contracts, libraries and tooling now exist end to end: JSON Schemas
+> (including pinned OCSF subsets), the service registry and generators, the role interface and
+> linter, detections as code, register and invariant tooling, shared libraries with in-memory fakes
+> (lake, notify, state, records, decision cascade, golden tasks), the site/network, guest/compute
+> and customization models, the **swap kit** (`hnx swap`, parity tools), the **conformance harness**
+> (`hnx conform`, 14 capability suites) and the **lab-in-a-box** compose environment. All of it is
+> proven by unit tests, golden files and fakes on a laptop or CI runner. **Nothing has been tested
+> on real hardware or against a live deployment**; the only thing that has run against real
+> containers is the lab-in-a-box smoke test, on a laptop-class host. Parts that need a real server
+> are tagged SERVER and ship an interface and a fake only. Expect breaking changes.
+
+### What works today
+
+* `hnx registry|site|guests validate` and `hnx gen`: check the synthetic lab and render artefacts
+  from it (resolver config, Terraform, cloud-init, Ansible inventory, network configs) against goldens.
+* `hnx conform list|run|mutants|report`: 14 capability suites run against a built-in fake, against a
+  deliberately broken fake (every suite must catch its mutants) or against your own adapter named in
+  a target file; `hnx conform report --json` lists capabilities without a passing test (invariant X-10).
+* `hnx swap plan|start|status|advance|rollback|record`: the nine-step swap procedure with gates,
+  hash-chained records, the registry flip and its exact inverse, dual-write and parity tools, and a
+  decommission scan; proven end to end between two in-memory lakes.
+* `hnx detections|registers|invariants|custom|schema-check`: detections as code, generated register
+  pages, standing invariants (X-01..X-10 plugins), customizations, schema contract checks.
+* `make lab-smoke`: a pinned Docker Compose stack within a 4 GB budget, checked service by service
+  (needs Docker; the compose smoke on a laptop-class host is the only live test so far).
+* `make check`: lint, tests, schemas, gates, detections, registers, SPDX, leak scan, changelog and a
+  conformance coverage check that fails if any of the 14 capabilities lacks a passing test.
 
 ## The capabilities and their seams
 
@@ -42,14 +61,19 @@ skip and `hnx` still runs).
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
-make check          # lint, tests, schemas, gates, detections, registers, SPDX, leak scan, changelog
-hnx --help          # registry, new, gen, detections, registers, invariants, ids, decide, golden, site, guests, custom, schema-check
+make check          # lint, tests, schemas, gates, detections, registers, SPDX, leak scan, conformance coverage, changelog
+hnx --help          # registry, new, gen, detections, registers, invariants, ids, decide, golden, site, guests, swap, conform, custom, schema-check
 hnx registry validate examples/services.yml
+hnx conform list                      # the 14 capabilities and their suites (needs a checkout)
+hnx conform run lake-query --target fake
+hnx swap plan                         # the nine steps, their gates and evidence
 ```
 
 `pip install homelabnext` (a wheel or sdist) is self-contained: it carries the schemas, the shipped
 profiles and a minimal example lab (`examples/minimal/`) inside the package, so `hnx site validate`,
-`hnx guests validate`, `hnx registry validate` and `hnx custom list` work without a checkout. An
+`hnx guests validate`, `hnx registry validate`, `hnx custom list` and `hnx swap plan` work without a
+checkout (the conformance suites, `compose/` and `tools/` stay in the source tree: from a wheel,
+`hnx conform list` names the 14 capabilities and says no suite is installed). An
 editable install (`pip install -e .`) reads the same directories from the checkout instead. Every
 lookup goes through `homelabnext/paths.py`: an explicit override (`HNX_SCHEMAS_DIR`,
 `HNX_PROFILES_DIR`, `HNX_EXAMPLES_DIR`, or `HNX_DATA_DIR` for all three), then the packaged copy,
@@ -58,7 +82,7 @@ then the source tree; a miss prints every place that was tried. The top-level `s
 and a test fails if the copy ever differs). The developer gates under `tools/` (`hnx schema-check`,
 `hnx new` linting) still need a checkout.
 
-`make check` is the one command CI also runs. It needs `ruff` importable as a module; pass
+`make check` is the one command CI also runs; `make conform` runs every capability suite on its own. It needs `ruff` importable as a module; pass
 `RUFF=/path/to/ruff` if yours lives elsewhere.
 
 ### Try it
@@ -94,8 +118,11 @@ memory budget) and skips the parts that need a daemon. The architecture behind i
 | [docs/checklist.md](docs/checklist.md) | what is done, what is public-now, what needs a server |
 | [docs/adr/](docs/adr/README.md) | architecture decision records |
 | `schemas/` | JSON Schemas (ids, events, records, registers, platform, OCSF subsets) with examples, negative cases and frozen baselines |
-| `examples/` | synthetic lab: `services.yml` registry and example registers |
-| `homelabnext/` | the Python package: registry, generators, ids, lake, notify, state, records, decide, golden, network, compute, customization, detections, registers, invariants, scaffolds, `cli.py` |
+| `examples/` | synthetic lab: `services.yml` registry, example registers and the minimal example lab (`examples/minimal/`) |
+| `conformance/`, `capabilities.yml` | the 14 capability suites (protocol, fake, broken twin, pytest glue), target files, and the list of capabilities the tree declares ([docs/conformance.md](docs/conformance.md)) |
+| `compose/` | the lab-in-a-box reference environment (not shipped in the wheel) |
+| [docs/swap.md](docs/swap.md) | the swap kit: record, gates, parity, flip, decommission |
+| `homelabnext/` | the Python package: registry, generators, ids, paths, lake, notify, state, records, decide, golden, network, compute, customization, conform, swap, parity, detections, registers, invariants, scaffolds, `cli.py` |
 | `profiles/` | shipped optional customization profiles (inert until enabled; see [docs/customization.md](docs/customization.md)) |
 | [docs/network-model.md](docs/network-model.md), [docs/compute-model.md](docs/compute-model.md) | the site/network and guest models |
 | `ansible/` | role interface example roles, playbook and inventory |

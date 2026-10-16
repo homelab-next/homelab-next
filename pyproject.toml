@@ -37,11 +37,12 @@ lake = [
   "pyarrow>=26",
   "pyiceberg[sql-sqlite,pyiceberg-core]>=0.12",
 ]
+# the swap kit: the registry flip and decommission scan need PyYAML, the swap record needs jsonschema
+swap = ["PyYAML>=6", "jsonschema>=4.18", "referencing>=0.30"]
 # planned families (declared so names are stable; their packages arrive in later waves)
 trino = ["trino>=0.328"]
 records = ["pydantic>=2"]
 decide = ["pydantic>=2"]
-swap = ["duckdb>=1.0"]
 nats = ["nats-py>=2.7"]
 
 [project.scripts]
@@ -50,6 +51,7 @@ hnx = "homelabnext.cli:main"
 # Optional invariants plugins are discovered through this group (see homelabnext.invariants.api).
 [project.entry-points."homelabnext.invariants.checks"]
 x09_customizations = "homelabnext.customization.plugins.x09_customizations:register"
+x10_conformance = "homelabnext.conform.plugins.x10_conformance:register"
 
 [project.urls]
 Homepage = "https://github.com/homelab-next/homelab-next"

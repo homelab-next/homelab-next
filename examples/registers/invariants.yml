@@ -60,3 +60,8 @@ criteria:
   evidence: plugin
   plugin: X-09
   remediation: Renew the customization with a new review_by and reason, or remove it and its profile.
+- id: X-10
+  statement: Every capability has a conformance test that passes and could fail.
+  evidence: plugin
+  plugin: X-10
+  remediation: Run `hnx conform report --json`, then fix the capability it names or add the missing suite or mutant.

@@ -9,8 +9,14 @@ allow:
     reason: negative fixtures that deliberately contain literals
   - path: "schemas/**/examples/**"
     reason: schema example documents use documentation addresses
-  - path: "compose/**"
-    reason: container definitions bind and probe loopback and the in-network capability aliases; they are environment definitions, not code defaults
+  - path: "compose/lab-in-a-box/docker-compose.yml"
+    reason: the reference environment binds published ports to loopback, probes its own containers and names the in-network capability aliases; an environment definition, not a code default
+  - path: "compose/lab-in-a-box/.env.example"
+    reason: default loopback bind address and the documentation-range subnet of the compose network
+  - path: "compose/lab-in-a-box/config/trino/config.properties"
+    reason: the query engine's own listener URI inside its container
+  - path: "compose/lab-in-a-box/config/trino/catalog/iceberg.properties"
+    reason: points the engine at the in-network aliases of the catalog and object store (example.internal names, compose network only)
   - path: "inventory/**"
     reason: the inventory is where addresses legitimately live
   - path: "conformance/fixtures/**"

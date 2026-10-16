@@ -278,7 +278,8 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 | X-07 | Export hooks are exercised | Every stateful product's export restored once in a drill | SERVER |
 | X-08 | Cutover commits are audited | Each cutover has a swap record with parity, rollback and flip commits | SERVER |
 | X-09 | Customizations are owned and not expired | Every customization has reason, owner and `review_by`, none is past its date, none conflicts (`hnx custom check`; plugin `homelabnext.customization.plugins.x09_customizations`, loaded through the `homelabnext.invariants.checks` entry point) | PUBLIC-NOW |
+| X-10 | Every capability has a conformance test that passes and could fail | `hnx conform report --json` lists no `capabilities_without_passing_test`: each suite ran enough checks, no MUST check failed, every deliberately broken fake was caught (X-04 only asks that a test file exists; plugin `homelabnext.conform.plugins.x10_conformance`, same entry-point group; `HNX_CONFORM_TARGET` aims it at a real deployment) | PUBLIC-NOW |
 
 ---
 
-**Totals:** 158 criteria across 16 pillars; 76 PUBLIC-NOW, 82 SERVER.
+**Totals:** 159 criteria across 16 pillars; 77 PUBLIC-NOW, 82 SERVER.

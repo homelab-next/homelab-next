@@ -11,14 +11,14 @@ ROLES := $(wildcard ansible/roles/*)
 PLAYBOOKS := $(wildcard ansible/playbooks/*.yml)
 REGISTERS_OUT := build/registers
 
-.PHONY: help check lint fmt test schemas gates detections registers spdx leak-scan secret-scan changelog-check clean lab-up lab-down lab-smoke
+.PHONY: help check lint fmt test schemas gates detections registers conform conform-check spdx leak-scan secret-scan changelog-check clean lab-up lab-down lab-smoke
 
 help:
-	@echo "targets: check lint fmt test schemas gates detections registers spdx leak-scan secret-scan changelog-check clean"
+	@echo "targets: check lint fmt test schemas gates detections registers conform conform-check spdx leak-scan secret-scan changelog-check clean"
 	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke"
 	@echo "override RUFF=/path/to/ruff if ruff is not importable as a module"
 
-check: lint test schemas gates detections registers spdx leak-scan changelog-check
+check: lint test schemas gates detections registers conform-check spdx leak-scan changelog-check
 	@echo "make check: OK"
 
 lint:
@@ -50,6 +50,14 @@ detections:
 
 registers:
 	$(PY) -m homelabnext.registers build examples/registers $(REGISTERS_OUT)
+
+# run every capability suite against the built-in fakes (TARGET=my-target aims it elsewhere)
+conform:
+	$(PY) -m homelabnext.cli conform run all --target $(or $(TARGET),fake)
+
+# `hnx conform list` and `hnx conform report --json`; fails if any of the 14 capabilities lacks a passing test
+conform-check:
+	$(PY) tools/conform_coverage.py
 
 spdx:
 	$(PY) tools/check_spdx.py

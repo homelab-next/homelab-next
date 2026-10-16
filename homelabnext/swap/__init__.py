@@ -2,7 +2,8 @@
 """The swap kit: run the nine-step replacement procedure with gates, evidence and a record.
 
 ``hnx swap`` (``cli.py``) drives :class:`SwapRunner`; see ``docs/swap.md`` and ADR-0005.
-The record needs ``jsonschema`` (extra ``schema``); everything else is standard library + PyYAML.
+Needs PyYAML (registry flip, decommission scan) and ``jsonschema`` (record validation): extras
+``yaml`` and ``schema``, bundled as the ``swap`` extra (also in ``core``).
 """
 
 from __future__ import annotations

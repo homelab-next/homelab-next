@@ -149,3 +149,25 @@ def test_this_repo_passes_with_zero():
     assert rc == 0, err
     rc, out, _ = run(ROOT, "--census", "--json")
     assert json.loads(out)["total"] == 0
+
+
+def test_compose_allowances_are_file_specific_not_blanket(tmp_path):
+    """A literal planted next to the reference compose files, or in another compose dir, is caught."""
+    import shutil
+
+    shutil.copy(ROOT / "tools" / "no_raw_endpoints.allow.yml", tmp_path / "allow.yml")
+    allow = (tmp_path / "allow.yml").read_text(encoding="utf-8")
+    assert "compose/**" not in allow
+    plant(
+        tmp_path,
+        {
+            "compose/lab-in-a-box/docker-compose.yml": f"ports: ['{IP_LOOP}:80:80']\n",  # allowed
+            "compose/lab-in-a-box/fakes/server.py": f'HOST = "{IP_LOOP}"\n',
+            "compose/other/stack.yml": f"host: {IP_LOOP}\n",
+        },
+    )
+    rc, out, err = run(tmp_path, "--allowlist", str(tmp_path / "allow.yml"))
+    report = out + err
+    assert rc == 1
+    assert "fakes/server.py" in report and "other/stack.yml" in report
+    assert "docker-compose.yml" not in report

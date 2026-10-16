@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/events/swap.step/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/events/swap.step/1.1",
   "title": "Event homelabnext.swap.step",
-  "description": "One step of the nine-step capability swap procedure changed state. Audit trail for replacing a product behind a capability.",
+  "description": "One step of the nine-step capability swap procedure changed state. Audit trail for replacing a product behind a capability. 1.1 adds the nine step names of the swap record (`declare` ... `close`), which `homelabnext.swap.events` emits; the 1.0 names stay valid.",
   "allOf": [
     {
       "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"
@@ -37,7 +37,15 @@
                 "conform-new",
                 "shadow",
                 "cutover",
-                "decommission"
+                "decommission",
+                "declare",
+                "shadow-start",
+                "dual-write",
+                "parity-compare",
+                "soak",
+                "rollback-window",
+                "decommission-check",
+                "close"
               ]
             },
             "status": {

@@ -8,6 +8,7 @@ checkout, and runs the data-dependent commands against example files shipped ins
 
 import filecmp
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -83,9 +84,16 @@ def test_wheel_ships_package_data_and_entry_point(wheel_dir, tmp_path):
     assert "homelabnext/_data/schemas/ocsf/authentication.v1.json" in names
     assert "homelabnext/_data/profiles/README.md" in names
     assert "homelabnext/_data/examples/minimal/site.yml" in names
+    assert "homelabnext/_data/schemas/platform/swap_record.schema.json" in names
+    assert "homelabnext/_data/schemas/events/swap.step.schema.json" in names
+    assert "homelabnext/swap/events.py" in names and "homelabnext/conform/cli.py" in names
     assert "[homelabnext.invariants.checks]" in eps
+    assert (
+        "x09_customizations = homelabnext.customization.plugins.x09_customizations:register" in eps
+    )
+    assert "x10_conformance = homelabnext.conform.plugins.x10_conformance:register" in eps
     assert "hnx = homelabnext.cli:main" in eps
-    assert not any(n.startswith(("tests/", "schemas/")) for n in names)
+    assert not any(n.startswith(("tests/", "schemas/", "compose/", "conformance/")) for n in names)
 
 
 def test_packaged_data_equals_the_source_of_truth(wheel_dir, tmp_path):
@@ -205,3 +213,35 @@ def test_installed_custom_check_and_ocsf_schemas(installed, tmp_path):
     )
     assert run.returncode == 0, run.stderr
     assert int(run.stdout) >= 5
+
+
+def test_installed_wheel_runs_conform_list_and_swap_plan_on_a_minimal_example(installed, tmp_path):
+    """Wave-3 coherence: the swap and conformance CLIs work from the wheel, without a checkout."""
+    py, _ = installed
+    listing = _run(py, ["conform", "list"], tmp_path)
+    assert listing.returncode == 0, listing.stderr + listing.stdout
+    for cap in ("lake-query", "object-store", "detections"):
+        assert cap in listing.stdout
+    assert len([ln for ln in listing.stdout.splitlines() if ln.strip()]) == 14
+    # the suites are a source-tree asset: from a wheel the listing says so instead of failing
+    assert "no suite" in listing.stdout
+    as_json = _run(py, ["conform", "list", "--json"], tmp_path)
+    assert as_json.returncode == 0, as_json.stderr
+    assert len(json.loads(as_json.stdout)["capabilities"]) == 14
+
+    plan = _run(py, ["swap", "plan"], tmp_path)
+    assert plan.returncode == 0, plan.stderr + plan.stdout
+    for step in ("declare", "shadow-start", "cutover", "decommission-check", "close"):
+        assert step in plan.stdout
+
+    ex, _where = _data(py, tmp_path)
+    registry = ex / "examples" / "minimal" / "services.yml"
+    flip = _run(
+        py,
+        ["swap", "plan", "--registry", str(registry), "--service", "dns", "--to-host", "lake-core",
+         "--to-port", "5353"],
+        tmp_path,
+    )  # fmt: skip
+    assert flip.returncode == 0, flip.stderr + flip.stdout
+    assert "services.dns.host: dns-core -> lake-core" in flip.stdout
+    assert "rollback (inverse):" in flip.stdout
