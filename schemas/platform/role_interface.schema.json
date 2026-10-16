@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/role_interface/1.0",
+  "title": "Role interface manifest",
+  "description": "What a deployable role promises: the capabilities it provides and requires, the service it registers, and the five tag-driven hooks (deploy, health, readiness, backup, export) each with an idempotency statement. Roles read endpoints from the registry, never literals.",
+  "type": "object",
+  "properties": {
+    "role": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "provides": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/cap_id"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "requires": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/cap_id"
+      },
+      "uniqueItems": true
+    },
+    "service": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/svc_id"
+    },
+    "hooks": {
+      "type": "object",
+      "properties": {
+        "deploy": {
+          "type": "object",
+          "properties": {
+            "tag": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+            },
+            "idempotent": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "tag",
+            "idempotent"
+          ]
+        },
+        "health": {
+          "type": "object",
+          "properties": {
+            "tag": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+            },
+            "idempotent": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "tag",
+            "idempotent"
+          ]
+        },
+        "readiness": {
+          "type": "object",
+          "properties": {
+            "tag": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+            },
+            "idempotent": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "tag",
+            "idempotent"
+          ]
+        },
+        "backup": {
+          "type": "object",
+          "properties": {
+            "tag": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+            },
+            "idempotent": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "tag",
+            "idempotent"
+          ]
+        },
+        "export": {
+          "type": "object",
+          "properties": {
+            "tag": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+            },
+            "idempotent": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "tag",
+            "idempotent"
+          ]
+        }
+      },
+      "required": [
+        "deploy",
+        "health",
+        "readiness",
+        "backup",
+        "export"
+      ]
+    },
+    "variables": {
+      "type": "object",
+      "properties": {
+        "argument_specs": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/rel_path"
+        }
+      }
+    },
+    "utc_only_schedules": {
+      "const": true
+    }
+  },
+  "required": [
+    "role",
+    "version",
+    "provides",
+    "service",
+    "hooks"
+  ]
+}

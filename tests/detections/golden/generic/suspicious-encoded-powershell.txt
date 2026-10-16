@@ -1,0 +1,5 @@
+-- det:suspicious-encoded-powershell
+-- title: Suspicious encoded PowerShell command line
+-- level: high
+-- tags: attack.execution, attack.t1059.001
+WHERE ((((process.executable ~endswith "\\powershell.exe" OR process.executable ~endswith "\\pwsh.exe")) AND ((process.command_line ~contains " -enc " OR process.command_line ~contains " -encodedcommand " OR process.command_line ~contains " -ec "))) AND NOT (process.parent.executable ~endswith "\\ccmexec.exe"))

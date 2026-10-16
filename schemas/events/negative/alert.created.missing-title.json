@@ -1,0 +1,14 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:siem",
+  "type": "homelabnext.alert.created",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "info",
+  "data": {
+    "alert_id": "ALT-0001",
+    "detection": "det:auth-failure-burst",
+    "severity": "high",
+    "observed_at": "2026-01-01T00:00:00Z"
+  }
+}

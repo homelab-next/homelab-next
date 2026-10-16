@@ -1,0 +1,9 @@
+# Managed by fleet_units. Do not edit.
+# RETIRED: replaced by st2:maintenance.sweep. Timer is not enabled.
+[Unit]
+Description=Timer for hnx-legacy-sweep.service
+
+[Timer]
+OnCalendar=*:0/30 UTC
+Persistent=true
+Unit=hnx-legacy-sweep.service

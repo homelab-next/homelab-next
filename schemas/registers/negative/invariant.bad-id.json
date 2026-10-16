@@ -1,0 +1,10 @@
+{
+  "id": "AA-1",
+  "pillar": "A",
+  "statement": "Every guest appears in exactly one backup job.",
+  "observable": "Compare the guest list with job membership",
+  "expected": "No guest is missing and none is listed twice",
+  "evidence": "auto",
+  "check": "python3 tools/example_check.py",
+  "remediation": "Add the guest to a job; an unprotected guest cannot be restored."
+}

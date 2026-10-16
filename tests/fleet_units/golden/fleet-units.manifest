@@ -1,0 +1,4 @@
+# fleet_units manifest: <state> <timer>
+enabled hnx-lake-compact.timer
+retired hnx-legacy-sweep.timer
+enabled hnx-notify-digest.timer

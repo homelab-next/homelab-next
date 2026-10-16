@@ -1,0 +1,17 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "shell-created",
+  "description": "a shell creates the file",
+  "event": {
+    "file": {
+      "path": "/root/.ssh/authorized_keys"
+    },
+    "process": {
+      "executable": "/bin/bash"
+    },
+    "event": {
+      "action": "created"
+    }
+  }
+}

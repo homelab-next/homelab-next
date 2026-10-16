@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# Spec rules (see docs/role-interface.md): pinned tag AND digest, mandatory healthcheck,
+# no ':latest', placeholder digest only when explicitly allowed.
+- name: Validate project name
+  ansible.builtin.assert:
+    that: compose_app_name is match('^[a-z0-9][a-z0-9-]*$')
+    fail_msg: "compose_app_name must match ^[a-z0-9][a-z0-9-]*$"
+
+- name: Validate services exist
+  ansible.builtin.assert:
+    that:
+      - compose_app_spec.services is mapping
+      - compose_app_spec.services | length > 0
+    fail_msg: "compose_app_spec.services must be a non-empty mapping"
+
+- name: Validate each service
+  ansible.builtin.assert:
+    that:
+      - item.value.image is defined
+      - "'@' not in item.value.image and ':' not in (item.value.image | regex_replace('^[^/]*/', ''))"
+      - item.value.tag is defined and item.value.tag | string != 'latest'
+      - item.value.digest is defined and item.value.digest is match('^sha256:[0-9a-f]{64}$')
+      - item.value.digest != 'sha256:' ~ ('0' * 64) or compose_app_allow_placeholder_digest | bool
+      - item.value.healthcheck is defined and item.value.healthcheck.test is defined
+      - item.value.healthcheck.test is sequence and item.value.healthcheck.test | length > 0
+      - item.value.depends_on | default([]) | difference(compose_app_spec.services.keys() | list) | length == 0
+    fail_msg: >-
+      service '{{ item.key }}' violates the compose_app spec (image without tag/digest, pinned tag not latest,
+      sha256 digest, healthcheck.test, depends_on must name services)
+  loop: "{{ compose_app_spec.services | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"

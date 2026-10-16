@@ -1,0 +1,37 @@
+{
+  "role": "example-service",
+  "version": 1,
+  "provides": [
+    "cap:example"
+  ],
+  "requires": [
+    "cap:object-store"
+  ],
+  "service": "svc:example",
+  "hooks": {
+    "deploy": {
+      "tag": "deploy",
+      "idempotent": true
+    },
+    "health": {
+      "tag": "health",
+      "idempotent": true
+    },
+    "readiness": {
+      "tag": "readiness",
+      "idempotent": true
+    },
+    "backup": {
+      "tag": "backup",
+      "idempotent": true
+    },
+    "export": {
+      "tag": "export",
+      "idempotent": true
+    }
+  },
+  "variables": {
+    "argument_specs": "roles/example-service/meta/argument_specs.yml"
+  },
+  "utc_only_schedules": true
+}

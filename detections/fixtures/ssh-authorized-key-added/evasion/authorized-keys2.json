@@ -1,0 +1,18 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "authorized-keys2",
+  "description": "legacy filename still honoured by some sshd configs",
+  "event": {
+    "file": {
+      "path": "/home/svc/.ssh/authorized_keys2"
+    },
+    "process": {
+      "executable": "/bin/bash"
+    },
+    "event": {
+      "action": "modified"
+    }
+  },
+  "note": "authorized_keys2 not covered"
+}

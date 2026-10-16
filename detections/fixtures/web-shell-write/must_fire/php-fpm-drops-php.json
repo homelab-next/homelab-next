@@ -1,0 +1,17 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "php-fpm-drops-php",
+  "description": "worker writes php into webroot",
+  "event": {
+    "process": {
+      "executable": "/usr/sbin/php-fpm"
+    },
+    "file": {
+      "path": "/var/www/html/uploads/x.php"
+    },
+    "event": {
+      "action": "created"
+    }
+  }
+}

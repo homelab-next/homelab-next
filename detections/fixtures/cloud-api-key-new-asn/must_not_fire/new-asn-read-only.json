@@ -1,0 +1,17 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "new-asn-read-only",
+  "description": "read-only call is filtered",
+  "event": {
+    "cloud": {
+      "credential": {
+        "type": "access_key",
+        "first_seen_asn": true
+      },
+      "api": {
+        "action": "ListBuckets"
+      }
+    }
+  }
+}

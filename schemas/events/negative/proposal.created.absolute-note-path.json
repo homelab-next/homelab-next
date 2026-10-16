@@ -1,0 +1,14 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:siem",
+  "type": "homelabnext.proposal.created",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "info",
+  "data": {
+    "proposal_id": "p1",
+    "note": "/etc/passwd",
+    "requesting_agent": "profile:triage",
+    "risk": "low"
+  }
+}

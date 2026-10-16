@@ -1,0 +1,16 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:siem",
+  "type": "homelabnext.alert.created",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "high",
+  "data": {
+    "k": 1
+  },
+  "subject": "det:auth-failure-burst",
+  "correlationid": "corr-1",
+  "datacontenttype": "application/json",
+  "dataschema": "https://schemas.example.internal/homelabnext/events/alert.created/1.0",
+  "tracehint": "abc"
+}

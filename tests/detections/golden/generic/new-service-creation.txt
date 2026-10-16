@@ -1,0 +1,5 @@
+-- det:new-service-creation
+-- title: New service created via the service control tool
+-- level: medium
+-- tags: attack.persistence, attack.privilege_escalation, attack.t1543.003
+WHERE ((process.executable ~endswith "\\sc.exe") AND ((process.command_line ~contains " create " AND process.command_line ~contains "binpath=")))

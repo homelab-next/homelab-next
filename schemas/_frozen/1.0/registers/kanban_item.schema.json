@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/registers/kanban_item/1.0",
+  "title": "Kanban item",
+  "description": "One board card. Columns: rfi (generated), blocked, todo, progress, partial; done archives. A multi-step project is one card in 'partial' with id PRJ-NNN and steps[]. Work-queue step cards carry id PRJ-NNN.M and live in blocked/todo/progress. Cross-card rules (unique ids, step cards reference an open step, an all-done project cannot sit in partial) are enforced by tools/schema_check.py check_kanban_board.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^PRJ-(\\d{3}|NEW)(\\.\\d+)?$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 200
+    },
+    "column": {
+      "enum": [
+        "rfi",
+        "blocked",
+        "todo",
+        "progress",
+        "partial",
+        "done"
+      ]
+    },
+    "detail": {
+      "type": "string"
+    },
+    "owner": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "text": {
+            "type": "string",
+            "minLength": 3
+          },
+          "status": {
+            "enum": [
+              "open",
+              "done"
+            ]
+          },
+          "date": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+          },
+          "result": {
+            "type": "string",
+            "minLength": 3
+          }
+        },
+        "required": [
+          "n",
+          "text",
+          "status"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "done"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "required": [
+                "date",
+                "result"
+              ]
+            }
+          }
+        ]
+      },
+      "minItems": 1
+    },
+    "blocked_by": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^PRJ-\\d{3}(\\.\\d+)?$"
+      }
+    }
+  },
+  "required": [
+    "title",
+    "column"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "id": {
+            "pattern": "\\.\\d+$"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "column": {
+            "enum": [
+              "blocked",
+              "todo",
+              "progress",
+              "done"
+            ]
+          }
+        },
+        "not": {
+          "required": [
+            "steps"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "column": {
+            "const": "partial"
+          }
+        },
+        "required": [
+          "column"
+        ]
+      },
+      "then": {
+        "required": [
+          "id",
+          "steps"
+        ],
+        "properties": {
+          "id": {
+            "pattern": "^PRJ-(\\d{3}|NEW)$"
+          }
+        }
+      }
+    }
+  ]
+}

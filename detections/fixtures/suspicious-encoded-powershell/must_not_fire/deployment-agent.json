@@ -1,0 +1,15 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "deployment-agent",
+  "description": "same flag from the allowed deployment parent",
+  "event": {
+    "process": {
+      "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "command_line": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -enc SQBFAFgA",
+      "parent": {
+        "executable": "C:\\Windows\\CCM\\CcmExec.exe"
+      }
+    }
+  }
+}

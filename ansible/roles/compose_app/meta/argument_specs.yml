@@ -1,0 +1,114 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Render and start a compose application from a typed spec.
+    description:
+    - 'Typed application spec. services: mapping of service name to {image (repository, no tag), tag (not
+      ''latest''), digest (sha256:<64 hex>), healthcheck {test: list, interval, timeout, retries, start_period}
+      (required), optional command, user, env_file, environment, ports, volumes, depends_on, restart}.'
+    options:
+      compose_app_name: &id001
+        type: str
+        description: Compose project name (lowercase letters, digits, hyphen).
+        required: true
+      compose_app_spec: &id004
+        type: dict
+        description: Typed application spec.
+        required: true
+        options:
+          services:
+            type: dict
+            description: Service definitions keyed by name.
+            required: true
+      compose_app_dir: &id002
+        type: path
+        description: Directory holding docker-compose.yml.
+        default: /opt/compose/{{ compose_app_name }}
+      compose_app_data_dir: &id005
+        type: path
+        description: Bind-mount data root, used by backup, restore and export.
+        default: '{{ compose_app_dir }}/data'
+      compose_app_export_dir: &id007
+        type: path
+        description: Open-format export target.
+        default: /var/backups/compose/{{ compose_app_name }}/export
+      compose_app_restart_policy:
+        type: str
+        description: Default restart policy.
+        default: unless-stopped
+      compose_app_log_max_size:
+        type: str
+        description: json-file max-size.
+        default: 10m
+      compose_app_log_max_file:
+        type: int
+        description: json-file max-file.
+        default: 3
+      compose_app_dependencies: &id003
+        type: list
+        description: Logical ids of dependencies resolved via the registry.
+        default: []
+        elements: str
+      compose_app_allow_placeholder_digest: &id006
+        type: bool
+        description: Permit the all-zero placeholder digest (development only).
+        default: false
+      compose_app_validate_with_docker:
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      compose_app_start:
+        type: bool
+        description: Run docker compose up -d after rendering.
+        default: true
+  health:
+    short_description: Assert every container with a healthcheck reports healthy.
+    options:
+      compose_app_name: *id001
+      compose_app_dir: *id002
+  readiness:
+    short_description: Check every declared dependency is reachable.
+    options:
+      compose_app_name: *id001
+      compose_app_dependencies: *id003
+  backup:
+    short_description: Write a backup manifest of bind mounts from the spec.
+    options:
+      compose_app_name: *id001
+      compose_app_dir: *id002
+      compose_app_spec: *id004
+      compose_app_data_dir: *id005
+  restore:
+    short_description: Restore the data directory from a backup source.
+    options:
+      compose_app_name: *id001
+      compose_app_data_dir: *id005
+      compose_app_restore_source:
+        type: path
+        description: Directory to restore from.
+        required: true
+  upgrade:
+    short_description: Validate a tag+digest bump and record it as pending.
+    options:
+      compose_app_name: *id001
+      compose_app_dir: *id002
+      compose_app_spec: *id004
+      compose_app_allow_placeholder_digest: *id006
+      compose_app_upgrade_service:
+        type: str
+        description: Service to bump.
+        required: true
+      compose_app_upgrade_tag:
+        type: str
+        description: New tag.
+        required: true
+      compose_app_upgrade_digest:
+        type: str
+        description: New digest (sha256:<64 hex>).
+        required: true
+  export:
+    short_description: Write the open-format exit copy of the data directory.
+    options:
+      compose_app_name: *id001
+      compose_app_data_dir: *id005
+      compose_app_export_dir: *id007

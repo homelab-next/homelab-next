@@ -1,0 +1,22 @@
+{
+  "id": "proposal-triage",
+  "version": 1,
+  "question_set": [
+    "Does the proposal name a rollback?"
+  ],
+  "decision_table": [
+    {
+      "when": "rollback present",
+      "then": "accept"
+    },
+    {
+      "when": "otherwise",
+      "then": "escalate"
+    }
+  ],
+  "tiers": [],
+  "error_direction": "fail-closed",
+  "on_error": "escalate",
+  "latency_budget_ms": 5000,
+  "sample_audit_pct": 10
+}

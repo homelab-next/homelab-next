@@ -1,0 +1,5 @@
+-- det:cloud-api-key-new-asn
+-- title: Cloud API key used from a network not seen before for that key
+-- level: medium
+-- tags: attack.initial_access, attack.t1078.004
+WHERE ((cloud.credential.type = "access_key" AND cloud.credential.first_seen_asn = true) AND NOT ((cloud.api.action ~startswith "Get" OR cloud.api.action ~startswith "List" OR cloud.api.action ~startswith "Describe")))

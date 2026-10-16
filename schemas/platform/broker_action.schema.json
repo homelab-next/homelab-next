@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/broker_action/1.0",
+  "title": "Broker action",
+  "description": "One allowlisted action the command broker may execute. Default deny: an action not declared here does not exist. privileged actions must require approval, and every action is audited.",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 10
+    },
+    "tier": {
+      "enum": [
+        "read",
+        "write",
+        "execute",
+        "privileged"
+      ]
+    },
+    "mode": {
+      "enum": [
+        "shadow",
+        "enforce"
+      ]
+    },
+    "requires_approval": {
+      "type": "boolean"
+    },
+    "target": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/svc_id"
+    },
+    "handler": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/rel_path"
+    },
+    "params": {
+      "type": "object"
+    },
+    "timeout_s": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3600
+    },
+    "idempotent": {
+      "type": "boolean"
+    },
+    "audit": {
+      "const": true
+    }
+  },
+  "required": [
+    "action",
+    "description",
+    "tier",
+    "mode",
+    "requires_approval",
+    "handler",
+    "timeout_s",
+    "audit"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "tier": {
+            "enum": [
+              "execute",
+              "privileged"
+            ]
+          }
+        },
+        "required": [
+          "tier"
+        ]
+      },
+      "then": {
+        "properties": {
+          "requires_approval": {
+            "const": true
+          }
+        }
+      }
+    }
+  ]
+}

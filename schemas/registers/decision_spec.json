@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/registers/decision_spec/1.0",
+  "title": "Decision spec",
+  "description": "Declarative spec for a cascaded decision: a deterministic floor, then ordered tiers, then escalate. W7 extends this file additively.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "question_set": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 3
+      },
+      "minItems": 1
+    },
+    "decision_table": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "when": {
+            "type": "string",
+            "minLength": 1
+          },
+          "then": {
+            "enum": [
+              "accept",
+              "reject",
+              "escalate"
+            ]
+          }
+        },
+        "required": [
+          "when",
+          "then"
+        ]
+      },
+      "minItems": 1
+    },
+    "tiers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "enum": [
+              "floor",
+              "small",
+              "large",
+              "llm"
+            ]
+          },
+          "model_role": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/mdl_id"
+          },
+          "min_confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "minItems": 1
+    },
+    "error_direction": {
+      "enum": [
+        "fail-open",
+        "fail-closed"
+      ]
+    },
+    "on_error": {
+      "const": "escalate"
+    },
+    "latency_budget_ms": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "sample_audit_pct": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    }
+  },
+  "required": [
+    "id",
+    "version",
+    "question_set",
+    "decision_table",
+    "tiers",
+    "error_direction",
+    "on_error",
+    "latency_budget_ms",
+    "sample_audit_pct"
+  ]
+}

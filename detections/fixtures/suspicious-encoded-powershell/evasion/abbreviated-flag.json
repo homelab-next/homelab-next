@@ -1,0 +1,16 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "abbreviated-flag",
+  "description": "-e is a valid abbreviation not in the pattern list",
+  "event": {
+    "process": {
+      "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "command_line": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -e SQBFAFgA",
+      "parent": {
+        "executable": "C:\\Windows\\explorer.exe"
+      }
+    }
+  },
+  "note": "abbreviated -e flag is not matched"
+}

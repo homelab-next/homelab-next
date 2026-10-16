@@ -1,0 +1,17 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "console-session",
+  "description": "not an access key",
+  "event": {
+    "cloud": {
+      "credential": {
+        "type": "console_session",
+        "first_seen_asn": true
+      },
+      "api": {
+        "action": "CreateUser"
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:siem",
+  "type": "homelabnext.other.thing",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "info",
+  "data": {
+    "task_id": "TASK-0001",
+    "profile": "profile:reader",
+    "priority": 50,
+    "idempotency_key": "reader-2026-01-01",
+    "shadow": false
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:siem",
+  "type": "homelabnext.swap.step",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "info",
+  "data": {
+    "swap_id": "S",
+    "capability": "cap:lake-query",
+    "step": 1,
+    "step_name": "inventory",
+    "status": "started",
+    "to_adapter": "https://x.example.internal"
+  }
+}

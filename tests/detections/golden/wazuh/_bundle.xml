@@ -1,0 +1,55 @@
+<group name="homelabnext,">
+  <!-- det:cloud-api-key-new-asn -->
+  <rule id="900001" level="8">
+    <if_group>hnx_generic</if_group>
+    <field name="cloud.credential.type" type="pcre2">(?i)^access_key$</field>
+    <field name="cloud.credential.first_seen_asn" type="pcre2">(?i)^True$</field>
+    <field name="cloud.api.action" type="pcre2" negate="yes">(?:(?i)^Get)|(?:(?i)^List)|(?:(?i)^Describe)</field>
+    <description>Cloud API key used from a network not seen before for that key</description>
+    <mitre><id>T1078.004</id></mitre>
+  </rule>
+  <!-- det:mass-file-rename-ransom-extension -->
+  <rule id="900002" level="12">
+    <if_group>hnx_generic</if_group>
+    <field name="event.action" type="pcre2">(?i)^renamed$</field>
+    <field name="file.new_path" type="pcre2">(?:(?i)\.locked$)|(?:(?i)\.encrypted$)|(?:(?i)\.crypt$)</field>
+    <description>File renamed to a typical ransomware extension</description>
+    <mitre><id>T1486</id></mitre>
+  </rule>
+  <!-- det:new-service-creation -->
+  <rule id="900003" level="8">
+    <if_group>hnx_generic</if_group>
+    <field name="process.executable" type="pcre2">(?i)\\sc\.exe$</field>
+    <field name="process.command_line" type="pcre2">(?i)\ create\ </field>
+    <field name="process.command_line" type="pcre2">(?i)binpath=</field>
+    <description>New service created via the service control tool</description>
+    <mitre><id>T1543.003</id></mitre>
+  </rule>
+  <!-- det:ssh-authorized-key-added -->
+  <rule id="900004" level="12">
+    <if_group>hnx_generic</if_group>
+    <field name="file.path" type="pcre2">(?i)/\.ssh/authorized_keys$</field>
+    <field name="event.action" type="pcre2">(?:(?i)^created$)|(?:(?i)^modified$)</field>
+    <field name="process.executable" type="pcre2" negate="yes">(?:(?i)/cloud\-init$)|(?:(?i)/usermod$)</field>
+    <description>SSH authorized_keys file modified</description>
+    <mitre><id>T1098.004</id></mitre>
+  </rule>
+  <!-- det:suspicious-encoded-powershell -->
+  <rule id="900005" level="12">
+    <if_group>hnx_generic</if_group>
+    <field name="process.executable" type="pcre2">(?:(?i)\\powershell\.exe$)|(?:(?i)\\pwsh\.exe$)</field>
+    <field name="process.command_line" type="pcre2">(?:(?i)\ \-enc\ )|(?:(?i)\ \-encodedcommand\ )|(?:(?i)\ \-ec\ )</field>
+    <field name="process.parent.executable" type="pcre2" negate="yes">(?i)\\ccmexec\.exe$</field>
+    <description>Suspicious encoded PowerShell command line</description>
+    <mitre><id>T1059.001</id></mitre>
+  </rule>
+  <!-- det:web-shell-write -->
+  <rule id="900006" level="12">
+    <if_group>hnx_generic</if_group>
+    <field name="process.executable" type="pcre2">(?:(?i)/nginx$)|(?:(?i)/apache2$)|(?:(?i)/httpd$)|(?:(?i)/php\-fpm$)|(?:(?i)\\w3wp\.exe$)</field>
+    <field name="file.path" type="pcre2">(?:(?i)\.php$)|(?:(?i)\.jsp$)|(?:(?i)\.aspx$)</field>
+    <field name="event.action" type="pcre2">(?i)^created$</field>
+    <description>Web server process wrote a script file into a web root</description>
+    <mitre><id>T1505.003</id></mitre>
+  </rule>
+</group>

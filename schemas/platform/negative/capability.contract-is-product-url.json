@@ -1,0 +1,14 @@
+{
+  "id": "cap:lake-query",
+  "title": "abc",
+  "layer": 4,
+  "summary": "xxxxxxxxxxxx",
+  "contracts": [
+    "https://vendor.example.com/schema"
+  ],
+  "status": {
+    "contract": true,
+    "fake": true,
+    "conformance": true
+  }
+}

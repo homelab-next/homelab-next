@@ -1,0 +1,8 @@
+# Managed by fleet_units. Do not edit.
+# RETIRED: replaced by st2:maintenance.sweep. Timer is not enabled.
+[Unit]
+Description=Old sweep, superseded by a workflow
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/legacy-sweep

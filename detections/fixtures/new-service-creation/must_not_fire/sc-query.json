@@ -1,0 +1,15 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "sc-query",
+  "description": "querying a service",
+  "event": {
+    "process": {
+      "executable": "C:\\Windows\\System32\\sc.exe",
+      "command_line": "sc.exe query updsvc",
+      "parent": {
+        "executable": "C:\\Windows\\explorer.exe"
+      }
+    }
+  }
+}

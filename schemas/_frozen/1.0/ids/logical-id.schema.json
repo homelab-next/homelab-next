@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0",
+  "title": "Logical id",
+  "description": "A product-neutral name (cap:, svc:, det:, profile:, persona:, skill:, mdl:, memory:, table:). Product URIs, IP literals and vendor rule numbers are structurally impossible. $defs expose one definition per kind (for example #/$defs/cap_id).",
+  "type": "string",
+  "maxLength": 128,
+  "pattern": "^(?:cap:[a-z][a-z0-9]*(?:-[a-z0-9]+)*|svc:[a-z][a-z0-9]*(?:-[a-z0-9]+)*|det:[a-z][a-z0-9]*(?:-[a-z0-9]+)*|profile:[a-z][a-z0-9]*(?:-[a-z0-9]+)*|persona:[a-z][a-z0-9]*(?:-[a-z0-9]+)*|skill:[a-z][a-z0-9]*(?:-[a-z0-9]+)*|mdl:[a-z][a-z0-9]*(?:-[a-z0-9]+)*|memory:[a-z][a-z0-9]*(?:-[a-z0-9]+)*/[a-z][a-z0-9]*(?:-[a-z0-9]+)*|table:[a-z][a-z0-9]*(?:_[a-z0-9]+)*\\.[a-z][a-z0-9]*(?:_[a-z0-9]+)*)$",
+  "not": {
+    "pattern": "[0-9]{4,}|(?:rule|sid)[-_]?[0-9]"
+  },
+  "$defs": {
+    "cap_id": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^cap:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "description": "Logical id of kind cap:."
+    },
+    "svc_id": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^svc:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "description": "Logical id of kind svc:."
+    },
+    "det_id": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^det:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "description": "Logical id of kind det:."
+    },
+    "profile_id": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^profile:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "description": "Logical id of kind profile:."
+    },
+    "persona_id": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^persona:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "description": "Logical id of kind persona:."
+    },
+    "skill_id": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^skill:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "description": "Logical id of kind skill:."
+    },
+    "mdl_id": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^mdl:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "description": "Logical id of kind mdl:."
+    },
+    "memory_id": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^memory:[a-z][a-z0-9]*(?:-[a-z0-9]+)*/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "description": "Logical id of kind memory:."
+    },
+    "table_id": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^table:[a-z][a-z0-9]*(?:_[a-z0-9]+)*\\.[a-z][a-z0-9]*(?:_[a-z0-9]+)*$",
+      "description": "Logical id of kind table:."
+    }
+  }
+}

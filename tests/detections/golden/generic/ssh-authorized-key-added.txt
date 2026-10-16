@@ -1,0 +1,5 @@
+-- det:ssh-authorized-key-added
+-- title: SSH authorized_keys file modified
+-- level: high
+-- tags: attack.persistence, attack.t1098.004
+WHERE ((file.path ~endswith "/.ssh/authorized_keys" AND (event.action = "created" OR event.action = "modified")) AND NOT ((process.executable ~endswith "/cloud-init" OR process.executable ~endswith "/usermod")))

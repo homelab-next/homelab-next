@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every variable is prefixed with the role name. No endpoints live here:
+# dependencies are logical ids resolved through the registry at run time.
+example_service_version: "1.4.2"
+example_service_listen_port: 8080
+example_service_data_dir: /var/lib/example-service
+example_service_config_dir: /etc/example-service
+example_service_export_dir: /var/backups/example-service/export
+example_service_dependencies: []
+example_service_health_path: /healthz

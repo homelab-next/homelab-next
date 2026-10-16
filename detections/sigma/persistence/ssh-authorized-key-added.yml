@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+title: SSH authorized_keys file modified
+det: det:ssh-authorized-key-added
+description: A process other than the provisioning tooling wrote an authorized_keys file.
+status: experimental
+logsource: {category: file_event, product: linux}
+detection:
+  selection:
+    TargetFilename|endswith: '/.ssh/authorized_keys'
+    EventAction: [created, modified]
+  filter_provisioning:
+    Image|endswith: ['/cloud-init', '/usermod']
+  condition: selection and not filter_provisioning
+level: high
+tags: [attack.persistence, attack.t1098.004]
+falsepositives: [Manual key rotation by an administrator]

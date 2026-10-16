@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/events/alert.created/1.0",
+  "title": "Event homelabnext.alert.created",
+  "description": "A detection fired. Starts the reaction chain; carries the logical detection id, never an engine rule number.",
+  "allOf": [
+    {
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "homelabnext.alert.created"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "alert_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{1,64}$"
+            },
+            "detection": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/det_id"
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "severity": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/severity"
+            },
+            "observed_at": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+            },
+            "entities": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "host",
+                      "user",
+                      "ip",
+                      "domain",
+                      "hash",
+                      "process"
+                    ]
+                  },
+                  "value": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "kind",
+                  "value"
+                ]
+              },
+              "maxItems": 50
+            },
+            "evidence_table": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/table_id"
+            }
+          },
+          "required": [
+            "alert_id",
+            "detection",
+            "title",
+            "severity",
+            "observed_at"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ]
+    }
+  ]
+}

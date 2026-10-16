@@ -1,0 +1,8 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:siem",
+  "type": "homelabnext.alert.created",
+  "severity": "info",
+  "data": {}
+}

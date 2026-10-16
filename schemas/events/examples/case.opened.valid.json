@@ -1,0 +1,17 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:siem",
+  "type": "homelabnext.case.opened",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "info",
+  "data": {
+    "case_id": "INC-0001",
+    "alert_ids": [
+      "ALT-0001"
+    ],
+    "title": "Credential stuffing against app-01",
+    "severity": "high",
+    "opened_by": "profile:triage"
+  }
+}

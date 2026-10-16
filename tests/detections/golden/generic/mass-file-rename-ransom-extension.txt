@@ -1,0 +1,5 @@
+-- det:mass-file-rename-ransom-extension
+-- title: File renamed to a typical ransomware extension
+-- level: high
+-- tags: attack.impact, attack.t1486
+WHERE (event.action = "renamed" AND (file.new_path ~endswith ".locked" OR file.new_path ~endswith ".encrypted" OR file.new_path ~endswith ".crypt"))

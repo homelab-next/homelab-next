@@ -1,0 +1,19 @@
+{
+  "id": "PRJ-001",
+  "title": "Replace the example proxy",
+  "column": "partial",
+  "steps": [
+    {
+      "n": 1,
+      "text": "Write the contract",
+      "status": "done",
+      "date": "2026-01-01",
+      "result": "schema merged"
+    },
+    {
+      "n": 2,
+      "text": "Run conformance",
+      "status": "open"
+    }
+  ]
+}

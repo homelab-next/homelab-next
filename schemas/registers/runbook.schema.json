@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/registers/runbook/1.0",
+  "title": "Runbook",
+  "description": "An ordered checklist in which every step carries its own verify. Answers 'what is the correct way to do this' before starting.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^RB-(\\d{3,}|NEW)$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 3
+    },
+    "systems": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "when": {
+      "type": "string",
+      "minLength": 3,
+      "description": "Trigger: when to open this runbook."
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "text": {
+            "type": "string",
+            "minLength": 3
+          },
+          "verify": {
+            "type": "string",
+            "minLength": 3
+          },
+          "rollback": {
+            "type": "string",
+            "minLength": 3
+          }
+        },
+        "required": [
+          "n",
+          "text",
+          "verify"
+        ]
+      },
+      "minItems": 1
+    },
+    "lessons": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^LL-\\d{3,}$"
+      }
+    }
+  },
+  "required": [
+    "id",
+    "title",
+    "systems",
+    "steps"
+  ]
+}

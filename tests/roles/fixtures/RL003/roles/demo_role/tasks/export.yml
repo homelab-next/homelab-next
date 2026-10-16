@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: TODO open-format export to the export dir
+  ansible.builtin.debug:
+    msg: "export to {{ demo_role_export_dir }}"
+  tags: [export]

@@ -1,0 +1,8 @@
+# Managed by fleet_units. Do not edit.
+[Unit]
+Description=Compact lake tables
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lake-compact --all
+TimeoutStartSec=3600

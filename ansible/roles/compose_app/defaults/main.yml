@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# compose_app_name and compose_app_spec are required (no default).
+compose_app_dir: "/opt/compose/{{ compose_app_name }}"
+compose_app_data_dir: "{{ compose_app_dir }}/data"
+compose_app_export_dir: "/var/backups/compose/{{ compose_app_name }}/export"
+compose_app_restart_policy: unless-stopped
+compose_app_log_max_size: 10m
+compose_app_log_max_file: 3
+compose_app_dependencies: []
+compose_app_allow_placeholder_digest: false
+compose_app_validate_with_docker: true
+compose_app_start: true

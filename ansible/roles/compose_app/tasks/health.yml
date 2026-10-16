@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: List container states
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ compose_app_dir }}/docker-compose.yml", ps, --all, --format, json]
+  register: compose_app_ps
+  changed_when: false
+  tags: [health]
+
+- name: Assert every container is running and healthy
+  ansible.builtin.assert:
+    that:
+      - item.State == 'running'
+      - item.Health | default('healthy') == 'healthy'
+    fail_msg: "{{ item.Service }} is {{ item.State }} / {{ item.Health | default('n/a') }}"
+  loop: "{{ compose_app_ps.stdout_lines | map('from_json') | list }}"
+  loop_control:
+    label: "{{ item.Service }}"
+  tags: [health]

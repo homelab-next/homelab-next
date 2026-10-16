@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# Minimal stand-in registry consumed by the hnx_registry lookup (stub shape).
+services:
+  query-core:
+    host: query-01.example.internal
+    port: 8443
+    scheme: https
+  lake-catalog:
+    host: lake-01.example.internal
+    port: 8181
+    scheme: http

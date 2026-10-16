@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# gitleaks configuration: the default ruleset plus one narrow, reasoned allowance
+# (a single test file; it is path-scoped because a rule-scoped allowance did not apply in 8.28).
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "the leak scanner's own test plants a fake high-entropy credential on purpose to prove it is detected"
+paths = ['''^tools/tests/test_leak_scan\.py$''']

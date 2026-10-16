@@ -1,0 +1,14 @@
+{
+  "id": "cap:lake-query",
+  "title": "abc",
+  "layer": 14,
+  "summary": "xxxxxxxxxxxx",
+  "contracts": [
+    "https://schemas.example.internal/homelabnext/ids/logical-id/1.0"
+  ],
+  "status": {
+    "contract": true,
+    "fake": true,
+    "conformance": true
+  }
+}

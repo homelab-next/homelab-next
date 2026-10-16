@@ -1,0 +1,17 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "new-asn-delete",
+  "description": "delete from a new ASN",
+  "event": {
+    "cloud": {
+      "credential": {
+        "type": "access_key",
+        "first_seen_asn": true
+      },
+      "api": {
+        "action": "DeleteBucket"
+      }
+    }
+  }
+}

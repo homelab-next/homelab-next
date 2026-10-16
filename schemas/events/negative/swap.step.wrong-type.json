@@ -1,0 +1,17 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:siem",
+  "type": "homelabnext.other.thing",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "info",
+  "data": {
+    "swap_id": "SWAP-0001",
+    "capability": "cap:lake-query",
+    "step": 7,
+    "step_name": "shadow",
+    "status": "passed",
+    "from_adapter": "fake",
+    "to_adapter": "engine-b"
+  }
+}

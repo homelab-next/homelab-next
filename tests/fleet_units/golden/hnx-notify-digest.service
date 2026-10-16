@@ -1,0 +1,9 @@
+# Managed by fleet_units. Do not edit.
+[Unit]
+Description=Send the daily digest
+OnFailure=hnx-page@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/notify-digest --daily
+User=svc-notify

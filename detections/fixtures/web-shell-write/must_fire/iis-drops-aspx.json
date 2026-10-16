@@ -1,0 +1,17 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "iis-drops-aspx",
+  "description": "IIS worker writes aspx",
+  "event": {
+    "process": {
+      "executable": "C:\\Windows\\System32\\inetsrv\\w3wp.exe"
+    },
+    "file": {
+      "path": "C:\\inetpub\\wwwroot\\a.aspx"
+    },
+    "event": {
+      "action": "created"
+    }
+  }
+}

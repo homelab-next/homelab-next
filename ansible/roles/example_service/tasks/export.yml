@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Ensure export directory exists
+  ansible.builtin.file:
+    path: "{{ example_service_export_dir }}"
+    state: directory
+    mode: "0750"
+  tags: [export]
+
+- name: Export data in an open format (tar.gz)
+  ansible.builtin.command:
+    argv:
+      - tar
+      - -czf
+      - "{{ example_service_export_dir }}/{{ example_service_logical_id }}.tar.gz"
+      - -C
+      - "{{ example_service_data_dir }}"
+      - .
+  changed_when: true
+  tags: [export]

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/events/decision.requested/1.0",
+  "title": "Event homelabnext.decision.requested",
+  "description": "A caller asked the decision service to judge a subject against a decision spec.",
+  "allOf": [
+    {
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "homelabnext.decision.requested"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "decision_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{1,64}$"
+            },
+            "spec": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+            },
+            "subject": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/rel_path"
+            },
+            "latency_budget_ms": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "decision_id",
+            "spec",
+            "subject"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ]
+    }
+  ]
+}

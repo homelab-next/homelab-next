@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+demo_role_version: "0.1.0"
+demo_role_data_dir: "/var/lib/demo-role"
+demo_role_export_dir: "/var/backups/demo-role/export"
+demo_role_api_token: "abc123"

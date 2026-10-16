@@ -1,0 +1,26 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:siem",
+  "type": "homelabnext.alert.created",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "high",
+  "data": {
+    "alert_id": "ALT-0001",
+    "detection": "det:auth-failure-burst",
+    "title": "Burst of failed logins",
+    "severity": "high",
+    "observed_at": "2026-01-01T00:00:00Z",
+    "entities": [
+      {
+        "kind": "ip",
+        "value": "198.51.100.23"
+      },
+      {
+        "kind": "host",
+        "value": "app-01"
+      }
+    ],
+    "evidence_table": "table:ocsf.authentication"
+  }
+}

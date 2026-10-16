@@ -1,0 +1,8 @@
+<!-- det:mass-file-rename-ransom-extension -->
+<rule id="900002" level="12">
+  <if_group>hnx_generic</if_group>
+  <field name="event.action" type="pcre2">(?i)^renamed$</field>
+  <field name="file.new_path" type="pcre2">(?:(?i)\.locked$)|(?:(?i)\.encrypted$)|(?:(?i)\.crypt$)</field>
+  <description>File renamed to a typical ransomware extension</description>
+  <mitre><id>T1486</id></mitre>
+</rule>

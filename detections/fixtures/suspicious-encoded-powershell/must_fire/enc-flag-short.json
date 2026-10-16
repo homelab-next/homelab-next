@@ -1,0 +1,15 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "enc-flag-short",
+  "description": "powershell with -enc and a base64 blob",
+  "event": {
+    "process": {
+      "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "command_line": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -nop -enc SQBFAFgA",
+      "parent": {
+        "executable": "C:\\Windows\\explorer.exe"
+      }
+    }
+  }
+}

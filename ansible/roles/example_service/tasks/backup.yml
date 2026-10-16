@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Write backup manifest
+  ansible.builtin.copy:
+    dest: "{{ example_service_config_dir }}/backup-manifest.json"
+    content: "{{ {'service': example_service_logical_id, 'paths': [example_service_data_dir, example_service_config_dir]} | to_nice_json }}\n"
+    mode: "0640"
+  tags: [backup]

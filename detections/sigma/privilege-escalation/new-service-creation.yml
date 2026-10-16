@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+title: New service created via the service control tool
+det: det:new-service-creation
+description: sc.exe used to register a new service with an explicit binary path.
+status: experimental
+logsource: {category: process_creation, product: windows}
+detection:
+  selection_img:
+    Image|endswith: '\sc.exe'
+  selection_args:
+    CommandLine|contains|all: [' create ', 'binpath=']
+  condition: selection_img and selection_args
+level: medium
+tags: [attack.persistence, attack.privilege_escalation, attack.t1543.003]
+falsepositives: [Installers and configuration management]

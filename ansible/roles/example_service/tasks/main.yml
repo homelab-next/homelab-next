@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Create service directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0750"
+  loop:
+    - "{{ example_service_data_dir }}"
+    - "{{ example_service_config_dir }}"
+
+- name: Render service configuration
+  ansible.builtin.template:
+    src: config.yml.j2
+    dest: "{{ example_service_config_dir }}/config.yml"
+    mode: "0640"
+
+- name: Render systemd unit
+  ansible.builtin.template:
+    src: example-service.service.j2
+    dest: "{{ example_service_config_dir }}/example-service.service"
+    mode: "0644"

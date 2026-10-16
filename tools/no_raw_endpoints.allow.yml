@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: Apache-2.0
+# Paths allowed to contain endpoint literals. Every entry needs a reason.
+allow:
+  - path: "examples/**"
+    reason: synthetic example lab and registry data (documentation address ranges only)
+  - path: "tests/**/golden/**"
+    reason: golden outputs rendered from the synthetic example lab
+  - path: "tests/**/fixtures/**"
+    reason: negative fixtures that deliberately contain literals
+  - path: "schemas/**/examples/**"
+    reason: schema example documents use documentation addresses
+  - path: "inventory/**"
+    reason: the inventory is where addresses legitimately live
+  - path: "conformance/fixtures/**"
+    reason: recorded fixtures and cassettes
+  - path: "CONTRIBUTING.md"
+    reason: prose listing the documentation address ranges
+  - path: "README.md"
+    reason: prose listing the documentation address ranges
+  - path: "docs/glossary.md"
+    reason: prose listing the documentation address ranges
+  - path: "docs/interfaces.md"
+    reason: prose listing the documentation address ranges
+  - path: "homelabnext/ids/lint.py"
+    reason: the lint rule that defines which documentation ranges are tolerated
+  - path: "tools/leak_scan.py"
+    reason: the scanner defines the documentation ranges it tolerates
+  - path: "tools/tests/test_leak_scan.py"
+    reason: scanner tests plant documentation-range addresses on purpose
+  - path: "ansible/roles/example_service/tasks/health.yml"
+    reason: loopback health probe of the service the role just started (not a cross-service endpoint)
+  - path: "schemas/events/negative/alert.created.wrong-type.json"
+    reason: negative schema fixture; documentation address
+  - path: "schemas/ids/negative/logical-id.ip-literal.json"
+    reason: negative fixture - an IP literal in a logical id must be rejected
+  - path: "schemas/platform/negative/model_roles.backend-is-url.json"
+    reason: negative fixture - a URL backend must be rejected
+  - path: "tests/ids/test_ids_grammar.py"
+    reason: tests plant documentation-range addresses to prove they are rejected in ids
+  - path: "tests/ids/test_ids_lint.py"
+    reason: tests plant documentation-range addresses to prove the lint catches them
+  - path: "tests/roles/test_role_lint.py"
+    reason: tests plant a loopback literal to prove role_lint flags it
+  - path: "tests/roles/test_role_render.py"
+    reason: render tests use synthetic example.internal endpoints and a loopback literal as expected values
+  - path: "schemas/platform/negative/service.*.yml"
+    reason: negative registry fixtures derived from the synthetic example lab (documentation addresses only)

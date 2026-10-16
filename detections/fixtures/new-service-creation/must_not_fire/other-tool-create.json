@@ -1,0 +1,15 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "other-tool-create",
+  "description": "not the service control tool",
+  "event": {
+    "process": {
+      "executable": "C:\\Windows\\System32\\cmd.exe",
+      "command_line": "cmd.exe /c echo create binpath=",
+      "parent": {
+        "executable": "C:\\Windows\\explorer.exe"
+      }
+    }
+  }
+}

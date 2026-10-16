@@ -1,0 +1,14 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:siem",
+  "type": "homelabnext.proposal.decided",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "info",
+  "data": {
+    "proposal_id": "p1",
+    "decision": "maybe",
+    "decided_by": "operator",
+    "decided_at": "2026-01-01T01:00:00Z"
+  }
+}

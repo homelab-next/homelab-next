@@ -1,0 +1,17 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "admin-edits-php",
+  "description": "an editor, not a web worker",
+  "event": {
+    "process": {
+      "executable": "/usr/bin/vim.basic"
+    },
+    "file": {
+      "path": "/var/www/html/index.php"
+    },
+    "event": {
+      "action": "created"
+    }
+  }
+}

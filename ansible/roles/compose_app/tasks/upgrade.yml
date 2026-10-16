@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# The bump path: validate the new pin, record it, then edit the spec and re-run main.
+- block:
+    - name: Validate the new pin
+      ansible.builtin.assert:
+        that:
+          - compose_app_upgrade_service in compose_app_spec.services
+          - compose_app_upgrade_tag != 'latest'
+          - compose_app_upgrade_digest is match('^sha256:[0-9a-f]{64}$')
+          - compose_app_upgrade_digest != 'sha256:' ~ ('0' * 64) or compose_app_allow_placeholder_digest | bool
+        fail_msg: "upgrade pin rejected: unknown service, :latest, malformed digest, or placeholder digest"
+    - name: Record the pending upgrade
+      ansible.builtin.copy:
+        dest: "{{ compose_app_dir }}/pending-upgrade.json"
+        content: "{{ {'service': compose_app_upgrade_service, 'tag': compose_app_upgrade_tag, 'digest': compose_app_upgrade_digest} | to_nice_json }}\n"
+        mode: "0640"
+  tags: [upgrade]

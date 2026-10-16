@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "roles": {
+    "x": {
+      "tier": "fast",
+      "bindings": [
+        {
+          "backend": "svc:a",
+          "model_id": "m"
+        }
+      ],
+      "fallback": "x"
+    }
+  }
+}

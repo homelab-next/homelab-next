@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+title: Cloud API key used from a network not seen before for that key
+det: det:cloud-api-key-new-asn
+description: >
+  Expects the pipeline to enrich each cloud API event with whether the key's
+  source ASN is new (first_seen_asn); the enrichment itself is out of scope here.
+status: experimental
+logsource: {product: cloud, service: audit}
+detection:
+  selection:
+    KeyType: access_key
+    NewAsnForKey: true
+  filter_readonly:
+    CloudApiAction|startswith: ['Get', 'List', 'Describe']
+  condition: selection and not filter_readonly
+level: medium
+tags: [attack.initial_access, attack.t1078.004]
+falsepositives: [Engineers travelling or changing ISP]

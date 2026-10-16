@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/events/proposal.created/1.0",
+  "title": "Event homelabnext.proposal.created",
+  "description": "An agent filed a proposal note (records lane inbox). Notifies the approver; the note itself is the record.",
+  "allOf": [
+    {
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "homelabnext.proposal.created"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "proposal_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{1,128}$"
+            },
+            "note": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/rel_path"
+            },
+            "requesting_agent": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+            },
+            "risk": {
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ]
+            },
+            "summary": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "affects": {
+              "type": "array",
+              "items": {
+                "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0"
+              }
+            }
+          },
+          "required": [
+            "proposal_id",
+            "note",
+            "requesting_agent",
+            "risk"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ]
+    }
+  ]
+}

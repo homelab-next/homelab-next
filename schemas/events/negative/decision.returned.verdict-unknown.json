@@ -1,0 +1,14 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:siem",
+  "type": "homelabnext.decision.returned",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "info",
+  "data": {
+    "decision_id": "D",
+    "verdict": "approve",
+    "confidence": 0.5,
+    "tier_used": "small"
+  }
+}

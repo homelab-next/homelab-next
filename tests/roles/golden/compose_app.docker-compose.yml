@@ -1,0 +1,44 @@
+# Managed by Ansible (role compose_app). Do not edit.
+name: demo-app
+services:
+  db:
+    image: docker.io/library/postgres:16.4@sha256:abababababababababababababababababababababababababababababababab
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD_FILE: "/run/secrets/db"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+  web:
+    image: registry.example.internal/demo/web:1.2.3@sha256:abababababababababababababababababababababababababababababababab
+    restart: unless-stopped
+    environment:
+      COUNT: "3"
+      MODE: "demo"
+    ports:
+      - "8080:80"
+    volumes:
+      - "./data/web:/var/lib/web"
+      - "/srv/shared:/shared:ro"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

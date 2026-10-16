@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/capability/1.0",
+  "title": "Capability descriptor",
+  "description": "Describes one capability (cap:<name>): the seam, its contract schemas, the conformance suite that proves an implementation, and implementations known.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/cap_id"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 3
+    },
+    "layer": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 13
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 10
+    },
+    "contracts": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^https://schemas\\.example\\.internal/homelabnext/"
+      },
+      "minItems": 1
+    },
+    "conformance": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/rel_path"
+    },
+    "status": {
+      "type": "object",
+      "properties": {
+        "contract": {
+          "type": "boolean"
+        },
+        "fake": {
+          "type": "boolean"
+        },
+        "conformance": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "contract",
+        "fake",
+        "conformance"
+      ]
+    },
+    "implementations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "adapter": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "kind": {
+            "enum": [
+              "fake",
+              "reference",
+              "product"
+            ]
+          },
+          "status": {
+            "enum": [
+              "planned",
+              "experimental",
+              "supported"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "status"
+        ]
+      }
+    },
+    "depends_on": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/cap_id"
+      },
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "id",
+    "title",
+    "layer",
+    "summary",
+    "contracts",
+    "status"
+  ]
+}

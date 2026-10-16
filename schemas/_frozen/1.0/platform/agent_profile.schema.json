@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/agent_profile/1.0",
+  "title": "Agent profile (compiled)",
+  "description": "The compiled, least-privilege profile for one agent. mcp must be a subset of mcp_ceiling (checked by tools/schema_check.py check_profile_ceiling). Model is a role alias, never a model id. Budgets are hard caps; context is referenced by logical id.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+    },
+    "persona": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/persona_id"
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/skill_id"
+      },
+      "uniqueItems": true
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/cap_id"
+      },
+      "uniqueItems": true
+    },
+    "model_role": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/mdl_id"
+    },
+    "mcp": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+      },
+      "uniqueItems": true
+    },
+    "mcp_ceiling": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+      },
+      "uniqueItems": true
+    },
+    "memory_scopes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+      },
+      "uniqueItems": true
+    },
+    "data_tier": {
+      "enum": [
+        "local-only",
+        "cloud-allowed"
+      ]
+    },
+    "budgets": {
+      "type": "object",
+      "properties": {
+        "max_input_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_runtime_s": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_tool_calls": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "max_input_tokens",
+        "max_output_tokens",
+        "max_runtime_s",
+        "max_tool_calls"
+      ]
+    },
+    "digest": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+    },
+    "provenance": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "required": [
+    "id",
+    "persona",
+    "model_role",
+    "mcp",
+    "mcp_ceiling",
+    "data_tier",
+    "budgets"
+  ]
+}

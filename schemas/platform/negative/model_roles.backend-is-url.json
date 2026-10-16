@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "roles": {
+    "main-reasoner": {
+      "tier": "large",
+      "bindings": [
+        {
+          "backend": "http://192.0.2.5:8000",
+          "model_id": "m"
+        }
+      ]
+    }
+  }
+}
