@@ -1,0 +1,17 @@
+uid: string not null
+time: timestamp[us, tz=UTC] not null
+class_uid: int64 not null
+category_uid: int64 not null
+activity_id: int64 not null
+type_uid: int64
+severity_id: int64 not null
+status_id: int64
+message: string
+metadata: struct<version: string not null, product: string, log_source: string>
+finding_uid: string not null
+finding_title: string
+detection_id: string not null
+risk_score: int64
+confidence_id: int64
+attack_techniques: list<element: string>
+host_name: string

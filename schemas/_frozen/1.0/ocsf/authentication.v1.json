@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/ocsf/authentication/1.0",
+  "title": "Authentication",
+  "description": "Pinned subset of the OCSF Authentication class (OCSF 1.3.0, class_uid 3002) as stored in the lake. Flat top-level columns plus a few one-level structs; the lake table, Arrow schema and DDL are generated from this file (see homelabnext/lake).",
+  "x-lake": {
+    "table": "authentication",
+    "ocsf_class": "authentication",
+    "ocsf_class_uid": 3002,
+    "ocsf_version": "1.3.0",
+    "key": [
+      "uid"
+    ],
+    "time_column": "time",
+    "partition": "day(time)"
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "uid",
+    "time",
+    "class_uid",
+    "category_uid",
+    "activity_id",
+    "severity_id",
+    "user_name"
+  ],
+  "properties": {
+    "uid": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Stable content-derived event id. This is the idempotency (content) key of the table."
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Event time, RFC 3339 with an explicit offset; stored as UTC."
+    },
+    "class_uid": {
+      "const": 3002,
+      "type": "integer"
+    },
+    "category_uid": {
+      "const": 3,
+      "type": "integer"
+    },
+    "activity_id": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 99
+    },
+    "type_uid": {
+      "type": "integer"
+    },
+    "severity_id": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 6
+    },
+    "status_id": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 99
+    },
+    "message": {
+      "type": "string",
+      "maxLength": 4096
+    },
+    "metadata": {
+      "type": "object",
+      "description": "OCSF metadata object (subset).",
+      "additionalProperties": false,
+      "required": [
+        "version"
+      ],
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "product": {
+          "type": "string"
+        },
+        "log_source": {
+          "type": "string"
+        }
+      }
+    },
+    "user_name": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "src_endpoint": {
+      "type": "object",
+      "description": "OCSF network endpoint (subset).",
+      "additionalProperties": false,
+      "properties": {
+        "ip": {
+          "type": "string",
+          "maxLength": 45
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "hostname": {
+          "type": "string",
+          "maxLength": 253
+        }
+      }
+    },
+    "dst_endpoint": {
+      "type": "object",
+      "description": "OCSF network endpoint (subset).",
+      "additionalProperties": false,
+      "properties": {
+        "ip": {
+          "type": "string",
+          "maxLength": 45
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "hostname": {
+          "type": "string",
+          "maxLength": 253
+        }
+      }
+    },
+    "logon_type_id": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 99
+    },
+    "auth_protocol": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "is_mfa": {
+      "type": "boolean"
+    }
+  }
+}

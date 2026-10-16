@@ -1,0 +1,17 @@
+uid: string not null
+time: timestamp[us, tz=UTC] not null
+class_uid: int64 not null
+category_uid: int64 not null
+activity_id: int64 not null
+type_uid: int64
+severity_id: int64 not null
+status_id: int64
+message: string
+metadata: struct<version: string not null, product: string, log_source: string>
+src_endpoint: struct<ip: string, port: int64, hostname: string> not null
+dst_endpoint: struct<ip: string, port: int64, hostname: string> not null
+protocol_name: string
+connection_uid: string
+direction_id: int64
+bytes_in: int64
+bytes_out: int64
