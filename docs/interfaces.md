@@ -100,6 +100,12 @@ class LakeWriter(Protocol):
     # commit-then-checkpoint: a retried batch_id after a crash writes zero duplicate rows
 # additive (see 2.3): describe(table), list_tables(), write_batch(...) -> WriteResult
 
+# homelabnext.paths  (where schemas/, profiles/ and examples/ live; wheel, editable and checkout alike)
+resource_dir(kind) / schemas_dir() / schema_file(*parts) / ocsf_dir() / profiles_dir() / examples_dir()
+example_file(*parts) / data_root() / source_root() / clear_cache()    # kind in {schemas, profiles, examples}
+# order: HNX_<KIND>_DIR (HNX_DATA_DIR for the whole tree) -> homelabnext/_data/<kind> (wheel) -> checkout;
+# every function takes env=, package_root=, source_root= for tests; ResourceNotFound lists the places tried.
+
 # homelabnext.notify
 @dataclass(frozen=True)
 class Message: key: str; title: str; body: str; level: str = "info"   # level: info|warn|crit
@@ -167,7 +173,7 @@ FakeLake(schemas=None, *, named_queries=None)                # in-memory, same c
 DuckDBLake(tables, schemas=None, ...)  IcebergLake(catalog, schemas=None, *, namespace="ocsf")
 TrinoLake(*, catalog, schema, user, resolver=None, ...)     # endpoint via the registry resolver
 Ingestor(client, checkpoint, *, table, source)               # commit-then-checkpoint, idempotent retry
-# OCSF table schemas come from schemas/ocsf/*.v1.json (override: HNX_SCHEMAS_DIR); cassette parity
+# OCSF table schemas come from schemas/ocsf/*.v1.json (located by homelabnext.paths; override: HNX_SCHEMAS_DIR); cassette parity
 # (CassetteLake / record / compare) pins that every adapter returns the same rows.
 
 # homelabnext.notify

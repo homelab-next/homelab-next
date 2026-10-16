@@ -16,7 +16,7 @@ from typing import Any
 
 import yaml
 
-SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "platform" / "service.json"
+from homelabnext import paths
 
 
 class RegistryError(Exception):
@@ -137,7 +137,7 @@ class Registry:
 
 
 def schema() -> dict:
-    return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    return json.loads(paths.schema_file("platform", "service.json").read_text(encoding="utf-8"))
 
 
 def schema_problems(doc: Any) -> list[str]:

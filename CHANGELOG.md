@@ -8,6 +8,7 @@ has no section below.
 
 ### Added
 
+- Self-contained wheel: `homelabnext.paths` is the one place that locates `schemas/`, `profiles/` and `examples/` (env override, then packaged `homelabnext/_data`, then the source tree, with an error listing every place tried); `setup.py` copies the top-level directories into the wheel at build time, a minimal example lab ships as `examples/minimal/`, and the wheel test now installs into a clean venv and runs `hnx site|guests|registry validate` and `hnx custom list` against it.
 - `homelabnext.notify`, `homelabnext.state` and `homelabnext.records`: state-diffed paging with registered recovery pairs and an ntfy-style sender, crash-safe versioned state files with a keyed check API, and the records lifecycle (single validated agent write path, separate operator movers).
 - Customizations: schema, loader, linter, plan-only applier, invariant X-09, register view, three synthetic optional profiles and `hnx custom list|check|plan|register` (`docs/customization.md`).
 - Customization schema 1.1 (additive): `maintained_upstream` exempts project-shipped profiles from `review_by` expiry; honoured only for the shipped `profiles/` directory, rejected with `CU015` in any overlay; `hnx custom check`, invariant X-09 and the register honour it.

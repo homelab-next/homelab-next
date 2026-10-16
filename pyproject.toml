@@ -55,6 +55,10 @@ x09_customizations = "homelabnext.customization.plugins.x09_customizations:regis
 Homepage = "https://github.com/homelab-next/homelab-next"
 Issues = "https://github.com/homelab-next/homelab-next/issues"
 
+# schemas/, profiles/ and examples/ stay at the repository root (single source of truth) and are
+# copied into the wheel as homelabnext/_data/ by the build_py hook in setup.py; MANIFEST.in puts
+# them in the sdist.  Runtime lookup: homelabnext/paths.py.
+
 [tool.setuptools.dynamic]
 version = { attr = "homelabnext._version.VERSION" }
 
