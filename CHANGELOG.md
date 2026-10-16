@@ -14,6 +14,7 @@ has no section below.
   registers, invariants, ids and schema-check.
 - `make check` now runs lint, tests, strict schema check, endpoint and role gates, detections,
   registers, SPDX, leak scan and changelog check; CI runs the same gates and a pinned gitleaks CLI.
+- Pinned OCSF 1.3.0 schema subsets (`schemas/ocsf/`) and the `homelabnext.lake` library: `LakeClient` protocol, `FakeLake`, DuckDB/Iceberg/Trino adapters, cassette parity, and commit-then-checkpoint idempotent writes.
 
 ### Changed
 
