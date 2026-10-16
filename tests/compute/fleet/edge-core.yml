@@ -2,7 +2,7 @@
 id: guest:edge-core
 kind: vm
 provisioning: terraform
-placement: {node: hv-a, vmid: 10, vmid_scheme: octet}
+placement: {node: hv-a, vmid: 110, vmid_scheme: freeform}
 resources:
   cpu: {cores: 2}
   memory: {size_mb: 2048}

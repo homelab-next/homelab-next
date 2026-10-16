@@ -8,6 +8,6 @@ hnx_kind: "vm"
 hnx_node: "hv-a"
 hnx_owner: "ml-team"
 hnx_provisioning: "terraform"
-hnx_vmid: 130
+hnx_vmid: 230
 hnx_zone: "compute"
 hnx_tags: ["gpu", "prod"]

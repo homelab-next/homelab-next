@@ -10,6 +10,6 @@ hnx_node: "hv-a"
 hnx_oncall: "platform-team"
 hnx_owner: "data-team"
 hnx_provisioning: "terraform"
-hnx_vmid: 40
+hnx_vmid: 140
 hnx_zone: "data"
 hnx_tags: ["prod", "stateful"]
