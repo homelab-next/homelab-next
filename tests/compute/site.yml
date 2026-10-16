@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# Synthetic site model (zones only): documentation ranges, example.internal.
+site: {id: northwind, domain: example.internal, timezone: UTC}
+zones:
+  - {id: mgmt, vlan_id: 10, subnet: 192.0.2.0/24, gateway: 192.0.2.1}
+  - {id: data, vlan_id: 20, subnet: 198.51.100.0/25, gateway: 198.51.100.1,
+     dhcp: {range: [198.51.100.100, 198.51.100.126]}}
+  - {id: compute, vlan_id: 30, subnet: 198.51.100.128/25, gateway: 198.51.100.129}
+  - {id: edge, vlan_id: 40, subnet: 203.0.113.0/24, gateway: 203.0.113.1}

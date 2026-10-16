@@ -15,6 +15,8 @@ has no section below.
 - `make check` now runs lint, tests, strict schema check, endpoint and role gates, detections,
   registers, SPDX, leak scan and changelog check; CI runs the same gates and a pinned gitleaks CLI.
 
+- Guest (compute) model: `guest.schema.json`, `homelabnext.compute` loader, validation and renderers (Terraform for a Proxmox-style provider, libvirt, cloud-init, Ansible inventory, registry hosts, backup jobs, plan diff) and `hnx guests validate|render|plan`.
+
 ### Changed
 
 - Core install is dependency-free; PyYAML, jsonschema and friends are extras.
