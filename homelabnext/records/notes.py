@@ -1,0 +1,182 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Note parsing, rendering and validation (shared by the agent and the operator side).
+
+Validation is the JSON Schema ``schemas/records/note.schema.json`` plus the filename rule
+``<YYYY-MM-DD>-<agent>-<slug>.md`` (date equals ``created``, agent equals the ``requesting_agent``
+slug), which JSON Schema cannot express.  The schema directory is found next to the package in a
+source checkout, or through ``HNX_SCHEMA_DIR``.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+AGENT_LANE = "inbox"
+DECIDED_LANES = ("decided/approved", "decided/denied", "decided/completed")
+ALL_LANES = (AGENT_LANE, *DECIDED_LANES)
+
+_SLUG_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+_FILENAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\.md$")
+_FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---[ \t]*(?:\n|\Z)", re.S)
+MAX_SLUG = 60
+
+
+class NoteError(ValueError):
+    """A note is malformed or violates the contract."""
+
+
+@dataclass(frozen=True)
+class Note:
+    lane: str
+    name: str
+    frontmatter: dict[str, Any]
+    body: str
+
+    @property
+    def type(self) -> str:
+        return str(self.frontmatter.get("type", ""))
+
+
+def _yaml():
+    try:
+        import yaml
+    except ModuleNotFoundError as exc:  # pragma: no cover - exercised only without the extra
+        raise ModuleNotFoundError(
+            "homelabnext.records needs PyYAML (pip install 'homelabnext[core]')", name="yaml"
+        ) from exc
+    return yaml
+
+
+@lru_cache(maxsize=1)
+def _str_loader():
+    yaml = _yaml()
+
+    class _StrLoader(yaml.SafeLoader):
+        """Keeps timestamps as strings (JSON Schema has no timestamp type)."""
+
+    _StrLoader.yaml_implicit_resolvers = {
+        k: [(t, rx) for t, rx in v if t != "tag:yaml.org,2002:timestamp"]
+        for k, v in yaml.SafeLoader.yaml_implicit_resolvers.items()
+    }
+    return _StrLoader
+
+
+def slugify(text: str, *, max_len: int = MAX_SLUG) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    s = re.sub(r"^[0-9-]+", "", s)  # a slug starts with a letter
+    s = s[:max_len].rstrip("-")
+    if not s:
+        raise NoteError(f"cannot derive a slug from {text!r}")
+    return s
+
+
+def agent_slug(requesting_agent: str) -> str:
+    kind, _, slug = str(requesting_agent).partition(":")
+    if kind != "profile" or not _SLUG_RE.match(slug or ""):
+        raise NoteError(f"requesting_agent: {requesting_agent!r} is not a 'profile:<slug>' id")
+    return slug
+
+
+def build_filename(frontmatter: dict[str, Any], slug: str) -> str:
+    if not _SLUG_RE.match(slug) or len(slug) > MAX_SLUG:
+        raise NoteError(f"slug {slug!r} is not a lowercase hyphenated slug (max {MAX_SLUG})")
+    date = str(frontmatter.get("created", ""))[:10]
+    return f"{date}-{agent_slug(frontmatter.get('requesting_agent', ''))}-{slug}.md"
+
+
+def check_filename(name: str, frontmatter: dict[str, Any]) -> list[str]:
+    m = _FILENAME_RE.match(name)
+    if not m:
+        return [f"filename {name!r} is not <YYYY-MM-DD>-<agent>-<slug>.md"]
+    date, rest = m.groups()
+    problems = []
+    if str(frontmatter.get("created", ""))[:10] != date:
+        problems.append(f"filename date {date} != created {str(frontmatter.get('created'))[:10]!r}")
+    try:
+        agent = agent_slug(frontmatter.get("requesting_agent", ""))
+    except NoteError as exc:
+        return [*problems, str(exc)]
+    if not rest.startswith(agent + "-"):
+        problems.append(f"filename must be '{date}-{agent}-<slug>.md'")
+    return problems
+
+
+# ---------------------------------------------------------------- schema
+def schema_dir() -> Path:
+    env = os.environ.get("HNX_SCHEMA_DIR")
+    return Path(env) if env else Path(__file__).resolve().parents[2] / "schemas"
+
+
+@lru_cache(maxsize=4)
+def _validator(sdir: str):
+    try:
+        from jsonschema import Draft202012Validator
+        from referencing import Registry, Resource
+        from referencing.jsonschema import DRAFT202012
+    except ModuleNotFoundError as exc:  # pragma: no cover
+        raise ModuleNotFoundError(
+            "homelabnext.records needs jsonschema (pip install 'homelabnext[core]')", name=exc.name
+        ) from exc
+    root = Path(sdir)
+    note_path = root / "records" / "note.schema.json"
+    if not note_path.is_file():
+        raise FileNotFoundError(
+            f"{note_path} not found; run from a source checkout or set HNX_SCHEMA_DIR"
+        )
+    reg = Registry()
+    for p in sorted(root.glob("*/*.json")):
+        if p.parent.name.startswith("_"):
+            continue
+        doc = json.loads(p.read_text(encoding="utf-8"))
+        if "$id" in doc:
+            reg = reg.with_resource(
+                doc["$id"], Resource.from_contents(doc, default_specification=DRAFT202012)
+            )
+    schema = json.loads(note_path.read_text(encoding="utf-8"))
+    return Draft202012Validator(schema, registry=reg)
+
+
+def validate_note(note: dict[str, Any] | Any) -> None:
+    """Raise :class:`NoteError` (a ``ValueError``) naming the first offending field."""
+    if not isinstance(note, dict):
+        raise NoteError("note frontmatter must be a mapping")
+    validator = _validator(str(schema_dir()))
+    errors = sorted(validator.iter_errors(note), key=lambda e: [str(p) for p in e.absolute_path])
+    if errors:
+        e = errors[0]
+        field = "/".join(str(p) for p in e.absolute_path) or "$"
+        extra = f" (+{len(errors) - 1} more)" if len(errors) > 1 else ""
+        raise NoteError(f"{field}: {e.message}{extra}")
+
+
+# ---------------------------------------------------------------- text <-> note
+def parse_note(text: str) -> tuple[dict[str, Any], str]:
+    m = _FRONTMATTER_RE.match(text)
+    if not m:
+        raise NoteError("no YAML frontmatter")
+    try:
+        fm = _yaml().load(m.group(1), Loader=_str_loader())
+    except Exception as exc:
+        raise NoteError(f"frontmatter is not valid YAML: {type(exc).__name__}") from exc
+    if not isinstance(fm, dict):
+        raise NoteError("frontmatter must be a mapping")
+    return fm, text[m.end() :]
+
+
+def render_note(frontmatter: dict[str, Any], body: str) -> str:
+    dumped = _yaml().safe_dump(
+        frontmatter, sort_keys=False, default_flow_style=False, allow_unicode=True
+    )
+    body = body if body.endswith("\n") or not body else body + "\n"
+    return f"---\n{dumped}---\n\n{body}"
+
+
+def read_note(path: Path, lane: str) -> Note:
+    fm, body = parse_note(path.read_text(encoding="utf-8"))
+    return Note(lane=lane, name=path.name, frontmatter=fm, body=body.lstrip("\n"))
