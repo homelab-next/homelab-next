@@ -14,6 +14,7 @@ has no section below.
   registers, invariants, ids and schema-check.
 - `make check` now runs lint, tests, strict schema check, endpoint and role gates, detections,
   registers, SPDX, leak scan and changelog check; CI runs the same gates and a pinned gitleaks CLI.
+- Site/network model: `schemas/platform/site.schema.json`, `homelabnext/network/` (validation, vendor-neutral IR, `linux`, `dnsmasq`, `zonefile` and dry-run `unifi` adapters, `opnsense` deferred) and `hnx site validate|plan|render`, with golden files from a synthetic site.
 
 ### Changed
 
