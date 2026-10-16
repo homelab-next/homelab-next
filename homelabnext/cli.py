@@ -108,6 +108,10 @@ COMMANDS: dict[str, tuple[str, Main]] = {
     "invariants": ("run the standing invariants (invariants run)", _invariants),
     "ids": ("allocate, resolve and loss-check register ids (alloc|resolve|check-lost)", _ids),
     "schema-check": ("check schemas, examples, negatives and frozen baselines", _schema_check),
+    "custom": (
+        "list|check|plan|register lab/vendor customizations",
+        lambda a: importlib.import_module("homelabnext.customization.cli").main(a),
+    ),
 }
 
 

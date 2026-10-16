@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+id: custom:board-sensor-driver
+title: Persist the sensor-chip kernel module on boards that need it
+kind: profile
+optional: true
+scope:
+  capabilities: ["cap:monitoring"]
+contract: adr:role-interface-and-capability-groups
+reason: >-
+  Some consumer boards expose fan and temperature inputs only through a sensor chip whose kernel
+  module the distribution does not load by default. Without the module, fan-stopped detection
+  sees no fans. Server-class boards do not need it, so it cannot be a core default.
+owner: platform-team
+created: "2026-10-15"
+review_by: "2027-06-30"
+links:
+  lesson: LL-900
+  runbook: RB-900
+upstream: proposed
+upstream_ref: public tracker proposal for a board-quirk table in the monitoring role
+action:
+  profile: board-sensor-driver
+  tasks:
+    - name: Persist the sensor module when the board is on the allowlist
+      file: tasks/persist-module.yml
+  vars:
+    board_sensor_driver_module: sensorchip_x
+    board_sensor_driver_boards:
+      - "Example Board X1"
+      - "Example Board X2 Pro"
