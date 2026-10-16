@@ -22,9 +22,9 @@ __all__ = ["build_register", "render_register", "state_of"]
 
 def state_of(c: Customization, today: date, enabled: dict[str, list[str]]) -> str:
     left = days_left(c, today)
-    if c.schema_errors or left is None:
+    if c.schema_errors or (left is None and not c.upstream_maintained):
         return "invalid"
-    if left < 0:
+    if left is not None and left < 0:
         return "expired"
     if c.optional and c.id not in enabled:
         return "inactive"
@@ -49,6 +49,7 @@ def render_register(
                 "created": d.get("created", ""),
                 "review_by": d.get("review_by", ""),
                 "days_left": days_left(c, today),
+                "upstream_maintained": c.upstream_maintained,
                 "upstream": d.get("upstream", ""),
                 "contract": d.get("contract", ""),
                 "reason": d.get("reason", ""),
@@ -70,12 +71,21 @@ def render_register(
         links = ", ".join(f"{k} {v}" for k, v in sorted(r["links"].items()))
         cards.append(
             f'<article id="{e(r["id"])}"><h2>{e(r["id"])} '
-            f'<span class="pill {cls}">{e(r["state"])}</span></h2><p>{e(r["title"])}</p><dl>'
+            f'<span class="pill {cls}">{e(r["state"])}</span>'
+            + (
+                ' <span class="pill pass">maintained upstream</span>'
+                if r["upstream_maintained"]
+                else ""
+            )
+            + f"</h2><p>{e(r['title'])}</p><dl>"
             f"<dt>Kind</dt><dd>{e(r['kind'])} ({e(r['origin'])})</dd>"
             f"<dt>Owner</dt><dd>{e(r['owner'])}</dd>"
-            f"<dt>Review by</dt><dd>{e(r['review_by'])}"
-            f" ({e(r['days_left'])} days)</dd>"
-            f"<dt>Upstream</dt><dd>{e(r['upstream'])}</dd>"
+            + (
+                "<dt>Review by</dt><dd>maintained upstream (shipped profile, never expires)</dd>"
+                if r["upstream_maintained"]
+                else f"<dt>Review by</dt><dd>{e(r['review_by'])} ({e(r['days_left'])} days)</dd>"
+            )
+            + f"<dt>Upstream</dt><dd>{e(r['upstream'])}</dd>"
             f"<dt>Deviates from</dt><dd><code>{e(r['contract'])}</code></dd>"
             f"<dt>Extension points</dt><dd><code>{e(', '.join(r['extension_points']))}</code></dd>"
             f"<dt>Reason</dt><dd>{e(r['reason'])}</dd>"

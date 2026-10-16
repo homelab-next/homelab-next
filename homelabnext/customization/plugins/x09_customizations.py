@@ -9,6 +9,10 @@ the dates are coherent, none is expired, and none conflicts. Fail: any of those 
 the evidence lists the offenders. Skip: no customization exists in this tree. Error: the
 loader itself broke (could not measure).
 
+Customizations marked ``maintained_upstream: true`` that are loaded from the shipped
+``profiles/`` directory are exempt from expiry (they never expire); the same flag in any other
+directory fails with CU015, and those customizations still expire.
+
 Where it looks, relative to ``ctx.root``: ``profiles/`` (shipped), ``customizations/`` (the
 deployment's own), plus anything named by ``HNX_CUSTOMIZATIONS_DIR``.
 """
@@ -28,7 +32,7 @@ from homelabnext.invariants.api import ERROR, FAIL, PASS, SKIP, Check, CheckResu
 CHECK_ID = "X-09"
 STATEMENT = "every customization is owned (reason, owner, review_by) and none is expired"
 #: findings that make this invariant fail; warnings and scope/path details are `hnx custom check`
-GATING = {"CU001", "CU002", "CU007", "CU008", "CU011", "CU012"}
+GATING = {"CU001", "CU002", "CU007", "CU008", "CU011", "CU012", "CU015"}
 
 
 def make_check(today_fn: Callable[[], date] = date.today) -> Check:

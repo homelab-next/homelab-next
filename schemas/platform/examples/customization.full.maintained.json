@@ -1,0 +1,26 @@
+{
+  "id": "custom:example-shipped-profile",
+  "title": "Example customization",
+  "kind": "profile",
+  "scope": {
+    "capabilities": [
+      "cap:monitoring"
+    ]
+  },
+  "contract": "cap:monitoring",
+  "reason": "The core default does not cover this synthetic case, so the deviation is held here.",
+  "owner": "platform-team",
+  "created": "2026-09-01",
+  "upstream": "none",
+  "action": {
+    "profile": "extra-sensor",
+    "tasks": [
+      {
+        "name": "Load the sensor module",
+        "file": "tasks/sensor.yml"
+      }
+    ]
+  },
+  "maintained_upstream": true,
+  "optional": true
+}

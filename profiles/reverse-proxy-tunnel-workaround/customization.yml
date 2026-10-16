@@ -3,6 +3,7 @@ id: custom:reverse-proxy-tunnel-workaround
 title: Lower the segment size for clients arriving through a tunnel
 kind: patch-overlay
 optional: true
+maintained_upstream: true      # shipped and maintained by the project: exempt from review_by expiry
 scope:
   capabilities: ["cap:edge"]
   services: ["svc:edge-proxy"]

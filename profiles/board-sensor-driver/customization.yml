@@ -3,6 +3,7 @@ id: custom:board-sensor-driver
 title: Persist the sensor-chip kernel module on boards that need it
 kind: profile
 optional: true
+maintained_upstream: true      # shipped and maintained by the project: exempt from review_by expiry
 scope:
   capabilities: ["cap:monitoring"]
 contract: adr:role-interface-and-capability-groups

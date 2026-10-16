@@ -121,7 +121,14 @@ def validate_doc(doc: Any) -> list[str]:
     out = []
     for err in sorted(_validator().iter_errors(doc), key=lambda e: [str(p) for p in e.path]):
         where = "/".join(str(p) for p in err.absolute_path) or "$"
-        out.append(f"{where}: {err.message}")
+        if err.validator == "anyOf" and err.context:
+            # name the missing field instead of dumping the whole instance
+            detail = "; ".join(sorted({c.message for c in err.context if "required" in c.message}))
+            out.append(
+                f"{where}: {detail} (review_by is required unless maintained_upstream is true)"
+            )
+        else:
+            out.append(f"{where}: {err.message}")
     return out
 
 

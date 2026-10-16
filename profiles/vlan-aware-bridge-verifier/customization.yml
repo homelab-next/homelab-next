@@ -3,6 +3,7 @@ id: custom:vlan-aware-bridge-verifier
 title: Verify the hypervisor bridge is VLAN-aware after network changes
 kind: profile
 optional: true
+maintained_upstream: true      # shipped and maintained by the project: exempt from review_by expiry
 scope:
   capabilities: ["cap:edge"]
 contract: adr:hypervisor-is-not-modular
