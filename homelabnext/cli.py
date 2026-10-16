@@ -107,6 +107,14 @@ COMMANDS: dict[str, tuple[str, Main]] = {
     "registers": ("build the lessons/runbooks/invariants pages (registers build)", _registers),
     "invariants": ("run the standing invariants (invariants run)", _invariants),
     "ids": ("allocate, resolve and loss-check register ids (alloc|resolve|check-lost)", _ids),
+    "decide": (
+        "decision cascade: eval, scan",
+        lambda a: importlib.import_module("homelabnext.decide.cli").main(a),
+    ),
+    "golden": (
+        "golden tasks: run a suite against a model alias",
+        lambda a: importlib.import_module("homelabnext.golden.cli").main(a),
+    ),
     "schema-check": ("check schemas, examples, negatives and frozen baselines", _schema_check),
 }
 

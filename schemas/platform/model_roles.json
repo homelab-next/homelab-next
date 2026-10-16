@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/model_roles/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/platform/model_roles/1.1",
   "title": "Model role table",
   "description": "Maps model-role aliases (mdl:<alias>) to concrete bindings. Consumers reference only the alias; model ids and backends appear here and nowhere else, so swapping a model is a one-file change. backends are svc: logical ids, never URLs.",
   "type": "object",
@@ -72,6 +72,32 @@
               "max_tokens": {
                 "type": "integer",
                 "minimum": 1
+              }
+            }
+          },
+          "kind": {
+            "enum": [
+              "chat",
+              "completion",
+              "embedding"
+            ],
+            "description": "What the role is called for. Absent means chat. An embedder role is kind=embedding."
+          },
+          "dimensions": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Vector size for kind=embedding roles."
+          },
+          "logprobs": {
+            "type": "boolean",
+            "description": "The role is expected to return token logprobs (classifier tiers use them for confidence)."
+          },
+          "probe": {
+            "type": "object",
+            "properties": {
+              "require_model_served": {
+                "type": "boolean",
+                "description": "A /v1/models probe fails when the bound model id is not served."
               }
             }
           }

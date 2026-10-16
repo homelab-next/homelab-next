@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Synthetic example keyword list for the deterministic impact-scan tier.
+version: 1
+tiers:
+  critical:
+    - wipe all data
+    - disable audit logging
+    - delete the backup
+  high:
+    - production database
+    - rotate root credentials
+    - open to the internet
+  medium:
+    - firewall rule
+    - schema change
+    - restart the cluster
