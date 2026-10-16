@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Opt-in: runs only for hosts the deployment enabled the profile for.
+- name: Read the board product name
+  ansible.builtin.slurp:
+    src: /sys/class/dmi/id/board_name
+  register: board_sensor_driver_board_raw
+  changed_when: false
+
+- name: Persist the sensor module on allowlisted boards
+  ansible.builtin.copy:
+    dest: "/etc/modules-load.d/{{ board_sensor_driver_module }}.conf"
+    content: "{{ board_sensor_driver_module }}\n"
+    mode: "0644"
+  when: (board_sensor_driver_board_raw.content | b64decode | trim) in board_sensor_driver_boards

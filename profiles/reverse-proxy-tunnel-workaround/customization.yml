@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+id: custom:reverse-proxy-tunnel-workaround
+title: Lower the segment size for clients arriving through a tunnel
+kind: patch-overlay
+optional: true
+scope:
+  capabilities: ["cap:edge"]
+  services: ["svc:edge-proxy"]
+contract: adr:registry-and-dns-aliases
+reason: >-
+  Clients reaching the edge through a tunnelled path see stalled large responses because the
+  tunnel lowers the usable segment size. Until the tunnel provider fixes path discovery, the
+  service config needs one extra setting that only tunnelled deployments want.
+owner: platform-team
+created: "2026-10-15"
+review_by: "2027-01-31"
+links:
+  runbook: RB-902
+upstream: none
+action:
+  role: example_service
+  template: config.yml.j2
+  overlay: overlay/tunnel-mss.j2
+  mode: append
