@@ -135,7 +135,9 @@ def test_check_lost_detects_entry_lost_in_merge_resolution(repo):
         cwd=repo,
         capture_output=True,
     )
-    assert merge.returncode != 0 and (repo / ".git" / "MERGE_HEAD").exists()  # a real conflict, not an ident error
+    assert (
+        merge.returncode != 0 and (repo / ".git" / "MERGE_HEAD").exists()
+    )  # a real conflict, not an ident error
     # Botched hand resolution: keep our side, silently drop the other side's entry.
     (repo / "lessons.yml").write_text(
         (repo / "lessons.yml").read_text().split("<<<<<<<")[0] + ENTRY.format(id="LL-006")
