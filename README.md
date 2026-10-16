@@ -10,12 +10,14 @@ in-memory fakes, a conformance harness, a role interface for Ansible, detections
 generators and a swap kit. Everything runs on a laptop or a CI runner. Items that are not built yet
 are listed as such in [docs/checklist.md](docs/checklist.md).
 
-> **Status: pre-alpha.** This drop is contracts and libraries only: JSON Schemas, the service registry
-> and generators, the role interface and linter, detections as code, register and invariant tooling,
-> and the `hnx` command line. All of it is proven by unit tests, golden files and fakes on a laptop or
-> CI runner. **Nothing here has been tested on real hardware or against a live deployment**, the
-> conformance harness and the shared client libraries are not in this drop yet, and parts that need a
-> real server are tagged SERVER and ship an interface and a fake only. Expect breaking changes.
+> **Status: pre-alpha.** This drop is contracts and libraries only: JSON Schemas (including pinned
+> OCSF subsets), the service registry and generators, the role interface and linter, detections as
+> code, register and invariant tooling, shared libraries with in-memory fakes (lake, notify, state,
+> records, decision cascade, golden tasks), the site/network, guest/compute and customization
+> models, and the `hnx` command line. All of it is proven by unit tests, golden files and fakes on a
+> laptop or CI runner. **Nothing here has been tested on real hardware or against a live
+> deployment**, the conformance harness and the swap kit are not in this drop yet, and parts that
+> need a real server are tagged SERVER and ship an interface and a fake only. Expect breaking changes.
 
 ## The capabilities and their seams
 
@@ -34,15 +36,20 @@ The vocabulary is in [docs/glossary.md](docs/glossary.md).
 
 <!-- quick-start:begin (owned by the lab-in-a-box task; do not edit outside this marker pair) -->
 Python 3.11 or newer. The core install has no dependencies; the `dev` extra adds PyYAML, jsonschema,
-pytest and ruff.
+pytest and ruff, and the `lake` extra adds DuckDB, PyArrow and PyIceberg (without it the lake tests
+skip and `hnx` still runs).
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 make check          # lint, tests, schemas, gates, detections, registers, SPDX, leak scan, changelog
-hnx --help          # registry, new, gen, detections, registers, invariants, ids, schema-check
+hnx --help          # registry, new, gen, detections, registers, invariants, ids, decide, golden, site, guests, custom, schema-check
 hnx registry validate examples/services.yml
 ```
+
+Install from a source checkout (`pip install -e .`): the schemas under `schemas/` and the shipped
+`profiles/` are read from the checkout (override the schema directory with `HNX_SCHEMAS_DIR`), and a
+wheel carries the code, templates and example specs but not those directories.
 
 `make check` is the one command CI also runs. It needs `ruff` importable as a module; pass
 `RUFF=/path/to/ruff` if yours lives elsewhere. A fuller walkthrough (conformance against fakes, then
@@ -56,13 +63,15 @@ against containers) arrives with the lab-in-a-box stack.
 | [docs/interfaces.md](docs/interfaces.md) | the index of contracts, Python interfaces and who owns them |
 | [docs/checklist.md](docs/checklist.md) | what is done, what is public-now, what needs a server |
 | [docs/adr/](docs/adr/README.md) | architecture decision records |
-| `schemas/` | JSON Schemas with examples, negative cases and frozen baselines |
+| `schemas/` | JSON Schemas (ids, events, records, registers, platform, OCSF subsets) with examples, negative cases and frozen baselines |
 | `examples/` | synthetic lab: `services.yml` registry and example registers |
-| `homelabnext/` | the Python package: registry, generators, ids, detections, registers, invariants, scaffolds, `cli.py` |
+| `homelabnext/` | the Python package: registry, generators, ids, lake, notify, state, records, decide, golden, network, compute, customization, detections, registers, invariants, scaffolds, `cli.py` |
+| `profiles/` | shipped optional customization profiles (inert until enabled; see [docs/customization.md](docs/customization.md)) |
+| [docs/network-model.md](docs/network-model.md), [docs/compute-model.md](docs/compute-model.md) | the site/network and guest models |
 | `ansible/` | role interface example roles, playbook and inventory |
 | `detections/` | Sigma-subset rules, fixtures and the ATT&CK map |
 | `tools/` | gates run by `make check` (schema check, endpoint gate, role lint, leak scan, SPDX, changelog) |
-| `tests/` | unit tests, golden files and negative fixtures |
+| `tests/` | unit tests, golden files, negative fixtures, cross-package integration tests (`tests/integration/`) |
 
 ## How it is meant to be adopted
 
