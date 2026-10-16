@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:edge-core
+kind: vm
+provisioning: terraform
+placement: {node: hv-a, vmid: 10, vmid_scheme: octet}
+resources:
+  cpu: {cores: 2}
+  memory: {size_mb: 2048}
+  disks: [{name: rootfs, size_gb: 16, pool: fast}]
+image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
+cloudinit: {user: ansible, ssh_authorized_keys: [operator], packages: [qemu-guest-agent]}
+network: {zone: edge, ip: 203.0.113.10, firewall: enabled}
+capability: cap:orchestration
+capability_groups: [cap_edge]
+tags: [prod, edge]
+backup: {policy: daily}
+owners: {primary: platform-team}

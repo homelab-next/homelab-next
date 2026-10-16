@@ -59,6 +59,8 @@ def _ids(argv: list[str]) -> int:
 
 def _site(argv: list[str]) -> int:
     from homelabnext.network.cli import main
+def _guests(argv: list[str]) -> int:
+    from homelabnext.compute.cli import main
 
     return main(argv)
 
@@ -122,6 +124,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.golden.cli").main(a),
     ),
     "site": ("validate, plan and render the site/network model (site validate|plan|render)", _site),
+    "guests": ("validate/render/plan the guest (compute) model", _guests),
     "schema-check": ("check schemas, examples, negatives and frozen baselines", _schema_check),
 }
 
