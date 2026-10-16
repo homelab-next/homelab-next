@@ -52,8 +52,31 @@ Install from a source checkout (`pip install -e .`): the schemas under `schemas/
 wheel carries the code, templates and example specs but not those directories.
 
 `make check` is the one command CI also runs. It needs `ruff` importable as a module; pass
-`RUFF=/path/to/ruff` if yours lives elsewhere. A fuller walkthrough (conformance against fakes, then
-against containers) arrives with the lab-in-a-box stack.
+`RUFF=/path/to/ruff` if yours lives elsewhere.
+
+### Try it
+
+The lab-in-a-box is a laptop-sized reference environment of real containers for the capability
+seams (object store, Iceberg REST catalog with Postgres, a single-node query engine, an event bus,
+secrets in dev mode, notifications, authorisation) plus the project's own fakes (an
+OpenAI-compatible inference server and a case system). It needs Docker with the compose plugin and
+about 2 GB of free RAM (the stack is capped well inside 4 GB); every credential in it is a
+throwaway placeholder from `compose/lab-in-a-box/.env.example`.
+
+```bash
+make lab-up       # build the fakes, start everything, wait until every healthcheck passes
+make lab-smoke    # up, check each service end to end, run `hnx conform` if present, tear down
+make lab-down     # remove the stack and its volumes
+```
+
+Inside the compose network each service answers on its registry alias, for example
+`lake-query.svc.example.internal`; from your machine the ports are published on loopback only
+(see `.env.example` to change them). `smoke.sh` writes `build/lab-smoke/report.json`; the same
+script runs in the scheduled `nightly` workflow, which never blocks a pull request. Without
+Docker, `pytest tests/compose` still validates the compose contract (healthchecks, pinned images,
+memory budget) and skips the parts that need a daemon. The architecture behind it is in
+[docs/architecture.md](docs/architecture.md) and the build order in
+[docs/build-order.md](docs/build-order.md).
 <!-- quick-start:end -->
 
 ## Repository map
