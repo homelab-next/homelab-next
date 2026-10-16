@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:dns-core
+kind: lxc
+provisioning: manual
+placement: {node: hv-a, vmid: 5, vmid_scheme: octet}
+resources:
+  cpu: {cores: 1}
+  memory: {size_mb: 512}
+  disks:
+    - {name: rootfs, size_gb: 8, pool: fast}
+image: {logical: debian-12-lxc, kind: tarball, os_type: debian}
+network: {zone: mgmt, ip: 192.0.2.5}
+capability: cap:idp
+backup: {policy: none}
+lifecycle:
+  requires_root_steps:
+    - "create the container privileged, then set the device allow-list in its config"
+owners: {primary: platform-team}

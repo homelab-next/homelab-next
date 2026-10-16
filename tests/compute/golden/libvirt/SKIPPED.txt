@@ -1,0 +1,3 @@
+guest:hv-a: not terraform-provisioned
+guest:idp-core: kind lxc
+guest:secrets-core: not terraform-provisioned

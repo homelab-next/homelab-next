@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:idp-core
+kind: lxc
+provisioning: terraform
+placement: {node: hv-a, vmid: 30, vmid_scheme: octet}
+resources:
+  cpu: {cores: 2}
+  memory: {size_mb: 2048}
+  disks: [{name: rootfs, size_gb: 16, pool: fast}]
+image: {logical: debian-12-lxc, kind: tarball, os_type: debian}
+cloudinit: {user: ansible, ssh_authorized_keys: [operator]}
+network: {zone: mgmt, ip: 192.0.2.30}
+capability: cap:idp
+capability_groups: [cap_idp]
+tags: [prod, identity]
+shared_dirs:
+  - {host_path: /tank/idp-media, mount_path: /data/media, read_only: true}
+backup: {policy: daily, retain: {daily: 7, weekly: 4}, export_hook: idp-export}
+owners: {primary: identity-team, oncall: platform-team}

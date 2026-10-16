@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Synthetic public-key stand-ins (not real keys).
+keys:
+  operator: "ssh-ed25519 AAAAEXAMPLEONLYNOTAREALKEY operator@example.internal"
+  automation: "ssh-ed25519 AAAAEXAMPLEONLYNOTAREALKEY2 automation@example.internal"
