@@ -1,0 +1,346 @@
+{
+  "capability": "cap:lake-query",
+  "closure": null,
+  "created_at": "2026-04-01T09:00:00Z",
+  "current_step": null,
+  "from_adapter": "trino-lake",
+  "plan": {
+    "max_divergences": 0,
+    "min_parity_rows": 50,
+    "rollback_window_hours": 72,
+    "soak_hours": 48
+  },
+  "record_version": "1.0",
+  "rollback": null,
+  "route": {
+    "after": {
+      "host": "lake-core-2",
+      "impl": "duckdb",
+      "port": 8443,
+      "version": "1.5"
+    },
+    "before": {
+      "host": "lake-core",
+      "impl": "trino",
+      "port": 8443,
+      "version": "450.0"
+    },
+    "flipped": false,
+    "registry": "services.yml"
+  },
+  "service": "lake-query",
+  "status": "rolled_back",
+  "steps": [
+    {
+      "attempts": 1,
+      "evidence": [
+        {
+          "kind": "incumbent-conformance",
+          "ref": "declare.01.json",
+          "sha256": "sha256:d027bee0b777f2cda067634785d07d2626473a79bc9f62f7aad06e909ea304a7",
+          "summary": "declare passed (3 gates)"
+        }
+      ],
+      "finished_at": "2026-04-01T09:00:00Z",
+      "gates": [
+        {
+          "detail": "",
+          "id": "adapters-differ",
+          "passed": true,
+          "phase": "pre"
+        },
+        {
+          "detail": "",
+          "id": "route-changes",
+          "passed": true,
+          "phase": "pre"
+        },
+        {
+          "detail": "old: 2 tables described",
+          "id": "incumbent-conformance",
+          "passed": true,
+          "phase": "post"
+        }
+      ],
+      "name": "declare",
+      "started_at": "2026-04-01T09:00:00Z",
+      "status": "passed"
+    },
+    {
+      "attempts": 1,
+      "evidence": [
+        {
+          "kind": "candidate-conformance",
+          "ref": "shadow-start.01.json",
+          "sha256": "sha256:5dc883e5bde18b73802b0fd0d28e1ed0ded8f5aa8392884ab2ff5dd4dd553b95",
+          "summary": "shadow-start passed (2 gates)"
+        }
+      ],
+      "finished_at": "2026-04-01T09:00:00Z",
+      "gates": [
+        {
+          "detail": "new: 2 tables described",
+          "id": "candidate-conformance",
+          "passed": true,
+          "phase": "post"
+        },
+        {
+          "detail": "backfilled 90 rows",
+          "id": "shadow-started",
+          "passed": true,
+          "phase": "post"
+        }
+      ],
+      "name": "shadow-start",
+      "started_at": "2026-04-01T09:00:00Z",
+      "status": "passed"
+    },
+    {
+      "attempts": 1,
+      "evidence": [
+        {
+          "kind": "mirror-status",
+          "ref": "dual-write.01.json",
+          "sha256": "sha256:990f580cf05cd75feea3debcc940f66e52e59563d8aa401460aaaf09a5e85972",
+          "summary": "dual-write passed (2 gates)"
+        }
+      ],
+      "finished_at": "2026-04-01T09:00:00Z",
+      "gates": [
+        {
+          "detail": "dual-write active",
+          "id": "mirror-running",
+          "passed": true,
+          "phase": "post"
+        },
+        {
+          "detail": "0 unresolved",
+          "id": "divergences-within-budget",
+          "passed": true,
+          "phase": "post"
+        }
+      ],
+      "name": "dual-write",
+      "started_at": "2026-04-01T09:00:00Z",
+      "status": "passed"
+    },
+    {
+      "attempts": 1,
+      "evidence": [
+        {
+          "kind": "parity-report",
+          "ref": "parity-compare.01.json",
+          "sha256": "sha256:cf8ffd1ab16625bcd17174229cd38a7c4fb75ce9c5912de359cfd8cce74b64ad",
+          "summary": "parity-compare passed (3 gates)"
+        }
+      ],
+      "finished_at": "2026-04-01T09:00:00Z",
+      "gates": [
+        {
+          "detail": "parity[combined] OK: 5 checks",
+          "id": "parity-holds",
+          "passed": true,
+          "phase": "post"
+        },
+        {
+          "detail": "93 rows compared (needs >= 50)",
+          "id": "enough-rows",
+          "passed": true,
+          "phase": "post"
+        },
+        {
+          "detail": "0 unresolved",
+          "id": "divergences-within-budget",
+          "passed": true,
+          "phase": "post"
+        }
+      ],
+      "name": "parity-compare",
+      "started_at": "2026-04-01T09:00:00Z",
+      "status": "passed"
+    },
+    {
+      "attempts": 1,
+      "evidence": [
+        {
+          "kind": "soak-parity",
+          "ref": "soak.01.json",
+          "sha256": "sha256:7e07eeaf3f4f379069e5d22f6343e98968fdb3804b8504cc72f14ba5d6eb8942",
+          "summary": "soak passed (3 gates)"
+        }
+      ],
+      "finished_at": "2026-04-03T10:00:00Z",
+      "gates": [
+        {
+          "detail": "2 days, 1:00:00 elapsed (needs 2 days, 0:00:00)",
+          "id": "soak-elapsed",
+          "passed": true,
+          "phase": "pre"
+        },
+        {
+          "detail": "parity[combined] OK: 5 checks",
+          "id": "parity-holds",
+          "passed": true,
+          "phase": "post"
+        },
+        {
+          "detail": "0 unresolved",
+          "id": "divergences-within-budget",
+          "passed": true,
+          "phase": "post"
+        }
+      ],
+      "name": "soak",
+      "started_at": "2026-04-03T10:00:00Z",
+      "status": "passed"
+    },
+    {
+      "attempts": 1,
+      "evidence": [
+        {
+          "kind": "cutover",
+          "ref": "cutover.01.json",
+          "sha256": "sha256:b07faf7967ce654bf4e5424b4e474c33139c5eca1eb0cfb11a9cadce180c14a9",
+          "summary": "cutover passed (3 gates)"
+        }
+      ],
+      "finished_at": "2026-04-03T10:00:00Z",
+      "gates": [
+        {
+          "detail": "flip lake-query (alias lake-query.svc.example.internal)\n  services.lake-query.host: lake-core -> lake-core-2\n  services.lake-query.impl: trino -> duckdb\n  services.lake-query.version: 450.0 -> 1.5\n  target: lake-core:8443 -> lake-core-2:8443\n",
+          "id": "route-applied",
+          "passed": true,
+          "phase": "post"
+        },
+        {
+          "detail": "alias lake-query.svc.example.internal -> lake-core-2:8443",
+          "id": "canary-green",
+          "passed": true,
+          "phase": "post"
+        },
+        {
+          "detail": "old component stopped (kept, not destroyed)",
+          "id": "old-stopped",
+          "passed": true,
+          "phase": "post"
+        }
+      ],
+      "name": "cutover",
+      "started_at": "2026-04-03T10:00:00Z",
+      "status": "passed"
+    },
+    {
+      "attempts": 0,
+      "evidence": [
+        {
+          "kind": "rollback",
+          "ref": "rollback.008.json",
+          "sha256": "sha256:f9bfb35b72a31efe580d37bfa5762877a89f0c91bc81b49c0fe947d5ed9974d8",
+          "summary": "rolled back from rollback-window"
+        }
+      ],
+      "gates": [],
+      "name": "rollback-window",
+      "status": "pending"
+    },
+    {
+      "attempts": 0,
+      "evidence": [],
+      "gates": [],
+      "name": "decommission-check",
+      "status": "pending"
+    },
+    {
+      "attempts": 0,
+      "evidence": [],
+      "gates": [],
+      "name": "close",
+      "status": "pending"
+    }
+  ],
+  "swap_id": "swap-lake-query-0001",
+  "to_adapter": "duckdb-lake",
+  "transitions": [
+    {
+      "actor": "platform-team",
+      "at": "2026-04-01T09:00:00Z",
+      "event": "declared",
+      "hash": "sha256:ecb1d6a7ac6daf41ffd53e92b301a75f05cc5283154a0495c762989bd6bf019c",
+      "note": "trino-lake -> duckdb-lake",
+      "prev": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "seq": 1,
+      "step": null
+    },
+    {
+      "actor": "platform-team",
+      "at": "2026-04-01T09:00:00Z",
+      "event": "step-passed",
+      "hash": "sha256:b6edfbc5a05a5158bbea52c28ed0e7c2fd52e97c7b54e833b3bbfe3a5cca6546",
+      "note": "declare passed (3 gates)",
+      "prev": "sha256:ecb1d6a7ac6daf41ffd53e92b301a75f05cc5283154a0495c762989bd6bf019c",
+      "seq": 2,
+      "step": "declare"
+    },
+    {
+      "actor": "platform-team",
+      "at": "2026-04-01T09:00:00Z",
+      "event": "step-passed",
+      "hash": "sha256:54c81b6405715e81524183e891a84af3ad9802c241ec3077a7a4a01e617a25a0",
+      "note": "shadow-start passed (2 gates)",
+      "prev": "sha256:b6edfbc5a05a5158bbea52c28ed0e7c2fd52e97c7b54e833b3bbfe3a5cca6546",
+      "seq": 3,
+      "step": "shadow-start"
+    },
+    {
+      "actor": "platform-team",
+      "at": "2026-04-01T09:00:00Z",
+      "event": "step-passed",
+      "hash": "sha256:cb5b7078b1c21a7db3fd005ff3b9b3daab08d8cc53fd3fbcdcb9a08c0f72c13e",
+      "note": "dual-write passed (2 gates)",
+      "prev": "sha256:54c81b6405715e81524183e891a84af3ad9802c241ec3077a7a4a01e617a25a0",
+      "seq": 4,
+      "step": "dual-write"
+    },
+    {
+      "actor": "platform-team",
+      "at": "2026-04-01T09:00:00Z",
+      "event": "step-passed",
+      "hash": "sha256:e4e7c19bdd7152704030a43c2fdfc3afc7d5d30b6db0c1485802a3748ba9e971",
+      "note": "parity-compare passed (3 gates)",
+      "prev": "sha256:cb5b7078b1c21a7db3fd005ff3b9b3daab08d8cc53fd3fbcdcb9a08c0f72c13e",
+      "seq": 5,
+      "step": "parity-compare"
+    },
+    {
+      "actor": "platform-team",
+      "at": "2026-04-03T10:00:00Z",
+      "event": "step-passed",
+      "hash": "sha256:d83dd200c48ad0eb3b6ffa8f50b0526e5b015f59d63fcb1788ecd239bf5f570c",
+      "note": "soak passed (3 gates)",
+      "prev": "sha256:e4e7c19bdd7152704030a43c2fdfc3afc7d5d30b6db0c1485802a3748ba9e971",
+      "seq": 6,
+      "step": "soak"
+    },
+    {
+      "actor": "platform-team",
+      "at": "2026-04-03T10:00:00Z",
+      "event": "step-passed",
+      "hash": "sha256:feb9eb5d921a9552b16b4b3a8cb04a6e50239de5c9794ce243f0fbb6000d604b",
+      "note": "cutover passed (3 gates)",
+      "prev": "sha256:d83dd200c48ad0eb3b6ffa8f50b0526e5b015f59d63fcb1788ecd239bf5f570c",
+      "seq": 7,
+      "step": "cutover"
+    },
+    {
+      "actor": "platform-team",
+      "at": "2026-04-03T15:00:00Z",
+      "event": "rolled-back",
+      "hash": "sha256:fac7a5b167a0c833b7ba208ef19947ec0949cb9b3c2dcb13d334ef4011ab6003",
+      "note": "canary latency regression observed on the candidate",
+      "prev": "sha256:feb9eb5d921a9552b16b4b3a8cb04a6e50239de5c9794ce243f0fbb6000d604b",
+      "seq": 8,
+      "step": "rollback-window"
+    }
+  ],
+  "updated_at": "2026-04-03T15:00:00Z"
+}

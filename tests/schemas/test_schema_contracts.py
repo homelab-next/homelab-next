@@ -44,6 +44,7 @@ EXPECTED = {
     "platform/broker_action.schema.json",
     "platform/site.schema.json",
     "platform/customization.schema.json",
+    "platform/swap_record.schema.json",
     "ocsf/authentication.v1.json",
     "ocsf/detection_finding.v1.json",
     "ocsf/dns_activity.v1.json",
