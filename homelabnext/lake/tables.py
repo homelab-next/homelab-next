@@ -20,11 +20,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from homelabnext import paths
+
 from .errors import LakeError, UnknownTable
 
 SCALARS = ("string", "long", "double", "boolean", "timestamp")
 LISTS = ("list<string>", "list<long>", "list<double>")
-SCHEMAS_ENV = "HNX_SCHEMAS_DIR"
+SCHEMAS_ENV = paths.KIND_ENV["schemas"][0]  # HNX_SCHEMAS_DIR
 
 
 @dataclass(frozen=True)
@@ -115,10 +117,7 @@ def schema_from_json(doc: Mapping[str, Any]) -> TableSchema:
 
 
 def default_schema_dir() -> Path:
-    env = os.environ.get(SCHEMAS_ENV)
-    if env:
-        return Path(env)
-    return Path(__file__).resolve().parents[2] / "schemas" / "ocsf"
+    return paths.ocsf_dir()
 
 
 def load_schemas(directory: str | os.PathLike | None = None) -> dict[str, TableSchema]:
@@ -126,7 +125,7 @@ def load_schemas(directory: str | os.PathLike | None = None) -> dict[str, TableS
     base = Path(directory) if directory is not None else default_schema_dir()
     if not base.is_dir():
         raise LakeError(
-            f"OCSF schema directory {base} not found; run from a source checkout or set {SCHEMAS_ENV}"
+            f"OCSF schema directory {base} not found; set {SCHEMAS_ENV} (installed wheels and source checkouts need no setting)"
         )
     out: dict[str, TableSchema] = {}
     for p in sorted(base.glob("*.v*.json")):

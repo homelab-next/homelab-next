@@ -1,24 +1,35 @@
 # SPDX-License-Identifier: Apache-2.0
-"""A built wheel imports without the source tree, ships its package data and the plugin entry point.
+"""A built wheel is self-contained: it carries the data and runs with no source tree.
 
-Schemas live in the source checkout (``schemas/``), not in the wheel: libraries that need them
-resolve the checkout or ``HNX_SCHEMAS_DIR`` (see README, "Installing").  This test pins what the
-wheel *does* promise: the core CLI runs on a bare interpreter, templates and example specs are
-packaged, and the invariants plugin is registered.
+``setup.py`` copies ``schemas/``, ``profiles/`` and ``examples/`` into ``homelabnext/_data`` at
+build time.  This test builds the wheel, installs it into a throwaway venv that cannot see the
+checkout, and runs the data-dependent commands against example files shipped inside the wheel.
 """
 
+import filecmp
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
+import venv
 import zipfile
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
+DATA_TREES = ("schemas", "profiles", "examples")
 
 pytestmark = pytest.mark.slow
+
+
+def _tree_files(base: Path) -> set[str]:
+    return {
+        p.relative_to(base).as_posix()
+        for p in base.rglob("*")
+        if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc"
+    }
 
 
 @pytest.fixture(scope="module")
@@ -26,11 +37,12 @@ def wheel_dir(tmp_path_factory):
     if importlib.util.find_spec("setuptools") is None:
         pytest.skip("setuptools is not installed (build without network needs it)")
     work = tmp_path_factory.mktemp("wheelsrc")
-    for name in ("pyproject.toml", "README.md"):
+    for name in ("pyproject.toml", "README.md", "setup.py", "MANIFEST.in"):
         shutil.copy(ROOT / name, work / name)
-    shutil.copytree(
-        ROOT / "homelabnext", work / "homelabnext", ignore=shutil.ignore_patterns("__pycache__")
-    )
+    ignore = shutil.ignore_patterns("__pycache__", "*.pyc", "_data")
+    shutil.copytree(ROOT / "homelabnext", work / "homelabnext", ignore=ignore)
+    for tree in DATA_TREES:
+        shutil.copytree(ROOT / tree, work / tree, ignore=ignore)
     out = tmp_path_factory.mktemp("wheelout")
     subprocess.run(
         [
@@ -53,38 +65,143 @@ def wheel_dir(tmp_path_factory):
     return out
 
 
-def _unpack(wheel_dir, tmp_path):
+def _wheel(wheel_dir):
     wheels = list(wheel_dir.glob("homelabnext-*.whl"))
     assert len(wheels) == 1
-    target = tmp_path / "site"
-    with zipfile.ZipFile(wheels[0]) as z:
-        z.extractall(target)
-        return target, set(z.namelist())
+    return wheels[0]
 
 
 def test_wheel_ships_package_data_and_entry_point(wheel_dir, tmp_path):
-    target, names = _unpack(wheel_dir, tmp_path)
+    with zipfile.ZipFile(_wheel(wheel_dir)) as z:
+        names = set(z.namelist())
+        eps_name = next(n for n in names if n.endswith("entry_points.txt"))
+        eps = z.read(eps_name).decode()
     assert "homelabnext/decide/examples/decision_spec.yml" in names
     assert "homelabnext/golden/examples/classifier_smoke.yml" in names
     assert "homelabnext/generators/templates/caddy_site.tmpl" in names
-    eps = (target / next(n for n in names if n.endswith("entry_points.txt"))).read_text()
+    assert "homelabnext/_data/schemas/platform/site.schema.json" in names
+    assert "homelabnext/_data/schemas/ocsf/authentication.v1.json" in names
+    assert "homelabnext/_data/profiles/README.md" in names
+    assert "homelabnext/_data/examples/minimal/site.yml" in names
     assert "[homelabnext.invariants.checks]" in eps
     assert "hnx = homelabnext.cli:main" in eps
     assert not any(n.startswith(("tests/", "schemas/")) for n in names)
 
 
-def test_installed_copy_runs_hnx_help_without_the_source_tree(wheel_dir, tmp_path):
-    target, _ = _unpack(wheel_dir, tmp_path)
-    code = (
-        "import sys; sys.path.insert(0, sys.argv[1]);"
-        "import homelabnext.cli as c; sys.exit(c.main(['--help']))"
-    )
-    run = subprocess.run(
-        [sys.executable, "-I", "-c", code, str(target)],
-        cwd=tmp_path,
+def test_packaged_data_equals_the_source_of_truth(wheel_dir, tmp_path):
+    """No divergence: every packaged file is byte-identical to its top-level original."""
+    with zipfile.ZipFile(_wheel(wheel_dir)) as z:
+        z.extractall(tmp_path)
+    for tree in DATA_TREES:
+        packaged = tmp_path / "homelabnext" / "_data" / tree
+        assert _tree_files(packaged) == _tree_files(ROOT / tree), tree
+        _match, mismatch, errors = filecmp.cmpfiles(
+            ROOT / tree, packaged, sorted(_tree_files(ROOT / tree)), shallow=False
+        )
+        assert not mismatch and not errors, (tree, mismatch, errors)
+
+
+@pytest.fixture(scope="module")
+def installed(wheel_dir, tmp_path_factory):
+    """A venv holding only the wheel (plus the test interpreter's third-party libraries)."""
+    for mod in ("yaml", "jsonschema", "referencing"):
+        if importlib.util.find_spec(mod) is None:
+            pytest.skip(f"{mod} is not installed; the installed-wheel CLI needs the core extra")
+    env_dir = tmp_path_factory.mktemp("venv")
+    venv.EnvBuilder(with_pip=True, system_site_packages=False, clear=True).create(env_dir)
+    py = env_dir / ("Scripts" if os.name == "nt" else "bin") / "python"
+    subprocess.run(
+        [str(py), "-m", "pip", "install", "--no-deps", "--no-index", "-q", str(_wheel(wheel_dir))],
+        check=True,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=300,
+    )
+    # expose the third-party libraries by path only: a .pth *path line* does not run the
+    # editable-install hooks that would put this checkout on sys.path
+    libs = set()
+    for mod in ("yaml", "jsonschema", "referencing", "rpds", "attr", "jsonschema_specifications"):
+        spec = importlib.util.find_spec(mod)
+        if spec and spec.submodule_search_locations:
+            libs.add(str(Path(next(iter(spec.submodule_search_locations))).parent))
+        elif spec and spec.origin:
+            libs.add(str(Path(spec.origin).parent))
+    site = next((env_dir / "lib").glob("python*/site-packages"), None) or (
+        env_dir / "Lib" / "site-packages"
+    )
+    (site / "zz_testlibs.pth").write_text("\n".join(sorted(libs)) + "\n", encoding="utf-8")
+    return py, site
+
+
+def _run(py, args, cwd):
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("HNX_", "PYTHON"))}
+    return subprocess.run(
+        [str(py), "-I", "-m", "homelabnext.cli", *args],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+def _data(py, tmp_path):
+    code = "import homelabnext.paths as p; print(p.data_root()); print(p.__file__)"
+    run = subprocess.run(
+        [str(py), "-I", "-c", code], cwd=tmp_path, capture_output=True, text=True, timeout=60
     )
     assert run.returncode == 0, run.stderr
+    root, where = run.stdout.split("\n")[:2]
+    return Path(root), Path(where)
+
+
+def test_installed_wheel_never_sees_the_source_tree(installed, tmp_path):
+    py, site = installed
+    root, where = _data(py, tmp_path)
+    assert site in where.parents, where
+    assert root == site / "homelabnext" / "_data"
+    assert ROOT not in root.parents
+
+
+def test_installed_help_runs_without_the_source_tree(installed, tmp_path):
+    py, _ = installed
+    run = _run(py, ["--help"], tmp_path)
+    assert run.returncode == 0, run.stderr
     assert "usage: hnx" in run.stdout
+
+
+def test_installed_cli_validates_shipped_examples(installed, tmp_path):
+    py, _ = installed
+    ex, _where = _data(py, tmp_path)
+    ex = ex / "examples" / "minimal"
+    site = _run(py, ["site", "validate", str(ex / "site.yml")], tmp_path)
+    assert site.returncode == 0, site.stderr + site.stdout
+    assert site.stdout.strip().endswith("ok"), site.stdout
+    guests = _run(
+        py, ["guests", "validate", str(ex / "guests"), "--site", str(ex / "site.yml")], tmp_path
+    )
+    assert guests.returncode == 0, guests.stderr + guests.stdout
+    assert guests.stdout.startswith("ok: 2 guests")
+    custom = _run(py, ["custom", "list"], tmp_path)
+    assert custom.returncode == 0, custom.stderr + custom.stdout
+    assert "custom:vlan-aware-bridge-verifier" in custom.stdout
+    reg = _run(py, ["registry", "validate", str(ex / "services.yml")], tmp_path)
+    assert reg.returncode == 0, reg.stderr + reg.stdout
+    assert reg.stdout.startswith("ok: ")
+
+
+def test_installed_custom_check_and_ocsf_schemas(installed, tmp_path):
+    py, _ = installed
+    check = _run(py, ["custom", "check"], tmp_path)
+    assert check.returncode == 0, check.stderr + check.stdout
+    code = (
+        "from homelabnext.lake.tables import load_schemas; "
+        "from homelabnext.records import notes; "
+        "assert (notes.schema_dir() / 'records' / 'note.schema.json').is_file(); "
+        "print(len(load_schemas()))"
+    )
+    run = subprocess.run(
+        [str(py), "-I", "-c", code], cwd=tmp_path, capture_output=True, text=True, timeout=60
+    )
+    assert run.returncode == 0, run.stderr
+    assert int(run.stdout) >= 5

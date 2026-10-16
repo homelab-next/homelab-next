@@ -33,6 +33,8 @@ class ScaffoldError(ValueError):
 
 def _role_lint():
     path = Path(__file__).resolve().parents[2] / "tools" / "role_lint.py"
+    if not path.is_file():
+        raise ScaffoldError("scaffold checks need a source checkout (tools/role_lint.py)")
     spec = importlib.util.spec_from_file_location("hnx_role_lint", path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules["hnx_role_lint"] = mod
