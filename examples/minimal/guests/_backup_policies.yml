@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+policies:
+  daily: {schedule: "02:30", description: "nightly snapshot to the backup target"}
+  weekly: {schedule: "03:15", description: "weekly full"}

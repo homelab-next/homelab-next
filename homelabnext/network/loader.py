@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "platform" / "site.schema.json"
+from homelabnext import paths
 
 
 class SiteError(Exception):
@@ -94,4 +94,4 @@ def load_registry(path: str | Path):
 
 
 def schema() -> dict:
-    return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    return json.loads(paths.schema_file("platform", "site.schema.json").read_text(encoding="utf-8"))

@@ -10,9 +10,10 @@ from typing import Any
 
 import yaml
 
+from homelabnext import paths
+
 from .model import ComputeError, Fleet, Guest, Problem, ZoneLookup
 
-SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "platform" / "guest.schema.json"
 POLICIES_FILE = "_backup_policies.yml"
 
 
@@ -42,7 +43,9 @@ _UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
 
 
 def schema() -> dict:
-    return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    return json.loads(
+        paths.schema_file("platform", "guest.schema.json").read_text(encoding="utf-8")
+    )
 
 
 def schema_problems(doc: Any, where: str) -> list[Problem]:
