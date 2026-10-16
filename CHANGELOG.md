@@ -22,11 +22,11 @@ has no section below.
   registers, SPDX, leak scan and changelog check; CI runs the same gates and a pinned gitleaks CLI.
 - Pinned OCSF 1.3.0 schema subsets (`schemas/ocsf/`) and the `homelabnext.lake` library: `LakeClient` protocol, `FakeLake`, DuckDB/Iceberg/Trino adapters, cassette parity, and commit-then-checkpoint idempotent writes.
 - Site/network model: `schemas/platform/site.schema.json`, `homelabnext/network/` (validation, vendor-neutral IR, `linux`, `dnsmasq`, `zonefile` and dry-run `unifi` adapters, `opnsense` deferred) and `hnx site validate|plan|render`, with golden files from a synthetic site.
-
 - Guest (compute) model: `guest.schema.json`, `homelabnext.compute` loader, validation and renderers (Terraform for a Proxmox-style provider, libvirt, cloud-init, Ansible inventory, registry hosts, backup jobs, plan diff) and `hnx guests validate|render|plan`.
 
 ### Changed
 
+- Wave-2 integration: `lake` extra pins (`duckdb>=1.5`, `pyarrow>=26`, `pyiceberg[sql-sqlite,pyiceberg-core]>=0.12`), package data for example specs, the X-09 invariants entry point, CI matrix with and without the lake extras, `hnx custom check` gate, `role_lint` expands a directory of roles, guests read zones through the network loader, registry merge keeps extra registry fields, schema contract test covers every schema, cross-package integration tests and a wheel-install smoke test.
 - Core install is dependency-free; PyYAML, jsonschema and friends are extras.
 - Leak scanner accepts exactly the `Claude-Session:` commit trailer shape.
 

@@ -3,7 +3,7 @@
 This page fixes the names every task writes against, so parallel work never edits another task's
 files. It is the contract of the repository skeleton (task W1). A task may **extend** what its
 section says; it may not rename or break it. A change another task needs is requested in
-`docs/handoffs/<task>.md` and decided by the skeleton owner. Anything marked SERVER needs
+an issue or pull request and decided by the skeleton owner. Anything marked SERVER needs
 hardware that is not part of the first drop: document the interface and ship a fake instead.
 
 ## 1. Ownership map
@@ -22,6 +22,10 @@ hardware that is not part of the first drop: document the interface and ship a f
 | `docs/role-interface.md ansible/ homelabnext/generators/fleet_units.py tools/role_lint.py homelabnext/scaffold/` | W8 | |
 | `detections/ homelabnext/detections/ tests/detections/` | W9 | |
 | `homelabnext/{registers,invariants}/ tools/register_ids.py docs/checklist.md examples/registers/` | W10 | |
+| `homelabnext/network/ schemas/platform/site.schema.json docs/network-model.md tests/network/` | W13 | |
+| `homelabnext/compute/ schemas/platform/guest.schema.json docs/compute-model.md tests/compute/` | W14 | |
+| `homelabnext/customization/ profiles/ schemas/platform/customization.schema.json docs/customization.md tests/customization/` | W15 | |
+| `tests/integration/ tests/packaging/` | integration | cross-package end-to-end tests |
 | `homelabnext/{swap,parity}/ tools/decommission_check.py tests/swap/` | W11 | |
 | `compose/lab-in-a-box/ .github/workflows/nightly.yml docs/build-order.md docs/architecture.md` | W12 | |
 
@@ -54,6 +58,9 @@ homelabnext/
   registers/    register schemas -> HTML/JSON       (W10)  core
   invariants/   runner, check plugin API            (W10)  core
   scaffold/     `hnx new ...` templates             (W8)   core
+  network/      site model, IR, adapters            (W13)  core + core extra (PyYAML, jsonschema)
+  compute/      guest model, validation, renderers  (W14)  core + core extra
+  customization/ lab/vendor customizations, X-09    (W15)  core + core extra
   cli.py        argparse entry point                (W6)
 ```
 
@@ -70,16 +77,19 @@ def parse(text: str) -> LogicalId                    # raises ValueError
 def is_valid(text: str) -> bool
 
 # homelabnext.registry
-class EndpointNotConfigured(LookupError): ...
+class ResolutionError(Exception): ...                          # .capability, .trail (what was tried)
+class UnknownCapability(ResolutionError): ...
+class InvalidOverride(ResolutionError): ...
 @dataclass(frozen=True)
-class Endpoint: name: str; host: str; port: int; scheme: str; url: str
-def load(path: str | os.PathLike) -> Registry
-class Registry:
-    def service(self, name: str) -> Mapping[str, Any]          # validated against service.json
+class Endpoint: capability: str; scheme: str; host: str; port: int; source: str   # source: env|dns|hosts; .url
+def load(path: str | os.PathLike) -> Registry                  # raises RegistryError
+class Resolver:
+    def __init__(self, registry: Registry | None = None, *, domain: str | None = None,
+                 dns: DNSBackend | None = None, hosts: Mapping | None = None,
+                 environ: Mapping[str, str] | None = None)
     def alias(self, capability: str) -> str                    # '<capability>.svc.example.internal'
-    def endpoint(self, name: str, *, port_name: str | None = None) -> Endpoint
-def resolve(name: str, *, registry: Registry | None = None,
-            env: Mapping[str, str] | None = None) -> Endpoint  # raises EndpointNotConfigured, never a default
+    def resolve(self, capability: str) -> Endpoint             # env override, then DNS SRV, then hosts
+def resolve(capability: str, **resolver_kwargs) -> Endpoint    # raises ResolutionError, never a default
 
 # homelabnext.lake   (protocols; real adapters and in-memory fakes both implement them)
 class LakeQuery(Protocol):
@@ -88,6 +98,7 @@ class LakeQuery(Protocol):
 class LakeWriter(Protocol):
     def write(self, table: str, rows: Sequence[Mapping[str, Any]], *, batch_id: str) -> int: ...
     # commit-then-checkpoint: a retried batch_id after a crash writes zero duplicate rows
+# additive (see 2.3): describe(table), list_tables(), write_batch(...) -> WriteResult
 
 # homelabnext.notify
 @dataclass(frozen=True)
@@ -133,10 +144,72 @@ Check = Callable[[Mapping[str, Any]], Result]                           # the pl
 
 ### 2.2 Command line
 
-`hnx` sub-commands are added by owners through `homelabnext.cli.register(name, add_args, run)`
-(W6 defines it). Reserved names: `conform`, `swap`, `new`, `registry`, `gen`, `parity`, `invariants`.
+`hnx` sub-commands are rows in `COMMANDS` in `homelabnext/cli.py` (name, one-line help, handler that
+imports its package lazily). Current names: `registry`, `new`, `gen`, `detections`, `registers`,
+`invariants`, `ids`, `decide`, `golden`, `site`, `guests`, `schema-check`, `custom`. Reserved for later
+drops: `conform`, `swap`, `parity`.
 Exit codes everywhere: `0` ok, `1` a check failed, `2` misconfiguration or bad input, `>=100` the
 check itself could not measure.
+
+### 2.3 Library surfaces added in the second drop
+
+Names below are the stable entry points; each package's own module docstring and `__all__` are the
+full list. Everything runs without a server: each has an in-memory fake or a pure function, and
+anything that needs hardware is documented as SERVER rather than implemented.
+
+```python
+# homelabnext.lake   (extra: lake; imports of duckdb / pyiceberg / trino are lazy -> MissingExtra)
+class LakeClient(LakeQuery, LakeWriter, Protocol):
+    def describe(self, table: str) -> TableInfo
+    def list_tables(self) -> list[str]
+    def write_batch(self, table, rows, *, idempotency_key: str, source=None, high_water=None) -> WriteResult
+FakeLake(schemas=None, *, named_queries=None)                # in-memory, same contract as the adapters
+DuckDBLake(tables, schemas=None, ...)  IcebergLake(catalog, schemas=None, *, namespace="ocsf")
+TrinoLake(*, catalog, schema, user, resolver=None, ...)     # endpoint via the registry resolver
+Ingestor(client, checkpoint, *, table, source)               # commit-then-checkpoint, idempotent retry
+# OCSF table schemas come from schemas/ocsf/*.v1.json (override: HNX_SCHEMAS_DIR); cassette parity
+# (CassetteLake / record / compare) pins that every adapter returns the same rows.
+
+# homelabnext.notify
+Notifier(sender, store, clock=time.time, rate_limit=None, namespace="notify")
+    .register_pair(problem_title, recovery_title); .report(key, state, message) -> bool; .state_of(key)
+NtfySender(endpoint=None, *, default_topic=None, auth=None, opener=None, ...) ; FakeSender()
+# a problem with no registered recovery pair raises UnregisteredProblem; SendError on delivery failure
+
+# homelabnext.state
+StateStore(path, *, schema_version=1, migrations=None, clock=time.time)   # atomic, versioned, quarantines corrupt files
+    .get/.put/.update(key, fn)/.delete/.keys/.items
+KeyedState(store, namespace="checks", clock=...)            # observe(key, ok), red_for(key), counter/incr, last_seen
+
+# homelabnext.records   (agents write inbox/ only; operator movers live in records.decider, not re-exported)
+Records(root, clock).propose(note, *, body="", slug=None) -> Path
+Records.completion_request(related, body, *, agent, ...) -> Path   # related: decided/approved/<file>.md
+RecordsReader(root).list(lane) / .read(lane, name) / .iter_notes(lane)
+validate_note(note) / parse_note(text) / render_note(...)   # note schema: schemas/records/note.schema.json
+
+# homelabnext.decide
+load_spec(path) -> DecisionSpec ; Cascade(spec, tiers, scanner=None).decide(Item) -> Decision
+ImpactScanner(tiers).scan(text) ; replay(records, cascade) -> ReplayReport ; gate(report, baseline=None, ...) -> GateResult
+handle_decide(cascades, doc)                                 # the /v1/systemone adapter, framework-free
+
+# homelabnext.golden
+load_suite(path) -> Suite ; run_suite(suite, completer, *, role=None, model_id="") -> Report ; score(output, expect)
+
+# homelabnext.network   (site model; pure, no network access)
+load_site(path) -> dict ; validate(doc, registry) -> Report(.ok, .errors, .warnings)
+build_ir(doc, registry) -> NetworkIR ; adapters.get("linux"|"dnsmasq"|"zonefile"|"unifi").render(ir) -> {path: text}
+
+# homelabnext.compute   (guest model)
+load_fleet(directory, zones: ZoneLookup, *, domain="example.internal", policies_path=None, keys_path=None) -> Fleet
+open_site(path) -> (ZoneLookup, domain)                      # reads zones through network.load_site
+validate(fleet) -> list[Problem] ; render(fleet, target) -> {path: text} ; plan(old_tree, new_tree) -> Plan
+registry_hosts.fragment(fleet) / merge_into_registry(registry_doc, fragment)   # guests feed the registry
+
+# homelabnext.customization
+load_all(settings) ; discover(root, registry=None, roles_dir=None) -> Universe
+lint(items, universe, today, enabled=None) -> list[Finding] ; build_plan(items, universe, today, enabled=None) -> dict
+# invariant X-09 (plugins/x09_customizations.py) is registered through the homelabnext.invariants.checks entry point
+```
 
 ## 3. Registry and naming
 
@@ -152,8 +225,9 @@ check itself could not measure.
   `broker`, `secrets`, `idp`, `records`, `detections`.
 - Addresses in examples: `192.0.2.0/24` services, `198.51.100.0/24` management,
   `203.0.113.0/24` external, `2001:db8::/32` IPv6, MACs `00:00:5e:00:53:xx`.
-- No library or role contains a default endpoint. An unset endpoint raises
-  `EndpointNotConfigured`; `tools/no_raw_endpoints.py` gates the tree (ADR-0002).
+- No library or role contains a default endpoint. An unresolvable capability raises the registry's
+  `ResolutionError` (with the list of what was tried); the lake adapters, which take an endpoint
+  from the caller, raise `homelabnext.lake.EndpointNotConfigured` when none was supplied; `tools/no_raw_endpoints.py` gates the tree (ADR-0002).
 - Environment variables use the prefix `HNX_`. Endpoint overrides are `HNX_ENDPOINT_<NAME>` with
   the service name upper-cased and `-` replaced by `_`.
 
@@ -173,7 +247,9 @@ schemas/<dir>/examples/<name>.<n>.json     at least one valid example per schema
 schemas/<dir>/negative/<name>.<n>.json     at least one example that MUST be rejected
 ```
 
-Directories: `ids`, `events`, `ocsf`, `agent`, `broker`, `records`, `registers`, `platform`.
+Directories: `ids`, `events`, `ocsf`, `records`, `registers`, `platform`. A schema may also be named
+`<name>.json` (`model_roles`, `decision_spec`, `service`) or `<class>.v1.json` (the OCSF subsets);
+`tests/schemas/test_schema_contracts.py` pins the exact set.
 JSON Schema draft 2020-12. Each schema file declares `title`, `description` and `$id`. Registers
 that humans edit are YAML validated by the JSON Schema of the same name.
 
@@ -193,5 +269,5 @@ that humans edit are YAML validated by the JSON Schema of the same name.
 
 ## 7. Extending this page
 
-Open a handoff note (`docs/handoffs/<task>.md`) naming the section and the proposed text. Do not
+Open an issue or pull request naming the section and the proposed text. Do not
 edit this file from a feature branch of another task.
