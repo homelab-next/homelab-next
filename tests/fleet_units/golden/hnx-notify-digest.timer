@@ -1,0 +1,11 @@
+# Managed by fleet_units. Do not edit.
+[Unit]
+Description=Timer for hnx-notify-digest.service
+
+[Timer]
+OnCalendar=*-*-* 06:00:00 UTC
+Persistent=true
+Unit=hnx-notify-digest.service
+
+[Install]
+WantedBy=timers.target

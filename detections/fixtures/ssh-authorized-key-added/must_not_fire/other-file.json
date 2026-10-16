@@ -1,0 +1,17 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "other-file",
+  "description": "known_hosts is not authorized_keys",
+  "event": {
+    "file": {
+      "path": "/home/svc/.ssh/known_hosts"
+    },
+    "process": {
+      "executable": "/usr/bin/ssh"
+    },
+    "event": {
+      "action": "modified"
+    }
+  }
+}

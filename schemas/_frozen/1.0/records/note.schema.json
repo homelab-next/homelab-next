@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/records/note/1.0",
+  "title": "Records note frontmatter",
+  "description": "YAML frontmatter of a records note (the generalised vault note). The filename convention is <YYYY-MM-DD>-<requesting-agent>-<slug>.md (checked by tools/schema_check.py, not expressible in JSON Schema). Lanes: inbox/ (writable by agents), decided/{approved,denied,completed}/ (decision-maker only).",
+  "type": "object",
+  "properties": {
+    "type": {
+      "enum": [
+        "proposal",
+        "completion-request",
+        "finding",
+        "escalation",
+        "task"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "requesting_agent": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+    },
+    "created": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    },
+    "related": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/rel_path"
+      },
+      "uniqueItems": true
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/svc_id"
+            },
+            {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/cap_id"
+            },
+            {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+            }
+          ]
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 50
+        },
+        "model_role": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/mdl_id"
+        }
+      },
+      "required": [
+        "source"
+      ]
+    }
+  },
+  "required": [
+    "type",
+    "title",
+    "requesting_agent",
+    "created"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "proposal"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "required": [
+          "risk",
+          "rollback"
+        ],
+        "properties": {
+          "risk": {
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "rollback": {
+            "type": "string",
+            "minLength": 1
+          },
+          "affects": {
+            "type": "array",
+            "items": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0"
+            },
+            "minItems": 1
+          },
+          "status": {
+            "enum": [
+              "proposed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "completion-request"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "required": [
+          "related"
+        ],
+        "properties": {
+          "related": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^decided/approved/[A-Za-z0-9._-]+\\.md$"
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "outcome": {
+            "enum": [
+              "implemented",
+              "already-done",
+              "superseded"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "finding"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "required": [
+          "area",
+          "severity"
+        ],
+        "properties": {
+          "area": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+          },
+          "severity": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/severity"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "escalation"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "required": [
+          "reason",
+          "to"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+            "description": "Role name, not a person."
+          },
+          "deadline": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "task"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "required": [
+          "assigned_to",
+          "done_when",
+          "expires"
+        ],
+        "properties": {
+          "assigned_to": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+          },
+          "done_when": {
+            "type": "string",
+            "minLength": 10,
+            "description": "The observable condition that defines completion."
+          },
+          "expires": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+          },
+          "status": {
+            "enum": [
+              "open",
+              "closed",
+              "expired"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

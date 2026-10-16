@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: untagged probe
+  ansible.builtin.debug:
+    msg: hi

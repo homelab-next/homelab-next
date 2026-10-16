@@ -1,0 +1,9 @@
+<!-- det:web-shell-write -->
+<rule id="900006" level="12">
+  <if_group>hnx_generic</if_group>
+  <field name="process.executable" type="pcre2">(?:(?i)/nginx$)|(?:(?i)/apache2$)|(?:(?i)/httpd$)|(?:(?i)/php\-fpm$)|(?:(?i)\\w3wp\.exe$)</field>
+  <field name="file.path" type="pcre2">(?:(?i)\.php$)|(?:(?i)\.jsp$)|(?:(?i)\.aspx$)</field>
+  <field name="event.action" type="pcre2">(?i)^created$</field>
+  <description>Web server process wrote a script file into a web root</description>
+  <mitre><id>T1505.003</id></mitre>
+</rule>

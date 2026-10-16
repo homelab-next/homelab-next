@@ -1,0 +1,17 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "read-only-access",
+  "description": "file was only opened",
+  "event": {
+    "file": {
+      "path": "/home/svc/.ssh/authorized_keys"
+    },
+    "process": {
+      "executable": "/usr/sbin/sshd"
+    },
+    "event": {
+      "action": "opened"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "roles": {
+    "x": {
+      "tier": "fast",
+      "bindings": []
+    }
+  }
+}

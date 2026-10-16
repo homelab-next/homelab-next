@@ -1,0 +1,13 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:siem",
+  "type": "homelabnext.decision.requested",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "info",
+  "data": {
+    "decision_id": "D",
+    "spec": "proposal triage",
+    "subject": "inbox/x.md"
+  }
+}

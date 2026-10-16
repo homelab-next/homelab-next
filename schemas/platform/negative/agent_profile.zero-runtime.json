@@ -1,0 +1,29 @@
+{
+  "id": "profile:reader",
+  "persona": "persona:analyst",
+  "skills": [
+    "skill:summarise"
+  ],
+  "capabilities": [
+    "cap:lake-query"
+  ],
+  "model_role": "mdl:fast-classifier",
+  "mcp": [
+    "lake"
+  ],
+  "mcp_ceiling": [
+    "lake",
+    "records"
+  ],
+  "memory_scopes": [
+    "analyst"
+  ],
+  "data_tier": "local-only",
+  "budgets": {
+    "max_input_tokens": 32000,
+    "max_output_tokens": 2000,
+    "max_runtime_s": 0,
+    "max_tool_calls": 20
+  },
+  "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+}

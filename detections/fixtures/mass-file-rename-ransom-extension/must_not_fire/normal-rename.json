@@ -1,0 +1,15 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "normal-rename",
+  "description": "ordinary rename",
+  "event": {
+    "file": {
+      "path": "/srv/share/q3.xlsx",
+      "new_path": "/srv/share/q3-final.xlsx"
+    },
+    "event": {
+      "action": "renamed"
+    }
+  }
+}

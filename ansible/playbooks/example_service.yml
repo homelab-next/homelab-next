@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# Playbooks target capability groups, never hostnames (tools/role_lint.py PB001).
+- name: Deploy the example service on the monitoring capability
+  hosts: cap_monitoring
+  roles:
+    - role: example_service
+      example_service_logical_id: example-service

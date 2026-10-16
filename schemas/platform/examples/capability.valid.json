@@ -1,0 +1,26 @@
+{
+  "id": "cap:lake-query",
+  "title": "Lake query",
+  "layer": 4,
+  "summary": "Read-only SQL over the event lake with named queries.",
+  "contracts": [
+    "https://schemas.example.internal/homelabnext/ids/logical-id/1.0"
+  ],
+  "conformance": "conformance/lake-query",
+  "status": {
+    "contract": true,
+    "fake": true,
+    "conformance": false
+  },
+  "implementations": [
+    {
+      "name": "in-memory",
+      "adapter": "fake",
+      "kind": "fake",
+      "status": "supported"
+    }
+  ],
+  "depends_on": [
+    "cap:object-store"
+  ]
+}

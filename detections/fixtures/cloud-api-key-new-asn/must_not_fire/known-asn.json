@@ -1,0 +1,17 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "known-asn",
+  "description": "key from a known ASN",
+  "event": {
+    "cloud": {
+      "credential": {
+        "type": "access_key",
+        "first_seen_asn": false
+      },
+      "api": {
+        "action": "CreateUser"
+      }
+    }
+  }
+}

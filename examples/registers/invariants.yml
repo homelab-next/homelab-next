@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: Apache-2.0
+pillars:
+- letter: F
+  title: Foundation
+- letter: X
+  title: Modularity
+criteria:
+- id: F-01
+  statement: The repository carries a licence file.
+  evidence: auto
+  observable: test -s LICENSE && echo licence present
+  expected: exit 0
+  expect_regex: licence present
+  remediation: Add the licence file; without it nobody may legally reuse the work.
+- id: F-02
+  statement: Every runbook step has a verify.
+  evidence: auto
+  observable: python3 -m homelabnext.registers build examples/registers "$(mktemp -d)" >/dev/null && echo steps verified
+  expected: exit 0
+  expect_regex: steps verified
+  slow: true
+  remediation: Add the missing verify; a step that cannot be checked is a hope, not a step.
+- id: F-03
+  statement: The backup target accepted a write in the last day.
+  evidence: server
+  observable: query the backup system for the newest recovery point of each guest
+  remediation: Investigate the failing job; an unrecoverable backup is no backup.
+- id: X-01
+  statement: No raw endpoint literals outside the registry.
+  evidence: plugin
+  plugin: X-01
+  remediation: Replace the literal with a registry lookup so a swap changes one row.
+- id: X-03
+  statement: Schemas are version-pinned and examples are valid.
+  evidence: plugin
+  plugin: X-03
+  remediation: Pin the schema version, add the missing example or negative, or fix the invalid one.
+- id: X-04
+  statement: Every capability has a conformance test.
+  evidence: plugin
+  plugin: X-04
+  remediation: Write the conformance test; a capability without one cannot be swapped safely.
+- id: X-05
+  statement: The role linter reports clean.
+  evidence: plugin
+  plugin: X-05
+  remediation: Fix the reported role defects.
+- id: X-06
+  statement: Detection ids in specs are logical.
+  evidence: plugin
+  plugin: X-06
+  remediation: Replace the raw rule number with its det logical id from the detection map.
+- id: X-02
+  statement: Registry rows match live listeners.
+  evidence: plugin
+  plugin: X-02
+  remediation: Add the missing registry row or remove the stray listener.

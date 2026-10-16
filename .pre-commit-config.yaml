@@ -1,0 +1,56 @@
+# Install: pip install pre-commit && pre-commit install
+# SPDX-License-Identifier: Apache-2.0
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: cef0300fd0fc4d2a87a85fa2093c6b283ea36f4b  # v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-added-large-files
+        args: ["--maxkb=512"]
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: 38bfb07c0c64c304f47eb52090f8288150c77730  # v0.17.1
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      # Generic shapes: addresses, MACs, e-mails, private TLDs, keys, tokens, entropy.
+      # Set HNX_DENYLIST=<file> locally to add run-time terms; the file is never committed.
+      - id: leak-scan
+        name: leak scan (generic patterns + optional HNX_DENYLIST)
+        entry: python3 tools/leak_scan.py
+        language: system
+        pass_filenames: true
+      # detect-secrets-style: credential shapes only, so it can be bypassed for nothing else.
+      - id: secret-scan
+        name: secret scan (key material and tokens)
+        entry: python3 tools/leak_scan.py --groups secret
+        language: system
+        pass_filenames: true
+      - id: spdx-header
+        name: SPDX header on Python sources
+        entry: python3 tools/check_spdx.py
+        language: system
+        types: [python]
+      # Register ids: never pick one by hand.  Write XX-NEW (LL-NEW, RB-NEW, ...) and let the hook
+      # allocate it under a host-wide lock.  `resolve` rewrites the file and fails the commit
+      # (exit 3) so you re-stage and commit again; `check-lost` then refuses any commit in which an
+      # id that the parent commit had has vanished (a merge that fused two entries).
+      - id: register-ids-resolve
+        name: register ids - resolve NEW placeholders
+        entry: python3 tools/register_ids.py resolve
+        language: system
+        files: '(^|/)(lessons|runbooks|invariants|queue)\.ya?ml$'
+      - id: register-ids-check-lost
+        name: register ids - no id may vanish
+        entry: python3 tools/register_ids.py check-lost
+        language: system
+        files: '(^|/)(lessons|runbooks|invariants|queue)\.ya?ml$'

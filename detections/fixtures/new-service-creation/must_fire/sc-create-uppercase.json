@@ -1,0 +1,15 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "sc-create-uppercase",
+  "description": "case-insensitive match",
+  "event": {
+    "process": {
+      "executable": "C:\\Windows\\System32\\SC.EXE",
+      "command_line": "SC.EXE CREATE updsvc BINPATH= C:\\temp\\a.exe",
+      "parent": {
+        "executable": "C:\\Windows\\explorer.exe"
+      }
+    }
+  }
+}

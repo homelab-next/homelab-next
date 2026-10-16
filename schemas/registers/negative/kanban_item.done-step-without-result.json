@@ -1,0 +1,12 @@
+{
+  "id": "PRJ-001",
+  "title": "abc",
+  "column": "partial",
+  "steps": [
+    {
+      "n": 1,
+      "text": "abc",
+      "status": "done"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Wait for each dependency to accept connections
+  ansible.builtin.wait_for:
+    host: "{{ lookup('hnx_registry', item, field='host') }}"
+    port: "{{ lookup('hnx_registry', item, field='port') }}"
+    timeout: 10
+  loop: "{{ example_service_dependencies }}"
+  tags: [readiness]

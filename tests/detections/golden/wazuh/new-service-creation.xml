@@ -1,0 +1,9 @@
+<!-- det:new-service-creation -->
+<rule id="900003" level="8">
+  <if_group>hnx_generic</if_group>
+  <field name="process.executable" type="pcre2">(?i)\\sc\.exe$</field>
+  <field name="process.command_line" type="pcre2">(?i)\ create\ </field>
+  <field name="process.command_line" type="pcre2">(?i)binpath=</field>
+  <description>New service created via the service control tool</description>
+  <mitre><id>T1543.003</id></mitre>
+</rule>

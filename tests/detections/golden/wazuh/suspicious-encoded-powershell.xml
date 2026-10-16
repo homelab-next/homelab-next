@@ -1,0 +1,9 @@
+<!-- det:suspicious-encoded-powershell -->
+<rule id="900005" level="12">
+  <if_group>hnx_generic</if_group>
+  <field name="process.executable" type="pcre2">(?:(?i)\\powershell\.exe$)|(?:(?i)\\pwsh\.exe$)</field>
+  <field name="process.command_line" type="pcre2">(?:(?i)\ \-enc\ )|(?:(?i)\ \-encodedcommand\ )|(?:(?i)\ \-ec\ )</field>
+  <field name="process.parent.executable" type="pcre2" negate="yes">(?i)\\ccmexec\.exe$</field>
+  <description>Suspicious encoded PowerShell command line</description>
+  <mitre><id>T1059.001</id></mitre>
+</rule>

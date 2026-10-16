@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+title: Web server process wrote a script file into a web root
+det: det:web-shell-write
+description: A web server worker created a server-side script file, a common web shell drop pattern.
+status: experimental
+logsource: {category: file_event}
+detection:
+  selection_proc:
+    Image|endswith: ['/nginx', '/apache2', '/httpd', '/php-fpm', '\w3wp.exe']
+  selection_file:
+    TargetFilename|endswith: ['.php', '.jsp', '.aspx']
+    EventAction: created
+  condition: selection_proc and selection_file
+level: high
+tags: [attack.persistence, attack.t1505.003]
+falsepositives: [Content management systems that compile templates to disk]

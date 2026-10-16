@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: TODO pinned version bump path
+  ansible.builtin.debug:
+    msg: "upgrade from {{ demo_role_version }}"
+  tags: [upgrade]

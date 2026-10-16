@@ -1,0 +1,13 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:siem",
+  "type": "homelabnext.task.queued",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "info",
+  "data": {
+    "task_id": "T",
+    "profile": "profile:reader",
+    "priority": 5
+  }
+}

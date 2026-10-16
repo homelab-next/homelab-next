@@ -21,3 +21,4 @@ node_modules/
 secrets/
 *.pem
 *.key
+*.egg-info/

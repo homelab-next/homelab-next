@@ -1,0 +1,17 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "editor-modified",
+  "description": "an editor appends a key",
+  "event": {
+    "file": {
+      "path": "/home/svc/.ssh/authorized_keys"
+    },
+    "process": {
+      "executable": "/usr/bin/vim.basic"
+    },
+    "event": {
+      "action": "modified"
+    }
+  }
+}

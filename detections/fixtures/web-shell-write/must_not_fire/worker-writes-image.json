@@ -1,0 +1,17 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "worker-writes-image",
+  "description": "image upload is not a script",
+  "event": {
+    "process": {
+      "executable": "/usr/sbin/nginx"
+    },
+    "file": {
+      "path": "/var/www/html/uploads/cat.png"
+    },
+    "event": {
+      "action": "created"
+    }
+  }
+}

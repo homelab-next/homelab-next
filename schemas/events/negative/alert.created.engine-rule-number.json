@@ -1,0 +1,15 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:siem",
+  "type": "homelabnext.alert.created",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "info",
+  "data": {
+    "alert_id": "ALT-0001",
+    "detection": "900299",
+    "title": "t",
+    "severity": "high",
+    "observed_at": "2026-01-01T00:00:00Z"
+  }
+}

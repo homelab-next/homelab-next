@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/events/envelope/1.0",
+  "title": "Event envelope (CloudEvents 1.0 compatible)",
+  "description": "CloudEvents 1.0 structured-mode JSON envelope. Required: specversion, id, source, type, time. source is a logical id (never a URL). id is the idempotency key: redelivery of the same id is harmless. Extension attributes must be lower-case alphanumeric (CloudEvents naming rule) so new ones are additive.",
+  "type": "object",
+  "properties": {
+    "specversion": {
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "source": {
+      "anyOf": [
+        {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/svc_id"
+        },
+        {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/cap_id"
+        },
+        {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+        }
+      ]
+    },
+    "type": {
+      "type": "string",
+      "pattern": "^homelabnext\\.[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+    },
+    "time": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    },
+    "subject": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "severity": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/severity"
+    },
+    "datacontenttype": {
+      "const": "application/json"
+    },
+    "dataschema": {
+      "type": "string",
+      "pattern": "^https://schemas\\.example\\.internal/homelabnext/",
+      "description": "$id of the schema describing data."
+    },
+    "correlationid": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+    },
+    "data": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "time",
+    "data"
+  ],
+  "propertyNames": {
+    "pattern": "^[a-z0-9]{1,20}$"
+  }
+}

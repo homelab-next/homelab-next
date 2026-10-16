@@ -1,0 +1,20 @@
+{
+  "action": "records.complete",
+  "description": "Move approved notes to completed",
+  "tier": "write",
+  "mode": "shadow",
+  "requires_approval": false,
+  "target": "svc:records",
+  "handler": "handlers/records_complete.py",
+  "params": {
+    "type": "object",
+    "properties": {
+      "related": {
+        "type": "array"
+      }
+    }
+  },
+  "timeout_s": 30,
+  "idempotent": true,
+  "audit": true
+}

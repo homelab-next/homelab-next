@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "roles": {
+    "Main Reasoner": {
+      "tier": "large",
+      "bindings": [
+        {
+          "backend": "svc:a",
+          "model_id": "m"
+        }
+      ]
+    }
+  }
+}

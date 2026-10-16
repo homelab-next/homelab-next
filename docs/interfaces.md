@@ -1,0 +1,197 @@
+# Interface index
+
+This page fixes the names every task writes against, so parallel work never edits another task's
+files. It is the contract of the repository skeleton (task W1). A task may **extend** what its
+section says; it may not rename or break it. A change another task needs is requested in
+`docs/handoffs/<task>.md` and decided by the skeleton owner. Anything marked SERVER needs
+hardware that is not part of the first drop: document the interface and ship a fake instead.
+
+## 1. Ownership map
+
+| Path | Owner | Notes |
+|---|---|---|
+| `LICENSE NOTICE README.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md CHANGELOG.md pyproject.toml Makefile .pre-commit-config.yaml .github/workflows/ci.yml` | W1 | README has a marked quick-start section handed to W12 |
+| `docs/adr/ docs/interfaces.md docs/glossary.md tools/leak_scan.py tools/check_*.py tools/tests/` | W1 | |
+| `homelabnext/__init__.py homelabnext/_version.py` | W1 | no one else creates these |
+| `schemas/{ids,events,records,registers,platform}/ tools/schema_check.py homelabnext/ids/` | W2 | |
+| `schemas/ocsf/ homelabnext/lake/ tests/lake/` | W3 | |
+| `homelabnext/registry/ homelabnext/generators/ generators/ examples/services.yml tools/no_raw_endpoints.py` | W4 | `registry/models.py` is W7 |
+| `homelabnext/{notify,state,records}/ tests/{notify,state,records}/` | W5 | |
+| `conformance/ homelabnext/conform/ homelabnext/cli.py` | W6 | `hnx conform` |
+| `homelabnext/{decide,golden}/ homelabnext/registry/models.py tests/{decide,golden}/ conformance/fakes/openai_server.py` | W7 | |
+| `docs/role-interface.md ansible/ homelabnext/generators/fleet_units.py tools/role_lint.py homelabnext/scaffold/` | W8 | |
+| `detections/ homelabnext/detections/ tests/detections/` | W9 | |
+| `homelabnext/{registers,invariants}/ tools/register_ids.py docs/checklist.md examples/registers/` | W10 | |
+| `homelabnext/{swap,parity}/ tools/decommission_check.py tests/swap/` | W11 | |
+| `compose/lab-in-a-box/ .github/workflows/nightly.yml docs/build-order.md docs/architecture.md` | W12 | |
+
+Rules that apply to every task: Python >= 3.11, standard library first; an SPDX header on every
+source file; no network in tests; clocks and randomness injected; no real identifiers (see
+`CONTRIBUTING.md`); tests live under `tests/<package>/` (or `<package>/tests/` for a separate
+distribution) and run with `python -m pytest -q <dir>`.
+
+## 2. Package layout
+
+One distribution, `homelabnext`, one namespace, one console script `hnx = homelabnext.cli:main`
+(module owned by W6). Each sub-package has its own `__init__.py`, is importable with only the core
+dependencies unless its extra says otherwise, and ships an in-memory fake.
+
+```
+homelabnext/
+  ids/          logical ids                         (W2)   core
+  registry/     service registry + resolver         (W4)   core;  models.py (W7)
+  generators/   registry -> artefacts, goldens      (W4, fleet_units W8)   extra: generators
+  lake/         query, catalog, write, fakes        (W3)   extras: lake, trino
+  notify/       state-diffed, dedup-keyed send      (W5)   core
+  state/        cursors and history, atomic writes  (W5)   core
+  records/      propose/finding/completion          (W5)   core (+ records for pydantic)
+  decide/       decision specs, replay, eval        (W7)   extra: decide
+  golden/       golden-task format and runner       (W7)   core
+  conform/      conformance harness core            (W6)   core
+  swap/         swap checklist runner               (W11)  extra: swap
+  parity/       parity and drift tools              (W11)  extra: swap
+  detections/   fixtures, engine adapters, det: map (W9)   extra: detections
+  registers/    register schemas -> HTML/JSON       (W10)  core
+  invariants/   runner, check plugin API            (W10)  core
+  scaffold/     `hnx new ...` templates             (W8)   core
+  cli.py        argparse entry point                (W6)
+```
+
+### 2.1 Initial signatures
+
+These are the shapes the other sections of the repo are written against. Owners may add
+parameters with defaults and new functions; they may not change what is listed.
+
+```python
+# homelabnext.ids
+@dataclass(frozen=True)
+class LogicalId: kind: str; slug: str                # str(x) == f"{kind}:{slug}"
+def parse(text: str) -> LogicalId                    # raises ValueError
+def is_valid(text: str) -> bool
+
+# homelabnext.registry
+class EndpointNotConfigured(LookupError): ...
+@dataclass(frozen=True)
+class Endpoint: name: str; host: str; port: int; scheme: str; url: str
+def load(path: str | os.PathLike) -> Registry
+class Registry:
+    def service(self, name: str) -> Mapping[str, Any]          # validated against service.json
+    def alias(self, capability: str) -> str                    # '<capability>.svc.example.internal'
+    def endpoint(self, name: str, *, port_name: str | None = None) -> Endpoint
+def resolve(name: str, *, registry: Registry | None = None,
+            env: Mapping[str, str] | None = None) -> Endpoint  # raises EndpointNotConfigured, never a default
+
+# homelabnext.lake   (protocols; real adapters and in-memory fakes both implement them)
+class LakeQuery(Protocol):
+    def query(self, sql: str, params: Mapping[str, Any] | None = None) -> list[dict[str, Any]]: ...
+    def named(self, name: str, params: Mapping[str, Any] | None = None) -> list[dict[str, Any]]: ...
+class LakeWriter(Protocol):
+    def write(self, table: str, rows: Sequence[Mapping[str, Any]], *, batch_id: str) -> int: ...
+    # commit-then-checkpoint: a retried batch_id after a crash writes zero duplicate rows
+
+# homelabnext.notify
+@dataclass(frozen=True)
+class Message: key: str; title: str; body: str; level: str = "info"   # level: info|warn|crit
+class Sender(Protocol):
+    def send(self, message: Message) -> None: ...
+class Notifier:
+    def __init__(self, sender: Sender, store: StateStore, clock: Callable[[], float]): ...
+    def report(self, key: str, state: str, message: Message) -> bool   # True if a message was sent
+    # same (key, state) twice sends once; a return to 'ok' sends one recovery message
+
+# homelabnext.state
+class StateStore:
+    def __init__(self, path: str | os.PathLike): ...
+    def get(self, key: str, default: Any = None) -> Any
+    def put(self, key: str, value: Any) -> None                # atomic: write temp, fsync, rename
+
+# homelabnext.records
+class Records:
+    def __init__(self, root: str | os.PathLike, clock: Callable[[], datetime]): ...
+    def propose(self, note: Mapping[str, Any]) -> Path         # validates; writes only under inbox/
+    def completion_request(self, related: Sequence[str], body: str, *, agent: str) -> Path
+def validate_note(note: Mapping[str, Any]) -> None             # raises ValueError naming the field
+
+# homelabnext.conform
+@dataclass(frozen=True)
+class CheckResult: check: str; ok: bool; evidence: str
+class Capability(Protocol):
+    name: str
+    def checks(self) -> Sequence[Callable[[Any], CheckResult]]: ...
+def run(capability: str, target: Mapping[str, Any]) -> list[CheckResult]
+
+# homelabnext.detections
+class Engine(Protocol):
+    def evaluate(self, rule: Mapping[str, Any], events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]: ...
+
+# homelabnext.invariants
+class Status(enum.IntEnum): PASS = 0; FAIL = 1; UNMEASURABLE = 100     # >=100 means "could not measure"
+@dataclass(frozen=True)
+class Result: id: str; status: Status; evidence: str
+Check = Callable[[Mapping[str, Any]], Result]                           # the plugin API
+```
+
+### 2.2 Command line
+
+`hnx` sub-commands are added by owners through `homelabnext.cli.register(name, add_args, run)`
+(W6 defines it). Reserved names: `conform`, `swap`, `new`, `registry`, `gen`, `parity`, `invariants`.
+Exit codes everywhere: `0` ok, `1` a check failed, `2` misconfiguration or bad input, `>=100` the
+check itself could not measure.
+
+## 3. Registry and naming
+
+- Registry file: `services.yml` (the example lives at `examples/services.yml`), validated by
+  `schemas/platform/service.json`. A service row has at least: `name` (logical id slug), `guest`,
+  `ports` (named), `hostname`, `auth`, `health`, `metrics`, `backup`, `depends_on`, `version`,
+  `impl` (current product), `replaced_by` (optional).
+- Capability alias: `<capability>.svc.example.internal`, for example
+  `lake-query.svc.example.internal`. The suffix is a registry setting (`domain:`), `example.internal`
+  in everything public. Aliases are generated, never typed.
+- Capability names (fourteen, also the `hnx conform --list` output): `lake-query`, `lake-catalog`,
+  `object-store`, `inference`, `fast-classifier`, `notify`, `cases`, `events`, `orchestration`,
+  `broker`, `secrets`, `idp`, `records`, `detections`.
+- Addresses in examples: `192.0.2.0/24` services, `198.51.100.0/24` management,
+  `203.0.113.0/24` external, `2001:db8::/32` IPv6, MACs `00:00:5e:00:53:xx`.
+- No library or role contains a default endpoint. An unset endpoint raises
+  `EndpointNotConfigured`; `tools/no_raw_endpoints.py` gates the tree (ADR-0002).
+- Environment variables use the prefix `HNX_`. Endpoint overrides are `HNX_ENDPOINT_<NAME>` with
+  the service name upper-cased and `-` replaced by `_`.
+
+## 4. Logical ids
+
+Grammar: `<kind>:<slug>`; `kind` is one of `svc cap det table role host note agent`; `slug` matches
+`[a-z0-9][a-z0-9-]{0,62}`. Examples: `det:auth-failure-burst`, `cap:lake-query`,
+`table:detection-findings`. A logical id never contains a scheme, address or engine rule number
+(`viking://`, IPs and numeric rule ids are lint failures). W2's `homelabnext/ids/` is the
+implementation and the `schemas/ids/` JSON Schema is the machine form; this section is the summary.
+
+## 5. Schemas
+
+```
+schemas/<dir>/<name>.schema.json          the contract; "$id": "urn:homelabnext:schema:<dir>/<name>:<major>"
+schemas/<dir>/examples/<name>.<n>.json     at least one valid example per schema
+schemas/<dir>/negative/<name>.<n>.json     at least one example that MUST be rejected
+```
+
+Directories: `ids`, `events`, `ocsf`, `agent`, `broker`, `records`, `registers`, `platform`.
+JSON Schema draft 2020-12. Each schema file declares `title`, `description` and `$id`. Registers
+that humans edit are YAML validated by the JSON Schema of the same name.
+
+## 6. Version policy
+
+- Distribution version: SemVer, `0.x` until the first stable drop. The single source is
+  `homelabnext/_version.py`; `CHANGELOG.md` must hold a section for it (`tools/check_changelog.py`).
+- Schemas: the major version is in `$id` and, for versioned families, the filename
+  (`<class>.v1.json`). Within a major version evolution is **additive only** (new optional
+  properties, new enum values only where the schema says the set is open). Removing, renaming or
+  tightening is a new major with a dual-write window (ADR-0001). `tools/schema_check.py` enforces it.
+- Python API: a name listed in section 2.1 follows SemVer once `1.0` ships; before that, a change
+  to a listed signature needs a note in `CHANGELOG.md` under "Changed".
+- Capability contracts: a conformance check is never removed; it may be added. A new check ships
+  with a fake update in the same change.
+- ADRs are append-only. A reversal is a new ADR that supersedes the old one.
+
+## 7. Extending this page
+
+Open a handoff note (`docs/handoffs/<task>.md`) naming the section and the proposed text. Do not
+edit this file from a feature branch of another task.

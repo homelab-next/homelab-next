@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/registers/lesson/1.0",
+  "title": "Lesson (post-incident learning)",
+  "description": "Separates contributing factors (conditions that enabled the problem) from the root cause (why those conditions existed). A lesson needs a preventive control and a falsifiable verification; graded statuses need control_installed_at. An id of the form LL-NEW is legal: a pre-commit hook allocates the number under a lock.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^LL-(\\d{3,}|NEW)$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 200
+    },
+    "date": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "systems": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "recurrences": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "status": {
+      "enum": [
+        "controlled",
+        "partial",
+        "open",
+        "retired",
+        "grandfathered"
+      ]
+    },
+    "symptom": {
+      "type": "string",
+      "minLength": 10,
+      "description": "What an observer sees; the lookup key."
+    },
+    "contributing_factors": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 3
+      },
+      "minItems": 1
+    },
+    "root_cause": {
+      "type": "string",
+      "minLength": 10,
+      "description": "Why the contributing conditions existed. A person or a single command is not a root cause."
+    },
+    "corrective_action": {
+      "type": "string",
+      "minLength": 3
+    },
+    "preventive_control": {
+      "type": "string",
+      "minLength": 10,
+      "description": "Must change what is possible or what is detectable."
+    },
+    "verification": {
+      "type": "string",
+      "minLength": 10,
+      "description": "A falsifiable test of the control."
+    },
+    "control_installed_at": {
+      "type": "string",
+      "pattern": "^(\\d{4}-\\d{2}-\\d{2}|unknown)$"
+    },
+    "retired_by": {
+      "type": "string",
+      "minLength": 3
+    }
+  },
+  "required": [
+    "id",
+    "title",
+    "date",
+    "systems",
+    "recurrences",
+    "status",
+    "symptom",
+    "contributing_factors",
+    "root_cause",
+    "corrective_action",
+    "preventive_control",
+    "verification"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "controlled",
+              "partial"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "control_installed_at"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "retired"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "retired_by"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+-- det:web-shell-write
+-- title: Web server process wrote a script file into a web root
+-- level: high
+-- tags: attack.persistence, attack.t1505.003
+WHERE (((process.executable ~endswith "/nginx" OR process.executable ~endswith "/apache2" OR process.executable ~endswith "/httpd" OR process.executable ~endswith "/php-fpm" OR process.executable ~endswith "\\w3wp.exe")) AND ((file.path ~endswith ".php" OR file.path ~endswith ".jsp" OR file.path ~endswith ".aspx") AND event.action = "created"))

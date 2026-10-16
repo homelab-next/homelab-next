@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/events/swap.step/1.0",
+  "title": "Event homelabnext.swap.step",
+  "description": "One step of the nine-step capability swap procedure changed state. Audit trail for replacing a product behind a capability.",
+  "allOf": [
+    {
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "homelabnext.swap.step"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "swap_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{1,64}$"
+            },
+            "capability": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/cap_id"
+            },
+            "step": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9
+            },
+            "step_name": {
+              "enum": [
+                "inventory",
+                "contract",
+                "fake",
+                "conform-old",
+                "stand-up-new",
+                "conform-new",
+                "shadow",
+                "cutover",
+                "decommission"
+              ]
+            },
+            "status": {
+              "enum": [
+                "started",
+                "passed",
+                "failed",
+                "rolled_back"
+              ]
+            },
+            "from_adapter": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+            },
+            "to_adapter": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+            }
+          },
+          "required": [
+            "swap_id",
+            "capability",
+            "step",
+            "step_name",
+            "status"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ]
+    }
+  ]
+}

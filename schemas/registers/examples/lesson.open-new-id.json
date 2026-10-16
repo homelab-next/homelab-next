@@ -1,0 +1,18 @@
+{
+  "id": "LL-NEW",
+  "title": "Stale cache served after config change",
+  "date": "2026-01-01",
+  "systems": [
+    "web-proxy"
+  ],
+  "recurrences": 0,
+  "status": "open",
+  "symptom": "Clients see the old page for ten minutes after a config change was applied.",
+  "contributing_factors": [
+    "Reload was skipped because the unit file hash did not change"
+  ],
+  "root_cause": "The deploy role infers 'changed' from the unit file alone, so a config-only change never triggers a reload.",
+  "corrective_action": "Reloaded the proxy by hand.",
+  "preventive_control": "The role now notifies reload on any template change, and a post-deploy probe fetches a canary path.",
+  "verification": "Change a canary template value; the probe must return the new value within 30 seconds or the deploy fails."
+}

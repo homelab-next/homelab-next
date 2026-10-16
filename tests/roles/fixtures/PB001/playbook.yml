@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: bad
+  hosts: query-01.example.internal
+  tasks: []

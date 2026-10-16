@@ -1,0 +1,16 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "random-extension",
+  "description": "per-victim random extension",
+  "event": {
+    "file": {
+      "path": "/srv/share/q3.xlsx",
+      "new_path": "/srv/share/q3.xlsx.a8f3kd"
+    },
+    "event": {
+      "action": "renamed"
+    }
+  },
+  "note": "unknown extension evades; needs volume/entropy aggregation in the engine"
+}

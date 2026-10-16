@@ -1,0 +1,17 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "provisioning",
+  "description": "cloud-init writes the key",
+  "event": {
+    "file": {
+      "path": "/home/svc/.ssh/authorized_keys"
+    },
+    "process": {
+      "executable": "/usr/bin/cloud-init"
+    },
+    "event": {
+      "action": "created"
+    }
+  }
+}

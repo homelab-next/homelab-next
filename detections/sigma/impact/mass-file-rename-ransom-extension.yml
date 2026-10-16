@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+title: File renamed to a typical ransomware extension
+det: det:mass-file-rename-ransom-extension
+description: >
+  Single-event half of a ransomware detection. Volume thresholding (many renames
+  per host per minute) is an engine-side aggregation and is out of this subset.
+status: experimental
+logsource: {category: file_rename}
+detection:
+  selection:
+    EventAction: renamed
+    NewFilename|endswith: ['.locked', '.encrypted', '.crypt']
+  condition: selection
+level: high
+tags: [attack.impact, attack.t1486]
+falsepositives: [Archive tools using one of these extensions deliberately]

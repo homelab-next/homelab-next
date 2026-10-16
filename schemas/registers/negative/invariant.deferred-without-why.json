@@ -1,0 +1,10 @@
+{
+  "id": "A-01",
+  "pillar": "A",
+  "statement": "Every guest appears in exactly one backup job.",
+  "observable": "Compare the guest list with job membership",
+  "expected": "No guest is missing and none is listed twice",
+  "evidence": "manual",
+  "remediation": "Add the guest to a job; an unprotected guest cannot be restored.",
+  "status": "deferred"
+}

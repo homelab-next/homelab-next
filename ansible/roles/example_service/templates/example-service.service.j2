@@ -1,0 +1,11 @@
+# Managed by Ansible (role example_service). Do not edit.
+[Unit]
+Description=Example service {{ example_service_logical_id }}
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/example-service --config {{ example_service_config_dir }}/config.yml
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

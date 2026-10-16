@@ -1,0 +1,56 @@
+# Managed by Ansible (role compose_app). Do not edit.
+name: {{ compose_app_name }}
+services:
+{% for sname, svc in compose_app_spec.services | dictsort %}
+  {{ sname }}:
+    image: {{ svc.image }}:{{ svc.tag }}@{{ svc.digest }}
+    restart: {{ svc.restart | default(compose_app_restart_policy) }}
+{% if svc.command is defined %}
+    command: {{ svc.command | to_json }}
+{% endif %}
+{% if svc.user is defined %}
+    user: {{ svc.user | string | to_json }}
+{% endif %}
+{% if svc.env_file | default([]) | length > 0 %}
+    env_file:
+{% for f in svc.env_file %}
+      - {{ f | to_json }}
+{% endfor %}
+{% endif %}
+{% if svc.environment | default({}) | length > 0 %}
+    environment:
+{% for k, v in svc.environment | dictsort %}
+      {{ k }}: {{ v | string | to_json }}
+{% endfor %}
+{% endif %}
+{% if svc.ports | default([]) | length > 0 %}
+    ports:
+{% for p in svc.ports %}
+      - {{ p | string | to_json }}
+{% endfor %}
+{% endif %}
+{% if svc.volumes | default([]) | length > 0 %}
+    volumes:
+{% for v in svc.volumes %}
+      - {{ v | to_json }}
+{% endfor %}
+{% endif %}
+{% if svc.depends_on | default([]) | length > 0 %}
+    depends_on:
+{% for d in svc.depends_on %}
+      {{ d }}:
+        condition: service_healthy
+{% endfor %}
+{% endif %}
+    healthcheck:
+      test: {{ svc.healthcheck.test | to_json }}
+      interval: {{ svc.healthcheck.interval | default('30s') }}
+      timeout: {{ svc.healthcheck.timeout | default('5s') }}
+      retries: {{ svc.healthcheck.retries | default(3) }}
+      start_period: {{ svc.healthcheck.start_period | default('10s') }}
+    logging:
+      driver: json-file
+      options:
+        max-size: {{ compose_app_log_max_size | string | to_json }}
+        max-file: {{ compose_app_log_max_file | string | to_json }}
+{% endfor %}

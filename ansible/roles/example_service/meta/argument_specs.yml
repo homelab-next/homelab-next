@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Deploy the example service.
+    options:
+      example_service_logical_id: &id001
+        type: str
+        description: Logical service id in the registry.
+        required: true
+      example_service_version: &id007
+        type: str
+        description: Pinned service version (taken from the registry row in real use).
+        default: 1.4.2
+      example_service_listen_port: &id002
+        type: int
+        description: Listen port.
+        default: 8080
+      example_service_data_dir: &id005
+        type: path
+        description: Data directory.
+        default: /var/lib/example-service
+      example_service_config_dir: &id006
+        type: path
+        description: Config directory.
+        default: /etc/example-service
+      example_service_export_dir: &id008
+        type: path
+        description: Open-format export target directory.
+        default: /var/backups/example-service/export
+      example_service_dependencies: &id004
+        type: list
+        description: Logical ids of dependencies, resolved via the registry.
+        default: []
+        elements: str
+      example_service_health_path: &id003
+        type: str
+        description: HTTP path probed by the health hook.
+        default: /healthz
+  health:
+    short_description: Probe the service health endpoint; fails if not healthy.
+    options:
+      example_service_logical_id: *id001
+      example_service_listen_port: *id002
+      example_service_health_path: *id003
+  readiness:
+    short_description: Check every declared dependency is reachable.
+    options:
+      example_service_logical_id: *id001
+      example_service_dependencies: *id004
+  backup:
+    short_description: Write a backup manifest naming what to add to backups.
+    options:
+      example_service_logical_id: *id001
+      example_service_data_dir: *id005
+      example_service_config_dir: *id006
+  restore:
+    short_description: Restore data from a backup source directory.
+    options:
+      example_service_logical_id: *id001
+      example_service_data_dir: *id005
+      example_service_restore_source:
+        type: path
+        description: Directory to restore from.
+        required: true
+  upgrade:
+    short_description: Validate and apply a version bump.
+    options:
+      example_service_logical_id: *id001
+      example_service_version: *id007
+      example_service_target_version:
+        type: str
+        description: Version to upgrade to.
+        required: true
+  export:
+    short_description: Write the open-format exit copy of the data.
+    options:
+      example_service_logical_id: *id001
+      example_service_data_dir: *id005
+      example_service_export_dir: *id008

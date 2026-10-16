@@ -1,0 +1,14 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:siem",
+  "type": "homelabnext.other.thing",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "info",
+  "data": {
+    "decision_id": "DEC-0001",
+    "spec": "proposal-triage",
+    "subject": "inbox/2026-01-01-triage-tune-auth-rule.md",
+    "latency_budget_ms": 5000
+  }
+}

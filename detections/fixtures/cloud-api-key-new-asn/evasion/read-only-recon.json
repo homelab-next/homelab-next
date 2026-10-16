@@ -1,0 +1,18 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "read-only-recon",
+  "description": "attacker only enumerates first",
+  "event": {
+    "cloud": {
+      "credential": {
+        "type": "access_key",
+        "first_seen_asn": true
+      },
+      "api": {
+        "action": "GetCallerIdentity"
+      }
+    }
+  },
+  "note": "read-only reconnaissance is deliberately filtered"
+}

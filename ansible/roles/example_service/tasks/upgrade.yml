@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Refuse downgrade or no-op upgrades
+      ansible.builtin.assert:
+        that:
+          - example_service_target_version is version(example_service_version, '>')
+        fail_msg: "target {{ example_service_target_version }} is not newer than {{ example_service_version }}"
+    - name: Record the pending version
+      ansible.builtin.copy:
+        dest: "{{ example_service_config_dir }}/pending-version"
+        content: "{{ example_service_target_version }}\n"
+        mode: "0640"
+  tags: [upgrade]

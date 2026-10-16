@@ -1,0 +1,15 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "plain-script",
+  "description": "ordinary script invocation",
+  "event": {
+    "process": {
+      "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "command_line": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -File C:\\ops\\report.ps1",
+      "parent": {
+        "executable": "C:\\Windows\\explorer.exe"
+      }
+    }
+  }
+}

@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Deploy demo_role.
+    options:
+      demo_role_logical_id:
+        type: str
+        description: Logical service id in the registry.
+        required: true
+      demo_role_version:
+        type: str
+        description: Pinned version.
+        default: 0.1.0
+      demo_role_data_dir:
+        type: path
+        description: Data directory.
+        default: /var/lib/demo-role
+      demo_role_export_dir:
+        type: path
+        description: Open-format export directory.
+        default: /var/backups/demo-role/export
+      demo_role_image:
+        type: str
+        description: fixture var
+  health:
+    short_description: health hook.
+    options:
+      demo_role_logical_id:
+        type: str
+        description: Logical service id in the registry.
+        required: true
+  readiness:
+    short_description: readiness hook.
+    options:
+      demo_role_logical_id:
+        type: str
+        description: Logical service id in the registry.
+        required: true
+  backup:
+    short_description: backup hook.
+    options:
+      demo_role_logical_id:
+        type: str
+        description: Logical service id in the registry.
+        required: true
+      demo_role_data_dir:
+        type: path
+        description: Data directory.
+        default: /var/lib/demo-role
+  restore:
+    short_description: restore hook.
+    options:
+      demo_role_logical_id:
+        type: str
+        description: Logical service id in the registry.
+        required: true
+      demo_role_data_dir:
+        type: path
+        description: Data directory.
+        default: /var/lib/demo-role
+  upgrade:
+    short_description: upgrade hook.
+    options:
+      demo_role_logical_id:
+        type: str
+        description: Logical service id in the registry.
+        required: true
+      demo_role_version:
+        type: str
+        description: Pinned version.
+        default: 0.1.0
+  export:
+    short_description: export hook.
+    options:
+      demo_role_logical_id:
+        type: str
+        description: Logical service id in the registry.
+        required: true
+      demo_role_data_dir:
+        type: path
+        description: Data directory.
+        default: /var/lib/demo-role
+      demo_role_export_dir:
+        type: path
+        description: Open-format export directory.
+        default: /var/backups/demo-role/export

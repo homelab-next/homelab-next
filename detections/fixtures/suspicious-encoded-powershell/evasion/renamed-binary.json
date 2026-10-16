@@ -1,0 +1,16 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "renamed-binary",
+  "description": "copied powershell.exe renamed",
+  "event": {
+    "process": {
+      "executable": "C:\\Users\\Public\\p.exe",
+      "command_line": "p.exe -enc SQBFAFgA",
+      "parent": {
+        "executable": "C:\\Windows\\explorer.exe"
+      }
+    }
+  },
+  "note": "renamed binary evades the Image selection"
+}

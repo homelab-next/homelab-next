@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Declare backup paths
+  ansible.builtin.debug:
+    msg: "back up {{ demo_role_data_dir }}"
+  tags: [backup]

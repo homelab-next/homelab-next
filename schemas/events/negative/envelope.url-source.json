@@ -1,0 +1,9 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "https://siem.example.internal/",
+  "type": "homelabnext.alert.created",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "info",
+  "data": {}
+}

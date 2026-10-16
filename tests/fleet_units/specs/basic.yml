@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: notify-digest
+  description: Send the daily digest
+  exec: /usr/local/bin/notify-digest --daily
+  on_calendar: "*-*-* 06:00:00 UTC"
+  user: svc-notify
+  pages_directly: true
+- name: lake-compact
+  description: Compact lake tables
+  exec: /usr/local/bin/lake-compact --all
+  on_calendar:
+    - "*-*-* 02:30:00 UTC"
+    - "Sun *-*-* 12:00:00 UTC"
+  persistent: false
+  randomized_delay_sec: 300
+  timeout_start_sec: 3600
+- name: legacy-sweep
+  description: Old sweep, superseded by a workflow
+  exec: /usr/local/bin/legacy-sweep
+  on_calendar: "*:0/30 UTC"
+  replaced_by: "st2:maintenance.sweep"

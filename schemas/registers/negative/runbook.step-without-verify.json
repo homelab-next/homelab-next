@@ -1,0 +1,13 @@
+{
+  "id": "RB-001",
+  "title": "x y z",
+  "systems": [
+    "a"
+  ],
+  "steps": [
+    {
+      "n": 1,
+      "text": "do it"
+    }
+  ]
+}

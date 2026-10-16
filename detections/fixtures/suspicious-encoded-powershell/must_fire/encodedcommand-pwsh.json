@@ -1,0 +1,15 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "encodedcommand-pwsh",
+  "description": "pwsh with the long flag",
+  "event": {
+    "process": {
+      "executable": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+      "command_line": "pwsh.exe -EncodedCommand SQBFAFgA",
+      "parent": {
+        "executable": "C:\\Windows\\explorer.exe"
+      }
+    }
+  }
+}

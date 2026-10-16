@@ -1,0 +1,9 @@
+<!-- det:ssh-authorized-key-added -->
+<rule id="900004" level="12">
+  <if_group>hnx_generic</if_group>
+  <field name="file.path" type="pcre2">(?i)/\.ssh/authorized_keys$</field>
+  <field name="event.action" type="pcre2">(?:(?i)^created$)|(?:(?i)^modified$)</field>
+  <field name="process.executable" type="pcre2" negate="yes">(?:(?i)/cloud\-init$)|(?:(?i)/usermod$)</field>
+  <description>SSH authorized_keys file modified</description>
+  <mitre><id>T1098.004</id></mitre>
+</rule>

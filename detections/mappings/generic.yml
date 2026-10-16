@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# Sigma field name -> dotted path in the synthetic generic event shape.
+fields:
+  Image: process.executable
+  CommandLine: process.command_line
+  ParentImage: process.parent.executable
+  TargetFilename: file.path
+  NewFilename: file.new_path
+  EventAction: event.action
+  KeyType: cloud.credential.type
+  NewAsnForKey: cloud.credential.first_seen_asn
+  CloudApiAction: cloud.api.action

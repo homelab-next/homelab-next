@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Restore data directory from the backup source
+  ansible.builtin.copy:
+    src: "{{ example_service_restore_source }}/"
+    dest: "{{ example_service_data_dir }}/"
+    remote_src: true
+    mode: preserve
+  tags: [restore]

@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+generators:
+  blackbox:
+    description: "Blackbox exporter file_sd target lists (HTTP and TCP probes)"
+    target: "monitoring (blackbox exporter)"
+  caddy:
+    description: "Caddyfile site snippets for services with a public hostname"
+    target: "reverse proxy (edge)"
+  dns_zone:
+    description: "RFC 1035 zone files: capability aliases (A, SRV, TXT) and host records"
+    target: "DNS server / Technitium adapter"
+  env_files:
+    description: "Per-service environment files (compose env_file / EnvironmentFile) plus an aggregate"
+    target: "container and unit runtime"
+  firewall_matrix:
+    description: "Inter-zone allow matrix (markdown) and rule list (CSV); everything else is denied"
+    target: "firewall / network policy"
+  hosts_file:
+    description: "hosts(5) block mapping host and capability names to addresses (resolver fallback)"
+    target: "/etc/hosts via base role"
+  idp_blueprint:
+    description: "Identity provider (Authentik-style) blueprint skeleton for services with auth=idp"
+    target: "identity provider"
+  mcp_config:
+    description: "Agent MCP client configuration for services that expose an MCP endpoint"
+    target: "agent runtime"
+  prometheus:
+    description: "Prometheus scrape_configs for services exposing metrics"
+    target: "monitoring (Prometheus)"
+  service_docs:
+    description: "Markdown service catalogue page (host table and per-service cards)"
+    target: "documentation site"
+  systemd_env:
+    description: "systemd drop-ins with Environment= endpoints for each service's upstreams"
+    target: "systemd units (base role)"

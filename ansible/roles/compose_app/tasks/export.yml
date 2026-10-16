@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Ensure export directory exists
+  ansible.builtin.file:
+    path: "{{ compose_app_export_dir }}"
+    state: directory
+    mode: "0750"
+  tags: [export]
+
+- name: Export the data directory as tar.gz
+  ansible.builtin.command:
+    argv: [tar, -czf, "{{ compose_app_export_dir }}/{{ compose_app_name }}.tar.gz", -C, "{{ compose_app_data_dir }}", .]
+  changed_when: true
+  tags: [export]
