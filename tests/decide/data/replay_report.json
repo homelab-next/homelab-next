@@ -1,0 +1,65 @@
+{
+  "baseline": {
+    "acting_tier_wrong": 0,
+    "automatic": 83,
+    "coverage": 0.415,
+    "error_rate": 0.0,
+    "escalated": 117,
+    "gold_automatic": 83,
+    "gold_records": 200,
+    "impact_under_calls": 0,
+    "per_tier": {
+      "floor": {
+        "acts": true,
+        "answered": 83,
+        "wrong": 0
+      }
+    },
+    "records": 200,
+    "spec": "floor-only",
+    "wrong": 0,
+    "wrong_ids": []
+  },
+  "compare": {
+    "coverage_baseline": 0.415,
+    "coverage_candidate": 0.885,
+    "coverage_delta": 0.47,
+    "error_rate_baseline": 0.0,
+    "error_rate_candidate": 0.0,
+    "error_rate_delta": 0.0,
+    "newly_right": [],
+    "newly_wrong": [],
+    "verdicts_changed": 94
+  },
+  "report": {
+    "acting_tier_wrong": 0,
+    "automatic": 177,
+    "coverage": 0.885,
+    "error_rate": 0.0,
+    "escalated": 23,
+    "gold_automatic": 177,
+    "gold_records": 200,
+    "impact_under_calls": 0,
+    "per_tier": {
+      "floor": {
+        "acts": true,
+        "answered": 83,
+        "wrong": 0
+      },
+      "large": {
+        "acts": false,
+        "answered": 29,
+        "wrong": 0
+      },
+      "small": {
+        "acts": true,
+        "answered": 65,
+        "wrong": 0
+      }
+    },
+    "records": 200,
+    "spec": "change-review",
+    "wrong": 0,
+    "wrong_ids": []
+  }
+}

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/registers/decision_spec/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/registers/decision_spec/1.1",
   "title": "Decision spec",
-  "description": "Declarative spec for a cascaded decision: a deterministic floor, then ordered tiers, then escalate. W7 extends this file additively.",
+  "description": "Declarative spec for a cascaded decision: a deterministic floor, then ordered tiers, then escalate. 1.1 adds safety, thresholds, impact and per-tier timeout and acts (additive).",
   "type": "object",
   "properties": {
     "id": {
@@ -64,6 +64,15 @@
             "type": "number",
             "minimum": 0,
             "maximum": 1
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Tier call deadline. A timeout escalates; it never answers."
+          },
+          "acts": {
+            "type": "boolean",
+            "description": "Answers from this tier are acted on without a human. The replay gate demands zero confident errors for acting tiers."
           }
         },
         "required": [
@@ -89,6 +98,34 @@
       "type": "number",
       "minimum": 0,
       "maximum": 100
+    },
+    "safety": {
+      "type": "boolean",
+      "description": "Safety spec: model tiers may only raise the impact tier, never lower it or approve."
+    },
+    "default_min_confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Threshold for tiers that do not set min_confidence."
+    },
+    "impact": {
+      "type": "object",
+      "properties": {
+        "keywords_file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "floor": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        }
+      },
+      "description": "Deterministic impact-scan tier configuration."
     }
   },
   "required": [

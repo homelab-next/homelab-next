@@ -69,7 +69,7 @@ def test_id_convention(path):
     name, major, minor = sc.parse_id(schema)
     d = path.parent.name
     assert name.startswith(d + "/")
-    assert (major, minor) == (1, 0)
+    assert major == 1 and minor >= 0  # minor bumps are additive (see _frozen)
 
 
 def test_event_schemas_cover_reaction_seam_types():

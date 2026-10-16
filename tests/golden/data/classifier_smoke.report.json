@@ -1,0 +1,29 @@
+{
+  "errors": 0,
+  "model_id": "example-4b",
+  "passed": 3,
+  "role": "fast-classifier",
+  "suite": "classifier-smoke",
+  "tasks": [
+    {
+      "detail": "all fields match",
+      "id": "rollback-present",
+      "passed": true,
+      "score": 1.0
+    },
+    {
+      "detail": "all fields match",
+      "id": "rollback-absent",
+      "passed": true,
+      "score": 1.0
+    },
+    {
+      "detail": "5 chars",
+      "id": "greeting-short",
+      "passed": true,
+      "score": 1.0
+    }
+  ],
+  "total": 3,
+  "weighted_score": 1.0
+}

@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Synthetic change-review cascade used by `hnx decide eval` and the tests.
+id: change-review
+version: 1
+default_min_confidence: 0.9
+impact:
+  keywords_file: impact_keywords.yml
+  floor: low
+question_set:
+  - Does the change request name a rollback?
+decision_table:
+  - {when: rollback present, then: accept}
+  - {when: rollback absent, then: reject}
+  - {when: otherwise, then: escalate}
+tiers:
+  - {name: floor, acts: true}
+  - {name: small, model_role: "mdl:fast-classifier", min_confidence: 0.9, timeout_ms: 2000, acts: true}
+  - {name: large, model_role: "mdl:main-reasoner", min_confidence: 0.9, timeout_ms: 8000}
+error_direction: fail-closed
+on_error: escalate
+latency_budget_ms: 15000
+sample_audit_pct: 10

@@ -13,6 +13,10 @@ has no section below.
   detections as code, register generators and invariants runner (first wave of workers).
 - `hnx` console script (`homelabnext/cli.py`) dispatching to registry, new, gen, detections,
   registers, invariants, ids and schema-check.
+- Inference and decision building blocks: model-role resolver with `/v1/models` mismatch probe
+  (`homelabnext.registry.models`), fake OpenAI-compatible server (`conformance/fakes`), golden
+  tasks (`homelabnext.golden`), decision cascade with impact scan, replay gate, synthetic eval and
+  `/v1/systemone` adapter (`homelabnext.decide`); `model_roles` and `decision_spec` schemas 1.1.
 - `make check` now runs lint, tests, strict schema check, endpoint and role gates, detections,
   registers, SPDX, leak scan and changelog check; CI runs the same gates and a pinned gitleaks CLI.
 - Pinned OCSF 1.3.0 schema subsets (`schemas/ocsf/`) and the `homelabnext.lake` library: `LakeClient` protocol, `FakeLake`, DuckDB/Iceberg/Trino adapters, cassette parity, and commit-then-checkpoint idempotent writes.

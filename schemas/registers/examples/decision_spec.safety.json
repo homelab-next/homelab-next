@@ -1,0 +1,38 @@
+{
+  "id": "impact-raise",
+  "version": 1,
+  "safety": true,
+  "default_min_confidence": 0.9,
+  "impact": {
+    "keywords_file": "impact_keywords.yml",
+    "floor": "low"
+  },
+  "question_set": [
+    "Does the change touch an authentication boundary?"
+  ],
+  "decision_table": [
+    {
+      "when": "keyword hit",
+      "then": "escalate"
+    },
+    {
+      "when": "otherwise",
+      "then": "accept"
+    }
+  ],
+  "tiers": [
+    {
+      "name": "floor"
+    },
+    {
+      "name": "small",
+      "model_role": "mdl:fast-classifier",
+      "min_confidence": 0.85,
+      "timeout_ms": 2000
+    }
+  ],
+  "error_direction": "fail-closed",
+  "on_error": "escalate",
+  "latency_budget_ms": 5000,
+  "sample_audit_pct": 5
+}
