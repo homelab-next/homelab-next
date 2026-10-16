@@ -1,0 +1,111 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Synthetic example site for HomelabNext. Everything here is fictional: addresses come from the
+# RFC 5737 documentation ranges, names live under example.internal, secrets are referenced by
+# name only. It pairs with tests/network/fixtures/services.yml (the registry it resolves against).
+site_version: 1
+
+site:
+  id: northwind
+  domain: example.internal
+  timezone: UTC
+
+zones:
+  - id: mgmt
+    purpose: management
+    vlan_id: 10
+    subnet: 192.0.2.0/26
+    gateway: 192.0.2.1
+    dhcp: {range: [192.0.2.32, 192.0.2.62]}
+    dns: {resolvers: [svc:dns]}
+    egress: {internet: deny, inter_zone: {default: deny}}
+    tags: [infra]
+  - id: data
+    purpose: storage_and_bus
+    vlan_id: 20
+    subnet: 192.0.2.64/26
+    gateway: 192.0.2.65
+    dns: {resolvers: [svc:dns]}
+    egress: {internet: deny, inter_zone: {default: deny}}
+    tags: [prod]
+  - id: compute
+    purpose: inference
+    vlan_id: 30
+    subnet: 192.0.2.128/26
+    gateway: 192.0.2.129
+    dhcp: {range: [192.0.2.160, 192.0.2.190], lease_hours: 24}
+    dns: {resolvers: [svc:dns]}
+    egress: {internet: allow, inter_zone: {default: deny}}
+    tags: [prod, gpu]
+  - id: edge
+    purpose: internet_ingress
+    vlan_id: 40
+    subnet: 198.51.100.0/26
+    gateway: 198.51.100.1
+    dhcp: {range: [198.51.100.32, 198.51.100.62]}
+    dns: {resolvers: [svc:dns]}
+    egress: {internet: allow, inter_zone: {default: deny}}
+    tags: [untrusted]
+  - id: sandbox
+    purpose: malware_analysis
+    vlan_id: 50
+    subnet: 198.51.100.64/26
+    gateway: 198.51.100.65
+    dhcp: {range: [198.51.100.96, 198.51.100.126]}
+    egress: {internet: deny, inter_zone: {default: deny}, one_way: true}
+    tags: [untrusted, lab]
+
+router:
+  id: edge-router
+  model: unifi
+  mgmt_endpoint: svc:router-console
+  tls_pin:
+    sha256: REPLACE_WITH_CONSOLE_CERT_FINGERPRINT
+  auth:
+    reads: {mode: api_key, secret_ref: "secret:network/router/api-key"}
+    writes: {mode: local_admin, secret_ref: "secret:network/router/local-admin"}
+
+switches:
+  - id: core-sw-1
+    model: unifi
+    device_mac: "00:00:5e:00:53:10"
+    uplink_port: 1
+    port_assignments:
+      - {ports: [1], kind: trunk, vlans: [10, 20, 30, 40, 50]}
+      - {ports: ["2-4"], kind: access, vlan: 20}
+      - {ports: [5, 6], kind: trunk, vlan: 10, vlans: [20, 30]}
+      - {ports: ["7-8"], kind: access, vlan: 40}
+
+dhcp_reservations:
+  - {host: infer-core, mac: "00:00:5e:00:53:21"}
+
+firewall:
+  default_action: deny
+  zone_to_zone:
+    - {from: mgmt, to: data, action: allow}
+    - {from: mgmt, to: compute, action: allow, ports: [22, 443], protocols: [tcp]}
+    - {from: compute, to: data, action: allow, ports: [9000]}
+    - {from: edge, to: data, action: deny, notes: "explicit; the default would deny it anyway"}
+    - {from: sandbox, to: any, action: deny, one_way_contract: true}
+  service_exceptions:
+    - {from: [zone:data, zone:compute, zone:edge], to: svc:dns, action: allow}
+    - {from: [zone:compute, zone:edge], to: svc:idp, action: allow}
+    - {from: zone:compute, to: svc:events, action: allow}
+    - {from: zone:sandbox, to: svc:events, action: allow, ports: [4222], notes: "the one-way telemetry pipe"}
+
+dns:
+  resolvers:
+    - {id: dns-primary, model: technitium, host: svc:dns, authoritative_for: [example.internal], bind_mode: all}
+  records:
+    static:
+      - {fqdn: router.example.internal, type: A, value: 192.0.2.1}
+  policy:
+    split_horizon: true
+    ttl_default: 300
+
+adapters:
+  network: unifi
+  dns: dnsmasq
+  options:
+    linux: {flavor: networkd, trunk_interface: trunk0, wan_interface: wan0}
+    zonefile: {serial: 2026101501}

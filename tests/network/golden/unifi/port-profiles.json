@@ -1,0 +1,39 @@
+{
+  "adapter": "unifi",
+  "dry_run": true,
+  "site": "northwind",
+  "kind": "portconf",
+  "note": "dry-run payload; live application is SERVER-only (see docs/network-model.md)",
+  "objects": [
+    {
+      "name": "hnx-access-data",
+      "forward": "native",
+      "native_networkconf_id": "${network:hnx-data}"
+    },
+    {
+      "name": "hnx-access-edge",
+      "forward": "native",
+      "native_networkconf_id": "${network:hnx-edge}"
+    },
+    {
+      "name": "hnx-trunk-mgmt-data-compute",
+      "forward": "customize",
+      "tagged_networkconf_ids": [
+        "${network:hnx-data}",
+        "${network:hnx-compute}"
+      ],
+      "native_networkconf_id": "${network:hnx-mgmt}"
+    },
+    {
+      "name": "hnx-trunk-none-mgmt-data-compute-edge-sandbox",
+      "forward": "customize",
+      "tagged_networkconf_ids": [
+        "${network:hnx-mgmt}",
+        "${network:hnx-data}",
+        "${network:hnx-compute}",
+        "${network:hnx-edge}",
+        "${network:hnx-sandbox}"
+      ]
+    }
+  ]
+}

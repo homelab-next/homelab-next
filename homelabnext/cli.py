@@ -57,6 +57,12 @@ def _ids(argv: list[str]) -> int:
     return main(argv)
 
 
+def _site(argv: list[str]) -> int:
+    from homelabnext.network.cli import main
+
+    return main(argv)
+
+
 def _schema_check(argv: list[str]) -> int:
     path = REPO_ROOT / "tools" / "schema_check.py"
     if not path.is_file():
@@ -115,6 +121,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "golden tasks: run a suite against a model alias",
         lambda a: importlib.import_module("homelabnext.golden.cli").main(a),
     ),
+    "site": ("validate, plan and render the site/network model (site validate|plan|render)", _site),
     "schema-check": ("check schemas, examples, negatives and frozen baselines", _schema_check),
 }
 
