@@ -2,7 +2,7 @@
 resource "proxmox_virtual_environment_vm" "edge_core" {
   name      = "edge-core"
   node_name = "hv-a"
-  vm_id     = 10
+  vm_id     = 110
   tags      = ["edge", "prod"]
   on_boot   = true
 

@@ -2,7 +2,7 @@
 id: guest:bus-core
 kind: vm
 provisioning: terraform
-placement: {node: hv-a, vmid: 80, vmid_scheme: octet}
+placement: {node: hv-a, vmid: 180, vmid_scheme: freeform}
 resources:
   cpu: {cores: 2}
   memory: {size_mb: 4096, balloon_min_mb: 2048}

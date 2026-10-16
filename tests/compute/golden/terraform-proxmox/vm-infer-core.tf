@@ -2,7 +2,7 @@
 resource "proxmox_virtual_environment_vm" "infer_core" {
   name      = "infer-core"
   node_name = "hv-a"
-  vm_id     = 130
+  vm_id     = 230
   tags      = ["gpu", "prod"]
   on_boot   = true
   bios      = "ovmf"

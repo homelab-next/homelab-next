@@ -148,13 +148,18 @@ CASES = [
         lambda d: d["network"].update(ip="198.51.100.1"),
         "zone gateway",
     ),
-    ("octet-mismatch", "lake-core", lambda d: d["placement"].update(vmid=41), "last octet 40"),
+    (
+        "octet-mismatch",
+        "lake-core",
+        lambda d: d["placement"].update(vmid=41, vmid_scheme="octet"),
+        "last octet 40",
+    ),
     ("duplicate-ip", "bus-core", lambda d: d["network"].update(ip="198.51.100.40"), "already used"),
     (
         "duplicate-vmid",
         "bus-core",
-        lambda d: d["placement"].update(vmid=40, vmid_scheme="freeform"),
-        "vmid 40",
+        lambda d: d["placement"].update(vmid=140, vmid_scheme="freeform"),
+        "vmid 140",
     ),
     (
         "gpu-on-lxc",
@@ -220,7 +225,7 @@ def test_inherit_gateway_needs_zone_gateway(tmp_path):
 def test_manual_guest_excluded_from_iac_but_listed(good):
     tf = render(good, "terraform-proxmox")
     assert not any("secrets-core" in k for k in tf if k.endswith(".tf"))
-    assert "pct create 31 as a privileged container" in tf["MANUAL.md"]
+    assert "pct create 131 as a privileged container" in tf["MANUAL.md"]
     assert "secrets-core" in render(good, "inventory")["hosts.yml"]
 
 

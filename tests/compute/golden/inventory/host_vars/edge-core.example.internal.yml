@@ -8,6 +8,6 @@ hnx_kind: "vm"
 hnx_node: "hv-a"
 hnx_owner: "platform-team"
 hnx_provisioning: "terraform"
-hnx_vmid: 10
+hnx_vmid: 110
 hnx_zone: "edge"
 hnx_tags: ["edge", "prod"]

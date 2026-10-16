@@ -1,0 +1,1574 @@
+{
+  "provider": "registry.terraform.io/bpg/proxmox",
+  "provider_version": "0.116.1",
+  "resource_schemas": {
+    "proxmox_virtual_environment_container": {
+      "block": {
+        "attributes": {
+          "delete_unreferenced_disks_on_destroy": {
+            "optional": true,
+            "type": "bool"
+          },
+          "description": {
+            "optional": true,
+            "type": "string"
+          },
+          "environment_variables": {
+            "optional": true,
+            "type": [
+              "map",
+              "string"
+            ]
+          },
+          "hook_script_file_id": {
+            "optional": true,
+            "type": "string"
+          },
+          "id": {
+            "computed": true,
+            "optional": true,
+            "type": "string"
+          },
+          "ipv4": {
+            "computed": true,
+            "type": [
+              "map",
+              "string"
+            ]
+          },
+          "ipv6": {
+            "computed": true,
+            "type": [
+              "map",
+              "string"
+            ]
+          },
+          "migrate": {
+            "optional": true,
+            "type": "bool"
+          },
+          "node_name": {
+            "required": true,
+            "type": "string"
+          },
+          "pool_id": {
+            "optional": true,
+            "type": "string"
+          },
+          "protection": {
+            "optional": true,
+            "type": "bool"
+          },
+          "purge_on_destroy": {
+            "optional": true,
+            "type": "bool"
+          },
+          "start_on_boot": {
+            "optional": true,
+            "type": "bool"
+          },
+          "started": {
+            "optional": true,
+            "type": "bool"
+          },
+          "tags": {
+            "optional": true,
+            "type": [
+              "list",
+              "string"
+            ]
+          },
+          "template": {
+            "optional": true,
+            "type": "bool"
+          },
+          "timeout_clone": {
+            "optional": true,
+            "type": "number"
+          },
+          "timeout_create": {
+            "optional": true,
+            "type": "number"
+          },
+          "timeout_delete": {
+            "optional": true,
+            "type": "number"
+          },
+          "timeout_migrate": {
+            "optional": true,
+            "type": "number"
+          },
+          "timeout_start": {
+            "optional": true,
+            "type": "number"
+          },
+          "timeout_update": {
+            "optional": true,
+            "type": "number"
+          },
+          "unprivileged": {
+            "optional": true,
+            "type": "bool"
+          },
+          "vm_id": {
+            "computed": true,
+            "optional": true,
+            "type": "number"
+          }
+        },
+        "block_types": {
+          "clone": {
+            "block": {
+              "attributes": {
+                "datastore_id": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "full": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "node_name": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "vm_id": {
+                  "required": true,
+                  "type": "number"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "console": {
+            "block": {
+              "attributes": {
+                "enabled": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "tty_count": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "type": {
+                  "optional": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "cpu": {
+            "block": {
+              "attributes": {
+                "architecture": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "cores": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "limit": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "units": {
+                  "computed": true,
+                  "optional": true,
+                  "type": "number"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "device_passthrough": {
+            "block": {
+              "attributes": {
+                "deny_write": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "gid": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "mode": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "path": {
+                  "required": true,
+                  "type": "string"
+                },
+                "uid": {
+                  "optional": true,
+                  "type": "number"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "disk": {
+            "block": {
+              "attributes": {
+                "acl": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "datastore_id": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "mount_options": {
+                  "optional": true,
+                  "type": [
+                    "list",
+                    "string"
+                  ]
+                },
+                "path_in_datastore": {
+                  "computed": true,
+                  "type": "string"
+                },
+                "quota": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "replicate": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "size": {
+                  "optional": true,
+                  "type": "number"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "features": {
+            "block": {
+              "attributes": {
+                "fuse": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "keyctl": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "mknod": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "mount": {
+                  "optional": true,
+                  "type": [
+                    "list",
+                    "string"
+                  ]
+                },
+                "nesting": {
+                  "optional": true,
+                  "type": "bool"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "idmap": {
+            "block": {
+              "attributes": {
+                "container_id": {
+                  "required": true,
+                  "type": "number"
+                },
+                "host_id": {
+                  "required": true,
+                  "type": "number"
+                },
+                "size": {
+                  "required": true,
+                  "type": "number"
+                },
+                "type": {
+                  "required": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "initialization": {
+            "block": {
+              "attributes": {
+                "entrypoint": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "hostname": {
+                  "optional": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {
+                "dns": {
+                  "block": {
+                    "attributes": {
+                      "domain": {
+                        "optional": true,
+                        "type": "string"
+                      },
+                      "server": {
+                        "optional": true,
+                        "type": "string"
+                      },
+                      "servers": {
+                        "optional": true,
+                        "type": [
+                          "list",
+                          "string"
+                        ]
+                      }
+                    },
+                    "block_types": {}
+                  },
+                  "nesting_mode": "list"
+                },
+                "ip_config": {
+                  "block": {
+                    "attributes": {},
+                    "block_types": {
+                      "ipv4": {
+                        "block": {
+                          "attributes": {
+                            "address": {
+                              "optional": true,
+                              "type": "string"
+                            },
+                            "gateway": {
+                              "optional": true,
+                              "type": "string"
+                            }
+                          },
+                          "block_types": {}
+                        },
+                        "nesting_mode": "list"
+                      },
+                      "ipv6": {
+                        "block": {
+                          "attributes": {
+                            "address": {
+                              "optional": true,
+                              "type": "string"
+                            },
+                            "gateway": {
+                              "optional": true,
+                              "type": "string"
+                            }
+                          },
+                          "block_types": {}
+                        },
+                        "nesting_mode": "list"
+                      }
+                    }
+                  },
+                  "nesting_mode": "list"
+                },
+                "user_account": {
+                  "block": {
+                    "attributes": {
+                      "keys": {
+                        "optional": true,
+                        "type": [
+                          "list",
+                          "string"
+                        ]
+                      },
+                      "password": {
+                        "optional": true,
+                        "sensitive": true,
+                        "type": "string"
+                      }
+                    },
+                    "block_types": {}
+                  },
+                  "nesting_mode": "list"
+                }
+              }
+            },
+            "nesting_mode": "list"
+          },
+          "memory": {
+            "block": {
+              "attributes": {
+                "dedicated": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "swap": {
+                  "optional": true,
+                  "type": "number"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "mount_point": {
+            "block": {
+              "attributes": {
+                "acl": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "backup": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "mount_options": {
+                  "optional": true,
+                  "type": [
+                    "list",
+                    "string"
+                  ]
+                },
+                "path": {
+                  "required": true,
+                  "type": "string"
+                },
+                "path_in_datastore": {
+                  "computed": true,
+                  "type": "string"
+                },
+                "quota": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "read_only": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "replicate": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "shared": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "size": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "volume": {
+                  "required": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "network_interface": {
+            "block": {
+              "attributes": {
+                "bridge": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "enabled": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "firewall": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "host_managed": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "mac_address": {
+                  "computed": true,
+                  "optional": true,
+                  "type": "string"
+                },
+                "mtu": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "name": {
+                  "required": true,
+                  "type": "string"
+                },
+                "rate_limit": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "vlan_id": {
+                  "optional": true,
+                  "type": "number"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "operating_system": {
+            "block": {
+              "attributes": {
+                "template_file_id": {
+                  "required": true,
+                  "type": "string"
+                },
+                "type": {
+                  "optional": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "startup": {
+            "block": {
+              "attributes": {
+                "down_delay": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "order": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "up_delay": {
+                  "optional": true,
+                  "type": "number"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "wait_for_ip": {
+            "block": {
+              "attributes": {
+                "ipv4": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "ipv6": {
+                  "optional": true,
+                  "type": "bool"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          }
+        }
+      },
+      "version": 0
+    },
+    "proxmox_virtual_environment_vm": {
+      "block": {
+        "attributes": {
+          "acpi": {
+            "optional": true,
+            "type": "bool"
+          },
+          "bios": {
+            "optional": true,
+            "type": "string"
+          },
+          "boot_order": {
+            "computed": true,
+            "optional": true,
+            "type": [
+              "list",
+              "string"
+            ]
+          },
+          "delete_unreferenced_disks_on_destroy": {
+            "optional": true,
+            "type": "bool"
+          },
+          "description": {
+            "optional": true,
+            "type": "string"
+          },
+          "hook_script_file_id": {
+            "optional": true,
+            "type": "string"
+          },
+          "hotplug": {
+            "computed": true,
+            "optional": true,
+            "type": "string"
+          },
+          "id": {
+            "computed": true,
+            "optional": true,
+            "type": "string"
+          },
+          "ipv4_addresses": {
+            "computed": true,
+            "type": [
+              "list",
+              [
+                "list",
+                "string"
+              ]
+            ]
+          },
+          "ipv6_addresses": {
+            "computed": true,
+            "type": [
+              "list",
+              [
+                "list",
+                "string"
+              ]
+            ]
+          },
+          "keyboard_layout": {
+            "optional": true,
+            "type": "string"
+          },
+          "kvm_arguments": {
+            "optional": true,
+            "type": "string"
+          },
+          "mac_addresses": {
+            "computed": true,
+            "optional": true,
+            "type": [
+              "list",
+              "string"
+            ]
+          },
+          "machine": {
+            "optional": true,
+            "type": "string"
+          },
+          "migrate": {
+            "optional": true,
+            "type": "bool"
+          },
+          "name": {
+            "optional": true,
+            "type": "string"
+          },
+          "network_device": {
+            "computed": true,
+            "optional": true,
+            "type": [
+              "list",
+              [
+                "object",
+                {
+                  "bridge": "string",
+                  "disconnected": "bool",
+                  "enabled": "bool",
+                  "firewall": "bool",
+                  "mac_address": "string",
+                  "model": "string",
+                  "mtu": "number",
+                  "queues": "number",
+                  "rate_limit": "number",
+                  "trunks": "string",
+                  "vlan_id": "number"
+                }
+              ]
+            ]
+          },
+          "network_interface_names": {
+            "computed": true,
+            "type": [
+              "list",
+              "string"
+            ]
+          },
+          "node_name": {
+            "required": true,
+            "type": "string"
+          },
+          "on_boot": {
+            "optional": true,
+            "type": "bool"
+          },
+          "pool_id": {
+            "optional": true,
+            "type": "string"
+          },
+          "protection": {
+            "optional": true,
+            "type": "bool"
+          },
+          "purge_on_destroy": {
+            "optional": true,
+            "type": "bool"
+          },
+          "reboot": {
+            "optional": true,
+            "type": "bool"
+          },
+          "reboot_after_update": {
+            "optional": true,
+            "type": "bool"
+          },
+          "scsi_hardware": {
+            "optional": true,
+            "type": "string"
+          },
+          "started": {
+            "optional": true,
+            "type": "bool"
+          },
+          "stop_on_destroy": {
+            "optional": true,
+            "type": "bool"
+          },
+          "tablet_device": {
+            "optional": true,
+            "type": "bool"
+          },
+          "tags": {
+            "optional": true,
+            "type": [
+              "list",
+              "string"
+            ]
+          },
+          "template": {
+            "optional": true,
+            "type": "bool"
+          },
+          "timeout_clone": {
+            "optional": true,
+            "type": "number"
+          },
+          "timeout_create": {
+            "optional": true,
+            "type": "number"
+          },
+          "timeout_migrate": {
+            "optional": true,
+            "type": "number"
+          },
+          "timeout_move_disk": {
+            "optional": true,
+            "type": "number"
+          },
+          "timeout_reboot": {
+            "optional": true,
+            "type": "number"
+          },
+          "timeout_shutdown_vm": {
+            "optional": true,
+            "type": "number"
+          },
+          "timeout_start_vm": {
+            "optional": true,
+            "type": "number"
+          },
+          "timeout_stop_vm": {
+            "optional": true,
+            "type": "number"
+          },
+          "vm_id": {
+            "computed": true,
+            "optional": true,
+            "type": "number"
+          }
+        },
+        "block_types": {
+          "agent": {
+            "block": {
+              "attributes": {
+                "enabled": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "timeout": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "trim": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "type": {
+                  "optional": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {
+                "wait_for_ip": {
+                  "block": {
+                    "attributes": {
+                      "disabled": {
+                        "optional": true,
+                        "type": "bool"
+                      },
+                      "ipv4": {
+                        "optional": true,
+                        "type": "bool"
+                      },
+                      "ipv6": {
+                        "optional": true,
+                        "type": "bool"
+                      }
+                    },
+                    "block_types": {}
+                  },
+                  "nesting_mode": "list"
+                }
+              }
+            },
+            "nesting_mode": "list"
+          },
+          "amd_sev": {
+            "block": {
+              "attributes": {
+                "allow_smt": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "kernel_hashes": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "no_debug": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "no_key_sharing": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "type": {
+                  "optional": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "audio_device": {
+            "block": {
+              "attributes": {
+                "device": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "driver": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "enabled": {
+                  "optional": true,
+                  "type": "bool"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "cdrom": {
+            "block": {
+              "attributes": {
+                "enabled": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "file_id": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "interface": {
+                  "optional": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "clone": {
+            "block": {
+              "attributes": {
+                "datastore_id": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "full": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "node_name": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "retries": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "vm_id": {
+                  "required": true,
+                  "type": "number"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "cpu": {
+            "block": {
+              "attributes": {
+                "affinity": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "architecture": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "cores": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "flags": {
+                  "optional": true,
+                  "type": [
+                    "list",
+                    "string"
+                  ]
+                },
+                "hotplugged": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "limit": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "numa": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "sockets": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "type": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "units": {
+                  "computed": true,
+                  "optional": true,
+                  "type": "number"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "disk": {
+            "block": {
+              "attributes": {
+                "aio": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "backup": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "cache": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "datastore_id": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "discard": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "file_format": {
+                  "computed": true,
+                  "optional": true,
+                  "type": "string"
+                },
+                "file_id": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "import_from": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "interface": {
+                  "required": true,
+                  "type": "string"
+                },
+                "iothread": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "path_in_datastore": {
+                  "computed": true,
+                  "optional": true,
+                  "type": "string"
+                },
+                "queues": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "replicate": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "serial": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "size": {
+                  "computed": true,
+                  "optional": true,
+                  "type": "number"
+                },
+                "ssd": {
+                  "optional": true,
+                  "type": "bool"
+                }
+              },
+              "block_types": {
+                "speed": {
+                  "block": {
+                    "attributes": {
+                      "iops_read": {
+                        "optional": true,
+                        "type": "number"
+                      },
+                      "iops_read_burstable": {
+                        "optional": true,
+                        "type": "number"
+                      },
+                      "iops_write": {
+                        "optional": true,
+                        "type": "number"
+                      },
+                      "iops_write_burstable": {
+                        "optional": true,
+                        "type": "number"
+                      },
+                      "read": {
+                        "optional": true,
+                        "type": "number"
+                      },
+                      "read_burstable": {
+                        "optional": true,
+                        "type": "number"
+                      },
+                      "write": {
+                        "optional": true,
+                        "type": "number"
+                      },
+                      "write_burstable": {
+                        "optional": true,
+                        "type": "number"
+                      }
+                    },
+                    "block_types": {}
+                  },
+                  "nesting_mode": "list"
+                }
+              }
+            },
+            "nesting_mode": "list"
+          },
+          "efi_disk": {
+            "block": {
+              "attributes": {
+                "datastore_id": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "file_format": {
+                  "computed": true,
+                  "optional": true,
+                  "type": "string"
+                },
+                "pre_enrolled_keys": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "type": {
+                  "optional": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "hostpci": {
+            "block": {
+              "attributes": {
+                "device": {
+                  "required": true,
+                  "type": "string"
+                },
+                "id": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "mapping": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "mdev": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "pcie": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "rom_file": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "rombar": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "xvga": {
+                  "optional": true,
+                  "type": "bool"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "initialization": {
+            "block": {
+              "attributes": {
+                "datastore_id": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "file_format": {
+                  "computed": true,
+                  "optional": true,
+                  "type": "string"
+                },
+                "interface": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "meta_data_file_id": {
+                  "computed": true,
+                  "optional": true,
+                  "type": "string"
+                },
+                "network_data_file_id": {
+                  "computed": true,
+                  "optional": true,
+                  "type": "string"
+                },
+                "type": {
+                  "computed": true,
+                  "optional": true,
+                  "type": "string"
+                },
+                "upgrade": {
+                  "computed": true,
+                  "optional": true,
+                  "type": "bool"
+                },
+                "user_data_file_id": {
+                  "computed": true,
+                  "optional": true,
+                  "type": "string"
+                },
+                "vendor_data_file_id": {
+                  "computed": true,
+                  "optional": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {
+                "dns": {
+                  "block": {
+                    "attributes": {
+                      "domain": {
+                        "optional": true,
+                        "type": "string"
+                      },
+                      "servers": {
+                        "optional": true,
+                        "type": [
+                          "list",
+                          "string"
+                        ]
+                      }
+                    },
+                    "block_types": {}
+                  },
+                  "nesting_mode": "list"
+                },
+                "ip_config": {
+                  "block": {
+                    "attributes": {},
+                    "block_types": {
+                      "ipv4": {
+                        "block": {
+                          "attributes": {
+                            "address": {
+                              "optional": true,
+                              "type": "string"
+                            },
+                            "gateway": {
+                              "optional": true,
+                              "type": "string"
+                            }
+                          },
+                          "block_types": {}
+                        },
+                        "nesting_mode": "list"
+                      },
+                      "ipv6": {
+                        "block": {
+                          "attributes": {
+                            "address": {
+                              "optional": true,
+                              "type": "string"
+                            },
+                            "gateway": {
+                              "optional": true,
+                              "type": "string"
+                            }
+                          },
+                          "block_types": {}
+                        },
+                        "nesting_mode": "list"
+                      }
+                    }
+                  },
+                  "nesting_mode": "list"
+                },
+                "user_account": {
+                  "block": {
+                    "attributes": {
+                      "keys": {
+                        "optional": true,
+                        "type": [
+                          "list",
+                          "string"
+                        ]
+                      },
+                      "password": {
+                        "optional": true,
+                        "sensitive": true,
+                        "type": "string"
+                      },
+                      "username": {
+                        "optional": true,
+                        "type": "string"
+                      }
+                    },
+                    "block_types": {}
+                  },
+                  "nesting_mode": "list"
+                }
+              }
+            },
+            "nesting_mode": "list"
+          },
+          "memory": {
+            "block": {
+              "attributes": {
+                "dedicated": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "floating": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "hugepages": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "keep_hugepages": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "shared": {
+                  "optional": true,
+                  "type": "number"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "numa": {
+            "block": {
+              "attributes": {
+                "cpus": {
+                  "required": true,
+                  "type": "string"
+                },
+                "device": {
+                  "required": true,
+                  "type": "string"
+                },
+                "hostnodes": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "memory": {
+                  "required": true,
+                  "type": "number"
+                },
+                "policy": {
+                  "optional": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "operating_system": {
+            "block": {
+              "attributes": {
+                "type": {
+                  "optional": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "rng": {
+            "block": {
+              "attributes": {
+                "max_bytes": {
+                  "computed": true,
+                  "optional": true,
+                  "type": "number"
+                },
+                "period": {
+                  "computed": true,
+                  "optional": true,
+                  "type": "number"
+                },
+                "source": {
+                  "required": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "serial_device": {
+            "block": {
+              "attributes": {
+                "device": {
+                  "optional": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "smbios": {
+            "block": {
+              "attributes": {
+                "family": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "manufacturer": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "product": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "serial": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "sku": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "uuid": {
+                  "computed": true,
+                  "optional": true,
+                  "type": "string"
+                },
+                "version": {
+                  "optional": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "startup": {
+            "block": {
+              "attributes": {
+                "down_delay": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "order": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "up_delay": {
+                  "optional": true,
+                  "type": "number"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "tpm_state": {
+            "block": {
+              "attributes": {
+                "datastore_id": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "version": {
+                  "optional": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "usb": {
+            "block": {
+              "attributes": {
+                "host": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "mapping": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "usb3": {
+                  "optional": true,
+                  "type": "bool"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "vga": {
+            "block": {
+              "attributes": {
+                "clipboard": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "memory": {
+                  "optional": true,
+                  "type": "number"
+                },
+                "type": {
+                  "optional": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "virtiofs": {
+            "block": {
+              "attributes": {
+                "cache": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "direct_io": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "expose_acl": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "expose_xattr": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "mapping": {
+                  "required": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          },
+          "watchdog": {
+            "block": {
+              "attributes": {
+                "action": {
+                  "optional": true,
+                  "type": "string"
+                },
+                "enabled": {
+                  "optional": true,
+                  "type": "bool"
+                },
+                "model": {
+                  "optional": true,
+                  "type": "string"
+                }
+              },
+              "block_types": {}
+            },
+            "nesting_mode": "list"
+          }
+        }
+      },
+      "version": 0
+    }
+  },
+  "schema_captured_from": "terraform providers schema -json"
+}
