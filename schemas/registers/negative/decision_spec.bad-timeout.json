@@ -1,0 +1,24 @@
+{
+  "id": "proposal-triage",
+  "version": 1,
+  "question_set": [
+    "Does the proposal name a rollback?"
+  ],
+  "decision_table": [
+    {
+      "when": "otherwise",
+      "then": "escalate"
+    }
+  ],
+  "tiers": [
+    {
+      "name": "small",
+      "model_role": "mdl:fast-classifier",
+      "timeout_ms": 0
+    }
+  ],
+  "error_direction": "fail-closed",
+  "on_error": "escalate",
+  "latency_budget_ms": 5000,
+  "sample_audit_pct": 10
+}

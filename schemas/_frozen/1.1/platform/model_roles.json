@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/model_roles/1.1",
+  "title": "Model role table",
+  "description": "Maps model-role aliases (mdl:<alias>) to concrete bindings. Consumers reference only the alias; model ids and backends appear here and nowhere else, so swapping a model is a one-file change. backends are svc: logical ids, never URLs.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "roles": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "tier": {
+            "enum": [
+              "fast",
+              "standard",
+              "large"
+            ]
+          },
+          "bindings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "backend": {
+                  "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/svc_id"
+                },
+                "model_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9._:/-]+$"
+                },
+                "priority": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "backend",
+                "model_id"
+              ]
+            },
+            "minItems": 1
+          },
+          "fallback": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/mdl_id"
+          },
+          "max_context_tokens": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "params": {
+            "type": "object",
+            "properties": {
+              "temperature": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 2
+              },
+              "max_tokens": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "kind": {
+            "enum": [
+              "chat",
+              "completion",
+              "embedding"
+            ],
+            "description": "What the role is called for. Absent means chat. An embedder role is kind=embedding."
+          },
+          "dimensions": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Vector size for kind=embedding roles."
+          },
+          "logprobs": {
+            "type": "boolean",
+            "description": "The role is expected to return token logprobs (classifier tiers use them for confidence)."
+          },
+          "probe": {
+            "type": "object",
+            "properties": {
+              "require_model_served": {
+                "type": "boolean",
+                "description": "A /v1/models probe fails when the bound model id is not served."
+              }
+            }
+          }
+        },
+        "required": [
+          "tier",
+          "bindings"
+        ]
+      }
+    }
+  },
+  "required": [
+    "version",
+    "roles"
+  ]
+}
