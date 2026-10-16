@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "roles": {
+    "embedder": {
+      "kind": "image",
+      "tier": "fast",
+      "bindings": [
+        {
+          "backend": "svc:inference-small",
+          "model_id": "example-embed-8d"
+        }
+      ]
+    }
+  }
+}

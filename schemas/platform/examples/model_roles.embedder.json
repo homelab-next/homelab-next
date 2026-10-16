@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "roles": {
+    "embedder": {
+      "kind": "embedding",
+      "tier": "fast",
+      "dimensions": 8,
+      "bindings": [
+        {
+          "backend": "svc:inference-small",
+          "model_id": "example-embed-8d"
+        }
+      ]
+    },
+    "fast-classifier": {
+      "kind": "chat",
+      "tier": "fast",
+      "logprobs": true,
+      "probe": {
+        "require_model_served": true
+      },
+      "bindings": [
+        {
+          "backend": "svc:inference-small",
+          "model_id": "example-4b"
+        }
+      ]
+    }
+  }
+}
