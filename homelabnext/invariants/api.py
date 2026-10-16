@@ -97,7 +97,15 @@ class Registry:
     checks: dict[str, Check] = field(default_factory=dict)
 
     def register(self, check: Check) -> Check:
-        if check.id in self.checks:
+        existing = self.checks.get(check.id)
+        if existing is not None:
+            # The same plugin reachable through two routes (an installed entry point and
+            # --plugins-dir) registers the identical check twice: that is idempotent, not a clash.
+            if (existing.fn.__module__, existing.fn.__qualname__) == (
+                check.fn.__module__,
+                check.fn.__qualname__,
+            ):
+                return existing
             raise ValueError(f"duplicate check id {check.id}")
         self.checks[check.id] = check
         return check
