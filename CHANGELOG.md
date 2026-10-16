@@ -8,6 +8,7 @@ has no section below.
 
 ### Added
 
+- Lab-in-a-box (`compose/lab-in-a-box/`): a pinned Docker Compose reference environment within a 4 GB budget (object store, Iceberg REST catalog + Postgres, single-node query engine, event bus, secrets dev mode, notifications, authorisation, fake inference and case servers), `make lab-up|lab-down|lab-smoke`, a smoke script with direct per-service checks, a scheduled `nightly` workflow, and `docs/architecture.md` / `docs/build-order.md`.
 - `homelabnext.notify`, `homelabnext.state` and `homelabnext.records`: state-diffed paging with registered recovery pairs and an ntfy-style sender, crash-safe versioned state files with a keyed check API, and the records lifecycle (single validated agent write path, separate operator movers).
 - Customizations: schema, loader, linter, plan-only applier, invariant X-09, register view, three synthetic optional profiles and `hnx custom list|check|plan|register` (`docs/customization.md`).
 - Customization schema 1.1 (additive): `maintained_upstream` exempts project-shipped profiles from `review_by` expiry; honoured only for the shipped `profiles/` directory, rejected with `CU015` in any overlay; `hnx custom check`, invariant X-09 and the register honour it.
