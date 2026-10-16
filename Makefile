@@ -11,10 +11,11 @@ ROLES := $(wildcard ansible/roles/*)
 PLAYBOOKS := $(wildcard ansible/playbooks/*.yml)
 REGISTERS_OUT := build/registers
 
-.PHONY: help check lint fmt test schemas gates detections registers spdx leak-scan secret-scan changelog-check clean
+.PHONY: help check lint fmt test schemas gates detections registers spdx leak-scan secret-scan changelog-check clean lab-up lab-down lab-smoke
 
 help:
 	@echo "targets: check lint fmt test schemas gates detections registers spdx leak-scan secret-scan changelog-check clean"
+	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke"
 	@echo "override RUFF=/path/to/ruff if ruff is not importable as a module"
 
 check: lint test schemas gates detections registers spdx leak-scan changelog-check
@@ -67,3 +68,17 @@ changelog-check:
 clean:
 	rm -rf build dist .pytest_cache .ruff_cache *.egg-info
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
+
+# --- lab-in-a-box: the laptop/CI-sized reference environment (needs docker with compose) -----------
+LAB_DIR := compose/lab-in-a-box
+LAB_ENV := --env-file $(LAB_DIR)/.env.example $(addprefix --env-file ,$(wildcard $(LAB_DIR)/.env))
+LAB_COMPOSE := docker compose $(LAB_ENV) -f $(LAB_DIR)/docker-compose.yml
+
+lab-up:
+	$(LAB_COMPOSE) up -d --build --wait --wait-timeout 420
+
+lab-down:
+	$(LAB_COMPOSE) down --volumes --remove-orphans
+
+lab-smoke:
+	$(LAB_DIR)/smoke.sh
