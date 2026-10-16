@@ -84,6 +84,14 @@ class Context:
         return p.returncode, ((p.stdout or "") + (p.stderr or "")).strip()
 
 
+def _origin(fn) -> tuple[str, str, int]:
+    """Where a check function was defined, independent of the module name it was imported under."""
+    code = getattr(fn, "__code__", None)
+    if code is None:
+        return (getattr(fn, "__module__", ""), getattr(fn, "__qualname__", repr(fn)), 0)
+    return (code.co_filename, fn.__qualname__, code.co_firstlineno)
+
+
 @dataclass(frozen=True)
 class Check:
     id: str
@@ -101,10 +109,7 @@ class Registry:
         if existing is not None:
             # The same plugin reachable through two routes (an installed entry point and
             # --plugins-dir) registers the identical check twice: that is idempotent, not a clash.
-            if (existing.fn.__module__, existing.fn.__qualname__) == (
-                check.fn.__module__,
-                check.fn.__qualname__,
-            ):
+            if _origin(existing.fn) == _origin(check.fn):
                 return existing
             raise ValueError(f"duplicate check id {check.id}")
         self.checks[check.id] = check
