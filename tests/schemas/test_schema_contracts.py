@@ -8,7 +8,7 @@ import pytest
 import schema_check as sc
 
 ROOT = Path(__file__).resolve().parents[2]
-OWNED_DIRS = ["ids", "events", "records", "registers", "platform"]
+OWNED_DIRS = ["ids", "events", "records", "registers", "platform", "ocsf"]
 EXCLUDED = {"platform/service.json"}  # owned by the registry task
 REGISTRY = sc.build_registry(ROOT)
 SCHEMAS = [
@@ -43,6 +43,12 @@ EXPECTED = {
     "platform/agent_profile.schema.json",
     "platform/broker_action.schema.json",
     "platform/site.schema.json",
+    "platform/customization.schema.json",
+    "ocsf/authentication.v1.json",
+    "ocsf/detection_finding.v1.json",
+    "ocsf/dns_activity.v1.json",
+    "ocsf/network_activity.v1.json",
+    "ocsf/vulnerability_finding.v1.json",
 }
 
 
@@ -71,7 +77,9 @@ def test_id_convention(path):
     name, major, minor = sc.parse_id(schema)
     d = path.parent.name
     assert name.startswith(d + "/")
-    assert major == 1 and minor >= 0  # minor bumps are additive (see _frozen)
+    # minor bumps are additive (see _frozen), so any minor of major 1 is allowed
+    assert major == 1
+    assert minor >= 0
 
 
 def test_event_schemas_cover_reaction_seam_types():
