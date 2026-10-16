@@ -130,7 +130,12 @@ def test_check_lost_detects_entry_lost_in_merge_resolution(repo):
     with open(repo / "lessons.yml", "a") as f:
         f.write(ENTRY.format(id="LL-006"))
     git(repo, "commit", "-am", "main adds LL-006")
-    assert subprocess.run(["git", "merge", "third"], cwd=repo, capture_output=True).returncode != 0
+    merge = subprocess.run(
+        ["git", "-c", "user.email=t@example.org", "-c", "user.name=t", "merge", "third"],
+        cwd=repo,
+        capture_output=True,
+    )
+    assert merge.returncode != 0 and (repo / ".git" / "MERGE_HEAD").exists()  # a real conflict, not an ident error
     # Botched hand resolution: keep our side, silently drop the other side's entry.
     (repo / "lessons.yml").write_text(
         (repo / "lessons.yml").read_text().split("<<<<<<<")[0] + ENTRY.format(id="LL-006")
