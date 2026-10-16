@@ -65,8 +65,10 @@ class ZoneLookup(Protocol):
     def zone(self, zone_id: str) -> ZoneInfo | None: ...  # id, subnet, gateway, dhcp_range, vlan_id
 ```
 
-`open_site(path)` uses `homelabnext.network.site.load_site` when it is installed and otherwise
-reads the `zones:` list of a `site.yml`. Tests use a stub.
+`open_site(path)` reads the site document with `homelabnext.network.load_site` (the same loader as
+`hnx site`) and takes its `zones:` list and `site.domain`. It does not validate the site; run
+`hnx site validate` for that. `load_zones_file` is the loader-free reader kept for tools that only
+have a zones file. Tests can also pass a stub.
 
 ## Rendering
 

@@ -53,3 +53,5 @@ allow:
     reason: negative guest fixtures (documentation addresses only)
   - path: "tests/compute/*"
     reason: synthetic fleet, site model, goldens and tests (documentation addresses only; addresses are the data under test)
+  - path: "tests/integration/**"
+    reason: synthetic fleet files and assertions on documentation addresses

@@ -3,7 +3,7 @@
 
 The compute model never imports the site-model package.  It codes against the small
 :class:`ZoneLookup` protocol; a stub, a plain mapping, a ``site.yml`` reader and an adapter for
-``homelabnext.network.site.load_site`` all satisfy it (see :mod:`homelabnext.compute.zones`).
+``homelabnext.network.load_site`` all satisfy it (see :mod:`homelabnext.compute.zones`).
 """
 
 from __future__ import annotations

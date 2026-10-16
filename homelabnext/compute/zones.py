@@ -88,11 +88,20 @@ class SiteAdapter:
 
 
 def open_site(path: str | Path) -> tuple[ZoneLookup, str | None]:
-    """Prefer ``homelabnext.network.site.load_site`` when present, else read the file directly."""
+    """Read zones and the domain through the network model's own loader.
+
+    ``homelabnext.network.load_site`` is the one reader of a site document, so a file that parses
+    for ``hnx site`` parses here the same way (duplicate keys rejected, same error text).  This
+    does not run the site validation: use ``hnx site validate`` for that.
+    """
+    from homelabnext.network.loader import SiteError, load_site
+
     try:
-        from homelabnext.network.site import load_site  # type: ignore[import-not-found]
-    except ImportError:
-        return load_zones_file(path)
-    site = load_site(path)
-    domain = getattr(site, "domain", None)
-    return SiteAdapter(site), domain
+        doc = load_site(path)
+    except SiteError as exc:
+        raise ComputeError(str(exc)) from exc
+    zones = doc.get("zones")
+    if not isinstance(zones, list):
+        raise ComputeError(f"{path}: expected a mapping with a 'zones' list")
+    domain = (doc.get("site") or {}).get("domain")
+    return MappingZones(zone_from_mapping(z) for z in zones), domain

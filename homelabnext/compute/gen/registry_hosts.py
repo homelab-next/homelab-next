@@ -31,14 +31,25 @@ def fragment(fleet: Fleet) -> dict[str, Any]:
 
 
 def merge_into_registry(doc: Mapping[str, Any], frag: Mapping[str, Any]) -> dict[str, Any]:
-    """Overlay the fragment on a registry document; a clash with different values is an error."""
+    """Overlay the fragment on a registry document.
+
+    An entry the registry already has is kept as written (it may carry fields the guests do not,
+    such as a zone description); it is an error only when it disagrees with the fragment on a
+    field the fragment supplies.
+    """
     out = copy.deepcopy(dict(doc))
     for section in ("zones", "hosts"):
         dst = out.setdefault(section, {})
         for k, v in frag[section].items():
-            if k in dst and dst[k] != v:
-                raise ComputeError(f"registry {section}.{k} differs from the guest-derived entry")
-            dst[k] = v
+            if k not in dst:
+                dst[k] = v
+                continue
+            clash = {f for f, val in v.items() if dst[k].get(f) != val}
+            if clash:
+                raise ComputeError(
+                    f"registry {section}.{k} differs from the guest-derived entry "
+                    f"({', '.join(sorted(clash))})"
+                )
     return out
 
 

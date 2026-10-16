@@ -1,0 +1,145 @@
+{
+  "conflicts": [],
+  "date": "2026-10-15",
+  "findings": [],
+  "inactive_optional": [],
+  "items": [
+    {
+      "applies_to": {
+        "hosts": [
+          "edge-core"
+        ],
+        "scope": {
+          "capabilities": [
+            "cap:edge"
+          ],
+          "services": [
+            "svc:edge-proxy"
+          ]
+        }
+      },
+      "changes": [
+        {
+          "mode": "append",
+          "overlay_template": "example_service/config.yml.j2",
+          "sha256": "8d4fc97b5c738f4d3514fc338e07eca28b25d5529283323da55bf6adf17b6c5a"
+        }
+      ],
+      "extension_points": [
+        "template:example_service/config.yml.j2"
+      ],
+      "id": "custom:reverse-proxy-tunnel-workaround",
+      "kind": "patch-overlay",
+      "origin": "public",
+      "owner": "platform-team",
+      "review_by": "2027-01-31"
+    },
+    {
+      "applies_to": {
+        "hosts": [
+          "edge-core"
+        ],
+        "scope": {
+          "capabilities": [
+            "cap:monitoring"
+          ]
+        }
+      },
+      "changes": [
+        {
+          "add_profile_tasks": "board-sensor-driver",
+          "count": 1
+        }
+      ],
+      "extension_points": [
+        "profile:board-sensor-driver"
+      ],
+      "id": "custom:board-sensor-driver",
+      "kind": "profile",
+      "origin": "public",
+      "owner": "platform-team",
+      "review_by": "2027-06-30"
+    },
+    {
+      "applies_to": {
+        "hosts": [
+          "edge-core"
+        ],
+        "scope": {
+          "capabilities": [
+            "cap:edge"
+          ]
+        }
+      },
+      "changes": [
+        {
+          "add_profile_tasks": "vlan-aware-bridge-verifier",
+          "count": 1
+        }
+      ],
+      "extension_points": [
+        "profile:vlan-aware-bridge-verifier"
+      ],
+      "id": "custom:vlan-aware-bridge-verifier",
+      "kind": "profile",
+      "origin": "public",
+      "owner": "platform-team",
+      "review_by": "2027-04-30"
+    }
+  ],
+  "ok": true,
+  "resolved": {
+    "hooks": {},
+    "profiles": {
+      "board-sensor-driver": {
+        "hosts": [
+          "edge-core"
+        ],
+        "tasks": [
+          {
+            "file": "tasks/persist-module.yml",
+            "id": "custom:board-sensor-driver",
+            "name": "Persist the sensor module when the board is on the allowlist"
+          }
+        ],
+        "vars": {
+          "board_sensor_driver_boards": [
+            "Example Board X1",
+            "Example Board X2 Pro"
+          ],
+          "board_sensor_driver_module": "sensorchip_x"
+        }
+      },
+      "vlan-aware-bridge-verifier": {
+        "hosts": [
+          "edge-core"
+        ],
+        "tasks": [
+          {
+            "file": "tasks/verify-bridge.yml",
+            "id": "custom:vlan-aware-bridge-verifier",
+            "name": "Fail unless the named bridge has VLAN filtering enabled"
+          }
+        ],
+        "vars": {
+          "vlan_aware_bridge_verifier_bridge": "vmbr0"
+        }
+      }
+    },
+    "registry_changes": [],
+    "role_vars": {},
+    "template_overlays": {
+      "example_service": {
+        "config.yml.j2": [
+          {
+            "id": "custom:reverse-proxy-tunnel-workaround",
+            "mode": "append",
+            "overlay": "overlay/tunnel-mss.j2",
+            "sha256": "8d4fc97b5c738f4d3514fc338e07eca28b25d5529283323da55bf6adf17b6c5a"
+          }
+        ]
+      }
+    }
+  },
+  "schema": "hnx.customization.plan/1"
+}

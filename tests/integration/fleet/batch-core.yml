@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:batch-core
+kind: vm
+provisioning: terraform
+placement: {node: hv-a, vmid: 141, vmid_scheme: octet}
+resources:
+  cpu: {cores: 2}
+  memory: {size_mb: 4096}
+  disks: [{name: rootfs, size_gb: 24, pool: fast}]
+image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
+cloudinit: {user: ansible, ssh_authorized_keys: [operator], packages: [qemu-guest-agent]}
+network: {zone: compute, ip: 192.0.2.141, firewall: enabled}
+capability: cap:orchestration
+capability_groups: [cap_orchestration]
+tags: [prod]
+backup: {policy: daily}
+owners: {primary: platform-team}
