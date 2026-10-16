@@ -72,6 +72,13 @@ class Customization:
         return s if isinstance(s, dict) else {}
 
     @property
+    def upstream_maintained(self) -> bool:
+        """True only for ``maintained_upstream: true`` documents loaded from the project's own
+        shipped profiles directory. Provenance comes from the loader's source root (``origin``),
+        never from a field in the document, so an overlay cannot grant itself the exemption."""
+        return self.origin == "public" and self.doc.get("maintained_upstream") is True
+
+    @property
     def optional(self) -> bool:
         return bool(self.doc.get("optional", False))
 
@@ -103,6 +110,8 @@ def parse_date(text: Any) -> date | None:
 
 
 def days_left(c: Customization, today: date) -> int | None:
+    if c.upstream_maintained:
+        return None  # never expires
     rb = parse_date(c.doc.get("review_by"))
     return None if rb is None else (rb - today).days
 

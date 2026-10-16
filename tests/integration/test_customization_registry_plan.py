@@ -55,12 +55,15 @@ def test_enabling_a_profile_on_a_host_the_registry_lacks_fails_closed(capsys):
     assert any(f["severity"] == "error" for f in plan["findings"])
 
 
-def test_an_expired_profile_is_refused_not_applied(capsys):
+def test_a_shipped_profile_is_maintained_upstream_and_never_expires(capsys):
     code = custom_main(
         ["plan", "--today", "2030-01-01", "--enable", "custom:board-sensor-driver=edge-core"]
     )
     plan = json.loads(capsys.readouterr().out)
-    assert code == 1 and plan["items"] == []
+    # shipped profiles carry maintained_upstream: true, so a far-future date does not refuse them
+    # (an expired overlay customization is still refused: tests/customization)
+    assert code == 0 and plan["ok"]
+    assert [i["id"] for i in plan["items"]] == ["custom:board-sensor-driver"]
 
 
 @pytest.mark.parametrize("cmd", ["check", "list"])

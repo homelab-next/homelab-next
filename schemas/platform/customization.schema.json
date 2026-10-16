@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/customization/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/platform/customization/1.1",
   "title": "Customization",
   "description": "One lab- or vendor-specific deviation from the core, held outside the core so it is visible, owned and expiring. A customization can only use a sanctioned extension point (variable override, role hook, template overlay, registry patch, opt-in host profile); it can never edit core files or bypass a schema.",
   "type": "object",
@@ -63,7 +63,12 @@
     "created": { "$ref": "#/$defs/date" },
     "review_by": {
       "$ref": "#/$defs/date",
-      "description": "Mandatory. After this date the customization is expired and the invariant fails until it is renewed, upstreamed or retired."
+      "description": "Required unless maintained_upstream is true. After this date the customization is expired and the invariant fails until it is renewed, upstreamed or retired."
+    },
+    "maintained_upstream": {
+      "type": "boolean",
+      "default": false,
+      "description": "Schema 1.1. True for a profile shipped and maintained by the project itself: exempt from the review_by expiry rule. Honoured only for documents loaded from the project's own shipped profiles directory; the linter rejects it (CU015) in any user overlay, so it cannot be forged by a file."
     },
     "links": {
       "type": "object",
@@ -85,7 +90,11 @@
     },
     "action": { "type": "object" }
   },
-  "required": ["id", "title", "kind", "scope", "contract", "reason", "owner", "created", "review_by", "upstream", "action"],
+  "required": ["id", "title", "kind", "scope", "contract", "reason", "owner", "created", "upstream", "action"],
+  "anyOf": [
+    { "required": ["review_by"] },
+    { "required": ["maintained_upstream"], "properties": { "maintained_upstream": { "const": true } } }
+  ],
   "additionalProperties": false,
   "allOf": [
     {

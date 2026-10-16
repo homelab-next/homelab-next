@@ -18,6 +18,7 @@ CU011  error    conflict: two customizations claim one extension point on overla
 CU012  error    file unreadable or not parseable
 CU013  error    enablement names an unknown customization, a non-optional one, or unknown hosts
 CU014  warning  upstream is accepted: retire this after upgrading
+CU015  error    maintained_upstream: true outside the project's own shipped profiles directory
 ====== ======== =============================================================================
 """
 
@@ -57,6 +58,7 @@ RULES = {
     "CU012": "unreadable",
     "CU013": "bad enablement",
     "CU014": "upstream accepted, retire",
+    "CU015": "maintained_upstream outside shipped profiles",
 }
 
 _TOOLS = Path(__file__).resolve().parents[2] / "tools" / "no_raw_endpoints.py"
@@ -131,13 +133,26 @@ def _check_files(c: Customization, u: Universe, out: list[Finding]) -> None:
 
 
 def _check_dates(c: Customization, today: date, out: list[Finding]) -> None:
+    exempt = c.upstream_maintained
+    if "review_by" not in c.doc:
+        if not exempt:
+            out.append(
+                Finding(
+                    "CU007",
+                    "error",
+                    c.id,
+                    "review_by is required; only maintained_upstream profiles shipped "
+                    "with the project may omit it",
+                )
+            )
+        return
     created, review = parse_date(c.doc["created"]), parse_date(c.doc["review_by"])
     if created is None or review is None:
         out.append(Finding("CU007", "error", c.id, "created and review_by must be real dates"))
         return
     if review < created:
         out.append(Finding("CU007", "error", c.id, "review_by is before created"))
-    elif (review - created).days > MAX_HORIZON_DAYS:
+    elif not exempt and (review - created).days > MAX_HORIZON_DAYS:
         out.append(
             Finding(
                 "CU007",
@@ -147,6 +162,8 @@ def _check_dates(c: Customization, today: date, out: list[Finding]) -> None:
                 "a customization that effectively never expires is not owned",
             )
         )
+    if exempt:
+        return  # shipped and maintained by the project itself: never expires
     if review < today:
         out.append(
             Finding("CU008", "error", c.id, f"expired on {review}; renew, upstream or retire")
@@ -242,6 +259,16 @@ def lint(
     valid = [c for c in items if not c.schema_errors]
     live = {c.id for c in active(valid, enabled)}
     for c in valid:
+        if c.doc.get("maintained_upstream") is True and c.origin != "public":
+            out.append(
+                Finding(
+                    "CU015",
+                    "error",
+                    c.id,
+                    "maintained_upstream: true is only valid for profiles shipped with the "
+                    "project; an overlay customization must carry a review_by and expire",
+                )
+            )
         _check_dates(c, today, out)
         for s in _strings(c.doc):
             for hit in endpoint_hits(s):

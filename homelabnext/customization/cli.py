@@ -83,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
                 "owner": x.doc.get("owner", ""),
                 "review_by": x.doc.get("review_by", ""),
                 "days_left": days_left(x, today),
+                "upstream_maintained": x.upstream_maintained,
                 "upstream": x.doc.get("upstream", ""),
                 "origin": x.origin,
                 "extension_points": extension_points(x) if not x.schema_errors else [],
@@ -95,7 +96,9 @@ def main(argv: list[str] | None = None) -> int:
             for r_ in rows:
                 print(
                     f"{r_['id']:44s} {r_['kind']:14s} {r_['state']:9s} "
-                    f"{r_['owner']:16s} {r_['review_by']}  upstream={r_['upstream']}"
+                    f"{r_['owner']:16s} "
+                    f"{'upstream-maintained' if r_['upstream_maintained'] else r_['review_by']}"
+                    f"  upstream={r_['upstream']}"
                 )
             if not rows:
                 print("no customizations found")

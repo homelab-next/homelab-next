@@ -80,7 +80,7 @@ def build_plan(
             "kind": c.kind,
             "origin": c.origin,
             "owner": c.doc["owner"],
-            "review_by": c.doc["review_by"],
+            "review_by": c.doc.get("review_by"),
             "applies_to": {"hosts": hosts, "scope": c.scope},
             "extension_points": extension_points(c),
             "changes": [],

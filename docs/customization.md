@@ -57,7 +57,8 @@ reason: >-                             # required, human text, 20+ characters
   Why the core cannot or should not do this.
 owner: platform-team                   # required
 created: "2026-10-15"
-review_by: "2027-06-30"                # required; at most 366 days after created
+review_by: "2027-06-30"                # required (unless maintained_upstream); at most 366 days after created
+# maintained_upstream: true            # schema 1.1, shipped profiles only; see "Shipped profiles never expire"
 links: {lesson: LL-900, runbook: RB-900}   # optional
 upstream: proposed                     # none | proposed | accepted
 upstream_ref: where the proposal lives # optional
@@ -96,10 +97,10 @@ hnx custom register OUT_DIR           # customizations.html + customizations.jso
 Useful flags: `--dir`, `--config`, `--enable ID[=HOST,HOST]`, `--root` (the tree supplying the
 registry, roles, schemas and ADRs), `--today YYYY-MM-DD` (for reproducible runs), `--json`.
 
-Lint rules `CU001`..`CU014` are listed at the top of `homelabnext/customization/lint.py`. The
+Lint rules `CU001`..`CU015` are listed at the top of `homelabnext/customization/lint.py`. The
 ones people hit: `CU001` missing reason, owner or review date; `CU005` a scope selector that does
 not resolve; `CU008` expired; `CU011` two customizations claim one extension point on overlapping
-scope.
+scope; `CU015` `maintained_upstream: true` outside the project's own shipped profiles.
 
 ## Conflicts and ordering
 
@@ -123,6 +124,33 @@ overlays, hooks, then profiles, each sorted by id. The same inputs give a byte-i
 
 An expired customization is never applied. That is deliberate: a deviation nobody has looked at
 for a year is the most likely thing to be wrong.
+
+## Shipped profiles never expire (`maintained_upstream`)
+
+Schema 1.1 adds one optional boolean, `maintained_upstream` (default `false`). It means the
+customization is a profile that the project itself ships and maintains. Such an entry is exempt
+from the `review_by` expiry rule (`CU008`/`CU009`) and from the one-year horizon rule, and
+`review_by` becomes optional for it (keeping one is harmless). Every other customization still
+needs a `review_by` and still expires. Schema 1.0 documents validate unchanged.
+
+* **Provenance is the loader's source root, not the file.** The exemption is honoured only for
+  documents loaded from the project's own `profiles/` directory. In any overlay directory
+  (`--dir`, `HNX_CUSTOMIZATIONS_DIR`, a config file's `customizations_dir`, `customizations/`)
+  the flag is rejected with `CU015`, the customization is not exempt, and it still expires. A
+  file cannot grant itself the exemption by saying so.
+* `hnx custom check` and the standing invariant **X-09** honour it: shipped profiles pass at any
+  future date, overlay customizations with an old `review_by` still fail. `hnx custom list` and
+  the register mark upstream-maintained entries.
+* A non-boolean value fails the schema.
+
+**Why not just give shipped profiles a far-future `review_by`?** Because that is the "never
+expires in disguise" the horizon rule exists to forbid: the date is a lie nobody will notice
+until it fires years later, it makes the shipped files churn every year to push the date, and it
+teaches overlay authors that a distant date is an acceptable way to opt out of review. Expiry is
+a promise that a human owner re-reads a deviation. A shipped profile has no such owner on the
+deployment side: the project reviews it with each release, and the deployment cannot renew it.
+Making that explicit in a field, enforced by where the file was loaded from, is honest and
+cannot be abused.
 
 ## The invariant and the register
 
