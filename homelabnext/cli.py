@@ -59,6 +59,10 @@ def _ids(argv: list[str]) -> int:
 
 def _site(argv: list[str]) -> int:
     from homelabnext.network.cli import main
+
+    return main(argv)
+
+
 def _guests(argv: list[str]) -> int:
     from homelabnext.compute.cli import main
 
