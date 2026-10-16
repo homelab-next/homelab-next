@@ -57,6 +57,12 @@ def _ids(argv: list[str]) -> int:
     return main(argv)
 
 
+def _site(argv: list[str]) -> int:
+    from homelabnext.network.cli import main
+
+    return main(argv)
+
+
 def _schema_check(argv: list[str]) -> int:
     path = REPO_ROOT / "tools" / "schema_check.py"
     if not path.is_file():
@@ -107,6 +113,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
     "registers": ("build the lessons/runbooks/invariants pages (registers build)", _registers),
     "invariants": ("run the standing invariants (invariants run)", _invariants),
     "ids": ("allocate, resolve and loss-check register ids (alloc|resolve|check-lost)", _ids),
+    "site": ("validate, plan and render the site/network model (site validate|plan|render)", _site),
     "schema-check": ("check schemas, examples, negatives and frozen baselines", _schema_check),
 }
 

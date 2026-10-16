@@ -1,0 +1,82 @@
+{
+  "adapter": "unifi",
+  "dry_run": true,
+  "site": "northwind",
+  "kind": "networkconf",
+  "note": "dry-run payload; live application is SERVER-only (see docs/network-model.md)",
+  "objects": [
+    {
+      "name": "hnx-mgmt",
+      "purpose": "corporate",
+      "enabled": true,
+      "networkgroup": "LAN",
+      "vlan_enabled": true,
+      "vlan": 10,
+      "ip_subnet": "192.0.2.1/26",
+      "domain_name": "example.internal",
+      "dhcpd_enabled": true,
+      "dhcpd_start": "192.0.2.32",
+      "dhcpd_stop": "192.0.2.62",
+      "dhcpd_leasetime": 43200,
+      "dhcpd_dns_enabled": true,
+      "dhcpd_dns_1": "192.0.2.5"
+    },
+    {
+      "name": "hnx-data",
+      "purpose": "corporate",
+      "enabled": true,
+      "networkgroup": "LAN",
+      "vlan_enabled": true,
+      "vlan": 20,
+      "ip_subnet": "192.0.2.65/26",
+      "domain_name": "example.internal",
+      "dhcpd_enabled": false
+    },
+    {
+      "name": "hnx-compute",
+      "purpose": "corporate",
+      "enabled": true,
+      "networkgroup": "LAN",
+      "vlan_enabled": true,
+      "vlan": 30,
+      "ip_subnet": "192.0.2.129/26",
+      "domain_name": "example.internal",
+      "dhcpd_enabled": true,
+      "dhcpd_start": "192.0.2.160",
+      "dhcpd_stop": "192.0.2.190",
+      "dhcpd_leasetime": 86400,
+      "dhcpd_dns_enabled": true,
+      "dhcpd_dns_1": "192.0.2.5"
+    },
+    {
+      "name": "hnx-edge",
+      "purpose": "corporate",
+      "enabled": true,
+      "networkgroup": "LAN",
+      "vlan_enabled": true,
+      "vlan": 40,
+      "ip_subnet": "198.51.100.1/26",
+      "domain_name": "example.internal",
+      "dhcpd_enabled": true,
+      "dhcpd_start": "198.51.100.32",
+      "dhcpd_stop": "198.51.100.62",
+      "dhcpd_leasetime": 43200,
+      "dhcpd_dns_enabled": true,
+      "dhcpd_dns_1": "192.0.2.5"
+    },
+    {
+      "name": "hnx-sandbox",
+      "purpose": "corporate",
+      "enabled": true,
+      "networkgroup": "LAN",
+      "vlan_enabled": true,
+      "vlan": 50,
+      "ip_subnet": "198.51.100.65/26",
+      "domain_name": "example.internal",
+      "dhcpd_enabled": true,
+      "dhcpd_start": "198.51.100.96",
+      "dhcpd_stop": "198.51.100.126",
+      "dhcpd_leasetime": 43200
+    }
+  ]
+}

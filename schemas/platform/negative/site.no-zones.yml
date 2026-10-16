@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# NEGATIVE: at least one zone
+site_version: 1
+site:
+  id: northwind
+  domain: example.internal
+  timezone: UTC
+router:
+  id: edge-router
+  model: unifi
+  mgmt_endpoint: svc:router-console
+  tls_pin:
+    sha256: REPLACE_WITH_CONSOLE_CERT_FINGERPRINT
+  auth:
+    reads:
+      mode: api_key
+      secret_ref: secret:network/router/api-key
+    writes:
+      mode: local_admin
+      secret_ref: secret:network/router/local-admin
+firewall:
+  default_action: deny
+zones: []
