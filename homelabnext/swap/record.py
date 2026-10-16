@@ -24,7 +24,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from homelabnext.paths import schema_file, schemas_dir
+
 RECORD_VERSION = "1.0"
 STEPS = (
     "declare",
@@ -173,7 +174,7 @@ def _validator():
         from referencing.jsonschema import DRAFT202012
 
         reg: Registry = Registry()
-        for p in sorted((REPO_ROOT / "schemas").rglob("*.json")):
+        for p in sorted(schemas_dir().rglob("*.json")):
             if "_frozen" in p.parts:
                 continue
             d = json.loads(p.read_text(encoding="utf-8"))
@@ -187,7 +188,7 @@ def _validator():
 
 
 def schema_path() -> Path:
-    return REPO_ROOT / "schemas" / "platform" / "swap_record.schema.json"
+    return schema_file("platform", "swap_record.schema.json")
 
 
 def schema_problems(doc: Any) -> list[str]:

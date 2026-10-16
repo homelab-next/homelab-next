@@ -19,6 +19,7 @@ node_modules/
 *.tfstate.*
 .terraform/
 secrets/
+!/conformance/secrets/
 *.pem
 *.key
 *.egg-info/

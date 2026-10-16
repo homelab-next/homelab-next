@@ -156,6 +156,15 @@ A capability has a **passing test** when its suite exists, executes at least six
 failing `must` check, and (on the `fake` target) catches every one of its mutants.  Capabilities
 named in `capabilities.yml` but lacking a suite are listed too.
 
+`capabilities.yml` at the repository root is the list of capabilities this tree declares (the fourteen
+names, one per line under `capabilities:`).  The exporter and invariants X-04 and X-10 read it, so a
+deployment that adds a capability adds it there and must then ship its suite, or the report and the
+invariants go red.  It is a source-tree file: the wheel does not carry it (without it the exporter
+falls back to the built-in fourteen).  `make conform-check` (`tools/conform_coverage.py`) runs
+`hnx conform list` and `hnx conform report --json` and fails if any of the fourteen lacks a passing
+test; `make conform` runs every suite against the built-in fakes, and the nightly workflow runs
+`hnx conform run all` after the lab-in-a-box smoke.
+
 `homelabnext/conform/plugins/x10_conformance.py` is the invariant plugin **X-10, "every
 capability has a passing conformance test"** (pillar X; X-04 only asks that a test file
 exists).  It runs the report and fails naming each capability and why.  Register it with the

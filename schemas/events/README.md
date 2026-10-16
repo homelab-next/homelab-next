@@ -11,7 +11,7 @@ detection to decision to swap). Other event families are added later as separate
 | `proposal.created` / `proposal.decided` | `homelabnext.proposal.created` / `.decided` |
 | `task.queued` | `homelabnext.task.queued` |
 | `decision.requested` / `decision.returned` | `homelabnext.decision.requested` / `.returned` |
-| `swap.step` | `homelabnext.swap.step` (steps 1..9 of the swap procedure) |
+| `swap.step` (1.1) | `homelabnext.swap.step` (steps 1..9 of the swap procedure; 1.1 adds the nine step names of the swap record, `homelabnext.swap.events` builds them from a record) |
 
 Envelope: `specversion` (`"1.0"`), `id` (idempotency key; redelivery of the same id is harmless),
 `source` (a `svc:`/`cap:`/`profile:` logical id, never a URL), `type`, `time` (RFC 3339), optional

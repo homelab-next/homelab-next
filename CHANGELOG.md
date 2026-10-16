@@ -29,8 +29,11 @@ has no section below.
 - Guest (compute) model: `guest.schema.json`, `homelabnext.compute` loader, validation and renderers (Terraform for a Proxmox-style provider, libvirt, cloud-init, Ansible inventory, registry hosts, backup jobs, plan diff) and `hnx guests validate|render|plan`.
 - Swap kit: `hnx swap plan|start|status|advance|rollback|record` (nine-step resumable state machine with gates, evidence and a hash-chained `swap_record` schema), `homelabnext.parity` (row, table, schema-drift, event-stream and notification parity), a dual-write helper, the registry flip with its exact inverse, and `tools/decommission_check.py` (`docs/swap.md`).
 
+- Wave-3 integration: `events/swap.step` schema 1.1 (additive: the nine step names of the swap record; 1.0 names stay valid) with `homelabnext.swap.events.step_events`, invariant X-10 in the example register plus its `x10_conformance` entry point, `tools/conform_coverage.py` behind `make conform` / `make conform-check` (part of `make check` and CI) and a nightly `hnx conform run all`, and tests that run a swap between conformance fakes and run `hnx conform list` / `hnx swap plan` from an installed wheel.
+
 ### Changed
 
+- Wave-3 integration: the blanket `compose/**` endpoint allowance is replaced by four file-specific entries, the `swap` extra is PyYAML + jsonschema (what the kit imports), the swap record schema is located through `homelabnext.paths`, and `.gitignore` no longer hides `conformance/secrets/`.
 - Wave-2 integration: `lake` extra pins (`duckdb>=1.5`, `pyarrow>=26`, `pyiceberg[sql-sqlite,pyiceberg-core]>=0.12`), package data for example specs, the X-09 invariants entry point, CI matrix with and without the lake extras, `hnx custom check` gate, `role_lint` expands a directory of roles, guests read zones through the network loader, registry merge keeps extra registry fields, schema contract test covers every schema, cross-package integration tests and a wheel-install smoke test.
 - Core install is dependency-free; PyYAML, jsonschema and friends are extras.
 - Leak scanner accepts exactly the `Claude-Session:` commit trailer shape.

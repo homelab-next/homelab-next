@@ -51,9 +51,10 @@ homelabnext/
   records/      propose/finding/completion          (W5)   core (+ records for pydantic)
   decide/       decision specs, replay, eval        (W7)   extra: decide
   golden/       golden-task format and runner       (W7)   core
-  conform/      conformance harness core            (W6)   core
-  swap/         swap checklist runner               (W11)  extra: swap
-  parity/       parity and drift tools              (W11)  extra: swap
+  paths.py      locates schemas/, profiles/, examples/  (W16)  core
+  conform/      conformance harness core            (W6)   core (+ yaml for target files)
+  swap/         nine-step swap runner and record    (W11)  extra: swap (= yaml + schema)
+  parity/       parity and drift tools              (W11)  core (uses lake and notify)
   detections/   fixtures, engine adapters, det: map (W9)   extra: detections
   registers/    register schemas -> HTML/JSON       (W10)  core
   invariants/   runner, check plugin API            (W10)  core
@@ -152,8 +153,8 @@ Check = Callable[[Mapping[str, Any]], Result]                           # the pl
 
 `hnx` sub-commands are rows in `COMMANDS` in `homelabnext/cli.py` (name, one-line help, handler that
 imports its package lazily). Current names: `registry`, `new`, `gen`, `detections`, `registers`,
-`invariants`, `ids`, `decide`, `golden`, `site`, `guests`, `schema-check`, `custom`. Reserved for later
-drops: `conform`, `swap`, `parity`.
+`invariants`, `ids`, `decide`, `golden`, `site`, `guests`, `schema-check`, `swap`, `conform`, `custom`.
+`parity` is a library only (the swap runner calls it; no sub-command).
 Exit codes everywhere: `0` ok, `1` a check failed, `2` misconfiguration or bad input, `>=100` the
 check itself could not measure.
 
@@ -215,7 +216,65 @@ registry_hosts.fragment(fleet) / merge_into_registry(registry_doc, fragment)   #
 load_all(settings) ; discover(root, registry=None, roles_dir=None) -> Universe
 lint(items, universe, today, enabled=None) -> list[Finding] ; build_plan(items, universe, today, enabled=None) -> dict
 # invariant X-09 (plugins/x09_customizations.py) is registered through the homelabnext.invariants.checks entry point
+
+# homelabnext.paths   (core; the one place that answers "where is schemas/?")
+schemas_dir() / schema_file(*parts) / ocsf_dir() / profiles_dir() / examples_dir() / example_file(*parts)
+resource_dir(kind) / resource_file(kind, *parts) / data_root() / source_root() / clear_cache()
+# kind in {schemas, profiles, examples}.  Order: HNX_<KIND>_DIR, then HNX_DATA_DIR (a whole tree), then the
+# wheel's homelabnext/_data/<kind>, then the checkout.  Each function takes env=, package_root=, source_root=
+# for tests; ResourceNotFound lists every place tried.  No module under homelabnext/ may locate the data
+# itself (tests/paths enforces it).  The wheel carries schemas/, profiles/ and examples/ only: conformance/,
+# compose/, tools/ and docs/ stay in the source tree.
+
+# homelabnext.swap   (extra: swap = PyYAML + jsonschema; hnx swap; docs/swap.md; ADR-0005)
+STEPS: tuple[str, ...]                  # declare, shadow-start, dual-write, parity-compare, soak, cutover,
+                                        # rollback-window, decommission-check, close
+class Backend: ...                      # conformance(role), shadow_start(), start_mirror(), parity(), apply_route(t),
+                                        # verify_route(t), stop_old(), start_old(), decommission_scan() -> Outcome
+ManualBackend(...)                      # gates satisfied by attestation files; the flip and the scan are real
+LakeBackend(old, new, *, tables, registry_path, service, new_host, queries=(), sample=None, smoke=None, ...)
+SwapRunner.create(record_path, backend, *, swap_id, capability, from_adapter, to_adapter, service, before, after,
+                  plan=None, registry=None, clock=..., actor=...) -> SwapRunner
+    .advance(dry_run=False, closure=None) -> AdvanceResult   # raises GateFailed when a gate refuses
+    .rollback(reason) -> dict                                # RollbackRefused after decommission
+    .status() / .record() / .note(text)
+plan_flip(registry_doc, service, host=..., port=..., impl=..., version=...) -> FlipPlan ; flip_text(text, plan)
+DualWriter(primary, secondary) ; Retired(...) ; scan(roots, retired, registry=..., allow=...) -> list[Finding]
+# homelabnext.swap.record: new_record/load/save/problems/verify_evidence/dumps (hash-chained transition log;
+#   schema platform/swap_record 1.0).  homelabnext.swap.events.step_events(record, *, source=None) -> list[event]
+#   turns the transition log into homelabnext.swap.step events (schema events/swap.step 1.1).
+
+# homelabnext.parity   (core; no sub-command)
+compare_tables(left, right, tables, *, sample=None, min_rows=0) -> ParityReport
+compare_queries(left, right, queries: Sequence[ParityQuery]) -> ParityReport
+compare_event_streams(old, new, EventRules(...)) / compare_notifications(old, new, NotifyRules(...)) -> ParityReport
+schema_drift(left_table_info, right_table_info) -> list[Drift] ; diff_rows(left, right, RowRules(key=(...))) -> RowDiff
+ParityReport(.ok, .checks, .merge(other), .summary(), .digest(), .to_dict())   # the digest goes into swap evidence
+
+# homelabnext.conform   (hnx conform list|run|mutants|report; docs/conformance.md)
+Suite(name, summary, protocol) ; @suite.check(id, summary, *, severity="must", requires=()) ; Mutant(factory, fails, description)
+run(capability, binding_mapping, root=None) -> list[CheckResult]           # {"fake": True} or {"adapter": "pkg.mod:factory", ...}
+run_capability(capability, target, root=None, *, only=None) -> CapabilityRun  # target: "fake" | "broken[:M]" | file | name
+build_report(root=None, target="fake", ...) -> dict                          # capabilities_without_passing_test
+CAPABILITIES (fourteen) / EXTENDED (backup, dns, edge) ; ConformError (misconfiguration, exit 2)
+# the suites, Protocols and fakes live in conformance/ of the source tree (hnx conform --root DIR); an
+# installed wheel lists the fourteen names and says "no suite" until pointed at a checkout.
+# invariant X-10 (plugins/x10_conformance.py) is registered through the homelabnext.invariants.checks entry point.
 ```
+
+### 2.4 Swap, conformance and paths: how they fit
+
+* **Contract first.** A swap is declared against a capability (`cap:<name>`); its first and second steps run
+  the capability's conformance suite against the incumbent and the candidate (`hnx conform run`), so the
+  same checks that prove a fake prove the real thing. A capability with no passing suite (invariant X-10) has
+  nothing to prove a swap against.
+* **Evidence is files.** Every step writes an evidence file under `<swap-id>.evidence/`; the record stores
+  its hash, and `hnx swap record --verify` recomputes the chain. Parity reports enter as evidence by digest.
+* **Events.** `homelabnext.swap.events.step_events` renders the record as `homelabnext.swap.step` events
+  (steps 1..9 named as in the record; `events/swap.step` 1.1 added those names additively, 1.0 names stay
+  valid). Publishing is the caller's job (the event bus is itself a capability).
+* **Where data lives.** `homelabnext.paths` is the only locator; the swap record schema, the OCSF subsets
+  and the minimal example lab are read through it, in a checkout and from an installed wheel alike.
 
 ## 3. Registry and naming
 
