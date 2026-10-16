@@ -45,3 +45,11 @@ allow:
     reason: render tests use synthetic example.internal endpoints and a loopback literal as expected values
   - path: "schemas/platform/negative/service.*.yml"
     reason: negative registry fixtures derived from the synthetic example lab (documentation addresses only)
+  - path: "docs/compute-model.md"
+    reason: guest example uses a documentation-range address
+  - path: "schemas/platform/examples/guest.*.yml"
+    reason: guest examples are synthetic fleet data (documentation addresses only)
+  - path: "schemas/platform/negative/guest.*.yml"
+    reason: negative guest fixtures (documentation addresses only)
+  - path: "tests/compute/*"
+    reason: synthetic fleet, site model, goldens and tests (documentation addresses only; addresses are the data under test)
