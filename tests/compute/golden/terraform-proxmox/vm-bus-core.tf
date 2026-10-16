@@ -2,7 +2,7 @@
 resource "proxmox_virtual_environment_vm" "bus_core" {
   name      = "bus-core"
   node_name = "hv-a"
-  vm_id     = 50
+  vm_id     = 150
   tags      = ["legacy-net", "prod"]
   on_boot   = false
 

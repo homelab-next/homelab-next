@@ -5,25 +5,25 @@ jobs:
     members:
       - guest: "guest:edge-core"
         node: "hv-a"
-        vmid: 10
+        vmid: 110
         include_memory: false
         retain: {}
         export_hook: null
       - guest: "guest:idp-core"
         node: "hv-a"
-        vmid: 30
+        vmid: 130
         include_memory: false
         retain: {daily: 7, weekly: 4}
         export_hook: "idp-export"
       - guest: "guest:lake-core"
         node: "hv-a"
-        vmid: 40
+        vmid: 140
         include_memory: false
         retain: {daily: 7, monthly: 6, weekly: 4}
         export_hook: "lake-export"
       - guest: "guest:secrets-core"
         node: "hv-a"
-        vmid: 31
+        vmid: 131
         include_memory: false
         retain: {daily: 14}
         export_hook: null
@@ -32,7 +32,7 @@ jobs:
     members:
       - guest: "guest:infer-core"
         node: "hv-a"
-        vmid: 130
+        vmid: 230
         include_memory: false
         retain: {weekly: 2}
         export_hook: null
