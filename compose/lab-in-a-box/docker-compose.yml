@@ -1,0 +1,292 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Lab-in-a-box: a laptop/CI-sized reference environment for the capability seams, inside a 4 GB
+# RAM budget (the sum of the mem_limit values below is asserted by tests/compose).
+#
+# Every capability is reachable inside the compose network by its registry alias
+# <capability>.svc.example.internal, so clients resolve it the same way they will on a real lab.
+# Settings come from the env file; run through the helper so the defaults are applied:
+#
+#   docker compose --env-file .env.example -f docker-compose.yml up -d --wait
+#
+# Everything here is fake: throwaway credentials, in-memory or scratch volumes, documentation
+# addresses.  Images are pinned by tag AND digest; bump both together in one reviewed change.
+name: hnx-lab
+
+x-restart: &restart
+  restart: "no"
+  init: true
+
+networks:
+  lab:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${LAB_SUBNET:-198.51.100.0/24}
+
+volumes:
+  postgres-data:
+  object-store-meta:
+  object-store-data:
+  events-data:
+  query-data:
+
+services:
+  # --- object-store: S3 API ---------------------------------------------------------------
+  object-store:
+    <<: *restart
+    image: dxflrs/garage:v1.0.1@sha256:a5706cf1f3d7b349ac5133ec59ad8181b709270b75e5f2fa7b3e1a5c07d67137
+    command: ["/garage", "server"]
+    environment:
+      GARAGE_RPC_SECRET: ${LAB_OBJECT_STORE_RPC_SECRET:?see .env.example}
+      GARAGE_ADMIN_TOKEN: ${LAB_OBJECT_STORE_ADMIN_TOKEN:?see .env.example}
+    volumes:
+      - ./config/garage.toml:/etc/garage.toml:ro
+      - object-store-meta:/var/lib/garage/meta
+      - object-store-data:/var/lib/garage/data
+    ports:
+      - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_OBJECT_STORE:-3900}:3900"
+      - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_OBJECT_STORE_ADMIN:-3903}:3903"
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    mem_limit: 192m
+    networks:
+      lab:
+        aliases: [garage, object-store.svc.example.internal]
+
+  # --- postgres: catalog and authz metadata -----------------------------------------------
+  postgres:
+    <<: *restart
+    image: postgres:16.4-alpine@sha256:5660c2cbfea50c7a9127d17dc4e48543eedd3d7a41a595a2dfa572471e37e64c
+    environment:
+      POSTGRES_USER: lab
+      POSTGRES_PASSWORD: ${LAB_POSTGRES_PASSWORD:?see .env.example}
+      POSTGRES_DB: catalog
+    command: ["postgres", "-c", "shared_buffers=64MB", "-c", "max_connections=40", "-c", "fsync=off"]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lab -d catalog"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 256m
+    networks:
+      lab:
+        aliases: [postgres.svc.example.internal]
+
+  # --- lake-catalog: Iceberg REST catalog -------------------------------------------------
+  catalog-migrate:
+    <<: *restart
+    image: quay.io/lakekeeper/catalog:v0.9.5@sha256:c3d6db91218a6115525ee05542925739a689938f3d116543a32bd8972f217c82
+    command: ["migrate"]
+    environment: &catalog-env
+      LAKEKEEPER__PG_DATABASE_URL_READ: postgresql://lab:${LAB_POSTGRES_PASSWORD}@postgres:5432/catalog
+      LAKEKEEPER__PG_DATABASE_URL_WRITE: postgresql://lab:${LAB_POSTGRES_PASSWORD}@postgres:5432/catalog
+      LAKEKEEPER__PG_ENCRYPTION_KEY: ${LAB_CATALOG_ENCRYPTION_KEY:?see .env.example}
+      RUST_LOG: warn
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 128m
+    networks: [lab]
+
+  lake-catalog:
+    <<: *restart
+    image: quay.io/lakekeeper/catalog:v0.9.5@sha256:c3d6db91218a6115525ee05542925739a689938f3d116543a32bd8972f217c82
+    command: ["serve"]
+    environment: *catalog-env
+    depends_on:
+      catalog-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_CATALOG:-8181}:8181"
+    healthcheck:
+      test: ["CMD", "/home/nonroot/lakekeeper", "healthcheck"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    mem_limit: 256m
+    networks:
+      lab:
+        aliases: [lake-catalog.svc.example.internal]
+
+  # --- one-shot initialiser: object-store layout/bucket/key + catalog bootstrap/warehouse ---
+  lab-init:
+    <<: *restart
+    image: hnx-lab-fakes:local
+    build:
+      context: ../..
+      dockerfile: compose/lab-in-a-box/fakes/Dockerfile
+    command: ["python", "/app/lab_init.py"]
+    environment:
+      LAB_S3_ACCESS_KEY: ${LAB_S3_ACCESS_KEY:?see .env.example}
+      LAB_S3_SECRET_KEY: ${LAB_S3_SECRET_KEY:?see .env.example}
+      LAB_S3_BUCKET: ${LAB_S3_BUCKET:?see .env.example}
+      LAB_S3_REGION: ${LAB_S3_REGION:?see .env.example}
+      LAB_WAREHOUSE: ${LAB_WAREHOUSE:?see .env.example}
+      LAB_OBJECT_STORE_ADMIN_TOKEN: ${LAB_OBJECT_STORE_ADMIN_TOKEN:?see .env.example}
+      LAB_OBJECT_STORE_ADMIN_URL: http://object-store.svc.example.internal:3903
+      LAB_S3_URL: http://object-store.svc.example.internal:3900
+      LAB_CATALOG_URL: http://lake-catalog.svc.example.internal:8181
+    depends_on:
+      object-store:
+        condition: service_healthy
+      lake-catalog:
+        condition: service_healthy
+    mem_limit: 64m
+    networks: [lab]
+
+  # --- lake-query: Trino, single node, tiny heap ------------------------------------------
+  lake-query:
+    <<: *restart
+    image: trinodb/trino:470@sha256:a591436ddc20cef15a4424704423326828591727b0e7c40c6ea4165d4564df67
+    environment:
+      LAB_WAREHOUSE: ${LAB_WAREHOUSE:?see .env.example}
+      LAB_S3_REGION: ${LAB_S3_REGION:?see .env.example}
+      LAB_S3_ACCESS_KEY: ${LAB_S3_ACCESS_KEY:?see .env.example}
+      LAB_S3_SECRET_KEY: ${LAB_S3_SECRET_KEY:?see .env.example}
+    volumes:
+      - ./config/trino/config.properties:/etc/trino/config.properties:ro
+      - ./config/trino/jvm.config:/etc/trino/jvm.config:ro
+      - ./config/trino/node.properties:/etc/trino/node.properties:ro
+      - ./config/trino/catalog:/etc/trino/catalog:ro
+      - query-data:/data/trino
+    depends_on:
+      lab-init:
+        condition: service_completed_successfully
+    ports:
+      - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_QUERY:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/v1/info | grep -q '\"starting\":false'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    mem_limit: 1280m
+    networks:
+      lab:
+        aliases: [lake-query.svc.example.internal]
+
+  # --- events: NATS JetStream -------------------------------------------------------------
+  events:
+    <<: *restart
+    image: nats:2.10.22-alpine@sha256:73b0ba5fec5518c5f698597c58d2a3350a2b5ccae43e84c308f8d2da1242deca
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    volumes:
+      - events-data:/data
+    ports:
+      - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_EVENTS:-4222}:4222"
+      - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_EVENTS_MONITOR:-8222}:8222"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 128m
+    networks:
+      lab:
+        aliases: [events.svc.example.internal]
+
+  # --- secrets: OpenBao in dev mode (in memory, auto-unsealed; never for real secrets) ----
+  secrets:
+    <<: *restart
+    image: openbao/openbao:2.1.0@sha256:7de07aa6df3937d44c96c2d65c188b2d4a70546f2a764ad4510301305af6a223
+    command: ["server", "-dev"]
+    environment:
+      BAO_DEV_ROOT_TOKEN_ID: ${LAB_SECRETS_DEV_TOKEN:?see .env.example}
+      BAO_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    cap_add: [IPC_LOCK]
+    ports:
+      - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_SECRETS:-8200}:8200"
+    healthcheck:
+      # dev mode listens on IPv4 only, and "localhost" resolves to IPv6 first in this image
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8200/v1/sys/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 256m
+    networks:
+      lab:
+        aliases: [secrets.svc.example.internal]
+
+  # --- notify: ntfy -----------------------------------------------------------------------
+  notify:
+    <<: *restart
+    image: binwiederhier/ntfy:v2.11.0@sha256:4a7d0f0adc6d5d9fc36e64ab55ef676e76e124a2bdd50ce115b6d9c1c7430294
+    command: ["serve"]
+    environment:
+      NTFY_BASE_URL: http://notify.svc.example.internal
+      NTFY_LISTEN_HTTP: ":80"
+    ports:
+      - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_NOTIFY:-8090}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:80/v1/health | grep -q '\"healthy\":true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 96m
+    networks:
+      lab:
+        aliases: [notify.svc.example.internal]
+
+  # --- authz: OpenFGA (in-memory store) ---------------------------------------------------
+  authz:
+    <<: *restart
+    image: openfga/openfga:v1.8.4@sha256:0ad225772d28527eacbe71fda9f2349b332100a710c2f2a624b188470b38f1ac
+    command: ["run"]
+    environment:
+      OPENFGA_DATASTORE_ENGINE: memory
+      OPENFGA_LOG_LEVEL: warn
+    ports:
+      - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_AUTHZ:-8089}:8080"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/grpc_health_probe", "-addr=localhost:8081"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 128m
+    networks:
+      lab:
+        aliases: [authz.svc.example.internal]
+
+  # --- inference: the project's fake OpenAI-compatible server -----------------------------
+  inference:
+    <<: *restart
+    image: hnx-lab-fakes:local
+    build:
+      context: ../..
+      dockerfile: compose/lab-in-a-box/fakes/Dockerfile
+    command: ["python", "/app/openai_server.py", "--host", "0.0.0.0", "--port", "8000", "--model", "example-4b"]
+    ports:
+      - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_INFERENCE:-8001}:8000"
+    healthcheck: &fake-health
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 64m
+    networks:
+      lab:
+        aliases: [inference.svc.example.internal]
+
+  # --- cases: the project's fake case system ----------------------------------------------
+  cases:
+    <<: *restart
+    image: hnx-lab-fakes:local
+    build:
+      context: ../..
+      dockerfile: compose/lab-in-a-box/fakes/Dockerfile
+    command: ["python", "/app/fake_cases.py", "--port", "8000"]
+    ports:
+      - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_CASES:-8002}:8000"
+    healthcheck: *fake-health
+    mem_limit: 64m
+    networks:
+      lab:
+        aliases: [cases.svc.example.internal]

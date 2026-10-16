@@ -9,6 +9,8 @@ allow:
     reason: negative fixtures that deliberately contain literals
   - path: "schemas/**/examples/**"
     reason: schema example documents use documentation addresses
+  - path: "compose/**"
+    reason: container definitions bind and probe loopback and the in-network capability aliases; they are environment definitions, not code defaults
   - path: "inventory/**"
     reason: the inventory is where addresses legitimately live
   - path: "conformance/fixtures/**"
