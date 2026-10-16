@@ -8,6 +8,7 @@ has no section below.
 
 ### Added
 
+- Conformance harness: `hnx conform list|run|mutants|report`, a suite format (named checks, severities, features, waivers) that runs against any implementation named by a target file, 14 capability suites with fakes, deliberately broken fakes that each suite must catch, three extended suites (`backup`, `dns`, `edge`), the `capabilities without a passing test` JSON export and invariant X-10 (`docs/conformance.md`).
 - `homelabnext.notify`, `homelabnext.state` and `homelabnext.records`: state-diffed paging with registered recovery pairs and an ntfy-style sender, crash-safe versioned state files with a keyed check API, and the records lifecycle (single validated agent write path, separate operator movers).
 - Customizations: schema, loader, linter, plan-only applier, invariant X-09, register view, three synthetic optional profiles and `hnx custom list|check|plan|register` (`docs/customization.md`).
 - Customization schema 1.1 (additive): `maintained_upstream` exempts project-shipped profiles from `review_by` expiry; honoured only for the shipped `profiles/` directory, rejected with `CU015` in any overlay; `hnx custom check`, invariant X-09 and the register honour it.
