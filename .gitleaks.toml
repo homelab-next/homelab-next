@@ -7,3 +7,7 @@ useDefault = true
 [[allowlists]]
 description = "the leak scanner's own test plants a fake high-entropy credential on purpose to prove it is detected"
 paths = ['''^tools/tests/test_leak_scan\.py$''']
+
+[[allowlists]]
+description = "the broker conformance suite plants a fake secret argument on purpose to prove the audit trail redacts it"
+paths = ['''^conformance/suites/broker\.py$''']
