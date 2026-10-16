@@ -1,0 +1,15 @@
+uid: string not null
+time: timestamp[us, tz=UTC] not null
+class_uid: int64 not null
+category_uid: int64 not null
+activity_id: int64 not null
+type_uid: int64
+severity_id: int64 not null
+status_id: int64
+message: string
+metadata: struct<version: string not null, product: string, log_source: string>
+src_endpoint: struct<ip: string, port: int64, hostname: string>
+query_hostname: string not null
+query_type: string
+rcode_id: int64
+answers: list<element: string>

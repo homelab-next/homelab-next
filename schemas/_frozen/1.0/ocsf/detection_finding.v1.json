@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/ocsf/detection_finding/1.0",
+  "title": "Detection Finding",
+  "description": "Pinned subset of the OCSF Detection Finding class (OCSF 1.3.0, class_uid 2004) as stored in the lake. Flat top-level columns plus a few one-level structs; the lake table, Arrow schema and DDL are generated from this file (see homelabnext/lake).",
+  "x-lake": {
+    "table": "detection_finding",
+    "ocsf_class": "detection_finding",
+    "ocsf_class_uid": 2004,
+    "ocsf_version": "1.3.0",
+    "key": [
+      "uid"
+    ],
+    "time_column": "time",
+    "partition": "day(time)"
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "uid",
+    "time",
+    "class_uid",
+    "category_uid",
+    "activity_id",
+    "severity_id",
+    "finding_uid",
+    "detection_id"
+  ],
+  "properties": {
+    "uid": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Stable content-derived event id. This is the idempotency (content) key of the table."
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Event time, RFC 3339 with an explicit offset; stored as UTC."
+    },
+    "class_uid": {
+      "const": 2004,
+      "type": "integer"
+    },
+    "category_uid": {
+      "const": 2,
+      "type": "integer"
+    },
+    "activity_id": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 99
+    },
+    "type_uid": {
+      "type": "integer"
+    },
+    "severity_id": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 6
+    },
+    "status_id": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 99
+    },
+    "message": {
+      "type": "string",
+      "maxLength": 4096
+    },
+    "metadata": {
+      "type": "object",
+      "description": "OCSF metadata object (subset).",
+      "additionalProperties": false,
+      "required": [
+        "version"
+      ],
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "product": {
+          "type": "string"
+        },
+        "log_source": {
+          "type": "string"
+        }
+      }
+    },
+    "finding_uid": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "finding_title": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "detection_id": {
+      "type": "string",
+      "pattern": "^det:[a-z0-9][a-z0-9-]{0,62}$",
+      "description": "Logical detection id, never an engine rule number."
+    },
+    "risk_score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "confidence_id": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 99
+    },
+    "attack_techniques": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^T[0-9]{4}(\\.[0-9]{3})?$"
+      }
+    },
+    "host_name": {
+      "type": "string",
+      "maxLength": 253
+    }
+  }
+}

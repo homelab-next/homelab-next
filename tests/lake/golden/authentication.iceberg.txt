@@ -1,0 +1,16 @@
+1: uid: string not null
+2: time: timestamp not null
+3: class_uid: long not null
+4: category_uid: long not null
+5: activity_id: long not null
+6: type_uid: long
+7: severity_id: long not null
+8: status_id: long
+9: message: string
+10: metadata: struct<version: string not null, product: string, log_source: string>
+14: user_name: string not null
+15: src_endpoint: struct<ip: string, port: long, hostname: string>
+19: dst_endpoint: struct<ip: string, port: long, hostname: string>
+23: logon_type_id: long
+24: auth_protocol: string
+25: is_mfa: boolean

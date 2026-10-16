@@ -1,0 +1,15 @@
+1: uid: string not null
+2: time: timestamp not null
+3: class_uid: long not null
+4: category_uid: long not null
+5: activity_id: long not null
+6: type_uid: long
+7: severity_id: long not null
+8: status_id: long
+9: message: string
+10: metadata: struct<version: string not null, product: string, log_source: string>
+14: src_endpoint: struct<ip: string, port: long, hostname: string>
+18: query_hostname: string not null
+19: query_type: string
+20: rcode_id: long
+21: answers: list<string>
