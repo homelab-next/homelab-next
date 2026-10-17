@@ -1,0 +1,9 @@
+{
+  "decided_at": "2026-01-15T10:02:00Z",
+  "enforced": true,
+  "mode": "enforce",
+  "reason": "default-deny",
+  "request_digest": "sha256:dceeb8aa3a2c4c0d594f17acb2afdc17946c41751660a97b5c456f26843d1271",
+  "request_id": "req-0001",
+  "verdict": "deny"
+}

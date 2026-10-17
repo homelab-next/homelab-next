@@ -25,6 +25,7 @@ hardware that is not part of the first drop: document the interface and ship a f
 | `homelabnext/network/ schemas/platform/site.schema.json docs/network-model.md tests/network/` | W13 | |
 | `homelabnext/compute/ schemas/platform/guest.schema.json docs/compute-model.md tests/compute/` | W14 | |
 | `homelabnext/customization/ profiles/ schemas/platform/customization.schema.json docs/customization.md tests/customization/` | W15 | |
+| `homelabnext/{agent,broker}/ schemas/{agent,broker}/ docs/agent.md tests/{agent,broker}/` | W18 | |
 | `tests/integration/ tests/packaging/` | integration | cross-package end-to-end tests |
 | `homelabnext/{swap,parity}/ tools/decommission_check.py tests/swap/` | W11 | |
 | `compose/lab-in-a-box/ .github/workflows/nightly.yml docs/build-order.md docs/architecture.md` | W12 | |
@@ -225,6 +226,15 @@ resource_dir(kind) / resource_file(kind, *parts) / data_root() / source_root() /
 # for tests; ResourceNotFound lists every place tried.  No module under homelabnext/ may locate the data
 # itself (tests/paths enforces it).  The wheel carries schemas/, profiles/ and examples/ only: conformance/,
 # compose/, tools/ and docs/ stay in the source tree.
+
+# homelabnext.agent   (extra: agent = PyYAML + jsonschema; hnx agent; docs/agent.md)
+compile_profile(spec, library: PartsLibrary) -> dict     # MissingPartError / CeilingViolation / BudgetError / SpecError
+check_ceiling(grants, ceiling) -> list[str]; check_budgets(budgets, cap=None) -> list[str]; verify_profile(profile) -> list[str]
+assemble_pack(manifest, inputs) -> (pack, "sha256:...")  # pure; stable -> session -> volatile; status ready|deferred
+validate_report(report, pack, pack_hash, manifest=None) -> list[str]
+digest_of(obj) -> "sha256:..."                           # canonical JSON digest used everywhere
+# homelabnext.broker  (reference evaluator for schemas/broker; default deny)
+decide(manifest, request, approval=None, *, now=None) -> decision; request_digest(request); check_manifest_handlers(manifest, handlers)
 
 # homelabnext.swap   (extra: swap = PyYAML + jsonschema; hnx swap; docs/swap.md; ADR-0005)
 STEPS: tuple[str, ...]                  # declare, shadow-start, dual-write, parity-compare, soak, cutover,

@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/agent/golden_task/1.0",
+  "title": "Golden task suite",
+  "description": "Describes the existing homelabnext.golden suite file format (homelabnext.golden.tasks.parse_suite), unchanged. One suite names a model-role alias and a list of tasks, each with a prompt and an expect block naming a scorer. Task ids are unique within a suite (checked by the loader; JSON Schema cannot express it). Optional agent-profile fields (profile, min_version) let a suite gate a compiled profile.",
+  "type": "object",
+  "properties": {
+    "suite": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "role": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "pass_score": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1
+    },
+    "profile": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+    },
+    "min_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "system": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "params": {
+            "type": "object"
+          },
+          "weight": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "expect": {
+            "type": "object",
+            "properties": {
+              "scorer": {
+                "enum": [
+                  "exact",
+                  "one_of",
+                  "contains",
+                  "regex",
+                  "json_fields",
+                  "json_schema",
+                  "max_length"
+                ]
+              }
+            },
+            "required": [
+              "scorer"
+            ],
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "scorer": {
+                      "const": "exact"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "value"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "scorer": {
+                      "const": "one_of"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "values"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "scorer": {
+                      "const": "regex"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "pattern"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "scorer": {
+                      "const": "json_schema"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "schema"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "scorer": {
+                      "const": "max_length"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "max_chars"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "prompt",
+          "expect"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "suite",
+    "tasks"
+  ],
+  "additionalProperties": false
+}

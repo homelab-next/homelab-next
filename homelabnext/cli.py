@@ -146,6 +146,10 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "generate/check docs: systems (one SOP page per service)",
         lambda a: importlib.import_module("homelabnext.sop.cli").main(a),
     ),
+    "agent": (
+        "agent profiles and context packs: compile|pack",
+        lambda a: importlib.import_module("homelabnext.agent.cli").main(a),
+    ),
     "custom": (
         "list|check|plan|register lab/vendor customizations",
         lambda a: importlib.import_module("homelabnext.customization.cli").main(a),

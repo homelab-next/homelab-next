@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/broker/approval/1.0",
+  "title": "Broker approval record",
+  "description": "A human or policy approval of exactly one request. request_digest binds the approval to the request as it was approved; if the request later changes, its digest no longer matches and the approval is void. approver is an identity, and the broker refuses self-approval.",
+  "type": "object",
+  "properties": {
+    "approval_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "request_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "request_digest": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+    },
+    "decision": {
+      "enum": [
+        "approved",
+        "denied"
+      ]
+    },
+    "approver": {
+      "type": "object",
+      "properties": {
+        "subject": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{0,63}$"
+        },
+        "issuer": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+        }
+      },
+      "required": [
+        "subject",
+        "issuer"
+      ],
+      "additionalProperties": false
+    },
+    "approved_at": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    },
+    "expires_at": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    },
+    "note": {
+      "type": "string",
+      "maxLength": 500
+    }
+  },
+  "required": [
+    "approval_id",
+    "request_id",
+    "request_digest",
+    "decision",
+    "approver",
+    "approved_at"
+  ],
+  "additionalProperties": false
+}

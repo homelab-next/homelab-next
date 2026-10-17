@@ -1,0 +1,49 @@
+{
+  "actions": [
+    {
+      "action": "service.status",
+      "handler": "handlers/service-status.sh",
+      "requires_approval": false,
+      "tier": "read"
+    },
+    {
+      "action": "records.annotate",
+      "handler": "handlers/records-annotate.sh",
+      "requires_approval": false,
+      "tier": "write"
+    },
+    {
+      "action": "service.restart",
+      "handler": "handlers/service-restart.sh",
+      "requires_approval": true,
+      "tier": "execute"
+    },
+    {
+      "action": "host.reboot",
+      "handler": "handlers/host-reboot.sh",
+      "requires_approval": true,
+      "tier": "privileged"
+    }
+  ],
+  "approval_ttl_s": 900,
+  "grants": [
+    {
+      "actions": [
+        "service.status"
+      ],
+      "max_tier": "read",
+      "profile": "profile:reader"
+    },
+    {
+      "actions": [
+        "service.status",
+        "records.annotate",
+        "service.restart"
+      ],
+      "max_tier": "execute",
+      "profile": "profile:operator"
+    }
+  ],
+  "manifest_id": "example-broker",
+  "mode": "enforce"
+}
