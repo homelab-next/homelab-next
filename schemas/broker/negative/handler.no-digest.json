@@ -1,0 +1,18 @@
+{
+  "action": "service.restart",
+  "audit": true,
+  "description": "Restart one service after a drain period.",
+  "handler": "handlers/service-restart.sh",
+  "idempotent": true,
+  "params_schema": {
+    "properties": {
+      "grace_s": {
+        "type": "integer"
+      }
+    },
+    "type": "object"
+  },
+  "requires_approval": true,
+  "tier": "execute",
+  "timeout_s": 120
+}

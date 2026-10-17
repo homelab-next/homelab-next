@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: Apache-2.0
+# Table-driven broker fixtures: manifest x tier x handler x approval -> decision.
+# `approval` is built by the test: none | valid | wrong-digest | denied | self | expired | altered
+# (altered = a valid approval, then the request params change; the digest no longer matches).
+manifests:
+  enforce:
+    manifest_id: table-enforce
+    default: deny
+    mode: enforce
+    approval_ttl_s: 900
+    actions:
+      - {action: service.status, tier: read, handler: handlers/status.sh, requires_approval: false}
+      - {action: records.annotate, tier: write, handler: handlers/annotate.sh, requires_approval: false}
+      - {action: records.purge, tier: write, handler: handlers/purge.sh, requires_approval: true}
+      - {action: service.restart, tier: execute, handler: handlers/restart.sh, requires_approval: true}
+      - {action: host.reboot, tier: privileged, handler: handlers/reboot.sh, requires_approval: true}
+    grants:
+      - {profile: "profile:reader", actions: [service.status], max_tier: read}
+      - {profile: "profile:writer", actions: [service.status, records.annotate, records.purge], max_tier: write}
+      - {profile: "profile:operator", actions: [service.status, service.restart, host.reboot], max_tier: execute}
+  shadow:
+    manifest_id: table-shadow
+    default: deny
+    mode: shadow
+    actions:
+      - {action: service.status, tier: read, handler: handlers/status.sh, requires_approval: false}
+    grants:
+      - {profile: "profile:reader", actions: [service.status], max_tier: read}
+  no-handler:
+    manifest_id: table-no-handler
+    default: deny
+    mode: enforce
+    actions:
+      - {action: service.status, tier: read, handler: "", requires_approval: false}
+    grants:
+      - {profile: "profile:reader", actions: [service.status], max_tier: read}
+
+cases:
+  # ---- default deny
+  - {name: unknown-action, manifest: enforce, actor: "profile:operator", action: host.format, approval: none, verdict: deny, reason: default-deny}
+  - {name: unknown-actor, manifest: enforce, actor: "profile:stranger", action: service.status, approval: none, verdict: deny, reason: not-granted}
+  - {name: action-not-in-grant, manifest: enforce, actor: "profile:reader", action: records.annotate, approval: none, verdict: deny, reason: not-granted}
+  - {name: empty-manifest-actions, manifest: no-handler, actor: "profile:reader", action: service.restart, approval: none, verdict: deny, reason: default-deny}
+  # ---- tier
+  - {name: read-allowed, manifest: enforce, actor: "profile:reader", action: service.status, approval: none, verdict: allow, reason: allowed}
+  - {name: write-allowed, manifest: enforce, actor: "profile:writer", action: records.annotate, approval: none, verdict: allow, reason: allowed}
+  - {name: tier-above-grant, manifest: enforce, actor: "profile:operator", action: host.reboot, approval: valid, verdict: deny, reason: tier-exceeds-grant, note: "grant max_tier is execute; reboot is privileged"}
+  # ---- handler
+  - {name: handler-missing, manifest: no-handler, actor: "profile:reader", action: service.status, approval: none, verdict: deny, reason: handler-missing}
+  # ---- approval
+  - {name: execute-needs-approval, manifest: enforce, actor: "profile:operator", action: service.restart, approval: none, verdict: needs-approval, reason: approval-required}
+  - {name: write-flagged-needs-approval, manifest: enforce, actor: "profile:writer", action: records.purge, approval: none, verdict: needs-approval, reason: approval-required}
+  - {name: execute-approved, manifest: enforce, actor: "profile:operator", action: service.restart, approval: valid, verdict: allow, reason: approved}
+  - {name: digest-mismatch, manifest: enforce, actor: "profile:operator", action: service.restart, approval: wrong-digest, verdict: deny, reason: approval-digest-mismatch}
+  - {name: altered-after-approval, manifest: enforce, actor: "profile:operator", action: service.restart, approval: altered, verdict: deny, reason: approval-digest-mismatch}
+  - {name: approval-denied, manifest: enforce, actor: "profile:operator", action: service.restart, approval: denied, verdict: deny, reason: approval-denied}
+  - {name: self-approval, manifest: enforce, actor: "profile:operator", action: service.restart, approval: self, verdict: deny, reason: approval-self-approved}
+  - {name: approval-expired, manifest: enforce, actor: "profile:operator", action: service.restart, approval: expired, verdict: deny, reason: approval-expired}
+  # ---- mode
+  - {name: shadow-records-but-does-not-enforce, manifest: shadow, actor: "profile:reader", action: service.status, approval: none, verdict: allow, reason: allowed, enforced: false}
+  - {name: shadow-deny-not-enforced, manifest: shadow, actor: "profile:reader", action: host.format, approval: none, verdict: deny, reason: default-deny, enforced: false}
+  - {name: enforce-is-enforced, manifest: enforce, actor: "profile:reader", action: service.status, approval: none, verdict: allow, reason: allowed, enforced: true}

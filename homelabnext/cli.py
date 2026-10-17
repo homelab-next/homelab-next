@@ -138,6 +138,10 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "capability conformance suites: list|run|mutants|report",
         lambda a: importlib.import_module("homelabnext.conform.cli").main(a),
     ),
+    "agent": (
+        "agent profiles and context packs: compile|pack",
+        lambda a: importlib.import_module("homelabnext.agent.cli").main(a),
+    ),
     "custom": (
         "list|check|plan|register lab/vendor customizations",
         lambda a: importlib.import_module("homelabnext.customization.cli").main(a),
