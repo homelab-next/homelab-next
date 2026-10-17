@@ -121,8 +121,9 @@ memory budget) and skips the parts that need a daemon. The architecture behind i
 | `examples/` | synthetic lab: `services.yml` registry, example registers and the minimal example lab (`examples/minimal/`) |
 | `conformance/`, `capabilities.yml` | the 14 capability suites (protocol, fake, broken twin, pytest glue), target files, and the list of capabilities the tree declares ([docs/conformance.md](docs/conformance.md)) |
 | `compose/` | the lab-in-a-box reference environment (not shipped in the wheel) |
+| [docs/agent.md](docs/agent.md) | agent profile compiler, context packs and the broker contracts (`hnx agent`, `schemas/agent/`, `schemas/broker/`) |
 | [docs/swap.md](docs/swap.md) | the swap kit: record, gates, parity, flip, decommission |
-| `homelabnext/` | the Python package: registry, generators, ids, paths, lake, notify, state, records, decide, golden, network, compute, customization, conform, swap, parity, detections, registers, invariants, scaffolds, `cli.py` |
+| `homelabnext/` | the Python package: registry, generators, ids, paths, lake, notify, state, records, decide, golden, network, compute, customization, conform, swap, parity, agent, broker, detections, registers, invariants, scaffolds, `cli.py` |
 | `profiles/` | shipped optional customization profiles (inert until enabled; see [docs/customization.md](docs/customization.md)) |
 | [docs/network-model.md](docs/network-model.md), [docs/compute-model.md](docs/compute-model.md) | the site/network and guest models |
 | `ansible/` | role interface example roles, playbook and inventory |

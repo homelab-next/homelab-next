@@ -1,0 +1,10 @@
+{
+  "approval_id": "appr-0001",
+  "decided_at": "2026-01-15T10:02:00Z",
+  "enforced": true,
+  "mode": "enforce",
+  "reason": "approved",
+  "request_digest": "sha256:ad37d65283182fdc2ca8dd415c245f422076c44ce30fbcbf36930dda1ea2758f",
+  "request_id": "req-0001",
+  "verdict": "maybe"
+}

@@ -1,0 +1,24 @@
+{
+  "cites": [
+    {
+      "ref": "f1",
+      "source": "findings"
+    }
+  ],
+  "finished_at": "2026-01-15T10:05:00Z",
+  "memory_updates": [
+    {
+      "key": "login-burst",
+      "op": "add",
+      "scope": "analyst",
+      "value": "seen once"
+    }
+  ],
+  "pack_id": "sha256:f7268317837fe1f75676e2e7601f2746a7b5de66f555beebfc544defe20b81f2",
+  "profile": "profile:reader",
+  "status": "great",
+  "summary": "One burst of failed logins.",
+  "unknowns": [
+    "whether the source host is managed"
+  ]
+}

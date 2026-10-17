@@ -39,6 +39,8 @@ lake = [
 ]
 # the swap kit: the registry flip and decommission scan need PyYAML, the swap record needs jsonschema
 swap = ["PyYAML>=6", "jsonschema>=4.18", "referencing>=0.30"]
+# the agent profile compiler and context-pack assembler
+agent = ["PyYAML>=6", "jsonschema>=4.18", "referencing>=0.30"]
 # planned families (declared so names are stable; their packages arrive in later waves)
 trino = ["trino>=0.328"]
 records = ["pydantic>=2"]

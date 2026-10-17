@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Synthetic golden suite for a fast-classifier alias.
+suite: classifier-smoke
+role: fast-classifier
+pass_score: 1.0
+tasks:
+  - id: rollback-present
+    system: 'Reply with one JSON object: {"label": ..., "confidence": ...}.'
+    prompt: "Change: upgrade the queue workers. Rollback: revert the commit."
+    params: {temperature: 0}
+    expect:
+      scorer: json_fields
+      fields:
+        label: accept
+        confidence: {min: 0.8}
+  - id: rollback-absent
+    prompt: "Change: reindex the cache tier. NO-ROLLBACK."
+    expect:
+      scorer: json_fields
+      fields: {label: reject}
+  - id: greeting-short
+    prompt: "Say hello in one word."
+    expect: {scorer: max_length, max_chars: 20}

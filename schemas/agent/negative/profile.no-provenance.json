@@ -1,0 +1,53 @@
+{
+  "budget_mode": "enforce",
+  "budgets": {
+    "max_input_tokens": 32000,
+    "max_output_tokens": 2000,
+    "max_runtime_s": 600,
+    "max_tool_calls": 20
+  },
+  "ceiling": {
+    "budgets": {
+      "max_input_tokens": 64000,
+      "max_output_tokens": 4000,
+      "max_runtime_s": 900,
+      "max_tool_calls": 40
+    },
+    "capabilities": [
+      "cap:lake-query",
+      "cap:records-propose"
+    ],
+    "mcp": [
+      "lake",
+      "records"
+    ],
+    "tier": "write"
+  },
+  "data_tier": "local-only",
+  "digest": "sha256:155308e5f4bb093e6ebc4ddb545a85b934e43b0ed0d8988b6ce4873d6faa2138",
+  "grants": {
+    "capabilities": [
+      "cap:lake-query"
+    ],
+    "mcp": [
+      "lake"
+    ],
+    "tier": "read"
+  },
+  "id": "profile:reader",
+  "memory_scopes": [
+    "analyst"
+  ],
+  "model_role": "mdl:fast-classifier",
+  "parts": {
+    "capabilities": [
+      "cap:lake-query"
+    ],
+    "skills": [
+      "skill:summarise",
+      "skill:triage"
+    ]
+  },
+  "persona": "persona:analyst",
+  "provenance": []
+}

@@ -1,0 +1,43 @@
+{
+  "budget_chars": 4000,
+  "delimiter": "=====",
+  "id": "reader-pack",
+  "memory_scopes": [
+    "analyst"
+  ],
+  "must_cite": [
+    "findings"
+  ],
+  "persona": "persona:analyst",
+  "sections": [
+    {
+      "max_chars": 800,
+      "name": "charter",
+      "required": true,
+      "source": "static",
+      "text": "You are a read-only analyst. Cite every claim.",
+      "tier": "stable"
+    },
+    {
+      "max_chars": 600,
+      "name": "memory",
+      "required": false,
+      "source": "input",
+      "tier": "session"
+    },
+    {
+      "max_chars": 2000,
+      "name": "findings",
+      "required": true,
+      "source": "input",
+      "tier": "volatile"
+    }
+  ],
+  "skills": [
+    "skill:summarise",
+    "skill:triage"
+  ],
+  "tools": [
+    "lake"
+  ]
+}

@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/agent/context_manifest/1.0",
+  "title": "Context manifest",
+  "description": "Declares exactly what goes into one agent's context pack and in what tier order (stable before session before volatile). Sections are filled from named inputs; pre-gates are mandatory checks whose output is itself a section. The assembler never truncates silently: every cut is reported with the tier it came from.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "persona": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/persona_id"
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/skill_id"
+      },
+      "uniqueItems": true
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+      },
+      "uniqueItems": true
+    },
+    "pregates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "max_age_s": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "required"
+        ],
+        "additionalProperties": false
+      },
+      "uniqueItems": true
+    },
+    "memory_scopes": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+      },
+      "uniqueItems": true
+    },
+    "sections": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "tier": {
+            "enum": [
+              "stable",
+              "session",
+              "volatile"
+            ]
+          },
+          "source": {
+            "enum": [
+              "static",
+              "input"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "max_chars": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "tier",
+          "source",
+          "required",
+          "max_chars"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "budget_chars": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "must_cite": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+      },
+      "uniqueItems": true
+    },
+    "delimiter": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 64
+    }
+  },
+  "required": [
+    "id",
+    "persona",
+    "skills",
+    "tools",
+    "pregates",
+    "memory_scopes",
+    "sections",
+    "budget_chars"
+  ],
+  "additionalProperties": false
+}
