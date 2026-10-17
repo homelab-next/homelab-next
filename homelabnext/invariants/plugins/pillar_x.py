@@ -10,13 +10,18 @@
     X-07  every stateful product's export hook exercised SERVER (needs a restore drill)
     X-08  cutover-commit audit                           SERVER (needs a real cutover)
 
+X-09 (customizations) and X-10 (conformance has-a-passing-test) are registered through the
+``homelabnext.invariants.checks`` entry-point group from
+``homelabnext.customization.plugins.x09_customizations`` and
+``homelabnext.conform.plugins.x10_conformance``.
+
 Every check takes ``ctx.root`` as the repository root, never reads outside it, and returns
 ``skip`` (with a reason) when the thing it audits does not exist yet.
 
 Layout conventions (kept in one place so adopters can see what to match):
     schemas/**/NAME.schema.json         schema; carries $schema, $id, and a version
                                         (``x-version: "1.2"`` or a ``/v1`` segment in ``$id``)
-    schemas/**/examples/NAME.*.json     must validate;  schemas/**/negatives/NAME.*.json must not
+    schemas/**/examples/NAME.*.json     must validate;  schemas/**/negative/NAME.*.json must not
     capabilities.yml                    ``capabilities: [name, ...]``
     conformance/<capability>/test_*.py  the capability's conformance test
     det_map.yml                         ``detections: {logical.id: rule_number}``
@@ -64,24 +69,79 @@ def x05(ctx: Context) -> CheckResult:
 
 # ---- X-03 -----------------------------------------------------------------------------------
 
-_VERSION_ID = re.compile(r"(/v\d+(?:\.\d+)*(?:/|$|\.)|@\d+(?:\.\d+)*$)")
+# A pinned ``$id`` is one of:
+#   .../v1          .../v1.2          .../v1/...        (SemVer-style with the v- prefix)
+#   .../1.0         .../2.1           .../1.2.3         (trailing dotted version, the repo convention
+#                                                       enforced by ``tools/schema_check.py``)
+#   ...@1           ...@1.2.3                           (version suffix after @)
+_VERSION_ID = re.compile(r"(/v\d+(?:\.\d+)*(?:/|$|\.)|/\d+\.\d+(?:\.\d+)?(?:/|$)|@\d+(?:\.\d+)*$)")
 _VERSION_FIELD = re.compile(r"^\d+\.\d+(\.\d+)?$")
 
 
+_FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\s*(?:\n|\Z)", re.S)
+
+
 def _load(path: pathlib.Path):
+    """Load a schema instance from ``.json``, ``.yaml``/``.yml`` or ``.md`` (YAML frontmatter).
+
+    Instance formats match ``tools/schema_check.py`` so this check and that one agree on which
+    files count as examples/negatives.
+    """
     text = path.read_text()
-    return yaml.safe_load(text) if path.suffix in (".yml", ".yaml") else json.loads(text)
+    if path.suffix == ".json":
+        return json.loads(text)
+    if path.suffix == ".md":
+        m = _FRONTMATTER.match(text)
+        if m is None:
+            raise ValueError(f"{path}: no YAML frontmatter")
+        return yaml.safe_load(m.group(1))
+    return yaml.safe_load(text)
+
+
+def _build_registry(schemas: list[pathlib.Path]):
+    r"""Build a ``referencing`` Registry so that cross-schema ``$ref``\s resolve offline.
+
+    Without a registry a validator carrying a reference like
+    ``https://schemas.example.internal/.../ids/logical-id/1.0#/$defs/...`` falls back to
+    HTTP retrieval, which turns an offline check into either a network call or an
+    ``Unresolvable`` on an air-gapped runner. Register every schema under its ``$id``.
+    Returns ``None`` on import failure (fall back to a bare validator).
+    """
+    try:
+        from referencing import Registry, Resource
+        from referencing.jsonschema import DRAFT202012
+    except ImportError:
+        return None
+    reg = Registry()
+    for sp in schemas:
+        try:
+            doc = json.loads(sp.read_text())
+        except Exception:
+            continue
+        if isinstance(doc, dict) and isinstance(doc.get("$id"), str):
+            reg = reg.with_resource(
+                doc["$id"], Resource.from_contents(doc, default_specification=DRAFT202012)
+            )
+    return reg
 
 
 def x03(ctx: Context) -> CheckResult:
     sdir = ctx.root / "schemas"
-    schemas = sorted(sdir.rglob("*.schema.json")) if sdir.is_dir() else []
+    # ``_frozen/`` holds version-stamped snapshots that intentionally pre-date the current
+    # ``$id``/``x-version`` pinning convention - the frozen tree is for baseline comparison,
+    # not for re-validation. ``tools/schema_check.py`` skips it the same way.
+    schemas = (
+        sorted(p for p in sdir.rglob("*.schema.json") if "_frozen" not in p.parts)
+        if sdir.is_dir()
+        else []
+    )
     if not schemas:
         return CheckResult(SKIP, "no schemas/ tree")
     try:
         import jsonschema
     except ImportError:
         return CheckResult(ERROR, "jsonschema is not installed")
+    registry = _build_registry(schemas)
     problems = []
     for sp in schemas:
         rel = sp.relative_to(ctx.root).as_posix()
@@ -99,25 +159,47 @@ def x03(ctx: Context) -> CheckResult:
             str(schema.get("$id", ""))
         ):
             problems.append(f"{rel}: not version-pinned (x-version or /vN in $id)")
-        validator = jsonschema.Draft202012Validator(schema)
-        good = sorted((sp.parent / "examples").glob(f"{name}.*.json")) + sorted(
-            (sp.parent / "examples").glob(f"{name}.*.y*ml")
-        )
-        bad = sorted((sp.parent / "negatives").glob(f"{name}.*.json")) + sorted(
-            (sp.parent / "negatives").glob(f"{name}.*.y*ml")
-        )
-        if not good:
+        if registry is not None:
+            validator = jsonschema.Draft202012Validator(schema, registry=registry)
+        else:
+            validator = jsonschema.Draft202012Validator(schema)
+        # Schemas tagged ``"x-defs-only": true`` hold shared ``$defs`` and are referenced from
+        # other schemas; they ship no instance of their own. ``tools/schema_check.py`` exempts
+        # them the same way (ADR-0001).
+        defs_only = bool(schema.get("x-defs-only"))
+        exts = ("json", "yml", "yaml", "md")
+        good: list[pathlib.Path] = []
+        bad: list[pathlib.Path] = []
+        for ext in exts:
+            good += sorted((sp.parent / "examples").glob(f"{name}.*.{ext}"))
+            bad += sorted((sp.parent / "negative").glob(f"{name}.*.{ext}"))
+        if not defs_only and not good:
             problems.append(f"{rel}: no example in examples/{name}.*")
-        if not bad:
-            problems.append(f"{rel}: no negative in negatives/{name}.*")
+        if not defs_only and not bad:
+            problems.append(f"{rel}: no negative in negative/{name}.*")
         for g in good:
-            errs = list(validator.iter_errors(_load(g)))
+            try:
+                errs = list(validator.iter_errors(_load(g)))
+            except Exception as ex:
+                problems.append(
+                    f"{g.relative_to(ctx.root).as_posix()}: could not validate "
+                    f"({type(ex).__name__}: {str(ex)[:80]})"
+                )
+                continue
             if errs:
                 problems.append(
                     f"{g.relative_to(ctx.root).as_posix()}: example invalid ({errs[0].message[:80]})"
                 )
         for b in bad:
-            if validator.is_valid(_load(b)):
+            try:
+                is_valid = validator.is_valid(_load(b))
+            except Exception as ex:
+                problems.append(
+                    f"{b.relative_to(ctx.root).as_posix()}: could not validate "
+                    f"({type(ex).__name__}: {str(ex)[:80]})"
+                )
+                continue
+            if is_valid:
                 problems.append(f"{b.relative_to(ctx.root).as_posix()}: negative was ACCEPTED")
     if problems:
         return CheckResult(FAIL, "; ".join(problems))
