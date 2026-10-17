@@ -42,6 +42,7 @@ gates:
 	$(PY) $(ROLE_LINT) $(ROLES)
 	$(PY) $(ROLE_LINT) --playbook $(PLAYBOOKS) --inventory ansible/inventory/example/hosts.yml
 	$(PY) -m homelabnext.cli custom check
+	$(PY) -m homelabnext.cli docs systems check examples/services.yml docs/systems
 
 detections:
 	$(PY) -m homelabnext.detections lint

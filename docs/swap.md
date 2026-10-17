@@ -14,6 +14,7 @@ points at the old component.
 | Dual-write helper | `homelabnext/swap/dualwrite.py` | library |
 | Registry flip | `homelabnext/swap/flip.py` | `hnx swap plan --registry ... --to-host ...` |
 | Decommission check | `tools/decommission_check.py` | `python tools/decommission_check.py ROOT --host ...` |
+| Per-guest teardown audit | `homelabnext/decommission/` | `hnx decommission check\|plan NAME` (`docs/decommission.md`) |
 
 Everything here runs on a laptop with fakes. Starting and stopping real components, real traffic
 mirroring and real DNS are **SERVER** work: the kit defines the interface (`Backend`) and ships a

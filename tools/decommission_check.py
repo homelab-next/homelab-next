@@ -8,6 +8,11 @@
     python tools/decommission_check.py ROOT --from-record swaps/swap-0001.swap.json
 
 Exit codes: 0 clean, 1 references remain, 2 usage error.
+
+Scope: this is the SERVICE-swap scanner (ADR-0005 step 8): "does anything still point at the
+retired product?".  For retiring a whole GUEST (inventory, IaC, hypervisor leftovers, SIEM roster,
+secret names, DNS, DHCP ...) use ``hnx decommission check|plan NAME`` (docs/decommission.md).
+This tool stays supported and unchanged; the swap runner calls the same scanner.
 """
 
 from __future__ import annotations
