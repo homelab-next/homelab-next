@@ -33,7 +33,8 @@ resource "proxmox_virtual_environment_vm" "bus_core" {
   }
 
   network_device {
-    bridge = "${var.default_bridge}v20"
+    bridge   = "${var.default_bridge}v20"
+    firewall = false
   }
 
   operating_system {

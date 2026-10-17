@@ -1,0 +1,15 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:scope-guard",
+  "type": "homelabnext.scope.denied",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "info",
+  "subject": "guest:scratch-a",
+  "data": {
+    "target": "scratch-a",
+    "canonical": "guest:scratch-a",
+    "code": "vmid-threshold",
+    "tool": "task-writer"
+  }
+}

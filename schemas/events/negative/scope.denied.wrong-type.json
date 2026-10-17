@@ -1,0 +1,16 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:scope-guard",
+  "type": "homelabnext.other.thing",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "info",
+  "subject": "guest:scratch-a",
+  "data": {
+    "target": "scratch-a",
+    "canonical": "guest:scratch-a",
+    "code": "vmid-threshold",
+    "reason": "vmid 9001 is above the scope threshold 9000",
+    "tool": "task-writer"
+  }
+}

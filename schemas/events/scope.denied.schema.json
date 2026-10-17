@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/events/scope.denied/1.0",
+  "title": "Event homelabnext.scope.denied",
+  "description": "A writer tool was refused because its target is out of scope (homelabnext.scope). The event records the denial; nothing was written about the target.",
+  "allOf": [
+    {
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "homelabnext.scope.denied"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "description": "The reference exactly as the tool passed it."
+            },
+            "canonical": {
+              "type": ["string", "null"],
+              "maxLength": 256,
+              "description": "The logical id it resolved to, or null when it did not resolve."
+            },
+            "code": {
+              "enum": [
+                "explicit-out",
+                "override-out",
+                "vmid-threshold",
+                "out-tag",
+                "unknown-target",
+                "ambiguous-target"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "tool": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,64}$"
+            }
+          },
+          "required": [
+            "target",
+            "canonical",
+            "code",
+            "reason"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ]
+    }
+  ]
+}

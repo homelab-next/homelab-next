@@ -58,6 +58,60 @@ def _check_network(g: Guest, fleet: Fleet) -> list[Problem]:
     return out
 
 
+def _check_firewall(g: Guest, fleet: Fleet) -> list[Problem]:
+    """Firewall on by default: a NIC with the flag off needs a documented exemption.
+
+    With a firewall enforced on the node, a guest NIC without the flag is not simply unfiltered:
+    its routed replies can be dropped by the node, which looks like a connectivity fault, not a
+    policy one.  So the off state must be a recorded decision, never an omission.
+    """
+    out: list[Problem] = []
+    if g.kind in ("vm", "lxc"):
+        if not g.nic_firewall:
+            ex = g.firewall_exemption
+            if fleet.node_firewall(g.node) and not ex:
+                out.append(
+                    Problem(
+                        g.id,
+                        f"network.firewall is disabled on node {g.node!r}, which enforces a "
+                        "firewall: add network.firewall_exemption.reason or enable the flag",
+                    )
+                )
+            if g.firewall_rules:
+                out.append(
+                    Problem(g.id, "firewall_rules are set but the NIC firewall flag is disabled")
+                )
+        elif g.firewall_exemption:
+            out.append(
+                Problem(g.id, "network.firewall_exemption is set but the NIC firewall is enabled")
+            )
+    elif g.firewall_rules:
+        out.append(Problem(g.id, "firewall_rules apply to kind vm and lxc only"))
+    names = [r["name"] for r in g.firewall_rules]
+    if len(names) != len(set(names)):
+        out.append(Problem(g.id, "firewall_rules names must be unique"))
+    for r in g.firewall_rules:
+        where = f"firewall_rules.{r['name']}"
+        if r["proto"] in ("tcp", "udp") and not r.get("ports"):
+            out.append(Problem(g.id, f"{where}: ports are required for {r['proto']}"))
+        if r["proto"] == "icmp" and r.get("ports"):
+            out.append(Problem(g.id, f"{where}: icmp takes no ports"))
+        ports = r.get("ports")
+        if ports:
+            nums = [int(x) for x in ports.split(":")]
+            if any(not 1 <= n <= 65535 for n in nums) or nums != sorted(nums):
+                out.append(Problem(g.id, f"{where}: bad port or range {ports!r}"))
+        src = r["source"]
+        if src.startswith("zone:") and fleet.zones.zone(src[5:]) is None:
+            out.append(Problem(g.id, f"{where}: source zone {src[5:]!r} does not exist"))
+        elif "/" in src:
+            try:
+                ipaddress.ip_network(src, strict=True)
+            except ValueError as exc:
+                out.append(Problem(g.id, f"{where}: bad source CIDR: {exc}"))
+    return out
+
+
 def _check_guest(g: Guest, fleet: Fleet) -> list[Problem]:
     out = _check_network(g, fleet)
     if g.kind == "host" and g.provisioning != "host-only":
@@ -99,6 +153,7 @@ def _check_guest(g: Guest, fleet: Fleet) -> list[Problem]:
     for grp in g.groups:
         if grp not in ok_groups:
             out.append(Problem(g.id, f"capability_groups: {grp} is not a known inventory group"))
+    out += _check_firewall(g, fleet)
     pol = g.backup.get("policy")
     if pol and pol != "none" and pol not in fleet.policies:
         out.append(Problem(g.id, f"backup.policy {pol!r} is not defined in the policy set"))

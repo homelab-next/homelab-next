@@ -23,6 +23,10 @@ def _common(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument("--keys", help="file mapping ssh key names to public keys (optional)")
     p.add_argument(
+        "--nodes",
+        help="node firewall file (default: DIRECTORY/_nodes.yml; nodes not listed run a firewall)",
+    )
+    p.add_argument(
         "--domain", help="DNS domain (default: the site's domain, else example.internal)"
     )
 
@@ -35,6 +39,7 @@ def _fleet(args: argparse.Namespace):
         domain=args.domain or site_domain or "example.internal",
         policies_path=args.policies,
         keys_path=args.keys,
+        nodes_path=args.nodes,
     )
 
 

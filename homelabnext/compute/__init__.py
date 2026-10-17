@@ -4,7 +4,7 @@
 ``load_fleet(dir, zones)`` -> :class:`Fleet`; ``render(fleet, target)`` -> ``{path: text}``.
 """
 
-from .loader import load_fleet, load_guests, load_keys, load_policies
+from .loader import load_fleet, load_guests, load_keys, load_nodes, load_policies
 from .model import (
     KNOWN_CAPABILITIES,
     ComputeError,
@@ -34,6 +34,7 @@ __all__ = [
     "load_fleet",
     "load_guests",
     "load_keys",
+    "load_nodes",
     "load_policies",
     "load_zones_file",
     "open_site",
