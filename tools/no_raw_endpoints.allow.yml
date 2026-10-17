@@ -63,3 +63,7 @@ allow:
     reason: synthetic fleet, site model, goldens and tests (documentation addresses only; addresses are the data under test)
   - path: "tests/integration/**"
     reason: synthetic fleet files and assertions on documentation addresses
+  - path: "tests/decommission/**"
+    reason: fictional lab data in the documentation address ranges, used as audit fixtures
+  - path: "docs/decommission.md"
+    reason: prose example using a documentation address

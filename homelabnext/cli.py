@@ -138,6 +138,14 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "capability conformance suites: list|run|mutants|report",
         lambda a: importlib.import_module("homelabnext.conform.cli").main(a),
     ),
+    "decommission": (
+        "per-guest teardown audit: check|plan NAME (read-only, all planes)",
+        lambda a: importlib.import_module("homelabnext.decommission.cli").main(a),
+    ),
+    "docs": (
+        "generate/check docs: systems (one SOP page per service)",
+        lambda a: importlib.import_module("homelabnext.sop.cli").main(a),
+    ),
     "custom": (
         "list|check|plan|register lab/vendor customizations",
         lambda a: importlib.import_module("homelabnext.customization.cli").main(a),
