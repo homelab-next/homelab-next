@@ -1,0 +1,26 @@
+pass_score: 0
+role: fast-classifier
+suite: classifier-smoke
+tasks:
+- expect:
+    fields:
+      confidence:
+        min: 0.8
+      label: accept
+    scorer: json_fields
+  id: rollback-present
+  params:
+    temperature: 0
+  prompt: 'Change: upgrade the queue workers. Rollback: revert the commit.'
+  system: 'Reply with one JSON object: {"label": ..., "confidence": ...}.'
+- expect:
+    fields:
+      label: reject
+    scorer: json_fields
+  id: rollback-absent
+  prompt: 'Change: reindex the cache tier. NO-ROLLBACK.'
+- expect:
+    max_chars: 20
+    scorer: max_length
+  id: greeting-short
+  prompt: Say hello in one word.

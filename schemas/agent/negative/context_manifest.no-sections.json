@@ -1,0 +1,27 @@
+{
+  "budget_chars": 4000,
+  "delimiter": "=====",
+  "id": "reader-pack",
+  "memory_scopes": [
+    "analyst"
+  ],
+  "must_cite": [
+    "findings"
+  ],
+  "persona": "persona:analyst",
+  "pregates": [
+    {
+      "id": "pipeline-health",
+      "max_age_s": 900,
+      "required": true
+    }
+  ],
+  "sections": [],
+  "skills": [
+    "skill:summarise",
+    "skill:triage"
+  ],
+  "tools": [
+    "lake"
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/agent/pregate_output/1.0",
+  "title": "Pre-gate output",
+  "description": "The result of one mandatory check that runs before an agent starts (for example pipeline health). Agents consume this verdict instead of inferring health from raw data; a stale or failed required gate defers the job.",
+  "type": "object",
+  "properties": {
+    "gate": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "degraded",
+        "stale",
+        "failed"
+      ]
+    },
+    "observed_at": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 500
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "age_s": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "name",
+          "age_s"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "gate",
+    "status",
+    "observed_at",
+    "sources"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "degraded",
+              "stale",
+              "failed"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "reason"
+        ]
+      }
+    }
+  ]
+}
