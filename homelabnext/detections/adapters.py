@@ -3,12 +3,20 @@
 
 An adapter turns a Sigma-subset rule into something a specific engine can
 load. Adapters are pure functions of (rule, target): no network, no deploy.
+
+Optionally, an adapter also advertises what ATT&CK ids its target engine KNOWS, so a rule can
+be checked against the engine's bundled ATT&CK database before it ships. Advertising is through
+either (a) a ``known_technique_ids()`` method returning a set/frozenset of ids, OR (b) a
+``known_ids_snapshot`` path on the backend pointing at a snapshot file for ``attack.load_snapshot``.
+The ``KnownTechniques`` protocol is informational: nothing enforces that a backend provides
+it, and the validator falls back to the loaded-file path when the method is absent.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 from .sigma import Rule
 
@@ -41,6 +49,21 @@ class Backend(Protocol):
     name: str
 
     def compile(self, rule: Rule, target: Target) -> Artifact: ...
+
+
+@runtime_checkable
+class KnownTechniques(Protocol):
+    """Optional capability on a backend: it can list the ATT&CK ids its engine knows about.
+
+    ``known_technique_ids()`` returns a (frozen)set of canonical uppercase technique ids. Many
+    engines ship their ATT&CK database behind a plain data file, so a backend that implements
+    this protocol typically loads a snapshot from ``known_ids_snapshot`` (a path relative to
+    the detections root or absolute) and returns its ``technique_ids`` set.
+    """
+
+    known_ids_snapshot: Path | str | None
+
+    def known_technique_ids(self) -> frozenset[str]: ...
 
 
 _REGISTRY: dict[str, Backend] = {}

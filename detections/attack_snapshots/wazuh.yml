@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ATT&CK ids known to this engine's bundled database, captured on the date below. Shipped as
+# an EXAMPLE: real deployments regenerate this file from the engine's own ATT&CK bundle after
+# every engine upgrade and after every ATT&CK release import. A rule whose technique id is not
+# in this list will fire correctly but the engine logs an "unknown technique" warning on every
+# alert - the fix is to tag the PARENT technique the engine knows and keep the newer id in the
+# rule description (see docs/detections.md and P6.5).
+#
+# This set covers the technique ids cited by the shipped example rules plus a handful of
+# commonly-used parents, enough to exercise the parent-suggestion path. It is NOT a complete
+# ATT&CK dump.
+engine: wazuh
+engine_version: 0.0.0-example
+attack_version: v15.1-example
+snapshot_date: 2026-10-15
+technique_ids:
+  # cited by shipped example rules
+  - T1059.001
+  - T1078.004
+  - T1098.004
+  - T1486
+  - T1505.003
+  - T1543.003
+  # parents of the above (so --suggest-parent can propose them when a newer sub-technique
+  # has not landed in the engine's bundle yet)
+  - T1059
+  - T1078
+  - T1098
+  - T1505
+  - T1543
