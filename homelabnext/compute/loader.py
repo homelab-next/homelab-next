@@ -15,6 +15,7 @@ from homelabnext import paths
 from .model import ComputeError, Fleet, Guest, Problem, ZoneLookup
 
 POLICIES_FILE = "_backup_policies.yml"
+NODES_FILE = "_nodes.yml"
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
@@ -107,6 +108,26 @@ def load_policies(path: str | Path) -> dict[str, Mapping[str, Any]]:
     return {str(k): (v or {}) for k, v in pol.items()}
 
 
+def load_nodes(path: str | Path) -> dict[str, Mapping[str, Any]]:
+    """Read ``{nodes: {name: {firewall: enabled|disabled}}}`` (what each hypervisor enforces)."""
+    p = Path(path)
+    try:
+        doc = yaml.load(p.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
+    except (OSError, yaml.YAMLError) as exc:
+        raise ComputeError(f"cannot read nodes {p}: {exc}") from exc
+    nodes = (doc or {}).get("nodes") if isinstance(doc, dict) else None
+    if not isinstance(nodes, dict):
+        raise ComputeError(f"{p}: expected a mapping with a 'nodes' mapping")
+    out: dict[str, Mapping[str, Any]] = {}
+    for name, spec in nodes.items():
+        spec = spec or {}
+        fw = spec.get("firewall", "enabled") if isinstance(spec, dict) else None
+        if fw not in ("enabled", "disabled"):
+            raise ComputeError(f"{p}: node {name!r}: firewall must be 'enabled' or 'disabled'")
+        out[str(name)] = {"firewall": fw}
+    return out
+
+
 def load_keys(path: str | Path) -> dict[str, str]:
     """Read ``{keys: {name: public-key-line}}`` (public keys only; never private material)."""
     p = Path(path)
@@ -127,6 +148,7 @@ def load_fleet(
     domain: str = "example.internal",
     policies_path: str | Path | None = None,
     keys_path: str | Path | None = None,
+    nodes_path: str | Path | None = None,
 ) -> Fleet:
     """Load, schema- and semantically validate; raise ComputeError listing every problem."""
     from .validate import validate
@@ -135,12 +157,14 @@ def load_fleet(
     guests, problems = load_guests(d)
     pol_path = Path(policies_path) if policies_path else d / POLICIES_FILE
     policies = load_policies(pol_path) if pol_path.is_file() else {}
+    nodes_file = Path(nodes_path) if nodes_path else d / NODES_FILE
     fleet = Fleet(
         tuple(guests),
         zones,
         domain=domain,
         keys=load_keys(keys_path) if keys_path else {},
         policies=policies,
+        nodes=load_nodes(nodes_file) if nodes_file.is_file() else {},
     )
     problems += validate(fleet)
     if problems:

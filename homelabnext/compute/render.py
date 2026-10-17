@@ -5,7 +5,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from .gen import backup_jobs, cloudinit, inventory, libvirt, registry_hosts, terraform_proxmox
+from .gen import (
+    backup_jobs,
+    cloudinit,
+    firewall_rules,
+    inventory,
+    libvirt,
+    registry_hosts,
+    terraform_proxmox,
+)
 from .model import ComputeError, Fleet
 
 TARGETS: dict[str, Callable[[Fleet], dict[str, str]]] = {
@@ -15,6 +23,7 @@ TARGETS: dict[str, Callable[[Fleet], dict[str, str]]] = {
     "inventory": inventory.render,
     "registry-hosts": registry_hosts.render,
     "backup-jobs": backup_jobs.render,
+    "firewall-rules": firewall_rules.render,
 }
 
 

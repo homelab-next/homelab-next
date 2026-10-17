@@ -176,6 +176,24 @@ class Guest:
         return self.raw["network"]
 
     @property
+    def nic_firewall(self) -> bool:
+        """Effective per-NIC firewall flag: on unless explicitly ``disabled`` (on by default)."""
+        return self.network.get("firewall", "enabled") != "disabled"
+
+    @property
+    def firewall_exemption(self) -> Mapping[str, Any] | None:
+        return self.network.get("firewall_exemption")
+
+    @property
+    def firewall_rules(self) -> list[Mapping[str, Any]]:
+        return list(self.raw.get("firewall_rules", {}).get("inbound_allow", []))
+
+    @property
+    def scope(self) -> str | None:
+        """``in`` / ``out`` when the file says so, else None (see ``homelabnext.scope``)."""
+        return self.raw.get("scope")
+
+    @property
     def gpu(self) -> Mapping[str, Any] | None:
         return self.raw.get("gpu")
 
@@ -214,6 +232,12 @@ class Fleet:
     domain: str = "example.internal"
     keys: Mapping[str, str] = field(default_factory=dict)
     policies: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    #: node name -> {"firewall": "enabled"|"disabled"}; a node not listed runs a firewall.
+    nodes: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+
+    def node_firewall(self, node: str) -> bool:
+        """Whether the node (hypervisor) itself enforces a firewall.  Unlisted = yes (safe default)."""
+        return self.nodes.get(node, {}).get("firewall", "enabled") != "disabled"
 
     def sorted(self) -> list[Guest]:
         return sorted(self.guests, key=lambda g: g.id)

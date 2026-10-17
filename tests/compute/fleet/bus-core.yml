@@ -9,7 +9,14 @@ resources:
   disks: [{name: rootfs, size_gb: 32, pool: fast, format: qcow2}]
 image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
 cloudinit: {user: ansible, ssh_authorized_keys: [operator]}
-network: {zone: data, ip: 198.51.100.50, vlan_tag_mode: per_vlan_bridge}
+network:
+  zone: data
+  ip: 198.51.100.50
+  vlan_tag_mode: per_vlan_bridge
+  firewall: disabled
+  firewall_exemption:
+    reason: Cluster peers connect from changing addresses and the bus enforces its own authentication.
+    review_by: "2027-03-31"
 capability: cap:events
 capability_groups: [cap_orchestration]
 tags: [prod, legacy-net]
