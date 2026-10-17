@@ -18,6 +18,11 @@ cloudinit:
   timezone: UTC
   storage_pool: fast
 network: {zone: data, ip: 198.51.100.40, gateway: inherit, bridge: default, firewall: enabled}
+firewall_rules:
+  inbound_allow:
+    - {name: query-api, proto: tcp, ports: "8443", source: "zone:compute"}
+    - {name: ssh-mgmt, proto: tcp, ports: "22", source: "zone:mgmt"}
+    - {name: ping, proto: icmp, source: "192.0.2.0/24"}
 capability: cap:lake-query
 capability_groups: [cap_lake, cap_query]
 tags: [prod, stateful]

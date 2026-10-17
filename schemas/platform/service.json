@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/service/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/platform/service/1.1",
   "title": "HomelabNext service registry (services.yml)",
   "description": "Single source of truth for what runs where. Every endpoint, scrape target, proxy site, firewall rule, DNS record and environment file is generated from this document. Schema version 1; evolve additively.",
   "type": "object",
@@ -123,6 +123,10 @@
           "type": "array",
           "uniqueItems": true,
           "items": {"type": "string", "pattern": "^[a-z][a-z0-9:_-]{0,31}$"}
+        },
+        "scope": {
+          "enum": ["in", "out"],
+          "description": "Writer-tool scope (homelabnext.scope). 'out' keeps tools from filing tasks, notes or findings about this service; absent = inherit from its host guest, else in."
         }
       }
     }

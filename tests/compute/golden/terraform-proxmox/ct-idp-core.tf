@@ -31,9 +31,10 @@ resource "proxmox_virtual_environment_container" "idp_core" {
   }
 
   network_interface {
-    name    = "eth0"
-    bridge  = var.default_bridge
-    vlan_id = 10
+    name     = "eth0"
+    bridge   = var.default_bridge
+    vlan_id  = 10
+    firewall = true
   }
 
   initialization {

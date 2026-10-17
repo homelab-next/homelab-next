@@ -42,8 +42,9 @@ resource "proxmox_virtual_environment_vm" "infer_core" {
   }
 
   network_device {
-    bridge  = var.default_bridge
-    vlan_id = 30
+    bridge   = var.default_bridge
+    vlan_id  = 30
+    firewall = true
   }
 
   operating_system {

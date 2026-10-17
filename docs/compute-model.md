@@ -6,7 +6,7 @@ render everything else from those files: infrastructure-as-code, hypervisor comm
 seeds, an Ansible inventory, registry hosts and backup jobs. Nothing here needs hardware: the
 whole chain is tested with golden files from a synthetic fleet.
 
-* Contract: `schemas/platform/guest.schema.json` (version 1.0, frozen).
+* Contract: `schemas/platform/guest.schema.json` (version 1.1, additive over 1.0; baselines in `schemas/_frozen/`).
 * Code: `homelabnext/compute/`. CLI: `hnx guests`.
 * Example fleet and goldens: `tests/compute/fleet/`, `tests/compute/golden/`.
 
@@ -36,7 +36,11 @@ Rules worth knowing:
 * Values only. Zones, storage pools, images and SSH keys are referenced by **name**; the
   environment supplies what the names mean (provider variables, a site model, a key file).
 * `firewall` is `inherit | enabled | disabled`, not `on | off`: YAML 1.1 reads a bare `on` as a
-  boolean.
+  boolean. **Firewall is on by default**: an absent value and `inherit` both mean enabled, and the
+  Terraform renderer always writes the flag (`firewall = true|false`) on every NIC. See
+  [Firewall on by default](#firewall-on-by-default).
+* `scope: in | out` (1.1) marks a guest the writer tools must not file work about
+  (`docs/scope.md`).
 * `provisioning: manual` guests (for example a container that needs host-level steps) must list
   `lifecycle.requires_root_steps`. They are left out of Terraform, libvirt and cloud-init output
   and printed in `MANUAL.md`, but still appear in the inventory, registry hosts and backup jobs.
@@ -57,6 +61,8 @@ Schema first, then `homelabnext.compute.validate`:
 | `capability` is one of the fourteen in `docs/interfaces.md` | |
 | `capability_groups` are known inventory groups (`docs/role-interface.md` section 5, or `cap_<capability>`) | playbooks target groups |
 | `backup.policy` is defined (or `none`) | |
+| a NIC with `firewall: disabled` on a node that enforces a firewall needs `network.firewall_exemption.reason` | see below |
+| `firewall_rules`: unique names, ports for tcp/udp (none for icmp), valid port ranges, existing `zone:` sources, valid CIDRs; only on vm/lxc with the flag on | rules that cannot be rendered are errors, not skips |
 
 The model does not import a site package. It reads zones through a small protocol:
 
@@ -82,10 +88,59 @@ have a zones file. Tests can also pass a stub.
 | `inventory` | `hosts.yml` with `cap_*` and `tag_*` groups, `host_vars/<fqdn>.yml` |
 | `registry-hosts` | a `zones:`/`hosts:` fragment for `services.yml` |
 | `backup-jobs` | members, retention and export hooks per policy |
+| `firewall-rules` | `firewall/<name>.fw` per guest (inbound drop plus the guest's allow rules) and `firewall/EXEMPTIONS.md` |
 
 Output is a pure function of the files: no clock, no randomness, no environment.  The `terraform-proxmox` target was validated against the real `bpg/proxmox` provider **version 0.116.1** (`terraform init && terraform validate` plus a one-guest live `plan` / `apply` / `destroy` cycle on a scoped scratch pool).  A trimmed snapshot of the provider's resource schemas is committed at `tests/compute/fixtures/bpg_proxmox_schema.json` and used by `tests/compute/test_terraform_proxmox_schema.py` as a CI-safe shape check.  Note that the real provider enforces `vm_id >= 100`, so the example fleet uses vmids in the `110-230` range; the `octet` scheme is still available but requires IPs whose last octet is `>= 100`. SSH keys are
 rendered from a name-to-public-key file, or as `<ssh-key:NAME>` placeholders; storage pool ids,
 template ids, the default bridge and the API endpoint stay Terraform variables.
+
+### Firewall on by default
+
+Every guest NIC defaults to `firewall: enabled`. The guest file can carry the rules:
+
+```yaml
+network:
+  zone: data
+  ip: 198.51.100.40
+  firewall: enabled              # the default; spelled out here for clarity
+firewall_rules:
+  inbound_allow:
+    - {name: query-api, proto: tcp, ports: "8443", source: "zone:compute"}   # zone id -> its subnet
+    - {name: ssh-admin, proto: tcp, ports: "22",   source: "192.0.2.0/24"}   # or a CIDR
+    - {name: ping,      proto: icmp,               source: any}
+```
+
+`hnx guests render ... --target firewall-rules` writes one Proxmox-style `.fw` file per guest:
+`policy_in: DROP`, `policy_out: ACCEPT`, then exactly the allow rules above in file order. A guest
+with no rules gets the drop policy and nothing else; silence is never an implicit allow.
+
+**Exemptions.** A NIC may run with the flag off only with a recorded reason:
+
+```yaml
+network:
+  firewall: disabled
+  firewall_exemption: {reason: "Peers connect from changing addresses; the service authenticates itself.", review_by: "2027-03-31"}
+```
+
+Validation rejects `disabled` without `firewall_exemption` when the guest's node enforces a
+firewall, rejects an exemption on an enabled NIC (a stale exception), and rejects rules on a
+disabled NIC. Which nodes enforce a firewall is data: `_nodes.yml` next to the guest files
+(`nodes: {hv-a: {firewall: enabled|disabled}}`, or `--nodes FILE`); a node that is not listed is
+assumed to enforce one, the safe default. Exemptions are listed with their reasons in
+`firewall/EXEMPTIONS.md`.
+
+**The incident class this prevents.** Hypervisor-level firewalls filter per virtual NIC, and the
+per-NIC flag decides whether a guest's traffic goes through that filtering path. With the
+node-level firewall switched on, a guest whose NIC does not carry the flag is not "simply
+unfiltered": traffic it receives that was routed (it arrived from another network segment rather
+than from the guest's own bridge) can be treated as unsolicited, because connection tracking never
+saw the outbound half of the exchange. The visible symptom is one-directional: the guest can open
+connections out and a probe from a neighbour on the same segment works, yet TCP replies that come
+back across a router are silently dropped, and nothing in the guest's own logs says why. Leaving
+the flag off was never a decision; it was an omission that only showed up after someone turned the
+node firewall on. The model therefore (1) defaults the flag on, (2) always renders it explicitly
+so a diff shows any change, and (3) turns "off" into a reviewed exception with a reason and a
+review date.
 
 ### One entry wires everything
 
