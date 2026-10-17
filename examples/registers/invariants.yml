@@ -55,6 +55,16 @@ criteria:
   evidence: plugin
   plugin: X-02
   remediation: Add the missing registry row or remove the stray listener.
+- id: X-07
+  statement: Every stateful product's export hook is exercised in a restore drill.
+  evidence: plugin
+  plugin: X-07
+  remediation: Run a restore drill for the product; a hook that was never exercised is a liability.
+- id: X-08
+  statement: Every cutover has a swap record with parity, rollback and flip commits.
+  evidence: plugin
+  plugin: X-08
+  remediation: Record the cutover with the swap kit; a cutover with no record is unauditable.
 - id: X-09
   statement: Every customization is owned and none is expired.
   evidence: plugin
