@@ -10,6 +10,10 @@ resources:
 image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
 cloudinit: {user: ansible, ssh_authorized_keys: [operator], packages: [qemu-guest-agent]}
 network: {zone: edge, ip: 203.0.113.10, firewall: enabled}
+firewall_rules:
+  inbound_allow:
+    - {name: https-public, proto: tcp, ports: "443", source: any}
+    - {name: ssh-mgmt, proto: tcp, ports: "22", source: "zone:mgmt"}
 capability: cap:orchestration
 capability_groups: [cap_edge]
 tags: [prod, edge]

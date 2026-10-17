@@ -11,6 +11,7 @@ detection to decision to swap). Other event families are added later as separate
 | `proposal.created` / `proposal.decided` | `homelabnext.proposal.created` / `.decided` |
 | `task.queued` | `homelabnext.task.queued` |
 | `decision.requested` / `decision.returned` | `homelabnext.decision.requested` / `.returned` |
+| `scope.denied` | `homelabnext.scope.denied` (a writer tool was refused for an out-of-scope target; `docs/scope.md`) |
 | `swap.step` (1.1) | `homelabnext.swap.step` (steps 1..9 of the swap procedure; 1.1 adds the nine step names of the swap record, `homelabnext.swap.events` builds them from a record) |
 
 Envelope: `specversion` (`"1.0"`), `id` (idempotency key; redelivery of the same id is harmless),

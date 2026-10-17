@@ -1,0 +1,240 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Synthetic example lab for HomelabNext. Everything here is fictional:
+# addresses come from the RFC 5737 documentation ranges, names live under
+# example.internal / lab.example. Every generator renders from this file.
+registry_version: 1
+
+lab:
+  name: northwind
+  domain: example.internal
+  svc_label: svc
+  owner: platform-team
+
+zones:
+  mgmt:
+    cidr: 192.0.2.0/24
+    description: management and shared infrastructure services
+  data:
+    cidr: 198.51.100.0/25
+    description: storage, catalog, query and bus
+  compute:
+    cidr: 198.51.100.128/25
+    description: inference and agent runtime
+  edge:
+    cidr: 203.0.113.0/24
+    description: reverse proxy and public entry
+
+hosts:
+  dns-core:     {address: 192.0.2.5,       zone: mgmt,    role: resolver}
+  mon-core:     {address: 192.0.2.20,      zone: mgmt,    role: monitoring}
+  idp-core:     {address: 192.0.2.30,      zone: mgmt,    role: identity}
+  secrets-core: {address: 192.0.2.31,      zone: mgmt,    role: secrets}
+  lake-core:    {address: 198.51.100.40,   zone: data,    role: lake}
+  bus-core:     {address: 198.51.100.50,   zone: data,    role: events}
+  infer-core:   {address: 198.51.100.130,  zone: compute, role: inference}
+  runtime-core:   {address: 198.51.100.140,  zone: compute, role: agent-runtime}
+  edge-core:    {address: 203.0.113.10,    zone: edge,    role: edge}
+
+services:
+  dns:
+    capability: dns
+    impl: technitium
+    host: dns-core
+    protocol: dns
+    port: 53
+    health: {kind: none}
+    clients: [mgmt, data, compute, edge]
+    owner: platform-team
+    version: "13.0"
+    tls: none
+    tags: [core]
+    scope: out
+
+  edge-proxy:
+    capability: edge-proxy
+    impl: caddy
+    host: edge-core
+    protocol: https
+    port: 443
+    health: {kind: tcp}
+    upstreams: [dashboards, idp]
+    owner: platform-team
+    version: "2.8.4"
+    tls: public
+    tags: [core, edge]
+
+  idp:
+    capability: idp
+    impl: authentik
+    host: idp-core
+    protocol: https
+    port: 9443
+    health: {kind: http, path: /-/health/live/, expect_status: 204}
+    clients: [edge, data, compute]
+    owner: identity-team
+    version: "2024.8"
+    tls: internal
+    auth: own
+    public_hostname: login.lab.example
+    backup_job: daily-core
+    tags: [core, identity]
+
+  secrets:
+    capability: secrets
+    impl: openbao
+    host: secrets-core
+    protocol: https
+    port: 8200
+    health: {kind: http, path: /v1/sys/health, expect_status: 200}
+    clients: [data, compute]
+    owner: identity-team
+    version: "2.1.0"
+    tls: mtls
+    backup_job: daily-core
+    tags: [core, secrets]
+
+  object-store:
+    capability: object-store
+    impl: minio
+    host: lake-core
+    protocol: https
+    port: 9000
+    health: {kind: http, path: /minio/health/live, expect_status: 200}
+    metrics: {path: /minio/v2/metrics/cluster}
+    upstreams: [secrets]
+    owner: data-team
+    version: "2024.9"
+    tls: internal
+    backup_job: weekly-lake
+    tags: [data, storage]
+
+  lake-catalog:
+    capability: lake-catalog
+    impl: lakekeeper
+    host: lake-core
+    protocol: https
+    port: 8181
+    health: {kind: http, path: /health, expect_status: 200}
+    metrics: {path: /metrics}
+    upstreams: [object-store, idp, records-db]
+    owner: data-team
+    version: "0.5.2"
+    tls: internal
+    backup_job: daily-core
+    tags: [data, catalog]
+
+  lake-query:
+    capability: lake-query
+    impl: trino
+    host: lake-core
+    protocol: https
+    port: 8443
+    health: {kind: http, path: /v1/info, expect_status: 200, interval_s: 30}
+    metrics: {path: /metrics, port: 9091}
+    upstreams: [lake-catalog, object-store, idp]
+    owner: data-team
+    version: "450.0"
+    tls: internal
+    auth: idp
+    mcp: {name: lake_query, transport: http, path: /mcp}
+    tags: [data, query]
+
+  records-db:
+    capability: records-db
+    impl: postgresql
+    host: lake-core
+    protocol: postgres
+    port: 5432
+    health: {kind: tcp}
+    owner: data-team
+    version: "16.4"
+    tls: internal
+    backup_job: daily-core
+    tags: [data, database]
+
+  events:
+    capability: events
+    impl: nats
+    host: bus-core
+    protocol: nats
+    port: 4222
+    health: {kind: tcp}
+    metrics: {path: /metrics, port: 7777}
+    clients: [compute]
+    owner: data-team
+    version: "2.10.20"
+    tls: mtls
+    tags: [data, bus]
+
+  inference:
+    capability: inference
+    impl: vllm
+    host: infer-core
+    protocol: http
+    port: 8000
+    health: {kind: http, path: /health, expect_status: 200}
+    metrics: {path: /metrics}
+    owner: ml-team
+    version: "0.6.1"
+    tls: none
+    tags: [compute, inference]
+
+  agent-runtime:
+    capability: agent-runtime
+    impl: orchestrator
+    host: runtime-core
+    protocol: http
+    port: 8088
+    health: {kind: http, path: /healthz, expect_status: 200}
+    metrics: {path: /metrics}
+    upstreams: [lake-query, inference, notify, events, secrets]
+    owner: ml-team
+    version: "0.3.0"
+    tls: none
+    mcp: {name: agent_runtime, transport: sse, path: /sse}
+    tags: [compute, agents]
+
+  notify:
+    capability: notify
+    impl: ntfy
+    host: mon-core
+    protocol: http
+    port: 8080
+    health: {kind: http, path: /v1/health, expect_status: 200}
+    clients: [data, compute]
+    owner: platform-team
+    version: "2.11"
+    tls: none
+    tags: [ops, notify]
+
+  metrics:
+    capability: metrics
+    impl: prometheus
+    host: mon-core
+    protocol: http
+    port: 9090
+    health: {kind: http, path: /-/healthy, expect_status: 200}
+    metrics: {path: /metrics}
+    upstreams: [notify]
+    owner: platform-team
+    version: "2.54.1"
+    tls: none
+    tags: [ops, monitoring]
+
+  dashboards:
+    capability: dashboards
+    impl: grafana
+    host: mon-core
+    protocol: http
+    port: 3000
+    health: {kind: http, path: /api/health, expect_status: 200}
+    metrics: {path: /metrics}
+    upstreams: [metrics, idp]
+    owner: platform-team
+    version: "11.2.0"
+    tls: none
+    auth: idp
+    public_hostname: dashboards.lab.example
+    backup_job: daily-core
+    tags: [ops, ui]

@@ -79,8 +79,10 @@ def _bridge(fleet: Fleet, g: Guest) -> tuple[str, str | None]:
     return base, (str(z.vlan_id) if z.vlan_id is not None else None)
 
 
-def _fw(g: Guest) -> str | None:
-    return {"enabled": "true", "disabled": "false"}.get(g.network.get("firewall", "inherit"))
+def _fw(g: Guest) -> str:
+    """Always rendered, never omitted: an absent flag is how a NIC silently ends up unfiltered
+    (or, behind a node firewall, unable to receive routed replies)."""
+    return "true" if g.nic_firewall else "false"
 
 
 def _vm(fleet: Fleet, g: Guest) -> str:
@@ -122,8 +124,7 @@ def _vm(fleet: Fleet, g: Guest) -> str:
     L += ["", "  network_device {", f"    bridge = {bridge}"]
     if vlan:
         L.append(f"    vlan_id  = {vlan}")
-    if _fw(g):
-        L.append(f"    firewall = {_fw(g)}")
+    L.append(f"    firewall = {_fw(g)}")
     L.append("  }")
     if img.get("os_type"):
         L += ["", "  operating_system {", f"    type = {q(_pve_ostype(img['os_type']))}", "  }"]
@@ -215,8 +216,7 @@ def _ct(fleet: Fleet, g: Guest) -> str:
     L += ["", "  network_interface {", '    name   = "eth0"', f"    bridge = {bridge}"]
     if vlan:
         L.append(f"    vlan_id  = {vlan}")
-    if _fw(g):
-        L.append(f"    firewall = {_fw(g)}")
+    L.append(f"    firewall = {_fw(g)}")
     L.append("  }")
     ci = g.cloudinit
     L += [

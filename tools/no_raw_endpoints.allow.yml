@@ -61,6 +61,10 @@ allow:
     reason: negative guest fixtures (documentation addresses only)
   - path: "tests/compute/*"
     reason: synthetic fleet, site model, goldens and tests (documentation addresses only; addresses are the data under test)
+  - path: "tests/scope/*"
+    reason: scope tests resolve guests by address alias; documentation-range addresses are the data under test
+  - path: "tests/schemas/fixtures/**"
+    reason: 1.1-only guest fixtures (documentation addresses only)
   - path: "tests/integration/**"
     reason: synthetic fleet files and assertions on documentation addresses
   - path: "tests/decommission/**"
