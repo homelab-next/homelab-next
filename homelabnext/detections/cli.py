@@ -7,10 +7,30 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import detmap, lint
+from . import attack, detmap, lint
 from .adapters import Target, get_backend
 from .runner import run_all
 from .sigma import load_mapping, load_rules
+
+
+def _resolve_known_ids(root: Path, backend_name: str, snapshot_arg: str | None):
+    """Snapshot explicitly named (``--snapshot``) wins; otherwise ask the backend; return
+    ``None`` when neither path produces a known set.
+    """
+    if snapshot_arg:
+        return attack.load_snapshot(snapshot_arg)
+    try:
+        be = get_backend(backend_name)
+    except KeyError:
+        return None
+    fn = getattr(be, "known_technique_ids", None)
+    if fn is None:
+        return None
+    try:
+        ids = fn(root)
+    except TypeError:
+        ids = fn()
+    return ids or None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -25,6 +45,20 @@ def main(argv: list[str] | None = None) -> int:
     ln.add_argument("paths", nargs="*", type=Path)
     cp = sub.add_parser("compile")
     cp.add_argument("backend")
+    vt = sub.add_parser(
+        "validate-techniques",
+        help="check each rule's ATT&CK ids against an engine's known-id snapshot",
+    )
+    vt.add_argument("--backend", default="wazuh")
+    vt.add_argument(
+        "--snapshot",
+        help="snapshot file (overrides the backend's default); .yml/.yaml/.json/.txt",
+    )
+    vt.add_argument(
+        "--suggest-parent",
+        action="store_true",
+        help="for an unknown sub-technique whose parent IS known, suggest tagging the parent",
+    )
     a = ap.parse_args(argv)
     root: Path = a.root
     mapfile = root / "det_map.yml"
@@ -63,6 +97,19 @@ def main(argv: list[str] | None = None) -> int:
             be.bundle(arts) if hasattr(be, "bundle") else "\n".join(x.content for x in arts)
         )
         return 0
+    if a.cmd == "validate-techniques":
+        rules = load_rules(root)
+        known = _resolve_known_ids(root, a.backend, a.snapshot)
+        if known is None:
+            print(
+                f"no ATT&CK known-id snapshot for backend {a.backend!r}; set its "
+                f"'known_ids_snapshot' or pass --snapshot",
+                file=sys.stderr,
+            )
+            return 100  # could not measure (invariants-runner convention)
+        probs = attack.validate_rules(rules, known, suggest_parent=a.suggest_parent)
+        print("\n".join(probs) or "ATT&CK ids all known to the engine")
+        return 1 if probs else 0
     return 2
 
 

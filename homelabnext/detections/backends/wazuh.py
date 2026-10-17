@@ -11,8 +11,10 @@ from ``Target.det_map`` (the generated map), never from the rule file.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
+from .. import attack
 from ..adapters import Artifact, MissingEngineId, Target, UnsupportedConstruct, register
 from ..sigma import Matcher, Rule
 
@@ -58,7 +60,45 @@ def _terms(ast: tuple) -> list[tuple[str, bool]]:
 
 
 class WazuhStubBackend:
+    """Wazuh-style stub. ``known_ids_snapshot`` is the default snapshot path RELATIVE to the
+    detections root; callers can also set an absolute path or ``None``. ``known_technique_ids``
+    loads the snapshot lazily and caches the frozen set so repeated calls are free.
+    """
+
     name = "wazuh"
+    known_ids_snapshot: Path | str | None = Path("attack_snapshots/wazuh.yml")
+
+    def __init__(self, known_ids_snapshot: Path | str | None = None):
+        if known_ids_snapshot is not None:
+            self.known_ids_snapshot = known_ids_snapshot
+        # Cache is keyed on the resolved snapshot path so a module-registered singleton can be
+        # driven against several roots in a test suite without one call's cached result leaking
+        # into another's.
+        self._cache: dict[Path, frozenset[str]] = {}
+
+    def known_technique_ids(self, root: Path | str | None = None) -> frozenset[str]:
+        """Return the engine's known ATT&CK ids. ``root`` is the detections root the backend's
+        relative snapshot path resolves against; absolute snapshot paths ignore it.
+
+        An empty set is returned when the snapshot file does not exist - the caller then
+        reads that as "the engine has not advertised a known set", which is distinguishable
+        from "the engine advertised an empty set" at the type level by the snapshot's own
+        schema (which refuses an empty id list).
+        """
+        if self.known_ids_snapshot is None:
+            return frozenset()
+        path = Path(self.known_ids_snapshot)
+        if not path.is_absolute() and root is not None:
+            path = Path(root) / path
+        resolved = path.resolve() if path.exists() else path
+        cached = self._cache.get(resolved)
+        if cached is not None:
+            return cached
+        if not path.exists():
+            return frozenset()
+        snap = attack.load_snapshot(path)
+        self._cache[resolved] = snap.technique_ids
+        return snap.technique_ids
 
     def compile(self, rule: Rule, target: Target) -> Artifact:
         if rule.det_id not in target.det_map:
