@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Passes every rule: a batch-only spec may climb to the slow tiers.
+id: lint-good-batch
+version: 1
+callers: [batch]
+question_set:
+  - Does the change request name a rollback?
+decision_table:
+  - {when: rollback present, then: accept}
+  - {when: otherwise, then: escalate}
+tiers:
+  - {name: floor}
+  - {name: small, model_role: "mdl:fast-classifier"}
+  - {name: large, model_role: "mdl:main-reasoner"}
+  - {name: llm, model_role: "mdl:main-reasoner"}
+error_direction: fail-closed
+on_error: escalate
+latency_budget_ms: 60000
+sample_audit_pct: 10

@@ -1,0 +1,36 @@
+{
+  "id": "alert-triage-inline",
+  "version": 1,
+  "callers": [
+    "inline",
+    "batch"
+  ],
+  "question_set": [
+    "Does the alert name a known host?"
+  ],
+  "decision_table": [
+    {
+      "when": "known host",
+      "then": "accept"
+    },
+    {
+      "when": "otherwise",
+      "then": "escalate"
+    }
+  ],
+  "tiers": [
+    {
+      "name": "floor"
+    },
+    {
+      "name": "small",
+      "model_role": "mdl:fast-classifier",
+      "min_confidence": 0.9,
+      "timeout_ms": 400
+    }
+  ],
+  "error_direction": "fail-closed",
+  "on_error": "escalate",
+  "latency_budget_ms": 800,
+  "sample_audit_pct": 5
+}

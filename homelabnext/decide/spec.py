@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Decision-spec model (``schemas/registers/decision_spec.json`` 1.1)."""
+"""Decision-spec model (``schemas/registers/decision_spec.json`` 1.2)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ IMPACTS = ("low", "medium", "high", "critical")
 TIER_ORDER = ("floor", "small", "large", "llm")  # a human is always the implicit last stop
 LABELS = ("accept", "reject", "escalate")
 SAFETY_LABELS = ("raise", "hold")
+CALLERS = ("inline", "batch")
 
 
 class SpecError(ValueError):
@@ -37,6 +38,16 @@ class TierSpec:
 
 
 @dataclass(frozen=True)
+class QuestionSpec:
+    """One question.  ``labels`` is empty for a plain-string question; ``compare`` names the two
+    slots of a pairwise question (written ``{slot}`` in ``text``)."""
+
+    text: str
+    labels: tuple[str, ...] = ()
+    compare: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class DecisionSpec:
     id: str
     version: int
@@ -50,6 +61,13 @@ class DecisionSpec:
     default_min_confidence: float = 0.9
     impact_keywords_file: str | None = None
     impact_floor: str = "low"
+    questions: tuple[QuestionSpec, ...] = ()
+    callers: tuple[str, ...] = ("batch",)
+
+    @property
+    def inline(self) -> bool:
+        """A caller blocks on the answer (``callers`` includes ``inline``)."""
+        return "inline" in self.callers
 
     @property
     def automatic_tiers(self) -> tuple[TierSpec, ...]:
@@ -118,6 +136,11 @@ def parse_spec(doc: Any) -> DecisionSpec:
         )
     if not tiers:
         p.append("tiers: empty")
+    questions = _questions(doc["question_set"], p)
+    callers = doc.get("callers", ["batch"])
+    if not isinstance(callers, list) or not callers or any(c not in CALLERS for c in callers):
+        p.append(f"callers must be a non-empty list drawn from {CALLERS}")
+        callers = ["batch"]
     table = tuple((str(r["when"]), str(r["then"])) for r in doc["decision_table"])
     for _, then in table:
         if then not in LABELS:
@@ -127,7 +150,7 @@ def parse_spec(doc: Any) -> DecisionSpec:
     return DecisionSpec(
         id=str(doc["id"]),
         version=int(doc["version"]),
-        question_set=tuple(doc["question_set"]),
+        question_set=tuple(q.text for q in questions),
         decision_table=table,
         tiers=tuple(tiers),
         error_direction=doc["error_direction"],
@@ -137,7 +160,33 @@ def parse_spec(doc: Any) -> DecisionSpec:
         default_min_confidence=dmin,
         impact_keywords_file=impact.get("keywords_file"),
         impact_floor=floor,
+        questions=tuple(questions),
+        callers=tuple(dict.fromkeys(callers)),
     )
+
+
+def _questions(raw: Any, p: list[str]) -> list[QuestionSpec]:
+    """``question_set`` items: a string, or ``{text, labels?, compare?}``."""
+    if not isinstance(raw, list) or not raw:
+        p.append("question_set must be a non-empty list")
+        return []
+    out: list[QuestionSpec] = []
+    for i, q in enumerate(raw):
+        if isinstance(q, str):
+            out.append(QuestionSpec(q))
+            continue
+        if not isinstance(q, dict) or not isinstance(q.get("text"), str):
+            p.append(f"question_set[{i}]: a question is a string or a mapping with text")
+            continue
+        labels, compare = q.get("labels", []), q.get("compare", [])
+        if not isinstance(labels, list) or not all(isinstance(x, str) for x in labels):
+            p.append(f"question_set[{i}]: labels must be a list of strings")
+            labels = []
+        if not isinstance(compare, list) or not all(isinstance(x, str) for x in compare):
+            p.append(f"question_set[{i}]: compare must be a list of two slot names")
+            compare = []
+        out.append(QuestionSpec(q["text"], tuple(labels), tuple(compare)))
+    return out
 
 
 def load_spec(path: str | Path) -> DecisionSpec:
