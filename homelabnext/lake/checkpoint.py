@@ -24,14 +24,13 @@ Assumption: one writer per ``(table, source)`` at a time.
 
 from __future__ import annotations
 
-import json
 import os
-import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from ..state import StateError, StateStore
 from .errors import CheckpointError
 from .protocol import LakeClient, WriteResult
 
@@ -44,49 +43,39 @@ class SourceState:
 
 
 class Checkpoint:
-    """JSON file keyed by source, saved atomically (write temp, fsync, rename, fsync dir)."""
+    """Per-source checkpoint in a :class:`~homelabnext.state.StateStore` (atomic, locked, versioned).
 
-    VERSION = 1
+    The file is the shared state-file format (``{"schema_version": 1, "data": {source: state}}``),
+    so it gets the library's atomic replace, ``flock`` and ``0600`` mode.  A checkpoint written
+    before the move (``{"version": 1, "sources": {...}}``) is still read, and is rewritten in the
+    new format on the next save.  An unusable file raises :class:`CheckpointError` rather than
+    being quarantined: start-up stops and says so, it does not silently re-read from the lake mark.
+    """
+
+    VERSION = 1  # the pre-StateStore file format, still read
 
     def __init__(self, path: str | os.PathLike):
         self.path = Path(path)
+        self._store = StateStore(self.path, quarantine=False, legacy=self._legacy)
 
-    def _load(self) -> dict[str, Any]:
-        if not self.path.exists():
-            return {"version": self.VERSION, "sources": {}}
-        try:
-            doc = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as e:
-            raise CheckpointError(f"checkpoint {self.path} is unreadable: {e}") from e
-        if doc.get("version") != self.VERSION or not isinstance(doc.get("sources"), dict):
-            raise CheckpointError(f"checkpoint {self.path} has an unknown format")
-        return doc
+    @classmethod
+    def _legacy(cls, doc: dict[str, Any]) -> dict[str, Any] | None:
+        if doc.get("version") == cls.VERSION and isinstance(doc.get("sources"), dict):
+            return doc["sources"]
+        return None
 
     def get(self, source: str) -> SourceState | None:
-        raw = self._load()["sources"].get(source)
+        try:
+            raw = self._store.get(source)
+        except StateError as e:
+            raise CheckpointError(f"checkpoint {self.path}: {e}") from e
         return None if raw is None else SourceState(**raw)
 
     def save(self, source: str, state: SourceState) -> None:
-        doc = self._load()
-        doc["sources"][source] = asdict(state)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=self.path.name + ".")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(doc, f, sort_keys=True, indent=2)
-                f.write("\n")
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp, self.path)
-        except BaseException:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
-            raise
-        dfd = os.open(self.path.parent, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+            self._store.put(source, asdict(state))
+        except StateError as e:
+            raise CheckpointError(f"checkpoint {self.path}: {e}") from e
 
 
 class Ingestor:
