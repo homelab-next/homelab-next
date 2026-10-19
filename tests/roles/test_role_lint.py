@@ -259,3 +259,17 @@ def test_rl013_certificate_validation_off(tmp_path, tasks, defaults, bad):
 def test_rl014_privileged_and_docker_socket(tmp_path, template, defaults, bad):
     found = mutate(tmp_path, template=template, defaults=defaults)
     assert ("RL014" in rules(found)) is bad, found
+
+
+def test_ansible_cfg_never_disables_host_key_checking():
+    import configparser
+
+    cfg = configparser.ConfigParser(inline_comment_prefixes=(";",))
+    cfg.read(ROOT / "ansible" / "ansible.cfg")
+    assert cfg.getboolean("defaults", "host_key_checking", fallback=True) is True
+    for section in cfg.sections():
+        for key, value in cfg.items(section):
+            if "host_key" in key:
+                assert value.strip().lower() not in ("false", "no", "0", "off"), (section, key)
+            if key.endswith("ssh_args") or key.endswith("ssh_common_args"):
+                assert "StrictHostKeyChecking=no" not in value, (section, key)
