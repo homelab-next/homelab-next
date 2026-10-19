@@ -106,3 +106,23 @@ markers = [
   "live: needs a real server or container; never runs in the default CI job",
   "slow: takes more than a few seconds",
 ]
+# Q-02 (tests/suite_policy.py): per-suite time budgets in seconds (a suite = a test file's first two
+# directories; HNX_SUITE_BUDGET_SCALE multiplies them), and the only legitimate skip reasons --
+# any other skip fails.  `pytest --suite-times` prints the table.
+suite_budget_default = "60"
+suite_budgets = [
+  "tests/roles = 480",  # runs ansible-playbook against localhost (skipped where ansible is absent)
+  "tools/tests = 240",  # the gate tools run pytest, git and builds in subprocesses
+  "tests/packaging = 120",  # builds and installs the wheel and the sdist
+]
+skip_reasons = [
+  "^could not import '[A-Za-z0-9_.]+'",  # pytest.importorskip: an optional extra is not installed
+  "\\bnot installed\\b",  # an external tool (shellcheck, ansible, make, dnsmasq) is absent
+  "\\bnot available\\b",  # a runtime facility (docker compose, unprivileged nft) is absent
+  "^needs (git|a git checkout)$",  # run from an sdist or without git
+  "^no sh/awk$",
+  "^POSIX file modes$",
+  "^systemd too old",
+  "^no shipped wazuh snapshot",
+]
+quarantine_max_days = "90"

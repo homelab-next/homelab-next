@@ -1,0 +1,193 @@
+[
+  {
+    "specversion": "1.0",
+    "id": "evt-enrich-01",
+    "source": "svc:siem",
+    "type": "homelabnext.alert.created",
+    "time": "2026-01-01T00:00:00Z",
+    "data": {
+      "alert_id": "ALT-0001",
+      "detection": "det:auth-failure-burst",
+      "title": "Burst of failed logins",
+      "severity": "high",
+      "observed_at": "2026-01-01T00:00:00Z",
+      "entities": [
+        {
+          "kind": "ip",
+          "value": "198.51.100.23"
+        },
+        {
+          "kind": "host",
+          "value": "lake-core"
+        }
+      ]
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "evt-enrich-02",
+    "source": "svc:siem",
+    "type": "homelabnext.alert.created",
+    "time": "2026-01-01T00:00:00Z",
+    "data": {
+      "alert_id": "ALT-0001",
+      "detection": "det:auth-failure-burst",
+      "title": "Burst of failed logins",
+      "severity": "high",
+      "observed_at": "2026-01-01T00:00:00Z",
+      "entities": [
+        {
+          "kind": "ip",
+          "value": "198.51.100.23"
+        },
+        {
+          "kind": "host",
+          "value": "secrets-core"
+        }
+      ]
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "evt-enrich-03",
+    "source": "svc:siem",
+    "type": "homelabnext.alert.created",
+    "time": "2026-01-01T00:00:00Z",
+    "data": {
+      "alert_id": "ALT-0001",
+      "detection": "det:auth-failure-burst",
+      "title": "Burst of failed logins",
+      "severity": "high",
+      "observed_at": "2026-01-01T00:00:00Z",
+      "entities": [
+        {
+          "kind": "ip",
+          "value": "198.51.100.23"
+        },
+        {
+          "kind": "host",
+          "value": "bus-core"
+        }
+      ]
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "evt-enrich-04",
+    "source": "svc:siem",
+    "type": "homelabnext.alert.created",
+    "time": "2026-01-01T00:00:00Z",
+    "data": {
+      "alert_id": "ALT-0001",
+      "detection": "det:auth-failure-burst",
+      "title": "Burst of failed logins",
+      "severity": "high",
+      "observed_at": "2026-01-01T00:00:00Z",
+      "entities": [
+        {
+          "kind": "ip",
+          "value": "198.51.100.23"
+        },
+        {
+          "kind": "host",
+          "value": "app-01"
+        }
+      ]
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "evt-enrich-05",
+    "source": "svc:inference",
+    "type": "homelabnext.task.queued",
+    "time": "2026-01-01T00:00:00Z",
+    "data": {
+      "task_id": "TASK-0001",
+      "profile": "profile:reader",
+      "priority": 50,
+      "idempotency_key": "reader-2026-01-01"
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "evt-enrich-06",
+    "source": "svc:siem",
+    "type": "homelabnext.task.queued",
+    "time": "2026-01-01T00:00:00Z",
+    "data": {
+      "task_id": "TASK-0001",
+      "profile": "profile:reader",
+      "priority": 50,
+      "idempotency_key": "reader-2026-01-01"
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "evt-enrich-07",
+    "source": "svc:scope-guard",
+    "type": "homelabnext.scope.denied",
+    "time": "2026-01-01T00:00:00Z",
+    "subject": "guest:bus-core",
+    "data": {
+      "target": "bus-core",
+      "canonical": "guest:bus-core",
+      "code": "vmid-threshold",
+      "reason": "vmid 9001 is above the scope threshold 9000",
+      "tool": "task-writer"
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "evt-enrich-08",
+    "source": "cap:lake-query",
+    "type": "homelabnext.swap.step",
+    "time": "2026-01-01T00:00:00Z",
+    "data": {
+      "swap_id": "SWAP-0001",
+      "capability": "cap:lake-query",
+      "step": 7,
+      "step_name": "shadow",
+      "status": "passed"
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "evt-enrich-09",
+    "source": "svc:idp",
+    "type": "homelabnext.task.queued",
+    "time": "2026-01-01T00:00:00Z",
+    "assetowner": "identity-team",
+    "assetcriticality": "critical",
+    "assetid": "svc:idp",
+    "data": {
+      "task_id": "TASK-0001",
+      "profile": "profile:reader",
+      "priority": 50,
+      "idempotency_key": "reader-2026-01-01"
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "evt-enrich-10",
+    "source": "svc:siem",
+    "type": "homelabnext.alert.created",
+    "time": "2026-01-01T00:00:00Z",
+    "data": {
+      "alert_id": "ALT-0001",
+      "detection": "det:auth-failure-burst",
+      "title": "Burst of failed logins",
+      "severity": "high",
+      "observed_at": "2026-01-01T00:00:00Z",
+      "entities": [
+        {
+          "kind": "ip",
+          "value": "198.51.100.23"
+        },
+        {
+          "kind": "host",
+          "value": "hv-a"
+        }
+      ]
+    }
+  }
+]

@@ -1,0 +1,14 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0002",
+  "source": "svc:siem",
+  "type": "homelabnext.alert.created",
+  "time": "2026-01-01T00:00:00Z",
+  "data": {
+    "k": 1
+  },
+  "subject": "host:lake-core",
+  "assetid": "host:lake-core",
+  "assetowner": "data-team",
+  "assetcriticality": "high"
+}

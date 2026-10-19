@@ -90,6 +90,29 @@
     },
     {
       "exit": {
+        "0": "clean",
+        "1": "a seam has no contract test",
+        "2": "usage error or an unresolvable range"
+      },
+      "id": "contract-coverage",
+      "inputs": "schemas/events, schemas/ocsf and the contract-test fixtures",
+      "invariant": [
+        "Q-05"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per seam without contract tests",
+      "owner": "maintainers",
+      "path": "tools/contract_coverage.py",
+      "purpose": "Fail when an event type or shared lake table lacks a schema with publisher and consumer contract-test fixtures.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:contracts"
+      ]
+    },
+    {
+      "exit": {
         "0": "every unit at or above the floor",
         "1": "some unit below it or not measured",
         "2": "coverage could not be run"
@@ -145,6 +168,29 @@
       "status": "active",
       "trigger": [
         "compose:lab-in-a-box/inference"
+      ]
+    },
+    {
+      "exit": {
+        "0": "clean",
+        "1": "a fix lacks a regression test",
+        "2": "usage error or an unresolvable range"
+      },
+      "id": "fix-has-test",
+      "inputs": "git history over a revision range",
+      "invariant": [
+        "Q-08"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per fix without a (failing-before) regression test",
+      "owner": "maintainers",
+      "path": "tools/fix_has_test.py",
+      "purpose": "Fail when a bugfix commit (a fix subject or a Fixes trailer) ships no regression test; with --prove, also when that test passes on the parent commit.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/regression-tests",
+        "make:fix-check"
       ]
     },
     {

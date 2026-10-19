@@ -136,6 +136,14 @@ detections:
 	$(PY) -m homelabnext.detections lint
 	$(PY) -m homelabnext.detections run
 	$(PY) -m homelabnext.detections map --check
+	$(PY) -m homelabnext.detections coverage --check detections/attack_coverage.json
+
+# T-07, Q-05: every event type and shared lake table has a passing publisher and consumer
+# contract test (generated from schemas/events and schemas/ocsf)
+.PHONY: contracts
+check: contracts
+contracts:
+	$(PY) tools/contract_coverage.py
 
 registers:
 	$(PY) -m homelabnext.registers build examples/registers $(REGISTERS_OUT)
@@ -206,6 +214,14 @@ keyring:
 # (not part of `check`, which pull requests run).  Maintainer fix: `make ids-resolve` on main.
 ids-placeholders:
 	$(PY) tools/register_ids.py check-placeholders $(REGISTER_FILES)
+
+# Q-08: every `fix:` commit (or `Fixes:` trailer) in RANGE touches a test file; PROVE=1 also runs
+# each fix's tests on its parent, where they must fail.  Skipped with a note when RANGE's base
+# does not exist (a fresh clone without origin/main).
+.PHONY: fix-check
+check: fix-check
+fix-check:
+	$(PY) tools/fix_has_test.py --range $(or $(RANGE),origin/main..HEAD) --allow-missing-base $(if $(PROVE),--prove)
 
 # Regenerate the hashed CI constraints (needs uv).  Versions published in the last 14 days are
 # skipped unless a direct pin needs one (CONSTRAINTS_FRESH: packages exempt from that cooldown).

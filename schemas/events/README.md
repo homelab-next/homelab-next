@@ -12,12 +12,21 @@ detection to decision to swap). Other event families are added later as separate
 | `task.queued` | `homelabnext.task.queued` |
 | `decision.requested` / `decision.returned` | `homelabnext.decision.requested` / `.returned` |
 | `scope.denied` | `homelabnext.scope.denied` (a writer tool was refused for an out-of-scope target; `docs/scope.md`) |
+| `deploy.changed` | `homelabnext.deploy.changed` (a component was released or deployed: versions and the changelog's changes; `homelabnext.events.deploy`, checklist F-15) |
 | `swap.step` (1.1) | `homelabnext.swap.step` (steps 1..9 of the swap procedure; 1.1 adds the nine step names of the swap record, `homelabnext.swap.events` builds them from a record) |
 
 Envelope: `specversion` (`"1.0"`), `id` (idempotency key; redelivery of the same id is harmless),
 `source` (a `svc:`/`cap:`/`profile:` logical id, never a URL), `type`, `time` (RFC 3339), optional
 `subject`, `severity`, `datacontenttype`, `dataschema`, `correlationid`, and `data` (object).
 Extension attribute names are lower-case alphanumeric (CloudEvents rule), so new ones are additive.
+Enrichment (`homelabnext.events.enrich`) sets three declared, optional extensions: `assetid`
+(`svc:`/`guest:`/`host:` id), `assetowner` (team slug) and `assetcriticality`
+(`low`|`medium`|`high`|`critical`).
+
+Every type here gets a publisher and a consumer contract test automatically
+(`tests/events/test_contracts.py`, parametrized from this directory); `tools/contract_coverage.py`
+fails the build when a type has no passing pair, so a new type needs at least one example and one
+negative to land.
 
 Each type schema is `allOf [envelope, {type: const, data: ...}]`: a publisher sample must satisfy both.
 Detections are referenced by `det:` id, never by an engine rule number; evidence tables by `table:` id.

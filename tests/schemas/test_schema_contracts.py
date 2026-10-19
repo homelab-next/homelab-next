@@ -31,6 +31,7 @@ EXPECTED = {
     "events/decision.returned.schema.json",
     "events/swap.step.schema.json",
     "events/scope.denied.schema.json",
+    "events/deploy.changed.schema.json",
     "records/note.schema.json",
     "registers/lesson.schema.json",
     "registers/runbook.schema.json",
@@ -103,6 +104,7 @@ def test_event_schemas_cover_reaction_seam_types():
             "decision.returned",
             "swap.step",
             "scope.denied",
+            "deploy.changed",
         )
     }
 

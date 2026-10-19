@@ -210,6 +210,29 @@ criteria:
   remediation: >-
     Point the config at a registry alias or a fleet host instead of the workstation; a runtime that
     depends on the admin workstation stops when the laptop does.
+- id: Q-05
+  statement: Every seam has a contract test.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 tools/contract_coverage.py && echo every seam contract-tested
+  expected: exit 0 (every event type and shared table has a schema plus publisher and consumer tests)
+  expect_regex: every seam contract-tested
+  remediation: >-
+    Add the missing publisher and consumer fixtures for the seam the gate names; a seam without a
+    contract test can change shape on one side and break the other side silently.
+- id: Q-08
+  statement: Fixed bugs stay fixed.
+  evidence: auto
+  observable: >-
+    git rev-parse HEAD >/dev/null 2>&1 || exit 100;
+    b=$(git rev-list -1 --before='90 days ago' HEAD);
+    python3 tools/fix_has_test.py --range "${b:+$b..}HEAD" && echo fixes carry tests
+  expected: exit 0 (every bugfix in the last 90 days touches a test file; CI also proves it fails without the fix)
+  expect_regex: fixes carry tests
+  remediation: >-
+    Add a regression test to the fix that fails on its parent commit (or a reviewed
+    `No-regression-test:` trailer); a fix without one is how the same bug ships twice.
 - id: M-17
   statement: Register ids are never lost.
   evidence: auto

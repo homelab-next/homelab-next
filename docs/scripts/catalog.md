@@ -5,7 +5,7 @@
 Every script in the tree, read from its `# hnx-script:` header. What counts as a script,
 the header fields and the checks that keep this page honest: [docs/scripts.md](../scripts.md).
 
-21 scripts: 14 check, 1 job, 2 service, 4 tool.
+23 scripts: 16 check, 1 job, 2 service, 4 tool.
 
 | id | path | kind | owner | purpose | triggers | invariant | exit codes |
 |---|---|---|---|---|---|---|---|
@@ -13,9 +13,11 @@ the header fields and the checks that keep this page honest: [docs/scripts.md](.
 | `check-spdx` | [`tools/check_spdx.py`](../../tools/check_spdx.py) | check | maintainers | Fail when a tracked source or config file has no SPDX-License-Identifier in its first five lines. | `ci:ci/lint`; `make:spdx`; `pre-commit:spdx-header` | Q-09 | 0 every file carries the header; 1 some file does not |
 | `component-tests` | [`tools/component_tests.py`](../../tools/component_tests.py) | check | maintainers | Fail when a package, capability, role, plugin, compose stack or tool has no tests. | `ci:ci/lint`; `make:component-tests` | Q-04 | 0 every component has tests; 1 some component has none or ALLOW is stale |
 | `conform-coverage` | [`tools/conform_coverage.py`](../../tools/conform_coverage.py) | check | maintainers | Fail unless each of the fourteen capabilities has a passing conformance suite. | `ci:ci/schemas`; `make:conform-check` | - | 0 all capabilities pass; 1 some capability lacks a passing test; 2 the report could not be produced |
+| `contract-coverage` | [`tools/contract_coverage.py`](../../tools/contract_coverage.py) | check | maintainers | Fail when an event type or shared lake table lacks a schema with publisher and consumer contract-test fixtures. | `ci:ci/schemas`; `make:contracts` | Q-05 | 0 clean; 1 a seam has no contract test; 2 usage error or an unresolvable range |
 | `coverage-floor` | [`tools/coverage_floor.py`](../../tools/coverage_floor.py) | check | maintainers | Fail when a security-critical unit drops below its line-coverage floor from its own tests. | `ci:ci/coverage`; `make:coverage` | Q-07 | 0 every unit at or above the floor; 1 some unit below it or not measured; 2 coverage could not be run |
 | `decommission-check` | [`tools/decommission_check.py`](../../tools/decommission_check.py) | tool | maintainers | Report every remaining reference to a service retired by a swap (ADR-0005 step 8). | `manual` | - | 0 no reference remains; 1 references remain; 2 usage error |
 | `fake-openai-server` | [`conformance/fakes/openai_server.py`](../../conformance/fakes/openai_server.py) | service | conformance | Serve the deterministic fake OpenAI-compatible inference API. | `compose:lab-in-a-box/inference` | - | 0 stopped cleanly |
+| `fix-has-test` | [`tools/fix_has_test.py`](../../tools/fix_has_test.py) | check | maintainers | Fail when a bugfix commit (a fix subject or a Fixes trailer) ships no regression test; with --prove, also when that test passes on the parent commit. | `ci:ci/regression-tests`; `make:fix-check` | Q-08 | 0 clean; 1 a fix lacks a regression test; 2 usage error or an unresolvable range |
 | `hermetic-lint` | [`tools/hermetic_lint.py`](../../tools/hermetic_lint.py) | check | maintainers | Fail when test code reads the wall clock or unseeded randomness directly. | `ci:ci/lint`; `make:hermetic-lint` | Q-11 | 0 clean; 1 findings |
 | `lab-bind-guard` | [`compose/lab-in-a-box/bind_guard.sh`](../../compose/lab-in-a-box/bind_guard.sh) | tool | lab-in-a-box | Refuse to publish the lab beyond loopback unless asked and every credential is changed. | `make:lab-up`; `script:lab-smoke` | - | 0 safe to start; 4 refused |
 | `lab-fake-cases` | [`compose/lab-in-a-box/fakes/fake_cases.py`](../../compose/lab-in-a-box/fakes/fake_cases.py) | service | lab-in-a-box | Serve an in-memory fake case system for the cases capability. | `compose:lab-in-a-box/cases` | - | 0 stopped cleanly |
