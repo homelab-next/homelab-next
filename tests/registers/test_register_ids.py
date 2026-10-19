@@ -167,3 +167,129 @@ def test_alloc_cli_needs_prefix_for_multi_prefix_register(tmp_path):
     assert run_tool(r, "alloc", "invariants.yml").returncode == 1
     out = run_tool(r, "alloc", "invariants.yml", "--prefix", "X")
     assert out.stdout.strip() == "X-02"
+
+
+# --- lock state: per repository, private, no symlinks; floor from the upstream default branch ----
+
+
+def test_state_lives_in_the_git_common_dir_and_is_shared_by_worktrees(repo, tmp_path, monkeypatch):
+    monkeypatch.delenv("HOMELABNEXT_IDS_STATE", raising=False)
+    wt_b = tmp_path / "wt-b"
+    git(repo, "worktree", "add", "-b", "b", str(wt_b))
+    assert ids.allocate(repo, "lessons.yml", "LL") == ["LL-003"]
+    assert ids.allocate(wt_b, "lessons.yml", "LL") == ["LL-004"]  # the other worktree sees it
+    sd = repo / ".git" / "homelabnext" / "register_ids"
+    assert ids.state_dir(wt_b) == sd.resolve()
+    assert (sd / "lessons.yml.LL.hwm").read_text().strip() == "4"
+    assert oct(sd.stat().st_mode & 0o777) == "0o700"
+    assert not list(sd.glob("*.tmp"))  # the mark is replaced atomically, no temp file is left
+
+
+def test_a_different_repository_has_its_own_state(repo, tmp_path, monkeypatch):
+    monkeypatch.delenv("HOMELABNEXT_IDS_STATE", raising=False)
+    other = tmp_path / "other"
+    other.mkdir()
+    git(other, "init")
+    (other / "lessons.yml").write_text("lessons:\n" + ENTRY.format(id="LL-001"))
+    assert ids.allocate(repo, "lessons.yml", "LL") == ["LL-003"]
+    assert ids.allocate(other, "lessons.yml", "LL") == ["LL-002"]  # not LL-004
+
+
+def test_state_dir_open_to_others_is_refused(repo, tmp_path, monkeypatch):
+    sd = tmp_path / "open-state"
+    sd.mkdir(mode=0o755)
+    sd.chmod(0o755)
+    monkeypatch.setenv("HOMELABNEXT_IDS_STATE", str(sd))
+    with pytest.raises(ids.IdError, match="0700"):
+        ids.allocate(repo, "lessons.yml", "LL")
+
+
+def test_state_dir_symlink_is_refused(repo, tmp_path, monkeypatch):
+    real = tmp_path / "real-state"
+    real.mkdir(mode=0o700)
+    link = tmp_path / "link-state"
+    link.symlink_to(real)
+    monkeypatch.setenv("HOMELABNEXT_IDS_STATE", str(link))
+    with pytest.raises(ids.IdError, match="not a directory"):
+        ids.allocate(repo, "lessons.yml", "LL")
+
+
+@pytest.mark.parametrize("which", ["lock", "hwm"])
+def test_symlinked_lock_or_mark_is_refused(repo, tmp_path, monkeypatch, which):
+    sd = tmp_path / "st"
+    sd.mkdir(mode=0o700)
+    monkeypatch.setenv("HOMELABNEXT_IDS_STATE", str(sd))
+    victim = tmp_path / "victim.txt"
+    victim.write_text("do not touch\n")
+    (sd / f"lessons.yml.LL.{which}").symlink_to(victim)
+    with pytest.raises(ids.IdError):
+        ids.allocate(repo, "lessons.yml", "LL")
+    assert victim.read_text() == "do not touch\n"
+
+
+def _remote_with(tmp_path, name, ident, branch="main"):
+    up = tmp_path / name
+    up.mkdir()
+    git(up, "init")
+    git(up, "checkout", "-b", branch)
+    (up / "lessons.yml").write_text("lessons:\n" + ENTRY.format(id=ident))
+    git(up, "add", "-A")
+    git(up, "commit", "-m", "x")
+    return up
+
+
+def test_floor_prefers_upstream_main_in_a_fork(repo, tmp_path):
+    up = _remote_with(tmp_path, "project", "LL-040")
+    fork = _remote_with(tmp_path, "fork", "LL-007")
+    git(repo, "remote", "add", "upstream", str(up))
+    git(repo, "remote", "add", "origin", str(fork))
+    git(repo, "fetch", "-q", "upstream")
+    git(repo, "fetch", "-q", "origin")
+    assert ids.upstream_refs(repo)[0] == "upstream/main"
+    assert ids.allocate(repo, "lessons.yml", "LL") == ["LL-041"]
+
+
+def test_floor_uses_origins_default_branch_whatever_its_name(repo, tmp_path):
+    origin = _remote_with(tmp_path, "origin-src", "LL-020", branch="trunk")
+    git(repo, "remote", "add", "origin", str(origin))
+    git(repo, "fetch", "-q", "origin")
+    git(repo, "remote", "set-head", "origin", "trunk")
+    assert ids.upstream_refs(repo) == ["origin/trunk"]
+    assert ids.allocate(repo, "lessons.yml", "LL") == ["LL-021"]
+
+
+# --- XX-NEW is a valid committed state; CI checks against the PR base -------------------------
+
+
+def test_new_placeholders_may_be_committed_and_repeat(repo):
+    with open(repo / "lessons.yml", "a") as f:
+        f.write(ENTRY.format(id="LL-NEW") + ENTRY.format(id="LL-NEW"))
+    git(repo, "commit", "-qam", "two contributions")
+    assert run_tool(repo, "check-dupes", "lessons.yml").returncode == 0
+    assert run_tool(repo, "check-lost", "lessons.yml").returncode == 0
+    from homelabnext.registers.schema import _dupes
+
+    problems: list[str] = []
+    _dupes(["LL-001", "LL-NEW", "LL-NEW"], problems)
+    assert problems == []
+
+
+def test_check_dupes_fails_on_a_repeated_allocated_id(repo):
+    with open(repo / "lessons.yml", "a") as f:
+        f.write(ENTRY.format(id="LL-002"))
+    r = run_tool(repo, "check-dupes", "lessons.yml")
+    assert r.returncode == 1 and "LL-002" in r.stderr
+
+
+def test_check_lost_against_a_pr_base(repo):
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    text = (repo / "lessons.yml").read_text()
+    (repo / "lessons.yml").write_text(text.replace(ENTRY.format(id="LL-001"), ""))
+    git(repo, "commit", "-qam", "drop LL-001")
+    # against HEAD the drop is already committed, so only the base comparison sees it
+    assert run_tool(repo, "check-lost", "lessons.yml").returncode == 0
+    r = run_tool(repo, "check-lost", "--base", base, "lessons.yml")
+    assert r.returncode == 1 and "LL-001" in r.stderr
+    assert run_tool(repo, "check-lost", "--base", "nope", "lessons.yml").returncode == 1

@@ -5,12 +5,21 @@ Two authors who both read "the next free id" out of a file and append an entry c
 module removes the read-then-write race and detects the one corruption a duplicate-id check
 cannot see (an entry that silently vanished in a merge).
 
-    alloc       claim ids under a host-wide flock; two racers get N and N+1
+    alloc       claim ids under a per-repository flock; two racers get N and N+1
     resolve     rewrite ``XX-NEW`` placeholders (``LL-NEW``, ``RB-NEW`` ...) into allocated ids
     check_lost  fail if an id a parent commit had is absent from the file being committed
 
 Nothing here parses YAML: entries are split as text so comments survive byte for byte, and an
 existing id is never renumbered.
+
+``XX-NEW`` is a valid committed state.  In a project with outside contributors, ids are
+allocated once, at merge time, by a maintainer (``hnx ids resolve`` on the target branch), so
+two pull requests can never claim the same number.
+
+Lock scope: the lock and the high-water mark live under ``git rev-parse --git-common-dir``, so
+every worktree of one repository shares them and different repositories never do.  They are
+shared between processes of the user who owns that directory; the state directory must be owned
+by the current user and not accessible to anyone else (0700), or allocation refuses to run.
 """
 
 from __future__ import annotations
@@ -20,6 +29,7 @@ import fcntl
 import os
 import pathlib
 import re
+import stat
 import subprocess
 from dataclasses import dataclass
 
@@ -29,10 +39,13 @@ __all__ = [
     "RegisterSpec",
     "allocate",
     "check_lost",
+    "duplicates",
     "ids_in",
     "resolve_file",
     "spec_for",
     "split_entries",
+    "state_dir",
+    "upstream_refs",
 ]
 
 
@@ -75,12 +88,68 @@ def spec_for(path: str | os.PathLike) -> RegisterSpec | None:
     return SPECS.get(pathlib.Path(path).stem.split(".")[0])
 
 
-def state_dir() -> pathlib.Path:
-    return pathlib.Path(
-        os.environ.get(
-            "HOMELABNEXT_IDS_STATE", os.path.expanduser("~/.cache/homelabnext/register_ids")
+STATE_SUBDIR = ("homelabnext", "register_ids")
+
+
+def state_dir(root=None) -> pathlib.Path:
+    """Where lock and high-water files live: ``$HOMELABNEXT_IDS_STATE`` or the git common dir."""
+    override = os.environ.get("HOMELABNEXT_IDS_STATE")
+    if override:
+        return pathlib.Path(override)
+    cwd = pathlib.Path(root or os.getcwd())
+    out = _git(cwd, "rev-parse", "--git-common-dir")
+    if out.returncode:
+        raise IdError("not inside a git work tree (the id lock lives in the git common dir)")
+    return (cwd / out.stdout.strip()).resolve().joinpath(*STATE_SUBDIR)
+
+
+def _secure_state_dir(sd: pathlib.Path) -> None:
+    """Create ``sd`` 0700, then refuse it unless it is a real directory we own, closed to others."""
+    sd.mkdir(mode=0o700, parents=True, exist_ok=True)
+    st = os.lstat(sd)
+    if not stat.S_ISDIR(st.st_mode):
+        raise IdError(f"{sd}: id state path is not a directory (a symlink is refused)")
+    if hasattr(os, "getuid") and st.st_uid != os.getuid():
+        raise IdError(f"{sd}: id state directory is owned by uid {st.st_uid}, not by you")
+    if st.st_mode & 0o077:
+        raise IdError(
+            f"{sd}: id state directory is mode {stat.S_IMODE(st.st_mode):o}; it must be 0700 "
+            f"(chmod 700 {sd})"
         )
-    )
+
+
+def _open_nofollow(path: pathlib.Path, flags: int) -> int:
+    return os.open(str(path), flags | getattr(os, "O_NOFOLLOW", 0), 0o600)
+
+
+def _read_hwm(path: pathlib.Path) -> int:
+    try:
+        fd = _open_nofollow(path, os.O_RDONLY)
+    except FileNotFoundError:
+        return 0
+    except OSError as ex:
+        raise IdError(f"{path}: cannot read the high-water mark ({ex})") from ex
+    with os.fdopen(fd) as f:
+        try:
+            return int(f.read().strip() or 0)
+        except ValueError:
+            return 0  # a torn or garbled mark only loses the cache; the files still set the floor
+
+
+def _write_hwm(path: pathlib.Path, value: int) -> None:
+    """Atomic: write a sibling temp file, fsync, then rename it over the mark."""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    fd = _open_nofollow(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(f"{value}\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 def _anchor(spec: RegisterSpec) -> re.Pattern:
@@ -124,12 +193,30 @@ def repo_root(start=None) -> pathlib.Path:
     return pathlib.Path(out.stdout.strip())
 
 
-def allocate(root, relpath: str, prefix: str, count: int = 1) -> list[str]:
-    """Claim ``count`` ids atomically across every process on this host.
+def upstream_refs(root) -> list[str]:
+    """Refs whose copy of a register bounds the next id: the upstream project's default branch.
 
-    The floor is the max of: the working file, HEAD, the remote default branch refs, and a
-    host-wide high-water mark that records ids a concurrent worktree claimed but has not yet
-    committed. A stale cache can only skip numbers (harmless), never reuse one.
+    ``upstream/main`` (a fork's conventional name for the project) wins when present; otherwise
+    ``origin``'s default branch as recorded in ``refs/remotes/origin/HEAD``, then ``origin/main``
+    and ``origin/master``.  Missing refs are skipped, so a fresh clone or a fork works.
+    """
+    refs = []
+    for ref in ("upstream/main", "upstream/master"):
+        if _rev_exists(root, ref):
+            refs.append(ref)
+    head = _git(root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+    if head.returncode == 0 and head.stdout.strip():
+        refs.append(head.stdout.strip())
+    refs += ["origin/main", "origin/master"]
+    return list(dict.fromkeys(r for r in refs if _rev_exists(root, r)))
+
+
+def allocate(root, relpath: str, prefix: str, count: int = 1) -> list[str]:
+    """Claim ``count`` ids atomically across every process of this user on this repository.
+
+    The floor is the max of: the working file, HEAD, the upstream default branch
+    (:func:`upstream_refs`), and a high-water mark that records ids a concurrent worktree claimed
+    but has not yet committed. A stale cache can only skip numbers (harmless), never reuse one.
     """
     root = pathlib.Path(root)
     spec = spec_for(relpath)
@@ -137,16 +224,19 @@ def allocate(root, relpath: str, prefix: str, count: int = 1) -> list[str]:
         raise IdError(f"{relpath}: unknown register kind ({', '.join(SPECS)})")
     if prefix not in spec.prefixes:
         raise IdError(f"prefix {prefix!r} is not allocatable in {relpath}")
-    sd = state_dir()
-    sd.mkdir(parents=True, exist_ok=True)
+    sd = state_dir(root)
+    _secure_state_dir(sd)
     key = relpath.replace("/", "_") + "." + prefix
     lock_path, hwm_path = sd / f"{key}.lock", sd / f"{key}.hwm"
-    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fd = _open_nofollow(lock_path, os.O_CREAT | os.O_RDWR)
+    except OSError as ex:
+        raise IdError(f"{lock_path}: cannot open the id lock ({ex})") from ex
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         disk = root / relpath
         texts = [disk.read_text() if disk.exists() else ""]
-        for rev in ("HEAD", "origin/main", "origin/master"):
+        for rev in ("HEAD", *upstream_refs(root)):
             t = git_show(root, rev, relpath)
             if t:
                 texts.append(t)
@@ -156,9 +246,8 @@ def allocate(root, relpath: str, prefix: str, count: int = 1) -> list[str]:
                 n = _num(ident, prefix)
                 if n is not None:
                     floor = max(floor, n)
-        with contextlib.suppress(OSError, ValueError):
-            floor = max(floor, int(hwm_path.read_text().strip()))
-        hwm_path.write_text(str(floor + count) + "\n")
+        floor = max(floor, _read_hwm(hwm_path))
+        _write_hwm(hwm_path, floor + count)
         return [f"{prefix}-{n:0{spec.width}d}" for n in range(floor + 1, floor + 1 + count)]
     finally:
         try:
@@ -192,11 +281,14 @@ def _rev_exists(root, rev: str) -> bool:
     return _git(root, "rev-parse", "--verify", "--quiet", rev + "^{commit}").returncode == 0
 
 
-def check_lost(root, relpath: str, allow: set[str] | None = None) -> list[str]:
+def check_lost(
+    root, relpath: str, allow: set[str] | None = None, base: str | None = None
+) -> list[str]:
     """Ids present in a parent commit but absent from the working file.
 
     Parents: HEAD, plus MERGE_HEAD / CHERRY_PICK_HEAD / REBASE_HEAD during conflict resolution
-    (when the id that vanished came from the OTHER side). ``allow`` or the environment variable
+    (when the id that vanished came from the OTHER side). With ``base`` (CI: the pull request's
+    base commit) that revision is the only parent. ``allow`` or the environment variable
     ``REGISTER_IDS_ALLOW_DROP=ID,ID`` waives a deliberate consolidation.
     """
     root = pathlib.Path(root)
@@ -208,7 +300,10 @@ def check_lost(root, relpath: str, allow: set[str] | None = None) -> list[str]:
         return []
     now = set(ids_in(path.read_text(), spec))
     parents: set[str] = set()
-    for rev in ("HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REBASE_HEAD"):
+    revs = (base,) if base else ("HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REBASE_HEAD")
+    if base and not _rev_exists(root, base):
+        raise IdError(f"base revision {base!r} does not exist (fetch it first)")
+    for rev in revs:
         if _rev_exists(root, rev):
             t = git_show(root, rev, relpath)
             if t:
@@ -217,3 +312,16 @@ def check_lost(root, relpath: str, allow: set[str] | None = None) -> list[str]:
         s.strip() for s in os.environ.get("REGISTER_IDS_ALLOW_DROP", "").split(",") if s.strip()
     }
     return sorted(parents - now - waived)
+
+
+def duplicates(text: str, spec: RegisterSpec) -> list[str]:
+    """Allocated ids that occur more than once (``XX-NEW`` placeholders may repeat)."""
+    seen: set[str] = set()
+    dupes: set[str] = set()
+    for ident in ids_in(text, spec):
+        if ident.endswith("-NEW"):
+            continue
+        if ident in seen:
+            dupes.add(ident)
+        seen.add(ident)
+    return sorted(dupes)
