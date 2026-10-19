@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``hnx agent compile|pack``.
+"""``hnx agent compile|verify|pack``.
 
-``compile SPEC --library LIB``  compile a profile spec against a parts library file.
-``pack MANIFEST --inputs FILE`` assemble a context pack and print its hash.
+``compile SPEC --library LIB [--policy POLICY]``  compile a profile spec against a parts library.
+``verify PROFILE --policy POLICY [--lock LOCK]``  check a compiled profile against the policy.
+``pack MANIFEST --inputs FILE``                   assemble a context pack and print its hash.
 
 Library file (YAML or JSON): ``{parts: {<logical id>: <path relative to the file>}}``.
+Policy file: ``{ceilings: {<profile id>: {mcp, capabilities, tier, budgets}}}``, owned and
+reviewed separately from the specs.  Lock file: ``{profiles: {<profile id>: <digest>}}``.
 Exit codes: 0 ok, 1 refused (missing part, ceiling or budget violation, bad input),
 3 (``pack`` only) the pack was assembled but is ``deferred``.
 """
@@ -19,7 +22,7 @@ from typing import Any
 
 from homelabnext.ids import MappingResolver
 
-from .compiler import PartsLibrary, compile_profile
+from .compiler import CeilingPolicy, PartsLibrary, compile_profile, verify_profile
 from .errors import AgentError
 from .pack import assemble_pack
 from .schemas import schema_errors
@@ -50,6 +53,10 @@ def _library(path: str) -> PartsLibrary:
     return PartsLibrary(MappingResolver("parts", mapping), read)
 
 
+def _policy(path: str) -> CeilingPolicy:
+    return CeilingPolicy.from_mapping(_load(path) or {}, source=path)
+
+
 def _emit(doc: dict, out: str | None) -> None:
     text = json.dumps(doc, indent=2, sort_keys=True) + "\n"
     if out:
@@ -65,6 +72,13 @@ def main(argv: list[str]) -> int:
     c.add_argument("spec")
     c.add_argument("--library", required=True)
     c.add_argument("--out")
+    c.add_argument(
+        "--policy", help="ceiling policy file (without it the spec's own ceiling is used)"
+    )
+    v = sub.add_parser("verify", help="check a compiled profile against a ceiling policy")
+    v.add_argument("profile")
+    v.add_argument("--policy", required=True)
+    v.add_argument("--lock", help="reviewed digests: {profiles: {<profile id>: <digest>}}")
     p = sub.add_parser("pack", help="assemble a context pack")
     p.add_argument("manifest")
     p.add_argument("--inputs", required=True)
@@ -72,10 +86,26 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
     try:
         if args.cmd == "compile":
-            profile = compile_profile(_load(args.spec), _library(args.library))
+            policy = _policy(args.policy) if args.policy else None
+            if policy is None:
+                print(
+                    "hnx agent compile: no --policy; the ceiling comes from the spec itself",
+                    file=sys.stderr,
+                )
+            profile = compile_profile(_load(args.spec), _library(args.library), policy=policy)
             _emit(profile, args.out)
             print(f"compiled {profile['id']} {profile['digest']}", file=sys.stderr)
             return 0
+        if args.cmd == "verify":
+            lock = None
+            if args.lock:
+                lock = (_load(args.lock) or {}).get("profiles")
+                if not isinstance(lock, dict):
+                    raise AgentError(f"{args.lock}: expected a 'profiles' mapping of id -> digest")
+            problems = verify_profile(_load(args.profile), policy=_policy(args.policy), lock=lock)
+            for prob in problems:
+                print(f"hnx agent verify: {prob}", file=sys.stderr)
+            return 1 if problems else 0
         manifest = _load(args.manifest)
         errs = schema_errors("agent", "context_manifest", manifest)
         if errs:

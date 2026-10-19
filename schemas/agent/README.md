@@ -14,5 +14,7 @@ Contracts for the agent layer (library: `homelabnext.agent`, guide: `docs/agent.
 output and carries everything needed to audit it.
 
 Rules JSON Schema cannot express are enforced in code and tested: grants subset of ceiling
-(`homelabnext.agent.check_ceiling`), digest equals content (`verify_profile`), unique task ids
+(`homelabnext.agent.check_ceiling`; the ceiling that counts is the separately owned
+`CeilingPolicy`, not the `ceiling` copied into the profile), digest equals content and, with a
+reviewed lock, the pinned digest (`verify_profile`), unique task ids
 (the golden loader), `pack_id` equals the pack hash and must-cite coverage (`validate_report`).

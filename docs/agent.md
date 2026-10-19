@@ -8,7 +8,8 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 ## Why these exist
 
 - A profile is **compiled**, not hand-assembled, so "this agent can never do more than its
-  ceiling" is a property of the compiler rather than a review habit.
+  ceiling" is a property of the compiler rather than a review habit. The ceiling comes from a
+  policy file owned separately from the specs, so editing a spec cannot raise it.
 - A context pack is a **pure function** of a manifest and its inputs, so identical inputs give an
   identical pack and hash. A job log that records the hash can be replayed and audited.
 - An agent never runs blind: a required pre-gate that is missing, stale or failed **defers** the
@@ -43,16 +44,31 @@ documents and the broker table agree (`check_manifest_handlers`).
 ## Profile compiler
 
 ```python
-from homelabnext.agent import PartsLibrary, compile_profile
+from homelabnext.agent import CeilingPolicy, PartsLibrary, compile_profile
 from homelabnext.ids import MappingResolver
 
 library = PartsLibrary(MappingResolver("parts", {"persona:analyst": "personas/analyst.md", ...}),
                        reader=read_text)          # reader(locator) -> str
-profile = compile_profile(spec, library)
+profile = compile_profile(spec, library, policy=CeilingPolicy.from_mapping(policy_doc))
 ```
 
 The spec names a persona, skills, capabilities, a model **role** (never a model id), the MCP
-servers it wants, a tier, budgets and a `ceiling`. The compiler:
+servers it wants, a tier and budgets. The **ceiling** is read from a `CeilingPolicy`:
+
+```yaml
+# policy.yml: owned and reviewed by someone other than the spec authors (CODEOWNERS)
+ceilings:
+  profile:reader: {mcp: [lake], capabilities: [cap:lake-query], tier: read,
+                   budgets: {max_input_tokens: 64000, max_output_tokens: 4000,
+                             max_runtime_s: 900, max_tool_calls: 40}}
+```
+
+A spec may also carry a `ceiling`; with a policy it may only narrow the policy's entry, and a
+profile id with no entry is refused. Without a policy the compiler falls back to the spec's own
+`ceiling` (and `hnx agent compile` says so): that output is self-consistent but bounded by
+nothing the spec author could not change, so do not rely on it for least privilege.
+
+The compiler:
 
 1. resolves every logical id through the library and reports **all** missing ids together
    (`MissingPartError`), never skipping one;
@@ -63,10 +79,17 @@ servers it wants, a tier, budgets and a `ceiling`. The compiler:
 5. records `provenance`: each part's id, source and content digest, plus the digest of the
    normalised spec;
 6. sets `digest` to the sha256 of the canonical JSON of everything else, and validates the result
-   against its own schema. `verify_profile` re-checks schema, ceiling, budgets and digest on a
-   profile you did not just compile.
+   against its own schema.
 
-Raising a ceiling is a reviewed change to the spec, never a compiler option.
+`verify_profile(profile, policy=..., lock=...)` re-checks a profile you did not just compile:
+schema, digest, and grants and budgets **against the policy's ceiling** (the ceiling stored in
+the profile may not be wider). The digest only proves the content was not changed *without
+recomputing it*; anyone can recompute a sha256. To pin the reviewed profile, commit a lock file
+next to the policy, `{profiles: {<profile id>: <digest>}}`, and pass it as `lock`: a profile whose
+digest is not the pinned one is refused. Without `policy`, `verify_profile` checks the profile
+against its own stored ceiling, which proves internal consistency only.
+
+Raising a ceiling is a reviewed change to the policy file, never a compiler option.
 
 ## Context-pack assembler
 
@@ -136,12 +159,14 @@ decision) is the conformance input for any broker implementation: run the same r
 ## Command line
 
 ```
-hnx agent compile SPEC --library LIBRARY.yml [--out profile.json]
+hnx agent compile SPEC --library LIBRARY.yml --policy POLICY.yml [--out profile.json]
+hnx agent verify PROFILE --policy POLICY.yml [--lock profiles.lock]
 hnx agent pack MANIFEST --inputs INPUTS.json [--out pack.json]
 ```
 
 `LIBRARY.yml` is `{parts: {<logical id>: <path relative to the file>}}`; paths may not escape its
-directory. `compile` exits 1 on a missing part, ceiling or budget violation. `pack` prints the
+directory. `compile` exits 1 on a missing part, ceiling or budget violation; `verify` exits 1 on
+any problem, including a digest that is not the one in the lock. `pack` prints the
 hash and status on stderr and exits 0 when ready, **3 when deferred**, 1 on invalid input.
 Install the extra with `pip install 'homelabnext[agent]'`.
 

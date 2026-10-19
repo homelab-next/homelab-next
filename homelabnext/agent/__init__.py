@@ -9,6 +9,7 @@ resolver, nothing here touches a network or a model.  Contracts: ``schemas/agent
 from .compiler import (
     BUDGET_KEYS,
     TIER_RANK,
+    CeilingPolicy,
     Part,
     PartsLibrary,
     check_budgets,
@@ -28,6 +29,7 @@ __all__ = [
     "TIER_RANK",
     "AgentError",
     "BudgetError",
+    "CeilingPolicy",
     "CeilingViolation",
     "MissingPartError",
     "Part",

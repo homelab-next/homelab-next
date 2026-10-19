@@ -189,3 +189,77 @@ def test_verify_profile_catches_tampering():
     t = copy.deepcopy(p)
     del t["provenance"]
     assert verify_profile(t)
+
+
+# ---- ceilings from a separately owned policy (security review: a self-declared ceiling is no bound)
+POLICY = {
+    "ceilings": {
+        "profile:reader": {
+            "mcp": ["lake"],
+            "capabilities": ["cap:lake-query"],
+            "tier": "read",
+            "budgets": {
+                "max_input_tokens": 64000,
+                "max_output_tokens": 4000,
+                "max_runtime_s": 900,
+                "max_tool_calls": 40,
+            },
+        }
+    }
+}
+
+
+def _policy():
+    from homelabnext.agent import CeilingPolicy
+
+    return CeilingPolicy.from_mapping(copy.deepcopy(POLICY))
+
+
+def test_spec_cannot_raise_its_own_ceiling_past_the_policy():
+    s = spec()
+    s["mcp"].append("records")  # within the spec's own ceiling, outside the policy
+    compile_profile(s, library())  # self-declared ceiling: accepted
+    with pytest.raises(CeilingViolation) as exc:
+        compile_profile(s, library(), policy=_policy())
+    assert any("mcp outside ceiling: ['records']" in p for p in exc.value.problems)
+
+
+def test_policy_needs_an_entry_and_spec_ceiling_is_optional():
+    s = spec()
+    del s["ceiling"]
+    s["ceiling"] = POLICY["ceilings"]["profile:reader"]
+    p = compile_profile(s, library(), policy=_policy())
+    assert verify_profile(p, policy=_policy()) == []
+    del s["ceiling"]
+    assert compile_profile(s, library(), policy=_policy())["ceiling"]["tier"] == "read"
+    s["id"] = "profile:other"
+    with pytest.raises(CeilingViolation, match="no ceiling for profile:other"):
+        compile_profile(s, library(), policy=_policy())
+
+
+def test_verify_uses_the_policy_not_the_profiles_own_ceiling():
+    from homelabnext.agent import profile_digest
+
+    p = compile_profile(spec(), library())  # spec ceiling is wider than the policy
+    forged = copy.deepcopy(p)
+    forged["grants"]["mcp"] = ["lake", "records"]
+    forged["digest"] = profile_digest(forged)  # recomputed: internally consistent
+    assert verify_profile(forged) == []
+    probs = verify_profile(forged, policy=_policy())
+    assert any("mcp outside ceiling" in x for x in probs)
+    assert any(x.startswith("ceiling wider than the policy") for x in probs)  # stored ceiling wider than policy
+
+
+def test_lock_pins_the_reviewed_digest():
+    from homelabnext.agent import profile_digest
+
+    s = spec()
+    del s["ceiling"]
+    p = compile_profile(s, library(), policy=_policy())
+    lock = {p["id"]: p["digest"]}
+    assert verify_profile(p, policy=_policy(), lock=lock) == []
+    edited = copy.deepcopy(p)
+    edited["budgets"]["max_runtime_s"] = 10
+    edited["digest"] = profile_digest(edited)
+    assert any("not the reviewed" in x for x in verify_profile(edited, policy=_policy(), lock=lock))
+    assert any("not in the lock" in x for x in verify_profile(p, policy=_policy(), lock={}))
