@@ -85,10 +85,12 @@ ALLOWED_EMAIL_DOMAINS = (
     "users.noreply.github.com",
 )
 # Exact addresses (not domains) that are public by construction, e.g. co-author trailers.
-ALLOWED_EMAIL_ADDRESSES = ("noreply@anthropic.com",)
+# Fixed service addresses that tools write into commits (a co-author trailer, Dependabot's
+# sign-off); other addresses at the same domains still count.
+ALLOWED_EMAIL_ADDRESSES = ("noreply@anthropic.com", "support@github.com")
 # Commit identities that are public by construction.
 NOREPLY_COMMIT_RE = re.compile(
-    r"(?i)^(?:[\w.+-]+@users\.noreply\.github\.com|noreply@github\.com)$"
+    r"(?i)^(?:[\w.+-]+(?:\[bot\])?@users\.noreply\.github\.com|noreply@github\.com)$"
 )
 # Well-known public anycast resolvers: public, but not anybody's infrastructure.
 PUBLIC_RESOLVERS = frozenset(

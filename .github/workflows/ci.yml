@@ -180,7 +180,7 @@ jobs:
           fi
 
   # Developer Certificate of Origin: every non-merge commit of a pull request carries a
-  # Signed-off-by trailer for its author (CONTRIBUTING.md, ground rule 1).
+  # Signed-off-by trailer for its author (CONTRIBUTING.md, ground rule 1); GitHub App bots are exempt.
   dco:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -199,6 +199,10 @@ jobs:
           bad=0
           for c in $(git rev-list --no-merges "$BASE..$HEAD_SHA"); do
             author=$(git log -1 --format='%ae' "$c")
+            # GitHub App bots (Dependabot) cannot certify the DCO; the maintainer who merges does.
+            if [[ "$author" =~ ^[0-9]+\+[a-z0-9-]+\[bot\]@users\.noreply\.github\.com$ ]]; then
+              continue
+            fi
             if ! git log -1 --format='%(trailers:key=Signed-off-by,valueonly)' "$c" \
                  | grep -qiF "<$author>"; then
               echo "::error::commit $(git log -1 --format=%h "$c") has no Signed-off-by for its author (git commit -s)"
