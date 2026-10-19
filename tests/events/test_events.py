@@ -368,7 +368,7 @@ def test_http_status_mapping():
 def test_http_forwarder_refuses_credentials_over_plaintext():
     with pytest.raises(ValueError, match="plaintext"):
         HttpForwarder("http://forwarder.example.invalid/e", auth=lambda: "Bearer t")
-    HttpForwarder("http://127.0.0.1:9/e", auth=lambda: "Bearer t")  # loopback is fine
+    HttpForwarder("http://localhost:9/e", auth=lambda: "t")  # no-raw-endpoint: allow loopback
     HttpForwarder("http://forwarder.example.invalid/e", auth=lambda: "t", allow_plaintext=True)
     f = HttpForwarder("https://forwarder.example.invalid/e", auth=lambda: "Bearer t")
     assert f.build_request(task_event()).get_header("Authorization") == "Bearer t"

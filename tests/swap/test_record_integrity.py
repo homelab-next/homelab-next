@@ -11,15 +11,15 @@ import copy
 import json
 
 import pytest
-from support import ROOT
+from support import GOLDEN, ROOT
 
 from homelabnext.swap import record as R
 
-EX = ROOT / "schemas" / "platform" / "examples"
+EX = ROOT / "schemas" / "platform" / "examples"  # v1.0 documents (no state digests)
 
 
-def _doc(label="active"):
-    return json.loads((EX / f"swap_record.{label}.json").read_text())
+def _doc(label="active", where=GOLDEN):
+    return json.loads((where / f"swap_record.{label}.json").read_text())
 
 
 @pytest.fixture(autouse=True)
@@ -46,6 +46,21 @@ def test_forged_steps_without_transitions_are_reported():
     probs = R.problems(t)
     assert any("step-passed transitions" in p for p in probs), probs
     assert any("differ from the state the last transition recorded" in p for p in probs), probs
+
+
+@pytest.mark.parametrize("label", ["active", "closed", "rolled-back"])
+def test_v1_0_records_still_verify_and_forged_steps_are_still_caught(label):
+    t = _doc(label, EX)
+    assert "state" not in t["transitions"][-1]
+    assert R.problems(t) == []
+    if label == "active":
+        s = next(x for x in t["steps"] if x["name"] == "soak")
+        s.update(status="passed", finished_at="2026-04-01T09:00:00Z", attempts=1)
+        s["evidence"] = [
+            {"kind": "x", "ref": "f.json", "sha256": "sha256:" + "a" * 64, "summary": "f"}
+        ]
+        t["current_step"] = "cutover"
+        assert any("step-passed transitions" in p for p in R.record_problems(t))
 
 
 def test_truncated_chain_is_reported():

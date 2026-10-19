@@ -24,6 +24,8 @@ from homelabnext.notify import Message
 from homelabnext.notify.core import SendError
 from homelabnext.notify.senders import NtfySender
 
+LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow test servers bind loopback only
+
 
 class _Server:
     """A loopback server; ``routes`` maps path -> (status, headers, body); records auth seen."""
@@ -47,12 +49,12 @@ class _Server:
             def log_message(self, *a):
                 pass
 
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.httpd = ThreadingHTTPServer((LOOPBACK, 0), H)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
     @property
     def url(self):
-        return f"http://127.0.0.1:{self.httpd.server_address[1]}"
+        return f"http://{LOOPBACK}:{self.httpd.server_address[1]}"
 
     def close(self):
         self.httpd.shutdown()
@@ -79,7 +81,7 @@ def test_check_plaintext():
     check_plaintext("http://n.example.internal/x", credentials=False, allow_plaintext=False)
     check_plaintext("http://n.example.internal/x", credentials=True, allow_plaintext=True)
     check_plaintext("https://n.example.internal/x", credentials=True, allow_plaintext=False)
-    for host in ("127.0.0.1", "localhost", "[::1]"):
+    for host in (LOOPBACK, "localhost", "[::1]"):  # no-raw-endpoint: allow loopback literals
         check_plaintext(f"http://{host}:8080/x", credentials=True, allow_plaintext=False)
 
 
