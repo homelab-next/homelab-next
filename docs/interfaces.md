@@ -250,9 +250,9 @@ SwapRunner.create(record_path, backend, *, swap_id, capability, from_adapter, to
     .status() / .record() / .note(text)
 plan_flip(registry_doc, service, host=..., port=..., impl=..., version=...) -> FlipPlan ; flip_text(text, plan)
 DualWriter(primary, secondary) ; Retired(...) ; scan(roots, retired, registry=..., allow=...) -> list[Finding]
-# homelabnext.swap.record: new_record/load/save/problems/verify_evidence/dumps (hash-chained transition log;
-#   schema platform/swap_record 1.0).  homelabnext.swap.events.step_events(record, *, source=None) -> list[event]
-#   turns the transition log into homelabnext.swap.step events (schema events/swap.step 1.1).
+# homelabnext.swap.record: new_record/load/save/problems/verify_evidence/dumps/head/verify_anchor (hash-chained
+#   transition log with state digests, optional HMAC key via HNX_SWAP_CHAIN_KEY; schema platform/swap_record 1.1).
+#   homelabnext.swap.events.step_events(record, *, source=None) -> list[event] turns the transition log into homelabnext.swap.step events (schema events/swap.step 1.1).
 
 # homelabnext.parity   (core; no sub-command)
 compare_tables(left, right, tables, *, sample=None, min_rows=0) -> ParityReport
@@ -279,7 +279,8 @@ CAPABILITIES (fourteen) / EXTENDED (backup, dns, edge) ; ConformError (misconfig
   same checks that prove a fake prove the real thing. A capability with no passing suite (invariant X-10) has
   nothing to prove a swap against.
 * **Evidence is files.** Every step writes an evidence file under `<swap-id>.evidence/`; the record stores
-  its hash, and `hnx swap record --verify` recomputes the chain. Parity reports enter as evidence by digest.
+  its hash, and `hnx swap record --verify` recomputes the chain (see docs/swap.md for what that does and
+  does not prove). Parity reports enter as evidence by digest.
 * **Events.** `homelabnext.swap.events.step_events` renders the record as `homelabnext.swap.step` events
   (steps 1..9 named as in the record; `events/swap.step` 1.1 added those names additively, 1.0 names stay
   valid). Publishing is the caller's job (the event bus is itself a capability).
