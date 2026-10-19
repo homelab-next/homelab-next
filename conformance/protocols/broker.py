@@ -2,9 +2,18 @@
 """Contract for ``broker``: allowlisted commands for named callers, with an audit trail.
 
 Callers never get a shell; they get ``call(caller, command, args)``.  A command exists only if
-registered with an argument schema; a caller may run only what its allowlist names; arguments
-are validated *before* the handler runs; every call - allowed, denied, failed - leaves one audit
-record; arguments the schema marks ``secret`` never appear in the audit record or in results.
+registered with an argument schema; a caller may run only the commands its allowlist names
+(per command: being allowed one command grants nothing else); arguments are validated *before*
+the handler runs; every call - allowed, denied, invalid, failed - leaves one audit record;
+arguments the schema marks ``secret`` never appear in any audit record, whatever the outcome, nor
+in anything ``call`` raises.  Redaction follows the schema's ``secret`` flag, not the argument's
+name.  A handler failure surfaces as ``BrokerError`` naming the command only: the handler's own
+exception (message, cause, context) is not passed to the caller.
+
+``ArgSpec`` checks *shape* (presence and type), not *content*.  A value that passed validation is
+still untrusted caller input: a ``str`` argument can hold ``../``, ``;``, a newline or a flag.
+The handler is the trust boundary - it must treat every argument as hostile (no shell, no string
+building of commands or paths without its own allowlist or pattern).
 """
 
 from __future__ import annotations

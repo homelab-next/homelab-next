@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The suite format: severities, skips, waivers, fresh subjects, never-raising checks."""
 
+import sys
+
 import pytest
 
 from homelabnext.conform import CheckResult, Skip, Suite, run_checks
@@ -33,7 +35,7 @@ def _suite():
     def _(x):
         raise KeyError("boom")
 
-    @s.check("skips", "raises Skip")
+    @s.check("skips", "raises Skip", skippable=True)
     def _(x):
         raise Skip("not here")
 
@@ -150,3 +152,88 @@ def test_check_result_validates_its_fields():
 def test_only_selects_checks():
     res = run_checks(_suite(), Subject, only=["passes"])
     assert [r.check for r in res] == ["passes"]
+
+
+# defined under another file name, as an adapter module would be
+_ns: dict = {"Skip": Skip}
+exec(
+    compile(
+        "class SkippingSubject:\n"
+        "    features = frozenset()\n"
+        "    def do(self):\n"
+        "        raise Skip('backend busy')\n",
+        "<adapter>",
+        "exec",
+    ),
+    _ns,
+)
+SkippingSubject = _ns["SkippingSubject"]
+
+
+def test_only_the_suite_may_skip_a_check():
+    s = Suite("d", "d")
+
+    @s.check("skippable-but-subject-skips", "x", skippable=True)
+    def _(x):
+        x.do()
+
+    @s.check("not-skippable", "x")
+    def _(x):
+        raise Skip("the suite itself, but undeclared")
+
+    @s.check("subject-skips-plain", "x")
+    def _(x):
+        x.do()
+
+    res = by_id(run_checks(s, SkippingSubject))
+    for cid in ("skippable-but-subject-skips", "not-skippable", "subject-skips-plain"):
+        assert res[cid].status == "fail" and not res[cid].ok, (cid, res[cid])
+    assert "subject raised Skip" in res["skippable-but-subject-skips"].evidence
+    assert "not skippable" in res["not-skippable"].evidence
+
+
+def test_a_must_needing_an_undeclared_test_hook_is_untested_not_skipped():
+    s = Suite("d", "d")
+    s.check("needs-clock", "x", requires=["clock-control"])(lambda x: None)
+    s.check("needs-faults-soft", "x", requires=["fault-injection"], severity="should")(
+        lambda x: None
+    )
+    s.check("needs-product-feature", "x", requires=["streaming"])(lambda x: None)
+    res = by_id(run_checks(s, object))
+    assert res["needs-clock"].status == "untested" and not res["needs-clock"].ok
+    assert res["needs-faults-soft"].status == "skip"  # a SHOULD may still skip
+    assert res["needs-product-feature"].status == "skip"  # product features may be absent
+    declared = by_id(run_checks(s, object, features=["clock-control"]))
+    assert declared["needs-clock"].status == "pass"
+
+
+def test_unknown_only_ids_are_a_misconfiguration():
+    with pytest.raises(ValueError, match="no check"):
+        run_checks(_suite(), Subject, only=["passes", "no-such-id"])
+
+
+def test_specs_say_whether_a_check_can_skip():
+    specs = {sp.id: sp for sp in _suite().specs}
+    assert specs["skips"].can_skip and specs["needs-feature"].can_skip
+    assert not specs["passes"].can_skip
+
+
+def test_subject_raised_skip_counts_against_minimum(monkeypatch, tmp_path):
+    """A subject that skips everything is a failing run, not 'PASS, 0 executed'."""
+    from homelabnext.conform import run_capability
+
+    mod = tmp_path / "skipping_idp.py"
+    mod.write_text(
+        "from homelabnext.conform.core import Skip\n"
+        "class S:\n"
+        "    features = frozenset()\n"
+        "    def issue(self, *a, **k):\n"
+        "        raise Skip('busy')\n"
+        "    verify = revoke = issue\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    t = tmp_path / "t.yml"
+    t.write_text("capabilities:\n  idp: {adapter: 'skipping_idp:S'}\n")
+    run = run_capability("idp", str(t))
+    assert not run.ok and run.executed and all(r.status == "fail" for r in run.results)
+    sys.modules.pop("skipping_idp", None)

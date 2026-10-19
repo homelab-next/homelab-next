@@ -70,6 +70,14 @@ class FakeConsumer:
     def dead_letters(self) -> list[Delivery]:
         return list(self._dead)
 
+    def _reopen(self) -> None:
+        """A restart: whatever was fetched but not settled becomes deliverable again."""
+        pending = sorted(self._in_flight)
+        self._in_flight.clear()
+        by_seq = {m.seq: m for m in self._redeliver}
+        by_seq.update({s: self.bus._log[s - 1] for s in pending})
+        self._redeliver = [by_seq[s] for s in sorted(by_seq)]
+
 
 class FakeEventBus:
     features = frozenset({"wildcards"})
@@ -93,7 +101,9 @@ class FakeEventBus:
 
     def consumer(self, name: str, subject: str, *, max_deliver: int = 3) -> FakeConsumer:
         if name in self._consumers:
-            return self._consumers[name]
+            c = self._consumers[name]
+            c._reopen()
+            return c
         c = self.consumer_class(self, name, subject, max_deliver, len(self._log) + 1)
         self._consumers[name] = c
         return c
@@ -108,3 +118,35 @@ class BrokenDlqEventBus(FakeEventBus):
     """Exhausted messages are discarded instead of dead-lettered."""
 
     consumer_class = _DroppingConsumer
+
+
+class _ForgetfulConsumer(FakeConsumer):
+    def _reopen(self) -> None:  # unsettled deliveries are lost on restart
+        self._in_flight.clear()
+
+
+class LosesUnsettledEventBus(FakeEventBus):
+    """Fetched-but-unsettled messages are lost when the consumer is reopened (at-most-once)."""
+
+    consumer_class = _ForgetfulConsumer
+
+
+class RestartsAtTailEventBus(FakeEventBus):
+    """Reopening a durable consumer starts a fresh one at the end of the log."""
+
+    def consumer(self, name: str, subject: str, *, max_deliver: int = 3) -> FakeConsumer:
+        c = self.consumer_class(self, name, subject, max_deliver, len(self._log) + 1)
+        self._consumers[name] = c
+        return c
+
+
+class _ResettlingConsumer(FakeConsumer):
+    def _settle(self, msg: _Msg, delivery: Delivery, how: str) -> None:
+        self._in_flight.add(msg.seq)  # every settlement counts, not only the first
+        super()._settle(msg, delivery, how)
+
+
+class DoubleSettleEventBus(FakeEventBus):
+    """A second nack (or a nack after an ack) queues the message again."""
+
+    consumer_class = _ResettlingConsumer

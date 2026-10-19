@@ -4,10 +4,11 @@
     hnx conform list [--all] [--json]      (also: hnx conform --list)
     hnx conform run CAPABILITY|all [--target NAME] [--check ID ...] [--strict] [--json] [--out FILE]
     hnx conform mutants [CAPABILITY|all] [--json]
-    hnx conform report [--target NAME] [--json] [--no-mutants]
+    hnx conform report [--target NAME] [--json] [--out FILE] [--no-mutants]
 
-Exit codes: 0 ok, 1 a check failed (or a capability has no passing test), 2 misconfiguration,
-100 the run could not be measured (a subject could not be built).
+Exit codes: 0 ok, 1 a check failed, too few checks executed (or a capability has no passing
+test), 2 misconfiguration (including an unknown ``--check`` id), 100 the run could not be
+measured (a subject could not be built).
 """
 
 from __future__ import annotations
@@ -63,10 +64,18 @@ def _human_run(run: CapabilityRun, verbose: bool) -> str:
     ]
     if run.error:
         lines.append(f"  ERROR {run.error}")
+    if run.too_few:
+        lines.append(f"  FAIL {run.too_few}")
     for r in run.results:
         if r.status == "pass" and not verbose:
             continue
-        tag = {"pass": "ok", "fail": "FAIL", "skip": "skip", "waived": "waived"}[r.status]
+        tag = {
+            "pass": "ok",
+            "fail": "FAIL",
+            "skip": "skip",
+            "waived": "waived",
+            "untested": "UNTESTED",
+        }[r.status]
         sev = "" if r.severity == "must" else " (should)"
         lines.append(f"  [{tag}] {r.check}{sev}: {r.evidence}")
     return "\n".join(lines)
@@ -74,7 +83,16 @@ def _human_run(run: CapabilityRun, verbose: bool) -> str:
 
 def _cmd_run(args: argparse.Namespace) -> int:
     caps = list(CAPABILITIES) if args.capability == "all" else [args.capability]
-    runs = [run_capability(c, args.target, args.root, only=args.check or None) for c in caps]
+    selection: dict[str, list[str] | None] = dict.fromkeys(caps)
+    if args.check:
+        wanted = list(dict.fromkeys(args.check))
+        known = {c: set(load_suite(c, args.root).ids()) for c in caps}
+        unknown = [i for i in wanted if not any(i in ids for ids in known.values())]
+        if unknown:
+            raise ConformError(f"unknown check id(s) for {args.capability}: {', '.join(unknown)}")
+        selection = {c: [i for i in wanted if i in known[c]] for c in caps}
+        selection = {c: ids for c, ids in selection.items() if ids}
+    runs = [run_capability(c, args.target, args.root, only=ids) for c, ids in selection.items()]
     if args.json or args.out:
         doc = {"target": args.target, "runs": [r.to_dict() for r in runs]}
         if args.out:
@@ -119,6 +137,8 @@ def _cmd_mutants(args: argparse.Namespace) -> int:
 
 def _cmd_report(args: argparse.Namespace) -> int:
     rep = build_report(args.root, args.target, mutants=False if args.no_mutants else None)
+    if args.out:
+        Path(args.out).write_text(json.dumps(rep, indent=2, sort_keys=True) + "\n")
     if args.json:
         _print_json(rep)
     else:
@@ -153,6 +173,7 @@ def _parser() -> argparse.ArgumentParser:
     rp = sub.add_parser("report", help="capabilities without a passing conformance test")
     rp.add_argument("--target", default="fake")
     rp.add_argument("--json", action="store_true")
+    rp.add_argument("--out", help="also write the JSON report to this file")
     rp.add_argument("--no-mutants", action="store_true", help="skip the mutation requirement")
     return p
 

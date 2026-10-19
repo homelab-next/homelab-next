@@ -89,3 +89,47 @@ class LeakyErrorSecretStore(FakeSecretStore):
             FakeSecretStore._check_path(path, data)
         except InvalidPath as exc:
             raise InvalidPath(f"{exc}; rejected payload {dict(data or {})!r}") from None
+
+
+class ChainedLeakSecretStore(FakeSecretStore):
+    """Defect: the error's message is clean but it is raised *from* one carrying the values."""
+
+    @staticmethod
+    def _check_path(path, data=None):
+        try:
+            FakeSecretStore._check_path(path, data)
+        except InvalidPath:
+            try:
+                raise ValueError(f"validation context: payload={dict(data or {})}")
+            except ValueError as inner:
+                raise InvalidPath(f"invalid secret path {path!r}") from inner
+
+
+class NeverExpiringSecretStore(FakeSecretStore):
+    """Defect: a lease stays valid after its ttl (only revocation ends it)."""
+
+    def lease_valid(self, lease_id: str) -> bool:
+        item = self._leases.get(lease_id)
+        return item is not None and not item[1]
+
+
+class UnknownLeaseValidSecretStore(FakeSecretStore):
+    """Defect: a lease id the store never issued is reported valid."""
+
+    def lease_valid(self, lease_id: str) -> bool:
+        if lease_id not in self._leases:
+            return True
+        return super().lease_valid(lease_id)
+
+
+class NegativeTtlSecretStore(FakeSecretStore):
+    """Defect: only a zero ttl is refused; a negative one makes an already-expired lease."""
+
+    def lease(self, path: str, ttl: float) -> Lease:
+        if ttl == 0:
+            raise LeaseError("ttl must be positive")
+        sec = self.get(path)
+        self._n += 1
+        lease = Lease(f"lease-{self._n}", path, self._clock() + ttl, dict(sec.data))
+        self._leases[lease.id] = (lease, False)
+        return lease

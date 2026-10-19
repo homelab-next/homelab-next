@@ -23,23 +23,28 @@ def tree(tmp_path):
     return tmp_path
 
 
-def canned(rc, payload):
+def canned(rc, payload, stdout=""):
+    """A fake ``ctx.run``: writes ``payload`` to the --out file, prints ``stdout``."""
     seen = []
 
     def run(argv, timeout=120):
         seen.append(list(argv))
-        text = payload if isinstance(payload, str) else json.dumps(payload)
-        return rc, text
+        if payload is not None:
+            text = payload if isinstance(payload, str) else json.dumps(payload)
+            Path(argv[argv.index("--out") + 1]).write_text(text)
+        return rc, stdout
 
     run.seen = seen
     return run
 
 
 GOOD = {
+    "schema": "homelabnext.conform.report/1",
     "capabilities_without_passing_test": [],
     "capabilities": {"secrets": {"passing": True}, "events": {"passing": True}},
 }
 BAD = {
+    "schema": "homelabnext.conform.report/1",
     "capabilities_without_passing_test": ["events"],
     "capabilities": {
         "secrets": {"passing": True},
@@ -53,7 +58,7 @@ def test_pass_fixture(tmp_path):
     r = x10.x10(Context(tree(tmp_path), run))
     assert r.status == PASS and "2 capabilities" in r.evidence
     argv = run.seen[0]
-    assert argv[1:4] == ["-m", "homelabnext.cli", "conform"] and "--json" in argv
+    assert argv[1:4] == ["-m", "homelabnext.cli", "conform"] and "--out" in argv
     assert argv[argv.index("--root") + 1] == str(tmp_path)
 
 
@@ -75,6 +80,12 @@ def test_skip_when_the_tree_has_no_suites(tmp_path):
         (2, "hnx conform: needs a source checkout"),
         (0, "not json at all"),
         (0, {"x": 1}),
+        (0, {**GOOD, "schema": "something-else/1"}),
+        (0, {k: v for k, v in GOOD.items() if k != "schema"}),
+        (0, None),
+        (1, GOOD),  # exit 1 but nothing missing: the report and the exit code disagree
+        (0, BAD),  # exit 0 but capabilities missing
+        (0, json.dumps(GOOD) + "\n{}"),  # a second document after the report
     ],
 )
 def test_could_not_measure_is_error_never_pass_or_fail(tmp_path, rc, payload):
@@ -82,8 +93,19 @@ def test_could_not_measure_is_error_never_pass_or_fail(tmp_path, rc, payload):
     assert r.status == ERROR
 
 
-def test_parser_tolerates_leading_noise():
-    assert x10._parse("warning: x\n" + json.dumps(GOOD))["capabilities_without_passing_test"] == []
+def test_parser_accepts_only_a_whole_report():
+    assert x10._parse(json.dumps(GOOD))["capabilities_without_passing_test"] == []
+    assert x10._parse("warning: x\n" + json.dumps(GOOD)) is None
+
+
+def test_a_json_banner_on_stdout_cannot_spoof_the_report(tmp_path):
+    """An adapter that prints a clean-looking report while the real run fails is not a pass."""
+    banner = '{"capabilities_without_passing_test": [], "capabilities": {}}'
+    root = tree(tmp_path)
+    r = x10.x10(Context(root, canned(1, None, stdout=banner)))
+    assert r.status == ERROR
+    r = x10.x10(Context(root, canned(1, BAD, stdout=banner + json.dumps(GOOD))))
+    assert r.status == FAIL and "events" in r.evidence
 
 
 def test_target_comes_from_the_environment(tmp_path, monkeypatch):

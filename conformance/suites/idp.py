@@ -3,17 +3,59 @@
 
 from __future__ import annotations
 
-from conformance.fakes.identity import FakeIdentityProvider, UnsignedIdentityProvider
-from conformance.protocols.idp import Forbidden, InvalidToken
-from homelabnext.conform.core import Mutant, Skip, Suite
+import base64
+import json
+import string
 
-from ._util import raises, uniq
+from conformance.fakes.identity import (
+    AlgNoneIdentityProvider,
+    DecodedSignatureIdentityProvider,
+    FakeIdentityProvider,
+    NoExpiryIdentityProvider,
+    UnsignedIdentityProvider,
+)
+from conformance.protocols.idp import Forbidden, InvalidToken
+from homelabnext.conform.core import Mutant, Suite
+
+from ._util import expires, raises, uniq
 
 SUITE = Suite(
     "idp",
     "issue/verify short-lived bearer tokens; forged, expired, revoked and garbage tokens fail",
     "conformance.protocols.idp:IdentityProvider",
 )
+
+# The structural forgeries below run on every token shape and never skip: a token with dots is
+# treated as ``[header.]payload.signature`` (JWT and compact HMAC tokens), one without dots as an
+# opaque string, for which the same intent is applied to its halves.
+
+_URL = string.ascii_uppercase + string.ascii_lowercase + string.digits + "-_"
+_STD = string.ascii_uppercase + string.ascii_lowercase + string.digits + "+/"
+
+
+def _b64(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _flip_last(tok: str) -> str:
+    """Change the last character so that a *significant* bit of the signature changes.
+
+    The low bits of a final base64 character can be padding that decoders ignore; flipping the
+    top bit of its 6-bit value always changes the decoded bytes."""
+    c = tok[-1]
+    for alpha in (_URL, _STD):
+        if c in alpha:
+            return tok[:-1] + alpha[alpha.index(c) ^ 32]
+    return tok[:-1] + ("A" if c != "A" else "B")
+
+
+def _splice(a: str, b: str) -> str:
+    """``a`` with the payload of ``b``: every part of ``a`` except the second-to-last."""
+    pa, pb = a.split("."), b.split(".")
+    if len(pa) >= 2 and len(pa) == len(pb):
+        return ".".join([*pa[:-2], pb[-2], pa[-1]])
+    half = len(a) // 2
+    return b[:half] + a[half:]
 
 
 @SUITE.check("issue-verify-roundtrip", "verify returns the subject and scopes that were issued")
@@ -50,19 +92,59 @@ def _(p):
 def _(p):
     a = p.issue(uniq("alice"), ["read"], 60)
     b = p.issue(uniq("mallory"), ["admin"], 60)
-    if a.count(".") != 1:
-        raise Skip("tokens are opaque (no payload.signature structure)")
-    forged = b.split(".")[0] + "." + a.split(".")[1]
-    raises(lambda: p.verify(forged), "spliced token", InvalidToken)
+    for forged in (_splice(a, b), _splice(b, a)):
+        raises(lambda f=forged: p.verify(f), "spliced token", InvalidToken)
 
 
-@SUITE.check("unsigned-token-rejected", "a payload with no signature is not a token")
+@SUITE.check("unsigned-token-rejected", "a token with its signature emptied or removed is invalid")
 def _(p):
     tok = p.issue(uniq("user"), ["read"], 60)
-    if tok.count(".") != 1:
-        raise Skip("tokens are opaque (no payload.signature structure)")
-    raises(lambda: p.verify(tok.split(".")[0] + "."), "unsigned token", InvalidToken)
-    raises(lambda: p.verify(tok.split(".")[0]), "payload only", InvalidToken)
+    parts = tok.split(".")
+    if len(parts) >= 2:
+        body = ".".join(parts[:-1])
+        forged = [body + ".", body, parts[-2], parts[-2] + "."]
+    else:
+        forged = [tok[: len(tok) // 2], tok + ".", "." + tok]
+    for f in forged:
+        raises(lambda x=f: p.verify(x), f"unsigned form {f[-12:]!r}", InvalidToken)
+
+
+@SUITE.check(
+    "signature-tamper-rejected",
+    "flipping a significant bit of the last signature character, or dropping it, invalidates",
+)
+def _(p):
+    tok = p.issue(uniq("user"), ["read"], 60)
+    for bad in (_flip_last(tok), tok[:-1]):
+        raises(lambda b=bad: p.verify(b), f"tampered ending {bad[-6:]!r}", InvalidToken)
+
+
+@SUITE.check(
+    "alg-none-rejected",
+    "a JWT with alg 'none' (any spelling) or an empty signature is never accepted",
+)
+def _(p):
+    who = uniq("user")
+    tok = p.issue(who, ["read"], 60)
+    parts = tok.split(".")
+    payloads = [
+        _b64(
+            json.dumps(
+                {"sub": who, "scp": ["admin"], "iat": 0, "exp": 4_102_444_800, "jti": "forged"}
+            ).encode()
+        )
+    ]
+    if len(parts) == 3:
+        payloads.append(parts[1])
+    for alg in ("none", "None", "NONE", "nOnE", ""):
+        header = _b64(json.dumps({"alg": alg, "typ": "JWT"}).encode())
+        for payload in payloads:
+            for forged in (
+                f"{header}.{payload}.",
+                f"{header}.{payload}",
+                f"{header}.{payload}.{parts[-1]}",
+            ):
+                raises(lambda f=forged: p.verify(f), f"alg={alg!r} token", InvalidToken)
 
 
 @SUITE.check("garbage-is-invalid-not-a-crash", "empty and nonsense strings raise InvalidToken only")
@@ -73,14 +155,20 @@ def _(p):
 
 @SUITE.check(
     "expired-token-rejected",
-    "a token is invalid once its ttl has passed",
-    requires=["clock-control"],
+    "a token is invalid once its ttl has passed (clock hook if offered, else real time)",
 )
 def _(p):
-    tok = p.issue(uniq("user"), ["read"], 30)
+    tok = p.issue(uniq("user"), ["read"], 1)
     p.verify(tok)
-    p.tick(31)
-    raises(lambda: p.verify(tok), "expired token", InvalidToken)
+
+    def valid() -> bool:
+        try:
+            p.verify(tok)
+        except InvalidToken:
+            return False
+        return True
+
+    assert expires(p, valid, 1), "token still verifies after its ttl"
 
 
 @SUITE.check("scope-enforced", "a valid token without the required scope is Forbidden, not invalid")
@@ -122,5 +210,18 @@ MUTANTS = {
         UnsignedIdentityProvider,
         "payload-splice-rejected",
         "verify trusts the payload without checking the signature",
+    ),
+    "alg-none-accepted": Mutant(
+        AlgNoneIdentityProvider,
+        "alg-none-rejected",
+        "the token header is trusted, so alg=none disables the signature check",
+    ),
+    "empty-signature-accepted": Mutant(
+        DecodedSignatureIdentityProvider,
+        "unsigned-token-rejected",
+        "the signature is compared only when present",
+    ),
+    "exp-not-enforced": Mutant(
+        NoExpiryIdentityProvider, "expired-token-rejected", "exp is issued but never checked"
     ),
 }
