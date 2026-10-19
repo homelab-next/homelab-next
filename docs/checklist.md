@@ -21,7 +21,7 @@ Platform-wide properties. Most need a running platform; the repository-level one
 | F-04 | Every service and agent has its own identity | Credential inventory: no credential shared by two consumers; no service or agent holds admin rights | SERVER |
 | F-05 | Secrets are not in git or readable on disk | Secret scan over full history reports 0 unaccepted findings; 0 secret files readable by other | PUBLIC-NOW |
 | F-06 | Credentials are short-lived and rotated | Every inventoried secret is within its rotate-by date | SERVER |
-| F-07 | Internal TLS is verified | 0 clients with certificate verification disabled (lint over client config); endpoints present certificates from the internal CA | PUBLIC-NOW |
+| F-07 | Internal TLS is verified | 0 clients with certificate verification disabled (lint over client config; RL013 for roles); endpoints present certificates from the internal CA | PUBLIC-NOW |
 | F-08 | The main branch is protected by CI | Branch protection requires passing checks; CI runs tests, lint, secret scan on every change | PUBLIC-NOW |
 | F-09 | Backups follow 3-2-1 with an immutable copy | Newest backup < 24 h; offsite or immutable copy < 7 days; a delete attempt with the automation identity fails | SERVER |
 | F-10 | Restores are proven | A full-system restore drill was completed <= 90 days ago and verified | SERVER |
@@ -273,7 +273,7 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 | X-02 | Registry rows match live listeners | Every registry row has health, metrics, backup, auth mode, and every live listener has a row | SERVER |
 | X-03 | Schemas version-pinned, examples valid | Each schema has $schema, $id, a version; examples validate; negatives are rejected | PUBLIC-NOW |
 | X-04 | Every capability has a conformance test | Each capability has a `conformance/<cap>/test_*.py` | PUBLIC-NOW |
-| X-05 | Role linter clean | `tools/role_lint.py ansible/roles` exits 0 (a directory of roles is expanded) | PUBLIC-NOW |
+| X-05 | Role linter clean | `tools/role_lint.py ansible/roles` exits 0 (a directory of roles is expanded), including RL011-RL014: `no_log` on secret use, no `shell` or templated free-form `command`, no `validate_certs: false`, no privileged container or docker socket | PUBLIC-NOW |
 | X-06 | Detection ids are logical | No raw rule number in charters, profiles, decisions or schedules; every `det:` id resolves in `det_map.yml` | PUBLIC-NOW |
 | X-07 | Export hooks are exercised | Every stateful product's export restored once in a drill | SERVER |
 | X-08 | Cutover commits are audited | Each cutover has a swap record with parity, rollback and flip commits | SERVER |

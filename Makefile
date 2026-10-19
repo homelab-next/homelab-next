@@ -83,7 +83,10 @@ LAB_DIR := compose/lab-in-a-box
 LAB_ENV := --env-file $(LAB_DIR)/.env.example $(addprefix --env-file ,$(wildcard $(LAB_DIR)/.env))
 LAB_COMPOSE := docker compose $(LAB_ENV) -f $(LAB_DIR)/docker-compose.yml
 
+# bind_guard.sh refuses a non-loopback LAB_BIND unless LAB_I_UNDERSTAND_UNAUTHENTICATED=1 and every
+# credential differs from its .env.example placeholder (lab-smoke runs it through smoke.sh)
 lab-up:
+	bash $(LAB_DIR)/bind_guard.sh
 	$(LAB_COMPOSE) up -d --build --wait --wait-timeout 420
 
 lab-down:

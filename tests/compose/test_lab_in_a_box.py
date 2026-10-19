@@ -337,3 +337,182 @@ def test_nightly_pins_every_action_by_full_sha():
     assert uses
     for ref in uses:
         assert re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", ref), ref
+
+
+# --- hardening and the bind guard ---------------------------------------------------------------
+HARDENED_EXCEPTIONS = {"secrets"}  # OpenBao's entrypoint needs its default capabilities
+
+
+def test_containers_drop_capabilities_and_forbid_new_privileges(compose):
+    for name, svc in compose["services"].items():
+        if name in HARDENED_EXCEPTIONS:
+            continue
+        assert svc.get("security_opt") == ["no-new-privileges:true"], name
+        assert svc.get("cap_drop") == ["ALL"], name
+        assert "privileged" not in svc, name
+        for v in svc.get("volumes", []):
+            assert "docker.sock" not in str(v), name
+
+
+def test_the_secrets_exception_is_explained_above_the_service():
+    text = COMPOSE.read_text()
+    banner = text[text.index("# --- secrets:") : text.index("  secrets:\n")]
+    for words in ("DEV MODE", "no persistence", "no TLS", "known root token", "Production"):
+        assert words in banner, words
+
+
+GUARD = LAB / "bind_guard.sh"
+OTHER_LOOPBACK = "127.0.0.2"  # no-raw-endpoint: allow the whole 127/8 block is loopback
+ROUTABLE = "192.0.2.10"  # no-raw-endpoint: allow a documentation address the guard must refuse
+CREDENTIALS = (
+    "LAB_POSTGRES_PASSWORD",
+    "LAB_S3_ACCESS_KEY",
+    "LAB_S3_SECRET_KEY",
+    "LAB_OBJECT_STORE_RPC_SECRET",
+    "LAB_OBJECT_STORE_ADMIN_TOKEN",
+    "LAB_CATALOG_ENCRYPTION_KEY",
+    "LAB_SECRETS_DEV_TOKEN",
+)
+
+
+@pytest.fixture
+def lab_copy(tmp_path):
+    """A copy of the lab directory, so a test can add a .env without touching the checkout."""
+    dst = tmp_path / "lab"
+    dst.mkdir()
+    for f in (".env.example", "bind_guard.sh", "smoke.sh", "docker-compose.yml"):
+        shutil.copy2(LAB / f, dst / f)
+    return dst
+
+
+def stub_path(tmp_path, tools=("dirname", "mkdir")):
+    """A PATH with only the named tools: in particular no docker."""
+    stub = tmp_path / "bin"
+    stub.mkdir(exist_ok=True)
+    for tool in tools:
+        found = shutil.which(tool)
+        assert found
+        if not (stub / tool).exists():
+            (stub / tool).symlink_to(found)
+    return str(stub)
+
+
+def guard(lab, tmp_path, **env):
+    return subprocess.run(
+        [shutil.which("bash"), str(lab / "bind_guard.sh")],
+        env={"PATH": stub_path(tmp_path), **env},
+        capture_output=True,
+        text=True,
+    )
+
+
+def real_credentials():
+    return {k: f"changed-{k.lower()}" for k in CREDENTIALS}
+
+
+@pytest.mark.parametrize("bind", [LOOPBACK, OTHER_LOOPBACK, "::1", "[::1]", ""])
+def test_guard_allows_loopback(lab_copy, tmp_path, bind):
+    assert guard(lab_copy, tmp_path, LAB_BIND=bind).returncode == 0
+
+
+def test_guard_allows_the_shipped_defaults(lab_copy, tmp_path):
+    assert guard(lab_copy, tmp_path).returncode == 0
+
+
+@pytest.mark.parametrize("bind", ["0.0.0.0", ROUTABLE, LOOPBACK + ".5", "::", "localhost"])
+def test_guard_refuses_a_non_loopback_bind_without_the_acknowledgement(lab_copy, tmp_path, bind):
+    r = guard(lab_copy, tmp_path, LAB_BIND=bind, **real_credentials())
+    assert r.returncode == 4
+    assert "LAB_I_UNDERSTAND_UNAUTHENTICATED=1" in r.stderr
+
+
+def test_guard_refuses_while_any_credential_is_the_placeholder(lab_copy, tmp_path):
+    creds = real_credentials()
+    del creds["LAB_SECRETS_DEV_TOKEN"]  # still the .env.example value
+    r = guard(lab_copy, tmp_path, LAB_BIND="0.0.0.0", LAB_I_UNDERSTAND_UNAUTHENTICATED="1", **creds)
+    assert r.returncode == 4
+    assert "LAB_SECRETS_DEV_TOKEN" in r.stderr and "LAB_POSTGRES_PASSWORD" not in r.stderr
+
+
+def test_guard_allows_a_non_loopback_bind_once_acknowledged_and_changed(lab_copy, tmp_path):
+    r = guard(
+        lab_copy,
+        tmp_path,
+        LAB_BIND="0.0.0.0",
+        LAB_I_UNDERSTAND_UNAUTHENTICATED="1",
+        **real_credentials(),
+    )
+    assert r.returncode == 0, r.stderr
+    assert "WARNING" in r.stderr
+
+
+def test_guard_reads_dot_env_and_the_environment_wins_over_it(lab_copy, tmp_path):
+    lines = [f"{k}={v}" for k, v in real_credentials().items()]
+    (lab_copy / ".env").write_text(
+        "LAB_BIND=0.0.0.0  # all interfaces\nLAB_I_UNDERSTAND_UNAUTHENTICATED=1\n"
+        + "\n".join(lines)
+        + "\n"
+    )
+    assert guard(lab_copy, tmp_path).returncode == 0
+    # .env sets a routable bind but keeps one placeholder: refused
+    env_example_token = dict(
+        line.split("=", 1)
+        for line in ENV_EXAMPLE.read_text().splitlines()
+        if line.startswith("LAB_SECRETS_DEV_TOKEN=")
+    )["LAB_SECRETS_DEV_TOKEN"]
+    (lab_copy / ".env").write_text(
+        (lab_copy / ".env").read_text() + f"LAB_SECRETS_DEV_TOKEN={env_example_token}\n"
+    )
+    r = guard(lab_copy, tmp_path)
+    assert r.returncode == 4 and "LAB_SECRETS_DEV_TOKEN" in r.stderr
+    # the environment overrides .env, exactly as docker compose interpolation does
+    assert guard(lab_copy, tmp_path, LAB_BIND=LOOPBACK).returncode == 0
+
+
+def test_smoke_script_runs_the_guard_before_looking_for_docker(lab_copy, tmp_path):
+    bash = shutil.which("bash")
+    env = {"PATH": stub_path(tmp_path), "LAB_BIND": "0.0.0.0"}
+    r = subprocess.run(
+        [bash, str(lab_copy / "smoke.sh"), "--report-dir", str(tmp_path / "r")],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 4, r.stderr
+    assert "refusing LAB_BIND=0.0.0.0" in r.stderr
+    assert not (tmp_path / "r").exists()  # nothing was run
+
+
+def test_smoke_script_keeps_the_environment_over_the_env_files(lab_copy, tmp_path):
+    # a routable bind in .env but a loopback LAB_BIND in the environment: the guard passes, so
+    # smoke.sh must not then re-read .env over the environment and publish on all interfaces
+    lines = [f"{k}={v}" for k, v in real_credentials().items()]
+    (lab_copy / ".env").write_text("LAB_BIND=0.0.0.0\n" + "\n".join(lines) + "\n")
+    text = (lab_copy / "smoke.sh").read_text()
+    probe = text.replace('eval "$from_env"', 'eval "$from_env"\necho "bind=$LAB_BIND"; exit 0', 1)
+    probe = probe.replace(
+        "  exit 3\n", "  :  # no docker here; this probe stops before using it\n", 1
+    )
+    (lab_copy / "probe.sh").write_text(probe)
+    r = subprocess.run(
+        [shutil.which("bash"), str(lab_copy / "probe.sh"), "--report-dir", str(tmp_path / "r")],
+        env={"PATH": stub_path(tmp_path), "LAB_BIND": LOOPBACK},
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, r.stderr
+    assert f"bind={LOOPBACK}" in r.stdout
+
+
+@pytest.mark.skipif(shutil.which("make") is None, reason="make not installed")
+def test_make_lab_up_runs_the_guard_first(tmp_path):
+    path = stub_path(tmp_path, tools=("dirname", "mkdir", "bash", "sh"))
+    r = subprocess.run(
+        [shutil.which("make"), "-s", "-C", str(ROOT), "lab-up"],
+        env={"PATH": path, "LAB_BIND": "0.0.0.0"},
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode != 0
+    assert "refusing LAB_BIND=0.0.0.0" in r.stderr
+    assert "docker" not in r.stderr.replace("docker's", "")  # never reached docker compose

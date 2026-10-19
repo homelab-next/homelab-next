@@ -1,11 +1,46 @@
 # Managed by Ansible (role example_service). Do not edit.
+# The sandbox below is the baseline to copy for any unit: an unprivileged account, no
+# capabilities, the whole filesystem read-only except the data directory, private /tmp and
+# devices, no home directories, and a system-call filter. Loosen one line at a time, with a reason.
 [Unit]
 Description=Example service {{ example_service_logical_id }}
+Wants=network-online.target
 After=network-online.target
 
 [Service]
+Type=simple
+User={{ example_service_user }}
+Group={{ example_service_group }}
 ExecStart=/usr/local/bin/example-service --config {{ example_service_config_dir }}/config.yml
 Restart=on-failure
+UMask=0077
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ReadWritePaths={{ example_service_data_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
 
 [Install]
 WantedBy=multi-user.target

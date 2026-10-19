@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Create data directory
+  ansible.builtin.file:
+    path: "{{ demo_role_data_dir }}"
+    state: directory
+    mode: "0750"
+
+- name: Write the API token where the service reads it
+  ansible.builtin.copy:
+    dest: "{{ demo_role_data_dir }}/token"
+    content: "{{ demo_role_api_token }}\n"
+    mode: "0600"

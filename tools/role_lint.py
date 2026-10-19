@@ -37,8 +37,12 @@ RULES = {
     "RL006": "a defaults/vars variable is not prefixed with the role name",
     "RL007": "defaults and argument_specs disagree (undocumented default or documented-but-missing default)",
     "RL008": "a hook task is not tagged with its hook name",
-    "RL009": "a container image is unpinned (:latest or no tag) in defaults/vars/templates",
+    "RL009": "a container image is not pinned by tag and sha256 digest in defaults/vars/templates",
     "RL010": "a secret-looking variable carries a literal default",
+    "RL011": "a task references a secret-looking variable without no_log: true",
+    "RL012": "a task uses the shell/raw module, or gives command a templated free-form string",
+    "RL013": "a task or variable turns TLS certificate validation off (validate_certs: false)",
+    "RL014": "a privileged container or a docker.sock mount appears in defaults/vars/templates",
     "PB001": "a playbook targets a hostname instead of a capability group",
     "PB002": "a playbook has no hosts: pattern",
 }
@@ -277,6 +281,7 @@ def _check_prefix_and_secrets(
             )
 
 
+DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 IMAGE_REF = re.compile(
     r"^(?:image:\s*)?['\"]?(?P<ref>[\w.\-/{}$ ]+(?::[\w.\-{}$ ]+)?)(?:@sha256:\S+)?['\"]?$"
 )
@@ -295,11 +300,150 @@ def _check_images(role: Path, findings: list[Finding]) -> None:
                 if not m:
                     continue
                 ref = m.group(1)
-                if "{{" in ref or "@sha256:" in ref:
-                    continue
-                last = ref.rsplit("/", 1)[-1]
+                if "{{" in ref:
+                    continue  # rendered from a validated spec (compose_app checks tag and digest)
+                name, _, digest = ref.partition("@")
+                last = name.rsplit("/", 1)[-1]
                 if ":" not in last or last.endswith(":latest"):
                     findings.append(Finding("RL009", f"{f}:{n}", f"unpinned image '{ref}'"))
+                elif not DIGEST.fullmatch(digest):
+                    findings.append(
+                        Finding("RL009", f"{f}:{n}", f"image '{ref}' has no sha256 digest")
+                    )
+
+
+# Task keywords: whatever key of a task is not one of these is its module.
+TASK_KEYWORDS = {
+    "name", "tags", "when", "loop", "loop_control", "register", "changed_when", "failed_when",
+    "no_log", "diff", "become", "become_user", "become_method", "vars", "notify", "listen",
+    "delegate_to", "delegate_facts", "run_once", "ignore_errors", "ignore_unreachable",
+    "environment", "args", "block", "rescue", "always", "until", "retries", "delay",
+    "check_mode", "any_errors_fatal", "throttle", "timeout", "module_defaults", "collections",
+    "connection", "async", "poll", "local_action", "action",
+}  # fmt: skip
+SHELL_MODULES = {"shell", "raw"}  # both hand a string to a shell
+COMMAND_MODULES = {"command"}
+# keys whose templated value is evaluated but never echoed into task output
+NOT_LOGGED = {"name", "when", "changed_when", "failed_when", "until", "tags", "no_log"}
+JINJA = re.compile(r"{{(.*?)}}|{%(.*?)%}", re.S)
+QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
+IDENT = re.compile(r"[A-Za-z_]\w*")
+FALSY = {"false", "no", "off", "0", "n"}
+
+
+def _falsy(value: Any) -> bool:
+    if isinstance(value, bool | int):
+        return not value
+    return isinstance(value, str) and value.strip().lower() in FALSY
+
+
+def _short(module: str) -> str:
+    return module.rsplit(".", 1)[-1]
+
+
+def _module(task: dict[str, Any]) -> str | None:
+    for k in task:
+        if k not in TASK_KEYWORDS and not str(k).startswith("with_"):
+            return str(k)
+    return None
+
+
+def _secret_refs(node: Any) -> set[str]:
+    """Secret-looking variable names used inside Jinja expressions anywhere in ``node``."""
+    out: set[str] = set()
+    for _key, val in _walk_scalars(node):
+        for m in JINJA.finditer(val):
+            expr = QUOTED.sub("", m.group(1) or m.group(2) or "")
+            out.update(i for i in IDENT.findall(expr) if SECRET_WORDS.search(i))
+    return out
+
+
+def _iter_tasks(tasks: Any, no_log: bool = False) -> Iterable[tuple[dict[str, Any], bool]]:
+    """Yield (task, effective no_log) for every task, descending into blocks."""
+    if not isinstance(tasks, list):
+        return
+    for t in tasks:
+        if not isinstance(t, dict):
+            continue
+        quiet = no_log or ("no_log" in t and not _falsy(t["no_log"]))
+        if any(k in t for k in ("block", "rescue", "always")):
+            for k in ("block", "rescue", "always"):
+                yield from _iter_tasks(t.get(k), quiet)
+            continue
+        yield t, quiet
+
+
+def _certs_off(node: Any) -> bool:
+    if isinstance(node, dict):
+        return any(
+            (str(k) == "validate_certs" and _falsy(v)) or _certs_off(v) for k, v in node.items()
+        )
+    if isinstance(node, list):
+        return any(_certs_off(v) for v in node)
+    return False
+
+
+def _check_tasks(role: Path, findings: list[Finding]) -> None:
+    base = role / "tasks"
+    if not base.is_dir():
+        return
+    for f in sorted(base.rglob("*.y*ml")):
+        try:
+            doc = yaml.safe_load(f.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            continue  # reported elsewhere
+        for task, quiet in _iter_tasks(doc):
+            label = f"{f}: task '{task.get('name', '?')}'"
+            module = _module(task)
+            short = _short(module) if module else ""
+            logged = {k: v for k, v in task.items() if k not in NOT_LOGGED}
+            refs = _secret_refs(logged)
+            if refs and not quiet:
+                findings.append(
+                    Finding("RL011", label, f"uses {', '.join(sorted(refs))} without no_log: true")
+                )
+            if short in SHELL_MODULES:
+                findings.append(Finding("RL012", label, f"uses the {short} module; use argv"))
+            elif short in COMMAND_MODULES:
+                arg = task.get(module)
+                free = arg if isinstance(arg, str) else None
+                if isinstance(arg, dict) and isinstance(arg.get("cmd"), str):
+                    free = arg["cmd"]
+                if isinstance(task.get("args"), dict) and isinstance(task["args"].get("cmd"), str):
+                    free = task["args"]["cmd"]
+                if free is not None and ("{{" in free or "{%" in free):
+                    findings.append(
+                        Finding(
+                            "RL012", label, "command with a templated free-form string; use argv"
+                        )
+                    )
+            if _certs_off(task):
+                findings.append(Finding("RL013", label, "validate_certs is false"))
+
+
+PRIVILEGED = re.compile(
+    r"(?:(?<![A-Za-z])privileged['\"]?\s*[:=]\s*['\"]?(?:true|yes|on|1)\b|--privileged\b|docker\.sock)",
+    re.I,
+)
+
+
+def _check_container_escape(role: Path, defaults: dict[str, Any], findings: list[Finding]) -> None:
+    for name, (where, value) in defaults.items():
+        if name.endswith("validate_certs") and _falsy(value):
+            findings.append(
+                Finding("RL013", str(role / where), f"variable '{name}' turns validation off")
+            )
+    for sub in ("defaults", "vars", "templates"):
+        base = role / sub
+        if not base.is_dir():
+            continue
+        for f in sorted(p for p in base.rglob("*") if p.is_file()):
+            for n, line in _strip_comments(f.read_text(encoding="utf-8", errors="replace")):
+                m = PRIVILEGED.search(line)
+                if m:
+                    findings.append(
+                        Finding("RL014", f"{f}:{n}", f"container escape hatch '{m.group(0)}'")
+                    )
 
 
 def lint_role(role: Path) -> list[Finding]:
@@ -311,6 +455,8 @@ def lint_role(role: Path) -> list[Finding]:
     _check_literals(role, findings)
     _check_prefix_and_secrets(role, defaults, findings)
     _check_images(role, findings)
+    _check_tasks(role, findings)
+    _check_container_escape(role, defaults, findings)
     return findings
 
 

@@ -3,10 +3,22 @@
 compose_app_dir: "/opt/compose/{{ compose_app_name }}"
 compose_app_data_dir: "{{ compose_app_dir }}/data"
 compose_app_export_dir: "/var/backups/compose/{{ compose_app_name }}/export"
+compose_app_owner: root
+compose_app_group: root
 compose_app_restart_policy: unless-stopped
 compose_app_log_max_size: 10m
 compose_app_log_max_file: 3
 compose_app_dependencies: []
+# Secrets: service name -> {VARIABLE: value}, written to secrets/<service>.env (0600) and passed
+# as an env_file. Supply it from the secrets capability at run time; it has no literal default.
+compose_app_secret_env: {}
+# Applied to every service. Dropping no-new-privileges needs compose_app_allow_privileged.
+compose_app_security_opt: ["no-new-privileges:true"]
+compose_app_cap_drop: [ALL]
+# Escape hatches, all off: each one lets a container reach the host.
+compose_app_allow_privileged: false
+compose_app_allow_docker_socket: false
+compose_app_allow_root: false
 compose_app_allow_placeholder_digest: false
 compose_app_validate_with_docker: true
 compose_app_start: true

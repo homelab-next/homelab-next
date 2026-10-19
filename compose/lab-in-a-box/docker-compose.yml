@@ -17,6 +17,14 @@ x-restart: &restart
   restart: "no"
   init: true
 
+# Least privilege for every container that still works with it (see tests/compose).  The two
+# exceptions are spelled out where they occur: postgres adds back the capabilities its entrypoint
+# needs to chown the data directory and drop to the postgres user, and secrets (OpenBao) keeps
+# docker's default set.
+x-hardened: &hardened
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+
 networks:
   lab:
     driver: bridge
@@ -34,7 +42,7 @@ volumes:
 services:
   # --- object-store: S3 API ---------------------------------------------------------------
   object-store:
-    <<: *restart
+    <<: [*restart, *hardened]
     image: dxflrs/garage:v1.0.1@sha256:a5706cf1f3d7b349ac5133ec59ad8181b709270b75e5f2fa7b3e1a5c07d67137
     command: ["/garage", "server"]
     environment:
@@ -60,12 +68,14 @@ services:
 
   # --- postgres: catalog and authz metadata -----------------------------------------------
   postgres:
-    <<: *restart
+    <<: [*restart, *hardened]
     image: postgres:16.4-alpine@sha256:5660c2cbfea50c7a9127d17dc4e48543eedd3d7a41a595a2dfa572471e37e64c
     environment:
       POSTGRES_USER: lab
       POSTGRES_PASSWORD: ${LAB_POSTGRES_PASSWORD:?see .env.example}
       POSTGRES_DB: catalog
+    # the entrypoint chowns the data directory, then drops to the postgres user
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
     command: ["postgres", "-c", "shared_buffers=64MB", "-c", "max_connections=40", "-c", "fsync=off"]
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -81,7 +91,7 @@ services:
 
   # --- lake-catalog: Iceberg REST catalog -------------------------------------------------
   catalog-migrate:
-    <<: *restart
+    <<: [*restart, *hardened]
     image: quay.io/lakekeeper/catalog:v0.9.5@sha256:c3d6db91218a6115525ee05542925739a689938f3d116543a32bd8972f217c82
     command: ["migrate"]
     environment: &catalog-env
@@ -96,7 +106,7 @@ services:
     networks: [lab]
 
   lake-catalog:
-    <<: *restart
+    <<: [*restart, *hardened]
     image: quay.io/lakekeeper/catalog:v0.9.5@sha256:c3d6db91218a6115525ee05542925739a689938f3d116543a32bd8972f217c82
     command: ["serve"]
     environment: *catalog-env
@@ -118,7 +128,7 @@ services:
 
   # --- one-shot initialiser: object-store layout/bucket/key + catalog bootstrap/warehouse ---
   lab-init:
-    <<: *restart
+    <<: [*restart, *hardened]
     image: hnx-lab-fakes:local
     build:
       context: ../..
@@ -144,7 +154,7 @@ services:
 
   # --- lake-query: Trino, single node, tiny heap ------------------------------------------
   lake-query:
-    <<: *restart
+    <<: [*restart, *hardened]
     image: trinodb/trino:470@sha256:a591436ddc20cef15a4424704423326828591727b0e7c40c6ea4165d4564df67
     environment:
       LAB_WAREHOUSE: ${LAB_WAREHOUSE:?see .env.example}
@@ -175,7 +185,7 @@ services:
 
   # --- events: NATS JetStream -------------------------------------------------------------
   events:
-    <<: *restart
+    <<: [*restart, *hardened]
     image: nats:2.10.22-alpine@sha256:73b0ba5fec5518c5f698597c58d2a3350a2b5ccae43e84c308f8d2da1242deca
     command: ["-js", "-sd", "/data", "-m", "8222"]
     volumes:
@@ -194,6 +204,20 @@ services:
         aliases: [events.svc.example.internal]
 
   # --- secrets: OpenBao in dev mode (in memory, auto-unsealed; never for real secrets) ----
+  # ==========================================================================================
+  # DEV MODE. This is not a secrets service anything may rely on:
+  #   * no persistence: storage is in memory, every secret is gone when the container stops;
+  #   * no TLS: the API is plain HTTP;
+  #   * a known root token: LAB_SECRETS_DEV_TOKEN is a root token, published in .env.example,
+  #     and dev mode starts unsealed, so whoever reaches the port owns the instance.
+  # It is published on LAB_BIND only, loopback by default; bind_guard.sh refuses anything else
+  # while the token is still the placeholder.  Production uses OpenBao in server mode instead:
+  # integrated (raft) storage, TLS, real unseal keys or auto-unseal, and the root token revoked
+  # after initialisation (docs/architecture.md, "The reference environment").
+  # It keeps docker's default capabilities and no no-new-privileges: its entrypoint chowns its
+  # directories, sets a file capability for mlock and drops to the openbao user, all of which
+  # cap_drop ALL and no-new-privileges would break.
+  # ==========================================================================================
   secrets:
     <<: *restart
     image: openbao/openbao:2.1.0@sha256:7de07aa6df3937d44c96c2d65c188b2d4a70546f2a764ad4510301305af6a223
@@ -217,12 +241,13 @@ services:
 
   # --- notify: ntfy -----------------------------------------------------------------------
   notify:
-    <<: *restart
+    <<: [*restart, *hardened]
     image: binwiederhier/ntfy:v2.11.0@sha256:4a7d0f0adc6d5d9fc36e64ab55ef676e76e124a2bdd50ce115b6d9c1c7430294
     command: ["serve"]
     environment:
       NTFY_BASE_URL: http://notify.svc.example.internal
       NTFY_LISTEN_HTTP: ":80"
+    cap_add: [NET_BIND_SERVICE]  # listens on port 80 inside the container
     ports:
       - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_NOTIFY:-8090}:80"
     healthcheck:
@@ -237,7 +262,7 @@ services:
 
   # --- authz: OpenFGA (in-memory store) ---------------------------------------------------
   authz:
-    <<: *restart
+    <<: [*restart, *hardened]
     image: openfga/openfga:v1.8.4@sha256:0ad225772d28527eacbe71fda9f2349b332100a710c2f2a624b188470b38f1ac
     command: ["run"]
     environment:
@@ -257,7 +282,7 @@ services:
 
   # --- inference: the project's fake OpenAI-compatible server -----------------------------
   inference:
-    <<: *restart
+    <<: [*restart, *hardened]
     image: hnx-lab-fakes:local
     build:
       context: ../..
@@ -277,7 +302,7 @@ services:
 
   # --- cases: the project's fake case system ----------------------------------------------
   cases:
-    <<: *restart
+    <<: [*restart, *hardened]
     image: hnx-lab-fakes:local
     build:
       context: ../..

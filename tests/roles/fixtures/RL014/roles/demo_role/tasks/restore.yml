@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: TODO restore from backup
+  ansible.builtin.debug:
+    msg: restore not implemented for demo_role
+  tags: [restore]

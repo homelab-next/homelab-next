@@ -47,8 +47,12 @@ A hook that cannot be implemented yet still exists and says so explicitly
   from loopback and the unspecified address (RL004), and no hostname literal in
   `defaults/`, `vars/` or `tasks/` (RL005). Variables whose name ends in
   `_image`/`_repository` are exempt from RL005 because they are covered by RL009.
-* Container images are never `:latest` and never untagged (RL009). `compose_app`
-  goes further: see section 6.
+* Container images are pinned by tag and `sha256` digest, never `:latest` (RL009).
+  `compose_app` goes further: see section 6.
+* A task that uses a secret-looking variable carries `no_log: true` (RL011). No
+  `shell` or `raw`, and no `command` given a templated free-form string: use `argv`
+  (RL012). TLS validation is never turned off (RL013). No privileged container or
+  docker socket in `defaults/`, `vars/` or `templates/` (RL014).
 * Versions are pinned; in real use they come from the registry row.
 
 ## 4. Service names come from the registry
@@ -93,6 +97,20 @@ membership change. `role_lint.py --playbook X --inventory Y` fails a playbook wh
   name services in the spec and render as `condition: service_healthy`.
 * Logging is bounded (`json-file`, size and file count), restart policy defaults to
   `unless-stopped`, ports and secrets are never defaulted.
+* Only the documented service keys are accepted, and every scalar is rendered
+  JSON-quoted, so no value can add YAML of its own. The tag must match
+  `^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`.
+* Every service gets `security_opt: [no-new-privileges:true]` and `cap_drop: [ALL]`;
+  `cap_add`, `user`, `read_only` and `mem_limit` are optional per service.
+* Ports are always `host_ip:host_port:container_port`; nothing binds all interfaces
+  by omission.
+* Secrets never go in `environment` (a secret-looking key is refused unless it ends
+  in `_FILE`). They go in `compose_app_secret_env`, which the role writes to
+  `secrets/<service>.env` (mode 0600, `no_log`, no diff) and passes as an `env_file`.
+* A privileged container or a dangerous `cap_add`, a docker socket (or host root,
+  `/run`) bind mount, and an explicit root `user` are refused unless
+  `compose_app_allow_privileged`, `compose_app_allow_docker_socket` or
+  `compose_app_allow_root` is set.
 
 ## 7. Linter rules
 
@@ -107,8 +125,12 @@ membership change. `role_lint.py --playbook X --inventory Y` fails a playbook wh
 | RL006 | variable not prefixed with the role name |
 | RL007 | defaults and argument_specs disagree |
 | RL008 | hook task not tagged with the hook name |
-| RL009 | unpinned container image |
+| RL009 | container image not pinned by tag and digest |
 | RL010 | literal default for a secret-looking variable |
+| RL011 | secret-looking variable used in a task without `no_log: true` |
+| RL012 | `shell`/`raw`, or `command` with a templated free-form string |
+| RL013 | `validate_certs: false` |
+| RL014 | privileged container or docker socket in defaults/vars/templates |
 | PB001 | playbook targets a hostname instead of a capability group |
 | PB002 | play without `hosts:` |
 

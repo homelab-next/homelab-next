@@ -121,6 +121,40 @@ every service is single node. See the README "Try it" section.
 | `inference` | the project's fake OpenAI-compatible server | `inference` |
 | `cases` | the project's fake case system | `cases` |
 
+### It is not a deployment: what replaces each service in production
+
+The lab trades every protection for a small footprint, so it binds published ports to loopback
+only. `smoke.sh` and `make lab-up` refuse any other `LAB_BIND` unless
+`LAB_I_UNDERSTAND_UNAUTHENTICATED=1` is set **and** every credential differs from its
+`.env.example` placeholder (`compose/lab-in-a-box/bind_guard.sh`); docker publishes ports through
+its own firewall rules, ahead of ufw or firewalld, so a host firewall is no substitute. Containers
+run with `no-new-privileges` and `cap_drop: [ALL]` (postgres adds back what its entrypoint needs;
+OpenBao keeps docker's defaults). A real deployment changes each service as follows:
+
+| Lab service | Lab shortcut | Production replacement |
+|---|---|---|
+| `secrets` (OpenBao) | dev mode: in memory, no TLS, a known root token, starts unsealed | server mode with integrated (raft) storage, TLS, real unseal keys or auto-unseal, root token revoked after initialisation, short-lived per-client tokens |
+| `object-store` (Garage) | known RPC secret and admin token, single node, plain HTTP | generated secrets from the secrets capability, replicated layout, TLS at the edge, admin API on the management zone only |
+| `postgres` | known password, `fsync=off` | generated password, `fsync` on, TLS, backups in the restore drill |
+| `lake-catalog` (Lakekeeper) | no authentication, known encryption key | OIDC through the IdP, encryption key from the secrets capability |
+| `lake-query` (Trino) | no authentication, plain HTTP | TLS plus OIDC or password authentication and access control (S-02) |
+| `events` (NATS) | no authentication, plain TCP | accounts with per-client credentials (NKeys or JWT) and TLS |
+| `notify` (ntfy) | open publish and subscribe | `auth-default-access: deny-all` with per-topic users or tokens, behind the forward-auth proxy |
+| `authz` (OpenFGA) | in-memory store, no API authentication | Postgres-backed store, preshared-key or OIDC authentication on the API |
+| `inference`, `cases` | the project's fakes | the real inference server and case system behind the same aliases |
+
+## Ansible host trust
+
+`ansible/ansible.cfg` keeps host key checking on. Ansible pushes configuration and secrets to
+hosts that grant it sudo, so an unverified host key would hand them to whoever answers on the
+address. Trust is bootstrapped once, out of band: record each guest's key in `known_hosts` after
+comparing its fingerprint with the one shown on the hypervisor console or in the cloud-init log
+(`ssh-keyscan` collects it, `ssh-keygen -lf` prints the fingerprint), or sign host keys with an
+SSH host CA and trust the CA once with an `@cert-authority` line. A guest cloned from a template
+must regenerate its host keys on first boot (cloud-init does by default; a template never ships
+`/etc/ssh/ssh_host_*`), otherwise every clone shares one key and a mismatch can no longer reveal an
+impostor.
+
 ## What is built and what needs a real server
 
 Phases are tagged **PUBLIC-NOW** (provable on a laptop or CI runner with fakes, fixtures and

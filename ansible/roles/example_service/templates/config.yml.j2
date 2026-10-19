@@ -1,10 +1,10 @@
 # Managed by Ansible (role example_service). Do not edit.
-service_id: {{ example_service_logical_id }}
-version: {{ example_service_version }}
-listen_port: {{ example_service_listen_port }}
-data_dir: {{ example_service_data_dir }}
+service_id: {{ example_service_logical_id | to_json }}
+version: {{ example_service_version | string | to_json }}
+listen_port: {{ example_service_listen_port | int }}
+data_dir: {{ example_service_data_dir | to_json }}
 dependencies:
 {% for dep in example_service_dependencies %}
-  - id: {{ dep }}
-    url: {{ lookup('hnx_registry', dep, field='url') }}
+  - id: {{ dep | to_json }}
+    url: {{ lookup('hnx_registry', dep, field='url') | to_json }}
 {% endfor %}

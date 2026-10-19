@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: TODO check dependencies via lookup('hnx_registry', ...)
+  ansible.builtin.debug:
+    msg: readiness not implemented for demo_role
+  tags: [readiness]
