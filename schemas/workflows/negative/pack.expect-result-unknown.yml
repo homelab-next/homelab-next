@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+pack: bad-example
+version: 1
+description: A negative.
+trigger:
+  event: homelabnext.alert.created
+actor: profile:workflow-soc
+broker_manifest: workflows/broker.manifest.json
+steps:
+  - {id: page, kind: action, action: notify.page, params: {}}
+fixtures:
+  - name: one
+    event: {type: homelabnext.alert.created}
+    expect: {calls: [{action: notify.page, params: {}, result: maybe}]}

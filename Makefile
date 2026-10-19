@@ -12,15 +12,15 @@ PLAYBOOKS := $(wildcard ansible/playbooks/*.yml)
 REGISTERS_OUT := build/registers
 REGISTER_FILES := $(shell git ls-files -- $(foreach k,lessons runbooks invariants queue,'*$(k).yml' '*$(k).yaml') 2>/dev/null)
 
-.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint agent-lint prompts-lint injection-check injection-report injection-eval detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke
+.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint agent-lint prompts-lint injection-check injection-report injection-eval workflows detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke
 
 help:
-	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint agent-lint prompts-lint injection-check injection-report detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
+	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
 	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke"
 	@echo "live (needs a real model endpoint): injection-eval MODEL=<role> REGISTRY=<file> ROLES=<file>"
 	@echo "override RUFF=/path/to/ruff if ruff is not importable as a module"
 
-check: lint component-tests hermetic-lint test schemas gates decide-lint agent-lint prompts-lint injection-check detections registers ids-check conform-check spdx leak-scan changelog-check
+check: lint component-tests hermetic-lint test schemas gates decide-lint agent-lint prompts-lint injection-check workflows detections registers ids-check conform-check spdx leak-scan changelog-check
 	@echo "make check: OK"
 
 lint:
@@ -92,6 +92,12 @@ injection-eval:
 	@test -n "$(MODEL)" -a -n "$(REGISTRY)" -a -n "$(ROLES)" || { echo "usage: make injection-eval MODEL=<role> REGISTRY=<services.yml> ROLES=<roles.json>"; exit 2; }
 	$(PY) -m homelabnext.cli agent injection run --role $(MODEL) --registry $(REGISTRY) --roles $(ROLES) --out build/injection/$(MODEL).json
 	$(PY) -m homelabnext.cli agent injection check-report build/injection/$(MODEL).json
+
+# R-01/R-03/R-04/R-07: every workflow pack in git validates offline (references resolve,
+# deterministic steps before any model, fixtures round-trip to the exact action calls, risky
+# actions bound to an approval of their payload digest) and the deploy pins match
+workflows:
+	$(PY) -m homelabnext.cli workflows validate
 
 detections:
 	$(PY) -m homelabnext.detections lint

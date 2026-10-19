@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# Deterministic only (no model step, so R-03 has nothing to order): a new case is announced in
+# the case channel.
+pack: example-case-announce
+version: 1
+description: Announce every newly opened case in the case channel.
+trigger:
+  event: homelabnext.case.opened
+actor: profile:workflow-soc
+broker_manifest: workflows/broker.manifest.json
+steps:
+  - id: announce
+    kind: action
+    action: notify.post
+    target: svc:notify
+    params:
+      channel: cases
+      case_id: $event.data.case_id
+      title: $event.data.title
+      severity: $event.data.severity
+fixtures:
+  - name: case-announced
+    event:
+      specversion: "1.0"
+      id: evt-case-0001
+      source: svc:cases
+      type: homelabnext.case.opened
+      time: "2026-01-01T00:00:00Z"
+      data:
+        case_id: INC-0001
+        alert_ids: [ALT-0101]
+        title: Mass file renames on app-01
+        severity: critical
+        opened_by: profile:workflow-soc
+    expect:
+      calls:
+        - action: notify.post
+          target: svc:notify
+          params: {channel: cases, case_id: INC-0001, title: Mass file renames on app-01, severity: critical}
+          result: executed

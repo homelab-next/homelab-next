@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# What the orchestrator may run, pinned by pack digest (`hnx workflows digest workflows/packs`).
+# `hnx workflows validate` fails when a pin does not match its pack or names a pack that does
+# not validate; the deployer loads only these digests from a commit CI passed (docs/workflows.md).
+deploy_id: lab-workflows
+pins:
+  - {pack: case-opened-notify, digest: "sha256:bc1e7964dc4563f4b9e6207ee8c07b3c03a5db4b7bf48abba731272a3605f246"}
+  - {pack: new-critical-alert, digest: "sha256:c4b395a871a318eaa882c9411933f6ae8039ca8746ebd170faca037ae491cf3d"}
+  - {pack: phishing-report, digest: "sha256:6fba6e2ae69f2182326504d2fb03b710636b463917f278c1c42922da714b185b"}

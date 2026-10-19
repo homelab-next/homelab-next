@@ -154,7 +154,8 @@ Check = Callable[[Mapping[str, Any]], Result]                           # the pl
 
 `hnx` sub-commands are rows in `COMMANDS` in `homelabnext/cli.py` (name, one-line help, handler that
 imports its package lazily). Current names: `registry`, `new`, `gen`, `detections`, `registers`,
-`invariants`, `ids`, `decide`, `golden`, `site`, `guests`, `schema-check`, `swap`, `conform`, `custom`.
+`invariants`, `ids`, `decide`, `golden`, `site`, `guests`, `schema-check`, `swap`, `conform`, `custom`,
+`workflows`.
 `parity` is a library only (the swap runner calls it; no sub-command).
 Exit codes everywhere: `0` ok, `1` a check failed, `2` misconfiguration or bad input, `>=100` the
 check itself could not measure.
@@ -238,6 +239,9 @@ validate_report(report, pack, pack_hash, manifest=None) -> list[str]
 digest_of(obj) -> "sha256:..."                           # canonical JSON digest used everywhere
 # homelabnext.broker  (reference evaluator for schemas/broker; default deny)
 decide(manifest, request, approval=None, *, now=None) -> decision; request_digest(request); check_manifest_handlers(manifest, handlers)
+# homelabnext.workflows  (hnx workflows validate|run|digest; docs/workflows.md; schemas/workflows)
+validate_repo(paths=(), *, root=None, deploy=None) -> Report ; check_pack(doc, universe) -> [(rule, detail)]
+run_fixture(pack, fixture, *, manifest, spec_labels=None, executor_factory=BrokerExecutor) -> RunResult ; pack_digest(doc)
 
 # homelabnext.swap   (extra: swap = PyYAML + jsonschema; hnx swap; docs/swap.md; ADR-0005)
 STEPS: tuple[str, ...]                  # declare, shadow-start, dual-write, parity-compare, soak, cutover,
