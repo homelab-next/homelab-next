@@ -38,6 +38,7 @@ SDIST_TOP_ALLOW = {
     "README.md",
     "SECURITY.md",
     "conformance",
+    "conftest.py",
     "examples",
     "homelabnext",
     "homelabnext.egg-info",

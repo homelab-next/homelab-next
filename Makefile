@@ -12,14 +12,14 @@ PLAYBOOKS := $(wildcard ansible/playbooks/*.yml)
 REGISTERS_OUT := build/registers
 REGISTER_FILES := $(shell git ls-files -- $(foreach k,lessons runbooks invariants queue,'*$(k).yml' '*$(k).yaml') 2>/dev/null)
 
-.PHONY: help check lint fmt test schemas gates decide-lint detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke
+.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke
 
 help:
-	@echo "targets: check lint fmt test schemas gates decide-lint detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
+	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
 	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke"
 	@echo "override RUFF=/path/to/ruff if ruff is not importable as a module"
 
-check: lint test schemas gates decide-lint detections registers ids-check conform-check spdx leak-scan changelog-check
+check: lint component-tests hermetic-lint test schemas gates decide-lint detections registers ids-check conform-check spdx leak-scan changelog-check
 	@echo "make check: OK"
 
 lint:
@@ -32,6 +32,21 @@ fmt:
 
 test:
 	$(PY) -m pytest -q
+
+# broker, scope guard, records lifecycle, decide cascade and the agent grant ceiling each keep
+# >= 80% line coverage from their own tests.  Not a prerequisite of `check`: `test` already runs
+# tools/tests/test_coverage_floor.py, which enforces the same floor; this target prints the table.
+coverage:
+	$(PY) tools/coverage_floor.py
+
+# every package, conformance capability, role, plugin, compose stack and tool has tests
+component-tests:
+	$(PY) tools/component_tests.py
+
+# test code reads neither the wall clock nor unseeded randomness (the network is guarded at run
+# time by tests/network_guard.py)
+hermetic-lint:
+	$(PY) tools/hermetic_lint.py
 
 schemas:
 	$(PY) $(SCHEMA_CHECK) --strict
@@ -107,7 +122,7 @@ constraints:
 	awk '/^pip==/{p=1} p{print} p&&!/\\$$/{exit}' constraints/ci.txt > constraints/bootstrap.txt
 
 clean:
-	rm -rf build dist .pytest_cache .ruff_cache *.egg-info
+	rm -rf build dist .pytest_cache .ruff_cache *.egg-info .coverage .coverage.*
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
 
 # --- lab-in-a-box: the laptop/CI-sized reference environment (needs docker with compose) -----------
