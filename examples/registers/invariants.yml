@@ -198,13 +198,16 @@ criteria:
   evidence: auto
   observable: >-
     python3 -c 'import yaml' 2>/dev/null || exit 100;
-    python3 tools/shared_helpers_lint.py && echo helpers shared
-  expected: exit 0 (0 private notify, state or lake-query helpers outside the shared libraries)
+    python3 tools/shared_helpers_lint.py && python3 tools/dup_check.py && echo helpers shared
+  expected: >-
+    exit 0 (0 private notify, state or lake-query helpers outside the shared libraries, and 0
+    copy-pasted clones or stale entries beyond tools/dup_check.baseline.json)
   expect_regex: helpers shared
   remediation: >-
     Call homelabnext.notify, homelabnext.state or homelabnext.lake instead of the private copy, or
-    record a reviewed exception with its reason in tools/shared_helpers.allow.yml; a copied helper
-    misses every fix the shared one gets.
+    record a reviewed exception with its reason in tools/shared_helpers.allow.yml; for a new clone,
+    move the copied code into one shared function (a stale baseline entry: `make dup-baseline`). A
+    copied helper misses every fix the shared one gets.
 - id: F-07
   statement: Internal TLS is verified.
   evidence: auto

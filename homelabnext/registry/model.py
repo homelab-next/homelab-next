@@ -17,6 +17,7 @@ from typing import Any
 import yaml
 
 from homelabnext import paths
+from homelabnext._yaml import UniqueKeyLoader
 
 
 class RegistryError(Exception):
@@ -28,23 +29,8 @@ class RegistryError(Exception):
         super().__init__(message + detail)
 
 
-class _UniqueKeyLoader(yaml.SafeLoader):
-    """Safe loader that refuses duplicate mapping keys (silent override is a bug)."""
-
-
-def _construct_mapping(loader: _UniqueKeyLoader, node: yaml.MappingNode, deep: bool = False):
-    seen: set[Any] = set()
-    for key_node, _ in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        if key in seen:
-            raise yaml.constructor.ConstructorError(
-                None, None, f"duplicate key {key!r}", key_node.start_mark
-            )
-        seen.add(key)
-    return yaml.SafeLoader.construct_mapping(loader, node, deep)
-
-
-_UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping)
+# refuses duplicate mapping keys (a silent override is a bug); homelabnext.swap.flip uses it too
+_UniqueKeyLoader = UniqueKeyLoader
 
 
 @dataclass(frozen=True)

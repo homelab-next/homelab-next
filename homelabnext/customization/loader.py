@@ -29,6 +29,7 @@ from typing import Any
 import yaml
 
 from homelabnext import paths
+from homelabnext._yaml import UniqueKeyStrDateLoader
 
 from .model import Customization, Finding
 
@@ -54,31 +55,9 @@ except paths.ResourceNotFound:  # reported with the full list of places when the
 _SUFFIXES = (".yml", ".yaml", ".json")
 
 
-class _StrLoader(yaml.SafeLoader):
-    """SafeLoader that leaves ISO dates as strings (the schema types them as strings) and
-    refuses duplicate mapping keys (a silent override is exactly the bug this module exists to
-    prevent)."""
-
-
-_StrLoader.yaml_implicit_resolvers = {
-    k: [(t, rx) for t, rx in v if t != "tag:yaml.org,2002:timestamp"]
-    for k, v in yaml.SafeLoader.yaml_implicit_resolvers.items()
-}
-
-
-def _no_dupes(loader: _StrLoader, node: yaml.MappingNode, deep: bool = False):
-    seen: set[Any] = set()
-    for key_node, _ in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        if key in seen:
-            raise yaml.constructor.ConstructorError(
-                None, None, f"duplicate key {key!r}", key_node.start_mark
-            )
-        seen.add(key)
-    return yaml.SafeLoader.construct_mapping(loader, node, deep)
-
-
-_StrLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dupes)
+# leaves ISO dates as strings (the schema types them as strings) and refuses duplicate mapping
+# keys (a silent override is exactly the bug this module exists to prevent)
+_StrLoader = UniqueKeyStrDateLoader
 
 
 def read_document(path: Path) -> Any:

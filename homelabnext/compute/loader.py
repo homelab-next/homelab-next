@@ -11,6 +11,7 @@ from typing import Any
 import yaml
 
 from homelabnext import paths
+from homelabnext._yaml import UniqueKeyStrDateLoader
 from homelabnext.generators.safe import control_char_paths
 
 from .model import ComputeError, Fleet, Guest, Problem, ZoneLookup
@@ -19,29 +20,8 @@ POLICIES_FILE = "_backup_policies.yml"
 NODES_FILE = "_nodes.yml"
 
 
-class _UniqueKeyLoader(yaml.SafeLoader):
-    """SafeLoader refusing duplicate keys; timestamps stay strings."""
-
-
-_UniqueKeyLoader.yaml_implicit_resolvers = {
-    k: [(tag, rx) for tag, rx in v if tag != "tag:yaml.org,2002:timestamp"]
-    for k, v in yaml.SafeLoader.yaml_implicit_resolvers.items()
-}
-
-
-def _construct_mapping(loader: _UniqueKeyLoader, node: yaml.MappingNode, deep: bool = False):
-    seen: set[Any] = set()
-    for key_node, _ in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        if key in seen:
-            raise yaml.constructor.ConstructorError(
-                None, None, f"duplicate key {key!r}", key_node.start_mark
-            )
-        seen.add(key)
-    return yaml.SafeLoader.construct_mapping(loader, node, deep)
-
-
-_UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping)
+# refuses duplicate keys; timestamps stay strings
+_UniqueKeyLoader = UniqueKeyStrDateLoader
 
 
 def schema() -> dict:
