@@ -1,6 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
-# The sdist must carry the repo-level data trees that setup.py packages into homelabnext/_data.
+# The sdist must carry the repo-level data trees that setup.py packages into homelabnext/_data,
+# plus what a downstream packager needs to verify the build: tests, conformance suites, tools and
+# the project documents.  setup.py narrows all of this to git-tracked files and refuses symlinks.
 graft schemas
 graft profiles
 graft examples
-global-exclude __pycache__ *.pyc
+graft tests
+graft conformance
+graft tools
+include CHANGELOG.md SECURITY.md CONTRIBUTING.md CODE_OF_CONDUCT.md NOTICE LICENSE README.md
+# never: dotfiles and dot-directories (.env, .github, .git*), environment files, caches
+prune .*
+global-exclude .* *.env .env* *.env.* __pycache__ *.pyc *.pyo
