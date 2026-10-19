@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Create data directory
+  ansible.builtin.file:
+    path: "{{ demo_role_data_dir }}"
+    state: directory
+    mode: "0750"
+
+- name: Probe the service without checking its certificate
+  ansible.builtin.uri:
+    url: "https://{{ lookup('hnx_registry', demo_role_logical_id, field='host') }}/healthz"
+    validate_certs: false

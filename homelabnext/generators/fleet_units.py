@@ -13,6 +13,14 @@ Rules enforced at render time (a violation raises ``FleetUnitsError``):
   ``hourly`` ...) because they resolve in the host's local zone.
 * Output is deterministic: entries are sorted by name, line endings are ``\\n``,
   and there are no timestamps, so goldens are byte-identical.
+* Every value is one line: control characters (a newline would add directives) and a
+  trailing backslash (systemd joins the next line onto it) are refused in every field.
+* Least privilege by default: a unit without ``user`` runs with ``DynamicUser=yes``;
+  ``user: root`` needs ``run_as_root: true``. Every service carries the :data:`HARDENING`
+  block; ``hardening_opt_out`` drops named directives for one unit, and
+  ``read_write_paths`` opens holes in ``ProtectSystem=strict``.
+* A retired unit (``replaced_by``) keeps its files for the record but runs nothing:
+  ``ExecStart=/bin/false``.
 
 Spec entry (YAML list item)::
 
@@ -20,7 +28,10 @@ Spec entry (YAML list item)::
     description: Compact lake tables
     exec: /usr/local/bin/lake-compact --all   # absolute path
     on_calendar: "*-*-* 02:30:00 UTC"         # string or list of strings
-    user: svc-lake                  # optional
+    user: svc-lake                  # optional; absent = DynamicUser=yes; root needs run_as_root
+    run_as_root: false              # optional; must be true for user: root
+    read_write_paths: [/var/lib/lake]   # optional; writable under ProtectSystem=strict
+    hardening_opt_out: [ProtectHome]    # optional; directive names from HARDENING
     persistent: true                # optional, default true
     randomized_delay_sec: 0         # optional
     timeout_start_sec: 3600         # optional
@@ -58,8 +69,37 @@ ALLOWED = {
     "timeout_start_sec",
     "pages_directly",
     "replaced_by",
+    "run_as_root",
+    "read_write_paths",
+    "hardening_opt_out",
 }
-NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# patterns are applied with fullmatch: ``$`` would also match before a trailing newline
+NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
+USER_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
+PATH_RE = re.compile(r"/[A-Za-z0-9._/@:+-]*")
+CONTROL_RE = re.compile(r"[\x00-\x1f\x7f\x85\u2028\u2029]")
+ROOT_USERS = {"root", "0"}
+RETIRED_EXEC = "/bin/false"
+#: The default sandbox for every rendered service (directive, value), in output order.
+HARDENING: tuple[tuple[str, str], ...] = (
+    ("NoNewPrivileges", "yes"),
+    ("ProtectSystem", "strict"),
+    ("ProtectHome", "yes"),
+    ("PrivateTmp", "yes"),
+    ("PrivateDevices", "yes"),
+    ("ProtectKernelTunables", "yes"),
+    ("ProtectKernelModules", "yes"),
+    ("ProtectKernelLogs", "yes"),
+    ("ProtectControlGroups", "yes"),
+    ("ProtectClock", "yes"),
+    ("ProtectHostname", "yes"),
+    ("RestrictSUIDSGID", "yes"),
+    ("RestrictRealtime", "yes"),
+    ("RestrictNamespaces", "yes"),
+    ("LockPersonality", "yes"),
+    ("SystemCallArchitectures", "native"),
+    ("CapabilityBoundingSet", ""),
+)
 SHORTHANDS = {
     "minutely",
     "hourly",
@@ -71,13 +111,28 @@ SHORTHANDS = {
     "yearly",
     "annually",
 }
-CAL_RE = re.compile(r"^[\w*,.:/\- ]+$")
+CAL_RE = re.compile(r"[\w*,.:/\- ]+")
 # a timezone token at the end of the expression: UTC, or something zone-like
 TZ_TOKEN = re.compile(r"\s(\S+)$")
 
 
 class FleetUnitsError(ValueError):
     """The spec violates a fleet_units rule."""
+
+
+def _single_line(where: str, value: Any) -> None:
+    """Refuse any string in ``value`` (recursively) that could span or join lines."""
+    if isinstance(value, str):
+        m = CONTROL_RE.search(value)
+        if m:
+            raise FleetUnitsError(
+                f"{where}: control character {m.group()!r} refused; values must be a single line"
+            )
+        if value.endswith("\\"):
+            raise FleetUnitsError(f"{where}: trailing backslash refused (systemd joins lines)")
+    elif isinstance(value, list):
+        for v in value:
+            _single_line(where, v)
 
 
 def _check_calendar(name: str, cal: Any) -> str:
@@ -88,7 +143,7 @@ def _check_calendar(name: str, cal: Any) -> str:
         raise FleetUnitsError(
             f"{name}: calendar shorthand '{cal}' resolves in the host time zone; write an explicit expression ending in ' UTC'"
         )
-    if not CAL_RE.match(cal):
+    if not CAL_RE.fullmatch(cal):
         raise FleetUnitsError(f"{name}: calendar '{cal}' contains unsupported characters")
     if cal.upper() == "UTC":
         raise FleetUnitsError(f"{name}: calendar '{cal}' has no time expression")
@@ -96,7 +151,7 @@ def _check_calendar(name: str, cal: Any) -> str:
     if not m:
         raise FleetUnitsError(f"{name}: calendar '{cal}' has no time zone; append ' UTC'")
     tz = m.group(1)
-    if not re.match(r"^[A-Za-z][A-Za-z_+\-/0-9]*$", tz):
+    if not re.fullmatch(r"[A-Za-z][A-Za-z_+\-/0-9]*", tz):
         raise FleetUnitsError(f"{name}: calendar '{cal}' has no time zone; append ' UTC'")
     if tz != "UTC":
         raise FleetUnitsError(
@@ -116,8 +171,10 @@ def validate(entries: Any) -> list[dict[str, Any]]:
         if not isinstance(e, dict):
             raise FleetUnitsError(f"entry {i}: must be a mapping")
         name = e.get("name")
-        if not isinstance(name, str) or not NAME_RE.match(name):
+        if not isinstance(name, str) or not NAME_RE.fullmatch(name):
             raise FleetUnitsError(f"entry {i}: name must match {NAME_RE.pattern}")
+        for k, v in e.items():
+            _single_line(f"{name}: {k}", v)
         mono = [k for k in MONOTONIC if k in e]
         if "on_boot_sec" in e and "on_unit_active_sec" in e:
             raise FleetUnitsError(
@@ -156,9 +213,36 @@ def validate(entries: Any) -> list[dict[str, Any]]:
             isinstance(item["replaced_by"], str) and item["replaced_by"].strip()
         ):
             raise FleetUnitsError(f"{name}: replaced_by must be a non-empty string")
-        for k in ("description", "user"):
-            if k in item and (not isinstance(item[k], str) or "\n" in item[k]):
-                raise FleetUnitsError(f"{name}: {k} must be a single-line string")
+        if "description" in item and not isinstance(item["description"], str):
+            raise FleetUnitsError(f"{name}: description must be a single-line string")
+        if "run_as_root" in item and not isinstance(item["run_as_root"], bool):
+            raise FleetUnitsError(f"{name}: run_as_root must be a boolean")
+        user = item.get("user")
+        if user is not None and (not isinstance(user, str) or not USER_RE.fullmatch(user)):
+            raise FleetUnitsError(f"{name}: user must match {USER_RE.pattern}")
+        if user in ROOT_USERS and item.get("run_as_root") is not True:
+            raise FleetUnitsError(
+                f"{name}: user {user} runs the job as root; set run_as_root: true to mean it"
+            )
+        if item.get("run_as_root") and user not in ROOT_USERS:
+            raise FleetUnitsError(f"{name}: run_as_root: true requires user: root")
+        rw = item.get("read_write_paths", [])
+        if not isinstance(rw, list) or not all(
+            isinstance(p, str) and PATH_RE.fullmatch(p) for p in rw
+        ):
+            raise FleetUnitsError(
+                f"{name}: read_write_paths must be a list of absolute paths ({PATH_RE.pattern})"
+            )
+        opt_out = item.get("hardening_opt_out", [])
+        known = {d for d, _ in HARDENING}
+        if not isinstance(opt_out, list) or not all(isinstance(d, str) for d in opt_out):
+            raise FleetUnitsError(f"{name}: hardening_opt_out must be a list of directive names")
+        unknown_d = sorted(set(opt_out) - known)
+        if unknown_d:
+            raise FleetUnitsError(
+                f"{name}: hardening_opt_out names unknown directive(s) {unknown_d}; known: "
+                f"{', '.join(d for d, _ in HARDENING)}"
+            )
         out.append(item)
     return sorted(out, key=lambda x: x["name"])
 
@@ -171,11 +255,18 @@ def _service(e: dict[str, Any]) -> str:
     lines += ["[Unit]", f"Description={e.get('description', name)}"]
     if e.get("pages_directly"):
         lines.append("OnFailure=hnx-page@%n.service")
-    lines += ["", "[Service]", "Type=oneshot", f"ExecStart={e['exec']}"]
+    exec_line = RETIRED_EXEC if e.get("replaced_by") else e["exec"]
+    lines += ["", "[Service]", "Type=oneshot", f"ExecStart={exec_line}"]
     if e.get("user"):
         lines.append(f"User={e['user']}")
+    else:
+        lines.append("DynamicUser=yes")
     if "timeout_start_sec" in e:
         lines.append(f"TimeoutStartSec={e['timeout_start_sec']}")
+    skip = set(e.get("hardening_opt_out", []))
+    lines += [f"{d}={v}" for d, v in HARDENING if d not in skip]
+    if e.get("read_write_paths"):
+        lines.append("ReadWritePaths=" + " ".join(e["read_write_paths"]))
     return "\n".join(lines) + "\n"
 
 

@@ -10,6 +10,8 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
+from homelabnext._http import check_plaintext, safe_urlopen
+
 from .core import Message, SendError
 
 _TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -48,7 +50,9 @@ class NtfySender:
     ``notify`` capability through the ``resolver`` you pass (a ``homelabnext.registry.Resolver``),
     else the ``HNX_ENDPOINT_NOTIFY`` override, else an error.
     ``auth`` is an optional callable returning an ``Authorization`` header value, read at send
-    time so the secret never sits in this object's repr or logs.
+    time so the secret never sits in this object's repr or logs.  A token is never sent over
+    plain ``http`` to a non-loopback host unless ``allow_plaintext=True``; redirects are followed
+    only within the same origin.
     """
 
     def __init__(
@@ -61,12 +65,14 @@ class NtfySender:
         timeout: float = 10.0,
         capability: str = "notify",
         resolver: Any | None = None,
+        allow_plaintext: bool = False,
     ):
         self._endpoint = endpoint
+        self.allow_plaintext = allow_plaintext
         self._resolver = resolver
         self.default_topic = default_topic
         self._auth = auth
-        self._opener = opener if opener is not None else urllib.request.urlopen
+        self._opener = opener if opener is not None else safe_urlopen
         self.timeout = timeout
         self.capability = capability
 
@@ -116,12 +122,17 @@ class NtfySender:
             if not _EMAIL_RE.match(message.email):
                 raise SendError("invalid email target")
             headers["Email"] = _header(message.email)
+        base = self.base_url()
         if self._auth is not None:
             token = self._auth()
             if token:
+                try:
+                    check_plaintext(base, credentials=True, allow_plaintext=self.allow_plaintext)
+                except ValueError as exc:
+                    raise SendError(str(exc)) from None
                 headers["Authorization"] = _header(token)
         return urllib.request.Request(
-            f"{self.base_url()}/{topic}",
+            f"{base}/{topic}",
             data=message.body.encode("utf-8"),
             headers=headers,
             method="POST",

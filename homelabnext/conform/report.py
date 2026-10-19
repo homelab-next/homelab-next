@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .registry import CAPABILITIES, EXTENDED, ConformError, find_root
-from .runner import CapabilityRun, mutation_runs, run_capability
+from .runner import MIN_CHECKS, CapabilityRun, git_sha, mutation_runs, run_capability
 
 __all__ = ["SCHEMA", "build_report", "declared_capabilities", "render_human"]
 
@@ -65,7 +65,9 @@ def build_report(
             "failed_must": [x.check for x in run.failed_must],
             "failed_should": [x.check for x in run.failed_should],
             "skipped": [x.check for x in run.results if x.status == "skip"],
+            "untested": [x.check for x in run.results if x.status == "untested"],
             "error": run.error,
+            "provenance": dict(run.meta),
         }
         reasons: list[str] = []
         if run.error:
@@ -73,7 +75,7 @@ def build_report(
             reasons.append(run.error)
         if e["failed_must"]:
             reasons.append("failing MUST check(s): " + ", ".join(e["failed_must"]))
-        if not run.error and len(run.executed) < 6:
+        if not run.error and len(run.executed) < MIN_CHECKS:
             reasons.append(f"only {len(run.executed)} check(s) executed")
         if with_mutants:
             ms = mutation_runs(cap, r)
@@ -83,6 +85,7 @@ def build_report(
                     "expected_check": m.expected,
                     "failed": m.failed,
                     "detected": m.detected,
+                    "reason": m.reason,
                 }
                 for m in ms
             ]
@@ -90,7 +93,9 @@ def build_report(
                 reasons.append("no deliberately broken fake")
             for m in ms:
                 if not m.detected:
-                    reasons.append(f"mutant {m.name!r} not caught by check {m.expected!r}")
+                    reasons.append(
+                        f"mutant {m.name!r} not caught by check {m.expected!r}: {m.reason}"
+                    )
         e["passing"] = not reasons
         if reasons:
             e["reason"] = "; ".join(reasons)
@@ -99,6 +104,7 @@ def build_report(
     return {
         "schema": SCHEMA,
         "target": target,
+        "git_sha": git_sha(r),
         "ok": not without,
         "measurement_errors": errors,
         "capabilities": entries,

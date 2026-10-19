@@ -331,3 +331,13 @@ def test_unresolved_references_against_the_stock_registry(doc):
     errs = errors(doc, stock)
     assert any("svc:router-console is not in the service registry" in e for e in errs)
     assert any("differs from registry cidr" in e or "is not a zone of this site" in e for e in errs)
+
+
+@pytest.mark.parametrize("value", ["lan\n", "lan\r", "a\nb"])
+def test_control_characters_are_refused_before_the_schema(doc, registry, value):
+    """Python's re lets a schema pattern's ``$`` match before a trailing newline; adapters write
+    line-oriented configs, so the newline must never reach them."""
+    d = copy.deepcopy(doc)
+    d["zones"][0]["id"] = value
+    errs = errors(d, registry)
+    assert any(e.startswith("unsafe: zones/0/id: control character") for e in errs), errs

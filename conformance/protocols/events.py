@@ -8,6 +8,11 @@
 * A delivery must be settled: ``ack`` (done), ``nack`` (redeliver, attempt + 1) or ``term``
   (never redeliver).  After ``max_deliver`` failed attempts, or on ``term``, the message goes to
   the consumer's dead-letter list and is never delivered again.
+* Only the first settlement of a delivery counts; settling it again is a no-op.
+* At least once: re-opening a durable consumer (``consumer()`` with the same name, as a
+  restarted process does) resumes where it left off.  Acked messages are not delivered again,
+  messages published in between are, and every delivery that was fetched but never settled is
+  redelivered (attempt + 1).  A delivery handed out before the reopen can no longer be settled.
 """
 
 from __future__ import annotations

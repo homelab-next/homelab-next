@@ -186,7 +186,17 @@ class Guest:
 
     @property
     def firewall_rules(self) -> list[Mapping[str, Any]]:
+        """Inbound allow rules."""
         return list(self.raw.get("firewall_rules", {}).get("inbound_allow", []))
+
+    @property
+    def outbound_rules(self) -> list[Mapping[str, Any]]:
+        """Outbound allow rules (meaningful with ``policy_out`` DROP or REJECT)."""
+        return list(self.raw.get("firewall_rules", {}).get("outbound_allow", []))
+
+    @property
+    def policy_out(self) -> str:
+        return self.raw.get("firewall_rules", {}).get("policy_out", "ACCEPT")
 
     @property
     def scope(self) -> str | None:

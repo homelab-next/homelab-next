@@ -95,7 +95,30 @@ REFUSED = {
     "unknown key": (entry(oncalendar="x"), "unknown key"),
     "non-bool persistent": (entry(persistent="yes"), "boolean"),
     "negative delay": (entry(randomized_delay_sec=-1), "non-negative"),
-    "multiline description": (entry(description="a\nb"), "single-line"),
+    "multiline description": (entry(description="a\nb"), "single line"),
+    # directive injection (security review): a newline adds directives, a trailing backslash
+    # joins the next generated line (User=) onto ExecStart
+    "exec adds ExecStartPost": (
+        entry(exec="/bin/true\nExecStartPost=/bin/sh -c id"),
+        "exec: control character",
+    ),
+    "replaced_by adds a section": (
+        entry(replaced_by="y\n[Service]\nExecStart=/bin/evil"),
+        "replaced_by: control character",
+    ),
+    "carriage return": (entry(description="a\rb"), "control character"),
+    "exec trailing backslash": (entry(exec="/bin/job \\"), "trailing backslash"),
+    "name trailing newline": (entry(name="job\n"), "name must match"),
+    "user trailing newline": (entry(user="svc\n"), "control character"),
+    "user with space": (entry(user="svc x"), "user must match"),
+    "calendar newline": (entry(on_calendar="*-*-* 01:00:00 UTC\nOnBootSec=1"), "control character"),
+    "root without opt-in": (entry(user="root"), "run_as_root: true"),
+    "run_as_root without root": (entry(user="svc", run_as_root=True), "requires user: root"),
+    "unknown hardening opt-out": (
+        entry(hardening_opt_out=["ProtectEverything"]),
+        "unknown directive",
+    ),
+    "relative read_write_path": (entry(read_write_paths=["var/lib"]), "absolute paths"),
 }
 
 
@@ -123,3 +146,56 @@ def test_calendar_expressions_parse_with_systemd_analyze():
             if "Failed to parse" in r.stderr + r.stdout and "time zone" in r.stderr.lower():
                 pytest.skip("systemd too old for explicit zones")
             assert r.returncode == 0, (c, r.stderr)
+
+
+def _service(**kw):
+    return fu.render([entry(**kw)])["hnx-job.service"]
+
+
+def test_review_payload_is_refused():
+    spec = HERE / "specs" / "injection.yml"
+    with pytest.raises(fu.FleetUnitsError, match="control character"):
+        fu.render_file(spec)
+
+
+def test_retired_unit_runs_nothing():
+    text = _service(replaced_by="st2:pack.workflow")
+    assert "ExecStart=/bin/false" in text
+    assert "/usr/local/bin/job" not in text
+
+
+def test_default_user_is_dynamic_never_root():
+    text = _service()
+    assert "DynamicUser=yes" in text and "\nUser=" not in text
+    named = _service(user="svc-job")
+    assert "User=svc-job" in named and "DynamicUser" not in named
+    root = _service(user="root", run_as_root=True)
+    assert "User=root" in root
+
+
+def test_hardening_block_is_on_by_default_with_per_unit_opt_out():
+    text = _service()
+    for directive, value in fu.HARDENING:
+        assert f"\n{directive}={value}\n" in text
+    opted = _service(hardening_opt_out=["ProtectHome", "PrivateDevices"])
+    assert "ProtectHome=" not in opted and "PrivateDevices=" not in opted
+    assert "ProtectSystem=strict" in opted
+
+
+def test_read_write_paths_open_protect_system_strict():
+    text = _service(read_write_paths=["/var/lib/job", "/srv/out"])
+    assert "ReadWritePaths=/var/lib/job /srv/out" in text
+
+
+def test_every_line_is_one_directive():
+    """No value can contribute a second directive: one '=' per Service line, known keys only."""
+    files = fu.render(yaml.safe_load(SPEC.read_text()))
+    for name, content in files.items():
+        if not name.endswith(".service"):
+            continue
+        body = content.split("[Service]\n", 1)[1]
+        keys = [ln.split("=", 1)[0] for ln in body.splitlines() if ln]
+        allowed = {"Type", "ExecStart", "User", "DynamicUser", "TimeoutStartSec", "ReadWritePaths"}
+        allowed |= {d for d, _ in fu.HARDENING}
+        assert set(keys) <= allowed, name
+        assert keys.count("ExecStart") == 1, name

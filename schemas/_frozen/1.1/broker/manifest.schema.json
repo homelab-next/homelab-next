@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/broker/manifest/1.1",
+  "title": "Broker manifest",
+  "description": "The allowlist. default is the constant deny: an action absent from actions, an actor absent from grants, or a tier above the grant's max_tier is refused. mode shadow records decisions without enforcing them. approvers is the allowlist of identities (issuer and subject, compared normalized) whose approvals count; without it no approval is accepted. An approver of kind agent, or one whose subject names a granted profile, counts only when allow_agent_approvers is true. approval_ttl_s defaults to 900 when absent. 1.1 adds approvers and allow_agent_approvers.",
+  "type": "object",
+  "properties": {
+    "manifest_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "default": {
+      "const": "deny"
+    },
+    "mode": {
+      "enum": [
+        "shadow",
+        "enforce"
+      ]
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$"
+          },
+          "tier": {
+            "enum": [
+              "read",
+              "write",
+              "execute",
+              "privileged"
+            ]
+          },
+          "handler": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/rel_path"
+          },
+          "requires_approval": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "action",
+          "tier",
+          "handler",
+          "requires_approval"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "tier": {
+                  "enum": [
+                    "execute",
+                    "privileged"
+                  ]
+                }
+              },
+              "required": [
+                "tier"
+              ]
+            },
+            "then": {
+              "properties": {
+                "requires_approval": {
+                  "const": true
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "grants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "profile": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$"
+            },
+            "uniqueItems": true
+          },
+          "max_tier": {
+            "enum": [
+              "read",
+              "write",
+              "execute",
+              "privileged"
+            ]
+          }
+        },
+        "required": [
+          "profile",
+          "actions",
+          "max_tier"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "approval_ttl_s": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "approvers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "issuer": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "subject": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9._-]{0,63}$"
+          },
+          "kind": {
+            "enum": [
+              "human",
+              "agent"
+            ]
+          }
+        },
+        "required": [
+          "issuer",
+          "subject"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "allow_agent_approvers": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "manifest_id",
+    "default",
+    "mode",
+    "actions",
+    "grants"
+  ],
+  "additionalProperties": false
+}

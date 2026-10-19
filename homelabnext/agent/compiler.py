@@ -2,10 +2,21 @@
 """Profile compiler: spec + parts library -> compiled, digested profile.
 
 A *spec* says what an agent should be: a persona, skills, capabilities, a model role, the MCP
-servers it wants, a tier, budgets and a permission **ceiling**.  The compiler harvests each named
-part from a :class:`PartsLibrary` (keyed by logical id, resolved through
-:mod:`homelabnext.ids`), refuses anything the ceiling does not allow, and emits a profile that
-validates against ``schemas/agent/profile.schema.json``.
+servers it wants, a tier and budgets.  The compiler harvests each named part from a
+:class:`PartsLibrary` (keyed by logical id, resolved through :mod:`homelabnext.ids`), refuses
+anything the permission **ceiling** does not allow, and emits a profile that validates against
+``schemas/agent/profile.schema.json``.
+
+Where the ceiling comes from matters.  A ceiling written in the spec it bounds is only a
+statement of intent: whoever edits the spec can raise it.  The ceiling that limits a profile is
+therefore read from a :class:`CeilingPolicy`, a separate file keyed by profile id that a
+different owner reviews (``compile_profile(..., policy=)``, ``hnx agent compile --policy``).  A
+spec may still carry a ``ceiling``; with a policy it may only narrow the policy's.  Without a
+policy the spec's own ceiling is used and the result is self-consistent, nothing more.
+
+:func:`verify_profile` checks a compiled profile against the policy (not against the ceiling
+copied into the profile) and, given a lock (``{profile id: digest}``, reviewed and committed
+next to the policy), that the profile is the one that was reviewed.
 
 Rules, all enforced here and tested:
 
@@ -89,6 +100,60 @@ def check_ceiling(grants: Mapping[str, Any], ceiling: Mapping[str, Any]) -> list
     return problems
 
 
+class CeilingPolicy:
+    """Ceilings keyed by profile id, owned and reviewed separately from the profile specs.
+
+    File shape (YAML or JSON)::
+
+        ceilings:
+          profile:reader: {mcp: [lake], capabilities: [cap:lake-query], tier: read,
+                           budgets: {max_runtime_s: 900, ...}}
+    """
+
+    def __init__(self, ceilings: Mapping[str, Mapping[str, Any]], source: str = "policy") -> None:
+        if not isinstance(ceilings, Mapping) or not ceilings:
+            raise SpecError(f"{source}: expected a non-empty 'ceilings' mapping of profile id")
+        self.source = source
+        self._ceilings = {
+            _ids({"id": [pid]}, "id", "profile")[0]: _normal_ceiling(c, f"{source}: {pid}")
+            for pid, c in ceilings.items()
+        }
+
+    @classmethod
+    def from_mapping(cls, doc: Mapping[str, Any], source: str = "policy") -> CeilingPolicy:
+        if not isinstance(doc, Mapping):
+            raise SpecError(f"{source}: expected a mapping with 'ceilings'")
+        return cls(doc.get("ceilings"), source)
+
+    def ceiling(self, profile_id: str) -> dict[str, Any]:
+        if profile_id not in self._ceilings:
+            raise CeilingViolation([f"{self.source} has no ceiling for {profile_id}"])
+        return dict(self._ceilings[profile_id])
+
+
+def _normal_ceiling(c: Any, where: str) -> dict[str, Any]:
+    if not isinstance(c, Mapping):
+        raise SpecError(f"{where}: ceiling must be a mapping")
+    out: dict[str, Any] = {
+        "mcp": sorted(set(c.get("mcp", []))),
+        "capabilities": _ids(c, "capabilities", "cap"),
+        "tier": c.get("tier"),
+    }
+    if "budgets" in c:
+        out["budgets"] = dict(c["budgets"])
+    return out
+
+
+def _ceiling_excess(inner: Mapping[str, Any], outer: Mapping[str, Any]) -> list[str]:
+    """Ways ``inner`` (a ceiling) is wider than ``outer``."""
+    out = [f"ceiling wider than the policy: {p}" for p in check_ceiling(inner, outer)]
+    ib, ob = inner.get("budgets") or {}, outer.get("budgets") or {}
+    for k in BUDGET_KEYS:
+        if k in ob and (k not in ib or not isinstance(ib[k], int) or ib[k] > ob[k]):
+            out.append(f"ceiling wider than the policy: budgets.{k} is not within {ob[k]}")
+    return out
+
+
 def check_budgets(budgets: Any, cap: Mapping[str, Any] | None = None) -> list[str]:
     if not isinstance(budgets, Mapping):
         return ["budgets must be a mapping with " + ", ".join(BUDGET_KEYS)]
@@ -119,12 +184,19 @@ def _ids(spec: Mapping[str, Any], key: str, kind: str) -> list[str]:
     return sorted(set(out))
 
 
-def compile_profile(spec: Mapping[str, Any], library: PartsLibrary) -> dict[str, Any]:
+def compile_profile(
+    spec: Mapping[str, Any], library: PartsLibrary, *, policy: CeilingPolicy | None = None
+) -> dict[str, Any]:
     """Compile ``spec`` into a profile dict.  Pure given the library; raises
-    :class:`~homelabnext.agent.errors.AgentError` subclasses, never returns a partial profile."""
+    :class:`~homelabnext.agent.errors.AgentError` subclasses, never returns a partial profile.
+
+    With ``policy`` the ceiling is the policy's entry for the profile id (a spec ceiling may only
+    narrow it); without, it is the spec's own ``ceiling``.
+    """
     if not isinstance(spec, Mapping):
         raise SpecError("spec must be a mapping")
-    for key in ("id", "persona", "model_role", "tier", "ceiling", "budgets", "data_tier"):
+    required = ("id", "persona", "model_role", "tier", "budgets", "data_tier")
+    for key in (*required, *(() if policy else ("ceiling",))):
         if key not in spec:
             raise SpecError(f"spec is missing required key {key!r}")
     pid = _ids({"id": [spec["id"]]}, "id", "profile")[0]
@@ -142,18 +214,17 @@ def compile_profile(spec: Mapping[str, Any], library: PartsLibrary) -> dict[str,
     parts = [library.get(i) for i in wanted]
 
     # 2. ceiling: a profile can never grant more than its ceiling
-    ceiling_in = spec["ceiling"]
-    if not isinstance(ceiling_in, Mapping):
-        raise SpecError("ceiling must be a mapping")
-    ceiling: dict[str, Any] = {
-        "mcp": sorted(set(ceiling_in.get("mcp", []))),
-        "capabilities": _ids(ceiling_in, "capabilities", "cap"),
-        "tier": ceiling_in.get("tier"),
-    }
-    if "budgets" in ceiling_in:
-        ceiling["budgets"] = dict(ceiling_in["budgets"])
+    own = _normal_ceiling(spec["ceiling"], "spec") if "ceiling" in spec else None
+    violations: list[str] = []
+    if policy is not None:
+        ceiling = policy.ceiling(pid)
+        if own is not None:
+            violations += _ceiling_excess(own, ceiling)
+            ceiling = own if not violations else ceiling  # a spec may narrow, never widen
+    else:
+        ceiling = own  # type: ignore[assignment]
     grants = {"mcp": mcp, "capabilities": caps, "tier": spec["tier"]}
-    violations = check_ceiling(grants, ceiling)
+    violations += check_ceiling(grants, ceiling)
     if violations:
         raise CeilingViolation(violations)
 
@@ -193,15 +264,40 @@ def profile_digest(profile: Mapping[str, Any]) -> str:
     return digest_of({k: v for k, v in profile.items() if k != "digest"})
 
 
-def verify_profile(profile: Mapping[str, Any]) -> list[str]:
-    """Problems with an already compiled profile: schema, ceiling, budgets, digest."""
+def verify_profile(
+    profile: Mapping[str, Any],
+    *,
+    policy: CeilingPolicy | None = None,
+    lock: Mapping[str, str] | None = None,
+) -> list[str]:
+    """Problems with an already compiled profile: schema, ceiling, budgets, digest.
+
+    Without ``policy`` the grants are checked against the ceiling stored *in the profile*, which
+    whoever edited the profile also controls: that proves internal consistency only.  With
+    ``policy`` they are checked against the policy's ceiling for the profile id, and the stored
+    ceiling may not be wider.  ``lock`` maps profile ids to reviewed digests; with it, a profile
+    whose digest is not the pinned one (recomputed honestly or not) is refused.
+    """
     problems = schema_errors("agent", "profile", profile)
     if problems:
         return problems
-    problems += check_ceiling(profile["grants"], profile["ceiling"])
-    problems += check_budgets(profile["budgets"], profile["ceiling"].get("budgets"))
+    ceiling = profile["ceiling"]
+    if policy is not None:
+        try:
+            ceiling = policy.ceiling(profile["id"])
+        except CeilingViolation as exc:
+            return list(exc.problems)
+        problems += _ceiling_excess(_normal_ceiling(profile["ceiling"], "profile"), ceiling)
+    problems += check_ceiling(profile["grants"], ceiling)
+    problems += check_budgets(profile["budgets"], ceiling.get("budgets"))
     if profile_digest(profile) != profile["digest"]:
         problems.append("digest does not match the profile content (edited after compile?)")
+    if lock is not None:
+        pinned = lock.get(profile["id"])
+        if pinned is None:
+            problems.append(f"{profile['id']} is not in the lock (no reviewed digest)")
+        elif pinned != profile["digest"]:
+            problems.append(f"digest {profile['digest']} is not the reviewed {pinned}")
     return problems
 
 

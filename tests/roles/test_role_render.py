@@ -2,10 +2,13 @@
 """Render the shipped roles through Ansible's template engine (strict undefined vars),
 validate compose output with `docker compose config` when docker exists."""
 
+import grp
 import http.server
 import json
 import os
+import pwd
 import shutil
+import stat
 import subprocess
 import threading
 from pathlib import Path
@@ -22,6 +25,9 @@ pytestmark = pytest.mark.skipif(
 
 DIGEST = "sha256:" + "ab" * 32
 ZERO = "sha256:" + "0" * 64
+LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow published ports bind loopback in the fixture spec
+OWNER = pwd.getpwuid(os.getuid()).pw_name
+GROUP = grp.getgrgid(os.getgid()).gr_name
 
 
 def docker_compose_ok():
@@ -83,6 +89,61 @@ def test_example_service_main_renders_with_registry_lookup(tmp_path):
         .read_text()
         .startswith("# Managed by Ansible")
     )
+
+
+def unit_directives(path):
+    out = {}
+    for line in path.read_text().splitlines():
+        if "=" in line and not line.startswith("#"):
+            k, _, v = line.partition("=")
+            out.setdefault(k, []).append(v)
+    return out
+
+
+def test_example_service_unit_runs_unprivileged_and_sandboxed(tmp_path):
+    r = run_role(tmp_path, "example_service", "main", svc_vars(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    d = unit_directives(tmp_path / "etc" / "example-service.service")
+    assert d["User"] == ["example-service"] and d["Group"] == ["example-service"]
+    for key, want in {
+        "NoNewPrivileges": "yes",
+        "ProtectSystem": "strict",
+        "ProtectHome": "yes",
+        "PrivateTmp": "yes",
+        "PrivateDevices": "yes",
+        "CapabilityBoundingSet": "",
+        "AmbientCapabilities": "",
+        "RestrictSUIDSGID": "yes",
+        "ReadWritePaths": str(tmp_path / "data"),
+    }.items():
+        assert d.get(key) == [want], key
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"example_service_data_dir": "/var/lib/x\nExecStartPre=/bin/sh -c id"},
+        {"example_service_data_dir": "/var/lib/x y"},
+        {"example_service_config_dir": "/etc/%h"},
+        {"example_service_logical_id": "x\nUser=root"},
+        {"example_service_user": "root"},
+        {"example_service_user": "a\nUser=root"},
+        {"example_service_listen_port": 80},
+    ],
+)
+def test_example_service_refuses_values_that_would_rewrite_the_unit(tmp_path, over):
+    r = run_role(tmp_path, "example_service", "main", svc_vars(tmp_path, **over))
+    assert r.returncode != 0
+    assert not (tmp_path / "etc" / "example-service.service").exists()
+
+
+def test_example_service_config_values_are_quoted(tmp_path):
+    r = run_role(
+        tmp_path, "example_service", "main", svc_vars(tmp_path, example_service_version="1.0: x")
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    cfg = yaml.safe_load((tmp_path / "etc" / "config.yml").read_text())
+    assert cfg["version"] == "1.0: x" and cfg["service_id"] == "example-service"
 
 
 def test_example_service_unknown_dependency_fails(tmp_path):
@@ -171,7 +232,7 @@ def spec(**svc_over):
         "image": "registry.example.internal/demo/web",
         "tag": "1.2.3",
         "digest": DIGEST,
-        "ports": ["8080:80"],
+        "ports": [f"{LOOPBACK}:8080:80"],
         "environment": {"MODE": "demo", "COUNT": 3},
         "volumes": ["./data/web:/var/lib/web", "/srv/shared:/shared:ro"],
         "depends_on": ["db"],
@@ -195,6 +256,8 @@ def app_vars(tmp_path, s=None, **kw):
         "compose_app_dir": str(tmp_path / "app"),
         "compose_app_data_dir": str(tmp_path / "app" / "data"),
         "compose_app_export_dir": str(tmp_path / "export"),
+        "compose_app_owner": OWNER,
+        "compose_app_group": GROUP,
         "compose_app_start": False,
         "compose_app_validate_with_docker": docker_compose_ok(),
     }
@@ -262,6 +325,42 @@ REJECTED = {
     "placeholder digest": lambda s: s["services"]["web"].update(digest=ZERO),
     "depends_on unknown": lambda s: s["services"]["web"].update(depends_on=["ghost"]),
     "empty services": lambda s: s.update(services={}),
+    # YAML injection through a scalar: each of these used to render an extra key
+    "tag injects a key": lambda s: s["services"]["web"].update(tag="1.0\n    privileged: true"),
+    "tag with trailing newline": lambda s: s["services"]["web"].update(tag="1.0\n"),
+    "image injects a key": lambda s: s["services"]["web"].update(
+        image="demo/web\n    privileged: true\n    x"
+    ),
+    "service name injects a key": lambda s: s["services"].update(
+        {"x:\n    privileged: true\n  y": s["services"].pop("db")}
+    ),
+    "interval injects a key": lambda s: s["services"]["web"]["healthcheck"].update(
+        interval="5s\n    privileged: true"
+    ),
+    "restart injects a key": lambda s: s["services"]["web"].update(
+        restart="always\n    privileged: true"
+    ),
+    "tag too long": lambda s: s["services"]["web"].update(tag="1" * 129),
+    "tag not a string": lambda s: s["services"]["web"].update(tag=16.4),
+    "unknown key": lambda s: s["services"]["web"].update(network_mode="host"),
+    # exposure and privilege
+    "port without host address": lambda s: s["services"]["web"].update(ports=["8080:80"]),
+    "bare container port": lambda s: s["services"]["web"].update(ports=["80"]),
+    "port as a number": lambda s: s["services"]["web"].update(ports=[80]),
+    "secret in environment": lambda s: s["services"]["db"]["environment"].update(
+        POSTGRES_PASSWORD="hunter2"
+    ),
+    "docker socket": lambda s: s["services"]["web"].update(
+        volumes=["/var/run/docker.sock:/var/run/docker.sock"]
+    ),
+    "docker socket via /run": lambda s: s["services"]["web"].update(volumes=["/run:/host-run"]),
+    "host root": lambda s: s["services"]["web"].update(volumes=["/:/host:ro"]),
+    "privileged": lambda s: s["services"]["web"].update(privileged=True),
+    "cap_add SYS_ADMIN": lambda s: s["services"]["web"].update(cap_add=["SYS_ADMIN"]),
+    "cap_add CAP_ALL": lambda s: s["services"]["web"].update(cap_add=["CAP_ALL"]),
+    "user root": lambda s: s["services"]["web"].update(user="root"),
+    "user 0:0": lambda s: s["services"]["web"].update(user="0:0"),
+    "bad mem_limit": lambda s: s["services"]["web"].update(mem_limit="lots"),
 }
 
 
@@ -276,6 +375,85 @@ def test_compose_app_rejects_spec_violation(tmp_path, case):
         app_vars(tmp_path, s, compose_app_validate_with_docker=False),
     )
     assert r.returncode != 0, case
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def services_of(tmp_path):
+    return yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"]
+
+
+def test_compose_app_hardening_defaults(tmp_path):
+    s = spec(cap_add=["NET_BIND_SERVICE"], read_only=True, mem_limit="256m", user="1000:1000")
+    r = run_role(tmp_path, "compose_app", "main", app_vars(tmp_path, s))
+    assert r.returncode == 0, r.stdout + r.stderr
+    svcs = services_of(tmp_path)
+    for svc in svcs.values():
+        assert svc["security_opt"] == ["no-new-privileges:true"]
+        assert svc["cap_drop"] == ["ALL"]
+        assert "privileged" not in svc
+    web = svcs["web"]
+    assert web["cap_add"] == ["NET_BIND_SERVICE"]
+    assert web["read_only"] is True and web["mem_limit"] == "256m" and web["user"] == "1000:1000"
+
+
+@pytest.mark.parametrize(
+    "over, flag",
+    [
+        ({"privileged": True}, "compose_app_allow_privileged"),
+        ({"cap_add": ["SYS_ADMIN"]}, "compose_app_allow_privileged"),
+        (
+            {"volumes": ["/var/run/docker.sock:/var/run/docker.sock"]},
+            "compose_app_allow_docker_socket",
+        ),
+        ({"user": "root"}, "compose_app_allow_root"),
+    ],
+)
+def test_compose_app_escape_hatches_need_their_explicit_flag(tmp_path, over, flag):
+    r = run_role(tmp_path, "compose_app", "main", app_vars(tmp_path, spec(**over), **{flag: True}))
+    assert r.returncode == 0, r.stdout + r.stderr
+    web = services_of(tmp_path)["web"]
+    for k, v in over.items():
+        assert web[k] == v
+
+
+def test_compose_app_dropping_no_new_privileges_needs_the_flag(tmp_path):
+    r = run_role(tmp_path, "compose_app", "main", app_vars(tmp_path, compose_app_security_opt=[]))
+    assert r.returncode != 0
+
+
+def test_compose_app_secrets_go_to_a_0600_env_file_not_compose_yml(tmp_path):
+    secret = "fake-s3cr3t-$HOME-value"  # a $ must reach the container literally
+    v = app_vars(tmp_path, compose_app_secret_env={"db": {"POSTGRES_PASSWORD": secret}})
+    r = run_role(tmp_path, "compose_app", "main", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert secret not in r.stdout + r.stderr
+    compose_yml = (tmp_path / "app" / "docker-compose.yml").read_text()
+    assert secret not in compose_yml
+    env = tmp_path / "app" / "secrets" / "db.env"
+    assert env.read_text() == f"POSTGRES_PASSWORD='{secret}'\n"
+    assert stat.S_IMODE(env.stat().st_mode) == 0o600
+    assert stat.S_IMODE(env.parent.stat().st_mode) == 0o700
+    assert services_of(tmp_path)["db"]["env_file"] == [str(env)]
+    assert "env_file" not in services_of(tmp_path)["web"]
+
+
+@pytest.mark.parametrize(
+    "secret_env",
+    [
+        {"db": {"POSTGRES_PASSWORD": "fake-never-echoed-it's"}},  # a quote would end the literal
+        {"db": {"POSTGRES_PASSWORD": "fake-never-echoed\nINJECTED=1"}},  # a line break adds a var
+        {"db": {"BAD-NAME": "fake-never-echoed-1"}},
+        {"ghost": {"TOKEN": "fake-never-echoed-2"}},  # not a service in the spec
+        {"db": {"POSTGRES_PASSWORD_FILE": "fake-never-echoed-3"}},  # already in environment
+    ],
+)
+def test_compose_app_rejects_bad_secret_env_without_echoing_it(tmp_path, secret_env):
+    v = app_vars(tmp_path, compose_app_secret_env=secret_env)
+    r = run_role(tmp_path, "compose_app", "main", v)
+    assert r.returncode != 0
+    for vals in secret_env.values():
+        for val in vals.values():
+            assert val not in r.stdout + r.stderr
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
@@ -337,6 +515,7 @@ def test_compose_app_upgrade_hook_validates_pin(tmp_path):
         {"compose_app_upgrade_tag": "latest"},
         {"compose_app_upgrade_digest": ZERO},
         {"compose_app_upgrade_service": "ghost"},
+        {"compose_app_upgrade_tag": "1.0\n    privileged: true"},
     ):
         assert run_role(tmp_path, "compose_app", "upgrade", {**up, **bad}).returncode != 0
 

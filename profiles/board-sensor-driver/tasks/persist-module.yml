@@ -1,5 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Opt-in: runs only for hosts the deployment enabled the profile for.
+# The module name becomes a path under /etc/modules-load.d and the file's content, so it is
+# checked before anything is read or written: no "/", "..", newline or space can get through.
+- name: Validate the module name
+  ansible.builtin.assert:
+    that:
+      - board_sensor_driver_module is string
+      - board_sensor_driver_module is match('^[a-z0-9_]+\Z')
+    fail_msg: "board_sensor_driver_module must match ^[a-z0-9_]+$"
+
 - name: Read the board product name
   ansible.builtin.slurp:
     src: /sys/class/dmi/id/board_name

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/guest/1.1",
+  "$id": "https://schemas.example.internal/homelabnext/platform/guest/1.2",
   "title": "Guest (compute) descriptor",
   "description": "One VM, container or physical host, described in vendor-neutral values. Zones are referenced by id (a site model owns them); capabilities by cap: id. Generators render Terraform, libvirt, cloud-init, an Ansible inventory, registry hosts and backup jobs from a directory of these files.",
   "type": "object",
@@ -101,7 +101,12 @@
         },
         "packages": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9+.:_-]*$"}},
         "timezone": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+)*$", "default": "UTC"},
-        "storage_pool": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"}
+        "storage_pool": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+        "sudo": {
+          "enum": ["none", "password", "nopasswd"],
+          "default": "none",
+          "description": "(1.2) Sudo rule for the cloud-init user. none = no sudo rule (the default); password = ALL=(ALL) ALL, usable only once a password is set out of band; nopasswd = ALL=(ALL) NOPASSWD:ALL, an explicit opt-in for an automation account (docs/compute-model.md)."
+        }
       }
     },
     "network": {
@@ -142,6 +147,26 @@
       "additionalProperties": false,
       "description": "Per-guest firewall rules rendered by the firewall-rules target. Inbound policy is drop; only the listed rules are allowed.",
       "properties": {
+        "policy_out": {
+          "enum": ["ACCEPT", "DROP", "REJECT"],
+          "default": "ACCEPT",
+          "description": "(1.2) Outbound policy. DROP or REJECT is default-deny egress: only outbound_allow rules (and replies to allowed inbound traffic) leave the guest."
+        },
+        "outbound_allow": {
+          "type": "array",
+          "description": "(1.2) Egress allow rules, used with policy_out DROP or REJECT.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "proto", "dest"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,39}$"},
+              "proto": {"enum": ["tcp", "udp", "icmp"]},
+              "ports": {"type": "string", "pattern": "^[0-9]{1,5}(?::[0-9]{1,5})?$", "description": "A port or low:high range; omitted for icmp."},
+              "dest": {"type": "string", "pattern": "^(?:any|zone:[a-z][a-z0-9-]{0,31}|[0-9]{1,3}(?:\\.[0-9]{1,3}){3}/[0-9]{1,2})$", "description": "any, zone:<id> (resolved through the site model) or a CIDR."}
+            }
+          }
+        },
         "inbound_allow": {
           "type": "array",
           "items": {

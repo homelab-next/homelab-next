@@ -27,8 +27,29 @@ class _Mem:
         self.d[key] = value
 
 
+class _Observed:
+    """The harness's own record of what the notifier handed to the sender.
+
+    ``received()`` is the subject's account of the far side; this is the suite's.  Every read
+    of ``received()`` is cross-checked against it, so a channel that duplicates, drops or
+    rewrites a message is caught even if its own record looks plausible.
+    """
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.sent: list[Message] = []
+
+    def send(self, message):
+        self.inner.send(message)
+        self.sent.append(message)
+
+
+_OBSERVERS: dict[int, _Observed] = {}
+
+
 def _notifier(t):
-    n = Notifier(t.sender, _Mem(), clock=lambda: 1_000.0)
+    obs = _OBSERVERS[id(t)] = _Observed(t.sender)
+    n = Notifier(obs, _Mem(), clock=lambda: 1_000.0)
     title = uniq("Disk")
     n.register_pair(title, "Recovered: " + title)
     return n, title
@@ -38,8 +59,20 @@ def _msg(key, title, body="body", level="crit"):
     return Message(key=key, title=title, body=body, level=level)
 
 
+def _shape(msgs):
+    return [(m.key, m.title, m.body, m.level) for m in msgs]
+
+
 def _for(t, key):
-    return [m for m in t.received() if m.key == key]
+    got = [m for m in t.received() if m.key == key]
+    obs = _OBSERVERS.get(id(t))
+    if obs is not None:
+        sent = [m for m in obs.sent if m.key == key]
+        assert _shape(got) == _shape(sent), (
+            f"the far side shows {len(got)} message(s) for {key}, the sender was given "
+            f"{len(sent)}: {_shape(got)[:2]} vs {_shape(sent)[:2]}"
+        )
+    return got
 
 
 @SUITE.check("first-report-delivers-once", "a new problem reaches the far side exactly once")

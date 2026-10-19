@@ -36,6 +36,14 @@ argument_specs:
         type: str
         description: HTTP path probed by the health hook.
         default: /healthz
+      example_service_user:
+        type: str
+        description: Unprivileged account the systemd unit runs as (must exist on the host).
+        default: example-service
+      example_service_group:
+        type: str
+        description: Group the systemd unit runs as.
+        default: example-service
   health:
     short_description: Probe the service health endpoint; fails if not healthy.
     options:

@@ -14,7 +14,16 @@ factory).  The same suite therefore proves the incumbent product and a replaceme
 
 A check passes by returning (or returning ``None``), fails by raising ``AssertionError`` (the
 message becomes the evidence) or by letting the subject raise anything unexpected, and is
-skipped by raising :class:`Skip` or by requiring a feature the target does not declare.
+skipped by requiring a product feature the target does not declare, or - only when the check is
+declared ``skippable=True`` - by raising :class:`Skip` from the suite's own code.  A ``Skip``
+raised by the subject (or from a check not declared skippable) is a failure: the subject does not
+get to decide that it was not tested.
+
+Features are of two kinds.  *Product* features (``streaming``, ``wildcards``, ...) describe what
+the implementation offers; a check needing one is skipped when it is absent.  *Test hooks*
+(:data:`TEST_HOOKS`: ``clock-control``, ``fault-injection``) only let the suite reach a state; a
+``must`` check that needs an undeclared hook is ``untested``, which fails like a failure - not
+declaring a hook cannot be a way around a MUST.
 
 Severity follows RFC 2119 loosely: ``must`` is part of the contract (a failure fails the
 capability and the exit code); ``should`` is expected behaviour whose absence is reported but
@@ -31,6 +40,7 @@ from typing import Any, Protocol
 __all__ = [
     "SEVERITIES",
     "STATUSES",
+    "TEST_HOOKS",
     "Capability",
     "CheckResult",
     "Mutant",
@@ -40,21 +50,28 @@ __all__ = [
 ]
 
 SEVERITIES = ("must", "should")
-STATUSES = ("pass", "fail", "skip", "waived")
+STATUSES = ("pass", "fail", "skip", "waived", "untested")
+#: features that are harness hooks rather than product abilities (see the module docstring)
+TEST_HOOKS = frozenset({"clock-control", "fault-injection"})
 _ID = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 
 
 class Skip(Exception):
-    """Raised by a check that cannot be evaluated against this subject (reason in the message)."""
+    """Raised by a ``skippable`` check that cannot be evaluated against this subject.
+
+    Honoured only when raised from the module that defines the check (the suite), never when it
+    comes out of the subject: an adapter that raises ``Skip`` fails the check.
+    """
 
 
 @dataclass(frozen=True)
 class CheckResult:
     """Outcome of one check.  ``check`` is the check id; ``ok`` is False only for a failure.
 
-    ``status`` is ``pass``, ``fail``, ``skip`` (feature not declared) or ``waived`` (a ``should``
-    check the target waived, with a reason).  Skipped and waived results have ``ok=True`` but
-    never count as a pass of anything that matters.
+    ``status`` is ``pass``, ``fail``, ``skip`` (product feature not declared), ``waived`` (a
+    ``should`` check the target waived, with a reason) or ``untested`` (a ``must`` check that
+    needs a test hook the target does not declare; ``ok=False``).  Skipped and waived results
+    have ``ok=True`` but never count as a pass of anything that matters.
     """
 
     check: str
@@ -100,6 +117,12 @@ class CheckSpec:
     severity: str
     requires: tuple[str, ...]
     fn: Callable[[Any], Any]
+    skippable: bool = False
+
+    @property
+    def can_skip(self) -> bool:
+        """True when this check can end without executing (a mutant must not rely on it)."""
+        return self.skippable or bool(self.requires)
 
 
 @dataclass
@@ -119,6 +142,7 @@ class Suite:
         *,
         severity: str = "must",
         requires: Iterable[str] = (),
+        skippable: bool = False,
     ) -> Callable[[Callable[[Any], Any]], Callable[[Any], Any]]:
         if not _ID.match(id):
             raise ValueError(f"check id {id!r} must be lower-case words joined by '-'")
@@ -128,7 +152,7 @@ class Suite:
             raise ValueError(f"duplicate check id {id!r} in suite {self.name!r}")
 
         def deco(fn: Callable[[Any], Any]) -> Callable[[Any], Any]:
-            self._specs[id] = CheckSpec(id, summary, severity, tuple(requires), fn)
+            self._specs[id] = CheckSpec(id, summary, severity, tuple(requires), fn, skippable)
             return fn
 
         return deco
@@ -151,6 +175,16 @@ class Suite:
         def run_one(subject: Any) -> CheckResult:
             have = set(getattr(subject, "features", ())) | set(features or ())
             missing = [r for r in spec.requires if r not in have]
+            hooks = [r for r in missing if r in TEST_HOOKS]
+            if hooks and spec.severity == "must":
+                return CheckResult(
+                    spec.id,
+                    False,
+                    f"untested: MUST check needs test hook(s) {', '.join(hooks)} that the target "
+                    "does not declare",
+                    spec.severity,
+                    "untested",
+                )
             if missing:
                 return CheckResult(
                     spec.id,
@@ -162,6 +196,9 @@ class Suite:
             try:
                 out = spec.fn(subject)
             except Skip as sk:
+                why = _foreign_skip(spec, sk)
+                if why:
+                    return CheckResult(spec.id, False, why, spec.severity)
                 return CheckResult(spec.id, True, f"skipped: {sk}", spec.severity, "skip")
             except AssertionError as exc:
                 return CheckResult(spec.id, False, str(exc) or "assertion failed", spec.severity)
@@ -179,9 +216,26 @@ class Suite:
         return run_one
 
 
+def _foreign_skip(spec: CheckSpec, sk: Skip) -> str | None:
+    """Why a ``Skip`` must not be honoured, or None when the suite itself raised it."""
+    if not spec.skippable:
+        return f"raised Skip ({sk}) but the check is not skippable: only the suite may skip"
+    tb = sk.__traceback__
+    while tb is not None and tb.tb_next is not None:
+        tb = tb.tb_next
+    origin = tb.tb_frame.f_code.co_filename if tb is not None else ""
+    if origin != spec.fn.__code__.co_filename:
+        return f"the subject raised Skip ({sk}): only the suite may skip a check"
+    return None
+
+
 @dataclass(frozen=True)
 class Mutant:
-    """A deliberately defective subject.  The suite MUST fail the check named in ``fails``."""
+    """A deliberately defective subject.  The suite MUST fail the check named in ``fails``.
+
+    That check must be one that always executes (no ``requires``, not ``skippable``): a mutant
+    caught only by a check that can skip proves nothing about a target on which it skips.
+    """
 
     factory: Callable[[], Any]
     fails: str
@@ -213,6 +267,10 @@ def run_checks(
         if not str(reason).strip():
             raise ValueError(f"waive: {cid} needs a reason")
     wanted = set(only) if only is not None else None
+    if wanted is not None:
+        unknown = sorted(wanted - set(suite._specs))
+        if unknown:
+            raise ValueError(f"{suite.name} has no check(s) {', '.join(unknown)}")
     results: list[CheckResult] = []
     for spec in suite.specs:
         if wanted is not None and spec.id not in wanted:

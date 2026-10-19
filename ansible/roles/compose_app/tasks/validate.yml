@@ -1,10 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
-# Spec rules (see docs/role-interface.md): pinned tag AND digest, mandatory healthcheck,
-# no ':latest', placeholder digest only when explicitly allowed.
-- name: Validate project name
+# Spec rules (see docs/role-interface.md section 6). Everything a service may carry is checked
+# here before anything is rendered; the template only ever emits keys from this allowlist, and
+# every scalar it emits is JSON-quoted, so a value cannot add a key of its own.
+- name: Validate project name and role-level settings
   ansible.builtin.assert:
-    that: compose_app_name is match('^[a-z0-9][a-z0-9-]*$')
-    fail_msg: "compose_app_name must match ^[a-z0-9][a-z0-9-]*$"
+    that:
+      - compose_app_name is string and compose_app_name is match('^[a-z0-9][a-z0-9-]*\Z')
+      - compose_app_restart_policy in compose_app_restart_policies
+      - compose_app_security_opt is sequence and compose_app_security_opt is not string
+      - "'no-new-privileges:true' in compose_app_security_opt or compose_app_allow_privileged | bool"
+      - compose_app_cap_drop is sequence and compose_app_cap_drop is not string
+    fail_msg: >-
+      compose_app_name must match ^[a-z0-9][a-z0-9-]*$, the restart policy must be one of
+      {{ compose_app_restart_policies }}, and no-new-privileges may only be dropped together
+      with compose_app_allow_privileged
 
 - name: Validate services exist
   ansible.builtin.assert:
@@ -13,20 +22,82 @@
       - compose_app_spec.services | length > 0
     fail_msg: "compose_app_spec.services must be a non-empty mapping"
 
-- name: Validate each service
+- name: Validate each service (pinning, healthcheck, allowed keys)
   ansible.builtin.assert:
     that:
-      - item.value.image is defined
-      - "'@' not in item.value.image and ':' not in (item.value.image | regex_replace('^[^/]*/', ''))"
-      - item.value.tag is defined and item.value.tag | string != 'latest'
-      - item.value.digest is defined and item.value.digest is match('^sha256:[0-9a-f]{64}$')
+      - item.key is match('^[a-z0-9][a-z0-9_.-]*\Z')
+      - item.value is mapping
+      - item.value.keys() | difference(compose_app_service_keys) | length == 0
+      - item.value.image is defined and item.value.image is string
+      - item.value.image is match(compose_app_repository_pattern)
+      - item.value.tag is defined and item.value.tag is string and item.value.tag != 'latest'
+      - item.value.tag is match('^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z')
+      - item.value.digest is defined and item.value.digest is string
+      - item.value.digest is match('^sha256:[0-9a-f]{64}\Z')
       - item.value.digest != 'sha256:' ~ ('0' * 64) or compose_app_allow_placeholder_digest | bool
-      - item.value.healthcheck is defined and item.value.healthcheck.test is defined
-      - item.value.healthcheck.test is sequence and item.value.healthcheck.test | length > 0
+      - item.value.healthcheck is defined and item.value.healthcheck is mapping
+      - item.value.healthcheck.test is defined and item.value.healthcheck.test is sequence
+      - item.value.healthcheck.test is not string and item.value.healthcheck.test | length > 0
+      - item.value.healthcheck.test | reject('string') | list | length == 0
+      - item.value.healthcheck.keys() | difference(['test', 'interval', 'timeout', 'retries', 'start_period']) | length == 0
+      - item.value.healthcheck | dict2items | rejectattr('key', 'in', ['test', 'retries']) | map(attribute='value') | map('string') | reject('match', '^[0-9]+(ms|s|m|h)\Z') | list | length == 0
+      - item.value.healthcheck.retries | default(3) is integer
+      - item.value.restart | default(compose_app_restart_policy) in compose_app_restart_policies
       - item.value.depends_on | default([]) | difference(compose_app_spec.services.keys() | list) | length == 0
     fail_msg: >-
-      service '{{ item.key }}' violates the compose_app spec (image without tag/digest, pinned tag not latest,
-      sha256 digest, healthcheck.test, depends_on must name services)
+      service '{{ item.key }}' violates the compose_app spec: only the keys {{ compose_app_service_keys }};
+      image is a repository without tag or digest; tag matches ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ and is
+      not latest; digest is sha256:<64 hex>; healthcheck.test is a non-empty list of strings and its
+      durations look like 30s; depends_on names services in the spec
   loop: "{{ compose_app_spec.services | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
+
+- name: Validate each service (exposure and privilege)
+  ansible.builtin.assert:
+    that:
+      # environment: plain keys only, and no secret in clear (use compose_app_secret_env)
+      - item.value.environment | default({}) is mapping
+      - item.value.environment | default({}) | list | reject('match', '^[A-Za-z_][A-Za-z0-9_]*\Z') | list | length == 0
+      - item.value.environment | default({}) | list | select('search', compose_app_sensitive_name_pattern) | reject('search', '_FILE\Z') | list | length == 0
+      # ports: an explicit host address, always
+      - item.value.ports | default([]) | reject('string') | list | length == 0
+      - item.value.ports | default([]) | reject('match', compose_app_port_pattern) | list | length == 0
+      # volumes: short syntax only; no docker socket and no host root or /run unless allowed
+      - item.value.volumes | default([]) | reject('string') | list | length == 0
+      - item.value.volumes | default([]) | select('search', compose_app_docker_socket_pattern) | list | length == 0 or compose_app_allow_docker_socket | bool
+      # privilege
+      - not (item.value.privileged | default(false) | bool) or compose_app_allow_privileged | bool
+      - item.value.cap_add | default([]) | reject('string') | list | length == 0
+      - item.value.cap_add | default([]) | reject('match', '^[A-Z][A-Z_]*\Z') | list | length == 0
+      - item.value.cap_add | default([]) | map('regex_replace', '^CAP_', '') | intersect(compose_app_dangerous_caps) | length == 0 or compose_app_allow_privileged | bool
+      - item.value.user is not defined or (item.value.user | string) is match('^[A-Za-z0-9_][A-Za-z0-9_.-]*(:[A-Za-z0-9_][A-Za-z0-9_.-]*)?\Z')
+      - item.value.user is not defined or (item.value.user | string).split(':')[0] not in ['0', 'root'] or compose_app_allow_root | bool
+      - item.value.read_only | default(false) is boolean
+      - item.value.mem_limit is not defined or (item.value.mem_limit | string) is match('^[0-9]+[bkmgBKMG]?\Z')
+      - item.value.env_file | default([]) | reject('string') | list | length == 0
+    fail_msg: >-
+      service '{{ item.key }}' is refused: environment keys must be plain names and secret-looking ones
+      belong in compose_app_secret_env (a *_FILE pointer is fine); ports must be host_ip:host_port:container_port;
+      a docker socket or host-root mount needs compose_app_allow_docker_socket; privileged, or cap_add of
+      {{ compose_app_dangerous_caps }}, needs compose_app_allow_privileged; running as root needs
+      compose_app_allow_root; mem_limit looks like 256m
+  loop: "{{ compose_app_spec.services | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+# The values are never echoed: no_log hides the item, the label and the failure message alike.
+- name: Validate secret environment files
+  ansible.builtin.assert:
+    that:
+      - item.key in compose_app_spec.services
+      - item.value is mapping
+      - item.value | list | reject('match', '^[A-Za-z_][A-Za-z0-9_]*\Z') | list | length == 0
+      - item.value.values() | reject('string') | list | length == 0
+      - item.value.values() | select('search', "['\r\n\x00]") | list | length == 0
+      - item.value | list | intersect(compose_app_spec.services[item.key].environment | default({}) | list) | length == 0
+    fail_msg: >-
+      compose_app_secret_env: keys must name services in the spec, variable names must be plain, values
+      must be strings without a single quote or a line break, and a variable may not also be in environment
+  loop: "{{ compose_app_secret_env | dict2items }}"
+  no_log: true

@@ -15,3 +15,7 @@ CAPABILITY = "idp"
 @pytest.mark.parametrize("check_id", testing.check_ids(CAPABILITY))
 def test_idp(check_id):
     testing.assert_check(CAPABILITY, check_id)
+
+
+def test_idp_enough_checks_executed():
+    testing.assert_enough_executed(CAPABILITY)

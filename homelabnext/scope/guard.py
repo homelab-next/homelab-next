@@ -39,6 +39,7 @@ class Target:
     vmid: int | None = None
     tags: tuple[str, ...] = ()
     scope: str | None = None  # None = not stated; "in" / "out" = stated on the target itself
+    parent: str | None = None  # the id of the target this runs on (a service's host guest)
 
 
 @dataclass(frozen=True)
@@ -155,6 +156,13 @@ class ScopeGuard:
 
     # ---------------------------------------------------------------- decision
     def in_scope(self, ref: str) -> Decision:
+        """Decide for ``ref``.
+
+        A target with a ``parent`` (a service on its host guest) can only narrow the parent's
+        scope: the parent is decided first, and a parent denial (its own ``scope: out``, a
+        threshold, an out tag, an override) denies the child whatever the child says about
+        itself.  Only a policy override naming the child itself beats that.
+        """
         canonical, why = self.resolve(ref)
         if canonical is None:
             if why == "unknown-target" and self.policy.unknown == "allow":
@@ -167,6 +175,9 @@ class ScopeGuard:
                 else "reference does not resolve to a known target"
             )
             return Decision(False, ref, None, why or "unknown-target", msg)
+        return self._decide(ref, canonical, set())
+
+    def _decide(self, ref: str, canonical: str, seen: set[str]) -> Decision:
         t = self._targets[canonical]
         p = self.policy
         ov = p.overrides.get(canonical)
@@ -174,6 +185,10 @@ class ScopeGuard:
             return Decision(False, ref, canonical, "override-out", "policy override marks it out")
         if ov == "in":
             return Decision(True, ref, canonical, "override-in", "policy override marks it in")
+        if t.parent is not None and t.parent in self._targets and t.parent not in seen:
+            up = self._decide(t.parent, t.parent, seen | {canonical})
+            if not up.allow:
+                return Decision(False, ref, canonical, up.code, f"host {t.parent}: {up.reason}")
         if t.scope == "out":
             return Decision(False, ref, canonical, "explicit-out", "target is marked scope: out")
         if t.scope == "in":
@@ -271,9 +286,10 @@ def targets_from_services(
 ) -> list[Target]:
     """Targets for every service of a registry document (``svc:<name>``).
 
-    A service with no ``scope`` of its own inherits the scope, vmid and tags of the guest named
-    like its host (``guest:<host>``) when that guest is among ``guests``; so marking a scratch
-    guest out also covers what runs on it.
+    A service on a guest named like its host (``guest:<host>``, when among ``guests``) gets that
+    guest as its ``parent`` and inherits its vmid and tags: the host is decided first, so marking
+    a scratch guest out covers what runs on it, and a service's own ``scope: in`` cannot undo it
+    (only narrow it).
     """
     by_id = {t.id: t for t in guests}
     out = []
@@ -289,6 +305,7 @@ def targets_from_services(
                 vmid=host.vmid if host else None,
                 tags=tags,
                 scope=scope,
+                parent=host.id if host else None,
             )
         )
     return out

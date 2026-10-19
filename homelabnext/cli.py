@@ -14,11 +14,8 @@ import importlib
 import importlib.util
 import sys
 from collections.abc import Callable, Sequence
-from pathlib import Path
 
 Main = Callable[[list[str]], int]
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _registry(argv: list[str]) -> int:
@@ -70,9 +67,12 @@ def _guests(argv: list[str]) -> int:
 
 
 def _schema_check(argv: list[str]) -> int:
-    path = REPO_ROOT / "tools" / "schema_check.py"
-    if not path.is_file():
-        print("hnx schema-check: needs a source checkout (tools/schema_check.py)", file=sys.stderr)
+    from homelabnext import paths
+
+    try:
+        path = paths.checkout_tool("schema_check.py", feature="hnx schema-check")
+    except paths.NotACheckout as exc:
+        print(exc, file=sys.stderr)
         return 2
     spec = importlib.util.spec_from_file_location("hnx_schema_check", path)
     assert spec and spec.loader

@@ -34,8 +34,8 @@ lessons:
     Id allocation was a read-then-write on shared state with no lock, so concurrent authors were
     guaranteed to collide eventually.
   preventive_control: >
-    Authors write `LL-NEW`; a commit hook allocates the number under a host-wide lock, and a
-    second hook fails the commit when an id present in a parent commit has vanished.
+    Authors commit `LL-NEW`; a maintainer step allocates the number under a per-repository lock,
+    and CI fails when an id is duplicated or an id present in the base has vanished.
   verification:
     observable: python3 tools/register_ids.py check-lost examples/registers/lessons.yml
     expected: exit 0; exit 1 naming the id when an entry is dropped

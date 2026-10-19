@@ -1,4 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
+# Values land in a systemd unit and a YAML file: refuse anything that could add a line or a key
+# (a newline, a space, a systemd % specifier) before rendering either.
+- name: Validate identifiers, paths and the run-as account
+  ansible.builtin.assert:
+    that:
+      - example_service_logical_id is match('^[a-z0-9][a-z0-9-]*\Z')
+      - example_service_data_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - example_service_config_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - example_service_user is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - example_service_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - example_service_user != 'root' and example_service_group != 'root'
+      - example_service_listen_port | int >= 1024 and example_service_listen_port | int <= 65535
+    fail_msg: >-
+      example_service: logical id, data/config dirs (absolute, [A-Za-z0-9._/-] only), a non-root
+      user and group, and an unprivileged listen port (1024-65535; the unit holds no capabilities)
+
 - name: Create service directories
   ansible.builtin.file:
     path: "{{ item }}"

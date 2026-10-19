@@ -8,7 +8,7 @@ resources:
   memory: {size_mb: 4096, balloon_min_mb: 2048}
   disks: [{name: rootfs, size_gb: 32, pool: fast, format: qcow2}]
 image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
-cloudinit: {user: ansible, ssh_authorized_keys: [operator]}
+cloudinit: {user: ansible, ssh_authorized_keys: [operator], sudo: password}
 network:
   zone: data
   ip: 198.51.100.50

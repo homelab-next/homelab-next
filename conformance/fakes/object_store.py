@@ -84,3 +84,21 @@ class BrokenEtagObjectStore(FakeObjectStore):
     @staticmethod
     def _etag(data: bytes) -> str:
         return f"len-{len(data)}"
+
+
+class PathResolvingObjectStore(FakeObjectStore):
+    """A directory-on-disk store that resolves ``bucket/key`` as a path, so ``..`` escapes."""
+
+    def _where(self, bucket: str, key: str) -> tuple[str, str]:
+        import posixpath
+
+        self._bucket(bucket)
+        full = posixpath.normpath(posixpath.join("/", bucket, key)).lstrip("/")
+        b, _, k = full.partition("/")
+        return (b, k) if b in self._b else (bucket, k or key)
+
+    def put(self, bucket, key, data, *, metadata=None):
+        return super().put(*self._where(bucket, key), data, metadata=metadata)
+
+    def get(self, bucket, key):
+        return super().get(*self._where(bucket, key))

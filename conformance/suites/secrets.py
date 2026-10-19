@@ -3,7 +3,14 @@
 
 from __future__ import annotations
 
-from conformance.fakes.secret_store import FakeSecretStore, LeakyErrorSecretStore
+from conformance.fakes.secret_store import (
+    ChainedLeakSecretStore,
+    FakeSecretStore,
+    LeakyErrorSecretStore,
+    NegativeTtlSecretStore,
+    NeverExpiringSecretStore,
+    UnknownLeaseValidSecretStore,
+)
 from conformance.protocols.secrets import (
     InvalidPath,
     LeaseError,
@@ -11,7 +18,7 @@ from conformance.protocols.secrets import (
 )
 from homelabnext.conform.core import Mutant, Suite
 
-from ._util import raises, uniq
+from ._util import exc_text, expires, raises, uniq
 
 SUITE = Suite(
     "secrets",
@@ -66,22 +73,27 @@ def _(s):
         raises(lambda b=bad: s.put(b, {"k": "v"}), f"path {bad!r}", InvalidPath, ValueError)
 
 
-@SUITE.check("errors-never-contain-values", "no error message includes a submitted secret value")
+@SUITE.check(
+    "errors-never-contain-values",
+    "no error - message, repr, attributes, cause chain or traceback - includes a secret value",
+)
 def _(s):
     text = []
     for fn in (
         lambda: s.put("../bad", {"password": VALUE}),
         lambda: s.put("", {"password": VALUE}),
+        lambda: s.put("a//b", {"password": VALUE}),
         lambda: s.get(_path(s)),
         lambda: s.get("../" + _path(s)),
+        lambda: s.lease(_path(s), 30),
     ):
         try:
             fn()
         except Exception as exc:
-            text.append(f"{exc} {exc!r}")
+            text.append(exc_text(exc))
     assert text, "no error was raised at all"
     leaked = [t for t in text if VALUE in t]
-    assert not leaked, f"secret value appeared in an error: {leaked[0][:120]}"
+    assert not leaked, "secret value appeared in an error (message, chain, attributes or traceback)"
 
 
 @SUITE.check("repr-is-redacted", "repr/str of a returned secret hides the value")
@@ -106,17 +118,29 @@ def _(s):
 def _(s):
     p = _path(s)
     s.put(p, {"k": "v"})
-    raises(lambda: s.lease(p, 0), "ttl 0", LeaseError, ValueError)
+    for ttl in (0, -5, -0.5):
+        raises(lambda t=ttl: s.lease(p, t), f"ttl {ttl}", LeaseError, ValueError)
 
 
-@SUITE.check("lease-expires", "a lease is invalid after its ttl", requires=["clock-control"])
+@SUITE.check(
+    "lease-expires",
+    "a lease is invalid after its ttl (clock hook if offered, else real time; never skipped)",
+)
 def _(s):
     p = _path(s)
     s.put(p, {"k": "v"})
-    lease = s.lease(p, 30)
+    lease = s.lease(p, 1)
     assert s.lease_valid(lease.id), "fresh lease not valid"
-    s.tick(31)
-    assert not s.lease_valid(lease.id), "lease still valid after ttl"
+    assert expires(s, lambda: s.lease_valid(lease.id), 1), "lease still valid after its ttl"
+
+
+@SUITE.check("unknown-lease-invalid", "a lease id the store never issued is not valid")
+def _(s):
+    p = _path(s)
+    s.put(p, {"k": "v"})
+    real = s.lease(p, 300)
+    for ghost in (uniq("lease-ghost"), "", real.id + "x", "lease-0"):
+        assert not s.lease_valid(ghost), f"never-issued lease id {ghost!r} reported valid"
 
 
 @SUITE.check("revoke-ends-lease", "a revoked lease is invalid; revoking twice is harmless")
@@ -138,5 +162,19 @@ MUTANTS = {
         LeakyErrorSecretStore,
         "errors-never-contain-values",
         "the invalid-path error echoes the submitted values",
+    ),
+    "error-cause-leaks-value": Mutant(
+        ChainedLeakSecretStore,
+        "errors-never-contain-values",
+        "the invalid-path error is raised from an exception that carries the values",
+    ),
+    "lease-never-expires": Mutant(
+        NeverExpiringSecretStore, "lease-expires", "lease_valid ignores the expiry time"
+    ),
+    "unknown-lease-valid": Mutant(
+        UnknownLeaseValidSecretStore, "unknown-lease-invalid", "any unknown lease id is valid"
+    ),
+    "negative-ttl-accepted": Mutant(
+        NegativeTtlSecretStore, "lease-ttl-must-be-positive", "only ttl == 0 is refused"
     ),
 }

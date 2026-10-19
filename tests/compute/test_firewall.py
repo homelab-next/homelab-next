@@ -180,20 +180,20 @@ def test_duplicate_rule_names_are_rejected(tmp_path):
 # ---------------------------------------------------------------- the rules-file renderer
 def test_rules_file_defaults_to_drop_inbound(good):
     fw = render(good, "firewall-rules")
-    text = fw["firewall/lake-core.fw"]
+    text = fw["firewall/140.fw"]
     assert "policy_in: DROP" in text and "enable: 1" in text
     assert "IN ACCEPT -p tcp -dport 8443 -source 198.51.100.128/25 -log nolog # query-api" in text
     assert "IN ACCEPT -p icmp -source 192.0.2.0/24" in text  # a CIDR passes through
 
 
 def test_zone_source_resolves_through_the_site_model(good):
-    text = render(good, "firewall-rules")["firewall/edge-core.fw"]
+    text = render(good, "firewall-rules")["firewall/110.fw"]
     assert "-dport 22 -source 192.0.2.0/24" in text
     assert "-dport 443 -log nolog # https-public" in text  # `any` adds no -source
 
 
 def test_rule_order_follows_the_file(good):
-    lines = render(good, "firewall-rules")["firewall/lake-core.fw"].splitlines()
+    lines = render(good, "firewall-rules")["firewall/140.fw"].splitlines()
     assert [ln.rsplit("# ", 1)[1] for ln in lines if ln.startswith("IN ")] == [
         "query-api",
         "ssh-mgmt",
@@ -202,13 +202,13 @@ def test_rule_order_follows_the_file(good):
 
 
 def test_guest_without_rules_gets_drop_and_nothing_else(good):
-    text = render(good, "firewall-rules")["firewall/idp-core.fw"]
+    text = render(good, "firewall-rules")["firewall/130.fw"]
     assert "policy_in: DROP" in text and "IN ACCEPT" not in text
 
 
 def test_exempt_and_non_iac_guests_get_no_file_but_are_listed(good):
     fw = render(good, "firewall-rules")
-    assert "firewall/bus-core.fw" not in fw
+    assert "firewall/150.fw" not in fw
     assert not any("secrets-core" in k or "hv-a" in k for k in fw)
     ex = fw["firewall/EXEMPTIONS.md"]
     assert "guest:bus-core" in ex and "2027-03-31" in ex and "authentication" in ex
@@ -240,3 +240,91 @@ def test_load_nodes_validates(tmp_path):
     p.write_text("- not a mapping\n")
     with pytest.raises(ComputeError):
         load_nodes(p)
+
+
+# ---------------------------------------------------------------- what the hypervisor actually reads
+def test_rules_files_are_named_by_vmid_because_that_is_what_proxmox_reads(good):
+    fw = render(good, "firewall-rules")
+    rule_files = sorted(k for k in fw if k.endswith(".fw"))
+    assert rule_files == [
+        f"firewall/{g.vmid}.fw" for g in sorted(good.iac(), key=lambda g: g.vmid) if g.nic_firewall
+    ]
+    assert not any(g.name in k for g in good.guests for k in rule_files)
+    assert "# guest:lake-core on hv-a" in fw["firewall/140.fw"]  # the name stays readable
+
+
+def _run_verify(tmp_path, fw, cluster: str | None, drop: str | None = None):
+    import subprocess
+
+    out = tmp_path / "render"
+    pve = tmp_path / "pve"
+    for d in (out, pve):
+        d.mkdir(parents=True)
+    for rel, text in fw.items():
+        (out / Path(rel).name).write_text(text)
+        if rel.endswith(".fw") and Path(rel).name != drop:
+            (pve / Path(rel).name).write_text(text)
+    if cluster is not None:
+        (pve / "cluster.fw").write_text(cluster)
+    return subprocess.run(
+        ["sh", str(out / "verify-datacenter.sh")],
+        env={"HNX_PVE_FIREWALL_DIR": str(pve), "PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.mark.skipif(shutil.which("sh") is None or shutil.which("awk") is None, reason="no sh/awk")
+def test_verify_script_checks_the_datacenter_switch_and_installed_files(good, tmp_path):
+    fw = render(good, "firewall-rules")
+    ok = _run_verify(tmp_path / "a", fw, "[OPTIONS]\nenable: 1\npolicy_in: DROP\n\n[RULES]\n")
+    assert ok.returncode == 0, ok.stderr
+    off = _run_verify(tmp_path / "b", fw, "[OPTIONS]\nenable: 0\n\n[RULES]\nenable: 1\n")
+    assert off.returncode == 1 and "datacenter firewall is off" in off.stderr
+    missing = _run_verify(tmp_path / "c", fw, None)
+    assert missing.returncode == 1 and "datacenter firewall is off" in missing.stderr
+    gone = _run_verify(tmp_path / "d", fw, "[OPTIONS]\nenable: 1\n", drop="140.fw")
+    assert gone.returncode == 1 and "140.fw is missing or differs" in gone.stderr
+    if shutil.which("shellcheck"):
+        import subprocess
+
+        script = tmp_path / "a" / "render" / "verify-datacenter.sh"
+        r = subprocess.run(["shellcheck", "-s", "sh", str(script)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout
+
+
+def test_egress_defaults_to_accept_and_can_be_default_deny(good, tmp_path):
+    assert "policy_out: ACCEPT" in render(good, "firewall-rules")["firewall/140.fw"]
+
+    def deny(doc):
+        doc["firewall_rules"]["policy_out"] = "DROP"
+        doc["firewall_rules"]["outbound_allow"] = [
+            {"name": "dns", "proto": "udp", "ports": "53", "dest": "zone:mgmt"},
+            {"name": "https-out", "proto": "tcp", "ports": "443", "dest": "any"},
+        ]
+
+    f = load_fleet(fleet_dir(tmp_path, "lake-core", deny), STUB)
+    text = render(f, "firewall-rules")["firewall/140.fw"]
+    assert "policy_out: DROP" in text and "log_level_out: nolog" in text
+    assert "OUT ACCEPT -p udp -dport 53 -dest 192.0.2.0/24 -log nolog # dns" in text
+    assert "OUT ACCEPT -p tcp -dport 443 -log nolog # https-out" in text
+    assert text.index("IN ACCEPT") < text.index("OUT ACCEPT")
+
+
+def test_outbound_rules_need_a_deny_policy_and_a_known_zone(tmp_path):
+    def allow_only(doc):
+        doc["firewall_rules"]["outbound_allow"] = [{"name": "x", "proto": "icmp", "dest": "any"}]
+
+    assert "needs policy_out DROP or REJECT" in problems(
+        fleet_dir(tmp_path / "a", "lake-core", allow_only)
+    )
+
+    def bad_zone(doc):
+        doc["firewall_rules"]["policy_out"] = "REJECT"
+        doc["firewall_rules"]["outbound_allow"] = [
+            {"name": "x", "proto": "icmp", "dest": "zone:nope"}
+        ]
+
+    assert "dest zone 'nope' does not exist" in problems(
+        fleet_dir(tmp_path / "b", "lake-core", bad_zone)
+    )

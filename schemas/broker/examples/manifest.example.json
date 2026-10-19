@@ -26,6 +26,13 @@
     }
   ],
   "approval_ttl_s": 900,
+  "approvers": [
+    {
+      "issuer": "sso",
+      "kind": "human",
+      "subject": "approver-one"
+    }
+  ],
   "default": "deny",
   "grants": [
     {

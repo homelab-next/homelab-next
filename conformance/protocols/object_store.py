@@ -2,7 +2,9 @@
 """Contract for ``object-store``: S3-like blobs in buckets.
 
 Deliberately the common subset of S3, MinIO, Ceph and a directory on disk.  Keys are text
-(``/`` is just a character), values are bytes.  ``list`` is by prefix, ordered by key
+(``/`` is just a character), values are bytes.  Keys are never resolved as paths: ``../x`` and
+``a/../../b`` are either stored under exactly that key or refused (``ValueError`` /
+``ObjectStoreError``), and no key reaches an object of another bucket.  ``list`` is by prefix, ordered by key
 (code-point order of the UTF-8 bytes), paginated with an opaque ``next`` token.
 """
 

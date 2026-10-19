@@ -3,9 +3,14 @@
 
   hnx ids alloc REGISTER [--prefix LL] [-n N]
   hnx ids resolve PATH...        rewrite XX-NEW placeholders (exit 3 if it changed anything)
-  hnx ids check-lost PATH...     fail if a parent commit's id vanished (exit 1)
+  hnx ids check-lost PATH... [--base REV]
+                                 fail if a parent commit's (or REV's) id vanished (exit 1)
+  hnx ids check-dupes PATH...    fail if an allocated id occurs twice (exit 1)
 
-Wire `resolve` then `check-lost` into a pre-commit hook (tools/register_ids.py is a thin wrapper).
+Contributors commit `XX-NEW`; `check-lost` and `check-dupes` run in the pre-commit hook and in CI
+against the pull request's base.  A maintainer runs `resolve` once, at merge time, on the target
+branch (`make ids-resolve`), so two pull requests never claim the same number.
+tools/register_ids.py is a thin wrapper.
 """
 
 import argparse
@@ -34,6 +39,9 @@ def main(argv=None) -> int:
     r.add_argument("--dry-run", action="store_true")
     c = sub.add_parser("check-lost")
     c.add_argument("paths", nargs="+")
+    c.add_argument("--base", help="compare with this revision only (CI: the PR base commit)")
+    d = sub.add_parser("check-dupes")
+    d.add_argument("paths", nargs="+")
     ns = ap.parse_args(argv)
     try:
         root = ids.repo_root()
@@ -55,8 +63,20 @@ def main(argv=None) -> int:
                     print(f"[register-ids] {rel}: {old} -> {new}")
             return 3 if changed else 0
         bad = False
+        if ns.cmd == "check-dupes":
+            for rel in rels:
+                spec = ids.spec_for(rel)
+                if spec is None:
+                    continue
+                dupes = ids.duplicates((root / rel).read_text(), spec)
+                if dupes:
+                    bad = True
+                    print(
+                        f"[register-ids] FATAL: {rel} repeats {', '.join(dupes)}", file=sys.stderr
+                    )
+            return 1 if bad else 0
         for rel in rels:
-            lost = ids.check_lost(root, rel)
+            lost = ids.check_lost(root, rel, base=ns.base)
             if lost:
                 bad = True
                 print(f"[register-ids] FATAL: {rel} lost {', '.join(lost)}", file=sys.stderr)

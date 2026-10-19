@@ -127,3 +127,38 @@ def test_report_json_is_canonical_and_stable():
     r1 = compare_tables(a, b, lakes.TABLES)
     r2 = compare_tables(a, b, lakes.TABLES)
     assert r1.to_json() == r2.to_json() and r1.digest() == r2.digest()
+
+
+def test_table_names_are_validated_and_quoted():
+    from homelabnext.lake.errors import LakeError
+    from homelabnext.lake.sqlparams import quote_table
+
+    assert quote_table("authentication") == '"authentication"'
+    assert quote_table("iceberg.soc.auth") == '"iceberg"."soc"."auth"'
+    for bad in ("auth\n", "auth; DROP TABLE x", 'a"b', "a..b", "", "1abc", "a.b.c.d"):
+        with pytest.raises(LakeError):
+            quote_table(bad)
+    a, b = lakes.pair()
+    with pytest.raises(ValueError):
+        compare_tables(a, b, ["authentication\n"])  # re.match + $ used to accept this
+
+
+def test_a_describe_name_from_the_adapter_is_not_trusted():
+    a, b = lakes.pair()
+
+    class Lying:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def describe(self, t):
+            info = self.inner.describe(t)
+            from dataclasses import replace
+
+            return replace(info, name="authentication WHERE 1=0 UNION SELECT 1")
+
+        def __getattr__(self, n):
+            return getattr(self.inner, n)
+
+    rep = compare_tables(Lying(a), b, ["authentication"])
+    rows = next(c for c in rep.checks if c.name == "table:authentication:rows")
+    assert not rows.ok and "not a table identifier" in rows.summary

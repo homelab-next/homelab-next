@@ -32,9 +32,10 @@ class RegisterError(Exception):
 
 
 LESSON_STATUSES = ("open", "partial", "controlled")
-LESSON_ID = re.compile(r"^LL-\d{3,}$")
-RUNBOOK_ID = re.compile(r"^RB-\d{3,}$")
-CRIT_ID = re.compile(r"^[A-Z]-\d{2,}$")
+# ``XX-NEW`` is a valid committed state: a maintainer allocates the number at merge time.
+LESSON_ID = re.compile(r"^LL-(?:\d{3,}|NEW)$")
+RUNBOOK_ID = re.compile(r"^RB-(?:\d{3,}|NEW)$")
+CRIT_ID = re.compile(r"^[A-Z]-(?:\d{2,}|NEW)$")
 MIN_TEXT = 12  # chars; a one-word root cause is a label, not a cause
 WEAK_PHRASES = (
     "be careful",
@@ -85,6 +86,8 @@ def _entries(data, key, register):
 def _dupes(ids, problems):
     seen = set()
     for i in ids:
+        if i.endswith("-NEW"):
+            continue  # placeholders may repeat until allocated
         if i in seen:
             problems.append(f"duplicate id {i}")
         seen.add(i)

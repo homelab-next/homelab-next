@@ -7,8 +7,9 @@ from conformance.fakes.object_store import (
     BrokenEtagObjectStore,
     BrokenListObjectStore,
     FakeObjectStore,
+    PathResolvingObjectStore,
 )
-from conformance.protocols.object_store import NoSuchBucket, NoSuchKey
+from conformance.protocols.object_store import NoSuchBucket, NoSuchKey, ObjectStoreError
 from homelabnext.conform.core import Mutant, Suite
 
 from ._util import raises, uniq
@@ -132,6 +133,33 @@ def _(store):
 
 
 @SUITE.check(
+    "keys-never-escape-the-bucket",
+    "'..' keys are stored verbatim or refused; buckets never see each other's objects",
+)
+def _(store):
+    a, b = _bucket(store), _bucket(store)
+    store.put(a, "secret", b"bucket-a")
+    store.put(a, "x", b"a-x")
+    raises(lambda: store.get(b, "secret"), "another bucket's key", NoSuchKey)
+    assert "secret" not in store.list(b).keys, "a bucket lists another bucket's key"
+    for key in ("../x", "a/../../b", f"../{a}/secret", f"x/../../{a}/secret", "./x"):
+        try:
+            store.put(b, key, b"evil")
+        except (ValueError, ObjectStoreError):
+            raises(lambda k=key: store.get(b, k), f"refused key {key!r}", NoSuchKey, ValueError)
+            continue
+        assert store.get(b, key) == b"evil", f"key {key!r} not stored under itself"
+    assert store.get(a, "secret") == b"bucket-a", "a '..' key overwrote another bucket's object"
+    assert store.get(a, "x") == b"a-x", "a '..' key overwrote another key"
+    for key in (f"../{a}/secret", f"x/../../{a}/secret"):
+        try:
+            got = store.get(b, key)
+        except (NoSuchKey, ValueError, ObjectStoreError):
+            continue
+        assert got != b"bucket-a", f"key {key!r} read another bucket's object"
+
+
+@SUITE.check(
     "user-metadata-preserved",
     "metadata supplied on put comes back from head",
     severity="should",
@@ -155,5 +183,10 @@ MUTANTS = {
     ),
     "weak-etag": Mutant(
         BrokenEtagObjectStore, "etag-tracks-content", "etag depends on the size only"
+    ),
+    "keys-resolved-as-paths": Mutant(
+        PathResolvingObjectStore,
+        "keys-never-escape-the-bucket",
+        "bucket/key is normalised as a path, so '..' reaches other keys and buckets",
     ),
 }

@@ -14,6 +14,14 @@ if the stable tier alone does not fit, the pack is ``deferred``.
 A required pre-gate that is missing, ``stale`` or ``failed`` also yields a ``deferred`` pack with
 the reason, so the agent does not run on guessed context.
 
+Fencing.  Stable sections are fenced ``<delim> <name> [stable] <delim>``; their text comes from
+the manifest.  Session and volatile sections carry untrusted input, so they are fenced with a
+per-pack nonce, ``<delim> <name> [<tier>] <nonce> <delim>`` ... ``<delim> end <name> <nonce>
+<delim>``, where the nonce is derived from the digest of the fenced content (deterministic, so the
+pack stays a pure function, but not knowable to whoever wrote that content).  Any line of
+session or volatile text that starts with the delimiter (or the default one) is escaped with
+:data:`ESCAPE_PREFIX`, so input cannot open a fake section, stable or otherwise.
+
 ``inputs`` shape::
 
     {"sections": {<section name>: <text>}, "pregates": {<gate id>: <pregate_output dict>}}
@@ -31,6 +39,16 @@ TIERS = ("stable", "session", "volatile")
 _RANK = {t: i for i, t in enumerate(TIERS)}
 DEFAULT_DELIMITER = "====="
 PREGATE_PREFIX = "pregate-"
+ESCAPE_PREFIX = "[escaped] "
+
+
+def _escape(text: str, delims: tuple[str, ...]) -> str:
+    """Prefix every line that looks like a fence so it reads as data, not structure."""
+    lines = text.split("\n")
+    return "\n".join(
+        ESCAPE_PREFIX + ln if ln.lstrip().startswith(delims) or ln.startswith(ESCAPE_PREFIX) else ln
+        for ln in lines
+    )
 
 
 def _marker(n: int) -> str:
@@ -85,6 +103,11 @@ def assemble_pack(manifest: Mapping[str, Any], inputs: Mapping[str, Any]) -> tup
             continue
         items.append({**{k: s[k] for k in ("name", "tier", "max_chars", "required")}, "text": text})
     items.sort(key=lambda i: (_RANK[i["tier"]], i["name"]))
+    delim = manifest.get("delimiter", DEFAULT_DELIMITER)
+    delims = tuple(sorted({delim, DEFAULT_DELIMITER}))
+    for i in items:
+        if i["tier"] != "stable":
+            i["text"] = _escape(i["text"], delims)
 
     # per-section cap
     for i in items:
@@ -132,7 +155,6 @@ def assemble_pack(manifest: Mapping[str, Any], inputs: Mapping[str, Any]) -> tup
     items = [i for i in items if i["text"] or not i["truncated"]]
     touched = sorted({t["tier"] for t in truncations}, key=_RANK.get)
 
-    delim = manifest.get("delimiter", DEFAULT_DELIMITER)
     sections = [
         {
             "name": i["name"],
@@ -143,14 +165,19 @@ def assemble_pack(manifest: Mapping[str, Any], inputs: Mapping[str, Any]) -> tup
         }
         for i in items
     ]
-    rendered = "".join(
-        f"{delim} {s['name']} [{s['tier']}] {delim}\n{s['text']}\n" for s in sections
-    )
-    stable_prefix = "".join(
-        f"{delim} {s['name']} [{s['tier']}] {delim}\n{s['text']}\n"
-        for s in sections
-        if s["tier"] == "stable"
-    )
+    fenced = [(s["name"], s["tier"], s["text"]) for s in sections if s["tier"] != "stable"]
+    nonce = digest_of([delim, fenced]).split(":", 1)[1][:16]
+
+    def fence(s: Mapping[str, Any]) -> str:
+        if s["tier"] == "stable":
+            return f"{delim} {s['name']} [stable] {delim}\n{s['text']}\n"
+        return (
+            f"{delim} {s['name']} [{s['tier']}] {nonce} {delim}\n{s['text']}\n"
+            f"{delim} end {s['name']} {nonce} {delim}\n"
+        )
+
+    rendered = "".join(fence(s) for s in sections)
+    stable_prefix = "".join(fence(s) for s in sections if s["tier"] == "stable")
     pack = {
         "manifest": manifest["id"],
         "persona": manifest["persona"],

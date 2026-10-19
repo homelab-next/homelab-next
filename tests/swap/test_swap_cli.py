@@ -158,7 +158,11 @@ def test_full_swap_via_cli(ws, capsys):
     code, out, _ = adv(ws, capsys, "2026-05-03T14:00:00+00:00", extra=["--adr", ADR])
     assert code == 0 and "swap closed" in out
     code, out, _err = run(capsys, "record", ws / "s.swap.json", "--verify")
-    assert code == 0 and "hash chain intact" in out
+    assert code == 0 and "hash chain consistent" in out
+    anchor = next(ln.split("head: ")[1] for ln in out.splitlines() if "head: " in ln)
+    assert run(capsys, "record", ws / "s.swap.json", "--anchor", anchor)[0] == 0
+    seq = anchor.split(":", 1)[0]
+    assert run(capsys, "record", ws / "s.swap.json", "--anchor", f"{seq}:sha256:{'0' * 64}")[0] == 1
     code, out, _ = run(
         capsys, "rollback", ws / "s.swap.json", "--reason", "too late to undo this one"
     )
