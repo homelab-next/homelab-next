@@ -2,6 +2,7 @@
 """``homelabnext.paths``: lookup order, injected roots, caching, error text, no stray locators."""
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -215,3 +216,18 @@ def test_tool_runners_refuse_outside_a_checkout(not_a_checkout, capsys):
         core._role_lint()
     lint = importlib.import_module("homelabnext.customization.lint")
     assert lint._tools_path() is None  # falls back to the built-in matcher
+
+
+def test_conformance_suites_are_not_imported_outside_a_checkout(not_a_checkout, monkeypatch):
+    from homelabnext.conform import registry
+
+    planted = not_a_checkout / "conformance" / "suites"
+    planted.mkdir(parents=True)
+    (not_a_checkout / "conformance" / "__init__.py").write_text("")
+    (planted / "__init__.py").write_text("")
+    (planted / "idp.py").write_text("raise SystemExit('planted code ran')\n")
+    monkeypatch.syspath_prepend(str(not_a_checkout))
+    for name in [m for m in sys.modules if m == "conformance" or m.startswith("conformance.")]:
+        monkeypatch.delitem(sys.modules, name)
+    with pytest.raises(registry.ConformError, match="needs a source checkout"):
+        registry.load_module("idp")

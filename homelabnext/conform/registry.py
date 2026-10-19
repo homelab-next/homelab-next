@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+from ..paths import checkout_root
 from .core import Suite
 
 __all__ = [
@@ -75,18 +76,27 @@ def module_name(capability: str) -> str:
 
 
 def load_module(capability: str, root: str | Path | None = None) -> ModuleType:
+    """Import the suite for ``capability`` from ``root`` (default: this package's checkout).
+
+    Suites are executed, so without ``--root`` they are only loaded when this package was imported
+    from a verified checkout: from a wheel, a ``conformance`` package that some other
+    distribution put on ``sys.path`` is never imported.
+    """
     if capability not in (*CAPABILITIES, *EXTENDED):
         raise ConformError(f"unknown capability {capability!r}; known: {', '.join(names(True))}")
     r = find_root(root)
+    missing = ConformError(
+        f"suite for {capability!r} not found: hnx conform needs a source checkout "
+        f"(conformance/suites/ under {r}); use --root to point at one"
+    )
+    if root is None and checkout_root() is None:
+        raise missing
     _ensure_importable(r)
     try:
         return importlib.import_module(module_name(capability))
     except ModuleNotFoundError as exc:
         if exc.name and exc.name.startswith("conformance"):
-            raise ConformError(
-                f"suite for {capability!r} not found: hnx conform needs a source checkout "
-                f"(conformance/suites/ under {r}); use --root to point at one"
-            ) from exc
+            raise missing from exc
         raise
 
 
