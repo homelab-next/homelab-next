@@ -325,9 +325,9 @@ class FakeLab:
             return [], [], {"updateType": "CREATE TABLE"}
         if sql.count("?") != len(args):
             raise _TrinoFail("Incorrect number of parameters", "INVALID_PARAMETER_USAGE")
-        m = re.match(r'INSERT INTO "\w+"\."(\w+)"\."(\w+)" \(([^)]*)\) VALUES ', sql)
-        if m:
-            return self._insert(m.group(1), m.group(2), m.group(3), args, qid)
+        ins = _parse_insert(sql)
+        if ins:
+            return self._insert(*ins, args, qid)
         return self._select(ns, sql, args)
 
     def _insert(self, ns, t, cols, args, qid):
@@ -484,3 +484,21 @@ class FakeLab:
 
 class _TrinoFail(Exception):
     pass
+
+
+def _parse_insert(sql):
+    """(namespace, table, column list) of `INSERT INTO "c"."ns"."t" (cols) VALUES ...`, else None.
+
+    Plain string splitting rather than a regex, so the stand-in's parse is linear on any input.
+    """
+    head, sep, _ = sql.partition(") VALUES ")
+    if not sep or not head.startswith('INSERT INTO "'):
+        return None
+    target, sep, cols = head[len("INSERT INTO ") :].partition(" (")
+    parts = target.split(".")
+    if not sep or len(parts) != 3 or "(" in cols:
+        return None
+    names = [x[1:-1] for x in parts if len(x) > 2 and x[0] == x[-1] == '"']
+    if len(names) != 3 or not all(n.replace("_", "").isalnum() for n in names):
+        return None
+    return names[1], names[2], cols
