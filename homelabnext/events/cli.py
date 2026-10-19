@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""CLI: ``python -m homelabnext.events <cmd>``.
+"""CLI: ``hnx events <cmd>`` (also ``python -m homelabnext.events <cmd>``).
 
 ``deploy-changed``   build the what-changed event of a deploy from the changelog (F-15); write it
                      to ``--out`` and/or publish it through ``--forwarder`` with a ``--state`` file.
@@ -85,7 +85,7 @@ def _enrich_coverage(a: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m homelabnext.events")
+    ap = argparse.ArgumentParser(prog="hnx events")
     sub = ap.add_subparsers(dest="cmd", required=True)
     d = sub.add_parser("deploy-changed", help="the what-changed event of a deploy (F-15)")
     d.add_argument("--component", required=True, help="svc:<name>, cap:<name> or pkg:<name>")
