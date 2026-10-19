@@ -97,6 +97,14 @@ detections:
 	$(PY) -m homelabnext.detections lint
 	$(PY) -m homelabnext.detections run
 	$(PY) -m homelabnext.detections map --check
+	$(PY) -m homelabnext.detections coverage --check detections/attack_coverage.json
+
+# T-07, Q-05: every event type and shared lake table has a passing publisher and consumer
+# contract test (generated from schemas/events and schemas/ocsf)
+.PHONY: contracts
+check: contracts
+contracts:
+	$(PY) tools/contract_coverage.py
 
 registers:
 	$(PY) -m homelabnext.registers build examples/registers $(REGISTERS_OUT)

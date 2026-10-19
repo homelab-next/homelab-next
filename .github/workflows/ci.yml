@@ -111,6 +111,9 @@ jobs:
           python -m homelabnext.detections lint
           python -m homelabnext.detections run
           python -m homelabnext.detections map --check
+          python -m homelabnext.detections coverage --check detections/attack_coverage.json
+      - name: every event type and shared table has passing publisher and consumer contract tests
+        run: python tools/contract_coverage.py
       - name: registers build from the examples
         run: python -m homelabnext.registers build examples/registers build/registers
       - name: conformance coverage (all 14 capabilities have a passing suite)
