@@ -102,7 +102,9 @@ make lab-down     # remove the stack and its volumes
 
 Inside the compose network each service answers on its registry alias, for example
 `lake-query.svc.example.internal`; from your machine the ports are published on loopback only
-(see `.env.example` to change them). `smoke.sh` writes `build/lab-smoke/report.json`; the same
+(see `.env.example` to change them). The stack has no authentication and OpenBao runs in dev mode
+with a known root token, so `make lab-up` and `smoke.sh` refuse a non-loopback `LAB_BIND` unless
+`LAB_I_UNDERSTAND_UNAUTHENTICATED=1` is set and every credential has been changed. `smoke.sh` writes `build/lab-smoke/report.json`; the same
 script runs in the scheduled `nightly` workflow, which never blocks a pull request. Without
 Docker, `pytest tests/compose` still validates the compose contract (healthchecks, pinned images,
 memory budget) and skips the parts that need a daemon. The architecture behind it is in

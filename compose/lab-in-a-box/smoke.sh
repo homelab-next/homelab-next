@@ -7,8 +7,10 @@
 #   compose/lab-in-a-box/smoke.sh [--keep] [--no-build] [--report-dir DIR]
 #
 # Exit codes: 0 all good; 1 a service or check failed; 2 usage; 3 docker or compose missing
-# (nothing was run).  The conformance step degrades gracefully: with no `hnx conform` it is
-# reported as "skipped" and does not fail the run.  Settings: .env.example, overridden by .env.
+# (nothing was run); 4 refused a non-loopback LAB_BIND (see bind_guard.sh; nothing was run).
+# The conformance step degrades gracefully: with no `hnx conform` it is reported as "skipped"
+# and does not fail the run.  Settings: .env.example, overridden by .env, overridden by the
+# environment (the order docker compose itself uses).
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,11 +23,17 @@ while [ $# -gt 0 ]; do
     --keep) keep=1 ;;
     --no-build) build=0 ;;
     --report-dir) shift; report_dir="${1:?--report-dir needs a path}" ;;
-    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
     *) echo "smoke.sh: unknown option $1" >&2; exit 2 ;;
   esac
   shift
 done
+
+# before anything else: never publish the unauthenticated stack beyond loopback by accident
+LAB_GUARD_DIR="$here"
+# shellcheck source=bind_guard.sh
+. "$here/bind_guard.sh"
+lab_bind_guard || exit 4
 
 if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
   echo "smoke.sh: docker with the compose plugin is required; nothing was run" >&2
@@ -37,12 +45,18 @@ env_args=(--env-file "$here/.env.example")
 [ -f "$here/.env" ] && env_args+=(--env-file "$here/.env")
 dc() { docker compose "${env_args[@]}" -f "$here/docker-compose.yml" "$@"; }
 
+# the environment wins over both files, as it does for docker compose (and for the bind guard)
+from_env=""
+lab_vars="$(compgen -v LAB_ || true)"
+# shellcheck disable=SC2086
+[ -n "$lab_vars" ] && from_env="$(declare -p $lab_vars)"
 set -a
 # shellcheck disable=SC1091
 . "$here/.env.example"
 # shellcheck disable=SC1091
 [ -f "$here/.env" ] && . "$here/.env"
 set +a
+eval "$from_env"
 
 status=0
 conform_state="skipped"
