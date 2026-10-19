@@ -1,0 +1,439 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/workflows/pack/1.0",
+  "title": "Workflow pack",
+  "description": "One reaction workflow as code: the event type that triggers it, ordered steps (deterministic enrich steps, model steps that reference a decision spec or a prompt template, and action steps that name broker actions), and the fixtures that pin what it does. A value that is a string starting with '$' is a reference ($event.<path> or $steps.<step-id>.<path>); '$$' escapes a literal dollar. Rules JSON Schema cannot express (references resolve, deterministic steps first, fixtures round-trip, risky actions bound to approvals) are enforced by `hnx workflows validate` (homelabnext.workflows).",
+  "type": "object",
+  "properties": {
+    "pack": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "trigger": {
+      "type": "object",
+      "properties": {
+        "event": {
+          "type": "string",
+          "pattern": "^homelabnext\\.[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$"
+        },
+        "where": {
+          "$ref": "#/$defs/conditions"
+        }
+      },
+      "required": [
+        "event"
+      ],
+      "additionalProperties": false
+    },
+    "actor": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+    },
+    "broker_manifest": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/rel_path"
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/enrich_step"
+          },
+          {
+            "$ref": "#/$defs/decide_step"
+          },
+          {
+            "$ref": "#/$defs/prompt_step"
+          },
+          {
+            "$ref": "#/$defs/action_step"
+          }
+        ]
+      }
+    },
+    "fixtures": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/fixture"
+      }
+    }
+  },
+  "required": [
+    "pack",
+    "version",
+    "description",
+    "trigger",
+    "actor",
+    "broker_manifest",
+    "steps",
+    "fixtures"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "ref": {
+      "type": "string",
+      "pattern": "^\\$(event|steps\\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)(\\.[A-Za-z0-9_-]+)*$"
+    },
+    "step_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "maxLength": 40
+    },
+    "condition": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/ref"
+        },
+        "equals": {},
+        "in": {
+          "type": "array",
+          "minItems": 1
+        },
+        "exists": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ref"
+      ],
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "equals"
+          ]
+        },
+        {
+          "required": [
+            "in"
+          ]
+        },
+        {
+          "required": [
+            "exists"
+          ]
+        }
+      ]
+    },
+    "conditions": {
+      "description": "All must hold (logical and).",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/condition"
+      }
+    },
+    "enrich_step": {
+      "description": "Deterministic: no model.  pick selects field values from a list of objects; lookup reads one row of a table by key; extract-iocs pulls URLs, domains, IPv4 addresses and sha256 hashes out of text (defanged forms refanged).",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/step_id"
+        },
+        "kind": {
+          "const": "enrich"
+        },
+        "op": {
+          "enum": [
+            "pick",
+            "lookup",
+            "extract-iocs"
+          ]
+        },
+        "when": {
+          "$ref": "#/$defs/conditions"
+        },
+        "from": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ref"
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/ref"
+              }
+            }
+          ]
+        },
+        "match": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          }
+        },
+        "field": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "table": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/table_id"
+        },
+        "key": {
+          "$ref": "#/$defs/ref"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "op"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "pick"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "from",
+              "field"
+            ],
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/ref"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "lookup"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "table",
+              "key"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "extract-iocs"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "from"
+            ]
+          }
+        }
+      ]
+    },
+    "decide_step": {
+      "description": "A model step through the decision cascade: spec is the id of a decision spec tracked in git (homelabnext.decide).  Output: {label, confidence}.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/step_id"
+        },
+        "kind": {
+          "const": "decide"
+        },
+        "spec": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+        },
+        "input": {
+          "type": "object",
+          "minProperties": 1
+        },
+        "when": {
+          "$ref": "#/$defs/conditions"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "spec",
+        "input"
+      ],
+      "additionalProperties": false
+    },
+    "prompt_step": {
+      "description": "A model step through a prompt template (homelabnext.agent.template): slots binds every required slot.  Output: the template's JSON reply.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/step_id"
+        },
+        "kind": {
+          "const": "prompt"
+        },
+        "template": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+        },
+        "slots": {
+          "type": "object",
+          "minProperties": 1
+        },
+        "when": {
+          "$ref": "#/$defs/conditions"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "template",
+        "slots"
+      ],
+      "additionalProperties": false
+    },
+    "action_step": {
+      "description": "A call to one broker action (schemas/broker/manifest).  The runner builds a broker request {action, actor, target, params}; a risky action runs only with an approval bound to that request's digest.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/step_id"
+        },
+        "kind": {
+          "const": "action"
+        },
+        "action": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$"
+        },
+        "target": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/svc_id"
+        },
+        "params": {
+          "type": "object"
+        },
+        "when": {
+          "$ref": "#/$defs/conditions"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "action",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    "expected_call": {
+      "type": "object",
+      "properties": {
+        "step": {
+          "$ref": "#/$defs/step_id"
+        },
+        "action": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$"
+        },
+        "target": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/svc_id"
+        },
+        "params": {
+          "type": "object"
+        },
+        "result": {
+          "description": "executed: the broker allowed it and the handler ran; held: it needs an approval and did not run; denied: the broker refused it; shadow: decided in shadow mode, nothing ran.",
+          "enum": [
+            "executed",
+            "held",
+            "denied",
+            "shadow"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        }
+      },
+      "required": [
+        "action",
+        "params",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "fixture": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+        },
+        "event": {
+          "type": "object"
+        },
+        "now": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+        },
+        "lookups": {
+          "description": "table id -> key -> row: what each lookup step reads.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object"
+            }
+          }
+        },
+        "model": {
+          "description": "step id -> the output the fake model returns for that model step.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
+        "approvals": {
+          "type": "array",
+          "items": {
+            "$ref": "https://schemas.example.internal/homelabnext/broker/approval/1.0"
+          }
+        },
+        "expect": {
+          "type": "object",
+          "properties": {
+            "triggered": {
+              "type": "boolean"
+            },
+            "calls": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/expected_call"
+              }
+            }
+          },
+          "required": [
+            "calls"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "name",
+        "event",
+        "expect"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

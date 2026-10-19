@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Used by workflows/packs/new-critical-alert.yml: page the owning team now, or leave it to the case?
+id: critical-alert-page
+version: 1
+default_min_confidence: 0.9
+question_set:
+  - Does the alert describe activity that needs the owning team paged now?
+decision_table:
+  - {when: active compromise or service impact on an owned asset, then: accept}
+  - {when: test asset or known benign activity, then: reject}
+  - {when: otherwise, then: escalate}
+tiers:
+  - {name: floor, acts: true}
+  - {name: small, model_role: "mdl:fast-classifier", min_confidence: 0.9, timeout_ms: 2000, acts: true}
+  - {name: large, model_role: "mdl:main-reasoner", min_confidence: 0.9, timeout_ms: 8000}
+error_direction: fail-closed
+on_error: escalate
+latency_budget_ms: 15000
+sample_audit_pct: 10

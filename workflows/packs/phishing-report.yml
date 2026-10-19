@@ -1,0 +1,185 @@
+# SPDX-License-Identifier: Apache-2.0
+# A user reported an e-mail.  Fetch the message and extract its IOCs deterministically, have the
+# triage prompt classify it, open a case, and - only for a phishing verdict - request a DNS block
+# of the extracted domains.  The block is an execute-tier broker action: it runs only with an
+# approval bound to the digest of exactly that block list.  The domains come from the
+# deterministic extraction, never from the model's reply.
+pack: phishing-report
+version: 1
+description: >-
+  A user-reported e-mail is triaged; a phishing verdict opens a case and requests an approved
+  DNS block of the domains found in the message.
+trigger:
+  event: homelabnext.alert.created
+  where:
+    - {ref: $event.data.detection, equals: det:user-reported-phish}
+actor: profile:workflow-soc
+broker_manifest: workflows/broker.manifest.json
+steps:
+  - id: message
+    kind: enrich
+    op: lookup
+    table: table:mail.reported_messages
+    key: $event.data.alert_id
+  - id: iocs
+    kind: enrich
+    op: extract-iocs
+    from: [$steps.message.row.headers, $steps.message.row.body]
+  - id: triage
+    kind: prompt
+    template: phishing-report-triage
+    when:
+      - {ref: $steps.message.found, equals: true}
+    slots:
+      reporter-team: the example service desk
+      email-headers: $steps.message.row.headers
+      email-body: $steps.message.row.body
+  - id: open-case
+    kind: action
+    action: case.open
+    target: svc:cases
+    params:
+      alert_id: $event.data.alert_id
+      title: $event.data.title
+      verdict: $steps.triage.verdict
+      domains: $steps.iocs.domains
+  - id: block
+    kind: action
+    action: dns.block-domains
+    target: svc:dns
+    when:
+      - {ref: $steps.triage.verdict, equals: phishing}
+      - {ref: $steps.iocs.domains.0, exists: true}
+    params:
+      domains: $steps.iocs.domains
+      case_ref: $event.data.alert_id
+      ttl_hours: 72
+fixtures:
+  - name: phishing-blocked-with-approval
+    event: &phish-event
+      specversion: "1.0"
+      id: evt-phish-0001
+      source: svc:mail-gateway
+      type: homelabnext.alert.created
+      time: "2026-01-01T09:00:00Z"
+      data:
+        alert_id: ALT-0201
+        detection: det:user-reported-phish
+        title: Reported e-mail - Action required, confirm your account
+        severity: medium
+        observed_at: "2026-01-01T09:00:00Z"
+    now: "2026-01-01T09:05:00Z"
+    lookups: &phish-lookups
+      table:mail.reported_messages:
+        ALT-0201:
+          headers: |
+            From: "Mailbox Team" <mailbox-team@mail.example.org>
+            Subject: Action required: confirm your account
+            Authentication-Results: spf=fail dkim=none dmarc=fail
+          body: |
+            Your mailbox will be closed today. Confirm your password at
+            https://login.example.org/verify or hxxps://pay-verify[.]example[.]net/x within 2 hours.
+    model: &phish-model
+      triage: {verdict: phishing, confidence: 0.93, reasons: [sender fails dmarc], urls: [], suspected_injection: false}
+    approvals:
+      - approval_id: apr-phish-0001
+        request_id: block-4237ec8df6a3
+        request_digest: "sha256:8da3f6e271bc0e4ad8fc65521062c4fe8fc33f16583d1d6fda6ba13ceaab1144"
+        decision: approved
+        approver: {issuer: sso, subject: approver-one}
+        approved_at: "2026-01-01T09:03:00Z"
+    expect:
+      calls:
+        - action: case.open
+          target: svc:cases
+          params: {alert_id: ALT-0201, title: "Reported e-mail - Action required, confirm your account", verdict: phishing, domains: [login.example.org, pay-verify.example.net]}
+          result: executed
+        - action: dns.block-domains
+          target: svc:dns
+          params: {domains: [login.example.org, pay-verify.example.net], case_ref: ALT-0201, ttl_hours: 72}
+          result: executed
+          reason: approved
+  - name: phishing-held-without-approval
+    event: *phish-event
+    lookups: *phish-lookups
+    model: *phish-model
+    expect:
+      calls:
+        - action: case.open
+          target: svc:cases
+          params: {alert_id: ALT-0201, title: "Reported e-mail - Action required, confirm your account", verdict: phishing, domains: [login.example.org, pay-verify.example.net]}
+          result: executed
+        - action: dns.block-domains
+          target: svc:dns
+          params: {domains: [login.example.org, pay-verify.example.net], case_ref: ALT-0201, ttl_hours: 72}
+          result: held
+          reason: approval-required
+  - name: approval-of-another-block-list-refused
+    event: *phish-event
+    now: "2026-01-01T09:05:00Z"
+    lookups: *phish-lookups
+    model: *phish-model
+    approvals:
+      - approval_id: apr-phish-0002
+        request_id: block-4237ec8df6a3
+        request_digest: "sha256:41d17b62a44cd344abe9374bd6a8b888c45e8b04b6596bd0900e28ba4b9cb830"
+        decision: approved
+        approver: {issuer: sso, subject: approver-one}
+        approved_at: "2026-01-01T09:03:00Z"
+        note: approved when the block list held only login.example.org
+    expect:
+      calls:
+        - action: case.open
+          target: svc:cases
+          params: {alert_id: ALT-0201, title: "Reported e-mail - Action required, confirm your account", verdict: phishing, domains: [login.example.org, pay-verify.example.net]}
+          result: executed
+        - action: dns.block-domains
+          target: svc:dns
+          params: {domains: [login.example.org, pay-verify.example.net], case_ref: ALT-0201, ttl_hours: 72}
+          result: denied
+          reason: approval-digest-mismatch
+  - name: benign-report-case-only
+    event:
+      specversion: "1.0"
+      id: evt-phish-0002
+      source: svc:mail-gateway
+      type: homelabnext.alert.created
+      time: "2026-01-02T09:00:00Z"
+      data:
+        alert_id: ALT-0202
+        detection: det:user-reported-phish
+        title: Reported e-mail - Team lunch on Friday
+        severity: low
+        observed_at: "2026-01-02T09:00:00Z"
+    lookups:
+      table:mail.reported_messages:
+        ALT-0202:
+          headers: |
+            From: "Office" <office@example.com>
+            Subject: Team lunch on Friday
+          body: |
+            Menu at https://intranet.example.com/lunch - see you there.
+    model:
+      triage: {verdict: benign, confidence: 0.97, reasons: [internal sender passes dmarc], urls: [], suspected_injection: false}
+    expect:
+      calls:
+        - action: case.open
+          target: svc:cases
+          params: {alert_id: ALT-0202, title: Reported e-mail - Team lunch on Friday, verdict: benign, domains: [intranet.example.com]}
+          result: executed
+  - name: other-detection-not-triggered
+    event:
+      specversion: "1.0"
+      id: evt-phish-0003
+      source: svc:siem
+      type: homelabnext.alert.created
+      time: "2026-01-02T10:00:00Z"
+      data:
+        alert_id: ALT-0203
+        detection: det:auth-failure-burst
+        title: Burst of failed logins
+        severity: medium
+        observed_at: "2026-01-02T10:00:00Z"
+    expect:
+      triggered: false
+      calls: []

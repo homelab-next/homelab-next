@@ -1,0 +1,57 @@
+{
+  "manifest_id": "workflow-broker",
+  "default": "deny",
+  "mode": "enforce",
+  "approval_ttl_s": 900,
+  "actions": [
+    {
+      "action": "case.open",
+      "tier": "write",
+      "handler": "handlers/case-open.sh",
+      "requires_approval": false
+    },
+    {
+      "action": "notify.page",
+      "tier": "write",
+      "handler": "handlers/notify-page.sh",
+      "requires_approval": false
+    },
+    {
+      "action": "notify.post",
+      "tier": "write",
+      "handler": "handlers/notify-post.sh",
+      "requires_approval": false
+    },
+    {
+      "action": "dns.block-domains",
+      "tier": "execute",
+      "handler": "handlers/dns-block-domains.sh",
+      "requires_approval": true
+    },
+    {
+      "action": "host.isolate",
+      "tier": "privileged",
+      "handler": "handlers/host-isolate.sh",
+      "requires_approval": true
+    }
+  ],
+  "grants": [
+    {
+      "profile": "profile:workflow-soc",
+      "actions": [
+        "case.open",
+        "notify.page",
+        "notify.post",
+        "dns.block-domains"
+      ],
+      "max_tier": "execute"
+    }
+  ],
+  "approvers": [
+    {
+      "issuer": "sso",
+      "subject": "approver-one",
+      "kind": "human"
+    }
+  ]
+}

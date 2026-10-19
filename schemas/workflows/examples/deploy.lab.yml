@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+deploy_id: lab-workflows
+pins:
+  - {pack: example-alert-page, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"}

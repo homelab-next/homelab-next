@@ -331,6 +331,9 @@ granted the action (`not-granted`); tier within the grant (`tier-exceeds-grant`)
 `approved`. `request_digest` covers `action`, `actor`, `target` and `params` (not ids or
 timestamps).
 
+Workflow packs (`docs/workflows.md`) act only through this evaluator: their offline runner sends
+every action step as a request, and a risky one runs only with an approval of its digest (R-04).
+
 - **Time.** `now` defaults to the UTC clock. An approval is valid from `approved_at` (which may
   not precede the request's `created` or follow `now`) until the earlier of its `expires_at` and
   `approved_at + approval_ttl_s`. A manifest without `approval_ttl_s` gets 900 seconds

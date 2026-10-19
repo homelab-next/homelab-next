@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every step kind: enrich (pick, lookup), a decide step, an action gated on its label.
+pack: example-alert-page
+version: 1
+description: Page the owner of a critical alert's host when the cascade accepts.
+trigger:
+  event: homelabnext.alert.created
+  where:
+    - {ref: $event.data.severity, in: [critical]}
+actor: profile:workflow-soc
+broker_manifest: workflows/broker.manifest.json
+steps:
+  - {id: hosts, kind: enrich, op: pick, from: $event.data.entities, match: {kind: host}, field: value}
+  - {id: owner, kind: enrich, op: lookup, table: table:cmdb.asset_owners, key: $steps.hosts.first}
+  - id: classify
+    kind: decide
+    spec: critical-alert-page
+    input: {title: $event.data.title, owner_team: $steps.owner.row.team}
+  - id: page
+    kind: action
+    action: notify.page
+    target: svc:notify
+    when:
+      - {ref: $steps.classify.label, equals: accept}
+    params: {rota: $steps.owner.row.oncall_rota}
+fixtures:
+  - name: not-critical
+    event:
+      specversion: "1.0"
+      id: evt-0001
+      source: svc:siem
+      type: homelabnext.alert.created
+      time: "2026-01-01T00:00:00Z"
+      data: {alert_id: ALT-0001, detection: det:auth-failure-burst, title: Burst, severity: low, observed_at: "2026-01-01T00:00:00Z"}
+    expect: {triggered: false, calls: []}

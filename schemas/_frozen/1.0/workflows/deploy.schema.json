@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/workflows/deploy/1.0",
+  "title": "Workflow deploy manifest",
+  "description": "What the orchestrator may run: each pin names a pack and the digest (homelabnext.workflows.pack_digest, sha256 of the canonical JSON of the pack document) of the exact version to deploy. A deployer loads only pinned packs whose digest matches, from a commit on which `hnx workflows validate` passed (docs/workflows.md).",
+  "type": "object",
+  "properties": {
+    "deploy_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "pins": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "pack": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "digest": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+          }
+        },
+        "required": [
+          "pack",
+          "digest"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "deploy_id",
+    "pins"
+  ],
+  "additionalProperties": false
+}
