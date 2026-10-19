@@ -145,8 +145,9 @@ criteria:
   evidence: auto
   observable: python3 tools/hermetic_lint.py && echo no clock or randomness in tests
   expected: >-
-    exit 0 (covers direct clock and randomness calls in test code; the network half is enforced
-    while the tests run, by tests/network_guard.py)
+    exit 0 (direct clock and randomness calls in test code, and library clock reads outside an
+    injectable default or fallback; the network half is enforced while the tests run, by
+    tests/network_guard.py)
   expect_regex: no clock or randomness in tests
   remediation: >-
     Inject the clock or a seeded random.Random into the code under test instead of reading them
@@ -537,6 +538,22 @@ criteria:
   remediation: >-
     Fix the assembler so every cut is reported with its tier and the stable tier is never cut; a
     silently truncated pack drops context the agent never knows it lost.
+- id: G-04
+  statement: Actors act only through allowlisted actions.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/agent/test_agent_handoff.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (raw text and invalid reports refused,
+    free-text fields never become action parameters, undeclared or unlisted actions denied); exit
+    100 when a test dependency is not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix homelabnext/agent/handoff.py so an actor only accepts a validated report and binds action
+    parameters to constrained output fields; an actor driven by free text can be steered by
+    whatever its reader ingested.
 - id: M-09
   statement: Agent memory is controlled.
   evidence: auto

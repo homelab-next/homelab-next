@@ -57,7 +57,19 @@ FAST_GATES = ["D-04", "T-07", "R-01", "R-03", "R-04", "R-07", "M-12", "G-01", "G
 FAST_GATES += ["G-11", "K-02", "K-03", "K-04", "K-12", "K-15", "L-05"]
 # the rows proven by named tests: the criterion runs that pytest selection (slow, like D-07)
 PYTEST_ROWS = ["T-02", "T-04", "S-06", "S-07", "O-08", "P-02", "P-03", "P-07", "A-03", "A-04"]
-PYTEST_ROWS += ["A-05", "K-06", "K-07", "K-08", "K-13", "K-14", "G-10", "M-06", "M-07", "M-08"]
+PYTEST_ROWS += [
+    "G-04",
+    "A-05",
+    "K-06",
+    "K-07",
+    "K-08",
+    "K-13",
+    "K-14",
+    "G-10",
+    "M-06",
+    "M-07",
+    "M-08",
+]
 PYTEST_ROWS += ["M-09", "M-14", "L-03", "L-08"]
 GATED += FAST_GATES + PYTEST_ROWS + ["M-16"]
 
