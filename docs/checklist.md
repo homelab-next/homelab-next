@@ -117,7 +117,7 @@ Action broker, approvals, operator-away mode.
 | P-04 | The broker audit is complete and fresh | Audit table <= 15 min stale; request count equals audit rows daily | SERVER |
 | P-05 | Operator-away mode works | Drill: switch on forces live intents to shadow within 1 min; daily summary arrives | SERVER |
 | P-06 | Broker decisions reach the SIEM | Allow, deny and needs-approval all appear in the SIEM within 5 min | SERVER |
-| P-07 | Broker isolation holds | One caller cannot read or cancel another's request (table test) | PUBLIC-NOW |
+| P-07 | Broker isolation holds | One caller cannot read or cancel another's request (`access_cases` table test; broker conformance checks `requests-bound-to-caller`, `foreign-request-access-audited`) | PUBLIC-NOW |
 
 ## R - Orchestration
 
@@ -141,15 +141,15 @@ Caught before deploy.
 |---|---|---|---|
 | Q-01 | Every repo's tests run on every change | CI runs unit and contract tests on push and merge request; main is green | PUBLIC-NOW |
 | Q-02 | Test suites are trustworthy | Each suite within its time budget; 0 silent skips; quarantined tests have owner and unexpired date | PUBLIC-NOW |
-| Q-03 | Live-dependent tests are marked | Tests needing real systems carry the `live` marker and CI skips them | PUBLIC-NOW |
-| Q-04 | Every component ships tests | CI fails a component directory with no tests | PUBLIC-NOW |
+| Q-03 | Live-dependent tests are marked | Tests needing real systems carry the `live` marker and CI skips them; an unmarked test that reaches a non-loopback address fails (`tests/network_guard.py`) | PUBLIC-NOW |
+| Q-04 | Every component ships tests | CI fails a component directory with no tests (`tools/component_tests.py`, reviewed allowlist) | PUBLIC-NOW |
 | Q-05 | Every seam has a contract test | Each event type and shared table has a schema plus publisher and consumer tests | PUBLIC-NOW |
 | Q-06 | Security tests run in CI | Secret scan, dependency audit and lint pass | PUBLIC-NOW |
-| Q-07 | Security-critical code is well covered | Broker, guard, approval and decision code >= 80% line coverage | PUBLIC-NOW |
+| Q-07 | Security-critical code is well covered | Broker, guard, approval and decision code >= 80% line coverage per unit (`make coverage`, `tools/coverage_floor.py`) | PUBLIC-NOW |
 | Q-08 | Fixed bugs stay fixed | Every bugfix in 90 days has a regression test that fails without the fix | PUBLIC-NOW |
 | Q-09 | Every source file carries an SPDX header | Grep over tracked source files finds 0 without the header | PUBLIC-NOW |
 | Q-10 | Every schema ships an example and a negative | Schema check passes (X-03 covers pinning and validity) | PUBLIC-NOW |
-| Q-11 | Tests are hermetic | No test uses the network, wall clock, or unseeded randomness (clock and sender injected) | PUBLIC-NOW |
+| Q-11 | Tests are hermetic | No test uses the network, wall clock, or unseeded randomness (clock and sender injected); network enforced by the test guard, direct clock and randomness calls in tests by `tools/hermetic_lint.py`; library code that falls back to the real clock is not yet detected | PUBLIC-NOW |
 
 ## M - Scripts, context and access
 
@@ -214,9 +214,9 @@ Decision specs run through one gate with a cascade and a replay gate.
 | ID | Must be true | Observable / pass criterion | Tag |
 |---|---|---|---|
 | K-01 | The decision service is healthy and fast | Health probe passes; inline specs p95 <= 1 s, async <= 10 s | SERVER |
-| K-02 | Every decision spec is complete and in git | Spec lint passes: question set, decision table, tiers, error direction, on_error, latency budget, audit sample | PUBLIC-NOW |
-| K-03 | Questions are well-formed | Spec lint: single-axis questions; pairwise questions asked in both orders; <= ~5 labels | PUBLIC-NOW |
-| K-04 | Inline callers use only fast specs | Spec lint: inline-caller specs end at the fast tier or escalate | PUBLIC-NOW |
+| K-02 | Every decision spec is complete and in git | Spec lint passes: question set, decision table, tiers, error direction, on_error, latency budget, audit sample (`hnx decide lint` over every spec in git) | PUBLIC-NOW |
+| K-03 | Questions are well-formed | Spec lint: single-axis questions; pairwise questions asked in both orders; <= 5 labels (`hnx decide lint`) | PUBLIC-NOW |
+| K-04 | Inline callers use only fast specs | Spec lint: specs declaring `callers: [inline]` use only fast tiers within the inline latency budget (`hnx decide lint`) | PUBLIC-NOW |
 | K-05 | Every decision is logged | 100% of calls produce a cascade-event row with spec, version, answers, tier, latency, caller | SERVER |
 | K-06 | Failure means escalate | Fault injection (down, timeout, malformed, abstain) returns escalate for every spec; 0 auto-closes | PUBLIC-NOW |
 | K-07 | Safety gates only add caution | 0 safety-gate decisions lowered a tier or granted anything (property test) | PUBLIC-NOW |

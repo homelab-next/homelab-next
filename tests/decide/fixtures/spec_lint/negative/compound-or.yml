@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fails rule: single-axis (two things joined by 'or')
+id: lint-bad-compound-or
+version: 1
+
+question_set:
+  - text: Is the host a server or a laptop?
+    labels: ["yes", "no"]
+decision_table:
+  - {when: matched, then: accept}
+  - {when: otherwise, then: escalate}
+tiers:
+  - {name: floor}
+  - {name: small, model_role: "mdl:fast-classifier", timeout_ms: 400}
+error_direction: fail-closed
+on_error: escalate
+latency_budget_ms: 800
+sample_audit_pct: 5

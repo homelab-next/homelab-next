@@ -22,13 +22,20 @@ tests on a laptop with no network and no private context.
    and commit it as is; never renumber an existing entry. A maintainer allocates the numbers once,
    at merge time, on the target branch (`make ids-resolve`), so two pull requests never claim the
    same id. CI checks that no id of the base branch vanished and that no allocated id repeats.
+   An id that was wrong is retired, not deleted: move it to the register's top-level `retired:`
+   block with a `reason:` (and `replaced_by:`), a tombstone that keeps it accounted for and
+   unreusable (see `homelabnext/registers/ids.py`; `examples/registers/invariants.yml` has three).
 7. **A contract change needs an ADR** (copy `docs/adr/_template.md`; one file, five headings).
 8. Python >= 3.11, standard library first. New dependencies go in an extra in `pyproject.toml`,
    must be permissively licensed (LGPL only as an unmodified dependency), and are justified in the PR.
    CI installs every package from the hash-pinned `constraints/ci.txt`; regenerate it with
    `make constraints` (needs `uv`) in the same PR.
 9. Tests do not use the network, wall-clock time or unseeded randomness. Anything needing a real
-   server is marked `@pytest.mark.live` and never runs in default CI.
+   server is marked `@pytest.mark.live` and never runs in default CI. Enforced: an unmarked test
+   that connects beyond loopback or resolves a non-local name fails (`tests/network_guard.py`), and
+   `make hermetic-lint` rejects direct clock and unseeded-random calls in test code.
+   Every component ships tests (`make component-tests`), and the broker, scope guard, records
+   lifecycle, decide cascade and agent grant ceiling keep >= 80% line coverage (`make coverage`).
 10. Every source file starts with `# SPDX-License-Identifier: Apache-2.0` (or the equivalent comment).
 
 ## Setup

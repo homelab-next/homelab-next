@@ -199,6 +199,7 @@ validate_note(note) / parse_note(text) / render_note(...)   # note schema: schem
 
 # homelabnext.decide
 load_spec(path) -> DecisionSpec ; Cascade(spec, tiers, scanner=None).decide(Item) -> Decision
+lint_doc(doc) -> [(rule, detail)] ; lint_paths(paths, root=None) -> (n, [Problem])   # hnx decide lint (decide.lint)
 ImpactScanner(tiers).scan(text) ; replay(records, cascade) -> ReplayReport ; gate(report, baseline=None, ...) -> GateResult
 handle_decide(cascades, doc)                                 # the /v1/systemone adapter, framework-free
 

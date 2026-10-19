@@ -3,6 +3,7 @@ import io
 from pathlib import Path
 
 from homelabnext.registry.cli import main
+from homelabnext.registry.dns import SystemDNS
 
 EXAMPLE = str(Path(__file__).resolve().parents[2] / "examples" / "services.yml")
 
@@ -22,7 +23,9 @@ def test_validate_ok_and_bad(tmp_path):
     assert rc == 1 and "invalid registry" in err
 
 
-def test_resolve_failure_exit_1_and_message():
+def test_resolve_failure_exit_1_and_message(monkeypatch):
+    # the CLI uses the system resolver; answer "no such name" without a real DNS query
+    monkeypatch.setattr(SystemDNS, "lookup_host", lambda self, name: [])
     rc, _, err = run("resolve", EXAMPLE, "lake-query")
     assert rc == 1 and "does not resolve" in err
 

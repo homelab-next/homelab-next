@@ -32,8 +32,9 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `broker/decision` | `allow` / `deny` / `needs-approval` with a closed reason vocabulary; shadow mode records but does not enforce |
 | `broker/approval` | approver identity plus `request_digest` |
 
-All are versioned 1.0 except `broker/manifest` and `broker/decision` (1.1, additive: approvers and
-the new approval reasons), frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`
+All are versioned 1.0 except `broker/manifest` (1.1, additive: approvers) and `broker/decision`
+(1.1 adds the approval reasons; 1.2 adds `not-request-owner` and the optional `operation` and
+`caller`), frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`
 (each has an example and several negatives). `agent/profile` is the compiler's output;
 `platform/agent_profile` stays as the lean runtime view.
 
@@ -153,8 +154,17 @@ timestamps).
   more than one process, or restarts, needs a durable store. Shadow mode reports a replay but
   consumes nothing.
 
+- **Ownership.** A request belongs to its `actor`.
+  `decide_access(manifest, request, caller, operation, now=...)` decides a `read` or `cancel` of
+  an existing request: only the actor itself (compared normalized) is `allowed`; every other
+  caller, including one granted the same action and an approver, is `deny` / `not-request-owner`.
+  The decision carries `operation` and `caller`, so it is the audit record of the attempt. The
+  conformance `broker` suite pins the same property on a running broker (`submit`, `status`,
+  `run`, `cancel`).
+
 The table `tests/broker/fixtures/decision_table.yml` (manifest x tier x handler x approval ->
-decision) is the conformance input for any broker implementation: run the same rows against it.
+decision, plus `access_cases`: owner x caller x operation -> decision) is the conformance input
+for any broker implementation: run the same rows against it.
 
 ## Command line
 

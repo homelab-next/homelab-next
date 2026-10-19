@@ -19,6 +19,8 @@ allow:
     reason: points the engine at the in-network aliases of the catalog and object store (example.internal names, compose network only)
   - path: "inventory/**"
     reason: the inventory is where addresses legitimately live
+  - path: "tests/gates/test_network_guard.py"
+    reason: the network guard's own tests classify loopback and documentation-range literals
   - path: "conformance/fixtures/**"
     reason: recorded fixtures and cassettes
   - path: "CONTRIBUTING.md"

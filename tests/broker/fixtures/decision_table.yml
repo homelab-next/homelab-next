@@ -72,3 +72,19 @@ cases:
   - {name: shadow-records-but-does-not-enforce, manifest: shadow, actor: "profile:reader", action: service.status, approval: none, verdict: allow, reason: allowed, enforced: false}
   - {name: shadow-deny-not-enforced, manifest: shadow, actor: "profile:reader", action: host.format, approval: none, verdict: deny, reason: default-deny, enforced: false}
   - {name: enforce-is-enforced, manifest: enforce, actor: "profile:reader", action: service.status, approval: none, verdict: allow, reason: allowed, enforced: true}
+
+# Ownership (P-07): who may read or cancel an existing request.  The request is always the one the
+# test builds for `owner`; `caller` is who asks.  Only the owner, compared normalized, is allowed.
+access_cases:
+  - {name: owner-reads, manifest: enforce, owner: "profile:operator", caller: "profile:operator", operation: read, verdict: allow, reason: allowed}
+  - {name: owner-cancels, manifest: enforce, owner: "profile:operator", caller: "profile:operator", operation: cancel, verdict: allow, reason: allowed}
+  - {name: owner-other-spelling, manifest: enforce, owner: "profile:ops-bot", caller: "profile:ops_bot", operation: cancel, verdict: allow, reason: allowed}
+  - {name: other-caller-reads, manifest: enforce, owner: "profile:operator", caller: "profile:reader", operation: read, verdict: deny, reason: not-request-owner}
+  - {name: other-caller-cancels, manifest: enforce, owner: "profile:operator", caller: "profile:reader", operation: cancel, verdict: deny, reason: not-request-owner}
+  - {name: same-grant-is-not-owner, manifest: enforce, owner: "profile:writer", caller: "profile:operator", operation: cancel, verdict: deny, reason: not-request-owner, note: "both are granted service.status; a shared grant does not share requests"}
+  - {name: approver-is-not-owner, manifest: enforce, owner: "profile:operator", caller: "profile:approver-one", operation: read, verdict: deny, reason: not-request-owner}
+  - {name: unknown-caller, manifest: enforce, owner: "profile:operator", caller: "profile:stranger", operation: read, verdict: deny, reason: not-request-owner}
+  - {name: empty-caller, manifest: enforce, owner: "profile:operator", caller: "", operation: cancel, verdict: deny, reason: not-request-owner}
+  - {name: other-kind-same-name, manifest: enforce, owner: "profile:operator", caller: "agent:operator", operation: cancel, verdict: deny, reason: not-request-owner}
+  - {name: prefix-is-not-owner, manifest: enforce, owner: "profile:operator", caller: "profile:operator-two", operation: read, verdict: deny, reason: not-request-owner}
+  - {name: shadow-not-owner-not-enforced, manifest: shadow, owner: "profile:reader", caller: "profile:writer", operation: read, verdict: deny, reason: not-request-owner, enforced: false}

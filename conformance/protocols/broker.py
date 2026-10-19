@@ -14,6 +14,15 @@ exception (message, cause, context) is not passed to the caller.
 still untrusted caller input: a ``str`` argument can hold ``../``, ``;``, a newline or a flag.
 The handler is the trust boundary - it must treat every argument as hostile (no shell, no string
 building of commands or paths without its own allowlist or pattern).
+
+Deferred requests: ``submit(caller, command, args)`` runs the same allowlist and argument checks
+as ``call`` and returns a request id instead of running the handler.  A request is bound to the
+caller that submitted it: only that caller may ``status`` (read), ``run`` or ``cancel`` it.  Any
+other caller gets ``Denied`` with ``reason == "not-request-owner"`` - the same answer as for an id
+that does not exist, so a foreign request's existence is not disclosed - the request is left
+exactly as it was, and the attempt leaves an audit record (outcome ``denied``, the same reason, the
+operation and the request id).  ``status`` returns the request's state (``pending``, ``done``,
+``error``, ``cancelled``); ``run`` executes a pending request once; ``cancel`` stops a pending one.
 """
 
 from __future__ import annotations
@@ -29,6 +38,7 @@ __all__ = [
     "BrokerError",
     "Denied",
     "InvalidArguments",
+    "RequestStatus",
 ]
 
 
@@ -37,7 +47,11 @@ class BrokerError(Exception):
 
 
 class Denied(BrokerError):
-    pass
+    """``reason`` is a machine-readable cause, e.g. ``not-request-owner``."""
+
+    def __init__(self, message: str = "", reason: str = "") -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 class InvalidArguments(BrokerError):
@@ -57,6 +71,17 @@ class AuditRecord:
     command: str
     outcome: str  # ok | denied | invalid | error
     args: Mapping[str, Any]  # secret arguments replaced by "<redacted>"
+    operation: str = "call"  # call | submit | status | run | cancel
+    request_id: str | None = None  # set for operations on a deferred request
+    reason: str = ""  # why a denial was denied (e.g. not-request-owner); empty otherwise
+
+
+@dataclass(frozen=True)
+class RequestStatus:
+    request_id: str
+    caller: str  # the owner: the caller that submitted it
+    command: str
+    state: str  # pending | done | error | cancelled
 
 
 @runtime_checkable
@@ -72,5 +97,17 @@ class Broker(Protocol):
 
     def call(self, caller: str, command: str, args: Mapping[str, Any]) -> Any:
         """Raises Denied / InvalidArguments; a handler exception becomes BrokerError."""
+
+    def submit(self, caller: str, command: str, args: Mapping[str, Any]) -> str:
+        """Check like ``call`` but defer running; returns the new request's id."""
+
+    def status(self, caller: str, request_id: str) -> RequestStatus:
+        """The owner's view of its request; anyone else: Denied(reason="not-request-owner")."""
+
+    def run(self, caller: str, request_id: str) -> Any:
+        """Run the owner's pending request once; same errors as ``call`` plus ownership."""
+
+    def cancel(self, caller: str, request_id: str) -> None:
+        """Cancel the owner's pending request; anyone else: Denied, request unchanged."""
 
     def audit(self) -> Sequence[AuditRecord]: ...

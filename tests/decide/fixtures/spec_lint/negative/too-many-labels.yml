@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fails rule: labels (6 > 5)
+id: lint-bad-too-many-labels
+version: 1
+
+question_set:
+  - text: How severe is the alert?
+    labels: [none, info, low, medium, high, critical]
+decision_table:
+  - {when: matched, then: accept}
+  - {when: otherwise, then: escalate}
+tiers:
+  - {name: floor}
+  - {name: small, model_role: "mdl:fast-classifier", timeout_ms: 400}
+error_direction: fail-closed
+on_error: escalate
+latency_budget_ms: 800
+sample_audit_pct: 5

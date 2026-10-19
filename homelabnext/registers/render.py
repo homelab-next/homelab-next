@@ -169,6 +169,24 @@ def render_invariants(data, results=None) -> tuple[str, dict]:
     body = "".join(
         f"<h2>{e(k)} - {e(titles.get(k, ''))}</h2>" + "".join(v) for k, v in sorted(rows.items())
     )
+    retired = reg["retired"]
+    if retired:  # tombstones: an old citation of one of these ids lands here, not on a 404
+        body += "<h2>Retired ids</h2>" + "".join(
+            f'<article id="{e(i)}"><h3>{e(i)} <span class="pill skip">retired</span></h3>'
+            + _dl(
+                [
+                    (
+                        "Replaced by",
+                        f'<a href="#{e(t["replaced_by"])}">{e(t["replaced_by"])}</a>'
+                        if t.get("replaced_by")
+                        else "",
+                    ),
+                    ("Reason", _p(t["reason"])),
+                ]
+            )
+            + "</article>"
+            for i, t in sorted(retired.items())
+        )
     red = counts.get("fail", 0) + counts.get("error", 0)
     live = [s for s in counts if s not in ("deferred", "server", "skip")]
     verdict = (
@@ -185,6 +203,7 @@ def render_invariants(data, results=None) -> tuple[str, dict]:
         "counts": counts,
         "last_run": (results or {}).get("last_run"),
         "criteria": merged,
+        "retired": retired,
     }
     return page("Invariants", body, summary), json.loads(json.dumps(doc, default=str))
 
