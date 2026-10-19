@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+id: example-compact
+kind: job
+status: active
+purpose: Compact the example tables once a night.
+owner: data-platform
+trigger: [fleet-unit:example-compact]
+inputs: [the table list, credentials from the environment]
+outputs: compacted tables; a summary line on stdout
+exit: {"0": done, "1": a table failed}
+installs_to: /usr/local/libexec/hnx/example-compact

@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# only a check runs through the invariants runner
+id: example-tool
+kind: tool
+purpose: Render the example page.
+owner: maintainers
+trigger: [make:example]
+inputs: the registry
+outputs: a page
+exit: {"0": ok}
+invariant: [Q-09]

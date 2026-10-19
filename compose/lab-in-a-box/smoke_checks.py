@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: lab-smoke-checks
+#   kind: tool
+#   purpose: One real round trip against every lab-in-a-box service, as a JSON report.
+#   owner: lab-in-a-box
+#   trigger: [script:lab-smoke]
+#   inputs: endpoints from the environment or --base capability=url
+#   outputs: the --report JSON file
+#   exit:
+#     "0": every check passed
+#     "1": some check failed
 """Direct, product-neutral checks of every lab-in-a-box service (stdlib only).
 
 Each check hits a published endpoint and does one real round trip (not just "port open").  The

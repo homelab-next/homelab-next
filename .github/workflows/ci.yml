@@ -120,6 +120,11 @@ jobs:
         run: python -m homelabnext.cli agent keyring check examples/keyring/sources.yml
       - name: workflow packs (R-01/R-03/R-04/R-07, offline, deploy pins)
         run: python -m homelabnext.cli workflows validate
+      - name: script catalog current, matches reality, checks only in the runner (M-01, M-02, M-04)
+        run: |
+          python -m homelabnext.cli scripts catalog --check
+          python -m homelabnext.cli scripts reality
+          python -m homelabnext.cli scripts runner-lint
       - name: detections lint, fixtures and ATT&CK map
         run: |
           python -m homelabnext.detections lint

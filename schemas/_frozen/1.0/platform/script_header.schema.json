@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/script_header/1.0",
+  "title": "Script header",
+  "description": "The machine-readable header every script carries (docs/scripts.md): a YAML block under a `# hnx-script:` comment line near the top of the file. Consumed by `hnx scripts` (checklist M-01, M-02, M-04).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Unique across the repository; the catalog key.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"
+    },
+    "kind": {
+      "description": "check: decides whether a standing property of the repository or the platform holds (exit 0 = holds) and runs through the invariants runner. tool: run by a person, a make target, CI or another script for one run's purpose. job: a one-shot task an orchestrator starts. service: a long-running process.",
+      "enum": [
+        "check",
+        "tool",
+        "job",
+        "service"
+      ]
+    },
+    "status": {
+      "description": "active (default) must have a caller; deprecated may have none.",
+      "enum": [
+        "active",
+        "deprecated"
+      ]
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 10
+    },
+    "owner": {
+      "description": "Who answers for it: a team or area slug, never a person.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "trigger": {
+      "description": "Every caller, exactly as `hnx scripts reality` discovers them, plus `manual` for a person.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(manual|(make|ci|pre-commit|compose|script|code|fleet-unit|timer|role|profile):[A-Za-z0-9._/-]+)$"
+      }
+    },
+    "inputs": {
+      "$ref": "#/$defs/text_or_list"
+    },
+    "outputs": {
+      "$ref": "#/$defs/text_or_list"
+    },
+    "exit": {
+      "description": "Exit-code contract: code -> meaning. 0 is always documented.",
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^(0|[1-9][0-9]{0,2})$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 2
+      },
+      "required": [
+        "0"
+      ]
+    },
+    "invariant": {
+      "description": "Invariants criteria that run this check (kind: check only).",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z]-[0-9]{2}$"
+      }
+    },
+    "installs_to": {
+      "description": "Absolute path the script is installed at on a host, so a unit's ExecStart resolves to it.",
+      "type": "string",
+      "pattern": "^/[A-Za-z0-9._/-]+$"
+    }
+  },
+  "required": [
+    "id",
+    "kind",
+    "purpose",
+    "owner",
+    "trigger",
+    "inputs",
+    "outputs",
+    "exit"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "check"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "description": "a check documents a failing code in 1..99 (semantic rule in homelabnext.scripts.header)"
+      },
+      "else": {
+        "not": {
+          "required": [
+            "invariant"
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "text_or_list": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 2
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 2
+          }
+        }
+      ]
+    }
+  }
+}

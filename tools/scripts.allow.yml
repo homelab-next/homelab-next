@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+# Settings and the reviewed allowlist for `hnx scripts reality` (M-02) and `hnx scripts
+# runner-lint` (M-04); docs/scripts.md.  Every entry names a catalogued script id (or, under
+# external_exec, a scheduled exec path) and the reason.  An entry that no longer matches anything
+# fails the check, so this list only ever shrinks by being right.
+
+# invariants registers whose criteria may run a check script
+registers:
+  - examples/registers/invariants.yml
+# fleet_units specs (homelabnext.generators.fleet_units) whose entries are scheduled jobs
+fleet_unit_specs:
+  - "**/fleet_units.yml"
+  - "**/fleet_units/*.yml"
+
+# active scripts with no caller in the tree
+uncalled:
+  decommission-check: >-
+    the operator runs it by hand at step 8 of a service swap (docs/swap.md), with the retired
+    service's names as arguments; the swap runner calls the same scanner as a library
+
+# checks that no invariants criterion runs
+not_in_runner:
+  conform-coverage: >-
+    CI wrapper around the conformance report; the same report already runs in the invariants
+    runner through plugin X-10 (homelabnext.conform.plugins.x10_conformance), so running this
+    script there too would measure one property twice
+  check-changelog: >-
+    release hygiene of the tree (an Unreleased section and one for the current version); the
+    nearest checklist row, F-15, also needs a what-changed event per deploy (SERVER), so
+    registering this as F-15 would claim more than it measures
+
+# scheduled execs that are not scripts of this repository (product binaries); none yet
+external_exec: {}

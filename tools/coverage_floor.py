@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: coverage-floor
+#   kind: check
+#   purpose: Fail when a security-critical unit drops below its line-coverage floor from its own tests.
+#   owner: maintainers
+#   trigger: [ci:ci/coverage, make:coverage]
+#   invariant: [Q-07]
+#   inputs: the units listed in this file and their tests (runs pytest with coverage)
+#   outputs: a per-unit coverage table; --json FILE writes it as JSON
+#   exit:
+#     "0": every unit at or above the floor
+#     "1": some unit below it or not measured
+#     "2": coverage could not be run
 """Gate: the security-critical code keeps at least 80% line coverage from its own tests.
 
 Each unit below is measured by the tests that exist for it (not by the whole suite, so a unit

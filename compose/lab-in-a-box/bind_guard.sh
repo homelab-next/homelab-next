@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: lab-bind-guard
+#   kind: tool
+#   purpose: Refuse to publish the lab beyond loopback unless asked and every credential is changed.
+#   owner: lab-in-a-box
+#   trigger: [make:lab-up, script:lab-smoke]
+#   inputs: LAB_BIND and the credentials (environment, .env, .env.example)
+#   outputs: the refusal reason on stderr
+#   exit:
+#     "0": safe to start
+#     "4": refused
 #
 # Lab-in-a-box bind guard: refuse to publish the stack beyond loopback unless the operator says so
 # and every credential has been changed from its .env.example placeholder.

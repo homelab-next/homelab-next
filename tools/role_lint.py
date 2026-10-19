@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: role-lint
+#   kind: check
+#   purpose: Fail when a role or playbook breaks the role interface (docs/role-interface.md).
+#   owner: maintainers
+#   trigger: [ci:ci/schemas, code:homelabnext/scaffold/core.py, make:gates]
+#   invariant: [X-05]
+#   inputs: role directories, or --playbook files with --inventory
+#   outputs: one line per finding with its rule id
+#   exit:
+#     "0": clean
+#     "1": findings
+#     "2": could not run
 """Role linter for the HomelabNext role interface (docs/role-interface.md).
 
 Usage:

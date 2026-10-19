@@ -17,11 +17,12 @@ REGISTER_FILES := $(shell git ls-files -- $(foreach k,lessons runbooks invariant
 help:
 	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
 	@echo "hygiene: helpers-lint tls-lint workstation-lint keyring-check keyring ids-placeholders"
+	@echo "script catalog (M-01, M-02, M-04): scripts-check"
 	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke"
 	@echo "live (needs a real model endpoint): injection-eval MODEL=<role> REGISTRY=<file> ROLES=<file>; models-eval REGISTRY=<file>"
 	@echo "override RUFF=/path/to/ruff if ruff is not importable as a module"
 
-check: lint component-tests hermetic-lint test schemas gates decide-lint decide-safety models-check agent-lint prompts-lint injection-check workflows detections registers ids-check conform-check spdx leak-scan changelog-check
+check: lint component-tests hermetic-lint test schemas gates decide-lint decide-safety models-check agent-lint prompts-lint injection-check workflows scripts-check detections registers ids-check conform-check spdx leak-scan changelog-check
 	@echo "make check: OK"
 
 lint:
@@ -121,6 +122,15 @@ injection-eval:
 # actions bound to an approval of their payload digest) and the deploy pins match
 workflows:
 	$(PY) -m homelabnext.cli workflows validate
+
+# M-01 every script has a valid header and docs/scripts/catalog.* is current (`hnx scripts catalog`
+# regenerates it); M-02 the headers' triggers are exactly what runs each script, nothing called is
+# uncatalogued, nothing active is uncalled; M-04 every check runs through the invariants runner
+.PHONY: scripts-check
+scripts-check:
+	$(PY) -m homelabnext.cli scripts catalog --check
+	$(PY) -m homelabnext.cli scripts reality
+	$(PY) -m homelabnext.cli scripts runner-lint
 
 detections:
 	$(PY) -m homelabnext.detections lint
