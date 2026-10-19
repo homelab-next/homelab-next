@@ -61,8 +61,17 @@ RULES = {
     "CU015": "maintained_upstream outside shipped profiles",
 }
 
-_TOOLS = Path(__file__).resolve().parents[2] / "tools" / "no_raw_endpoints.py"
 _scan_text = None
+
+
+def _tools_path() -> Path | None:
+    """tools/no_raw_endpoints.py of a verified checkout, else None (see homelabnext.paths)."""
+    from homelabnext import paths
+
+    try:
+        return paths.checkout_tool("no_raw_endpoints.py", feature="custom lint")
+    except paths.NotACheckout:
+        return None
 
 
 def _load_scanner():
@@ -72,8 +81,9 @@ def _load_scanner():
     global _scan_text
     if _scan_text is not None:
         return _scan_text
-    if _TOOLS.is_file():
-        spec = importlib.util.spec_from_file_location("hnx_no_raw_endpoints", _TOOLS)
+    tools = _tools_path()
+    if tools is not None:
+        spec = importlib.util.spec_from_file_location("hnx_no_raw_endpoints", tools)
         assert spec and spec.loader
         mod = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = mod  # dataclasses need the module registered

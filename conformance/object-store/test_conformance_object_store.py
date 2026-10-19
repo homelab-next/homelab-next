@@ -15,3 +15,7 @@ CAPABILITY = "object-store"
 @pytest.mark.parametrize("check_id", testing.check_ids(CAPABILITY))
 def test_object_store(check_id):
     testing.assert_check(CAPABILITY, check_id)
+
+
+def test_object_store_enough_checks_executed():
+    testing.assert_enough_executed(CAPABILITY)

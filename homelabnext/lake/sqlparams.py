@@ -8,6 +8,7 @@ across adapters is the portable subset documented in ``README.md``.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -87,3 +88,18 @@ def to_qmark(sql: str, params: Mapping[str, Any]) -> tuple[str, list[Any]]:
         last = e
     out.append(sql[last:])
     return "".join(out), args
+
+
+_TABLE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*){0,2}")
+
+
+def quote_table(name: str) -> str:
+    """``name`` (``table``, ``schema.table`` or ``catalog.schema.table``) as a quoted identifier.
+
+    Table names cannot be bound parameters, so code that builds ``SELECT ... FROM <table>``
+    validates the name against a plain identifier pattern (whole string, no trailing newline)
+    and double-quotes each part; anything else raises :class:`LakeError`.
+    """
+    if not isinstance(name, str) or not _TABLE_RE.fullmatch(name):
+        raise LakeError(f"not a table identifier: {name!r}")
+    return ".".join(f'"{part}"' for part in name.split("."))

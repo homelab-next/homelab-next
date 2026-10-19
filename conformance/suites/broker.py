@@ -5,11 +5,18 @@ from __future__ import annotations
 
 import contextlib
 
-from conformance.fakes.command_broker import FakeBroker, LoggingBroker
+from conformance.fakes.command_broker import (
+    CallerOnlyBroker,
+    ChattyErrorBroker,
+    FakeBroker,
+    KeyNameRedactingBroker,
+    LoggingBroker,
+    OkOnlyRedactingBroker,
+)
 from conformance.protocols.broker import ArgSpec, BrokerError, Denied, InvalidArguments
 from homelabnext.conform.core import Mutant, Suite
 
-from ._util import raises, uniq
+from ._util import exc_text, raises, uniq
 
 SUITE = Suite(
     "broker",
@@ -18,6 +25,11 @@ SUITE = Suite(
 )
 
 ARGS = {"name": ArgSpec("str"), "count": ArgSpec("int", required=False)}
+
+#: a secret value under an argument name that does not look secret: redaction must follow the
+#: schema's ``secret`` flag, so a broker that guesses from names leaks it
+SECRET = "zq7-opaque-4b1d-fake-DO-NOT-LOG"
+INTERNAL = "internal-detail-7c2e"
 
 
 def _setup(b, handler=None):
@@ -52,6 +64,22 @@ def _(b):
 
 
 @SUITE.check(
+    "allowlist-is-per-command",
+    "a caller allowed one command is denied another, and that handler never runs",
+)
+def _(b):
+    mine, caller, _ = _setup(b)
+    ran = []
+    other = uniq("cmd")
+    b.register(other, lambda **kw: ran.append(kw) or "wiped", ARGS)
+    b.allow(uniq("admin"), [other])
+    for _attempt in range(2):
+        raises(lambda: b.call(caller, other, {"name": "x"}), "command not allowed", Denied)
+    assert ran == [], "the handler of a command the caller is not allowed ran"
+    assert b.call(caller, mine, {"name": "x"}) == {"ok": "x"}, "the allowed command broke"
+
+
+@SUITE.check(
     "invalid-args-never-reach-handler",
     "missing, unexpected and mistyped arguments are rejected first",
 )
@@ -69,15 +97,19 @@ def _(b):
 
 
 @SUITE.check(
-    "handler-error-contained", "a failing handler surfaces as BrokerError, not a raw exception"
+    "handler-error-contained",
+    "a failing handler surfaces as BrokerError carrying none of the handler's internal detail",
 )
 def _(b):
     def boom(**kw):
-        raise ZeroDivisionError("internal detail")
+        raise ZeroDivisionError(INTERNAL)
 
     cmd, caller, _ = _setup(b, boom)
     exc = raises(lambda: b.call(caller, cmd, {"name": "x"}), "failing handler", BrokerError)
     assert isinstance(exc, BrokerError)
+    assert INTERNAL not in exc_text(exc), (
+        "the handler's internal detail reached the caller (message, cause or context)"
+    )
 
 
 @SUITE.check("every-call-audited", "ok, denied, invalid and error calls each leave one record")
@@ -105,18 +137,45 @@ def _(b):
     assert new[0].caller == caller and new[0].command == ok_cmd
 
 
-@SUITE.check("audit-redacts-secret-args", "arguments marked secret never appear in the audit trail")
+@SUITE.check(
+    "audit-redacts-secret-args",
+    "arguments the schema marks secret never appear in the audit trail or an error, any outcome",
+)
 def _(b):
     cmd, caller = uniq("cmd"), uniq("caller")
-    b.register(
-        cmd, lambda **kw: "done", {"user": ArgSpec("str"), "token": ArgSpec("str", secret=True)}
-    )
+    spec = {"user": ArgSpec("str"), "label": ArgSpec("str", secret=True)}
+
+    def handler(**kw):
+        if kw["user"] == "fail":
+            raise RuntimeError(f"cannot use {kw['label']}")
+        return "done"
+
+    b.register(cmd, handler, spec)
     b.allow(caller, [cmd])
-    b.call(caller, cmd, {"user": "svc", "token": "tok-SECRET-123"})
-    dump = " ".join(repr(r) for r in b.audit())
-    assert "tok-SECRET-123" not in dump, "a secret argument was written to the audit trail"
-    rec = [r for r in b.audit() if r.command == cmd][-1]
-    assert rec.args.get("user") == "svc", "non-secret arguments should stay visible"
+    before = len(b.audit())
+    raised = []
+    for who, args in (
+        (caller, {"user": "svc", "label": SECRET}),  # ok
+        (uniq("stranger"), {"user": "svc", "label": SECRET}),  # denied
+        (caller, {"user": 7, "label": SECRET}),  # invalid
+        (caller, {"user": "fail", "label": SECRET}),  # error
+    ):
+        try:
+            b.call(who, cmd, args)
+        except BrokerError as exc:
+            raised.append(exc_text(exc))
+    new = list(b.audit())[before:]
+    assert [r.outcome for r in new] == ["ok", "denied", "invalid", "error"], [
+        r.outcome for r in new
+    ]
+    for rec in new:
+        assert SECRET not in repr(rec) and SECRET not in repr(dict(rec.args)), (
+            f"a secret argument was written to the audit trail on a {rec.outcome!r} call"
+        )
+    assert len(raised) == 3 and not any(SECRET in t for t in raised), (
+        "a secret argument appeared in an error raised to the caller"
+    )
+    assert new[0].args.get("user") == "svc", "non-secret arguments should stay visible"
 
 
 @SUITE.check(
@@ -153,5 +212,25 @@ def make_fake():
 MUTANTS = {
     "audit-logs-secrets": Mutant(
         LoggingBroker, "audit-redacts-secret-args", "secret arguments are audited in the clear"
+    ),
+    "allowlist-per-caller-only": Mutant(
+        CallerOnlyBroker,
+        "allowlist-is-per-command",
+        "any allowlisted caller may run any registered command",
+    ),
+    "redacts-by-key-name": Mutant(
+        KeyNameRedactingBroker,
+        "audit-redacts-secret-args",
+        "redaction guesses from argument names instead of the schema's secret flag",
+    ),
+    "redacts-ok-calls-only": Mutant(
+        OkOnlyRedactingBroker,
+        "audit-redacts-secret-args",
+        "denied, invalid and failed calls are audited with secrets in the clear",
+    ),
+    "handler-error-passed-through": Mutant(
+        ChattyErrorBroker,
+        "handler-error-contained",
+        "the handler's exception message and cause reach the caller",
     ),
 }

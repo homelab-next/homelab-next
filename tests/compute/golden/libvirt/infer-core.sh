@@ -14,12 +14,11 @@ virt-install \
   --memory 65536 \
   --os-variant linux2022 \
   --import \
-  --disk path=${HNX_POOL_FAST}/infer-core-rootfs.qcow2,size=40,format=qcow2,bus=virtio,discard=unmap,backing_store=${HNX_IMAGE_DIR}/debian-12-cloudinit.qcow2 \
-  --disk path=${HNX_POOL_BULK}/infer-core-models.raw,size=500,format=raw,bus=virtio,discard=unmap \
-  --network bridge=${HNX_DEFAULT_BRIDGE:?set HNX_DEFAULT_BRIDGE},model=virtio \
-  --cloud-init user-data="$CI/infer-core/user-data",meta-data="$CI/infer-core/meta-data" \
-  --hostdev ${HNX_HOSTDEV_GPU_A} \
+  --disk "path=${HNX_POOL_FAST}/infer-core-rootfs.qcow2,size=40,format=qcow2,bus=virtio,discard=unmap,backing_store=${HNX_IMAGE_DIR}/debian-12-cloudinit.qcow2" \
+  --disk "path=${HNX_POOL_BULK}/infer-core-models.raw,size=500,format=raw,bus=virtio,discard=unmap" \
+  --network "bridge=${HNX_DEFAULT_BRIDGE:?set HNX_DEFAULT_BRIDGE}v30,model=virtio" \
+  --cloud-init "user-data=$CI/infer-core/user-data,meta-data=$CI/infer-core/meta-data" \
+  --hostdev "${HNX_HOSTDEV_GPU_A}" \
   --graphics none \
   --noautoconsole
-# vlan 30: tag it on the bridge port or a libvirt portgroup
 virsh autostart infer-core

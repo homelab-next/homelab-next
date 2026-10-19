@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext.lake.errors import LakeError
+from homelabnext.lake.sqlparams import quote_table
 from homelabnext.parity import ParityQuery, ParityReport, Sample, compare_queries, compare_tables
 
 from .backend import Backend, Outcome
@@ -69,6 +70,8 @@ class LakeBackend(Backend):
     ):
         self.old = SwitchableClient(old)
         self.new = new
+        for t in tables:
+            quote_table(t)  # refuse a name that is not a plain identifier before anything runs
         self.tables = list(tables)
         self.queries = list(queries)
         self.sample = sample
@@ -105,7 +108,7 @@ class LakeBackend(Backend):
         counts: dict[str, int] = {}
         try:
             for t in self.tables:
-                rows = self.old.query(f"SELECT * FROM {t}")
+                rows = self.old.query(f"SELECT * FROM {quote_table(t)}")
                 res = self.new.write_batch(t, rows, idempotency_key=f"backfill-{t}")
                 counts[t] = len(rows)
                 if res.rows_written + res.rows_skipped != len(rows):

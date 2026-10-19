@@ -1,0 +1,12 @@
+{
+  "actions": [],
+  "approvers": [
+    {
+      "subject": "approver-one"
+    }
+  ],
+  "default": "deny",
+  "grants": [],
+  "manifest_id": "bad-approver",
+  "mode": "enforce"
+}

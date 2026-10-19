@@ -10,6 +10,9 @@ to provide one:
 3. A directory of ``*.py`` modules (``--plugins-dir``). A module exposes ``CHECKS`` (iterable of
    ``Check``) and/or ``register(registry)``.
 
+All three import and run code: a plugins directory is trusted input, like the source tree
+(SECURITY.md, "Trusted inputs").
+
 Statuses: ``pass``, ``fail``, ``error`` (could not measure), ``skip`` (not applicable here,
 with a reason; never counts as a pass of anything that matters). An exception inside a plugin
 is ``error``, never ``fail`` and never ``pass``: "could not measure" is its own verdict.

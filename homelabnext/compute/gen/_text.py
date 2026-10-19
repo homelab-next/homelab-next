@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tiny deterministic text helpers (JSON strings are valid YAML and HCL string literals)."""
+"""Tiny deterministic text helpers (JSON strings are valid YAML literals; :func:`hq` makes them HCL)."""
 
 from __future__ import annotations
 
@@ -22,6 +22,24 @@ def q(value: Any) -> str:
 
 def qlist(values: list[Any]) -> str:
     return "[" + ", ".join(q(v) for v in values) + "]"
+
+
+def hq(value: Any) -> str:
+    """Quote a scalar as an HCL string literal.
+
+    A JSON string is an HCL literal except for template sequences: HCL interpolates ``${...}``
+    and evaluates ``%{...}`` directives inside quoted strings, so those are escaped to ``$${``
+    and ``%%{`` (the literal forms).  Use :func:`q` for YAML, where the doubling would change
+    the value.
+    """
+    text = q(value)
+    if isinstance(value, str):
+        text = text.replace("${", "$${").replace("%{", "%%{")
+    return text
+
+
+def hqlist(values: list[Any]) -> str:
+    return "[" + ", ".join(hq(v) for v in values) + "]"
 
 
 def tf_ident(name: str) -> str:

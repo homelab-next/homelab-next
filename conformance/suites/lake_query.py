@@ -42,13 +42,59 @@ def _(lake):
     assert len(got) == len(uids), f"expected {len(uids)} rows, got {len(got)}"
 
 
-@SUITE.check("named-params-are-bound", "a parameter value is data, never SQL")
+#: values that change the meaning of a query if they are spliced into the SQL text instead of
+#: bound: quotes, comments, statement separators, backslash escapes and placeholder look-alikes
+HOSTILE = (
+    "x' OR '1'='1",
+    "x'' OR ''1''=''1",
+    "\\' OR 1=1 --",
+    "x' --",
+    "x'; DELETE FROM authentication; --",
+    "x'); DROP TABLE authentication; SELECT ('",
+    ":q",
+    ":p OR 1=1",
+    "%' OR uid LIKE '%",
+    "x\nOR 1=1",
+)
+
+
+@SUITE.check("named-params-are-bound", "a parameter value is data, never SQL - in any position")
 def _(lake):
     pre, uids = _seed(lake)
-    hostile = "x' OR '1'='1"
-    assert lake.query(_BASE, {"p": hostile}) == [], "hostile value matched rows"
+    two = f"SELECT uid FROM {TABLE} WHERE uid LIKE :p AND user_name = :q ORDER BY uid"
+    for hostile in HOSTILE:
+        assert lake.query(_BASE, {"p": hostile}) == [], f"hostile value {hostile!r} matched rows"
+        # two placeholders, the hostile value in either, in either insertion order
+        for params in (
+            {"p": hostile, "q": "alice"},
+            {"q": "alice", "p": hostile},
+            {"p": pre + "-%", "q": hostile},
+            {"q": hostile, "p": pre + "-%"},
+        ):
+            got = lake.query(two, params)
+            assert got == [], f"hostile value {hostile!r} matched rows with {params}"
     # the table is intact afterwards
     assert len(lake.query(_BASE, {"p": pre + "-%"})) == len(uids)
+
+
+@SUITE.check(
+    "hostile-values-roundtrip-verbatim",
+    "a bound value comes back exactly as given, whether selected or compared",
+)
+def _(lake):
+    pre = uniq("v")
+    rows = [auth_row(f"{pre}-{i:02d}", user=v) for i, v in enumerate(HOSTILE)]
+    lake.write_batch(TABLE, rows, idempotency_key=uniq("seed"))
+    # the placeholder names match the look-alikes in HOSTILE, so text substitution collides
+    sel = f"SELECT uid, :p AS v, user_name FROM {TABLE} WHERE uid = :q AND user_name = :p"
+    for i, v in enumerate(HOSTILE):
+        uid = f"{pre}-{i:02d}"
+        for params in ({"p": v, "q": uid}, {"q": uid, "p": v}):
+            got = lake.query(sel, params)
+            assert len(got) == 1, f"value {v!r}: expected its one row, got {len(got)}"
+            assert got[0]["v"] == v and got[0]["user_name"] == v, (
+                f"value {v!r} came back as {got[0]['v']!r} / {got[0]['user_name']!r}"
+            )
 
 
 @SUITE.check("missing-param-rejected", "a placeholder with no value is an error")
@@ -125,8 +171,26 @@ class DuplicatingLake(FakeLake):
         return [r for r in rows for _ in (0, 1)]
 
 
+class InterpolatingLake(FakeLake):
+    """Defect: parameters are spliced into the SQL text (quotes doubled, one name at a time)."""
+
+    def query(self, sql, params=None):
+        from homelabnext.lake.sqlparams import check_params
+
+        check_params(sql, params)
+        for k, v in (params or {}).items():
+            lit = str(v) if isinstance(v, int) else "'" + str(v).replace("'", "''") + "'"
+            sql = sql.replace(":" + k, lit)
+        return super().query(sql, {})
+
+
 MUTANTS = {
     "duplicate-rows": Mutant(
         DuplicatingLake, "rows-unique-by-key", "query returns every row twice"
+    ),
+    "interpolated-params": Mutant(
+        InterpolatingLake,
+        "hostile-values-roundtrip-verbatim",
+        "parameters are spliced into the SQL text with quote doubling",
     ),
 }

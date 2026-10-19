@@ -36,7 +36,15 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the maintainers privately. Use this repository's private reporting channel (Security -> Report a vulnerability: choose it for conduct concerns too, and say so in the title), or GitHub's "Report content" for abuse that needs GitHub's own action. A dedicated conduct contact will be published here once one is set up. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the maintainers privately, through channels that exist today:
+
+1. Contact the maintainer listed in [`.github/CODEOWNERS`](.github/CODEOWNERS) (currently [@PeteSampras](https://github.com/PeteSampras)) through a contact option on their GitHub profile.
+2. If none suits you, open an issue titled "Code of conduct: private contact requested", with no details of the incident. A maintainer will reply there with a private way to talk, and the issue is then closed.
+3. For abuse that needs GitHub's own action (spam, threats, illegal content), use GitHub's "Report content" on the comment, issue or account.
+
+Do not use the security reporting route in [SECURITY.md](SECURITY.md) for conduct reports: it is reserved for vulnerabilities. All complaints will be reviewed and investigated promptly and fairly.
+
+<!-- Maintainer TODO: when a dedicated conduct contact exists (an address or form owned by the project), list it above as the first option. -->
 
 All community leaders are obligated to respect the privacy and security of the reporter of any incident.
 

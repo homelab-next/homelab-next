@@ -1,0 +1,580 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/swap_record/1.1",
+  "title": "Swap record",
+  "description": "The persisted state of one capability swap: the nine procedure steps, each with gates and evidence, an append-only hash-chained transition log, the route before and after the flip, and the rollback or closure outcome. Written by `hnx swap`; semantic checks (hash chain, step order) are in homelabnext.swap.record. 1.1 adds transition.state (digest of steps, route, status, rollback and closure when the transition was written, covered by the hash) and chain.alg (hmac-sha256 for a keyed chain).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "record_version",
+    "swap_id",
+    "capability",
+    "from_adapter",
+    "to_adapter",
+    "service",
+    "status",
+    "current_step",
+    "created_at",
+    "updated_at",
+    "plan",
+    "route",
+    "steps",
+    "transitions",
+    "rollback",
+    "closure"
+  ],
+  "properties": {
+    "record_version": {
+      "const": "1.0"
+    },
+    "swap_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"
+    },
+    "capability": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/cap_id"
+    },
+    "from_adapter": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "to_adapter": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "service": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "status": {
+      "enum": [
+        "active",
+        "closed",
+        "rolled_back"
+      ]
+    },
+    "current_step": {
+      "enum": [
+        "declare",
+        "shadow-start",
+        "dual-write",
+        "parity-compare",
+        "soak",
+        "cutover",
+        "rollback-window",
+        "decommission-check",
+        "close",
+        null
+      ]
+    },
+    "created_at": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    },
+    "updated_at": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "soak_hours",
+        "rollback_window_hours",
+        "max_divergences",
+        "min_parity_rows"
+      ],
+      "properties": {
+        "soak_hours": {
+          "type": "number",
+          "minimum": 0
+        },
+        "rollback_window_hours": {
+          "type": "number",
+          "minimum": 0
+        },
+        "max_divergences": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "min_parity_rows": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "before",
+        "after",
+        "flipped"
+      ],
+      "properties": {
+        "before": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "host",
+            "port"
+          ],
+          "properties": {
+            "host": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "impl": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          }
+        },
+        "after": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "host",
+            "port"
+          ],
+          "properties": {
+            "host": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "impl": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          }
+        },
+        "flipped": {
+          "type": "boolean"
+        },
+        "registry": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "items": {
+        "$ref": "#/$defs/step"
+      }
+    },
+    "transitions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/transition"
+      }
+    },
+    "rollback": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/rollback"
+        }
+      ]
+    },
+    "closure": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/closure"
+        }
+      ]
+    },
+    "chain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alg"
+      ],
+      "properties": {
+        "alg": {
+          "enum": [
+            "sha256",
+            "hmac-sha256"
+          ]
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "active"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "current_step": {
+            "enum": [
+              "declare",
+              "shadow-start",
+              "dual-write",
+              "parity-compare",
+              "soak",
+              "cutover",
+              "rollback-window",
+              "decommission-check",
+              "close"
+            ]
+          },
+          "rollback": {
+            "type": "null"
+          },
+          "closure": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "closed"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "current_step": {
+            "type": "null"
+          },
+          "rollback": {
+            "type": "null"
+          },
+          "closure": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "rolled_back"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "current_step": {
+            "type": "null"
+          },
+          "rollback": {
+            "type": "object"
+          },
+          "closure": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "status",
+        "attempts",
+        "evidence",
+        "gates"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "declare",
+            "shadow-start",
+            "dual-write",
+            "parity-compare",
+            "soak",
+            "cutover",
+            "rollback-window",
+            "decommission-check",
+            "close"
+          ]
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "passed",
+            "failed"
+          ]
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "started_at": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+        },
+        "finished_at": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        },
+        "gates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/gate"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "passed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "finished_at",
+              "started_at"
+            ],
+            "properties": {
+              "attempts": {
+                "minimum": 1
+              },
+              "evidence": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "ref",
+        "sha256",
+        "summary"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+        },
+        "ref": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/rel_path"
+        },
+        "sha256": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "phase",
+        "passed",
+        "detail"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+        },
+        "phase": {
+          "enum": [
+            "pre",
+            "post"
+          ]
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 500
+        }
+      }
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "seq",
+        "at",
+        "event",
+        "step",
+        "actor",
+        "note",
+        "prev",
+        "hash"
+      ],
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "at": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+        },
+        "event": {
+          "enum": [
+            "declared",
+            "step-passed",
+            "gate-failed",
+            "cutover-reverted",
+            "rolled-back",
+            "closed",
+            "note"
+          ]
+        },
+        "step": {
+          "enum": [
+            "declare",
+            "shadow-start",
+            "dual-write",
+            "parity-compare",
+            "soak",
+            "cutover",
+            "rollback-window",
+            "decommission-check",
+            "close",
+            null
+          ]
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._@-]{1,64}$"
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "prev": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+        },
+        "hash": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+        },
+        "state": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+        }
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "from_step",
+        "reason",
+        "restored_route",
+        "actions"
+      ],
+      "properties": {
+        "at": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+        },
+        "from_step": {
+          "enum": [
+            "declare",
+            "shadow-start",
+            "dual-write",
+            "parity-compare",
+            "soak",
+            "cutover",
+            "rollback-window",
+            "decommission-check",
+            "close"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 500
+        },
+        "restored_route": {
+          "type": "boolean"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          }
+        }
+      }
+    },
+    "closure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "adr_ref"
+      ],
+      "properties": {
+        "at": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+        },
+        "adr_ref": {
+          "type": "string",
+          "pattern": "^docs/adr/[0-9]{4}-[a-z0-9-]+\\.md$"
+        },
+        "lesson_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    }
+  }
+}

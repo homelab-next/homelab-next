@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 pass_score: 1.0
 role: fast-classifier
 suite: classifier-smoke

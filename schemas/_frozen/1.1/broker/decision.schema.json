@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/broker/decision/1.1",
+  "title": "Broker decision",
+  "description": "The broker's verdict on one request. reason is a closed vocabulary so audits can count denials by cause. In shadow mode the verdict is recorded but enforced is false; in enforce mode enforced is true. 1.1 adds the reasons approval-approver-not-allowed, approval-agent-approver, approval-time-invalid and approval-replayed.",
+  "type": "object",
+  "properties": {
+    "request_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "request_digest": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+    },
+    "verdict": {
+      "enum": [
+        "allow",
+        "deny",
+        "needs-approval"
+      ]
+    },
+    "reason": {
+      "enum": [
+        "allowed",
+        "default-deny",
+        "not-granted",
+        "tier-exceeds-grant",
+        "handler-missing",
+        "approval-required",
+        "approved",
+        "approval-digest-mismatch",
+        "approval-denied",
+        "approval-self-approved",
+        "approval-expired",
+        "approval-approver-not-allowed",
+        "approval-agent-approver",
+        "approval-time-invalid",
+        "approval-replayed"
+      ]
+    },
+    "mode": {
+      "enum": [
+        "shadow",
+        "enforce"
+      ]
+    },
+    "enforced": {
+      "type": "boolean"
+    },
+    "decided_at": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    },
+    "approval_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    }
+  },
+  "required": [
+    "request_id",
+    "request_digest",
+    "verdict",
+    "reason",
+    "mode",
+    "enforced",
+    "decided_at"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "enforce"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "enforced": {
+            "const": true
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "shadow"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "enforced": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "allow"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "reason": {
+            "enum": [
+              "allowed",
+              "approved"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

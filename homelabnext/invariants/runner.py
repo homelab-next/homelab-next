@@ -10,6 +10,9 @@ Exit semantics for an ``observable`` command:
     timeout  error
 
 Overall runner exit: 1 if anything failed, else 100 if anything could not be measured, else 0.
+
+An observable is a command line that is executed: the register file it comes from is trusted
+input (SECURITY.md, "Trusted inputs").
 """
 
 from __future__ import annotations

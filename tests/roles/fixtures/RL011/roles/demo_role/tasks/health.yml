@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: TODO replace with a real probe (uri, command, or wait_for)
+  ansible.builtin.debug:
+    msg: health not implemented for demo_role
+  tags: [health]

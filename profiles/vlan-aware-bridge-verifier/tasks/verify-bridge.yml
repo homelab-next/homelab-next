@@ -1,7 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # Read-only: inspects and asserts, never changes the bridge.
+- name: Validate the bridge name
+  ansible.builtin.assert:
+    that:
+      - vlan_aware_bridge_verifier_bridge is string
+      - vlan_aware_bridge_verifier_bridge is match('^[A-Za-z0-9_.-]{1,15}\Z')
+      - vlan_aware_bridge_verifier_bridge not in ['.', '..']
+    fail_msg: "vlan_aware_bridge_verifier_bridge must be an interface name (1-15 of [A-Za-z0-9_.-])"
+
 - name: Read bridge VLAN filtering state
-  ansible.builtin.command: "cat /sys/class/net/{{ vlan_aware_bridge_verifier_bridge }}/bridge/vlan_filtering"
+  ansible.builtin.command:
+    argv: [cat, "/sys/class/net/{{ vlan_aware_bridge_verifier_bridge }}/bridge/vlan_filtering"]
   register: vlan_aware_bridge_verifier_state
   changed_when: false
 

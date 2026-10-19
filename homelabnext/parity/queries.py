@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from homelabnext.lake.errors import LakeError
+from homelabnext.lake.sqlparams import quote_table
 
 from .report import Check, ParityReport
 from .rows import RowRules, Sample, diff_rows
@@ -76,7 +77,7 @@ def compare_tables(
     report = ParityReport("tables")
     rules = rules or {}
     for t in tables:
-        if not _IDENT.match(t):
+        if not isinstance(t, str) or not _IDENT.fullmatch(t):
             raise ValueError(f"not a table identifier: {t!r}")
         try:
             li, ri = left.describe(t), right.describe(t)
@@ -93,9 +94,9 @@ def compare_tables(
             )
         )
         r = rules.get(t) or RowRules(key=tuple(li.key), sample=sample)
-        try:
-            lrows = left.query(f"SELECT * FROM {li.name}")
-            rrows = right.query(f"SELECT * FROM {ri.name}")
+        try:  # the names come back from each adapter's describe(): validate and quote them too
+            lrows = left.query(f"SELECT * FROM {quote_table(li.name)}")
+            rrows = right.query(f"SELECT * FROM {quote_table(ri.name)}")
         except LakeError as exc:
             report.add(Check(f"table:{t}:rows", False, f"read failed: {exc}"))
             continue

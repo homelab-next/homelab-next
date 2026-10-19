@@ -12,6 +12,7 @@ import yaml
 from homelabnext.registry.model import Registry, Service
 
 from .core import MARKER, register
+from .safe import check_fields, checked
 from .templates import render
 
 
@@ -72,6 +73,7 @@ def dns_zone(reg: Registry) -> dict[str, str]:
         lines.append(f"@ IN NS {mname}.")
     for s in reg.sorted_services():
         host = reg.host_of(s)
+        check_fields("zone", {"capability": s.capability, "address": host.address})
         lines.append(f"{s.capability} IN {_rrtype(host.address)} {host.address}")
     for s in reg.sorted_services():
         lines.append(f"_{s.capability}._{_l4(s)} IN SRV 0 0 {s.port} {s.capability}.{zone}.")
@@ -131,7 +133,7 @@ def caddy(reg: Registry) -> dict[str, str]:
     if idp:
         parts.append(
             "(hnx_forward_auth) {\n"
-            f"\tforward_auth {_endpoint_url(reg, idp)} {{\n"
+            f"\tforward_auth {checked(_endpoint_url(reg, idp), 'idp endpoint', 'caddy')} {{\n"
             "\t\turi /outpost.goauthentik.io/auth/caddy\n"
             "\t\tcopy_headers X-Authentik-Username X-Authentik-Groups\n"
             "\t}\n}\n"
@@ -143,11 +145,11 @@ def caddy(reg: Registry) -> dict[str, str]:
         parts.append(
             render(
                 "caddy_site",
+                raw={"auth_block": auth_block},
                 hostname=s.public_hostname,
                 service=s.name,
                 capability=s.capability,
                 owner=s.owner,
-                auth_block=auth_block,
                 scheme=s.scheme,
                 alias=reg.alias(s.capability),
                 port=str(s.port),
@@ -238,6 +240,7 @@ def systemd_env(reg: Registry) -> dict[str, str]:
         lines = [_hdr(reg), "[Service]"]
         for up in sorted(s.upstreams):
             u = reg.by_capability(up)
+            check_fields("systemd", {"env_var": u.endpoint_env_var, "url": _endpoint_url(reg, u)})
             lines.append(f'Environment="{u.endpoint_env_var}={_endpoint_url(reg, u)}"')
         out[f"systemd/{s.name}.service.d/10-hnx-endpoints.conf"] = "\n".join(lines) + "\n"
     return out
@@ -325,6 +328,7 @@ def firewall_matrix(reg: Registry) -> dict[str, str]:
         "|---|---|---|---|---|",
     ]
     for src, dst, proto, port, svc, why in rules:
+        check_fields("markdown", {"zone": src, "zone ": dst, "service": svc, "reason": why})
         md.append(f"| {src} | {dst} | {proto}/{port} | {svc} | {why} |")
     csv = [_hdr(reg), "src_zone,dst_zone,proto,port,service,reason"]
     for src, dst, proto, port, svc, why in rules:
@@ -336,27 +340,69 @@ def firewall_matrix(reg: Registry) -> dict[str, str]:
 
 
 # 9 ---------------------------------------------------------------- IdP blueprint
+class _Find(list):
+    """Authentik ``!Find [model, [field, value]]`` lookup."""
+
+
+class _KeyOf(str):
+    """Authentik ``!KeyOf <entry id>`` reference."""
+
+
+class _BlueprintDumper(yaml.SafeDumper):
+    """``SafeDumper`` that knows the two Authentik tags; every value is emitted as YAML data, so a
+    registry string can never add keys or entries."""
+
+
+_BlueprintDumper.add_representer(
+    _Find, lambda d, v: d.represent_sequence("!Find", list(v), flow_style=True)
+)
+_BlueprintDumper.add_representer(_KeyOf, lambda d, v: d.represent_scalar("!KeyOf", str(v)))
+
+
 @register(
     "idp_blueprint",
     "Identity provider (Authentik-style) blueprint skeleton for services with auth=idp",
     "identity provider",
 )
 def idp_blueprint(reg: Registry) -> dict[str, str]:
-    parts = [_hdr(reg), "version: 1", "metadata:", f"  name: {reg.lab_name}-services", "entries:"]
+    entries: list[dict] = []
     for s in reg.sorted_services():
         if s.auth != "idp":
             continue
         external = f"https://{s.public_hostname}" if s.public_hostname else _endpoint_url(reg, s)
-        parts.append(
-            render(
-                "idp_app",
-                service=s.name,
-                capability=s.capability,
-                external_host=external,
-                description=f"owner {s.owner}",
-            ).rstrip("\n")
-        )
-    return {"idp/blueprint.yaml": "\n".join(parts) + "\n"}
+        entries += [
+            {
+                "model": "authentik_providers_proxy.proxyprovider",
+                "id": f"{s.name}-provider",
+                "state": "present",
+                "identifiers": {"name": s.name},
+                "attrs": {
+                    "mode": "forward_single",
+                    "external_host": external,
+                    "authorization_flow": _Find(
+                        [
+                            "authentik_flows.flow",
+                            ["slug", "default-provider-authorization-implicit-consent"],
+                        ]
+                    ),
+                },
+            },
+            {
+                "model": "authentik_core.application",
+                "state": "present",
+                "identifiers": {"slug": s.name},
+                "attrs": {
+                    "name": s.name,
+                    "provider": _KeyOf(f"{s.name}-provider"),
+                    "meta_description": f"owner {s.owner}",
+                },
+            },
+        ]
+    body = {"version": 1, "metadata": {"name": f"{reg.lab_name}-services"}, "entries": entries}
+    text = yaml.dump(
+        body, Dumper=_BlueprintDumper, sort_keys=False, default_flow_style=False, width=100
+    )
+    return {"idp/blueprint.yaml": _hdr(reg) + text}
 
 
 # 10 --------------------------------------------------------------- docs
@@ -381,6 +427,7 @@ def service_docs(reg: Registry) -> dict[str, str]:
     ]
     for name in sorted(reg.hosts):
         h = reg.hosts[name]
+        check_fields("markdown", {"host": name, "address": h.address, "role": h.role})
         md.append(f"| {name} | {h.address} | {h.zone} | {h.role or '-'} |")
     md += [
         "",
@@ -390,6 +437,9 @@ def service_docs(reg: Registry) -> dict[str, str]:
         "|---|---|---|---|---|",
     ]
     for s in reg.sorted_services():
+        check_fields(
+            "markdown", {"impl": s.impl, "version": s.version, "owner": s.owner, "service": s.name}
+        )
         md.append(
             f"| {s.capability} | {s.impl or '-'} | {s.version} | `{_endpoint_url(reg, s)}` | {s.owner} |"
         )
@@ -398,10 +448,17 @@ def service_docs(reg: Registry) -> dict[str, str]:
         h = reg.host_of(s)
         health = s.health.get("kind", "none")
         if health == "http":
-            health = f"http {s.health['path']} expect {s.health.get('expect_status', 200)}"
+            path = checked(s.health["path"], f"{s.name}.health.path", "markdown")
+            health = f"http {path} expect {s.health.get('expect_status', 200)}"
+        check_fields("markdown", {"upstream": "".join(s.upstreams), "tag": "".join(s.tags)})
         md.append(
             render(
                 "service_section",
+                raw={
+                    "upstreams": ", ".join(f"`{u}`" for u in sorted(s.upstreams)) or "none",
+                    "dependants": ", ".join(f"`{d.capability}`" for d in deps.get(s.capability, []))
+                    or "none",
+                },
                 service=s.name,
                 alias=reg.alias(s.capability),
                 impl=s.impl or "-",
@@ -414,9 +471,6 @@ def service_docs(reg: Registry) -> dict[str, str]:
                 auth=s.auth,
                 owner=s.owner,
                 health=health,
-                upstreams=", ".join(f"`{u}`" for u in sorted(s.upstreams)) or "none",
-                dependants=", ".join(f"`{d.capability}`" for d in deps.get(s.capability, []))
-                or "none",
                 backup=s.backup_job or "none",
                 tags=", ".join(s.tags) or "none",
             )
@@ -433,9 +487,14 @@ def service_docs(reg: Registry) -> dict[str, str]:
 def env_files(reg: Registry) -> dict[str, str]:
     out = {}
     for s in reg.sorted_services():
-        lines = [_hdr(reg), f"HNX_SERVICE={s.name}", f"HNX_LISTEN_PORT={s.port}"]
+        lines = [
+            _hdr(reg),
+            f"HNX_SERVICE={checked(s.name, 'service', 'env')}",
+            f"HNX_LISTEN_PORT={s.port}",
+        ]
         for up in sorted(s.upstreams):
             u = reg.by_capability(up)
+            check_fields("env", {"env_var": u.endpoint_env_var, "url": _endpoint_url(reg, u)})
             lines.append(f"{u.endpoint_env_var}={_endpoint_url(reg, u)}")
         out[f"env/{s.name}.env.generated"] = "\n".join(lines) + "\n"
     allv = [_hdr(reg)] + [

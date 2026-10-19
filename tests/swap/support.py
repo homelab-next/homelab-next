@@ -48,8 +48,12 @@ def check_golden(name: str, actual: str) -> None:
 
 
 def check_example(label: str, actual: str) -> None:
-    """The published schema examples are the goldens of the end-to-end runs."""
-    path = ROOT / "schemas" / "platform" / "examples" / f"swap_record.{label}.json"
+    """Goldens of the end-to-end runs (current record format, with state digests).
+
+    The published schema examples stay v1.0 documents: the evolution test checks that every
+    example still validates against the frozen 1.0 schema, and record_problems accepts them.
+    """
+    path = GOLDEN / f"swap_record.{label}.json"
     if os.environ.get("HNX_UPDATE_GOLDEN") == "1":
         path.write_text(actual, encoding="utf-8")
         return

@@ -22,7 +22,7 @@
         {
           "mode": "append",
           "overlay_template": "example_service/config.yml.j2",
-          "sha256": "8d4fc97b5c738f4d3514fc338e07eca28b25d5529283323da55bf6adf17b6c5a"
+          "sha256": "9de89f8dbc36d0bbfb6e67ffa791589ef56c7c8627bad43fd0a9b6827862bd17"
         }
       ],
       "extension_points": [
@@ -135,7 +135,7 @@
             "id": "custom:reverse-proxy-tunnel-workaround",
             "mode": "append",
             "overlay": "overlay/tunnel-mss.j2",
-            "sha256": "8d4fc97b5c738f4d3514fc338e07eca28b25d5529283323da55bf6adf17b6c5a"
+            "sha256": "9de89f8dbc36d0bbfb6e67ffa791589ef56c7c8627bad43fd0a9b6827862bd17"
           }
         ]
       }

@@ -8,8 +8,11 @@ A *target* maps capability names to *bindings*.  A binding says how to build a s
 * ``adapter: "package.module:factory"`` (a target file): ``factory(**config)`` returns the
   subject, an object implementing the capability's Protocol in ``conformance/protocols/``.
 
-Target file (YAML or JSON), looked up as a path, then ``conformance/targets/NAME.yml`` under the
-root, then ``$HNX_CONFORM_TARGETS``::
+Target file (YAML or JSON).  A spec that looks like a path (it contains ``/`` or ends in
+``.yml``/``.yaml``/``.json``) is read as that file; anything else is a *name*, looked up only in
+``conformance/targets/NAME.yml`` under the root, then ``$HNX_CONFORM_TARGETS`` - never in the
+current directory, so a stray ``staging.yml`` in the working directory cannot stand in for the
+named target::
 
     name: staging
     capabilities:
@@ -21,6 +24,12 @@ root, then ``$HNX_CONFORM_TARGETS``::
 
 Endpoints come from the registry resolver inside the adapter, never from this file
 (``docs/conformance.md``).
+
+Trust: the adapter is imported and run in this process.  Conformance assumes an *honest*
+adapter - it proves that an implementation meets the contract, it is not a sandbox and cannot
+catch an adapter written to deceive it (one that patches the harness, or rewrites its own
+results).  Review an adapter like any other code you run; the report records which adapter
+module file was used.
 """
 
 from __future__ import annotations
@@ -35,7 +44,16 @@ from typing import Any
 from .core import Suite
 from .registry import ConformError, find_root, load_module
 
-__all__ = ["Binding", "Target", "binding_from_mapping", "load_target", "make_factory"]
+__all__ = [
+    "Binding",
+    "Target",
+    "adapter_origin",
+    "binding_from_mapping",
+    "load_target",
+    "make_factory",
+]
+
+_TARGET_SUFFIXES = (".yml", ".yaml", ".json")
 
 
 @dataclass(frozen=True)
@@ -109,17 +127,20 @@ def load_target(spec: str, root: str | Path | None = None) -> Target:
     if spec == "broken" or spec.startswith("broken:"):
         return Target(spec, {}, spec)
     r = find_root(root)
-    candidates = [Path(spec)]
-    for ext in (".yml", ".yaml", ".json"):
-        candidates.append(r / "conformance" / "targets" / f"{spec}{ext}")
+    if "/" in spec or os.sep in spec or spec.endswith(_TARGET_SUFFIXES):
+        path: Path | None = Path(spec)
+        if not path.is_file():
+            raise ConformError(f"target file {spec!r} does not exist")
+    else:
+        candidates = [r / "conformance" / "targets" / f"{spec}{ext}" for ext in _TARGET_SUFFIXES]
         env = os.environ.get("HNX_CONFORM_TARGETS")
         if env:
-            candidates.append(Path(env) / f"{spec}{ext}")
-    path = next((c for c in candidates if c.is_file()), None)
+            candidates += [Path(env) / f"{spec}{ext}" for ext in _TARGET_SUFFIXES]
+        path = next((c for c in candidates if c.is_file()), None)
     if path is None:
         raise ConformError(
-            f"unknown target {spec!r}: not 'fake', 'broken', a file, or a named target in "
-            f"{r / 'conformance' / 'targets'}"
+            f"unknown target {spec!r}: not 'fake', 'broken', a named target in "
+            f"{r / 'conformance' / 'targets'}, or a path (use ./{spec}.yml for a local file)"
         )
     doc = _read(path)
     caps = doc.get("capabilities")
@@ -140,6 +161,22 @@ def _import_attr(dotted: str) -> Callable[..., Any]:
     if not callable(obj):
         raise ConformError(f"adapter {dotted!r} is not callable")
     return obj
+
+
+def adapter_origin(dotted: str, root: str | Path | None = None) -> str | None:
+    """The file the adapter's module is loaded from (recorded in reports), or None."""
+    import importlib.util
+    import sys
+
+    r = str(find_root(root))
+    if r not in sys.path:
+        sys.path.insert(0, r)
+    mod = dotted.partition(":")[0]
+    try:
+        spec = importlib.util.find_spec(mod)
+    except (ImportError, ValueError):
+        return None
+    return spec.origin if spec is not None else None
 
 
 def make_factory(

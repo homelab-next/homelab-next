@@ -14,6 +14,8 @@
   persistent: false
   randomized_delay_sec: 300
   timeout_start_sec: 3600
+  read_write_paths: [/var/lib/lake]
+  hardening_opt_out: [ProtectHome]
 - name: legacy-sweep
   description: Old sweep, superseded by a workflow
   exec: /usr/local/bin/legacy-sweep

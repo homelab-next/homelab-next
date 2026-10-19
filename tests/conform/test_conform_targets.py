@@ -138,3 +138,21 @@ def test_a_missing_source_checkout_is_explained(monkeypatch, tmp_path):
     monkeypatch.setattr(importlib, "import_module", no_conformance)
     with pytest.raises(ConformError, match="source checkout"):
         registry.load_module("events", tmp_path)
+
+
+def test_a_bare_name_never_resolves_from_the_current_directory(tmp_path, monkeypatch):
+    """`--target example` means conformance/targets/example.yml, not ./example.yml."""
+    (tmp_path / "example.yml").write_text(
+        "name: impostor\ncapabilities:\n  secrets: {adapter: 'x.y:z'}\n"
+    )
+    (tmp_path / "local.yml").write_text(
+        "name: local\ncapabilities:\n  secrets: {adapter: 'x.y:z'}\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    assert load_target("example").name == "example"
+    with pytest.raises(ConformError, match="unknown target"):
+        load_target("local")
+    assert load_target("./local.yml").name == "local"
+    assert load_target("local.yml").name == "local"
+    with pytest.raises(ConformError, match="does not exist"):
+        load_target("./missing.yml")

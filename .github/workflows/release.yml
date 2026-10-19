@@ -1,0 +1,149 @@
+# SPDX-License-Identifier: Apache-2.0
+name: release
+
+# On a version tag: build the sdist and wheel ONCE, attest their provenance (SLSA, Sigstore),
+# produce a CycloneDX SBOM, attach everything to a GitHub release and publish to PyPI through
+# Trusted Publishing (OIDC; no API token is stored anywhere).  Every later job consumes the
+# artefacts of the build job, byte for byte; nothing is rebuilt.
+#
+# One-time setup by a maintainer: a `pypi` environment in the repository settings (with required
+# reviewers), and a trusted publisher on PyPI for this repository, workflow `release.yml` and
+# environment `pypi`.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Action pins below are full commit SHAs; the trailing comment names the release.
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/python-deps
+        with:
+          python-version: "3.12"
+          packages: build cyclonedx-bom
+          install-project: "false"
+          cache: ""  # no shared cache in a release build
+      - name: the tag names the packaged version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version=$(python -c "import runpy; print(runpy.run_path('homelabnext/_version.py')['VERSION'])")
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::tag $TAG does not match homelabnext/_version.py ($version)"
+            exit 1
+          fi
+      - name: build sdist and wheel (no isolation, so the build backend is the hash-pinned one)
+        run: python -m build --no-isolation --outdir dist .
+      - name: leak-scan the unpacked artefacts
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/unpacked"
+          mkdir -p "$out/wheel" "$out/sdist"
+          python -m zipfile -e dist/*.whl "$out/wheel"
+          tar -xzf dist/*.tar.gz -C "$out/sdist"
+          rm "$out"/wheel/*.dist-info/RECORD  # file hashes by construction
+          python tools/leak_scan.py "$out"
+      - name: CycloneDX SBOM of the wheel installed with its core extra
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/sbom-env"
+          "$RUNNER_TEMP/sbom-env/bin/python" -m pip install --disable-pip-version-check \
+            --require-hashes --no-deps -r constraints/bootstrap.txt
+          "$RUNNER_TEMP/sbom-env/bin/python" -m pip install --disable-pip-version-check \
+            -c constraints/ci.txt PyYAML jsonschema referencing
+          "$RUNNER_TEMP/sbom-env/bin/python" -m pip install --disable-pip-version-check \
+            --no-deps dist/*.whl
+          mkdir -p sbom
+          python -m cyclonedx_py environment --pyproject pyproject.toml --mc-type library \
+            --output-reproducible --of JSON -o sbom/homelabnext.cdx.json \
+            "$RUNNER_TEMP/sbom-env/bin/python"
+      - name: checksums
+        run: sha256sum dist/* sbom/* | tee SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: sbom
+          path: |
+            sbom/
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+  attest:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write      # Sigstore signing identity for the attestation
+      attestations: write  # store the attestation on this repository
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: dist/*
+
+  github-release:
+    needs: [build, attest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write  # create the release and upload its assets
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: sbom
+          path: sbom
+      - name: create the release with artefacts, SBOM and checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh release create "$TAG" --repo "$REPO" --verify-tag --title "$TAG" \
+            --notes "See CHANGELOG.md. Provenance: gh attestation verify <file> --repo $REPO" \
+            dist/* sbom/sbom/homelabnext.cdx.json sbom/SHA256SUMS
+
+  publish:
+    needs: [build, attest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/homelabnext
+    permissions:
+      id-token: write  # PyPI Trusted Publishing; the only job that can publish
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2

@@ -10,14 +10,14 @@ from __future__ import annotations
 
 from homelabnext.compute.model import Fleet, Guest
 
-from ._text import HEADER, hcl_align, q, qlist, tf_ident
+from ._text import HEADER, hcl_align, hq, hqlist, tf_ident
 
 PROVIDERS = f"""# {HEADER}
 terraform {{
   required_providers {{
     proxmox = {{
       source  = "bpg/proxmox"
-      version = ">= 0.60.0"
+      version = "~> 0.60"
     }}
   }}
 }}
@@ -71,10 +71,10 @@ def _bridge(fleet: Fleet, g: Guest) -> tuple[str, str | None]:
     """Return (bridge expression, vlan_id literal or None)."""
     z = fleet.zone(g)
     br = g.network.get("bridge", "default")
-    base = "var.default_bridge" if br == "default" else q(br)
+    base = "var.default_bridge" if br == "default" else hq(br)
     if g.network.get("vlan_tag_mode", "in_bridge") == "per_vlan_bridge":
         suffix = f"v{z.vlan_id}"
-        expr = f'"${{var.default_bridge}}{suffix}"' if br == "default" else q(f"{br}{suffix}")
+        expr = f'"${{var.default_bridge}}{suffix}"' if br == "default" else hq(f"{br}{suffix}")
         return expr, None
     return base, (str(z.vlan_id) if z.vlan_id is not None else None)
 
@@ -89,21 +89,21 @@ def _vm(fleet: Fleet, g: Guest) -> str:
     bridge, vlan = _bridge(fleet, g)
     mem = g.memory
     L = [f"# {HEADER}", f'resource "proxmox_virtual_environment_vm" "{tf_ident(g.name)}" {{']
-    L += [f"  name      = {q(g.name)}", f"  node_name = {q(g.node)}", f"  vm_id     = {g.vmid}"]
+    L += [f"  name      = {hq(g.name)}", f"  node_name = {hq(g.node)}", f"  vm_id     = {g.vmid}"]
     if g.tags:
-        L.append(f"  tags      = {qlist(sorted(g.tags))}")
-    L.append(f"  on_boot   = {q(g.lifecycle.get('on_boot', True))}")
+        L.append(f"  tags      = {hqlist(sorted(g.tags))}")
+    L.append(f"  on_boot   = {hq(g.lifecycle.get('on_boot', True))}")
     if g.gpu:
         L += ['  bios    = "ovmf"', '  machine = "q35"']
     img = g.image
     if img.get("kind") == "template-clone":
-        L += ["", "  clone {", f"    vm_id = var.vm_templates[{q(img['logical'])}]", "  }"]
+        L += ["", "  clone {", f"    vm_id = var.vm_templates[{hq(img['logical'])}]", "  }"]
     L += ["", "  agent {", "    enabled = true", "  }"]
     L += [
         "",
         "  cpu {",
         f"    cores = {g.cpu['cores']}",
-        f"    type  = {q(g.cpu.get('type', 'host'))}",
+        f"    type  = {hq(g.cpu.get('type', 'host'))}",
         "  }",
     ]
     L += ["", "  memory {", f"    dedicated = {mem['size_mb']}"]
@@ -114,11 +114,11 @@ def _vm(fleet: Fleet, g: Guest) -> str:
         L += [
             "",
             "  disk {",
-            f"    datastore_id = var.pools[{q(d['pool'])}]",
+            f"    datastore_id = var.pools[{hq(d['pool'])}]",
             f'    interface    = "scsi{i}"',
             f"    size         = {d['size_gb']}",
-            f"    file_format  = {q(d.get('format', 'raw'))}",
-            f"    discard      = {q('on' if d.get('discard', True) else 'ignore')}",
+            f"    file_format  = {hq(d.get('format', 'raw'))}",
+            f"    discard      = {hq('on' if d.get('discard', True) else 'ignore')}",
             "  }",
         ]
     L += ["", "  network_device {", f"    bridge = {bridge}"]
@@ -127,12 +127,12 @@ def _vm(fleet: Fleet, g: Guest) -> str:
     L.append(f"    firewall = {_fw(g)}")
     L.append("  }")
     if img.get("os_type"):
-        L += ["", "  operating_system {", f"    type = {q(_pve_ostype(img['os_type']))}", "  }"]
+        L += ["", "  operating_system {", f"    type = {hq(_pve_ostype(img['os_type']))}", "  }"]
     if g.gpu:
         mapping = g.gpu.get("resource_mapping")
         L += ["", "  hostpci {", '    device = "hostpci0"']
         L.append(
-            f"    mapping = {q(mapping)}"
+            f"    mapping = {hq(mapping)}"
             if mapping
             else "    # resource_mapping unset: set one before apply"
         )
@@ -141,20 +141,20 @@ def _vm(fleet: Fleet, g: Guest) -> str:
     if ci:
         L += ["", "  initialization {"]
         if ci.get("storage_pool"):
-            L.append(f"    datastore_id = var.pools[{q(ci['storage_pool'])}]")
+            L.append(f"    datastore_id = var.pools[{hq(ci['storage_pool'])}]")
         L += [
             "    ip_config {",
             "      ipv4 {",
-            f"        address = {q(g.ip + '/' + str(fleet.prefix_len(g)))}",
-            f"        gateway = {q(fleet.gateway(g))}",
+            f"        address = {hq(g.ip + '/' + str(fleet.prefix_len(g)))}",
+            f"        gateway = {hq(fleet.gateway(g))}",
             "      }",
             "    }",
             "    user_account {",
-            f"      username = {q(ci['user'])}",
+            f"      username = {hq(ci['user'])}",
         ]
         keys = ci.get("ssh_authorized_keys", [])
         if keys:
-            L.append("      keys     = [" + ", ".join(f"var.ssh_keys[{q(k)}]" for k in keys) + "]")
+            L.append("      keys     = [" + ", ".join(f"var.ssh_keys[{hq(k)}]" for k in keys) + "]")
         L += ["    }", "  }"]
     ign = g.lifecycle.get("ignore_changes", [])
     if ign:
@@ -176,16 +176,16 @@ def _ct(fleet: Fleet, g: Guest) -> str:
     bridge, vlan = _bridge(fleet, g)
     mem = g.memory
     L = [f"# {HEADER}", f'resource "proxmox_virtual_environment_container" "{tf_ident(g.name)}" {{']
-    L += [f"  node_name    = {q(g.node)}", f"  vm_id        = {g.vmid}"]
+    L += [f"  node_name    = {hq(g.node)}", f"  vm_id        = {g.vmid}"]
     if g.tags:
-        L.append(f"  tags         = {qlist(sorted(g.tags))}")
+        L.append(f"  tags         = {hqlist(sorted(g.tags))}")
     L += [
-        f"  start_on_boot = {q(g.lifecycle.get('on_boot', True))}",
+        f"  start_on_boot = {hq(g.lifecycle.get('on_boot', True))}",
         "  unprivileged  = true",
         "",
         "  operating_system {",
-        f"    template_file_id = var.ct_templates[{q(g.image['logical'])}]",
-        f"    type             = {q(g.image['os_type'])}",
+        f"    template_file_id = var.ct_templates[{hq(g.image['logical'])}]",
+        f"    type             = {hq(g.image['os_type'])}",
         "  }",
         "",
         "  cpu {",
@@ -200,7 +200,7 @@ def _ct(fleet: Fleet, g: Guest) -> str:
     L += [
         "",
         "  disk {",
-        f"    datastore_id = var.pools[{q(root['pool'])}]",
+        f"    datastore_id = var.pools[{hq(root['pool'])}]",
         f"    size         = {root['size_gb']}",
         "  }",
     ]
@@ -208,9 +208,9 @@ def _ct(fleet: Fleet, g: Guest) -> str:
         L += [
             "",
             "  mount_point {",
-            f"    volume    = {q(d['host_path'])}",
-            f"    path      = {q(d['mount_path'])}",
-            f"    read_only = {q(d.get('read_only', False))}",
+            f"    volume    = {hq(d['host_path'])}",
+            f"    path      = {hq(d['mount_path'])}",
+            f"    read_only = {hq(d.get('read_only', False))}",
             "  }",
         ]
     L += ["", "  network_interface {", '    name   = "eth0"', f"    bridge = {bridge}"]
@@ -222,11 +222,11 @@ def _ct(fleet: Fleet, g: Guest) -> str:
     L += [
         "",
         "  initialization {",
-        f"    hostname = {q(g.name)}",
+        f"    hostname = {hq(g.name)}",
         "    ip_config {",
         "      ipv4 {",
-        f"        address = {q(g.ip + '/' + str(fleet.prefix_len(g)))}",
-        f"        gateway = {q(fleet.gateway(g))}",
+        f"        address = {hq(g.ip + '/' + str(fleet.prefix_len(g)))}",
+        f"        gateway = {hq(fleet.gateway(g))}",
         "      }",
         "    }",
     ]
@@ -234,7 +234,7 @@ def _ct(fleet: Fleet, g: Guest) -> str:
         L += [
             "    user_account {",
             "      keys = ["
-            + ", ".join(f"var.ssh_keys[{q(k)}]" for k in ci["ssh_authorized_keys"])
+            + ", ".join(f"var.ssh_keys[{hq(k)}]" for k in ci["ssh_authorized_keys"])
             + "]",
             "    }",
         ]

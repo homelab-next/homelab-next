@@ -21,3 +21,35 @@ def test_repo_python_files_all_have_header():
     root = Path(__file__).resolve().parents[2]
     files = [p for p in root.rglob("*.py") if ".git" not in p.parts]
     assert [str(p) for p in files if check_spdx.missing_header(p)] == []
+
+
+def test_shell_yaml_and_toml_need_the_header_too(tmp_path: Path):
+    for name in ("run.sh", "conf.yml", "conf.yaml", "pyproject.toml"):
+        f = tmp_path / name
+        f.write_text("key = 1\n")
+        assert check_spdx.main([str(f)]) == 1, name
+        f.write_text("#!/bin/sh\n# SPDX-License-Identifier: Apache-2.0\nkey = 1\n")
+        assert check_spdx.main([str(f)]) == 0, name
+
+
+def test_golden_outputs_are_exempt(tmp_path: Path):
+    g = tmp_path / "tests" / "golden" / "out.yml"
+    g.parent.mkdir(parents=True)
+    g.write_text("generated: true\n")
+    assert check_spdx.main([str(g)]) == 0
+
+
+def test_vendored_file_needs_its_own_spdx_identifier(tmp_path: Path, monkeypatch):
+    v = tmp_path / "third_party" / "lib.sh"
+    v.parent.mkdir()
+    monkeypatch.setattr(check_spdx, "VENDORED", {"*/third_party/*": "kept verbatim"})
+    v.write_text("# SPDX-License-Identifier: MIT\necho hi\n")
+    assert check_spdx.main([str(v)]) == 0
+    v.write_text("echo hi\n")
+    assert check_spdx.main([str(v)]) == 1
+
+
+def test_repo_tracked_files_all_have_header(monkeypatch):
+    root = Path(__file__).resolve().parents[2]
+    monkeypatch.chdir(root)
+    assert check_spdx.main([]) == 0

@@ -3,5 +3,7 @@
   ansible.builtin.copy:
     dest: "{{ compose_app_dir }}/backup-manifest.json"
     content: "{{ {'app': compose_app_name, 'paths': ([compose_app_data_dir] + (compose_app_spec.services.values() | map(attribute='volumes', default=[]) | flatten | map('regex_replace', ':.*$', '') | select('match', '^/') | list)) | unique | sort} | to_nice_json }}\n"
+    owner: "{{ compose_app_owner }}"
+    group: "{{ compose_app_group }}"
     mode: "0640"
   tags: [backup]

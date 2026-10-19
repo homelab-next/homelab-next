@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # The real Iceberg adapter on a temporary SQLite catalog (needs: pip install 'homelabnext[lake]').
 #   hnx conform run lake-query --target lake-iceberg
 #   hnx conform run lake-catalog --target lake-iceberg

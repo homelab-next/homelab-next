@@ -30,9 +30,12 @@ scope_policy:
   overrides: {guest:keep-me: in}   # per canonical id; beats everything
 ```
 
-Precedence, first match wins: `overrides` > the target's own `scope` > `vmid_threshold` / `out_tags`
-> allow. A service without a `scope` inherits the scope, vmid and tags of the guest named like its
-host.
+Precedence, first match wins: `overrides` > the host's decision (for a service) > the target's
+own `scope` > `vmid_threshold` / `out_tags` > allow. A service runs on the guest named like its
+host and inherits that guest's vmid and tags. The host is decided first, so a service can only
+**narrow** its host's scope: `scope: out` on a service of an in-scope host takes it out, but
+`scope: in` on a service of a host that is out (by its own `scope`, the threshold, a tag or an
+override) is still out. Only a policy override naming the service itself beats the host.
 
 ## Resolution first, decision second
 

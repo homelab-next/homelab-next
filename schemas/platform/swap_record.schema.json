@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/swap_record/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/platform/swap_record/1.1",
   "title": "Swap record",
-  "description": "The persisted state of one capability swap: the nine procedure steps, each with gates and evidence, an append-only hash-chained transition log, the route before and after the flip, and the rollback or closure outcome. Written by `hnx swap`; semantic checks (hash chain, step order) are in homelabnext.swap.record.",
+  "description": "The persisted state of one capability swap: the nine procedure steps, each with gates and evidence, an append-only hash-chained transition log, the route before and after the flip, and the rollback or closure outcome. Written by `hnx swap`; semantic checks (hash chain, step order) are in homelabnext.swap.record. 1.1 adds transition.state (digest of steps, route, status, rollback and closure when the transition was written, covered by the hash) and chain.alg (hmac-sha256 for a keyed chain).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -203,6 +203,21 @@
           "$ref": "#/$defs/closure"
         }
       ]
+    },
+    "chain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alg"
+      ],
+      "properties": {
+        "alg": {
+          "enum": [
+            "sha256",
+            "hmac-sha256"
+          ]
+        }
+      }
     }
   },
   "allOf": [
@@ -488,6 +503,9 @@
           "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
         },
         "hash": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+        },
+        "state": {
           "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
         }
       }

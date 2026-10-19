@@ -1,13 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
-# gitleaks configuration: the default ruleset plus one narrow, reasoned allowance
-# (a single test file; it is path-scoped because a rule-scoped allowance did not apply in 8.28).
+# gitleaks configuration: the default ruleset plus allowances for exact, known-fake values only.
+# Each entry matches one whole secret string (regexTarget = "secret", anchored), so nothing else in
+# any file is exempt: a real credential added next to a fixture is still caught.  No allowance is
+# path-scoped, because gitleaks 8.28 skips an allowlisted path entirely (condition = "AND" does
+# not narrow it).  A new fixture line can instead carry an inline `gitleaks:allow` comment.
 [extend]
 useDefault = true
 
 [[allowlists]]
-description = "the leak scanner's own test plants a fake high-entropy credential on purpose to prove it is detected"
-paths = ['''^tools/tests/test_leak_scan\.py$''']
+description = "broker conformance suite: the fake secret argument it plants to prove the audit trail redacts it"
+regexTarget = "secret"
+regexes = ['''^zq7-opaque-4b1d-fake-DO-NOT-LOG$''', '''^tok-SECRET-123$''']
 
 [[allowlists]]
-description = "the broker conformance suite plants a fake secret argument on purpose to prove the audit trail redacts it"
-paths = ['''^conformance/suites/broker\.py$''']
+description = "leak scanner tests (historical revision): the first half of a planted fake credential, split on purpose"
+regexTarget = "secret"
+regexes = ['''^Zx9Qw3Rt7Yp2$''']

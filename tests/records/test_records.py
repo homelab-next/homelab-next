@@ -301,3 +301,34 @@ def test_repo_schema_examples_validate_and_negatives_fail():
     for f in neg:
         with pytest.raises(ValueError):
             validate_note(parse_note(f.read_text())[0])
+
+
+def test_bound_writer_stamps_its_identity_and_refuses_another(tree):
+    bound = Records(tree, lambda: NOW, agent="triage")
+    p = bound.propose({k: v for k, v in proposal().items() if k != "requesting_agent"})
+    fm, _ = parse_note(p.read_text())
+    assert fm["requesting_agent"] == AGENT and "-triage-" in p.name
+    with pytest.raises(LaneViolation, match="not this writer's identity"):
+        bound.propose(proposal(requesting_agent="profile:operator"))
+    with pytest.raises(LaneViolation):
+        bound.submit(
+            {
+                "type": "finding",
+                "title": "f",
+                "requesting_agent": "profile:other",
+                "severity": "low",
+            }
+        )
+    with pytest.raises(LaneViolation):
+        bound.completion_request(["x.md"], "x", agent="someone-else")
+
+
+def test_unbound_completion_request_needs_an_agent(rec):
+    with pytest.raises(NoteError, match="agent: required"):
+        rec.completion_request(["x.md"], "x")
+
+
+def test_module_doc_states_filesystem_ownership_is_the_enforcement():
+    import homelabnext.records.agent as agent_mod
+
+    assert "filesystem ownership" in agent_mod.__doc__

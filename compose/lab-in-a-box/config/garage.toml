@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Single-node object store for the lab-in-a-box.  The rpc secret and admin token come from the
 # environment (GARAGE_RPC_SECRET, GARAGE_ADMIN_TOKEN), never from this file.
 metadata_dir = "/var/lib/garage/meta"

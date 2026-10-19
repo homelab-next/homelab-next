@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: Apache-2.0
+# negative: sudo is an enum, never a raw sudoers line
+id: guest:lake-core
+display_name: lake-core
+kind: vm
+provisioning: terraform
+placement:
+  node: hv-a
+  vmid: 40
+  vmid_scheme: octet
+resources:
+  cpu:
+    cores: 4
+    type: host
+  memory:
+    size_mb: 16384
+    balloon_min_mb: null
+  disks:
+  - name: rootfs
+    size_gb: 20
+    pool: fast
+    discard: true
+    format: raw
+  - name: data
+    size_gb: 200
+    pool: bulk
+image:
+  logical: debian-12-cloudinit
+  kind: template-clone
+  os_type: linux-6
+cloudinit:
+  user: ansible
+  ssh_authorized_keys:
+  - operator
+  packages:
+  - qemu-guest-agent
+  timezone: UTC
+  sudo: ALL=(ALL) NOPASSWD:ALL
+network:
+  zone: data
+  ip: 198.51.100.40
+  gateway: inherit
+  bridge: default
+  vlan_tag_mode: in_bridge
+  firewall: inherit
+capability: cap:lake-query
+capability_groups:
+- cap_lake
+- cap_query
+tags:
+- prod
+- stateful
+shared_dirs: []
+backup:
+  policy: daily
+  include_memory: false
+  retain:
+    daily: 7
+    weekly: 4
+    monthly: 6
+  export_hook: lake-export
+lifecycle:
+  on_boot: true
+  ignore_changes:
+  - clone
+owners:
+  primary: data-team
+  oncall: platform-team

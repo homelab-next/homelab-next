@@ -6,15 +6,43 @@
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
+    owner: "{{ compose_app_owner }}"
+    group: "{{ compose_app_group }}"
     mode: "0750"
   loop:
     - "{{ compose_app_dir }}"
     - "{{ compose_app_data_dir }}"
 
+- name: Create the secrets directory
+  ansible.builtin.file:
+    path: "{{ compose_app_dir }}/secrets"
+    state: directory
+    owner: "{{ compose_app_owner }}"
+    group: "{{ compose_app_group }}"
+    mode: "0700"
+  when: compose_app_secret_env | length > 0
+
+# One env_file per service, 0600, read by docker compose on the host and never written into
+# docker-compose.yml. Values are single-quoted, which compose reads literally (no $ expansion);
+# validate.yml refuses a value holding a quote or a line break.
+- name: Write secret env_files
+  ansible.builtin.copy:
+    dest: "{{ compose_app_dir }}/secrets/{{ item.key }}.env"
+    content: "{% for k, v in item.value | dictsort %}{{ k }}='{{ v }}'\n{% endfor %}"
+    owner: "{{ compose_app_owner }}"
+    group: "{{ compose_app_group }}"
+    mode: "0600"
+  loop: "{{ compose_app_secret_env | dict2items }}"
+  register: compose_app_secrets_written
+  no_log: true
+  diff: false
+
 - name: Render docker-compose.yml
   ansible.builtin.template:
     src: compose.yml.j2
     dest: "{{ compose_app_dir }}/docker-compose.yml"
+    owner: "{{ compose_app_owner }}"
+    group: "{{ compose_app_group }}"
     mode: "0640"
   register: compose_app_rendered
 
@@ -27,5 +55,5 @@
 - name: Start the application
   ansible.builtin.command:
     argv: [docker, compose, -f, "{{ compose_app_dir }}/docker-compose.yml", up, -d, --remove-orphans]
-  changed_when: compose_app_rendered.changed
+  changed_when: compose_app_rendered.changed or compose_app_secrets_written.changed
   when: compose_app_start | bool

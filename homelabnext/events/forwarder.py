@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Protocol
 
+from homelabnext._http import ResponseTooLarge, check_plaintext, read_bounded, safe_urlopen
+
 from .envelope import body_digest, canonical_body
 
 CONTENT_TYPE = "application/cloudevents+json"
@@ -156,21 +158,39 @@ class HttpForwarder:
     prior accept is reported as duplicate), 409 -> :class:`PermanentError` (id collision),
     408/425/429 and 5xx -> :class:`TransientError`, any other 4xx -> :class:`PermanentError`.
     Connection errors and timeouts are transient.  The id travels in ``Idempotency-Key`` too.
+
+    Redirects are followed only within the same origin, and a reply body over ``max_reply_bytes``
+    is refused (the ack is tiny).  ``auth`` (a callable returning an ``Authorization`` value,
+    read per request) is refused over plain http to a non-loopback host unless
+    ``allow_plaintext=True``.
     """
 
-    def __init__(self, url: str, *, timeout: float = 5.0, opener: Any = None) -> None:
+    def __init__(
+        self,
+        url: str,
+        *,
+        timeout: float = 5.0,
+        opener: Any = None,
+        auth: Any = None,
+        allow_plaintext: bool = False,
+        max_reply_bytes: int = 64 * 1024,
+    ) -> None:
         if not url.startswith(("http://", "https://")):
             raise ValueError("forwarder url must be http(s)")
+        check_plaintext(url, credentials=auth is not None, allow_plaintext=allow_plaintext)
         self.url = url
         self.timeout = timeout
-        self._opener = opener or urllib.request.urlopen
+        self._auth = auth
+        self.max_reply_bytes = max_reply_bytes
+        self._opener = opener or safe_urlopen
 
     def build_request(self, event: dict[str, Any]) -> urllib.request.Request:
+        headers = {"Content-Type": CONTENT_TYPE, IDEMPOTENCY_HEADER: event["id"]}
+        token = self._auth() if self._auth is not None else None
+        if token:
+            headers["Authorization"] = token
         return urllib.request.Request(
-            self.url,
-            data=canonical_body(event),
-            headers={"Content-Type": CONTENT_TYPE, IDEMPOTENCY_HEADER: event["id"]},
-            method="POST",
+            self.url, data=canonical_body(event), headers=headers, method="POST"
         )
 
     def forward(self, event: dict[str, Any]) -> Ack:
@@ -184,7 +204,9 @@ class HttpForwarder:
             raise TransientError(f"forwarder unreachable: {type(exc).__name__}") from exc
         code = int(getattr(resp, "status", getattr(resp, "code", 200)))
         try:
-            raw = resp.read() if hasattr(resp, "read") else b""
+            raw = read_bounded(resp, self.max_reply_bytes) if hasattr(resp, "read") else b""
+        except ResponseTooLarge as exc:
+            raise PermanentError(str(exc)) from None
         finally:
             close = getattr(resp, "close", None)
             if close:
