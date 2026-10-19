@@ -24,7 +24,7 @@
     "tier": "write"
   },
   "data_tier": "local-only",
-  "digest": "sha256:155308e5f4bb093e6ebc4ddb545a85b934e43b0ed0d8988b6ce4873d6faa2138",
+  "digest": "sha256:b855f7d3bf4d947b92df54cdb815d2099722c7a62166abf05cd2af0c62837114",
   "grants": {
     "capabilities": [
       "cap:lake-query"
@@ -71,9 +71,10 @@
       "source": "parts-library"
     },
     {
-      "digest": "sha256:6c342d263a360b8629095f2783df33675bd15ff0816ddc856f2167d5565524b6",
+      "digest": "sha256:d0dea5a68c67f5ac89cebfaf9c015c48c2bea0247c0be4958ce3538828e021f3",
       "id": "profile:reader",
       "source": "spec"
     }
-  ]
+  ],
+  "reads_untrusted": true
 }

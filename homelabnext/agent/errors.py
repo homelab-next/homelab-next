@@ -38,3 +38,16 @@ class CeilingViolation(AgentError):
 
 class BudgetError(AgentError):
     """Budgets are missing, malformed or above the ceiling's budget caps."""
+
+
+class ReaderViolation(AgentError):
+    """A profile that reads untrusted content holds a tool that can act (checklist G-03)."""
+
+    def __init__(self, problems: list[str]) -> None:
+        self.problems = list(problems)
+        super().__init__(
+            "reader profile holds acting tools: "
+            + "; ".join(self.problems)
+            + " (no ceiling can allow this: give the acting tools to a separate actor profile "
+            "with reads_untrusted: false that receives the reader's structured output)"
+        )

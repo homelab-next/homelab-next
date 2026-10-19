@@ -100,6 +100,8 @@ jobs:
           python tools/role_lint.py --playbook ansible/playbooks/*.yml --inventory ansible/inventory/example/hosts.yml
       - name: decision spec lint (complete, well-formed questions, inline specs fast)
         run: python -m homelabnext.cli decide lint
+      - name: readers cannot act (agent profile and context manifest lint)
+        run: python -m homelabnext.cli agent lint
       - name: detections lint, fixtures and ATT&CK map
         run: |
           python -m homelabnext.detections lint

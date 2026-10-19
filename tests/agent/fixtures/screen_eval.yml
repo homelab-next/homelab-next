@@ -1,0 +1,395 @@
+# SPDX-License-Identifier: Apache-2.0
+# Screener evaluation set (checklist A-03): every value is synthetic.
+#
+# positives: `text` holds sensitive values; every string in `secrets` must be absent from the
+#   rendered pack, and a [REDACTED:<type>:n] label of `type` must be present.
+# negatives: hard negatives that look like sensitive values but are not; every string in `keep`
+#   must survive unchanged and nothing may be redacted.
+#
+# `text` and each `secrets`/`keep` entry may be a list of fragments joined with no separator.
+# Credential shapes are split that way on purpose, so this file never holds a whole token that
+# the repository's own secret scanners (tools/leak_scan.py, gitleaks) would rightly flag.
+# Secret-looking values contain "fake"; addresses use documentation ranges and domains; card
+# numbers are the issuers' published test numbers; phone numbers are fictional ranges.
+
+denylist:
+  - FakeCorp
+  - "re:proj-[a-z]+-fake"
+
+positives:
+  # -------------------------------------------------------------- private keys
+  - id: pem-rsa-key
+    type: private-key
+    text: ["key dump:\n-----BEGIN RSA PRIV", "ATE KEY-----\nMIIfakefakefakeBODYline0001\nfakefakefakeBODYline0002\n-----END RSA PRIV", "ATE KEY-----\nend of dump"]
+    secrets: [MIIfakefakefakeBODYline0001, fakefakefakeBODYline0002]
+  - id: openssh-key-in-log
+    type: private-key
+    text: ["2026-10-19 agent stderr: -----BEGIN OPENSSH PRIV", "ATE KEY----- b3BlbnNzaC1rZXktdjEfakeAAAA -----END OPENSSH PRIV", "ATE KEY-----"]
+    secrets: [b3BlbnNzaC1rZXktdjEfakeAAAA]
+  - id: truncated-key-paste
+    type: private-key
+    text: ["pasted into the ticket:\n-----BEGIN EC PRIV", "ATE KEY-----\nMHcCAQEEIfakeTRUNCATEDbody\n(rest of message cut)"]
+    secrets: [MHcCAQEEIfakeTRUNCATEDbody, (rest of message cut)]
+
+  # -------------------------------------------------------------- JSON web tokens
+  - id: jwt-in-header
+    type: jwt
+    text: ["Cookie: session=eyJ", "hbGciOiJIUzI1NiJ9.eyJ", "zdWIiOiJmYWtlIn0.fakeSignature_0123456789; Path=/"]
+    secrets: [["eyJ", "hbGciOiJIUzI1NiJ9"], fakeSignature_0123456789]
+  - id: jwt-in-json
+    type: jwt
+    text: ["{\"id_token\": \"eyJ", "0eXAiOiJKV1QifQ.eyJ", "pc3MiOiJmYWtlIn0.fake_sig_ABCDEFGH\"}"]
+    secrets: [fake_sig_ABCDEFGH, ["eyJ", "pc3MiOiJmYWtlIn0"]]
+  - id: jwt-in-prose
+    type: jwt
+    text: ["The attacker replayed eyJ", "raWQiOiJmYWtlIn0.eyJ", "leHAiOjB9fakefake.fakeTAILfake01 against the API."]
+    secrets: [fakeTAILfake01]
+
+  # -------------------------------------------------------------- vendor tokens
+  - id: aws-access-key
+    type: token
+    text: ["export AWS_ACCESS_KEY_ID=AKI", "AFAKE7EXAMPLE0KEY"]
+    secrets: [["AKI", "AFAKE7EXAMPLE0KEY"]]
+  - id: aws-key-in-prose
+    type: token
+    text: ["The leaked id ASI", "AFAKEFAKEFAKE0123 was used from the build host."]
+    secrets: [["ASI", "AFAKEFAKEFAKE0123"]]
+  - id: github-classic-token
+    type: token
+    text: ["git remote set-url origin https://gh", "p_fake0123456789abcdefghijklmnopqrstuv@example.com/x.git"]
+    secrets: [["gh", "p_fake0123456789abcdefghijklmnopqrstuv"]]
+  - id: github-fine-grained
+    type: token
+    text: ["token: github", "_pat_11FAKE0000_fakeTokenValue0123456789"]
+    secrets: [["github", "_pat_11FAKE0000_fakeTokenValue0123456789"]]
+  - id: slack-bot-token
+    type: token
+    text: ["SLACK_BOT=xo", "xb-0000000000-fake-slack-token-value"]
+    secrets: [["xo", "xb-0000000000-fake-slack-token-value"]]
+  - id: google-key
+    type: token
+    text: ["maps url ...&key=AI", "zaSyFAKE-fake_key_0123456789abcdefghi&callback=init"]
+    secrets: [["AI", "zaSyFAKE-fake_key_0123456789abcdefghi"]]
+  - id: gitlab-pat
+    type: token
+    text: ["CI variable set to glp", "at-fakeFAKEfake0123456789"]
+    secrets: [["glp", "at-fakeFAKEfake0123456789"]]
+  - id: npm-token
+    type: token
+    text: ["//registry.example.org/:_authToken=npm", "_fake0123456789abcdefghijklmnopqrstuv"]
+    secrets: [["npm", "_fake0123456789abcdefghijklmnopqrstuv"]]
+  - id: huggingface-token
+    type: token
+    text: ["HF token in notebook: hf", "_fakeFAKEfake0123456789abcdefghijkl"]
+    secrets: [["hf", "_fakeFAKEfake0123456789abcdefghijkl"]]
+  - id: stripe-style-live-key
+    type: token
+    text: ["charge failed for key sk", "_live_fakeFAKE0123456789 (rotated)"]
+    secrets: [["sk", "_live_fakeFAKE0123456789"]]
+  - id: sk-dash-api-key
+    type: token
+    text: ["client = Client(key=\"sk-an", "t-fake_fake_fake_0123456789abcd\")"]
+    secrets: [["sk-an", "t-fake_fake_fake_0123456789abcd"]]
+  - id: sk-proj-key
+    type: token
+    text: ["found sk-pr", "oj-fakeFAKE-0123456789-abcdefghij in a gist"]
+    secrets: [["sk-pr", "oj-fakeFAKE-0123456789-abcdefghij"]]
+  - id: bearer-header
+    type: token
+    text: ["curl -H 'Authorization: Bear", "er fakeOpaqueToken.0123456789abc' https://api.example.com/v1"]
+    secrets: [fakeOpaqueToken.0123456789abc]
+  - id: bearer-lowercase
+    type: token
+    text: ["request headers: authorization=bearer fake-opaque-0123456789-zz"]
+    secrets: [fake-opaque-0123456789-zz]
+
+  # -------------------------------------------------------------- keyed secrets
+  - id: env-password
+    type: secret
+    text: ["DB_PASSWORD=fakeHunter42"]
+    secrets: [fakeHunter42]
+  - id: json-password
+    type: secret
+    text: ["{\"user\": \"svc\", \"password\": \"fake-P@ssw0rd!\"}"]
+    secrets: [fake-P@ssw0rd!]
+  - id: yaml-password
+    type: secret
+    text: ["database:\n  host: db\n  db_password: fakeS3cret!x\n"]
+    secrets: [fakeS3cret!x]
+  - id: client-secret-python
+    type: secret
+    text: ["client_secret = 'fake_client_value_99'"]
+    secrets: [fake_client_value_99]
+  - id: api-key-lowercase
+    type: secret
+    text: ["api_key: fakeKeyValue0001"]
+    secrets: [fakeKeyValue0001]
+  - id: aws-secret-access-key
+    type: secret
+    text: ["aws_secret_", "access_key = fake/AWS/secret+value/0123456789ab"]
+    secrets: [fake/AWS/secret+value/0123456789ab]
+  - id: cli-password-flag
+    type: secret
+    text: ["mysql -u root --password fakeRootPw77 -h db"]
+    secrets: [fakeRootPw77]
+  - id: cli-token-flag-equals
+    type: secret
+    text: ["runner register --token=fakeRunnerToken42"]
+    secrets: [fakeRunnerToken42]
+  - id: url-credentials
+    type: secret
+    text: ["DATABASE_URL=postgres://svc:fakeUrlPass99@db.example.net:5432/app"]
+    secrets: [fakeUrlPass99]
+  - id: prose-password
+    type: secret
+    text: ["Per the ticket, the password is fake-Winter2026! and must be rotated."]
+    secrets: [fake-Winter2026!]
+  - id: header-api-token
+    type: secret
+    text: ["X-Api-Token: fakeHeaderToken123"]
+    secrets: [fakeHeaderToken123]
+  - id: passphrase-arrow
+    type: secret
+    text: ["{:passphrase => \"fake-horse-battery-staple\"}"]
+    secrets: [fake-horse-battery-staple]
+  - id: csrf-token-form
+    type: secret
+    text: ["<input name=csrf_token value=x> csrf_token=fakeCsrf0123456789"]
+    secrets: [fakeCsrf0123456789]
+
+  # -------------------------------------------------------------- deny-list terms
+  - id: denylist-literal
+    type: denylist
+    text: ["Escalate to the FakeCorp tenant owner."]
+    secrets: [FakeCorp]
+  - id: denylist-case-insensitive
+    type: denylist
+    text: ["seen in fakecorp logs and FAKECORP mail"]
+    secrets: [fakecorp, FAKECORP]
+  - id: denylist-regex
+    type: denylist
+    text: ["bucket proj-alpha-fake is public"]
+    secrets: [proj-alpha-fake]
+
+  # -------------------------------------------------------------- payment cards
+  - id: card-visa-spaces
+    type: card
+    text: ["card on file: 4111 1111 1111 1111 exp 12/29"]
+    secrets: [4111 1111 1111 1111]
+  - id: card-mastercard-dashes
+    type: card
+    text: ["cc=5555-5555-5555-4444"]
+    secrets: [5555-5555-5555-4444]
+  - id: card-amex-plain
+    type: card
+    text: ["amex 378282246310005 declined"]
+    secrets: ["378282246310005"]
+  - id: card-discover-json
+    type: card
+    text: ["{\"pan\": \"6011111111111117\"}"]
+    secrets: ["6011111111111117"]
+  - id: card-visa-prose
+    type: card
+    text: ["The skimmer captured 4012888888881881 at 09:14."]
+    secrets: ["4012888888881881"]
+  - id: card-jcb
+    type: card
+    text: ["jcb:3530111333300000;"]
+    secrets: ["3530111333300000"]
+  - id: card-mastercard-plain
+    type: card
+    text: ["refund to 5105105105105100 issued"]
+    secrets: ["5105105105105100"]
+
+  # -------------------------------------------------------------- e-mail addresses
+  - id: email-plain
+    type: email
+    text: ["Phishing reported by alice.fake@example.com this morning."]
+    secrets: [alice.fake@example.com]
+  - id: email-angle-brackets
+    type: email
+    text: ["From: Bob <bob+alerts@mail.example.org>"]
+    secrets: [bob+alerts@mail.example.org]
+  - id: email-mailto
+    type: email
+    text: ["<a href=\"mailto:dave@example.net\">contact</a>"]
+    secrets: [dave@example.net]
+  - id: email-reserved-tld
+    type: email
+    text: ["reply-to header: carol.fake@", "corp.test"]
+    secrets: [["carol.fake@", "corp.test"]]
+  - id: email-csv
+    type: email
+    text: ["name,mail\nErin,erin_99@sub.example.com\n"]
+    secrets: [erin_99@sub.example.com]
+  - id: email-uppercase
+    type: email
+    text: ["SENDER=FRANK.FAKE@EXAMPLE.ORG"]
+    secrets: [FRANK.FAKE@EXAMPLE.ORG]
+  - id: email-invalid-tld-fragment
+    type: email
+    text: ["exfil to grace@", "drop.invalid confirmed"]
+    secrets: [["grace@", "drop.invalid"]]
+
+  # -------------------------------------------------------------- IP addresses
+  - id: ipv4-plain
+    type: ip
+    text: ["Failed login from 192.0.2.10 (3 attempts)"]
+    secrets: [192.0.2.10]
+  - id: ipv4-with-port
+    type: ip
+    text: ["connect 198.51.100.7:443 refused"]
+    secrets: [198.51.100.7]
+  - id: ipv4-cidr
+    type: ip
+    text: ["block 203.0.113.0/24 at the edge"]
+    secrets: [203.0.113.0]
+  - id: ipv4-pair
+    type: ip
+    text: ["src=203.0.113.45 dst=198.51.100.2 proto=tcp"]
+    secrets: [203.0.113.45, 198.51.100.2]
+  - id: ipv6-compressed
+    type: ip
+    text: ["beacon to 2001:db8::1 every 60s"]
+    secrets: ["2001:db8::1"]
+  - id: ipv6-full
+    type: ip
+    text: ["peer 2001:db8:0:0:0:0:0:42 joined"]
+    secrets: ["2001:db8:0:0:0:0:0:42"]
+  - id: ipv6-bracketed-port
+    type: ip
+    text: ["GET http://[2001:db8::7]:8443/admin"]
+    secrets: ["2001:db8::7"]
+  - id: ipv4-end-of-sentence
+    type: ip
+    text: ["The scanner was 192.0.2.200."]
+    secrets: [192.0.2.200]
+
+  # -------------------------------------------------------------- national ids
+  - id: ssn-dashed
+    type: national-id
+    text: ["applicant SSN 123-45-6789 on form"]
+    secrets: [123-45-6789]
+  - id: ssn-keyed-spaces
+    type: national-id
+    text: ["social security number: 123 45 6780"]
+    secrets: [123 45 6780]
+  - id: nino-spaced
+    type: national-id
+    text: ["NI number QQ 12 34 56 C attached"]
+    secrets: [QQ 12 34 56 C]
+  - id: nino-compact
+    type: national-id
+    text: ["HR export row: QQ123456A"]
+    secrets: [QQ123456A]
+  - id: passport-keyed
+    type: national-id
+    text: ["passport number: FAKE12345 (expired)"]
+    secrets: [FAKE12345]
+  - id: tax-id-keyed
+    type: national-id
+    text: ["tax id 12-3456789 on invoice"]
+    secrets: [12-3456789]
+
+  # -------------------------------------------------------------- phone numbers
+  - id: phone-uk-international
+    type: phone
+    text: ["Call +44 20 7946 0123 to verify"]
+    secrets: [+44 20 7946 0123]
+  - id: phone-us-international
+    type: phone
+    text: ["callback +1 (202) 555-0143 requested"]
+    secrets: [+1 (202) 555-0143]
+  - id: phone-us-parentheses
+    type: phone
+    text: ["Helpdesk (202) 555-0188, ext 4"]
+    secrets: [(202) 555-0188]
+  - id: phone-us-dots
+    type: phone
+    text: ["vishing from 202.555.0167 reported"]
+    secrets: [202.555.0167]
+  - id: phone-au
+    type: phone
+    text: ["SMS sender +61 491 570 156"]
+    secrets: [+61 491 570 156]
+  - id: phone-keyed-local
+    type: phone
+    text: ["tel: 555 0142"]
+    secrets: [555 0142]
+  - id: phone-uk-mobile-keyed
+    type: phone
+    text: ["mobile 07700 900123 (do not call)"]
+    secrets: [07700 900123]
+  - id: phone-fr
+    type: phone
+    text: ["contact +33 1 23 45 67 89 after 18h"]
+    secrets: [+33 1 23 45 67 89]
+
+  # -------------------------------------------------------------- mixed and co-reference
+  - id: mixed-log-line
+    type: email
+    text: ["2026-10-19T10:30:45Z auth fail user=heidi.fake@example.com src=192.0.2.33 password=fakeWrong1"]
+    secrets: [heidi.fake@example.com, 192.0.2.33, fakeWrong1]
+  - id: mixed-ticket
+    type: phone
+    text: ["Customer ivan@example.net (+44 20 7946 0999) paid with 4111-1111-1111-1111."]
+    secrets: [ivan@example.net, +44 20 7946 0999, 4111-1111-1111-1111]
+  - id: repeated-address
+    type: ip
+    text: ["192.0.2.50 scanned 198.51.100.9, then 192.0.2.50 scanned it again"]
+    secrets: [192.0.2.50, 198.51.100.9]
+  - id: secret-in-yaml-block
+    type: secret
+    text: ["smtp:\n  user: judy@example.org\n  password: \"fakeMailPw!9\"\n"]
+    secrets: [fakeMailPw!9, judy@example.org]
+  - id: token-and-email
+    type: token
+    text: ["mallory@example.com committed gh", "o_fakeOAUTH0123456789abcdefghijklmnopqr"]
+    secrets: [mallory@example.com, ["gh", "o_fakeOAUTH0123456789abcdefghijklmnopqr"]]
+
+negatives:
+  - {id: version-dotted-quad, text: "upgraded to v4.18.2.1 last week", keep: [v4.18.2.1]}
+  - {id: version-word, text: "agent version 2.31.0.7 deployed", keep: [version 2.31.0.7]}
+  - {id: semver, text: "requires ruff 0.17.1 and pydantic 2.9.2", keep: [0.17.1, 2.9.2]}
+  - {id: prerelease, text: "tag 2.0.0-rc.1 cut", keep: [2.0.0-rc.1]}
+  - {id: iso-date, text: "created 2026-10-19 by the nightly job", keep: [2026-10-19]}
+  - {id: iso-timestamp, text: "at 2026-10-19T10:30:45.123+02:00", keep: ["2026-10-19T10:30:45.123+02:00"]}
+  - {id: slash-date, text: "due 19/10/2026", keep: [19/10/2026]}
+  - {id: uuid, text: "request id 123e4567-e89b-12d3-a456-426614174000 failed", keep: [123e4567-e89b-12d3-a456-426614174000]}
+  - {id: sha256-prose, text: "the sample's sha256 is 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", keep: [9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08]}
+  - {id: md5-prose, text: "md5 d41d8cd98f00b204e9800998ecf8427e matches the empty file", keep: [d41d8cd98f00b204e9800998ecf8427e]}
+  - {id: git-commit, text: "fixed in commit 3f2c1e9a7b4d5e6f8091a2b3c4d5e6f708192a3b", keep: [3f2c1e9a7b4d5e6f8091a2b3c4d5e6f708192a3b]}
+  - {id: short-sha, text: "see 3f2c1e9", keep: [3f2c1e9]}
+  - {id: cve-ids, text: "CVE-2024-12345 and CVE-2021-44228 are exploited", keep: [CVE-2024-12345, CVE-2021-44228]}
+  - {id: attack-ids, text: "maps to T1059.001 under TA0002; group G0016 uses S0154", keep: [T1059.001, TA0002, G0016, S0154]}
+  - {id: ports, text: "listening on :8080 and port 8443", keep: [":8080", "8443"]}
+  - {id: sizes, text: "transferred 1,234,567 bytes (3.5 GB total)", keep: ["1,234,567", "3.5 GB"]}
+  - {id: price, text: "renewal costs $1,299.99 per year", keep: ["$1,299.99"]}
+  - {id: luhn-fail-card-shape, text: "order 4111 1111 1111 1112 shipped", keep: [4111 1111 1111 1112]}
+  - {id: order-number-16, text: "invoice 1234567812345678", keep: ["1234567812345678"]}
+  - {id: ssn-invalid-area-000, text: "form code 000-12-3456", keep: [000-12-3456]}
+  - {id: ssn-invalid-area-666, text: "ref 666-12-3456", keep: [666-12-3456]}
+  - {id: ssn-invalid-area-9xx, text: "batch 900-12-3456", keep: [900-12-3456]}
+  - {id: max-tokens, text: "max_tokens=4000 token_count: 512", keep: [max_tokens=4000, "token_count: 512"]}
+  - {id: password-policy, text: "password_policy: strict; secret_name: db-creds", keep: ["password_policy: strict", "secret_name: db-creds"]}
+  - {id: password-prose-no-value, text: "the password was changed after the reset", keep: [the password was changed]}
+  - {id: password-placeholder, text: "password: ${DB_PASSWORD} and token: <redacted>", keep: ["${DB_PASSWORD}", "<redacted>"]}
+  - {id: token-url, text: "token_url: https://auth.example.com/oauth/token", keep: [https://auth.example.com/oauth/token]}
+  - {id: cpp-scope, text: "std::vector<int> and Foo::Bar::baz()", keep: ["std::vector<int>", "Foo::Bar::baz()"]}
+  - {id: time-of-day, text: "between 10:30:45 and 11:00", keep: ["10:30:45", "11:00"]}
+  - {id: isbn, text: "ISBN 978-0-306-40615-7", keep: [978-0-306-40615-7]}
+  - {id: plus-points, text: "+1 vote, +42 points", keep: [+1 vote, +42 points]}
+  - {id: timezone-offset, text: "logged as UTC+0530", keep: [UTC+0530]}
+  - {id: ticket-ids, text: "JIRA-4521 and AB-1234 are linked", keep: [JIRA-4521, AB-1234]}
+  - {id: oid, text: "OID 1.3.6.1.4.1.311 in the cert", keep: [1.3.6.1.4.1.311]}
+  - {id: local-user-no-tld, text: "sudo su user@localhost", keep: [user@localhost]}
+  - {id: npm-at-version, text: "npm i lodash@4.17.21", keep: [lodash@4.17.21]}
+  - {id: scoped-package, text: "import from @scope/pkg", keep: ["@scope/pkg"]}
+  - {id: pid-and-counts, text: "PID 12345 exited 137 after 4096 retries", keep: ["12345", "137", "4096"]}
+  - {id: file-paths, text: "wrote /var/log/auth.log and C:\\Windows\\Temp\\x.dll", keep: [/var/log/auth.log, "C:\\Windows\\Temp\\x.dll"]}
+  - {id: build-number, text: "build 20261019.1 green", keep: [20261019.1]}
+  - {id: base64-nonce, text: "nonce dGhpcyBpcyBub3QgYSBrZXk= in the header", keep: [dGhpcyBpcyBub3QgYSBrZXk=]}
+  - {id: email-word, text: "email the on-call and @channel", keep: [email the on-call and @channel]}
+  - {id: seven-digit-no-keyword, text: "case 555-0100 opened", keep: [555-0100]}
+  - {id: doc-mac, text: "MAC 00:00:5e:00:53:01 is out of scope", keep: ["00:00:5e:00:53:01"]}
+  - {id: phone-like-range, text: "ports 100-200 and 300-400", keep: [100-200, 300-400]}

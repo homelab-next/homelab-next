@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/agent/profile/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/agent/profile/1.1",
   "title": "Compiled agent profile",
-  "description": "Output of the profile compiler: harvested parts by logical id, the grants the profile holds, the permission ceiling they were checked against, hard budgets, a deterministic digest and provenance for every part. grants must be a subset of ceiling (mcp, capabilities, tier rank and budgets); JSON Schema cannot express that, so homelabnext.agent.check_ceiling enforces it and the compiler refuses a violation. Model is a role alias, never a model id.",
+  "description": "Output of the profile compiler: harvested parts by logical id, the grants the profile holds, the permission ceiling they were checked against, hard budgets, a deterministic digest and provenance for every part. grants must be a subset of ceiling (mcp, capabilities, tier rank and budgets); JSON Schema cannot express that, so homelabnext.agent.check_ceiling enforces it and the compiler refuses a violation. Model is a role alias, never a model id. 1.1 adds reads_untrusted (additive, optional): true when the profile reads raw or untrusted content; such a reader may hold no shell/exec, file-write, egress or credential grant (homelabnext.agent.readers, data: homelabnext/agent/tool_classes.yml). The compiler always writes it; a profile without it is treated as a reader (fail closed).",
   "type": "object",
   "properties": {
     "id": {
@@ -178,6 +178,10 @@
         "warn",
         "enforce"
       ]
+    },
+    "reads_untrusted": {
+      "type": "boolean",
+      "description": "The profile reads raw or untrusted content (feeds, alerts, mail, web pages). Absent means true."
     },
     "digest": {
       "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"

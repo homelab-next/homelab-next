@@ -52,6 +52,13 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+# Shapes shared with the prompt screener (homelabnext.agent.screen); stdlib only.
+from homelabnext import shapes  # noqa: E402
+
 EXIT_CLEAN = 0
 EXIT_HIT = 1
 EXIT_CONFIG = 2
@@ -171,10 +178,7 @@ def _is_hit_rule_number(m: re.Match[str], _line: str) -> bool:
     return not m.group("num").startswith("9000")
 
 
-# Text right before a dotted quad that makes it a version or an OID, not an address.
-VERSION_CONTEXT_RE = re.compile(
-    r"(?i)(?:\bv|version\W{0,3}|ver\W{0,2}|[=<>~^!]=?\s*|@|oid\W{0,3})$"
-)
+VERSION_CONTEXT_RE = shapes.VERSION_CONTEXT_RE
 
 
 def _is_hit_public_ipv4(m: re.Match[str], line: str) -> bool:
@@ -340,7 +344,7 @@ PATTERNS: tuple[Pattern, ...] = (
     _p(
         "email",
         "identity",
-        r"[\w.+-]+@(?P<domain>(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})\b",
+        shapes.EMAIL,
         "e-mail outside example domains / users.noreply.github.com",
         accept=_is_hit_email,
     ),
@@ -375,7 +379,7 @@ PATTERNS: tuple[Pattern, ...] = (
     _p(
         "aws-access-key",
         "secret",
-        r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b",
+        shapes.AWS_ACCESS_KEY,
         "AWS access key id",
         redact=True,
     ),
@@ -396,7 +400,7 @@ PATTERNS: tuple[Pattern, ...] = (
     _p(
         "private-key-block",
         "secret",
-        r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----",
+        shapes.PRIVATE_KEY_HEADER,
         "PEM private key",
         redact=True,
     ),
@@ -404,16 +408,16 @@ PATTERNS: tuple[Pattern, ...] = (
     _p(
         "github-token",
         "secret",
-        r"\bgh[pousr]_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{22,}\b",
+        shapes.GITHUB_TOKEN,
         "GitHub token",
         redact=True,
     ),
-    _p("slack-token", "secret", r"\bxox[abposr]-[A-Za-z0-9-]{10,}", "Slack token", redact=True),
-    _p("google-api-key", "secret", r"\bAIza[0-9A-Za-z_-]{35}\b", "Google API key", redact=True),
+    _p("slack-token", "secret", shapes.SLACK_TOKEN, "Slack token", redact=True),
+    _p("google-api-key", "secret", shapes.GOOGLE_KEY, "Google API key", redact=True),
     _p(
         "jwt",
         "secret",
-        r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",
+        shapes.JWT,
         "JSON web token",
         redact=True,
     ),
@@ -474,19 +478,10 @@ def load_denylist(path: str | None) -> list[tuple[int, re.Pattern[str]]]:
     p = Path(path)
     if not p.is_file():
         raise ConfigError(f"deny-list not found: {path}")
-    terms: list[tuple[int, re.Pattern[str]]] = []
-    for lineno, raw in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
-        raw = raw.strip()
-        if not raw or raw.startswith("#"):
-            continue
-        try:
-            if raw.startswith("re:"):
-                rx = re.compile(raw[3:], re.IGNORECASE)
-            else:
-                rx = re.compile(r"(?<![\w-])" + re.escape(raw) + r"(?![\w-])", re.IGNORECASE)
-        except re.error as exc:
-            raise ConfigError(f"deny-list line {lineno}: bad regex ({exc})") from exc
-        terms.append((lineno, rx))
+    try:
+        terms = shapes.compile_denylist(p.read_text(encoding="utf-8").splitlines())
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
     if not terms:
         raise ConfigError(f"deny-list is empty: {path} (an empty list would pass everything)")
     return terms
