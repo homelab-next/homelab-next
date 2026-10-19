@@ -422,7 +422,7 @@ def test_compose_app_dropping_no_new_privileges_needs_the_flag(tmp_path):
 
 
 def test_compose_app_secrets_go_to_a_0600_env_file_not_compose_yml(tmp_path):
-    secret = "s3cr3t-$HOME-value"  # a $ must reach the container literally
+    secret = "fake-s3cr3t-$HOME-value"  # a $ must reach the container literally
     v = app_vars(tmp_path, compose_app_secret_env={"db": {"POSTGRES_PASSWORD": secret}})
     r = run_role(tmp_path, "compose_app", "main", v)
     assert r.returncode == 0, r.stdout + r.stderr
@@ -440,11 +440,11 @@ def test_compose_app_secrets_go_to_a_0600_env_file_not_compose_yml(tmp_path):
 @pytest.mark.parametrize(
     "secret_env",
     [
-        {"db": {"POSTGRES_PASSWORD": "never-echoed-it's"}},  # a quote would end the literal
-        {"db": {"POSTGRES_PASSWORD": "never-echoed\nINJECTED=1"}},  # a line break adds a variable
-        {"db": {"BAD-NAME": "never-echoed-1"}},
-        {"ghost": {"TOKEN": "never-echoed-2"}},  # not a service in the spec
-        {"db": {"POSTGRES_PASSWORD_FILE": "never-echoed-3"}},  # already in environment
+        {"db": {"POSTGRES_PASSWORD": "fake-never-echoed-it's"}},  # a quote would end the literal
+        {"db": {"POSTGRES_PASSWORD": "fake-never-echoed\nINJECTED=1"}},  # a line break adds a var
+        {"db": {"BAD-NAME": "fake-never-echoed-1"}},
+        {"ghost": {"TOKEN": "fake-never-echoed-2"}},  # not a service in the spec
+        {"db": {"POSTGRES_PASSWORD_FILE": "fake-never-echoed-3"}},  # already in environment
     ],
 )
 def test_compose_app_rejects_bad_secret_env_without_echoing_it(tmp_path, secret_env):

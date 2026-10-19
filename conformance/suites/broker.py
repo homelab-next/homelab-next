@@ -28,7 +28,7 @@ ARGS = {"name": ArgSpec("str"), "count": ArgSpec("int", required=False)}
 
 #: a secret value under an argument name that does not look secret: redaction must follow the
 #: schema's ``secret`` flag, so a broker that guesses from names leaks it
-SECRET = "zq7-opaque-4b1d-DO-NOT-LOG"
+SECRET = "zq7-opaque-4b1d-fake-DO-NOT-LOG"
 INTERNAL = "internal-detail-7c2e"
 
 

@@ -418,6 +418,7 @@ def test_compressed_ipv6_negatives(text: str):
         "token_logprobs: tuple[float, ...] = ()",
         "password = os.environ['DB_PASSWORD']",
         "secret: required-option",
+        '{"password": "ALL=(ALL) ALL", "nopasswd": "ALL=(ALL) NOPASSWD:ALL"}',
     ],
 )
 def test_keyed_secret_negatives(text: str):

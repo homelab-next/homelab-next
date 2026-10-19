@@ -10,7 +10,7 @@ useDefault = true
 [[allowlists]]
 description = "broker conformance suite: the fake secret argument it plants to prove the audit trail redacts it"
 regexTarget = "secret"
-regexes = ['''^tok-SECRET-123$''']
+regexes = ['''^zq7-opaque-4b1d-fake-DO-NOT-LOG$''', '''^tok-SECRET-123$''']
 
 [[allowlists]]
 description = "leak scanner tests (historical revision): the first half of a planted fake credential, split on purpose"

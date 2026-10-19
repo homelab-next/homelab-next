@@ -269,6 +269,8 @@ def _is_hit_keyed_value(m: re.Match[str], _line: str) -> bool:
         return False
     if re.fullmatch(r"[a-z]+(?:[-_][a-z]+)*", value):
         return False  # a word or kebab-case name: an option value, not a secret
+    if re.fullmatch(r"[A-Z(),:=]+", value):
+        return False  # an all-caps rule such as a sudoers spec (ALL=(ALL)), not a secret
     return len(set(value)) > 3  # 'xxxxxx', '000000' are fillers
 
 
