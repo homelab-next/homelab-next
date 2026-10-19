@@ -41,7 +41,7 @@ P9 --> S2.6 staging on the real server --> S3.. capability swaps --> S8 cutover
 
 | Step | Deliverable | Exit criterion |
 |---|---|---|
-| P9.1 | `compose/lab-in-a-box/`: object store, Iceberg REST catalog with Postgres, query engine, event bus, secrets (dev mode), notifications, authorisation, plus the project's fakes, all behind `<capability>.svc.example.internal` aliases and inside a 4 GB RAM budget | `make lab-smoke` passes locally; the nightly workflow is green for seven consecutive days before any SERVER cutover relies on it |
+| P9.1 | `compose/lab-in-a-box/`: object store, Iceberg REST catalog with Postgres, query engine, event bus, secrets (dev mode), notifications, plus the project's fakes, all behind `<capability>.svc.example.internal` aliases and inside a 4 GB RAM budget | `make lab-smoke` passes locally; the nightly workflow is green for seven consecutive days before any SERVER cutover relies on it |
 | P9.2 | The first rehearsal of the swap procedure in CI: a fake lake replaced by the query engine in the box through the swap kit (shadow, parity, flip, rollback) | the run produces a swap record and rollback restores the incumbent |
 
 ## SERVER phases

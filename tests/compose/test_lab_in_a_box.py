@@ -127,7 +127,6 @@ def test_every_capability_has_a_registry_style_alias(compose):
         "events",
         "secrets",
         "notify",
-        "authz",
         "inference",
         "cases",
     ):

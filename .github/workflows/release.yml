@@ -2,13 +2,14 @@
 name: release
 
 # On a version tag: build the sdist and wheel ONCE, attest their provenance (SLSA, Sigstore),
-# produce a CycloneDX SBOM, attach everything to a GitHub release and publish to PyPI through
-# Trusted Publishing (OIDC; no API token is stored anywhere).  Every later job consumes the
-# artefacts of the build job, byte for byte; nothing is rebuilt.
+# produce a CycloneDX SBOM and attach everything to a GitHub release.  Every later job consumes
+# the artefacts of the build job, byte for byte; nothing is rebuilt.
 #
-# One-time setup by a maintainer: a `pypi` environment in the repository settings (with required
-# reviewers), and a trusted publisher on PyPI for this repository, workflow `release.yml` and
-# environment `pypi`.
+# Releases are GitHub-only for now.  The `publish` job (PyPI Trusted Publishing: OIDC, no API token
+# stored anywhere) is skipped unless the repository variable PUBLISH_TO_PYPI is `true`.  To turn it
+# on, a maintainer first creates a `pypi` environment in the repository settings (with required
+# reviewers) and a trusted publisher on PyPI for this repository, workflow `release.yml` and
+# environment `pypi`, then sets the variable.
 on:
   push:
     tags: ["v*"]
@@ -82,7 +83,7 @@ jobs:
           mkdir -p sbom
           # `hnx events`, through the module: this job does not install the project
           python -m homelabnext.cli events deploy-changed --component pkg:homelabnext \
-            --to "${TAG#v}" --environment pypi --commit "$SHA" --changelog CHANGELOG.md \
+            --to "${TAG#v}" --environment github-release --commit "$SHA" --changelog CHANGELOG.md \
             --source svc:release-pipeline --out sbom/deploy-changed.json
       - name: checksums
         run: sha256sum dist/* sbom/* | tee SHA256SUMS
@@ -145,6 +146,7 @@ jobs:
 
   publish:
     needs: [build, attest]
+    if: vars.PUBLISH_TO_PYPI == 'true'  # off until PyPI Trusted Publishing is set up (see the top)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:

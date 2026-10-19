@@ -160,12 +160,6 @@ def check_notify(b: Mapping[str, str]) -> str:
     return "health 200, message accepted"
 
 
-def check_authz(b: Mapping[str, str]) -> str:
-    status, out = http("GET", f"{b['authz']}/healthz")
-    expect(status, (200,), "authz health", out)
-    return "health 200"
-
-
 def check_inference(b: Mapping[str, str]) -> str:
     status, out = http("GET", f"{b['inference']}/v1/models")
     expect(status, (200,), "inference models", out)
@@ -202,7 +196,6 @@ CHECKS: dict[str, Callable[[Mapping[str, str]], str]] = {
     "events": check_events,
     "secrets": check_secrets,
     "notify": check_notify,
-    "authz": check_authz,
     "inference": check_inference,
     "cases": check_cases,
 }
@@ -218,7 +211,6 @@ def bases_from_env(environ: Mapping[str, str]) -> dict[str, str]:
         "events-monitor": "LAB_PORT_EVENTS_MONITOR",
         "secrets": "LAB_PORT_SECRETS",
         "notify": "LAB_PORT_NOTIFY",
-        "authz": "LAB_PORT_AUTHZ",
         "inference": "LAB_PORT_INFERENCE",
         "cases": "LAB_PORT_CASES",
     }

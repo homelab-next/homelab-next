@@ -69,7 +69,8 @@ hnx conform run lake-query --target fake
 hnx swap plan                         # the nine steps, their gates and evidence
 ```
 
-`pip install homelabnext` (a wheel or sdist) is self-contained: it carries the schemas, the shipped
+The package is not on PyPI yet; install the wheel attached to a [GitHub release](https://github.com/homelab-next/homelab-next/releases)
+(`pip install ./homelabnext-<version>-py3-none-any.whl`). A wheel or sdist is self-contained: it carries the schemas, the shipped
 profiles and a minimal example lab (`examples/minimal/`) inside the package, so `hnx site validate`,
 `hnx guests validate`, `hnx registry validate`, `hnx custom list` and `hnx swap plan` work without a
 checkout (the conformance suites, `compose/` and `tools/` stay in the source tree: from a wheel,
@@ -89,7 +90,7 @@ and a test fails if the copy ever differs). The developer gates under `tools/` (
 
 The lab-in-a-box is a laptop-sized reference environment of real containers for the capability
 seams (object store, Iceberg REST catalog with Postgres, a single-node query engine, an event bus,
-secrets in dev mode, notifications, authorisation) plus the project's own fakes (an
+secrets in dev mode, notifications) plus the project's own fakes (an
 OpenAI-compatible inference server and a case system). It needs Docker with the compose plugin and
 about 2 GB of free RAM (the stack is capped well inside 4 GB); every credential in it is a
 throwaway placeholder from `compose/lab-in-a-box/.env.example`.

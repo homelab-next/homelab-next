@@ -19,7 +19,7 @@ only by agreement.
 
 ## Verifying a release
 
-Each release on PyPI and GitHub is built once by `.github/workflows/release.yml` and carries a
+Each GitHub release is built once by `.github/workflows/release.yml` and carries a
 build-provenance attestation and a CycloneDX SBOM. Verify a downloaded file with
 `gh attestation verify <file> --repo <owner>/<repo>`.
 

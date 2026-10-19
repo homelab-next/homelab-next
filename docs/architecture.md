@@ -103,7 +103,7 @@ cutover is a defect to be recorded as a lesson.
 ## The reference environment
 
 `compose/lab-in-a-box/` stands up a laptop- and CI-sized instance of the data, events, secrets,
-notification, authorisation and inference seams inside a 4 GB RAM budget, addressed through the
+notification and inference seams inside a 4 GB RAM budget, addressed through the
 same `<capability>.svc.example.internal` aliases a real deployment uses. It is the place where
 the conformance suites run against real containers rather than fakes (nightly, never on a pull
 request). It is a rehearsal environment, not a deployment: every credential is a throwaway and
@@ -117,7 +117,6 @@ every service is single node. See the README "Try it" section.
 | `events` | NATS with JetStream | `events` |
 | `secrets` | OpenBao in dev mode | `secrets` |
 | `notify` | ntfy | `notify` |
-| `authz` | OpenFGA, in-memory store | authorisation |
 | `inference` | the project's fake OpenAI-compatible server | `inference` |
 | `cases` | the project's fake case system | `cases` |
 
@@ -140,7 +139,6 @@ OpenBao keeps docker's defaults). A real deployment changes each service as foll
 | `lake-query` (Trino) | no authentication, plain HTTP | TLS plus OIDC or password authentication and access control (S-02) |
 | `events` (NATS) | no authentication, plain TCP | accounts with per-client credentials (NKeys or JWT) and TLS |
 | `notify` (ntfy) | open publish and subscribe | `auth-default-access: deny-all` with per-topic users or tokens, behind the forward-auth proxy |
-| `authz` (OpenFGA) | in-memory store, no API authentication | Postgres-backed store, preshared-key or OIDC authentication on the API |
 | `inference`, `cases` | the project's fakes | the real inference server and case system behind the same aliases |
 
 ## Ansible host trust

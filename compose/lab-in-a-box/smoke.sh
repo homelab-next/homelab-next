@@ -138,8 +138,12 @@ if ${conform_cmd%% run*} --help >/dev/null 2>&1; then
   conform_state="pass"
   set -a; . "$endpoints"; set +a
   for cap in $conform_caps; do
-    echo "smoke.sh: conformance: $cap"
-    if $conform_cmd "$cap" >"$report_dir/conform-$cap.log" 2>&1; then
+    # a real-product adapter for this capability, when one ships, replaces the built-in fake
+    target_args=""
+    [ -f "$here/targets/$cap.yml" ] && target_args="--target $here/targets/$cap.yml"
+    echo "smoke.sh: conformance: $cap ${target_args:-(built-in fake)}"
+    # shellcheck disable=SC2086  # target_args is empty or two words on purpose
+    if $conform_cmd "$cap" $target_args >"$report_dir/conform-$cap.log" 2>&1; then
       :
     else
       rc=$?
@@ -151,6 +155,17 @@ if ${conform_cmd%% run*} --help >/dev/null 2>&1; then
         conform_state="fail"
         status=1
       fi
+    fi
+  done
+  # rehearsals (e.g. the swap procedure against the real query engine) run while the stack is up
+  for r in "$here"/rehearsals/*.sh; do
+    [ -f "$r" ] || continue
+    name=$(basename "$r" .sh)
+    echo "smoke.sh: rehearsal: $name"
+    if ! bash "$r" "$report_dir" >"$report_dir/rehearsal-$name.log" 2>&1; then
+      conform_note="$conform_note rehearsal:$name:FAIL"
+      conform_state="fail"
+      status=1
     fi
   done
 else
