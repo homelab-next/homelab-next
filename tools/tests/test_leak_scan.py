@@ -252,6 +252,13 @@ def test_coauthor_trailer_address_allowed_but_other_addresses_at_that_domain_not
     assert {h.pattern for h in leak_scan.scan_text(bad, "t")} == {"email"}
 
 
+def test_dependabot_signoff_allowed_but_other_github_addresses_not():
+    ok = "Signed-off-by: dependabot[bot] <support" + "@github.com>"
+    assert leak_scan.scan_text(ok, "t") == []
+    bad = "Signed-off-by: Person <person" + "@github.com>"
+    assert {h.pattern for h in leak_scan.scan_text(bad, "t")} == {"email"}
+
+
 def test_session_trailer_allowed_only_in_its_exact_shape():
     sid = "session_" + "01XRiJBb6qhT2AV6" + "CbxXnaWa"
     trailer = "Claude-Session: https://claude.ai/code/" + sid
@@ -486,3 +493,17 @@ def test_check_authors_requires_noreply(tmp_path: Path):
     )  # fmt: skip
     assert bad.returncode == 1 and "not a noreply" in bad.stdout
     assert "p@" not in bad.stdout  # the local part of the address is not echoed
+
+
+@pytest.mark.parametrize(
+    ("identity", "ok"),
+    [
+        ("1+someone@users.noreply.github.com", True),
+        ("49699333+dependabot[bot]@users.noreply.github.com", True),
+        ("noreply" + "@github.com", True),
+        ("someone[bot]@example.org", False),
+        ("support" + "@github.com", False),  # allowed in message text, not as an author
+    ],
+)
+def test_noreply_commit_identities(identity: str, ok: bool):
+    assert bool(leak_scan.NOREPLY_COMMIT_RE.match(identity)) is ok
