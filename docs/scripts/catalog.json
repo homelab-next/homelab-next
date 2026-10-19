@@ -272,6 +272,25 @@
     },
     {
       "exit": {
+        "0": "the swap ran to cutover, rolled back, and the record validates",
+        "1": "a step, the rollback or the record check failed",
+        "2": "usage, or the candidate lake could not be reached"
+      },
+      "id": "lab-rehearsal-swap-lake-query",
+      "inputs": "REPORT_DIR; the lake endpoints and LAB_WAREHOUSE from the environment",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "REPORT_DIR/swap-lake-query/ (swap record, evidence, registry, plan, rehearsal.json)",
+      "owner": "lab-in-a-box",
+      "path": "compose/lab-in-a-box/rehearsals/swap-lake-query.sh",
+      "purpose": "Rehearse the lake-query swap on the lab-in-a-box (fake lake to Trino) and roll it back.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
         "0": "all good",
         "1": "a service or check failed",
         "2": "usage",
