@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.example.internal/homelabnext/events/envelope/1.0",
   "title": "Event envelope (CloudEvents 1.0 compatible)",
-  "description": "CloudEvents 1.0 structured-mode JSON envelope. Required: specversion, id, source, type, time. source is a logical id (never a URL). id is the idempotency key: redelivery of the same id is harmless. Extension attributes must be lower-case alphanumeric (CloudEvents naming rule) so new ones are additive.",
+  "description": "CloudEvents 1.0 structured-mode JSON envelope. Required: specversion, id, source, type, time. source is a logical id (never a URL). id is the idempotency key: redelivery of the same id is harmless. Extension attributes must be lower-case alphanumeric (CloudEvents naming rule) so new ones are additive. Enrichment adds the optional extension attributes assetid, assetowner and assetcriticality (additive).",
   "type": "object",
   "properties": {
     "specversion": {
@@ -53,6 +53,27 @@
     "correlationid": {
       "type": "string",
       "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+    },
+    "assetid": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^(?:svc|guest|host):[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "description": "Enrichment (homelabnext.events.enrich): the inventory asset the event is about, as a logical id."
+    },
+    "assetowner": {
+      "type": "string",
+      "maxLength": 63,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "description": "Enrichment: the owning team of assetid (a slug, from the service registry or the guest model)."
+    },
+    "assetcriticality": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "description": "Enrichment: how much the lab depends on assetid (derived from its tags; see docs/events.md)."
     },
     "data": {
       "type": "object"

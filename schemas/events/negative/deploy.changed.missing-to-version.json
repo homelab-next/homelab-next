@@ -1,0 +1,27 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:release-pipeline",
+  "type": "homelabnext.deploy.changed",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "info",
+  "subject": "pkg:homelabnext",
+  "data": {
+    "deploy_id": "homelabnext-0.2.0-pypi",
+    "component": "pkg:homelabnext",
+    "environment": "pypi",
+    "from_version": "0.1.0",
+    "commit": "0000000000000000000000000000000000000000",
+    "changelog": "CHANGELOG.md",
+    "changes": [
+      {
+        "kind": "added",
+        "summary": "Event enrichment with asset owner and criticality."
+      },
+      {
+        "kind": "fixed",
+        "summary": "Publisher retries a lost acknowledgement once."
+      }
+    ]
+  }
+}

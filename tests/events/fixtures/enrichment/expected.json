@@ -1,0 +1,44 @@
+{
+  "evt-enrich-01": {
+    "assetid": "host:lake-core",
+    "assetowner": "data-team",
+    "assetcriticality": "high"
+  },
+  "evt-enrich-02": {
+    "assetid": "host:secrets-core",
+    "assetowner": "identity-team",
+    "assetcriticality": "critical"
+  },
+  "evt-enrich-03": {
+    "assetid": "host:bus-core",
+    "assetowner": "platform-team",
+    "assetcriticality": "high"
+  },
+  "evt-enrich-04": null,
+  "evt-enrich-05": {
+    "assetid": "svc:inference",
+    "assetowner": "ml-team",
+    "assetcriticality": "medium"
+  },
+  "evt-enrich-06": null,
+  "evt-enrich-07": {
+    "assetid": "guest:bus-core",
+    "assetowner": "platform-team",
+    "assetcriticality": "high"
+  },
+  "evt-enrich-08": {
+    "assetid": "svc:lake-query",
+    "assetowner": "data-team",
+    "assetcriticality": "medium"
+  },
+  "evt-enrich-09": {
+    "assetid": "svc:idp",
+    "assetowner": "identity-team",
+    "assetcriticality": "critical"
+  },
+  "evt-enrich-10": {
+    "assetid": "guest:hv-a",
+    "assetowner": "platform-team",
+    "assetcriticality": "high"
+  }
+}
