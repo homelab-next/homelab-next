@@ -146,6 +146,14 @@ leak-scan-history:
 changelog-check:
 	$(PY) tools/check_changelog.py
 
+# Q-08: every `fix:` commit (or `Fixes:` trailer) in RANGE touches a test file; PROVE=1 also runs
+# each fix's tests on its parent, where they must fail.  Skipped with a note when RANGE's base
+# does not exist (a fresh clone without origin/main).
+.PHONY: fix-check
+check: fix-check
+fix-check:
+	$(PY) tools/fix_has_test.py --range $(or $(RANGE),origin/main..HEAD) --allow-missing-base $(if $(PROVE),--prove)
+
 # Regenerate the hashed CI constraints (needs uv).  Versions published in the last 14 days are
 # skipped unless a direct pin needs one (CONSTRAINTS_FRESH: packages exempt from that cooldown).
 CONSTRAINTS_CUTOFF ?= $(shell date -u -d '14 days ago' +%Y-%m-%d 2>/dev/null)

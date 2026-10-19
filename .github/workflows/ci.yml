@@ -210,6 +210,33 @@ jobs:
             make ids-check PY=python
           fi
 
+  # Q-08: every bugfix commit of this push or pull request touches a test file, and that test fails
+  # on the fix's parent (tools/fix_has_test.py --prove; CONTRIBUTING.md "Bug fixes").
+  regression-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/python-deps
+        with:
+          python-version: "3.12"
+          extras: test
+      - name: every fix ships a regression test that fails without the fix
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] \
+             && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            python tools/fix_has_test.py --range "$BASE..$HEAD_SHA" --prove
+          else
+            echo "no base commit (new branch): nothing to compare"
+          fi
+
   # Developer Certificate of Origin: every non-merge commit of a pull request carries a
   # Signed-off-by trailer for its author (CONTRIBUTING.md, ground rule 1); GitHub App bots are exempt.
   dco:
