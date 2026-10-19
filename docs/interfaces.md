@@ -190,8 +190,10 @@ StateStore(path, *, schema_version=1, migrations=None, clock=time.time)   # atom
 KeyedState(store, namespace="checks", clock=...)            # observe(key, ok), red_for(key), counter/incr, last_seen
 
 # homelabnext.records   (agents write inbox/ only; operator movers live in records.decider, not re-exported)
-Records(root, clock).propose(note, *, body="", slug=None) -> Path
-Records.completion_request(related, body, *, agent, ...) -> Path   # related: decided/approved/<file>.md
+Records(root, clock, *, agent=None).propose(note, *, body="", slug=None) -> Path
+#   agent= binds requesting_agent (a note naming anyone else is refused); unbound, the caller sets it.
+#   The real enforcement of decided/ is filesystem ownership, not this library.
+Records.completion_request(related, body, *, agent=None, ...) -> Path   # related: decided/approved/<file>.md
 RecordsReader(root).list(lane) / .read(lane, name) / .iter_notes(lane)
 validate_note(note) / parse_note(text) / render_note(...)   # note schema: schemas/records/note.schema.json
 

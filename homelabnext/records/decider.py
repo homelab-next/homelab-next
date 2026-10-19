@@ -5,6 +5,11 @@ This module is the decision maker's tool.  It is **not** imported by ``homelabne
 by the agent API, and a test pins that: an agent process that imports the agent API cannot reach
 these functions without importing this module by name, which is exactly the review signal wanted.
 Notes are never edited; each move leaves a ``<name>.decision.json`` audit sidecar beside it.
+
+Keeping this module out of the agent's imports is a review signal, not an access control: any
+code in the agent's process could import it.  What actually stops an agent from deciding is
+filesystem ownership: run the decider as a different OS user that owns ``decided/``, and give the
+agent's user write access to ``inbox/`` only.
 """
 
 from __future__ import annotations
