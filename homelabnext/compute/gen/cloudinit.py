@@ -3,6 +3,10 @@
 
 Key names resolve through ``Fleet.keys``; an unresolved name renders as ``<ssh-key:NAME>`` so a
 dry render is still reviewable and can never carry key material by accident.
+
+Sudo is per guest (``cloudinit.sudo``) and off unless asked for: ``none`` writes no sudo rule,
+``password`` writes ``ALL=(ALL) ALL`` (usable once a password is set out of band, since the
+account is created locked), and ``nopasswd`` is the explicit opt-in for an automation account.
 """
 
 from __future__ import annotations
@@ -11,18 +15,20 @@ from homelabnext.compute.model import Fleet, Guest
 
 from ._text import HEADER, q
 
+#: ``cloudinit.sudo`` -> sudoers rule (``None`` = no rule)
+SUDO_RULES = {"none": None, "password": "ALL=(ALL) ALL", "nopasswd": "ALL=(ALL) NOPASSWD:ALL"}
+
 
 def user_data(fleet: Fleet, g: Guest) -> str:
     ci = g.cloudinit
     L = ["#cloud-config", f"# {HEADER}"]
     L += [f"hostname: {q(g.name)}", f"fqdn: {q(fleet.fqdn(g))}", "manage_etc_hosts: true"]
     L += [f"timezone: {q(ci.get('timezone', 'UTC'))}"]
-    L += [
-        "users:",
-        f"  - name: {q(ci['user'])}",
-        '    sudo: "ALL=(ALL) NOPASSWD:ALL"',
-        "    shell: /bin/bash",
-    ]
+    L += ["users:", f"  - name: {q(ci['user'])}"]
+    rule = SUDO_RULES[ci.get("sudo", "none")]
+    if rule:
+        L.append(f"    sudo: {q(rule)}")
+    L += ["    lock_passwd: true", "    shell: /bin/bash"]
     keys = ci.get("ssh_authorized_keys", [])
     if keys:
         L.append("    ssh_authorized_keys:")

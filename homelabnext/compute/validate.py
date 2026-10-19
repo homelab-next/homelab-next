@@ -77,7 +77,7 @@ def _check_firewall(g: Guest, fleet: Fleet) -> list[Problem]:
                         "firewall: add network.firewall_exemption.reason or enable the flag",
                     )
                 )
-            if g.firewall_rules:
+            if g.raw.get("firewall_rules"):
                 out.append(
                     Problem(g.id, "firewall_rules are set but the NIC firewall flag is disabled")
                 )
@@ -85,12 +85,14 @@ def _check_firewall(g: Guest, fleet: Fleet) -> list[Problem]:
             out.append(
                 Problem(g.id, "network.firewall_exemption is set but the NIC firewall is enabled")
             )
-    elif g.firewall_rules:
+    elif g.raw.get("firewall_rules"):
         out.append(Problem(g.id, "firewall_rules apply to kind vm and lxc only"))
-    names = [r["name"] for r in g.firewall_rules]
+    names = [r["name"] for r in g.firewall_rules + g.outbound_rules]
     if len(names) != len(set(names)):
         out.append(Problem(g.id, "firewall_rules names must be unique"))
-    for r in g.firewall_rules:
+    if g.outbound_rules and g.policy_out == "ACCEPT":
+        out.append(Problem(g.id, "firewall_rules.outbound_allow needs policy_out DROP or REJECT"))
+    for r in g.firewall_rules + g.outbound_rules:
         where = f"firewall_rules.{r['name']}"
         if r["proto"] in ("tcp", "udp") and not r.get("ports"):
             out.append(Problem(g.id, f"{where}: ports are required for {r['proto']}"))
@@ -101,14 +103,15 @@ def _check_firewall(g: Guest, fleet: Fleet) -> list[Problem]:
             nums = [int(x) for x in ports.split(":")]
             if any(not 1 <= n <= 65535 for n in nums) or nums != sorted(nums):
                 out.append(Problem(g.id, f"{where}: bad port or range {ports!r}"))
-        src = r["source"]
+        side = "source" if "source" in r else "dest"
+        src = r[side]
         if src.startswith("zone:") and fleet.zones.zone(src[5:]) is None:
-            out.append(Problem(g.id, f"{where}: source zone {src[5:]!r} does not exist"))
+            out.append(Problem(g.id, f"{where}: {side} zone {src[5:]!r} does not exist"))
         elif "/" in src:
             try:
                 ipaddress.ip_network(src, strict=True)
             except ValueError as exc:
-                out.append(Problem(g.id, f"{where}: bad source CIDR: {exc}"))
+                out.append(Problem(g.id, f"{where}: bad {side} CIDR: {exc}"))
     return out
 
 

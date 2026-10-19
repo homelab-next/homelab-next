@@ -13,6 +13,7 @@ resources:
 image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
 cloudinit:
   user: ansible
+  sudo: nopasswd            # automation account: explicit opt-in
   ssh_authorized_keys: [operator, automation]
   packages: [qemu-guest-agent, chrony]
   timezone: UTC

@@ -14,11 +14,10 @@ virt-install \
   --memory 16384 \
   --os-variant linux2022 \
   --import \
-  --disk path=${HNX_POOL_FAST}/lake-core-rootfs.qcow2,size=20,format=qcow2,bus=virtio,discard=unmap,backing_store=${HNX_IMAGE_DIR}/debian-12-cloudinit.qcow2 \
-  --disk path=${HNX_POOL_BULK}/lake-core-data.raw,size=200,format=raw,bus=virtio,discard=unmap \
-  --network bridge=${HNX_DEFAULT_BRIDGE:?set HNX_DEFAULT_BRIDGE},model=virtio \
-  --cloud-init user-data="$CI/lake-core/user-data",meta-data="$CI/lake-core/meta-data" \
+  --disk "path=${HNX_POOL_FAST}/lake-core-rootfs.qcow2,size=20,format=qcow2,bus=virtio,discard=unmap,backing_store=${HNX_IMAGE_DIR}/debian-12-cloudinit.qcow2" \
+  --disk "path=${HNX_POOL_BULK}/lake-core-data.raw,size=200,format=raw,bus=virtio,discard=unmap" \
+  --network "bridge=${HNX_DEFAULT_BRIDGE:?set HNX_DEFAULT_BRIDGE}v20,model=virtio" \
+  --cloud-init "user-data=$CI/lake-core/user-data,meta-data=$CI/lake-core/meta-data" \
   --graphics none \
   --noautoconsole
-# vlan 20: tag it on the bridge port or a libvirt portgroup
 virsh autostart lake-core

@@ -245,7 +245,11 @@ def build_registry(doc: dict) -> Registry:
     """Validate a parsed document and return the model, or raise RegistryError."""
     if not isinstance(doc, dict):
         raise RegistryError("registry root must be a mapping")
-    problems = schema_problems(doc)
+    from homelabnext.generators.safe import control_char_paths  # local: generators imports registry
+
+    # schema-independent backstop: every value lands in a line-oriented generated file
+    problems = [f"unsafe: {m}" for m in control_char_paths(doc)]
+    problems += schema_problems(doc)
     if not problems:
         problems = semantic_problems(doc)
     if problems:

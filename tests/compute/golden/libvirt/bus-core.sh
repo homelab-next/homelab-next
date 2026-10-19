@@ -13,8 +13,8 @@ virt-install \
   --memory 4096 \
   --os-variant linux2022 \
   --import \
-  --disk path=${HNX_POOL_FAST}/bus-core-rootfs.qcow2,size=32,format=qcow2,bus=virtio,discard=unmap,backing_store=${HNX_IMAGE_DIR}/debian-12-cloudinit.qcow2 \
-  --network bridge=${HNX_DEFAULT_BRIDGE:?set HNX_DEFAULT_BRIDGE},model=virtio \
-  --cloud-init user-data="$CI/bus-core/user-data",meta-data="$CI/bus-core/meta-data" \
+  --disk "path=${HNX_POOL_FAST}/bus-core-rootfs.qcow2,size=32,format=qcow2,bus=virtio,discard=unmap,backing_store=${HNX_IMAGE_DIR}/debian-12-cloudinit.qcow2" \
+  --network "bridge=${HNX_DEFAULT_BRIDGE:?set HNX_DEFAULT_BRIDGE}v20,model=virtio" \
+  --cloud-init "user-data=$CI/bus-core/user-data,meta-data=$CI/bus-core/meta-data" \
   --graphics none \
   --noautoconsole

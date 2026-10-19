@@ -6,7 +6,8 @@ manage_etc_hosts: true
 timezone: "UTC"
 users:
   - name: "ansible"
-    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    sudo: "ALL=(ALL) ALL"
+    lock_passwd: true
     shell: /bin/bash
     ssh_authorized_keys:
       - "ssh-ed25519 AAAAEXAMPLEONLYNOTAREALKEY operator@example.internal"

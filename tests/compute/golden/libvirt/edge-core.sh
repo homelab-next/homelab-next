@@ -13,10 +13,9 @@ virt-install \
   --memory 2048 \
   --os-variant linux2022 \
   --import \
-  --disk path=${HNX_POOL_FAST}/edge-core-rootfs.qcow2,size=16,format=qcow2,bus=virtio,discard=unmap,backing_store=${HNX_IMAGE_DIR}/debian-12-cloudinit.qcow2 \
-  --network bridge=${HNX_DEFAULT_BRIDGE:?set HNX_DEFAULT_BRIDGE},model=virtio \
-  --cloud-init user-data="$CI/edge-core/user-data",meta-data="$CI/edge-core/meta-data" \
+  --disk "path=${HNX_POOL_FAST}/edge-core-rootfs.qcow2,size=16,format=qcow2,bus=virtio,discard=unmap,backing_store=${HNX_IMAGE_DIR}/debian-12-cloudinit.qcow2" \
+  --network "bridge=${HNX_DEFAULT_BRIDGE:?set HNX_DEFAULT_BRIDGE}v40,model=virtio" \
+  --cloud-init "user-data=$CI/edge-core/user-data,meta-data=$CI/edge-core/meta-data" \
   --graphics none \
   --noautoconsole
-# vlan 40: tag it on the bridge port or a libvirt portgroup
 virsh autostart edge-core
