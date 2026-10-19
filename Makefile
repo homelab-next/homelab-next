@@ -244,7 +244,7 @@ CONSTRAINTS_CUTOFF ?= $(shell date -u -d '14 days ago' +%Y-%m-%d 2>/dev/null)
 CONSTRAINTS_FRESH ?= ruff pyarrow
 constraints:
 	uv pip compile pyproject.toml constraints/ci-tools.in --extra dev --extra test --extra lake \
-	  --extra core --universal --python-version 3.11 --generate-hashes --no-header \
+	  --extra core --extra nats --universal --python-version 3.11 --generate-hashes --no-header \
 	  --exclude-newer $(CONSTRAINTS_CUTOFF) \
 	  $(foreach p,$(CONSTRAINTS_FRESH),--exclude-newer-package $(p)=$(shell date -u +%Y-%m-%d)) \
 	  -o constraints/ci.txt

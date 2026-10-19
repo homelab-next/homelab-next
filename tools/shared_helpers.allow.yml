@@ -12,3 +12,6 @@ allow:
   - path: tools/shared_helpers_lint.py
     rule: lake
     reason: the lint names the Trino REST endpoint in order to detect it
+  - path: homelabnext/conform/adapters/ntfy.py
+    rule: notify
+    reason: the notify conformance adapter reads a topic back from ntfy (GET poll) to observe delivery independently of the sender under test; every send goes through homelabnext.notify.NtfySender

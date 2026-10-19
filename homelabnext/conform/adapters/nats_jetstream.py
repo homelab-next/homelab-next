@@ -1,0 +1,606 @@
+# SPDX-License-Identifier: Apache-2.0
+"""The ``events`` contract on NATS JetStream (pinned: nats 2.10 with ``-js``).
+
+``make(**config)`` builds a :class:`JetStreamBus` on the server named by ``HNX_ENDPOINT_EVENTS``
+(``nats://host:port``).  The bus speaks the JetStream wire API (``$JS.API.*`` JSON requests,
+``$JS.ACK.*`` replies) through a small :class:`Wire` interface; :class:`NatsPyWire` is that
+interface over nats-py (``pip install 'homelabnext[nats]'``), and the unit tests drive the same
+mapping with an in-process fake of the server, so no server is needed offline.
+
+How the contract maps onto JetStream:
+
+* **Stream.**  One limits-retention stream captures ``<prefix>.>``; a contract subject ``a.b`` is
+  the NATS subject ``<prefix>.a.b``.  (A stream may not capture ``>`` itself unless it is no-ack,
+  and a no-ack publish returns no sequence, so a prefix is required.)
+* **publish** is a request to the subject; the PubAck carries the stream sequence.  ``msg_id`` is
+  the ``Nats-Msg-Id`` header; a repeat inside the stream's ``duplicate_window`` gets the PubAck of
+  the original (``"duplicate": true``) with the original sequence.
+* **consumer** is a durable pull consumer: ``deliver_policy=new`` (it sees what is published after
+  it was created), ``ack_policy=explicit``, ``max_deliver``, ``ack_wait`` and a filter of
+  ``<prefix>.<pattern>`` (``*`` and ``>`` are native NATS wildcards).
+* **fetch** is one ``CONSUMER.MSG.NEXT`` pull with ``no_wait``: the server answers with what is
+  deliverable now and a ``404``/``408`` status, so an empty consumer returns at once.  The attempt
+  number is the delivery count from the ack reply subject.
+* **ack / nack / term** are ``+ACK`` / ``-NAK`` / ``+TERM`` sent as *requests*: the server answers
+  each one after processing it ("ack the ack"), so a following fetch cannot overtake it.  Only the
+  first settlement of a delivery is sent; later ones are no-ops on the client.
+* **Dead letters** are JetStream's own advisories, captured by a second stream (the documented DLQ
+  pattern): ``$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.<stream>.*`` and ``...MSG_TERMINATED...``.
+  ``dead_letters()`` reads the advisories for its consumer and loads each original message by its
+  stream sequence, so the list survives the client and is the server's record, not ours.
+* **Reopen** binds to the existing durable.  JetStream redelivers a delivery nobody settled once
+  its ``ack_wait`` lapses; the server does not know a client restarted.  So when the durable still
+  has unacknowledged deliveries, reopening waits one ``ack_wait`` (plus a margin) for the previous
+  incarnation's leases to lapse, after which every one of them is redelivered with attempt + 1.
+  Deliveries handed out before the reopen are detached: settling them is a no-op.
+
+Findings (where the product's semantics are narrower than the contract's words):
+
+* Publish dedup holds only within the stream's ``duplicate_window`` (here ``duplicate_window``
+  seconds, default one hour): a ``msg_id`` repeated later is a new message.
+* A message nacked on its last allowed attempt is dead-lettered when the server next tries to
+  deliver it (the next pull on that consumer), not at the nack; ``dead_letters()`` waits up to
+  ``dlq_wait`` seconds for the deliveries this client expects to see dead-lettered.
+* An unsettled delivery is also redelivered, without a reopen, once ``ack_wait`` lapses (that is
+  JetStream's at-least-once lease); keep handlers shorter than ``ack_wait``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import hashlib
+import json
+import re
+import secrets
+import threading
+import time
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from typing import Any, Protocol
+
+from conformance.protocols.events import Delivery, EventsError
+
+from ._lab import endpoint_url
+
+__all__ = [
+    "JetStreamApiError",
+    "JetStreamBus",
+    "JetStreamConsumer",
+    "NatsPyWire",
+    "Wire",
+    "WireError",
+    "WireMsg",
+    "make",
+]
+
+_ADVISORY_MAX = "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES"
+_ADVISORY_TERM = "$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED"
+_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_SETTLE = {"ack": b"+ACK", "nack": b"-NAK", "term": b"+TERM"}
+_NS = 1_000_000_000
+_NOT_FOUND = {"stream": 10059, "consumer": 10014, "message": 10037}
+
+
+class WireError(EventsError):
+    """The transport failed: no connection, no responder, or no reply in time."""
+
+
+class JetStreamApiError(EventsError):
+    """The JetStream API answered with an error object."""
+
+    def __init__(self, what: str, code: int, err_code: int, description: str):
+        super().__init__(f"{what}: JetStream error {code}/{err_code}: {description}")
+        self.code, self.err_code, self.description = code, err_code, description
+
+
+@dataclass(frozen=True)
+class WireMsg:
+    subject: str
+    data: bytes
+    headers: Mapping[str, str] = field(default_factory=dict)
+    reply: str = ""
+
+
+class Wire(Protocol):
+    """The three NATS operations the bus needs.  ``pull`` publishes ``payload`` with a fresh
+    reply inbox and returns the data messages that arrive on it, stopping at the first status
+    message (``Status`` header), after ``max_msgs`` messages, or after ``timeout`` seconds."""
+
+    def request(
+        self,
+        subject: str,
+        payload: bytes = b"",
+        *,
+        headers: Mapping[str, str] | None = None,
+        timeout: float,
+    ) -> WireMsg: ...
+
+    def pull(
+        self, subject: str, payload: bytes, *, max_msgs: int, timeout: float
+    ) -> list[WireMsg]: ...
+
+    def close(self) -> None: ...
+
+
+# --------------------------------------------------------------------------- helpers
+def _check_subject(subject: str, *, pattern: bool) -> list[str]:
+    if not isinstance(subject, str) or not subject:
+        raise EventsError("subject must be a non-empty string")
+    tokens = subject.split(".")
+    for i, tok in enumerate(tokens):
+        if not tok or any(c.isspace() for c in tok):
+            raise EventsError(f"invalid subject {subject!r}: empty token or whitespace")
+        if tok in ("*", ">") or "*" in tok or ">" in tok:
+            if not pattern:
+                raise EventsError(f"cannot publish to a wildcard subject {subject!r}")
+            if tok not in ("*", ">") or (tok == ">" and i != len(tokens) - 1):
+                raise EventsError(f"invalid subject pattern {subject!r}")
+    return tokens
+
+
+def durable_name(name: str) -> str:
+    """The contract's consumer name as a JetStream durable name (no ``.``, ``*``, ``>``, space)."""
+    if not isinstance(name, str) or not name:
+        raise EventsError("consumer name must be a non-empty string")
+    if _NAME_RE.match(name):
+        return name
+    return "h" + hashlib.sha256(name.encode("utf-8")).hexdigest()[:24]
+
+
+def parse_ack_reply(reply: str) -> tuple[str, str, int, int]:
+    """``(stream, consumer, delivery_count, stream_seq)`` from a ``$JS.ACK`` reply subject (the
+    9-token form, and the 12+-token form with domain and account hash)."""
+    t = reply.split(".")
+    if len(t) < 9 or t[0] != "$JS" or t[1] != "ACK":
+        raise EventsError(f"not a JetStream delivery (reply {reply!r})")
+    if len(t) == 9:
+        stream, consumer, dc, sseq = t[2], t[3], t[4], t[5]
+    else:
+        stream, consumer, dc, sseq = t[4], t[5], t[6], t[7]
+    try:
+        return stream, consumer, int(dc), int(sseq)
+    except ValueError:
+        raise EventsError(f"malformed ack reply subject {reply!r}") from None
+
+
+def parse_headers(raw: bytes) -> dict[str, str]:
+    """Headers from a stored message's ``hdrs`` block (``NATS/1.0\\r\\nKey: value\\r\\n...``)."""
+    out: dict[str, str] = {}
+    for line in raw.decode("utf-8", "replace").split("\r\n")[1:]:
+        key, sep, value = line.partition(":")
+        if sep and key.strip():
+            out[key.strip()] = value.strip()
+    return out
+
+
+def _noop(_how: str) -> None:
+    return None
+
+
+# --------------------------------------------------------------------------- the bus
+class JetStreamBus:
+    """:class:`conformance.protocols.events.EventBus` on one JetStream stream (see module doc)."""
+
+    features = frozenset({"wildcards"})
+
+    def __init__(
+        self,
+        wire: Wire,
+        *,
+        stream: str,
+        subject_prefix: str,
+        ack_wait: float = 3.0,
+        duplicate_window: float = 3600.0,
+        storage: str = "file",
+        request_timeout: float = 5.0,
+        fetch_timeout: float = 1.0,
+        dlq_wait: float = 3.0,
+        delete_on_close: bool = False,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ):
+        if not _NAME_RE.match(stream or ""):
+            raise EventsError("stream name must be 1-64 of [A-Za-z0-9_-]")
+        _check_subject(subject_prefix, pattern=False)
+        if storage not in ("file", "memory"):
+            raise EventsError("storage must be 'file' or 'memory'")
+        if ack_wait <= 0 or duplicate_window < 0.1:
+            raise EventsError("ack_wait must be positive and duplicate_window >= 0.1s")
+        self._wire = wire
+        self.stream = stream
+        self.dlq_stream = f"{stream}_DLQ"
+        self.prefix = subject_prefix
+        self.ack_wait = float(ack_wait)
+        self.request_timeout = request_timeout
+        self.fetch_timeout = fetch_timeout
+        self.dlq_wait = dlq_wait
+        self._delete_on_close = delete_on_close
+        self._clock = clock
+        self._sleep = sleep
+        self._generation: dict[str, int] = {}
+        self._closed = False
+        base = {
+            "retention": "limits",
+            "storage": storage,
+            "discard": "old",
+            "num_replicas": 1,
+        }
+        self._ensure_stream(
+            {
+                "name": stream,
+                "subjects": [f"{subject_prefix}.>"],
+                "duplicate_window": int(duplicate_window * _NS),
+                **base,
+            }
+        )
+        self._ensure_stream(
+            {
+                "name": self.dlq_stream,
+                "subjects": [f"{_ADVISORY_MAX}.{stream}.*", f"{_ADVISORY_TERM}.{stream}.*"],
+                **base,
+            }
+        )
+
+    def __repr__(self) -> str:
+        return f"JetStreamBus(stream={self.stream!r}, prefix={self.prefix!r})"
+
+    # ---------------------------------------------------------------- JetStream API
+    def api(self, what: str, body: Mapping[str, Any] | None = None, *, missing: str = "") -> Any:
+        """One ``$JS.API.<what>`` request.  Returns the decoded reply, or None when it is the
+        ``missing`` kind's not-found error (``stream``, ``consumer`` or ``message``)."""
+        payload = b"" if body is None else json.dumps(body).encode("utf-8")
+        msg = self._wire.request(f"$JS.API.{what}", payload, timeout=self.request_timeout)
+        try:
+            doc = json.loads(msg.data or b"{}")
+        except ValueError:
+            raise EventsError(f"{what}: reply is not JSON") from None
+        if not isinstance(doc, dict):
+            raise EventsError(f"{what}: reply is not an object")
+        err = doc.get("error")
+        if err:
+            code, err_code = int(err.get("code", 0)), int(err.get("err_code", 0))
+            if missing and err_code == _NOT_FOUND[missing]:
+                return None
+            raise JetStreamApiError(what, code, err_code, str(err.get("description", "")))
+        return doc
+
+    def _ensure_stream(self, config: Mapping[str, Any]) -> None:
+        name = config["name"]
+        if self.api(f"STREAM.INFO.{name}", missing="stream") is None:
+            self.api(f"STREAM.CREATE.{name}", config)
+
+    # ---------------------------------------------------------------- contract
+    def publish(self, subject: str, data: bytes, *, msg_id: str | None = None) -> int:
+        _check_subject(subject, pattern=False)
+        headers = None
+        if msg_id is not None:
+            if not msg_id or any(c in msg_id for c in "\r\n"):
+                raise EventsError("msg_id must be a non-empty single-line string")
+            headers = {"Nats-Msg-Id": msg_id}
+        msg = self._wire.request(
+            f"{self.prefix}.{subject}", bytes(data), headers=headers, timeout=self.request_timeout
+        )
+        try:
+            ack = json.loads(msg.data)
+        except ValueError:
+            raise EventsError(f"publish to {subject!r}: the PubAck is not JSON") from None
+        if not isinstance(ack, dict) or "error" in ack or "seq" not in ack:
+            err = ack.get("error", {}) if isinstance(ack, dict) else {}
+            raise EventsError(f"publish to {subject!r} was not stored: {err or ack!r}")
+        if ack.get("stream") != self.stream:
+            raise EventsError(f"publish to {subject!r} landed in stream {ack.get('stream')!r}")
+        return int(ack["seq"])
+
+    def consumer(self, name: str, subject: str, *, max_deliver: int = 3) -> JetStreamConsumer:
+        _check_subject(subject, pattern=True)
+        if not isinstance(max_deliver, int) or max_deliver < 1:
+            raise EventsError("max_deliver must be a positive int")
+        durable = durable_name(name)
+        filt = f"{self.prefix}.{subject}"
+        info = self.api(f"CONSUMER.INFO.{self.stream}.{durable}", missing="consumer")
+        if info is None:
+            config = {
+                "durable_name": durable,
+                "deliver_policy": "new",
+                "ack_policy": "explicit",
+                "ack_wait": int(self.ack_wait * _NS),
+                "max_deliver": max_deliver,
+                "filter_subject": filt,
+                "replay_policy": "instant",
+            }
+            info = self.api(
+                f"CONSUMER.CREATE.{self.stream}.{durable}",
+                {"stream_name": self.stream, "config": config, "action": "create"},
+            )
+        else:
+            have = info.get("config", {}).get("filter_subject")
+            if have != filt:
+                raise EventsError(
+                    f"consumer {name!r} exists on another subject; delete it to change it"
+                )
+            if int(info.get("num_ack_pending", 0)) > 0:
+                # the previous incarnation's deliveries are leased for ack_wait; let them lapse
+                self._sleep(self.ack_wait + min(1.0, 0.25 + self.ack_wait / 4))
+        gen = self._generation[durable] = self._generation.get(durable, 0) + 1
+        max_dc = int(info.get("config", {}).get("max_deliver", max_deliver))
+        return JetStreamConsumer(self, name, durable, max_dc, gen)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            if self._delete_on_close:
+                for name in (self.stream, self.dlq_stream):
+                    self.api(f"STREAM.DELETE.{name}", missing="stream")
+        finally:
+            self._wire.close()
+
+    # ---------------------------------------------------------------- internals
+    def _strip(self, subject: str) -> str:
+        head = self.prefix + "."
+        return subject[len(head) :] if subject.startswith(head) else subject
+
+    def _current(self, durable: str, gen: int) -> bool:
+        return self._generation.get(durable) == gen
+
+
+class JetStreamConsumer:
+    """One incarnation of a durable pull consumer (a reopen makes a new one)."""
+
+    def __init__(self, bus: JetStreamBus, name: str, durable: str, max_deliver: int, gen: int):
+        self.bus, self.name, self.durable = bus, name, durable
+        self.max_deliver, self._gen = max_deliver, gen
+        self._expect_dead: set[int] = set()
+
+    def __repr__(self) -> str:
+        return f"JetStreamConsumer(name={self.name!r}, durable={self.durable!r})"
+
+    def fetch(self, n: int = 1) -> list[Delivery]:
+        if n < 1:
+            return []
+        bus = self.bus
+        req = json.dumps({"batch": int(n), "no_wait": True}).encode("utf-8")
+        msgs = bus._wire.pull(
+            f"$JS.API.CONSUMER.MSG.NEXT.{bus.stream}.{self.durable}",
+            req,
+            max_msgs=n,
+            timeout=bus.fetch_timeout,
+        )
+        return [self._delivery(m) for m in msgs]
+
+    def _delivery(self, m: WireMsg) -> Delivery:
+        stream, consumer, dc, sseq = parse_ack_reply(m.reply)
+        if stream != self.bus.stream or consumer != self.durable:
+            raise EventsError(f"delivery for {stream}/{consumer} reached {self.durable}")
+        d = Delivery(
+            sseq, self.bus._strip(m.subject), bytes(m.data), m.headers.get("Nats-Msg-Id"), dc
+        )
+        state = {"settled": False}
+
+        def settle(how: str, reply: str = m.reply, delivery: Delivery = d) -> None:
+            self._settle(reply, delivery, how, state)
+
+        d._settle = settle
+        return d
+
+    def _settle(self, reply: str, d: Delivery, how: str, state: dict[str, bool]) -> None:
+        body = _SETTLE.get(how)
+        if body is None:
+            raise EventsError(f"unknown settlement {how!r}")
+        if state["settled"] or not self.bus._current(self.durable, self._gen):
+            return  # only the first settlement counts; a reopen detaches older deliveries
+        state["settled"] = True
+        # sent as a request: the server replies once it has processed the settlement
+        self.bus._wire.request(reply, body, timeout=self.bus.request_timeout)
+        if how == "term" or (how == "nack" and d.attempt >= self.max_deliver):
+            self._expect_dead.add(d.seq)
+
+    def dead_letters(self) -> list[Delivery]:
+        bus = self.bus
+        deadline = bus._clock() + bus.dlq_wait
+        while True:
+            dead = self._read_dead()
+            if self._expect_dead <= {d.seq for d in dead} or bus._clock() >= deadline:
+                return dead
+            bus._sleep(0.05)
+
+    def _read_dead(self) -> list[Delivery]:
+        bus = self.bus
+        filt = f"$JS.EVENT.ADVISORY.CONSUMER.*.{bus.stream}.{self.durable}"
+        out: list[Delivery] = []
+        seq = 1
+        while True:
+            got = bus.api(
+                f"STREAM.MSG.GET.{bus.dlq_stream}",
+                {"seq": seq, "next_by_subj": filt},
+                missing="message",
+            )
+            if got is None:
+                return out
+            stored = got["message"]
+            seq = int(stored["seq"]) + 1
+            adv = json.loads(base64.b64decode(stored.get("data") or ""))
+            sseq = int(adv["stream_seq"])
+            orig = bus.api(f"STREAM.MSG.GET.{bus.stream}", {"seq": sseq}, missing="message")
+            if orig is None:
+                raise EventsError(f"dead letter {sseq}: the original is no longer in the stream")
+            m = orig["message"]
+            hdrs = parse_headers(base64.b64decode(m.get("hdrs") or ""))
+            out.append(
+                Delivery(
+                    sseq,
+                    bus._strip(m["subject"]),
+                    base64.b64decode(m.get("data") or ""),
+                    hdrs.get("Nats-Msg-Id"),
+                    int(adv.get("deliveries", 0)),
+                    _noop,
+                )
+            )
+
+
+# --------------------------------------------------------------------------- nats-py wire
+class NatsPyWire:
+    """:class:`Wire` over nats-py: an asyncio loop on a private thread, one connection."""
+
+    def __init__(self, url: str, *, connect_timeout: float = 5.0, name: str = "hnx-conform"):
+        try:
+            import nats
+            import nats.errors
+        except ImportError as exc:
+            raise EventsError("nats-py is not installed: pip install 'homelabnext[nats]'") from exc
+        if not url.startswith(("nats://", "tls://")):
+            raise EventsError("the events endpoint must be a nats:// or tls:// URL")
+        self._errors = nats.errors
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._loop.run_forever, name=name, daemon=True)
+        self._thread.start()
+        self.last_error = ""
+
+        async def note(exc: Exception) -> None:  # nats-py reports connection errors here
+            self.last_error = f"{type(exc).__name__}: {exc}"
+
+        try:
+            # max_reconnect_attempts=0 would retry a refused first connect forever in nats-py
+            self._nc = self._run(
+                nats.connect(
+                    url,
+                    name=name,
+                    connect_timeout=max(1, int(connect_timeout)),
+                    allow_reconnect=False,
+                    max_reconnect_attempts=1,
+                    reconnect_time_wait=0.5,
+                    error_cb=note,
+                ),
+                connect_timeout + 5,
+            )
+        except WireError as exc:
+            self._stop_loop()
+            raise WireError(
+                f"cannot connect to the events endpoint: {exc} ({self.last_error})"
+            ) from None
+        except Exception:
+            self._stop_loop()
+            raise
+
+    def __repr__(self) -> str:
+        return "NatsPyWire(<endpoint>)"
+
+    def _run(self, coro: Any, timeout: float) -> Any:
+        fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        try:
+            return fut.result(timeout)
+        except self._errors.NoRespondersError:
+            raise WireError("no responders (no stream captures that subject?)") from None
+        except (self._errors.TimeoutError, TimeoutError):
+            fut.cancel()
+            raise WireError(f"no reply within {timeout:.1f}s") from None
+        except (self._errors.Error, OSError) as exc:
+            raise WireError(f"nats transport error: {type(exc).__name__}: {exc}") from None
+
+    def request(
+        self,
+        subject: str,
+        payload: bytes = b"",
+        *,
+        headers: Mapping[str, str] | None = None,
+        timeout: float,
+    ) -> WireMsg:
+        async def go() -> WireMsg:
+            msg = await self._nc.request(
+                subject, payload, timeout=timeout, headers=dict(headers) if headers else None
+            )
+            return WireMsg(msg.subject, msg.data, dict(msg.headers or {}), msg.reply or "")
+
+        return self._run(go(), timeout + 1)
+
+    def pull(self, subject: str, payload: bytes, *, max_msgs: int, timeout: float) -> list[WireMsg]:
+        async def go() -> list[WireMsg]:
+            loop = asyncio.get_running_loop()
+            inbox = self._nc.new_inbox()
+            sub = await self._nc.subscribe(inbox)
+            out: list[WireMsg] = []
+            try:
+                await self._nc.publish(subject, payload, reply=inbox)
+                deadline = loop.time() + timeout
+                while len(out) < max_msgs:
+                    left = deadline - loop.time()
+                    if left <= 0:
+                        break
+                    try:
+                        msg = await sub.next_msg(timeout=left)
+                    except self._errors.TimeoutError:
+                        break
+                    hdrs = dict(msg.headers or {})
+                    if "Status" in hdrs:
+                        if hdrs["Status"] == "100":  # idle heartbeat
+                            continue
+                        break  # 404 No Messages / 408 Request Timeout / 409 ...: end of batch
+                    out.append(WireMsg(msg.subject, msg.data, hdrs, msg.reply or ""))
+            finally:
+                await sub.unsubscribe()
+            return out
+
+        return self._run(go(), timeout + 5)
+
+    def close(self) -> None:
+        if self._loop.is_closed():
+            return
+        try:
+            if not self._nc.is_closed:
+                self._run(self._nc.close(), 10)
+        finally:
+            self._stop_loop()
+
+    def _stop_loop(self) -> None:
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(timeout=5)
+        self._loop.close()
+
+
+# --------------------------------------------------------------------------- factory
+def make(
+    *,
+    stream: str | None = None,
+    subject_prefix: str | None = None,
+    scratch: bool = True,
+    ack_wait: float = 3.0,
+    duplicate_window: float = 3600.0,
+    storage: str = "file",
+    request_timeout: float = 5.0,
+    fetch_timeout: float = 1.0,
+    dlq_wait: float = 3.0,
+    capability: str = "events",
+    wire: Wire | None = None,
+) -> JetStreamBus:
+    """A bus on the ``events`` endpoint.  ``scratch`` (the conformance default) gives every
+    subject its own stream and subject prefix, deleted on ``close()``, so checks never see each
+    other or an earlier run; otherwise ``stream`` and ``subject_prefix`` name a standing stream."""
+    if scratch:
+        token = secrets.token_hex(6)
+        stream = stream or f"HNXCONF_{token}"
+        subject_prefix = subject_prefix or f"hnxconf.{token}"
+    elif not stream or not subject_prefix:
+        raise EventsError("a standing bus needs both stream and subject_prefix")
+    assert stream is not None and subject_prefix is not None
+    own = wire is None
+    if wire is None:
+        wire = NatsPyWire(endpoint_url(capability, ("nats", "tls")))
+    try:
+        return JetStreamBus(
+            wire,
+            stream=stream,
+            subject_prefix=subject_prefix,
+            ack_wait=ack_wait,
+            duplicate_window=duplicate_window,
+            storage=storage,
+            request_timeout=request_timeout,
+            fetch_timeout=fetch_timeout,
+            dlq_wait=dlq_wait,
+            delete_on_close=scratch,
+        )
+    except Exception:
+        if own:
+            wire.close()
+        raise

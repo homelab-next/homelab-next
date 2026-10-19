@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# notify on the lab's ntfy (HNX_ENDPOINT_NOTIFY from smoke.sh): the production NtfySender publishes
+# to a random scratch topic and received() reads it back from ntfy's cache, independently.
+name: lab-notify
+capabilities:
+  notify:
+    adapter: homelabnext.conform.adapters.ntfy:make

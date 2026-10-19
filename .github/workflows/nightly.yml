@@ -28,11 +28,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      # the project with its core extra (so that hnx conform can read target files), hash-pinned
+      # the project with its core extra (so that hnx conform can read target files) and nats (the
+      # events adapter's client), hash-pinned
       - uses: ./.github/actions/python-deps
         with:
           python-version: "3.12"
-          extras: core
+          extras: core,nats
       - name: validate the compose file
         run: |
           docker compose --env-file compose/lab-in-a-box/.env.example \
