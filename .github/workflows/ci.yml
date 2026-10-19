@@ -162,9 +162,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+      - uses: ./.github/actions/python-deps
         with:
           python-version: "3.12"
+          extras: yaml  # the register tooling parses YAML
+          install-project: "false"
       - name: no id vanished relative to the base, no allocated id twice
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
