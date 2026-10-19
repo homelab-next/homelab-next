@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# Reviewed exemptions from tools/workstation_refs.py (checklist F-17). Each entry names a path
+# glob, optionally a `match` regex limiting it to the lines it excuses, and why. An entry that
+# excuses nothing fails the gate.
+allow:
+  - path: compose/lab-in-a-box/docker-compose.yml
+    match: "/home/nonroot/lakekeeper"
+    reason: the catalog binary's path inside its upstream distroless image (the image's nonroot user), not a host or workstation path

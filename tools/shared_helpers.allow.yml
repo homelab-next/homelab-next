@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Reviewed exemptions from tools/shared_helpers_lint.py (checklist M-03). Each names the path, the
+# rule (notify | state | lake) and why the code may not use the shared library. An entry that no
+# longer matches anything fails the lint, so this list cannot rot.
+allow:
+  - path: compose/lab-in-a-box/smoke_checks.py
+    rule: lake
+    reason: the lab smoke check probes the query engine product itself over its REST protocol, stdlib only inside the container; it tests the server the lake library talks to, it is not a consumer of the seam
+  - path: homelabnext/lake/checkpoint.py
+    rule: state
+    reason: the ingest checkpoint is part of the lake library's idempotent-write protocol (position, batch id and snapshot id committed together, own format version, crash-safety covered by tests/lake); candidate to move onto homelabnext.state, tracked as a follow-up
+  - path: homelabnext/records/decider.py
+    rule: state
+    reason: the decision sidecar is a record artefact written atomically next to the note it decides before the note moves lanes; it is part of the record, not checker state
+  - path: tools/shared_helpers_lint.py
+    rule: lake
+    reason: the lint names the Trino REST endpoint in order to detect it

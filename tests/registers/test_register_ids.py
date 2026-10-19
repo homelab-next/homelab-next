@@ -371,3 +371,28 @@ def test_allocation_never_hands_out_a_retired_number(tmp_path):
         TOMB.format(id="F-07") + "criteria:\n" + ENTRY.format(id="F-01")
     )
     assert ids.allocate(r, "invariants.yml", "F") == ["F-08"]
+
+
+def test_check_placeholders_fails_on_new_entry_ids_and_passes_once_resolved(repo):
+    # M-16: XX-NEW may be committed on a branch, but a push to main fails while one remains
+    path = repo / "lessons.yml"
+    path.write_text(path.read_text() + ENTRY.format(id="LL-NEW"))
+    assert ids.placeholders(path.read_text(), ids.SPECS["lessons"]) == ["LL-NEW"]
+    r = run_tool(repo, "check-placeholders", "lessons.yml")
+    assert r.returncode == 1
+    assert "LL-NEW" in r.stderr and "make ids-resolve" in r.stderr
+    assert run_tool(repo, "resolve", "lessons.yml").returncode == 3
+    r = run_tool(repo, "check-placeholders", "lessons.yml")
+    assert r.returncode == 0, r.stderr
+
+
+def test_placeholders_ignore_prose_that_mentions_the_convention():
+    text = "lessons:\n- id: LL-001\n  note: authors write LL-NEW and a maintainer resolves it\n"
+    assert ids.placeholders(text, ids.SPECS["lessons"]) == []
+
+
+def test_the_example_registers_carry_no_placeholder_ids(examples):
+    for f in sorted(examples.glob("*.yml")):
+        spec = ids.spec_for(f)
+        if spec is not None:
+            assert ids.placeholders(f.read_text(), spec) == [], f.name

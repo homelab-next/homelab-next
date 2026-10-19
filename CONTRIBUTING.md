@@ -22,6 +22,9 @@ tests on a laptop with no network and no private context.
    and commit it as is; never renumber an existing entry. A maintainer allocates the numbers once,
    at merge time, on the target branch (`make ids-resolve`), so two pull requests never claim the
    same id. CI checks that no id of the base branch vanished and that no allocated id repeats.
+   A placeholder is never valid on `main`: every push to `main` runs `make ids-placeholders`
+   (`hnx ids check-placeholders`), which fails while any entry id is still `XX-NEW`, so the
+   maintainer's allocation step cannot be skipped silently.
    An id that was wrong is retired, not deleted: move it to the register's top-level `retired:`
    block with a `reason:` (and `replaced_by:`), a tombstone that keeps it accounted for and
    unreusable (see `homelabnext/registers/ids.py`; `examples/registers/invariants.yml` has three).
@@ -86,6 +89,27 @@ make leak-scan-history RANGE=origin/main..HEAD           # what you are about to
 The pre-commit hooks read the same variable. A hit prints only `term on deny-list line N`, never the
 term itself, so CI logs and screenshots do not leak the list. Deny-list hits cannot be suppressed
 with `scrub-allow`. An empty or missing file is an error (exit 2), not a silent pass.
+
+## Hygiene lints
+
+Part of `make check` and CI; each reviewed exception lives in one allowlist file with a reason,
+and an entry that no longer excuses anything fails the lint.
+
+- `tools/shared_helpers_lint.py` (M-03): no private notify, state-file or lake-query helper
+  outside `homelabnext/notify`, `homelabnext/state` and `homelabnext/lake` (AST; test code is out
+  of scope). Allowlist: `tools/shared_helpers.allow.yml` (`path`, `rule`, `reason`).
+- `tools/tls_verify_lint.py` (F-07): no `verify=False`, unverified SSL context, `CERT_NONE`,
+  `check_hostname=False` or silenced urllib3 warnings in Python, and no
+  `validate_certs`/`verify_ssl`/`insecure_skip_verify`-style key turning verification off in YAML
+  or JSON (role tasks are also covered by role-lint RL013). Allowlist:
+  `tools/tls_verify.allow.yml`, or `tls-verify: allow <reason>` on the line.
+- `tools/workstation_refs.py` (F-17): runtime configuration (roles, playbooks, inventory, compose,
+  examples, generator templates, golden outputs) names no home directory, workstation path or
+  host, and no role step runs on the Ansible control node. Allowlist:
+  `tools/workstation_refs.allow.yml` (`path`, optional `match`, `reason`), or
+  `workstation-ref: allow <reason>` on the line.
+- `make keyring-check` (M-12): `examples/keyring/keyring.json` is exactly what
+  `hnx agent keyring build examples/keyring/sources.yml` generates (`make keyring` rebuilds it).
 
 ## Adding a capability
 

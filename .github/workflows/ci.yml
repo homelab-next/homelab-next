@@ -94,6 +94,12 @@ jobs:
         run: python tools/schema_check.py --strict
       - name: no raw endpoints
         run: python tools/no_raw_endpoints.py .
+      - name: helpers are shared, not copied (M-03)
+        run: python tools/shared_helpers_lint.py .
+      - name: TLS certificate verification never disabled (F-07)
+        run: python tools/tls_verify_lint.py .
+      - name: nothing at runtime points at the workstation (F-17)
+        run: python tools/workstation_refs.py .
       - name: role and playbook lint
         run: |
           python tools/role_lint.py ansible/roles/*
@@ -106,6 +112,8 @@ jobs:
         run: python -m homelabnext.cli agent prompts lint
       - name: injection corpus against the fence-respecting fake (G-02, golden report current)
         run: python -m homelabnext.cli agent injection run --fake fence --check homelabnext/agent/prompts/injection/report.json
+      - name: the keyring has 0 drift from its sources (M-12)
+        run: python -m homelabnext.cli agent keyring check examples/keyring/sources.yml
       - name: detections lint, fixtures and ATT&CK map
         run: |
           python -m homelabnext.detections lint
@@ -206,6 +214,10 @@ jobs:
           else
             make ids-check PY=python
           fi
+      # M-16: placeholders are allocated at merge time, so main may never carry one
+      - name: no XX-NEW placeholder id on main
+        if: github.event_name == 'push'
+        run: make ids-placeholders PY=python
 
   # Developer Certificate of Origin: every non-merge commit of a pull request carries a
   # Signed-off-by trailer for its author (CONTRIBUTING.md, ground rule 1); GitHub App bots are exempt.

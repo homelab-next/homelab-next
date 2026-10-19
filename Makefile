@@ -16,6 +16,7 @@ REGISTER_FILES := $(shell git ls-files -- $(foreach k,lessons runbooks invariant
 
 help:
 	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint agent-lint prompts-lint injection-check injection-report detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
+	@echo "hygiene: helpers-lint tls-lint workstation-lint keyring-check keyring ids-placeholders"
 	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke"
 	@echo "live (needs a real model endpoint): injection-eval MODEL=<role> REGISTRY=<file> ROLES=<file>"
 	@echo "override RUFF=/path/to/ruff if ruff is not importable as a module"
@@ -137,6 +138,36 @@ leak-scan-history:
 
 changelog-check:
 	$(PY) tools/check_changelog.py
+
+# batch-3 hygiene gates, prerequisites of `check` (make merges this with the rule above):
+#   M-03 no private notify/state/lake helpers outside the shared libraries
+#   F-07 no client with TLS certificate verification off (Python and YAML/JSON; RL013 does roles)
+#   F-17 no runtime config points at the admin workstation (runs beside X-01's endpoint gate)
+#   M-12 the generated keyring has 0 drift from its sources
+.PHONY: helpers-lint tls-lint workstation-lint keyring-check keyring ids-placeholders
+check: helpers-lint tls-lint workstation-lint keyring-check
+
+helpers-lint:
+	$(PY) tools/shared_helpers_lint.py .
+
+tls-lint:
+	$(PY) tools/tls_verify_lint.py .
+
+workstation-lint:
+	$(PY) tools/workstation_refs.py .
+
+KEYRING_SOURCES := examples/keyring/sources.yml
+keyring-check:
+	$(PY) -m homelabnext.cli agent keyring check $(KEYRING_SOURCES)
+
+# after changing a registry, profile or broker source of the keyring: regenerate and commit it
+keyring:
+	$(PY) -m homelabnext.cli agent keyring build $(KEYRING_SOURCES)
+
+# M-16: XX-NEW is allowed on a pull request, never on main; CI runs this on every push to main
+# (not part of `check`, which pull requests run).  Maintainer fix: `make ids-resolve` on main.
+ids-placeholders:
+	$(PY) tools/register_ids.py check-placeholders $(REGISTER_FILES)
 
 # Regenerate the hashed CI constraints (needs uv).  Versions published in the last 14 days are
 # skipped unless a direct pin needs one (CONSTRAINTS_FRESH: packages exempt from that cooldown).
