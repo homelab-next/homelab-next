@@ -244,8 +244,8 @@ def test_new_file_is_0600_and_existing_mode_is_kept(tmp_path):
         p = tmp_path / "s.json"
         StateStore(p).put("token", "x")
         assert p.stat().st_mode & 0o777 == 0o600
-        os.chmod(p, 0o640)
+        os.chmod(p, 0o400)  # differs from the 0600 default; owner read-only
         StateStore(p).put("token", "y")
-        assert p.stat().st_mode & 0o777 == 0o640
+        assert p.stat().st_mode & 0o777 == 0o400
     finally:
         os.umask(old)
