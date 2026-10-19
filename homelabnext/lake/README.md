@@ -39,8 +39,9 @@ restarted, replayed a rotated log tail from the stale offset, duplicating every 
    lake, never ahead of it.
 2. The batch id, source and high-water mark are stored **inside the lake commit** (Iceberg
    snapshot summary `hnx.batch-id`, `hnx.source`, `hnx.high-water`; a ledger row committed in the
-   same transaction in `FakeLake`). The checkpoint file records the committed batch id, snapshot
-   id and position. `Ingestor.start()` sees a lake mark newer than the checkpoint and fast-forwards.
+   same transaction in `FakeLake`). The checkpoint (a `homelabnext.state` file: atomic, locked,
+   versioned; the older `{"version": 1, "sources"}` file is still read) records the committed
+   batch id, snapshot id and position. `Ingestor.start()` sees a lake mark newer than the checkpoint and fast-forwards.
 3. If the tail is read again anyway (lost checkpoint, expired snapshots, different batching),
    rows whose content key (`uid`) already exist are skipped. Replay is idempotent.
 

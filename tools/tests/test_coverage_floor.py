@@ -21,6 +21,12 @@ def _report(**overrides):
         "homelabnext/records/notes.py": _file(10, 9),
         "homelabnext/decide/cascade.py": _file(10, 10),
         "homelabnext/agent/compiler.py": _file(10, 9),
+        "homelabnext/agent/readers.py": _file(10, 9),
+        "homelabnext/agent/handoff.py": _file(10, 9),
+        "homelabnext/agent/memory.py": _file(10, 9),
+        "homelabnext/agent/screen.py": _file(10, 9),
+        "homelabnext/workflows/runner.py": _file(10, 9),
+        "homelabnext/registry/limits.py": _file(10, 9),
         "homelabnext/agent/pack.py": _file(10, 0),  # not a unit: never counted
     }
     files.update(overrides)

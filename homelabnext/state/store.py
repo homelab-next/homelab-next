@@ -14,7 +14,13 @@ Guarantees
   * **Corrupt file quarantine.**  Unparseable content is renamed to ``<name>.corrupt-<stamp>``
     and the store starts empty, so one bad file cannot crash a scheduled check forever.  Each
     quarantine is logged (logger ``homelabnext.state``, WARNING) with the reason.  Only decode
-    and shape errors quarantine; anything else (permissions, I/O) raises.
+    and shape errors quarantine; anything else (permissions, I/O) raises.  A store that would
+    rather stop than start empty passes ``quarantine=False`` and gets a :class:`StateCorruptError`
+    instead (the file is left in place for the operator).
+  * **Pre-store formats.**  A file a module wrote before it moved onto this library is read
+    through ``legacy``: a function that recognises the old document and returns its data (as
+    schema version 1, so ``migrations`` still apply), or ``None`` when it does not recognise it.
+    The next write rewrites the file in the current format.
   * **Permissions.**  A replaced file keeps the mode of the file it replaces; a new file is
     created ``0600`` (state often holds tokens or cursors that are nobody else's business).
 
@@ -53,6 +59,10 @@ class StateVersionError(StateError):
     """The file was written by a newer schema version than this code understands."""
 
 
+class StateCorruptError(StateError):
+    """The file is unusable and the store was built with ``quarantine=False``."""
+
+
 def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -79,12 +89,16 @@ class StateStore:
         schema_version: int = SCHEMA_VERSION,
         migrations: Mapping[int, Callable[[dict[str, Any]], dict[str, Any]]] | None = None,
         clock: Callable[[], float] = time.time,
+        quarantine: bool = True,
+        legacy: Callable[[Any], dict[str, Any] | None] | None = None,
     ):
         self.path = Path(path)
         self.schema_version = schema_version
         # migrations[n] upgrades data from version n to n + 1
         self.migrations = dict(migrations or {})
         self.clock = clock
+        self.quarantine = quarantine
+        self.legacy = legacy
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock_path = self.path.with_name(self.path.name + ".lock")
 
@@ -184,12 +198,19 @@ class StateStore:
             return {}
         try:
             doc = self._decode(raw.decode("utf-8"))
+            old = self._legacy_data(doc)
+            if old is not None:
+                doc = {"schema_version": 1, "data": old}
             if not isinstance(doc, dict) or not isinstance(doc.get("data"), dict):
                 raise ValueError("not a state document")
             version = doc.get("schema_version")
             if not isinstance(version, int) or isinstance(version, bool) or version < 1:
                 raise ValueError("bad schema_version")
         except self._decode_errors() as exc:  # JSON/YAML/shape errors all mean "unusable file"
+            if not self.quarantine:
+                raise StateCorruptError(
+                    f"{self.path} is unusable: {type(exc).__name__}: {str(exc)[:200]}"
+                ) from exc
             self._quarantine(f"{type(exc).__name__}: {str(exc)[:200]}")
             return {}
         if version > self.schema_version:
@@ -205,6 +226,12 @@ class StateStore:
             data = step(data)
             version += 1
         return data
+
+    def _legacy_data(self, doc: Any) -> dict[str, Any] | None:
+        if self.legacy is None or not isinstance(doc, dict) or "schema_version" in doc:
+            return None
+        data = self.legacy(doc)
+        return data if isinstance(data, dict) else None
 
     def _sweep_orphans(self) -> None:
         for tmp in self.path.parent.glob(f".{self.path.name}.*.tmp"):

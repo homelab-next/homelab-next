@@ -9,6 +9,8 @@ The invariant under test is always the same: after any sequence of crashes and r
 
 from __future__ import annotations
 
+import json
+
 import pytest
 import synthetic
 
@@ -175,8 +177,32 @@ def test_checkpoint_file_is_atomic_and_rejects_garbage(tmp_path):
     assert cp.get("x") is None
     cp.save("x", SourceState("5", "b", "snap"))
     assert cp.get("x") == SourceState("5", "b", "snap")
-    assert [f.name for f in p.parent.iterdir()] == ["cp.json"]  # no temp file left behind
+    # no temp file left behind; the .lock sidecar is the state library's flock target
+    assert sorted(f.name for f in p.parent.iterdir()) == ["cp.json", "cp.json.lock"]
+    assert json.loads(p.read_text())["schema_version"] == 1
     p.write_text("{not json")
+    with pytest.raises(CheckpointError):
+        cp.get("x")
+    assert p.read_text() == "{not json"  # refused, not quarantined: the operator sees it
+    p.write_text('{"schema_version": 99, "data": {}}')  # a newer writer
+    with pytest.raises(CheckpointError, match="newer"):
+        cp.get("x")
+
+
+def test_checkpoint_reads_the_pre_state_library_format_and_rewrites_it(tmp_path):
+    """On-disk compatibility: a checkpoint saved before the move onto homelabnext.state."""
+    from homelabnext.lake import CheckpointError, SourceState
+
+    p = tmp_path / "cp.json"
+    old = {"version": 1, "sources": {"x": {"position": "7", "batch_id": "b7", "snapshot_id": "s"}}}
+    p.write_text(json.dumps(old))
+    cp = Checkpoint(p)
+    assert cp.get("x") == SourceState("7", "b7", "s")
+    cp.save("y", SourceState("1", "b1", None))
+    doc = json.loads(p.read_text())
+    assert doc["schema_version"] == 1 and set(doc["data"]) == {"x", "y"}
+    assert Checkpoint(p).get("x") == SourceState("7", "b7", "s")
+    p.write_text(json.dumps({"version": 2, "sources": {}}))  # not a format this code wrote
     with pytest.raises(CheckpointError):
         cp.get("x")
 

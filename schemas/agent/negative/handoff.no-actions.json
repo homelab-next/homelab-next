@@ -1,0 +1,32 @@
+{
+  "handoff": "phish-block",
+  "reader": "profile:reader",
+  "actor": "profile:responder",
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "verdict",
+      "domain"
+    ],
+    "properties": {
+      "verdict": {
+        "enum": [
+          "malicious",
+          "benign",
+          "unsure"
+        ]
+      },
+      "domain": {
+        "type": "string",
+        "maxLength": 253,
+        "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+      },
+      "note": {
+        "type": "string",
+        "maxLength": 500
+      }
+    }
+  },
+  "actions": []
+}

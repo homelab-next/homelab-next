@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/agent/handoff/1.0",
+  "title": "Reader-to-actor handoff",
+  "description": "Declares how an actor may act on a reader's report (checklist G-04). The reader's report_result must carry an output that validates against output_schema; each declared action builds a broker request whose params are literals or $output.<path> references to constrained (non-free-text) fields of that output. homelabnext.agent.handoff adds the checks JSON Schema cannot: the reader cannot act, the actor does not read untrusted content, every reference names a constrained field, and every action is in the broker manifest with a grant for the actor.",
+  "type": "object",
+  "properties": {
+    "handoff": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "reader": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+    },
+    "actor": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+    },
+    "output_schema": {
+      "type": "object",
+      "description": "JSON Schema (2020-12) for the report's output; must be a closed object (additionalProperties false)."
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$"
+          },
+          "target": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/svc_id"
+          },
+          "params": {
+            "type": "object",
+            "description": "param name -> a literal, or \"$output.<path>\"; \"$$\" escapes a literal \"$\"."
+          }
+        },
+        "required": [
+          "action",
+          "params"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "handoff",
+    "reader",
+    "actor",
+    "output_schema",
+    "actions"
+  ],
+  "additionalProperties": false
+}

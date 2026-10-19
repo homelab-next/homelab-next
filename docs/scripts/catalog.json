@@ -200,7 +200,7 @@
         "1": "findings"
       },
       "id": "hermetic-lint",
-      "inputs": "every .py under tests/ and tools/tests/ (or the files named)",
+      "inputs": "every .py under tests/ and tools/tests/ and homelabnext/ (or the files named)",
       "invariant": [
         "Q-11"
       ],
@@ -209,7 +209,7 @@
       "outputs": "one line per finding",
       "owner": "maintainers",
       "path": "tools/hermetic_lint.py",
-      "purpose": "Fail when test code reads the wall clock or unseeded randomness directly.",
+      "purpose": "Fail when test code reads the wall clock or unseeded randomness directly, or library code reads the clock other than as an injectable default.",
       "status": "active",
       "trigger": [
         "ci:ci/lint",

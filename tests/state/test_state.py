@@ -13,6 +13,7 @@ import pytest
 from homelabnext.state import (
     SCHEMA_VERSION,
     KeyedState,
+    StateCorruptError,
     StateStore,
     StateVersionError,
     quarantined_files,
@@ -56,6 +57,29 @@ def test_wrong_shape_is_quarantined(tmp_path, content):
     p.write_text(content)
     assert StateStore(p).items() == {}
     assert len(quarantined_files(p)) == 1
+
+
+def test_quarantine_off_raises_and_leaves_the_file(tmp_path):
+    p = tmp_path / "s.json"
+    p.write_text("{not json")
+    with pytest.raises(StateCorruptError, match="unusable"):
+        StateStore(p, quarantine=False).get("a")
+    assert p.read_text() == "{not json" and not quarantined_files(p)
+
+
+def test_legacy_format_is_read_then_rewritten(tmp_path):
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"version": 1, "rows": {"a": 1}}))
+
+    def legacy(doc):
+        return doc["rows"] if doc.get("version") == 1 else None
+
+    s = StateStore(p, schema_version=2, migrations={1: lambda d: {**d, "m": True}}, legacy=legacy)
+    assert s.items() == {"a": 1, "m": True}  # legacy data enters as version 1, then migrates
+    s.put("b", 2)
+    assert json.loads(p.read_text()) == {"schema_version": 2, "data": {"a": 1, "b": 2, "m": True}}
+    p.write_text(json.dumps({"version": 7, "rows": {}}))  # unrecognised: the normal corrupt path
+    assert StateStore(p, legacy=legacy).items() == {} and len(quarantined_files(p)) == 1
 
 
 def test_newer_schema_is_refused_and_left_untouched(tmp_path):

@@ -4,6 +4,7 @@
 from .keyed import KeyedState
 from .store import (
     SCHEMA_VERSION,
+    StateCorruptError,
     StateError,
     StateStore,
     StateVersionError,
@@ -13,6 +14,7 @@ from .store import (
 __all__ = [
     "SCHEMA_VERSION",
     "KeyedState",
+    "StateCorruptError",
     "StateError",
     "StateStore",
     "StateVersionError",
