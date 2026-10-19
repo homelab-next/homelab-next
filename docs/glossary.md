@@ -49,7 +49,10 @@ invariants) from which pages and JSON are generated.
 operator moves items to `decided/`; a `completion-request` note with a `related:` list closes
 approved items (ADR-0010).
 
-**Lab in a box.** The staging stack in `compose/lab-in-a-box/`, small enough for a CI runner.
+**Lab in a box.** The rehearsal stack in `compose/lab-in-a-box/`, small enough for a CI runner. It
+is not a staging environment: its services run in dev mode with known credentials and no
+authentication, bound to loopback (see [architecture.md](architecture.md), "The reference
+environment").
 
 **SERVER.** A tag for work that needs hardware that is not part of the first drop. Its interface
 and a fake ship; the implementation does not.
