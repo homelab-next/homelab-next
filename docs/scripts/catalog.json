@@ -1,0 +1,511 @@
+{
+  "schema": "homelabnext.scripts.catalog/1",
+  "scripts": [
+    {
+      "exit": {
+        "0": "both sections present",
+        "1": "a section is missing or the version cannot be read"
+      },
+      "id": "check-changelog",
+      "inputs": [
+        "CHANGELOG.md",
+        "homelabnext/_version.py"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "the reason on stderr when it fails",
+      "owner": "maintainers",
+      "path": "tools/check_changelog.py",
+      "purpose": "Fail unless CHANGELOG.md keeps an Unreleased section and one for the current version.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/lint",
+        "make:changelog-check"
+      ]
+    },
+    {
+      "exit": {
+        "0": "every file carries the header",
+        "1": "some file does not"
+      },
+      "id": "check-spdx",
+      "inputs": "the tracked tree (git ls-files), or the files named on the command line",
+      "invariant": [
+        "Q-09"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per file without the header",
+      "owner": "maintainers",
+      "path": "tools/check_spdx.py",
+      "purpose": "Fail when a tracked source or config file has no SPDX-License-Identifier in its first five lines.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/lint",
+        "make:spdx",
+        "pre-commit:spdx-header"
+      ]
+    },
+    {
+      "exit": {
+        "0": "every component has tests",
+        "1": "some component has none or ALLOW is stale"
+      },
+      "id": "component-tests",
+      "inputs": "the tree under --root; the reviewed ALLOW table in this file",
+      "invariant": [
+        "Q-04"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per component without tests or stale ALLOW entry",
+      "owner": "maintainers",
+      "path": "tools/component_tests.py",
+      "purpose": "Fail when a package, capability, role, plugin, compose stack or tool has no tests.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/lint",
+        "make:component-tests"
+      ]
+    },
+    {
+      "exit": {
+        "0": "all capabilities pass",
+        "1": "some capability lacks a passing test",
+        "2": "the report could not be produced"
+      },
+      "id": "conform-coverage",
+      "inputs": "the conformance suites and the target (--target, default fake)",
+      "kind": "check",
+      "language": "python",
+      "outputs": "build/conform-report.json and a summary on stdout",
+      "owner": "maintainers",
+      "path": "tools/conform_coverage.py",
+      "purpose": "Fail unless each of the fourteen capabilities has a passing conformance suite.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:conform-check"
+      ]
+    },
+    {
+      "exit": {
+        "0": "clean",
+        "1": "a seam has no contract test",
+        "2": "usage error or an unresolvable range"
+      },
+      "id": "contract-coverage",
+      "inputs": "schemas/events, schemas/ocsf and the contract-test fixtures",
+      "invariant": [
+        "Q-05"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per seam without contract tests",
+      "owner": "maintainers",
+      "path": "tools/contract_coverage.py",
+      "purpose": "Fail when an event type or shared lake table lacks a schema with publisher and consumer contract-test fixtures.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:contracts"
+      ]
+    },
+    {
+      "exit": {
+        "0": "every unit at or above the floor",
+        "1": "some unit below it or not measured",
+        "2": "coverage could not be run"
+      },
+      "id": "coverage-floor",
+      "inputs": "the units listed in this file and their tests (runs pytest with coverage)",
+      "invariant": [
+        "Q-07"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "a per-unit coverage table; --json FILE writes it as JSON",
+      "owner": "maintainers",
+      "path": "tools/coverage_floor.py",
+      "purpose": "Fail when a security-critical unit drops below its line-coverage floor from its own tests.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/coverage",
+        "make:coverage"
+      ]
+    },
+    {
+      "exit": {
+        "0": "no reference remains",
+        "1": "references remain",
+        "2": "usage error"
+      },
+      "id": "decommission-check",
+      "inputs": "the roots to scan and the retired service's names (flags, or --from-record)",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one line per remaining reference, or JSON with --json",
+      "owner": "maintainers",
+      "path": "tools/decommission_check.py",
+      "purpose": "Report every remaining reference to a service retired by a swap (ADR-0005 step 8).",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "stopped cleanly"
+      },
+      "id": "fake-openai-server",
+      "inputs": "--host, --port, --model",
+      "kind": "service",
+      "language": "python",
+      "outputs": "the HTTP API; nothing on disk",
+      "owner": "conformance",
+      "path": "conformance/fakes/openai_server.py",
+      "purpose": "Serve the deterministic fake OpenAI-compatible inference API.",
+      "status": "active",
+      "trigger": [
+        "compose:lab-in-a-box/inference"
+      ]
+    },
+    {
+      "exit": {
+        "0": "clean",
+        "1": "a fix lacks a regression test",
+        "2": "usage error or an unresolvable range"
+      },
+      "id": "fix-has-test",
+      "inputs": "git history over a revision range",
+      "invariant": [
+        "Q-08"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per fix without a (failing-before) regression test",
+      "owner": "maintainers",
+      "path": "tools/fix_has_test.py",
+      "purpose": "Fail when a bugfix commit (a fix subject or a Fixes trailer) ships no regression test; with --prove, also when that test passes on the parent commit.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/regression-tests",
+        "make:fix-check"
+      ]
+    },
+    {
+      "exit": {
+        "0": "clean",
+        "1": "findings"
+      },
+      "id": "hermetic-lint",
+      "inputs": "every .py under tests/ and tools/tests/ (or the files named)",
+      "invariant": [
+        "Q-11"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per finding",
+      "owner": "maintainers",
+      "path": "tools/hermetic_lint.py",
+      "purpose": "Fail when test code reads the wall clock or unseeded randomness directly.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/lint",
+        "make:hermetic-lint"
+      ]
+    },
+    {
+      "exit": {
+        "0": "safe to start",
+        "4": "refused"
+      },
+      "id": "lab-bind-guard",
+      "inputs": "LAB_BIND and the credentials (environment, .env, .env.example)",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "the refusal reason on stderr",
+      "owner": "lab-in-a-box",
+      "path": "compose/lab-in-a-box/bind_guard.sh",
+      "purpose": "Refuse to publish the lab beyond loopback unless asked and every credential is changed.",
+      "status": "active",
+      "trigger": [
+        "make:lab-up",
+        "script:lab-smoke"
+      ]
+    },
+    {
+      "exit": {
+        "0": "stopped cleanly"
+      },
+      "id": "lab-fake-cases",
+      "inputs": "--host and --port",
+      "kind": "service",
+      "language": "python",
+      "outputs": "the HTTP API; nothing on disk",
+      "owner": "lab-in-a-box",
+      "path": "compose/lab-in-a-box/fakes/fake_cases.py",
+      "purpose": "Serve an in-memory fake case system for the cases capability.",
+      "status": "active",
+      "trigger": [
+        "compose:lab-in-a-box/cases"
+      ]
+    },
+    {
+      "exit": {
+        "0": "ready",
+        "1": "a step failed or a variable is missing"
+      },
+      "id": "lab-init",
+      "inputs": "endpoints and the fake credentials from the environment",
+      "kind": "job",
+      "language": "python",
+      "outputs": "a bucket, a key and a warehouse; progress lines on stdout",
+      "owner": "lab-in-a-box",
+      "path": "compose/lab-in-a-box/fakes/lab_init.py",
+      "purpose": "Initialise the lab object store and Iceberg catalog once (idempotent).",
+      "status": "active",
+      "trigger": [
+        "compose:lab-in-a-box/lab-init"
+      ]
+    },
+    {
+      "exit": {
+        "0": "all good",
+        "1": "a service or check failed",
+        "2": "usage",
+        "3": "docker or compose missing",
+        "4": "refused a non-loopback LAB_BIND"
+      },
+      "id": "lab-smoke",
+      "inputs": "compose/lab-in-a-box settings (.env.example, .env, environment)",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "build/lab-smoke/report.json (or --report-dir)",
+      "owner": "lab-in-a-box",
+      "path": "compose/lab-in-a-box/smoke.sh",
+      "purpose": "Bring the lab-in-a-box up, check every service, run conformance where present, tear down.",
+      "status": "active",
+      "trigger": [
+        "ci:nightly/lab-in-a-box",
+        "make:lab-smoke"
+      ]
+    },
+    {
+      "exit": {
+        "0": "every check passed",
+        "1": "some check failed"
+      },
+      "id": "lab-smoke-checks",
+      "inputs": "endpoints from the environment or --base capability=url",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the --report JSON file",
+      "owner": "lab-in-a-box",
+      "path": "compose/lab-in-a-box/smoke_checks.py",
+      "purpose": "One real round trip against every lab-in-a-box service, as a JSON report.",
+      "status": "active",
+      "trigger": [
+        "script:lab-smoke"
+      ]
+    },
+    {
+      "exit": {
+        "0": "clean",
+        "1": "at least one hit or an unscannable file",
+        "2": "misconfiguration"
+      },
+      "id": "leak-scan",
+      "inputs": "paths, --history RANGE, --stdin or --check-authors RANGE; optional HNX_DENYLIST file",
+      "invariant": [
+        "F-05",
+        "F-18"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per hit",
+      "owner": "maintainers",
+      "path": "tools/leak_scan.py",
+      "purpose": "Fail when the tree, a commit range or stdin carries a private identifier or a secret shape.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/leak-scan",
+        "ci:ci/packaging",
+        "ci:release/build",
+        "make:leak-scan",
+        "make:leak-scan-history",
+        "make:secret-scan",
+        "pre-commit:leak-scan",
+        "pre-commit:secret-scan"
+      ]
+    },
+    {
+      "exit": {
+        "0": "clean",
+        "1": "violations",
+        "2": "usage error or bad allowlist"
+      },
+      "id": "no-raw-endpoints",
+      "inputs": "the tree; tools/no_raw_endpoints.allow.yml",
+      "invariant": [
+        "X-01"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per violation (or a census)",
+      "owner": "maintainers",
+      "path": "tools/no_raw_endpoints.py",
+      "purpose": "Fail when code or config writes an endpoint literal instead of a registry lookup.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "code:homelabnext/customization/lint.py",
+        "make:gates"
+      ]
+    },
+    {
+      "exit": {
+        "0": "nothing lost or duplicated",
+        "1": "an id vanished or occurs twice",
+        "2": "usage error",
+        "3": "resolve rewrote a placeholder"
+      },
+      "id": "register-ids",
+      "inputs": "register files (lessons, runbooks, invariants, queue) and git history",
+      "invariant": [
+        "M-17"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "rewritten registers (resolve) or one line per lost or duplicate id",
+      "owner": "maintainers",
+      "path": "tools/register_ids.py",
+      "purpose": "Allocate XX-NEW register ids, and fail when an id vanished or occurs twice.",
+      "status": "active",
+      "trigger": [
+        "make:ids-check",
+        "make:ids-placeholders",
+        "make:ids-resolve",
+        "pre-commit:register-ids-check-dupes",
+        "pre-commit:register-ids-check-lost",
+        "pre-commit:register-ids-resolve"
+      ]
+    },
+    {
+      "exit": {
+        "0": "clean",
+        "1": "findings",
+        "2": "could not run"
+      },
+      "id": "role-lint",
+      "inputs": "role directories, or --playbook files with --inventory",
+      "invariant": [
+        "X-05"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per finding with its rule id",
+      "owner": "maintainers",
+      "path": "tools/role_lint.py",
+      "purpose": "Fail when a role or playbook breaks the role interface (docs/role-interface.md).",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "code:homelabnext/scaffold/core.py",
+        "make:gates"
+      ]
+    },
+    {
+      "exit": {
+        "0": "no errors",
+        "1": "errors"
+      },
+      "id": "schema-check",
+      "inputs": "schemas/ (with examples/, negative/ and _frozen/)",
+      "invariant": [
+        "Q-10"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per problem and a summary; --freeze writes missing baselines",
+      "owner": "maintainers",
+      "path": "tools/schema_check.py",
+      "purpose": "Fail when a schema is invalid, lacks an example or a negative, or breaks its frozen baseline.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "code:homelabnext/cli.py",
+        "make:schemas"
+      ]
+    },
+    {
+      "exit": {
+        "0": "clean",
+        "1": "a private helper or a stale allowlist entry",
+        "2": "usage error or a missing dependency"
+      },
+      "id": "shared-helpers-lint",
+      "inputs": "the tracked tree and tools/shared_helpers.allow.yml",
+      "invariant": [
+        "M-03"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per private helper or stale allowlist entry",
+      "owner": "maintainers",
+      "path": "tools/shared_helpers_lint.py",
+      "purpose": "Fail when a private notify, state or lake-query helper is re-implemented outside the shared libraries (reviewed allowlist).",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:helpers-lint"
+      ]
+    },
+    {
+      "exit": {
+        "0": "clean",
+        "1": "verification is disabled somewhere",
+        "2": "usage error or a missing dependency"
+      },
+      "id": "tls-verify-lint",
+      "inputs": "the tracked tree and tools/tls_verify.allow.yml",
+      "invariant": [
+        "F-07"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per disabled verification",
+      "owner": "maintainers",
+      "path": "tools/tls_verify_lint.py",
+      "purpose": "Fail when Python code or a YAML/JSON config turns TLS certificate verification off.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:tls-lint"
+      ]
+    },
+    {
+      "exit": {
+        "0": "clean",
+        "1": "a workstation reference or a stale allowlist entry",
+        "2": "usage error or a missing dependency"
+      },
+      "id": "workstation-refs",
+      "inputs": "runtime configs (ansible, compose, examples, generators, conformance targets, goldens)",
+      "invariant": [
+        "F-17"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per workstation-shaped reference or stale allowlist entry",
+      "owner": "maintainers",
+      "path": "tools/workstation_refs.py",
+      "purpose": "Fail when a runtime config, role, compose file, example or golden output points at the admin workstation.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:workstation-lint"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# Synthetic cases for the disclosure-risk safety spec (K-15).  `fake_tiers` is what the
+# deterministic CI fakes "know"; it proves the spec and the cascade, not any real model.
+spec: disclosure-risk
+fake_tiers:
+  small:
+    raise:
+      - {phrase: "the admin panel lives at", impact: high}
+      - {phrase: "embargoed", impact: critical}
+    hold: ["public blog post", "conference talk"]
+  large:
+    raise:
+      - {phrase: "the box under the stairs answers on", impact: high}
+cases:
+  - id: keyword-tlp-red
+    text: "TLP:RED summary of the incident, please review."
+    expect: {verdict: raise, impact: critical, tier: floor}
+  - id: keyword-topology
+    text: "Draft post with the network diagram attached for the lab."
+    expect: {verdict: raise, impact: high, tier: floor}
+  - id: paraphrase-location
+    text: "Fun fact: the admin panel lives at a port we never changed."
+    expect: {verdict: raise, impact: high, tier: small}
+  - id: paraphrase-embargo
+    text: "The embargoed findings go out next week."
+    expect: {verdict: raise, impact: critical, tier: small}
+  - id: hard-for-large
+    text: "The box under the stairs answers on the old port."
+    expect: {verdict: raise, impact: high, tier: large}
+  - id: benign-held
+    text: "Notes for a public blog post about backups."
+    expect: {verdict: hold, impact: low, tier: small}
+  - id: unknown-goes-to-a-human
+    text: "Thoughts on the meeting."
+    expect: {verdict: human, impact: low}

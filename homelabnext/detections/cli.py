@@ -7,7 +7,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import attack, detmap, lint
+from . import attack, coverage, detmap, lint
 from .adapters import Target, get_backend
 from .runner import run_all
 from .sigma import load_mapping, load_rules
@@ -41,6 +41,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("run")
     mp = sub.add_parser("map")
     mp.add_argument("--check", action="store_true")
+    cv = sub.add_parser("coverage", help="ATT&CK coverage from rules whose fixtures pass (D-04)")
+    cv.add_argument("--out", type=Path, help="write the report here (default: stdout)")
+    cv.add_argument("--check", type=Path, help="fail unless this golden report is current")
     ln = sub.add_parser("lint-ids")
     ln.add_argument("paths", nargs="*", type=Path)
     cp = sub.add_parser("compile")
@@ -80,6 +83,20 @@ def main(argv: list[str] | None = None) -> int:
             return 1 if probs else 0
         mapfile.write_text(detmap.dump(detmap.generate(rules, existing)), encoding="utf-8")
         print(f"wrote {mapfile}")
+        return 0
+    if a.cmd == "coverage":
+        rep = coverage.coverage_report(load_rules(root), run_all(root))
+        if a.check:
+            golden = a.check.read_text(encoding="utf-8") if a.check.exists() else "{}"
+            probs = coverage.check_golden(rep, golden)
+            print("\n".join(probs) or f"ATT&CK coverage report current ({a.check})")
+            return 1 if probs else 0
+        text = coverage.dumps(rep)
+        if a.out:
+            a.out.write_text(text, encoding="utf-8")
+            print(f"wrote {a.out}")
+        else:
+            sys.stdout.write(text)
         return 0
     if a.cmd == "lint-ids":
         m = detmap.load(mapfile) if mapfile.exists() else None

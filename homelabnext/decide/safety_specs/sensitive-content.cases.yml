@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# Synthetic cases for the sensitive-content safety spec (K-15).  `fake_tiers` is what the
+# deterministic CI fakes "know"; it proves the spec and the cascade, not any real model.
+spec: sensitive-content
+fake_tiers:
+  small:
+    raise:
+      - {phrase: "the login for the service is", impact: critical}
+      - {phrase: "patient record", impact: high}
+    hold: ["quarterly report", "weather"]
+  large:
+    raise:
+      - {phrase: "the thing you type at the prompt", impact: critical}
+cases:
+  - id: keyword-api-token
+    text: "Deploy note: the api token for the job is fake-token-0001."
+    expect: {verdict: raise, impact: critical, tier: floor}
+  - id: keyword-personal-high
+    text: "Attached: passport number and home address of the new contractor."
+    expect: {verdict: raise, impact: high, tier: floor}
+  - id: paraphrase-credential
+    text: "Reminder: the login for the service is fake-pass on the shared host."
+    expect: {verdict: raise, impact: critical, tier: small}
+  - id: hard-paraphrase-for-large
+    text: "Use the thing you type at the prompt, it is written on the card."
+    expect: {verdict: raise, impact: critical, tier: large}
+  - id: benign-held
+    text: "Here is the quarterly report for the reading group."
+    expect: {verdict: hold, impact: low, tier: small}
+  - id: declared-impact-never-lowered
+    text: "Weather summary for the week."
+    impact: high
+    expect: {verdict: hold, impact: high, tier: small}
+  - id: unknown-goes-to-a-human
+    text: "See the attachment from yesterday."
+    expect: {verdict: human, impact: low}

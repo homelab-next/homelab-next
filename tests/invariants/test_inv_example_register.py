@@ -50,7 +50,8 @@ def test_retired_ids_are_checklist_conflicts_with_a_live_replacement():
 
 
 # rows whose gate already runs in `make check`; each must be runnable from a checkout
-GATED = ["F-05", "F-18", "D-02", "D-07", "Q-09", "Q-10", "M-17", "L-06", "L-07"]
+GATED = ["F-05", "F-18", "D-02", "D-07", "Q-04", "Q-07", "Q-09", "Q-10", "Q-11"]
+GATED += ["M-01", "M-02", "M-03", "M-04", "M-17", "L-06", "L-07", "F-07", "F-17", "Q-05", "Q-08"]
 
 
 def test_ci_gates_are_auto_criteria_with_a_remediation():

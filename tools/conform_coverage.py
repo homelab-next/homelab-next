@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: conform-coverage
+#   kind: check
+#   purpose: Fail unless each of the fourteen capabilities has a passing conformance suite.
+#   owner: maintainers
+#   trigger: [ci:ci/schemas, make:conform-check]
+#   inputs: the conformance suites and the target (--target, default fake)
+#   outputs: build/conform-report.json and a summary on stdout
+#   exit:
+#     "0": all capabilities pass
+#     "1": some capability lacks a passing test
+#     "2": the report could not be produced
 """Gate: every one of the fourteen capabilities has a passing conformance test.
 
 Runs ``hnx conform list`` and ``hnx conform report --json`` (the exporter behind invariant X-10)

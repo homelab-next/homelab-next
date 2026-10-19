@@ -21,7 +21,7 @@ Platform-wide properties. Most need a running platform; the repository-level one
 | F-04 | Every service and agent has its own identity | Credential inventory: no credential shared by two consumers; no service or agent holds admin rights | SERVER |
 | F-05 | Secrets are not in git or readable on disk | Secret scan over full history reports 0 unaccepted findings; 0 secret files readable by other | PUBLIC-NOW |
 | F-06 | Credentials are short-lived and rotated | Every inventoried secret is within its rotate-by date | SERVER |
-| F-07 | Internal TLS is verified | 0 clients with certificate verification disabled (lint over client config; RL013 for roles); endpoints present certificates from the internal CA | PUBLIC-NOW |
+| F-07 | Internal TLS is verified | 0 clients with certificate verification disabled (lint over client config; RL013 for roles); endpoints present certificates from the internal CA (`tools/tls_verify_lint.py` over Python and YAML/JSON) | PUBLIC-NOW |
 | F-08 | The main branch is protected by CI | Branch protection requires passing checks; CI runs tests, lint, secret scan on every change | PUBLIC-NOW |
 | F-09 | Backups follow 3-2-1 with an immutable copy | Newest backup < 24 h; offsite or immutable copy < 7 days; a delete attempt with the automation identity fails | SERVER |
 | F-10 | Restores are proven | A full-system restore drill was completed <= 90 days ago and verified | SERVER |
@@ -29,9 +29,9 @@ Platform-wide properties. Most need a running platform; the repository-level one
 | F-12 | Changes go through staging first | Every production deploy in 30 days has a green staging run of the same version | SERVER |
 | F-13 | Break-glass access works | Each break-glass procedure was exercised <= 180 days ago | SERVER |
 | F-14 | Recovery targets are defined and met | Every service records an RTO and RPO; the last drill met them | SERVER |
-| F-15 | Changes are versioned and visible | Components are released as tagged versions with changelogs; every deploy emits a what-changed event | PUBLIC-NOW |
+| F-15 | Changes are versioned and visible | Components are released as tagged versions with changelogs; every deploy emits a what-changed event (`homelabnext.deploy.changed` event built from the changelog section and emitted by the release workflow) | PUBLIC-NOW |
 | F-16 | The fleet runs without the admin workstation | With the workstation off for 24 h, all canaries pass and 0 jobs fail because of it | SERVER |
-| F-17 | Nothing at runtime points at the workstation | 0 runtime configs reference the admin workstation (runs as part of X-01) | PUBLIC-NOW |
+| F-17 | Nothing at runtime points at the workstation | 0 runtime configs reference the admin workstation (runs as part of X-01) (`tools/workstation_refs.py`) | PUBLIC-NOW |
 | F-18 | The public tree contains no private identifiers | `tools/leak_scan.py` over the tree exits 0 (no private IPs, domains, emails, MACs, keys) | PUBLIC-NOW |
 
 ## C - Collection
@@ -57,10 +57,10 @@ Events move through one bus, in one schema, with nothing silently dropped.
 | T-01 | All events flow through the event bus | Every source appears on its subject; consumer lag < 5 min | SERVER |
 | T-02 | Events validate against the schema | Fixture events validate against the event schema in CI; >= 99.5% of live events validate, the rest reach the dead-letter queue | PUBLIC-NOW |
 | T-03 | Nothing is silently dropped | Dead-letter depth is alerted on; 0 unreviewed items older than 7 days | SERVER |
-| T-04 | Events are enriched | Enrichment fixture adds asset owner and criticality; >= 95% of live events carry them | PUBLIC-NOW |
+| T-04 | Events are enriched | Enrichment fixture adds asset owner and criticality; >= 95% of live events carry them (`homelabnext/events/enrich.py`; `python -m homelabnext.events enrich-coverage` measures live coverage) | PUBLIC-NOW |
 | T-05 | Flows have provenance | Every flow definition is in git; provenance shows source, time, transform per record | SERVER |
 | T-06 | End-to-end latency is bounded | p95 event creation to searchable < 2 min | SERVER |
-| T-07 | Event envelopes are contract-tested | Publisher and consumer tests pass against the envelope schema for every event type | PUBLIC-NOW |
+| T-07 | Event envelopes are contract-tested | Publisher and consumer tests pass against the envelope schema for every event type (generated publisher and consumer tests per event type) | PUBLIC-NOW |
 
 ## S - Storage and query
 
@@ -85,7 +85,7 @@ Rules live in git and are proven by fixtures.
 | D-01 | Every rule is in git | Deployed rules match the repo by hash | SERVER |
 | D-02 | Every rule is tested | Each rule has must-fire and must-not-fire fixtures that pass in CI (fixture runner against a fake engine) | PUBLIC-NOW |
 | D-03 | Rule deploys are safe | A deliberately broken rule is rejected or rolled back with the engine left healthy | SERVER |
-| D-04 | Coverage counts only tested rules | Coverage report derived from passing fixtures only (golden report) | PUBLIC-NOW |
+| D-04 | Coverage counts only tested rules | Coverage report derived from passing fixtures only (golden report) (`python -m homelabnext.detections coverage --check`; a rule counts only when all its fixtures pass) | PUBLIC-NOW |
 | D-05 | Alert volume is manageable | Alerts reaching a human < 100/day on a 7-day average; every suppression has owner and expiry | SERVER |
 | D-06 | Evasion variants are reported | Fixture runner reports evasion fixtures that slip through, without failing the rule | PUBLIC-NOW |
 | D-07 | Rules compile for every supported engine | Sigma to generic backend compile goldens match | PUBLIC-NOW |
@@ -125,13 +125,13 @@ Workflows are code, event-driven, bounded.
 
 | ID | Must be true | Observable / pass criterion | Tag |
 |---|---|---|---|
-| R-01 | Workflows are code | Every pack is in git, validated offline in CI, deployed only from passing commits | PUBLIC-NOW |
+| R-01 | Workflows are code | Every pack is in git, validated offline in CI, deployed only from passing commits (`hnx workflows validate`; deploy pins must match validated pack digests) | PUBLIC-NOW |
 | R-02 | Reaction is event-driven | A test event triggers its workflow within 60 s; no polling where an event exists | SERVER |
-| R-03 | Deterministic steps come first | Every workflow calling a model first runs deterministic enrichment (offline validator) | PUBLIC-NOW |
-| R-04 | Risky actions need bound approval | Risky action without approval of its payload hash does not run (test) | PUBLIC-NOW |
+| R-03 | Deterministic steps come first | Every workflow calling a model first runs deterministic enrichment (offline validator) (validator rules `deterministic-first`, `model-input`) | PUBLIC-NOW |
+| R-04 | Risky actions need bound approval | Risky action without approval of its payload hash does not run (test) (`BrokerExecutor` through the broker approval binding; table test and validator `approval-binding`) | PUBLIC-NOW |
 | R-05 | Actions use scoped service accounts | Off-list command as an action account fails | SERVER |
 | R-06 | Every run is recorded | Executions with inputs, outputs, approver, result retained >= 1 year | SERVER |
-| R-07 | Workflow fixtures round-trip | Fixture events produce the expected action calls in the offline validator | PUBLIC-NOW |
+| R-07 | Workflow fixtures round-trip | Fixture events produce the expected action calls in the offline validator (`hnx workflows validate` runs every pack's fixtures offline) | PUBLIC-NOW |
 
 ## Q - Quality gates
 
@@ -140,13 +140,13 @@ Caught before deploy.
 | ID | Must be true | Observable / pass criterion | Tag |
 |---|---|---|---|
 | Q-01 | Every repo's tests run on every change | CI runs unit and contract tests on push and merge request; main is green | PUBLIC-NOW |
-| Q-02 | Test suites are trustworthy | Each suite within its time budget; 0 silent skips; quarantined tests have owner and unexpired date | PUBLIC-NOW |
+| Q-02 | Test suites are trustworthy | Each suite within its time budget; 0 silent skips; quarantined tests have owner and unexpired date (`tests/suite_policy.py`: per-suite budgets, registered skip reasons, `quarantine` marker with owner and expiry) | PUBLIC-NOW |
 | Q-03 | Live-dependent tests are marked | Tests needing real systems carry the `live` marker and CI skips them; an unmarked test that reaches a non-loopback address fails (`tests/network_guard.py`) | PUBLIC-NOW |
 | Q-04 | Every component ships tests | CI fails a component directory with no tests (`tools/component_tests.py`, reviewed allowlist) | PUBLIC-NOW |
-| Q-05 | Every seam has a contract test | Each event type and shared table has a schema plus publisher and consumer tests | PUBLIC-NOW |
+| Q-05 | Every seam has a contract test | Each event type and shared table has a schema plus publisher and consumer tests (`tools/contract_coverage.py`) | PUBLIC-NOW |
 | Q-06 | Security tests run in CI | Secret scan, dependency audit and lint pass | PUBLIC-NOW |
 | Q-07 | Security-critical code is well covered | Broker, guard, approval and decision code >= 80% line coverage per unit (`make coverage`, `tools/coverage_floor.py`) | PUBLIC-NOW |
-| Q-08 | Fixed bugs stay fixed | Every bugfix in 90 days has a regression test that fails without the fix | PUBLIC-NOW |
+| Q-08 | Fixed bugs stay fixed | Every bugfix in 90 days has a regression test that fails without the fix (`tools/fix_has_test.py`; CI `--prove` runs the fix's tests on its parent) | PUBLIC-NOW |
 | Q-09 | Every source file carries an SPDX header | Grep over tracked source files finds 0 without the header | PUBLIC-NOW |
 | Q-10 | Every schema ships an example and a negative | Schema check passes (X-03 covers pinning and validity) | PUBLIC-NOW |
 | Q-11 | Tests are hermetic | No test uses the network, wall clock, or unseeded randomness (clock and sender injected); network enforced by the test guard, direct clock and randomness calls in tests by `tools/hermetic_lint.py`; library code that falls back to the real clock is not yet detected | PUBLIC-NOW |
@@ -157,22 +157,22 @@ Catalogued scripts, controlled agent context, one map of access.
 
 | ID | Must be true | Observable / pass criterion | Tag |
 |---|---|---|---|
-| M-01 | Every script is catalogued | Each script has a valid header; generated catalog is current | PUBLIC-NOW |
-| M-02 | The catalog matches reality | 0 scheduled-but-uncatalogued scripts, 0 uncalled active scripts, 0 duplicate ids | PUBLIC-NOW |
-| M-03 | Helpers are shared, not copied | 0 private notify/state/lake-query helpers outside the shared libraries (allowlist with reason) | PUBLIC-NOW |
-| M-04 | Checks run in one place | Every check script runs through the invariants runner; no standalone check timers | PUBLIC-NOW |
+| M-01 | Every script is catalogued | Each script has a valid header; generated catalog is current (`hnx scripts catalog --check`) | PUBLIC-NOW |
+| M-02 | The catalog matches reality | 0 scheduled-but-uncatalogued scripts, 0 uncalled active scripts, 0 duplicate ids (`hnx scripts reality`) | PUBLIC-NOW |
+| M-03 | Helpers are shared, not copied | 0 private notify/state/lake-query helpers outside the shared libraries (allowlist with reason) (`tools/shared_helpers_lint.py`) | PUBLIC-NOW |
+| M-04 | Checks run in one place | Every check script runs through the invariants runner; no standalone check timers (`hnx scripts runner-lint`) | PUBLIC-NOW |
 | M-05 | Every agent job gets its context pack | Job log records pack hash and contents built from the charter manifest | SERVER |
 | M-06 | No agent runs blind | A job with a missing or stale pre-gate is deferred with a reason | PUBLIC-NOW |
 | M-07 | Agents prove they used the pack | Result citing no must_cite pre-gate is rejected (test) | PUBLIC-NOW |
 | M-08 | Packs fit and are never silently cut | Assembler reports tier used; 0 silent truncations (test) | PUBLIC-NOW |
-| M-09 | Agent memory is controlled | Writes only through validated memory updates; cross-agent read refused (test) | PUBLIC-NOW |
+| M-09 | Agent memory is controlled | Writes only through validated memory updates; cross-agent read refused (test) (`homelabnext/agent/memory.py`) | PUBLIC-NOW |
 | M-10 | The context store is dependable | Authenticated, backed up, restore-tested; outage falls back to flagged cache | SERVER |
 | M-11 | One map of access | Every principal is in the keyring with grants by level and denials | SERVER |
-| M-12 | The keyring comes from the sources | 0 drift between generated keyring and its sources | PUBLIC-NOW |
+| M-12 | The keyring comes from the sources | 0 drift between generated keyring and its sources (`hnx agent keyring check`) | PUBLIC-NOW |
 | M-13 | Access is proven, not assumed | Each grant and denial has a probe as the principal at least daily; a passing denial pages | SERVER |
-| M-14 | Every agent starts knowing its access | Session start injects the access block for where it runs | PUBLIC-NOW |
+| M-14 | Every agent starts knowing its access | Session start injects the access block for where it runs (`homelabnext/agent/access.py`: a reserved stable `access` section) | PUBLIC-NOW |
 | M-15 | The keyring is protected | Served only behind SSO; a new privileged grant is flagged | SERVER |
-| M-16 | No placeholder ids survive a commit | `grep -rn -- '-NEW' registers/` finds 0 after the commit hook runs | PUBLIC-NOW |
+| M-16 | No placeholder ids survive a commit | On every push to main, `make ids-placeholders` (`hnx ids check-placeholders` over every register) exits 0: no entry id is an `XX-NEW` placeholder (pull requests may carry them; ids are allocated on main) | PUBLIC-NOW |
 | M-17 | Register ids are never lost | `tools/register_ids.py check-lost` exits 0 for every register | PUBLIC-NOW |
 
 ## A - AI layer
@@ -184,7 +184,7 @@ Tiered: screen, fast model, heavy model.
 | A-01 | The pre-AI screener handles every item first | 100% of AI-bound items show a routing decision in the log | SERVER |
 | A-02 | The screener reduces volume | at least 70% closed or deduplicated before any LLM call; false-negative rate < 1% on the evaluation set | SERVER |
 | A-03 | The screener redacts sensitive data | 0 secrets or PII tokens reach a model prompt on the evaluation set (`homelabnext/agent/screen.py` in pack assembly; `tests/agent/fixtures/screen_eval.yml`, precision floor 0.95) | PUBLIC-NOW |
-| A-04 | The fast model returns validated output | 100% schema-validated; invalid output retried once then escalated | PUBLIC-NOW |
+| A-04 | The fast model returns validated output | 100% schema-validated; invalid output retried once then escalated (`ModelTier` validates every reply, retries once, then escalates) | PUBLIC-NOW |
 | A-05 | Low confidence escalates | Below-threshold items reach the heavy model or a human; none auto-actioned | PUBLIC-NOW |
 | A-06 | The heavy model is reserved for hard cases | <= 10% of routed items reach the heavy tier; cost within budget | SERVER |
 | A-07 | The AI agrees with analysts | Agreement >= 90% on a rolling 30-day sample | SERVER |
@@ -204,8 +204,8 @@ Untrusted content cannot drive actions.
 | G-07 | Kernel enforcement is active | Runtime policy loaded on every AI host; a write outside allowed paths is blocked and reported | SERVER |
 | G-08 | The policy layer is in path | 100% of tool calls pass the guardrail layer; a call with a secret is redacted or blocked | SERVER |
 | G-09 | Every AI action is auditable | Model and tool calls logged off-host tamper-evidently | SERVER |
-| G-10 | Rate and cost limits hold | Exceeding a limit throttles and alerts (test) | PUBLIC-NOW |
-| G-11 | Model versions are pinned | Each model is pinned by version and hash; changes pass CI evaluation | PUBLIC-NOW |
+| G-10 | Rate and cost limits hold | Exceeding a limit throttles and alerts (test) (`homelabnext/registry/limits.py`) | PUBLIC-NOW |
+| G-11 | Model versions are pinned | Each model is pinned by version and hash; changes pass CI evaluation (`hnx golden pins check`) | PUBLIC-NOW |
 
 ## K - Fast classifiers and decision specs
 
@@ -220,14 +220,14 @@ Decision specs run through one gate with a cascade and a replay gate.
 | K-05 | Every decision is logged | 100% of calls produce a cascade-event row with spec, version, answers, tier, latency, caller | SERVER |
 | K-06 | Failure means escalate | Fault injection (down, timeout, malformed, abstain) returns escalate for every spec; 0 auto-closes | PUBLIC-NOW |
 | K-07 | Safety gates only add caution | 0 safety-gate decisions lowered a tier or granted anything (property test) | PUBLIC-NOW |
-| K-08 | Noise gates de-escalate only with corroboration | Each de-escalation carries a deterministic corroboration reference (test) | PUBLIC-NOW |
+| K-08 | Noise gates de-escalate only with corroboration | Each de-escalation carries a deterministic corroboration reference (test) (`noise_gate` corroborators; uncorroborated de-escalation escalates) | PUBLIC-NOW |
 | K-09 | Noise gates are audited | Weekly sample reviewed within 7 days; miss rate <= spec limit | SERVER |
 | K-10 | Specs go live only on evidence | Recorded shadow period and precision on time-split held-out data | SERVER |
 | K-11 | Drift is caught | Per-spec precision, escalation rate, tier share published; abstain-rate band alert | SERVER |
 | K-12 | Changes pass a replay gate | Model or threshold change replayed against the decision set; report stored (golden report) | PUBLIC-NOW |
-| K-13 | Classifiers never delete data at ingest | Records in equal records out; results only as annotation columns | PUBLIC-NOW |
-| K-14 | The serving config is what we think it is | Health check reads actual loaded context length and model id and alerts on mismatch (fake server) | PUBLIC-NOW |
-| K-15 | Required safety specs are live | Sensitive-content, hostile-content, purpose-consistency and disclosure-risk specs pass their cases | PUBLIC-NOW |
+| K-13 | Classifiers never delete data at ingest | Records in equal records out; results only as annotation columns (`homelabnext/decide/annotate.py`, property test) | PUBLIC-NOW |
+| K-14 | The serving config is what we think it is | Health check reads actual loaded context length and model id and alerts on mismatch (fake server) (`check_serving` against the fake server; alert via notify) | PUBLIC-NOW |
+| K-15 | Required safety specs are live | Sensitive-content, hostile-content, purpose-consistency and disclosure-risk specs pass their cases (`hnx decide safety`) | PUBLIC-NOW |
 
 ## E - End-to-end flows
 

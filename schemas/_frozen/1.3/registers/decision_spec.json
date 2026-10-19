@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/registers/decision_spec/1.3",
+  "title": "Decision spec",
+  "description": "Declarative spec for a cascaded decision: a deterministic floor, then ordered tiers, then escalate. 1.1 adds safety, thresholds, impact and per-tier timeout and acts (additive). 1.2 adds question objects (text, labels, compare) beside plain strings, and callers (additive). 1.3 adds noise_gate: de-escalating labels that stand only with a corroboration reference (additive). Rules JSON Schema cannot express (single-axis questions, pairwise questions in both orders, at most 5 labels, inline callers end at the fast tier) are `hnx decide lint`.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "question_set": {
+      "type": "array",
+      "items": {
+        "type": [
+          "string",
+          "object"
+        ],
+        "minLength": 3,
+        "description": "A plain question, or an object with its own label set. hnx decide lint requires text, at most 5 labels, and every pairwise question (compare) asked in both orders.",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 3,
+            "description": "The question. One axis: one question mark, no 'and'/'or' joining two questions."
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 2,
+            "description": "The answers this question may take (at most 5, enforced by hnx decide lint)."
+          },
+          "compare": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*$"
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "A pairwise question over the two named slots, written {slot} in text. Its mirror (the slots swapped) must also be in the set: asking both orders cancels position bias."
+          }
+        }
+      },
+      "minItems": 1
+    },
+    "decision_table": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "when": {
+            "type": "string",
+            "minLength": 1
+          },
+          "then": {
+            "enum": [
+              "accept",
+              "reject",
+              "escalate"
+            ]
+          }
+        },
+        "required": [
+          "when",
+          "then"
+        ]
+      },
+      "minItems": 1
+    },
+    "tiers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "enum": [
+              "floor",
+              "small",
+              "large",
+              "llm"
+            ]
+          },
+          "model_role": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/mdl_id"
+          },
+          "min_confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Tier call deadline. A timeout escalates; it never answers."
+          },
+          "acts": {
+            "type": "boolean",
+            "description": "Answers from this tier are acted on without a human. The replay gate demands zero confident errors for acting tiers."
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "minItems": 1
+    },
+    "error_direction": {
+      "enum": [
+        "fail-open",
+        "fail-closed"
+      ]
+    },
+    "on_error": {
+      "const": "escalate"
+    },
+    "latency_budget_ms": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "sample_audit_pct": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "safety": {
+      "type": "boolean",
+      "description": "Safety spec: model tiers may only raise the impact tier, never lower it or approve."
+    },
+    "default_min_confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Threshold for tiers that do not set min_confidence."
+    },
+    "impact": {
+      "type": "object",
+      "properties": {
+        "keywords_file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "floor": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        }
+      },
+      "description": "Deterministic impact-scan tier configuration."
+    },
+    "callers": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "inline",
+          "batch"
+        ]
+      },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Who waits on this spec. inline: a caller blocks on the answer, so hnx decide lint requires the spec to end at the fast tier (floor, small) and then escalate, within a 1 s budget. Absent means batch only."
+    },
+    "noise_gate": {
+      "type": "object",
+      "description": "Noise gate (K-08): an automatic answer with a deescalate label stands only when one of the named corroborators (deterministic checks supplied by the caller) returns a reference for the item; the decision carries it. Otherwise the item escalates. Not allowed on a safety spec.",
+      "properties": {
+        "deescalate": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "accept",
+              "reject"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "corroborators": {
+          "type": "array",
+          "items": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "deescalate",
+        "corroborators"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "id",
+    "version",
+    "question_set",
+    "decision_table",
+    "tiers",
+    "error_direction",
+    "on_error",
+    "latency_budget_ms",
+    "sample_audit_pct"
+  ]
+}

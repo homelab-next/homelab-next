@@ -180,6 +180,65 @@ pack, pack_hash = assemble_pack(manifest, {"sections": {...}, "pregates": {...}}
 ran on: schema, `pack_id`, deferred-only-when-deferred, cites name real pack sources, and the
 manifest's `must_cite` sources are cited by an `ok` report.
 
+## Session start: the access block (M-14)
+
+`start_session(manifest, inputs, profile, registry, runs_on=None, broker=None)` is how a session
+gets its pack: it renders the profile's **access block** and adds it as a required `stable`
+section named `access`, then calls `assemble_pack`. The block is derived from the compiled
+profile (digest-checked) and the registry, for the host the agent runs on (default: the host of
+the registry's `agent-runtime` service):
+
+- who it is, where it runs (host and zone), model role, data tier, whether it reads untrusted
+  content, broker tier, its own memory scopes and budgets;
+- **may**: every granted capability and MCP server with its level (the worst of its classes in
+  `tool_classes.yml`: read, write, execute, privileged; `unclassified` if the table does not know
+  it) and the registry alias it goes through, plus the broker actions granted to it;
+- **may not**: every other registry capability, MCP server and broker action, explicitly;
+- the registry aliases reachable from its zone, and the profile and registry digests.
+
+`access` is a reserved section name: a manifest that defines one is refused, so a manifest cannot
+replace what the agent is told. The manifest's persona must be the profile's. Stable content is
+never cut, so a block that does not fit `budget_chars` defers the pack. On the command line,
+`hnx agent pack MANIFEST --inputs F --profile P --registry R [--runs-on HOST] [--broker M]`.
+
+## The keyring (M-12)
+
+ADR-0002 lists keyring rows among the outputs generated from the registry; checklist M-11 asks
+for every principal with grants by level and denials. The keyring is therefore a **generated**
+document (`homelabnext/agent/keyring.py`) whose only inputs are the sources that already decide
+access: the registry, the compiled agent profiles and, optionally, the broker manifest. It uses
+the same derivation as the access block, so the two cannot disagree. Principals: every profile,
+every profile the broker grants actions to without a compiled profile in the set
+(`profile: null`), every broker approver, and every registry zone (`kind: network`, which
+services it may connect to). `generated_from` records the digest of each source.
+
+```
+hnx agent keyring build examples/keyring/sources.yml   # make keyring
+hnx agent keyring check examples/keyring/sources.yml   # make keyring-check (make check, CI)
+```
+
+`check` regenerates the keyring and fails on any difference from the committed file, naming the
+principals that drifted. Never edit `keyring.json` by hand: change a source and rebuild. Serving
+it behind SSO and flagging new privileged grants (M-15) and probing each row (M-13) need the
+running platform.
+
+## Agent memory (M-09)
+
+`homelabnext.agent.memory.MemoryStore` is the only way to change an agent's memory, and it takes
+only the `memory_updates` of a `report_result` (`apply_report`, which validates the report and,
+given the pack, checks it with `validate_report`) or a list of them (`apply_updates`). Updates
+are validated exactly as inside a report, then applied all or nothing: `add` needs a value and a
+key that is not live, `replace` a live key and a value, `retire` a live key and no value (kept as
+a tombstone). A deferred report may not change memory, and a report updates only its own
+profile's memory.
+
+Reads are scoped to the owner: `read(profile, scope)` returns that profile's own entries in one
+of its `memory_scopes`; `owner=` naming another profile is a cross-agent read and is refused
+(`MemoryAccessError`), and the same scope name on two profiles is two memories. Every call
+checks the profile's digest, so widening `memory_scopes` on a profile in hand gains nothing.
+Backends store data only: `InMemoryBackend` (the fake) and `FileBackend` (one
+`homelabnext.state` file keyed by profile id).
+
 ## Prompt templates (G-01)
 
 Every prompt the platform sends is a template under `homelabnext/agent/prompts/templates/`
@@ -272,6 +331,9 @@ granted the action (`not-granted`); tier within the grant (`tier-exceeds-grant`)
 `approved`. `request_digest` covers `action`, `actor`, `target` and `params` (not ids or
 timestamps).
 
+Workflow packs (`docs/workflows.md`) act only through this evaluator: their offline runner sends
+every action step as a request, and a risky one runs only with an approval of its digest (R-04).
+
 - **Time.** `now` defaults to the UTC clock. An approval is valid from `approved_at` (which may
   not precede the request's `created` or follow `now`) until the earlier of its `expires_at` and
   `approved_at + approval_ttl_s`. A manifest without `approval_ttl_s` gets 900 seconds
@@ -307,6 +369,8 @@ for any broker implementation: run the same rows against it.
 hnx agent compile SPEC --library LIBRARY.yml --policy POLICY.yml [--out profile.json]
 hnx agent verify PROFILE --policy POLICY.yml [--lock profiles.lock]
 hnx agent pack MANIFEST --inputs INPUTS.json [--out pack.json] [--denylist FILE]
+               [--profile PROFILE.json --registry services.yml [--runs-on HOST] [--broker M]]
+hnx agent keyring build|check SOURCES.yml
 hnx agent lint [PATH ...] [--classes FILE]
 hnx agent prompts lint [TEMPLATE|DIR ...]
 hnx agent prompts render TEMPLATE [--values VALUES.yml]

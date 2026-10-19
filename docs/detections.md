@@ -15,7 +15,20 @@ detections/
   mappings/<backend>.yml           Sigma field name -> dotted path in the engine's event shape
   attack_snapshots/<backend>.yml   the engine's bundled ATT&CK ids (see below)
   det_map.yml                      det:<slug> -> engine rule number
+  attack_coverage.json             GENERATED: ATT&CK coverage from passing fixtures (golden)
 ```
+
+## ATT&CK coverage counts only tested rules (D-04)
+
+`python -m homelabnext.detections coverage` derives the ATT&CK technique and tactic coverage from
+the fixture runner, not from the tags alone: a rule counts only when it has must_fire and
+must_not_fire fixtures and every one of them passes. A rule that misses a must_fire or fires on
+benign input is listed under `uncounted` with the reason; evasion misses are listed as
+`evasion_gaps` and never change coverage. The report is committed as the golden file
+`detections/attack_coverage.json`; `coverage --check detections/attack_coverage.json` (in
+`make detections` and CI) fails when it is not the one the current rules and fixtures produce, naming
+each technique that appeared or lost its last passing rule. After changing a rule or a fixture,
+regenerate it with `coverage --out detections/attack_coverage.json` and commit it.
 
 ## ATT&CK-id validation (P6.5)
 

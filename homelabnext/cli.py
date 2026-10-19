@@ -150,6 +150,14 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "agent profiles, context packs, prompt templates: compile|verify|pack|prompts|injection",
         lambda a: importlib.import_module("homelabnext.agent.cli").main(a),
     ),
+    "workflows": (
+        "workflow packs as code: validate (offline, every pack in git)|run|digest",
+        lambda a: importlib.import_module("homelabnext.workflows.cli").main(a),
+    ),
+    "scripts": (
+        "script catalog: catalog [--check]|reality|runner-lint|list",
+        lambda a: importlib.import_module("homelabnext.scripts.cli").main(a),
+    ),
     "custom": (
         "list|check|plan|register lab/vendor customizations",
         lambda a: importlib.import_module("homelabnext.customization.cli").main(a),

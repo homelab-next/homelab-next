@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Deterministic impact keywords for the sensitive-content safety spec (synthetic, generic).
+version: 1
+tiers:
+  critical:
+    - private key
+    - password is
+    - api token
+    - secret key
+    - session cookie
+  high:
+    - social security number
+    - passport number
+    - date of birth
+    - home address
+    - credit card
+  medium:
+    - phone number
+    - salary

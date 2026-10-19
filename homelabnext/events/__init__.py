@@ -6,6 +6,7 @@ Publishers never speak the event bus directly: they hand a CloudEvents-shaped en
 lost acknowledgement is accepted once.
 """
 
+from .consumer import Consumer, Delivery, decode_event
 from .envelope import (
     EventError,
     build_event,
@@ -27,6 +28,8 @@ from .publisher import Publisher, PublishResult, RetryPolicy
 
 __all__ = [
     "Ack",
+    "Consumer",
+    "Delivery",
     "EventError",
     "FakeForwarder",
     "FakeForwarderServer",
@@ -38,6 +41,7 @@ __all__ = [
     "RetryPolicy",
     "TransientError",
     "build_event",
+    "decode_event",
     "derive_event_id",
     "event_problems",
     "schema_for_type",

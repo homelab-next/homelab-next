@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: component-tests
+#   kind: check
+#   purpose: Fail when a package, capability, role, plugin, compose stack or tool has no tests.
+#   owner: maintainers
+#   trigger: [ci:ci/lint, make:component-tests]
+#   invariant: [Q-04]
+#   inputs: the tree under --root; the reviewed ALLOW table in this file
+#   outputs: one line per component without tests or stale ALLOW entry
+#   exit:
+#     "0": every component has tests
+#     "1": some component has none or ALLOW is stale
 """Gate: every component ships tests.
 
 A component, and what counts as its tests (a test file is ``test_*.py`` under ``tests/``,

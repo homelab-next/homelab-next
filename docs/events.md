@@ -47,3 +47,57 @@ fake behind a loopback HTTP server so the HTTP adapter is exercised for real. No
 network beyond loopback: `pytest tests/events`.
 
 The `homelabnext.scope.denied` event (a writer tool was refused) is described in `docs/scope.md`.
+
+## Consumers (`homelabnext.events.consumer`)
+
+`decode_event(body, types=...)` is what a consumer runs on every received body: parse, validate the
+envelope and the per-type schema, refuse types it does not handle. Unknown extension attributes are
+kept and ignored (CloudEvents), so adding one never breaks a consumer. `Consumer({type: handler})`
+dispatches by type and is idempotent by id, the mirror of the publisher: a redelivered id is a
+`duplicate` and does not run the handler again, the same id with a different body is refused, and a
+handler that raises leaves the id unrecorded so the redelivery is processed.
+
+## Contract tests for every seam (checklist T-07, Q-05)
+
+Every event type with a schema (`schemas/events/<type>.schema.json`) and every shared lake table with
+a schema (`schemas/ocsf/<table>.v1.json`) gets a publisher and a consumer contract test without
+anyone writing one: `tests/events/test_contracts.py` and `tests/lake/test_table_contracts.py` are
+parametrized from those directories (`homelabnext.events.contract`).
+
+| Seam | Publisher test | Consumer test |
+|---|---|---|
+| event type | each example is rebuilt through `build_event` and published over HTTP to the loopback forwarder | the received bytes decode and validate, dispatch once, redelivery is a duplicate, an unknown extension is tolerated; every negative and every missing required `data` field is refused |
+| lake table | each example row satisfies the table's JSON Schema and is written through the lake writer; every negative is refused | rows read back through the query interface carry exactly the schema's columns and normalise to the rows written; a replayed batch adds nothing |
+
+`make contracts` (`tools/contract_coverage.py`, also in CI) runs them and fails, by name, for any
+type or table without a passing `test_publisher_contract[<name>]` and
+`test_consumer_contract[<name>]`. A skip is not a pass.
+
+## Enrichment: asset owner and criticality (checklist T-04)
+
+`homelabnext.events.enrich` builds an `AssetInventory` from the service registry and the guest
+model (`AssetInventory.from_models(registry, guests)`) and `enrich_event` adds three extension
+attributes: `assetid`, `assetowner`, `assetcriticality`. The asset is the event's `subject` when that
+is an asset id, else the first known `host` entity in `data.entities`, else -- only when the event
+names no target at all -- its `source`. An event naming a target the inventory does not know stays
+unenriched rather than being attributed to its emitter. Criticality comes from tags (highest wins:
+`secrets`/`identity` critical; `core`/`prod`/`hypervisor`/`storage`/`database`/`bus` high; `data`,
+`compute`, `edge`, `monitoring` and friends medium; otherwise low), with per-asset `overrides`; a host
+takes the highest of its guest and its services, and its owner is the guest's `owners.primary`, else
+the single owner of its services. Values a publisher already set are kept. Enrich before publishing:
+it changes the body, and the id is the idempotency key.
+
+`enrichment_coverage(events)` is the metric (share of events carrying owner and a known criticality,
+missing counts per type; an empty stream is not ok). The live >= 95% target is measured on the server
+over an exported stream: `python -m homelabnext.events enrich-coverage events.jsonl [--min 0.95]`
+(exit 0 at or above, 1 below, 100 nothing to measure; `--registry`/`--guests` enrich first).
+
+## Deploys emit a what-changed event (checklist F-15)
+
+`homelabnext.events.deploy` builds `homelabnext.deploy.changed` (component, from/to version,
+environment, commit, and `changes` read from the changelog section of the new version, Keep a
+Changelog headings). A version without a section, or a section that lists nothing, refuses the event.
+The id derives from the deploy id, so a retried deploy step is a duplicate. The release workflow runs
+`python -m homelabnext.events deploy-changed --component pkg:homelabnext --to <tag> ... --out
+sbom/deploy-changed.json` and attaches the event to the GitHub release; a lab deploy publishes it with
+`--forwarder URL --state FILE` (or `emit_deploy_changed(publisher, ...)` from Python).

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+id: example-tool
+kind: tool
+purpose: Render the example page.
+owner: maintainers
+trigger: [make:example]
+inputs: the registry
+outputs: a page
+exit: {"1": failed}

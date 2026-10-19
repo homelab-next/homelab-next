@@ -1,0 +1,111 @@
+{
+  "schema": "homelabnext.detections.attack_coverage/v1",
+  "counted_from": "rules whose must_fire and must_not_fire fixtures all pass",
+  "summary": {
+    "rules_total": 6,
+    "rules_counted": 6,
+    "techniques_covered": 6,
+    "tactics_covered": 5
+  },
+  "techniques": {
+    "T1059.001": {
+      "rules": [
+        "det:suspicious-encoded-powershell"
+      ],
+      "tactics": [
+        "execution"
+      ]
+    },
+    "T1078.004": {
+      "rules": [
+        "det:cloud-api-key-new-asn"
+      ],
+      "tactics": [
+        "initial-access"
+      ]
+    },
+    "T1098.004": {
+      "rules": [
+        "det:ssh-authorized-key-added"
+      ],
+      "tactics": [
+        "persistence"
+      ]
+    },
+    "T1486": {
+      "rules": [
+        "det:mass-file-rename-ransom-extension"
+      ],
+      "tactics": [
+        "impact"
+      ]
+    },
+    "T1505.003": {
+      "rules": [
+        "det:web-shell-write"
+      ],
+      "tactics": [
+        "persistence"
+      ]
+    },
+    "T1543.003": {
+      "rules": [
+        "det:new-service-creation"
+      ],
+      "tactics": [
+        "persistence",
+        "privilege-escalation"
+      ]
+    }
+  },
+  "tactics": {
+    "execution": [
+      "T1059.001"
+    ],
+    "impact": [
+      "T1486"
+    ],
+    "initial-access": [
+      "T1078.004"
+    ],
+    "persistence": [
+      "T1098.004",
+      "T1505.003",
+      "T1543.003"
+    ],
+    "privilege-escalation": [
+      "T1543.003"
+    ]
+  },
+  "uncounted": [],
+  "evasion_gaps": [
+    {
+      "rule": "det:cloud-api-key-new-asn",
+      "evasion": "read-only-recon.json"
+    },
+    {
+      "rule": "det:mass-file-rename-ransom-extension",
+      "evasion": "random-extension.json"
+    },
+    {
+      "rule": "det:new-service-creation",
+      "evasion": "new-service-cmdlet.json"
+    },
+    {
+      "rule": "det:ssh-authorized-key-added",
+      "evasion": "authorized-keys2.json"
+    },
+    {
+      "rule": "det:suspicious-encoded-powershell",
+      "evasion": "abbreviated-flag.json"
+    },
+    {
+      "rule": "det:suspicious-encoded-powershell",
+      "evasion": "renamed-binary.json"
+    },
+    {
+      "rule": "det:web-shell-write",
+      "evasion": "double-extension.json"
+    }
+  ]
+}

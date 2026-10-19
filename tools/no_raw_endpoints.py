@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: no-raw-endpoints
+#   kind: check
+#   purpose: Fail when code or config writes an endpoint literal instead of a registry lookup.
+#   owner: maintainers
+#   trigger: [ci:ci/schemas, code:homelabnext/customization/lint.py, make:gates]
+#   invariant: [X-01]
+#   inputs: the tree; tools/no_raw_endpoints.allow.yml
+#   outputs: one line per violation (or a census)
+#   exit:
+#     "0": clean
+#     "1": violations
+#     "2": usage error or bad allowlist
 """CI gate: no raw endpoints in code or config.
 
 Endpoints are looked up through the service registry (capability alias), never

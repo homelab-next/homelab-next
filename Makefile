@@ -12,15 +12,17 @@ PLAYBOOKS := $(wildcard ansible/playbooks/*.yml)
 REGISTERS_OUT := build/registers
 REGISTER_FILES := $(shell git ls-files -- $(foreach k,lessons runbooks invariants queue,'*$(k).yml' '*$(k).yaml') 2>/dev/null)
 
-.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint agent-lint prompts-lint injection-check injection-report injection-eval detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke
+.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-eval agent-lint prompts-lint injection-check injection-report injection-eval workflows detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke
 
 help:
-	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint agent-lint prompts-lint injection-check injection-report detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
+	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
+	@echo "hygiene: helpers-lint tls-lint workstation-lint keyring-check keyring ids-placeholders"
+	@echo "script catalog (M-01, M-02, M-04): scripts-check"
 	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke"
-	@echo "live (needs a real model endpoint): injection-eval MODEL=<role> REGISTRY=<file> ROLES=<file>"
+	@echo "live (needs a real model endpoint): injection-eval MODEL=<role> REGISTRY=<file> ROLES=<file>; models-eval REGISTRY=<file>"
 	@echo "override RUFF=/path/to/ruff if ruff is not importable as a module"
 
-check: lint component-tests hermetic-lint test schemas gates decide-lint agent-lint prompts-lint injection-check detections registers ids-check conform-check spdx leak-scan changelog-check
+check: lint component-tests hermetic-lint test schemas gates decide-lint decide-safety models-check agent-lint prompts-lint injection-check workflows scripts-check detections registers ids-check conform-check spdx leak-scan changelog-check
 	@echo "make check: OK"
 
 lint:
@@ -65,6 +67,28 @@ gates:
 decide-lint:
 	$(PY) -m homelabnext.cli decide lint
 
+# K-15: the required safety specs (sensitive-content, hostile-content, purpose-consistency,
+# disclosure-risk) exist, are safety-only and pass their case sets against deterministic fakes
+decide-safety:
+	$(PY) -m homelabnext.cli decide safety
+
+# G-11: every model binding is pinned by version and digest, and the committed evaluation report
+# (golden suites + the K-12 replay gate, against the deterministic fake) is the one for these pins
+MODEL_ROLES := examples/model_roles.json
+MODEL_EVAL := examples/model_roles.eval.json
+models-check:
+	$(PY) -m homelabnext.cli golden pins check --roles $(MODEL_ROLES) --report $(MODEL_EVAL)
+
+# after changing a pin, a golden suite or the replay inputs: regenerate the report and commit it
+models-report:
+	$(PY) -m homelabnext.cli golden pins report --roles $(MODEL_ROLES) --report $(MODEL_EVAL)
+
+# LIVE, never in CI: the same evaluation against the real pinned models through the resolver.
+# Keep build/models/eval.json with the model change.
+models-eval:
+	@test -n "$(REGISTRY)" || { echo "usage: make models-eval REGISTRY=<services.yml> [MODEL_ROLES=<roles.json>]"; exit 2; }
+	$(PY) -m homelabnext.cli golden pins report --roles $(MODEL_ROLES) --registry $(REGISTRY) --report build/models/eval.json
+
 # readers cannot act (G-03): no agent profile or context manifest in the repository that reads
 # untrusted content holds a shell, file-write, egress or credential grant
 agent-lint:
@@ -93,10 +117,33 @@ injection-eval:
 	$(PY) -m homelabnext.cli agent injection run --role $(MODEL) --registry $(REGISTRY) --roles $(ROLES) --out build/injection/$(MODEL).json
 	$(PY) -m homelabnext.cli agent injection check-report build/injection/$(MODEL).json
 
+# R-01/R-03/R-04/R-07: every workflow pack in git validates offline (references resolve,
+# deterministic steps before any model, fixtures round-trip to the exact action calls, risky
+# actions bound to an approval of their payload digest) and the deploy pins match
+workflows:
+	$(PY) -m homelabnext.cli workflows validate
+
+# M-01 every script has a valid header and docs/scripts/catalog.* is current (`hnx scripts catalog`
+# regenerates it); M-02 the headers' triggers are exactly what runs each script, nothing called is
+# uncatalogued, nothing active is uncalled; M-04 every check runs through the invariants runner
+.PHONY: scripts-check
+scripts-check:
+	$(PY) -m homelabnext.cli scripts catalog --check
+	$(PY) -m homelabnext.cli scripts reality
+	$(PY) -m homelabnext.cli scripts runner-lint
+
 detections:
 	$(PY) -m homelabnext.detections lint
 	$(PY) -m homelabnext.detections run
 	$(PY) -m homelabnext.detections map --check
+	$(PY) -m homelabnext.detections coverage --check detections/attack_coverage.json
+
+# T-07, Q-05: every event type and shared lake table has a passing publisher and consumer
+# contract test (generated from schemas/events and schemas/ocsf)
+.PHONY: contracts
+check: contracts
+contracts:
+	$(PY) tools/contract_coverage.py
 
 registers:
 	$(PY) -m homelabnext.registers build examples/registers $(REGISTERS_OUT)
@@ -137,6 +184,44 @@ leak-scan-history:
 
 changelog-check:
 	$(PY) tools/check_changelog.py
+
+# batch-3 hygiene gates, prerequisites of `check` (make merges this with the rule above):
+#   M-03 no private notify/state/lake helpers outside the shared libraries
+#   F-07 no client with TLS certificate verification off (Python and YAML/JSON; RL013 does roles)
+#   F-17 no runtime config points at the admin workstation (runs beside X-01's endpoint gate)
+#   M-12 the generated keyring has 0 drift from its sources
+.PHONY: helpers-lint tls-lint workstation-lint keyring-check keyring ids-placeholders
+check: helpers-lint tls-lint workstation-lint keyring-check
+
+helpers-lint:
+	$(PY) tools/shared_helpers_lint.py .
+
+tls-lint:
+	$(PY) tools/tls_verify_lint.py .
+
+workstation-lint:
+	$(PY) tools/workstation_refs.py .
+
+KEYRING_SOURCES := examples/keyring/sources.yml
+keyring-check:
+	$(PY) -m homelabnext.cli agent keyring check $(KEYRING_SOURCES)
+
+# after changing a registry, profile or broker source of the keyring: regenerate and commit it
+keyring:
+	$(PY) -m homelabnext.cli agent keyring build $(KEYRING_SOURCES)
+
+# M-16: XX-NEW is allowed on a pull request, never on main; CI runs this on every push to main
+# (not part of `check`, which pull requests run).  Maintainer fix: `make ids-resolve` on main.
+ids-placeholders:
+	$(PY) tools/register_ids.py check-placeholders $(REGISTER_FILES)
+
+# Q-08: every `fix:` commit (or `Fixes:` trailer) in RANGE touches a test file; PROVE=1 also runs
+# each fix's tests on its parent, where they must fail.  Skipped with a note when RANGE's base
+# does not exist (a fresh clone without origin/main).
+.PHONY: fix-check
+check: fix-check
+fix-check:
+	$(PY) tools/fix_has_test.py --range $(or $(RANGE),origin/main..HEAD) --allow-missing-base $(if $(PROVE),--prove)
 
 # Regenerate the hashed CI constraints (needs uv).  Versions published in the last 14 days are
 # skipped unless a direct pin needs one (CONSTRAINTS_FRESH: packages exempt from that cooldown).

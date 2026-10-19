@@ -22,6 +22,9 @@ tests on a laptop with no network and no private context.
    and commit it as is; never renumber an existing entry. A maintainer allocates the numbers once,
    at merge time, on the target branch (`make ids-resolve`), so two pull requests never claim the
    same id. CI checks that no id of the base branch vanished and that no allocated id repeats.
+   A placeholder is never valid on `main`: every push to `main` runs `make ids-placeholders`
+   (`hnx ids check-placeholders`), which fails while any entry id is still `XX-NEW`, so the
+   maintainer's allocation step cannot be skipped silently.
    An id that was wrong is retired, not deleted: move it to the register's top-level `retired:`
    block with a `reason:` (and `replaced_by:`), a tombstone that keeps it accounted for and
    unreusable (see `homelabnext/registers/ids.py`; `examples/registers/invariants.yml` has three).
@@ -36,6 +39,7 @@ tests on a laptop with no network and no private context.
    `make hermetic-lint` rejects direct clock and unseeded-random calls in test code.
    Every component ships tests (`make component-tests`), and the broker, scope guard, records
    lifecycle, decide cascade and agent grant ceiling keep >= 80% line coverage (`make coverage`).
+   Suites stay trustworthy (`tests/suite_policy.py`, see "Skips, quarantine and time budgets").
 10. Every source file starts with `# SPDX-License-Identifier: Apache-2.0` (or the equivalent comment).
 
 ## Setup
@@ -86,6 +90,55 @@ make leak-scan-history RANGE=origin/main..HEAD           # what you are about to
 The pre-commit hooks read the same variable. A hit prints only `term on deny-list line N`, never the
 term itself, so CI logs and screenshots do not leak the list. Deny-list hits cannot be suppressed
 with `scrub-allow`. An empty or missing file is an error (exit 2), not a silent pass.
+
+## Hygiene lints
+
+Part of `make check` and CI; each reviewed exception lives in one allowlist file with a reason,
+and an entry that no longer excuses anything fails the lint.
+
+- `tools/shared_helpers_lint.py` (M-03): no private notify, state-file or lake-query helper
+  outside `homelabnext/notify`, `homelabnext/state` and `homelabnext/lake` (AST; test code is out
+  of scope). Allowlist: `tools/shared_helpers.allow.yml` (`path`, `rule`, `reason`).
+- `tools/tls_verify_lint.py` (F-07): no `verify=False`, unverified SSL context, `CERT_NONE`,
+  `check_hostname=False` or silenced urllib3 warnings in Python, and no
+  `validate_certs`/`verify_ssl`/`insecure_skip_verify`-style key turning verification off in YAML
+  or JSON (role tasks are also covered by role-lint RL013). Allowlist:
+  `tools/tls_verify.allow.yml`, or `tls-verify: allow <reason>` on the line.
+- `tools/workstation_refs.py` (F-17): runtime configuration (roles, playbooks, inventory, compose,
+  examples, generator templates, golden outputs) names no home directory, workstation path or
+  host, and no role step runs on the Ansible control node. Allowlist:
+  `tools/workstation_refs.allow.yml` (`path`, optional `match`, `reason`), or
+  `workstation-ref: allow <reason>` on the line.
+- `make keyring-check` (M-12): `examples/keyring/keyring.json` is exactly what
+  `hnx agent keyring build examples/keyring/sources.yml` generates (`make keyring` rebuilds it).
+
+## Skips, quarantine and time budgets
+
+`tests/suite_policy.py` runs with every `pytest` invocation:
+
+- **No silent skips.** A skip's reason must match one of the `skip_reasons` patterns in
+  `[tool.pytest.ini_options]` (an optional extra or external tool is absent, the platform cannot run
+  the test). Anything else, including a bare `@pytest.mark.skip`, fails. Prefer
+  `pytest.importorskip("module")` for optional extras and `reason="<tool> not installed"` for tools.
+  A genuinely new legitimate cause is a reviewed one-line addition to `skip_reasons`.
+- **Quarantine, not deletion, for a flaky test:**
+  `@pytest.mark.quarantine(owner="<team-or-handle>", until="YYYY-MM-DD", reason="<what is flaky>")`.
+  The test still runs but cannot break the build; all three fields are required, the date may be at
+  most 90 days ahead, and on expiry the test fails until it is fixed or the quarantine is renewed.
+- **Time budgets.** Each suite (a test file's first two directories, e.g. `tests/lake`) has a budget
+  (`suite_budget_default`, `suite_budgets`); a suite over it fails the run. `pytest --suite-times`
+  prints the table; `HNX_SUITE_BUDGET_SCALE=3` scales every budget on a slow machine.
+
+## Bug fixes carry a regression test
+
+A bug fix is a commit whose subject is a conventional-commit fix (`fix: ...`, `fix(scope): ...`) or
+whose message has a `Fixes: <issue or description>` trailer. Use one of them for every fix, and in
+the same commit add or change a test that **fails without the fix and passes with it** (write the
+test first and watch it fail). CI's `regression-tests` job (`tools/fix_has_test.py --prove`) checks
+both halves for every commit of a pull request: a fix must touch a test file, and its test modules,
+run on the fix's parent commit, must fail. `make fix-check` runs the first half locally
+(`make fix-check PROVE=1` both). A fix that cannot have a test (a documentation typo, a CI setting)
+says why in a trailer, `No-regression-test: <reason>`; the gate lists every waiver.
 
 ## Adding a capability
 

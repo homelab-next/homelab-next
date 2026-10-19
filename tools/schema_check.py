@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: schema-check
+#   kind: check
+#   purpose: Fail when a schema is invalid, lacks an example or a negative, or breaks its frozen baseline.
+#   owner: maintainers
+#   trigger: [ci:ci/schemas, code:homelabnext/cli.py, make:schemas]
+#   invariant: [Q-10]
+#   inputs: schemas/ (with examples/, negative/ and _frozen/)
+#   outputs: one line per problem and a summary; --freeze writes missing baselines
+#   exit:
+#     "0": no errors
+#     "1": errors
 """Schema contract checker.
 
 For every schema under ``schemas/<dir>/`` (top level only):

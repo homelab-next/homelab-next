@@ -7,7 +7,9 @@
         {
           "backend": "svc:inference-large",
           "model_id": "example-27b",
-          "priority": 0
+          "priority": 0,
+          "version": "2026.09.1",
+          "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
         }
       ],
       "fallback": "mdl:fast-classifier",
@@ -18,12 +20,21 @@
       "bindings": [
         {
           "backend": "svc:inference-small",
-          "model_id": "example-4b"
+          "model_id": "example-4b",
+          "version": "2026.08.2",
+          "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
         }
       ],
       "params": {
         "temperature": 0,
         "max_tokens": 256
+      },
+      "limits": {
+        "window_s": 60,
+        "max_requests": 600,
+        "max_tokens": 200000,
+        "max_cost": 1.5,
+        "cost_per_1k_tokens": 0.002
       }
     }
   }

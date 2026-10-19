@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+id: example-lint
+kind: check
+purpose: Fail when a tracked file breaks the example rule.
+owner: maintainers
+trigger: [make:example-lint, ci:ci/lint]
+inputs: the tracked tree
+outputs: one line per finding on stdout
+exit:
+  "0": clean
+  "1": findings
+  "2": usage error
+invariant: [Q-09]

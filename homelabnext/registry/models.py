@@ -6,8 +6,12 @@ Consumers name only a role (``mdl:main-reasoner``).  The role table
 plus the model id that backend serves.  The backend's address comes from the service registry
 and the capability resolver, so neither a model id nor an address ever appears in a consumer.
 
-``probe`` asks the backend what it really serves (``GET /v1/models``) and flags a mismatch
-between the alias table and the backend.  :class:`ModelClient` is a small stdlib
+``probe`` asks the backend what it really serves (``GET /v1/models``): the model id and, when the
+role declares ``max_context_tokens``, the loaded context length; it flags a mismatch between the
+alias table and the backend (K-14; :mod:`homelabnext.registry.serving` turns results into
+state-diffed alerts).  Every binding can carry a pin (``version`` + ``digest``, G-11; checked by
+:mod:`homelabnext.golden.pins`) and every role a rate/cost budget (``limits``, G-10; enforced by
+:mod:`homelabnext.registry.limits`).  :class:`ModelClient` is a small stdlib
 OpenAI-compatible client used by the golden runner and by the decision cascade.
 """
 
@@ -31,6 +35,10 @@ ROLE_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 SVC_RE = re.compile(r"^svc:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)$")
 MDL_RE = re.compile(r"^mdl:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)$")
 KINDS = ("chat", "completion", "embedding")
+DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+LIMIT_KEYS = ("window_s", "max_requests", "max_tokens", "max_cost", "cost_per_1k_tokens")
+#: keys an OpenAI-compatible ``/v1/models`` entry uses for the loaded context length, by engine
+CONTEXT_KEYS = ("loaded_context_length", "max_model_len", "context_length", "max_context_length")
 
 
 class RoleTableError(ValueError):
@@ -59,6 +67,12 @@ class Binding:
     backend: str  # logical service name (without the svc: prefix)
     model_id: str
     priority: int = 0
+    version: str | None = None  # G-11 pin: the release the backend must serve
+    digest: str | None = None  # G-11 pin: sha256:<hex> of the weights
+
+    @property
+    def pinned(self) -> bool:
+        return bool(self.version) and bool(self.digest and DIGEST_RE.match(self.digest))
 
 
 @dataclass(frozen=True)
@@ -74,6 +88,7 @@ class Role:
     dimensions: int | None = None
     logprobs: bool = False
     require_model_served: bool = True
+    limits: Mapping[str, float] = field(default_factory=dict)
 
 
 class RoleTable:
@@ -103,7 +118,18 @@ class RoleTable:
                 if not b.get("model_id"):
                     problems.append(f"role {name}: bindings[{i}].model_id missing")
                     continue
-                bindings.append(Binding(m.group(1), str(b["model_id"]), int(b.get("priority", 0))))
+                digest = b.get("digest")
+                if digest is not None and not DIGEST_RE.match(str(digest)):
+                    problems.append(f"role {name}: bindings[{i}].digest must be sha256:<64 hex>")
+                bindings.append(
+                    Binding(
+                        m.group(1),
+                        str(b["model_id"]),
+                        int(b.get("priority", 0)),
+                        str(b["version"]) if b.get("version") is not None else None,
+                        str(digest) if digest is not None else None,
+                    )
+                )
             if not bindings:
                 problems.append(f"role {name}: needs at least one binding")
             kind = r.get("kind", "chat")
@@ -114,6 +140,11 @@ class RoleTable:
             if fb is not None and not fbm:
                 problems.append(f"role {name}: fallback {fb!r} must be an mdl: id")
             probe_cfg = r.get("probe") or {}
+            limits = r.get("limits") or {}
+            bad = sorted(set(limits) - set(LIMIT_KEYS)) if isinstance(limits, dict) else ["?"]
+            if bad or (limits and not limits.get("window_s")):
+                problems.append(f"role {name}: limits needs window_s and only {LIMIT_KEYS}")
+                limits = {}
             roles[name] = Role(
                 name=name,
                 tier=str(r.get("tier", "")),
@@ -126,6 +157,7 @@ class RoleTable:
                 dimensions=r.get("dimensions"),
                 logprobs=bool(r.get("logprobs", False)),
                 require_model_served=bool(probe_cfg.get("require_model_served", True)),
+                limits={k: float(v) for k, v in limits.items()},
             )
         for name, role in roles.items():
             seen = {name}
@@ -146,6 +178,30 @@ class RoleTable:
     @classmethod
     def load(cls, path: str | Path) -> RoleTable:
         return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+
+    def unpinned(self) -> list[str]:
+        """Every binding without a version and a sha256 digest (G-11); empty = all pinned."""
+        return [
+            f"mdl:{name} -> svc:{b.backend} {b.model_id}: not pinned (needs version and digest)"
+            for name, r in sorted(self.roles.items())
+            for b in r.bindings
+            if not b.pinned
+        ]
+
+    def pins(self) -> dict[str, list[dict]]:
+        """The pinned identity of every binding, role by role (what an evaluation is a function of)."""
+        return {
+            name: [
+                {
+                    "backend": f"svc:{b.backend}",
+                    "model_id": b.model_id,
+                    "version": b.version,
+                    "digest": b.digest,
+                }
+                for b in r.bindings
+            ]
+            for name, r in sorted(self.roles.items())
+        }
 
     def get(self, role: str) -> Role:
         name = normalize_role(role)
@@ -168,6 +224,9 @@ class ResolvedModel:
     require_model_served: bool = True
     dimensions: int | None = None
     trail: tuple[str, ...] = ()
+    max_context_tokens: int | None = None
+    version: str | None = None
+    digest: str | None = None
 
     @property
     def base_url(self) -> str:
@@ -212,6 +271,9 @@ class ModelResolver:
                     require_model_served=r.require_model_served,
                     dimensions=r.dimensions,
                     trail=tuple(trail),
+                    max_context_tokens=r.max_context_tokens,
+                    version=b.version,
+                    digest=b.digest,
                 )
             if r.fallback:
                 trail.append(f"{cur}: no binding resolved, falling back to mdl:{r.fallback}")
@@ -341,30 +403,60 @@ class ProbeResult:
     status: str  # ok | mismatch | unreachable | error
     served: tuple[str, ...] = ()
     detail: str = ""
+    context_length: int | None = None  # what the backend says is loaded for this model
+    expected_context: int | None = None  # the role's max_context_tokens
 
     @property
     def ok(self) -> bool:
         return self.status == "ok"
 
 
+def served_context(entry: Mapping[str, Any]) -> int | None:
+    """The loaded context length a ``/v1/models`` entry reports, under any known engine key."""
+    for src in (entry, entry.get("meta") if isinstance(entry.get("meta"), dict) else {}):
+        for key in (*CONTEXT_KEYS, "n_ctx"):
+            v = src.get(key)
+            if isinstance(v, int) and not isinstance(v, bool) and v > 0:
+                return v
+    return None
+
+
 def probe(
     model: ResolvedModel, *, timeout: float = 5.0, transport: Transport | None = None
 ) -> ProbeResult:
-    """Compare the alias's bound model id with what the backend says it serves."""
+    """Compare the alias's bound model id (and declared context length) with what is served.
+
+    A role that declares ``max_context_tokens`` is a mismatch when the backend reports a
+    different loaded context length, or reports none at all (it cannot be verified, K-14).
+    """
     tr = transport or urllib_transport
+    want_ctx = model.max_context_tokens
     try:
         status, doc = tr("GET", f"{model.base_url}/v1/models", None, timeout)
     except ModelError as exc:
         st = "unreachable" if exc.kind in ("unreachable", "timeout") else "error"
-        return ProbeResult(model.role, model.model_id, st, detail=str(exc))
+        return ProbeResult(
+            model.role, model.model_id, st, detail=str(exc), expected_context=want_ctx
+        )
     if status != 200 or not isinstance(doc, dict) or not isinstance(doc.get("data"), list):
-        return ProbeResult(model.role, model.model_id, "error", detail=f"HTTP {status}, bad body")
-    served = tuple(sorted(str(m.get("id")) for m in doc["data"] if isinstance(m, dict)))
-    if model.model_id in served:
-        return ProbeResult(model.role, model.model_id, "ok", served)
-    detail = f"alias binds {model.model_id!r} but backend serves {list(served)}"
-    st = "mismatch" if model.require_model_served else "ok"
-    return ProbeResult(model.role, model.model_id, st, served, detail)
+        return ProbeResult(model.role, model.model_id, "error", detail=f"HTTP {status}, bad body",
+                           expected_context=want_ctx)  # fmt: skip
+    entries = {str(m.get("id")): m for m in doc["data"] if isinstance(m, dict)}
+    served = tuple(sorted(entries))
+    if model.model_id not in served:
+        detail = f"alias binds {model.model_id!r} but backend serves {list(served)}"
+        st = "mismatch" if model.require_model_served else "ok"
+        return ProbeResult(model.role, model.model_id, st, served, detail, None, want_ctx)
+    ctx = served_context(entries[model.model_id])
+    if want_ctx is not None and ctx != want_ctx:
+        detail = (
+            f"{model.model_id!r} loaded with context {ctx} but the role declares {want_ctx}"
+            if ctx is not None
+            else f"{model.model_id!r}: backend does not report its loaded context length "
+            f"(role declares {want_ctx})"
+        )
+        return ProbeResult(model.role, model.model_id, "mismatch", served, detail, ctx, want_ctx)
+    return ProbeResult(model.role, model.model_id, "ok", served, "", ctx, want_ctx)
 
 
 def probe_all(

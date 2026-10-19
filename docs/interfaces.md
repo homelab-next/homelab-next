@@ -154,7 +154,8 @@ Check = Callable[[Mapping[str, Any]], Result]                           # the pl
 
 `hnx` sub-commands are rows in `COMMANDS` in `homelabnext/cli.py` (name, one-line help, handler that
 imports its package lazily). Current names: `registry`, `new`, `gen`, `detections`, `registers`,
-`invariants`, `ids`, `decide`, `golden`, `site`, `guests`, `schema-check`, `swap`, `conform`, `custom`.
+`invariants`, `ids`, `decide`, `golden`, `site`, `guests`, `schema-check`, `swap`, `conform`, `custom`,
+`workflows`.
 `parity` is a library only (the swap runner calls it; no sub-command).
 Exit codes everywhere: `0` ok, `1` a check failed, `2` misconfiguration or bad input, `>=100` the
 check itself could not measure.
@@ -202,8 +203,13 @@ load_spec(path) -> DecisionSpec ; Cascade(spec, tiers, scanner=None).decide(Item
 lint_doc(doc) -> [(rule, detail)] ; lint_paths(paths, root=None) -> (n, [Problem])   # hnx decide lint (decide.lint)
 ImpactScanner(tiers).scan(text) ; replay(records, cascade) -> ReplayReport ; gate(report, baseline=None, ...) -> GateResult
 handle_decide(cascades, doc)                                 # the /v1/systemone adapter, framework-free
+Cascade(spec, tiers, scanner, corroborators={name: fn})      # noise_gate specs: de-escalate only with a reference (K-08)
+ModelTier(...).decide(item)                                  # schema-validated reply, retried once, then invalid -> escalate (A-04)
+annotate(records, cascade) -> [records + decide_* columns]   # batch/ingest: records in == records out (K-13)
+safety.check() -> [SpecResult]                               # hnx decide safety: REQUIRED safety specs pass their cases (K-15)
 
 # homelabnext.golden
+pins.run_eval(table, suites, factory, model_name=...) ; pins.check_report(report, table, suites)   # hnx golden pins (G-11)
 load_suite(path) -> Suite ; run_suite(suite, completer, *, role=None, model_id="") -> Report ; score(output, expect)
 
 # homelabnext.network   (site model; pure, no network access)
@@ -238,6 +244,9 @@ validate_report(report, pack, pack_hash, manifest=None) -> list[str]
 digest_of(obj) -> "sha256:..."                           # canonical JSON digest used everywhere
 # homelabnext.broker  (reference evaluator for schemas/broker; default deny)
 decide(manifest, request, approval=None, *, now=None) -> decision; request_digest(request); check_manifest_handlers(manifest, handlers)
+# homelabnext.workflows  (hnx workflows validate|run|digest; docs/workflows.md; schemas/workflows)
+validate_repo(paths=(), *, root=None, deploy=None) -> Report ; check_pack(doc, universe) -> [(rule, detail)]
+run_fixture(pack, fixture, *, manifest, spec_labels=None, executor_factory=BrokerExecutor) -> RunResult ; pack_digest(doc)
 
 # homelabnext.swap   (extra: swap = PyYAML + jsonschema; hnx swap; docs/swap.md; ADR-0005)
 STEPS: tuple[str, ...]                  # declare, shadow-start, dual-write, parity-compare, soak, cutover,

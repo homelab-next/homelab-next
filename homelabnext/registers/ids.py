@@ -8,6 +8,7 @@ cannot see (an entry that silently vanished in a merge).
     alloc       claim ids under a per-repository flock; two racers get N and N+1
     resolve     rewrite ``XX-NEW`` placeholders (``LL-NEW``, ``RB-NEW`` ...) into allocated ids
     check_lost  fail if an id a parent commit had is absent from the file being committed
+    placeholders  the ``XX-NEW`` entry ids still in a file (CI fails a push to main with any)
 
 Nothing here rewrites YAML: entries are split as text so comments survive byte for byte, and an
 existing id is never renumbered (and the module stays standard library only, for hooks).
@@ -28,9 +29,11 @@ citation can never silently start meaning something else.  Reusing a retired id 
 (an invariants register adopting the checklist's real F-02, say) takes a reviewed diff that
 deletes the tombstone in the same change that adds the live entry.
 
-``XX-NEW`` is a valid committed state.  In a project with outside contributors, ids are
-allocated once, at merge time, by a maintainer (``hnx ids resolve`` on the target branch), so
-two pull requests can never claim the same number.
+``XX-NEW`` is a valid committed state *on a pull request branch*.  In a project with outside
+contributors, ids are allocated once, at merge time, by a maintainer (``hnx ids resolve`` on the
+target branch), so two pull requests can never claim the same number.  It is not a valid state of
+the main branch: ``hnx ids check-placeholders`` runs on every push to main and fails while any
+entry id there is still a placeholder, so a merge that skipped the allocation cannot go unnoticed.
 
 Lock scope: the lock and the high-water mark live under ``git rev-parse --git-common-dir``, so
 every worktree of one repository shares them and different repositories never do.  They are
@@ -57,6 +60,7 @@ __all__ = [
     "check_lost",
     "duplicates",
     "ids_in",
+    "placeholders",
     "resolve_file",
     "retired_in",
     "spec_for",
@@ -191,6 +195,14 @@ def ids_in(text: str, spec: RegisterSpec) -> list[str]:
 
 _RETIRED_HEAD = re.compile(r"^retired:[ \t]*(?:#.*)?$")
 _KEY = re.compile(r"^([ \t]+)([^\s#:][^:]*?)[ \t]*:(?:[ \t]|$)")
+
+
+def placeholders(text: str, spec: RegisterSpec) -> list[str]:
+    """Entry ids that are still ``XX-NEW`` placeholders, in file order (repeats kept).
+
+    Only entry ids count: prose that *mentions* the convention (``write LL-NEW``) is not an id.
+    """
+    return [i for i in ids_in(text, spec) if i.endswith("-NEW")]
 
 
 def retired_in(text: str, spec: RegisterSpec) -> list[str]:

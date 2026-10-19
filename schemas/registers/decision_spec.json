@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/registers/decision_spec/1.2",
+  "$id": "https://schemas.example.internal/homelabnext/registers/decision_spec/1.3",
   "title": "Decision spec",
-  "description": "Declarative spec for a cascaded decision: a deterministic floor, then ordered tiers, then escalate. 1.1 adds safety, thresholds, impact and per-tier timeout and acts (additive). 1.2 adds question objects (text, labels, compare) beside plain strings, and callers (additive). Rules JSON Schema cannot express (single-axis questions, pairwise questions in both orders, at most 5 labels, inline callers end at the fast tier) are `hnx decide lint`.",
+  "description": "Declarative spec for a cascaded decision: a deterministic floor, then ordered tiers, then escalate. 1.1 adds safety, thresholds, impact and per-tier timeout and acts (additive). 1.2 adds question objects (text, labels, compare) beside plain strings, and callers (additive). 1.3 adds noise_gate: de-escalating labels that stand only with a corroboration reference (additive). Rules JSON Schema cannot express (single-axis questions, pairwise questions in both orders, at most 5 labels, inline callers end at the fast tier) are `hnx decide lint`.",
   "type": "object",
   "properties": {
     "id": {
@@ -168,6 +168,36 @@
       "minItems": 1,
       "uniqueItems": true,
       "description": "Who waits on this spec. inline: a caller blocks on the answer, so hnx decide lint requires the spec to end at the fast tier (floor, small) and then escalate, within a 1 s budget. Absent means batch only."
+    },
+    "noise_gate": {
+      "type": "object",
+      "description": "Noise gate (K-08): an automatic answer with a deescalate label stands only when one of the named corroborators (deterministic checks supplied by the caller) returns a reference for the item; the decision carries it. Otherwise the item escalates. Not allowed on a safety spec.",
+      "properties": {
+        "deescalate": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "accept",
+              "reject"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "corroborators": {
+          "type": "array",
+          "items": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "deescalate",
+        "corroborators"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [

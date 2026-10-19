@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: check-spdx
+#   kind: check
+#   purpose: Fail when a tracked source or config file has no SPDX-License-Identifier in its first five lines.
+#   owner: maintainers
+#   trigger: [ci:ci/lint, make:spdx, pre-commit:spdx-header]
+#   invariant: [Q-09]
+#   inputs: the tracked tree (git ls-files), or the files named on the command line
+#   outputs: one line per file without the header
+#   exit:
+#     "0": every file carries the header
+#     "1": some file does not
 """Fail if a source or config file lacks an SPDX-License-Identifier header in its first 5 lines.
 
 Checked: ``*.py``, ``*.sh``, ``*.yml``, ``*.yaml``, ``*.toml``.  With no arguments the file list is

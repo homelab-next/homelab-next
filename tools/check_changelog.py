@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: check-changelog
+#   kind: check
+#   purpose: Fail unless CHANGELOG.md keeps an Unreleased section and one for the current version.
+#   owner: maintainers
+#   trigger: [ci:ci/lint, make:changelog-check]
+#   inputs: [CHANGELOG.md, homelabnext/_version.py]
+#   outputs: the reason on stderr when it fails
+#   exit:
+#     "0": both sections present
+#     "1": a section is missing or the version cannot be read
 """Fail unless CHANGELOG.md has a section for the version in homelabnext/_version.py."""
 
 from __future__ import annotations

@@ -35,7 +35,7 @@ jobs:
       - uses: ./.github/actions/python-deps
         with:
           python-version: "3.12"
-          packages: build cyclonedx-bom
+          packages: build cyclonedx-bom jsonschema referencing  # the last two: the deploy event's schema check
           install-project: "false"
           cache: ""  # no shared cache in a release build
       - name: the tag names the packaged version
@@ -73,6 +73,16 @@ jobs:
           python -m cyclonedx_py environment --pyproject pyproject.toml --mc-type library \
             --output-reproducible --of JSON -o sbom/homelabnext.cdx.json \
             "$RUNNER_TEMP/sbom-env/bin/python"
+      - name: what-changed event of this release (F-15), from its CHANGELOG.md section
+        env:
+          TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p sbom
+          python -m homelabnext.events deploy-changed --component pkg:homelabnext \
+            --to "${TAG#v}" --environment pypi --commit "$SHA" --changelog CHANGELOG.md \
+            --source svc:release-pipeline --out sbom/deploy-changed.json
       - name: checksums
         run: sha256sum dist/* sbom/* | tee SHA256SUMS
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -130,7 +140,7 @@ jobs:
         run: |
           gh release create "$TAG" --repo "$REPO" --verify-tag --title "$TAG" \
             --notes "See CHANGELOG.md. Provenance: gh attestation verify <file> --repo $REPO" \
-            dist/* sbom/sbom/homelabnext.cdx.json sbom/SHA256SUMS
+            dist/* sbom/sbom/homelabnext.cdx.json sbom/sbom/deploy-changed.json sbom/SHA256SUMS
 
   publish:
     needs: [build, attest]

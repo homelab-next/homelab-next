@@ -6,10 +6,14 @@
   hnx ids check-lost PATH... [--base REV]
                                  fail if a parent commit's (or REV's) id vanished (exit 1)
   hnx ids check-dupes PATH...    fail if an allocated id occurs twice, or is live and retired (exit 1)
+  hnx ids check-placeholders PATH...
+                                 fail if any entry id is still an XX-NEW placeholder (exit 1);
+                                 CI runs it on every push to main, never on a pull request
 
 Contributors commit `XX-NEW`; `check-lost` and `check-dupes` run in the pre-commit hook and in CI
 against the pull request's base.  A maintainer runs `resolve` once, at merge time, on the target
-branch (`make ids-resolve`), so two pull requests never claim the same number.
+branch (`make ids-resolve`), so two pull requests never claim the same number; a push to main
+that still carries a placeholder fails CI (`make ids-placeholders`) until that step is done.
 tools/register_ids.py is a thin wrapper.
 """
 
@@ -29,6 +33,11 @@ check-lost counts as present. A one-off consolidation in a local commit:
 REGISTER_IDS_ALLOW_DROP={lost} git commit ...
 """
 
+PLACEHOLDER_HELP = """XX-NEW is fine on a pull request branch, never on main. Maintainer step: on an
+up-to-date main, run `make ids-resolve`, review the diff and push it (resolve allocates under the
+per-repository lock, so the numbers cannot collide with another merge).
+"""
+
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="hnx ids", description=__doc__.split("\n")[0])
@@ -45,6 +54,8 @@ def main(argv=None) -> int:
     c.add_argument("--base", help="compare with this revision only (CI: the PR base commit)")
     d = sub.add_parser("check-dupes")
     d.add_argument("paths", nargs="+")
+    pl = sub.add_parser("check-placeholders")
+    pl.add_argument("paths", nargs="+")
     ns = ap.parse_args(argv)
     try:
         root = ids.repo_root()
@@ -66,6 +77,22 @@ def main(argv=None) -> int:
                     print(f"[register-ids] {rel}: {old} -> {new}")
             return 3 if changed else 0
         bad = False
+        if ns.cmd == "check-placeholders":
+            for rel in rels:
+                spec = ids.spec_for(rel)
+                if spec is None:
+                    continue
+                left = ids.placeholders((root / rel).read_text(), spec)
+                if left:
+                    bad = True
+                    print(
+                        f"[register-ids] FATAL: {rel} still has {len(left)} placeholder id(s): "
+                        f"{', '.join(sorted(set(left)))}",
+                        file=sys.stderr,
+                    )
+            if bad:
+                print(PLACEHOLDER_HELP, file=sys.stderr)
+            return 1 if bad else 0
         if ns.cmd == "check-dupes":
             for rel in rels:
                 spec = ids.spec_for(rel)

@@ -1,4 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: lab-init
+#   kind: job
+#   purpose: Initialise the lab object store and Iceberg catalog once (idempotent).
+#   owner: lab-in-a-box
+#   trigger: [compose:lab-in-a-box/lab-init]
+#   inputs: endpoints and the fake credentials from the environment
+#   outputs: a bucket, a key and a warehouse; progress lines on stdout
+#   exit:
+#     "0": ready
+#     "1": a step failed or a variable is missing
 """One-shot initialiser for the lab-in-a-box stack (stdlib only, idempotent).
 
 1. object store: assign the single-node layout, import the fixed fake access key, create the

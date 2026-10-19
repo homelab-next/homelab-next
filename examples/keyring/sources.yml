@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# Sources of the example keyring (checklist M-12). keyring.json is generated from exactly these
+# files and never edited by hand: `hnx agent keyring build examples/keyring/sources.yml`
+# rebuilds it, and `make keyring-check` fails when it has drifted from them.
+registry: ../services.yml
+profiles:
+  - ../../schemas/agent/examples/profile.*.json
+broker: ../../schemas/broker/examples/manifest.example.json
+out: keyring.json

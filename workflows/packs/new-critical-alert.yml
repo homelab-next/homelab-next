@@ -1,0 +1,153 @@
+# SPDX-License-Identifier: Apache-2.0
+# A critical alert: find the host's owner (deterministic), ask the paging cascade whether the
+# owner is paged now, always open a case, page only on an `accept`.
+pack: new-critical-alert
+version: 1
+description: >-
+  A critical alert opens a case for the owning team; the team is paged when the
+  critical-alert-page cascade accepts.
+trigger:
+  event: homelabnext.alert.created
+  where:
+    - {ref: $event.data.severity, equals: critical}
+actor: profile:workflow-soc
+broker_manifest: workflows/broker.manifest.json
+steps:
+  - id: hosts
+    kind: enrich
+    op: pick
+    from: $event.data.entities
+    match: {kind: host}
+    field: value
+  - id: owner
+    kind: enrich
+    op: lookup
+    table: table:cmdb.asset_owners
+    key: $steps.hosts.first
+  - id: classify
+    kind: decide
+    spec: critical-alert-page
+    when:
+      - {ref: $steps.owner.found, equals: true}
+    input:
+      title: $event.data.title
+      detection: $event.data.detection
+      host: $steps.hosts.first
+      owner_team: $steps.owner.row.team
+      asset_tier: $steps.owner.row.tier
+  - id: open-case
+    kind: action
+    action: case.open
+    target: svc:cases
+    params:
+      alert_id: $event.data.alert_id
+      title: $event.data.title
+      severity: $event.data.severity
+      team: $steps.owner.row.team
+  - id: page
+    kind: action
+    action: notify.page
+    target: svc:notify
+    when:
+      - {ref: $steps.classify.label, equals: accept}
+    params:
+      rota: $steps.owner.row.oncall_rota
+      alert_id: $event.data.alert_id
+      title: $event.data.title
+fixtures:
+  - name: owned-host-paged
+    event:
+      specversion: "1.0"
+      id: evt-crit-0001
+      source: svc:siem
+      type: homelabnext.alert.created
+      time: "2026-01-01T00:00:00Z"
+      severity: critical
+      data:
+        alert_id: ALT-0101
+        detection: det:ransomware-file-rename-burst
+        title: Mass file renames on app-01
+        severity: critical
+        observed_at: "2026-01-01T00:00:00Z"
+        entities:
+          - {kind: host, value: app-01}
+    lookups:
+      table:cmdb.asset_owners:
+        app-01: {team: payments, oncall_rota: payments-primary, tier: production}
+    model:
+      classify: {label: accept, confidence: 0.96}
+    expect:
+      calls:
+        - action: case.open
+          target: svc:cases
+          params: {alert_id: ALT-0101, title: Mass file renames on app-01, severity: critical, team: payments}
+          result: executed
+        - action: notify.page
+          target: svc:notify
+          params: {rota: payments-primary, alert_id: ALT-0101, title: Mass file renames on app-01}
+          result: executed
+  - name: cascade-escalates-no-page
+    event:
+      specversion: "1.0"
+      id: evt-crit-0002
+      source: svc:siem
+      type: homelabnext.alert.created
+      time: "2026-01-01T01:00:00Z"
+      data:
+        alert_id: ALT-0102
+        detection: det:ransomware-file-rename-burst
+        title: Mass file renames on build-02
+        severity: critical
+        observed_at: "2026-01-01T01:00:00Z"
+        entities:
+          - {kind: host, value: build-02}
+    lookups:
+      table:cmdb.asset_owners:
+        build-02: {team: platform, oncall_rota: platform-primary, tier: staging}
+    model:
+      classify: {label: escalate, confidence: 0.55}
+    expect:
+      calls:
+        - action: case.open
+          target: svc:cases
+          params: {alert_id: ALT-0102, title: Mass file renames on build-02, severity: critical, team: platform}
+          result: executed
+  - name: unknown-owner-case-only
+    event:
+      specversion: "1.0"
+      id: evt-crit-0003
+      source: svc:siem
+      type: homelabnext.alert.created
+      time: "2026-01-01T02:00:00Z"
+      data:
+        alert_id: ALT-0103
+        detection: det:auth-failure-burst
+        title: Burst of failed logins on an unlisted host
+        severity: critical
+        observed_at: "2026-01-01T02:00:00Z"
+        entities:
+          - {kind: host, value: stray-07}
+    lookups:
+      table:cmdb.asset_owners: {}
+    expect:
+      calls:
+        - action: case.open
+          target: svc:cases
+          params: {alert_id: ALT-0103, title: Burst of failed logins on an unlisted host, severity: critical, team: null}
+          result: executed
+  - name: high-severity-not-triggered
+    event:
+      specversion: "1.0"
+      id: evt-crit-0004
+      source: svc:siem
+      type: homelabnext.alert.created
+      time: "2026-01-01T03:00:00Z"
+      data:
+        alert_id: ALT-0104
+        detection: det:auth-failure-burst
+        title: Burst of failed logins
+        severity: high
+        observed_at: "2026-01-01T03:00:00Z"
+    expect:
+      triggered: false
+      calls: []

@@ -1,0 +1,37 @@
+{
+  "id": "alert-noise",
+  "version": 1,
+  "question_set": [
+    "Is the alert expected maintenance noise?"
+  ],
+  "decision_table": [
+    {
+      "when": "noise, corroborated",
+      "then": "reject"
+    },
+    {
+      "when": "otherwise",
+      "then": "escalate"
+    }
+  ],
+  "tiers": [
+    {
+      "name": "floor"
+    },
+    {
+      "name": "small",
+      "model_role": "mdl:fast-classifier",
+      "min_confidence": 0.8
+    }
+  ],
+  "error_direction": "fail-closed",
+  "on_error": "escalate",
+  "latency_budget_ms": 5000,
+  "sample_audit_pct": 10,
+  "noise_gate": {
+    "deescalate": [
+      "reject"
+    ],
+    "corroborators": []
+  }
+}
