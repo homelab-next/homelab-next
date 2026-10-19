@@ -142,6 +142,8 @@ jobs:
         run: python tools/conform_coverage.py
       - name: system pages match the inventory (L-05)
         run: python -m homelabnext.cli docs systems check examples/services.yml docs/systems
+      - name: capability reference pages match the contracts, suites and adapters (L-05)
+        run: python -m homelabnext.cli docs capabilities check
       - name: hnx entry point
         run: |
           hnx --help

@@ -15,6 +15,11 @@ conformance/targets/     example target files naming a real implementation
 homelabnext/conform/     the harness: suite format, runner, targets, report, `hnx conform`, X-10
 ```
 
+The reference page of each capability, [docs/capabilities/](capabilities/README.md), is generated
+from these files (`hnx docs capabilities generate`; `hnx docs capabilities check` in `make check`
+and CI): the Protocol operations and signatures, the data shapes and errors, the check table, the
+fake, the target-file adapters with their product limits, and the integration steps.
+
 ## Running
 
 ```bash

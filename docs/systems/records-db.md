@@ -20,6 +20,7 @@ status: draft
 
 <!-- hnx:gen:what -->
 - Capability: `records-db`
+- Contract: none (`records-db` is not one of the conformance capabilities)
 - Implementation: `postgresql` 16.4
 - Owner: data-team
 - Tags: data, database
@@ -78,7 +79,7 @@ status: draft
 
 <!-- hnx:gen:deps -->
 - Depends on: none declared
-- Depended on by: [lake-catalog](lake-catalog.md) ([[lake-catalog]])
+- Depended on by: [lake-catalog](lake-catalog.md) ([[systems/lake-catalog|lake-catalog]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->

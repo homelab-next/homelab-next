@@ -20,6 +20,7 @@ status: draft
 
 <!-- hnx:gen:what -->
 - Capability: `metrics`
+- Contract: none (`metrics` is not one of the conformance capabilities)
 - Implementation: `prometheus` 2.54.1
 - Owner: platform-team
 - Tags: monitoring, ops
@@ -77,8 +78,8 @@ status: draft
 ## Depends on / depended on by
 
 <!-- hnx:gen:deps -->
-- Depends on: [notify](notify.md) ([[notify]])
-- Depended on by: [dashboards](dashboards.md) ([[dashboards]])
+- Depends on: [notify](notify.md) ([[systems/notify|notify]])
+- Depended on by: [dashboards](dashboards.md) ([[systems/dashboards|dashboards]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->

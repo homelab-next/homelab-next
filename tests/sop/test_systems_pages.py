@@ -28,7 +28,8 @@ def test_one_page_per_row_with_prefilled_facts(reg, tmp_path):
     page = (tmp_path / "lake-query.md").read_text()
     assert page.startswith("---\n") and "service: lake-query" in page
     assert "port `8443`" in page and "`/v1/info`" in page and "expects status `200`" in page
-    assert "[lake-catalog](lake-catalog.md) ([[lake-catalog]])" in page  # relative + wiki link
+    # relative + path-qualified wiki link (docs/capabilities/ has pages of the same names)
+    assert "[lake-catalog](lake-catalog.md) ([[systems/lake-catalog|lake-catalog]])" in page
     assert "Depended on by" in page and "agent-runtime" in page
     for _key, heading, _ in SECTIONS:
         assert f"## {heading}" in page
@@ -121,6 +122,20 @@ def test_cli(reg, tmp_path, capsys):
     assert main(["systems", "template"]) == 0
     assert main(["bogus"]) == 2
     capsys.readouterr()
+
+
+def test_page_links_its_capability_reference(reg, tmp_path):
+    generate_pages(reg, tmp_path)
+    page = (tmp_path / "secrets.md").read_text()
+    assert "[secrets capability reference](../capabilities/secrets.md)" in page
+    assert "[[capabilities/secrets|secrets capability]]" in page
+    # a capability without a conformance suite says so instead of linking nowhere
+    assert (
+        "Contract: none (`dns` is not one of the conformance capabilities)"
+        in (tmp_path / "dns.md").read_text()
+    )
+    # and the committed page carries the link (the systems check above pins the rest)
+    assert "../capabilities/secrets.md" in (ROOT / "docs" / "systems" / "secrets.md").read_text()
 
 
 def test_hnx_dispatch_registered():

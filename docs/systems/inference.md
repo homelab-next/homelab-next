@@ -20,6 +20,7 @@ status: draft
 
 <!-- hnx:gen:what -->
 - Capability: `inference`
+- Contract: [inference capability reference](../capabilities/inference.md) ([[capabilities/inference|inference capability]]): operations, data shapes, conformance checks, adapters
 - Implementation: `vllm` 0.6.1
 - Owner: ml-team
 - Tags: compute, inference
@@ -78,7 +79,7 @@ status: draft
 
 <!-- hnx:gen:deps -->
 - Depends on: none declared
-- Depended on by: [agent-runtime](agent-runtime.md) ([[agent-runtime]])
+- Depended on by: [agent-runtime](agent-runtime.md) ([[systems/agent-runtime|agent-runtime]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->

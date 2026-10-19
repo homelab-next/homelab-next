@@ -20,6 +20,7 @@ status: draft
 
 <!-- hnx:gen:what -->
 - Capability: `dashboards`
+- Contract: none (`dashboards` is not one of the conformance capabilities)
 - Implementation: `grafana` 11.2.0
 - Owner: platform-team
 - Tags: ops, ui
@@ -77,8 +78,8 @@ status: draft
 ## Depends on / depended on by
 
 <!-- hnx:gen:deps -->
-- Depends on: [metrics](metrics.md) ([[metrics]]), [idp](idp.md) ([[idp]])
-- Depended on by: [edge-proxy](edge-proxy.md) ([[edge-proxy]])
+- Depends on: [metrics](metrics.md) ([[systems/metrics|metrics]]), [idp](idp.md) ([[systems/idp|idp]])
+- Depended on by: [edge-proxy](edge-proxy.md) ([[systems/edge-proxy|edge-proxy]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->

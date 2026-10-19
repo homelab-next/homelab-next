@@ -20,6 +20,7 @@ status: draft
 
 <!-- hnx:gen:what -->
 - Capability: `lake-query`
+- Contract: [lake-query capability reference](../capabilities/lake-query.md) ([[capabilities/lake-query|lake-query capability]]): operations, data shapes, conformance checks, adapters
 - Implementation: `trino` 450.0
 - Owner: data-team
 - Tags: data, query
@@ -77,8 +78,8 @@ status: draft
 ## Depends on / depended on by
 
 <!-- hnx:gen:deps -->
-- Depends on: [lake-catalog](lake-catalog.md) ([[lake-catalog]]), [object-store](object-store.md) ([[object-store]]), [idp](idp.md) ([[idp]])
-- Depended on by: [agent-runtime](agent-runtime.md) ([[agent-runtime]])
+- Depends on: [lake-catalog](lake-catalog.md) ([[systems/lake-catalog|lake-catalog]]), [object-store](object-store.md) ([[systems/object-store|object-store]]), [idp](idp.md) ([[systems/idp|idp]])
+- Depended on by: [agent-runtime](agent-runtime.md) ([[systems/agent-runtime|agent-runtime]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->

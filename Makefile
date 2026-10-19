@@ -56,13 +56,15 @@ schemas:
 	$(PY) $(SCHEMA_CHECK) --strict
 
 # endpoints come from the registry; role and playbook rules come from the role interface;
-# `custom check` fails on an unowned or expired customization
+# `custom check` fails on an unowned or expired customization; the system and capability pages
+# (docs/systems/, docs/capabilities/) match the registry and the conformance code
 gates:
 	$(PY) $(ENDPOINT_GATE) .
 	$(PY) $(ROLE_LINT) $(ROLES)
 	$(PY) $(ROLE_LINT) --playbook $(PLAYBOOKS) --inventory ansible/inventory/example/hosts.yml
 	$(PY) -m homelabnext.cli custom check
 	$(PY) -m homelabnext.cli docs systems check examples/services.yml docs/systems
+	$(PY) -m homelabnext.cli docs capabilities check
 
 # every decision spec git tracks is complete, asks well-formed questions, and inline specs stay fast
 decide-lint:
