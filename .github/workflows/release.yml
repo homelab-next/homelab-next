@@ -80,7 +80,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p sbom
-          python -m homelabnext.events deploy-changed --component pkg:homelabnext \
+          # `hnx events`, through the module: this job does not install the project
+          python -m homelabnext.cli events deploy-changed --component pkg:homelabnext \
             --to "${TAG#v}" --environment pypi --commit "$SHA" --changelog CHANGELOG.md \
             --source svc:release-pipeline --out sbom/deploy-changed.json
       - name: checksums

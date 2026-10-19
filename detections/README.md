@@ -15,7 +15,9 @@ tactic tags. `evasion` fixtures document known-hard variants: the runner lists w
 caught, a miss is a reported gap, never a failure.
 
 Engine rule numbers appear in `det_map.yml` and nowhere else. Charters, profiles, decision specs and
-schedules say `det:<slug>`; `lint-ids` fails on a raw number.
+schedules say `det:<slug>`; `lint-ids` fails on a raw number. With no paths it scans the checkout
+(skipping `tests/`, build output and hidden directories, where fixtures are bad on purpose); it runs
+in `make detections` and CI, and invariant X-06 also checks that every `det:` id resolves in the map.
 
 ```
 python -m homelabnext.detections lint | run | map [--check] | lint-ids [paths] | compile <generic|wazuh>

@@ -52,6 +52,14 @@ def test_retired_ids_are_checklist_conflicts_with_a_live_replacement():
 # rows whose gate already runs in `make check`; each must be runnable from a checkout
 GATED = ["F-05", "F-18", "D-02", "D-07", "Q-04", "Q-07", "Q-09", "Q-10", "Q-11"]
 GATED += ["M-01", "M-02", "M-03", "M-04", "M-17", "L-06", "L-07", "F-07", "F-17", "Q-05", "Q-08"]
+# the CLI gates of `make check` and CI (fast: they run in `make invariants`)
+FAST_GATES = ["D-04", "T-07", "R-01", "R-03", "R-04", "R-07", "M-12", "G-01", "G-02", "G-03"]
+FAST_GATES += ["G-11", "K-02", "K-03", "K-04", "K-12", "K-15", "L-05"]
+# the rows proven by named tests: the criterion runs that pytest selection (slow, like D-07)
+PYTEST_ROWS = ["T-02", "T-04", "S-06", "S-07", "O-08", "P-02", "P-03", "P-07", "A-03", "A-04"]
+PYTEST_ROWS += ["A-05", "K-06", "K-07", "K-08", "K-13", "K-14", "G-10", "M-06", "M-07", "M-08"]
+PYTEST_ROWS += ["M-09", "M-14", "L-03", "L-08"]
+GATED += FAST_GATES + PYTEST_ROWS + ["M-16"]
 
 
 def test_ci_gates_are_auto_criteria_with_a_remediation():
@@ -64,6 +72,61 @@ def test_ci_gates_are_auto_criteria_with_a_remediation():
 
 def _run(root, only):
     return run_criteria(register()["criteria"], Context(root), only=set(only))["results"]
+
+
+def test_fast_cli_gates_pass_on_the_repository():
+    res = _run(REPO, FAST_GATES)
+    bad = {i: r["evidence"] for i, r in res.items() if r["status"] != "pass"}
+    assert not bad and set(res) == set(FAST_GATES)
+
+
+def test_fast_cli_gates_are_red_on_an_empty_checkout(tmp_path, monkeypatch):
+    # nothing to validate must never read as "validated": each gate fails or cannot measure.
+    # G-01 and K-15 audit data the package ships (prompt templates, the required safety specs),
+    # so they still find it; their own tests prove they fail on a bad template or spec.
+    monkeypatch.setenv("PYTHONPATH", str(REPO))
+    res = _run(tmp_path, [i for i in FAST_GATES if i not in ("G-01", "K-15")])
+    assert {i for i, r in res.items() if r["status"] not in ("fail", "error")} == set()
+
+
+def test_pytest_rows_run_a_named_selection_and_refuse_a_partial_run():
+    crit = by_id()
+    for i in PYTEST_ROWS:
+        c = crit[i]
+        assert (
+            c.get("slow") is True and "-m pytest -q -p no:cacheprovider tests/" in c["observable"]
+        )
+        assert "exit 100" in c["observable"], i  # a missing test dependency is could-not-measure
+        rx = re.compile(c["expect_regex"])
+        assert rx.search("12 passed, 30 deselected in 0.41s"), i
+        assert rx.search("8 passed in 1.69s"), i
+        for partial in (
+            "11 passed, 1 skipped in 0.5s",
+            "no tests ran in 0.1s",
+            "1 failed, 3 passed",
+        ):
+            assert not rx.search(partial), (i, partial)
+
+
+def test_a_pytest_row_fails_when_its_tests_fail(tmp_path, monkeypatch):
+    # L-08's own observable, pointed at a checkout whose runner tests are broken
+    monkeypatch.setenv("PYTHONPATH", str(REPO))
+    (tmp_path / "tests/invariants").mkdir(parents=True)
+    (tmp_path / "tests/invariants/test_inv_runner.py").write_text(
+        "def test_exit_code_semantics():\n    assert False\n"
+    )
+    r = _run(tmp_path, ["L-08"])["L-08"]
+    assert r["status"] == "fail"
+
+
+def test_m16_fails_on_a_placeholder_id(scratch):
+    reg = scratch / "lessons.yml"
+    reg.write_text("lessons:\n- id: LL-001\n  x: 1\n")
+    _git(scratch, "add", "-A")
+    assert _run(scratch, ["M-16"])["M-16"]["status"] == "pass"
+    reg.write_text("lessons:\n- id: LL-001\n  x: 1\n- id: LL-NEW\n  x: 2\n")
+    r = _run(scratch, ["M-16"])["M-16"]
+    assert r["status"] == "fail" and "LL-NEW" in r["evidence"]
 
 
 def test_fast_gates_pass_on_the_repository():

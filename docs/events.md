@@ -89,7 +89,7 @@ it changes the body, and the id is the idempotency key.
 
 `enrichment_coverage(events)` is the metric (share of events carrying owner and a known criticality,
 missing counts per type; an empty stream is not ok). The live >= 95% target is measured on the server
-over an exported stream: `python -m homelabnext.events enrich-coverage events.jsonl [--min 0.95]`
+over an exported stream: `hnx events enrich-coverage events.jsonl [--min 0.95]`
 (exit 0 at or above, 1 below, 100 nothing to measure; `--registry`/`--guests` enrich first).
 
 ## Deploys emit a what-changed event (checklist F-15)
@@ -98,6 +98,7 @@ over an exported stream: `python -m homelabnext.events enrich-coverage events.js
 environment, commit, and `changes` read from the changelog section of the new version, Keep a
 Changelog headings). A version without a section, or a section that lists nothing, refuses the event.
 The id derives from the deploy id, so a retried deploy step is a duplicate. The release workflow runs
-`python -m homelabnext.events deploy-changed --component pkg:homelabnext --to <tag> ... --out
-sbom/deploy-changed.json` and attaches the event to the GitHub release; a lab deploy publishes it with
+`hnx events deploy-changed --component pkg:homelabnext --to <tag> ... --out sbom/deploy-changed.json`
+(as `python -m homelabnext.cli events ...`: its build job does not install the project) and
+attaches the event to the GitHub release; a lab deploy publishes it with
 `--forwarder URL --state FILE` (or `emit_deploy_changed(publisher, ...)` from Python).
