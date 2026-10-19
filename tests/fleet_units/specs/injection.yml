@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Directive-injection payload from the security review (must be refused).
+- name: x
+  exec: "/bin/true\nExecStartPost=/bin/sh -c id"
+  on_calendar: "*-*-* 02:00:00 UTC"
+  replaced_by: "y\n[Service]\nExecStart=/bin/evil"

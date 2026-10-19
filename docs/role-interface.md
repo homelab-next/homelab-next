@@ -126,7 +126,17 @@ output is byte-for-byte deterministic. The reason for the ban: with
 `OnBootSec` + `OnUnitActiveSec`, a boot trigger point that passes while the unit
 was not runnable leaves the timer `active` forever and never firing again.
 `pages_directly: true` adds an `OnFailure=` page unit; `replaced_by: <ref>` renders the
-unit disabled and marks it retired in `fleet-units.manifest`.
+unit disabled, with `ExecStart=/bin/false`, and marks it retired in `fleet-units.manifest`.
+
+Every value must be a single line: a control character or a trailing backslash in any field is
+refused, because either one lets a value add or swallow unit directives. Services are sandboxed
+by default: without `user:` a unit runs as `DynamicUser=yes`, `user: root` needs
+`run_as_root: true`, and every service carries `NoNewPrivileges`, `ProtectSystem=strict`,
+`ProtectHome`, `PrivateTmp`, `PrivateDevices`, the kernel and cgroup protections,
+`RestrictSUIDSGID`, `RestrictNamespaces` and an empty `CapabilityBoundingSet`
+(`fleet_units.HARDENING`). `read_write_paths:` lists what the job may write under
+`ProtectSystem=strict`; `hardening_opt_out: [Directive, ...]` drops named directives for one
+unit, and shows up in review as exactly that.
 
 ## 9. Scaffolds
 
