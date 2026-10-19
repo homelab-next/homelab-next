@@ -263,6 +263,10 @@ services:
   # --- authz: OpenFGA (in-memory store) ---------------------------------------------------
   authz:
     <<: [*restart, *hardened]
+    # No docker-init here: in this distroless image under cap_drop ALL the runtime cannot exec the
+    # injected /sbin/docker-init (permission denied, seen in the nightly run).  openfga is a single
+    # Go binary that handles SIGTERM itself, so it needs no init process; the hardening stays.
+    init: false
     image: openfga/openfga:v1.8.4@sha256:0ad225772d28527eacbe71fda9f2349b332100a710c2f2a624b188470b38f1ac
     command: ["run"]
     environment:
