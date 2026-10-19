@@ -125,9 +125,10 @@ jobs:
           python -m homelabnext.cli scripts catalog --check
           python -m homelabnext.cli scripts reality
           python -m homelabnext.cli scripts runner-lint
-      - name: detections lint, fixtures and ATT&CK map
+      - name: detections lint, fixtures, ATT&CK map, no engine rule numbers in agent files
         run: |
           python -m homelabnext.detections lint
+          python -m homelabnext.detections lint-ids
           python -m homelabnext.detections run
           python -m homelabnext.detections map --check
           python -m homelabnext.detections coverage --check detections/attack_coverage.json
@@ -137,6 +138,8 @@ jobs:
         run: python -m homelabnext.registers build examples/registers build/registers
       - name: conformance coverage (all 14 capabilities have a passing suite)
         run: python tools/conform_coverage.py
+      - name: system pages match the inventory (L-05)
+        run: python -m homelabnext.cli docs systems check examples/services.yml docs/systems
       - name: hnx entry point
         run: |
           hnx --help
