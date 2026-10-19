@@ -21,10 +21,10 @@ FROZEN_11 = json.loads((ROOT / "schemas/_frozen/1.1/platform/guest.schema.json")
 FIXTURES = sorted((Path(__file__).parent / "fixtures").glob("guest.1_1.*.yml"))
 
 
-def test_version_is_1_1_and_frozen():
-    assert CURRENT["$id"].endswith("/platform/guest/1.1")
-    assert CURRENT == FROZEN_11
+def test_1_1_is_frozen_and_current_is_additive_over_it():
+    assert FROZEN_11["$id"].endswith("/platform/guest/1.1")
     assert FROZEN_10["$id"].endswith("/platform/guest/1.0")
+    assert sc.is_additive(FROZEN_11, CURRENT) == []
 
 
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.name)

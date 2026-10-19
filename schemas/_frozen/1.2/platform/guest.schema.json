@@ -1,0 +1,270 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/guest/1.2",
+  "title": "Guest (compute) descriptor",
+  "description": "One VM, container or physical host, described in vendor-neutral values. Zones are referenced by id (a site model owns them); capabilities by cap: id. Generators render Terraform, libvirt, cloud-init, an Ansible inventory, registry hosts and backup jobs from a directory of these files.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "kind", "provisioning", "placement", "network", "capability", "owners"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^guest:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "maxLength": 70,
+      "description": "Logical id; the slug is the guest's hostname and must equal the file name stem."
+    },
+    "display_name": {"type": "string", "minLength": 1, "maxLength": 80},
+    "kind": {
+      "enum": ["vm", "lxc", "host"],
+      "description": "host = a physical machine that is inventoried but never provisioned."
+    },
+    "provisioning": {
+      "enum": ["terraform", "manual", "host-only"],
+      "description": "terraform = rendered into IaC; manual = created by hand (needs lifecycle.requires_root_steps); host-only = physical, kind host."
+    },
+    "placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node"],
+      "properties": {
+        "node": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$", "description": "Logical name of the hypervisor or host."},
+        "vmid": {"type": "integer", "minimum": 1, "maximum": 999999999},
+        "vmid_scheme": {
+          "enum": ["octet", "sequential", "freeform"],
+          "default": "freeform",
+          "description": "octet = vmid equals the last octet of network.ip."
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu", "memory", "disks"],
+      "properties": {
+        "cpu": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cores"],
+          "properties": {
+            "cores": {"type": "integer", "minimum": 1, "maximum": 512},
+            "type": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]*$", "default": "host"}
+          }
+        },
+        "memory": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["size_mb"],
+          "properties": {
+            "size_mb": {"type": "integer", "minimum": 64},
+            "balloon_min_mb": {"type": ["integer", "null"], "minimum": 0}
+          }
+        },
+        "disks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "size_gb", "pool"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+              "size_gb": {"type": "integer", "minimum": 1},
+              "pool": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$", "description": "Logical storage pool; the hypervisor adapter maps it."},
+              "discard": {"type": "boolean", "default": true},
+              "format": {"enum": ["raw", "qcow2"], "default": "raw"}
+            }
+          }
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["logical", "kind", "os_type"],
+      "properties": {
+        "logical": {"type": "string", "pattern": "^[a-z][a-z0-9._-]*$", "description": "Logical image name; resolved to a template or file per hypervisor."},
+        "kind": {"enum": ["template-clone", "iso-install", "tarball"]},
+        "os_type": {"type": "string", "pattern": "^[a-z][a-z0-9._-]*$"}
+      }
+    },
+    "cloudinit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["user"],
+      "properties": {
+        "user": {"type": "string", "pattern": "^[a-z_][a-z0-9_-]{0,31}$"},
+        "ssh_authorized_keys": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+          "description": "Key NAMES, never key material; resolved when rendering."
+        },
+        "packages": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9+.:_-]*$"}},
+        "timezone": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+)*$", "default": "UTC"},
+        "storage_pool": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+        "sudo": {
+          "enum": ["none", "password", "nopasswd"],
+          "default": "none",
+          "description": "(1.2) Sudo rule for the cloud-init user. none = no sudo rule (the default); password = ALL=(ALL) ALL, usable only once a password is set out of band; nopasswd = ALL=(ALL) NOPASSWD:ALL, an explicit opt-in for an automation account (docs/compute-model.md)."
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["zone", "ip"],
+      "properties": {
+        "zone": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"},
+        "ip": {"type": "string", "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$"},
+        "gateway": {
+          "default": "inherit",
+          "oneOf": [
+            {"const": "inherit"},
+            {"type": "string", "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$"}
+          ]
+        },
+        "bridge": {"type": "string", "pattern": "^(?:default|[a-z][a-z0-9_.-]{0,14})$", "default": "default"},
+        "vlan_tag_mode": {"enum": ["in_bridge", "per_vlan_bridge"], "default": "in_bridge"},
+        "firewall": {
+          "enum": ["inherit", "enabled", "disabled"],
+          "default": "enabled",
+          "description": "Per-NIC firewall flag. Absent or 'inherit' resolve to enabled (firewall on by default); 'disabled' needs network.firewall_exemption when the node runs a firewall."
+        },
+        "firewall_exemption": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason"],
+          "description": "Documented reason a NIC runs with the firewall flag off. Without it, a disabled flag on a firewall-enabled node is rejected.",
+          "properties": {
+            "reason": {"type": "string", "minLength": 10, "maxLength": 300},
+            "review_by": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}
+          }
+        }
+      }
+    },
+    "firewall_rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per-guest firewall rules rendered by the firewall-rules target. Inbound policy is drop; only the listed rules are allowed.",
+      "properties": {
+        "policy_out": {
+          "enum": ["ACCEPT", "DROP", "REJECT"],
+          "default": "ACCEPT",
+          "description": "(1.2) Outbound policy. DROP or REJECT is default-deny egress: only outbound_allow rules (and replies to allowed inbound traffic) leave the guest."
+        },
+        "outbound_allow": {
+          "type": "array",
+          "description": "(1.2) Egress allow rules, used with policy_out DROP or REJECT.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "proto", "dest"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,39}$"},
+              "proto": {"enum": ["tcp", "udp", "icmp"]},
+              "ports": {"type": "string", "pattern": "^[0-9]{1,5}(?::[0-9]{1,5})?$", "description": "A port or low:high range; omitted for icmp."},
+              "dest": {"type": "string", "pattern": "^(?:any|zone:[a-z][a-z0-9-]{0,31}|[0-9]{1,3}(?:\\.[0-9]{1,3}){3}/[0-9]{1,2})$", "description": "any, zone:<id> (resolved through the site model) or a CIDR."}
+            }
+          }
+        },
+        "inbound_allow": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "proto", "source"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,39}$"},
+              "proto": {"enum": ["tcp", "udp", "icmp"]},
+              "ports": {"type": "string", "pattern": "^[0-9]{1,5}(?::[0-9]{1,5})?$", "description": "A port or low:high range; omitted for icmp."},
+              "source": {"type": "string", "pattern": "^(?:any|zone:[a-z][a-z0-9-]{0,31}|[0-9]{1,3}(?:\\.[0-9]{1,3}){3}/[0-9]{1,2})$", "description": "any, zone:<id> (resolved through the site model) or a CIDR."}
+            }
+          }
+        }
+      }
+    },
+    "scope": {
+      "enum": ["in", "out"],
+      "default": "in",
+      "description": "Writer-tool scope: 'out' marks a throwaway or scratch guest that tools must not file tasks, notes or findings about (homelabnext.scope)."
+    },
+    "gpu": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile"],
+      "properties": {
+        "profile": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+        "resource_mapping": {"type": ["string", "null"], "pattern": "^[a-z][a-z0-9_-]*$"},
+        "power_limit_w": {"type": ["integer", "null"], "minimum": 1},
+        "tensor_parallel": {"type": ["integer", "null"], "minimum": 1}
+      }
+    },
+    "capability": {
+      "type": "string",
+      "pattern": "^cap:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "description": "The one capability this guest provides; must be a known capability."
+    },
+    "capability_groups": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^cap_[a-z][a-z0-9_]*$"}
+    },
+    "tags": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"}},
+    "shared_dirs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["host_path", "mount_path"],
+        "properties": {
+          "host_path": {"type": "string", "pattern": "^/[A-Za-z0-9_./-]*$"},
+          "mount_path": {"type": "string", "pattern": "^/[A-Za-z0-9_./-]*$"},
+          "read_only": {"type": "boolean", "default": false}
+        }
+      }
+    },
+    "backup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy"],
+      "properties": {
+        "policy": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$", "description": "Named policy; 'none' opts out."},
+        "include_memory": {"type": "boolean", "default": false},
+        "retain": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "daily": {"type": "integer", "minimum": 0},
+            "weekly": {"type": "integer", "minimum": 0},
+            "monthly": {"type": "integer", "minimum": 0}
+          }
+        },
+        "export_hook": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$", "description": "Name of the role's export hook (docs/role-interface.md)."}
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "on_boot": {"type": "boolean", "default": true},
+        "requires_root_steps": {"type": "array", "items": {"type": "string", "minLength": 3}},
+        "ignore_changes": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}}
+      }
+    },
+    "owners": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary"],
+      "properties": {
+        "primary": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+        "oncall": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"kind": {"enum": ["vm", "lxc"]}}, "required": ["kind"]},
+      "then": {"required": ["resources", "image"]}
+    }
+  ]
+}

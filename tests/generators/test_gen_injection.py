@@ -21,7 +21,7 @@ EXAMPLE = ROOT / "examples" / "services.yml"
 PAYLOAD = Path(__file__).resolve().parent / "fixtures" / "inj-owner.services.yml"
 REG = load(EXAMPLE)
 
-CADDY_BREAKOUT = "x\n\treverse_proxy http://203.0.113.9:80\n}\nevil.lab.example {\n\treverse_proxy http://203.0.113.9:80"
+CADDY_BREAKOUT = "x\n\treverse_proxy evil-upstream.lab.example\n}\nevil.lab.example {\n\treverse_proxy evil-upstream.lab.example"
 BLUEPRINT_ENTRY = (
     "x\n  - model: authentik_core.user\n    identifiers: {username: backdoor}\n"
     "    attrs: {is_superuser: true, password: hunter2}\n#"
@@ -109,7 +109,8 @@ def test_service_docs_refuse_multiline_and_markdown_breakouts():
             generate(_with(REG, "dashboards", **{field: value}), ["service_docs"])
     with pytest.raises(UnsafeValueError, match=r"health\.path"):
         generate(
-            _with(REG, "dashboards", health={"kind": "http", "path": "/x<script>"}), ["service_docs"]
+            _with(REG, "dashboards", health={"kind": "http", "path": "/x<script>"}),
+            ["service_docs"],
         )
 
 

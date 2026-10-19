@@ -52,6 +52,38 @@ def good():
     return load_fleet(FLEET, STUB, keys_path=KEYS)
 
 
+#: libvirt cannot tag a bridge port or enforce the .fw rules, so its golden fleet uses
+#: per-VLAN bridges and host-filtered NICs (homelabnext/compute/gen/libvirt.py)
+LIBVIRT_EXEMPTION = {
+    "reason": "Filtered on the libvirt host by its nftables ruleset, not by the hypervisor.",
+    "review_by": "2027-03-31",
+}
+
+
+def _libvirt_ready(doc):
+    doc["network"].update(
+        vlan_tag_mode="per_vlan_bridge", firewall="disabled", firewall_exemption=LIBVIRT_EXEMPTION
+    )
+    doc.pop("firewall_rules", None)
+
+
+@pytest.fixture(scope="module")
+def libvirt_dir(tmp_path_factory):
+    d = tmp_path_factory.mktemp("libvirt") / "fleet"
+    shutil.copytree(FLEET, d)
+    for name in ("lake-core", "edge-core", "infer-core"):
+        p = d / f"{name}.yml"
+        doc = yaml.safe_load(p.read_text())
+        _libvirt_ready(doc)
+        p.write_text(yaml.safe_dump(doc, sort_keys=False))
+    return d
+
+
+@pytest.fixture(scope="module")
+def libvirt_fleet(libvirt_dir):
+    return load_fleet(libvirt_dir, STUB, keys_path=KEYS)
+
+
 def mutate(tmp_path: Path, name: str, edit) -> Path:
     d = tmp_path / "fleet"
     shutil.copytree(FLEET, d)
@@ -235,8 +267,8 @@ def _golden_cases():
 
 
 @pytest.mark.parametrize("target", _golden_cases())
-def test_target_matches_golden(good, target):
-    out = render(good, target)
+def test_target_matches_golden(good, libvirt_fleet, target):
+    out = render(libvirt_fleet if target == "libvirt" else good, target)
     assert out
     gdir = GOLDEN / target
     if os.environ.get("HNX_UPDATE_GOLDEN") == "1":
@@ -251,8 +283,9 @@ def test_target_matches_golden(good, target):
 
 
 @pytest.mark.parametrize("target", _golden_cases())
-def test_render_is_deterministic(good, target):
-    assert render(good, target) == render(good, target)
+def test_render_is_deterministic(good, libvirt_fleet, target):
+    fleet = libvirt_fleet if target == "libvirt" else good
+    assert render(fleet, target) == render(fleet, target)
 
 
 def test_unresolved_key_renders_placeholder_never_material():
@@ -274,8 +307,8 @@ def test_terraform_shapes(good):
     assert "endpoint" in tf["providers.tf"] and "198." not in tf["providers.tf"]
 
 
-def test_libvirt_skips_non_vm_and_manual(good):
-    lv = render(good, "libvirt")
+def test_libvirt_skips_non_vm_and_manual(libvirt_fleet):
+    lv = render(libvirt_fleet, "libvirt")
     assert "idp-core.sh" not in lv and "lake-core.sh" in lv
     assert "kind lxc" in lv["SKIPPED.txt"] and "secrets-core: not terraform" in lv["SKIPPED.txt"]
     assert "backing_store" in lv["lake-core.sh"]
@@ -377,9 +410,10 @@ def test_cli_validate_fails_on_bad_fleet(tmp_path, capsys):
 
 
 @pytest.mark.parametrize("target", sorted(TARGETS))
-def test_cli_render_writes_tree(tmp_path, target, capsys):
+def test_cli_render_writes_tree(tmp_path, libvirt_dir, target, capsys):
     out = tmp_path / "o"
-    assert run_cli("render", *BASE, "--keys", str(KEYS), "--target", target, "--out", str(out)) == 0
+    base = [str(libvirt_dir), *BASE[1:]] if target == "libvirt" else BASE
+    assert run_cli("render", *base, "--keys", str(KEYS), "--target", target, "--out", str(out)) == 0
     assert read_tree(out) == read_tree(GOLDEN / target)
 
 
@@ -409,3 +443,73 @@ def test_cli_plan_against_previous_render(tmp_path, capsys):
 
 def test_cli_unknown_target_rejected():
     assert run_cli("render", *BASE, "--target", "bogus") == 2
+
+
+# ---------------------------------------------------------------- security regressions
+def test_libvirt_refuses_what_it_cannot_isolate(good):
+    with pytest.raises(ComputeError) as ei:
+        render(good, "libvirt")
+    msg = str(ei.value)
+    for gid in ("guest:lake-core", "guest:edge-core", "guest:infer-core"):
+        assert f"{gid}: zone" in msg and f"{gid}: the NIC firewall is enabled" in msg
+    assert "guest:bus-core" not in msg  # per-VLAN bridge, documented exemption
+
+
+def test_libvirt_uses_the_per_vlan_bridge_and_quotes_expansions(libvirt_fleet):
+    lv = render(libvirt_fleet, "libvirt")
+    sh = lv["lake-core.sh"]
+    assert '--network "bridge=${HNX_DEFAULT_BRIDGE:?set HNX_DEFAULT_BRIDGE}v20,model=virtio"' in sh
+    assert '--disk "path=${HNX_POOL_BULK}/lake-core-data.raw,' in sh
+    assert "# vlan" not in sh
+    for text in lv.values():
+        for line in text.splitlines():
+            if line.lstrip().startswith(("--disk", "--network", "--hostdev", "--filesystem")):
+                assert line.split(" ", 3)[3 if line.startswith("  ") else 1].startswith('"'), line
+
+
+@pytest.mark.skipif(shutil.which("shellcheck") is None, reason="shellcheck not installed")
+def test_libvirt_scripts_pass_shellcheck(libvirt_fleet, tmp_path):
+    import subprocess
+
+    for name, text in render(libvirt_fleet, "libvirt").items():
+        if name.endswith(".sh"):
+            p = tmp_path / name
+            p.write_text(text)
+            r = subprocess.run(["shellcheck", "-s", "sh", str(p)], capture_output=True, text=True)
+            assert r.returncode == 0, r.stdout
+
+
+def test_cloudinit_sudo_is_per_guest_and_off_by_default(good):
+    ci = render(good, "cloudinit")
+    assert "sudo:" not in ci["edge-core/user-data"]  # no cloudinit.sudo -> no rule
+    assert 'sudo: "ALL=(ALL) ALL"' in ci["bus-core/user-data"]  # sudo: password
+    assert 'sudo: "ALL=(ALL) NOPASSWD:ALL"' in ci["lake-core/user-data"]  # explicit opt-in
+    for text in ci.values():
+        if "user-data" in text or text.startswith("#cloud-config"):
+            assert "lock_passwd: true" in text
+
+
+def test_loader_refuses_control_characters_the_schema_pattern_lets_through(tmp_path):
+    d = mutate(tmp_path, "lake-core", lambda x: x["cloudinit"].update(user="ansible\n"))
+    assert "unsafe: cloudinit/user: control character" in problems_of(d)
+    d = mutate(
+        tmp_path / "b", "lake-core", lambda x: x["resources"]["disks"][0].update(pool="fast\n")
+    )
+    assert "unsafe: resources/disks/0/pool" in problems_of(d)
+
+
+def test_hcl_quote_escapes_template_sequences():
+    from homelabnext.compute.gen._text import hq, hqlist, q
+
+    assert hq("a${var.x}b") == '"a$${var.x}b"'
+    assert hq("%{ if true }x%{ endif }") == '"%%{ if true }x%%{ endif }"'
+    assert hq("plain") == q("plain") == '"plain"'
+    assert hq("$x %y") == '"$x %y"'  # only the template openers change
+    assert hq(3) == "3" and hq(True) == "true"
+    assert hqlist(["${a}", "b"]) == '["$${a}", "b"]'
+    assert q("${a}") == '"${a}"'  # YAML has no templates: q leaves it alone
+
+
+def test_terraform_provider_constraint_is_bounded(good):
+    tf = render(good, "terraform-proxmox")["providers.tf"]
+    assert 'version = "~> 0.60"' in tf and ">=" not in tf

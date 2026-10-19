@@ -48,6 +48,10 @@ to write a permissive default.
 `hnx site validate` runs the JSON Schema and then the semantic rules, which only report and never
 repair. Errors block `plan` and `render`; warnings do not.
 
+Before the schema, any key or value holding a control character (a newline included) is an error.
+Adapters write line-oriented configs, and Python's `re`, which the schema validator uses, lets a
+pattern's `$` match before a trailing newline, so a pattern alone does not keep `"lan\n"` out.
+
 * VLAN ids are unique; subnets are valid, large enough and do not overlap.
 * The gateway is a usable address inside its subnet; a DHCP range is ordered, inside the subnet and
   excludes the gateway and every statically addressed registry host.

@@ -11,6 +11,7 @@ from typing import Any
 import yaml
 
 from homelabnext import paths
+from homelabnext.generators.safe import control_char_paths
 
 from .model import ComputeError, Fleet, Guest, Problem, ZoneLookup
 
@@ -83,7 +84,10 @@ def load_guests(directory: str | Path) -> tuple[list[Guest], list[Problem]]:
         except (OSError, yaml.YAMLError) as exc:
             problems.append(Problem(where, f"unreadable YAML: {exc}"))
             continue
-        errs = schema_problems(doc, where)
+        # Python's re lets a schema pattern's "$" match before a trailing newline, and every
+        # target writes line-oriented text: refuse control characters in any key or value first
+        errs = [Problem(where, f"unsafe: {m}") for m in control_char_paths(doc)]
+        errs += schema_problems(doc, where)
         if errs:
             problems += errs
             continue

@@ -15,6 +15,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from homelabnext.generators.safe import control_char_paths
+
 from .loader import schema
 
 #: Field paths where an IPv4 literal is legitimate (everything else must be a reference).
@@ -94,6 +96,10 @@ def _walk_literals(node: Any, path: str, report: Report) -> None:
 def validate(doc: Any, registry: Any) -> Report:
     """Full validation of ``doc`` against the JSON Schema and ``registry`` (a built Registry)."""
     report = Report()
+    # adapters write line-oriented configs; Python's re lets a pattern's "$" match before a
+    # trailing newline, so refuse control characters in any key or value before the schema
+    for m in control_char_paths(doc):
+        report.error(f"unsafe: {m}")
     for p in schema_problems(doc):
         report.error(p)
     if report.errors:
