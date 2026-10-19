@@ -1,0 +1,18 @@
+{
+  "last_run": "2026-10-19",
+  "results": {
+    "L-05": {
+      "checked_at": "2026-10-19T23:18:25+00:00",
+      "duration_s": 0.9,
+      "evidence": "systems pages: ok (14 services, 126 unfilled TODO blocks)\ncapability pages: ok (docs/capabilities)",
+      "status": "pass"
+    },
+    "M-03": {
+      "checked_at": "2026-10-19T23:18:17+00:00",
+      "duration_s": 3.5,
+      "evidence": "shared_helpers_lint: 0 private helper(s), 0 stale allowlist entries, 315 files scanned\ndup_check: 0 new, 0 stale; 39 clone(s), 484/49725 lines duplicated (0.97%), 315 files\nhelpers shared",
+      "status": "pass"
+    }
+  },
+  "schema": "homelabnext.invariants.results/1"
+}

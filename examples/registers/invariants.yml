@@ -886,10 +886,12 @@ criteria:
   evidence: auto
   observable: >-
     python3 -c 'import yaml' 2>/dev/null || exit 100;
-    python3 -m homelabnext.cli docs systems check examples/services.yml docs/systems
+    python3 -m homelabnext.cli docs systems check examples/services.yml docs/systems &&
+    python3 -m homelabnext.cli docs capabilities check
   expected: >-
     exit 0: every service in the inventory has its system page and the generated parts match the
-    inventory (0 drift; TODO blocks are reported, not failed)
+    inventory, and every capability page matches its contract, suite and adapters (0 drift; TODO
+    blocks are reported, not failed)
   expect_regex: 'systems pages: ok'
   remediation: >-
     Run `hnx docs systems generate examples/services.yml docs/systems` (or fix the inventory) and
