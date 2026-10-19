@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("ansible")
+pytest.importorskip("ansible.errors")  # the repo's own ansible/ dir also imports as "ansible"
 from ansible.errors import AnsibleLookupError
 
 PLUGIN = Path(__file__).resolve().parents[2] / "ansible/plugins/lookup/hnx_registry.py"
