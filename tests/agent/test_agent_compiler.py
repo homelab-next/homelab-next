@@ -247,7 +247,8 @@ def test_verify_uses_the_policy_not_the_profiles_own_ceiling():
     assert verify_profile(forged) == []
     probs = verify_profile(forged, policy=_policy())
     assert any("mcp outside ceiling" in x for x in probs)
-    assert any(x.startswith("ceiling wider than the policy") for x in probs)  # stored ceiling wider than policy
+    # the ceiling stored in the profile is wider than the policy's
+    assert any(x.startswith("ceiling wider than the policy") for x in probs)
 
 
 def test_lock_pins_the_reviewed_digest():

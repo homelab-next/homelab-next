@@ -4,7 +4,9 @@
 ``OpenAICompat(base_url)`` implements :class:`conformance.protocols.inference.InferenceClient`.
 The base URL is always supplied by the caller (a fake's ``.url``, or an endpoint the registry
 resolver produced); there is no default.  An optional ``auth`` callable returns an
-``Authorization`` header value at request time so a secret is never held in the object.
+``Authorization`` header value at request time so a secret is never held in the object.  With
+``auth`` set, plain ``http`` to a non-loopback host is refused unless ``allow_plaintext=True``;
+redirects are followed only within the same origin; replies are read up to ``max_bytes``.
 """
 
 from __future__ import annotations
@@ -15,6 +17,14 @@ import urllib.request
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
+
+from homelabnext._http import (
+    DEFAULT_MAX_BYTES,
+    ResponseTooLarge,
+    check_plaintext,
+    read_bounded,
+    safe_urlopen,
+)
 
 __all__ = ["ChatResult", "InferenceError", "OpenAICompat"]
 
@@ -45,9 +55,13 @@ class OpenAICompat:
         auth: Callable[[], str | None] | None = None,
         timeout: float = 10.0,
         features: Sequence[str] = ("embeddings", "streaming"),
+        allow_plaintext: bool = False,
+        max_bytes: int = 16 * DEFAULT_MAX_BYTES,
     ):
         if not base_url.startswith(("http://", "https://")):
             raise ValueError("base_url must be an http(s) URL supplied by the caller")
+        check_plaintext(base_url, credentials=auth is not None, allow_plaintext=allow_plaintext)
+        self.max_bytes = max_bytes
         self._base = base_url.rstrip("/")
         self._auth = auth
         self._timeout = timeout
@@ -74,7 +88,7 @@ class OpenAICompat:
             self._base + path, data=data, headers=headers, method="GET" if body is None else "POST"
         )
         try:
-            return urllib.request.urlopen(req, timeout=self._timeout)
+            return safe_urlopen(req, timeout=self._timeout)
         except urllib.error.HTTPError as exc:
             raise InferenceError(f"HTTP {exc.code} from {path}", exc.code) from exc
         except (urllib.error.URLError, OSError) as exc:
@@ -82,7 +96,10 @@ class OpenAICompat:
 
     def _json(self, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
         with self._request(path, body) as resp:
-            raw = resp.read()
+            try:
+                raw = read_bounded(resp, self.max_bytes)
+            except ResponseTooLarge as exc:
+                raise InferenceError(f"{path}: {exc}") from None
         try:
             doc = json.loads(raw)
         except ValueError as exc:
@@ -139,7 +156,14 @@ class OpenAICompat:
         )
         with resp:
             done = False
-            for raw in resp:
+            seen = 0
+            while True:
+                raw = resp.readline(self.max_bytes + 1)
+                if not raw:
+                    break
+                seen += len(raw)
+                if seen > self.max_bytes:
+                    raise InferenceError(f"stream: larger than {self.max_bytes} bytes")
                 line = raw.decode("utf-8").strip()
                 if not line.startswith("data:"):
                     continue
