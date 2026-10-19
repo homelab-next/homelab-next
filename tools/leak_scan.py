@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: leak-scan
+#   kind: check
+#   purpose: Fail when the tree, a commit range or stdin carries a private identifier or a secret shape.
+#   owner: maintainers
+#   trigger: [ci:ci/leak-scan, ci:ci/packaging, ci:release/build, make:leak-scan, make:leak-scan-history, make:secret-scan, pre-commit:leak-scan, pre-commit:secret-scan]
+#   invariant: [F-05, F-18]
+#   inputs: paths, --history RANGE, --stdin or --check-authors RANGE; optional HNX_DENYLIST file
+#   outputs: one line per hit
+#   exit:
+#     "0": clean
+#     "1": at least one hit or an unscannable file
+#     "2": misconfiguration
 """Generic public-repository leak scanner.
 
 Scans text files for *shapes* of data that must never be published: private, carrier-grade-NAT

@@ -1,4 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: fake-openai-server
+#   kind: service
+#   purpose: Serve the deterministic fake OpenAI-compatible inference API.
+#   owner: conformance
+#   trigger: [compose:lab-in-a-box/inference]
+#   inputs: --host, --port, --model
+#   outputs: the HTTP API; nothing on disk
+#   exit:
+#     "0": stopped cleanly
 """A fake OpenAI-compatible inference server (stdlib only, deterministic).
 
 Serves ``GET /v1/models``, ``POST /v1/chat/completions`` (optionally streamed),

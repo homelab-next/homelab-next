@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: decommission-check
+#   kind: tool
+#   purpose: Report every remaining reference to a service retired by a swap (ADR-0005 step 8).
+#   owner: maintainers
+#   trigger: [manual]
+#   inputs: the roots to scan and the retired service's names (flags, or --from-record)
+#   outputs: one line per remaining reference, or JSON with --json
+#   exit:
+#     "0": no reference remains
+#     "1": references remain
+#     "2": usage error
 """Exit non-zero if any reference to a retired service remains.
 
     python tools/decommission_check.py ROOT [ROOT ...] --host old-host --impl oldproduct \\

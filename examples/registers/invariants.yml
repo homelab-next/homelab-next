@@ -84,6 +84,27 @@ criteria:
   remediation: >-
     Fix the backend or rule that changed the compiled output, or, if the change is intended,
     refresh the goldens with UPDATE_GOLDEN=1 and review the diff.
+- id: Q-04
+  statement: Every component ships tests.
+  evidence: auto
+  observable: python3 tools/component_tests.py && echo every component has tests
+  expected: exit 0 (a component directory with no tests, or a stale allowlist entry, fails)
+  expect_regex: every component has tests
+  remediation: >-
+    Add a test file for the component the gate names, or, for a genuine exception, an ALLOW entry
+    in tools/component_tests.py with the reason; untested code is code nobody can change safely.
+- id: Q-07
+  statement: Security-critical code is well covered.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest_cov' 2>/dev/null || exit 100;
+    python3 tools/coverage_floor.py && echo coverage floor held
+  expected: exit 0 (exit 100 when pytest-cov is not installed, which is could-not-measure)
+  expect_regex: coverage floor held
+  slow: true
+  remediation: >-
+    Write tests for the unit the table shows below its floor (from its own test directory); a
+    broker, scope guard or decision path nobody exercises is where a regression ships unseen.
 - id: Q-09
   statement: Every source file carries an SPDX header.
   evidence: auto
@@ -103,6 +124,58 @@ criteria:
   remediation: >-
     Add the missing example or negative under the schema's examples directory, or fix the
     schema; a schema with no negative has never been shown to reject anything.
+- id: Q-11
+  statement: Tests are hermetic.
+  evidence: auto
+  observable: python3 tools/hermetic_lint.py && echo no clock or randomness in tests
+  expected: >-
+    exit 0 (covers direct clock and randomness calls in test code; the network half is enforced
+    while the tests run, by tests/network_guard.py)
+  expect_regex: no clock or randomness in tests
+  remediation: >-
+    Inject the clock or a seeded random.Random into the code under test instead of reading them
+    in the test; a test that depends on the time of day passes until the day it does not.
+- id: M-01
+  statement: Every script is catalogued.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli scripts catalog --check
+  expected: >-
+    exit 0: every script (docs/scripts.md) has a valid `# hnx-script:` header and
+    docs/scripts/catalog.json and catalog.md are what the headers produce now
+  expect_regex: "scripts catalog: current"
+  remediation: >-
+    Add or fix the header the check names, then run `hnx scripts catalog` and commit both files; a
+    script nobody catalogued is a script nobody knows to maintain, schedule or retire.
+- id: M-02
+  statement: The catalog matches reality.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli scripts reality
+  expected: >-
+    exit 0: 0 scheduled or called but uncatalogued scripts, 0 uncalled active scripts, 0 duplicate
+    ids, and every header's triggers are exactly the callers found in the tree
+  expect_regex: catalog matches reality
+  remediation: >-
+    Make the header's trigger list match what the check found, catalogue the file a caller runs,
+    or retire the uncalled script; a reviewed exception goes in tools/scripts.allow.yml with its
+    reason. A catalog that drifts from what runs is how a check stops running without anyone noticing.
+- id: M-04
+  statement: Checks run in one place.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli scripts runner-lint
+  expected: >-
+    exit 0: every `kind: check` script is run by the invariants criteria its header names, and no
+    timer, fleet unit or scheduled workflow runs a check directly
+  expect_regex: every check runs through the invariants runner
+  remediation: >-
+    Add a criterion whose observable (or plugin) runs the check and schedule `hnx invariants run`
+    instead of the script; a check on its own timer pages on its own terms and drops out of the
+    one place that says whether everything holds.
 - id: M-17
   statement: Register ids are never lost.
   evidence: auto

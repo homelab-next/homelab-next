@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: hermetic-lint
+#   kind: check
+#   purpose: Fail when test code reads the wall clock or unseeded randomness directly.
+#   owner: maintainers
+#   trigger: [ci:ci/lint, make:hermetic-lint]
+#   invariant: [Q-11]
+#   inputs: every .py under tests/ and tools/tests/ (or the files named)
+#   outputs: one line per finding
+#   exit:
+#     "0": clean
+#     "1": findings
 """Gate: test code reads neither the wall clock nor unseeded randomness directly.
 
 Hermetic tests inject the clock and the random source (``now=...``, ``random.Random(seed)``).

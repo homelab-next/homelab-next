@@ -11,6 +11,7 @@
 | `guest.schema.json` | one guest (VM, container or host): `guest:` id, placement, resources, image, cloud-init, network zone and address, `cap:` capability, backup policy, lifecycle. Consumed by `homelabnext.compute` |
 | `customization.schema.json` | a lab or vendor customization: kind (profile, patch-overlay, role override, hook, registry patch), scope as logical ids, mandatory `reason`, `owner`, `review_by` and `upstream` status. Consumed by `homelabnext.customization` and invariant X-09 |
 | `swap_record.schema.json` | the persisted state of one capability swap: nine procedure steps with gates and evidence, hash-chained transition log, route before/after the flip, rollback or closure. Written by `hnx swap`; semantic checks in `homelabnext.swap.record` |
+| `script_header.schema.json` | the `# hnx-script:` header every script carries: id, kind (`check`, `tool`, `job`, `service`), purpose, owner, triggers, inputs, outputs, exit-code contract, and the invariants a check runs under. Consumed by `homelabnext.scripts` (`hnx scripts`, checklist M-01, M-02, M-04; docs/scripts.md) |
 
 `service.json` (the service-registry row) is owned by the registry task and lives in this directory;
 it is not part of this task's checks. Backends and services are always `svc:` ids, never URLs.

@@ -1,4 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: lab-fake-cases
+#   kind: service
+#   purpose: Serve an in-memory fake case system for the cases capability.
+#   owner: lab-in-a-box
+#   trigger: [compose:lab-in-a-box/cases]
+#   inputs: --host and --port
+#   outputs: the HTTP API; nothing on disk
+#   exit:
+#     "0": stopped cleanly
 """A fake case system (stdlib only, in memory) for the ``cases`` capability.
 
 It speaks only the round-trip the contract needs: create a case (idempotent on ``dedup_key``),

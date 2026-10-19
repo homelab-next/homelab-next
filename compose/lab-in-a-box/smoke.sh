@@ -11,6 +11,20 @@
 # The conformance step degrades gracefully: with no `hnx conform` it is reported as "skipped"
 # and does not fail the run.  Settings: .env.example, overridden by .env, overridden by the
 # environment (the order docker compose itself uses).
+# hnx-script:
+#   id: lab-smoke
+#   kind: tool
+#   purpose: Bring the lab-in-a-box up, check every service, run conformance where present, tear down.
+#   owner: lab-in-a-box
+#   trigger: [ci:nightly/lab-in-a-box, make:lab-smoke]
+#   inputs: compose/lab-in-a-box settings (.env.example, .env, environment)
+#   outputs: build/lab-smoke/report.json (or --report-dir)
+#   exit:
+#     "0": all good
+#     "1": a service or check failed
+#     "2": usage
+#     "3": docker or compose missing
+#     "4": refused a non-loopback LAB_BIND
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
