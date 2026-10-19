@@ -66,7 +66,7 @@ services:
       lab:
         aliases: [garage, object-store.svc.example.internal]
 
-  # --- postgres: catalog and authz metadata -----------------------------------------------
+  # --- postgres: catalog metadata ---------------------------------------------------------
   postgres:
     <<: [*restart, *hardened]
     image: postgres:16.4-alpine@sha256:5660c2cbfea50c7a9127d17dc4e48543eedd3d7a41a595a2dfa572471e37e64c
@@ -259,30 +259,6 @@ services:
     networks:
       lab:
         aliases: [notify.svc.example.internal]
-
-  # --- authz: OpenFGA (in-memory store) ---------------------------------------------------
-  authz:
-    <<: [*restart, *hardened]
-    # No docker-init here: in this distroless image under cap_drop ALL the runtime cannot exec the
-    # injected /sbin/docker-init (permission denied, seen in the nightly run).  openfga is a single
-    # Go binary that handles SIGTERM itself, so it needs no init process; the hardening stays.
-    init: false
-    image: openfga/openfga:v1.8.4@sha256:0ad225772d28527eacbe71fda9f2349b332100a710c2f2a624b188470b38f1ac
-    command: ["run"]
-    environment:
-      OPENFGA_DATASTORE_ENGINE: memory
-      OPENFGA_LOG_LEVEL: warn
-    ports:
-      - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_AUTHZ:-8089}:8080"
-    healthcheck:
-      test: ["CMD", "/usr/local/bin/grpc_health_probe", "-addr=localhost:8081"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-    mem_limit: 128m
-    networks:
-      lab:
-        aliases: [authz.svc.example.internal]
 
   # --- inference: the project's fake OpenAI-compatible server -----------------------------
   inference:

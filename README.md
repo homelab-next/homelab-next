@@ -89,7 +89,7 @@ and a test fails if the copy ever differs). The developer gates under `tools/` (
 
 The lab-in-a-box is a laptop-sized reference environment of real containers for the capability
 seams (object store, Iceberg REST catalog with Postgres, a single-node query engine, an event bus,
-secrets in dev mode, notifications, authorisation) plus the project's own fakes (an
+secrets in dev mode, notifications) plus the project's own fakes (an
 OpenAI-compatible inference server and a case system). It needs Docker with the compose plugin and
 about 2 GB of free RAM (the stack is capped well inside 4 GB); every credential in it is a
 throwaway placeholder from `compose/lab-in-a-box/.env.example`.

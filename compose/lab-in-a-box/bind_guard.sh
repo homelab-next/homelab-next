@@ -19,8 +19,8 @@
 #   . compose/lab-in-a-box/bind_guard.sh; lab_bind_guard   # from another bash script
 #
 # Why: with LAB_BIND set to a routable address the stack publishes OpenBao in dev mode (known root
-# token, no TLS), the object-store admin API (known token), and Trino, NATS, the catalog, ntfy and
-# OpenFGA with no authentication at all. Docker publishes ports through its own firewall rules,
+# token, no TLS), the object-store admin API (known token), and Trino, NATS, the catalog and ntfy
+# with no authentication at all. Docker publishes ports through its own firewall rules,
 # ahead of ufw or firewalld, so a host firewall does not cover them.
 #
 # Values are resolved the way docker compose resolves them for interpolation: the process
@@ -112,8 +112,8 @@ lab_bind_guard() {
       "placeholder:$placeholders. Set real values in compose/lab-in-a-box/.env first." >&2
     return 4
   fi
-  echo "lab-in-a-box: WARNING: publishing on $bind; the query engine, bus, catalog, notify and" \
-    "authz services have no authentication and OpenBao runs in dev mode" >&2
+  echo "lab-in-a-box: WARNING: publishing on $bind; the query engine, bus, catalog and notify" \
+    "services have no authentication and OpenBao runs in dev mode" >&2
   return 0
 }
 

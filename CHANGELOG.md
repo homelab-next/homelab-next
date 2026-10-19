@@ -20,6 +20,10 @@ has no section below.
 - `hnx decide lint` (K-02, K-03, K-04): every decision spec in git must be complete and tracked, ask single-axis questions with 2-5 labels, pair comparison questions with their mirror, and keep `callers: [inline]` specs on fast tiers within the inline latency budget (decision spec schema 1.2). Runs in `make check` and CI.
 - Invariants register: retired-id tombstones (`retired:`) honoured by `check-lost`, `check-dupes` and allocation; the example register's drifted F-01..F-03 are retired in favour of Q-09, L-07 and F-09, and the CI gates for F-05, F-18, D-02, D-07, Q-09, Q-10, M-17, L-06 and L-07 are now criteria that `hnx invariants run` executes.
 
+### Removed
+
+- OpenFGA (`authz`) from the lab-in-a-box: it backed no capability or conformance suite, and authorisation in this design is the identity provider plus the broker's allowlists and bound approvals.
+
 ### Fixed
 
 - Invariant X-06 never checked `det:` ids: it read a top-level `det_map.yml` under a `detections:` key instead of `detections/det_map.yml` `entries:`. `detections lint-ids` now skips test fixtures and runs in `make detections` and CI; `hnx docs systems check` (L-05) now runs in CI.
