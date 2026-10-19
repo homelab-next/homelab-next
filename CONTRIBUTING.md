@@ -36,9 +36,11 @@ tests on a laptop with no network and no private context.
 9. Tests do not use the network, wall-clock time or unseeded randomness. Anything needing a real
    server is marked `@pytest.mark.live` and never runs in default CI. Enforced: an unmarked test
    that connects beyond loopback or resolves a non-local name fails (`tests/network_guard.py`), and
-   `make hermetic-lint` rejects direct clock and unseeded-random calls in test code.
-   Every component ships tests (`make component-tests`), and the broker, scope guard, records
-   lifecycle, decide cascade and agent grant ceiling keep >= 80% line coverage (`make coverage`).
+   `make hermetic-lint` rejects direct clock and unseeded-random calls in test code, and any
+   clock read in `homelabnext/` that is not the default or fallback of an injectable clock/`now`.
+   Every component ships tests (`make component-tests`), and the security-critical units (broker,
+   scope guard, records lifecycle, decide cascade, agent grant ceiling, reader rule and handoff,
+   memory, screen, workflows, model budgets) keep >= 80% line coverage (`make coverage`).
    Suites stay trustworthy (`tests/suite_policy.py`, see "Skips, quarantine and time budgets").
 10. Every source file starts with `# SPDX-License-Identifier: Apache-2.0` (or the equivalent comment).
 
