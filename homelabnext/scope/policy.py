@@ -15,8 +15,9 @@ Nothing about which targets are out of scope is written in code or prose.  It is
         guest:prod-frozen: out
 
 Per-target scope lives on the target itself (``scope: in|out`` in a guest or service file).
-Precedence, first match wins: ``overrides`` > the target's own ``scope`` > ``vmid_threshold`` and
-``out_tags`` (either one denies) > default allow.
+Precedence, first match wins: ``overrides`` > for a service, its host guest's decision (a service
+can only narrow its host) > the target's own ``scope`` > ``vmid_threshold`` and ``out_tags``
+(either one denies) > default allow.
 """
 
 from __future__ import annotations
