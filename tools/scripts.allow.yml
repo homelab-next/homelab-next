@@ -17,6 +17,9 @@ uncalled:
   decommission-check: >-
     the operator runs it by hand at step 8 of a service swap (docs/swap.md), with the retired
     service's names as arguments; the swap runner calls the same scanner as a library
+  lab-rehearsal-swap-lake-query: >-
+    run by lab-smoke (compose/lab-in-a-box/smoke.sh) through its `rehearsals/*.sh` glob, which
+    names no path the scanner can resolve; the nightly workflow runs lab-smoke
 
 # checks that no invariants criterion runs
 not_in_runner:

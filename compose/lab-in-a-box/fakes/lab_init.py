@@ -12,7 +12,8 @@
 #     "1": a step failed or a variable is missing
 """One-shot initialiser for the lab-in-a-box stack (stdlib only, idempotent).
 
-1. object store: assign the single-node layout, import the fixed fake access key, create the
+1. object store: assign the single-node layout, import the fixed fake access key (allowed to
+   create buckets, for the conformance suite), create the
    bucket and grant the key on it;
 2. catalog: bootstrap the Iceberg REST catalog and create the warehouse that points at that
    bucket.
@@ -97,6 +98,10 @@ def init_object_store(admin: str, token: str, access: str, secret: str, bucket: 
         )
         if code >= 300:
             raise SystemExit(f"lab_init: key import failed: {code} {out}")
+    # the object-store conformance suite creates its own buckets through the S3 API
+    code, out = call("POST", f"{admin}/v1/key?id={access}", {"allow": {"createBucket": True}}, auth)
+    if code >= 300:
+        raise SystemExit(f"lab_init: key permission update failed: {code} {out}")
     code, info = call("GET", f"{admin}/v1/bucket?globalAlias={bucket}", headers=auth)
     if code == 404:
         code, info = call("POST", f"{admin}/v1/bucket", {"globalAlias": bucket}, auth)

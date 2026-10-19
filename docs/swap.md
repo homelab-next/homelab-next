@@ -192,6 +192,20 @@ start and that a write made after the flip was replayed into the incumbent. Run 
 decommission and close. A third test writes one row to the incumbent behind the mirror's back and
 shows `parity-compare` refusing until the gap is reconciled.
 
+## Rehearsal on the lab-in-a-box (P9.2)
+
+`compose/lab-in-a-box/rehearsals/swap-lake-query.sh` runs while the smoke test has the stack up
+(nightly). It drives `SwapRunner` with `LakeBackend` (driver: `homelabnext/swap/rehearsal.py`):
+the incumbent is the built-in fake lake seeded with a deterministic dataset, the candidate is
+the box's Trino over the Lakekeeper catalog (`homelabnext.conform.adapters.lake`, a scratch
+namespace per run). It runs `declare` through `cutover` (zero-hour soak and window: this is a
+rehearsal), checks that the flipped route answers from the candidate with the incumbent's
+results, then rolls back and checks that the registry file is restored byte for byte, the route
+answers from the incumbent again, and the record validates (`hnx swap record --verify`). The
+record, its evidence, the registry, the flip plan and `rehearsal.json` land in
+`<report-dir>/swap-lake-query/`. The unit tests run the same driver on two in-memory lakes and
+the wrapper against a loopback stand-in for Trino and the catalog.
+
 ## Driving a real swap
 
 `hnx swap advance` uses the `ManualBackend`. Gates that need a real system are satisfied by

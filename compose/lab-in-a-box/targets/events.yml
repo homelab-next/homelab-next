@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# events on the lab's NATS JetStream (HNX_ENDPOINT_EVENTS, exported by smoke.sh).  Every check gets
+# its own scratch stream, DLQ stream and subject prefix, deleted afterwards.  Needs nats-py:
+#   pip install 'homelabnext[nats]'
+name: lab-events
+capabilities:
+  events:
+    adapter: homelabnext.conform.adapters.nats_jetstream:make
+    config:
+      ack_wait: 3.0          # seconds; a reopen with unsettled deliveries waits this long
+      duplicate_window: 3600.0
+      dlq_wait: 3.0

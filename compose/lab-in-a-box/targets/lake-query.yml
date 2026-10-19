@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# The real lake of the lab-in-a-box: Trino (lake-query) over Iceberg tables in the Lakekeeper REST
+# catalog (lake-catalog), data in the object store.  smoke.sh runs
+#   hnx conform run lake-query --target compose/lab-in-a-box/targets/lake-query.yml
+# with HNX_ENDPOINT_LAKE_QUERY, HNX_ENDPOINT_LAKE_CATALOG and LAB_WAREHOUSE in the environment.
+# Both lake suites need the whole LakeClient, so both targets use the same adapter; each run works
+# in its own scratch namespace (hnx_conform_<run>).
+name: lab-in-a-box
+capabilities:
+  lake-query:
+    adapter: homelabnext.conform.adapters.lake:make_lake
+    config: {domain: example.internal, namespace: auto, trino_catalog: iceberg}

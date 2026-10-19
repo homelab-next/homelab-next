@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# The real object store of the lab-in-a-box (Garage, S3 API).  smoke.sh runs
+#   hnx conform run object-store --target compose/lab-in-a-box/targets/object-store.yml
+# with HNX_ENDPOINT_OBJECT_STORE and the LAB_S3_* settings of .env.example in the environment.
+# Buckets get a per-run prefix (hnx-<run>-) so repeated runs never share one.
+name: lab-in-a-box
+capabilities:
+  object-store:
+    adapter: homelabnext.conform.adapters.s3:make_object_store
+    config: {domain: example.internal, bucket_prefix: auto}
+    features: [metadata]

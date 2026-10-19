@@ -5,7 +5,7 @@
 Every script in the tree, read from its `# hnx-script:` header. What counts as a script,
 the header fields and the checks that keep this page honest: [docs/scripts.md](../scripts.md).
 
-23 scripts: 16 check, 1 job, 2 service, 4 tool.
+24 scripts: 16 check, 1 job, 2 service, 5 tool.
 
 | id | path | kind | owner | purpose | triggers | invariant | exit codes |
 |---|---|---|---|---|---|---|---|
@@ -22,6 +22,7 @@ the header fields and the checks that keep this page honest: [docs/scripts.md](.
 | `lab-bind-guard` | [`compose/lab-in-a-box/bind_guard.sh`](../../compose/lab-in-a-box/bind_guard.sh) | tool | lab-in-a-box | Refuse to publish the lab beyond loopback unless asked and every credential is changed. | `make:lab-up`; `script:lab-smoke` | - | 0 safe to start; 4 refused |
 | `lab-fake-cases` | [`compose/lab-in-a-box/fakes/fake_cases.py`](../../compose/lab-in-a-box/fakes/fake_cases.py) | service | lab-in-a-box | Serve an in-memory fake case system for the cases capability. | `compose:lab-in-a-box/cases` | - | 0 stopped cleanly |
 | `lab-init` | [`compose/lab-in-a-box/fakes/lab_init.py`](../../compose/lab-in-a-box/fakes/lab_init.py) | job | lab-in-a-box | Initialise the lab object store and Iceberg catalog once (idempotent). | `compose:lab-in-a-box/lab-init` | - | 0 ready; 1 a step failed or a variable is missing |
+| `lab-rehearsal-swap-lake-query` | [`compose/lab-in-a-box/rehearsals/swap-lake-query.sh`](../../compose/lab-in-a-box/rehearsals/swap-lake-query.sh) | tool | lab-in-a-box | Rehearse the lake-query swap on the lab-in-a-box (fake lake to Trino) and roll it back. | `manual` | - | 0 the swap ran to cutover, rolled back, and the record validates; 1 a step, the rollback or the record check failed; 2 usage, or the candidate lake could not be reached |
 | `lab-smoke` | [`compose/lab-in-a-box/smoke.sh`](../../compose/lab-in-a-box/smoke.sh) | tool | lab-in-a-box | Bring the lab-in-a-box up, check every service, run conformance where present, tear down. | `ci:nightly/lab-in-a-box`; `make:lab-smoke` | - | 0 all good; 1 a service or check failed; 2 usage; 3 docker or compose missing; 4 refused a non-loopback LAB_BIND |
 | `lab-smoke-checks` | [`compose/lab-in-a-box/smoke_checks.py`](../../compose/lab-in-a-box/smoke_checks.py) | tool | lab-in-a-box | One real round trip against every lab-in-a-box service, as a JSON report. | `script:lab-smoke` | - | 0 every check passed; 1 some check failed |
 | `leak-scan` | [`tools/leak_scan.py`](../../tools/leak_scan.py) | check | maintainers | Fail when the tree, a commit range or stdin carries a private identifier or a secret shape. | `ci:ci/leak-scan`; `ci:ci/packaging`; `ci:release/build`; `make:leak-scan`; `make:leak-scan-history`; `make:secret-scan`; `pre-commit:leak-scan`; `pre-commit:secret-scan` | F-05; F-18 | 0 clean; 1 at least one hit or an unscannable file; 2 misconfiguration |
