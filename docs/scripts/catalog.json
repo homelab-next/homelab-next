@@ -338,6 +338,7 @@
       "status": "active",
       "trigger": [
         "make:ids-check",
+        "make:ids-placeholders",
         "make:ids-resolve",
         "pre-commit:register-ids-check-dupes",
         "pre-commit:register-ids-check-lost",
@@ -389,6 +390,75 @@
         "ci:ci/schemas",
         "code:homelabnext/cli.py",
         "make:schemas"
+      ]
+    },
+    {
+      "exit": {
+        "0": "clean",
+        "1": "a private helper or a stale allowlist entry",
+        "2": "usage error or a missing dependency"
+      },
+      "id": "shared-helpers-lint",
+      "inputs": "the tracked tree and tools/shared_helpers.allow.yml",
+      "invariant": [
+        "M-03"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per private helper or stale allowlist entry",
+      "owner": "maintainers",
+      "path": "tools/shared_helpers_lint.py",
+      "purpose": "Fail when a private notify, state or lake-query helper is re-implemented outside the shared libraries (reviewed allowlist).",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:helpers-lint"
+      ]
+    },
+    {
+      "exit": {
+        "0": "clean",
+        "1": "verification is disabled somewhere",
+        "2": "usage error or a missing dependency"
+      },
+      "id": "tls-verify-lint",
+      "inputs": "the tracked tree and tools/tls_verify.allow.yml",
+      "invariant": [
+        "F-07"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per disabled verification",
+      "owner": "maintainers",
+      "path": "tools/tls_verify_lint.py",
+      "purpose": "Fail when Python code or a YAML/JSON config turns TLS certificate verification off.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:tls-lint"
+      ]
+    },
+    {
+      "exit": {
+        "0": "clean",
+        "1": "a workstation reference or a stale allowlist entry",
+        "2": "usage error or a missing dependency"
+      },
+      "id": "workstation-refs",
+      "inputs": "runtime configs (ansible, compose, examples, generators, conformance targets, goldens)",
+      "invariant": [
+        "F-17"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per workstation-shaped reference or stale allowlist entry",
+      "owner": "maintainers",
+      "path": "tools/workstation_refs.py",
+      "purpose": "Fail when a runtime config, role, compose file, example or golden output points at the admin workstation.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:workstation-lint"
       ]
     }
   ]

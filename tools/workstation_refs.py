@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: workstation-refs
+#   kind: check
+#   purpose: Fail when a runtime config, role, compose file, example or golden output points at the admin workstation.
+#   owner: maintainers
+#   trigger: [ci:ci/schemas, make:workstation-lint]
+#   invariant: [F-17]
+#   inputs: runtime configs (ansible, compose, examples, generators, conformance targets, goldens)
+#   outputs: one line per workstation-shaped reference or stale allowlist entry
+#   exit:
+#     "0": clean
+#     "1": a workstation reference or a stale allowlist entry
+#     "2": usage error or a missing dependency
 """Gate (checklist F-17): nothing at runtime points at the admin workstation.
 
 The fleet must keep running with the workstation switched off (F-16), so no runtime
@@ -18,7 +31,7 @@ conformance targets and the generated golden outputs under ``tests/**/golden/`` 
                     ``hosts: localhost`` in a playbook
 
 Comments (``#`` to end of line) are not configuration and are skipped; ``localhost:<port>``
-endpoints are X-01's job (``tools/no_raw_endpoints.py``), which this gate runs beside. A reviewed
+endpoints are X-01's job (the no-raw-endpoints gate), which this gate runs beside. A reviewed
 exception is an entry in ``tools/workstation_refs.allow.yml`` (``path`` glob, optional ``match``
 regex limiting it to the lines it excuses, ``reason``) or an inline ``workstation-ref: allow
 <reason>`` comment on the line. An allowlist entry that excuses nothing is reported as stale.

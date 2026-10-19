@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Allocate XX-NEW register ids, and fail when an id vanished or occurs twice.
 #   owner: maintainers
-#   trigger: [make:ids-check, make:ids-resolve, pre-commit:register-ids-check-dupes, pre-commit:register-ids-check-lost, pre-commit:register-ids-resolve]
+#   trigger: [make:ids-check, make:ids-placeholders, make:ids-resolve, pre-commit:register-ids-check-dupes, pre-commit:register-ids-check-lost, pre-commit:register-ids-resolve]
 #   invariant: [M-17]
 #   inputs: register files (lessons, runbooks, invariants, queue) and git history
 #   outputs: rewritten registers (resolve) or one line per lost or duplicate id

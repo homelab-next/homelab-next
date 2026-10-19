@@ -6,3 +6,6 @@ allow:
   - path: compose/lab-in-a-box/docker-compose.yml
     match: "/home/nonroot/lakekeeper"
     reason: the catalog binary's path inside its upstream distroless image (the image's nonroot user), not a host or workstation path
+  - path: examples/registers/invariants.yml
+    match: "workstation|laptop"
+    reason: the F-17 criterion describes this gate in prose (its statement, remediation and the script name); the register is documentation of checks, not runtime configuration

@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: tls-verify-lint
+#   kind: check
+#   purpose: Fail when Python code or a YAML/JSON config turns TLS certificate verification off.
+#   owner: maintainers
+#   trigger: [ci:ci/schemas, make:tls-lint]
+#   invariant: [F-07]
+#   inputs: the tracked tree and tools/tls_verify.allow.yml
+#   outputs: one line per disabled verification
+#   exit:
+#     "0": clean
+#     "1": verification is disabled somewhere
+#     "2": usage error or a missing dependency
 """Gate (checklist F-07): no client turns TLS certificate verification off.
 
 Role-lint RL013 covers Ansible tasks and role variables. This covers the rest of the tree:

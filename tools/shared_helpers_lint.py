@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: shared-helpers-lint
+#   kind: check
+#   purpose: Fail when a private notify, state or lake-query helper is re-implemented outside the shared libraries (reviewed allowlist).
+#   owner: maintainers
+#   trigger: [ci:ci/schemas, make:helpers-lint]
+#   invariant: [M-03]
+#   inputs: the tracked tree and tools/shared_helpers.allow.yml
+#   outputs: one line per private helper or stale allowlist entry
+#   exit:
+#     "0": clean
+#     "1": a private helper or a stale allowlist entry
+#     "2": usage error or a missing dependency
 """Gate (checklist M-03): helpers are shared, not copied.
 
 Three seams have one shared library each, with a fake (ADR-0003). Code outside the library that

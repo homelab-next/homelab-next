@@ -176,6 +176,40 @@ criteria:
     Add a criterion whose observable (or plugin) runs the check and schedule `hnx invariants run`
     instead of the script; a check on its own timer pages on its own terms and drops out of the
     one place that says whether everything holds.
+- id: M-03
+  statement: Helpers are shared, not copied.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml' 2>/dev/null || exit 100;
+    python3 tools/shared_helpers_lint.py && echo helpers shared
+  expected: exit 0 (0 private notify, state or lake-query helpers outside the shared libraries)
+  expect_regex: helpers shared
+  remediation: >-
+    Call homelabnext.notify, homelabnext.state or homelabnext.lake instead of the private copy, or
+    record a reviewed exception with its reason in tools/shared_helpers.allow.yml; a copied helper
+    misses every fix the shared one gets.
+- id: F-07
+  statement: Internal TLS is verified.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml' 2>/dev/null || exit 100;
+    python3 tools/tls_verify_lint.py && echo tls verification on
+  expected: exit 0 (0 clients with certificate verification disabled; RL013 covers roles)
+  expect_regex: tls verification on
+  remediation: >-
+    Trust the internal CA instead of turning verification off; a client that skips verification
+    accepts any certificate, so anyone on the path can read and change its traffic.
+- id: F-17
+  statement: Nothing at runtime points at the workstation.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml' 2>/dev/null || exit 100;
+    python3 tools/workstation_refs.py && echo no workstation references
+  expected: exit 0 (0 runtime configs reference the admin workstation)
+  expect_regex: no workstation references
+  remediation: >-
+    Point the config at a registry alias or a fleet host instead of the workstation; a runtime that
+    depends on the admin workstation stops when the laptop does.
 - id: M-17
   statement: Register ids are never lost.
   evidence: auto
