@@ -1,15 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``hnx agent compile|verify|pack``.
+"""``hnx agent compile|verify|pack|prompts|injection``.
 
 ``compile SPEC --library LIB [--policy POLICY]``  compile a profile spec against a parts library.
 ``verify PROFILE --policy POLICY [--lock LOCK]``  check a compiled profile against the policy.
 ``pack MANIFEST --inputs FILE``                   assemble a context pack and print its hash.
+``prompts lint [PATH ...]``                         G-01 template lint (default: shipped templates).
+``prompts render TEMPLATE [--values FILE]``         render a template (default: its examples).
+``injection run [--fake MODE | --role ROLE ...]``   G-02 injection eval; ``--check`` a golden.
+``injection check-report REPORT``                   a stored report is current with 0 follows.
 
 Library file (YAML or JSON): ``{parts: {<logical id>: <path relative to the file>}}``.
 Policy file: ``{ceilings: {<profile id>: {mcp, capabilities, tier, budgets}}}``, owned and
 reviewed separately from the specs.  Lock file: ``{profiles: {<profile id>: <digest>}}``.
 Exit codes: 0 ok, 1 refused (missing part, ceiling or budget violation, bad input),
-3 (``pack`` only) the pack was assembled but is ``deferred``.
+3 (``pack`` only) the pack was assembled but is ``deferred``.  ``prompts lint`` and ``injection``
+exit 1 on any problem, instruction-follow, error or stale report.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ from homelabnext.ids import MappingResolver
 from .compiler import CeilingPolicy, PartsLibrary, compile_profile, verify_profile
 from .errors import AgentError
 from .pack import assemble_pack
+from .prompts_cli import add_injection_parser, add_prompts_parser, run_injection, run_prompts
 from .schemas import schema_errors
 
 
@@ -83,8 +89,14 @@ def main(argv: list[str]) -> int:
     p.add_argument("manifest")
     p.add_argument("--inputs", required=True)
     p.add_argument("--out", help="write the pack JSON here (default: stdout)")
+    add_prompts_parser(sub)
+    add_injection_parser(sub)
     args = ap.parse_args(argv)
     try:
+        if args.cmd == "prompts":
+            return run_prompts(args)
+        if args.cmd == "injection":
+            return run_injection(args)
         if args.cmd == "compile":
             policy = _policy(args.policy) if args.policy else None
             if policy is None:

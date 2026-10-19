@@ -100,6 +100,10 @@ jobs:
           python tools/role_lint.py --playbook ansible/playbooks/*.yml --inventory ansible/inventory/example/hosts.yml
       - name: decision spec lint (complete, well-formed questions, inline specs fast)
         run: python -m homelabnext.cli decide lint
+      - name: prompt template lint (G-01, untrusted slots only inside fences)
+        run: python -m homelabnext.cli agent prompts lint
+      - name: injection corpus against the fence-respecting fake (G-02, golden report current)
+        run: python -m homelabnext.cli agent injection run --fake fence --check homelabnext/agent/prompts/injection/report.json
       - name: detections lint, fixtures and ATT&CK map
         run: |
           python -m homelabnext.detections lint

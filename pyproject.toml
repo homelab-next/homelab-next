@@ -77,6 +77,8 @@ homelabnext = [
   "generators/templates/*.tmpl",
   "decide/examples/*.yml",
   "golden/examples/*.yml",
+  "agent/prompts/templates/*.yml",
+  "agent/prompts/injection/*.yml",
 ]
 
 [tool.ruff]
