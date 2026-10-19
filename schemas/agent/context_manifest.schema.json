@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/agent/context_manifest/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/agent/context_manifest/1.1",
   "title": "Context manifest",
-  "description": "Declares exactly what goes into one agent's context pack and in what tier order (stable before session before volatile). Sections are filled from named inputs; pre-gates are mandatory checks whose output is itself a section. The assembler never truncates silently: every cut is reported with the tier it came from.",
+  "description": "Declares exactly what goes into one agent's context pack and in what tier order (stable before session before volatile). Sections are filled from named inputs; pre-gates are mandatory checks whose output is itself a section. The assembler never truncates silently: every cut is reported with the tier it came from. 1.1 adds screen (additive, optional): untrusted (source: input) sections are redacted for secrets and PII before they enter the pack unless screen.redact is false, which needs a reason and is recorded in the pack.",
   "type": "object",
   "properties": {
     "id": {
@@ -114,6 +114,38 @@
       "type": "string",
       "minLength": 4,
       "maxLength": 64
+    },
+    "screen": {
+      "type": "object",
+      "description": "Redaction of untrusted sections (homelabnext.agent.screen). On by default.",
+      "properties": {
+        "redact": {
+          "type": "boolean"
+        },
+        "redact_private_ips": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 8
+        }
+      },
+      "additionalProperties": false,
+      "if": {
+        "properties": {
+          "redact": {
+            "const": false
+          }
+        },
+        "required": [
+          "redact"
+        ]
+      },
+      "then": {
+        "required": [
+          "reason"
+        ]
+      }
     }
   },
   "required": [

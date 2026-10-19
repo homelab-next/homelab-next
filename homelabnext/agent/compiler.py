@@ -24,7 +24,12 @@ Rules, all enforced here and tested:
 * grants are a subset of the ceiling: MCP servers, capabilities, tier rank, and each budget;
 * the output is deterministic: lists are sorted and de-duplicated, and the digest is the
   sha256 of the canonical JSON of the profile without its own ``digest`` field;
-* every harvested part is recorded in ``provenance`` with the digest of its content.
+* every harvested part is recorded in ``provenance`` with the digest of its content;
+* readers cannot act: a profile that reads untrusted content (``reads_untrusted``, true unless the
+  spec says ``false``, and forced true by a policy entry that says so) may hold no grant whose
+  capability class is shell/exec, file-write, egress or credential, nor an unclassified one
+  (:mod:`homelabnext.agent.readers`).  The compiler refuses it whatever the ceiling allows, and
+  :func:`verify_profile` refuses a compiled profile edited into that state.
 """
 
 from __future__ import annotations
@@ -36,7 +41,8 @@ from typing import Any
 from homelabnext.ids import IdError, Resolver, UnresolvedId, parse
 
 from .digest import digest_of, sha256_text
-from .errors import BudgetError, CeilingViolation, MissingPartError, SpecError
+from .errors import BudgetError, CeilingViolation, MissingPartError, ReaderViolation, SpecError
+from .readers import ToolClasses, profile_problems, reader_problems
 from .schemas import schema_errors
 
 TIER_RANK = {"read": 0, "write": 1, "execute": 2, "privileged": 3}
@@ -107,13 +113,23 @@ class CeilingPolicy:
 
         ceilings:
           profile:reader: {mcp: [lake], capabilities: [cap:lake-query], tier: read,
-                           budgets: {max_runtime_s: 900, ...}}
+                           budgets: {max_runtime_s: 900, ...}, reads_untrusted: true}
+
+    ``reads_untrusted: true`` on an entry makes that profile a reader whatever its spec says
+    (the policy owner, not the spec author, decides); ``false`` or absent leaves it to the spec.
     """
 
     def __init__(self, ceilings: Mapping[str, Mapping[str, Any]], source: str = "policy") -> None:
         if not isinstance(ceilings, Mapping) or not ceilings:
             raise SpecError(f"{source}: expected a non-empty 'ceilings' mapping of profile id")
         self.source = source
+        self._readers = set()
+        for pid, c in ceilings.items():
+            flag = c.get("reads_untrusted") if isinstance(c, Mapping) else None
+            if flag is not None and not isinstance(flag, bool):
+                raise SpecError(f"{source}: {pid}: reads_untrusted must be true or false")
+            if flag:
+                self._readers.add(_ids({"id": [pid]}, "id", "profile")[0])
         self._ceilings = {
             _ids({"id": [pid]}, "id", "profile")[0]: _normal_ceiling(c, f"{source}: {pid}")
             for pid, c in ceilings.items()
@@ -129,6 +145,10 @@ class CeilingPolicy:
         if profile_id not in self._ceilings:
             raise CeilingViolation([f"{self.source} has no ceiling for {profile_id}"])
         return dict(self._ceilings[profile_id])
+
+    def requires_reader(self, profile_id: str) -> bool:
+        """True when the policy marks ``profile_id`` as reading untrusted content."""
+        return profile_id in self._readers
 
 
 def _normal_ceiling(c: Any, where: str) -> dict[str, Any]:
@@ -185,13 +205,18 @@ def _ids(spec: Mapping[str, Any], key: str, kind: str) -> list[str]:
 
 
 def compile_profile(
-    spec: Mapping[str, Any], library: PartsLibrary, *, policy: CeilingPolicy | None = None
+    spec: Mapping[str, Any],
+    library: PartsLibrary,
+    *,
+    policy: CeilingPolicy | None = None,
+    classes: ToolClasses | None = None,
 ) -> dict[str, Any]:
     """Compile ``spec`` into a profile dict.  Pure given the library; raises
     :class:`~homelabnext.agent.errors.AgentError` subclasses, never returns a partial profile.
 
     With ``policy`` the ceiling is the policy's entry for the profile id (a spec ceiling may only
-    narrow it); without, it is the spec's own ``ceiling``.
+    narrow it); without, it is the spec's own ``ceiling``.  ``classes`` is the capability-class
+    table for the reader rule (default: the packaged ``tool_classes.yml``).
     """
     if not isinstance(spec, Mapping):
         raise SpecError("spec must be a mapping")
@@ -205,6 +230,9 @@ def compile_profile(
     skills = _ids(spec, "skills", "skill")
     caps = _ids(spec, "capabilities", "cap")
     mcp = sorted(set(spec.get("mcp", [])))
+    reads = spec.get("reads_untrusted", True)  # fail closed: an actor must say false
+    if not isinstance(reads, bool):
+        raise SpecError("reads_untrusted must be true or false")
 
     # 1. harvest: every logical id must be in the library, reported together
     wanted = [persona, *skills, *caps]
@@ -212,6 +240,8 @@ def compile_profile(
     if missing:
         raise MissingPartError(missing)
     parts = [library.get(i) for i in wanted]
+
+    grants = {"mcp": mcp, "capabilities": caps, "tier": spec["tier"]}
 
     # 2. ceiling: a profile can never grant more than its ceiling
     own = _normal_ceiling(spec["ceiling"], "spec") if "ceiling" in spec else None
@@ -223,12 +253,24 @@ def compile_profile(
             ceiling = own if not violations else ceiling  # a spec may narrow, never widen
     else:
         ceiling = own  # type: ignore[assignment]
-    grants = {"mcp": mcp, "capabilities": caps, "tier": spec["tier"]}
     violations += check_ceiling(grants, ceiling)
     if violations:
         raise CeilingViolation(violations)
 
-    # 3. budgets
+    # 3. readers cannot act: checked even when the ceiling allows every grant
+    if policy is not None and policy.requires_reader(pid) and not reads:
+        raise ReaderViolation(
+            [
+                f"{policy.source} marks {pid} as reading untrusted content; "
+                "the spec may not declare reads_untrusted: false"
+            ]
+        )
+    if reads:
+        rproblems = reader_problems(grants, classes, pid)
+        if rproblems:
+            raise ReaderViolation(rproblems)
+
+    # 4. budgets
     bproblems = check_budgets(spec["budgets"], ceiling.get("budgets"))
     if bproblems:
         raise BudgetError("; ".join(bproblems))
@@ -244,6 +286,7 @@ def compile_profile(
         "data_tier": spec["data_tier"],
         "budgets": {k: spec["budgets"][k] for k in BUDGET_KEYS},
         "budget_mode": spec.get("budget_mode", "warn"),
+        "reads_untrusted": reads,
     }
     # the spec entry digests the *normalised* spec, so list order in the source file is irrelevant
     provenance = sorted(
@@ -269,18 +312,32 @@ def verify_profile(
     *,
     policy: CeilingPolicy | None = None,
     lock: Mapping[str, str] | None = None,
+    classes: ToolClasses | None = None,
 ) -> list[str]:
-    """Problems with an already compiled profile: schema, ceiling, budgets, digest.
+    """Problems with an already compiled profile: schema, reader rule, ceiling, budgets, digest.
 
     Without ``policy`` the grants are checked against the ceiling stored *in the profile*, which
     whoever edited the profile also controls: that proves internal consistency only.  With
     ``policy`` they are checked against the policy's ceiling for the profile id, and the stored
     ceiling may not be wider.  ``lock`` maps profile ids to reviewed digests; with it, a profile
     whose digest is not the pinned one (recomputed honestly or not) is refused.
+
+    The reader rule needs no policy: a profile that reads untrusted content (a profile without
+    ``reads_untrusted`` counts as one) and holds an acting grant is refused, whatever its ceiling.
     """
     problems = schema_errors("agent", "profile", profile)
     if problems:
         return problems
+    problems += profile_problems(profile, classes)
+    if (
+        policy is not None
+        and policy.requires_reader(profile["id"])
+        and profile.get("reads_untrusted") is False
+    ):
+        problems.append(
+            f"{policy.source} marks {profile['id']} as reading untrusted content "
+            "but the profile says reads_untrusted: false"
+        )
     ceiling = profile["ceiling"]
     if policy is not None:
         try:

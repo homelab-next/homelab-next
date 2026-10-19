@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+id: ticket-summariser
+version: 1
+description: Summarise a support ticket.
+persona: persona:ticket-summariser
+budget_chars: 8000
+system: You summarise tickets.
+instructions: Summarise the ticket-body section.
+slots:
+  - name: Ticket_Body
+    trust: untrusted
+    description: Slot names are slugs.
+    example: hello

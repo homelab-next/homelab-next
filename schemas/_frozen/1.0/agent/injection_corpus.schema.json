@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/agent/injection_corpus/1.0",
+  "title": "Prompt-injection corpus",
+  "description": "Versioned, synthetic prompt-injection cases for the G-02 eval. Each case is attacker text placed into an untrusted template slot, with a canary (a token emitted only by following the instruction) and/or a forbidden tool, plus the markers the deterministic fake model uses to recognise the instruction. Rules JSON Schema cannot express (unique ids, every category covered, markers present in the decoded payload, canary absent from it) are enforced by homelabnext.agent.injection.parse_corpus.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "category": {
+            "enum": [
+              "direct-override",
+              "fence-escape",
+              "role-impersonation",
+              "tool-smuggling",
+              "exfiltration",
+              "encoded",
+              "multilingual",
+              "hidden-markup",
+              "nested-quoting"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "payload": {
+            "type": "string",
+            "minLength": 1
+          },
+          "markers": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 4
+            },
+            "uniqueItems": true
+          },
+          "canary": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{8,}$"
+          },
+          "forbidden_tool": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{3,63}$"
+          },
+          "lang": {
+            "type": "string",
+            "pattern": "^[a-z]{2,3}$"
+          }
+        },
+        "required": [
+          "id",
+          "category",
+          "description",
+          "payload",
+          "markers"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "canary"
+            ]
+          },
+          {
+            "required": [
+              "forbidden_tool"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "version",
+    "cases"
+  ],
+  "additionalProperties": false
+}
