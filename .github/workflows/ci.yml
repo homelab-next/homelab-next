@@ -100,6 +100,10 @@ jobs:
           python tools/role_lint.py --playbook ansible/playbooks/*.yml --inventory ansible/inventory/example/hosts.yml
       - name: decision spec lint (complete, well-formed questions, inline specs fast)
         run: python -m homelabnext.cli decide lint
+      - name: required safety specs pass their cases (K-15)
+        run: python -m homelabnext.cli decide safety
+      - name: models pinned by version and digest, evaluation report current (G-11, K-12)
+        run: python -m homelabnext.cli golden pins check --roles examples/model_roles.json --report examples/model_roles.eval.json
       - name: readers cannot act (agent profile and context manifest lint)
         run: python -m homelabnext.cli agent lint
       - name: prompt template lint (G-01, untrusted slots only inside fences)

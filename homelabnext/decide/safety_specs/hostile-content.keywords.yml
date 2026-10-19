@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Deterministic impact keywords for the hostile-content safety spec (synthetic, generic).
+version: 1
+tiers:
+  critical:
+    - ignore previous instructions
+    - ignore all previous instructions
+    - disregard your instructions
+    - you are now the system
+  high:
+    - call the tool
+    - run this command
+    - send the contents
+    - exfiltrate
+  medium:
+    - system prompt
+    - developer mode

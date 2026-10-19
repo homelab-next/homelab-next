@@ -15,7 +15,11 @@ and a human is always the last stop.  The rules, none of which a tier can change
 4. In a **safety** spec tiers may only ``raise`` the impact or ``hold`` it.  They can never approve
    (``accept``), and a raise is applied even below the confidence threshold, because raising is the
    safe direction.
-5. If every automatic tier declines, or the latency budget is spent, the decision is ``human``:
+5. In a **noise gate** (``noise_gate`` in the spec) an automatic answer with a de-escalating label
+   stands only with **corroboration**: one of the spec's named corroborators (deterministic checks
+   the caller supplies) returns a reference for the item, and the decision carries it.  Without
+   one the answer is ``uncorroborated`` and the item escalates (K-08).
+6. If every automatic tier declines, or the latency budget is spent, the decision is ``human``:
    escalated, ``acted`` false, with an ``interim`` posture (``hold`` for fail-closed, ``allow`` for
    fail-open) that is explicitly not an answer.
 """
@@ -30,7 +34,11 @@ from dataclasses import dataclass, field
 
 from .impact_scan import ImpactScanner
 from .spec import IMPACTS, LABELS, SAFETY_LABELS, DecisionSpec, TierSpec, impact_rank, max_impact
-from .tiers import Item, Tier, TierAnswer, TierError, TierTimeout
+from .tiers import Item, Tier, TierAnswer, TierError, TierInvalidOutput, TierTimeout
+
+#: ``corroborator(item) -> evidence or None``.  Must be deterministic: the same item gives the
+#: same evidence, so the reference a de-escalation carries can be recomputed and audited.
+Corroborator = Callable[[Item], "str | None"]
 
 
 class CascadeConfigError(ValueError):
@@ -40,7 +48,8 @@ class CascadeConfigError(ValueError):
 @dataclass(frozen=True)
 class Step:
     tier: str
-    outcome: str  # answered | below-threshold | abstained | escalated | error | timeout | invalid | budget
+    outcome: str  # answered | below-threshold | abstained | escalated | error | timeout | invalid
+    #               | uncorroborated | budget
     label: str | None = None
     confidence: float | None = None
     detail: str = ""
@@ -69,6 +78,7 @@ class Decision:
     interim: str | None
     audit: bool
     trace: tuple[Step, ...] = field(default_factory=tuple)
+    corroboration: str | None = None  # noise gates: the reference a de-escalation stands on
 
     @property
     def automatic(self) -> bool:
@@ -87,6 +97,7 @@ class Decision:
             "interim": self.interim,
             "audit": self.audit,
             "trace": [s.to_dict() for s in self.trace],
+            **({"corroboration": self.corroboration} if self.corroboration else {}),
         }
 
 
@@ -103,10 +114,18 @@ class Cascade:
         tiers: dict[str, Tier],
         scanner: ImpactScanner | None = None,
         clock: Callable[[], float] = time.monotonic,
+        corroborators: dict[str, Corroborator] | None = None,
     ):
         missing = [t.name for t in spec.automatic_tiers if t.name not in tiers]
         if missing:
             raise CascadeConfigError(f"spec {spec.id}: no implementation for tiers {missing}")
+        self.corroborators = dict(corroborators or {})
+        if spec.noise_gate is not None:
+            absent = [c for c in spec.noise_gate.corroborators if c not in self.corroborators]
+            if absent:
+                raise CascadeConfigError(
+                    f"spec {spec.id}: no implementation for corroborators {absent}"
+                )
         self.spec = spec
         self.tiers = tiers
         self.scanner = scanner
@@ -138,6 +157,24 @@ class Cascade:
                 detail = f"keyword scan: {res.tier} ({', '.join(res.keywords)})"
         return base, detail
 
+    def corroborate(self, item: Item) -> tuple[str | None, str]:
+        """``(reference, detail)``: the first corroborator with evidence wins, in spec order.
+
+        The reference is ``<corroborator>:<evidence>``.  A corroborator that raises gives no
+        evidence (a broken check never de-escalates anything)."""
+        gate = self.spec.noise_gate
+        tried: list[str] = []
+        for name in gate.corroborators if gate else ():
+            try:
+                evidence = self.corroborators[name](item)
+            except Exception as exc:
+                tried.append(f"{name}: {type(exc).__name__}")
+                continue
+            if evidence:
+                return f"{name}:{evidence}", ""
+            tried.append(f"{name}: no evidence")
+        return None, "no corroboration (" + ", ".join(tried) + ")"
+
     # ---------------------------------------------------------------- decide
     def decide(self, item: Item) -> Decision:
         spec = self.spec
@@ -155,6 +192,9 @@ class Cascade:
                 ans = self._call(ts, item)
             except TierTimeout as exc:
                 steps.append(Step(ts.name, "timeout", detail=str(exc)))
+                continue
+            except TierInvalidOutput as exc:
+                steps.append(Step(ts.name, "invalid", detail=str(exc)))
                 continue
             except TierError as exc:
                 steps.append(Step(ts.name, "error", detail=str(exc)))
@@ -194,8 +234,14 @@ class Cascade:
                 continue
             raise_applied = spec.safety and ans.label == "raise"
             if conf >= ts.min_confidence:
+                ref = None
+                if spec.noise_gate is not None and ans.label in spec.noise_gate.deescalate:
+                    ref, why = self.corroborate(item)
+                    if ref is None:
+                        steps.append(Step(ts.name, "uncorroborated", ans.label, conf, why))
+                        continue
                 steps.append(Step(ts.name, "answered", ans.label, conf, note))
-                return self._finish(item, ans.label, ts, conf, impact, base, steps)
+                return self._finish(item, ans.label, ts, conf, impact, base, steps, ref)
             detail = f"below threshold {ts.min_confidence}"
             if raise_applied:
                 detail += "; raise applied anyway (safe direction)"
@@ -219,6 +265,7 @@ class Cascade:
         impact: str,
         base: str,
         steps: list[Step],
+        corroboration: str | None = None,
     ) -> Decision:
         escalated = ts is None
         spec = self.spec
@@ -235,4 +282,5 @@ class Cascade:
             interim=spec.interim if escalated else None,
             audit=(not escalated) and audit_selected(spec.id, item.id, spec.sample_audit_pct),
             trace=tuple(steps),
+            corroboration=corroboration,
         )

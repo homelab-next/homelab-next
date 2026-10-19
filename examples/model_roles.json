@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "roles": {
+    "main-reasoner": {
+      "description": "Reference role table for the CI model-pin gate (G-11). Synthetic model ids; digests are sha256 of fake weight names.",
+      "tier": "large",
+      "bindings": [
+        {
+          "backend": "svc:inference",
+          "model_id": "example-27b",
+          "version": "2026.09.1",
+          "digest": "sha256:66b534d26225a49bff7c242ccb401eae51e63c4be6cdcbbd264757c380196ffb"
+        }
+      ],
+      "fallback": "mdl:fast-classifier",
+      "max_context_tokens": 131072,
+      "limits": {
+        "window_s": 3600,
+        "max_requests": 2000,
+        "max_tokens": 2000000
+      }
+    },
+    "fast-classifier": {
+      "tier": "fast",
+      "logprobs": true,
+      "bindings": [
+        {
+          "backend": "svc:inference",
+          "model_id": "example-4b",
+          "version": "2026.08.2",
+          "digest": "sha256:f7e15cd53ea8cec698a8cbbd70f5da9bed084307e7e4cdbef858c222b3cc4172"
+        }
+      ],
+      "max_context_tokens": 8192,
+      "params": {
+        "temperature": 0,
+        "max_tokens": 256
+      },
+      "limits": {
+        "window_s": 60,
+        "max_requests": 600,
+        "max_tokens": 300000,
+        "max_cost": 0.5,
+        "cost_per_1k_tokens": 0.001
+      }
+    }
+  }
+}

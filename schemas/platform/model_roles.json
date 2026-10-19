@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/model_roles/1.1",
+  "$id": "https://schemas.example.internal/homelabnext/platform/model_roles/1.2",
   "title": "Model role table",
-  "description": "Maps model-role aliases (mdl:<alias>) to concrete bindings. Consumers reference only the alias; model ids and backends appear here and nowhere else, so swapping a model is a one-file change. backends are svc: logical ids, never URLs.",
+  "description": "Maps model-role aliases (mdl:<alias>) to concrete bindings. Consumers reference only the alias; model ids and backends appear here and nowhere else, so swapping a model is a one-file change. backends are svc: logical ids, never URLs. 1.2 adds, additively, a per-binding pin (version and sha256 digest of the served weights; `hnx models pins` requires one on every binding and a current evaluation report for the pinned set) and per-role limits (requests, tokens and cost per window; exceeding one throttles and alerts).",
   "type": "object",
   "properties": {
     "version": {
@@ -45,6 +45,18 @@
                 "priority": {
                   "type": "integer",
                   "minimum": 0
+                },
+                "version": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^[A-Za-z0-9._+-]+$",
+                  "description": "Pinned model version (release tag or revision) the backend must serve."
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "description": "sha256 of the pinned weights file (or the serving engine's manifest digest)."
                 }
               },
               "required": [
@@ -100,6 +112,36 @@
                 "description": "A /v1/models probe fails when the bound model id is not served."
               }
             }
+          },
+          "limits": {
+            "type": "object",
+            "description": "Rate and cost budget for calls through this role (G-10). Exceeding any limit throttles the call (it is refused, so a decision escalates) and alerts.",
+            "properties": {
+              "window_s": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "max_requests": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "max_tokens": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "max_cost": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "cost_per_1k_tokens": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "window_s"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [

@@ -76,6 +76,7 @@ include = ["homelabnext*"]
 homelabnext = [
   "generators/templates/*.tmpl",
   "decide/examples/*.yml",
+  "decide/safety_specs/*.yml",
   "golden/examples/*.yml",
   "agent/*.yml",
   "agent/prompts/templates/*.yml",

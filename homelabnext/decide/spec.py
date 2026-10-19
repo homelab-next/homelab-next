@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Decision-spec model (``schemas/registers/decision_spec.json`` 1.2)."""
+"""Decision-spec model (``schemas/registers/decision_spec.json`` 1.3)."""
 
 from __future__ import annotations
 
@@ -38,6 +38,19 @@ class TierSpec:
 
 
 @dataclass(frozen=True)
+class NoiseGate:
+    """A noise gate may answer a de-escalating label automatically only with corroboration.
+
+    ``deescalate`` lists the labels that lower attention (close as noise, suppress).  An automatic
+    answer with one of them stands only when one of ``corroborators`` (deterministic checks the
+    caller supplies by name) returns a reference for the item; otherwise the item escalates (K-08).
+    """
+
+    deescalate: tuple[str, ...]
+    corroborators: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class QuestionSpec:
     """One question.  ``labels`` is empty for a plain-string question; ``compare`` names the two
     slots of a pairwise question (written ``{slot}`` in ``text``)."""
@@ -63,6 +76,7 @@ class DecisionSpec:
     impact_floor: str = "low"
     questions: tuple[QuestionSpec, ...] = ()
     callers: tuple[str, ...] = ("batch",)
+    noise_gate: NoiseGate | None = None
 
     @property
     def inline(self) -> bool:
@@ -141,6 +155,7 @@ def parse_spec(doc: Any) -> DecisionSpec:
     if not isinstance(callers, list) or not callers or any(c not in CALLERS for c in callers):
         p.append(f"callers must be a non-empty list drawn from {CALLERS}")
         callers = ["batch"]
+    noise_gate = _noise_gate(doc.get("noise_gate"), safety, p)
     table = tuple((str(r["when"]), str(r["then"])) for r in doc["decision_table"])
     for _, then in table:
         if then not in LABELS:
@@ -162,7 +177,26 @@ def parse_spec(doc: Any) -> DecisionSpec:
         impact_floor=floor,
         questions=tuple(questions),
         callers=tuple(dict.fromkeys(callers)),
+        noise_gate=noise_gate,
     )
+
+
+def _noise_gate(raw: Any, safety: bool, p: list[str]) -> NoiseGate | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        p.append("noise_gate must be a mapping")
+        return None
+    if safety:
+        p.append("noise_gate: a safety spec never de-escalates")
+    de, corr = raw.get("deescalate"), raw.get("corroborators")
+    if not isinstance(de, list) or not de or any(x not in ("accept", "reject") for x in de):
+        p.append("noise_gate.deescalate must list labels from ('accept', 'reject')")
+        de = []
+    if not isinstance(corr, list) or not corr or not all(isinstance(x, str) and x for x in corr):
+        p.append("noise_gate.corroborators must name at least one corroborator")
+        corr = []
+    return NoiseGate(tuple(dict.fromkeys(de)), tuple(dict.fromkeys(corr)))
 
 
 def _questions(raw: Any, p: list[str]) -> list[QuestionSpec]:

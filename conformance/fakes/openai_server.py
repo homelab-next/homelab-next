@@ -102,6 +102,7 @@ class FakeOpenAIServer:
         faults: list[Fault] | None = None,
         logprob: float | None = None,
         embed_dim: int = 8,
+        context_length: int | dict[str, int] | None = None,
         host: str = LOOPBACK,
         port: int = 0,
     ):
@@ -112,6 +113,9 @@ class FakeOpenAIServer:
         self.faults = list(faults or [])
         self.logprob = logprob
         self.embed_dim = embed_dim
+        # loaded context length reported per model in /v1/models (``max_model_len``, as vLLM
+        # does); an int applies to every model, a dict per model id, None reports nothing
+        self.context_length = context_length
         self.requests: list[dict] = []
         self._lock = threading.Lock()
         self._httpd = ThreadingHTTPServer((host, port), self._handler())
@@ -148,6 +152,10 @@ class FakeOpenAIServer:
         self.stop()
 
     # -------------------------------------------------------------- behaviour
+    def context_of(self, model: str) -> int | None:
+        cl = self.context_length
+        return cl.get(model) if isinstance(cl, dict) else cl
+
     def reply_for(self, text: str, request: dict) -> tuple[str, float | None]:
         for rule in self.rules:
             if rule.matches(text):
@@ -191,10 +199,17 @@ class FakeOpenAIServer:
                 if fault and self._apply_fault(fault):
                     return
                 if path == "/v1/models":
-                    data = [
-                        {"id": m, "object": "model", "created": 0, "owned_by": "fake"}
-                        for m in server.models
-                    ]
+                    data = []
+                    for m in server.models:
+                        entry: dict[str, Any] = {
+                            "id": m,
+                            "object": "model",
+                            "created": 0,
+                            "owned_by": "fake",
+                        }
+                        if server.context_of(m) is not None:
+                            entry["max_model_len"] = server.context_of(m)
+                        data.append(entry)
                     self._send(200, {"object": "list", "data": data})
                 elif path == "/health":
                     self._send(200, {"status": "ok"})

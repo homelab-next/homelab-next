@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``hnx decide``: eval (synthetic gold set), scan (impact keywords), lint (decision specs)."""
+"""``hnx decide``: eval (synthetic gold set), scan (impact keywords), lint (decision specs),
+safety (the required safety specs pass their cases)."""
 
 from __future__ import annotations
 
@@ -25,7 +26,13 @@ def main(argv: list[str]) -> int:
     li = sub.add_parser("lint", help="lint every decision spec in the git tree, or PATHS")
     li.add_argument("paths", nargs="*", type=Path, help="spec files or directories")
     li.add_argument("--root", type=Path, default=None, help="git tree to search (default: cwd)")
+    sf = sub.add_parser("safety", help="the required safety specs exist and pass their cases")
+    sf.add_argument("--dir", type=Path, default=None, help="spec directory (default: built-in)")
     args = ap.parse_args(argv)
+    if args.cmd == "safety":
+        from .safety import main as safety_main
+
+        return safety_main(args.dir)
     if args.cmd == "lint":
         return _lint(args.paths, args.root)
     if args.cmd == "scan":
