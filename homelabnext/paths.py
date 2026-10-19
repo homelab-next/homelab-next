@@ -9,7 +9,10 @@ One module answers every "where is ``schemas/``?" question so no other module gu
    ``HNX_DATA_DIR`` for a whole tree laid out as ``<root>/schemas``, ``<root>/profiles``, ...;
 2. **installed package data**: ``homelabnext/_data/<kind>`` (what the wheel carries, copied there at
    build time from the repository-level directories by ``setup.py``);
-3. **source tree**: ``<checkout>/<kind>`` (editable installs and plain checkouts).
+3. **source tree**: ``<checkout>/<kind>`` (editable installs and plain checkouts), used only when
+   the directory above the package is verifiably this project's checkout (:func:`checkout_root`:
+   a ``pyproject.toml`` naming the ``homelabnext`` project).  In a wheel install that directory is
+   ``site-packages``, which other distributions share, so it is never searched or executed from.
 
 Results are cached.  Tests inject roots instead of patching the environment: every function takes
 ``env=``, ``package_root=`` and ``source_root=`` keyword arguments, and a call that injects any of
@@ -20,6 +23,7 @@ from __future__ import annotations
 
 import importlib.resources
 import os
+import tomllib
 from collections.abc import Mapping, Sequence
 from functools import cache
 from pathlib import Path
@@ -35,6 +39,48 @@ PACKAGE_DATA = "_data"
 
 _PACKAGE_ROOT_DEFAULT = None  # sentinel: ask importlib.resources
 _SOURCE_ROOT = Path(__file__).resolve().parents[1]
+
+
+class NotACheckout(RuntimeError):
+    """A feature needs this project's source checkout and the package is not running from one."""
+
+
+@cache
+def checkout_root() -> Path | None:
+    """The source checkout this package was imported from, or ``None``.
+
+    Verified, not assumed: the parent of the package directory must hold a ``pyproject.toml``
+    whose ``[project] name`` is ``homelabnext``, next to a ``homelabnext/`` that is this package.
+    """
+    root = _SOURCE_ROOT
+    try:
+        meta = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if (meta.get("project") or {}).get("name") != "homelabnext":
+        return None
+    if (root / "homelabnext" / "paths.py").resolve() != Path(__file__).resolve():
+        return None
+    return root
+
+
+def checkout_tool(name: str, *, feature: str) -> Path:
+    """``<checkout>/tools/<name>``, for code that runs a repository tool in-process.
+
+    Raises :class:`NotACheckout` (naming ``feature``) unless :func:`checkout_root` verified the
+    checkout and the file exists.  The tools are executed, so they are never looked up anywhere
+    else, in particular not in a ``site-packages/tools`` some other distribution installed.
+    """
+    root = checkout_root()
+    if root is None:
+        raise NotACheckout(
+            f"{feature} needs a homelabnext source checkout (tools/{name}); this install is not "
+            f"one ({_SOURCE_ROOT} has no pyproject.toml for the homelabnext project)"
+        )
+    path = root / "tools" / name
+    if not path.is_file():
+        raise NotACheckout(f"{feature} needs tools/{name}, which is missing from {root}")
+    return path
 
 
 class ResourceNotFound(FileNotFoundError):
@@ -82,8 +128,11 @@ def candidates(
     out.append((f"${DATA_ENV}/{kind}", Path(d) / kind if d else None))
     pkg = Path(package_root) if package_root is not None else _package_data_root()
     out.append((f"package data (homelabnext/{PACKAGE_DATA}/{kind})", pkg / kind if pkg else None))
-    src = Path(source_root) if source_root is not None else _SOURCE_ROOT
-    out.append((f"source tree ({src}/{kind})", src / kind))
+    src = Path(source_root) if source_root is not None else checkout_root()
+    if src is None:
+        out.append((f"source tree ({_SOURCE_ROOT} is not a homelabnext checkout)", None))
+    else:
+        out.append((f"source tree ({src}/{kind})", src / kind))
     return out
 
 
@@ -109,6 +158,7 @@ def _cached(kind: str) -> Path:
 def clear_cache() -> None:
     """Forget cached lookups (after changing the environment or installing data)."""
     _cached.cache_clear()
+    checkout_root.cache_clear()
 
 
 def resource_dir(
@@ -165,7 +215,11 @@ def example_file(*parts: str, **inject) -> Path:
 
 
 def source_root() -> Path:
-    """The repository root when running from a checkout (it may not hold the data trees)."""
+    """The directory above the package (the repository root when running from a checkout).
+
+    Unverified: in a wheel install this is ``site-packages``.  Use :func:`checkout_root` before
+    reading from it, and :func:`checkout_tool` before executing anything in it.
+    """
     return _SOURCE_ROOT
 
 

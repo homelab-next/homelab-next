@@ -31,7 +31,8 @@ USAGE = """usage: hnx swap {plan,start,status,advance,rollback,record} ...
   status R                                  one-screen state of a swap record
   advance R [--dry-run] [--attest NAME=FILE ...] [--scan-root DIR ...] [--adr docs/adr/NNNN-x.md]
   rollback R --reason TEXT                  restore the prior route (any step before decommission)
-  record R [--verify] [--note TEXT]         validate a record, show its transition log
+  record R [--verify] [--note TEXT] [--anchor SEQ:HASH]
+                                            validate a record, show its transition log and head
 """
 
 
@@ -113,6 +114,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--actor", default="operator")
     p.add_argument("--now")
     p.add_argument("--evidence-dir")
+    p.add_argument("--anchor", help="SEQ:HASH from an earlier `head`, stored outside the record")
     return ap
 
 
@@ -335,16 +337,27 @@ def _cmd_record(args: argparse.Namespace) -> int:
             else path.parent / (doc["swap_id"] + ".evidence")
         )
         bad = rec.verify_evidence(doc, ev)
+    if args.anchor:
+        seq, _, want = args.anchor.partition(":")
+        if not seq.isdigit() or not want:
+            raise SystemExit("--anchor must be SEQ:HASH (as printed after 'head:')")
+        bad += rec.verify_anchor(doc, {"seq": int(seq), "hash": want})
     if args.json:
         print(rec.dumps(doc), end="")
     else:
-        print(f"{doc['swap_id']}: valid ({len(doc['transitions'])} transitions, hash chain intact)")
+        keyed = (doc.get("chain") or {}).get("alg") == "hmac-sha256"
+        print(
+            f"{doc['swap_id']}: valid ({len(doc['transitions'])} transitions, "
+            f"{'keyed ' if keyed else ''}hash chain consistent)"
+        )
+        h = rec.head(doc)
+        print(f"  head: {h['seq']}:{h['hash']}")
         for t in doc["transitions"]:
             print(
                 f"  {t['seq']:>3} {t['at']} {t['event']:<16} {t['step'] or '-':<19} {t['note'][:70]}"
             )
     for b in bad:
-        print(f"EVIDENCE: {b}", file=sys.stderr)
+        print(f"{'ANCHOR' if b.startswith('anchor:') else 'EVIDENCE'}: {b}", file=sys.stderr)
     return 1 if bad else 0
 
 

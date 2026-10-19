@@ -225,3 +225,27 @@ def test_keyed_state_first_red_counters_and_last_seen(tmp_path):
     )
     k.reset("c1")
     assert k.record("c1") == {}
+
+
+def test_quarantine_is_logged_with_its_reason(tmp_path, caplog):
+    p = tmp_path / "s.json"
+    p.write_bytes(b'{"schema_version": 1, "data": {"a": \xff')
+    with caplog.at_level("WARNING", logger="homelabnext.state"):
+        assert StateStore(p).items() == {}
+    assert len(quarantined_files(p)) == 1
+    msg = caplog.records[-1].getMessage()
+    assert "quarantined" in msg and "UnicodeDecodeError" in msg and str(p) in msg
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_new_file_is_0600_and_existing_mode_is_kept(tmp_path):
+    old = os.umask(0o022)
+    try:
+        p = tmp_path / "s.json"
+        StateStore(p).put("token", "x")
+        assert p.stat().st_mode & 0o777 == 0o600
+        os.chmod(p, 0o640)
+        StateStore(p).put("token", "y")
+        assert p.stat().st_mode & 0o777 == 0o640
+    finally:
+        os.umask(old)

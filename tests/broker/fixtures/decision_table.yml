@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Table-driven broker fixtures: manifest x tier x handler x approval -> decision.
-# `approval` is built by the test: none | valid | wrong-digest | denied | self | expired | altered
+# `approval` is built by the test: none | valid | wrong-digest | denied | self | self-spelling |
+# expired | expires-at-past | future | before-request | unlisted | other-issuer | agent | altered
 # (altered = a valid approval, then the request params change; the digest no longer matches).
 manifests:
   enforce:
@@ -18,6 +19,10 @@ manifests:
       - {profile: "profile:reader", actions: [service.status], max_tier: read}
       - {profile: "profile:writer", actions: [service.status, records.annotate, records.purge], max_tier: write}
       - {profile: "profile:operator", actions: [service.status, service.restart, host.reboot], max_tier: execute}
+    approvers:
+      - {issuer: sso, subject: approver-one, kind: human}
+      - {issuer: sso, subject: operator, kind: human}
+      - {issuer: agents, subject: writer}
   shadow:
     manifest_id: table-shadow
     default: deny
@@ -56,6 +61,13 @@ cases:
   - {name: approval-denied, manifest: enforce, actor: "profile:operator", action: service.restart, approval: denied, verdict: deny, reason: approval-denied}
   - {name: self-approval, manifest: enforce, actor: "profile:operator", action: service.restart, approval: self, verdict: deny, reason: approval-self-approved}
   - {name: approval-expired, manifest: enforce, actor: "profile:operator", action: service.restart, approval: expired, verdict: deny, reason: approval-expired}
+  - {name: self-approval-other-spelling, manifest: enforce, actor: "profile:operator", action: service.restart, approval: self-spelling, verdict: deny, reason: approval-self-approved}
+  - {name: expires-at-in-the-past, manifest: enforce, actor: "profile:operator", action: service.restart, approval: expires-at-past, verdict: deny, reason: approval-expired}
+  - {name: approved-in-the-future, manifest: enforce, actor: "profile:operator", action: service.restart, approval: future, verdict: deny, reason: approval-time-invalid}
+  - {name: approved-before-request, manifest: enforce, actor: "profile:operator", action: service.restart, approval: before-request, verdict: deny, reason: approval-time-invalid}
+  - {name: approver-not-listed, manifest: enforce, actor: "profile:operator", action: service.restart, approval: unlisted, verdict: deny, reason: approval-approver-not-allowed}
+  - {name: approver-wrong-issuer, manifest: enforce, actor: "profile:operator", action: service.restart, approval: other-issuer, verdict: deny, reason: approval-approver-not-allowed}
+  - {name: agent-approves-agent, manifest: enforce, actor: "profile:operator", action: service.restart, approval: agent, verdict: deny, reason: approval-agent-approver}
   # ---- mode
   - {name: shadow-records-but-does-not-enforce, manifest: shadow, actor: "profile:reader", action: service.status, approval: none, verdict: allow, reason: allowed, enforced: false}
   - {name: shadow-deny-not-enforced, manifest: shadow, actor: "profile:reader", action: host.format, approval: none, verdict: deny, reason: default-deny, enforced: false}

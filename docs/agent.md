@@ -8,7 +8,8 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 ## Why these exist
 
 - A profile is **compiled**, not hand-assembled, so "this agent can never do more than its
-  ceiling" is a property of the compiler rather than a review habit.
+  ceiling" is a property of the compiler rather than a review habit. The ceiling comes from a
+  policy file owned separately from the specs, so editing a spec cannot raise it.
 - A context pack is a **pure function** of a manifest and its inputs, so identical inputs give an
   identical pack and hash. A job log that records the hash can be replayed and audited.
 - An agent never runs blind: a required pre-gate that is missing, stale or failed **defers** the
@@ -25,13 +26,14 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `agent/pregate_output` | `ok` / `degraded` / `stale` / `failed`, with per-source ages; a non-ok status needs a reason |
 | `agent/report_result` | `pack_id`, cites, unknowns, memory updates; `ok` needs at least one cite, `deferred` is how a job reports it did nothing |
 | `agent/golden_task` | the existing `homelabnext.golden` suite format, described unchanged |
-| `broker/manifest` | the allowlist; `default` is the constant `deny` |
+| `broker/manifest` | the allowlist; `default` is the constant `deny`; `approvers` lists who may approve |
 | `broker/handler` | one handler implementation; execute and privileged handlers require approval; always audited |
 | `broker/request` | one call; `digest` binds `{action, actor, target, params}` |
 | `broker/decision` | `allow` / `deny` / `needs-approval` with a closed reason vocabulary; shadow mode records but does not enforce |
 | `broker/approval` | approver identity plus `request_digest` |
 
-All are versioned 1.0, frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`
+All are versioned 1.0 except `broker/manifest` and `broker/decision` (1.1, additive: approvers and
+the new approval reasons), frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`
 (each has an example and several negatives). `agent/profile` is the compiler's output;
 `platform/agent_profile` stays as the lean runtime view.
 
@@ -42,16 +44,31 @@ documents and the broker table agree (`check_manifest_handlers`).
 ## Profile compiler
 
 ```python
-from homelabnext.agent import PartsLibrary, compile_profile
+from homelabnext.agent import CeilingPolicy, PartsLibrary, compile_profile
 from homelabnext.ids import MappingResolver
 
 library = PartsLibrary(MappingResolver("parts", {"persona:analyst": "personas/analyst.md", ...}),
                        reader=read_text)          # reader(locator) -> str
-profile = compile_profile(spec, library)
+profile = compile_profile(spec, library, policy=CeilingPolicy.from_mapping(policy_doc))
 ```
 
 The spec names a persona, skills, capabilities, a model **role** (never a model id), the MCP
-servers it wants, a tier, budgets and a `ceiling`. The compiler:
+servers it wants, a tier and budgets. The **ceiling** is read from a `CeilingPolicy`:
+
+```yaml
+# policy.yml: owned and reviewed by someone other than the spec authors (CODEOWNERS)
+ceilings:
+  profile:reader: {mcp: [lake], capabilities: [cap:lake-query], tier: read,
+                   budgets: {max_input_tokens: 64000, max_output_tokens: 4000,
+                             max_runtime_s: 900, max_tool_calls: 40}}
+```
+
+A spec may also carry a `ceiling`; with a policy it may only narrow the policy's entry, and a
+profile id with no entry is refused. Without a policy the compiler falls back to the spec's own
+`ceiling` (and `hnx agent compile` says so): that output is self-consistent but bounded by
+nothing the spec author could not change, so do not rely on it for least privilege.
+
+The compiler:
 
 1. resolves every logical id through the library and reports **all** missing ids together
    (`MissingPartError`), never skipping one;
@@ -62,10 +79,17 @@ servers it wants, a tier, budgets and a `ceiling`. The compiler:
 5. records `provenance`: each part's id, source and content digest, plus the digest of the
    normalised spec;
 6. sets `digest` to the sha256 of the canonical JSON of everything else, and validates the result
-   against its own schema. `verify_profile` re-checks schema, ceiling, budgets and digest on a
-   profile you did not just compile.
+   against its own schema.
 
-Raising a ceiling is a reviewed change to the spec, never a compiler option.
+`verify_profile(profile, policy=..., lock=...)` re-checks a profile you did not just compile:
+schema, digest, and grants and budgets **against the policy's ceiling** (the ceiling stored in
+the profile may not be wider). The digest only proves the content was not changed *without
+recomputing it*; anyone can recompute a sha256. To pin the reviewed profile, commit a lock file
+next to the policy, `{profiles: {<profile id>: <digest>}}`, and pass it as `lock`: a profile whose
+digest is not the pinned one is refused. Without `policy`, `verify_profile` checks the profile
+against its own stored ceiling, which proves internal consistency only.
+
+Raising a ceiling is a reviewed change to the policy file, never a compiler option.
 
 ## Context-pack assembler
 
@@ -87,7 +111,14 @@ pack, pack_hash = assemble_pack(manifest, {"sections": {...}, "pregates": {...}}
   `failed`, makes `status: deferred` with `deferred_reasons`. Pre-gate outputs are included in the
   pack as volatile sections so the agent sees the verdict itself.
 - Section text is fenced with the manifest's delimiter and tier so untrusted input stays
-  distinguishable from instructions.
+  distinguishable from instructions. Stable sections (manifest text) open with
+  `<delim> <name> [stable] <delim>`. Session and volatile sections are input, so their fences
+  carry a per-pack nonce derived from the digest of that content
+  (`<delim> <name> [<tier>] <nonce> <delim>` ... `<delim> end <name> <nonce> <delim>`), and any line
+  of their text that starts with the delimiter is prefixed `[escaped] `. Input therefore cannot
+  open a section of its own, least of all a stable one. This is a structural guarantee about the
+  text, not about the model: a model can still be persuaded by data it reads, so the broker, not
+  the pack, is what limits what an agent can do.
 
 `validate_report(report, pack, pack_hash, manifest)` checks a `report_result` against the pack it
 ran on: schema, `pack_id`, deferred-only-when-deferred, cites name real pack sources, and the
@@ -95,13 +126,32 @@ manifest's `must_cite` sources are cited by an `ok` report.
 
 ## Broker contracts and reference evaluator
 
-`homelabnext.broker.decide(manifest, request, approval=None, now=...)` returns a `decision`.
-Order of checks, first failure wins: action in manifest (else `default-deny`); actor granted the
-action (`not-granted`); tier within the grant (`tier-exceeds-grant`); handler declared
+`homelabnext.broker.decide(manifest, request, approval=None, now=..., store=...)` returns a
+`decision`. Order of checks, first failure wins: action in manifest (else `default-deny`); actor
+granted the action (`not-granted`); tier within the grant (`tier-exceeds-grant`); handler declared
 (`handler-missing`); then approval for execute/privileged or flagged actions: none is
 `needs-approval`, a digest that does not match the request is `approval-digest-mismatch`, then
-`approval-denied`, `approval-self-approved`, `approval-expired`, else `approved`.
-`request_digest` covers `action`, `actor`, `target` and `params` (not ids or timestamps).
+`approval-denied`, `approval-self-approved`, `approval-approver-not-allowed`,
+`approval-agent-approver`, `approval-time-invalid`, `approval-expired`, `approval-replayed`, else
+`approved`. `request_digest` covers `action`, `actor`, `target` and `params` (not ids or
+timestamps).
+
+- **Time.** `now` defaults to the UTC clock. An approval is valid from `approved_at` (which may
+  not precede the request's `created` or follow `now`) until the earlier of its `expires_at` and
+  `approved_at + approval_ttl_s`. A manifest without `approval_ttl_s` gets 900 seconds
+  (`DEFAULT_APPROVAL_TTL_S`).
+- **Who may approve.** `manifest.approvers` lists `{issuer, subject, kind}`; an approval counts
+  only when its approver matches an entry on both issuer and subject. A manifest without
+  `approvers` accepts no approval. Identities are compared normalized (case-folded, `.`, `_` and
+  whitespace folded to `-`, see `normalize_identity`), so `ops_bot` is the actor
+  `profile:ops-bot` and is refused as a self-approval. An approver whose entry says
+  `kind: agent`, or whose subject names any profile the manifest grants actions to, is an agent
+  and is refused unless the manifest sets `allow_agent_approvers: true`.
+- **Single use.** An `approved` decision in enforce mode consumes the `approval_id` in the
+  `store` (an `ApprovalStore`: `consume(id)` must be atomic, `consumed(id)` reads). A second use
+  is `approval-replayed`. `MemoryApprovalStore` is the in-process default; a broker that runs in
+  more than one process, or restarts, needs a durable store. Shadow mode reports a replay but
+  consumes nothing.
 
 The table `tests/broker/fixtures/decision_table.yml` (manifest x tier x handler x approval ->
 decision) is the conformance input for any broker implementation: run the same rows against it.
@@ -109,12 +159,14 @@ decision) is the conformance input for any broker implementation: run the same r
 ## Command line
 
 ```
-hnx agent compile SPEC --library LIBRARY.yml [--out profile.json]
+hnx agent compile SPEC --library LIBRARY.yml --policy POLICY.yml [--out profile.json]
+hnx agent verify PROFILE --policy POLICY.yml [--lock profiles.lock]
 hnx agent pack MANIFEST --inputs INPUTS.json [--out pack.json]
 ```
 
 `LIBRARY.yml` is `{parts: {<logical id>: <path relative to the file>}}`; paths may not escape its
-directory. `compile` exits 1 on a missing part, ceiling or budget violation. `pack` prints the
+directory. `compile` exits 1 on a missing part, ceiling or budget violation; `verify` exits 1 on
+any problem, including a digest that is not the one in the lock. `pack` prints the
 hash and status on stderr and exits 0 when ready, **3 when deferred**, 1 on invalid input.
 Install the extra with `pip install 'homelabnext[agent]'`.
 

@@ -47,10 +47,31 @@ characters). After decommission there is nothing to roll back to, so it is refus
 One JSON file per swap, validated against the schema before every write and written atomically.
 It holds the plan (soak and window lengths, divergence budget, minimum rows), the route before and
 after, the nine steps with their last gates and evidence references (file name plus SHA-256), the
-rollback or closure, and an append-only transition log. Each transition carries the hash of the
-previous one, so editing or deleting a past entry is detected by `hnx swap record FILE --verify`
-(which also re-hashes the evidence files). Time comes from an injected clock; the record never
-reads the wall clock itself.
+rollback or closure, and an append-only transition log. Time comes from an injected clock; the
+record never reads the wall clock itself.
+
+What `hnx swap record FILE --verify` checks (it also re-hashes the evidence files):
+
+* Each transition carries the hash of the previous one and a `state` digest of the steps, route,
+  status, rollback and closure as they were when it was written; the hash covers both.
+* The steps agree with the log: one `step-passed` transition per passed step, in order, at the
+  step's `finished_at`, naming that step's evidence; a failed step has its `gate-failed`
+  transition; `closed` and `rolled_back` have theirs; the last `state` matches the file. Marking a
+  step passed, faking its evidence or flipping the route without the transitions is reported, and
+  so is cutting transitions off the end.
+
+What it does **not** guarantee. With the default unkeyed chain anyone who can write the file can
+recompute every hash, so the chain detects damage and careless edits, not a determined writer.
+Two optional measures close that gap:
+
+* **Keyed chain.** Set `HNX_SWAP_CHAIN_KEY` when the swap starts (and for every later command):
+  the record says `chain.alg: hmac-sha256` and the hashes are HMAC-SHA256, which cannot be
+  recomputed without the key. With a key set, an unkeyed record is refused, so the chain cannot
+  be downgraded.
+* **Anchored head.** `hnx swap record FILE` prints `head: SEQ:HASH`. Store it where the record's
+  writer cannot rewrite it (a ticket, a commit, the event bus) and later run
+  `hnx swap record FILE --anchor SEQ:HASH`: a record that lost or rewrote that transition fails.
+  This is the only check that catches a record replaced by a consistent older copy of itself.
 
 Evidence artefacts live next to the record in `<swap_id>.evidence/`, one file per attempt, each
 with the gate results and whatever the backend returned (for example the full parity report).

@@ -5,6 +5,15 @@ Agents write only into ``inbox/``.  Every note is validated against the schema a
 convention before a byte is written, and a note is created exclusively (never overwrites).  There is
 deliberately no way here to touch ``decided/``: the approve/deny/complete movers live in
 ``homelabnext.records.decider`` which this module never imports.
+
+What this module enforces and what it cannot.  It is a library running inside the agent's own
+process, so it is a guard against mistakes, not a security boundary: code in that process can
+write files without it.  The real enforcement is **filesystem ownership**: ``decided/`` must be
+owned by the decision maker and not writable by the agent's OS user, and ``inbox/`` writable by
+it.  Likewise ``requesting_agent`` is only as trustworthy as the identity binding: construct
+:class:`Records` with ``agent=`` (one instance per agent, ideally one inbox or OS user per agent)
+and every note is stamped with that identity and a note naming anyone else is refused.  An
+unbound instance takes ``requesting_agent`` from the caller, which any caller can set to any name.
 """
 
 from __future__ import annotations
@@ -64,10 +73,36 @@ class RecordsReader:
 
 
 class Records:
-    def __init__(self, root: str | os.PathLike, clock: Callable[[], datetime]):
+    """The agent write path.  ``agent`` binds the requesting identity (see the module doc)."""
+
+    def __init__(
+        self,
+        root: str | os.PathLike,
+        clock: Callable[[], datetime],
+        *,
+        agent: str | None = None,
+    ):
         self.root = Path(root)
         self.clock = clock
         self.reader = RecordsReader(self.root)
+        self.agent = self._profile(agent) if agent is not None else None
+
+    @staticmethod
+    def _profile(agent: str) -> str:
+        who = agent if agent.startswith("profile:") else f"profile:{agent}"
+        agent_slug(who)
+        return who
+
+    def _bind(self, fm: dict[str, Any]) -> None:
+        """Stamp the bound identity; refuse a note that names another agent."""
+        if self.agent is None:
+            return
+        claimed = fm.get("requesting_agent")
+        if claimed is not None and claimed != self.agent:
+            raise LaneViolation(
+                f"requesting_agent {claimed!r} is not this writer's identity {self.agent!r}"
+            )
+        fm["requesting_agent"] = self.agent
 
     # ---------------------------------------------------------------- public writes
     def propose(self, note: Mapping[str, Any], *, body: str = "", slug: str | None = None) -> Path:
@@ -85,17 +120,19 @@ class Records:
         related: Sequence[str],
         body: str,
         *,
-        agent: str,
+        agent: str | None = None,
         title: str | None = None,
         outcome: str = "implemented",
         slug: str | None = None,
     ) -> Path:
+        if agent is None and self.agent is None:
+            raise NoteError("agent: required when the writer is not bound to an identity")
+        who = self._profile(agent) if agent is not None else self.agent
+        self._bind({"requesting_agent": who})
         rel = [self._normalise_related(r) for r in related]
         for r in rel:
             if not (self.root / r).is_file():
                 raise NoteError(f"related: {r} does not exist in the approved lane")
-        who = agent if agent.startswith("profile:") else f"profile:{agent}"
-        agent_slug(who)
         fm: dict[str, Any] = {
             "type": "completion-request",
             "title": title or (f"Done: {Path(rel[0]).stem}" if rel else "Done"),
@@ -121,6 +158,7 @@ class Records:
             fm.setdefault("type", expect)
             if fm["type"] != expect:
                 raise NoteError(f"type: expected {expect!r}, got {fm['type']!r}")
+        self._bind(fm)
         fm.setdefault("created", self._now())
         if fm["type"] == "proposal":
             fm.setdefault("status", "proposed")

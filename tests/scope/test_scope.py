@@ -322,7 +322,35 @@ def test_service_inherits_scope_from_its_host_guest():
     assert g.in_scope("svc:worker").code == "explicit-out"
     assert g.in_scope("orchestration").canonical == "svc:worker"  # capability alias resolves first
     assert g.in_scope("svc:api").allow
-    assert g.in_scope("svc:pinned").code == "explicit-in"
+    # a service can only narrow its host: scope: in on an out host is still out
+    d = g.in_scope("svc:pinned")
+    assert not d.allow and d.code == "explicit-out" and "host guest:scratch-a" in d.reason
+
+
+def test_service_cannot_widen_host_threshold_or_tags():
+    guests = [
+        Target("guest:big", vmid=9001),
+        Target("guest:tagged", tags=("scratch",)),
+        Target("guest:prod-a"),
+    ]
+    reg = {
+        "services": {
+            "a": {"host": "big", "scope": "in"},
+            "b": {"host": "tagged", "scope": "in"},
+            "c": {"host": "prod-a", "scope": "out"},
+            "d": {"host": "prod-a", "scope": "in"},
+        }
+    }
+    pol = ScopePolicy(vmid_threshold=9000, out_tags=frozenset({"scratch"}))
+    g = ScopeGuard([*guests, *targets_from_services(reg, guests)], pol)
+    assert g.in_scope("svc:a").code == "vmid-threshold"
+    assert g.in_scope("svc:b").code == "out-tag"
+    assert g.in_scope("svc:c").code == "explicit-out"  # narrowing is fine
+    assert g.in_scope("svc:d").allow
+    # the policy owner can still decide for the service itself
+    pol2 = ScopePolicy(vmid_threshold=9000, overrides={"svc:a": "in"})
+    g2 = ScopeGuard([*guests, *targets_from_services(reg, guests)], pol2)
+    assert g2.in_scope("svc:a").code == "override-in"
 
 
 def test_hostname_shared_by_guest_and_service_does_not_become_ambiguous():

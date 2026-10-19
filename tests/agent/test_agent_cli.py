@@ -145,3 +145,32 @@ def test_pack_invalid_manifest_exit_1(work, capsys):
     )
     assert rc == 1 and "manifest invalid" in capsys.readouterr().err
     assert GATE_OK  # fixture import used
+
+
+def test_compile_with_policy_and_verify(work, capsys):
+    policy = {
+        "ceilings": {
+            "profile:reader": {"mcp": ["lake"], "capabilities": ["cap:lake-query"], "tier": "read"}
+        }
+    }
+    (work / "policy.yml").write_text(yaml.safe_dump(policy))
+    s = spec()
+    del s["ceiling"]  # the policy owns it
+    (work / "spec.yml").write_text(yaml.safe_dump(s))
+    out = work / "profile.json"
+    lib = str(work / "lib" / "library.yml")
+    base = ["agent", "compile", str(work / "spec.yml"), "--library", lib]
+    assert cli.main([*base, "--policy", str(work / "policy.yml"), "--out", str(out)]) == 0
+    digest = json.loads(out.read_text())["digest"]
+    (work / "profiles.lock").write_text(yaml.safe_dump({"profiles": {"profile:reader": digest}}))
+    verify = ["agent", "verify", str(out), "--policy", str(work / "policy.yml")]
+    assert cli.main([*verify, "--lock", str(work / "profiles.lock")]) == 0
+    s = spec()  # its own ceiling allows records; the policy does not
+    s["mcp"].append("records")
+    (work / "spec.yml").write_text(yaml.safe_dump(s))
+    capsys.readouterr()
+    assert cli.main([*base, "--policy", str(work / "policy.yml")]) == 1
+    assert "outside ceiling" in capsys.readouterr().err
+    assert cli.main([*base, "--out", str(out)]) == 0  # self-declared ceiling, with a warning
+    assert "ceiling comes from the spec itself" in capsys.readouterr().err
+    assert cli.main([*verify, "--lock", str(work / "profiles.lock")]) == 1

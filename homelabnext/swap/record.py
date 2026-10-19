@@ -6,17 +6,35 @@ live in :func:`record_problems`:
 
 * the nine steps appear in procedure order and the passed steps are a prefix;
 * ``current_step`` is the first step that has not passed (while the swap is active);
-* ``transitions`` are numbered 1..n and hash-chained, so editing or removing a past entry is
-  detectable (:func:`record_problems` recomputes every hash);
+* ``transitions`` are numbered 1..n and hash-chained: each hash covers the previous hash and the
+  transition, including ``state``, the digest of the steps, route, status, rollback and closure
+  as they were when the transition was written;
+* the steps agree with the log: exactly one ``step-passed`` transition per passed step, in
+  procedure order, at the step's ``finished_at``, naming the step's evidence; a failed step has
+  a ``gate-failed`` transition; ``closed`` and ``rolled_back`` have their transitions; and the
+  last transition's ``state`` is the digest of the record as it stands;
 * ``route.flipped`` is true exactly when the ``cutover`` step has passed and the swap has not
   been rolled back;
 * a swap cannot be rolled back after ``decommission-check`` passed, and cannot close before it.
+
+What this guarantees, and what it does not:
+
+* An **unkeyed** chain (plain sha256) detects accidental damage and an edit by someone who does
+  not recompute the hashes.  Anyone who can write the file can recompute every hash, so it is
+  not tamper-proof on its own.
+* A **keyed** chain (``chain.alg: hmac-sha256``; key from ``key=`` or ``HNX_SWAP_CHAIN_KEY``)
+  cannot be recomputed without the key.  When a key is configured, an unkeyed record is refused,
+  so the chain cannot be downgraded.
+* Neither detects a record replaced by a consistent *older* copy of itself (the tail truncated
+  and the steps rewound with it).  For that, store :func:`head` somewhere the record's writer
+  cannot rewrite (a ticket, a commit, the event bus) and check it with :func:`verify_anchor`.
 """
 
 from __future__ import annotations
 
 import copy
 import hashlib
+import hmac
 import json
 import os
 import tempfile
@@ -39,6 +57,8 @@ STEPS = (
     "close",
 )
 GENESIS = "sha256:" + "0" * 64
+KEY_ENV = "HNX_SWAP_CHAIN_KEY"
+_STATE_FIELDS = ("status", "current_step", "route", "steps", "rollback", "closure")
 
 
 class RecordError(Exception):
@@ -81,14 +101,48 @@ def parse_stamp(text: str) -> Any:
 
 
 # ---------------------------------------------------------------- transitions
-def chain_hash(prev: str, t: Mapping[str, Any]) -> str:
-    body = {k: t[k] for k in ("seq", "at", "event", "step", "actor", "note")}
-    return sha256_text(prev + canonical(body))
+def chain_key(key: bytes | str | None = None) -> bytes | None:
+    """The HMAC key: ``key`` if given, else ``$HNX_SWAP_CHAIN_KEY``, else None (unkeyed)."""
+    if key is None:
+        key = os.environ.get(KEY_ENV) or None
+    if isinstance(key, str):
+        key = key.encode("utf-8")
+    return key or None
+
+
+def state_digest(doc: Mapping[str, Any]) -> str:
+    """Digest of the parts of the record a transition vouches for."""
+    return sha256_text(canonical({k: doc.get(k) for k in _STATE_FIELDS}))
+
+
+def chain_hash(prev: str, t: Mapping[str, Any], key: bytes | None = None) -> str:
+    fields = ("seq", "at", "event", "step", "actor", "note", "state")
+    body = {k: t[k] for k in fields if k in t}
+    text = prev + canonical(body)
+    if key is None:
+        return sha256_text(text)
+    return "sha256:" + hmac.new(key, text.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _doc_key(doc: Mapping[str, Any], key: bytes | str | None) -> bytes | None:
+    keyed = (doc.get("chain") or {}).get("alg") == "hmac-sha256"
+    k = chain_key(key)
+    if keyed and k is None:
+        raise RecordError(f"swap record is HMAC-chained; set {KEY_ENV} or pass key=")
+    return k if keyed else None
 
 
 def append_transition(
-    doc: dict[str, Any], *, at: str, event: str, step: str | None, actor: str, note: str = ""
+    doc: dict[str, Any],
+    *,
+    at: str,
+    event: str,
+    step: str | None,
+    actor: str,
+    note: str = "",
+    key: bytes | str | None = None,
 ) -> dict[str, Any]:
+    """Append one transition; call it after the step/route/status change it records."""
     trans = doc["transitions"]
     prev = trans[-1]["hash"] if trans else GENESIS
     t: dict[str, Any] = {
@@ -99,11 +153,33 @@ def append_transition(
         "actor": actor,
         "note": note[:500],
         "prev": prev,
+        "state": state_digest(doc),
     }
-    t["hash"] = chain_hash(prev, t)
+    t["hash"] = chain_hash(prev, t, _doc_key(doc, key))
     trans.append(t)
     doc["updated_at"] = at
     return t
+
+
+def head(doc: Mapping[str, Any]) -> dict[str, Any]:
+    """``{seq, hash}`` of the last transition: the value to anchor outside the record."""
+    t = doc["transitions"][-1]
+    return {"seq": t["seq"], "hash": t["hash"]}
+
+
+def verify_anchor(doc: Mapping[str, Any], anchor: Mapping[str, Any]) -> list[str]:
+    """Problems if the anchored head (from :func:`head`) is not in this record's chain.
+
+    The record may have grown since the anchor was taken; it may not have lost or rewritten the
+    anchored transition or anything before it (those change its hash).
+    """
+    seq, want = int(anchor["seq"]), anchor["hash"]
+    trans = doc["transitions"]
+    if seq > len(trans):
+        return [f"anchor: record has {len(trans)} transitions, anchored head is seq {seq}"]
+    if trans[seq - 1]["hash"] != want:
+        return [f"anchor: transition {seq} hash differs from the anchored head (rewritten)"]
+    return []
 
 
 def new_record(
@@ -119,7 +195,9 @@ def new_record(
     actor: str,
     plan: Mapping[str, Any] | None = None,
     registry: str | None = None,
+    key: bytes | str | None = None,
 ) -> dict[str, Any]:
+    """A new record.  With a chain key (``key=`` or ``$HNX_SWAP_CHAIN_KEY``) the chain is keyed."""
     p = {
         "soak_hours": 168,
         "rollback_window_hours": 168,
@@ -151,6 +229,8 @@ def new_record(
         "rollback": None,
         "closure": None,
     }
+    if chain_key(key) is not None:
+        doc["chain"] = {"alg": "hmac-sha256"}
     append_transition(
         doc,
         at=now,
@@ -158,6 +238,7 @@ def new_record(
         step=None,
         actor=actor,
         note=f"{from_adapter} -> {to_adapter}",
+        key=key,
     )
     return doc
 
@@ -201,8 +282,12 @@ def schema_problems(doc: Any) -> list[str]:
     return out
 
 
-def record_problems(doc: Mapping[str, Any]) -> list[str]:
-    """Semantic checks. Assumes the schema already passed."""
+def record_problems(doc: Mapping[str, Any], *, key: bytes | str | None = None) -> list[str]:
+    """Semantic checks. Assumes the schema already passed.
+
+    ``key`` (or ``$HNX_SWAP_CHAIN_KEY``) verifies a keyed chain; when a key is configured an
+    unkeyed record is a problem, so a keyed chain cannot be downgraded by dropping ``chain``.
+    """
     out: list[str] = []
     steps = doc["steps"]
     if [s["name"] for s in steps] != list(STEPS):
@@ -235,30 +320,88 @@ def record_problems(doc: Mapping[str, Any]) -> list[str]:
             out.append(f"route.flipped is {flipped} but cutover passed is {'cutover' in passed}")
     if st == "closed" and "decommission-check" not in passed:
         out.append("closed without decommission-check")
-    # transition chain
+    out += _chain_problems(doc, key)
+    out += _log_problems(doc)
+    return out
+
+
+def _chain_problems(doc: Mapping[str, Any], key: bytes | str | None) -> list[str]:
+    out: list[str] = []
+    keyed = (doc.get("chain") or {}).get("alg") == "hmac-sha256"
+    k = chain_key(key)
+    if keyed and k is None:
+        return [f"transitions: the chain is HMAC-keyed; set {KEY_ENV} (or pass key=) to verify it"]
+    if k is not None and not keyed:
+        out.append("transitions: a chain key is configured but this record's chain is unkeyed")
     prev = GENESIS
+    seen_state = False
     for i, t in enumerate(doc["transitions"], 1):
         if t["seq"] != i:
             out.append(f"transition {i}: seq is {t['seq']}")
         if t["prev"] != prev:
             out.append(f"transition {i}: prev hash does not link to transition {i - 1}")
-        if t["hash"] != chain_hash(t["prev"], t):
+        if t["hash"] != chain_hash(t["prev"], t, k if keyed else None):
             out.append(f"transition {i}: hash does not match its content (edited?)")
+        if seen_state and "state" not in t:
+            out.append(f"transition {i}: state digest missing after earlier transitions had one")
+        seen_state = seen_state or "state" in t
         prev = t["hash"]
     if doc["transitions"] and doc["transitions"][0]["event"] != "declared":
         out.append("first transition must be 'declared'")
     if doc["updated_at"] != doc["transitions"][-1]["at"]:
         out.append("updated_at is not the time of the last transition")
+    last = doc["transitions"][-1]
+    if "state" in last and last["state"] != state_digest(doc):
+        out.append(
+            "steps/route/status differ from the state the last transition recorded "
+            "(edited after the fact, or transitions removed)"
+        )
     return out
 
 
-def problems(doc: Any) -> list[str]:
+def _log_problems(doc: Mapping[str, Any]) -> list[str]:
+    """The steps, route and status must be the ones the transition log says happened."""
+    out: list[str] = []
+    trans = doc["transitions"]
+    steps = {s["name"]: s for s in doc["steps"]}
+    passed = [s["name"] for s in doc["steps"] if s["status"] == "passed"]
+    logged = [t for t in trans if t["event"] == "step-passed"]
+    if [t["step"] for t in logged] != passed:
+        out.append(
+            f"step-passed transitions {[t['step'] for t in logged]} do not match the passed "
+            f"steps {passed}"
+        )
+    else:
+        for t in logged:
+            s = steps[t["step"]]
+            if s.get("finished_at") != t["at"]:
+                out.append(
+                    f"{s['name']}: finished_at is not the time of its step-passed transition"
+                )
+            if t["note"] not in [e["summary"][:500] for e in s["evidence"]]:
+                out.append(f"{s['name']}: step-passed transition names no evidence of the step")
+    failed_logged = {t["step"] for t in trans if t["event"] == "gate-failed"}
+    for s in doc["steps"]:
+        if s["status"] == "failed" and s["name"] not in failed_logged:
+            out.append(f"{s['name']}: failed, but no gate-failed transition records it")
+    events = [t["event"] for t in trans]
+    st = doc["status"]
+    for status, event in (("closed", "closed"), ("rolled_back", "rolled-back")):
+        if (st == status) != (event in events):
+            where = "present" if event in events else "absent"
+            out.append(f"status is {st} but a {event!r} transition is {where}")
+    if st != "active" and events and events[-1] not in ("closed", "rolled-back", "note"):
+        out.append(f"status is {st} but the last transition is {events[-1]!r}")
+    return out
+
+
+def problems(doc: Any, *, key: bytes | str | None = None) -> list[str]:
     p = schema_problems(doc)
-    return p or record_problems(doc)
+    return p or record_problems(doc, key=key)
 
 
-def validate(doc: Any) -> None:
-    p = problems(doc)
+def validate(doc: Any, *, key: bytes | str | None = None) -> None:
+    p = problems(doc, key=key)
     if p:
         raise RecordError("invalid swap record", p)
 
@@ -278,7 +421,7 @@ def verify_evidence(doc: Mapping[str, Any], evidence_dir: str | Path) -> list[st
 
 
 # ---------------------------------------------------------------- persistence
-def load(path: str | Path) -> dict[str, Any]:
+def load(path: str | Path, *, key: bytes | str | None = None) -> dict[str, Any]:
     p = Path(path)
     try:
         doc = json.loads(p.read_text(encoding="utf-8"))
@@ -286,7 +429,7 @@ def load(path: str | Path) -> dict[str, Any]:
         raise RecordError(f"cannot read swap record {p}: {exc}") from exc
     except ValueError as exc:
         raise RecordError(f"swap record {p} is not valid JSON: {exc}") from exc
-    validate(doc)
+    validate(doc, key=key)
     return doc
 
 
@@ -294,9 +437,9 @@ def dumps(doc: Mapping[str, Any]) -> str:
     return json.dumps(doc, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 
-def save(path: str | Path, doc: Mapping[str, Any]) -> None:
+def save(path: str | Path, doc: Mapping[str, Any], *, key: bytes | str | None = None) -> None:
     """Validate, then write atomically (temp file + rename): a crash leaves the old record."""
-    validate(doc)
+    validate(doc, key=key)
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=p.name + ".", suffix=".tmp", dir=p.parent)
