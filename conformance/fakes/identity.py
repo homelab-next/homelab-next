@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""In-memory identity provider: HMAC-signed compact tokens with an injected clock."""
+"""In-memory identity provider: HS256 JWT-shaped tokens (``header.payload.signature``) with an
+injected clock.  The header is checked, not trusted: only the one algorithm it issues verifies."""
 
 from __future__ import annotations
 
@@ -33,8 +34,10 @@ class FakeIdentityProvider:
     def tick(self, seconds: float) -> None:
         self._now += seconds
 
-    def _sign(self, payload: str) -> str:
-        return _b64(hmac.new(self._key, payload.encode("ascii"), hashlib.sha256).digest())
+    _HEADER = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}, sort_keys=True).encode("utf-8"))
+
+    def _sign(self, signing_input: str) -> str:
+        return _b64(hmac.new(self._key, signing_input.encode("ascii"), hashlib.sha256).digest())
 
     def issue(self, subject: str, scopes: Sequence[str], ttl: float) -> str:
         if not subject:
@@ -51,13 +54,19 @@ class FakeIdentityProvider:
             "jti": f"t{self._n}",
         }
         payload = _b64(json.dumps(body, sort_keys=True).encode("utf-8"))
-        return f"{payload}.{self._sign(payload)}"
+        signing_input = f"{self._HEADER}.{payload}"
+        return f"{signing_input}.{self._sign(signing_input)}"
 
     def _decode(self, token: str) -> dict:
-        if not isinstance(token, str) or token.count(".") != 1:
+        if not isinstance(token, str) or token.count(".") != 2:
             raise InvalidToken("malformed token")
-        payload, sig = token.split(".")
-        if not hmac.compare_digest(sig, self._sign(payload)):
+        header, payload, sig = token.split(".")
+        # the header is compared, never interpreted: alg=none or any other algorithm is refused
+        if not hmac.compare_digest(header.encode(), self._HEADER.encode()):
+            raise InvalidToken("unexpected token header")
+        if not sig or not hmac.compare_digest(
+            sig.encode("ascii", "replace"), self._sign(f"{header}.{payload}").encode()
+        ):
             raise InvalidToken("bad signature")
         return self._parse(payload)
 
@@ -90,6 +99,51 @@ class UnsignedIdentityProvider(FakeIdentityProvider):
     """Defect: the signature is never checked, so an altered payload is accepted."""
 
     def _decode(self, token: str) -> dict:
-        if not isinstance(token, str) or token.count(".") != 1:
+        if not isinstance(token, str) or token.count(".") != 2:
             raise InvalidToken("malformed token")
-        return self._parse(token.split(".")[0])
+        return self._parse(token.split(".")[1])
+
+
+class AlgNoneIdentityProvider(FakeIdentityProvider):
+    """Defect: the header is trusted, so ``alg: none`` turns signature checking off."""
+
+    def _decode(self, token: str) -> dict:
+        if isinstance(token, str) and token.count(".") == 2:
+            header = token.split(".")[0]
+            try:
+                alg = json.loads(_unb64(header)).get("alg")
+            except (ValueError, TypeError, AttributeError):
+                alg = None
+            if isinstance(alg, str) and alg.lower() == "none":
+                return self._parse(token.split(".")[1])
+        return super()._decode(token)
+
+
+class DecodedSignatureIdentityProvider(FakeIdentityProvider):
+    """Defect: the signature is compared only when present, so an empty one is skipped."""
+
+    def _decode(self, token: str) -> dict:
+        if not isinstance(token, str) or token.count(".") != 2:
+            raise InvalidToken("malformed token")
+        header, payload, sig = token.split(".")
+        if header != self._HEADER:
+            raise InvalidToken("unexpected token header")
+        try:
+            got = _unb64(sig)
+        except (ValueError, TypeError) as exc:
+            raise InvalidToken("bad signature") from exc
+        if got and got != _unb64(self._sign(f"{header}.{payload}")):
+            raise InvalidToken("bad signature")
+        return self._parse(payload)
+
+
+class NoExpiryIdentityProvider(FakeIdentityProvider):
+    """Defect: ``exp`` is issued but never enforced."""
+
+    def verify(self, token: str, required_scope: str | None = None) -> Claims:
+        real = self._clock
+        self._clock = lambda: float("-inf")
+        try:
+            return super().verify(token, required_scope)
+        finally:
+            self._clock = real

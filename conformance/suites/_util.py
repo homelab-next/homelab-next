@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import os
 from collections.abc import Callable
@@ -37,3 +38,48 @@ def raises(fn: Callable[[], Any], what: str, *types: type[BaseException]) -> Bas
     except catch as exc:
         return exc
     raise AssertionError(f"{what}: expected an error, got {out!r}")
+
+
+def exc_text(exc: BaseException) -> str:
+    """Everything a caller can read off an exception: the formatted traceback, and for every
+    exception on the chain (``__cause__`` and ``__context__``, suppressed or not) its ``str``,
+    ``repr``, ``args`` and attributes.  Leak checks search this, not just ``str(exc)``."""
+    import traceback
+
+    parts = ["".join(traceback.format_exception(exc))]
+    seen: set[int] = set()
+    todo: list[BaseException | None] = [exc]
+    while todo:
+        e = todo.pop()
+        if e is None or id(e) in seen:
+            continue
+        seen.add(id(e))
+        parts += [str(e), repr(e), repr(e.args)]
+        with contextlib.suppress(TypeError):
+            parts.append(repr(vars(e)))
+        parts += [repr(n) for n in getattr(e, "__notes__", ())]
+        todo += [e.__cause__, e.__context__]
+    return "\n".join(parts)
+
+
+def expires(subject: Any, still_valid: Callable[[], bool], ttl: float) -> bool:
+    """Let ``ttl`` seconds pass and report whether ``still_valid()`` turned False.
+
+    With the ``clock-control`` hook (a ``tick(seconds)`` method) the clock is advanced; without
+    it the check waits in real time (keep ``ttl`` to a second), polling so a precise
+    implementation returns quickly and a whole-second one gets one second of grace.  Expiry is a
+    MUST either way: not offering the hook only makes the check slower.
+    """
+    import time
+
+    tick = getattr(subject, "tick", None)
+    if callable(tick):
+        tick(ttl + 1)
+        return not still_valid()
+    deadline = time.monotonic() + ttl + 1.5
+    time.sleep(ttl)
+    while time.monotonic() < deadline:
+        if not still_valid():
+            return True
+        time.sleep(0.05)
+    return not still_valid()

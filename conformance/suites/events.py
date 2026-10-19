@@ -3,7 +3,13 @@
 
 from __future__ import annotations
 
-from conformance.fakes.event_bus import BrokenDlqEventBus, FakeEventBus
+from conformance.fakes.event_bus import (
+    BrokenDlqEventBus,
+    DoubleSettleEventBus,
+    FakeEventBus,
+    LosesUnsettledEventBus,
+    RestartsAtTailEventBus,
+)
 from homelabnext.conform.core import Mutant, Suite
 
 from ._util import uniq
@@ -112,6 +118,62 @@ def _(bus):
 
 
 @SUITE.check(
+    "unsettled-redelivered-on-reopen",
+    "a message fetched but never settled is delivered again after the consumer restarts",
+)
+def _(bus):
+    s, name = _subject(bus), uniq("c")
+    c = bus.consumer(name, s)
+    bus.publish(s, b"x")
+    (d1,) = c.fetch(1)  # the process "crashes" here: no ack, nack or term
+    c = bus.consumer(name, s)
+    got = list(c.fetch(5))
+    assert [d.data for d in got] == [b"x"], f"after restart got {[d.data for d in got]}"
+    assert got[0].attempt == d1.attempt + 1, f"redelivery attempt {got[0].attempt}"
+    got[0].ack()
+    assert list(c.fetch(5)) == [], "acked redelivery was delivered again"
+
+
+@SUITE.check(
+    "durable-resumes-after-reopen",
+    "a reopened durable consumer continues after its last ack, including messages sent meanwhile",
+)
+def _(bus):
+    s, name = _subject(bus), uniq("c")
+    c = bus.consumer(name, s)
+    for i in range(4):
+        bus.publish(s, f"m{i}".encode())
+    for d in c.fetch(2):
+        d.ack()
+    bus.publish(s, b"m4")
+    c = bus.consumer(name, s)
+    got = [d.data for d in c.fetch(10)]
+    assert got == [b"m2", b"m3", b"m4"], f"after reopen got {got}"
+
+
+@SUITE.check(
+    "settle-twice-is-noop",
+    "only the first ack/nack/term of a delivery counts",
+)
+def _(bus):
+    s = _subject(bus)
+    c = bus.consumer(uniq("c"), s, max_deliver=5)
+    bus.publish(s, b"acked")
+    (d,) = c.fetch(1)
+    d.ack()
+    d.nack()
+    assert list(c.fetch(5)) == [], "a nack after an ack redelivered the message"
+    bus.publish(s, b"nacked")
+    (e,) = c.fetch(1)
+    e.nack()
+    e.nack()
+    first = list(c.fetch(5))
+    assert [x.data for x in first] == [b"nacked"], f"got {[x.data for x in first]}"
+    first[0].ack()
+    assert list(c.fetch(5)) == [], "a second nack queued the message twice"
+
+
+@SUITE.check(
     "star-wildcard-matches-one-token",
     "'*' matches exactly one token",
     severity="should",
@@ -134,5 +196,20 @@ MUTANTS = {
         BrokenDlqEventBus,
         "dlq-after-max-deliver",
         "exhausted messages vanish instead of being dead-lettered",
+    ),
+    "loses-unsettled-on-restart": Mutant(
+        LosesUnsettledEventBus,
+        "unsettled-redelivered-on-reopen",
+        "a message fetched but not settled is lost when the consumer restarts",
+    ),
+    "restart-at-tail": Mutant(
+        RestartsAtTailEventBus,
+        "durable-resumes-after-reopen",
+        "reopening a durable consumer skips everything not yet delivered",
+    ),
+    "double-settle": Mutant(
+        DoubleSettleEventBus,
+        "settle-twice-is-noop",
+        "a delivery can be settled more than once",
     ),
 }

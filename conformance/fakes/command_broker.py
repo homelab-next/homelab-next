@@ -54,11 +54,22 @@ class FakeBroker:
             self._log(caller, command, "invalid", spec, args)
             raise InvalidArguments("; ".join(problems))
         try:
-            result = handler(**dict(args))
-        except Exception as exc:
+            result = self._run_handler(command, handler, args)
+        except BrokerError:
             self._log(caller, command, "error", spec, args)
-            raise BrokerError(f"{command} failed: {type(exc).__name__}") from None
+            raise
         self._log(caller, command, "ok", spec, args)
+        return result
+
+    @staticmethod
+    def _run_handler(command, handler, args):
+        failed = False
+        try:
+            result = handler(**dict(args))
+        except Exception:
+            failed = True
+        if failed:  # raised outside the handler's except block: no __context__ to leak through
+            raise BrokerError(f"{command} failed")
         return result
 
     def audit(self) -> Sequence[AuditRecord]:
@@ -70,3 +81,39 @@ class LoggingBroker(FakeBroker):
 
     def _redact(self, spec, args):
         return dict(args)
+
+
+class CallerOnlyBroker(FakeBroker):
+    """Defect: the allowlist is checked per caller, not per command."""
+
+    def call(self, caller, command, args):
+        if command in self._cmds and caller in self._allow:
+            self._allow[caller].add(command)
+        return super().call(caller, command, args)
+
+
+class KeyNameRedactingBroker(FakeBroker):
+    """Defect: redaction guesses from the argument's name instead of the schema's flag."""
+
+    def _redact(self, spec, args):
+        hints = ("secret", "token", "password", "key")
+        return {k: ("<redacted>" if any(h in k for h in hints) else v) for k, v in args.items()}
+
+
+class OkOnlyRedactingBroker(FakeBroker):
+    """Defect: secrets are redacted on successful calls only; denied/invalid/error log them."""
+
+    def _log(self, caller, command, outcome, spec, args):
+        rec = self._redact(spec, args) if outcome == "ok" else dict(args)
+        self._audit.append(AuditRecord(caller, command, outcome, rec))
+
+
+class ChattyErrorBroker(FakeBroker):
+    """Defect: a handler failure is passed through with the handler's own message and cause."""
+
+    @staticmethod
+    def _run_handler(command, handler, args):
+        try:
+            return handler(**dict(args))
+        except Exception as exc:
+            raise BrokerError(f"{command} failed: {exc}") from exc
