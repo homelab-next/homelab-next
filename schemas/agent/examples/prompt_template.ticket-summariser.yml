@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# A minimal template: one trusted slot interpolated in trusted text, one untrusted slot fenced.
+id: ticket-summariser
+version: 1
+description: Summarise a support ticket for the queue view.
+persona: persona:ticket-summariser
+budget_chars: 8000
+system: |
+  You summarise tickets for {{ queue-name }}. You take no actions.
+instructions: |
+  Summarise the ticket in the "ticket-body" section in two sentences.
+slots:
+  - name: queue-name
+    trust: trusted
+    description: Queue name from configuration.
+    example: example queue
+  - name: ticket-body
+    trust: untrusted
+    description: The ticket text as submitted.
+    max_chars: 4000
+    example: The example printer on floor 2 is offline.

@@ -30,6 +30,8 @@ def test_expected_schema_set():
                 "context_manifest",
                 "pregate_output",
                 "golden_task",
+                "prompt_template",
+                "injection_corpus",
             )
         ),
         *(

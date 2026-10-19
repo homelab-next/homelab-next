@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/agent/prompt_template/1.0",
+  "title": "Prompt template",
+  "description": "One prompt: trusted text (system, instructions) plus declared slots, each with a trust level. Trusted text may interpolate trusted slots as {{ name }}; untrusted slots (ingested content) are never interpolated and render only as nonce-fenced, escaped context-pack sections. Rules JSON Schema cannot express (no untrusted placeholder, no undeclared placeholder, no fence-looking trusted line, every trusted slot used) are enforced by `hnx agent prompts lint`.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "persona": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/persona_id"
+    },
+    "delimiter": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 64,
+      "pattern": "^\\S+$"
+    },
+    "budget_chars": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "system": {
+      "type": "string",
+      "minLength": 1
+    },
+    "instructions": {
+      "type": "string",
+      "minLength": 1
+    },
+    "slots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "trust": {
+            "enum": [
+              "trusted",
+              "untrusted"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "example": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "tier": {
+            "enum": [
+              "session",
+              "volatile"
+            ]
+          },
+          "max_chars": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "name",
+          "trust",
+          "description",
+          "example"
+        ],
+        "if": {
+          "properties": {
+            "trust": {
+              "const": "trusted"
+            }
+          }
+        },
+        "then": {
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "tier"
+                ]
+              },
+              {
+                "required": [
+                  "max_chars"
+                ]
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "id",
+    "version",
+    "description",
+    "persona",
+    "budget_chars",
+    "system",
+    "instructions",
+    "slots"
+  ],
+  "additionalProperties": false
+}
