@@ -146,7 +146,7 @@ def tokens_of(text: str, mode: str) -> tuple[list[str], list[int]]:
     skipping = False  # inside a module-level import statement
     prev_sig = tk.NEWLINE  # previous significant token type (docstring detection)
     prev_text = ""
-    for t in tokenize.generate_tokens(io.StringIO(text).readline):
+    for t in _tokens(text):
         if t.type in SKIP_TYPES:
             continue
         if t.type == tk.INDENT:
@@ -177,6 +177,41 @@ def tokens_of(text: str, mode: str) -> tuple[list[str], list[int]]:
         norm.append(_norm(t, mode))
         lines.append(t.start[0])
     return norm, lines
+
+
+def _tokens(text: str):
+    """``tokenize`` tokens with each f-string as ONE ``STRING`` token, as Python 3.11 emits it.
+
+    From 3.12 an f-string is split into FSTRING_START / MIDDLE / END around its replacement
+    fields, so the same file would give different token runs (and different clone hashes) on
+    different interpreters, and a baseline written on one would fail on another.
+    """
+    fstart = getattr(tk, "FSTRING_START", None)
+    fend = getattr(tk, "FSTRING_END", None)
+    if fstart is None:
+        yield from tokenize.generate_tokens(io.StringIO(text).readline)
+        return
+    lines = text.splitlines(keepends=True)
+    depth = 0
+    begin = None
+    for t in tokenize.generate_tokens(io.StringIO(text).readline):
+        if t.type == fstart:
+            if depth == 0:
+                begin = t
+            depth += 1
+            continue
+        if depth:
+            if t.type == fend:
+                depth -= 1
+                if depth == 0:
+                    (r0, c0), (r1, c1) = begin.start, t.end
+                    if r0 == r1:
+                        src = lines[r0 - 1][c0:c1]
+                    else:
+                        src = lines[r0 - 1][c0:] + "".join(lines[r0 : r1 - 1]) + lines[r1 - 1][:c1]
+                    yield tokenize.TokenInfo(tk.STRING, src, begin.start, t.end, begin.line)
+            continue
+        yield t
 
 
 def _norm(t: tokenize.TokenInfo, mode: str) -> str:

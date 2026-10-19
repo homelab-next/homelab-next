@@ -213,3 +213,11 @@ def test_the_repository_holds_its_baseline_in_seconds():
     doc = _baseline(REPO)
     assert doc["params"] == dup.DEFAULTS
     assert doc["summary"]["clones"] == sum(e["count"] for e in doc["clones"].values())
+
+
+def test_tokens_are_the_same_on_every_interpreter():
+    """An f-string is one STRING token on every Python, so the baseline holds on 3.11 and 3.12+."""
+    src = 'x = f"a{b!r:>{w}}c" + f"""\n{d}\n"""\n'
+    toks, lines = dup.tokens_of(src, "exact")
+    assert toks == ["x", "=", 'f"a{b!r:>{w}}c"', "+", 'f"""\n{d}\n"""', ";"]
+    assert lines == [1, 1, 1, 1, 1, 3]

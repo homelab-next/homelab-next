@@ -6,27 +6,13 @@
   "min_lines": 5
  },
  "summary": {
-  "clones": 39,
-  "duplicated_lines": 484,
-  "total_lines": 48401,
-  "duplicated_percent": 1.0
+  "clones": 35,
+  "duplicated_lines": 441,
+  "total_lines": 49760,
+  "duplicated_percent": 0.89
  },
  "increases": [],
  "clones": {
-  "04593e59125cebcb": {
-   "tokens": 81,
-   "lines": 8,
-   "count": 1,
-   "files": [
-    "conformance/fakes/ntfy_api.py",
-    "conformance/fakes/openbao_api.py"
-   ],
-   "fingerprints": [
-    "0228971fba",
-    "08d5c72b1d",
-    "09b2dab352"
-   ]
-  },
   "090a0ca506a53791": {
    "tokens": 79,
    "lines": 6,
@@ -42,18 +28,6 @@
     "35ef92c2f9"
    ]
   },
-  "09628cb6f8e5d7af": {
-   "tokens": 54,
-   "lines": 6,
-   "count": 1,
-   "files": [
-    "homelabnext/decide/lint.py",
-    "homelabnext/workflows/pack.py"
-   ],
-   "fingerprints": [
-    "05be9b0708"
-   ]
-  },
   "0fc8b79846c64a7c": {
    "tokens": 55,
    "lines": 7,
@@ -66,31 +40,24 @@
     "04ab1ec395"
    ]
   },
-  "186381cb351ec193": {
-   "tokens": 56,
-   "lines": 8,
-   "count": 1,
-   "files": [
-    "homelabnext/decide/lint.py",
-    "homelabnext/workflows/validate.py"
-   ],
-   "fingerprints": [
-    "0b0e91e128",
-    "12a929de48"
-   ]
-  },
-  "35161afdbb793923": {
-   "tokens": 63,
-   "lines": 6,
+  "2dea0564519e2e70": {
+   "tokens": 137,
+   "lines": 12,
    "count": 2,
    "files": [
-    "homelabnext/lake/fake.py",
-    "homelabnext/lake/iceberg.py",
-    "homelabnext/lake/trino_rest.py"
+    "tools/shared_helpers_lint.py",
+    "tools/tls_verify_lint.py",
+    "tools/workstation_refs.py"
    ],
    "fingerprints": [
-    "07068a1467",
-    "0af6262d97"
+    "01502f4e35",
+    "02a2ffbbf2",
+    "033091dc33",
+    "056e5de4fa",
+    "070c444a48",
+    "08abbb9124",
+    "0d0d25aa8c",
+    "14bbf4b4bc"
    ]
   },
   "3fbfee55f7e6e4c9": {
@@ -107,21 +74,6 @@
     "010ff94c5f",
     "02a2ffbbf2",
     "031c6e39d6"
-   ]
-  },
-  "44ee4588f1c7be44": {
-   "tokens": 91,
-   "lines": 6,
-   "count": 1,
-   "files": [
-    "homelabnext/network/validate.py",
-    "homelabnext/registry/model.py"
-   ],
-   "fingerprints": [
-    "02581e8bc6",
-    "031fbc6010",
-    "04ae7acef4",
-    "152f00aef6"
    ]
   },
   "47113f76453571cf": {
@@ -150,28 +102,6 @@
     "08b762c94e"
    ]
   },
-  "4d04a2bf5c0204b2": {
-   "tokens": 142,
-   "lines": 12,
-   "count": 2,
-   "files": [
-    "tools/shared_helpers_lint.py",
-    "tools/tls_verify_lint.py",
-    "tools/workstation_refs.py"
-   ],
-   "fingerprints": [
-    "01502f4e35",
-    "02a2ffbbf2",
-    "033091dc33",
-    "056e5de4fa",
-    "070c444a48",
-    "08abbb9124",
-    "0d0d25aa8c",
-    "0e94001bf0",
-    "10b4508e9c",
-    "1d75880349"
-   ]
-  },
   "502e634be2b80e35": {
    "tokens": 62,
    "lines": 5,
@@ -184,6 +114,23 @@
     "00620e6587",
     "13125cf328",
     "1ac8308707"
+   ]
+  },
+  "5be3381282b794f8": {
+   "tokens": 105,
+   "lines": 9,
+   "count": 2,
+   "files": [
+    "tools/shared_helpers_lint.py",
+    "tools/tls_verify_lint.py",
+    "tools/workstation_refs.py"
+   ],
+   "fingerprints": [
+    "02b67c3cec",
+    "068393affc",
+    "11438f7ddf",
+    "136f681bdf",
+    "1eefefa2a7"
    ]
   },
   "6cd4cfc1eb62d158": {
@@ -293,6 +240,20 @@
     "037da7bccf"
    ]
   },
+  "a2369042c5c75ed4": {
+   "tokens": 80,
+   "lines": 6,
+   "count": 1,
+   "files": [
+    "homelabnext/network/validate.py",
+    "homelabnext/registry/model.py"
+   ],
+   "fingerprints": [
+    "02581e8bc6",
+    "031fbc6010",
+    "152f00aef6"
+   ]
+  },
   "b30ee47e71aac6ae": {
    "tokens": 61,
    "lines": 11,
@@ -332,20 +293,16 @@
     "012f4a93eb"
    ]
   },
-  "b9f76319a7c0ca04": {
-   "tokens": 103,
-   "lines": 8,
-   "count": 2,
+  "bccda83dbb55d3dd": {
+   "tokens": 62,
+   "lines": 7,
+   "count": 1,
    "files": [
-    "tools/shared_helpers_lint.py",
-    "tools/tls_verify_lint.py",
-    "tools/workstation_refs.py"
+    "conformance/fakes/ntfy_api.py",
+    "homelabnext/decide/adapter.py"
    ],
    "fingerprints": [
-    "02b67c3cec",
-    "068393affc",
-    "0fd8a16574",
-    "209f0b8103"
+    "0228971fba"
    ]
   },
   "bfa69f8edb488814": {
@@ -364,17 +321,17 @@
     "3f5b683292"
    ]
   },
-  "c28fc47869b960d1": {
-   "tokens": 71,
-   "lines": 7,
+  "cd8256f9ec00dad2": {
+   "tokens": 72,
+   "lines": 8,
    "count": 1,
    "files": [
     "conformance/fakes/ntfy_api.py",
-    "homelabnext/decide/adapter.py"
+    "conformance/fakes/openbao_api.py"
    ],
    "fingerprints": [
     "0228971fba",
-    "08d5c72b1d"
+    "09b2dab352"
    ]
   },
   "d13bf074a5d6950d": {
@@ -402,18 +359,6 @@
     "13f29ea55d"
    ]
   },
-  "de2c516e0444c70f": {
-   "tokens": 71,
-   "lines": 6,
-   "count": 1,
-   "files": [
-    "conformance/fakes/secret_store.py"
-   ],
-   "fingerprints": [
-    "0268b9f203",
-    "0bd2f64be5"
-   ]
-  },
   "e436e0fb014ab108": {
    "tokens": 52,
    "lines": 5,
@@ -437,6 +382,19 @@
    "fingerprints": [
     "03cfb065e1",
     "060af653af"
+   ]
+  },
+  "f419894940d85fe1": {
+   "tokens": 64,
+   "lines": 6,
+   "count": 1,
+   "files": [
+    "conformance/fakes/secret_store.py"
+   ],
+   "fingerprints": [
+    "0cde3e9b8d",
+    "0f8e3fb477",
+    "15b0620334"
    ]
   }
  }
