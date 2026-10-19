@@ -8,3 +8,6 @@ example_service_config_dir: /etc/example-service
 example_service_export_dir: /var/backups/example-service/export
 example_service_dependencies: []
 example_service_health_path: /healthz
+# The unit runs as this unprivileged account, never root (see the sandbox in the unit template).
+example_service_user: example-service
+example_service_group: example-service

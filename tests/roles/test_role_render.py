@@ -91,6 +91,61 @@ def test_example_service_main_renders_with_registry_lookup(tmp_path):
     )
 
 
+def unit_directives(path):
+    out = {}
+    for line in path.read_text().splitlines():
+        if "=" in line and not line.startswith("#"):
+            k, _, v = line.partition("=")
+            out.setdefault(k, []).append(v)
+    return out
+
+
+def test_example_service_unit_runs_unprivileged_and_sandboxed(tmp_path):
+    r = run_role(tmp_path, "example_service", "main", svc_vars(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    d = unit_directives(tmp_path / "etc" / "example-service.service")
+    assert d["User"] == ["example-service"] and d["Group"] == ["example-service"]
+    for key, want in {
+        "NoNewPrivileges": "yes",
+        "ProtectSystem": "strict",
+        "ProtectHome": "yes",
+        "PrivateTmp": "yes",
+        "PrivateDevices": "yes",
+        "CapabilityBoundingSet": "",
+        "AmbientCapabilities": "",
+        "RestrictSUIDSGID": "yes",
+        "ReadWritePaths": str(tmp_path / "data"),
+    }.items():
+        assert d.get(key) == [want], key
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"example_service_data_dir": "/var/lib/x\nExecStartPre=/bin/sh -c id"},
+        {"example_service_data_dir": "/var/lib/x y"},
+        {"example_service_config_dir": "/etc/%h"},
+        {"example_service_logical_id": "x\nUser=root"},
+        {"example_service_user": "root"},
+        {"example_service_user": "a\nUser=root"},
+        {"example_service_listen_port": 80},
+    ],
+)
+def test_example_service_refuses_values_that_would_rewrite_the_unit(tmp_path, over):
+    r = run_role(tmp_path, "example_service", "main", svc_vars(tmp_path, **over))
+    assert r.returncode != 0
+    assert not (tmp_path / "etc" / "example-service.service").exists()
+
+
+def test_example_service_config_values_are_quoted(tmp_path):
+    r = run_role(
+        tmp_path, "example_service", "main", svc_vars(tmp_path, example_service_version="1.0: x")
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    cfg = yaml.safe_load((tmp_path / "etc" / "config.yml").read_text())
+    assert cfg["version"] == "1.0: x" and cfg["service_id"] == "example-service"
+
+
 def test_example_service_unknown_dependency_fails(tmp_path):
     r = run_role(
         tmp_path,
