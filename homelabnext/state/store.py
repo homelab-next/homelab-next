@@ -12,7 +12,11 @@ Guarantees
     are upgraded through the ``migrations`` mapping; a file from a *newer* writer raises
     :class:`StateVersionError` rather than being guessed at.
   * **Corrupt file quarantine.**  Unparseable content is renamed to ``<name>.corrupt-<stamp>``
-    and the store starts empty, so one bad file cannot crash a scheduled check forever.
+    and the store starts empty, so one bad file cannot crash a scheduled check forever.  Each
+    quarantine is logged (logger ``homelabnext.state``, WARNING) with the reason.  Only decode
+    and shape errors quarantine; anything else (permissions, I/O) raises.
+  * **Permissions.**  A replaced file keeps the mode of the file it replaces; a new file is
+    created ``0600`` (state often holds tokens or cursors that are nobody else's business).
 
 ``.json`` is the default; ``.yml``/``.yaml`` use PyYAML (imported lazily).
 """
@@ -21,6 +25,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import re
 import time
@@ -34,6 +39,8 @@ except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
 SCHEMA_VERSION = 1
+NEW_FILE_MODE = 0o600
+log = logging.getLogger("homelabnext.state")
 _MISSING = object()
 _TMP_RE = re.compile(r"^\.(?P<name>.+)\.(?P<pid>\d+)\.[0-9a-f]+\.tmp$")
 
@@ -160,21 +167,30 @@ class StateStore:
             n += 1
             target = self.path.with_name(f"{self.path.name}.corrupt-{stamp}-{n}")
         os.replace(self.path, target)
+        log.warning("state file %s is unusable (%s); quarantined as %s", self.path, reason, target)
+
+    def _decode_errors(self) -> tuple[type[BaseException], ...]:
+        errs: tuple[type[BaseException], ...] = (ValueError, UnicodeDecodeError)
+        if self._is_yaml:
+            import yaml
+
+            errs += (yaml.YAMLError,)
+        return errs
 
     def _load(self) -> dict[str, Any]:
         try:
-            text = self.path.read_text(encoding="utf-8")
+            raw = self.path.read_bytes()
         except FileNotFoundError:
             return {}
         try:
-            doc = self._decode(text)
+            doc = self._decode(raw.decode("utf-8"))
             if not isinstance(doc, dict) or not isinstance(doc.get("data"), dict):
                 raise ValueError("not a state document")
             version = doc.get("schema_version")
             if not isinstance(version, int) or isinstance(version, bool) or version < 1:
                 raise ValueError("bad schema_version")
-        except Exception as exc:  # JSON/YAML/shape errors all mean "unusable file"
-            self._quarantine(str(exc))
+        except self._decode_errors() as exc:  # JSON/YAML/shape errors all mean "unusable file"
+            self._quarantine(f"{type(exc).__name__}: {str(exc)[:200]}")
             return {}
         if version > self.schema_version:
             raise StateVersionError(
@@ -203,7 +219,14 @@ class StateStore:
         text = self._encode(doc)
         tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.{os.urandom(4).hex()}.tmp")
         try:
-            with open(tmp, "w", encoding="utf-8") as fh:
+            mode = self.path.stat().st_mode & 0o7777
+        except FileNotFoundError:
+            mode = NEW_FILE_MODE
+        try:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, NEW_FILE_MODE)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                if hasattr(os, "fchmod"):
+                    os.fchmod(fh.fileno(), mode)  # not subject to the umask
                 fh.write(text)
                 fh.flush()
                 os.fsync(fh.fileno())
