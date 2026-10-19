@@ -12,16 +12,16 @@ PLAYBOOKS := $(wildcard ansible/playbooks/*.yml)
 REGISTERS_OUT := build/registers
 REGISTER_FILES := $(shell git ls-files -- $(foreach k,lessons runbooks invariants queue,'*$(k).yml' '*$(k).yaml') 2>/dev/null)
 
-.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint agent-lint prompts-lint injection-check injection-report injection-eval detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke
+.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-eval agent-lint prompts-lint injection-check injection-report injection-eval detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke
 
 help:
-	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint agent-lint prompts-lint injection-check injection-report detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
+	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report agent-lint prompts-lint injection-check injection-report detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
 	@echo "hygiene: helpers-lint tls-lint workstation-lint keyring-check keyring ids-placeholders"
 	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke"
-	@echo "live (needs a real model endpoint): injection-eval MODEL=<role> REGISTRY=<file> ROLES=<file>"
+	@echo "live (needs a real model endpoint): injection-eval MODEL=<role> REGISTRY=<file> ROLES=<file>; models-eval REGISTRY=<file>"
 	@echo "override RUFF=/path/to/ruff if ruff is not importable as a module"
 
-check: lint component-tests hermetic-lint test schemas gates decide-lint agent-lint prompts-lint injection-check detections registers ids-check conform-check spdx leak-scan changelog-check
+check: lint component-tests hermetic-lint test schemas gates decide-lint decide-safety models-check agent-lint prompts-lint injection-check detections registers ids-check conform-check spdx leak-scan changelog-check
 	@echo "make check: OK"
 
 lint:
@@ -65,6 +65,28 @@ gates:
 # every decision spec git tracks is complete, asks well-formed questions, and inline specs stay fast
 decide-lint:
 	$(PY) -m homelabnext.cli decide lint
+
+# K-15: the required safety specs (sensitive-content, hostile-content, purpose-consistency,
+# disclosure-risk) exist, are safety-only and pass their case sets against deterministic fakes
+decide-safety:
+	$(PY) -m homelabnext.cli decide safety
+
+# G-11: every model binding is pinned by version and digest, and the committed evaluation report
+# (golden suites + the K-12 replay gate, against the deterministic fake) is the one for these pins
+MODEL_ROLES := examples/model_roles.json
+MODEL_EVAL := examples/model_roles.eval.json
+models-check:
+	$(PY) -m homelabnext.cli golden pins check --roles $(MODEL_ROLES) --report $(MODEL_EVAL)
+
+# after changing a pin, a golden suite or the replay inputs: regenerate the report and commit it
+models-report:
+	$(PY) -m homelabnext.cli golden pins report --roles $(MODEL_ROLES) --report $(MODEL_EVAL)
+
+# LIVE, never in CI: the same evaluation against the real pinned models through the resolver.
+# Keep build/models/eval.json with the model change.
+models-eval:
+	@test -n "$(REGISTRY)" || { echo "usage: make models-eval REGISTRY=<services.yml> [MODEL_ROLES=<roles.json>]"; exit 2; }
+	$(PY) -m homelabnext.cli golden pins report --roles $(MODEL_ROLES) --registry $(REGISTRY) --report build/models/eval.json
 
 # readers cannot act (G-03): no agent profile or context manifest in the repository that reads
 # untrusted content holds a shell, file-write, egress or credential grant

@@ -2,7 +2,7 @@
 
 | Schema | What |
 |---|---|
-| `model_roles.json` (1.1) | alias table: `mdl:<alias>` -> tier + bindings (`svc:` backend, model id) + fallback. Consumers name only the alias |
+| `model_roles.json` (1.2) | alias table: `mdl:<alias>` -> tier + bindings (`svc:` backend, model id) + fallback. Consumers name only the alias. 1.2 adds a per-binding pin (`version`, `digest: sha256:<hex>`; `hnx golden pins check` requires both and a current evaluation report, G-11) and per-role `limits` (requests, tokens, cost per window; `homelabnext.registry.limits`, G-10) |
 | `capability.schema.json` | descriptor for a `cap:` seam: layer 1..13, contract `$id`s, conformance path, readiness flags, implementations |
 | `role_interface.schema.json` | what a deployable role provides/requires, its `svc:` id and the five hooks `deploy health readiness backup export` (tags + idempotency); UTC-only schedules |
 | `agent_profile.schema.json` | compiled least-privilege agent profile; `mcp` must be a subset of `mcp_ceiling` (`check_profile_ceiling`); model is a role alias; hard budgets |

@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Required safety spec (K-15): Would publishing the text disclose internal details (topology, identities, unreleased findings)?
+# Safety spec: tiers may only raise the impact or hold it; nothing here approves or acts.
+id: disclosure-risk
+version: 1
+safety: true
+default_min_confidence: 0.9
+impact:
+  keywords_file: disclosure-risk.keywords.yml
+  floor: low
+question_set:
+  - Would publishing the text disclose internal details?
+decision_table:
+  - {when: impact raised, then: escalate}
+  - {when: otherwise, then: accept}
+tiers:
+  - {name: floor}
+  - {name: small, model_role: "mdl:fast-classifier", min_confidence: 0.85, timeout_ms: 2000}
+  - {name: large, model_role: "mdl:main-reasoner", min_confidence: 0.9, timeout_ms: 8000}
+error_direction: fail-closed
+on_error: escalate
+latency_budget_ms: 15000
+sample_audit_pct: 10

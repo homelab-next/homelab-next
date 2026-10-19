@@ -100,7 +100,10 @@ def test_unparseable_model_reply_and_backend_outage_escalate(stack):
     server, backend = stack
     code, body = decide(server, text="something the backend cannot parse")
     assert body["decision"]["verdict"] == "human"
-    assert any(s["outcome"] == "error" and s["tier"] == "small" for s in body["trace"])
+    # A-04: an unparseable reply is retried once, then the tier is invalid and the item escalates
+    assert any(s["outcome"] == "invalid" and s["tier"] == "small" for s in body["trace"])
+    chats = [r for r in backend.requests if r["path"] == "/v1/chat/completions"]
+    assert len(chats) == 2
     backend.faults.append(Fault("http_error", status=503))
     code, body = decide(server, text="the previous build comes back")
     assert code == 200 and body["decision"]["verdict"] == "human"

@@ -1,0 +1,115 @@
+{
+  "format": "hnx-model-eval/1",
+  "golden": {
+    "classifier-smoke": {
+      "errors": 0,
+      "model_id": "fake-golden:fast-classifier",
+      "ok": true,
+      "passed": 3,
+      "role": "fast-classifier",
+      "suite": "classifier-smoke",
+      "tasks": [
+        {
+          "detail": "all fields match",
+          "id": "rollback-present",
+          "passed": true,
+          "score": 1.0
+        },
+        {
+          "detail": "all fields match",
+          "id": "rollback-absent",
+          "passed": true,
+          "score": 1.0
+        },
+        {
+          "detail": "5 chars",
+          "id": "greeting-short",
+          "passed": true,
+          "score": 1.0
+        }
+      ],
+      "total": 3,
+      "weighted_score": 1.0
+    }
+  },
+  "inputs": {
+    "decide": {
+      "gold": {
+        "n": 200,
+        "seed": 7
+      },
+      "impact_keywords": "sha256:b52c8fbf86afbbb3b83e17950826b068a9d6b54888adb08b9d5c691cad28dd1a",
+      "spec": "sha256:eebf1221c2f81b13bf23e90529e62b0d9230e2d8561c4b6f9406feb5821e4282"
+    },
+    "digest": "sha256:f0a9b180a0319281f550a9578eafb4c003ac2a08832f1695b894d8d7d091e8cb",
+    "eval": 1,
+    "pins": {
+      "fast-classifier": [
+        {
+          "backend": "svc:inference",
+          "digest": "sha256:f7e15cd53ea8cec698a8cbbd70f5da9bed084307e7e4cdbef858c222b3cc4172",
+          "model_id": "example-4b",
+          "version": "2026.08.2"
+        }
+      ],
+      "main-reasoner": [
+        {
+          "backend": "svc:inference",
+          "digest": "sha256:66b534d26225a49bff7c242ccb401eae51e63c4be6cdcbbd264757c380196ffb",
+          "model_id": "example-27b",
+          "version": "2026.09.1"
+        }
+      ]
+    },
+    "suites": {
+      "classifier-smoke": "sha256:020b2f73361c3c52c2e33a309835532c6f8d8b9fc809cce0362ca4d991c35391"
+    }
+  },
+  "model": {
+    "name": "fake-golden"
+  },
+  "replay": {
+    "gate": {
+      "comparison": null,
+      "failures": [],
+      "passed": true
+    },
+    "report": {
+      "acting_tier_wrong": 0,
+      "automatic": 177,
+      "coverage": 0.885,
+      "error_rate": 0.0,
+      "escalated": 23,
+      "gold_automatic": 177,
+      "gold_records": 200,
+      "impact_under_calls": 0,
+      "per_tier": {
+        "floor": {
+          "acts": true,
+          "answered": 83,
+          "wrong": 0
+        },
+        "large": {
+          "acts": false,
+          "answered": 29,
+          "wrong": 0
+        },
+        "small": {
+          "acts": true,
+          "answered": 65,
+          "wrong": 0
+        }
+      },
+      "records": 200,
+      "spec": "change-review",
+      "wrong": 0,
+      "wrong_ids": []
+    }
+  },
+  "summary": {
+    "ok": true,
+    "replay_passed": true,
+    "suites": 1,
+    "suites_passed": 1
+  }
+}

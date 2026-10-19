@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Deterministic impact keywords for the purpose-consistency safety spec (synthetic, generic).
+version: 1
+tiers:
+  critical:
+    - disable audit logging
+    - delete the backup
+    - wipe all data
+    - grant admin
+  high:
+    - export all records
+    - add a new administrator
+    - turn off alerting
+  medium:
+    - change the retention
+    - widen the firewall rule

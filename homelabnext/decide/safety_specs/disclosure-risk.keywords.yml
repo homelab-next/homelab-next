@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Deterministic impact keywords for the disclosure-risk safety spec (synthetic, generic).
+version: 1
+tiers:
+  critical:
+    - tlp:red
+    - unpatched vulnerability in our
+    - not yet disclosed
+  high:
+    - tlp:amber
+    - internal hostname
+    - vpn endpoint
+    - network diagram
+  medium:
+    - internal only
+    - do not forward
