@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: Apache-2.0
+name: python-deps
+description: >-
+  Set up Python and install dependencies pinned by hash.  pip itself comes from
+  constraints/bootstrap.txt (--require-hashes); every other package is resolved under
+  constraints/ci.txt, whose hashes pip enforces; the project is then installed with --no-deps and
+  --no-build-isolation so nothing unpinned is fetched for the build either.  Regenerate both files
+  with `make constraints`.
+
+inputs:
+  python-version:
+    description: Python version for actions/setup-python
+    required: true
+  extras:
+    description: comma-separated project extras whose requirements to install (may be empty)
+    required: false
+    default: ""
+  packages:
+    description: space-separated extra package names (versions come from the constraints)
+    required: false
+    default: ""
+  install-project:
+    description: "true: also install this project, editable, without dependencies"
+    required: false
+    default: "true"
+  cache:
+    description: "pip download cache: 'pip' or '' (off; use '' in release jobs)"
+    required: false
+    default: pip
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: ${{ inputs.cache }}
+        cache-dependency-path: constraints/ci.txt
+    - name: pip itself, hash-pinned
+      shell: bash
+      run: python -m pip install --disable-pip-version-check --require-hashes --no-deps -r constraints/bootstrap.txt
+    - name: dependencies under the hashed constraints
+      shell: bash
+      env:
+        EXTRAS: ${{ inputs.extras }}
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        set -euo pipefail
+        req="$RUNNER_TEMP/requirements.txt"
+        python - "$EXTRAS" > "$req" <<'PY'
+        import sys
+        import tomllib
+
+        with open("pyproject.toml", "rb") as f:
+            project = tomllib.load(f)["project"]
+        extras = [e.strip() for e in sys.argv[1].split(",") if e.strip()]
+        reqs = list(project.get("dependencies", []))
+        for e in extras:
+            reqs += project["optional-dependencies"][e]  # KeyError = a typo in the workflow
+        print("\n".join(dict.fromkeys(reqs)))
+        PY
+        for p in setuptools $PACKAGES; do echo "$p" >> "$req"; done
+        python -m pip install --disable-pip-version-check -c constraints/ci.txt -r "$req"
+    - name: the project, editable, no dependencies
+      if: inputs.install-project == 'true'
+      shell: bash
+      run: python -m pip install --disable-pip-version-check --no-deps --no-build-isolation -e .

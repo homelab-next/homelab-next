@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """A built wheel is self-contained: it carries the data and runs with no source tree.
 
-``setup.py`` copies ``schemas/``, ``profiles/`` and ``examples/`` into ``homelabnext/_data`` at
+``setup.py`` copies the tracked files of ``schemas/``, ``profiles/`` and ``examples/`` into ``homelabnext/_data`` at
 build time.  This test builds the wheel, installs it into a throwaway venv that cannot see the
 checkout, and runs the data-dependent commands against example files shipped inside the wheel.
 """
@@ -10,14 +10,13 @@ import filecmp
 import importlib.util
 import json
 import os
-import shutil
 import subprocess
-import sys
 import venv
 import zipfile
 from pathlib import Path
 
 import pytest
+from pkgbuild import build, export_tree, git
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_TREES = ("schemas", "profiles", "examples")
@@ -35,34 +34,9 @@ def _tree_files(base: Path) -> set[str]:
 
 @pytest.fixture(scope="module")
 def wheel_dir(tmp_path_factory):
-    if importlib.util.find_spec("setuptools") is None:
-        pytest.skip("setuptools is not installed (build without network needs it)")
-    work = tmp_path_factory.mktemp("wheelsrc")
-    for name in ("pyproject.toml", "README.md", "setup.py", "MANIFEST.in"):
-        shutil.copy(ROOT / name, work / name)
-    ignore = shutil.ignore_patterns("__pycache__", "*.pyc", "_data")
-    shutil.copytree(ROOT / "homelabnext", work / "homelabnext", ignore=ignore)
-    for tree in DATA_TREES:
-        shutil.copytree(ROOT / tree, work / tree, ignore=ignore)
+    work = export_tree(tmp_path_factory.mktemp("wheelsrc"))
     out = tmp_path_factory.mktemp("wheelout")
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "wheel",
-            "--no-deps",
-            "--no-build-isolation",
-            "-q",
-            "-w",
-            str(out),
-            str(work),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
+    build("wheel", work, out)
     return out
 
 
@@ -100,11 +74,13 @@ def test_packaged_data_equals_the_source_of_truth(wheel_dir, tmp_path):
     """No divergence: every packaged file is byte-identical to its top-level original."""
     with zipfile.ZipFile(_wheel(wheel_dir)) as z:
         z.extractall(tmp_path)
+    tracked = git(ROOT, "ls-files", "-z").decode().split("\0")
     for tree in DATA_TREES:
         packaged = tmp_path / "homelabnext" / "_data" / tree
-        assert _tree_files(packaged) == _tree_files(ROOT / tree), tree
+        source = {n[len(tree) + 1 :] for n in tracked if n.startswith(tree + "/")}
+        assert _tree_files(packaged) == source, tree
         _match, mismatch, errors = filecmp.cmpfiles(
-            ROOT / tree, packaged, sorted(_tree_files(ROOT / tree)), shallow=False
+            ROOT / tree, packaged, sorted(source), shallow=False
         )
         assert not mismatch and not errors, (tree, mismatch, errors)
 

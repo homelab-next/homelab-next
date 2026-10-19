@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Example target file for `hnx conform run CAPABILITY --target example --root .`
 # Each capability names an adapter factory (callable(**config) -> subject) and its options.
 # Endpoints are resolved by the adapter through the registry resolver; never put a URL here.

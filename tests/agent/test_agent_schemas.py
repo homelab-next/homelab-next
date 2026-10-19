@@ -89,8 +89,14 @@ def test_golden_schema_and_loader_agree_on_rejects():
 
 
 def test_examples_have_no_lab_identifiers():
+    """Generic shapes from the leak scanner, plus the run-time deny-list when HNX_DENYLIST is set."""
+    import os
+
+    import leak_scan
+
+    deny = leak_scan.load_denylist(os.environ.get("HNX_DENYLIST"))
     for d in DIRS:
         for f in (ROOT / "schemas" / d).rglob("*"):
             if f.is_file() and f.suffix in {".json", ".yml", ".md"}:
-                text = f.read_text()
-                assert "example.org" not in text.lower()
+                hits = leak_scan.scan_text(f.read_text(), str(f), leak_scan.PATTERNS, deny)
+                assert hits == [], hits

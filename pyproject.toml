@@ -1,5 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
 [build-system]
-requires = ["setuptools>=68"]
+# license = "<SPDX expression>" needs setuptools 77; the upper bound keeps builds reproducible
+# until a new major has been tried (dependabot proposes the bump).
+requires = ["setuptools>=77,<85"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,11 +11,11 @@ dynamic = ["version"]
 description = "Contracts, libraries and conformance tests for a modular, swappable security-and-AI lab."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "The HomelabNext contributors" }]
 keywords = ["homelab", "soc", "conformance", "ocsf", "sigma"]
 classifiers = [
-  "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Intended Audience :: Information Technology",
@@ -27,8 +30,8 @@ schema = ["jsonschema>=4.18", "referencing>=0.30"]
 # everything the contracts-and-libraries drop needs at run time
 core = ["PyYAML>=6", "jsonschema>=4.18", "referencing>=0.30"]
 detections = ["PyYAML>=6"]
-test = ["pytest>=8", "setuptools>=68", "PyYAML>=6", "jsonschema>=4.18", "referencing>=0.30"]
-dev = ["pytest>=8", "setuptools>=68", "ruff>=0.6", "PyYAML>=6", "jsonschema>=4.18", "referencing>=0.30"]
+test = ["pytest>=8", "setuptools>=77,<85", "PyYAML>=6", "jsonschema>=4.18", "referencing>=0.30"]
+dev = ["pytest>=8", "setuptools>=77,<85", "ruff>=0.6", "PyYAML>=6", "jsonschema>=4.18", "referencing>=0.30"]
 # optional: only needed to run the role/playbook tests that shell out to ansible
 ansible = ["ansible-core>=2.16"]
 # the lake library: DuckDB local queries, Iceberg tables over a SQLite catalog, Arrow batches
