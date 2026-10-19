@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Agent building blocks: profile compiler, reader rule, screener, context-pack assembler,
-report validator, controlled memory, access block and keyring.
+"""Agent building blocks: profile compiler, reader rule, reader->actor handoff, screener,
+context-pack assembler, report validator, controlled memory, access block and keyring.
 
 Vendor-neutral and fake-backed: parts come from a :class:`PartsLibrary` over the logical-id
 resolver, nothing here touches a network or a model.  Contracts: ``schemas/agent/``; guide:
@@ -29,6 +29,7 @@ from .errors import (
     ReaderViolation,
     SpecError,
 )
+from .handoff import Accepted, Handoff, HandoffError, HandoffRefused
 from .keyring import build_keyring
 from .memory import MemoryAccessError, MemoryStore, MemoryUpdateError
 from .pack import TIERS, assemble_pack
@@ -41,10 +42,14 @@ __all__ = [
     "BUDGET_KEYS",
     "TIERS",
     "TIER_RANK",
+    "Accepted",
     "AgentError",
     "BudgetError",
     "CeilingPolicy",
     "CeilingViolation",
+    "Handoff",
+    "HandoffError",
+    "HandoffRefused",
     "MemoryAccessError",
     "MemoryStore",
     "MemoryUpdateError",

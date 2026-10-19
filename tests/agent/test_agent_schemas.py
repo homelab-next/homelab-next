@@ -32,6 +32,7 @@ def test_expected_schema_set():
                 "golden_task",
                 "prompt_template",
                 "injection_corpus",
+                "handoff",
             )
         ),
         *(

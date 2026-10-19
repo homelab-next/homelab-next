@@ -1,0 +1,16 @@
+{
+  "handoff": "phish-block",
+  "reader": "profile:reader",
+  "actor": "profile:responder",
+  "actions": [
+    {
+      "action": "records.annotate",
+      "target": "svc:records",
+      "params": {
+        "verdict": "$output.verdict",
+        "domain": "$output.domain",
+        "source": "handoff"
+      }
+    }
+  ]
+}

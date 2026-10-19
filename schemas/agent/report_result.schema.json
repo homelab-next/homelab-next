@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/agent/report_result/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/agent/report_result/1.1",
   "title": "Agent report result",
-  "description": "What an agent hands back after a job: which context pack it ran on, what it cites, what it could not establish and which memory it wants updated. status deferred means a required pre-gate was missing and no work was done; ok requires at least one cite. homelabnext.agent.validate_report adds the cross-checks JSON Schema cannot (pack_id equals the pack hash, every must-cite source is cited, cites reference sources present in the pack).",
+  "description": "What an agent hands back after a job: which context pack it ran on, what it cites, what it could not establish and which memory it wants updated. status deferred means a required pre-gate was missing and no work was done; ok requires at least one cite. homelabnext.agent.validate_report adds the cross-checks JSON Schema cannot (pack_id equals the pack hash, every must-cite source is cited, cites reference sources present in the pack). 1.1 adds the optional output: the job's structured result, which an actor receiving the report through a handoff (agent/handoff) accepts only after it validates against that handoff's declared output_schema.",
   "type": "object",
   "properties": {
     "pack_id": {
@@ -81,6 +81,10 @@
         ],
         "additionalProperties": false
       }
+    },
+    "output": {
+      "type": "object",
+      "description": "Structured result for an actor (G-04): validated against the handoff's output_schema before an actor reads any of it; summary and unknowns are free text and never reach an action."
     },
     "finished_at": {
       "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"

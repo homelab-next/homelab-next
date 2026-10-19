@@ -22,6 +22,7 @@ def _report(**overrides):
         "homelabnext/decide/cascade.py": _file(10, 10),
         "homelabnext/agent/compiler.py": _file(10, 9),
         "homelabnext/agent/readers.py": _file(10, 9),
+        "homelabnext/agent/handoff.py": _file(10, 9),
         "homelabnext/agent/memory.py": _file(10, 9),
         "homelabnext/agent/screen.py": _file(10, 9),
         "homelabnext/workflows/runner.py": _file(10, 9),
