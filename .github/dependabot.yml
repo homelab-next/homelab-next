@@ -18,14 +18,18 @@ updates:
     commit-message:
       prefix: "ci"
 
+  # Only constraints/: listing "/" as well opened a duplicate pull request for every update.
   - package-ecosystem: pip
     directories:
-      - "/"
       - "/constraints"
     schedule:
       interval: weekly
     cooldown:
       default-days: 14
     open-pull-requests-limit: 5
+    groups:
+      # pydantic pins pydantic-core exactly, so a core bump on its own can never install.
+      pydantic:
+        patterns: ["pydantic", "pydantic-core"]
     commit-message:
       prefix: "deps"
