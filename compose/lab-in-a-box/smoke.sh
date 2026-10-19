@@ -144,7 +144,8 @@ if ${conform_cmd%% run*} --help >/dev/null 2>&1; then
     echo "smoke.sh: conformance: $cap ${target_args:-(built-in fake)}"
     # shellcheck disable=SC2086  # target_args is empty or two words on purpose
     if $conform_cmd "$cap" $target_args >"$report_dir/conform-$cap.log" 2>&1; then
-      :
+      # the suite's own verdict line (capability, checks executed) into the job log
+      grep -E "^(PASS|FAIL)" "$report_dir/conform-$cap.log" | tail -n 1 | sed 's/^/smoke.sh:   /'
     else
       rc=$?
       # a capability whose suite is not shipped yet is skipped; any other failure fails the run
@@ -162,7 +163,9 @@ if ${conform_cmd%% run*} --help >/dev/null 2>&1; then
     [ -f "$r" ] || continue
     name=$(basename "$r" .sh)
     echo "smoke.sh: rehearsal: $name"
-    if ! bash "$r" "$report_dir" >"$report_dir/rehearsal-$name.log" 2>&1; then
+    if bash "$r" "$report_dir" >"$report_dir/rehearsal-$name.log" 2>&1; then
+      tail -n 1 "$report_dir/rehearsal-$name.log" | sed 's/^/smoke.sh:   /'
+    else
       conform_note="$conform_note rehearsal:$name:FAIL"
       conform_state="fail"
       status=1
