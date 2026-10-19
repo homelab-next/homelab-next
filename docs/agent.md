@@ -88,7 +88,14 @@ pack, pack_hash = assemble_pack(manifest, {"sections": {...}, "pregates": {...}}
   `failed`, makes `status: deferred` with `deferred_reasons`. Pre-gate outputs are included in the
   pack as volatile sections so the agent sees the verdict itself.
 - Section text is fenced with the manifest's delimiter and tier so untrusted input stays
-  distinguishable from instructions.
+  distinguishable from instructions. Stable sections (manifest text) open with
+  `<delim> <name> [stable] <delim>`. Session and volatile sections are input, so their fences
+  carry a per-pack nonce derived from the digest of that content
+  (`<delim> <name> [<tier>] <nonce> <delim>` ... `<delim> end <name> <nonce> <delim>`), and any line
+  of their text that starts with the delimiter is prefixed `[escaped] `. Input therefore cannot
+  open a section of its own, least of all a stable one. This is a structural guarantee about the
+  text, not about the model: a model can still be persuaded by data it reads, so the broker, not
+  the pack, is what limits what an agent can do.
 
 `validate_report(report, pack, pack_hash, manifest)` checks a `report_result` against the pack it
 ran on: schema, `pack_id`, deferred-only-when-deferred, cites name real pack sources, and the
