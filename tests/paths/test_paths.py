@@ -165,3 +165,53 @@ def test_no_module_locates_data_on_its_own():
             if LOCATOR.search(line) or re.search(r"REPO_ROOT\s*/\s*\"(schemas|profiles)\"", line):
                 offenders.append(f"{py.relative_to(ROOT)}:{n}: {line.strip()}")
     assert not offenders, "use homelabnext.paths instead:\n" + "\n".join(offenders)
+
+
+# ---- the source root is verified before anything is read or executed from it
+@pytest.fixture
+def not_a_checkout(tmp_path, monkeypatch):
+    """Pretend the package was imported from site-packages (no homelabnext pyproject above it)."""
+    site = tmp_path / "site-packages"
+    (site / "tools").mkdir(parents=True)
+    (site / "tools" / "schema_check.py").write_text("raise SystemExit('planted code ran')\n")
+    (site / "tools" / "role_lint.py").write_text("raise SystemExit('planted code ran')\n")
+    (site / "tools" / "no_raw_endpoints.py").write_text("raise SystemExit('planted code ran')\n")
+    (site / "schemas").mkdir()
+    monkeypatch.setattr(paths, "_SOURCE_ROOT", site)
+    paths.clear_cache()
+    yield site
+    paths.clear_cache()
+
+
+def test_this_checkout_is_verified():
+    assert paths.checkout_root() == ROOT
+    assert paths.checkout_tool("schema_check.py", feature="t") == ROOT / "tools" / "schema_check.py"
+
+
+def test_site_packages_is_not_a_checkout(not_a_checkout, tmp_path):
+    assert paths.checkout_root() is None
+    with pytest.raises(paths.NotACheckout, match="needs a homelabnext source checkout"):
+        paths.checkout_tool("schema_check.py", feature="hnx schema-check")
+    (not_a_checkout / "pyproject.toml").write_text('[project]\nname = "someone-else"\n')
+    paths.clear_cache()
+    assert paths.checkout_root() is None
+    labels = [
+        label for label, p in paths.candidates("schemas", env={}, package_root=tmp_path / "x")
+    ]
+    assert any("is not a homelabnext checkout" in label for label in labels)
+    with pytest.raises(paths.ResourceNotFound):
+        paths.resource_dir("schemas", env={}, package_root=tmp_path / "x")
+
+
+def test_tool_runners_refuse_outside_a_checkout(not_a_checkout, capsys):
+    import importlib
+
+    from homelabnext import cli
+    from homelabnext.scaffold import core
+
+    assert cli.main(["schema-check"]) == 2
+    assert "needs a homelabnext source checkout" in capsys.readouterr().err
+    with pytest.raises(core.ScaffoldError, match="source checkout"):
+        core._role_lint()
+    lint = importlib.import_module("homelabnext.customization.lint")
+    assert lint._tools_path() is None  # falls back to the built-in matcher

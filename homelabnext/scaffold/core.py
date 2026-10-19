@@ -32,9 +32,12 @@ class ScaffoldError(ValueError):
 
 
 def _role_lint():
-    path = Path(__file__).resolve().parents[2] / "tools" / "role_lint.py"
-    if not path.is_file():
-        raise ScaffoldError("scaffold checks need a source checkout (tools/role_lint.py)")
+    from homelabnext import paths
+
+    try:
+        path = paths.checkout_tool("role_lint.py", feature="scaffold checks")
+    except paths.NotACheckout as exc:
+        raise ScaffoldError(str(exc)) from None
     spec = importlib.util.spec_from_file_location("hnx_role_lint", path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules["hnx_role_lint"] = mod
