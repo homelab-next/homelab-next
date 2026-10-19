@@ -183,7 +183,7 @@ Tiered: screen, fast model, heavy model.
 |---|---|---|---|
 | A-01 | The pre-AI screener handles every item first | 100% of AI-bound items show a routing decision in the log | SERVER |
 | A-02 | The screener reduces volume | at least 70% closed or deduplicated before any LLM call; false-negative rate < 1% on the evaluation set | SERVER |
-| A-03 | The screener redacts sensitive data | 0 secrets or PII tokens reach a model prompt on the evaluation set | PUBLIC-NOW |
+| A-03 | The screener redacts sensitive data | 0 secrets or PII tokens reach a model prompt on the evaluation set (`homelabnext/agent/screen.py` in pack assembly; `tests/agent/fixtures/screen_eval.yml`, precision floor 0.95) | PUBLIC-NOW |
 | A-04 | The fast model returns validated output | 100% schema-validated; invalid output retried once then escalated | PUBLIC-NOW |
 | A-05 | Low confidence escalates | Below-threshold items reach the heavy model or a human; none auto-actioned | PUBLIC-NOW |
 | A-06 | The heavy model is reserved for hard cases | <= 10% of routed items reach the heavy tier; cost within budget | SERVER |
@@ -195,9 +195,9 @@ Untrusted content cannot drive actions.
 
 | ID | Must be true | Observable / pass criterion | Tag |
 |---|---|---|---|
-| G-01 | Untrusted content is delimited | Every prompt template wraps ingested content in untrusted-data delimiters (template lint) | PUBLIC-NOW |
-| G-02 | Prompt-injection defences are tested | Injection corpus passes with 0 instruction-follows before each model or prompt change | PUBLIC-NOW |
-| G-03 | Readers cannot act | Agents that read raw content hold no shell, file-write or egress tool (profile lint and refusal test) | PUBLIC-NOW |
+| G-01 | Untrusted content is delimited | Every prompt template wraps ingested content in untrusted-data delimiters (template lint: `hnx agent prompts lint`) | PUBLIC-NOW |
+| G-02 | Prompt-injection defences are tested | Injection corpus passes with 0 instruction-follows before each model or prompt change (`hnx agent injection run`; CI against the fence-respecting fake with a golden report, `make injection-eval` against a real model) | PUBLIC-NOW |
+| G-03 | Readers cannot act | Agents that read raw content hold no shell, file-write or egress tool (profile lint and refusal test: `reads_untrusted`, `hnx agent lint`, compiler and `verify` refuse) | PUBLIC-NOW |
 | G-04 | Actors act only through allowlisted actions | Actors receive validated structured input; actions pass the allowlist | PUBLIC-NOW |
 | G-05 | Agents are never admin | No agent identity can use sudo or read admin credentials | SERVER |
 | G-06 | Agent egress is allowlisted | A connection to a non-allowlisted destination is refused | SERVER |
