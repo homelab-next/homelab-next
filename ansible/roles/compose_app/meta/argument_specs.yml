@@ -5,7 +5,11 @@ argument_specs:
     description:
     - 'Typed application spec. services: mapping of service name to {image (repository, no tag), tag (not
       ''latest''), digest (sha256:<64 hex>), healthcheck {test: list, interval, timeout, retries, start_period}
-      (required), optional command, user, env_file, environment, ports, volumes, depends_on, restart}.'
+      (required), optional command, user, env_file, environment, ports (host_ip:host_port:container_port),
+      volumes, depends_on, restart, cap_add, read_only, mem_limit, privileged}. No other key is accepted.'
+    - Every service gets security_opt no-new-privileges and cap_drop ALL. Secrets go in
+      compose_app_secret_env, never in environment. Privileged containers, docker socket mounts and
+      running as root are refused unless the matching compose_app_allow_* flag is set.
     options:
       compose_app_name: &id001
         type: str
@@ -32,10 +36,48 @@ argument_specs:
         type: path
         description: Open-format export target.
         default: /var/backups/compose/{{ compose_app_name }}/export
+      compose_app_owner: &id008
+        type: str
+        description: Owner of the application directory and every file the role writes.
+        default: root
+      compose_app_group: &id009
+        type: str
+        description: Group of the application directory and every file the role writes.
+        default: root
       compose_app_restart_policy:
         type: str
         description: Default restart policy.
         default: unless-stopped
+      compose_app_secret_env:
+        type: dict
+        description: >-
+          Service name to {VARIABLE: value}. Written to secrets/<service>.env with mode 0600 and
+          passed as an env_file, never into docker-compose.yml. Values may not hold a single quote
+          or a line break. Supply it from the secrets capability; it has no literal default.
+        default: {}
+        no_log: true
+      compose_app_security_opt:
+        type: list
+        elements: str
+        description: security_opt applied to every service; must keep no-new-privileges:true.
+        default: ['no-new-privileges:true']
+      compose_app_cap_drop:
+        type: list
+        elements: str
+        description: cap_drop applied to every service.
+        default: [ALL]
+      compose_app_allow_privileged:
+        type: bool
+        description: Permit privileged, a dangerous cap_add, or dropping no-new-privileges.
+        default: false
+      compose_app_allow_docker_socket:
+        type: bool
+        description: Permit a docker socket, host root or /run bind mount.
+        default: false
+      compose_app_allow_root:
+        type: bool
+        description: Permit an explicit user of root or 0.
+        default: false
       compose_app_log_max_size:
         type: str
         description: json-file max-size.
@@ -76,6 +118,8 @@ argument_specs:
     options:
       compose_app_name: *id001
       compose_app_dir: *id002
+      compose_app_owner: *id008
+      compose_app_group: *id009
       compose_app_spec: *id004
       compose_app_data_dir: *id005
   restore:
@@ -92,6 +136,8 @@ argument_specs:
     options:
       compose_app_name: *id001
       compose_app_dir: *id002
+      compose_app_owner: *id008
+      compose_app_group: *id009
       compose_app_spec: *id004
       compose_app_allow_placeholder_digest: *id006
       compose_app_upgrade_service:
