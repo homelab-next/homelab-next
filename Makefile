@@ -12,7 +12,7 @@ PLAYBOOKS := $(wildcard ansible/playbooks/*.yml)
 REGISTERS_OUT := build/registers
 REGISTER_FILES := $(shell git ls-files -- $(foreach k,lessons runbooks invariants queue,'*$(k).yml' '*$(k).yaml') 2>/dev/null)
 
-.PHONY: help check lint fmt test schemas gates detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean lab-up lab-down lab-smoke
+.PHONY: help check lint fmt test schemas gates detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke
 
 help:
 	@echo "targets: check lint fmt test schemas gates detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
@@ -89,6 +89,18 @@ leak-scan-history:
 
 changelog-check:
 	$(PY) tools/check_changelog.py
+
+# Regenerate the hashed CI constraints (needs uv).  Versions published in the last 14 days are
+# skipped unless a direct pin needs one (CONSTRAINTS_FRESH: packages exempt from that cooldown).
+CONSTRAINTS_CUTOFF ?= $(shell date -u -d '14 days ago' +%Y-%m-%d 2>/dev/null)
+CONSTRAINTS_FRESH ?= ruff pyarrow
+constraints:
+	uv pip compile pyproject.toml constraints/ci-tools.in --extra dev --extra test --extra lake \
+	  --extra core --universal --python-version 3.11 --generate-hashes --no-header \
+	  --exclude-newer $(CONSTRAINTS_CUTOFF) \
+	  $(foreach p,$(CONSTRAINTS_FRESH),--exclude-newer-package $(p)=$(shell date -u +%Y-%m-%d)) \
+	  -o constraints/ci.txt
+	awk '/^pip==/{p=1} p{print} p&&!/\\$$/{exit}' constraints/ci.txt > constraints/bootstrap.txt
 
 clean:
 	rm -rf build dist .pytest_cache .ruff_cache *.egg-info

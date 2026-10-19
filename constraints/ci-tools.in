@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# CI-only tools, pinned together with the project's own extras into constraints/ci.txt.
+# ruff matches the rev in .pre-commit-config.yaml; bump both together.
+ruff==0.17.1
+setuptools>=77,<85
+build
+pip-audit
+cyclonedx-bom

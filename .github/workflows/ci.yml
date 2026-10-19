@@ -11,21 +11,26 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # superseded pull-request runs are cancelled; every push to main runs to completion
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Action pins below are full commit SHAs; the trailing comment names the release.
+# Action pins below are full commit SHAs; the trailing comment names the release.  Every checkout
+# sets persist-credentials: false, so no job leaves a token in .git/config for later steps.
+# Python packages come from constraints/ci.txt (hash-pinned) via .github/actions/python-deps.
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/python-deps
         with:
           python-version: "3.12"
-          cache: pip
-      - run: python -m pip install --upgrade pip ruff
+          packages: ruff  # the version is the one .pre-commit-config.yaml pins (constraints/ci-tools.in)
+          install-project: "false"
       - run: python -m ruff check .
       - run: python -m ruff format --check .
       - run: python tools/check_spdx.py
@@ -33,7 +38,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -45,25 +50,26 @@ jobs:
           - python-version: "3.11"
             extras: "test"
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/python-deps
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -e ".[${{ matrix.extras }}]"
+          extras: ${{ matrix.extras }}
       - run: python -m pytest -q -m "not live"
 
   schemas:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/python-deps
         with:
           python-version: "3.12"
-          cache: pip
-      - run: python -m pip install -e ".[dev]"
+          extras: dev
       - name: schema contracts (examples, negatives, additive evolution, frozen baselines)
         run: python tools/schema_check.py --strict
       - name: no raw endpoints
@@ -87,27 +93,173 @@ jobs:
           hnx registry validate examples/services.yml
           hnx custom check
 
+  # Build the sdist and wheel exactly as a release would and leak-scan what they contain (the
+  # path allowlist for both artefacts is tests/packaging/test_artifacts.py, run by `test`).
+  packaging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/python-deps
+        with:
+          python-version: "3.12"
+          packages: build
+          install-project: "false"
+      - name: build sdist and wheel (no isolation, so the build backend is the hash-pinned one)
+        run: python -m build --no-isolation --outdir "$RUNNER_TEMP/dist" .
+      - name: list the wheel and leak-scan both unpacked artefacts
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/unpacked"
+          mkdir -p "$out/wheel" "$out/sdist"
+          python -m zipfile -e "$RUNNER_TEMP"/dist/*.whl "$out/wheel"
+          tar -xzf "$RUNNER_TEMP"/dist/*.tar.gz -C "$out/sdist"
+          python -m zipfile -l "$RUNNER_TEMP"/dist/*.whl >> "$GITHUB_STEP_SUMMARY"
+          rm "$out"/wheel/*.dist-info/RECORD  # file hashes by construction
+          python tools/leak_scan.py "$out"
+
   leak-scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.12"
       - name: scan the tree
         run: python tools/leak_scan.py .
-      - name: scan commit messages of this push or pull request
+      - name: scan the commits of this push or pull request (messages, added lines, identities)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] \
+             && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            range="$BASE..$HEAD_SHA"
+          else
+            range="$HEAD_SHA"  # new branch: the whole reachable history
+          fi
+          echo "range: $range"
+          git log --format=%B "$range" | python tools/leak_scan.py --stdin
+          python tools/leak_scan.py --check-authors "$range"
+          # network and identity shapes in every added line, so a value committed and then
+          # deleted inside the same pull request is still caught
+          if [ "$range" != "$HEAD_SHA" ]; then
+            python tools/leak_scan.py --history "$range"
+          fi
+
+  register-ids:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: no id vanished relative to the base, no allocated id twice
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ]; then
-            git log --format=%B "$BASE..HEAD" | python tools/leak_scan.py --stdin
+          set -euo pipefail
+          if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] \
+             && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            make ids-check PY=python BASE="$BASE"
           else
-            git log --format=%B | python tools/leak_scan.py --stdin
+            make ids-check PY=python
           fi
+
+  # Developer Certificate of Origin: every non-merge commit of a pull request carries a
+  # Signed-off-by trailer for its author (CONTRIBUTING.md, ground rule 1).
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: sign-off on every commit
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          bad=0
+          for c in $(git rev-list --no-merges "$BASE..$HEAD_SHA"); do
+            author=$(git log -1 --format='%ae' "$c")
+            if ! git log -1 --format='%(trailers:key=Signed-off-by,valueonly)' "$c" \
+                 | grep -qiF "<$author>"; then
+              echo "::error::commit $(git log -1 --format=%h "$c") has no Signed-off-by for its author (git commit -s)"
+              bad=1
+            fi
+          done
+          exit "$bad"
+
+  # The pre-commit hooks that do not need their own environment, run on the whole tree.
+  hygiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/python-deps
+        with:
+          python-version: "3.12"
+          extras: yaml
+          install-project: "false"
+      - name: merge markers, large files, private keys, YAML/JSON syntax, symlinks
+        run: |
+          python - <<'PY'
+          import json, os, re, subprocess, sys
+          import yaml
+
+          class Loader(yaml.SafeLoader):
+              pass
+
+          # Ansible and CloudFormation tags are data here; only the syntax is checked
+          Loader.add_multi_constructor("!", lambda loader, suffix, node: None)
+          files = subprocess.run(["git", "ls-files", "-z"], capture_output=True, check=True)
+          problems = []
+          # fixtures that are malformed on purpose (a role-lint parse-error case)
+          invalid_on_purpose = ("tests/roles/fixtures/RL000/",)
+          marker = re.compile(rb"^(?:<{7}|>{7})(?: |$)|^={7}$", re.M)
+          key = re.compile(rb"-----BEGIN [A-Z ]*PRIVATE KEY")
+          for name in files.stdout.decode().split("\0"):
+              if not name:
+                  continue
+              if os.path.islink(name):
+                  problems.append(f"{name}: symbolic link (packaging refuses them)")
+                  continue
+              data = open(name, "rb").read()
+              if len(data) > 512 * 1024:
+                  problems.append(f"{name}: larger than 512 KB")
+              if marker.search(data):
+                  problems.append(f"{name}: merge-conflict marker")
+              if key.search(data):
+                  problems.append(f"{name}: private key block")
+              try:
+                  if name.startswith(invalid_on_purpose):
+                      pass
+                  elif name.endswith((".yml", ".yaml")):
+                      list(yaml.load_all(data, Loader=Loader))
+                  elif name.endswith(".json"):
+                      json.loads(data)
+              except Exception as exc:  # noqa: BLE001 - report every parse failure
+                  problems.append(f"{name}: does not parse ({exc.__class__.__name__})")
+          print("\n".join(problems) or "hygiene: clean")
+          sys.exit(1 if problems else 0)
+          PY
 
   secret-scan:
     runs-on: ubuntu-latest
@@ -118,9 +270,10 @@ jobs:
       GITLEAKS_VERSION: "8.28.0"
       GITLEAKS_SHA256: "a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb"
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: install gitleaks (pinned release, checksum verified)
         run: |
           set -euo pipefail
@@ -131,16 +284,49 @@ jobs:
           mkdir -p "$RUNNER_TEMP/gitleaks"
           tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/gitleaks" gitleaks
           echo "$RUNNER_TEMP/gitleaks" >> "$GITHUB_PATH"
-      - name: gitleaks detect (full history, .gitleaks.toml)
-        run: gitleaks detect --source . --no-banner --redact --verbose
+      - name: gitleaks over full history (.gitleaks.toml)
+        run: gitleaks git . --no-banner --redact --verbose
+      - name: gitleaks over the checked-out tree
+        run: gitleaks dir . --no-banner --redact --verbose
+
+  pip-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/python-deps
+        with:
+          python-version: "3.12"
+          packages: pip-audit
+          install-project: "false"
+      - name: known vulnerabilities in every pinned dependency
+        run: python -m pip_audit --strict --progress-spinner off --disable-pip --require-hashes -r constraints/ci.txt
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294  # v5.0.0
+        with:
+          fail-on-severity: moderate
+          # LGPL only as an unmodified dependency (CONTRIBUTING.md, ground rule 8)
+          deny-licenses: GPL-2.0-only, GPL-2.0-or-later, GPL-3.0-only, GPL-3.0-or-later, AGPL-3.0-only, AGPL-3.0-or-later
 
   markdown-links:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: check relative links and anchors (offline, deterministic)
-        uses: lycheeverse/lychee-action@82202e5e9c2f4ef1a55a3d02563e1cb6041e5332  # v2.4.1
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8  # v2.9.0
         with:
           args: --offline --no-progress --include-fragments "./**/*.md"
           fail: true

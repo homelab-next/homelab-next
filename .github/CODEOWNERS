@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Review is required from the owners below for changes to CI, the scanners and gates, packaging
+# and the conformance suites (enable "Require review from Code Owners" in the branch ruleset).
+# Later lines take precedence over earlier ones.
+*                         @PeteSampras
+
+/.github/                 @PeteSampras
+/tools/                   @PeteSampras
+/conformance/             @PeteSampras
+/constraints/             @PeteSampras
+/.gitleaks.toml           @PeteSampras
+/.pre-commit-config.yaml  @PeteSampras
+/setup.py                 @PeteSampras
+/MANIFEST.in              @PeteSampras
+/pyproject.toml           @PeteSampras
+/SECURITY.md              @PeteSampras
