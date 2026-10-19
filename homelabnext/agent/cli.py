@@ -4,6 +4,10 @@
 ``compile SPEC --library LIB [--policy POLICY]``  compile a profile spec against a parts library.
 ``verify PROFILE --policy POLICY [--lock LOCK]``  check a compiled profile against the policy.
 ``pack MANIFEST --inputs FILE [--denylist FILE]`` assemble a context pack and print its hash.
+    ``[--profile P --registry R [--runs-on HOST] [--broker M]]`` start a session: the pack gets
+                                                  the profile's access block (stable ``access``).
+``keyring build|check SOURCES``                   generate the keyring from its sources, or fail
+                                                  when the committed one has drifted (M-12).
 ``lint [PATH ...]``                               readers cannot act: every agent profile and
                                                   context manifest under PATH (default ``.``).
 ``prompts lint [PATH ...]``                         G-01 template lint (default: shipped templates).
@@ -31,7 +35,9 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext.ids import MappingResolver
+from homelabnext.registry import RegistryError
 
+from .access import start_session
 from .compiler import CeilingPolicy, PartsLibrary, compile_profile, verify_profile
 from .errors import AgentError
 from .pack import assemble_pack
@@ -77,6 +83,24 @@ def _emit(doc: dict, out: str | None) -> None:
         sys.stdout.write(text)
 
 
+def _keyring(action: str, sources: str, classes: ToolClasses | None) -> int:
+    from .keyring import build_from_sources, drift
+
+    text, out = build_from_sources(sources, classes)
+    if action == "build":
+        out.write_text(text, encoding="utf-8")
+        print(f"hnx agent keyring: wrote {out}", file=sys.stderr)
+        return 0
+    problems = drift(text, out.read_text(encoding="utf-8") if out.is_file() else None)
+    for prob in problems:
+        print(f"hnx agent keyring check: {out}: {prob}", file=sys.stderr)
+    if problems:
+        print(f"rebuild it: hnx agent keyring build {sources}", file=sys.stderr)
+        return 1
+    print(f"hnx agent keyring check: {out} matches its sources", file=sys.stderr)
+    return 0
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="hnx agent", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -103,6 +127,14 @@ def main(argv: list[str]) -> int:
     p.add_argument(
         "--denylist", help="deny-list file (one term or re:<regex> per line) redacted from input"
     )
+    p.add_argument("--profile", help="compiled profile: start a session with its access block")
+    p.add_argument("--registry", help="service registry (with --profile)")
+    p.add_argument("--runs-on", help="registry host the agent runs on (default: agent-runtime)")
+    p.add_argument("--broker", help="broker manifest, to list the profile's broker actions")
+    k = sub.add_parser("keyring", help="generate the keyring from its sources, or check drift")
+    k.add_argument("action", choices=("build", "check"))
+    k.add_argument("sources", help="sources file: {registry, profiles, broker, out}")
+    k.add_argument("--classes", help="capability-class table (default: the packaged one)")
     add_prompts_parser(sub)
     add_injection_parser(sub)
     args = ap.parse_args(argv)
@@ -125,6 +157,8 @@ def main(argv: list[str]) -> int:
                 print("hnx agent lint: no agent profile found (wrong path?)", file=sys.stderr)
                 return 1
             return 1 if problems else 0
+        if args.cmd == "keyring":
+            return _keyring(args.action, args.sources, classes)
         if args.cmd == "compile":
             policy = _policy(args.policy) if args.policy else None
             if policy is None:
@@ -158,12 +192,27 @@ def main(argv: list[str]) -> int:
         deny = None
         if args.denylist:
             deny = Path(args.denylist).read_text(encoding="utf-8").splitlines()
-        pack, digest = assemble_pack(manifest, _load(args.inputs) or {}, denylist=deny)
+        if args.profile or args.registry:
+            if not (args.profile and args.registry):
+                raise AgentError("--profile and --registry go together")
+            from homelabnext.registry import load as load_registry
+
+            pack, digest = start_session(
+                manifest,
+                _load(args.inputs) or {},
+                _load(args.profile),
+                load_registry(args.registry),
+                runs_on=args.runs_on,
+                broker=_load(args.broker) if args.broker else None,
+                denylist=deny,
+            )
+        else:
+            pack, digest = assemble_pack(manifest, _load(args.inputs) or {}, denylist=deny)
         _emit({"hash": digest, "pack": pack}, args.out)
         print(f"pack {digest} status={pack['status']}", file=sys.stderr)
         for r in pack["deferred_reasons"]:
             print(f"deferred: {r}", file=sys.stderr)
         return 0 if pack["status"] == "ready" else 3
-    except (AgentError, OSError, ValueError) as exc:
+    except (AgentError, OSError, ValueError, RegistryError) as exc:
         print(f"hnx agent {args.cmd}: {exc}", file=sys.stderr)
         return 1

@@ -1,0 +1,655 @@
+{
+  "generated_from": {
+    "broker": "sha256:329adee08662989613b59c3c85b509ad24a094c804dafa683f28b805d0ada2cc",
+    "classes": "sha256:4597943fe4950bbf5a787a3f2a97bd2ba33c10e026560d5532def06f7cb4030e",
+    "profiles": {
+      "profile:reader": "sha256:b855f7d3bf4d947b92df54cdb815d2099722c7a62166abf05cd2af0c62837114",
+      "profile:responder": "sha256:ed744f7e5a9beed4c46712e50eb47055c08f9e7d0e51c4d7e45fa3b6ac30012d"
+    },
+    "registry": "edf3e9c04325fed47acfe3f6dbf89c43bf2d25a8636549086c2b261a05fa0d72"
+  },
+  "keyring_version": 1,
+  "principals": [
+    {
+      "denials": [
+        {
+          "reason": "not granted (default deny)",
+          "resource": "action:host.reboot"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:agent-runtime"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:dashboards"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:dns"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:edge-proxy"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:events"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:idp"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:inference"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:lake-catalog"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:lake-query"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:metrics"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:notify"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:object-store"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:records-db"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:secrets"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "mcp:agent_runtime"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "mcp:lake_query"
+        }
+      ],
+      "grants": [
+        {
+          "approval": false,
+          "kind": "broker-action",
+          "level": "read",
+          "resource": "action:service.status"
+        },
+        {
+          "approval": false,
+          "kind": "broker-action",
+          "level": "write",
+          "resource": "action:records.annotate"
+        },
+        {
+          "approval": true,
+          "kind": "broker-action",
+          "level": "execute",
+          "resource": "action:service.restart"
+        }
+      ],
+      "kind": "agent",
+      "principal": "profile:operator",
+      "profile": null
+    },
+    {
+      "broker_tier": "read",
+      "data_tier": "local-only",
+      "denials": [
+        {
+          "reason": "not granted (default deny)",
+          "resource": "action:host.reboot"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "action:records.annotate"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "action:service.restart"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:agent-runtime"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:dashboards"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:dns"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:edge-proxy"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:events"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:idp"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:inference"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:lake-catalog"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:metrics"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:notify"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:object-store"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:records-db"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:secrets"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "mcp:agent_runtime"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "mcp:lake_query"
+        }
+      ],
+      "grants": [
+        {
+          "approval": false,
+          "kind": "broker-action",
+          "level": "read",
+          "resource": "action:service.status"
+        },
+        {
+          "endpoint": "lake-query.svc.example.internal",
+          "kind": "capability",
+          "level": "read",
+          "resource": "cap:lake-query"
+        },
+        {
+          "endpoint": null,
+          "kind": "mcp",
+          "level": "read",
+          "resource": "mcp:lake"
+        }
+      ],
+      "kind": "agent",
+      "memory_scopes": [
+        "analyst"
+      ],
+      "principal": "profile:reader",
+      "profile": "sha256:b855f7d3bf4d947b92df54cdb815d2099722c7a62166abf05cd2af0c62837114",
+      "reads_untrusted": true
+    },
+    {
+      "broker_tier": "execute",
+      "data_tier": "local-only",
+      "denials": [
+        {
+          "reason": "not granted (default deny)",
+          "resource": "action:host.reboot"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "action:records.annotate"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "action:service.restart"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "action:service.status"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:agent-runtime"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:dashboards"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:dns"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:edge-proxy"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:events"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:idp"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:inference"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:lake-catalog"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:lake-query"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:metrics"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:notify"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:object-store"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:records-db"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:secrets"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "mcp:agent_runtime"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "mcp:lake_query"
+        }
+      ],
+      "grants": [
+        {
+          "endpoint": null,
+          "kind": "capability",
+          "level": "write",
+          "resource": "cap:records-propose"
+        },
+        {
+          "endpoint": null,
+          "kind": "mcp",
+          "level": "write",
+          "resource": "mcp:records"
+        },
+        {
+          "endpoint": null,
+          "kind": "capability",
+          "level": "execute",
+          "resource": "cap:broker"
+        },
+        {
+          "endpoint": null,
+          "kind": "mcp",
+          "level": "execute",
+          "resource": "mcp:shell"
+        }
+      ],
+      "kind": "agent",
+      "memory_scopes": [
+        "responder"
+      ],
+      "principal": "profile:responder",
+      "profile": "sha256:ed744f7e5a9beed4c46712e50eb47055c08f9e7d0e51c4d7e45fa3b6ac30012d",
+      "reads_untrusted": false
+    },
+    {
+      "denials": [],
+      "grants": [
+        {
+          "kind": "broker-approval",
+          "level": "privileged",
+          "resource": "approve:example-broker"
+        }
+      ],
+      "kind": "human",
+      "principal": "sso:approver-one"
+    },
+    {
+      "denials": [
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:dashboards"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:edge-proxy"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:lake-catalog"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:metrics"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:object-store"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:records-db"
+        }
+      ],
+      "grants": [
+        {
+          "endpoint": "agent-runtime.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:agent-runtime"
+        },
+        {
+          "endpoint": "dns.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:dns"
+        },
+        {
+          "endpoint": "events.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:events"
+        },
+        {
+          "endpoint": "idp.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:idp"
+        },
+        {
+          "endpoint": "inference.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:inference"
+        },
+        {
+          "endpoint": "lake-query.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:lake-query"
+        },
+        {
+          "endpoint": "notify.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:notify"
+        },
+        {
+          "endpoint": "secrets.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:secrets"
+        }
+      ],
+      "kind": "network",
+      "principal": "zone:compute"
+    },
+    {
+      "denials": [
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:agent-runtime"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:dashboards"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:edge-proxy"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:inference"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:metrics"
+        }
+      ],
+      "grants": [
+        {
+          "endpoint": "dns.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:dns"
+        },
+        {
+          "endpoint": "events.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:events"
+        },
+        {
+          "endpoint": "idp.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:idp"
+        },
+        {
+          "endpoint": "lake-catalog.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:lake-catalog"
+        },
+        {
+          "endpoint": "lake-query.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:lake-query"
+        },
+        {
+          "endpoint": "notify.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:notify"
+        },
+        {
+          "endpoint": "object-store.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:object-store"
+        },
+        {
+          "endpoint": "records-db.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:records-db"
+        },
+        {
+          "endpoint": "secrets.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:secrets"
+        }
+      ],
+      "kind": "network",
+      "principal": "zone:data"
+    },
+    {
+      "denials": [
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:agent-runtime"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:events"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:inference"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:lake-catalog"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:lake-query"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:metrics"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:notify"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:object-store"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:records-db"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:secrets"
+        }
+      ],
+      "grants": [
+        {
+          "endpoint": "dashboards.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:dashboards"
+        },
+        {
+          "endpoint": "dns.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:dns"
+        },
+        {
+          "endpoint": "edge-proxy.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:edge-proxy"
+        },
+        {
+          "endpoint": "idp.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:idp"
+        }
+      ],
+      "kind": "network",
+      "principal": "zone:edge"
+    },
+    {
+      "denials": [
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:agent-runtime"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:edge-proxy"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:events"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:inference"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:lake-catalog"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:lake-query"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:object-store"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:records-db"
+        }
+      ],
+      "grants": [
+        {
+          "endpoint": "dashboards.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:dashboards"
+        },
+        {
+          "endpoint": "dns.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:dns"
+        },
+        {
+          "endpoint": "idp.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:idp"
+        },
+        {
+          "endpoint": "metrics.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:metrics"
+        },
+        {
+          "endpoint": "notify.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:notify"
+        },
+        {
+          "endpoint": "secrets.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:secrets"
+        }
+      ],
+      "kind": "network",
+      "principal": "zone:mgmt"
+    }
+  ]
+}
