@@ -38,7 +38,7 @@ from .errors import LakeError, SchemaMismatch, UnknownTable
 from .protocol import Mark, TableInfo, WriteResult
 from .rest_catalog import CommitConflict, RestCatalog, current_schema_fields, current_snapshot
 from .sqlparams import check_params, to_qmark
-from .tables import Column, TableSchema, load_schemas, table_name
+from .tables import Column, TableSchema, column_diffs, load_schemas, table_name
 from .trino_http import Row, TrinoHTTP
 from .validate import content_key, normalize_rows
 
@@ -95,14 +95,7 @@ def rest_schema_diffs(
     """
     want = {c.name: _col_text(c, nested_required) for c in expected.columns}
     have = {f["name"]: _ice_field(f) for f in fields}
-    diffs = []
-    for n in want:
-        if n not in have:
-            diffs.append(f"missing column: {want[n]}")
-        elif want[n] != have[n]:
-            diffs.append(f"column differs: expected `{want[n]}`, table has `{have[n]}`")
-    diffs += [f"unexpected column in table: {have[n]}" for n in have if n not in want]
-    return diffs
+    return column_diffs(want, have)
 
 
 # ---------------------------------------------------------------- the lake

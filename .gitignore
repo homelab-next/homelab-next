@@ -26,3 +26,5 @@ secrets/
 /homelabnext/_data/
 .coverage
 .coverage.*
+# Obsidian vault settings (docs/ opens as a vault; see docs/README.md)
+.obsidian/

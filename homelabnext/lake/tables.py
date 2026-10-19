@@ -158,3 +158,16 @@ def iter_columns(columns: tuple[Column, ...], prefix: str = "") -> Iterator[tupl
         yield prefix + c.name, c
         if c.type == "struct":
             yield from iter_columns(c.fields, prefix + c.name + ".")
+
+
+def column_diffs(want: Mapping[str, str], have: Mapping[str, str]) -> list[str]:
+    """Differences between the pinned columns and a table's, each rendered as text by the caller
+    (``name -> "name type"``): missing, differing, then unexpected columns."""
+    diffs: list[str] = []
+    for n in want:
+        if n not in have:
+            diffs.append(f"missing column: {want[n]}")
+        elif want[n] != have[n]:
+            diffs.append(f"column differs: expected `{want[n]}`, table has `{have[n]}`")
+    diffs += [f"unexpected column in table: {have[n]}" for n in have if n not in want]
+    return diffs

@@ -29,23 +29,9 @@ def _yaml():
 
 
 def _unique_loader():
-    yaml = _yaml()
+    _yaml()  # PyYAML stays optional here: import the shared loader only when a document needs it
+    from homelabnext._yaml import UniqueKeyLoader
 
-    class UniqueKeyLoader(yaml.SafeLoader):
-        """Safe loader that refuses duplicate mapping keys (a silent override is a bug)."""
-
-    def construct(loader, node, deep=False):
-        seen: set[Any] = set()
-        for key_node, _ in node.value:
-            key = loader.construct_object(key_node, deep=deep)
-            if key in seen:
-                raise yaml.constructor.ConstructorError(
-                    None, None, f"duplicate key {key!r}", key_node.start_mark
-                )
-            seen.add(key)
-        return yaml.SafeLoader.construct_mapping(loader, node, deep)
-
-    UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, construct)
     return UniqueKeyLoader
 
 

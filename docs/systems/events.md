@@ -20,6 +20,7 @@ status: draft
 
 <!-- hnx:gen:what -->
 - Capability: `events`
+- Contract: [events capability reference](../capabilities/events.md) ([[capabilities/events|events capability]]): operations, data shapes, conformance checks, adapters
 - Implementation: `nats` 2.10.20
 - Owner: data-team
 - Tags: bus, data
@@ -78,7 +79,7 @@ status: draft
 
 <!-- hnx:gen:deps -->
 - Depends on: none declared
-- Depended on by: [agent-runtime](agent-runtime.md) ([[agent-runtime]])
+- Depended on by: [agent-runtime](agent-runtime.md) ([[systems/agent-runtime|agent-runtime]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->

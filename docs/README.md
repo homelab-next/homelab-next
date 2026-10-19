@@ -1,0 +1,62 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+# Documentation home
+
+The map of the documentation: start here on GitHub, or open this `docs/` folder as an
+[Obsidian](https://obsidian.md) vault and use this page as its home. Every generated page links
+both ways, with a relative Markdown link (for GitHub) and a path-qualified `[[folder/page|label]]`
+wiki-link (for Obsidian), so the graph view shows how capabilities, systems, decisions and scripts
+relate.
+
+## Choosing and integrating a tool
+
+- [Capabilities](capabilities/README.md) ([[capabilities/README|Capabilities]]): one generated
+  reference page per capability: what it does, every operation with its signature, the data shapes
+  in and out (field tables, errors, the JSON Schemas it loads), the conformance checks, the
+  built-in fake, the real-product adapters and their recorded limits, the registry services that
+  use it, and the steps to integrate a new product. The index is a capability x (operations,
+  checks, adapters, services) matrix for tool choice.
+- [Conformance harness](conformance.md) ([[conformance]]): suites, targets and `hnx conform`.
+- [Swap procedure](swap.md) ([[swap]]): replacing one product with another behind a capability.
+- [Interface index](interfaces.md) ([[interfaces]]): the contracts, Python interfaces and owners.
+
+## Running the systems
+
+- [Per-system SOP pages](systems.md) ([[systems]]): how the pages in `systems/` are built; each
+  service page links to its capability page, its upstreams and its dependants. The
+  [capabilities index](capabilities/README.md) lists every registry service.
+- [Architecture](architecture.md) ([[architecture]]), [build order](build-order.md)
+  ([[build-order]]), [network model](network-model.md) ([[network-model]]),
+  [compute model](compute-model.md) ([[compute-model]]), [role interface](role-interface.md)
+  ([[role-interface]]).
+- [Events](events.md) ([[events]]), [detections](detections.md) ([[detections]]),
+  [workflows](workflows.md) ([[workflows]]), [decisions and models](decide.md) ([[decide]]),
+  [agent profiles](agent.md) ([[agent]]), [scope guard](scope.md) ([[scope]]),
+  [customization](customization.md) ([[customization]]),
+  [decommission audit](decommission.md) ([[decommission]]).
+
+## Decisions, status and scripts
+
+- [Architecture decision log](adr/README.md) ([[adr/README|ADRs]]).
+- [Checklist](checklist.md) ([[checklist]]): what is done, public now, or needs a server.
+- [Script catalog](scripts/catalog.md) ([[scripts/catalog|Script catalog]]), generated from the
+  script headers; [how the catalog is kept true](scripts.md) ([[scripts]]).
+- [Glossary](glossary.md) ([[glossary]]).
+
+## Opening `docs/` as an Obsidian vault
+
+1. In Obsidian choose **Open folder as vault** and pick this `docs/` directory (not the repository
+   root: the links are written relative to `docs/`).
+2. Open this page and pin it, or set it as the vault's home note.
+3. Open **Graph view**. Capability pages link to the systems that provide them, systems link to
+   their capability, their upstreams and their dependants.
+
+Obsidian keeps its settings in `docs/.obsidian/`; that folder is ignored by git and never
+committed. Links to source files (`../conformance/...`) leave the vault and only resolve on GitHub.
+
+The generated pages are checked in `make check` and CI:
+
+```
+hnx docs capabilities check                                # docs/capabilities/ is current
+hnx docs systems check examples/services.yml docs/systems  # docs/systems/ matches the registry
+hnx scripts catalog --check                                # docs/scripts/catalog.* is current
+```

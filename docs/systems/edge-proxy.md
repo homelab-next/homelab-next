@@ -20,6 +20,7 @@ status: draft
 
 <!-- hnx:gen:what -->
 - Capability: `edge-proxy`
+- Contract: none (`edge-proxy` is not one of the conformance capabilities)
 - Implementation: `caddy` 2.8.4
 - Owner: platform-team
 - Tags: core, edge
@@ -77,7 +78,7 @@ status: draft
 ## Depends on / depended on by
 
 <!-- hnx:gen:deps -->
-- Depends on: [dashboards](dashboards.md) ([[dashboards]]), [idp](idp.md) ([[idp]])
+- Depends on: [dashboards](dashboards.md) ([[systems/dashboards|dashboards]]), [idp](idp.md) ([[systems/idp|idp]])
 - Depended on by: none declared
 <!-- /hnx:gen -->
 

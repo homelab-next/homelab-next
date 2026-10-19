@@ -20,6 +20,7 @@ status: draft
 
 <!-- hnx:gen:what -->
 - Capability: `idp`
+- Contract: [idp capability reference](../capabilities/idp.md) ([[capabilities/idp|idp capability]]): operations, data shapes, conformance checks, adapters
 - Implementation: `authentik` 2024.8
 - Owner: identity-team
 - Tags: core, identity
@@ -78,7 +79,7 @@ status: draft
 
 <!-- hnx:gen:deps -->
 - Depends on: none declared
-- Depended on by: [dashboards](dashboards.md) ([[dashboards]]), [edge-proxy](edge-proxy.md) ([[edge-proxy]]), [lake-catalog](lake-catalog.md) ([[lake-catalog]]), [lake-query](lake-query.md) ([[lake-query]])
+- Depended on by: [dashboards](dashboards.md) ([[systems/dashboards|dashboards]]), [edge-proxy](edge-proxy.md) ([[systems/edge-proxy|edge-proxy]]), [lake-catalog](lake-catalog.md) ([[systems/lake-catalog|lake-catalog]]), [lake-query](lake-query.md) ([[systems/lake-query|lake-query]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->

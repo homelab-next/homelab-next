@@ -23,8 +23,13 @@ hnx docs systems template                                       # print the blan
 * Machine-known facts sit in `<!-- hnx:gen:NAME -->` blocks that `generate` rewrites. Human text
   sits in `<!-- hnx:todo:NAME -->` blocks that `generate` never touches. Replace the
   `TODO(human)` line inside the block with prose.
-* Links are relative (`lake-catalog.md`) and each also has a `[[wiki-link]]`, so the folder opens
-  cleanly as an Obsidian vault.
+* Links are relative (`lake-catalog.md`) and each also has a path-qualified wiki-link
+  (`[[systems/lake-catalog|lake-catalog]]`), so `docs/` opens cleanly as an Obsidian vault
+  ([docs/README.md](README.md)); the path matters because `docs/capabilities/` has pages of the
+  same names.
+* The `what` block links the service's capability reference page
+  ([capabilities/](capabilities/README.md), built by `hnx docs capabilities generate`) when its
+  capability is one of the conformance capabilities.
 
 ## The check
 

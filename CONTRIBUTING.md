@@ -101,6 +101,16 @@ and an entry that no longer excuses anything fails the lint.
 - `tools/shared_helpers_lint.py` (M-03): no private notify, state-file or lake-query helper
   outside `homelabnext/notify`, `homelabnext/state` and `homelabnext/lake` (AST; test code is out
   of scope). Allowlist: `tools/shared_helpers.allow.yml` (`path`, `rule`, `reason`).
+- `tools/dup_check.py` (M-03, textual side): no copy-pasted Python beyond the committed baseline
+  `tools/dup_check.baseline.json` (stdlib `tokenize`; runs of at least 50 tokens and 5 lines,
+  compared exactly, comments, docstrings and module-level imports ignored; test code,
+  `schemas/_frozen/` and generated files out of scope). The baseline is keyed by content hash, so
+  moving code does not touch it, and it only shrinks: a removed clone is a stale entry that fails
+  until `make dup-baseline` drops it, and an update that would raise the duplicated-line total is
+  refused unless `--update-baseline --allow-increase "<reason>"` records why. The helpers lint
+  above is the semantic side (a re-implemented seam, copied or not); a copied seam helper trips
+  both and the one fix clears both. `--mode normalised` (identifiers and literals abstracted)
+  finds renamed copies too, as an audit.
 - `tools/tls_verify_lint.py` (F-07): no `verify=False`, unverified SSL context, `CERT_NONE`,
   `check_hostname=False` or silenced urllib3 warnings in Python, and no
   `validate_certs`/`verify_ssl`/`insecure_skip_verify`-style key turning verification off in YAML

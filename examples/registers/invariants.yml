@@ -198,13 +198,16 @@ criteria:
   evidence: auto
   observable: >-
     python3 -c 'import yaml' 2>/dev/null || exit 100;
-    python3 tools/shared_helpers_lint.py && echo helpers shared
-  expected: exit 0 (0 private notify, state or lake-query helpers outside the shared libraries)
+    python3 tools/shared_helpers_lint.py && python3 tools/dup_check.py && echo helpers shared
+  expected: >-
+    exit 0 (0 private notify, state or lake-query helpers outside the shared libraries, and 0
+    copy-pasted clones or stale entries beyond tools/dup_check.baseline.json)
   expect_regex: helpers shared
   remediation: >-
     Call homelabnext.notify, homelabnext.state or homelabnext.lake instead of the private copy, or
-    record a reviewed exception with its reason in tools/shared_helpers.allow.yml; a copied helper
-    misses every fix the shared one gets.
+    record a reviewed exception with its reason in tools/shared_helpers.allow.yml; for a new clone,
+    move the copied code into one shared function (a stale baseline entry: `make dup-baseline`). A
+    copied helper misses every fix the shared one gets.
 - id: F-07
   statement: Internal TLS is verified.
   evidence: auto
@@ -883,10 +886,12 @@ criteria:
   evidence: auto
   observable: >-
     python3 -c 'import yaml' 2>/dev/null || exit 100;
-    python3 -m homelabnext.cli docs systems check examples/services.yml docs/systems
+    python3 -m homelabnext.cli docs systems check examples/services.yml docs/systems &&
+    python3 -m homelabnext.cli docs capabilities check
   expected: >-
     exit 0: every service in the inventory has its system page and the generated parts match the
-    inventory (0 drift; TODO blocks are reported, not failed)
+    inventory, and every capability page matches its contract, suite and adapters (0 drift; TODO
+    blocks are reported, not failed)
   expect_regex: 'systems pages: ok'
   remediation: >-
     Run `hnx docs systems generate examples/services.yml docs/systems` (or fix the inventory) and

@@ -156,6 +156,30 @@
     },
     {
       "exit": {
+        "0": "no clone beyond the baseline and no stale entry",
+        "1": "a new or grown clone, or a stale baseline entry",
+        "2": "usage error, a bad baseline, or an update that would raise the total"
+      },
+      "id": "dup-check",
+      "inputs": "the tracked Python files and tools/dup_check.baseline.json",
+      "invariant": [
+        "M-03"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per new clone (both copies) or stale baseline entry; the rewritten baseline with --update-baseline",
+      "owner": "maintainers",
+      "path": "tools/dup_check.py",
+      "purpose": "Fail when copy-pasted Python appears that the committed duplication baseline does not hold; the baseline only shrinks.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:dup-baseline",
+        "make:dup-check"
+      ]
+    },
+    {
+      "exit": {
         "0": "stopped cleanly"
       },
       "id": "fake-openai-server",

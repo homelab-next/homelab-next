@@ -16,7 +16,7 @@ REGISTER_FILES := $(shell git ls-files -- $(foreach k,lessons runbooks invariant
 
 help:
 	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
-	@echo "hygiene: helpers-lint tls-lint workstation-lint keyring-check keyring ids-placeholders"
+	@echo "hygiene: helpers-lint dup-check tls-lint workstation-lint keyring-check keyring ids-placeholders"
 	@echo "script catalog (M-01, M-02, M-04): scripts-check"
 	@echo "invariants register, fast criteria, never pages (not in check; CI runs it): invariants"
 	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke"
@@ -56,13 +56,15 @@ schemas:
 	$(PY) $(SCHEMA_CHECK) --strict
 
 # endpoints come from the registry; role and playbook rules come from the role interface;
-# `custom check` fails on an unowned or expired customization
+# `custom check` fails on an unowned or expired customization; the system and capability pages
+# (docs/systems/, docs/capabilities/) match the registry and the conformance code
 gates:
 	$(PY) $(ENDPOINT_GATE) .
 	$(PY) $(ROLE_LINT) $(ROLES)
 	$(PY) $(ROLE_LINT) --playbook $(PLAYBOOKS) --inventory ansible/inventory/example/hosts.yml
 	$(PY) -m homelabnext.cli custom check
 	$(PY) -m homelabnext.cli docs systems check examples/services.yml docs/systems
+	$(PY) -m homelabnext.cli docs capabilities check
 
 # every decision spec git tracks is complete, asks well-formed questions, and inline specs stay fast
 decide-lint:
@@ -201,15 +203,24 @@ changelog-check:
 	$(PY) tools/check_changelog.py
 
 # batch-3 hygiene gates, prerequisites of `check` (make merges this with the rule above):
-#   M-03 no private notify/state/lake helpers outside the shared libraries
+#   M-03 no private notify/state/lake helpers outside the shared libraries, and no copy-paste
+#        beyond tools/dup_check.baseline.json (which only shrinks)
 #   F-07 no client with TLS certificate verification off (Python and YAML/JSON; RL013 does roles)
 #   F-17 no runtime config points at the admin workstation (runs beside X-01's endpoint gate)
 #   M-12 the generated keyring has 0 drift from its sources
-.PHONY: helpers-lint tls-lint workstation-lint keyring-check keyring ids-placeholders
-check: helpers-lint tls-lint workstation-lint keyring-check
+.PHONY: helpers-lint dup-check dup-baseline tls-lint workstation-lint keyring-check keyring ids-placeholders
+check: helpers-lint dup-check tls-lint workstation-lint keyring-check
 
 helpers-lint:
 	$(PY) tools/shared_helpers_lint.py .
+
+dup-check:
+	$(PY) tools/dup_check.py .
+
+# after removing duplication (a stale entry): shrink the baseline and commit it.  Raising it needs
+# `$(PY) tools/dup_check.py --update-baseline --allow-increase "<reason>"` by hand.
+dup-baseline:
+	$(PY) tools/dup_check.py --update-baseline .
 
 tls-lint:
 	$(PY) tools/tls_verify_lint.py .

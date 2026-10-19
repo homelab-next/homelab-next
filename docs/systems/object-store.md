@@ -20,6 +20,7 @@ status: draft
 
 <!-- hnx:gen:what -->
 - Capability: `object-store`
+- Contract: [object-store capability reference](../capabilities/object-store.md) ([[capabilities/object-store|object-store capability]]): operations, data shapes, conformance checks, adapters
 - Implementation: `minio` 2024.9
 - Owner: data-team
 - Tags: data, storage
@@ -77,8 +78,8 @@ status: draft
 ## Depends on / depended on by
 
 <!-- hnx:gen:deps -->
-- Depends on: [secrets](secrets.md) ([[secrets]])
-- Depended on by: [lake-catalog](lake-catalog.md) ([[lake-catalog]]), [lake-query](lake-query.md) ([[lake-query]])
+- Depends on: [secrets](secrets.md) ([[systems/secrets|secrets]])
+- Depended on by: [lake-catalog](lake-catalog.md) ([[systems/lake-catalog|lake-catalog]]), [lake-query](lake-query.md) ([[systems/lake-query|lake-query]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->

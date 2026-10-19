@@ -159,7 +159,7 @@ Catalogued scripts, controlled agent context, one map of access.
 |---|---|---|---|
 | M-01 | Every script is catalogued | Each script has a valid header; generated catalog is current (`hnx scripts catalog --check`) | PUBLIC-NOW |
 | M-02 | The catalog matches reality | 0 scheduled-but-uncatalogued scripts, 0 uncalled active scripts, 0 duplicate ids (`hnx scripts reality`) | PUBLIC-NOW |
-| M-03 | Helpers are shared, not copied | 0 private notify/state/lake-query helpers outside the shared libraries (allowlist with reason) (`tools/shared_helpers_lint.py`) | PUBLIC-NOW |
+| M-03 | Helpers are shared, not copied | 0 private notify/state/lake-query helpers outside the shared libraries (allowlist with reason) (`tools/shared_helpers_lint.py`), and 0 copy-pasted clones beyond `tools/dup_check.baseline.json`, which only shrinks (`tools/dup_check.py`) | PUBLIC-NOW |
 | M-04 | Checks run in one place | Every check script runs through the invariants runner; no standalone check timers (`hnx scripts runner-lint`) | PUBLIC-NOW |
 | M-05 | Every agent job gets its context pack | Job log records pack hash and contents built from the charter manifest | SERVER |
 | M-06 | No agent runs blind | A job with a missing or stale pre-gate is deferred with a reason | PUBLIC-NOW |
@@ -258,7 +258,7 @@ The checks themselves.
 | L-02 | Metrics are tracked | MTTD, MTTR, false-positive rate, AI agreement trended over 90 days | SERVER |
 | L-03 | Continuous checks page once | The runner pages a newly red criterion once and never the standing set (fake sender test) | PUBLIC-NOW |
 | L-04 | Detections are validated by emulation | Purple-team run <= 90 days ago; every step maps to a firing rule or ticket | SERVER |
-| L-05 | Documentation matches reality | Docs regenerated from or checked against the live inventory; 0 drift | PUBLIC-NOW |
+| L-05 | Documentation matches reality | Docs regenerated from or checked against the live inventory; 0 drift (`hnx docs systems check`; capability reference pages generated from the conformance code, `hnx docs capabilities check`) | PUBLIC-NOW |
 | L-06 | Every lesson has a root cause, control and verification | `python3 -m homelabnext.registers build` exits 0 (fatal schema) | PUBLIC-NOW |
 | L-07 | Every runbook step has a verify | Same build exits 0 | PUBLIC-NOW |
 | L-08 | Invariant exits are unambiguous | Runner returns 0 pass, 1 fail, >= 100 could-not-measure (unit tests) | PUBLIC-NOW |

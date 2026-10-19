@@ -1,0 +1,401 @@
+{
+ "schema": 1,
+ "params": {
+  "mode": "exact",
+  "min_tokens": 50,
+  "min_lines": 5
+ },
+ "summary": {
+  "clones": 35,
+  "duplicated_lines": 441,
+  "total_lines": 49760,
+  "duplicated_percent": 0.89
+ },
+ "increases": [],
+ "clones": {
+  "090a0ca506a53791": {
+   "tokens": 79,
+   "lines": 6,
+   "count": 1,
+   "files": [
+    "tools/role_lint.py"
+   ],
+   "fingerprints": [
+    "0419f5a3b4",
+    "0510b189b9",
+    "071289f6b8",
+    "1b20018957",
+    "35ef92c2f9"
+   ]
+  },
+  "0fc8b79846c64a7c": {
+   "tokens": 55,
+   "lines": 7,
+   "count": 1,
+   "files": [
+    "homelabnext/lake/iceberg.py",
+    "homelabnext/lake/trino_rest.py"
+   ],
+   "fingerprints": [
+    "04ab1ec395"
+   ]
+  },
+  "2dea0564519e2e70": {
+   "tokens": 137,
+   "lines": 12,
+   "count": 2,
+   "files": [
+    "tools/shared_helpers_lint.py",
+    "tools/tls_verify_lint.py",
+    "tools/workstation_refs.py"
+   ],
+   "fingerprints": [
+    "01502f4e35",
+    "02a2ffbbf2",
+    "033091dc33",
+    "056e5de4fa",
+    "070c444a48",
+    "08abbb9124",
+    "0d0d25aa8c",
+    "14bbf4b4bc"
+   ]
+  },
+  "3fbfee55f7e6e4c9": {
+   "tokens": 76,
+   "lines": 5,
+   "count": 3,
+   "files": [
+    "tools/dup_check.py",
+    "tools/shared_helpers_lint.py",
+    "tools/tls_verify_lint.py",
+    "tools/workstation_refs.py"
+   ],
+   "fingerprints": [
+    "010ff94c5f",
+    "02a2ffbbf2",
+    "031c6e39d6"
+   ]
+  },
+  "47113f76453571cf": {
+   "tokens": 63,
+   "lines": 6,
+   "count": 1,
+   "files": [
+    "homelabnext/agent/schemas.py",
+    "homelabnext/workflows/pack.py"
+   ],
+   "fingerprints": [
+    "0ab26ac7d7",
+    "1524c40da6",
+    "16719c69a8"
+   ]
+  },
+  "4a758f2d038d3617": {
+   "tokens": 56,
+   "lines": 7,
+   "count": 1,
+   "files": [
+    "homelabnext/agent/cli.py",
+    "homelabnext/agent/prompts_cli.py"
+   ],
+   "fingerprints": [
+    "08b762c94e"
+   ]
+  },
+  "502e634be2b80e35": {
+   "tokens": 62,
+   "lines": 5,
+   "count": 1,
+   "files": [
+    "tools/shared_helpers_lint.py",
+    "tools/workstation_refs.py"
+   ],
+   "fingerprints": [
+    "00620e6587",
+    "13125cf328",
+    "1ac8308707"
+   ]
+  },
+  "5be3381282b794f8": {
+   "tokens": 105,
+   "lines": 9,
+   "count": 2,
+   "files": [
+    "tools/shared_helpers_lint.py",
+    "tools/tls_verify_lint.py",
+    "tools/workstation_refs.py"
+   ],
+   "fingerprints": [
+    "02b67c3cec",
+    "068393affc",
+    "11438f7ddf",
+    "136f681bdf",
+    "1eefefa2a7"
+   ]
+  },
+  "6cd4cfc1eb62d158": {
+   "tokens": 53,
+   "lines": 9,
+   "count": 1,
+   "files": [
+    "tools/no_raw_endpoints.py",
+    "tools/workstation_refs.py"
+   ],
+   "fingerprints": [
+    "0424b35911",
+    "058248b370"
+   ]
+  },
+  "7b2d1d3e3382e36f": {
+   "tokens": 85,
+   "lines": 11,
+   "count": 3,
+   "files": [
+    "conformance/fakes/ntfy_api.py",
+    "conformance/fakes/openai_server.py",
+    "conformance/fakes/openbao_api.py",
+    "homelabnext/decide/adapter.py"
+   ],
+   "fingerprints": [
+    "08a532eef8",
+    "0b15f1f3a0",
+    "0b44db0050",
+    "0f5b4e88f2"
+   ]
+  },
+  "84ae69d3ea6308ba": {
+   "tokens": 80,
+   "lines": 13,
+   "count": 1,
+   "files": [
+    "homelabnext/lake/fake.py",
+    "homelabnext/lake/trino_rest.py"
+   ],
+   "fingerprints": [
+    "0f975f9c48",
+    "11702ecdd6",
+    "13575ffdcf",
+    "159f9af6d5"
+   ]
+  },
+  "857e36c63e2fe90a": {
+   "tokens": 56,
+   "lines": 5,
+   "count": 1,
+   "files": [
+    "homelabnext/agent/digest.py",
+    "homelabnext/swap/record.py"
+   ],
+   "fingerprints": [
+    "0e3c1d554e"
+   ]
+  },
+  "8ea3fbc0510ad430": {
+   "tokens": 78,
+   "lines": 13,
+   "count": 1,
+   "files": [
+    "tools/no_raw_endpoints.py",
+    "tools/workstation_refs.py"
+   ],
+   "fingerprints": [
+    "17c27a1c8d",
+    "1f17eeff7d",
+    "1ff5a16a0d"
+   ]
+  },
+  "90787f5f48372cd1": {
+   "tokens": 51,
+   "lines": 6,
+   "count": 1,
+   "files": [
+    "tools/shared_helpers_lint.py",
+    "tools/workstation_refs.py"
+   ],
+   "fingerprints": [
+    "010ff94c5f"
+   ]
+  },
+  "999becf4c3edad93": {
+   "tokens": 72,
+   "lines": 6,
+   "count": 1,
+   "files": [
+    "tools/no_raw_endpoints.py",
+    "tools/tls_verify_lint.py"
+   ],
+   "fingerprints": [
+    "0896e949a1"
+   ]
+  },
+  "9b815faa4306a37d": {
+   "tokens": 56,
+   "lines": 6,
+   "count": 1,
+   "files": [
+    "homelabnext/events/envelope.py",
+    "homelabnext/swap/record.py"
+   ],
+   "fingerprints": [
+    "037da7bccf"
+   ]
+  },
+  "a2369042c5c75ed4": {
+   "tokens": 80,
+   "lines": 6,
+   "count": 1,
+   "files": [
+    "homelabnext/network/validate.py",
+    "homelabnext/registry/model.py"
+   ],
+   "fingerprints": [
+    "02581e8bc6",
+    "031fbc6010",
+    "152f00aef6"
+   ]
+  },
+  "b30ee47e71aac6ae": {
+   "tokens": 61,
+   "lines": 11,
+   "count": 1,
+   "files": [
+    "homelabnext/lake/fake.py",
+    "homelabnext/lake/iceberg.py"
+   ],
+   "fingerprints": [
+    "0f975f9c48",
+    "13575ffdcf",
+    "159f9af6d5"
+   ]
+  },
+  "b7f8853f4082ffbb": {
+   "tokens": 51,
+   "lines": 5,
+   "count": 2,
+   "files": [
+    "homelabnext/compute/loader.py",
+    "homelabnext/network/validate.py",
+    "homelabnext/registry/model.py"
+   ],
+   "fingerprints": [
+    "152f00aef6"
+   ]
+  },
+  "b97f303cb833ab4f": {
+   "tokens": 61,
+   "lines": 5,
+   "count": 1,
+   "files": [
+    "conformance/fakes/event_bus.py",
+    "conformance/fakes/jetstream_wire.py"
+   ],
+   "fingerprints": [
+    "012f4a93eb"
+   ]
+  },
+  "bccda83dbb55d3dd": {
+   "tokens": 62,
+   "lines": 7,
+   "count": 1,
+   "files": [
+    "conformance/fakes/ntfy_api.py",
+    "homelabnext/decide/adapter.py"
+   ],
+   "fingerprints": [
+    "0228971fba"
+   ]
+  },
+  "bfa69f8edb488814": {
+   "tokens": 93,
+   "lines": 8,
+   "count": 1,
+   "files": [
+    "homelabnext/agent/handoff.py",
+    "homelabnext/workflows/runner.py"
+   ],
+   "fingerprints": [
+    "0c482a234f",
+    "121d0b970c",
+    "140eef7a2e",
+    "2ab14c3d85",
+    "3f5b683292"
+   ]
+  },
+  "cd8256f9ec00dad2": {
+   "tokens": 72,
+   "lines": 8,
+   "count": 1,
+   "files": [
+    "conformance/fakes/ntfy_api.py",
+    "conformance/fakes/openbao_api.py"
+   ],
+   "fingerprints": [
+    "0228971fba",
+    "09b2dab352"
+   ]
+  },
+  "d13bf074a5d6950d": {
+   "tokens": 61,
+   "lines": 5,
+   "count": 1,
+   "files": [
+    "homelabnext/compute/gen/terraform_proxmox.py"
+   ],
+   "fingerprints": [
+    "00de33fd6f",
+    "0ca20fd0a6",
+    "0fff124342"
+   ]
+  },
+  "d96a187bdda54736": {
+   "tokens": 51,
+   "lines": 7,
+   "count": 1,
+   "files": [
+    "homelabnext/workflows/pack.py",
+    "tools/schema_check.py"
+   ],
+   "fingerprints": [
+    "13f29ea55d"
+   ]
+  },
+  "e436e0fb014ab108": {
+   "tokens": 52,
+   "lines": 5,
+   "count": 1,
+   "files": [
+    "homelabnext/decide/lint.py",
+    "homelabnext/workflows/validate.py"
+   ],
+   "fingerprints": [
+    "021f5b356c"
+   ]
+  },
+  "e6f0640f97b13d3e": {
+   "tokens": 78,
+   "lines": 13,
+   "count": 1,
+   "files": [
+    "tools/shared_helpers_lint.py",
+    "tools/tls_verify_lint.py"
+   ],
+   "fingerprints": [
+    "03cfb065e1",
+    "060af653af"
+   ]
+  },
+  "f419894940d85fe1": {
+   "tokens": 64,
+   "lines": 6,
+   "count": 1,
+   "files": [
+    "conformance/fakes/secret_store.py"
+   ],
+   "fingerprints": [
+    "0cde3e9b8d",
+    "0f8e3fb477",
+    "15b0620334"
+   ]
+  }
+ }
+}

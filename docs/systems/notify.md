@@ -20,6 +20,7 @@ status: draft
 
 <!-- hnx:gen:what -->
 - Capability: `notify`
+- Contract: [notify capability reference](../capabilities/notify.md) ([[capabilities/notify|notify capability]]): operations, data shapes, conformance checks, adapters
 - Implementation: `ntfy` 2.11
 - Owner: platform-team
 - Tags: notify, ops
@@ -78,7 +79,7 @@ status: draft
 
 <!-- hnx:gen:deps -->
 - Depends on: none declared
-- Depended on by: [agent-runtime](agent-runtime.md) ([[agent-runtime]]), [metrics](metrics.md) ([[metrics]])
+- Depended on by: [agent-runtime](agent-runtime.md) ([[systems/agent-runtime|agent-runtime]]), [metrics](metrics.md) ([[systems/metrics|metrics]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->

@@ -20,6 +20,7 @@ status: draft
 
 <!-- hnx:gen:what -->
 - Capability: `agent-runtime`
+- Contract: none (`agent-runtime` is not one of the conformance capabilities)
 - Implementation: `orchestrator` 0.3.0
 - Owner: ml-team
 - Tags: agents, compute
@@ -77,7 +78,7 @@ status: draft
 ## Depends on / depended on by
 
 <!-- hnx:gen:deps -->
-- Depends on: [lake-query](lake-query.md) ([[lake-query]]), [inference](inference.md) ([[inference]]), [notify](notify.md) ([[notify]]), [events](events.md) ([[events]]), [secrets](secrets.md) ([[secrets]])
+- Depends on: [lake-query](lake-query.md) ([[systems/lake-query|lake-query]]), [inference](inference.md) ([[systems/inference|inference]]), [notify](notify.md) ([[systems/notify|notify]]), [events](events.md) ([[systems/events|events]]), [secrets](secrets.md) ([[systems/secrets|secrets]])
 - Depended on by: none declared
 <!-- /hnx:gen -->
 

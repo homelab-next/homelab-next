@@ -20,6 +20,7 @@ status: draft
 
 <!-- hnx:gen:what -->
 - Capability: `dns`
+- Contract: none (`dns` is not one of the conformance capabilities)
 - Implementation: `technitium` 13.0
 - Owner: platform-team
 - Tags: core

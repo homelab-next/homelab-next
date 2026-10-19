@@ -20,6 +20,7 @@ status: draft
 
 <!-- hnx:gen:what -->
 - Capability: `secrets`
+- Contract: [secrets capability reference](../capabilities/secrets.md) ([[capabilities/secrets|secrets capability]]): operations, data shapes, conformance checks, adapters
 - Implementation: `openbao` 2.1.0
 - Owner: identity-team
 - Tags: core, secrets
@@ -78,7 +79,7 @@ status: draft
 
 <!-- hnx:gen:deps -->
 - Depends on: none declared
-- Depended on by: [agent-runtime](agent-runtime.md) ([[agent-runtime]]), [object-store](object-store.md) ([[object-store]])
+- Depended on by: [agent-runtime](agent-runtime.md) ([[systems/agent-runtime|agent-runtime]]), [object-store](object-store.md) ([[systems/object-store|object-store]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->

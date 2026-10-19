@@ -4,7 +4,10 @@
 A page has YAML front-matter and nine fixed sections.  Machine-known facts live inside
 ``<!-- hnx:gen:NAME -->`` ... ``<!-- /hnx:gen -->`` blocks, which regeneration rewrites; human
 prose lives outside them, in ``<!-- hnx:todo -->`` blocks that regeneration never touches.  Links
-between pages are relative (``other.md``) and ``[[wiki-links]]`` resolve in Obsidian by file name.
+between pages are relative (``other.md``) and path-qualified ``[[systems/other|other]]`` wiki-links
+resolve in an Obsidian vault opened at ``docs/`` (where ``docs/capabilities/`` holds pages of the
+same names, so a bare ``[[other]]`` would be ambiguous).  The ``what`` block links the service's
+capability reference page when the capability is one of the conformance capabilities.
 Credentials appear as secret-store NAMES only.
 """
 
@@ -18,6 +21,7 @@ from typing import Any
 
 import yaml
 
+from homelabnext.conform.registry import CAPABILITIES
 from homelabnext.registry.model import Registry, Service
 
 GEN_RE = re.compile(
@@ -56,7 +60,18 @@ def slug(name: str) -> str:
 
 
 def _link(name: str) -> str:
-    return f"[{name}]({slug(name)}.md) ([[{slug(name)}]])"
+    return f"[{name}]({slug(name)}.md) ([[systems/{slug(name)}|{slug(name)}]])"
+
+
+def _contract(capability: str) -> str:
+    if capability in CAPABILITIES:
+        c = slug(capability)
+        return (
+            f"[{c} capability reference](../capabilities/{c}.md)"
+            f" ([[capabilities/{c}|{c} capability]]): operations, data shapes, conformance checks,"
+            " adapters"
+        )
+    return f"none (`{capability}` is not one of the conformance capabilities)"
 
 
 def _health(s: Service) -> str:
@@ -79,7 +94,8 @@ def _gen_blocks(reg: Registry, s: Service) -> dict[str, str]:
     metrics = s.metrics or {}
     gen: dict[str, str] = {
         "what": (
-            f"- Capability: `{s.capability}`\n- Implementation: `{s.impl or 'unspecified'}`"
+            f"- Capability: `{s.capability}`\n- Contract: {_contract(s.capability)}\n"
+            f"- Implementation: `{s.impl or 'unspecified'}`"
             f" {s.version}\n- Owner: {s.owner}\n- Tags: {', '.join(s.tags) or 'none'}\n"
         ),
         "inputs": (

@@ -20,6 +20,7 @@ status: draft
 
 <!-- hnx:gen:what -->
 - Capability: `lake-catalog`
+- Contract: [lake-catalog capability reference](../capabilities/lake-catalog.md) ([[capabilities/lake-catalog|lake-catalog capability]]): operations, data shapes, conformance checks, adapters
 - Implementation: `lakekeeper` 0.5.2
 - Owner: data-team
 - Tags: catalog, data
@@ -77,8 +78,8 @@ status: draft
 ## Depends on / depended on by
 
 <!-- hnx:gen:deps -->
-- Depends on: [object-store](object-store.md) ([[object-store]]), [idp](idp.md) ([[idp]]), [records-db](records-db.md) ([[records-db]])
-- Depended on by: [lake-query](lake-query.md) ([[lake-query]])
+- Depends on: [object-store](object-store.md) ([[systems/object-store|object-store]]), [idp](idp.md) ([[systems/idp|idp]]), [records-db](records-db.md) ([[systems/records-db|records-db]])
+- Depended on by: [lake-query](lake-query.md) ([[systems/lake-query|lake-query]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->

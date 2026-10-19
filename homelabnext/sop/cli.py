@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``hnx docs systems generate|check|template REGISTRY [DIR]``.
+"""``hnx docs systems generate|check|template REGISTRY [DIR]`` and ``hnx docs capabilities``.
 
-Exit codes: 0 ok, 1 a registry row has no page, a page has no row, or a generated block is stale,
-2 usage error.
+``hnx docs capabilities generate|check [--out DIR] [--registry FILE] [--root CHECKOUT]`` renders or
+checks ``docs/capabilities/`` (see :mod:`homelabnext.sop.capabilities`).
+
+Exit codes: 0 ok, 1 a registry row has no page, a page has no row, or a generated block is stale
+(capabilities: a page is stale, missing or orphaned), 2 usage error (or no source checkout).
 """
 
 from __future__ import annotations
@@ -16,9 +19,58 @@ from homelabnext.registry.model import RegistryError, load
 from .pages import check_pages, generate_pages, render_template
 
 
+def _shown(p: Path) -> str:
+    try:
+        return p.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return str(p)
+
+
+def capabilities_main(argv: list[str]) -> int:
+    from . import capabilities as caps
+
+    ap = argparse.ArgumentParser(
+        prog="hnx docs capabilities",
+        description="generate or check the capability reference pages (docs/capabilities/)",
+    )
+    ap.add_argument("cmd", choices=["generate", "check"])
+    ap.add_argument("--root", help="source checkout holding conformance/ (default: this checkout)")
+    ap.add_argument("--out", help="pages directory (default: <root>/docs/capabilities)")
+    ap.add_argument("--registry", help="service registry (default: <root>/examples/services.yml)")
+    try:
+        args = ap.parse_args(argv)
+    except SystemExit as exc:
+        return 2 if exc.code else 0
+    try:
+        root = caps.resolve_root(args.root)
+        reg = load(args.registry or root / "examples" / "services.yml")
+    except caps.NotACheckoutError as exc:
+        print(f"hnx docs capabilities: {exc}", file=sys.stderr)
+        return 2
+    except (RegistryError, OSError) as exc:
+        print(f"hnx docs capabilities: {exc}", file=sys.stderr)
+        return 2
+    out = Path(args.out) if args.out else root / caps.PAGES_DIR
+    if args.cmd == "generate":
+        written, removed = caps.generate(out, root, reg)
+        print(
+            f"capability pages: {len(written)} written, {len(removed)} orphan(s) removed"
+            f" in {_shown(out)}"
+        )
+        return 0
+    rep = caps.check(out, root, reg)
+    for line in rep.lines():
+        print(line)
+    print(f"capability pages: {'ok' if rep.ok() else 'FAIL'} ({_shown(out)})")
+    return 0 if rep.ok() else 1
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["capabilities"]:
+        return capabilities_main(argv[1:])
     ap = argparse.ArgumentParser(prog="hnx docs", description="generate and check documentation")
-    ap.add_argument("topic", choices=["systems"])
+    ap.add_argument("topic", choices=["systems", "capabilities"])
     ap.add_argument("cmd", choices=["generate", "check", "template"])
     ap.add_argument("registry", nargs="?")
     ap.add_argument("dir", nargs="?", default="docs/systems")
