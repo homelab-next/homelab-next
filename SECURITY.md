@@ -29,6 +29,29 @@ The latest minor release receives fixes. Before `1.0`, only the most recent tagg
 Not in scope: weaknesses in third-party products that the contracts merely describe; report those to
 the product's own project.
 
+## Trusted inputs (code execution by design)
+
+Some inputs are code, or name code, and are run with the caller's privileges. Treat them like the
+source tree itself: review them, keep them in version control, and never point these options at
+files someone else can write. Running what they say is the feature, not a vulnerability:
+
+- **`--plugins-dir DIR`** (`python -m homelabnext.invariants`): every `*.py` in `DIR` is imported.
+  Entry points in the `homelabnext.invariants.checks` group are imported the same way.
+- **Invariant observables**: a register row's `check` (in `invariants.yml` or any register file
+  passed to the runner) is a command line that the runner executes, and `--notify-cmd` is run on a
+  newly red criterion.
+- **Register files** in general (`examples/registers/` and your own): they hold those commands and
+  feed the generators, so a register file is as trusted as a script.
+- **Conformance targets**: `hnx conform run --target FILE` and a binding of
+  `{"adapter": "pkg.mod:factory"}` import and run the named adapter; `--root DIR` runs the suites
+  found there.
+- **Repository tools**: `hnx schema-check`, the scaffold checks and `hnx custom lint` execute files
+  from `tools/`, and only from a verified source checkout of this project (`homelabnext.paths`).
+
+A bug that makes one of these run something *other* than what the trusted input names (for
+example a path traversal out of `--plugins-dir`, or data from an untrusted source reaching a
+command line) is in scope.
+
 ## Handling secrets and data
 
 Never include real credentials, tokens, addresses or logs in a report. If you find that the
