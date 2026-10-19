@@ -22,6 +22,9 @@ tests on a laptop with no network and no private context.
    and commit it as is; never renumber an existing entry. A maintainer allocates the numbers once,
    at merge time, on the target branch (`make ids-resolve`), so two pull requests never claim the
    same id. CI checks that no id of the base branch vanished and that no allocated id repeats.
+   An id that was wrong is retired, not deleted: move it to the register's top-level `retired:`
+   block with a `reason:` (and `replaced_by:`), a tombstone that keeps it accounted for and
+   unreusable (see `homelabnext/registers/ids.py`; `examples/registers/invariants.yml` has three).
 7. **A contract change needs an ADR** (copy `docs/adr/_template.md`; one file, five headings).
 8. Python >= 3.11, standard library first. New dependencies go in an extra in `pyproject.toml`,
    must be permissively licensed (LGPL only as an unmodified dependency), and are justified in the PR.

@@ -5,7 +5,7 @@
   hnx ids resolve PATH...        rewrite XX-NEW placeholders (exit 3 if it changed anything)
   hnx ids check-lost PATH... [--base REV]
                                  fail if a parent commit's (or REV's) id vanished (exit 1)
-  hnx ids check-dupes PATH...    fail if an allocated id occurs twice (exit 1)
+  hnx ids check-dupes PATH...    fail if an allocated id occurs twice, or is live and retired (exit 1)
 
 Contributors commit `XX-NEW`; `check-lost` and `check-dupes` run in the pre-commit hook and in CI
 against the pull request's base.  A maintainer runs `resolve` once, at merge time, on the target
@@ -23,7 +23,10 @@ EXPLAIN = """An id a parent commit HAD is missing from {path}: {lost}.
 Ids are append-only here, so this is not an edit. Likely a merge conflict resolved inside an
 entry body, producing one record with one entry's head and another's tail. Recover with
 `git show MERGE_HEAD:{path}` (or HEAD) and re-append the entry whole; never renumber to
-silence this. A deliberate consolidation: REGISTER_IDS_ALLOW_DROP={lost} git commit ...
+silence this. An id that was wrong on purpose is retired, not deleted: move it to the
+register's top-level `retired:` block with `reason:` (and `replaced_by:`), a tombstone that
+check-lost counts as present. A one-off consolidation in a local commit:
+REGISTER_IDS_ALLOW_DROP={lost} git commit ...
 """
 
 
@@ -68,12 +71,20 @@ def main(argv=None) -> int:
                 spec = ids.spec_for(rel)
                 if spec is None:
                     continue
-                dupes = ids.duplicates((root / rel).read_text(), spec)
+                text = (root / rel).read_text()
+                dupes = ids.duplicates(text, spec)
                 if dupes:
                     bad = True
                     print(
                         f"[register-ids] FATAL: {rel} repeats {', '.join(dupes)}", file=sys.stderr
                     )
+                    reused = sorted(set(dupes) & set(ids.retired_in(text, spec)))
+                    if reused:
+                        print(
+                            f"[register-ids] {', '.join(reused)} retired; a live entry may not "
+                            "reuse it unless the same change deletes its tombstone",
+                            file=sys.stderr,
+                        )
             return 1 if bad else 0
         for rel in rels:
             lost = ids.check_lost(root, rel, base=ns.base)

@@ -9,8 +9,24 @@ cannot see (an entry that silently vanished in a merge).
     resolve     rewrite ``XX-NEW`` placeholders (``LL-NEW``, ``RB-NEW`` ...) into allocated ids
     check_lost  fail if an id a parent commit had is absent from the file being committed
 
-Nothing here parses YAML: entries are split as text so comments survive byte for byte, and an
-existing id is never renumbered.
+Nothing here rewrites YAML: entries are split as text so comments survive byte for byte, and an
+existing id is never renumbered (and the module stays standard library only, for hooks).
+
+Retiring an id: an entry whose id was wrong (it collided with another register's meaning, say)
+is not deleted.  Its id moves into the register's top-level ``retired:`` mapping, a tombstone,
+written in block style (one ``ID:`` key per line, as :func:`retired_in` reads it as text)::
+
+    retired:
+      F-02:
+        replaced_by: L-07
+        reason: meant checklist L-07 (runbook verifies), not F-02 (network segments)
+
+``check_lost`` counts a tombstoned id as present, so the retirement passes CI against the pull
+request base; dropping the tombstone later is a loss like any other.  ``duplicates`` refuses an
+id that is both live and retired, and ``allocate`` never hands out a retired number, so an old
+citation can never silently start meaning something else.  Reusing a retired id on purpose
+(an invariants register adopting the checklist's real F-02, say) takes a reviewed diff that
+deletes the tombstone in the same change that adds the live entry.
 
 ``XX-NEW`` is a valid committed state.  In a project with outside contributors, ids are
 allocated once, at merge time, by a maintainer (``hnx ids resolve`` on the target branch), so
@@ -42,6 +58,7 @@ __all__ = [
     "duplicates",
     "ids_in",
     "resolve_file",
+    "retired_in",
     "spec_for",
     "split_entries",
     "state_dir",
@@ -172,6 +189,42 @@ def ids_in(text: str, spec: RegisterSpec) -> list[str]:
     return [i for i, _ in split_entries(text, spec)[1]]
 
 
+_RETIRED_HEAD = re.compile(r"^retired:[ \t]*(?:#.*)?$")
+_KEY = re.compile(r"^([ \t]+)([^\s#:][^:]*?)[ \t]*:(?:[ \t]|$)")
+
+
+def retired_in(text: str, spec: RegisterSpec) -> list[str]:
+    """Ids tombstoned under the top-level ``retired:`` block mapping (read as text).
+
+    Keys are the lines at the block's first indentation level; only keys that look like this
+    register's allocated ids count (the schema validator reports any other key).
+    """
+    lines = text.splitlines()
+    start = next((i for i, ln in enumerate(lines) if _RETIRED_HEAD.match(ln)), None)
+    if start is None:
+        return []
+    rx = re.compile(spec.id_re)
+    found, indent = [], None
+    for ln in lines[start + 1 :]:
+        if not ln.strip() or ln.lstrip().startswith("#"):
+            continue
+        if not ln[0].isspace():
+            break  # the next top-level key ends the block
+        m = _KEY.match(ln)
+        if indent is None and m:
+            indent = m.group(1)
+        if m and m.group(1) == indent:
+            key = m.group(2).strip("'\"")
+            if rx.fullmatch(key) and not key.endswith("-NEW"):
+                found.append(key)
+    return sorted(set(found))
+
+
+def _known(text: str, spec: RegisterSpec) -> set[str]:
+    """Every id the file accounts for: live entries plus tombstones."""
+    return set(ids_in(text, spec)) | set(retired_in(text, spec))
+
+
 def _num(ident: str, prefix: str):
     m = re.fullmatch(rf"{re.escape(prefix)}-(\d+)", ident)
     return int(m.group(1)) if m else None
@@ -242,7 +295,7 @@ def allocate(root, relpath: str, prefix: str, count: int = 1) -> list[str]:
                 texts.append(t)
         floor = 0
         for t in texts:
-            for ident in ids_in(t, spec):
+            for ident in _known(t, spec):  # a retired number is never handed out again
                 n = _num(ident, prefix)
                 if n is not None:
                     floor = max(floor, n)
@@ -289,7 +342,8 @@ def check_lost(
     Parents: HEAD, plus MERGE_HEAD / CHERRY_PICK_HEAD / REBASE_HEAD during conflict resolution
     (when the id that vanished came from the OTHER side). With ``base`` (CI: the pull request's
     base commit) that revision is the only parent. ``allow`` or the environment variable
-    ``REGISTER_IDS_ALLOW_DROP=ID,ID`` waives a deliberate consolidation.
+    ``REGISTER_IDS_ALLOW_DROP=ID,ID`` waives a deliberate consolidation.  An id moved into the
+    ``retired:`` mapping is still accounted for and is not lost; removing that tombstone is.
     """
     root = pathlib.Path(root)
     spec = spec_for(relpath)
@@ -298,7 +352,7 @@ def check_lost(
     path = root / relpath
     if not path.exists():
         return []
-    now = set(ids_in(path.read_text(), spec))
+    now = _known(path.read_text(), spec)
     parents: set[str] = set()
     revs = (base,) if base else ("HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REBASE_HEAD")
     if base and not _rev_exists(root, base):
@@ -307,7 +361,7 @@ def check_lost(
         if _rev_exists(root, rev):
             t = git_show(root, rev, relpath)
             if t:
-                parents |= set(ids_in(t, spec))
+                parents |= _known(t, spec)
     waived = set(allow or ()) | {
         s.strip() for s in os.environ.get("REGISTER_IDS_ALLOW_DROP", "").split(",") if s.strip()
     }
@@ -315,8 +369,9 @@ def check_lost(
 
 
 def duplicates(text: str, spec: RegisterSpec) -> list[str]:
-    """Allocated ids that occur more than once (``XX-NEW`` placeholders may repeat)."""
-    seen: set[str] = set()
+    """Allocated ids that occur more than once, counting a tombstone as an occurrence (a live
+    entry reusing a retired id is a duplicate).  ``XX-NEW`` placeholders may repeat."""
+    seen: set[str] = set(retired_in(text, spec))
     dupes: set[str] = set()
     for ident in ids_in(text, spec):
         if ident.endswith("-NEW"):
