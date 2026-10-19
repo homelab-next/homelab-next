@@ -192,3 +192,49 @@ def test_help(flag, capsys):
     with pytest.raises(SystemExit) as e:
         main([flag])
     assert e.value.code == 0
+
+
+def test_run_rejects_unknown_check_ids(capsys):
+    assert main(["run", "idp", "--check", "no-such-id"]) == 2
+    assert "no-such-id" in capsys.readouterr().err
+    assert main(["run", "all", "--check", "put-get-roundtrip"]) == 0  # secrets and object-store
+
+
+def test_run_fails_when_too_few_checks_execute(tmp_path, capsys):
+    """Skips are not passes: a target on which nearly everything skips fails `run`."""
+    mod = tmp_path / "bare_store.py"
+    mod.write_text(
+        "from conformance.fakes.object_store import FakeObjectStore\n"
+        "class Bare(FakeObjectStore):\n"
+        "    features = frozenset()\n"
+    )
+    t = tmp_path / "t.yml"
+    t.write_text("capabilities:\n  object-store: {adapter: 'bare_store:Bare'}\n")
+    sys.path.insert(0, str(tmp_path))
+    try:
+        assert main(["run", "object-store", "--target", str(t)]) == 0  # one skip of twelve
+        assert (
+            main(["run", "object-store", "--target", str(t), "--check", "user-metadata-preserved"])
+            == 1
+        )
+        assert "0 check(s) executed" in capsys.readouterr().out
+    finally:
+        sys.path.remove(str(tmp_path))
+        sys.modules.pop("bare_store", None)
+
+
+def test_runs_and_reports_record_their_provenance(tmp_path, capsys):
+    assert main(["run", "secrets", "--json"]) == 0
+    prov = json.loads(capsys.readouterr().out)["runs"][0]["provenance"]
+    assert len(prov["suite_sha256"]) == 64 and prov["adapter"] == "builtin:fake"
+    t = tmp_path / "t.yml"
+    t.write_text(
+        "capabilities:\n  secrets: {adapter: 'conformance.fakes.secret_store:FakeSecretStore'}\n"
+    )
+    assert main(["run", "secrets", "--json", "--target", str(t)]) == 0
+    prov = json.loads(capsys.readouterr().out)["runs"][0]["provenance"]
+    assert prov["adapter_file"].endswith("conformance/fakes/secret_store.py")
+    out = tmp_path / "rep.json"
+    assert main(["report", "--out", str(out), "--no-mutants"]) == 0
+    rep = json.loads(out.read_text())
+    assert "git_sha" in rep and rep["capabilities"]["idp"]["provenance"]["suite_sha256"]

@@ -15,7 +15,7 @@ import os
 from .registry import load_suite
 from .runner import run_capability
 
-__all__ = ["assert_check", "check_ids", "target_name"]
+__all__ = ["assert_check", "assert_enough_executed", "check_ids", "target_name"]
 
 
 def target_name() -> str:
@@ -38,3 +38,17 @@ def assert_check(capability: str, check_id: str) -> None:
     if not res.ok and res.severity == "should":
         pytest.xfail(f"SHOULD check failed: {res.evidence}")
     assert res.ok, f"{capability}/{res.check}: {res.evidence}"
+
+
+def assert_enough_executed(capability: str) -> None:
+    """Fail when the whole suite executed fewer than ``MIN_CHECKS`` checks against the target.
+
+    Each check alone may skip; this is what stops a target on which *everything* skips from
+    showing up as a green (all-skipped) pytest run.
+    """
+    import pytest
+
+    run = run_capability(capability, target_name())
+    if run.error:
+        pytest.fail(run.error)
+    assert run.too_few is None, f"{capability}: {run.too_few} (target {run.target})"
