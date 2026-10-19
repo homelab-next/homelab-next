@@ -2,6 +2,7 @@
 """Pass and fail fixtures for each pillar-X plugin; SERVER ones must skip with a reason."""
 
 import json
+import pathlib
 
 import pytest
 
@@ -211,8 +212,12 @@ def test_x04_skip_without_any_tree(tmp_path):
 # ---- X-06 -------------------------------------------------------------------------------------
 
 
+DET_MAP = "entries:\n  det:auth.burst: 900001\n  det:dns.nrd: 900002\nretired: []\n"
+REPO = pathlib.Path(__file__).resolve().parents[2]
+
+
 def test_x06_pass_with_logical_ids(tmp_path):
-    write(tmp_path / "det_map.yml", "detections:\n  auth.burst: 900001\n  dns.nrd: 900002\n")
+    write(tmp_path / "detections/det_map.yml", DET_MAP)
     write(
         tmp_path / "charters/reader.md",
         "Watches det:auth.burst and det:dns.nrd. See det:auth.burst.\n",
@@ -237,10 +242,29 @@ def test_x06_flags_raw_rule_numbers(tmp_path, line):
 
 
 def test_x06_flags_unknown_logical_id(tmp_path):
-    write(tmp_path / "det_map.yml", "detections:\n  auth.burst: 900001\n")
+    write(tmp_path / "detections/det_map.yml", DET_MAP)
     write(tmp_path / "schedules/s.yml", "watch: det:auth.nonexistent\n")
     r = pillar_x.x06(ctx(tmp_path))
     assert r.status == "fail" and "auth.nonexistent" in r.evidence
+    assert "detections/det_map.yml" in r.evidence
+
+
+def test_x06_resolves_against_the_repositorys_real_det_map(tmp_path):
+    # regression: the plugin once read a root det_map.yml under `detections:`, which this
+    # repository does not have, so an unknown det: id was never caught
+    write(tmp_path / "detections/det_map.yml", (REPO / "detections/det_map.yml").read_text())
+    write(tmp_path / "profiles/p/README.md", "Watches det:web-shell-write.\n")
+    assert pillar_x.x06(ctx(tmp_path)).status == "pass"
+    write(tmp_path / "profiles/p/README.md", "Watches det:no-such-detection.\n")
+    r = pillar_x.x06(ctx(tmp_path))
+    assert r.status == "fail" and "det:no-such-detection" in r.evidence
+
+
+def test_x06_falls_back_to_a_root_det_map(tmp_path):
+    write(tmp_path / "det_map.yml", DET_MAP)
+    write(tmp_path / "charters/c.md", "det:auth.burst and det:auth.gone\n")
+    r = pillar_x.x06(ctx(tmp_path))
+    assert r.status == "fail" and "auth.gone" in r.evidence and "auth.burst" not in r.evidence
 
 
 def test_x06_ignores_ordinary_numbers_and_skips_when_no_specs(tmp_path):

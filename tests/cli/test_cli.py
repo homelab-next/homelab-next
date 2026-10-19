@@ -2,6 +2,7 @@
 """hnx dispatcher: every subcommand is reachable and its --help works."""
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -40,6 +41,27 @@ def test_version(capsys):
 def test_every_subcommand_help_works(name, capsys):
     assert cli.main([name, "--help"]) == 0
     assert "usage" in capsys.readouterr().out.lower()
+
+
+@pytest.mark.parametrize("name", sorted(cli.COMMANDS))
+def test_one_line_help_names_every_subcommand(name, capsys):
+    # the help string is the only map `hnx --help` gives; a subcommand it omits is undiscoverable
+    cli.main([name, "--help"])
+    usage = capsys.readouterr().out
+    m = re.search(r"\{([a-z0-9,-]+)\}", usage)
+    subs = m.group(1).split(",") if m else []
+    missing = [
+        s
+        for s in subs
+        if not re.search(rf"(?<![\w-]){re.escape(s)}(?![\w-])", cli.COMMANDS[name][0])
+    ]
+    assert not missing, f"hnx {name}: help omits {missing}"
+
+
+def test_events_routes_to_the_events_cli(capsys):
+    assert cli.main(["events", "--help"]) == 0
+    out = capsys.readouterr().out
+    assert "usage: hnx events" in out and "deploy-changed" in out and "enrich-coverage" in out
 
 
 def test_gen_subcommand_help_and_unknown(capsys):

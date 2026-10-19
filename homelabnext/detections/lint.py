@@ -17,6 +17,9 @@ AGENT_GLOBS = (
     "**/schedules/**/*",
     "**/*charter*",
 )
+# Never agent-facing: test fixtures (some are bad on purpose), build output, virtualenvs and
+# hidden directories.  Paths are judged relative to the scanned root.
+SKIP_DIRS = frozenset({"tests", "build", "dist", "node_modules", "venv"})
 # A number is "an engine rule number" when it follows rule-ish words, or is in the det map.
 RULE_NO_CONTEXT = re.compile(
     r"(?i)\b(?:rule|sid|rule[_ -]?id|signature|detection[_ -]?id)\b[^\n\d]{0,16}(\d{4,9})\b"
@@ -77,9 +80,13 @@ def lint_no_rule_numbers(paths: list[Path], det_map: dict | None = None) -> list
 
 
 def find_agent_files(root: Path) -> list[Path]:
+    root = Path(root)
     seen: dict[Path, None] = {}
     for g in AGENT_GLOBS:
-        for p in Path(root).glob(g):
+        for p in root.glob(g):
+            parts = p.relative_to(root).parts[:-1]
+            if any(d in SKIP_DIRS or d.startswith(".") for d in parts):
+                continue
             if p.is_file():
                 seen[p] = None
     return sorted(seen)

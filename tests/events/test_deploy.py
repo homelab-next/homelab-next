@@ -175,7 +175,7 @@ def test_the_release_workflow_emits_the_event():
     wf = yaml.safe_load((REPO / ".github" / "workflows" / "release.yml").read_text())
     steps = wf["jobs"]["build"]["steps"]
     runs = [s.get("run", "") for s in steps]
-    emit = [i for i, r in enumerate(runs) if "homelabnext.events deploy-changed" in r]
+    emit = [i for i, r in enumerate(runs) if "events deploy-changed" in r]
     assert emit, "release.yml build job does not emit the deploy.changed event"
     checksums = next(i for i, s in enumerate(steps) if s.get("name") == "checksums")
     assert emit[0] < checksums  # the event is checksummed and attached with the SBOM

@@ -24,7 +24,8 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `agent/profile` | compiled profile: `parts` by logical id, `grants`, `ceiling`, `budgets`, `reads_untrusted`, `digest`, `provenance` |
 | `agent/context_manifest` | persona, skills, tools, pre-gates, memory scopes, tiered sections, character budget, must-cite sources, `screen` |
 | `agent/pregate_output` | `ok` / `degraded` / `stale` / `failed`, with per-source ages; a non-ok status needs a reason |
-| `agent/report_result` | `pack_id`, cites, unknowns, memory updates; `ok` needs at least one cite, `deferred` is how a job reports it did nothing |
+| `agent/report_result` | `pack_id`, cites, unknowns, memory updates, optional structured `output`; `ok` needs at least one cite, `deferred` is how a job reports it did nothing |
+| `agent/handoff` | reader -> actor handoff: reader, actor, `output_schema`, the actions the actor may take and how their params bind to the output (G-04) |
 | `agent/golden_task` | the existing `homelabnext.golden` suite format, described unchanged |
 | `agent/prompt_template` | trusted `system`/`instructions`, slots each declaring `trust`; untrusted slots render only fenced |
 | `agent/injection_corpus` | versioned injection cases: payload, canary or forbidden tool, fake-model markers |
@@ -35,6 +36,7 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `broker/approval` | approver identity plus `request_digest` |
 
 All are versioned 1.0 except `agent/profile` (1.1, additive: `reads_untrusted`),
+`agent/report_result` (1.1, additive: `output`),
 `agent/context_manifest` (1.1, additive: `screen`), `broker/manifest` (1.1, additive: approvers)
 and `broker/decision` (1.1 adds the approval reasons; 1.2 adds `not-request-owner` and the optional
 `operation` and `caller`), frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`
@@ -125,6 +127,36 @@ through allowlisted broker actions (G-04).
   profile in the repository (specs, compiled `agent/profile`, the lean `platform/agent_profile`)
   and to every context manifest, where it *is* derivable: a manifest with an input section feeds
   untrusted content, so its `tools` obey the same rule. The lint fails when it finds no profile.
+
+### Actors act only on validated structured input (G-04)
+
+`homelabnext.agent.handoff` is the seam between the two. A **handoff** (`schemas/agent/handoff`,
+example `schemas/agent/examples/handoff.phish-block.json`) names the reader, the actor, the JSON
+Schema the reader's `report_result.output` must satisfy, and the broker actions the actor may
+take, each with params that are literals or `$output.<path>` references (`$$` escapes a `$`).
+
+- **Structured input only.** `accept(handoff, report, pack=, pack_hash=, manifest=)` is the only
+  way to get an `Accepted` output. Raw text is refused unparsed (even text that *is* a valid
+  report); the report must pass `validate_report` against the pack it ran on, come from the
+  declared reader, not be deferred, and carry an `output` that validates against
+  `output_schema`. Anything else raises `HandoffRefused` with every reason.
+- **Free text never becomes a parameter.** The actor does not choose params: `build_request`
+  computes them from the declaration and the accepted output. A reference may name only a
+  *constrained* field (`is_constrained`: `enum`/`const`, number, boolean, a checked `format` -
+  `date`, `ipv4`, `ipv6`, `uuid` - or a closed `pattern`: anchored at both ends, no top-level `|`,
+  no `.`, negated class or `\S`/`\W`/`\D`). `summary`, `unknowns`, cites, memory updates and
+  any unconstrained string are free text; a declaration that binds one is refused. Bound strings
+  are also refused if they hold a control character (`$` matches before a final newline). This is
+  the workflows validator's `risky-params` rule, applied to every action, since everything an actor
+  gets here came from a reader of untrusted content.
+- **Actions pass the allowlist.** `act(accepted, action, broker_manifest, request_id=, now=,
+  approval=)` refuses an action the handoff does not declare, and sends a declared one through
+  `homelabnext.broker.decide`: an action the manifest does not list is `deny`/`default-deny`, a
+  risky one still needs its bound approval.
+- **Checked offline.** `declaration_problems(doc, reader_profile=, actor_profile=,
+  broker_manifest=)`: schema, closed `output_schema`, every reference constrained, the reader
+  passes the G-03 rule, the actor has `reads_untrusted: false`, every action is in the broker
+  manifest and granted to the actor at its tier. Tests: `tests/agent/test_agent_handoff.py`.
 
 ## Context-pack assembler
 

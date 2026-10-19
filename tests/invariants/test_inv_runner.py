@@ -301,3 +301,13 @@ def test_cli_invalid_register_is_exit_2(tmp_path):
     reg = tmp_path / "invariants.yml"
     reg.write_text("criteria:\n- id: F-01\n")
     assert inv_main(["run", str(reg), "--root", str(tmp_path)]) == 2
+
+
+def test_cli_skip_leaves_a_criterion_out_and_out_dir_is_created(tmp_path, capsys):
+    reg = tmp_path / "invariants.yml"
+    out = tmp_path / "build" / "inv" / "res.json"
+    reg.write_text(REGISTER.replace("{cmd}", "exit 1"))
+    argv = ["run", str(reg), "--root", str(tmp_path), "--out", str(out), "--no-notify"]
+    assert inv_main(argv) == 1
+    assert inv_main([*argv, "--skip", "F-01"]) == 0
+    assert "F-01" not in json.loads(out.read_text())["results"]

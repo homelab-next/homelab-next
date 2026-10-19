@@ -358,6 +358,25 @@ def test_find_agent_files_and_cli(tmp_path, capsys):
     )
 
 
+def test_find_agent_files_skips_test_fixtures_and_build_output(tmp_path):
+    for d in ("tests/data/charters", "build/charters", ".venv/charters", "charters"):
+        shutil.copytree(DATA / "charters", tmp_path / d)
+    files = lint.find_agent_files(tmp_path)
+    assert sorted(f.relative_to(tmp_path).as_posix() for f in files) == [
+        "charters/clean-agent-charter.md",
+        "charters/triage-agent-charter.md",
+    ]
+
+
+def test_repository_agent_files_carry_no_engine_rule_numbers():
+    # the `make detections` / CI gate: `lint-ids` with no paths scans the checkout
+    repo = DET.parent
+    files = lint.find_agent_files(repo)
+    assert files, "no agent-facing files found"
+    assert not any("tests" in f.relative_to(repo).parts for f in files)
+    assert lint.lint_no_rule_numbers(files, detmap.load(DET / "det_map.yml")) == []
+
+
 def test_det_map_itself_only_place_for_numbers():
     # the shipped example charters/rules contain no engine numbers
     files = list((DET / "sigma").rglob("*.yml"))

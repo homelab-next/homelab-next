@@ -26,6 +26,12 @@ unit is a reviewed change to this file.
 * ``homelabnext/records`` -- the approval lifecycle (inbox, decided lanes, completion)
 * ``homelabnext/decide``  -- the decision cascade
 * ``homelabnext/agent/compiler.py`` -- the agent-profile grant ceiling (privilege decisions)
+* ``homelabnext/agent/readers.py``  -- the reader/actor split (who may see untrusted text)
+* ``homelabnext/agent/handoff.py``  -- the reader->actor handoff (validated structured input)
+* ``homelabnext/agent/memory.py``   -- the agent memory write path (untrusted text at rest)
+* ``homelabnext/agent/screen.py``   -- the injection screen in front of the model
+* ``homelabnext/workflows``         -- workflow runs: the broker executor and approval binding
+* ``homelabnext/registry/limits.py`` -- the model rate/token/cost budget (throttle + alert)
 
 Usage: python tools/coverage_floor.py [--floor N] [--json FILE]
   --json FILE  evaluate an existing ``coverage json`` report instead of running the tests
@@ -53,6 +59,12 @@ UNITS: dict[str, tuple[str, ...]] = {
     "homelabnext/records": ("tests/records", "conformance/records"),
     "homelabnext/decide": ("tests/decide",),
     "homelabnext/agent/compiler.py": ("tests/agent",),
+    "homelabnext/agent/readers.py": ("tests/agent",),
+    "homelabnext/agent/handoff.py": ("tests/agent",),
+    "homelabnext/agent/memory.py": ("tests/agent",),
+    "homelabnext/agent/screen.py": ("tests/agent",),
+    "homelabnext/workflows": ("tests/workflows",),
+    "homelabnext/registry/limits.py": ("tests/models",),
 }
 
 

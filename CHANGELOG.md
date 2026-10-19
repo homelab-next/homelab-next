@@ -8,6 +8,7 @@ has no section below.
 
 ### Added
 
+- Assurance loop closed (batch 4): the example invariants register now carries 70 runnable criteria (every PUBLIC-NOW row with a gate), `make invariants` and a CI job run the fast ones on every change, and pytest-selection criteria pass only when every selected test passed. New: a reader-to-actor handoff (G-04, `homelabnext.agent.handoff`, schema `agent/handoff` 1.0, `report_result` 1.1 `output`), library clock reads must be injectable (Q-11, `tools/hermetic_lint.py`), `hnx events`, and the coverage floor now also covers workflows, readers, memory, screener, handoff and model limits. The lake checkpoint now uses `homelabnext.state` (with a reader for the old format).
 - Workflow packs as code (R-01, R-03, R-04, R-07): pack and deploy schemas (`schemas/workflows`), `hnx workflows validate|run|digest` checking references, deterministic-first ordering, grants, deploy pins and every pack's fixtures offline; risky actions run only under a broker approval bound to their payload digest. Three example packs in `workflows/`.
 - Script catalog (M-01, M-02, M-04): an `# hnx-script:` header on every script, a generated catalog (`docs/scripts/`), `hnx scripts reality` (headers match what actually runs each script) and `hnx scripts runner-lint` (every check runs through the invariants runner).
 - Decisions and models (A-04, K-08, K-13, K-14, K-15, G-10, G-11): validated model output with one retry, corroborated de-escalation (decision spec 1.3 `noise_gate`), annotate-only classification at ingest, a serving-config probe that alerts on model id or context length drift, four required safety specs (`hnx decide safety`), per-role rate/token/cost limits that throttle and alert, and pinned model versions with a golden evaluation report (`hnx golden pins`, model_roles 1.2).
@@ -18,6 +19,10 @@ has no section below.
 - Broker request isolation (P-07): requests are bound to the caller that submitted them; another caller's read or cancel is denied as `not-request-owner` and audited (broker decision schema 1.2). The broker conformance protocol gains `submit`, `status`, `run` and `cancel`, four MUST checks and two mutants.
 - `hnx decide lint` (K-02, K-03, K-04): every decision spec in git must be complete and tracked, ask single-axis questions with 2-5 labels, pair comparison questions with their mirror, and keep `callers: [inline]` specs on fast tiers within the inline latency budget (decision spec schema 1.2). Runs in `make check` and CI.
 - Invariants register: retired-id tombstones (`retired:`) honoured by `check-lost`, `check-dupes` and allocation; the example register's drifted F-01..F-03 are retired in favour of Q-09, L-07 and F-09, and the CI gates for F-05, F-18, D-02, D-07, Q-09, Q-10, M-17, L-06 and L-07 are now criteria that `hnx invariants run` executes.
+
+### Fixed
+
+- Invariant X-06 never checked `det:` ids: it read a top-level `det_map.yml` under a `detections:` key instead of `detections/det_map.yml` `entries:`. `detections lint-ids` now skips test fixtures and runs in `make detections` and CI; `hnx docs systems check` (L-05) now runs in CI.
 
 ### Security
 

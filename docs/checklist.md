@@ -57,7 +57,7 @@ Events move through one bus, in one schema, with nothing silently dropped.
 | T-01 | All events flow through the event bus | Every source appears on its subject; consumer lag < 5 min | SERVER |
 | T-02 | Events validate against the schema | Fixture events validate against the event schema in CI; >= 99.5% of live events validate, the rest reach the dead-letter queue | PUBLIC-NOW |
 | T-03 | Nothing is silently dropped | Dead-letter depth is alerted on; 0 unreviewed items older than 7 days | SERVER |
-| T-04 | Events are enriched | Enrichment fixture adds asset owner and criticality; >= 95% of live events carry them (`homelabnext/events/enrich.py`; `python -m homelabnext.events enrich-coverage` measures live coverage) | PUBLIC-NOW |
+| T-04 | Events are enriched | Enrichment fixture adds asset owner and criticality; >= 95% of live events carry them (`homelabnext/events/enrich.py`; `hnx events enrich-coverage` measures live coverage) | PUBLIC-NOW |
 | T-05 | Flows have provenance | Every flow definition is in git; provenance shows source, time, transform per record | SERVER |
 | T-06 | End-to-end latency is bounded | p95 event creation to searchable < 2 min | SERVER |
 | T-07 | Event envelopes are contract-tested | Publisher and consumer tests pass against the envelope schema for every event type (generated publisher and consumer tests per event type) | PUBLIC-NOW |
@@ -149,7 +149,7 @@ Caught before deploy.
 | Q-08 | Fixed bugs stay fixed | Every bugfix in 90 days has a regression test that fails without the fix (`tools/fix_has_test.py`; CI `--prove` runs the fix's tests on its parent) | PUBLIC-NOW |
 | Q-09 | Every source file carries an SPDX header | Grep over tracked source files finds 0 without the header | PUBLIC-NOW |
 | Q-10 | Every schema ships an example and a negative | Schema check passes (X-03 covers pinning and validity) | PUBLIC-NOW |
-| Q-11 | Tests are hermetic | No test uses the network, wall clock, or unseeded randomness (clock and sender injected); network enforced by the test guard, direct clock and randomness calls in tests by `tools/hermetic_lint.py`; library code that falls back to the real clock is not yet detected | PUBLIC-NOW |
+| Q-11 | Tests are hermetic | No test uses the network, wall clock, or unseeded randomness (clock and sender injected); network enforced by the test guard, direct clock and randomness calls in tests, and library clock reads outside an injectable default or fallback, by `tools/hermetic_lint.py` | PUBLIC-NOW |
 
 ## M - Scripts, context and access
 
@@ -198,7 +198,7 @@ Untrusted content cannot drive actions.
 | G-01 | Untrusted content is delimited | Every prompt template wraps ingested content in untrusted-data delimiters (template lint: `hnx agent prompts lint`) | PUBLIC-NOW |
 | G-02 | Prompt-injection defences are tested | Injection corpus passes with 0 instruction-follows before each model or prompt change (`hnx agent injection run`; CI against the fence-respecting fake with a golden report, `make injection-eval` against a real model) | PUBLIC-NOW |
 | G-03 | Readers cannot act | Agents that read raw content hold no shell, file-write or egress tool (profile lint and refusal test: `reads_untrusted`, `hnx agent lint`, compiler and `verify` refuse) | PUBLIC-NOW |
-| G-04 | Actors act only through allowlisted actions | Actors receive validated structured input; actions pass the allowlist | PUBLIC-NOW |
+| G-04 | Actors act only through allowlisted actions | Actors receive validated structured input; actions pass the allowlist (`homelabnext.agent.handoff`: only a validated `report_result` output is accepted, free text never becomes an action parameter, undeclared or unlisted actions are refused) | PUBLIC-NOW |
 | G-05 | Agents are never admin | No agent identity can use sudo or read admin credentials | SERVER |
 | G-06 | Agent egress is allowlisted | A connection to a non-allowlisted destination is refused | SERVER |
 | G-07 | Kernel enforcement is active | Runtime policy loaded on every AI host; a write outside allowed paths is blocked and reported | SERVER |

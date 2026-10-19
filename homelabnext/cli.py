@@ -112,22 +112,31 @@ def _gen(argv: list[str]) -> int:
 
 # name -> (one-line help, handler).  Order is the order shown in --help.
 COMMANDS: dict[str, tuple[str, Main]] = {
-    "registry": ("validate/resolve/generate/check the service registry", _registry),
-    "new": ("scaffold a role, service or other component (hnx new KIND NAME)", _new),
-    "gen": ("run generators (registry, fleet-units)", _gen),
-    "detections": ("lint, run and map detections-as-code", _detections),
+    "registry": (
+        "the service registry: validate|resolve|generate|check|list-generators",
+        _registry,
+    ),
+    "new": ("scaffold a component: hnx new role|capability|detection|schema NAME", _new),
+    "gen": ("run generators: registry|check|fleet-units|list", _gen),
+    "detections": (
+        "detections-as-code: lint|run|map|coverage|lint-ids|compile|validate-techniques",
+        _detections,
+    ),
     "registers": ("build the lessons/runbooks/invariants pages (registers build)", _registers),
     "invariants": ("run the standing invariants (invariants run)", _invariants),
-    "ids": ("allocate, resolve and loss-check register ids (alloc|resolve|check-lost)", _ids),
+    "ids": (
+        "register ids: alloc|resolve|check-lost|check-dupes|check-placeholders",
+        _ids,
+    ),
     "decide": (
-        "decision cascade: eval, scan",
+        "decision specs and cascade: eval|scan|lint|safety",
         lambda a: importlib.import_module("homelabnext.decide.cli").main(a),
     ),
     "golden": (
-        "golden tasks: run a suite against a model alias",
+        "golden tasks and model pins: run|pins check|pins report",
         lambda a: importlib.import_module("homelabnext.golden.cli").main(a),
     ),
-    "site": ("validate, plan and render the site/network model (site validate|plan|render)", _site),
+    "site": ("the site/network model: validate|plan|render|ir|adapters", _site),
     "guests": ("validate/render/plan the guest (compute) model", _guests),
     "schema-check": ("check schemas, examples, negatives and frozen baselines", _schema_check),
     "swap": (
@@ -147,7 +156,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.sop.cli").main(a),
     ),
     "agent": (
-        "agent profiles, context packs, prompt templates: compile|verify|pack|prompts|injection",
+        "agent profiles, packs, prompts: compile|verify|lint|pack|keyring|prompts|injection",
         lambda a: importlib.import_module("homelabnext.agent.cli").main(a),
     ),
     "workflows": (
@@ -157,6 +166,10 @@ COMMANDS: dict[str, tuple[str, Main]] = {
     "scripts": (
         "script catalog: catalog [--check]|reality|runner-lint|list",
         lambda a: importlib.import_module("homelabnext.scripts.cli").main(a),
+    ),
+    "events": (
+        "event seam: deploy-changed (what-changed event, F-15)|enrich-coverage (T-04)",
+        lambda a: importlib.import_module("homelabnext.events.cli").main(a),
     ),
     "custom": (
         "list|check|plan|register lab/vendor customizations",

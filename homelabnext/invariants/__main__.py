@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """python -m homelabnext.invariants run REGISTER [--root DIR] [--out FILE] [--only A-01,B-02]
-[--fast] [--plugins-dir DIR] [--state FILE --notify-cmd CMD | --no-notify] [--baseline]"""
+[--skip C-01,D-02] [--fast] [--plugins-dir DIR] [--state FILE --notify-cmd CMD | --no-notify] [--baseline]"""
 
 import argparse
 import json
@@ -23,6 +23,10 @@ def main(argv=None) -> int:
     r.add_argument("--root", default=".")
     r.add_argument("--out", help="results JSON (default: next to the register)")
     r.add_argument("--only")
+    r.add_argument(
+        "--skip",
+        help="criteria not to run this time (e.g. a main-only property on a pull request)",
+    )
     r.add_argument("--fast", action="store_true")
     r.add_argument("--plugins-dir")
     r.add_argument("--state", help="state file for state-diffed paging")
@@ -42,14 +46,16 @@ def main(argv=None) -> int:
         load_directory(registry, ns.plugins_dir)
     out = pathlib.Path(ns.out) if ns.out else reg_path.with_name("invariants.results.json")
     previous = json.loads(out.read_text()) if out.exists() else None
+    skip = set(ns.skip.split(",")) if ns.skip else set()
     doc = run_criteria(
-        reg["criteria"],
+        [c for c in reg["criteria"] if c["id"] not in skip],
         Context(ns.root),
         registry,
         only=set(ns.only.split(",")) if ns.only else None,
         fast=ns.fast,
         previous=previous,
     )
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
     for i, x in sorted(doc["results"].items()):
         print(f"{x['status']:5s} {i}  {x['evidence'][:100]!r}")

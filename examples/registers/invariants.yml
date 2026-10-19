@@ -5,12 +5,28 @@
 pillars:
 - letter: F
   title: Foundation
+- letter: T
+  title: Transport and processing
+- letter: S
+  title: Storage and query
 - letter: D
   title: Detection as code
+- letter: O
+  title: Outputs
+- letter: P
+  title: Control plane
+- letter: R
+  title: Orchestration
 - letter: Q
   title: Quality gates
 - letter: M
   title: Scripts, context and access
+- letter: A
+  title: AI layer
+- letter: G
+  title: AI safety guardrails
+- letter: K
+  title: Fast classifiers and decision specs
 - letter: L
   title: Feedback and assurance
 - letter: X
@@ -129,8 +145,9 @@ criteria:
   evidence: auto
   observable: python3 tools/hermetic_lint.py && echo no clock or randomness in tests
   expected: >-
-    exit 0 (covers direct clock and randomness calls in test code; the network half is enforced
-    while the tests run, by tests/network_guard.py)
+    exit 0 (direct clock and randomness calls in test code, and library clock reads outside an
+    injectable default or fallback; the network half is enforced while the tests run, by
+    tests/network_guard.py)
   expect_regex: no clock or randomness in tests
   remediation: >-
     Inject the clock or a seeded random.Random into the code under test instead of reading them
@@ -267,6 +284,627 @@ criteria:
   expected: exit 0
   expect_regex: steps verified
   remediation: Add the missing verify; a step that cannot be checked is a hope, not a step.
+- id: T-02
+  statement: Events validate against the schema.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/events/test_events.py -k "validates or schema or negatives or invalid or non_object"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (fixture events validate against the
+    envelope and type schemas and negatives are refused); exit 100 when a test dependency is not
+    installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the event builder or the schema the failing test names; an event that does not validate in
+    CI is one consumers will misread in production.
+- id: T-04
+  statement: Events are enriched.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/events/test_enrich.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (the enrichment fixture adds asset
+    owner and criticality; the coverage metric is right on a fake stream); exit 100 when a test
+    dependency is not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix homelabnext/events/enrich.py (or the inventory it reads) until the fixture stream carries
+    owner and criticality again; an alert with no owner or criticality is triaged blind.
+- id: T-07
+  statement: Event envelopes are contract-tested.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 tools/contract_coverage.py && echo every event type contract-tested
+  expected: >-
+    exit 0: every event type has an envelope schema plus passing publisher and consumer contract
+    tests
+  expect_regex: every event type contract-tested
+  remediation: >-
+    Add the publisher and consumer fixtures for the event type the gate names; an event type
+    without a contract test can change shape on the publisher and break every consumer silently.
+- id: S-06
+  statement: Replaying a batch creates no duplicates.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, pyiceberg, pyarrow' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/lake/test_iceberg.py -k "replay or duplicate or checkpoint or converge"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (the lake extras' Iceberg tables over
+    a SQLite catalog); exit 100 when a test dependency is not installed, which is
+    could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the lake writer's content keys or batch ledger until a replay after a crash between commit
+    and checkpoint adds no rows; a duplicate row double-counts every alert and metric built on it.
+- id: S-07
+  statement: Query results are engine-independent.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, duckdb' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/lake/test_parity.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (the fixed query set against DuckDB,
+    the fake lake and the recorded cassette); exit 100 when a test dependency is not installed,
+    which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the engine adapter or the query the parity test names, or re-record the cassette if the
+    change is intended (and review the diff); an engine-dependent answer means a lake swap
+    silently changes results.
+- id: D-04
+  statement: Coverage counts only tested rules.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml' 2>/dev/null || exit 100;
+    python3 -m homelabnext.detections coverage --check detections/attack_coverage.json
+  expected: >-
+    exit 0: the committed ATT&CK coverage report is the one the passing fixtures produce now
+  expect_regex: ATT&CK coverage report current
+  remediation: >-
+    Run `python -m homelabnext.detections coverage --out detections/attack_coverage.json` and
+    commit it, or fix the fixture that stopped passing; coverage that counts an untested rule
+    claims detection nobody has shown works.
+- id: D-06
+  statement: Evasion variants are reported.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/detections/test_detections.py -k "evasion"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (the fixture runner lists every
+    evasion fixture as caught or missed and a miss does not fail the rule); exit 100 when a test
+    dependency is not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Restore the runner's evasion report (each evasion fixture listed as caught or missed, a miss
+    never failing the rule); a hidden evasion gap is a blind spot nobody knows to close.
+- id: O-08
+  statement: Notifications are state-diffed.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/notify/test_notify.py -k "same_problem or state_change or recovery or ok_without or new_problem_after"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (the fake sender sees one send for a
+    repeated state and one for a recovery); exit 100 when a test dependency is not installed,
+    which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix homelabnext.notify's state diff so a standing state stays quiet and a recovery sends
+    exactly once; a notifier that repeats itself trains everyone to mute it.
+- id: P-02
+  statement: Default deny.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/broker/test_broker.py -k "decision_table or default_deny or only_explicit_allows"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (the broker decision table and the
+    default-deny manifest tests); exit 100 when a test dependency is not installed, which is
+    could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the broker decision or the manifest the table test names so an unlisted intent is denied;
+    anything not explicitly allowed must be refused.
+- id: P-03
+  statement: Approvals are bound and attributable.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/broker/test_broker.py -k "decision_table or digest or approv"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (the decision table's approval cases,
+    including a request altered after approval); exit 100 when a test dependency is not installed,
+    which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the approval binding the table names (approver identity, request digest, expiry, single
+    use); an approval that survives a changed request approves something nobody saw.
+- id: P-07
+  statement: Broker isolation holds.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/broker/test_broker.py -k "access"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (the `access_cases` table test); exit
+    100 when a test dependency is not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the broker's request ownership check so a foreign read or cancel is refused and audited;
+    one caller seeing another's request breaks the isolation every grant assumes.
+- id: R-01
+  statement: Workflows are code.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli workflows validate
+  expected: >-
+    exit 0: every pack in git validates offline and the deploy pins match the validated pack
+    digests
+  expect_regex: 'workflows validate: [1-9]\d* pack\(s\), 0 problem\(s\)'
+  remediation: >-
+    Fix the pack or refresh the deploy pin the validator names; a pack deployed from anything but
+    a validated commit is unreviewed automation.
+- id: R-03
+  statement: Deterministic steps come first.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli workflows validate
+  expected: >-
+    exit 0 (validator rules `deterministic-first` and `model-input`)
+  expect_regex: 'workflows validate: [1-9]\d* pack\(s\), 0 problem\(s\)'
+  remediation: >-
+    Move the deterministic enrichment before the model step the validator names; a model that sees
+    raw, unenriched input guesses what a lookup would have told it.
+- id: R-04
+  statement: Risky actions need bound approval.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli workflows validate
+  expected: >-
+    exit 0 (validator rule `approval-binding`; the BrokerExecutor table test runs in `make test`)
+  expect_regex: 'workflows validate: [1-9]\d* pack\(s\), 0 problem\(s\)'
+  remediation: >-
+    Bind the risky action to an approval of its payload digest in the pack; a risky action that
+    runs on an unbound approval runs whatever the payload became.
+- id: R-07
+  statement: Workflow fixtures round-trip.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli workflows validate
+  expected: >-
+    exit 0: every pack's fixture events produce exactly the expected action calls offline
+  expect_regex: 'workflows validate: [1-9]\d* pack\(s\), 0 problem\(s\)'
+  remediation: >-
+    Fix the pack or its fixture until the fixture events produce the expected action calls; a pack
+    whose fixtures do not round-trip does something nobody wrote down.
+- id: M-06
+  statement: No agent runs blind.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/agent/test_agent_pack.py -k "pregate or defers"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (the pack assembler's pre-gate and
+    deferral tests); exit 100 when a test dependency is not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the assembler so a missing or stale required pre-gate defers the job with its reason; an
+    agent that runs without its pre-gate works from a picture of the world nobody checked.
+- id: M-07
+  statement: Agents prove they used the pack.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/agent/test_agent_pack.py -k "report_validation or deferred_pack"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (report validation rejects a result
+    citing no must_cite source); exit 100 when a test dependency is not installed, which is
+    could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix report validation so a result that cites no must_cite pre-gate is rejected; an uncited
+    result cannot be told apart from one the agent made up.
+- id: M-08
+  statement: Packs fit and are never silently cut.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/agent/test_agent_pack.py -k "truncation or budget or dropped"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (budget cuts are recorded with their
+    tier; 0 silent truncations); exit 100 when a test dependency is not installed, which is
+    could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the assembler so every cut is reported with its tier and the stable tier is never cut; a
+    silently truncated pack drops context the agent never knows it lost.
+- id: G-04
+  statement: Actors act only through allowlisted actions.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/agent/test_agent_handoff.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (raw text and invalid reports refused,
+    free-text fields never become action parameters, undeclared or unlisted actions denied); exit
+    100 when a test dependency is not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix homelabnext/agent/handoff.py so an actor only accepts a validated report and binds action
+    parameters to constrained output fields; an actor driven by free text can be steered by
+    whatever its reader ingested.
+- id: M-09
+  statement: Agent memory is controlled.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/agent/test_agent_memory.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (validated writes only, cross-agent
+    and out-of-scope reads refused); exit 100 when a test dependency is not installed, which is
+    could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix homelabnext/agent/memory.py so every write goes through a validated update and a
+    cross-agent read is refused; uncontrolled memory is a channel one agent can use to steer
+    another.
+- id: M-12
+  statement: The keyring comes from the sources.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli agent keyring check examples/keyring/sources.yml
+  expected: >-
+    exit 0: the generated keyring has 0 drift from its registry, profile and broker sources
+  expect_regex: matches its sources
+  remediation: >-
+    Run `make keyring` and commit the result; a keyring that drifted from its sources tells agents
+    about access they no longer (or do not yet) have.
+- id: M-14
+  statement: Every agent starts knowing its access.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/agent/test_agent_access.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (session start injects the reserved
+    access block); exit 100 when a test dependency is not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix homelabnext/agent/access.py so session start injects the stable `access` section for where
+    the agent runs; an agent that does not know its access either stalls or tries what it may not
+    do.
+- id: M-16
+  statement: No placeholder ids survive a commit.
+  evidence: auto
+  observable: >-
+    IFS=$'\n'; f=$(git ls-files -- '*lessons.yml' '*runbooks.yml' '*invariants.yml' '*queue.yml')
+    || exit 100; [ -n "$f" ] || { echo no registers tracked; exit 100; };
+    python3 tools/register_ids.py check-placeholders $f && echo no placeholder ids
+  expected: >-
+    exit 0 on main: no register entry id is an `XX-NEW` placeholder (a pull request may carry
+    them, so CI skips this on pull requests; exit 100 outside a git checkout)
+  expect_regex: no placeholder ids
+  remediation: >-
+    Run `make ids-resolve` on main and commit the allocated ids; a placeholder that reaches main
+    is an id two branches can both allocate, which is how entries get fused or lost.
+- id: A-03
+  statement: The screener redacts sensitive data.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/agent/test_agent_screen.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (0 leaks and the precision floor on
+    tests/agent/fixtures/screen_eval.yml); exit 100 when a test dependency is not installed, which
+    is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the screener pattern or the evaluation case the test names, keeping the precision floor; a
+    secret or personal token in a prompt leaves the network with the request.
+- id: A-04
+  statement: The fast model returns validated output.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/decide/test_decide_validated_output.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (every reply schema-validated, an
+    invalid one retried once then escalated); exit 100 when a test dependency is not installed,
+    which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix ModelTier's validation, single retry or escalation; an unvalidated model reply is acted on
+    as if a person had checked it.
+- id: A-05
+  statement: Low confidence escalates.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/decide/test_decide_cascade.py -k "below_threshold or escalate_label or per_spec_thresholds or interim_posture or acting_tier"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (below-threshold items reach the next
+    tier or a human and none is acted on); exit 100 when a test dependency is not installed, which
+    is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the cascade so a below-threshold answer moves to the next tier or a human and is never
+    acted on; a low-confidence auto-action is a coin flip with side effects.
+- id: G-01
+  statement: Untrusted content is delimited.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli agent prompts lint
+  expected: >-
+    exit 0: every template declares a trust level per slot and untrusted slots appear only inside
+    the fences
+  expect_regex: 'prompts lint: [1-9]\d* templates, 0 problems'
+  remediation: >-
+    Declare the slot's trust level and move the untrusted slot inside the nonce-fenced delimiters;
+    ingested text outside the fence reads to the model as instructions.
+- id: G-02
+  statement: Prompt-injection defences are tested.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli agent injection run --fake fence --check homelabnext/agent/prompts/injection/report.json
+  expected: >-
+    exit 0: 0 instruction-follows and the committed report is the one for the current templates
+    and corpus
+  expect_regex: 'runs=[1-9]\d* .*follows=0 errors=0'
+  remediation: >-
+    Fix the template or the delimiting until the corpus shows 0 follows, then `make
+    injection-report` and commit it; before a real model or prompt change also run `make
+    injection-eval`.
+- id: G-03
+  statement: Readers cannot act.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli agent lint
+  expected: >-
+    exit 0: no profile or context manifest that reads untrusted content holds a shell, file-write,
+    egress or credential grant
+  expect_regex: '[1-9]\d* profile\(s\), \d+ manifest\(s\), 0 problem\(s\)'
+  remediation: >-
+    Split the agent: the reader keeps no acting grant and hands validated structured output to an
+    actor; a reader that can act turns one injected sentence into an action.
+- id: G-10
+  statement: Rate and cost limits hold.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/models/test_models_limits.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (exceeding a rate, token or cost limit
+    throttles and alerts once); exit 100 when a test dependency is not installed, which is
+    could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix homelabnext/registry/limits.py so an exceeded rate, token or cost budget throttles and
+    alerts; an unbounded model loop is a bill and an outage at once.
+- id: G-11
+  statement: Model versions are pinned.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli golden pins check --roles examples/model_roles.json --report examples/model_roles.eval.json
+  expected: >-
+    exit 0: every model binding is pinned by version and digest and the committed evaluation
+    report is for these pins
+  expect_regex: 'golden pins: [1-9]\d* role\(s\), 0 problem\(s\)'
+  remediation: >-
+    Pin the model by version and digest and run `make models-report` (plus `make models-eval`
+    against the real model), then commit both; an unpinned model changes under you without a
+    review.
+- id: K-02
+  statement: Every decision spec is complete and in git.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli decide lint
+  expected: >-
+    exit 0 over every decision spec git tracks
+  expect_regex: 'decide lint: [1-9]\d* spec\(s\), 0 problem\(s\)'
+  remediation: >-
+    Complete the spec the lint names (question set, decision table, tiers, error direction,
+    on_error, latency budget, audit sample); a spec missing one of them decides something nobody
+    specified.
+- id: K-03
+  statement: Questions are well-formed.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli decide lint
+  expected: >-
+    exit 0 (single-axis questions, pairwise questions asked both ways, at most 5 labels)
+  expect_regex: 'decide lint: [1-9]\d* spec\(s\), 0 problem\(s\)'
+  remediation: >-
+    Split the question into single-axis ones, ask a pairwise question in both orders, or cut the
+    labels to five; a malformed question gets answers that cannot be compared.
+- id: K-04
+  statement: Inline callers use only fast specs.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli decide lint
+  expected: >-
+    exit 0 (specs with `callers: [inline]` use only fast tiers within the inline latency budget)
+  expect_regex: 'decide lint: [1-9]\d* spec\(s\), 0 problem\(s\)'
+  remediation: >-
+    Drop the slow tier from the inline spec or move the caller off the inline path; a slow tier
+    inline stalls the ingest it sits on.
+- id: K-06
+  statement: Failure means escalate.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/decide/test_decide_cascade.py -k "k06"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (fault injection escalates for every
+    spec, 0 auto-closes); exit 100 when a test dependency is not installed, which is
+    could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the cascade so a down, timed-out, malformed or abstaining tier escalates; a fault that
+    auto-closes an item hides exactly the alerts an outage produces.
+- id: K-07
+  statement: Safety gates only add caution.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/decide/test_decide_cascade.py -k "k07"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (the impact-monotonicity and
+    safety-gate property tests); exit 100 when a test dependency is not installed, which is
+    could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the cascade so a safety gate can only raise caution; a safety gate that can lower a tier
+    or grant something is a bypass.
+- id: K-08
+  statement: Noise gates de-escalate only with corroboration.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/decide/test_decide_noise_gate.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (corroborated de-escalation carries
+    its reference; uncorroborated escalates); exit 100 when a test dependency is not installed,
+    which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the noise gate so every de-escalation carries a deterministic corroboration reference and
+    an uncorroborated one escalates; a model alone must never quiet an alert.
+- id: K-12
+  statement: Changes pass a replay gate.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli golden pins check --roles examples/model_roles.json --report examples/model_roles.eval.json
+  expected: >-
+    exit 0: the committed evaluation report (golden suites plus the replay gate over the decision
+    set) is the one for the current pins and thresholds
+  expect_regex: 'golden pins: [1-9]\d* role\(s\), 0 problem\(s\)'
+  remediation: >-
+    Replay the decision set with `make models-report`, review the report and commit it with the
+    model or threshold change; an unreplayed change ships an unknown shift in decisions.
+- id: K-13
+  statement: Classifiers never delete data at ingest.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/decide/test_decide_annotate.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (records in equal records out; results
+    only as annotation columns); exit 100 when a test dependency is not installed, which is
+    could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix homelabnext/decide/annotate.py so every input record comes out, with results only in
+    annotation columns; a classifier that drops records at ingest deletes evidence.
+- id: K-14
+  statement: The serving config is what we think it is.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/models/test_models_serving.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (against the fake server; alert once
+    on mismatch, once on recovery); exit 100 when a test dependency is not installed, which is
+    could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix check_serving so it reads the loaded model id and context length and alerts on a mismatch;
+    a server quietly loaded with a short context truncates every prompt.
+- id: K-15
+  statement: Required safety specs are live.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli decide safety
+  expected: >-
+    exit 0: the sensitive-content, hostile-content, purpose-consistency and disclosure-risk specs
+    exist, are safety-only and pass their cases
+  expect_regex: 'decide safety: 4 required spec\(s\), 0 failing'
+  remediation: >-
+    Restore the missing safety spec or fix the case it fails; a required safety gate that is
+    absent or failing lets the content it exists to stop straight through.
+- id: L-03
+  statement: Continuous checks page once.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/invariants/test_inv_runner.py -k "pages_once or two_new_reds or baseline or skip_does_not or failed_send or diff_state"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (the fake sender sees one page per
+    newly red criterion); exit 100 when a test dependency is not installed, which is
+    could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the runner's state diff so a newly red criterion pages once and the standing set never
+    re-pages; an alert that repeats every hour becomes wallpaper.
+- id: L-05
+  statement: Documentation matches reality.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli docs systems check examples/services.yml docs/systems
+  expected: >-
+    exit 0: every service in the inventory has its system page and the generated parts match the
+    inventory (0 drift; TODO blocks are reported, not failed)
+  expect_regex: 'systems pages: ok'
+  remediation: >-
+    Run `hnx docs systems generate examples/services.yml docs/systems` (or fix the inventory) and
+    commit the result; a page that disagrees with the inventory is believed over it.
+- id: L-08
+  statement: Invariant exits are unambiguous.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/invariants/test_inv_runner.py -k "exit_code or timeout or overall_exit or expect_regex"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (the runner's exit-code unit tests);
+    exit 100 when a test dependency is not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix homelabnext/invariants/runner.py so 0 is pass, 1..99 fail and >= 100 could-not-measure;
+    collapsing could-not-measure into pass or fail is how a control turns decorative.
 - id: X-01
   statement: No raw endpoint literals outside the registry.
   evidence: plugin

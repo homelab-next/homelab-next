@@ -42,7 +42,7 @@ def _now(args: argparse.Namespace):
         if t.tzinfo is None:
             raise SystemExit("hnx swap: --now needs a UTC offset")
         return lambda: t
-    return lambda: datetime.now(UTC)
+    return lambda: datetime.now(UTC)  # hermetic: allow CLI edge: real clock unless --now
 
 
 def _add_target(p: argparse.ArgumentParser) -> None:
