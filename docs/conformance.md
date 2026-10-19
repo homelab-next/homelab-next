@@ -138,7 +138,7 @@ The fourteen names are fixed by `docs/interfaces.md`.  Contracts that already ha
 | `cases` | `CaseStore` | dedup, promotion links, dismissal needs a reason, status machine, closed cases reject notes |
 | `events` | `EventBus` | order, ack/nack, bounded redelivery, DLQ, msg-id dedup, independent durables, at-least-once across a consumer restart, settle once |
 | `orchestration` | `Orchestrator` | idempotency key runs once, bounded retries, cancel, isolation |
-| `broker` | `Broker` | per-command allowlist, validated arguments, one audit record per call, secret arguments redacted by schema on every outcome, handler errors opaque |
+| `broker` | `Broker` | per-command allowlist, validated arguments, one audit record per call, secret arguments redacted by schema on every outcome, handler errors opaque, deferred requests bound to their caller (another caller's read, run or cancel is `Denied` with reason `not-request-owner` and audited) |
 | `secrets` | `SecretStore` | versions, leases (expiry, unknown ids, ttl > 0), **no value in any error, cause chain, traceback or repr** |
 | `idp` | `IdentityProvider` | forged (splice, alg=none, empty or tampered signature), altered, expired, revoked and garbage tokens are always `InvalidToken`, on JWTs and compact tokens alike |
 | `records` | `RecordsTarget` | validated notes, agent lane only, never overwrite, completion of approved notes only and all-or-nothing, `..` names refused on every verb |

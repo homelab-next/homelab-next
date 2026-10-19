@@ -14,6 +14,7 @@ from homelabnext.broker import (
     MemoryApprovalStore,
     check_manifest_handlers,
     decide,
+    decide_access,
     normalize_identity,
     request_digest,
 )
@@ -99,9 +100,40 @@ def test_decision_table(case):
         assert schema_errors("broker", "approval", approval) == []
 
 
+@pytest.mark.parametrize("case", TABLE["access_cases"], ids=lambda c: c["name"])
+def test_access_table(case):
+    """P-07: a request is bound to its actor; nobody else may read or cancel it."""
+    manifest = TABLE["manifests"][case["manifest"]]
+    req = _request({"action": "service.status", "actor": case["owner"]})
+    dec = decide_access(manifest, req, case["caller"], case["operation"], now=NOW)
+    assert (dec["verdict"], dec["reason"]) == (case["verdict"], case["reason"])
+    assert dec["enforced"] is case.get("enforced", True)
+    # the decision is the audit record of the attempt: who asked, to do what, to which request
+    assert (dec["caller"], dec["operation"]) == (case["caller"], case["operation"])
+    assert (dec["request_id"], dec["request_digest"]) == (req["request_id"], req["digest"])
+    assert schema_errors("broker", "decision", dec) == []
+
+
+def test_access_table_covers_both_operations_both_ways():
+    seen = {(c["operation"], c["verdict"]) for c in TABLE["access_cases"]}
+    assert seen >= {("read", "allow"), ("read", "deny"), ("cancel", "allow"), ("cancel", "deny")}
+
+
+def test_access_rejects_unknown_operations():
+    req = _request({"action": "service.status", "actor": "profile:reader"})
+    with pytest.raises(ValueError, match="operation"):
+        decide_access(TABLE["manifests"]["enforce"], req, "profile:reader", "execute", now=NOW)
+
+
+def test_access_decision_without_owner_reason_is_rejected_by_schema():
+    req = _request({"action": "service.status", "actor": "profile:reader"})
+    dec = decide_access(TABLE["manifests"]["enforce"], req, "profile:writer", "read", now=NOW)
+    assert schema_errors("broker", "decision", dict(dec, verdict="allow")) != []
+
+
 def test_only_explicit_allows_allow():
     """Property: across the whole table, every allow is one of the two allow reasons."""
-    for case in TABLE["cases"]:
+    for case in TABLE["cases"] + TABLE["access_cases"]:
         assert (case["verdict"] == "allow") == (case["reason"] in ("allowed", "approved"))
 
 
