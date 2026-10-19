@@ -36,10 +36,11 @@ repos:
         language: system
         pass_filenames: true
       - id: spdx-header
-        name: SPDX header on Python sources
+        name: SPDX header on Python, shell, YAML and TOML files
         entry: python3 tools/check_spdx.py
         language: system
-        types: [python]
+        files: '\.(py|sh|ya?ml|toml)$'
+        exclude: '(^|/)golden/'
       # Register ids: never pick one by hand.  Write XX-NEW (LL-NEW, RB-NEW, ...) and commit it as
       # is: XX-NEW is a valid committed state.  A maintainer allocates numbers once, at merge time,
       # on the target branch (`make ids-resolve`, or `pre-commit run register-ids-resolve

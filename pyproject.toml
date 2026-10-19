@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 [build-system]
 # license = "<SPDX expression>" needs setuptools 77; the upper bound keeps builds reproducible
 # until a new major has been tried (dependabot proposes the bump).
