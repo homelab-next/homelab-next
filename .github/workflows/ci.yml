@@ -35,6 +35,10 @@ jobs:
       - run: python -m ruff format --check .
       - run: python tools/check_spdx.py
       - run: python tools/check_changelog.py
+      - name: every component ships tests
+        run: python tools/component_tests.py
+      - name: test code reads no wall clock or unseeded randomness
+        run: python tools/hermetic_lint.py
 
   test:
     runs-on: ubuntu-latest
@@ -58,6 +62,22 @@ jobs:
           python-version: ${{ matrix.python-version }}
           extras: ${{ matrix.extras }}
       - run: python -m pytest -q -m "not live"
+
+  # Broker, scope guard, records lifecycle, decide cascade and the agent grant ceiling: each keeps
+  # >= 80% line coverage from its own tests (tools/coverage_floor.py; pytest-cov from the test extra).
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/python-deps
+        with:
+          python-version: "3.12"
+          extras: test
+      - name: security-critical coverage floor (80% lines per unit)
+        run: python tools/coverage_floor.py
 
   schemas:
     runs-on: ubuntu-latest

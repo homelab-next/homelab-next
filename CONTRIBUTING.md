@@ -28,7 +28,11 @@ tests on a laptop with no network and no private context.
    CI installs every package from the hash-pinned `constraints/ci.txt`; regenerate it with
    `make constraints` (needs `uv`) in the same PR.
 9. Tests do not use the network, wall-clock time or unseeded randomness. Anything needing a real
-   server is marked `@pytest.mark.live` and never runs in default CI.
+   server is marked `@pytest.mark.live` and never runs in default CI. Enforced: an unmarked test
+   that connects beyond loopback or resolves a non-local name fails (`tests/network_guard.py`), and
+   `make hermetic-lint` rejects direct clock and unseeded-random calls in test code.
+   Every component ships tests (`make component-tests`), and the broker, scope guard, records
+   lifecycle, decide cascade and agent grant ceiling keep >= 80% line coverage (`make coverage`).
 10. Every source file starts with `# SPDX-License-Identifier: Apache-2.0` (or the equivalent comment).
 
 ## Setup

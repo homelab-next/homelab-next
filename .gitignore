@@ -24,3 +24,5 @@ secrets/
 *.key
 *.egg-info/
 /homelabnext/_data/
+.coverage
+.coverage.*
