@@ -25,13 +25,14 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `agent/pregate_output` | `ok` / `degraded` / `stale` / `failed`, with per-source ages; a non-ok status needs a reason |
 | `agent/report_result` | `pack_id`, cites, unknowns, memory updates; `ok` needs at least one cite, `deferred` is how a job reports it did nothing |
 | `agent/golden_task` | the existing `homelabnext.golden` suite format, described unchanged |
-| `broker/manifest` | the allowlist; `default` is the constant `deny` |
+| `broker/manifest` | the allowlist; `default` is the constant `deny`; `approvers` lists who may approve |
 | `broker/handler` | one handler implementation; execute and privileged handlers require approval; always audited |
 | `broker/request` | one call; `digest` binds `{action, actor, target, params}` |
 | `broker/decision` | `allow` / `deny` / `needs-approval` with a closed reason vocabulary; shadow mode records but does not enforce |
 | `broker/approval` | approver identity plus `request_digest` |
 
-All are versioned 1.0, frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`
+All are versioned 1.0 except `broker/manifest` and `broker/decision` (1.1, additive: approvers and
+the new approval reasons), frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`
 (each has an example and several negatives). `agent/profile` is the compiler's output;
 `platform/agent_profile` stays as the lean runtime view.
 
@@ -95,13 +96,32 @@ manifest's `must_cite` sources are cited by an `ok` report.
 
 ## Broker contracts and reference evaluator
 
-`homelabnext.broker.decide(manifest, request, approval=None, now=...)` returns a `decision`.
-Order of checks, first failure wins: action in manifest (else `default-deny`); actor granted the
-action (`not-granted`); tier within the grant (`tier-exceeds-grant`); handler declared
+`homelabnext.broker.decide(manifest, request, approval=None, now=..., store=...)` returns a
+`decision`. Order of checks, first failure wins: action in manifest (else `default-deny`); actor
+granted the action (`not-granted`); tier within the grant (`tier-exceeds-grant`); handler declared
 (`handler-missing`); then approval for execute/privileged or flagged actions: none is
 `needs-approval`, a digest that does not match the request is `approval-digest-mismatch`, then
-`approval-denied`, `approval-self-approved`, `approval-expired`, else `approved`.
-`request_digest` covers `action`, `actor`, `target` and `params` (not ids or timestamps).
+`approval-denied`, `approval-self-approved`, `approval-approver-not-allowed`,
+`approval-agent-approver`, `approval-time-invalid`, `approval-expired`, `approval-replayed`, else
+`approved`. `request_digest` covers `action`, `actor`, `target` and `params` (not ids or
+timestamps).
+
+- **Time.** `now` defaults to the UTC clock. An approval is valid from `approved_at` (which may
+  not precede the request's `created` or follow `now`) until the earlier of its `expires_at` and
+  `approved_at + approval_ttl_s`. A manifest without `approval_ttl_s` gets 900 seconds
+  (`DEFAULT_APPROVAL_TTL_S`).
+- **Who may approve.** `manifest.approvers` lists `{issuer, subject, kind}`; an approval counts
+  only when its approver matches an entry on both issuer and subject. A manifest without
+  `approvers` accepts no approval. Identities are compared normalized (case-folded, `.`, `_` and
+  whitespace folded to `-`, see `normalize_identity`), so `ops_bot` is the actor
+  `profile:ops-bot` and is refused as a self-approval. An approver whose entry says
+  `kind: agent`, or whose subject names any profile the manifest grants actions to, is an agent
+  and is refused unless the manifest sets `allow_agent_approvers: true`.
+- **Single use.** An `approved` decision in enforce mode consumes the `approval_id` in the
+  `store` (an `ApprovalStore`: `consume(id)` must be atomic, `consumed(id)` reads). A second use
+  is `approval-replayed`. `MemoryApprovalStore` is the in-process default; a broker that runs in
+  more than one process, or restarts, needs a durable store. Shadow mode reports a replay but
+  consumes nothing.
 
 The table `tests/broker/fixtures/decision_table.yml` (manifest x tier x handler x approval ->
 decision) is the conformance input for any broker implementation: run the same rows against it.

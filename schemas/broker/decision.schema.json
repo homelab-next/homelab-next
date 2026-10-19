@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/broker/decision/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/broker/decision/1.1",
   "title": "Broker decision",
-  "description": "The broker's verdict on one request. reason is a closed vocabulary so audits can count denials by cause. In shadow mode the verdict is recorded but enforced is false; in enforce mode enforced is true.",
+  "description": "The broker's verdict on one request. reason is a closed vocabulary so audits can count denials by cause. In shadow mode the verdict is recorded but enforced is false; in enforce mode enforced is true. 1.1 adds the reasons approval-approver-not-allowed, approval-agent-approver, approval-time-invalid and approval-replayed.",
   "type": "object",
   "properties": {
     "request_id": {
@@ -30,7 +30,11 @@
         "approval-digest-mismatch",
         "approval-denied",
         "approval-self-approved",
-        "approval-expired"
+        "approval-expired",
+        "approval-approver-not-allowed",
+        "approval-agent-approver",
+        "approval-time-invalid",
+        "approval-replayed"
       ]
     },
     "mode": {

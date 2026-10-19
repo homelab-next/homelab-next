@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Reference evaluator for the broker contracts in ``schemas/broker/``.
 
-This is the decision logic the schemas imply, kept small and pure so the table-driven fixtures
+This is the decision logic the schemas imply, kept small so the table-driven fixtures
 (``tests/broker/fixtures/decision_table.yml``) have something to run against and so a real
 broker can be tested against the same table.  Default deny: every path that is not an explicit
 allow is a ``deny`` or ``needs-approval``.
@@ -13,23 +13,84 @@ Order of checks (first failure wins):
 3. the action's tier is at or below the grant tier  else ``tier-exceeds-grant``
 4. a handler is declared for the action             else ``handler-missing``
 5. approval, when required (always for execute / privileged):
-   none -> ``needs-approval``; wrong request digest -> ``approval-digest-mismatch``;
-   denied -> ``approval-denied``; approver is the actor -> ``approval-self-approved``;
-   past ``approval_ttl_s`` -> ``approval-expired``; otherwise ``approved``.
 
-In ``shadow`` mode the verdict is computed identically but ``enforced`` is false.
+   - none -> ``needs-approval``;
+   - wrong request id or digest -> ``approval-digest-mismatch``;
+   - decision is not ``approved`` -> ``approval-denied``;
+   - approver is the actor (compared normalized, see :func:`normalize_identity`)
+     -> ``approval-self-approved``;
+   - approver not in ``manifest.approvers`` (issuer and subject) -> ``approval-approver-not-allowed``;
+   - approver is an agent and ``allow_agent_approvers`` is not true -> ``approval-agent-approver``;
+   - ``approved_at`` before the request was created, or after ``now`` -> ``approval-time-invalid``;
+   - ``now`` past ``expires_at`` or past ``approved_at + approval_ttl_s`` -> ``approval-expired``;
+   - the approval id was already consumed -> ``approval-replayed``;
+   - otherwise ``approved``, and the approval id is consumed.
+
+Time: ``now`` defaults to the current UTC clock; it is never optional in effect.  A manifest
+without ``approval_ttl_s`` gets :data:`DEFAULT_APPROVAL_TTL_S` (15 minutes); the stricter of the
+TTL and the approval's own ``expires_at`` wins.
+
+Approvers: a manifest without ``approvers`` accepts no approval at all (fail closed).  An
+approver counts as an agent when its allowlist entry says ``kind: agent`` or when its normalized
+subject is the name of any profile the manifest grants actions to.
+
+Single use: an approval allows exactly one request.  :class:`ApprovalStore` is the interface a
+broker implements over durable storage; :class:`MemoryApprovalStore` is the in-process default.
+Pass one store per broker (``store=``); without one, a module-level in-memory store is used,
+which only protects a single process.
+
+In ``shadow`` mode the verdict is computed identically but ``enforced`` is false, and the
+approval is not consumed (nothing runs).
 """
 
 from __future__ import annotations
 
+import re
+import threading
 from collections.abc import Mapping
-from datetime import datetime
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, Protocol
 
 from homelabnext.agent.digest import digest_of
 
 TIER_RANK = {"read": 0, "write": 1, "execute": 2, "privileged": 3}
+DEFAULT_APPROVAL_TTL_S = 900
 _DIGEST_FIELDS = ("action", "actor", "target", "params")
+_SEP_RE = re.compile(r"[._\s]+")
+
+
+class ApprovalStore(Protocol):
+    """Records which approval ids have been used.  ``consume`` must be atomic."""
+
+    def consume(self, approval_id: str) -> bool:
+        """Mark ``approval_id`` used; True the first time, False on every later call."""
+        ...
+
+    def consumed(self, approval_id: str) -> bool:
+        """True when ``approval_id`` has already been used (read only)."""
+        ...
+
+
+class MemoryApprovalStore:
+    """Thread-safe in-memory :class:`ApprovalStore` (one process, lost on restart)."""
+
+    def __init__(self) -> None:
+        self._used: set[str] = set()
+        self._lock = threading.Lock()
+
+    def consume(self, approval_id: str) -> bool:
+        with self._lock:
+            if approval_id in self._used:
+                return False
+            self._used.add(approval_id)
+            return True
+
+    def consumed(self, approval_id: str) -> bool:
+        with self._lock:
+            return approval_id in self._used
+
+
+_DEFAULT_STORE = MemoryApprovalStore()
 
 
 def request_digest(request: Mapping[str, Any]) -> str:
@@ -37,8 +98,30 @@ def request_digest(request: Mapping[str, Any]) -> str:
     return digest_of({k: request[k] for k in _DIGEST_FIELDS if k in request})
 
 
+def normalize_identity(value: str) -> str:
+    """Case-folded, with ``.``, ``_`` and whitespace runs folded to ``-``.
+
+    ``ops_bot``, ``Ops.Bot`` and ``ops-bot`` are the same identity for every comparison the
+    broker makes, so a spelling variant cannot pass as someone else.
+    """
+    return _SEP_RE.sub("-", value.strip().casefold()).strip("-")
+
+
+def _qualified(issuer: str, subject: str) -> tuple[str, str]:
+    return normalize_identity(issuer), normalize_identity(subject)
+
+
+def _profile_name(profile_id: str) -> str:
+    return normalize_identity(profile_id.split(":", 1)[-1])
+
+
 def _ts(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+def _now_str() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def decide(
@@ -47,11 +130,21 @@ def decide(
     approval: Mapping[str, Any] | None = None,
     *,
     now: str | None = None,
+    store: ApprovalStore | None = None,
 ) -> dict[str, Any]:
-    """Decision document (``schemas/broker/decision``) for ``request`` under ``manifest``."""
+    """Decision document (``schemas/broker/decision``) for ``request`` under ``manifest``.
+
+    ``now`` defaults to the UTC clock.  ``store`` records consumed approvals (see module doc).
+    """
+    now = now or _now_str()
     actual = request_digest(request)
-    verdict, reason, approval_id = _evaluate(manifest, request, approval, actual, now)
     mode = manifest.get("mode", "enforce")
+    verdict, reason, approval_id = _evaluate(manifest, request, approval, actual, now)
+    if reason == "approved":
+        st = _DEFAULT_STORE if store is None else store
+        fresh = st.consume(approval_id) if mode == "enforce" else not st.consumed(approval_id)
+        if not fresh:
+            verdict, reason = "deny", "approval-replayed"
     out = {
         "request_id": request["request_id"],
         "request_digest": actual,
@@ -59,7 +152,7 @@ def decide(
         "reason": reason,
         "mode": mode,
         "enforced": mode == "enforce",
-        "decided_at": now or request["created"],
+        "decided_at": now,
     }
     if approval_id:
         out["approval_id"] = approval_id
@@ -96,13 +189,33 @@ def _evaluate(manifest, request, approval, actual, now):
         return "deny", "approval-digest-mismatch", aid
     if approval["decision"] != "approved":
         return "deny", "approval-denied", aid
-    if approval["approver"]["subject"] == request["actor"].split(":", 1)[1]:
+    who = approval["approver"]
+    issuer, subject = _qualified(who["issuer"], who["subject"])
+    if subject == _profile_name(request["actor"]):
         return "deny", "approval-self-approved", aid
-    ttl = manifest.get("approval_ttl_s")
-    if ttl and now:
-        age = (_ts(now) - _ts(approval["approved_at"])).total_seconds()
-        if age > ttl:
-            return "deny", "approval-expired", aid
+    allowed = next(
+        (
+            a
+            for a in manifest.get("approvers", [])
+            if _qualified(a["issuer"], a["subject"]) == (issuer, subject)
+        ),
+        None,
+    )
+    if allowed is None:
+        return "deny", "approval-approver-not-allowed", aid
+    agents = {_profile_name(g["profile"]) for g in manifest.get("grants", [])}
+    is_agent = allowed.get("kind", "human") == "agent" or subject in agents
+    if is_agent and manifest.get("allow_agent_approvers") is not True:
+        return "deny", "approval-agent-approver", aid
+    t_now, t_appr = _ts(now), _ts(approval["approved_at"])
+    if t_appr > t_now or ("created" in request and t_appr < _ts(request["created"])):
+        return "deny", "approval-time-invalid", aid
+    ttl = manifest.get("approval_ttl_s") or DEFAULT_APPROVAL_TTL_S
+    expiry = t_appr + timedelta(seconds=ttl)
+    if approval.get("expires_at"):
+        expiry = min(expiry, _ts(approval["expires_at"]))
+    if t_now > expiry:
+        return "deny", "approval-expired", aid
     return "allow", "approved", aid
 
 

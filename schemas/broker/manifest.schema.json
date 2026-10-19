@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/broker/manifest/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/broker/manifest/1.1",
   "title": "Broker manifest",
-  "description": "The allowlist. default is the constant deny: an action absent from actions, an actor absent from grants, or a tier above the grant's max_tier is refused. mode shadow records decisions without enforcing them.",
+  "description": "The allowlist. default is the constant deny: an action absent from actions, an actor absent from grants, or a tier above the grant's max_tier is refused. mode shadow records decisions without enforcing them. approvers is the allowlist of identities (issuer and subject, compared normalized) whose approvals count; without it no approval is accepted. An approver of kind agent, or one whose subject names a granted profile, counts only when allow_agent_approvers is true. approval_ttl_s defaults to 900 when absent. 1.1 adds approvers and allow_agent_approvers.",
   "type": "object",
   "properties": {
     "manifest_id": {
@@ -110,6 +110,35 @@
     "approval_ttl_s": {
       "type": "integer",
       "minimum": 1
+    },
+    "approvers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "issuer": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "subject": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9._-]{0,63}$"
+          },
+          "kind": {
+            "enum": [
+              "human",
+              "agent"
+            ]
+          }
+        },
+        "required": [
+          "issuer",
+          "subject"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "allow_agent_approvers": {
+      "type": "boolean"
     }
   },
   "required": [
