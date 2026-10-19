@@ -6,6 +6,13 @@ has no section below.
 
 ## [Unreleased]
 
+### Added
+
+- Quality gates (checklist Q-03, Q-04, Q-07, Q-11): a per-unit 80% line-coverage floor on the broker, scope guard, records, decide and agent compiler (`make coverage`, CI `coverage` job); a test-session network guard that fails any test reaching a non-loopback address unless it is marked `live`; `tools/hermetic_lint.py` for direct wall-clock and unseeded-random calls in tests; `tools/component_tests.py`, which fails a package, conformance capability, role, plugin, compose stack or tool without tests.
+- Broker request isolation (P-07): requests are bound to the caller that submitted them; another caller's read or cancel is denied as `not-request-owner` and audited (broker decision schema 1.2). The broker conformance protocol gains `submit`, `status`, `run` and `cancel`, four MUST checks and two mutants.
+- `hnx decide lint` (K-02, K-03, K-04): every decision spec in git must be complete and tracked, ask single-axis questions with 2-5 labels, pair comparison questions with their mirror, and keep `callers: [inline]` specs on fast tiers within the inline latency budget (decision spec schema 1.2). Runs in `make check` and CI.
+- Invariants register: retired-id tombstones (`retired:`) honoured by `check-lost`, `check-dupes` and allocation; the example register's drifted F-01..F-03 are retired in favour of Q-09, L-07 and F-09, and the CI gates for F-05, F-18, D-02, D-07, Q-09, Q-10, M-17, L-06 and L-07 are now criteria that `hnx invariants run` executes.
+
 ### Security
 
 - Conformance false passes closed: broker per-command allowlist, records completion only of approved notes, idp forgeries on JWT-shaped tokens (alg=none, empty or tampered signature) and expiry without clock control, lake-query injection payloads and verbatim round trip, secrets leak scan over the cause chain and traceback, events redelivery and object-store key traversal. A `Skip` counts only from the suite itself, a MUST needing an undeclared test hook is `untested` (a failure), `run` enforces `MIN_CHECKS`, unknown `--check` ids fail, one mutant per gap, and X-10 reads the report from `--out`. Suites load only from a verified checkout or an explicit `--root`.
