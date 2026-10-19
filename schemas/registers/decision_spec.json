@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/registers/decision_spec/1.1",
+  "$id": "https://schemas.example.internal/homelabnext/registers/decision_spec/1.2",
   "title": "Decision spec",
-  "description": "Declarative spec for a cascaded decision: a deterministic floor, then ordered tiers, then escalate. 1.1 adds safety, thresholds, impact and per-tier timeout and acts (additive).",
+  "description": "Declarative spec for a cascaded decision: a deterministic floor, then ordered tiers, then escalate. 1.1 adds safety, thresholds, impact and per-tier timeout and acts (additive). 1.2 adds question objects (text, labels, compare) beside plain strings, and callers (additive). Rules JSON Schema cannot express (single-axis questions, pairwise questions in both orders, at most 5 labels, inline callers end at the fast tier) are `hnx decide lint`.",
   "type": "object",
   "properties": {
     "id": {
@@ -15,8 +15,38 @@
     "question_set": {
       "type": "array",
       "items": {
-        "type": "string",
-        "minLength": 3
+        "type": [
+          "string",
+          "object"
+        ],
+        "minLength": 3,
+        "description": "A plain question, or an object with its own label set. hnx decide lint requires text, at most 5 labels, and every pairwise question (compare) asked in both orders.",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 3,
+            "description": "The question. One axis: one question mark, no 'and'/'or' joining two questions."
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 2,
+            "description": "The answers this question may take (at most 5, enforced by hnx decide lint)."
+          },
+          "compare": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*$"
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "A pairwise question over the two named slots, written {slot} in text. Its mirror (the slots swapped) must also be in the set: asking both orders cancels position bias."
+          }
+        }
       },
       "minItems": 1
     },
@@ -126,6 +156,18 @@
         }
       },
       "description": "Deterministic impact-scan tier configuration."
+    },
+    "callers": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "inline",
+          "batch"
+        ]
+      },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Who waits on this spec. inline: a caller blocks on the answer, so hnx decide lint requires the spec to end at the fast tier (floor, small) and then escalate, within a 1 s budget. Absent means batch only."
     }
   },
   "required": [

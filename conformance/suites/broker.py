@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``broker``: allowlisted commands, validated arguments, one audit record per call."""
+"""``broker``: allowlisted commands, validated arguments, one audit record per call, and deferred
+requests bound to the caller that submitted them."""
 
 from __future__ import annotations
 
@@ -12,6 +13,8 @@ from conformance.fakes.command_broker import (
     KeyNameRedactingBroker,
     LoggingBroker,
     OkOnlyRedactingBroker,
+    SharedRequestsBroker,
+    SilentForeignAccessBroker,
 )
 from conformance.protocols.broker import ArgSpec, BrokerError, Denied, InvalidArguments
 from homelabnext.conform.core import Mutant, Suite
@@ -20,7 +23,7 @@ from ._util import exc_text, raises, uniq
 
 SUITE = Suite(
     "broker",
-    "allowlisted command execution with argument validation and a redacted audit trail",
+    "allowlisted command execution with argument validation, a redacted audit trail and caller-bound requests",
     "conformance.protocols.broker:Broker",
 )
 
@@ -205,6 +208,112 @@ def _(b):
     assert b.call(caller, cmd, {"name": "x"}) == {"items": [1, 2]}
 
 
+# ---- deferred requests (P-07: one caller cannot read, run or cancel another's request)
+NOT_OWNER = "not-request-owner"
+OWNED = {"name": ArgSpec("str"), "label": ArgSpec("str", secret=True)}
+
+
+def _owned_request(b):
+    """A pending request of ``owner``; ``intruder`` is allowed the very same command."""
+    calls = []
+    cmd, owner, intruder = uniq("cmd"), uniq("owner"), uniq("intruder")
+    b.register(cmd, lambda **kw: calls.append(kw) or {"ran": kw["name"]}, OWNED)
+    b.allow(owner, [cmd])
+    b.allow(intruder, [cmd])
+    rid = b.submit(owner, cmd, {"name": "mine", "label": SECRET})
+    return cmd, owner, intruder, rid, calls
+
+
+def _foreign_attempts(b, intruder, rid):
+    return {
+        "status": lambda: b.status(intruder, rid),
+        "run": lambda: b.run(intruder, rid),
+        "cancel": lambda: b.cancel(intruder, rid),
+    }
+
+
+@SUITE.check(
+    "submitted-request-runs-for-its-owner",
+    "submit defers; the owner reads it pending, runs it once, and reads it done",
+)
+def _(b):
+    cmd, owner, _, rid, calls = _owned_request(b)
+    assert calls == [], "submit ran the handler"
+    st = b.status(owner, rid)
+    assert (st.request_id, st.caller, st.command, st.state) == (rid, owner, cmd, "pending"), st
+    assert b.run(owner, rid) == {"ran": "mine"}
+    assert len(calls) == 1 and b.status(owner, rid).state == "done"
+    raises(lambda: b.run(owner, rid), "running a finished request again", BrokerError)
+    assert len(calls) == 1, "a finished request ran twice"
+
+
+@SUITE.check(
+    "requests-bound-to-caller",
+    "another caller - even one allowed the same command - cannot read, run or cancel a request",
+)
+def _(b):
+    _, owner, intruder, rid, calls = _owned_request(b)
+    for who in (intruder, uniq("stranger")):
+        for op, fn in _foreign_attempts(b, who, rid).items():
+            exc = raises(fn, f"{op} of another caller's request", Denied)
+            assert getattr(exc, "reason", None) == NOT_OWNER, (
+                f"{op}: expected reason {NOT_OWNER!r}, got {getattr(exc, 'reason', None)!r}"
+            )
+            text = exc_text(exc)
+            assert SECRET not in text and "mine" not in text, (
+                f"{op}: the refusal disclosed the owner's request arguments"
+            )
+    assert calls == [], "another caller ran the owner's request"
+    assert b.status(owner, rid).state == "pending", "another caller changed the owner's request"
+    assert b.run(owner, rid) == {"ran": "mine"}, "the owner lost its own request"
+
+
+@SUITE.check(
+    "foreign-request-access-audited",
+    "each refused read, run or cancel of another's request leaves one denied record with a reason",
+)
+def _(b):
+    _, _, intruder, rid, _ = _owned_request(b)
+    for op, fn in _foreign_attempts(b, intruder, rid).items():
+        before = len(b.audit())
+        with contextlib.suppress(BrokerError):
+            fn()
+        new = list(b.audit())[before:]
+        assert len(new) == 1, f"{op}: expected one audit record for the refusal, got {len(new)}"
+        rec = new[0]
+        got = (rec.caller, rec.outcome, rec.reason, rec.operation, rec.request_id)
+        assert got == (intruder, "denied", NOT_OWNER, op, rid), f"{op}: audit record {got}"
+        assert SECRET not in repr(rec), f"{op}: the owner's secret argument reached the audit trail"
+
+
+@SUITE.check(
+    "cancelled-request-never-runs",
+    "the owner's cancel stops a pending request for good",
+)
+def _(b):
+    _, owner, _, rid, calls = _owned_request(b)
+    b.cancel(owner, rid)
+    assert b.status(owner, rid).state == "cancelled"
+    raises(lambda: b.run(owner, rid), "running a cancelled request", BrokerError)
+    assert calls == [], "a cancelled request ran"
+
+
+@SUITE.check(
+    "foreign-request-looks-unknown",
+    "refusing another caller's request answers exactly as for an id that does not exist",
+    severity="should",
+)
+def _(b):
+    _, _, intruder, rid, _ = _owned_request(b)
+    for op in ("status", "run", "cancel"):
+        foreign = raises(_foreign_attempts(b, intruder, rid)[op], op, BrokerError)
+        unknown = raises(_foreign_attempts(b, intruder, uniq("req"))[op], op, BrokerError)
+        assert type(foreign) is type(unknown), f"{op}: {type(foreign)} vs {type(unknown)}"
+        assert getattr(foreign, "reason", None) == getattr(unknown, "reason", None), (
+            f"{op}: the reason tells a foreign request from a missing one"
+        )
+
+
 def make_fake():
     return FakeBroker()
 
@@ -232,5 +341,15 @@ MUTANTS = {
         ChattyErrorBroker,
         "handler-error-contained",
         "the handler's exception message and cause reach the caller",
+    ),
+    "requests-shared-between-callers": Mutant(
+        SharedRequestsBroker,
+        "requests-bound-to-caller",
+        "any caller may read, run or cancel a request another caller submitted",
+    ),
+    "foreign-access-not-audited": Mutant(
+        SilentForeignAccessBroker,
+        "foreign-request-access-audited",
+        "a refused access to another caller's request leaves no audit record",
     ),
 }

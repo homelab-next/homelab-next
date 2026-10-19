@@ -41,6 +41,11 @@ which only protects a single process.
 
 In ``shadow`` mode the verdict is computed identically but ``enforced`` is false, and the
 approval is not consumed (nothing runs).
+
+Ownership: a request belongs to its ``actor``.  :func:`decide_access` is the verdict on a caller
+reading or cancelling an existing request: only the owner (compared normalized) is allowed;
+anyone else is ``deny`` / ``not-request-owner``.  The decision names the ``operation`` and the
+``caller``, so the document itself is the audit record of the attempt.
 """
 
 from __future__ import annotations
@@ -54,6 +59,8 @@ from typing import Any, Protocol
 from homelabnext.agent.digest import digest_of
 
 TIER_RANK = {"read": 0, "write": 1, "execute": 2, "privileged": 3}
+#: what a caller may do to a request that already exists (``execute`` is :func:`decide`)
+ACCESS_OPERATIONS = ("read", "cancel")
 DEFAULT_APPROVAL_TTL_S = 900
 _DIGEST_FIELDS = ("action", "actor", "target", "params")
 _SEP_RE = re.compile(r"[._\s]+")
@@ -157,6 +164,42 @@ def decide(
     if approval_id:
         out["approval_id"] = approval_id
     return out
+
+
+def decide_access(
+    manifest: Mapping[str, Any],
+    request: Mapping[str, Any],
+    caller: str,
+    operation: str,
+    *,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """Decision document for ``caller`` performing ``operation`` (read / cancel) on ``request``.
+
+    A request is bound to its ``actor``: only that identity, compared with
+    :func:`normalize_identity`, may read or cancel it.  Every other caller - another profile, an
+    empty or non-string caller - is ``deny`` / ``not-request-owner``.  Being granted the same
+    action, or being an approver, does not make a caller the owner.  The verdict follows the
+    manifest's ``mode`` like :func:`decide`; it never consumes anything.
+    """
+    if operation not in ACCESS_OPERATIONS:
+        raise ValueError(f"operation must be one of {ACCESS_OPERATIONS}, got {operation!r}")
+    now = now or _now_str()
+    mode = manifest.get("mode", "enforce")
+    owner = normalize_identity(str(request["actor"]))
+    is_owner = isinstance(caller, str) and bool(owner) and normalize_identity(caller) == owner
+    verdict, reason = ("allow", "allowed") if is_owner else ("deny", "not-request-owner")
+    return {
+        "request_id": request["request_id"],
+        "request_digest": request_digest(request),
+        "verdict": verdict,
+        "reason": reason,
+        "mode": mode,
+        "enforced": mode == "enforce",
+        "decided_at": now,
+        "operation": operation,
+        "caller": caller if isinstance(caller, str) else repr(caller),
+    }
 
 
 def _evaluate(manifest, request, approval, actual, now):

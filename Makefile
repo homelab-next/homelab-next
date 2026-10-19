@@ -12,14 +12,14 @@ PLAYBOOKS := $(wildcard ansible/playbooks/*.yml)
 REGISTERS_OUT := build/registers
 REGISTER_FILES := $(shell git ls-files -- $(foreach k,lessons runbooks invariants queue,'*$(k).yml' '*$(k).yaml') 2>/dev/null)
 
-.PHONY: help check lint fmt test schemas gates detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke
+.PHONY: help check lint fmt test schemas gates decide-lint detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke
 
 help:
-	@echo "targets: check lint fmt test schemas gates detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
+	@echo "targets: check lint fmt test schemas gates decide-lint detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
 	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke"
 	@echo "override RUFF=/path/to/ruff if ruff is not importable as a module"
 
-check: lint test schemas gates detections registers ids-check conform-check spdx leak-scan changelog-check
+check: lint test schemas gates decide-lint detections registers ids-check conform-check spdx leak-scan changelog-check
 	@echo "make check: OK"
 
 lint:
@@ -44,6 +44,10 @@ gates:
 	$(PY) $(ROLE_LINT) --playbook $(PLAYBOOKS) --inventory ansible/inventory/example/hosts.yml
 	$(PY) -m homelabnext.cli custom check
 	$(PY) -m homelabnext.cli docs systems check examples/services.yml docs/systems
+
+# every decision spec git tracks is complete, asks well-formed questions, and inline specs stay fast
+decide-lint:
+	$(PY) -m homelabnext.cli decide lint
 
 detections:
 	$(PY) -m homelabnext.detections lint

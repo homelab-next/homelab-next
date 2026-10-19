@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fails rule: complete (no latency budget, no on_error)
+id: lint-bad-incomplete
+version: 1
+question_set:
+  - Does the alert name a known host?
+decision_table:
+  - {when: known host, then: accept}
+tiers:
+  - {name: floor}
+error_direction: fail-closed
+sample_audit_pct: 5
