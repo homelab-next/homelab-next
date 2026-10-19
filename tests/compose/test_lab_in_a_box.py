@@ -336,4 +336,8 @@ def test_nightly_pins_every_action_by_full_sha():
     uses = re.findall(r"uses:\s*(\S+)", WORKFLOW.read_text())
     assert uses
     for ref in uses:
+        if ref.startswith("./.github/actions/"):  # a local action is pinned by this commit
+            action = ROOT / ref / "action.yml"
+            uses += re.findall(r"uses:\s*(\S+)", action.read_text())
+            continue
         assert re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", ref), ref
