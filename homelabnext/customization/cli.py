@@ -47,7 +47,8 @@ def _setup(ns: argparse.Namespace):
         Path(ns.registry) if ns.registry else None,
         Path(ns.roles) if ns.roles else None,
     )
-    today = date.fromisoformat(ns.today) if ns.today else date.today()  # hermetic: allow CLI edge, --today
+    real = date.today()  # hermetic: allow CLI edge: the real date unless --today
+    today = date.fromisoformat(ns.today) if ns.today else real
     return settings, items, load_problems, uni, today
 
 
