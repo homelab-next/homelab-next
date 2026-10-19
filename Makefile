@@ -18,6 +18,7 @@ help:
 	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
 	@echo "hygiene: helpers-lint tls-lint workstation-lint keyring-check keyring ids-placeholders"
 	@echo "script catalog (M-01, M-02, M-04): scripts-check"
+	@echo "invariants register, fast criteria, never pages (not in check; CI runs it): invariants"
 	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke"
 	@echo "live (needs a real model endpoint): injection-eval MODEL=<role> REGISTRY=<file> ROLES=<file>; models-eval REGISTRY=<file>"
 	@echo "override RUFF=/path/to/ruff if ruff is not importable as a module"
@@ -150,6 +151,17 @@ contracts:
 
 registers:
 	$(PY) -m homelabnext.registers build examples/registers $(REGISTERS_OUT)
+
+# Every fast criterion of the example register through the invariants runner, never paging; the
+# plugin-only rows (X-04, X-06, X-09, X-10) run nowhere else.  Slow criteria (leak scans, schema
+# check, coverage floor, pytest selections) are gates of their own.  Not a prerequisite of `check`:
+# `test` already runs the fast CLI gates through the register and the rest would repeat ~30 s of
+# gates `check` has just run; CI runs it as its own job (INVARIANTS_ARGS="--skip M-16" on a pull
+# request, which may carry XX-NEW placeholders until merge).
+INVARIANTS_OUT := build/invariants/results.json
+.PHONY: invariants
+invariants:
+	$(PY) -m homelabnext.invariants run examples/registers/invariants.yml --fast --no-notify --out $(INVARIANTS_OUT) $(INVARIANTS_ARGS)
 
 # no allocated register id twice; with BASE=<rev> also no id that BASE had may vanish (CI: PR base)
 ids-check:

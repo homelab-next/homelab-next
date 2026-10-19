@@ -146,6 +146,31 @@ jobs:
           hnx registry validate examples/services.yml
           hnx custom check
 
+  # The example invariants register's fast criteria through the runner (the plugin-only rows X-04,
+  # X-06, X-09 and X-10 run nowhere else); slow criteria are the gates of the other jobs.  No state
+  # file and --no-notify: CI never pages.  Could-not-measure (exit 100) fails the job here, where
+  # every dependency is installed.
+  invariants:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/python-deps
+        with:
+          python-version: "3.12"
+          extras: test
+      - name: invariants register, fast criteria
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          # M-16 holds on main only: a pull request may carry XX-NEW placeholders until merge
+          args=""
+          if [ "$EVENT" = pull_request ]; then args="--skip M-16"; fi
+          make invariants PY=python INVARIANTS_ARGS="$args"
+
   # Build the sdist and wheel exactly as a release would and leak-scan what they contain (the
   # path allowlist for both artefacts is tests/packaging/test_artifacts.py, run by `test`).
   packaging:

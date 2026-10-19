@@ -97,7 +97,8 @@
       "id": "contract-coverage",
       "inputs": "schemas/events, schemas/ocsf and the contract-test fixtures",
       "invariant": [
-        "Q-05"
+        "Q-05",
+        "T-07"
       ],
       "kind": "check",
       "language": "python",
@@ -373,6 +374,7 @@
       "id": "register-ids",
       "inputs": "register files (lessons, runbooks, invariants, queue) and git history",
       "invariant": [
+        "M-16",
         "M-17"
       ],
       "kind": "check",
