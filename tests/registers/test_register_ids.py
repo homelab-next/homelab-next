@@ -293,3 +293,81 @@ def test_check_lost_against_a_pr_base(repo):
     r = run_tool(repo, "check-lost", "--base", base, "lessons.yml")
     assert r.returncode == 1 and "LL-001" in r.stderr
     assert run_tool(repo, "check-lost", "--base", "nope", "lessons.yml").returncode == 1
+
+
+# --- retiring an id: a tombstone keeps it accounted for, and keeps it from being reused ----------
+
+TOMB = """\
+retired:
+  # a comment inside the block
+  {id}:
+    replaced_by: X-02
+    reason: "collided with another register's meaning"
+"""
+
+
+def _inv_repo(tmp_path):
+    r = tmp_path / "inv"
+    r.mkdir()
+    git(r, "init")
+    (r / "invariants.yml").write_text(
+        "criteria:\n" + ENTRY.format(id="F-01") + ENTRY.format(id="X-02")
+    )
+    git(r, "add", "-A")
+    git(r, "commit", "-m", "base")
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=r, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    return r, base
+
+
+def test_retired_in_reads_only_the_top_level_block():
+    spec = ids.SPECS["invariants"]
+    text = (
+        "pillars:\n- letter: F\n"
+        + TOMB.format(id="F-01")
+        + "  F-NEW:\n    reason: placeholders are never tombstones\n"
+        + "  not-an-id:\n    reason: ignored here, reported by the schema\n"
+        + "criteria:\n"
+        + ENTRY.format(id="X-02")
+        + "  F-09: nested, not a tombstone\n"
+    )
+    assert ids.retired_in(text, spec) == ["F-01"]
+    assert ids.retired_in("criteria:\n" + ENTRY.format(id="X-02"), spec) == []
+
+
+def test_retiring_an_id_passes_check_lost_and_deleting_the_tombstone_fails(tmp_path):
+    r, base = _inv_repo(tmp_path)
+    path = r / "invariants.yml"
+    # deleting F-01 outright is a loss, against HEAD and against the PR base
+    path.write_text("criteria:\n" + ENTRY.format(id="X-02"))
+    assert run_tool(r, "check-lost", "invariants.yml").returncode == 1
+    # retiring it is not
+    path.write_text(TOMB.format(id="F-01") + "criteria:\n" + ENTRY.format(id="X-02"))
+    assert run_tool(r, "check-lost", "invariants.yml").returncode == 0
+    git(r, "commit", "-qam", "retire F-01")
+    assert run_tool(r, "check-lost", "--base", base, "invariants.yml").returncode == 0
+    # the tombstone is append-only too: dropping it later loses F-01 again
+    path.write_text("criteria:\n" + ENTRY.format(id="X-02"))
+    out = run_tool(r, "check-lost", "invariants.yml")
+    assert out.returncode == 1 and "F-01" in out.stderr and "retired:" in out.stderr
+
+
+def test_a_live_entry_may_not_reuse_a_retired_id(tmp_path):
+    r, _ = _inv_repo(tmp_path)
+    live = ENTRY.format(id="F-01") + ENTRY.format(id="X-02")
+    (r / "invariants.yml").write_text(TOMB.format(id="F-01") + "criteria:\n" + live)
+    out = run_tool(r, "check-dupes", "invariants.yml")
+    assert out.returncode == 1 and "F-01 retired" in out.stderr
+    # reuse on purpose = delete the tombstone in the same change; nothing is lost then
+    (r / "invariants.yml").write_text("criteria:\n" + live)
+    assert run_tool(r, "check-dupes", "invariants.yml").returncode == 0
+    assert run_tool(r, "check-lost", "invariants.yml").returncode == 0
+
+
+def test_allocation_never_hands_out_a_retired_number(tmp_path):
+    r, _ = _inv_repo(tmp_path)
+    (r / "invariants.yml").write_text(
+        TOMB.format(id="F-07") + "criteria:\n" + ENTRY.format(id="F-01")
+    )
+    assert ids.allocate(r, "invariants.yml", "F") == ["F-08"]

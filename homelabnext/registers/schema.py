@@ -93,6 +93,38 @@ def _dupes(ids, problems):
         seen.add(i)
 
 
+def _retired(data, live, id_rx: re.Pattern, problems: list[str]) -> dict:
+    """The optional top-level ``retired:`` mapping of tombstoned ids (see registers.ids).
+
+    {ID: {reason: why it was retired, replaced_by: live ID or omitted}}.  A tombstone may not
+    name a live id (that is reuse) and may only point at an id that is live.
+    """
+    ret = data.get("retired") if isinstance(data, dict) else None
+    if ret is None:
+        return {}
+    if not isinstance(ret, dict):
+        problems.append("`retired` must be a mapping of id -> {reason, replaced_by}")
+        return {}
+    live = {i for i in live if not i.endswith("-NEW")}
+    for k, v in ret.items():
+        who = f"retired {k}"
+        if not id_rx.match(str(k)) or str(k).endswith("-NEW"):
+            problems.append(f"{who}: only an allocated id can be retired")
+        if str(k) in live:
+            problems.append(f"{who}: is also a live entry (delete the tombstone to reuse it)")
+        if not isinstance(v, dict):
+            problems.append(f"{who}: must be a mapping with `reason` (and `replaced_by`)")
+            continue
+        extra = set(v) - {"reason", "replaced_by"}
+        if extra:
+            problems.append(f"{who}: unknown field(s) {sorted(extra)}")
+        _text(v, "reason", problems, who)
+        rb = v.get("replaced_by")
+        if rb is not None and str(rb) not in live:
+            problems.append(f"{who}: replaced_by {rb} is not a live entry")
+    return ret
+
+
 def validate_lessons(data) -> list[dict]:
     items = _entries(data, "lessons", "lessons")
     problems: list[str] = []
@@ -112,6 +144,7 @@ def validate_lessons(data) -> list[dict]:
         "notes",
     }
     _dupes([str(e.get("id")) for e in items if isinstance(e, dict)], problems)
+    _retired(data, [str(e.get("id")) for e in items if isinstance(e, dict)], LESSON_ID, problems)
     for e in items:
         if not isinstance(e, dict):
             problems.append(f"entry is not a mapping: {e!r}")
@@ -178,6 +211,7 @@ def validate_runbooks(data) -> list[dict]:
     items = _entries(data, "runbooks", "runbooks")
     problems: list[str] = []
     _dupes([str(e.get("id")) for e in items if isinstance(e, dict)], problems)
+    _retired(data, [str(e.get("id")) for e in items if isinstance(e, dict)], RUNBOOK_ID, problems)
     for e in items:
         if not isinstance(e, dict):
             problems.append(f"entry is not a mapping: {e!r}")
@@ -220,6 +254,9 @@ def validate_invariants(data) -> dict:
         else:
             letters.add(p["letter"])
     _dupes([str(e.get("id")) for e in items if isinstance(e, dict)], problems)
+    retired = _retired(
+        data, [str(e.get("id")) for e in items if isinstance(e, dict)], CRIT_ID, problems
+    )
     for e in items:
         if not isinstance(e, dict):
             problems.append(f"entry is not a mapping: {e!r}")
@@ -250,4 +287,4 @@ def validate_invariants(data) -> dict:
         _text(e, "remediation", problems, who)
     if problems:
         raise RegisterError("invariants", problems)
-    return {"pillars": pillars, "criteria": items}
+    return {"pillars": pillars, "criteria": items, "retired": retired}

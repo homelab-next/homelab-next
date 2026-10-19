@@ -1,30 +1,142 @@
 # SPDX-License-Identifier: Apache-2.0
+# Criterion ids are docs/checklist.md row ids and mean what that row means; an auto or server
+# criterion states the row's statement verbatim (tests/invariants/test_inv_example_register.py).
+# The auto criteria run the same gates as `make check`, so `hnx invariants run` sees them too.
 pillars:
 - letter: F
   title: Foundation
+- letter: D
+  title: Detection as code
+- letter: Q
+  title: Quality gates
+- letter: M
+  title: Scripts, context and access
+- letter: L
+  title: Feedback and assurance
 - letter: X
   title: Modularity
+# Tombstones (homelabnext/registers/ids.py): ids this register once used with a meaning that
+# collided with the checklist's.  They stay here so `register_ids.py check-lost` still finds them
+# and nothing can reuse them by accident.
+retired:
+  F-01:
+    replaced_by: Q-09
+    reason: >-
+      Was "the repository carries a licence file", which is not checklist F-01 (rebuildable
+      from git). No checklist row is about the licence alone; it is the file every SPDX header
+      points at, so the check now runs as part of Q-09.
+  F-02:
+    replaced_by: L-07
+    reason: >-
+      Was "every runbook step has a verify", which is checklist L-07, not F-02 (network
+      segments are enforced).
+  F-03:
+    replaced_by: F-09
+    reason: >-
+      Was "the backup target accepted a write in the last day", which is part of checklist F-09
+      (backups follow 3-2-1), not F-03 (SSO and MFA).
 criteria:
-- id: F-01
-  statement: The repository carries a licence file.
+- id: F-05
+  statement: Secrets are not in git or readable on disk.
   evidence: auto
-  observable: test -s LICENSE && echo licence present
+  observable: python3 tools/leak_scan.py --groups secret . && echo no secrets found
+  expected: exit 0 (covers the tracked tree; history is `make leak-scan-history`, perms are server-side)
+  expect_regex: no secrets found
+  slow: true
+  remediation: >-
+    Remove the secret, rotate it (it is burned once committed), and load it from the environment
+    or the secrets store instead; a key in git is readable by everyone who ever cloned it.
+- id: F-09
+  statement: Backups follow 3-2-1 with an immutable copy.
+  evidence: server
+  observable: >-
+    query the backup system for the newest recovery point of each guest (< 24 h), the newest
+    offsite or immutable copy (< 7 days), and attempt a delete with the automation identity
+  remediation: Investigate the failing job; an unrecoverable backup is no backup.
+- id: F-18
+  statement: The public tree contains no private identifiers.
+  evidence: auto
+  observable: python3 tools/leak_scan.py . && echo tree clean
   expected: exit 0
-  expect_regex: licence present
-  remediation: Add the licence file; without it nobody may legally reuse the work.
-- id: F-02
+  expect_regex: tree clean
+  slow: true
+  remediation: >-
+    Replace the address, domain, e-mail or MAC with a documentation value (192.0.2.0/24,
+    example.org); a published private identifier maps the lab for anyone who reads the repo.
+- id: D-02
+  statement: Every rule is tested.
+  evidence: auto
+  observable: python3 -m homelabnext.detections lint && python3 -m homelabnext.detections run
+  expected: exit 0
+  expect_regex: "RESULT: ok"
+  remediation: >-
+    Add the missing must-fire and must-not-fire fixtures, or fix the rule the fixture runner
+    names; an untested rule is a rule nobody knows still fires.
+- id: D-07
+  statement: Rules compile for every supported engine.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/detections/test_detections.py -k golden
+  expected: exit 0 (exit 100 when pytest is not installed, which is could-not-measure)
+  expect_regex: passed
+  slow: true
+  remediation: >-
+    Fix the backend or rule that changed the compiled output, or, if the change is intended,
+    refresh the goldens with UPDATE_GOLDEN=1 and review the diff.
+- id: Q-09
+  statement: Every source file carries an SPDX header.
+  evidence: auto
+  observable: test -s LICENSE && python3 tools/check_spdx.py && echo spdx headers present
+  expected: exit 0 (also fails if the LICENSE file the headers point at is missing or empty)
+  expect_regex: spdx headers present
+  remediation: >-
+    Add `SPDX-License-Identifier: Apache-2.0` in the first five lines of each file listed (and
+    restore LICENSE if it is gone); without them nobody may legally reuse the work.
+- id: Q-10
+  statement: Every schema ships an example and a negative.
+  evidence: auto
+  observable: python3 tools/schema_check.py --strict
+  expected: exit 0
+  expect_regex: " 0 errors, 0 warnings"
+  slow: true
+  remediation: >-
+    Add the missing example or negative under the schema's examples directory, or fix the
+    schema; a schema with no negative has never been shown to reject anything.
+- id: M-17
+  statement: Register ids are never lost.
+  evidence: auto
+  observable: >-
+    IFS=$'\n'; f=$(git ls-files -- '*lessons.yml' '*runbooks.yml' '*invariants.yml' '*queue.yml')
+    || exit 100; [ -n "$f" ] || { echo no registers tracked; exit 100; };
+    python3 tools/register_ids.py check-lost $f && echo no ids lost
+  expected: >-
+    exit 0: an id the last commit had is still a live entry or a `retired:` tombstone
+    (exit 100 outside a git checkout)
+  expect_regex: no ids lost
+  remediation: >-
+    Restore the entry whole from `git show HEAD:<register>` (or MERGE_HEAD); if the id was wrong,
+    retire it under `retired:` with a reason instead of deleting it. Never renumber to silence it.
+- id: L-06
+  statement: Every lesson has a root cause, control and verification.
+  evidence: auto
+  observable: >-
+    d=$(mktemp -d) && python3 -m homelabnext.registers build examples/registers "$d" >/dev/null;
+    rc=$?; rm -rf "$d"; [ $rc -eq 0 ] && echo lessons valid
+  expected: exit 0
+  expect_regex: lessons valid
+  remediation: >-
+    Fix the lesson the build names; a lesson with no root cause, control or falsifiable test is
+    an opinion, and the fatal schema refuses to render it.
+- id: L-07
   statement: Every runbook step has a verify.
   evidence: auto
-  observable: python3 -m homelabnext.registers build examples/registers "$(mktemp -d)" >/dev/null && echo steps verified
+  observable: >-
+    d=$(mktemp -d) && python3 -m homelabnext.registers build examples/registers "$d" >/dev/null;
+    rc=$?; rm -rf "$d"; [ $rc -eq 0 ] && echo steps verified
   expected: exit 0
   expect_regex: steps verified
-  slow: true
   remediation: Add the missing verify; a step that cannot be checked is a hope, not a step.
-- id: F-03
-  statement: The backup target accepted a write in the last day.
-  evidence: server
-  observable: query the backup system for the newest recovery point of each guest
-  remediation: Investigate the failing job; an unrecoverable backup is no backup.
 - id: X-01
   statement: No raw endpoint literals outside the registry.
   evidence: plugin

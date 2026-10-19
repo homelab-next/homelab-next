@@ -125,7 +125,7 @@ def test_invariants_render_with_live_results(examples):
     html, doc = render_invariants(inv, green)
     assert doc["verdict"] == "ALL INVARIANTS HOLD" and "ALL INVARIANTS HOLD" in html
     red = json.loads(json.dumps(green))
-    red["results"]["F-01"] = {"status": "fail", "evidence": "LICENSE missing"}
+    red["results"]["Q-09"] = {"status": "fail", "evidence": "LICENSE missing"}
     html, doc = render_invariants(inv, red)
     assert doc["verdict"].startswith("1 red") and "LICENSE missing" in html
     _, doc = render_invariants(inv, None)  # no results: untested counts against
@@ -137,7 +137,7 @@ def test_invariants_render_with_live_results(examples):
     [
         (lambda c: c.pop("remediation"), "remediation"),
         (lambda c: c.update(evidence="sometimes"), "evidence"),
-        (lambda c: c.update(id="Q-01"), "not declared"),
+        (lambda c: c.update(id="Z-01"), "not declared"),
         (lambda c: c.update(expect_regex="("), "expect_regex"),
         (lambda c: c.pop("observable"), "observable"),
     ],
@@ -170,3 +170,44 @@ def test_cli_exit_codes(examples, tmp_path, capsys):
     (src / "lessons.yml").write_text("lessons:\n- id: LL-001\n  title: broken entry here\n")
     assert registers_main(["build", str(src), str(tmp_path / "o2")]) == 1
     assert "FATAL" in capsys.readouterr().err
+
+
+# --- retired ids: tombstones for ids that were wrong, validated and rendered ---------------------
+
+
+def test_example_tombstones_render_with_their_replacement(examples, tmp_path):
+    build_all(examples, tmp_path)
+    doc = json.loads((tmp_path / "invariants.json").read_text())
+    assert doc["retired"]["F-02"]["replaced_by"] == "L-07"
+    assert {c["id"] for c in doc["criteria"]}.isdisjoint(doc["retired"])
+    html = (tmp_path / "invariants.html").read_text()
+    assert '<article id="F-02">' in html and '<a href="#L-07">L-07</a>' in html
+
+
+@pytest.mark.parametrize(
+    "tomb, needle",
+    [
+        ({"Q-09": {"reason": "reused while still live"}}, "also a live entry"),
+        ({"F-77": {"reason": "points at nothing real", "replaced_by": "F-99"}}, "not a live"),
+        ({"F-77": {"replaced_by": "Q-09"}}, "reason"),
+        ({"F-77": {"reason": "a field nobody reads", "when": "x"}}, "unknown field"),
+        ({"F-NEW": {"reason": "never allocated, never cited"}}, "only an allocated id"),
+        ({"F-77": "just a string"}, "must be a mapping"),
+        (["F-77"], "`retired` must be a mapping"),
+    ],
+)
+def test_bad_tombstones_are_fatal(examples, tomb, needle):
+    inv = yaml.safe_load((examples / "invariants.yml").read_text())
+    inv["retired"] = tomb
+    with pytest.raises(RegisterError, match=re.escape(needle)):
+        render_invariants(inv)
+
+
+def test_lessons_and_runbooks_accept_tombstones(lessons):
+    lessons["retired"] = {
+        "LL-099": {"reason": "merged into LL-001 on review", "replaced_by": "LL-001"}
+    }
+    assert validate_lessons(lessons)
+    lessons["retired"] = {"LL-001": {"reason": "cannot be both retired and live"}}
+    with pytest.raises(RegisterError, match="also a live entry"):
+        validate_lessons(lessons)
