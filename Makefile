@@ -12,15 +12,15 @@ PLAYBOOKS := $(wildcard ansible/playbooks/*.yml)
 REGISTERS_OUT := build/registers
 REGISTER_FILES := $(shell git ls-files -- $(foreach k,lessons runbooks invariants queue,'*$(k).yml' '*$(k).yaml') 2>/dev/null)
 
-.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint prompts-lint injection-check injection-report injection-eval detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke
+.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint agent-lint prompts-lint injection-check injection-report injection-eval detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke
 
 help:
-	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint prompts-lint injection-check injection-report detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
+	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint agent-lint prompts-lint injection-check injection-report detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
 	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke"
 	@echo "live (needs a real model endpoint): injection-eval MODEL=<role> REGISTRY=<file> ROLES=<file>"
 	@echo "override RUFF=/path/to/ruff if ruff is not importable as a module"
 
-check: lint component-tests hermetic-lint test schemas gates decide-lint prompts-lint injection-check detections registers ids-check conform-check spdx leak-scan changelog-check
+check: lint component-tests hermetic-lint test schemas gates decide-lint agent-lint prompts-lint injection-check detections registers ids-check conform-check spdx leak-scan changelog-check
 	@echo "make check: OK"
 
 lint:
@@ -64,6 +64,11 @@ gates:
 # every decision spec git tracks is complete, asks well-formed questions, and inline specs stay fast
 decide-lint:
 	$(PY) -m homelabnext.cli decide lint
+
+# readers cannot act (G-03): no agent profile or context manifest in the repository that reads
+# untrusted content holds a shell, file-write, egress or credential grant
+agent-lint:
+	$(PY) -m homelabnext.cli agent lint
 
 # G-01: every prompt template declares a trust level per slot and never interpolates an untrusted
 # slot outside the nonce-fenced, escaped untrusted-data delimiters

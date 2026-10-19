@@ -22,6 +22,15 @@ pack stays a pure function, but not knowable to whoever wrote that content).  An
 session or volatile text that starts with the delimiter (or the default one) is escaped with
 :data:`ESCAPE_PREFIX`, so input cannot open a fake section, stable or otherwise.
 
+Screening.  Before fencing, every section filled from input (``source: input``) is passed through
+:class:`~homelabnext.agent.screen.Screener`, which replaces secrets and PII with typed labels that
+are stable across the pack (``[REDACTED:email:1]`` is the same address in every section).  It is
+on unless the manifest says ``screen: {redact: false, reason: ...}``; either way the pack's
+``screen`` block records what happened (settings and counts, never a value).  A caller's
+``denylist`` (deny-list lines: literal terms or ``re:`` regexes) is applied even when the manifest
+opts out of the rest.  Static sections and pre-gate verdicts are platform-authored and are not
+screened.
+
 ``inputs`` shape::
 
     {"sections": {<section name>: <text>}, "pregates": {<gate id>: <pregate_output dict>}}
@@ -29,11 +38,12 @@ session or volatile text that starts with the delimiter (or the default one) is 
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from .digest import canonical_json, digest_of, sha256_text
 from .errors import SpecError
+from .screen import Screener, screen_config
 
 TIERS = ("stable", "session", "volatile")
 _RANK = {t: i for i, t in enumerate(TIERS)}
@@ -55,8 +65,16 @@ def _marker(n: int) -> str:
     return f"\n[TRUNCATED: {n} chars omitted]"
 
 
-def assemble_pack(manifest: Mapping[str, Any], inputs: Mapping[str, Any]) -> tuple[dict, str]:
-    """Return ``(pack, hash)``.  Does no I/O and does not mutate its arguments."""
+def assemble_pack(
+    manifest: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+    *,
+    denylist: Iterable[str] | None = None,
+) -> tuple[dict, str]:
+    """Return ``(pack, hash)``.  Does no I/O and does not mutate its arguments.
+
+    ``denylist``: deny-list lines whose terms are redacted from input sections (see module doc).
+    """
     if not isinstance(manifest, Mapping) or not manifest.get("sections"):
         raise SpecError("manifest must be a mapping with a non-empty 'sections' list")
     names = [s.get("name") for s in manifest["sections"]]
@@ -65,6 +83,16 @@ def assemble_pack(manifest: Mapping[str, Any], inputs: Mapping[str, Any]) -> tup
     for s in manifest["sections"]:
         if s.get("tier") not in _RANK:
             raise SpecError(f"section {s.get('name')!r}: tier must be one of {list(TIERS)}")
+    try:
+        screen_cfg = screen_config(manifest)
+        deny = list(denylist or [])
+        screener = Screener(
+            redact_private_ips=screen_cfg["redact_private_ips"],
+            denylist=deny,
+            types=None if screen_cfg["redact"] else ("denylist",),
+        )
+    except ValueError as exc:
+        raise SpecError(str(exc)) from None
     supplied = dict(inputs.get("sections", {}))
     gates_in = dict(inputs.get("pregates", {}))
     deferred: list[str] = []
@@ -88,6 +116,7 @@ def assemble_pack(manifest: Mapping[str, Any], inputs: Mapping[str, Any]) -> tup
                 "text": canonical_json(out),
                 "max_chars": 1 << 30,
                 "required": bool(g["required"]),
+                "source": "pregate",
             }
         )
 
@@ -101,8 +130,20 @@ def assemble_pack(manifest: Mapping[str, Any], inputs: Mapping[str, Any]) -> tup
             else:
                 omitted.append(s["name"])
             continue
-        items.append({**{k: s[k] for k in ("name", "tier", "max_chars", "required")}, "text": text})
+        keep = ("name", "tier", "max_chars", "required", "source")
+        items.append({**{k: s[k] for k in keep}, "text": text})
     items.sort(key=lambda i: (_RANK[i["tier"]], i["name"]))
+
+    # screening: untrusted input only, in pack order so label numbers follow first appearance
+    screened = []
+    for i in items:
+        if i["source"] == "input" and screener.types:
+            i["text"] = screener.screen(i["text"])[0]
+            screened.append(i["name"])
+    screen_record = {**screener.summary(), "sections": screened}
+    if not screen_cfg["redact"]:
+        screen_record.update(enabled=False, reason=screen_cfg["reason"])
+
     delim = manifest.get("delimiter", DEFAULT_DELIMITER)
     delims = tuple(sorted({delim, DEFAULT_DELIMITER}))
     for i in items:
@@ -191,6 +232,7 @@ def assemble_pack(manifest: Mapping[str, Any], inputs: Mapping[str, Any]) -> tup
         "truncations": sorted(truncations, key=lambda t: (_RANK[t["tier"]], t["section"])),
         "budget": {"limit_chars": limit, "used_chars": total, "tiers_cut": touched},
         "stable_prefix_digest": sha256_text(stable_prefix),
+        "screen": screen_record,
         "text": rendered,
     }
     return pack, digest_of(pack)

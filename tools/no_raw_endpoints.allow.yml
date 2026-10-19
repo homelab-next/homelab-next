@@ -37,6 +37,8 @@ allow:
     reason: the scanner defines the documentation ranges it tolerates
   - path: "tools/tests/test_leak_scan.py"
     reason: scanner tests plant documentation-range addresses on purpose
+  - path: "tests/agent/test_agent_screen.py"
+    reason: screener tests plant documentation-range addresses to prove they are redacted from prompts
   - path: "ansible/roles/example_service/tasks/health.yml"
     reason: loopback health probe of the service the role just started (not a cross-service endpoint)
   - path: "schemas/events/negative/alert.created.wrong-type.json"

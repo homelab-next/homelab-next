@@ -1,0 +1,82 @@
+{
+  "budget_mode": "enforce",
+  "budgets": {
+    "max_input_tokens": 8000,
+    "max_output_tokens": 1000,
+    "max_runtime_s": 300,
+    "max_tool_calls": 10
+  },
+  "ceiling": {
+    "budgets": {
+      "max_input_tokens": 16000,
+      "max_output_tokens": 2000,
+      "max_runtime_s": 600,
+      "max_tool_calls": 20
+    },
+    "capabilities": [
+      "cap:broker",
+      "cap:records-propose"
+    ],
+    "mcp": [
+      "records",
+      "shell"
+    ],
+    "tier": "execute"
+  },
+  "data_tier": "local-only",
+  "digest": "sha256:ed744f7e5a9beed4c46712e50eb47055c08f9e7d0e51c4d7e45fa3b6ac30012d",
+  "grants": {
+    "capabilities": [
+      "cap:broker",
+      "cap:records-propose"
+    ],
+    "mcp": [
+      "records",
+      "shell"
+    ],
+    "tier": "execute"
+  },
+  "id": "profile:responder",
+  "memory_scopes": [
+    "responder"
+  ],
+  "model_role": "mdl:main-reasoner",
+  "parts": {
+    "capabilities": [
+      "cap:broker",
+      "cap:records-propose"
+    ],
+    "skills": [
+      "skill:contain"
+    ]
+  },
+  "persona": "persona:responder",
+  "provenance": [
+    {
+      "digest": "sha256:48420953edbc26d349be2ce7b13f475a8a40891f223215ee7a384f817d9ece9a",
+      "id": "cap:broker",
+      "source": "parts-library"
+    },
+    {
+      "digest": "sha256:6345d87390e38238bd62ebf5d0e6548ee2c0e6cb24392e6e95d3732350d3ff17",
+      "id": "cap:records-propose",
+      "source": "parts-library"
+    },
+    {
+      "digest": "sha256:075ecc5603d792c70797ec9cb4925ac08cb1b0ae847cf27c0151d37806e56399",
+      "id": "persona:responder",
+      "source": "parts-library"
+    },
+    {
+      "digest": "sha256:9c39cd32f567834e48c218939f04cee65e2753cb67c3f03748854161c7ba5c1f",
+      "id": "skill:contain",
+      "source": "parts-library"
+    },
+    {
+      "digest": "sha256:66e9800dc70cdb72a8e8cc685ccb6397651dd564bd2d377c79c6a84cc19d763d",
+      "id": "profile:responder",
+      "source": "spec"
+    }
+  ],
+  "reads_untrusted": false
+}
