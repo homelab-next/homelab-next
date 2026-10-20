@@ -57,7 +57,7 @@ Whether the agent dashboard's audit trail is being written (warn when off, empty
 - Declared by: [`svc:agentmetry`](../systems/agentmetry.md) ([[systems/agentmetry|agentmetry]]), capability `cap:agent-audit`
 - Kind: `poll-http-json`; target: `agentmetry` `/api/v1/audit/status`
 - Mapping: builtin agentmetry-audit
-- Credential: `secret:agentmetry/api-token` (a secret-store name) sent as `X-API-Key`
+- Credential: from the secret store (this source's `auth.secret`), sent as `X-API-Key`
 - Module: `agents`; graph node `status:agentmetry-audit`
 - Every 5 min, timeout 10 s; stale after 15 min without a reading; a failed poll reads as `unknown`
 
@@ -88,7 +88,7 @@ Actions with failed or timed-out executions in the last hour (fail) and the runn
 - Declared by: [`svc:automation`](../systems/automation.md) ([[systems/automation|automation]]), capability `cap:automation`
 - Kind: `poll-stackstorm`; target: `automation` `/api/v1/executions`
 - Mapping: built in (poll-stackstorm)
-- Credential: `secret:stackstorm/status-token` (a secret-store name) sent as `St2-Api-Key`
+- Credential: from the secret store (this source's `auth.secret`), sent as `St2-Api-Key`
 - Module: `automation`; graph node `status:automation-executions`
 - Every 2 min, timeout 15 s; stale after 6 min without a reading; a failed poll reads as `unknown`
 
@@ -99,7 +99,7 @@ Queued flowfiles, invalid and stopped components, and error or warning bulletins
 - Declared by: [`svc:dataflow`](../systems/dataflow.md) ([[systems/dataflow|dataflow]]), capability `cap:dataflow`
 - Kind: `poll-nifi`; target: `dataflow` `/nifi-api/flow/status`
 - Mapping: built in (poll-nifi)
-- Credential: `secret:nifi/status-token` (a secret-store name) sent as `Authorization: Bearer`
+- Credential: from the secret store (this source's `auth.secret`), sent as `Authorization: Bearer`
 - Module: `dataflow`; graph node `status:dataflow-status`
 - Every 1 min, timeout 10 s; stale after 3 min without a reading; a failed poll reads as `unknown`
 

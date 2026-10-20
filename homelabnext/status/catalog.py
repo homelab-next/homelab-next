@@ -37,7 +37,8 @@ def _credential(s: SourceSpec) -> str:
     if not s.auth:
         return ""
     header = f"`{s.auth['header']}`" if s.auth.get("header") else "`Authorization: Bearer`"
-    return f"- Credential: `{s.auth['secret']}` (a secret-store name) sent as {header}\n"
+    # the page says where the credential is configured, never anything read for the secret store
+    return f"- Credential: from the secret store (this source's `auth.secret`), sent as {header}\n"
 
 
 def render_catalog(specs: Sequence[SourceSpec]) -> str:
