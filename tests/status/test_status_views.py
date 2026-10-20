@@ -184,7 +184,7 @@ def test_status_json_contract_keys(make_hub, registry):
     doc = _doc(hub, registry, _specs())
     assert set(doc) == {
         "schema", "generated_at", "title", "main", "act_via", "summary", "menu", "views",
-        "modules", "sources", "observations",
+        "modules", "sources", "observations", "agents",
     }  # fmt: skip
     assert doc["summary"] == {"total": 3, "ok": 3, "warn": 0, "fail": 0, "unknown": 0, "stale": 0}
     assert set(doc["views"]) == {"overview", "grid", "only-b", "sources"}

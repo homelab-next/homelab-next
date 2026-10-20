@@ -242,13 +242,39 @@ def test_lessons_due_and_invariants_status(cat):
             cat.lessons_due(bad)
     inv = _call(cat, "invariants_status")
     assert sum(inv["counts"].values()) == len(inv["criteria"]) > 0
-    results = json.loads(
-        (ROOT / "examples" / "registers" / "invariants.results.json").read_text(encoding="utf-8")
-    )["results"]
     for row in inv["criteria"]:
-        assert row["status"] == results.get(row["id"], {}).get("status", "untested")
         assert ("remediation" in row) == (row["status"] != "pass")
     assert inv["all_hold"] is False  # most criteria have no committed result: untested counts
+
+
+def _page(src: Path) -> dict:
+    from homelabnext.registers.render import load_sources, render_invariants
+
+    s = load_sources(src)
+    return render_invariants(s["invariants"], s["results"])[1]
+
+
+def test_invariants_status_is_the_pages_verdict(cat, tmp_path):
+    """The MCP counts and verdict are the rendered page's: a server-evidence or deferred
+    criterion is not ``untested``, and ``all_hold`` is true exactly when the page says so."""
+    src = ROOT / "examples" / "registers"
+    inv, page = _call(cat, "invariants_status"), _page(src)
+    assert inv["counts"] == dict(sorted(page["counts"].items()))
+    assert inv["verdict"] == page["verdict"] and inv["all_hold"] is False
+    assert {r["id"]: r["status"] for r in inv["criteria"]} == {
+        c["id"]: c["status"] for c in page["criteria"]
+    }
+    # a checkout whose every live criterion passed: the page says ALL HOLD, and so does MCP
+    root = tmp_path / "repo"
+    for d in ("homelabnext", "schemas", "examples/registers"):
+        (root / d).mkdir(parents=True)
+    (root / "examples/registers/invariants.yml").write_bytes((src / "invariants.yml").read_bytes())
+    live = [c["id"] for c in page["criteria"] if c["status"] in ("pass", "untested")]
+    results = {"last_run": "2026-01-01", "results": {i: {"status": "pass"} for i in live}}
+    (root / "examples/registers/invariants.results.json").write_text(json.dumps(results))
+    inv, page = _call(Catalog(root), "invariants_status"), _page(root / "examples/registers")
+    assert page["verdict"] == "ALL INVARIANTS HOLD" and inv["all_hold"] is True
+    assert inv["counts"] == dict(sorted(page["counts"].items())) and "server" in inv["counts"]
 
 
 # -- context_for and the scope ----------------------------------------------------------------
@@ -338,6 +364,45 @@ def test_profile_scope_bounds_a_call_and_cannot_be_widened(cat, tmp_path):
     assert rel["scoped"] is True and rel["seeds"] == ["cap:lake-query"]
     assert rel["unresolved"] == ["cap:context"]  # outside the scope reads as unknown
     assert rel["related"] and all(_visible(scope, r["id"]) for r in rel["related"])
+
+
+def test_related_resolves_a_path_however_it_is_spelled(cat):
+    """``./docs/graph.md`` is the same path as ``docs/graph.md``: a seed, not ``unresolved``."""
+    for spelling in ("./docs/graph.md", "docs/graph.md"):
+        out = _call(cat, "related", ids_or_paths=[spelling, "./no/such/file.md"])
+        assert out["seeds"] == ["doc:docs/graph.md"]
+        assert out["unresolved"] == ["./no/such/file.md"]
+
+
+def test_profile_scope_bounds_the_catalog_tools(cat, tmp_path):
+    """``find_services``, ``get_contract``, ``list_capabilities`` and ``lessons_due`` return only
+    what the profile scope covers; an out-of-scope capability reads like an unknown one."""
+    pid, scope = load_profile_scope(_granted_profile(tmp_path), cat.registry)
+    scoped = Catalog(ROOT, scope=scope, scope_source=pid)
+    caps = _call(scoped, "list_capabilities")["capabilities"]
+    assert caps and all(f"cap:{c['name']}" in scope for c in caps)
+    assert len(caps) < len(_call(cat, "list_capabilities")["capabilities"])
+    for c in caps:
+        assert all(f"svc:{s}" in scope for s in c["implementations"]["services"])
+    contract = _call(scoped, "get_contract", capability="cap:lake-query")
+    svcs = [p["name"] for p in contract["services"]["providers"]]
+    svcs += contract["services"]["consumers"]
+    assert all(f"svc:{s}" in scope for s in svcs)
+    with pytest.raises(CatalogError, match=r"no such capability; known: lake-query$"):
+        scoped.call("get_contract", {"capability": "cap:secrets"})
+    assert _call(cat, "get_contract", capability="cap:secrets")["name"] == "secrets"  # unscoped
+    found = _call(scoped, "find_services")["services"]
+    assert found and all(f"svc:{s['name']}" in scope for s in found)
+    assert all(f"svc:{d}" in scope for s in found for d in s["depends_on"])
+    assert _call(scoped, "find_services", capability="secrets")["services"] == []
+    assert len(_call(cat, "find_services")["services"]) > len(found)
+    due = _call(scoped, "lessons_due", today="2027-06-01")
+    assert not any(due["due"].values())  # lessons and runbooks are not in a reader's scope
+    assert any(_call(cat, "lessons_due", today="2027-06-01")["due"].values())
+    with_lessons = Catalog(ROOT, scope=scope | {"lesson:LL-001"}, scope_source=pid)
+    ids = {d["id"] for v in _call(with_lessons, "lessons_due", today="2027-06-01")["due"].values()
+           for d in v}  # fmt: skip
+    assert ids == {"LL-001"}
 
 
 def _visible(scope, doc_id):

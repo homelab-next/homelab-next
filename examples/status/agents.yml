@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Agent activity in the status hub (ADR-0013 stage 1b, docs/status.md). Optional: the hub runs
+# without it; `hnx status collect|render|serve --agents examples/status/agents.yml` turns it on
+# and `hnx status ingest --agents ...` is the push listener. Schema:
+# schemas/status/agents.schema.json. Secrets are secret-store references, never values.
+agents_version: 1
+store: build/status/agents/activity.db
+retention_days: 14
+detail: true                    # keep the private tier (prompts, commands, tool input/output)
+redact_personal_data: false     # secrets are always redacted; this adds e-mail, phone, addresses, ...
+caps: {prompt: 4000, command: 2000, tool_input: 4000, tool_output: 8000, error: 2000, approval_payload: 4000}
+stuck_after_s:
+  default: 900
+  runtimes: {orchestrator: 1800}
+  models: {example-model-large: 1200}
+
+# the private tier: only through the registry's status-hub front door (the edge adds
+# X-Hnx-Front-Door from secret:status/front-door-secret), for identities in the viewer group
+private:
+  service: status-hub
+  # trusted_proxies: [edge-core]     # default: the hosts of every edge-proxy service
+  identity_header: X-Authentik-Username
+  groups_header: X-Authentik-Groups
+  viewer_group: hub-private-viewers
+  access_log: build/status/agents/access.jsonl
+
+# the push ingest (hnx status ingest): one bearer token per sender
+ingest:
+  max_body_bytes: 262144
+  max_events: 200
+  rate_per_min: 120
+  senders:
+    - {name: cloud-sessions, token: "secret:status/ingest/cloud-sessions-token"}
+    - {name: agent-fleet, token: "secret:status/ingest/agent-fleet-token"}
+    - {name: orchestrator, token: "secret:status/ingest/orchestrator-token", detail: false}

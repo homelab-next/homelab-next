@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+views_version: 1
+shell: {title: Lab status, main: "overview\n"}
+menu:
+  - {id: "overview\n", title: Overview, panel: exceptions}

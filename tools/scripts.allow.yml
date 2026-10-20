@@ -20,6 +20,10 @@ uncalled:
   lab-rehearsal-swap-lake-query: >-
     run by lab-smoke (compose/lab-in-a-box/smoke.sh) through its `rehearsals/*.sh` glob, which
     names no path the scanner can resolve; the nightly workflow runs lab-smoke
+  claude-code-activity-hook: >-
+    a Claude Code hook: the coding agent runs it from the operator's own settings.json (outside
+    this tree, snippet in docs/status.md section 6) on every hook event; nothing in the repository
+    calls it
 
 # checks that no invariants criterion runs
 not_in_runner:

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/status/agent_activity_detail/1.0",
+  "title": "Agent activity detail (private tier)",
+  "description": "The private detail of one agent activity event (event_id names its summary event): the prompt, command, tool input and output, error text and an approval with its gated payload. Accepted only on the authenticated ingest and from local collectors; secrets are redacted (and personal data when configured) and every field is cut to its configured cap BEFORE it is stored; shown only behind the hub's trusted front door, as escaped text. Never published on the shared bus. Evolve additively.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "session_id", "time"],
+  "properties": {
+    "event_id": {"$ref": "#/$defs/id"},
+    "session_id": {"$ref": "#/$defs/id"},
+    "time": {"$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"},
+    "prompt": {"$ref": "#/$defs/text"},
+    "command": {"$ref": "#/$defs/text"},
+    "tool_input": {"$ref": "#/$defs/text"},
+    "tool_output": {"$ref": "#/$defs/text"},
+    "error": {"$ref": "#/$defs/text"},
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "decision": {"enum": ["ask", "allow", "deny", "approved", "denied", "pending"]},
+        "payload": {"$ref": "#/$defs/text", "description": "What the approval gates (the command or tool input it would release)."}
+      }
+    },
+    "truncated": {"type": "array", "uniqueItems": true, "items": {"enum": ["prompt", "command", "tool_input", "tool_output", "error", "approval.payload"]}, "description": "Set by the hub: fields cut to their cap."},
+    "redactions": {"type": "object", "propertyNames": {"pattern": "^[a-z-]{1,20}$(?!\\n)"}, "additionalProperties": {"type": "integer", "minimum": 0}, "description": "Set by the hub: redactions by type."}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$(?!\\n)"},
+    "text": {"type": "string", "maxLength": 262144}
+  }
+}

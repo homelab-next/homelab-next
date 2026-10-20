@@ -267,7 +267,10 @@ include:
   access-bearing nodes; the profile holds its granted capabilities and MCP servers and the
   services providing a granted capability (never a broker action). A node's *subjects* are the
   access-bearing nodes it links to directly, seen through nodes that only name one (a system tag,
-  a product, an adapter, a compose service). A node is eligible only if it has a subject and
+  a product, an adapter, a compose service), transitively: a tag naming a product reaches the
+  services that run it and the capabilities its adapters and compose services implement. A proxy
+  that reaches nothing access-bearing is itself an ungranted subject (fail closed); a system tag
+  that resolves to nothing is a free-form topic and adds none. A node is eligible only if it has a subject and
   **every** subject is granted: a page about a granted and an ungranted capability is excluded,
   one hop away or not. The search runs on the graph minus ungranted access-bearing nodes, but
   subjects are read on the full graph. System tags are transparent for `depth`: a lesson tagged

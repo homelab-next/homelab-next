@@ -1,0 +1,8 @@
+{
+  "event_id": "cc-0001",
+  "session_id": "s-1",
+  "runtime": "claude-code",
+  "time": "2026-10-20T08:00:00Z",
+  "kind": "prompt",
+  "prompt": "the summary tier never carries prompt text"
+}

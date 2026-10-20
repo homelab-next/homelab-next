@@ -12,6 +12,9 @@ The menu of the status hub ([status hub](../status.md) ([[status]]), [ADR-0013](
 
 | Source | Module | Kind | Interval | Stale after | What it reports |
 |---|---|---|---|---|---|
+| [`agent-push`](#agent-push) | agents | agent-activity | 1 min | 3 min | Agent sessions pushed to the ingest listener (cloud sessions, orchestrators); stuck and errored sessions need attention. |
+| [`agent-spool`](#agent-spool) | agents | agent-activity | 30 s | 90 s | Agent sessions from the local hook spool (Claude Code hooks and other CLIs); stuck and errored sessions need attention. |
+| [`agentmetry-trail`](#agentmetry-trail) | agents | agent-activity | 1 min | 3 min | Agent sessions read from an Agentmetry canonical JSONL trail (optional external app). |
 | [`approvals`](#approvals) | records-db | poll-file | 5 min | 15 min | Broker requests waiting for an approval, with the oldest age (optional - only with a broker). |
 | [`invariants`](#invariants) | invariants | poll-file | 1 h | 3 h | The last invariants run, one item per criterion (pass is ok, fail is fail, error is unknown). |
 | [`metrics-alerts`](#metrics-alerts) | metrics | poll-http-json | 1 min | 3 min | Every alert rule the metrics service evaluates; firing is fail, pending is warn. |
@@ -21,6 +24,36 @@ The menu of the status hub ([status hub](../status.md) ([[status]]), [ADR-0013](
 | [`proposals`](#proposals) | records-db | poll-file | 5 min | 15 min | The proposal lanes - notes in the inbox and approved but not completed, with the oldest age. |
 
 ## Sources
+
+### agent-push
+
+Agent sessions pushed to the ingest listener (cloud sessions, orchestrators); stuck and errored sessions need attention.
+
+- Declared by: [`svc:status-hub`](../systems/status-hub.md) ([[systems/status-hub|status-hub]]), capability `cap:status-hub`
+- Kind: `agent-activity`; target: pushed (`homelabnext.status.observed`)
+- Mapping: builtin agent-push
+- Module: `agents`; graph node `status:agent-push`
+- Every 1 min, timeout 10 s; stale after 3 min without a reading; a failed poll reads as `unknown`
+
+### agent-spool
+
+Agent sessions from the local hook spool (Claude Code hooks and other CLIs); stuck and errored sessions need attention.
+
+- Declared by: [`svc:status-hub`](../systems/status-hub.md) ([[systems/status-hub|status-hub]]), capability `cap:status-hub`
+- Kind: `agent-activity`; target: file `build/status/agent-spool`
+- Mapping: builtin agent-spool
+- Module: `agents`; graph node `status:agent-spool`
+- Every 30 s, timeout 10 s; stale after 90 s without a reading; a failed poll reads as `unknown`
+
+### agentmetry-trail
+
+Agent sessions read from an Agentmetry canonical JSONL trail (optional external app).
+
+- Declared by: [`svc:status-hub`](../systems/status-hub.md) ([[systems/status-hub|status-hub]]), capability `cap:status-hub`
+- Kind: `agent-activity`; target: file `build/status/agentmetry/audit-forward.jsonl`
+- Mapping: builtin agentmetry-jsonl
+- Module: `agents`; graph node `status:agentmetry-trail`
+- Every 1 min, timeout 10 s; stale after 3 min without a reading; a failed poll reads as `unknown`
 
 ### approvals
 

@@ -34,7 +34,7 @@ refused call is an MCP tool error with the reason.
 | `related(ids_or_paths, depth=2, budget=25, include_inactive=False)` | the ranked graph neighbourhood, seeds, ids that resolved to nothing | [knowledge graph](graph.md) ([[graph]]) |
 | `context_for(task_text, allowed, paths=[], kinds=[], budget=10)` | ranked hits with content and sha256 digest, relation before keywords | the [`context`](capabilities/context.md) ([[capabilities/context\|context]]) reference store over the graph |
 | `lessons_due(today=None)` | the lesson review's due list by action | `hnx registers review` ([[registers]]) |
-| `invariants_status()` | per criterion: statement, status (`untested` without a committed result), checked_at, remediation when not passing | `examples/registers/invariants.results.json` |
+| `invariants_status()` | the invariants page's verdict, counts and `all_hold`, and per criterion: statement, status (the page's: `deferred`, `server` or `untested` without a committed result), checked_at, remediation when not passing | `examples/registers/invariants.results.json`, judged by `homelabnext.registers.render` |
 
 `context_for` is the main tool. Its seeds are the graph nodes defined by `paths` (the files the
 task edits) and the ids and names the text mentions (`seeds_for`); the store ranks documents
@@ -77,8 +77,12 @@ $ hnx mcp call context_for --args '{"task_text": "add an adapter for the context
   and a wider namespace is replaced by the granted entries inside it (`cap:` against a grant of
   `cap:lake-query` gives `cap:lake-query`). `related` is computed over the in-scope nodes only, so
   nothing outside is returned or related through, and an out-of-scope seed reads like an unknown
-  one. The catalog tools (contracts, schemas, service names, review and invariant status)
-  describe the repository's public contracts and are not scoped.
+  one. The catalog tools are bounded the same way: `list_capabilities`, `get_contract`,
+  `find_services` and `lessons_due` return only in-scope capabilities, services (also in
+  `depends_on`, providers and consumers) and lesson or runbook records, and an out-of-scope
+  capability reads like an unknown one. `get_schema` and `invariants_status` describe the
+  repository's public contracts and are not scoped. Without `--scope-from-profile` every tool
+  sees everything, as before.
 * **Registered like any other MCP server.** `homelabnext/agent/tool_classes.yml` classifies
   `hnx-catalog` as `read`, so a profile may grant it, a reader profile included, and the
   compiler, `hnx agent verify` and `hnx agent lint` judge it like every other grant. It is not a

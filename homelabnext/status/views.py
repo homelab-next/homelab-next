@@ -8,11 +8,13 @@ can change without touching collectors or consumers.  Top-level keys (``schema``
 
     schema, generated_at, title, main, act_via
     summary       {"total", "ok", "warn", "fail", "unknown", "stale"}   item counts by state
-    menu          [{"id", "title", "kind": "panel"|"external", "panel"?, "href"?, "available"}]
+    menu          [{"id", "title", "kind": "panel"|"external"|"page", "panel"?, "href"?, "group"?,
+                    "available"}]
     views         {<view id>: <panel payload>}                          one per panel view
     modules       [{"module", "state", "counts", "service", "capability", "links", "items"}]
     sources       [the menu of sources with "state", "last_attempt", "last_ok", "error"]
     observations  [every latest observation, "state" effective, "reported_state" as recorded]
+    agents        null, or {"counts", "sessions"}: agent sessions, summary tier only (stage 1b)
 
 Panel payloads:
 
@@ -45,6 +47,19 @@ from homelabnext.registry.model import Registry
 from .model import SEVERITY, STATES, SourceSpec, worst
 
 STATUS_SCHEMA = "homelabnext.status/1"
+#: panels that are pages of their own (stage 1b, agent activity), served live by ``hnx status
+#: serve``: panel -> path.  The private ones render only for an authorized request.
+PAGE_PANELS = {
+    "agents": "/agents",
+    "activity": "/activity",
+    "agent-analytics": "/agent-analytics",
+    "agent-detail": "/private/sessions",
+    "agent-access-log": "/private/access-log",
+}
+PRIVATE_PANELS = frozenset({"agent-detail", "agent-access-log"})
+PRIVATE_GROUP = "private"
+#: at most this many sessions go into status.json (worst state first)
+MAX_SESSIONS = 200
 _ATTENTION_ORDER = {s: -SEVERITY[s] for s in STATES}
 _SILENT = {"unknown": "nothing read yet", "stale": "no reading within its staleness window"}
 
@@ -76,8 +91,17 @@ def views_problems(
     out += [f"menu: duplicate view id {i!r}" for i in sorted({i for i in ids if ids.count(i) > 1})]
     by_id = {v["id"]: v for v in doc["menu"]}
     main = by_id.get(doc["shell"]["main"])
-    if main is None or "panel" not in main:
+    if main is None or "panel" not in main or main["panel"] in PAGE_PANELS:
         out.append(f"shell.main {doc['shell']['main']!r} is not a panel view in the menu")
+    for v in doc["menu"]:
+        if v.get("panel") in PAGE_PANELS and v.get("select"):
+            out.append(f"view {v['id']}: the {v['panel']} page takes no select")
+        private = v.get("panel") in PRIVATE_PANELS
+        if private != (v.get("group") == PRIVATE_GROUP):
+            out.append(
+                f"view {v['id']}: the {PRIVATE_GROUP!r} group holds exactly the private pages "
+                f"({', '.join(sorted(PRIVATE_PANELS))})"
+            )
     known_sources = {s.id for s in specs} if specs is not None else None
     known_modules = {s.module for s in specs} if specs is not None else None
     for v in doc["menu"]:
@@ -241,8 +265,10 @@ def build_status(
     specs: Sequence[SourceSpec],
     *,
     capability_pages: set[str] | None = None,
+    agents: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The ``status.json`` document (see the module docstring)."""
+    """The ``status.json`` document (see the module docstring).  ``agents``: the summary tier's
+    sessions (``{"sessions", "counts"}``) when an activity store is configured, else None."""
     if capability_pages is None:
         from homelabnext.conform.registry import CAPABILITIES
 
@@ -252,7 +278,19 @@ def build_status(
     modules = _modules(specs, obs, sources, capability_pages)
     menu, panels = [], {}
     for v in views["menu"]:
-        if "panel" in v:
+        if v.get("panel") in PAGE_PANELS:
+            entry = {
+                "id": v["id"],
+                "title": v["title"],
+                "kind": "page",
+                "panel": v["panel"],
+                "href": PAGE_PANELS[v["panel"]],
+                "available": agents is not None,
+            }
+            if v.get("group"):
+                entry["group"] = v["group"]
+            menu.append(entry)
+        elif "panel" in v:
             menu.append(
                 {
                     "id": v["id"],
@@ -288,6 +326,12 @@ def build_status(
         "modules": modules,
         "sources": sources,
         "observations": obs,
+        "agents": None
+        if agents is None
+        else {
+            "counts": dict(agents["counts"]),
+            "sessions": [dict(r) for r in agents["sessions"][:MAX_SESSIONS]],
+        },
     }
 
 

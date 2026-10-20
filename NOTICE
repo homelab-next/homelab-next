@@ -14,3 +14,7 @@ Third-party material
 - Detection tags and the ATT&CK coverage map reference MITRE ATT&CK(R) technique identifiers.
   MITRE ATT&CK is a registered trademark of The MITRE Corporation; the identifiers are used under
   the ATT&CK terms of use, https://attack.mitre.org/resources/terms-of-use/.
+- hooks/claude_code_activity.py contains portions derived from Agentmetry (the hook stdin
+  decoding and the tool-failure test), Copyright 2026 blitzcrieg1, licensed under the Apache
+  License, Version 2.0; modified. Agentmetry itself remains an optional external application
+  the status hub can read from; it is not part of this product.

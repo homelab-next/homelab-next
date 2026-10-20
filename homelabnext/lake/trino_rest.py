@@ -48,7 +48,9 @@ PROP_BATCH = "hnx.batch."
 PROP_MARK = "hnx.mark."
 KEY_CHUNK = 500
 _NS = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
-_ENSURED: set[tuple[str, str]] = set()
+#: setups already done in this process: (catalog root, Trino catalog, namespace, schemas digest).
+#: Only the constructor's ``ensure=True`` consults it; an explicit ``ensure_tables()`` always runs.
+_ENSURED: set[tuple[str, str, str, str]] = set()
 
 
 def _qi(name: str) -> str:
@@ -125,7 +127,7 @@ class TrinoRestLake(AdapterBase):
         self._cat = trino_catalog
         self._named = dict(named_queries or {})
         trino.catalog, trino.schema = trino_catalog, namespace
-        if ensure:
+        if ensure and self._setup_key() not in _ENSURED:
             self.ensure_tables()
 
     def __repr__(self) -> str:
@@ -138,11 +140,20 @@ class TrinoRestLake(AdapterBase):
     def _fq(self, table: str) -> str:
         return f"{_qi(self._cat)}.{_qi(self._ns)}.{_qi(table)}"
 
+    def _setup_key(self) -> tuple[str, str, str, str]:
+        """What one setup covers: the catalog, the Trino catalog, the namespace and the exact
+        table definitions (a digest of their DDL), so a lake with other tables is set up again."""
+        ddl = "\n".join(
+            trino_ddl(self._schemas[n], catalog=self._cat, schema_name=self._ns)
+            for n in sorted(self._schemas)
+        )
+        return (self._rest.root, self._cat, self._ns, _digest(ddl, 64))
+
     def ensure_tables(self, names: Iterable[str] | None = None) -> None:
-        """Create the namespace and missing tables; refuse a table whose schema differs."""
-        key = (self._rest.root, self._ns)
-        if names is None and key in _ENSURED:
-            return
+        """Create the namespace and missing tables; refuse a table whose schema differs.
+
+        Always runs (a table dropped since an earlier setup is created again); the constructor
+        skips it when this process already set up the same catalog, namespace and tables."""
         self._trino.execute(f"CREATE SCHEMA IF NOT EXISTS {_qi(self._cat)}.{_qi(self._ns)}")
         for n in names if names is not None else sorted(self._schemas):
             s = self._schema(n)
@@ -150,7 +161,7 @@ class TrinoRestLake(AdapterBase):
             self._trino.execute(ddl)
             self._check_schema(s, self._rest.load_table(self._ns, s.name))
         if names is None:
-            _ENSURED.add(key)
+            _ENSURED.add(self._setup_key())
 
     def _schema(self, table: str) -> TableSchema:
         n = table_name(table)

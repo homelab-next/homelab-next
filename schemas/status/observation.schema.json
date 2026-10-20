@@ -8,16 +8,16 @@
   "required": ["source", "module", "item", "state", "summary", "observed_at", "expires_at"],
   "properties": {
     "source": {"$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"},
-    "module": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$"},
-    "item": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$"},
+    "module": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$(?!\\n)"},
+    "item": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$(?!\\n)"},
     "state": {"enum": ["ok", "warn", "fail", "unknown", "stale"]},
-    "summary": {"type": "string", "maxLength": 300, "pattern": "^[^\\u0000-\\u001f\\u007f]*$"},
+    "summary": {"type": "string", "maxLength": 300, "pattern": "^[^\\u0000-\\u001f\\u007f]*$(?!\\n)"},
     "link": {
       "type": "string",
       "maxLength": 256,
       "anyOf": [
-        {"pattern": "^(?:svc|cap|status|inv|runbook|lesson|doc):[A-Za-z0-9._/-]{1,200}$"},
-        {"pattern": "^(?!/)(?!.*\\.\\.)(?![0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)[A-Za-z0-9._/-]+(?:#[A-Za-z0-9._-]+)?$"}
+        {"pattern": "^(?:svc|cap|status|inv|runbook|lesson|doc):[A-Za-z0-9._/-]{1,200}$(?!\\n)"},
+        {"pattern": "^(?!/)(?!.*\\.\\.)(?![0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)[A-Za-z0-9._/-]+(?:#[A-Za-z0-9._-]+)?$(?!\\n)"}
       ],
       "description": "A logical id (svc:metrics, cap:notify, inv:O-05) or a path relative to the docs, never a URL or an address."
     },

@@ -28,9 +28,28 @@ menu:
   - id: sources
     title: Sources
     panel: sources
+  # agent activity (stage 1b, optional: listed as unavailable without --agents)
+  - id: agents
+    title: Agents
+    panel: agents
+  - id: activity
+    title: Activity
+    panel: activity
+  - id: agent-analytics
+    title: Agent analytics
+    panel: agent-analytics
   - id: grafana
     title: Grafana
     external: {service: dashboards}
   - id: agentmetry
     title: Agentmetry
     external: {service: agentmetry, optional: true}
+  # rendered only for a request through the trusted front door (docs/status.md)
+  - id: agent-detail
+    title: Session detail
+    panel: agent-detail
+    group: private
+  - id: access-log
+    title: Access log
+    panel: agent-access-log
+    group: private

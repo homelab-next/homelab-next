@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/events/agent.activity/1.0",
+  "title": "Event homelabnext.agent.activity",
+  "description": "One agent activity event of the SUMMARY tier (data is schemas/status/agent_activity.schema.json): names, counts and outcomes, never a prompt, command, tool input or output. The private detail tier never goes on the bus. The status hub publishes it so other consumers can follow agent sessions (ADR-0013 stage 1b). The id derives from the activity event_id, so a re-sent event is a duplicate.",
+  "allOf": [
+    {
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "homelabnext.agent.activity"
+        },
+        "data": {
+          "$ref": "https://schemas.example.internal/homelabnext/status/agent_activity/1.0",
+          "required": [
+            "event_id",
+            "session_id",
+            "runtime",
+            "time",
+            "kind"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ]
+    }
+  ]
+}

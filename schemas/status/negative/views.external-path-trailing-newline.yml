@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+views_version: 1
+shell: {title: Lab status, main: overview}
+menu:
+  - {id: overview, title: Overview, panel: exceptions}
+  - {id: grafana, title: Grafana, external: {service: dashboards, path: "/d/fleet\n"}}

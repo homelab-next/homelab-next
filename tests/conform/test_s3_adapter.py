@@ -75,6 +75,19 @@ def test_dot_segments_are_encoded_and_stored_verbatim(server):
     assert set(server.buckets["t-dots"]) == {"../x", "a/./b"}
 
 
+@pytest.mark.parametrize("encoding", ["garage", "aws"])
+def test_listed_keys_decode_under_either_url_encoding(encoding):
+    """``encoding-type=url``: Garage percent-encodes a space (``%20``), AWS S3 and MinIO send it
+    as ``+`` (and a literal ``+`` as ``%2B``); both decode back to the stored keys."""
+    keys = {"a b/c+d", "x+y", "sp ace", "pct%20lit"}
+    with FakeS3(ACCESS, SECRET, REGION, list_encoding=encoding) as s:
+        st = _store(s)
+        st.create_bucket("enc")
+        for k in keys:
+            st.put("enc", k, b"1")
+        assert set(st.list("enc").keys) == keys
+
+
 def test_a_wrong_secret_is_refused_and_never_echoed(server):
     st = _store(server, secret="fake-wrong-secret")
     with pytest.raises(ObjectStoreError) as e:

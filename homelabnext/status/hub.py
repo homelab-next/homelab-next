@@ -21,6 +21,7 @@ reports ``ok`` so the Notifier sends exactly one recovery when a paged item clea
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Protocol
@@ -30,6 +31,7 @@ from .model import OBSERVED_EVENT, Observation, SourceSpec, iso, parse_iso
 from .scheduler import SourceResult
 
 PREFIX = "status"
+_log = logging.getLogger(__name__)
 DEFAULT_HISTORY = 20
 PROBLEM_TITLE = "Status item needs attention"
 RECOVERY_TITLE = "Status item recovered"
@@ -137,30 +139,68 @@ class StatusHub:
         self.store.put(self._src_key(spec.id), src)
         return out
 
-    def ingest(self, observation: Mapping[str, Any]) -> Observation:
-        """Record an observation pushed by a ``push-event`` source (already schema-valid)."""
+    def ingest(
+        self, observation: Mapping[str, Any], *, publisher: str | None = None
+    ) -> Observation:
+        """Record an observation pushed by a ``push-event`` source (already schema-valid).
+
+        Only the source's owner may report it: ``publisher`` (the event envelope's ``source``,
+        given by :meth:`ingest_event`) must be ``svc:<the service that declares the source>``,
+        and the module must be the one the source reports (``mapping.module``, else the
+        declaring service).  Times are the hub's, not the pusher's: an ``observed_at`` in the
+        future is clamped to now (the skew is kept on the source as ``clock_skew_s``), and
+        ``expires_at`` is capped at both ``observed_at + stale_after_s`` and
+        ``now + stale_after_s``, so a pushed reading always goes stale on time (O-06)."""
         source = observation.get("source")
         spec = self.specs.get(str(source))
         if spec is None or spec.polled:
-            raise HubError(f"{source!r} is not a registered push-event status source")
+            return self._refuse(f"{source!r} is not a registered push-event status source")
+        if publisher is not None and publisher != f"svc:{spec.service}":
+            return self._refuse(
+                f"{publisher!r} may not report status source {spec.id!r} "
+                f"(declared by svc:{spec.service})"
+            )
+        if observation.get("module") != spec.module:
+            return self._refuse(
+                f"status source {spec.id!r} reports module {spec.module!r}, "
+                f"not {observation.get('module')!r}"
+            )
         now = self.clock()
         obs = Observation.from_dict(observation)
-        # the registry's stale_after_s bounds what a pusher may claim
-        cap = parse_iso(obs.observed_at) + spec.stale_after_s
-        if parse_iso(obs.expires_at) > cap:
-            obs = Observation.from_dict({**obs.to_dict(), "expires_at": iso(cap)})
+        observed = parse_iso(obs.observed_at)
+        skew = max(0.0, observed - now)
+        if skew:
+            observed = now
+        cap = min(observed, now) + spec.stale_after_s
+        expires = min(parse_iso(obs.expires_at), cap)
+        if skew or expires != parse_iso(obs.expires_at):
+            obs = Observation.from_dict(
+                {**obs.to_dict(), "observed_at": iso(observed), "expires_at": iso(expires)}
+            )
         self._put(obs, now)
         src = dict(self.store.get(self._src_key(spec.id)) or {})
         src.update(last_attempt=iso(now), last_ok=iso(now), error=None)
+        if skew:
+            src["clock_skew_s"] = round(skew, 3)
+            _log.warning(
+                "status source %s: observed_at %.0fs in the future, clamped", spec.id, skew
+            )
+        else:
+            src.pop("clock_skew_s", None)
         self.store.put(self._src_key(spec.id), src)
         return obs
 
+    def _refuse(self, reason: str):
+        _log.warning("status hub refused a pushed observation: %s", reason)
+        raise HubError(reason)
+
     def ingest_event(self, body: bytes | str | Mapping[str, Any]) -> Observation:
-        """Decode and validate a ``homelabnext.status.observed`` event, then :meth:`ingest` it."""
+        """Decode and validate a ``homelabnext.status.observed`` event, then :meth:`ingest` it
+        with the envelope's ``source`` as the publisher (it must own the status source)."""
         from homelabnext.events.consumer import decode_event
 
         event = decode_event(body, types=[OBSERVED_EVENT])
-        return self.ingest(event["data"])
+        return self.ingest(event["data"], publisher=event["source"])
 
     # ---------------------------------------------------------------- reads
     def observations(self, now: float | None = None) -> list[dict[str, Any]]:
@@ -204,6 +244,7 @@ class StatusHub:
                     "last_attempt": rec.get("last_attempt"),
                     "last_ok": last_ok,
                     "error": rec.get("error"),
+                    **({"clock_skew_s": rec["clock_skew_s"]} if rec.get("clock_skew_s") else {}),
                 }
             )
         return out

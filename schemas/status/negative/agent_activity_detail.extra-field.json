@@ -1,0 +1,6 @@
+{
+  "event_id": "cc-0001",
+  "session_id": "s-1",
+  "time": "2026-10-20T08:00:00Z",
+  "html": "<b>fields outside the schema are refused</b>"
+}

@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+agents_version: 1
+store: build/status/agents/activity.db
+private: {service: status-hub, access_log: build/status/agents/access.jsonl}

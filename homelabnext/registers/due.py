@@ -27,12 +27,10 @@ import datetime as dt
 import pathlib
 from dataclasses import dataclass, field
 
-from homelabnext.reviews import evaluate
-
 from .schema import (
     CRIT_REF,
     is_active,
-    record_digest_of,
+    review_evaluation,
     sync_warnings,
     validate_lessons,
     validate_runbooks,
@@ -96,14 +94,7 @@ def _due(e, today) -> bool:
 
 
 def _eval(e, artefact, state, policy):
-    return evaluate(
-        e.get("reviews"),
-        author=e.get("author"),
-        digest=record_digest_of(e),
-        artefact=artefact,
-        state=state,
-        policy=policy,
-    )
+    return review_evaluation(e, artefact, state, policy)
 
 
 def _needs(e, artefact, state, policy) -> str:

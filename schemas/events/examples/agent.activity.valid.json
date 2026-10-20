@@ -1,0 +1,18 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:status-hub",
+  "type": "homelabnext.agent.activity",
+  "time": "2026-10-20T08:00:05Z",
+  "severity": "info",
+  "subject": "claude-code/6b1f0c2e-4d7a-4c55-9e0b-2f6d8a1c3e10",
+  "data": {
+    "event_id": "cc-6b1f0c2e-0007",
+    "session_id": "6b1f0c2e-4d7a-4c55-9e0b-2f6d8a1c3e10",
+    "runtime": "claude-code",
+    "time": "2026-10-20T08:00:05Z",
+    "kind": "tool_end",
+    "tool": "Bash",
+    "outcome": "success"
+  }
+}

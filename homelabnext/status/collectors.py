@@ -84,6 +84,7 @@ class CollectContext:
     endpoint: Callable[[str], str] | None = None
     root: Path = Path(".")
     broker: PendingApprovals | None = None
+    activity: Any = None  # an agents ActivityStore (homelabnext.status.agents.store), optional
 
 
 class Collector(Protocol):
@@ -185,9 +186,20 @@ class ReservedCollector:
         raise CollectError(f"{spec.kind} is reserved for stage 2 (no collector yet)")
 
 
+class AgentActivityCollector:
+    """``agent-activity``: drain agent activity into the store and report stuck and errored
+    sessions (:mod:`homelabnext.status.agents.sources`)."""
+
+    def collect(self, spec: SourceSpec, ctx: CollectContext) -> list[Draft]:
+        from .agents.sources import collect
+
+        return collect(spec, ctx)
+
+
 COLLECTORS: dict[str, Collector] = {
     "poll-http-json": HttpJsonCollector(),
     "poll-file": FileCollector(),
     "push-event": PushCollector(),
     "poll-prometheus": ReservedCollector(),
+    "agent-activity": AgentActivityCollector(),
 }

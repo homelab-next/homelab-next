@@ -84,11 +84,14 @@ def make_server(
     allow_remote: bool = False,
     allowed_hosts: Iterable[str] = (),
     docs_base: str = "docs",
+    agents: Any = None,
 ) -> ThreadingHTTPServer:
     """A server for ``document()`` (called once per request).  ``port=0`` picks a free port.
 
     ``allowed_hosts``: hostnames (no port) a request's ``Host``/``Origin`` may name besides the
-    loopback names; required with ``allow_remote``."""
+    loopback names; required with ``allow_remote``.  ``agents``: an
+    :class:`homelabnext.status.agents.pages.AgentSite` adds the agent pages (and, behind its
+    trusted front door only, the private tier)."""
     extra = frozenset(h.strip().lower().rstrip(".") for h in allowed_hosts if h.strip())
     if allow_remote and not extra:
         raise ValueError("allow_remote needs allowed_hosts: the hostnames clients will use")
@@ -123,12 +126,22 @@ def make_server(
         def _get(self) -> None:
             if not self._guard():
                 return
-            route = self.path.split("?", 1)[0]
+            route, _, query = self.path.partition("?")
+            client = self.client_address[0] if self.client_address else None
             if route in ("/", "/index.html"):
-                html = render_html(document(), docs_base=docs_base).encode("utf-8")
-                self._reply(200, "text/html; charset=utf-8", html)
+                private = bool(agents) and agents.authorize(client, self.headers).allowed
+                html = render_html(document(), docs_base=docs_base, live=True, private=private)
+                self._reply(200, "text/html; charset=utf-8", html.encode("utf-8"))
             elif route == "/status.json":
-                self._reply(200, "application/json", dumps(document()).encode("utf-8"))
+                doc = dict(document())  # the public contract: the private group is not listed
+                doc["menu"] = [m for m in doc["menu"] if m.get("group") != "private"]
+                self._reply(200, "application/json", dumps(doc).encode("utf-8"))
+            elif agents is not None and (
+                hit := agents.handle(route, query, document(), client, self.headers)
+            ):
+                self._reply(*hit)
+            elif route.startswith("/private"):  # no activity store: still never served
+                self._reply(403, "text/plain; charset=utf-8", b"forbidden: private view\n")
             else:
                 self._reply(404, "text/plain; charset=utf-8", b"not found\n")
 

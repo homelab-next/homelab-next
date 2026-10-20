@@ -23,6 +23,7 @@ from homelabnext.status import (
     due,
     observation_problems,
 )
+from homelabnext.status.model import iso
 
 
 class Hang:
@@ -156,7 +157,9 @@ def test_every_recorded_observation_matches_the_schema(make_hub):
 
 
 def test_push_events_are_ingested_and_capped_by_the_registry(make_hub, clock):
-    push = spec("runs", kind="push-event", path=None, interval_s=300)  # stale after 900
+    push = spec(
+        "runs", kind="push-event", path=None, interval_s=300, service="agent-runtime"
+    )  # stale after 900
     hub = make_hub([push, spec("polled")])
     data = {
         "source": "runs", "module": "agent-runtime", "item": "nightly", "state": "ok",
@@ -174,6 +177,61 @@ def test_push_events_are_ingested_and_capped_by_the_registry(make_hub, clock):
         hub.ingest({**data, "source": "unregistered"})
     clock.advance(900)
     assert hub.observations()[0]["state"] == "stale"
+
+
+def _push_hub(make_hub, **kw):
+    push = spec("runs", kind="push-event", path=None, interval_s=300, service="agent-runtime", **kw)
+    return make_hub([push])
+
+
+def _push_data(**kw):
+    data = {
+        "source": "runs", "module": "agent-runtime", "item": "nightly", "state": "ok",
+        "summary": "done", "observed_at": "2026-09-21T13:33:20Z", "expires_at": "2099-01-01T00:00:00Z",
+    }  # fmt: skip
+    data.update(kw)
+    return data
+
+
+def test_a_future_observed_at_is_clamped_and_still_goes_stale(make_hub, clock):
+    # regression: the cap was relative to the pusher's observed_at, so a reading dated 2099
+    # never went stale (O-06)
+    hub = _push_hub(make_hub)
+    obs = hub.ingest(_push_data(observed_at="2099-01-01T00:00:00Z"))
+    assert obs.observed_at == iso(clock()) and obs.expires_at == iso(clock() + 900)
+    assert hub.sources()[0]["clock_skew_s"] > 0  # recorded, not silently dropped
+    clock.advance(900)
+    assert hub.observations()[0]["state"] == "stale"
+    hub.ingest(_push_data(observed_at=iso(clock())))
+    assert "clock_skew_s" not in hub.sources()[0]
+
+
+def test_only_the_declaring_service_may_publish_a_push_source(make_hub, clock):
+    # regression: the envelope source was ignored, so any publisher could feed any push source
+    hub = _push_hub(make_hub)
+    data = _push_data()
+    for publisher in ("svc:notify", "svc:agent-runtime-2"):
+        ev = build_event(
+            OBSERVED_EVENT, publisher, data, dedupe_key=publisher, time=data["observed_at"]
+        )
+        with pytest.raises(HubError, match="may not report"):
+            hub.ingest_event(ev)
+    ev = build_event(OBSERVED_EVENT, "svc:agent-runtime", {**data, "module": "metrics"},
+                     dedupe_key="m", time=data["observed_at"])  # fmt: skip
+    with pytest.raises(HubError, match="reports module"):
+        hub.ingest_event(ev)
+    assert hub.observations() == []
+    ok = build_event(
+        OBSERVED_EVENT, "svc:agent-runtime", data, dedupe_key="ok", time=data["observed_at"]
+    )
+    assert hub.ingest_event(ok).item == "nightly"
+
+
+def test_a_source_mapping_module_is_the_module_it_may_report(make_hub):
+    hub = _push_hub(make_hub, mapping={"module": "runs-module"})
+    with pytest.raises(HubError, match="reports module"):
+        hub.ingest(_push_data())
+    assert hub.ingest(_push_data(module="runs-module")).module == "runs-module"
 
 
 def test_notifications_fire_once_per_transition(make_hub, clock):

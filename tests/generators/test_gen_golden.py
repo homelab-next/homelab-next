@@ -80,7 +80,7 @@ def test_removed_service_prunes_only_generated_files(tmp_path):
 
 def test_registry_change_changes_dependent_outputs_only():
     doc = yaml.safe_load(EXAMPLE.read_text())
-    doc["services"]["notify"]["port"] = 8099
+    doc["services"]["notify"]["port"] = 8097
     new = flatten(generate(build_registry(doc)))
     old = flatten(generate(REG))
     changed = {p for p in new if new[p] != old.get(p)}
@@ -121,7 +121,7 @@ def test_dns_zone_records_cover_every_service():
     zone = generate(REG, ["dns_zone"])["dns_zone"]["dns/svc.example.internal.zone"]
     for s in REG.services.values():
         assert f"\n{s.capability} IN A " in zone
-    assert zone.count(" IN SRV ") == 14 and zone.count(" IN TXT ") == 14
+    assert zone.count(" IN SRV ") == 15 and zone.count(" IN TXT ") == 15
 
 
 def test_hosts_block_apply_is_idempotent_and_preserves_other_lines():
@@ -209,7 +209,7 @@ def test_idp_blueprint_is_parseable_yaml_with_authentik_tags():
 
 def test_caddy_only_public_hosts_and_forward_auth():
     text = generate(REG, ["caddy"])["caddy"]["caddy/sites.caddy"]
-    assert text.count("reverse_proxy") == 2
+    assert text.count("reverse_proxy") == 3  # dashboards, idp, status-hub
     assert "dashboards.lab.example {" in text and "import hnx_forward_auth" in text
 
 

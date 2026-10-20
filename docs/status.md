@@ -50,8 +50,9 @@ generated from it (`hnx status catalog generate`, checked by `hnx status catalog
 |---|---|---|
 | `poll-http-json` | `GET` the service's capability alias + `path`, 2xx JSON | `service` (default: the declaring one), `path` |
 | `poll-file` | a JSON or YAML file, or a records directory, under the status root (`--root`) | `file` (relative, no `..`) |
-| `push-event` | `homelabnext.status.observed` events the source publishes itself | none: silence for `stale_after_s` reads stale |
+| `push-event` | `homelabnext.status.observed` events the source publishes itself: the envelope `source` must be `svc:<the declaring service>` and the module the one the source reports; an `observed_at` in the future is clamped to now (kept as the source's `clock_skew_s`) and `expires_at` is capped at now + `stale_after_s` | none: silence for `stale_after_s` reads stale |
 | `poll-prometheus` | reserved for stage 2; reads `unknown` until its collector ships | `service`, `path` |
+| `agent-activity` | drains agent activity into the activity store and reports stuck and errored sessions (section 6) | `file` for `agent-spool` and `agentmetry-jsonl`, none for `agent-push` |
 
 ### Mappings
 
@@ -173,6 +174,155 @@ observation as `data`; its id derives from the item and `observed_at`, so a re-s
 (see [events](events.md) ([[events]])). Each source is a knowledge-graph node `status:<id>`
 with `observes` edges to its service and capability and `polls` to a polled service, so a tile
 can link to the capability and runbook pages ([graph](graph.md) ([[graph]])).
+
+## 6. Agent activity (stage 1b)
+
+Agents are optional. When they run, the hub shows what every one of them is doing, whatever
+runs it: Claude Code on a workstation or in a cloud session, Codex or another CLI with the same
+hook shape, the orchestrator, the maintainer's own agent fleet, or anything that can POST JSON.
+Without `--agents` none of this runs and the hub is unchanged. Code: `homelabnext.status.agents`;
+decision: ADR-0013 "Stage 1b".
+
+### Two tiers
+
+| Tier | Schema | Holds | Where it goes |
+|---|---|---|---|
+| summary | `schemas/status/agent_activity.schema.json` | `event_id`, `session_id`, `parent_session_id`, `runtime`, `surface` (local, cloud), `host`, `project`, `model`, `agent`, `time`, `kind`, `tool` (name only), `outcome`, `tokens_in`, `tokens_out`, `cost_usd`, `has_detail` | the hub pages, `status.json` (`agents`), the bus (`homelabnext.agent.activity`), CSV/JSONL export |
+| detail | `schemas/status/agent_activity_detail.schema.json` | `prompt`, `command`, `tool_input`, `tool_output`, `error`, `approval` (`decision`, `payload`), plus `truncated` and `redactions` set by the hub | the activity store and the private pages; never the bus, never `status.json` |
+
+Both schemas are closed: a summary event that carries a detail field is refused everywhere
+(ingest, spool, store, bus).
+
+A **session** is every summary event with one `session_id`. Its state is derived at read time:
+`done` (last event `session_end`), `errored` (last event an error or outcome `error`),
+`waiting` (`stop`, a notification, or a pending approval: the agent handed back to the
+operator), `stuck` (otherwise, no event for `stuck_after_s`; a model's threshold beats its
+runtime's, which beats the default) or `working`.
+
+### Configuration (`examples/status/agents.yml`)
+
+`store` (SQLite), `retention_days`, `detail` (keep the private tier at all),
+`redact_personal_data`, `caps` (per-field characters), `stuck_after_s` (`default`, `runtimes`,
+`models`), `private` (the front door) and `ingest` (the senders). Schema:
+`schemas/status/agents.schema.json`. Secrets are secret-store references (`secret:a/b`), never
+values; at run time `secret:a/b-token` is read from `HNX_SECRET_A_B_TOKEN` (or the file `a/b-token` under
+`--secrets-dir`). A reference that does not resolve **disables** what it guards (the private
+tier, or that one sender) with a warning; nothing falls back to open.
+
+**What happens to every record, in order:** schema validation; **secret redaction** with the
+shared screener (`homelabnext.agent.screen`: private keys, JWTs, vendor tokens, `Authorization:
+Bearer` credentials, secret-key values; typed labels such as `[REDACTED:token:1]`; e-mail,
+phone, card, national id and addresses too when `redact_personal_data` is on); the **cap** (after
+redaction, so a cut never leaves half a secret the screener cannot see); validation again; the
+write. A secret the screener recognises never reaches the disk. Rows older than
+`retention_days` (by event time or by arrival) are deleted when the store opens and on every
+write.
+
+### Collecting: sources and the push ingest
+
+Registered like every source (`status_sources`, kind `agent-activity`, registry 2.2):
+
+| `builtin` | Reads | Notes |
+|---|---|---|
+| `agent-spool` | `target.file`: a spool directory of one-record files `{"summary": {...}, "detail": {...}}` | the Claude Code hook writes it; so may anything else (the generic file spool). Ingested files are deleted, invalid ones moved to `rejected/` |
+| `agentmetry-jsonl` | `target.file`: an Agentmetry canonical JSONL trail, from the last offset | `action.type` maps to `kind` (`tool_called` and `tool_failed` to `tool_end`, `detection` to `notification`, `config_change` skipped); arguments are hashes there, so no detail tier |
+| `agent-push` | nothing: the push ingest writes the store | reports the pushed sessions |
+
+Each source reports the sessions it fed: an errored session is a `fail` item, a stuck one a
+`warn` item (both on the main page's attention list), and `working` / `waiting` are live-work
+counts. `hnx status collect --agents examples/status/agents.yml` runs them.
+
+**Push ingest** (`hnx status ingest --agents FILE [--bind ... --allow-remote --allowed-host
+NAME]`, default port 8098, loopback by default): `POST /ingest/agent-activity` with
+`Authorization: Bearer <token>` and a JSON body `{"summary": [...], "detail": [...]}`. Answers:
+403 foreign Host/Origin, 404 other path, 405 other method, 401 no or unknown token, 429 over the
+sender's `rate_per_min`, 411 no length, 413 over `max_body_bytes` or `max_events`, 415 not JSON,
+400 not the batch shape, 422 any invalid record or a detail whose event is neither in the batch
+nor stored (all or nothing), 403 the sender does not own what it writes (a runtime outside the
+sender's `runtimes`, a session another sender or a local source started), 200 `{added, duplicates, details, detail_dropped}`. A sender with
+`detail: false` has its details dropped. It is a separate listener: the console never accepts a
+write. Cloud sessions reach it through a separate edge site **without** forward auth (bearer
+only).
+
+### The Claude Code hook
+
+`hooks/claude_code_activity.py` (standard library only; copy it anywhere) maps SessionStart,
+SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse (outcome from the tool response),
+PermissionRequest, Notification, Stop and SubagentStop to both tiers. It prints nothing (some
+hook events feed stdout back into the agent's context) and always exits 0. With `--spool` it
+writes the detail only after redacting it with the shared screener, and drops the detail when
+the screener is not importable. In `~/.claude/settings.json` (or a project's
+`.claude/settings.json`):
+
+```json
+{
+  "hooks": {
+    "SessionStart":     [{"hooks": [{"type": "command", "command": "python3 /opt/hnx/hooks/claude_code_activity.py --post https://status-ingest.lab.example/ingest/agent-activity", "timeout": 5}]}],
+    "SessionEnd":       [{"hooks": [{"type": "command", "command": "python3 /opt/hnx/hooks/claude_code_activity.py --post https://status-ingest.lab.example/ingest/agent-activity", "timeout": 5}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python3 /opt/hnx/hooks/claude_code_activity.py --post https://status-ingest.lab.example/ingest/agent-activity", "timeout": 5}]}],
+    "PreToolUse":       [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /opt/hnx/hooks/claude_code_activity.py --post https://status-ingest.lab.example/ingest/agent-activity", "timeout": 5}]}],
+    "PostToolUse":      [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /opt/hnx/hooks/claude_code_activity.py --post https://status-ingest.lab.example/ingest/agent-activity", "timeout": 5}]}],
+    "Notification":     [{"hooks": [{"type": "command", "command": "python3 /opt/hnx/hooks/claude_code_activity.py --post https://status-ingest.lab.example/ingest/agent-activity", "timeout": 5}]}],
+    "Stop":             [{"hooks": [{"type": "command", "command": "python3 /opt/hnx/hooks/claude_code_activity.py --post https://status-ingest.lab.example/ingest/agent-activity", "timeout": 5}]}],
+    "SubagentStop":     [{"hooks": [{"type": "command", "command": "python3 /opt/hnx/hooks/claude_code_activity.py --post https://status-ingest.lab.example/ingest/agent-activity", "timeout": 5}]}]
+  }
+}
+```
+
+The token comes from `HNX_STATUS_INGEST_TOKEN` (`--token-env` names another variable). On the
+hub's own host use `--spool build/status/agent-spool` instead of `--post`. `--surface` overrides
+the local/cloud guess (`CLAUDE_CODE_REMOTE=true` reads as cloud); `--runtime codex` reports a
+CLI with the same hook shape; `--no-detail` never sends the private tier.
+
+### Pages
+
+Menu entries in `views.yml` (`panel: agents | activity | agent-analytics`, and `agent-detail`,
+`agent-access-log` in `group: private`), served live by `hnx status serve --agents FILE`; the
+static page lists them as live-only. No script anywhere: filters are links with query strings,
+the stream refreshes with a meta refresh, the inspector is a second pane chosen by `?event=`.
+
+| Path | Shows |
+|---|---|
+| `/agents` | sessions with state badges and counts; filters `?runtime=`, `?state=`, `?project=` |
+| `/agents/session?id=` | one session's facts and timeline (a link to its private detail when authorized) |
+| `/activity` | the event stream, newest 200; filters `runtime`, `outcome`, `kind`, `session`; `?event=` opens the inspector |
+| `/activity.csv`, `/activity.jsonl` | the same selection exported, summary tier only (CSV cells that would run as a spreadsheet formula are quoted) |
+| `/agent-analytics` | counts by outcome, runtime, model, tool and day |
+| `/private/sessions`, `/private/session?id=`, `/private/event?id=`, `/private/access-log` | the detail tier and the access log: **private** |
+
+### The private tier: Caddy + Authentik setup
+
+The private pages and the `private` menu group exist only for a request that passes **all** of:
+
+1. it comes **from a trusted proxy address**: the hosts of the registry's `edge-proxy`
+   services (or `private.trusted_proxies`, registry host names); a local process on the hub's
+   host is not one, so the loopback listener alone never serves the private tier;
+2. it carries the **front-door header** with the shared secret. The registry declares it on the
+   hub's service (`front_door: {header: X-Hnx-Front-Door, secret: "secret:status/front-door-secret"}`,
+   needs `auth: idp` and a `public_hostname`), and the generated Caddy site adds it:
+   ```caddyfile
+   status.lab.example {
+   	import hnx_forward_auth
+   	reverse_proxy <the hub's capability alias and port> {
+   		header_up X-Hnx-Front-Door {env.HNX_SECRET_STATUS_FRONT_DOOR_SECRET}
+   	}
+   }
+   ```
+   Give the edge and the hub the same value in `HNX_SECRET_STATUS_FRONT_DOOR_SECRET` from the secret
+   store;
+3. it carries the **identity** the forward-auth proxy sets (`X-Authentik-Username`, copied by
+   the generated `hnx_forward_auth` snippet);
+4. that identity is in the **viewer group** (`X-Authentik-Groups`, `|`-separated; create the
+   group in Authentik and add the people who may read prompts and commands).
+
+Anything missing, repeated or malformed is `403`. Run the hub with `hnx status serve --agents
+examples/status/agents.yml --bind <address> --allow-remote --allowed-host status.lab.example`.
+**Check your edge** once: a request to the site with a forged `X-Authentik-Username` and no
+login must not reach the hub with that header (Caddy's `copy_headers` sets the header from the
+auth response; verify on your version). Every private view is appended to the access log
+(`private.access_log`, JSONL, mode 0600: `at`, `user`, `view`, `session`, `event`), which is
+itself a private page. Detail content is rendered as escaped text only (never HTML or markdown)
+and nothing in this code feeds it back into an agent's context.
 
 ## What needs a server (stage 2)
 

@@ -1334,9 +1334,15 @@ class Report:
 def generate(
     out_dir: str | Path, root: Path, registry: Registry | None
 ) -> tuple[list[str], list[str]]:
-    """Write every page; remove orphans.  Returns (written, removed)."""
+    """Write every page; remove orphans.  Returns (written, removed).
+
+    Orphans are removed only from a directory this generator owns
+    (:func:`homelabnext._generated.claim`: ``<root>/docs/capabilities``, or one it created or
+    marked); any other ``out_dir`` is written to and nothing in it is deleted."""
+    from homelabnext._generated import claim
+
     out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
+    prune = claim(out, "hnx docs capabilities", Path(root) / PAGES_DIR)
     pages = render_all(root, registry)
     written = []
     for name, text in pages.items():
@@ -1344,7 +1350,7 @@ def generate(
         if not p.exists() or p.read_text(encoding="utf-8") != text:
             p.write_text(text, encoding="utf-8")
             written.append(name)
-    removed = sorted(p.name for p in out.glob("*.md") if p.name not in pages)
+    removed = sorted(p.name for p in out.glob("*.md") if p.name not in pages) if prune else []
     for n in removed:
         (out / n).unlink()
     return written, removed

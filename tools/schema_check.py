@@ -202,6 +202,20 @@ _TIGHTENING_IF_NEW = (
 )
 
 
+def _newline_guard_only(old: str, new: str) -> bool:
+    """``new`` is ``old`` with ``(?!\\n)`` appended to its closing ``$``: the same language.
+
+    JSON Schema patterns are ECMA-262 regular expressions, where ``$`` (no multiline flag)
+    matches only at the end of the input, so the lookahead after it is always true.  Python's
+    ``re``, which the repository's validators use, also lets ``$`` match before a trailing
+    newline; the guard makes Python agree with the contract, it does not change the contract.
+    """
+    if not (isinstance(old, str) and isinstance(new, str) and new == old + "(?!\\n)"):
+        return False
+    body = old[:-1]
+    return old.endswith("$") and (len(body) - len(body.rstrip("\\"))) % 2 == 0
+
+
 def _as_types(t: Any) -> set[str]:
     return set(t) if isinstance(t, list) else {t}
 
@@ -265,7 +279,7 @@ def is_additive(old: Any, new: Any, path: str = "$") -> list[str]:
             if ov != nv:
                 out.append(f"{p}: const changed {ov!r} -> {nv!r}")
         elif key == "pattern":
-            if ov != nv:
+            if ov != nv and not _newline_guard_only(ov, nv):
                 out.append(f"{p}: pattern changed (cannot prove compatible)")
         elif key in _NUM_LOWER:
             if nv > ov:

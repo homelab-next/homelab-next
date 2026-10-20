@@ -33,6 +33,7 @@ EXPECTED = {
     "events/scope.denied.schema.json",
     "events/deploy.changed.schema.json",
     "events/status.observed.schema.json",
+    "events/agent.activity.schema.json",
     "records/note.schema.json",
     "registers/lesson.schema.json",
     "registers/runbook.schema.json",
@@ -56,6 +57,9 @@ EXPECTED = {
     "ocsf/network_activity.v1.json",
     "ocsf/vulnerability_finding.v1.json",
     "status/observation.schema.json",
+    "status/agent_activity.schema.json",
+    "status/agent_activity_detail.schema.json",
+    "status/agents.schema.json",
     "status/views.schema.json",
 }
 
@@ -110,6 +114,7 @@ def test_event_schemas_cover_reaction_seam_types():
             "scope.denied",
             "deploy.changed",
             "status.observed",
+            "agent.activity",
         )
     }
 

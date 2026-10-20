@@ -1,0 +1,14 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:status-hub",
+  "type": "homelabnext.status.observed",
+  "time": "2026-10-20T08:00:05Z",
+  "data": {
+    "event_id": "cc-0007",
+    "session_id": "s-1",
+    "runtime": "claude-code",
+    "time": "2026-10-20T08:00:05Z",
+    "kind": "tool_end"
+  }
+}

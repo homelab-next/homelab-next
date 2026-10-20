@@ -29,6 +29,8 @@ def _report(**overrides):
         "homelabnext/registry/limits.py": _file(10, 9),
         "homelabnext/context/store.py": _file(10, 9),
         "homelabnext/mcp/catalog.py": _file(10, 9),
+        "homelabnext/status/agents/auth.py": _file(10, 9),
+        "homelabnext/status/agents/ingest.py": _file(10, 9),
         "homelabnext/agent/pack.py": _file(10, 0),  # not a unit: never counted
     }
     files.update(overrides)

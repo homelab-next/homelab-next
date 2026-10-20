@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+agents_version: 1
+store: build/status/agents/activity.db
+ingest:
+  senders:
+    - {name: cloud, token: fake-literal-token-value}

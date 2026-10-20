@@ -43,7 +43,7 @@ from typing import Any
 from homelabnext._http import DEFAULT_MAX_BYTES, check_plaintext, read_bounded, safe_urlopen
 from homelabnext.notify import LEVELS, Message, NtfySender, SendError
 
-from ._lab import endpoint_url
+from ._env import resolve
 
 __all__ = ["NtfyTarget", "make"]
 
@@ -199,7 +199,7 @@ def make(
 ) -> NtfyTarget:
     """A target on the ``notify`` endpoint (unauthenticated, as the lab's ntfy is)."""
     return NtfyTarget(
-        endpoint_url(capability, ("http", "https")),
+        resolve(capability, env_only=True, schemes=("http", "https")).url,
         topic=topic,
         timeout=timeout,
         allow_plaintext=allow_plaintext,

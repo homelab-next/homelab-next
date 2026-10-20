@@ -48,6 +48,7 @@ Every service in `examples/services.yml`, and the capability page that holds its
 | [object-store](../systems/object-store.md) ([[systems/object-store\|object-store]]) | `object-store` | `minio` | [object-store](object-store.md) ([[capabilities/object-store\|object-store]]) |
 | [records-db](../systems/records-db.md) ([[systems/records-db\|records-db]]) | `records-db` | `postgresql` | no conformance suite |
 | [secrets](../systems/secrets.md) ([[systems/secrets\|secrets]]) | `secrets` | `openbao` | [secrets](secrets.md) ([[capabilities/secrets\|secrets]]) |
+| [status-hub](../systems/status-hub.md) ([[systems/status-hub\|status-hub]]) | `status-hub` | `homelabnext` | no conformance suite |
 
 ## Regenerate and check
 

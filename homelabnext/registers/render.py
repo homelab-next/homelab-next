@@ -21,7 +21,16 @@ from .schema import (
     validate_runbooks,
 )
 
-__all__ = ["build_all", "load_yaml", "render_invariants", "render_lessons", "render_runbooks"]
+__all__ = [
+    "ALL_HOLD",
+    "build_all",
+    "criterion_status",
+    "invariants_verdict",
+    "load_yaml",
+    "render_invariants",
+    "render_lessons",
+    "render_runbooks",
+]
 
 CSS = """
 :root{--bg:#fff;--fg:#1b1f24;--mut:#59636e;--line:#d0d7de;--card:#f6f8fa;--ok:#1a7f37;--bad:#cf222e;--warn:#9a6700}
@@ -214,6 +223,32 @@ def render_runbooks(data, lessons=None, policy=None) -> tuple[str, dict]:
     ), json.loads(json.dumps(doc, default=str))
 
 
+ALL_HOLD = "ALL INVARIANTS HOLD"
+#: statuses that neither hold nor break the register: not run here by design
+NOT_LIVE = ("deferred", "server", "skip")
+
+
+def criterion_status(criterion: dict, result: dict | None) -> str:
+    """One criterion's status on the page: its result's, else ``deferred`` (a deferred
+    criterion), ``server`` (``evidence: server``, run on the lab) or ``untested``."""
+    status = (result or {}).get("status")
+    if status:
+        return status
+    if criterion.get("deferred"):
+        return "deferred"
+    return "server" if criterion.get("evidence") == "server" else "untested"
+
+
+def invariants_verdict(counts: dict[str, int]) -> str:
+    """The page's headline for ``counts`` (status -> criteria): ``ALL INVARIANTS HOLD`` when
+    nothing is red and every criterion that runs here passed, else ``<n> red, <n> untested``."""
+    red = counts.get("fail", 0) + counts.get("error", 0)
+    live = [s for s in counts if s not in NOT_LIVE]
+    if red == 0 and set(live) <= {"pass"} and live:
+        return ALL_HOLD
+    return f"{red} red, {counts.get('untested', 0)} untested"
+
+
 def render_invariants(data, results=None) -> tuple[str, dict]:
     reg = validate_invariants(data)
     res = (results or {}).get("results", {})
@@ -221,13 +256,7 @@ def render_invariants(data, results=None) -> tuple[str, dict]:
     rows, merged, counts = {}, [], {}
     for c in reg["criteria"]:
         r = res.get(c["id"], {})
-        status = r.get("status") or (
-            "deferred"
-            if c.get("deferred")
-            else "server"
-            if c["evidence"] == "server"
-            else "untested"
-        )
+        status = criterion_status(c, r)
         counts[status] = counts.get(status, 0) + 1
         merged.append(
             {
@@ -273,13 +302,7 @@ def render_invariants(data, results=None) -> tuple[str, dict]:
             + "</article>"
             for i, t in sorted(retired.items())
         )
-    red = counts.get("fail", 0) + counts.get("error", 0)
-    live = [s for s in counts if s not in ("deferred", "server", "skip")]
-    verdict = (
-        "ALL INVARIANTS HOLD"
-        if red == 0 and set(live) <= {"pass"} and live
-        else f"{red} red, {counts.get('untested', 0)} untested"
-    )
+    verdict = invariants_verdict(counts)
     summary = f"{verdict} - " + ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))
     if results and results.get("last_run"):
         summary += f" - last run {results['last_run']}"

@@ -53,7 +53,7 @@ from conformance.protocols.secrets import (
 )
 from homelabnext._http import check_plaintext, read_bounded, safe_urlopen
 
-from ._lab import endpoint_url, env_secret
+from ._env import env_secret, resolve
 
 __all__ = ["OpenBaoError", "OpenBaoStore", "make"]
 
@@ -338,7 +338,7 @@ def make(
     elif not namespace:
         raise ValueError("a standing store needs a namespace")
     return OpenBaoStore(
-        endpoint_url(capability, ("http", "https")),
+        resolve(capability, env_only=True, schemes=("http", "https")).url,
         env_secret(token_env),
         mount=mount,
         namespace=namespace,

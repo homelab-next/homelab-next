@@ -161,7 +161,7 @@ Provided by (`examples/services.yml`):
 |---|---|
 | [idp](../systems/idp.md) ([[systems/idp\|idp]]) | `authentik` |
 
-Depended on by: [dashboards](../systems/dashboards.md) ([[systems/dashboards|dashboards]]), [edge-proxy](../systems/edge-proxy.md) ([[systems/edge-proxy|edge-proxy]]), [lake-catalog](../systems/lake-catalog.md) ([[systems/lake-catalog|lake-catalog]]), [lake-query](../systems/lake-query.md) ([[systems/lake-query|lake-query]])
+Depended on by: [dashboards](../systems/dashboards.md) ([[systems/dashboards|dashboards]]), [edge-proxy](../systems/edge-proxy.md) ([[systems/edge-proxy|edge-proxy]]), [lake-catalog](../systems/lake-catalog.md) ([[systems/lake-catalog|lake-catalog]]), [lake-query](../systems/lake-query.md) ([[systems/lake-query|lake-query]]), [status-hub](../systems/status-hub.md) ([[systems/status-hub|status-hub]])
 
 ## Integrating a new product
 

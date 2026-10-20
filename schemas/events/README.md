@@ -14,6 +14,7 @@ detection to decision to swap). Other event families are added later as separate
 | `scope.denied` | `homelabnext.scope.denied` (a writer tool was refused for an out-of-scope target; `docs/scope.md`) |
 | `deploy.changed` | `homelabnext.deploy.changed` (a component was released or deployed: versions and the changelog's changes; `homelabnext.events.deploy`, checklist F-15) |
 | `status.observed` | `homelabnext.status.observed` (one status observation, `schemas/status/observation.schema.json`; collectors publish it, the status hub consumes it: `docs/status.md`, ADR-0013) |
+| `agent.activity` | `homelabnext.agent.activity` (one agent activity event, summary tier only: `schemas/status/agent_activity.schema.json`; the detail tier never goes on the bus: `docs/status.md` section 6) |
 | `swap.step` (1.1) | `homelabnext.swap.step` (steps 1..9 of the swap procedure; 1.1 adds the nine step names of the swap record, `homelabnext.swap.events` builds them from a record) |
 
 Envelope: `specversion` (`"1.0"`), `id` (idempotency key; redelivery of the same id is harmless),

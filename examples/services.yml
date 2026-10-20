@@ -57,7 +57,7 @@ services:
     protocol: https
     port: 443
     health: {kind: tcp}
-    upstreams: [dashboards, idp]
+    upstreams: [dashboards, idp, status-hub]
     owner: platform-team
     version: "2.8.4"
     tls: public
@@ -301,3 +301,42 @@ services:
     public_hostname: dashboards.lab.example
     backup_job: daily-core
     tags: [ops, ui]
+
+  status-hub:
+    capability: status-hub
+    impl: homelabnext
+    host: mon-core
+    protocol: http
+    port: 8099
+    health: {kind: http, path: /status.json, expect_status: 200}
+    upstreams: [idp]
+    owner: platform-team
+    version: "0.1.0"
+    tls: none
+    auth: idp
+    public_hostname: status.lab.example
+    # the edge adds this header (value from the secret store) so the hub can trust the
+    # forward-auth identity headers for its private agent-activity tier (docs/status.md)
+    front_door: {header: X-Hnx-Front-Door, secret: "secret:status/front-door-secret"}
+    tags: [ops, ui]
+    status_sources:
+      - id: agent-spool
+        kind: agent-activity
+        target: {file: build/status/agent-spool}
+        interval_s: 30
+        timeout_s: 10
+        mapping: {builtin: agent-spool, module: agents}
+        what: Agent sessions from the local hook spool (Claude Code hooks and other CLIs); stuck and errored sessions need attention.
+      - id: agent-push
+        kind: agent-activity
+        interval_s: 60
+        timeout_s: 10
+        mapping: {builtin: agent-push, module: agents}
+        what: Agent sessions pushed to the ingest listener (cloud sessions, orchestrators); stuck and errored sessions need attention.
+      - id: agentmetry-trail
+        kind: agent-activity
+        target: {file: build/status/agentmetry/audit-forward.jsonl}
+        interval_s: 60
+        timeout_s: 10
+        mapping: {builtin: agentmetry-jsonl, module: agents}
+        what: Agent sessions read from an Agentmetry canonical JSONL trail (optional external app).

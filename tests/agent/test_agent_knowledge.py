@@ -26,6 +26,8 @@ from homelabnext.agent import (
 )
 from homelabnext.agent.knowledge import explain, select_knowledge, subjects
 from homelabnext.graph import Edge, Graph, Node
+from homelabnext.graph.sources import _provenance
+from homelabnext.registers.schema import record_digest_of
 from homelabnext.registry import load
 
 REPO = Path(__file__).resolve().parents[2]
@@ -275,6 +277,65 @@ def test_a_node_about_an_ungranted_capability_one_hop_away_is_excluded(root):
         assert "secrets" not in text
 
 
+def _with(graph: Graph, nodes, edges) -> Graph:
+    return Graph(
+        {**graph.nodes, **{n.id: n for n in nodes}},
+        [*graph.edges, *(Edge(s, d, t, "fake") for s, d, t in edges)],
+    )
+
+
+def test_a_tag_naming_a_product_reaches_the_services_that_run_it(root):
+    """A lesson tagged ``lake-query`` and ``garage``: the garage tag resolves to the product, the
+    product is run by the object-store service.  The profile holds lake-query only, so the lesson
+    is about something ungranted and stays out."""
+    g = _with(
+        fake_graph(),
+        [
+            _node("system:garage", "system"),
+            _node("product:garage", "product"),
+            _node("svc:object-store", "svc"),
+            _node("cap:object-store", "cap"),
+            _node("lesson:LL-020", "lesson", "lessons/LL-010.md", reviewed=FULL),
+        ],
+        [
+            ("lesson:LL-020", "system:lake-query", "about"),
+            ("lesson:LL-020", "system:garage", "about"),
+            ("system:garage", "product:garage", "resolves_to"),
+            ("svc:object-store", "product:garage", "runs"),
+            ("svc:object-store", "cap:object-store", "provides"),
+        ],
+    )
+    assert subjects(g, "lesson:LL-020") == {"cap:lake-query", "svc:object-store"}
+    sel = select_knowledge(profile_with(RULE), g, root)
+    assert "lesson:LL-020" not in ids(sel)
+    assert reasons(sel)["lesson:LL-020"] == (
+        "about what the profile is not granted: svc:object-store"
+    )
+
+
+def test_a_proxy_that_resolves_to_nothing_grantable_fails_closed(root):
+    """A product nothing registered runs (only a compose service with no capability): the tag is
+    an ungranted subject, not a pass."""
+    g = _with(
+        fake_graph(),
+        [
+            _node("system:garage", "system"),
+            _node("product:garage", "product"),
+            _node("compose:lab/garage", "compose"),
+            _node("lesson:LL-020", "lesson", "lessons/LL-010.md", reviewed=FULL),
+        ],
+        [
+            ("lesson:LL-020", "system:lake-query", "about"),
+            ("lesson:LL-020", "system:garage", "about"),
+            ("system:garage", "product:garage", "resolves_to"),
+            ("compose:lab/garage", "product:garage", "runs"),
+        ],
+    )
+    assert subjects(g, "lesson:LL-020") == {"cap:lake-query", "system:garage"}
+    sel = select_knowledge(profile_with(RULE), g, root)
+    assert "lesson:LL-020" not in ids(sel)
+
+
 def test_the_task_cannot_seed_an_ungranted_capability(root):
     rule = {"from": "task", "kinds": ["runbook", "lesson", "doc"]}
     sel = select_knowledge(
@@ -305,6 +366,46 @@ def test_require_reviews_filters_records_only(root):
     assert "lesson:LL-011" not in ids(sel)
     assert reasons(sel)["lesson:LL-011"] == "reviews: no current challenge (has: agent_check)"
     assert "lesson:LL-010" in ids(sel) and "check:lake-query/a" in ids(sel)  # not a record
+
+
+def _ll010(author: str, edit_after_review: bool = False) -> Graph:
+    """The fake graph with LL-010's ``reviewed`` built by the registers reader from a record that
+    an agent checked and another challenged (against its content as written, then maybe edited)."""
+    rec = {"id": "LL-010", "title": "Lake queries time out", "kind": "pitfall", "author": author}
+    digest = record_digest_of(rec)
+    rec["reviews"] = [
+        {"by": f"agent:fake-{who}", "kind": "agent", "role": role, "date": "2026-01-02",
+         "verdict": "pass", "digest": digest}
+        for who, role in (("checker", "check"), ("challenger", "challenge"))
+    ]  # fmt: skip
+    if edit_after_review:
+        rec["title"] += " (edited after review)"
+    g = fake_graph()
+    node = g.nodes["lesson:LL-010"]
+    attrs = {k: v for k, v in node.attrs.items() if k != "reviewed"}
+    attrs.update({k: v for k, v in _provenance(rec).items() if v is not None})
+    return Graph({**g.nodes, node.id: Node(node.id, node.kind, node.title, node.path, attrs)},
+                 list(g.edges))  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("author", "edited", "has"),
+    [
+        ("agent:fake-author", False, None),  # current, independent: included
+        ("agent:fake-author", True, "none"),  # content changed after the reviews
+        ("agent:fake-checker", False, "challenge"),  # the checker reviewed its own lesson
+    ],
+)
+def test_require_reviews_trusts_only_current_valid_reviews(root, author, edited, has):
+    """``require_reviews`` reads the graph's ``reviewed``, which drops a review of an earlier
+    content and a self-review, so neither can satisfy it."""
+    prof = profile_with({**RULE, "require_reviews": ["agent_check", "challenge"]})
+    sel = select_knowledge(prof, _ll010(author, edited), root)
+    if has is None:
+        assert "lesson:LL-010" in ids(sel)
+    else:
+        assert "lesson:LL-010" not in ids(sel)
+        assert reasons(sel)["lesson:LL-010"].endswith(f"(has: {has})")
 
 
 def test_another_rule_may_include_what_one_excluded(root):
