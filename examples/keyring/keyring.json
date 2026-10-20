@@ -6,7 +6,7 @@
       "profile:reader": "sha256:b855f7d3bf4d947b92df54cdb815d2099722c7a62166abf05cd2af0c62837114",
       "profile:responder": "sha256:ed744f7e5a9beed4c46712e50eb47055c08f9e7d0e51c4d7e45fa3b6ac30012d"
     },
-    "registry": "edf3e9c04325fed47acfe3f6dbf89c43bf2d25a8636549086c2b261a05fa0d72"
+    "registry": "ebf471a7d867e8689d3d3d31a4322d168bba0fb0d0bcbc2510dd50363f76d4d7"
   },
   "keyring_version": 1,
   "principals": [
@@ -71,6 +71,10 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:secrets"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:status-hub"
         },
         {
           "reason": "not granted (default deny)",
@@ -172,6 +176,10 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:secrets"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:status-hub"
         },
         {
           "reason": "not granted (default deny)",
@@ -288,6 +296,10 @@
         },
         {
           "reason": "not granted (default deny)",
+          "resource": "cap:status-hub"
+        },
+        {
+          "reason": "not granted (default deny)",
           "resource": "mcp:agent_runtime"
         },
         {
@@ -366,6 +378,10 @@
         {
           "reason": "zone not a client (default deny)",
           "resource": "svc:records-db"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:status-hub"
         }
       ],
       "grants": [
@@ -442,6 +458,10 @@
         {
           "reason": "zone not a client (default deny)",
           "resource": "svc:metrics"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:status-hub"
         }
       ],
       "grants": [
@@ -570,6 +590,12 @@
           "kind": "service",
           "level": "connect",
           "resource": "svc:idp"
+        },
+        {
+          "endpoint": "status-hub.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:status-hub"
         }
       ],
       "kind": "network",
@@ -646,6 +672,12 @@
           "kind": "service",
           "level": "connect",
           "resource": "svc:secrets"
+        },
+        {
+          "endpoint": "status-hub.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:status-hub"
         }
       ],
       "kind": "network",

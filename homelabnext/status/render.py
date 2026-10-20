@@ -54,6 +54,19 @@ th,td{border-bottom:1px solid var(--line);padding:.4rem .5rem;text-align:left;ve
 .stale{color:var(--stale);border-left-color:var(--stale)}
 .tile.ok,.tile.warn,.tile.fail,.tile.unknown,.tile.stale{color:inherit}
 code{font-size:.85em}
+nav .grp{margin:.9rem 0 .2rem;padding:0 .5rem;color:var(--mute);font-size:.75rem;
+text-transform:uppercase;letter-spacing:.04em}
+.chips{margin:0 0 .75rem;font-size:.85rem}.chips a,.chips b{display:inline-block;margin:0 .3rem .3rem 0;
+padding:.1rem .5rem;border:1px solid var(--line);border-radius:1rem;color:inherit;text-decoration:none}
+.chips b{background:var(--panel)}.split{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);
+gap:1rem}.pane{background:var(--panel);border:1px solid var(--line);border-radius:.4rem;padding:.6rem .75rem;
+min-width:0}dl{display:grid;grid-template-columns:max-content 1fr;gap:.2rem .75rem;margin:0}
+dt{color:var(--mute)}dd{margin:0;overflow-wrap:anywhere}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);border:1px solid var(--line);
+padding:.5rem;border-radius:.3rem;font-size:.82rem;max-height:30rem;overflow:auto}
+.working{color:var(--ok)}.waiting{color:var(--warn)}.stuck{color:var(--stale)}.errored{color:var(--fail)}
+.done{color:var(--mute)}.private{border-left:.35rem solid var(--fail);padding-left:.6rem}
+@media (max-width:60rem){.split{grid-template-columns:1fr}}
 @media (max-width:40rem){body{display:block}nav{width:auto;border-right:0;
 border-bottom:1px solid var(--line)}}
 """
@@ -167,12 +180,27 @@ def _sources(p: Mapping[str, Any], docs_base: str) -> str:
 _PANELS = {"exceptions": _exceptions, "grid": _grid, "sources": _sources}
 
 
-def render_html(doc: Mapping[str, Any], *, docs_base: str = "docs") -> str:
-    """The page for one status document (deterministic)."""
-    nav = []
+def nav_html(doc: Mapping[str, Any], *, live: bool = False, private: bool = False) -> str:
+    """The left menu.  ``live``: served by ``hnx status serve`` (page entries link to their live
+    pages; in the static file they are marked live-only).  ``private``: the request passed the
+    trusted front door -- only then is the private group rendered at all."""
+    prefix = "/" if live else ""
+    nav, group = [], None
     for m in doc["menu"]:
+        if m.get("group") == "private" and not private:
+            continue
+        if m.get("group") != group:
+            group = m.get("group")
+            if group:
+                nav.append(f'<div class="grp">{_e(group)}</div>')
         if m["kind"] == "panel":
-            nav.append(f'<a href="#view-{_e(m["id"])}">{_e(m["title"])}</a>')
+            nav.append(f'<a href="{prefix}#view-{_e(m["id"])}">{_e(m["title"])}</a>')
+        elif m["kind"] == "page":
+            if live and m["available"]:
+                nav.append(f'<a href="{_e(m["href"])}">{_e(m["title"])}</a>')
+            else:
+                why = "served live by hnx status serve" if not live else "no activity store"
+                nav.append(f'<span class="off" title="{why}">{_e(m["title"])}</span>')
         elif m["available"]:
             nav.append(
                 f'<a class="ext" href="{_e(m["href"])}" rel="noopener noreferrer">{_e(m["title"])}</a>'
@@ -181,6 +209,31 @@ def render_html(doc: Mapping[str, Any], *, docs_base: str = "docs") -> str:
             nav.append(f'<span class="off" title="not registered">{_e(m["title"])}</span>')
     if doc.get("act_via"):
         nav.append(f'<a class="ext" href="{_e(doc["act_via"])}">Make a change</a>')
+    s = doc["summary"]
+    return (
+        f"<nav><h1>{_e(doc['title'])}</h1><p>read-only &middot; {_e(doc['generated_at'])}"
+        f"<br>{s['ok']}/{s['total']} ok</p>{''.join(nav)}</nav>"
+    )
+
+
+def shell_html(
+    doc: Mapping[str, Any], title: str, main: str, *, nav: str, refresh_s: int | None = None
+) -> str:
+    """One page of the shell: the menu and ``main`` (already-escaped HTML)."""
+    meta = f'<meta http-equiv="refresh" content="{int(refresh_s)}">' if refresh_s else ""
+    return (
+        "<!doctype html>\n"
+        '<html lang="en"><head><meta charset="utf-8">'
+        f'<meta name="viewport" content="width=device-width,initial-scale=1">{meta}'
+        f"<title>{_e(title)}</title><style>{_CSS}</style></head><body>"
+        f"{nav}<main>{main}</main></body></html>\n"
+    )
+
+
+def render_html(
+    doc: Mapping[str, Any], *, docs_base: str = "docs", live: bool = False, private: bool = False
+) -> str:
+    """The page for one status document (deterministic)."""
     sections = []
     titles = {m["id"]: m["title"] for m in doc["menu"]}
     order = sorted(doc["views"], key=lambda v: (v == doc["main"], list(titles).index(v)))
@@ -191,16 +244,8 @@ def render_html(doc: Mapping[str, Any], *, docs_base: str = "docs") -> str:
             f'<section id="view-{_e(vid)}" class="{cls}" data-panel="{_e(p["panel"])}">'
             f"<h2>{_e(titles[vid])}</h2>{_PANELS[p['panel']](p, docs_base)}</section>"
         )
-    s = doc["summary"]
-    return (
-        "<!doctype html>\n"
-        '<html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        f"<title>{_e(doc['title'])}</title><style>{_CSS}</style></head><body>"
-        f"<nav><h1>{_e(doc['title'])}</h1><p>read-only &middot; {_e(doc['generated_at'])}"
-        f"<br>{s['ok']}/{s['total']} ok</p>{''.join(nav)}</nav>"
-        f"<main>{''.join(sections)}</main></body></html>\n"
-    )
+    nav = nav_html(doc, live=live, private=private)
+    return shell_html(doc, doc["title"], "".join(sections), nav=nav)
 
 
 def write(out: str | Path, doc: Mapping[str, Any], *, docs_base: str = "docs") -> list[Path]:

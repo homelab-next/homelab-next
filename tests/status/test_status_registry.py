@@ -113,3 +113,49 @@ def test_status_sources_do_not_change_the_generator_digest(doc):
     moved = copy.deepcopy(bare)
     moved["services"]["metrics"]["port"] = 9091
     assert build_registry(moved).digest != build_registry(bare).digest
+
+
+# ---------------------------------------------------------------- stage 1b: agent activity
+@pytest.mark.parametrize(
+    "src, message",
+    [
+        ({"mapping": {"state": "status"}, "target": {"file": "x"}}, "agent-activity needs mapping.builtin"),
+        ({"mapping": {"builtin": "agent-spool"}, "target": {}}, "agent-spool needs target.file"),
+        ({"mapping": {"builtin": "agent-push"}, "target": {"file": "x"}}, "agent-push reads the activity store"),
+        ({"mapping": {"builtin": "agentmetry-jsonl"}, "target": {"path": "/x"}}, "takes only target.file"),
+    ],
+)  # fmt: skip
+def test_agent_activity_source_rules(doc, src, message):
+    bad = _with_source(doc, "status-hub", kind="agent-activity", **src)
+    assert any(message in p for p in _problems(bad))
+
+
+def test_agent_builtin_only_on_agent_activity(doc):
+    bad = _with_source(
+        doc, kind="poll-file", target={"file": "x"}, mapping={"builtin": "agent-spool"}
+    )
+    assert any("for agent-activity only" in p for p in _problems(bad))
+
+
+def test_front_door_needs_idp_and_a_public_hostname(doc):
+    bad = copy.deepcopy(doc)
+    bad["services"]["notify"]["front_door"] = {"header": "X-Door", "secret": "secret:a/b"}
+    assert any("front_door needs auth: idp" in p for p in _problems(bad))
+    ok = build_registry(doc)
+    assert ok.services["status-hub"].front_door["header"] == "X-Hnx-Front-Door"
+
+
+def test_generated_caddy_site_adds_the_front_door_header_from_the_environment(registry):
+    from homelabnext.generators.builtin import caddy
+
+    site = (
+        caddy(registry)["caddy/sites.caddy"].split("status.lab.example {", 1)[1].split("\n}", 1)[0]
+    )
+    assert "import hnx_forward_auth" in site
+    assert "header_up X-Hnx-Front-Door {env.HNX_SECRET_STATUS_FRONT_DOOR_SECRET}" in site
+    other = (
+        caddy(registry)["caddy/sites.caddy"]
+        .split("dashboards.lab.example {", 1)[1]
+        .split("\n}", 1)[0]
+    )
+    assert "header_up" not in other

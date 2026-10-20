@@ -79,7 +79,7 @@ author: unknown
 ## Depends on / depended on by
 
 <!-- hnx:gen:deps -->
-- Depends on: [dashboards](dashboards.md) ([[systems/dashboards|dashboards]]), [idp](idp.md) ([[systems/idp|idp]])
+- Depends on: [dashboards](dashboards.md) ([[systems/dashboards|dashboards]]), [idp](idp.md) ([[systems/idp|idp]]), [status-hub](status-hub.md) ([[systems/status-hub|status-hub]])
 - Depended on by: none declared
 <!-- /hnx:gen -->
 

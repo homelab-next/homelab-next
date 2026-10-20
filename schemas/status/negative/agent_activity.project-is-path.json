@@ -1,0 +1,8 @@
+{
+  "event_id": "cc-0004",
+  "session_id": "s-1",
+  "runtime": "claude-code",
+  "project": "/home/someone/work/repo",
+  "time": "2026-10-20T08:00:00Z",
+  "kind": "session_start"
+}

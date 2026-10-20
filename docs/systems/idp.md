@@ -80,7 +80,7 @@ author: unknown
 
 <!-- hnx:gen:deps -->
 - Depends on: none declared
-- Depended on by: [dashboards](dashboards.md) ([[systems/dashboards|dashboards]]), [edge-proxy](edge-proxy.md) ([[systems/edge-proxy|edge-proxy]]), [lake-catalog](lake-catalog.md) ([[systems/lake-catalog|lake-catalog]]), [lake-query](lake-query.md) ([[systems/lake-query|lake-query]])
+- Depended on by: [dashboards](dashboards.md) ([[systems/dashboards|dashboards]]), [edge-proxy](edge-proxy.md) ([[systems/edge-proxy|edge-proxy]]), [lake-catalog](lake-catalog.md) ([[systems/lake-catalog|lake-catalog]]), [lake-query](lake-query.md) ([[systems/lake-query|lake-query]]), [status-hub](status-hub.md) ([[systems/status-hub|status-hub]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->

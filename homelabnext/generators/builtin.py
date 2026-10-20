@@ -9,7 +9,7 @@ from collections import defaultdict
 
 import yaml
 
-from homelabnext.registry.model import Registry, Service
+from homelabnext.registry.model import Registry, Service, secret_env_name
 
 from .core import MARKER, register
 from .safe import check_fields, checked
@@ -142,10 +142,17 @@ def caddy(reg: Registry) -> dict[str, str]:
         if not s.public_hostname:
             continue
         auth_block = "\timport hnx_forward_auth\n" if (s.auth == "idp" and idp) else ""
+        proxy_block = ""
+        if s.front_door and auth_block:
+            # the shared secret that tells the service this request came through the edge (and
+            # so its identity headers are the IdP's): from the environment, never in the file
+            header = checked(s.front_door["header"], "front_door.header", "caddy")
+            env = checked(secret_env_name(s.front_door["secret"]), "front_door.secret", "caddy")
+            proxy_block = f" {{\n\t\theader_up {header} {{env.{env}}}\n\t}}"
         parts.append(
             render(
                 "caddy_site",
-                raw={"auth_block": auth_block},
+                raw={"auth_block": auth_block, "proxy_block": proxy_block},
                 hostname=s.public_hostname,
                 service=s.name,
                 capability=s.capability,

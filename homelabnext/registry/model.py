@@ -71,6 +71,7 @@ class Service:
     mcp: dict | None = None
     tags: tuple[str, ...] = ()
     status_sources: tuple[dict, ...] = ()
+    front_door: dict | None = None
 
     @property
     def scheme(self) -> str:
@@ -209,6 +210,10 @@ def semantic_problems(doc: dict) -> list[str]:
                 problems.append(f"service {sname}: mcp requires an http(s) protocol")
         if s.get("auth") == "idp" and not any(x["capability"] == "idp" for x in services.values()):
             problems.append(f"service {sname}: auth=idp but no service provides capability 'idp'")
+        if s.get("front_door") and (s.get("auth") != "idp" or not pub):
+            problems.append(
+                f"service {sname}: front_door needs auth: idp and a public_hostname (the edge adds it)"
+            )
     for sname, s in services.items():
         for up in s.get("upstreams", []):
             if up not in caps:
@@ -225,8 +230,18 @@ def semantic_problems(doc: dict) -> list[str]:
     return problems
 
 
+def secret_env_name(ref: str) -> str:
+    """The environment variable a secret-store reference is delivered in at run time:
+    ``secret:status/front-door-secret`` -> ``HNX_SECRET_STATUS_FRONT_DOOR_SECRET`` (the value never appears in
+    the registry, a generated file or the repository)."""
+    name = ref.removeprefix("secret:")
+    return "HNX_SECRET_" + re.sub(r"[^A-Za-z0-9]", "_", name).upper()
+
+
 #: status-source kinds that poll a registry service over HTTP (target.service + target.path)
 _HTTP_STATUS_KINDS = ("poll-http-json", "poll-prometheus")
+#: built-in mappers of the agent-activity kind (homelabnext.status.agents.sources)
+_AGENT_BUILTINS = ("agent-spool", "agentmetry-jsonl", "agent-push")
 _RAW_ADDRESS = re.compile(r"://|(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w])|\blocalhost\b", re.I)
 
 
@@ -270,10 +285,26 @@ def status_source_problems(services: dict) -> list[str]:
                     problems.append(f"{where}: poll-file needs target.file")
                 if "path" in target or "service" in target:
                     problems.append(f"{where}: poll-file takes only target.file")
+            elif kind == "agent-activity":
+                builtin = (src.get("mapping") or {}).get("builtin")
+                if builtin not in _AGENT_BUILTINS:
+                    problems.append(
+                        f"{where}: agent-activity needs mapping.builtin, one of {list(_AGENT_BUILTINS)}"
+                    )
+                if "path" in target or "service" in target:
+                    problems.append(f"{where}: agent-activity takes only target.file")
+                if builtin == "agent-push" and "file" in target:
+                    problems.append(
+                        f"{where}: agent-push reads the activity store (no target.file)"
+                    )
+                if builtin in ("agent-spool", "agentmetry-jsonl") and "file" not in target:
+                    problems.append(f"{where}: {builtin} needs target.file")
             elif target.get("path") or target.get("file"):
                 problems.append(f"{where}: push-event sources are not polled (no path or file)")
             mapping = src.get("mapping")
-            if kind in ("poll-http-json", "poll-file") and not mapping:
+            if mapping and mapping.get("builtin") in _AGENT_BUILTINS and kind != "agent-activity":
+                problems.append(f"{where}: builtin {mapping['builtin']} is for agent-activity only")
+            if kind in ("poll-http-json", "poll-file", "agent-activity") and not mapping:
                 problems.append(f"{where}: {kind} needs a mapping")
             if (
                 mapping
@@ -359,6 +390,7 @@ def build_registry(doc: dict) -> Registry:
             mcp=s.get("mcp"),
             tags=tuple(sorted(s.get("tags", []))),
             status_sources=tuple(s.get("status_sources", [])),
+            front_door=s.get("front_door"),
         )
     return Registry(
         lab_name=lab["name"],

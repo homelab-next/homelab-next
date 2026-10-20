@@ -5,12 +5,13 @@
 Every script in the tree, read from its `# hnx-script:` header. What counts as a script,
 the header fields and the checks that keep this page honest: [docs/scripts.md](../scripts.md).
 
-26 scripts: 18 check, 1 job, 2 service, 5 tool.
+27 scripts: 18 check, 1 job, 2 service, 6 tool.
 
 | id | path | kind | owner | purpose | triggers | invariant | exit codes |
 |---|---|---|---|---|---|---|---|
 | `check-changelog` | [`tools/check_changelog.py`](../../tools/check_changelog.py) | check | maintainers | Fail unless CHANGELOG.md keeps an Unreleased section and one for the current version. | `ci:ci/lint`; `make:changelog-check` | - | 0 both sections present; 1 a section is missing or the version cannot be read |
 | `check-spdx` | [`tools/check_spdx.py`](../../tools/check_spdx.py) | check | maintainers | Fail when a tracked source or config file has no SPDX-License-Identifier in its first five lines. | `ci:ci/lint`; `make:spdx`; `pre-commit:spdx-header` | Q-09 | 0 every file carries the header; 1 some file does not |
+| `claude-code-activity-hook` | [`hooks/claude_code_activity.py`](../../hooks/claude_code_activity.py) | tool | status-hub | Report Claude Code (or a CLI with the same hook shape) session activity to the status hub, both tiers. | `manual` | - | 0 always -- a reporting failure never blocks or alters the agent |
 | `component-tests` | [`tools/component_tests.py`](../../tools/component_tests.py) | check | maintainers | Fail when a package, capability, role, plugin, compose stack or tool has no tests. | `ci:ci/lint`; `make:component-tests` | Q-04 | 0 every component has tests; 1 some component has none or ALLOW is stale |
 | `conform-coverage` | [`tools/conform_coverage.py`](../../tools/conform_coverage.py) | check | maintainers | Fail unless each of the fifteen capabilities has a passing conformance suite. | `ci:ci/schemas`; `make:conform-check` | - | 0 all capabilities pass; 1 some capability lacks a passing test; 2 the report could not be produced |
 | `contract-coverage` | [`tools/contract_coverage.py`](../../tools/contract_coverage.py) | check | maintainers | Fail when an event type or shared lake table lacks a schema with publisher and consumer contract-test fixtures. | `ci:ci/schemas`; `make:contracts` | Q-05; T-07 | 0 clean; 1 a seam has no contract test; 2 usage error or an unresolvable range |

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/service/2.1",
+  "$id": "https://schemas.example.internal/homelabnext/platform/service/2.2",
   "title": "HomelabNext service registry (services.yml)",
-  "description": "Single source of truth for what runs where. Every endpoint, scrape target, proxy site, firewall rule, DNS record and environment file is generated from this document. Schema version 1; evolve additively. 2.0 closes every free-text field that generators interpolate: owners and identifiers are slugs, paths are URL path characters, descriptions are single lines, and every pattern rejects a trailing newline (Python re lets $ match before one; ECMA-262 does not). 2.1 adds status_sources: what the status hub may poll or receive for a service, by registry name only (docs/status.md, ADR-0013).",
+  "description": "Single source of truth for what runs where. Every endpoint, scrape target, proxy site, firewall rule, DNS record and environment file is generated from this document. Schema version 1; evolve additively. 2.0 closes every free-text field that generators interpolate: owners and identifiers are slugs, paths are URL path characters, descriptions are single lines, and every pattern rejects a trailing newline (Python re lets $ match before one; ECMA-262 does not). 2.1 adds status_sources: what the status hub may poll or receive for a service, by registry name only (docs/status.md, ADR-0013). 2.2 adds the agent-activity status-source kind with its built-in mappers, and front_door: the shared-secret header the edge adds in front of a service that trusts its forward-auth identity headers (the status hub's private tier).",
   "type": "object",
   "additionalProperties": false,
   "required": ["registry_version", "lab", "zones", "hosts", "services"],
@@ -132,6 +132,16 @@
           "type": "array",
           "items": {"$ref": "#/$defs/status_source"},
           "description": "Status sources this service offers the status hub (the menu: hnx status sources, docs/status/sources.md). Targets are registry names, never addresses."
+        },
+        "front_door": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["header", "secret"],
+          "description": "The service trusts the forward-auth identity headers only on requests that carry this header with the shared secret, which the edge adds (Caddy header_up from the environment variable named after the secret reference). Needs auth: idp and a public_hostname.",
+          "properties": {
+            "header": {"type": "string", "pattern": "^X-[A-Za-z0-9-]{1,60}$(?!\\n)"},
+            "secret": {"type": "string", "pattern": "^secret:[a-z][a-z0-9_-]*(/[a-z][a-z0-9_-]*)*$(?!\\n)", "description": "A name in the secret store; the value is never in the registry."}
+          }
         }
       }
     },
@@ -141,7 +151,7 @@
       "required": ["id", "kind", "interval_s", "what"],
       "properties": {
         "id": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)", "maxLength": 63, "description": "Unique across the registry; the graph node is status:<id>."},
-        "kind": {"enum": ["poll-http-json", "poll-file", "push-event", "poll-prometheus"], "description": "poll-prometheus is reserved for stage 2: its collector reports unknown until then."},
+        "kind": {"enum": ["poll-http-json", "poll-file", "push-event", "poll-prometheus", "agent-activity"], "description": "poll-prometheus is reserved for stage 2: its collector reports unknown until then. agent-activity (2.2) drains agent activity into the hub's activity store and reports stuck and errored sessions."},
         "target": {
           "type": "object",
           "additionalProperties": false,
@@ -165,7 +175,7 @@
       "additionalProperties": false,
       "description": "Payload -> status observations: a named built-in mapper, or declarative selectors (homelabnext.status.mapping).",
       "properties": {
-        "builtin": {"enum": ["invariants-results", "records-lanes", "broker-pending"]},
+        "builtin": {"enum": ["invariants-results", "records-lanes", "broker-pending", "agent-spool", "agentmetry-jsonl", "agent-push"]},
         "warn_after_s": {"type": "integer", "minimum": 1, "description": "records-lanes, broker-pending: an oldest item older than this is warn."},
         "items": {"$ref": "#/$defs/status_selector", "description": "The list (or mapping) of items; absent = the payload is one item."},
         "item": {"$ref": "#/$defs/status_selector", "description": "An item's name, relative to the item (@key = its key in a mapping)."},

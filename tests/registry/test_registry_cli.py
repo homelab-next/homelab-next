@@ -16,7 +16,7 @@ def run(*argv):
 
 def test_validate_ok_and_bad(tmp_path):
     rc, out, _ = run("validate", EXAMPLE)
-    assert rc == 0 and "14 services" in out
+    assert rc == 0 and "15 services" in out
     bad = tmp_path / "bad.yml"
     bad.write_text("registry_version: 1\n")
     rc, _, err = run("validate", str(bad))

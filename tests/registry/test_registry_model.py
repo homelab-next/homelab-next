@@ -24,7 +24,7 @@ def base_doc():
 
 def test_example_loads_and_counts():
     reg = load(EXAMPLE)
-    assert len(reg.services) == 14
+    assert len(reg.services) == 15
     assert reg.alias("lake-query") == "lake-query.svc.example.internal"
     assert reg.by_capability("lake-query").scheme == "https"
     assert reg.by_capability("inference").scheme == "http"

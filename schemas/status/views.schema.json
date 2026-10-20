@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/status/views/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/status/views/1.1",
   "title": "Status hub views (views.yml)",
-  "description": "The status hub shell: a main page and a left menu of views (ADR-0013). A view is a built-in panel (exceptions-first summary, per-module grid, source table) over a selection of the registered status sources, or an external link entry naming a registry service. Nothing here acts: the hub is read-only. Evolve additively.",
+  "description": "The status hub shell: a main page and a left menu of views (ADR-0013). A view is a built-in panel (exceptions-first summary, per-module grid, source table) over a selection of the registered status sources, or an external link entry naming a registry service. Nothing here acts: the hub is read-only. 1.1 adds the live agent-activity pages as panels (agents, activity, agent-analytics; agent-detail and agent-access-log, which must sit in the private group and render only for an authorized request) and the optional menu group. Evolve additively.",
   "type": "object",
   "additionalProperties": false,
   "required": ["views_version", "shell", "menu"],
@@ -40,7 +40,8 @@
       "properties": {
         "id": {"$ref": "#/$defs/view_id"},
         "title": {"type": "string", "minLength": 1, "maxLength": 60, "pattern": "^[^\\u0000-\\u001f\\u007f<>&]*$"},
-        "panel": {"enum": ["exceptions", "grid", "sources"]},
+        "panel": {"enum": ["exceptions", "grid", "sources", "agents", "activity", "agent-analytics", "agent-detail", "agent-access-log"], "description": "exceptions, grid and sources are sections of the page; the agent panels (1.1) are pages of their own, served live by hnx status serve."},
+        "group": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,30}$", "description": "1.1: a menu group; the private group renders only for a request through the trusted front door."},
         "select": {
           "type": "object",
           "additionalProperties": false,

@@ -1,0 +1,7 @@
+{
+  "event_id": "cc-0003",
+  "session_id": "s-1",
+  "runtime": "claude-code",
+  "time": "2026-10-20T08:00:00Z",
+  "kind": "thinking"
+}

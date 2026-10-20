@@ -1,0 +1,9 @@
+{
+  "event_id": "cc-0002",
+  "session_id": "s-1",
+  "runtime": "claude-code",
+  "time": "2026-10-20T08:00:00Z",
+  "kind": "tool_start",
+  "tool": "Bash",
+  "tool_input": {"command": "ls"}
+}

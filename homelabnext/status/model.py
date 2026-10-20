@@ -23,7 +23,7 @@ from homelabnext.registry.model import Registry
 STATES = ("ok", "warn", "fail", "unknown", "stale")
 #: worst first: a module or a view takes the worst state of what it holds
 SEVERITY = {"fail": 4, "stale": 3, "unknown": 2, "warn": 1, "ok": 0}
-KINDS = ("poll-http-json", "poll-file", "push-event", "poll-prometheus")
+KINDS = ("poll-http-json", "poll-file", "push-event", "poll-prometheus", "agent-activity")
 RESERVED_KINDS = ("poll-prometheus",)  # stage 2: product collectors
 OBSERVED_EVENT = "homelabnext.status.observed"
 DEFAULT_TIMEOUT_S = 10
@@ -103,7 +103,7 @@ class SourceSpec:
         target: dict[str, Any] = {}
         if self.kind in ("poll-http-json", "poll-prometheus"):
             target = {"service": self.polled_service, "path": self.path}
-        elif self.kind == "poll-file":
+        elif self.kind == "poll-file" or (self.kind == "agent-activity" and self.file):
             target = {"file": self.file}
         mapping = f"builtin {self.mapping['builtin']}" if "builtin" in self.mapping else "selectors"
         return {

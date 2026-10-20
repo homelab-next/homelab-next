@@ -149,7 +149,7 @@ def test_every_source_contributes_and_counts(graph):
     kinds = graph.kinds()
     for kind in ("svc", "cap", "adapter", "check", "schema", "lesson", "runbook", "inv"):
         assert kinds.get(kind), kind
-    assert kinds["svc"] == 14
+    assert kinds["svc"] == 15
     assert kinds["lesson"] == 5 and kinds["runbook"] == 2
     assert len(graph.of_kind("script")) == 26
     assert all(n.attrs.get("status") for n in graph.of_kind("lesson"))

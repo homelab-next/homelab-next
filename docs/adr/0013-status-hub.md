@@ -51,6 +51,41 @@ work.
 9. **`status.json` is the contract** (documented in `docs/status.md`); the HTML is a plain,
    self-contained rendering of it and may evolve freely.
 
+### Stage 1b: agent activity
+
+Agents are optional; when they run, what they do is one more domain of the hub, from any
+runtime (a coding CLI on a workstation or in a cloud session, an orchestrator, the maintainer's
+own agent fleet, anything that can POST JSON).
+
+1. **Two tiers, kept apart.** The *summary* tier (`schemas/status/agent_activity.schema.json`:
+   ids, runtime, surface, host, project, model, agent, parent session, kind, tool *name*,
+   outcome, tokens, cost) is public: hub pages, `status.json` (`agents`) and the bus event
+   `homelabnext.agent.activity`. The *detail* tier (`agent_activity_detail.schema.json`: prompt,
+   command, tool input and output, error, approval with its gated payload) is private: never on
+   the bus, never in `status.json`, served only behind the trusted front door. Both schemas are
+   closed (`additionalProperties: false`), so a detail field in a summary event is refused.
+2. **Redact before storage, always.** Every detail field goes through the shared screener with the
+   secret types on (personal data when configured), *then* is cut to its configured cap, then is
+   stored. Retention is by age, purged on open and on every write.
+3. **The private tier has a door, not a login.** A request must come from a trusted proxy address
+   (the registry's edge hosts), carry the front door's shared-secret header (the registry's
+   `front_door`, added by the generated Caddy site with `header_up` from the secret store), carry
+   the forward-auth identity header and be in the viewer group. Anything missing is `403`; every
+   private view is access-logged; content is rendered as escaped text.
+4. **Collection reuses the framework.** A new status-source kind `agent-activity` (registry 2.2)
+   with built-ins `agent-spool` (the stdlib Claude Code hook's spool, and the generic file spool),
+   `agentmetry-jsonl` (an Agentmetry canonical trail) and `agent-push` (sessions from the separate
+   push listener, `POST /ingest/agent-activity`, a bearer token per sender named by secret
+   reference). Each reports its errored sessions (`fail`) and stuck ones (`warn`) as attention
+   items and the working/waiting counts as live work, so the exceptions-first page needs no change.
+5. **Pages, not a graph.** Sessions, a session timeline, an event stream with an inspector pane and
+   CSV/JSONL export, and counts are server-rendered pages with query-string filters (no script).
+   Runtimes are not graph nodes: they are values in events, not registry entities.
+
+Alternatives considered: shipping the details on the bus (rejected: everything on the bus is
+shared); a login in the hub (rejected: one identity provider, at the edge); a client-side
+dashboard framework (rejected: CSP and the no-dependency page).
+
 ## Consequences
 
 - Adding a tool to the console is a registry edit plus, at most, a mapping; it appears in the menu,

@@ -48,6 +48,23 @@
     },
     {
       "exit": {
+        "0": "always -- a reporting failure never blocks or alters the agent"
+      },
+      "id": "claude-code-activity-hook",
+      "inputs": "one hook event as JSON on stdin (SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest, Notification, Stop, SubagentStop)",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one record file in the spool directory (--spool) or one POST to the hub's ingest (--post); nothing on stdout",
+      "owner": "status-hub",
+      "path": "hooks/claude_code_activity.py",
+      "purpose": "Report Claude Code (or a CLI with the same hook shape) session activity to the status hub, both tiers.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
         "0": "every component has tests",
         "1": "some component has none or ALLOW is stale"
       },

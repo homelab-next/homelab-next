@@ -1,0 +1,15 @@
+{
+  "event_id": "push-hermes-0042",
+  "session_id": "triage-run-0042",
+  "parent_session_id": "orchestrator-run-0040",
+  "runtime": "hermes",
+  "surface": "cloud",
+  "agent": "triage",
+  "model": "example-model-small",
+  "time": "2026-10-20T08:01:00Z",
+  "kind": "usage",
+  "outcome": "info",
+  "tokens_in": 1200,
+  "tokens_out": 300,
+  "cost_usd": 0.004
+}
