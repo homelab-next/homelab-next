@@ -60,7 +60,7 @@ schemas:
 # `custom check` fails on an unowned or expired customization; the system and capability pages
 # (docs/systems/, docs/capabilities/) match the registry and the conformance code; the status
 # source catalog (docs/status/sources.md) and views.yml match the registry; the knowledge graph
-# has no dangling edge or duplicate id
+# has no dangling edge or duplicate id; docs/terms.md matches homelabnext/agent/terms.md
 gates:
 	$(PY) $(ENDPOINT_GATE) .
 	$(PY) $(ROLE_LINT) $(ROLES)
@@ -71,6 +71,7 @@ gates:
 	$(PY) -m homelabnext.cli status catalog check
 	$(PY) -m homelabnext.cli status views check
 	$(PY) -m homelabnext.cli graph check
+	$(PY) -m homelabnext.cli agent terms --check docs/terms.md
 
 # every decision spec git tracks is complete, asks well-formed questions, and inline specs stay fast
 decide-lint:

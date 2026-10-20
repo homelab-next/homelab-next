@@ -121,7 +121,7 @@ Beside each record (and each `docs/systems/<service>.md` page) is a sidecar dire
 ```
 lessons/LL-005.events/
   20261019T000000Z-review-agent-example-checker.yml
-  20261019T000001Z-review-agent-example-challenger.yml
+  20261019T000001Z-review-agent-example-auditor.yml
   20261020T093000Z-verified-agent-example-checker.yml
   20261020T093000Z-verified-agent-example-checker-2.yml   # same second, same writer: -2
 ```
@@ -223,7 +223,7 @@ backfilled examples) and reviews, each one a `review` event file in its sidecar 
 event: review
 by: agent:j8-lead                # issuer:subject
 kind: agent                      # agent | human
-role: check                      # check | challenge | approve
+role: check                      # check | audit | approve
 date: 2026-10-19
 verdict: pass                    # pass | changes | reject
 digest: sha256:3f9a0c41e2b7      # `hnx reviews digest FILE` (a prefix of >= 12 hex digits)
@@ -232,9 +232,11 @@ note: optional one line or a link to the evidence
 
 * identities are normalized and compared like the broker's approvals
   (`homelabnext.broker.qualified_identity`); the author never reviews their own record;
-* roles: `check` (an agent confirms the record is correct and complete), `challenge` (a second,
-  independent agent looks for what is wrong, missing or unproven), `approve` (a human signs off);
-* a `challenge` review comes from a different agent than every `check` review;
+* roles: `check` (an agent confirms the record is correct and complete), `audit` (an independent
+  agent audit that looks for what is wrong, missing or unproven), `approve` (a human signs off);
+* an `audit` review comes from a different agent than every `check` review;
+* `challenge`, the role's earlier name, is a deprecated alias: a file that still says it is read
+  as `audit` with a warning (never a failure); write `audit`;
 * a requirement's `min` counts distinct reviewers (normalized identities), not reviews;
 * a `human` review must be by a `kind: human` reviewer in the policy's allowlist; an agent identity
   (an `agent:` issuer, or an allowlist entry of `kind: agent`) in a human slot fails;
@@ -247,7 +249,7 @@ note: optional one line or a link to the evidence
 
 `examples/review-policy.yml` says, per artefact kind and state, what a status needs. The defaults:
 an open or partial pitfall needs nothing (recording a problem is never blocked); a controlled
-pitfall, an active practice and an active runbook need an agent check and a challenge agent
+pitfall, an active practice and an active runbook need an agent check and an agent audit
 review; retiring a pitfall, and incorporating or superseding a practice, also need a human
 approve. A record whose status lacks what the policy requires fails the build, naming the
 missing tier. The policy is validated fatally: every artefact kind lists every state.

@@ -43,6 +43,7 @@ READ_ONLY_ALLOWLIST = {
     "lessons_due",
     "list_capabilities",
     "related",
+    "terms",
 }
 
 
@@ -252,6 +253,15 @@ def _page(src: Path) -> dict:
 
     s = load_sources(src)
     return render_invariants(s["invariants"], s["results"])[1]
+
+
+def test_terms_is_the_packaged_terms_page_and_unscoped(cat):
+    from homelabnext.agent import terms_text
+
+    out = _call(cat, "terms")
+    assert out == {"source": "homelabnext/agent/terms.md", "text": terms_text()}
+    assert "**Authorized scope**" in out["text"]
+    assert _call(Catalog(ROOT, scope=frozenset(), scope_source="fake"), "terms") == out
 
 
 def test_invariants_status_is_the_pages_verdict(cat, tmp_path):
@@ -489,6 +499,7 @@ def test_every_tool_result_fits_the_cap(cat):
         ("related", {"ids_or_paths": ["doc:README.md"], "budget": 200, "depth": 3}),
         ("context_for", {"task_text": "the lab", "allowed": ["doc:"], "budget": 200}),
         ("invariants_status", {}),
+        ("terms", {}),
     ]:
         assert len(cat.call(name, args)) <= MAX_RESULT_CHARS
 

@@ -117,7 +117,7 @@ def test_retire_without_a_human_approve_fails(ll):
 def test_editing_a_reviewed_record_drops_its_reviews(ll):
     e = by_id(ll, "lessons", "LL-001")
     e["root_cause"] += " (and nobody asked the client)"
-    with pytest.raises(RegisterError, match="needs agent check, agent challenge") as ex:
+    with pytest.raises(RegisterError, match="needs agent check, agent audit") as ex:
         validate_lessons(ll, POLICY)
     assert "2 review(s) are of an earlier content" in str(ex.value)
     restamp(e)
@@ -295,7 +295,7 @@ def test_review_suggests_retiring_a_pitfall_its_invariant_already_proves(src):
     assert "retired will need" in retire.reason
     # the edit made the reviews stale: the record needs re-review, by tier
     (again,) = [d for d in rep.items if d.action == "review"]
-    assert again.id == "LL-001" and again.reason == "missing agent check, agent challenge"
+    assert again.id == "LL-001" and again.reason == "missing agent check, agent audit"
 
 
 def test_review_suggests_superseding_by_a_newer_practice(src):

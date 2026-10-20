@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``hnx agent compile|verify|pack|lint|prompts|injection``.
+"""``hnx agent compile|verify|pack|terms|keyring|lint|prompts|injection``.
 
 ``compile SPEC --library LIB [--policy POLICY]``  compile a profile spec against a parts library.
 ``verify PROFILE --policy POLICY [--lock LOCK]``  check a compiled profile against the policy.
@@ -11,6 +11,10 @@
                                                   the linked knowledge from the graph of the
                                                   checkout at DIR (default ``.``); ``--explain``
                                                   prints what was included and excluded and why.
+``terms [--check | --write] [PATH]``               the project's terms (the reserved ``terms``
+                                                  section of every session pack): print them, or
+                                                  check / regenerate PATH (default
+                                                  ``docs/terms.md``).
 ``keyring build|check SOURCES``                   generate the keyring from its sources, or fail
                                                   when the committed one has drifted (M-12).
 ``lint [PATH ...]``                               readers cannot act: every agent profile and
@@ -106,6 +110,23 @@ def _keyring(action: str, sources: str, classes: ToolClasses | None) -> int:
     return 0
 
 
+def _terms(args: argparse.Namespace) -> int:
+    from . import terms
+
+    if not (args.check or args.write):
+        sys.stdout.write(terms.terms_text())
+        return 0
+    path = Path(args.path)
+    if args.write:
+        path.write_text(terms.render_doc(), encoding="utf-8")
+        print(f"hnx agent terms: wrote {path}", file=sys.stderr)
+        return 0
+    problems = terms.check_doc(path)
+    for prob in problems:
+        print(f"hnx agent terms check: {prob}", file=sys.stderr)
+    return 1 if problems else 0
+
+
 def _knowledge(profile: dict, args: argparse.Namespace) -> Any:
     """The profile's knowledge selection over a fresh graph of ``--root``."""
     from homelabnext.graph import build
@@ -158,6 +179,11 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="print the included and excluded knowledge and why (the pack goes to --out only)",
     )
+    t = sub.add_parser("terms", help="the project's terms: print, or check/write docs/terms.md")
+    mode = t.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true", help="fail when PATH has drifted")
+    mode.add_argument("--write", action="store_true", help="regenerate PATH")
+    t.add_argument("path", nargs="?", default="docs/terms.md")
     k = sub.add_parser("keyring", help="generate the keyring from its sources, or check drift")
     k.add_argument("action", choices=("build", "check"))
     k.add_argument("sources", help="sources file: {registry, profiles, broker, out}")
@@ -184,6 +210,8 @@ def main(argv: list[str]) -> int:
                 print("hnx agent lint: no agent profile found (wrong path?)", file=sys.stderr)
                 return 1
             return 1 if problems else 0
+        if args.cmd == "terms":
+            return _terms(args)
         if args.cmd == "keyring":
             return _keyring(args.action, args.sources, classes)
         if args.cmd == "compile":

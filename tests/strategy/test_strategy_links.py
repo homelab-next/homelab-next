@@ -93,6 +93,4 @@ def test_a_record_named_against_its_id_is_fatal(lab):
 def test_the_review_tiers_apply(lab):
     edit(lab, "objectives/SO-001.md", "an outage is known", "an outage is seen")
     errs = validate(load_tree(lab)).errors
-    assert any(
-        e.startswith("SO-001: status active needs agent check, agent challenge") for e in errs
-    )
+    assert any(e.startswith("SO-001: status active needs agent check, agent audit") for e in errs)

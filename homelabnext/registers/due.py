@@ -6,8 +6,8 @@ graduate into mechanisms (an invariant, a test, a gate: ``retired_by``); practic
 into procedures (a runbook step or a system page: ``incorporated_into``).  The review drains that
 backlog, and this module says what is due, grouped by action, for a given ``today``:
 
-  review       the record's status needs reviews it lacks (by tier: agent check, challenge
-               agent, human approve), e.g. after an edit made its reviews stale
+  review       the record's status needs reviews it lacks (by tier: agent check, agent
+               audit, human approve), e.g. after an edit made its reviews stale
   retire       a controlled pitfall whose ``retired_by`` candidate already holds (every invariant
                it names passes in the results file, every path exists)
   incorporate  a due active practice, with the active runbooks sharing its systems/applies_to

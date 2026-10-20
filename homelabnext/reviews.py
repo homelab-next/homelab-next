@@ -12,7 +12,7 @@ inline ``reviews:`` list::
     reviews:
       - by: agent:j8-lead        # issuer:subject, compared like the broker's approvals
         kind: agent              # agent | human
-        role: check              # check | challenge | approve
+        role: check              # check | audit | approve
         date: 2026-10-19
         verdict: pass            # pass | changes | reject
         digest: sha256:3f9a...   # the content reviewed (`hnx reviews digest FILE`); prefix >= 12
@@ -24,7 +24,8 @@ Identity rules (always fatal):
   :func:`homelabnext.broker.qualified_identity`, so ``agent:J8_Lead`` and ``agent:j8-lead`` are
   one reviewer;
 * the ``author`` never reviews their own artefact, in any role;
-* a ``challenge`` review comes from an agent identity other than every ``check`` reviewer;
+* an ``audit`` review (an independent agent audit that looks for what is wrong, missing or
+  unproven) comes from an agent identity other than every ``check`` reviewer;
 * a review's ``kind`` must match the identity: an identity is an agent when the policy's
   ``reviewers`` allowlist says ``kind: agent`` or its issuer is ``agent`` (the broker's rule: an
   allowlisted agent, or an identity naming an agent profile); a ``human`` review must come from a
@@ -39,6 +40,11 @@ The policy (one YAML file, ``examples/review-policy.yml``) says, per artefact ki
 which reviews are required; :func:`load_policy` validates it fatally.  ``last_reviewed`` is
 derived (:attr:`Evaluation.last_reviewed`, the latest current passing review), never stored.
 
+``challenge`` is the deprecated spelling of ``audit`` (the role's earlier name): a file that
+still says it is read as ``audit`` by :func:`normalize_role` and draws a
+:class:`DeprecatedReviewRole` warning, never a failure, so older review files and policies keep
+validating while they are renamed.
+
 This is a consistency check over what the files claim, not authentication: anyone with write
 access can type a review.  Authenticated sign-off is the broker's approval flow.
 """
@@ -51,6 +57,7 @@ import json
 import pathlib
 import re
 import sys
+import warnings
 from dataclasses import dataclass, field
 
 import yaml
@@ -60,6 +67,7 @@ from homelabnext.broker import qualified_identity
 
 __all__ = [
     "ARTEFACT_STATES",
+    "DeprecatedReviewRole",
     "Evaluation",
     "Policy",
     "Requirement",
@@ -69,11 +77,14 @@ __all__ = [
     "identity",
     "load_policy",
     "main",
+    "normalize_role",
     "validate_policy",
 ]
 
 KINDS = ("agent", "human")
-ROLES = ("check", "challenge", "approve")
+ROLES = ("check", "audit", "approve")
+#: deprecated role spellings -> the role they mean; read (with a warning), never written
+ROLE_ALIASES = {"challenge": "audit"}
 VERDICTS = ("pass", "changes", "reject")
 FIELDS = frozenset({"by", "kind", "role", "date", "verdict", "digest", "note"})
 REQUIRED_FIELDS = ("by", "kind", "role", "date", "verdict", "digest")
@@ -98,6 +109,26 @@ class ReviewError(ValueError):
     def __init__(self, what: str, problems: list[str]):
         self.problems = problems
         super().__init__(f"{what}: {len(problems)} problem(s)\n  - " + "\n  - ".join(problems))
+
+
+class DeprecatedReviewRole(FutureWarning):
+    """A review or a policy still spells a role the deprecated way (``challenge``)."""
+
+
+def normalize_role(role, where: str = ""):
+    """The role ``role`` means: a deprecated alias (``challenge``) becomes its current name
+    (``audit``) with a :class:`DeprecatedReviewRole` warning; anything else is returned as is
+    (an unknown role is the caller's validation problem, not this helper's)."""
+    if isinstance(role, str) and role in ROLE_ALIASES:
+        new = ROLE_ALIASES[role]
+        at = f"{where}: " if where else ""
+        warnings.warn(
+            f"{at}review role {role!r} is deprecated; write {new!r}",
+            DeprecatedReviewRole,
+            stacklevel=2,
+        )
+        return new
+    return role
 
 
 def content_digest(obj) -> str:
@@ -190,7 +221,7 @@ def validate_policy(data) -> list[str]:
                 if not isinstance(q, dict) or set(q) - {"role", "kind", "min"}:
                     problems.append(f"{where}: a mapping of role, kind (and min)")
                     continue
-                if q.get("role") not in ROLES:
+                if normalize_role(q.get("role"), where) not in ROLES:
                     problems.append(f"{where}: `role` must be one of {ROLES}")
                 if q.get("kind") not in KINDS:
                     problems.append(f"{where}: `kind` must be one of {KINDS}")
@@ -209,7 +240,10 @@ def policy_from(data) -> Policy:
     }
     reqs = {
         art: {
-            st: tuple(Requirement(q["role"], q["kind"], q.get("min", 1)) for q in lst)
+            st: tuple(
+                Requirement(ROLE_ALIASES.get(q["role"], q["role"]), q["kind"], q.get("min", 1))
+                for q in lst
+            )
             for st, lst in states.items()
         }
         for art, states in data["requirements"].items()
@@ -263,7 +297,7 @@ def evaluate(
 ) -> Evaluation:
     """Check ``reviews`` of one artefact whose current content digest is ``digest``.
 
-    Without a policy only the rules that need none run (shape, self-review, challenge
+    Without a policy only the rules that need none run (shape, self-review, audit
     independence, an ``agent:`` identity in a human slot); with one, the allowlist and the
     requirement for (``artefact``, ``state``) apply too.
     """
@@ -284,7 +318,7 @@ def evaluate(
         ev.problems.append(f"{pre}`reviews` must be a list")
         reviews = []
     checks: list[tuple[str, str]] = []
-    challenge: list[tuple[int, tuple[str, str]]] = []
+    audits: list[tuple[int, tuple[str, str]]] = []
     for n, r in enumerate(reviews, 1):
         at = f"{pre}review #{n}"
         if not isinstance(r, dict):
@@ -300,7 +334,10 @@ def evaluate(
         if ident is None:
             ev.problems.append(f"{at}: `by` must be an issuer-qualified identity (agent:name)")
             continue
-        kind, role = r.get("kind"), r.get("role")
+        role = normalize_role(r.get("role"), at)
+        if role != r.get("role"):
+            r = {**r, "role": role}
+        kind = r.get("kind")
         bad = False
         if kind not in KINDS:
             ev.problems.append(f"{at}: `kind` must be one of {KINDS}")
@@ -340,18 +377,18 @@ def evaluate(
             bad = True
         if role == "check":
             checks.append(ident)
-        elif role == "challenge":
-            challenge.append((n, ident))
+        elif role == "audit":
+            audits.append((n, ident))
         if bad:
             continue
         if r["verdict"] == "pass" and digest.startswith(r["digest"]):
             ev.current.append(r)
         elif not digest.startswith(r["digest"]):
             ev.stale.append(r)
-    for n, ident in challenge:
+    for n, ident in audits:
         if ident in checks:
             ev.problems.append(
-                f"{pre}review #{n}: the challenge review comes from {_show(ident)}, who also "
+                f"{pre}review #{n}: the audit review comes from {_show(ident)}, who also "
                 "made a check review; it must be a different agent"
             )
             ev.current = [r for r in ev.current if identity(r.get("by")) != ident]

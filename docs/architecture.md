@@ -51,7 +51,7 @@ The "example tenants" are illustrations only: the reference environment in
 | 7 | Detection and correlation | Sigma rules with fixtures, cited by `det:<slug>` | a SIEM or rule engine | fixture runner with an engine adapter |
 | 8 | Case management and DFIR | Case round trip (create, dedup, comment, close) | a case system (fake*) | `cases` suite |
 | 9 | Threat intelligence | Typed indicators and reports in the lake | a TIP, feeds | schema validation plus replay |
-| 10 | Internal security testing, detection and code security | Authorized test plans and findings as typed records (own environment only) | internal test tooling | detection fixtures and coverage map |
+| 10 | Internal assessment, detection and code security | Authorized internal assessment plans and findings as typed records (own environment only; [terms](terms.md)) | auditing tools | detection fixtures and coverage map |
 | 11 | LLM serving, orchestration, agents | OpenAI-compatible chat; model-role aliases (ADR-0007); scoped context retrieval | an inference server (fake*), a context store | `inference` and `context` suites, golden tasks |
 | 12 | Observability, alerting, backup, power | OpenMetrics, state-diffed paging, export hooks (ADR-0008) | a metrics stack, ntfy* | `notify` suite; restore drill |
 | 13 | Governance and control plane | Records lifecycle as an API (ADR-0010), approvals bound to a request digest | a broker, the records library | lifecycle and fixture runs |

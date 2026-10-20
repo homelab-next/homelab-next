@@ -34,6 +34,7 @@ refused call is an MCP tool error with the reason.
 | `related(ids_or_paths, depth=2, budget=25, include_inactive=False)` | the ranked graph neighbourhood, seeds, ids that resolved to nothing | [knowledge graph](graph.md) ([[graph]]) |
 | `context_for(task_text, allowed, paths=[], kinds=[], budget=10)` | ranked hits with content and sha256 digest, relation before keywords | the [`context`](capabilities/context.md) ([[capabilities/context\|context]]) reference store over the graph |
 | `lessons_due(today=None)` | the lesson review's due list by action | `hnx registers review` ([[registers]]) |
+| `terms()` | the project's terms and scope: auditing, audit review, auditing tool, internal assessment, the authorized scope, how threat vocabulary is used | `homelabnext/agent/terms.md`, the [terms](terms.md) ([[terms]]) page's source and every session pack's `terms` section |
 | `invariants_status()` | the invariants page's verdict, counts and `all_hold`, and per criterion: statement, status (the page's: `deferred`, `server` or `untested` without a committed result), checked_at, remediation when not passing | `examples/registers/invariants.results.json`, judged by `homelabnext.registers.render` |
 
 `context_for` is the main tool. Its seeds are the graph nodes defined by `paths` (the files the
@@ -80,7 +81,7 @@ $ hnx mcp call context_for --args '{"task_text": "add an adapter for the context
   one. The catalog tools are bounded the same way: `list_capabilities`, `get_contract`,
   `find_services` and `lessons_due` return only in-scope capabilities, services (also in
   `depends_on`, providers and consumers) and lesson or runbook records, and an out-of-scope
-  capability reads like an unknown one. `get_schema` and `invariants_status` describe the
+  capability reads like an unknown one. `get_schema`, `invariants_status` and `terms` describe the
   repository's public contracts and are not scoped. Without `--scope-from-profile` every tool
   sees everything, as before.
 * **Registered like any other MCP server.** `homelabnext/agent/tool_classes.yml` classifies

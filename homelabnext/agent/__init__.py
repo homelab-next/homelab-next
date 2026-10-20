@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Agent building blocks: profile compiler, reader rule, reader->actor handoff, screener,
 context-pack assembler with linked knowledge (``include:`` rules), report validator, controlled
-memory, access block and keyring.
+memory, access block, the project's terms and keyring.
 
 Vendor-neutral and fake-backed: parts come from a :class:`PartsLibrary` over the logical-id
 resolver, nothing here touches a network or a model.  Contracts: ``schemas/agent/``; guide:
@@ -38,10 +38,12 @@ from .pack import TIERS, assemble_pack
 from .readers import ToolClasses, lint_paths, reader_problems
 from .report import validate_report
 from .screen import Screener, screen_text
+from .terms import TERMS_SECTION, terms_text
 
 __all__ = [
     "ACCESS_SECTION",
     "BUDGET_KEYS",
+    "TERMS_SECTION",
     "TIERS",
     "TIER_RANK",
     "Accepted",
@@ -78,6 +80,7 @@ __all__ = [
     "screen_text",
     "sha256_text",
     "start_session",
+    "terms_text",
     "validate_report",
     "verify_profile",
 ]

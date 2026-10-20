@@ -57,6 +57,9 @@ relate.
   (contracts, schemas, services, the graph, scoped context, review and invariant status) over
   stdio, scoped by a compiled agent profile.
 - [Glossary](glossary.md) ([[glossary]]).
+- [Terms and scope](terms.md) ([[terms]]): what auditing, an audit review, an auditing tool and an
+  internal assessment mean, the authorized scope (the operator's own lab) and how threat
+  vocabulary is used (external threats only); every agent session's context pack carries it.
 
 ## Opening `docs/` as an Obsidian vault
 

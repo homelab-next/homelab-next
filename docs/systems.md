@@ -48,11 +48,11 @@ one file each in the sidecar `docs/systems/<service>.events/`
 docs/systems/<service>.md review.yml` validates and appends one) holding `{by, kind, role, date,
 verdict, digest, note}`; an inline `reviews:` list still counts and `hnx registers events migrate
 docs/systems` moves it out. Same rules: the broker's identity normalization, no
-self-review, a challenge review by a different agent than every check, and no agent identity
+self-review, an audit review by a different agent than every check, and no agent identity
 in a human slot. The policy is `examples/review-policy.yml` (`system-page`), read by `check`
 when it exists (`--policy FILE`, or `--policy none`).
 
-* `status: reviewed` needs, by default, an agent check, a challenge agent review and a human
+* `status: reviewed` needs, by default, an agent check, an agent audit review and a human
   approve, all current, and no `TODO(human)` left. `check` fails on a page that claims it without
   them and names the missing tier.
 * A review is current while its `digest` matches the page's: `hnx reviews digest

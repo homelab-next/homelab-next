@@ -10,7 +10,7 @@ A rule is small and declarative::
         depth: 1                    # hops from the seeds, 1..3
         budget: 12                  # max nodes this rule includes, 1..50
         max_chars: 4000             # per included node (the pack's section cap), 200..20000
-        require_reviews: [agent_check, challenge]   # optional, for lessons/runbooks/criteria
+        require_reviews: [agent_check, audit]   # optional, for lessons/runbooks/criteria
 
 Seeds are always grants: ``capabilities`` are the profile's granted ``cap:`` ids, ``mcp`` its
 granted MCP servers, ``services`` the registry services that provide a granted capability (found
@@ -36,7 +36,7 @@ from .errors import IncludeViolation, SpecError
 
 INCLUDE_FROM = ("capabilities", "mcp", "services", "task")
 KNOWLEDGE_KINDS = ("adr", "check", "doc", "inv", "lesson", "runbook", "schema")
-REVIEW_TIERS = ("agent_check", "challenge", "human")
+REVIEW_TIERS = ("agent_check", "audit", "human")
 RULE_KEYS = frozenset({"from", "only", "kinds", "depth", "budget", "max_chars", "require_reviews"})
 DEFAULTS = {"depth": 1, "budget": 12, "max_chars": 4000}
 LIMITS = {"depth": (1, 3), "budget": (1, 50), "max_chars": (200, 20000)}
@@ -91,7 +91,14 @@ def normalise_include(raw: Any, grants: Mapping[str, Any]) -> list[dict[str, Any
             **{k: _int(rule, k, where) for k in ("depth", "budget", "max_chars")},
         }
         if "require_reviews" in rule:
-            norm["require_reviews"] = _names(rule, "require_reviews", REVIEW_TIERS, where)
+            from homelabnext.reviews import normalize_role  # (reviews imports this package)
+
+            tiers = rule["require_reviews"]
+            if isinstance(tiers, list):  # the deprecated tier `challenge` reads as `audit`
+                tiers = [normalize_role(t, f"{where}: require_reviews") for t in tiers]
+            norm["require_reviews"] = _names(
+                {"require_reviews": tiers}, "require_reviews", REVIEW_TIERS, where
+            )
         if "only" in rule:
             if src not in ("capabilities", "mcp"):
                 raise SpecError(f"{where}: only is allowed with from: capabilities or mcp")

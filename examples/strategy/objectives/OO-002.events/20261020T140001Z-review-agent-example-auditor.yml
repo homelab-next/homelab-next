@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 event: review
-by: agent:example-challenger
+by: agent:example-auditor
 kind: agent
-role: challenge
+role: audit
 date: 2026-10-20
 verdict: pass
-digest: sha256:5dcfa9bcfc70
+digest: sha256:b942b9c4b99f
 note: fictional example review

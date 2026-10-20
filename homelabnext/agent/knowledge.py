@@ -302,7 +302,11 @@ def select_knowledge(
                 )
             elif "require_reviews" in rule and node.kind in REVIEWABLE_KINDS:
                 have = set(node.attrs.get("reviewed") or ())
-                missing = sorted(set(rule["require_reviews"]) - have)
+                from homelabnext.reviews import ROLE_ALIASES  # (reviews imports this package)
+
+                # a profile compiled before the rename may still say `challenge` (now `audit`)
+                need = {ROLE_ALIASES.get(t, t) for t in rule["require_reviews"]}
+                missing = sorted(need - have)
                 if missing:
                     reason = (
                         f"reviews: no current {', '.join(missing)} "

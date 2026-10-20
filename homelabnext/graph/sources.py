@@ -810,14 +810,14 @@ def read_registers(b: Builder) -> None:
 def _provenance(e: dict[str, Any], policy: Any = None) -> dict[str, Any]:
     """``author`` and a compact summary of a record's ``reviews`` (reviewer identities are not
     nodes): ``reviewed`` lists each tier with a *current, valid, passing* review -- ``agent_check``
-    (an agent's ``check``), ``challenge`` (a ``challenge`` review) and ``human`` (a human's review
+    (an agent's ``check``), ``audit`` (an ``audit`` review) and ``human`` (a human's review
     of any role) -- and ``review_count`` counts every review.  Absent fields: nothing.
 
     "Current and valid" is the register validation's own judgement of the loaded record
     (:func:`homelabnext.registers.schema.review_evaluation`: its reviews as derived from the
     sidecar events, against :func:`~homelabnext.registers.schema.record_digest_of`), with
     ``policy`` (the register's ``review-policy.yml``) when there is one: a review of an earlier
-    content, a self-review, a challenge from a checker, an agent in a human slot or a malformed
+    content, a self-review, an audit by a checker, an agent in a human slot or a malformed
     review counts for no tier, so ``require_reviews`` can trust the attr."""
     from homelabnext.registers.schema import review_evaluation
 
@@ -827,8 +827,8 @@ def _provenance(e: dict[str, Any], policy: Any = None) -> dict[str, Any]:
     for r in ev.current:
         if r["kind"] == "agent" and r["role"] == "check":
             tiers.add("agent_check")
-        if r["role"] == "challenge":
-            tiers.add("challenge")
+        if r["role"] == "audit":
+            tiers.add("audit")
         if r["kind"] == "human":
             tiers.add("human")
     return {

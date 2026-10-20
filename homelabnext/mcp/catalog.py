@@ -85,6 +85,11 @@ TOOLS: dict[str, str] = {
         "The knowledge graph's ranked neighbourhood of node ids or repo-relative paths: nearest "
         "first, then strongest relation (docs/graph.md)."
     ),
+    "terms": (
+        "The project's terms and scope (docs/terms.md): what auditing, an audit review, an "
+        "auditing tool and an internal assessment mean, the authorized scope (the operator's own "
+        "lab) and how threat vocabulary is used. Every agent session's context pack carries it."
+    ),
 }
 
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -529,6 +534,11 @@ class Catalog:
             "counts": dict(sorted(counts.items())),
             "criteria": rows,
         }
+
+    def terms(self) -> dict[str, Any]:
+        from homelabnext.agent.terms import terms_text
+
+        return {"source": "homelabnext/agent/terms.md", "text": terms_text()}
 
     # -- dispatch -----------------------------------------------------------------------------
     def call(self, name: str, arguments: Mapping[str, Any] | None = None) -> str:

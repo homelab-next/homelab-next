@@ -135,12 +135,14 @@ memory budget) and skips the parts that need a daemon. The architecture behind i
 | `tools/` | gates run by `make check` (schema check, endpoint gate, role lint, leak scan, SPDX, changelog) |
 | `tests/` | unit tests, golden files, negative fixtures, cross-package integration tests (`tests/integration/`) |
 
-## Scope of security testing
+## Scope: auditing and internal assessment
 
-Everything this project says about security testing (detection tests, conformance checks that try
-hostile inputs, prompt-injection evaluations, deliberately broken fakes) is internal research and
-validation by the operator, against the operator's own lab and with the operator's authorization.
-Nothing in it targets, scans or probes systems the operator does not own or run.
+Everything this project says about auditing and assessment (detection tests, conformance checks
+that try hostile inputs, prompt-injection evaluations, deliberately broken fakes: the project's
+auditing tools) is internal assessment and validation by the operator, against the operator's own
+lab and with the operator's authorization. Nothing in it targets, scans or probes systems the
+operator does not own or run. [Terms and scope](docs/terms.md) defines the vocabulary; every agent
+session's context pack carries it.
 
 ## How it is meant to be adopted
 

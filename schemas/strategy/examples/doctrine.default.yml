@@ -3,7 +3,7 @@
 # docs/strategy.md "The doctrine policy"). Every rule a program can decide is here, each with
 # `enforce`: error (the check fails), warn (it prints), 'off' (disabled; a computed rule then does
 # not apply; quote it: YAML 1.1 reads a bare off as false). The defaults follow a MOE/MOP doctrine of nine rules; another discipline tunes them.
-# What needs judgment is listed under `judgment` for the reviewers (check | challenge | approve).
+# What needs judgment is listed under `judgment` for the reviewers (check | audit | approve).
 doctrine_version: 1
 name: MOE/MOP doctrine (nine rules), the defaults
 rfi_default_ltiov_days: 30       # an RFI raised without an LTIOV expires this many days later
