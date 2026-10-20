@@ -65,6 +65,9 @@ CREATE TABLE IF NOT EXISTS detail(
   event_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time REAL NOT NULL, received REAL NOT NULL,
   via TEXT NOT NULL, doc TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS detail_session ON detail(session_id);
+CREATE INDEX IF NOT EXISTS summary_received ON summary(received);
+CREATE INDEX IF NOT EXISTS detail_time ON detail(time);
+CREATE INDEX IF NOT EXISTS detail_received ON detail(received);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
@@ -173,11 +176,14 @@ class ActivityStore:
     # ---------------------------------------------------------------- writes
     def purge(self, now: float | None = None) -> int:
         """Delete every row past retention (by event time or arrival); returns rows deleted."""
-        cutoff = (self.clock() if now is None else now) - self.retention_s
         with self._db() as db:
-            n = db.execute("DELETE FROM summary WHERE time < ? OR received < ?", (cutoff, cutoff))
-            m = db.execute("DELETE FROM detail WHERE time < ? OR received < ?", (cutoff, cutoff))
-            return n.rowcount + m.rowcount
+            return self._purge(db, self.clock() if now is None else now)
+
+    def _purge(self, db: sqlite3.Connection, now: float) -> int:
+        cutoff = now - self.retention_s  # both columns are indexed: no full scan per batch
+        n = db.execute("DELETE FROM summary WHERE time < ? OR received < ?", (cutoff, cutoff))
+        m = db.execute("DELETE FROM detail WHERE time < ? OR received < ?", (cutoff, cutoff))
+        return n.rowcount + m.rowcount
 
     def add(
         self,
@@ -236,7 +242,7 @@ class ActivityStore:
                     ),
                 )  # fmt: skip
                 result.details += cur.rowcount
-        self.purge(now)
+            self._purge(db, now)  # in the same transaction: one connection, one commit
         return result
 
     def get_meta(self, key: str) -> str | None:

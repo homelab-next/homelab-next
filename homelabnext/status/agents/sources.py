@@ -21,7 +21,10 @@ is not an item, so the main page stays one green number while agents simply work
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
+import logging
+import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -34,7 +37,9 @@ from .store import ActivityError, ActivityStore
 
 MAX_SPOOL_FILE = 1 << 20
 MAX_TRAIL_READ = 8 << 20  # per poll; the rest is read next time
+HEAD_BYTES = 4096  # how much of a trail's start identifies it (with its inode) across polls
 PUSH_VIA = "push"
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------- Agentmetry canonical -> ours
 _AM_KIND = {
@@ -150,40 +155,91 @@ def drain_spool(store: ActivityStore, spool: Path, via: str) -> tuple[int, int]:
     return ok, bad
 
 
+def _position(raw: str | None) -> dict[str, Any]:
+    """The stored read position of a trail (an older plain-integer offset still reads)."""
+    try:
+        pos = json.loads(raw) if raw else {}
+    except ValueError:
+        pos = {}
+    if isinstance(pos, int) and not isinstance(pos, bool):
+        pos = {"offset": pos}
+    return pos if isinstance(pos, dict) and isinstance(pos.get("offset"), int) else {"offset": 0}
+
+
+def _head(fh, n: int) -> str:
+    fh.seek(0)
+    return hashlib.sha256(fh.read(n)).hexdigest()
+
+
 def drain_agentmetry(store: ActivityStore, trail: Path, via: str) -> tuple[int, int]:
-    """Read the trail from the stored offset (from 0 again if it was truncated or rotated)."""
+    """Read the trail from the stored position, in one store batch per poll.
+
+    The position carries the file's identity (device and inode) and a hash of its first bytes
+    (up to ``HEAD_BYTES`` already read), so a rotated trail -- a new file, or one truncated and
+    written again -- is read from 0 even when it has already grown past the old offset.  A line
+    longer than ``MAX_TRAIL_READ`` is skipped to its newline and counted (as rejected) once."""
     key = f"offset:{via}"
     try:
-        size = trail.stat().st_size
+        fh = trail.open("rb")
     except FileNotFoundError:
         return 0, 0
-    offset = int(store.get_meta(key) or 0)
-    if size < offset:
-        offset = 0
-    with trail.open("rb") as fh:
+    with fh:
+        st = os.fstat(fh.fileno())
+        ident = f"{st.st_dev}:{st.st_ino}"
+        pos = _position(store.get_meta(key))
+        offset = pos["offset"]
+        head_len = min(int(pos.get("head_len") or 0), st.st_size)
+        if (
+            st.st_size < offset
+            or pos.get("id", ident) != ident
+            or (
+                pos.get("head")
+                and (head_len < pos["head_len"] or _head(fh, head_len) != pos["head"])
+            )
+        ):
+            pos, offset = {"offset": 0}, 0  # rotated or truncated: read the new file from 0
         fh.seek(offset)
         chunk = fh.read(MAX_TRAIL_READ)
-    end = chunk.rfind(b"\n") + 1  # whole lines only; a half-written last line waits
-    ok = bad = 0
-    events = []
-    for raw in chunk[:end].splitlines():
+        ok = bad = 0
+        start, skip = 0, bool(pos.get("skip"))
+        if skip:  # inside an over-long line: drop up to its newline
+            nl = chunk.find(b"\n")
+            start, skip = (len(chunk), True) if nl < 0 else (nl + 1, False)
+        end = max(chunk.rfind(b"\n") + 1, start)  # whole lines only; a half-written one waits
+        if end == start and not skip and len(chunk) - start >= MAX_TRAIL_READ:
+            _log.warning("%s: a line longer than %d bytes is skipped", trail.name, MAX_TRAIL_READ)
+            bad, start, end, skip = 1, len(chunk), len(chunk), True
+        events = []
+        for raw in chunk[start:end].splitlines():
+            try:
+                ev = json.loads(raw)
+            except ValueError:
+                bad += 1
+                continue
+            mapped = map_agentmetry(ev) if isinstance(ev, Mapping) else None
+            if mapped is None:
+                bad += 1
+            else:
+                events.append(mapped)
         try:
-            ev = json.loads(raw)
-        except ValueError:
-            bad += 1
-            continue
-        mapped = map_agentmetry(ev) if isinstance(ev, Mapping) else None
-        if mapped is None:
-            bad += 1
-        else:
-            events.append(mapped)
-    for ev in events:
-        try:
-            store.add([ev], via=via)
-            ok += 1
-        except ActivityError:
-            bad += 1
-    store.set_meta(key, str(offset + end))
+            store.add(events, via=via)  # one transaction, one purge
+            ok += len(events)
+        except ActivityError:  # one bad record: find it without losing the others
+            for ev in events:
+                try:
+                    store.add([ev], via=via)
+                    ok += 1
+                except ActivityError:
+                    bad += 1
+        new = offset + end
+        n = min(new, HEAD_BYTES)
+        store.set_meta(
+            key,
+            json.dumps(
+                {"offset": new, "id": ident, "head_len": n, "head": _head(fh, n), "skip": skip},
+                sort_keys=True,
+            ),
+        )
     return ok, bad
 
 

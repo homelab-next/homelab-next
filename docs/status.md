@@ -238,7 +238,7 @@ Registered like every source (`status_sources`, kind `agent-activity`, registry 
 | `builtin` | Reads | Notes |
 |---|---|---|
 | `agent-spool` | `target.file`: a spool directory of one-record files `{"summary": {...}, "detail": {...}}` | the Claude Code hook writes it; so may anything else (the generic file spool). Ingested files are deleted, invalid ones moved to `rejected/` |
-| `agentmetry-jsonl` | `target.file`: an Agentmetry canonical JSONL trail, from the last offset | `action.type` maps to `kind` (`tool_called` and `tool_failed` to `tool_end`, `detection` to `notification`, `config_change` skipped); arguments are hashes there, so no detail tier |
+| `agentmetry-jsonl` | `target.file`: an Agentmetry canonical JSONL trail, from the last offset (kept with the file's inode and a hash of its first bytes, so a rotated or rewritten trail is read from the start; a line over 8 MiB is skipped and counted once) | `action.type` maps to `kind` (`tool_called` and `tool_failed` to `tool_end`, `detection` to `notification`, `config_change` skipped); arguments are hashes there, so no detail tier |
 | `agent-push` | nothing: the push ingest writes the store | reports the pushed sessions |
 
 Each source reports the sessions it fed: an errored session is a `fail` item, a stuck one a

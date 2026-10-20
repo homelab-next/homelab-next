@@ -256,3 +256,59 @@ def test_agentmetry_trail_is_read_from_its_offset(tmp_path, clock):
     trail.write_text(lines[0] + "\n")  # rotated: shorter than the offset, read from the start
     assert drain_agentmetry(store, trail, "am") == (1, 0)  # a duplicate, counted as read
     assert len(store.events()) == 3
+
+
+def _am_lines(prefix: str, n: int) -> list[str]:
+    return [
+        json.dumps(
+            {**AM_TOOL, "event_id": f"{prefix}-{i}", "timestamp_utc": "2026-09-21T13:00:00Z"}
+        )
+        for i in range(n)
+    ]
+
+
+def test_a_rotated_trail_that_grew_past_the_offset_is_read_from_the_start(tmp_path, clock):
+    """Regression: rotation was detected only when the new file was shorter than the old offset;
+    one that had already grown past it was read from the middle (a torn line, lost events)."""
+    store = ActivityStore(tmp_path / "activity.db", clock=clock)
+    trail = tmp_path / "audit-forward.jsonl"
+    trail.write_text("\n".join(_am_lines("old", 2)) + "\n")
+    assert drain_agentmetry(store, trail, "am") == (2, 0)
+    rotated = tmp_path / "next.jsonl"  # a new file (new inode) renamed into place
+    rotated.write_text("\n".join(_am_lines("new", 6)) + "\n")
+    rotated.replace(trail)
+    assert drain_agentmetry(store, trail, "am") == (6, 0)
+    trail.write_text("\n".join(_am_lines("cut", 8)) + "\n")  # truncated in place, then regrown
+    assert drain_agentmetry(store, trail, "am") == (8, 0)
+    assert len(store.events()) == 16
+    assert drain_agentmetry(store, trail, "am") == (0, 0)
+
+
+def test_a_line_longer_than_one_read_is_skipped_once(tmp_path, clock, monkeypatch):
+    """Regression: a line longer than MAX_TRAIL_READ never advanced the offset (stuck forever)."""
+    from homelabnext.status.agents import sources
+
+    monkeypatch.setattr(sources, "MAX_TRAIL_READ", 1024)
+    store = ActivityStore(tmp_path / "activity.db", clock=clock)
+    trail = tmp_path / "audit-forward.jsonl"
+    good = _am_lines("ok", 1)[0]
+    assert len(good) < 1024
+    trail.write_text("x" * 2500 + "\n" + good + "\n")
+    got = [drain_agentmetry(store, trail, "am") for _ in range(5)]
+    assert sum(b for _, b in got) == 1  # reported once, not every poll
+    assert sum(o for o, _ in got) == 1 and len(store.events()) == 1
+
+
+def test_a_large_trail_drains_in_one_batch(tmp_path, clock):
+    """Regression: one store.add (two connections, a commit, a purge) per event; 2,000 events
+    must drain in one quick pass and advance the offset to the end."""
+    import time as _time
+
+    store = ActivityStore(tmp_path / "activity.db", clock=clock)
+    trail = tmp_path / "audit-forward.jsonl"
+    trail.write_text("\n".join(_am_lines("bulk", 2000)) + "\n")
+    t0 = _time.perf_counter()
+    assert drain_agentmetry(store, trail, "am") == (2000, 0)
+    assert _time.perf_counter() - t0 < 5
+    assert len(store.events(limit=None)) == 2000
+    assert drain_agentmetry(store, trail, "am") == (0, 0)  # the offset is at the end
