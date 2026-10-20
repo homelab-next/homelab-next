@@ -96,9 +96,19 @@ ALERT_SEVERITIES = {
     "info": "warn",
     "none": "ok",  # the always-firing-by-design convention (Watchdog, InfoInhibitor)
 }
-_SLUG_PATH = re.compile(
-    r"^(?P<prefix>(?:/[^?]*)?)/api/status-page/(?P<slug>[a-z0-9]+(?:-[a-z0-9]+)*)$"
-)
+_SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_STATUS_PAGE = "/api/status-page/"
+
+
+def _slug_path(path: str) -> tuple[str, str] | None:
+    """``(prefix, slug)`` of ``[<prefix>]/api/status-page/<slug>``, else None.  A split, not one
+    regex over the whole path: a backtracking pattern on a long path is polynomial."""
+    if "?" in path:
+        return None
+    prefix, sep, slug = path.rpartition(_STATUS_PAGE)
+    if not sep or (prefix and not prefix.startswith("/")) or not _SLUG.fullmatch(slug):
+        return None
+    return prefix, slug
 
 
 # ---------------------------------------------------------------- helpers
@@ -254,10 +264,10 @@ class PrometheusCollector:
 # ---------------------------------------------------------------- Uptime Kuma
 def kuma_heartbeat_path(path: str) -> str:
     """``.../api/status-page/<slug>`` -> ``.../api/status-page/heartbeat/<slug>``."""
-    m = _SLUG_PATH.match(path)
-    if not m:
+    m = _slug_path(path)
+    if m is None:
         raise MappingError(f"{path!r} is not /api/status-page/<slug>")
-    return f"{m['prefix']}/api/status-page/heartbeat/{m['slug']}"
+    return f"{m[0]}/api/status-page/heartbeat/{m[1]}"
 
 
 def uptime_kuma(
@@ -547,7 +557,7 @@ _STATE_WORDS: dict[str, tuple[str, ...]] = {
     "poll-nifi": tuple(NIFI_STATES),
 }
 _PATHS: dict[str, tuple[Callable[[str], bool], str]] = {
-    "poll-uptime-kuma": (lambda p: bool(_SLUG_PATH.match(p)), "/api/status-page/<slug>"),
+    "poll-uptime-kuma": (lambda p: _slug_path(p) is not None, "/api/status-page/<slug>"),
     "poll-stackstorm": (lambda p: p.endswith("/executions"), "a path ending in /executions"),
     "poll-nifi": (lambda p: p.endswith("/flow/status"), "a path ending in /flow/status"),
 }

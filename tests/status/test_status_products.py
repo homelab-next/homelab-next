@@ -495,3 +495,16 @@ def test_bad_product_sources_are_refused(doc, service, change, needle):
 def test_builtins_and_auth_belong_to_their_kinds(doc, src, needle):
     problems = _problems(doc, "metrics", **src)
     assert any(needle in p for p in problems), problems
+
+
+def test_the_status_page_path_is_parsed_without_backtracking():
+    """A split, not one backtracking regex: a long crafted path is rejected in linear time."""
+    from homelabnext.status.products import kuma_heartbeat_path
+
+    assert kuma_heartbeat_path("/api/status-page/lab") == "/api/status-page/heartbeat/lab"
+    assert kuma_heartbeat_path("/kuma/api/status-page/my-page").startswith("/kuma/api/")
+    for bad in ("/api/status-page/Lab", "api/status-page/lab", "/a?b/api/status-page/x"):
+        with pytest.raises(MappingError):
+            kuma_heartbeat_path(bad)
+    with pytest.raises(MappingError):
+        kuma_heartbeat_path("/api/status-page/" * 50_000 + "x!")  # returns at once
