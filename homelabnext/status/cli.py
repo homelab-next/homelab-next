@@ -5,7 +5,7 @@
     hnx status catalog generate|check [--registry FILE] [--out FILE]   docs/status/sources.md
     hnx status views check [VIEWS] [--registry FILE]        views.yml against schema + registry
     hnx status collect [--registry FILE] [--root DIR] [--state FILE] [--all | --source ID ...]
-                       [--notify-topic T]
+                       [--notify-topic T] [--secrets-dir DIR]
     hnx status render --out DIR [--state FILE] [--views FILE] [--registry FILE] [--now TIME]
     hnx status serve [--state FILE] [--views FILE] [--registry FILE] [--bind HOST] [--port N]
                      [--allow-remote --allowed-host NAME ...] [--agents FILE] [--secrets-dir DIR]
@@ -267,6 +267,7 @@ def _ingest(args, cfg, store, clock: Callable[[], float]) -> int:
 
 
 def _collect(args, reg, specs, clock: Callable[[], float], store=None) -> int:
+    from .agents.config import secret_lookup
     from .collectors import CollectContext, UrllibClient, registry_endpoint
     from .scheduler import Scheduler, due
 
@@ -277,6 +278,7 @@ def _collect(args, reg, specs, clock: Callable[[], float], store=None) -> int:
         endpoint=registry_endpoint(reg),
         root=Path(args.root),
         activity=store,
+        secret=secret_lookup(secrets_dir=args.secrets_dir),  # a source's auth, by name
     )
     if args.source:
         unknown = sorted(set(args.source) - {s.id for s in specs})

@@ -18,6 +18,10 @@ result is a JSON report; the exit code is 0 only when every check passed.  Endpo
 the environment (the same variables as ``.env.example``) or ``--base capability=url`` options;
 there are no defaults, so a missing endpoint is a failed check, not a silent skip.
 
+The metrics and uptime checks poll their service through the status hub's real collectors
+(``homelabnext.status``: ``poll-prometheus``, ``poll-uptime-kuma``), so they need the project
+importable; without it they fail with that reason.
+
     smoke_checks.py --report build/lab-smoke/checks.json
 """
 
@@ -189,6 +193,58 @@ def check_cases(b: Mapping[str, str]) -> str:
     return f"create/dedup/read ({first['id']})"
 
 
+def collect(kind: str, base: str, path: str, mapping: Mapping[str, Any]) -> dict[str, str]:
+    """One poll through the status hub's collector for ``kind``: ``{item: state}``."""
+    try:
+        from homelabnext.status import CollectContext, SourceSpec, UrllibClient
+        from homelabnext.status.collectors import COLLECTORS
+    except ImportError as exc:
+        raise CheckError(f"the status hub is not importable ({exc})") from None
+    spec = SourceSpec(
+        id=f"lab-{kind}",
+        kind=kind,
+        service="lab",
+        capability="lab",
+        interval_s=60,
+        what="lab smoke",
+        path=path,
+        timeout_s=TIMEOUT,
+        mapping=dict(mapping),
+    )
+    ctx = CollectContext(http=UrllibClient(), endpoint=lambda _service: base)
+    try:
+        drafts = COLLECTORS[kind].collect(spec, ctx)
+    except Exception as exc:  # the collector's own error (transport, shape) fails this check
+        raise CheckError(f"{kind}: {type(exc).__name__}: {exc}") from None
+    return {d.item: d.state for d in drafts}
+
+
+def check_metrics(b: Mapping[str, str]) -> str:
+    alerts = collect(
+        "poll-prometheus", b["metrics"], "/api/v1/alerts", {"builtin": "prometheus-alerts"}
+    )
+    want = {"LabSmokeWarning": "warn", "LabSmokeCritical": "fail"}
+    if alerts != want:
+        raise CheckError(f"alerts read {alerts}, expected {want} (rules evaluated yet?)")
+    up = collect(
+        "poll-prometheus",
+        b["metrics"],
+        "/api/v1/query",
+        {"query": "up", "item": "job", "thresholds": {"fail": 0, "direction": "below"}},
+    )
+    if up.get("prometheus") != "ok":
+        raise CheckError(f"self-scrape read {up}, expected prometheus ok")
+    return "collector: firing alerts warn+fail by severity, self-scrape target up"
+
+
+def check_uptime(b: Mapping[str, str]) -> str:
+    monitors = collect("poll-uptime-kuma", b["uptime"], "/api/status-page/lab", {})
+    want = {"metrics": "ok", "unreachable": "fail"}
+    if monitors != want:
+        raise CheckError(f"status page read {monitors}, expected {want}")
+    return "collector: public status page, up monitor ok, down monitor fail"
+
+
 CHECKS: dict[str, Callable[[Mapping[str, str]], str]] = {
     "object-store": check_object_store,
     "lake-catalog": check_lake_catalog,
@@ -198,6 +254,8 @@ CHECKS: dict[str, Callable[[Mapping[str, str]], str]] = {
     "notify": check_notify,
     "inference": check_inference,
     "cases": check_cases,
+    "metrics": check_metrics,
+    "uptime": check_uptime,
 }
 
 
@@ -213,6 +271,8 @@ def bases_from_env(environ: Mapping[str, str]) -> dict[str, str]:
         "notify": "LAB_PORT_NOTIFY",
         "inference": "LAB_PORT_INFERENCE",
         "cases": "LAB_PORT_CASES",
+        "metrics": "LAB_PORT_METRICS",
+        "uptime": "LAB_PORT_UPTIME",
     }
     out = {k: f"http://{bind}:{environ[v]}" for k, v in ports.items() if bind and v in environ}
     out["warehouse"] = environ.get("LAB_WAREHOUSE", "")

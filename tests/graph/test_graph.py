@@ -154,7 +154,7 @@ def test_every_source_contributes_and_counts(graph):
     kinds = graph.kinds()
     for kind in ("svc", "cap", "adapter", "check", "schema", "lesson", "runbook", "inv"):
         assert kinds.get(kind), kind
-    assert kinds["svc"] == 15
+    assert kinds["svc"] == 19
     assert kinds["lesson"] == 5 and kinds["runbook"] == 2
     # one script node per catalogued script (the catalog is the source of truth for the count)
     catalog = json.loads((ROOT / "docs/scripts/catalog.json").read_text(encoding="utf-8"))

@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Lab-in-a-box: a laptop/CI-sized reference environment for the capability seams, inside a 4 GB
-# RAM budget (the sum of the mem_limit values below is asserted by tests/compose).
+# RAM budget (the sum of the mem_limit values below is asserted by tests/compose):
+# the mem_limit values sum to 3328 MB of the 3584 MB the test allows (4 GB less OS/docker headroom).
+# StackStorm (MongoDB, RabbitMQ and its own services) and NiFi (a 1 GB default heap) do not fit in
+# what is left; the status hub tests them against source-verified responses instead
+# (tests/status/test_status_products.py).
 #
 # Every capability is reachable inside the compose network by its registry alias
 # <capability>.svc.example.internal, so clients resolve it the same way they will on a real lab.
@@ -17,9 +21,9 @@ x-restart: &restart
   restart: "no"
   init: true
 
-# Least privilege for every container that still works with it (see tests/compose).  The two
-# exceptions are spelled out where they occur: postgres adds back the capabilities its entrypoint
-# needs to chown the data directory and drop to the postgres user, and secrets (OpenBao) keeps
+# Least privilege for every container that still works with it (see tests/compose).  The
+# exceptions are spelled out where they occur: postgres and uptime add back the capabilities their
+# entrypoints need to chown the data directory and switch user, and secrets (OpenBao) keeps
 # docker's default set.
 x-hardened: &hardened
   security_opt: ["no-new-privileges:true"]
@@ -38,6 +42,7 @@ volumes:
   object-store-data:
   events-data:
   query-data:
+  uptime-data:
 
 services:
   # --- object-store: S3 API ---------------------------------------------------------------
@@ -295,3 +300,84 @@ services:
     networks:
       lab:
         aliases: [cases.svc.example.internal]
+
+  # --- metrics: Prometheus scraping itself, with two rules that always fire ---------------
+  # The status hub's poll-prometheus collector reads it in smoke_checks.py: the alerts mapping
+  # sees a warning and a critical alert, the query mapping sees the self-scrape target up.
+  metrics:
+    <<: [*restart, *hardened]
+    image: prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=2h
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./config/prometheus/rules.yml:/etc/prometheus/rules.yml:ro
+    ports:
+      - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_METRICS:-9090}:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:9090/-/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 192m
+    networks:
+      lab:
+        aliases: [metrics.svc.example.internal]
+
+  # --- uptime: Uptime Kuma, provisioned headlessly by uptime-init -------------------------
+  # Its entrypoint chowns /app/data to PUID:PGID (root here) and switches to them with setpriv,
+  # so it adds back exactly those capabilities.
+  uptime:
+    <<: [*restart, *hardened]
+    image: louislam/uptime-kuma:1.23.16@sha256:431fee3be822b04861cf0e35daf4beef6b7cb37391c5f26c3ad6e12ce280fe18
+    cap_add: [CHOWN, SETGID, SETUID]
+    volumes:
+      - uptime-data:/app/data
+    ports:
+      - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_UPTIME:-3001}:3001"
+    healthcheck: &kuma-health
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3001/api/entry-page', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    mem_limit: 256m
+    networks:
+      lab:
+        aliases: [uptime.svc.example.internal]
+
+  # Uptime Kuma has no REST API for setup, monitors or status pages; this runs
+  # config/uptime-kuma/provision.js in the same image, with its own socket.io client (the API the
+  # UI uses): admin user, a monitor that answers (metrics) and one that cannot (a closed port),
+  # their first heartbeats, then the public status page "lab".  It stays up once done and is
+  # healthy only then, so `up --wait` returns with the page in place.
+  uptime-init:
+    <<: [*restart, *hardened]
+    image: louislam/uptime-kuma:1.23.16@sha256:431fee3be822b04861cf0e35daf4beef6b7cb37391c5f26c3ad6e12ce280fe18
+    entrypoint: ["node", "/provision/provision.js"]
+    working_dir: /app
+    environment:
+      NODE_PATH: /app/node_modules
+      KUMA_URL: http://uptime.svc.example.internal:3001
+      KUMA_USERNAME: lab
+      KUMA_PASSWORD: ${LAB_UPTIME_PASSWORD:?see .env.example}
+      KUMA_SLUG: lab
+      KUMA_UP_URL: http://metrics.svc.example.internal:9090/-/healthy
+      KUMA_DOWN_URL: http://metrics.svc.example.internal:9/
+      KUMA_MARKER: /tmp/provisioned.json
+    volumes:
+      - ./config/uptime-kuma/provision.js:/provision/provision.js:ro
+    depends_on:
+      uptime:
+        condition: service_healthy
+      metrics:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/provisioned.json"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    mem_limit: 96m
+    networks: [lab]

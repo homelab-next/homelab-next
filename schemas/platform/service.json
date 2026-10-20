@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/service/2.2",
+  "$id": "https://schemas.example.internal/homelabnext/platform/service/2.3",
   "title": "HomelabNext service registry (services.yml)",
-  "description": "Single source of truth for what runs where. Every endpoint, scrape target, proxy site, firewall rule, DNS record and environment file is generated from this document. Schema version 1; evolve additively. 2.0 closes every free-text field that generators interpolate: owners and identifiers are slugs, paths are URL path characters, descriptions are single lines, and every pattern rejects a trailing newline (Python re lets $ match before one; ECMA-262 does not). 2.1 adds status_sources: what the status hub may poll or receive for a service, by registry name only (docs/status.md, ADR-0013). 2.2 adds the agent-activity status-source kind with its built-in mappers, and front_door: the shared-secret header the edge adds in front of a service that trusts its forward-auth identity headers (the status hub's private tier).",
+  "description": "Single source of truth for what runs where. Every endpoint, scrape target, proxy site, firewall rule, DNS record and environment file is generated from this document. Schema version 1; evolve additively. 2.0 closes every free-text field that generators interpolate: owners and identifiers are slugs, paths are URL path characters, descriptions are single lines, and every pattern rejects a trailing newline (Python re lets $ match before one; ECMA-262 does not). 2.1 adds status_sources: what the status hub may poll or receive for a service, by registry name only (docs/status.md, ADR-0013). 2.2 adds the agent-activity status-source kind with its built-in mappers, and front_door: the shared-secret header the edge adds in front of a service that trusts its forward-auth identity headers (the status hub's private tier). 2.3 adds the product status kinds (poll-uptime-kuma, poll-stackstorm, poll-nifi; poll-prometheus is no longer reserved), a source's auth (a credential by secret-store name) and the product mapping keys (query, thresholds, empty, window_s, limit) with the built-ins prometheus-alerts, orchestrator-queue and agentmetry-audit.",
   "type": "object",
   "additionalProperties": false,
   "required": ["registry_version", "lab", "zones", "hosts", "services"],
@@ -151,7 +151,17 @@
       "required": ["id", "kind", "interval_s", "what"],
       "properties": {
         "id": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)", "maxLength": 63, "description": "Unique across the registry; the graph node is status:<id>."},
-        "kind": {"enum": ["poll-http-json", "poll-file", "push-event", "poll-prometheus", "agent-activity"], "description": "poll-prometheus is reserved for stage 2: its collector reports unknown until then. agent-activity (2.2) drains agent activity into the hub's activity store and reports stuck and errored sessions."},
+        "kind": {"enum": ["poll-http-json", "poll-file", "push-event", "poll-prometheus", "agent-activity", "poll-uptime-kuma", "poll-stackstorm", "poll-nifi"], "description": "agent-activity (2.2) drains agent activity into the hub's activity store and reports stuck and errored sessions. The product kinds (2.3; poll-prometheus was reserved before) read a product's own API: a Prometheus instant query or its alerts, an Uptime Kuma public status page, StackStorm executions, NiFi controller status and bulletins (docs/status.md)."},
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["secret"],
+          "description": "2.3: the credential an HTTP kind sends, by secret-store name (the value is never in the registry): the header named here, else Authorization: Bearer. A reference that does not resolve is that source's error; it is never polled without it.",
+          "properties": {
+            "secret": {"type": "string", "pattern": "^secret:[a-z][a-z0-9_-]*(/[a-z][a-z0-9_-]*)*$(?!\\n)"},
+            "header": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,62}$(?!\\n)", "description": "e.g. St2-Api-Key or X-API-Key; absent = Authorization: Bearer <value>."}
+          }
+        },
         "target": {
           "type": "object",
           "additionalProperties": false,
@@ -175,7 +185,22 @@
       "additionalProperties": false,
       "description": "Payload -> status observations: a named built-in mapper, or declarative selectors (homelabnext.status.mapping).",
       "properties": {
-        "builtin": {"enum": ["invariants-results", "records-lanes", "broker-pending", "agent-spool", "agentmetry-jsonl", "agent-push"]},
+        "builtin": {"enum": ["invariants-results", "records-lanes", "broker-pending", "agent-spool", "agentmetry-jsonl", "agent-push", "prometheus-alerts", "orchestrator-queue", "agentmetry-audit"]},
+        "query": {"type": "string", "minLength": 1, "maxLength": 1000, "pattern": "^[^\\u0000-\\u001f\\u007f]*$(?!\\n)", "description": "poll-prometheus: the PromQL instant query (an instant vector or a scalar)."},
+        "thresholds": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "description": "poll-prometheus (each sample) and poll-nifi (queued flowfiles): a value at or above (direction below: at or below) fail is fail, else at or past warn is warn, else ok.",
+          "properties": {
+            "warn": {"type": "number"},
+            "fail": {"type": "number"},
+            "direction": {"enum": ["above", "below"], "default": "above"}
+          }
+        },
+        "empty": {"enum": ["ok", "warn", "fail", "unknown"], "description": "poll-prometheus: an empty result is one item in this state (absent: no items)."},
+        "window_s": {"type": "integer", "minimum": 60, "maximum": 604800, "description": "poll-stackstorm: how far back failed executions count (default 3600)."},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "poll-stackstorm: executions per poll; poll-nifi: bulletins per poll (default 100)."},
         "warn_after_s": {"type": "integer", "minimum": 1, "description": "records-lanes, broker-pending: an oldest item older than this is warn."},
         "items": {"$ref": "#/$defs/status_selector", "description": "The list (or mapping) of items; absent = the payload is one item."},
         "item": {"$ref": "#/$defs/status_selector", "description": "An item's name, relative to the item (@key = its key in a mapping)."},

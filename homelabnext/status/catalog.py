@@ -33,6 +33,13 @@ def _target(d: dict) -> str:
     return "pushed (`homelabnext.status.observed`)"
 
 
+def _credential(s: SourceSpec) -> str:
+    if not s.auth:
+        return ""
+    header = f"`{s.auth['header']}`" if s.auth.get("header") else "`Authorization: Bearer`"
+    return f"- Credential: `{s.auth['secret']}` (a secret-store name) sent as {header}\n"
+
+
 def render_catalog(specs: Sequence[SourceSpec]) -> str:
     rows = []
     sections = []
@@ -49,7 +56,8 @@ def render_catalog(specs: Sequence[SourceSpec]) -> str:
             f"([[systems/{d['service']}|{d['service']}]]), capability `cap:{d['capability']}`\n"
             f"- Kind: `{d['kind']}`; target: {_target(d)}\n"
             f"- Mapping: {d['mapping']}\n"
-            f"- Module: `{d['module']}`; graph node `status:{d['id']}`\n"
+            + _credential(s)
+            + f"- Module: `{d['module']}`; graph node `status:{d['id']}`\n"
             f"- Every {_dur(d['interval_s'])}, timeout {_dur(d['timeout_s'])}; stale after "
             f"{_dur(d['stale_after_s'])} without a reading; a failed poll reads as "
             f"`{d['on_error']}`\n"

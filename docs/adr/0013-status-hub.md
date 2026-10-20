@@ -82,6 +82,25 @@ own agent fleet, anything that can POST JSON).
    CSV/JSONL export, and counts are server-rendered pages with query-string filters (no script).
    Runtimes are not graph nodes: they are values in events, not registry entities.
 
+### Stage 2: product collectors
+
+1. **A product with more than one request is a kind; one request is a built-in mapping.**
+   `poll-prometheus` (no longer reserved: an instant query, or `builtin: prometheus-alerts`),
+   `poll-uptime-kuma` (the public status page and its heartbeats), `poll-stackstorm` (executions
+   in a window, the running ones) and `poll-nifi` (controller status, bulletin board) are
+   entries of `COLLECTORS` (`homelabnext.status.products`, registry 2.3); the LLM orchestrator
+   (`orchestrator-queue`) and Agentmetry (`agentmetry-audit`) are built-ins over
+   `poll-http-json`. Each kind validates its own target path and mapping keys in the registry.
+2. **Credentials by name.** Every HTTP kind takes `auth: {secret, header?}`: a secret-store
+   reference, sent as that header or as a bearer token, resolved at run time like the agents
+   configuration. An unresolved reference is the source's error; nothing is polled without it.
+3. **Verified shapes, replayed.** Every mapping is a pure function tested against the product's
+   response shape as its source defines it, recorded from the running product where it fits the
+   lab (Prometheus, Uptime Kuma: also polled nightly through the real collectors in the
+   lab-in-a-box). StackStorm and NiFi do not fit the 4 GB lab and are tested from fixtures only.
+4. **Unmapped is never healthy, here too**: a value without thresholds, an alert without a
+   severity, an unknown heartbeat code all read `unknown` or `fail`, never `ok`.
+
 Alternatives considered: shipping the details on the bus (rejected: everything on the bus is
 shared); a login in the hub (rejected: one identity provider, at the edge); a client-side
 dashboard framework (rejected: CSP and the no-dependency page).
@@ -91,10 +110,10 @@ dashboard framework (rejected: CSP and the no-dependency page).
 - Adding a tool to the console is a registry edit plus, at most, a mapping; it appears in the menu,
   the catalog page and the knowledge graph (`status:<id>`, linked to its service and capability).
 - A tile always knows its age: an adapter that dies cannot leave its last green on the console.
-- Stage 2 adds product collectors (Uptime Kuma, Prometheus queries, the agent dashboard,
-  StackStorm, NiFi, the orchestrator) tested in the lab-in-a-box. Each is either a declarative
-  mapping over `poll-http-json` or a new entry of `homelabnext.status.collectors.COLLECTORS` for
-  a reserved kind; the model, the views and the contract do not change.
+- Stage 2 added the product collectors (Prometheus, Uptime Kuma, StackStorm, NiFi, the
+  orchestrator, Agentmetry), each a built-in mapping over `poll-http-json` or an entry of
+  `homelabnext.status.collectors.COLLECTORS`; the model, the views and the contract did not
+  change.
 - We maintain the mapping engine, the built-in mappers and the catalog generator, and every new
   source needs a `what` line someone can read.
 

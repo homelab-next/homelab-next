@@ -13,8 +13,9 @@ import shutil
 import subprocess
 import sys
 import threading
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 import yaml
@@ -27,6 +28,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "nightly.yml"
 ONE_SHOT = {"catalog-migrate", "lab-init"}  # run to completion; health is their exit code
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow test servers bind loopback only
 RAM_BUDGET_MB = 3584  # 4 GB runner minus headroom for the OS and the docker daemon
+STATUS_FIXTURES = ROOT / "tests" / "status" / "fixtures"
 
 
 def load_module(name: str, path: Path):
@@ -99,12 +101,27 @@ def test_dockerfile_base_is_pinned_by_digest():
         assert re.search(r"@sha256:[0-9a-f]{64}$", line), line
 
 
-def test_memory_budget_fits_four_gigabytes(compose):
+def mem_total(compose) -> int:
     total = 0
     for name, svc in compose["services"].items():
         assert "mem_limit" in svc, f"{name} has no mem_limit"
         total += mem_mb(svc["mem_limit"])
+    return total
+
+
+def test_memory_budget_fits_four_gigabytes(compose):
+    total = mem_total(compose)
     assert total <= RAM_BUDGET_MB, f"sum of mem_limit is {total} MB"
+
+
+def test_the_documented_memory_total_is_the_real_one(compose):
+    # the header states the sum, so a reader sees the headroom left; keep it true
+    stated = re.search(r"mem_limit values sum to (\d+) MB of the (\d+) MB", COMPOSE.read_text())
+    assert stated, "docker-compose.yml no longer states its memory total"
+    assert (int(stated[1]), int(stated[2])) == (mem_total(compose), RAM_BUDGET_MB)
+    broken = json.loads(json.dumps(compose))
+    broken["services"]["metrics"]["mem_limit"] = "1g"  # what a silent bump would look like
+    assert mem_total(broken) != int(stated[1])
 
 
 def test_trino_heap_is_tiny():
@@ -129,6 +146,8 @@ def test_every_capability_has_a_registry_style_alias(compose):
         "notify",
         "inference",
         "cases",
+        "metrics",
+        "uptime",
     ):
         assert f"{cap}.svc.example.internal" in aliases, cap
 
@@ -226,9 +245,10 @@ def test_docker_compose_config_is_valid():
     )
     assert proc.returncode == 0, proc.stderr
     rendered = json.loads(proc.stdout)
-    assert {"object-store", "lake-catalog", "lake-query", "events", "secrets", "notify"} <= set(
-        rendered["services"]
-    )
+    assert {
+        "object-store", "lake-catalog", "lake-query", "events", "secrets", "notify", "metrics",
+        "uptime", "uptime-init",
+    } <= set(rendered["services"])  # fmt: skip
 
 
 @needs_docker
@@ -297,6 +317,58 @@ def fake_servers():
         }
     httpd.shutdown()
     httpd.server_close()
+
+
+class FixtureHandler(BaseHTTPRequestHandler):
+    """Serves the status hub's recorded Prometheus and Uptime Kuma responses by path."""
+
+    ROUTES: ClassVar[dict[str, str]] = {
+        "/api/v1/alerts": "prometheus-alerts",
+        "/api/v1/query": "prometheus-query-up",
+        "/api/status-page/lab": "uptime-kuma-status-page",
+        "/api/status-page/heartbeat/lab": "uptime-kuma-heartbeat",
+    }
+
+    def do_GET(self):
+        name = self.ROUTES.get(self.path.split("?", 1)[0])
+        body = (STATUS_FIXTURES / f"{name}.json").read_bytes() if name else b""
+        self.send_response(200 if name else 404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def product_server():
+    httpd = ThreadingHTTPServer((LOOPBACK, 0), FixtureHandler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    yield f"http://{LOOPBACK}:{httpd.server_address[1]}"
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def test_metrics_and_uptime_checks_poll_through_the_real_collectors(checks, product_server):
+    bases = {"metrics": product_server, "uptime": product_server}
+    results = checks.run_checks(bases, only=["metrics", "uptime"], retries=1)
+    assert [r["status"] for r in results] == ["pass", "pass"], results
+    assert "collector" in results[0]["detail"] and "collector" in results[1]["detail"]
+
+
+def test_metrics_and_uptime_checks_fail_on_the_wrong_reading(checks, product_server, monkeypatch):
+    # the down monitor reads ok and a critical alert is gone: both checks must notice
+    monkeypatch.setitem(
+        FixtureHandler.ROUTES, "/api/status-page/heartbeat/lab", "uptime-kuma-heartbeat-all-up"
+    )
+    monkeypatch.setitem(FixtureHandler.ROUTES, "/api/v1/alerts", "prometheus-query-error")
+    bases = {"metrics": product_server, "uptime": product_server}
+    results = checks.run_checks(bases, only=["metrics", "uptime"], retries=1)
+    assert [r["status"] for r in results] == ["fail", "fail"], results
+    dead = checks.run_checks({"uptime": f"http://{LOOPBACK}:9"}, only=["uptime"], retries=1)
+    assert dead[0]["status"] == "fail" and "Connection refused" in dead[0]["detail"]
 
 
 def test_inference_and_cases_checks_pass_against_the_fakes(checks, fake_servers):
@@ -375,6 +447,7 @@ CREDENTIALS = (
     "LAB_OBJECT_STORE_ADMIN_TOKEN",
     "LAB_CATALOG_ENCRYPTION_KEY",
     "LAB_SECRETS_DEV_TOKEN",
+    "LAB_UPTIME_PASSWORD",
 )
 
 

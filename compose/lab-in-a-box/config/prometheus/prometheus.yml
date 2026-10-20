@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# The lab's metrics service: Prometheus scraping itself, with two rules that always fire so the
+# status hub's alerts mapping has a warning and a critical alert to read (smoke_checks.py).
+# Short intervals: the smoke test should not wait a minute for the first evaluation.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+rule_files:
+  - /etc/prometheus/rules.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

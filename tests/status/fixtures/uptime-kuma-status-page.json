@@ -1,0 +1,39 @@
+{
+ "config": {
+  "slug": "lab",
+  "title": "Lab",
+  "description": "lab-in-a-box status page (provisioned headlessly)",
+  "icon": "/icon.svg",
+  "theme": "auto",
+  "published": true,
+  "showTags": false,
+  "customCSS": "",
+  "footerText": "",
+  "showPoweredBy": false,
+  "googleAnalyticsId": "",
+  "showCertificateExpiry": false
+ },
+ "incident": null,
+ "publicGroupList": [
+  {
+   "id": 1,
+   "name": "Lab",
+   "weight": 1,
+   "monitorList": [
+    {
+     "id": 1,
+     "name": "metrics",
+     "sendUrl": 0,
+     "type": "http"
+    },
+    {
+     "id": 2,
+     "name": "unreachable",
+     "sendUrl": 0,
+     "type": "http"
+    }
+   ]
+  }
+ ],
+ "maintenanceList": []
+}

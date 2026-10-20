@@ -151,8 +151,3 @@ def test_poll_http_json_maps_and_refuses_non_2xx(http):
     http.routes["http://svc-a.status.invalid/api/v1/alerts"] = (503, {})
     with pytest.raises(CollectError, match="HTTP 503"):
         COLLECTORS["poll-http-json"].collect(s, ctx)
-
-
-def test_reserved_kind_reads_unknown_until_stage_two():
-    with pytest.raises(CollectError, match="reserved for stage 2"):
-        COLLECTORS["poll-prometheus"].collect(spec(kind="poll-prometheus"), CollectContext())

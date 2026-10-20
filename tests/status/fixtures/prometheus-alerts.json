@@ -1,0 +1,31 @@
+{
+ "status": "success",
+ "data": {
+  "alerts": [
+   {
+    "labels": {
+     "alertname": "LabSmokeWarning",
+     "severity": "warning"
+    },
+    "annotations": {
+     "summary": "lab smoke warning, always firing"
+    },
+    "state": "firing",
+    "activeAt": "2026-10-20T05:46:54.326757282Z",
+    "value": "1e+00"
+   },
+   {
+    "labels": {
+     "alertname": "LabSmokeCritical",
+     "severity": "critical"
+    },
+    "annotations": {
+     "summary": "lab smoke critical, always firing"
+    },
+    "state": "firing",
+    "activeAt": "2026-10-20T05:46:54.326757282Z",
+    "value": "1e+00"
+   }
+  ]
+ }
+}

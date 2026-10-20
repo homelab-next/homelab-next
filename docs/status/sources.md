@@ -14,14 +14,19 @@ The menu of the status hub ([status hub](../status.md) ([[status]]), [ADR-0013](
 |---|---|---|---|---|---|
 | [`agent-push`](#agent-push) | agents | agent-activity | 1 min | 3 min | Agent sessions pushed to the ingest listener (cloud sessions, orchestrators); stuck and errored sessions need attention. |
 | [`agent-spool`](#agent-spool) | agents | agent-activity | 30 s | 90 s | Agent sessions from the local hook spool (Claude Code hooks and other CLIs); stuck and errored sessions need attention. |
+| [`agentmetry-audit`](#agentmetry-audit) | agents | poll-http-json | 5 min | 15 min | Whether the agent dashboard's audit trail is being written (warn when off, empty or silent for a day). |
 | [`agentmetry-trail`](#agentmetry-trail) | agents | agent-activity | 1 min | 3 min | Agent sessions read from an Agentmetry canonical JSONL trail (optional external app). |
 | [`approvals`](#approvals) | records-db | poll-file | 5 min | 15 min | Broker requests waiting for an approval, with the oldest age (optional - only with a broker). |
+| [`automation-executions`](#automation-executions) | automation | poll-stackstorm | 2 min | 6 min | Actions with failed or timed-out executions in the last hour (fail) and the running executions. |
+| [`dataflow-status`](#dataflow-status) | dataflow | poll-nifi | 1 min | 3 min | Queued flowfiles, invalid and stopped components, and error or warning bulletins of the dataflow service. |
 | [`invariants`](#invariants) | invariants | poll-file | 1 h | 3 h | The last invariants run, one item per criterion (pass is ok, fail is fail, error is unknown). |
-| [`metrics-alerts`](#metrics-alerts) | metrics | poll-http-json | 1 min | 3 min | Every alert rule the metrics service evaluates; firing is fail, pending is warn. |
+| [`metrics-alerts`](#metrics-alerts) | metrics | poll-prometheus | 1 min | 3 min | Every firing alert of the metrics service, fail or warn by its severity label; resolved alerts drop out. |
+| [`metrics-targets`](#metrics-targets) | metrics | poll-prometheus | 1 min | 3 min | Whether each scrape job's targets answer (up is 1); a job whose target is down is fail. |
 | [`notify-health`](#notify-health) | notify | poll-http-json | 1 min | 3 min | Whether the notification service answers its own health endpoint. |
-| [`orchestrator-queues`](#orchestrator-queues) | agent-runtime | poll-http-json | 1 min | 3 min | Each orchestrator queue and whether it is draining (healthy, degraded or stalled). |
+| [`orchestrator-queues`](#orchestrator-queues) | agent-runtime | poll-http-json | 1 min | 3 min | Queued and running orchestrator jobs; the oldest queued job waiting over an hour is warn. |
 | [`orchestrator-runs`](#orchestrator-runs) | agent-runtime | push-event | 5 min | 15 min | Run outcomes the orchestrator publishes itself as status.observed events. |
 | [`proposals`](#proposals) | records-db | poll-file | 5 min | 15 min | The proposal lanes - notes in the inbox and approved but not completed, with the oldest age. |
+| [`uptime-monitors`](#uptime-monitors) | uptime | poll-uptime-kuma | 1 min | 3 min | Every monitor on the uptime service's public status page (no login); down is fail, pending is warn. |
 
 ## Sources
 
@@ -45,6 +50,17 @@ Agent sessions from the local hook spool (Claude Code hooks and other CLIs); stu
 - Module: `agents`; graph node `status:agent-spool`
 - Every 30 s, timeout 10 s; stale after 90 s without a reading; a failed poll reads as `unknown`
 
+### agentmetry-audit
+
+Whether the agent dashboard's audit trail is being written (warn when off, empty or silent for a day).
+
+- Declared by: [`svc:agentmetry`](../systems/agentmetry.md) ([[systems/agentmetry|agentmetry]]), capability `cap:agent-audit`
+- Kind: `poll-http-json`; target: `agentmetry` `/api/v1/audit/status`
+- Mapping: builtin agentmetry-audit
+- Credential: `secret:agentmetry/api-token` (a secret-store name) sent as `X-API-Key`
+- Module: `agents`; graph node `status:agentmetry-audit`
+- Every 5 min, timeout 10 s; stale after 15 min without a reading; a failed poll reads as `unknown`
+
 ### agentmetry-trail
 
 Agent sessions read from an Agentmetry canonical JSONL trail (optional external app).
@@ -65,6 +81,28 @@ Broker requests waiting for an approval, with the oldest age (optional - only wi
 - Module: `records-db`; graph node `status:approvals`
 - Every 5 min, timeout 10 s; stale after 15 min without a reading; a failed poll reads as `unknown`
 
+### automation-executions
+
+Actions with failed or timed-out executions in the last hour (fail) and the running executions.
+
+- Declared by: [`svc:automation`](../systems/automation.md) ([[systems/automation|automation]]), capability `cap:automation`
+- Kind: `poll-stackstorm`; target: `automation` `/api/v1/executions`
+- Mapping: built in (poll-stackstorm)
+- Credential: `secret:stackstorm/status-token` (a secret-store name) sent as `St2-Api-Key`
+- Module: `automation`; graph node `status:automation-executions`
+- Every 2 min, timeout 15 s; stale after 6 min without a reading; a failed poll reads as `unknown`
+
+### dataflow-status
+
+Queued flowfiles, invalid and stopped components, and error or warning bulletins of the dataflow service.
+
+- Declared by: [`svc:dataflow`](../systems/dataflow.md) ([[systems/dataflow|dataflow]]), capability `cap:dataflow`
+- Kind: `poll-nifi`; target: `dataflow` `/nifi-api/flow/status`
+- Mapping: built in (poll-nifi)
+- Credential: `secret:nifi/status-token` (a secret-store name) sent as `Authorization: Bearer`
+- Module: `dataflow`; graph node `status:dataflow-status`
+- Every 1 min, timeout 10 s; stale after 3 min without a reading; a failed poll reads as `unknown`
+
 ### invariants
 
 The last invariants run, one item per criterion (pass is ok, fail is fail, error is unknown).
@@ -77,12 +115,22 @@ The last invariants run, one item per criterion (pass is ok, fail is fail, error
 
 ### metrics-alerts
 
-Every alert rule the metrics service evaluates; firing is fail, pending is warn.
+Every firing alert of the metrics service, fail or warn by its severity label; resolved alerts drop out.
 
 - Declared by: [`svc:metrics`](../systems/metrics.md) ([[systems/metrics|metrics]]), capability `cap:metrics`
-- Kind: `poll-http-json`; target: `metrics` `/api/v1/alerts`
-- Mapping: selectors
+- Kind: `poll-prometheus`; target: `metrics` `/api/v1/alerts`
+- Mapping: builtin prometheus-alerts
 - Module: `metrics`; graph node `status:metrics-alerts`
+- Every 1 min, timeout 10 s; stale after 3 min without a reading; a failed poll reads as `unknown`
+
+### metrics-targets
+
+Whether each scrape job's targets answer (up is 1); a job whose target is down is fail.
+
+- Declared by: [`svc:metrics`](../systems/metrics.md) ([[systems/metrics|metrics]]), capability `cap:metrics`
+- Kind: `poll-prometheus`; target: `metrics` `/api/v1/query`
+- Mapping: instant query `up`
+- Module: `metrics`; graph node `status:metrics-targets`
 - Every 1 min, timeout 10 s; stale after 3 min without a reading; a failed poll reads as `unknown`
 
 ### notify-health
@@ -97,13 +145,13 @@ Whether the notification service answers its own health endpoint.
 
 ### orchestrator-queues
 
-Each orchestrator queue and whether it is draining (healthy, degraded or stalled).
+Queued and running orchestrator jobs; the oldest queued job waiting over an hour is warn.
 
 - Declared by: [`svc:agent-runtime`](../systems/agent-runtime.md) ([[systems/agent-runtime|agent-runtime]]), capability `cap:agent-runtime`
-- Kind: `poll-http-json`; target: `agent-runtime` `/api/v1/status`
-- Mapping: selectors
+- Kind: `poll-http-json`; target: `agent-runtime` `/admin/queue-summary`
+- Mapping: builtin orchestrator-queue
 - Module: `agent-runtime`; graph node `status:orchestrator-queues`
-- Every 1 min, timeout 5 s; stale after 3 min without a reading; a failed poll reads as `unknown`
+- Every 1 min, timeout 5 s; stale after 3 min without a reading; a failed poll reads as `fail`
 
 ### orchestrator-runs
 
@@ -124,6 +172,16 @@ The proposal lanes - notes in the inbox and approved but not completed, with the
 - Mapping: builtin records-lanes
 - Module: `records-db`; graph node `status:proposals`
 - Every 5 min, timeout 10 s; stale after 15 min without a reading; a failed poll reads as `unknown`
+
+### uptime-monitors
+
+Every monitor on the uptime service's public status page (no login); down is fail, pending is warn.
+
+- Declared by: [`svc:uptime`](../systems/uptime.md) ([[systems/uptime|uptime]]), capability `cap:uptime`
+- Kind: `poll-uptime-kuma`; target: `uptime` `/api/status-page/lab`
+- Mapping: built in (poll-uptime-kuma)
+- Module: `uptime`; graph node `status:uptime-monitors`
+- Every 1 min, timeout 10 s; stale after 3 min without a reading; a failed poll reads as `unknown`
 
 ## Regenerate and check
 

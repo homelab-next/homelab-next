@@ -6,7 +6,7 @@
       "profile:reader": "sha256:b855f7d3bf4d947b92df54cdb815d2099722c7a62166abf05cd2af0c62837114",
       "profile:responder": "sha256:ed744f7e5a9beed4c46712e50eb47055c08f9e7d0e51c4d7e45fa3b6ac30012d"
     },
-    "registry": "ebf471a7d867e8689d3d3d31a4322d168bba0fb0d0bcbc2510dd50363f76d4d7"
+    "registry": "243943f95413ac0bf2c454ec8db6142d7a179313cd87d11c106eea2589457f8b"
   },
   "keyring_version": 1,
   "principals": [
@@ -18,11 +18,23 @@
         },
         {
           "reason": "not granted (default deny)",
+          "resource": "cap:agent-audit"
+        },
+        {
+          "reason": "not granted (default deny)",
           "resource": "cap:agent-runtime"
         },
         {
           "reason": "not granted (default deny)",
+          "resource": "cap:automation"
+        },
+        {
+          "reason": "not granted (default deny)",
           "resource": "cap:dashboards"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:dataflow"
         },
         {
           "reason": "not granted (default deny)",
@@ -78,6 +90,10 @@
         },
         {
           "reason": "not granted (default deny)",
+          "resource": "cap:uptime"
+        },
+        {
+          "reason": "not granted (default deny)",
           "resource": "mcp:agent_runtime"
         },
         {
@@ -127,11 +143,23 @@
         },
         {
           "reason": "not granted (default deny)",
+          "resource": "cap:agent-audit"
+        },
+        {
+          "reason": "not granted (default deny)",
           "resource": "cap:agent-runtime"
         },
         {
           "reason": "not granted (default deny)",
+          "resource": "cap:automation"
+        },
+        {
+          "reason": "not granted (default deny)",
           "resource": "cap:dashboards"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:dataflow"
         },
         {
           "reason": "not granted (default deny)",
@@ -180,6 +208,10 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:status-hub"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:uptime"
         },
         {
           "reason": "not granted (default deny)",
@@ -240,11 +272,23 @@
         },
         {
           "reason": "not granted (default deny)",
+          "resource": "cap:agent-audit"
+        },
+        {
+          "reason": "not granted (default deny)",
           "resource": "cap:agent-runtime"
         },
         {
           "reason": "not granted (default deny)",
+          "resource": "cap:automation"
+        },
+        {
+          "reason": "not granted (default deny)",
           "resource": "cap:dashboards"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:dataflow"
         },
         {
           "reason": "not granted (default deny)",
@@ -297,6 +341,10 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:status-hub"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:uptime"
         },
         {
           "reason": "not granted (default deny)",
@@ -357,7 +405,15 @@
       "denials": [
         {
           "reason": "zone not a client (default deny)",
+          "resource": "svc:agentmetry"
+        },
+        {
+          "reason": "zone not a client (default deny)",
           "resource": "svc:dashboards"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:dataflow"
         },
         {
           "reason": "zone not a client (default deny)",
@@ -382,6 +438,10 @@
         {
           "reason": "zone not a client (default deny)",
           "resource": "svc:status-hub"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:uptime"
         }
       ],
       "grants": [
@@ -390,6 +450,12 @@
           "kind": "service",
           "level": "connect",
           "resource": "svc:agent-runtime"
+        },
+        {
+          "endpoint": "automation.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:automation"
         },
         {
           "endpoint": "dns.svc.example.internal",
@@ -445,6 +511,14 @@
         },
         {
           "reason": "zone not a client (default deny)",
+          "resource": "svc:agentmetry"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:automation"
+        },
+        {
+          "reason": "zone not a client (default deny)",
           "resource": "svc:dashboards"
         },
         {
@@ -462,9 +536,19 @@
         {
           "reason": "zone not a client (default deny)",
           "resource": "svc:status-hub"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:uptime"
         }
       ],
       "grants": [
+        {
+          "endpoint": "dataflow.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:dataflow"
+        },
         {
           "endpoint": "dns.svc.example.internal",
           "kind": "service",
@@ -531,6 +615,18 @@
         },
         {
           "reason": "zone not a client (default deny)",
+          "resource": "svc:agentmetry"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:automation"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:dataflow"
+        },
+        {
+          "reason": "zone not a client (default deny)",
           "resource": "svc:events"
         },
         {
@@ -564,6 +660,10 @@
         {
           "reason": "zone not a client (default deny)",
           "resource": "svc:secrets"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:uptime"
         }
       ],
       "grants": [
@@ -609,6 +709,14 @@
         },
         {
           "reason": "zone not a client (default deny)",
+          "resource": "svc:automation"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:dataflow"
+        },
+        {
+          "reason": "zone not a client (default deny)",
           "resource": "svc:edge-proxy"
         },
         {
@@ -637,6 +745,12 @@
         }
       ],
       "grants": [
+        {
+          "endpoint": "agent-audit.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:agentmetry"
+        },
         {
           "endpoint": "dashboards.svc.example.internal",
           "kind": "service",
@@ -678,6 +792,12 @@
           "kind": "service",
           "level": "connect",
           "resource": "svc:status-hub"
+        },
+        {
+          "endpoint": "uptime.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:uptime"
         }
       ],
       "kind": "network",

@@ -209,18 +209,16 @@ services:
     mcp: {name: agent_runtime, transport: sse, path: /sse}
     tags: [compute, agents]
     status_sources:
+      # the LLM orchestrator's own queue summary (GET /admin/queue-summary); it has no other
+      # health endpoint, so a failed poll is the reading (on_error: fail)
       - id: orchestrator-queues
         kind: poll-http-json
-        target: {path: /api/v1/status}
+        target: {path: /admin/queue-summary}
         interval_s: 60
         timeout_s: 5
-        mapping:
-          items: $.queues[*]
-          item: name
-          state: health
-          states: {healthy: ok, degraded: warn, stalled: fail}
-          summary: detail
-        what: Each orchestrator queue and whether it is draining (healthy, degraded or stalled).
+        on_error: fail
+        mapping: {builtin: orchestrator-queue, warn_after_s: 3600}
+        what: Queued and running orchestrator jobs; the oldest queued job waiting over an hour is warn.
       - id: orchestrator-runs
         kind: push-event
         interval_s: 300
@@ -265,17 +263,23 @@ services:
     tags: [ops, monitoring]
     status_sources:
       - id: metrics-alerts
-        kind: poll-http-json
+        kind: poll-prometheus
         target: {path: /api/v1/alerts}
         interval_s: 60
         timeout_s: 10
+        mapping: {builtin: prometheus-alerts, item: instance}
+        what: Every firing alert of the metrics service, fail or warn by its severity label; resolved alerts drop out.
+      - id: metrics-targets
+        kind: poll-prometheus
+        target: {path: /api/v1/query}
+        interval_s: 60
+        timeout_s: 10
         mapping:
-          items: $.data.alerts[*]
-          item: labels.alertname
-          state: state
-          states: {firing: fail, pending: warn, inactive: ok}
-          summary: annotations.summary
-        what: Every alert rule the metrics service evaluates; firing is fail, pending is warn.
+          query: up
+          item: job
+          thresholds: {fail: 0, direction: below}
+          empty: fail
+        what: Whether each scrape job's targets answer (up is 1); a job whose target is down is fail.
       - id: invariants
         kind: poll-file
         target: {file: examples/registers/invariants.results.json}
@@ -284,6 +288,89 @@ services:
         timeout_s: 10
         mapping: {builtin: invariants-results, module: invariants}
         what: The last invariants run, one item per criterion (pass is ok, fail is fail, error is unknown).
+
+  uptime:
+    capability: uptime
+    impl: uptime-kuma
+    host: mon-core
+    protocol: http
+    port: 3001
+    health: {kind: http, path: /api/entry-page, expect_status: 200}
+    owner: platform-team
+    version: "1.23.16"
+    tls: none
+    tags: [ops, monitoring]
+    status_sources:
+      - id: uptime-monitors
+        kind: poll-uptime-kuma
+        target: {path: /api/status-page/lab}
+        interval_s: 60
+        timeout_s: 10
+        what: Every monitor on the uptime service's public status page (no login); down is fail, pending is warn.
+
+  automation:
+    capability: automation
+    impl: stackstorm
+    host: runtime-core
+    protocol: https
+    port: 443
+    health: {kind: tcp}
+    owner: platform-team
+    version: "3.8.1"
+    tls: internal
+    tags: [ops, automation]
+    status_sources:
+      - id: automation-executions
+        kind: poll-stackstorm
+        target: {path: /api/v1/executions}
+        interval_s: 120
+        timeout_s: 15
+        auth: {secret: "secret:stackstorm/status-token", header: St2-Api-Key}
+        mapping: {window_s: 3600, limit: 100}
+        what: Actions with failed or timed-out executions in the last hour (fail) and the running executions.
+
+  dataflow:
+    capability: dataflow
+    impl: nifi
+    host: lake-core
+    protocol: https
+    port: 9443
+    health: {kind: tcp}
+    owner: data-team
+    version: "2.0.0"
+    tls: internal
+    tags: [data, dataflow]
+    status_sources:
+      - id: dataflow-status
+        kind: poll-nifi
+        target: {path: /nifi-api/flow/status}
+        interval_s: 60
+        timeout_s: 10
+        auth: {secret: "secret:nifi/status-token"}
+        mapping:
+          thresholds: {warn: 10000, fail: 100000}
+        what: Queued flowfiles, invalid and stopped components, and error or warning bulletins of the dataflow service.
+
+  agentmetry:
+    capability: agent-audit
+    impl: agentmetry
+    host: mon-core
+    protocol: http
+    port: 8000
+    health: {kind: http, path: /api/v1/health, expect_status: 200}
+    owner: platform-team
+    version: "0.2.0"
+    tls: none
+    tags: [ops, agents]
+    status_sources:
+      - id: agentmetry-audit
+        kind: poll-http-json
+        target: {path: /api/v1/audit/status}
+        interval_s: 300
+        timeout_s: 10
+        auth: {secret: "secret:agentmetry/api-token", header: X-API-Key}
+        mapping: {builtin: agentmetry-audit, module: agents, warn_after_s: 86400}
+        what: Whether the agent dashboard's audit trail is being written (warn when off, empty or silent for a day).
 
   dashboards:
     capability: dashboards

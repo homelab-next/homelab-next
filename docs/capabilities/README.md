@@ -35,7 +35,10 @@ Every service in `examples/services.yml`, and the capability page that holds its
 | Service | Capability | Implementation | Contract |
 |---|---|---|---|
 | [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-runtime\|agent-runtime]]) | `agent-runtime` | `orchestrator` | no conformance suite |
+| [agentmetry](../systems/agentmetry.md) ([[systems/agentmetry\|agentmetry]]) | `agent-audit` | `agentmetry` | no conformance suite |
+| [automation](../systems/automation.md) ([[systems/automation\|automation]]) | `automation` | `stackstorm` | no conformance suite |
 | [dashboards](../systems/dashboards.md) ([[systems/dashboards\|dashboards]]) | `dashboards` | `grafana` | no conformance suite |
+| [dataflow](../systems/dataflow.md) ([[systems/dataflow\|dataflow]]) | `dataflow` | `nifi` | no conformance suite |
 | [dns](../systems/dns.md) ([[systems/dns\|dns]]) | `dns` | `technitium` | no conformance suite |
 | [edge-proxy](../systems/edge-proxy.md) ([[systems/edge-proxy\|edge-proxy]]) | `edge-proxy` | `caddy` | no conformance suite |
 | [events](../systems/events.md) ([[systems/events\|events]]) | `events` | `nats` | [events](events.md) ([[capabilities/events\|events]]) |
@@ -49,6 +52,7 @@ Every service in `examples/services.yml`, and the capability page that holds its
 | [records-db](../systems/records-db.md) ([[systems/records-db\|records-db]]) | `records-db` | `postgresql` | no conformance suite |
 | [secrets](../systems/secrets.md) ([[systems/secrets\|secrets]]) | `secrets` | `openbao` | [secrets](secrets.md) ([[capabilities/secrets\|secrets]]) |
 | [status-hub](../systems/status-hub.md) ([[systems/status-hub\|status-hub]]) | `status-hub` | `homelabnext` | no conformance suite |
+| [uptime](../systems/uptime.md) ([[systems/uptime\|uptime]]) | `uptime` | `uptime-kuma` | no conformance suite |
 
 ## Regenerate and check
 

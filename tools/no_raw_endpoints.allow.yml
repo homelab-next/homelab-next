@@ -17,6 +17,8 @@ allow:
     reason: the query engine's own listener URI inside its container
   - path: "compose/lab-in-a-box/config/trino/catalog/iceberg.properties"
     reason: points the engine at the in-network aliases of the catalog and object store (example.internal names, compose network only)
+  - path: "compose/lab-in-a-box/config/prometheus/prometheus.yml"
+    reason: the lab's Prometheus scrapes itself inside its own container (its own listener, compose network only)
   - path: "inventory/**"
     reason: the inventory is where addresses legitimately live
   - path: "tests/gates/test_network_guard.py"
