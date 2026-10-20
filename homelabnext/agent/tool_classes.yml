@@ -34,6 +34,7 @@ capabilities:
   cap:monitoring: [read]
   cap:inference: [read]
   cap:fast-classifier: [read]
+  cap:context: [read]
   cap:records-propose: [record-write]
   cap:records: [record-write]
   cap:cases: [record-write]

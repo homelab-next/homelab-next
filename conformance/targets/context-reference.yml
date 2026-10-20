@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# The reference context store (homelabnext.context), the one that serves the repository's graph.
+#   hnx conform run context --target context-reference
+name: context-reference
+capabilities:
+  context:
+    adapter: homelabnext.context:ContextStore

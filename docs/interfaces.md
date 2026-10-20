@@ -278,9 +278,9 @@ Suite(name, summary, protocol) ; @suite.check(id, summary, *, severity="must", r
 run(capability, binding_mapping, root=None) -> list[CheckResult]           # {"fake": True} or {"adapter": "pkg.mod:factory", ...}
 run_capability(capability, target, root=None, *, only=None) -> CapabilityRun  # target: "fake" | "broken[:M]" | file | name
 build_report(root=None, target="fake", ...) -> dict                          # capabilities_without_passing_test
-CAPABILITIES (fourteen) / EXTENDED (backup, dns, edge) ; ConformError (misconfiguration, exit 2)
+CAPABILITIES (fifteen) / EXTENDED (backup, dns, edge) ; ConformError (misconfiguration, exit 2)
 # the suites, Protocols and fakes live in conformance/ of the source tree (hnx conform --root DIR); an
-# installed wheel lists the fourteen names and says "no suite" until pointed at a checkout.
+# installed wheel lists the fifteen names and says "no suite" until pointed at a checkout.
 # invariant X-10 (plugins/x10_conformance.py) is registered through the homelabnext.invariants.checks entry point.
 ```
 
@@ -308,9 +308,9 @@ CAPABILITIES (fourteen) / EXTENDED (backup, dns, edge) ; ConformError (misconfig
 - Capability alias: `<capability>.svc.example.internal`, for example
   `lake-query.svc.example.internal`. The suffix is a registry setting (`domain:`), `example.internal`
   in everything public. Aliases are generated, never typed.
-- Capability names (fourteen, also the `hnx conform --list` output): `lake-query`, `lake-catalog`,
+- Capability names (fifteen, also the `hnx conform --list` output): `lake-query`, `lake-catalog`,
   `object-store`, `inference`, `fast-classifier`, `notify`, `cases`, `events`, `orchestration`,
-  `broker`, `secrets`, `idp`, `records`, `detections`.
+  `broker`, `secrets`, `idp`, `records`, `detections`, `context`.
 - Addresses in examples: `192.0.2.0/24` services, `198.51.100.0/24` management,
   `203.0.113.0/24` external, `2001:db8::/32` IPv6, MACs `00:00:5e:00:53:xx`.
 - No library or role contains a default endpoint. An unresolvable capability raises the registry's

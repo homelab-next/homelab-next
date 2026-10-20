@@ -43,4 +43,4 @@ def test_failing_and_suiteless_capabilities_are_reported():
 
 def test_this_tree_passes(capsys):
     assert gate.main([]) == 0
-    assert "all 14 capabilities" in capsys.readouterr().out
+    assert "all 15 capabilities" in capsys.readouterr().out

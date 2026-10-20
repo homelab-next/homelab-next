@@ -60,7 +60,7 @@ trailing newline), then the schema, then `homelabnext.compute.validate`:
 | ids, `(node, vmid)` and ips are unique | |
 | `gpu` requires `kind: vm` | passthrough is a VM feature |
 | `provisioning: manual` requires `requires_root_steps` | the hand work is written down |
-| `capability` is one of the fourteen in `docs/interfaces.md` | |
+| `capability` is one of the fifteen in `docs/interfaces.md` | |
 | `capability_groups` are known inventory groups (`docs/role-interface.md` section 5, or `cap_<capability>`) | playbooks target groups |
 | `backup.policy` is defined (or `none`) | |
 | a NIC with `firewall: disabled` on a node that enforces a firewall needs `network.firewall_exemption.reason` | see below |
