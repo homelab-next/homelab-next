@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/status/agents/1.1",
+  "title": "Status hub agent activity configuration (agents.yml)",
+  "description": "Where the hub keeps agent activity, how long, how much of each private field, when a session counts as stuck, who may see the private tier (through the trusted front door) and who may push activity (one bearer token per sender, named by its secret-store reference, never a value). ADR-0013 stage 1b, docs/status.md. 1.1 adds, additively, approvals: the broker Approvals page (ADR-0017 stage 2b), served behind the same front door as the private tier, which it requires, with its own approver group for approve and deny. Evolve additively.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agents_version", "store"],
+  "properties": {
+    "agents_version": {"const": 1},
+    "store": {"$ref": "#/$defs/rel_path", "description": "The activity database (SQLite), relative to the working directory."},
+    "retention_days": {"type": "integer", "minimum": 1, "maximum": 3650, "default": 14},
+    "detail": {"type": "boolean", "default": true, "description": "Keep the private detail tier at all (false: summary only)."},
+    "redact_personal_data": {"type": "boolean", "default": false, "description": "Also redact personal data (e-mail, phone, card, national id, addresses) from details; secrets are always redacted."},
+    "caps": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per-field size caps in characters, applied after redaction and before storage.",
+      "properties": {
+        "prompt": {"$ref": "#/$defs/cap"},
+        "command": {"$ref": "#/$defs/cap"},
+        "tool_input": {"$ref": "#/$defs/cap"},
+        "tool_output": {"$ref": "#/$defs/cap"},
+        "error": {"$ref": "#/$defs/cap"},
+        "approval_payload": {"$ref": "#/$defs/cap"}
+      }
+    },
+    "stuck_after_s": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A working session with no event for this long is stuck. A model's threshold beats its runtime's, which beats the default.",
+      "properties": {
+        "default": {"$ref": "#/$defs/seconds"},
+        "runtimes": {"type": "object", "propertyNames": {"pattern": "^[a-z][a-z0-9-]{0,31}$(?!\\n)"}, "additionalProperties": {"$ref": "#/$defs/seconds"}},
+        "models": {"type": "object", "propertyNames": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,99}$(?!\\n)"}, "additionalProperties": {"$ref": "#/$defs/seconds"}}
+      }
+    },
+    "private": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service", "viewer_group", "access_log"],
+      "description": "The private tier. Absent: never served. Present: served only to requests from a trusted proxy that carry the front door's shared-secret header, an identity header and the viewer group.",
+      "properties": {
+        "service": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$(?!\\n)", "description": "The registry service whose front_door (header + secret reference) the edge adds."},
+        "trusted_proxies": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$(?!\\n)"}, "description": "Registry host names allowed to front the hub; default: the hosts of every edge-proxy service."},
+        "identity_header": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,62}$(?!\\n)", "default": "X-Authentik-Username"},
+        "groups_header": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,62}$(?!\\n)", "default": "X-Authentik-Groups"},
+        "viewer_group": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}$(?!\\n)"},
+        "access_log": {"$ref": "#/$defs/rel_path"}
+      }
+    },
+    "approvals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["socket", "issuer", "approver_group"],
+      "description": "The broker Approvals page (/approvals): pending broker requests and recent decisions for the private tier's viewers, approve and deny for the approver group. The hub is the broker's approval relay for issuer; the approver it names is that issuer and the front door's identity, never anything from the form. Requires private (checked when the config is loaded).",
+      "properties": {
+        "socket": {"type": "string", "pattern": "^/(?!.*\\.\\.)[A-Za-z0-9._/-]+$(?!\\n)", "maxLength": 256, "description": "The broker's Unix socket (absolute path); the hub's user must be listed in the broker manifest's approval_relays."},
+        "issuer": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)", "maxLength": 64, "description": "The SSO issuer the broker maps this relay to (approval_relays[].issuer)."},
+        "approver_group": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}$(?!\\n)", "description": "The group (X-Authentik-Groups) required to approve or deny; must differ from private.viewer_group."},
+        "timeout_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 120, "default": 10, "description": "Bound on one broker exchange."}
+      }
+    },
+    "ingest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["senders"],
+      "properties": {
+        "max_body_bytes": {"type": "integer", "minimum": 1024, "maximum": 16777216, "default": 262144},
+        "max_events": {"type": "integer", "minimum": 1, "maximum": 5000, "default": 200},
+        "rate_per_min": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 120},
+        "senders": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "token"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$(?!\\n)"},
+              "token": {"$ref": "#/$defs/secret_ref"},
+              "detail": {"type": "boolean", "default": true, "description": "Accept this sender's private detail tier."},
+              "runtimes": {"type": "array", "uniqueItems": true, "minItems": 1, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$(?!\\n)"}, "description": "The runtimes this sender may report (default: any). A sender may only add to sessions it started."}
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "rel_path": {"type": "string", "pattern": "^(?!/)(?!.*\\.\\.)[A-Za-z0-9._/-]+$(?!\\n)", "maxLength": 256},
+    "cap": {"type": "integer", "minimum": 0, "maximum": 262144},
+    "seconds": {"type": "integer", "minimum": 30, "maximum": 604800},
+    "secret_ref": {"type": "string", "pattern": "^secret:[a-z][a-z0-9_-]*(/[a-z][a-z0-9_-]*)*$(?!\\n)", "description": "A name in the secret store; the value is never in this file."}
+  }
+}

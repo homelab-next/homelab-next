@@ -20,7 +20,7 @@ Default deny throughout: :func:`homelabnext.broker.decide` judges every call aga
 that needs approval can only be submitted.  Its request waits ``pending`` until an approver
 listed in the manifest approves or denies it (:meth:`BrokerService.approve` /
 :meth:`BrokerService.deny`, bound to the request digest), a ``decision.requested`` event is
-emitted, and ``run`` then executes it once, consuming the approval durably.
+emitted (carrying a ``link`` to the hub's Approvals page when ``approvals_url`` is set), and ``run`` then executes it once, consuming the approval durably.
 
 State lives in one directory (:class:`homelabnext.broker.state.StateDir`): one file per request,
 claim, result, approval, consumed approval and audit record, each created exclusively, so any
@@ -45,6 +45,7 @@ import json
 import os
 import re
 import tempfile
+import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -277,8 +278,10 @@ class BrokerService:
         resolve_secret: Callable[[str], str] | None = None,
         clock: Callable[[], datetime] = _utcnow,
         source: str = "svc:broker",
+        approvals_url: str | None = None,
     ) -> None:
         self.state = StateDir(state_dir)
+        self.approvals_url = check_approvals_url(approvals_url)
         self.approvals = FileApprovalStore(self.state.root / "consumed")
         self.manifest = copy.deepcopy(dict(manifest or EMPTY_MANIFEST))
         self.base_dir = Path(base_dir) if base_dir is not None else Path.cwd()
@@ -998,29 +1001,36 @@ class BrokerService:
         else:
             self.bus.publish(event_type, canonical_body(ev), msg_id=ev["id"])
 
+    def approval_link(self, rid: str) -> str | None:
+        """The hub Approvals page for one request, when ``approvals_url`` is configured."""
+        if not self.approvals_url:
+            return None
+        return f"{self.approvals_url}?{urllib.parse.urlencode({'request': rid})}"
+
     def _approval_requested(self, request: Mapping[str, Any]) -> None:
         rid = request["request_id"]
-        self._emit(
-            "homelabnext.decision.requested",
-            {
-                "decision_id": rid,
-                "spec": "broker-approval",
-                "subject": f"requests/{rid}.json",
-                "action": request["action"],
-                "actor": request["actor"],
-                "request_digest": request["digest"],
-            },
-            rid,
-            key=f"requested:{rid}",
-        )
+        link = self.approval_link(rid)
+        data = {
+            "decision_id": rid,
+            "spec": "broker-approval",
+            "subject": f"requests/{rid}.json",
+            "action": request["action"],
+            "actor": request["actor"],
+            "request_digest": request["digest"],
+        }
+        if link:
+            data["link"] = link
+        self._emit("homelabnext.decision.requested", data, rid, key=f"requested:{rid}")
         if self.notifier is not None:
             from homelabnext.notify.core import Message
 
+            body = f"{request['actor']} asks to run {request['action']} ({rid})"
             msg = Message(
                 key=f"broker-approval-{rid}",
                 title=APPROVAL_TITLE,
-                body=f"{request['actor']} asks to run {request['action']} ({rid})",
+                body=body + (f"\nReview: {link}" if link else ""),
                 level="warn",
+                click=link,
             )
             self._notify(msg.key, "awaiting-approval", msg)
 
@@ -1041,6 +1051,25 @@ class BrokerService:
             self._audit(
                 "svc:broker", "", "notify", "error", reason="notify-failed", request_id=key[16:]
             )
+
+
+def check_approvals_url(url: str | None) -> str | None:
+    """``url`` when it is an absolute http(s) URL of a page (no credentials, query or fragment),
+    else :class:`ValueError`; None and "" pass as None (no link)."""
+    if not url:
+        return None
+    parts = urllib.parse.urlsplit(url)
+    if (
+        parts.scheme not in ("http", "https")
+        or not parts.hostname
+        or parts.username
+        or parts.password
+        or parts.query
+        or parts.fragment
+        or any(c.isspace() for c in url)
+    ):
+        raise ValueError(f"approvals URL {url!r} is not an http(s) page URL")
+    return url
 
 
 def _lane_params(lane: _lanes.Lane) -> dict[str, str]:

@@ -46,6 +46,7 @@ class Message:
     tags: tuple[str, ...] = ()
     topic: str | None = None  # None -> the sender's default topic
     email: str | None = None  # optional extra email target
+    click: str | None = None  # optional http(s) link the notification opens (ntfy ``Click``)
 
     def __post_init__(self) -> None:
         if not self.key or not self.title:
@@ -56,6 +57,11 @@ class Message:
             isinstance(self.priority, int) and 1 <= self.priority <= 5
         ):
             raise ValueError("priority must be an int in 1..5")
+        if self.click is not None and (
+            not self.click.startswith(("https://", "http://"))
+            or any(c.isspace() for c in self.click)
+        ):
+            raise ValueError("click must be an http(s) URL")
         object.__setattr__(self, "tags", tuple(self.tags))
 
     @property

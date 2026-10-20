@@ -3,6 +3,9 @@
 
 Read-only by construction: the handler answers ``GET`` and ``HEAD`` for ``/``, ``/index.html``
 and ``/status.json`` and nothing else (every other method is ``405``, every other path ``404``).
+The one exception is ``POST /approvals/decide``, and only when the Approvals page is configured
+(:mod:`homelabnext.status.approvals`: front door, approver group, same-origin, a CSRF token and
+the digest the person saw); every other ``POST`` is still ``405``.
 Each request builds the document from the state file only -- it never calls a source -- so a hung
 or blackholed source cannot stall the console (O-07); collection runs elsewhere
 (``hnx status collect``).
@@ -87,6 +90,7 @@ def make_server(
     agents: Any = None,
     strategy: Any = None,
     baselines: Any = None,
+    approvals: Any = None,
 ) -> ThreadingHTTPServer:
     """A server for ``document()`` (called once per request).  ``port=0`` picks a free port.
 
@@ -95,7 +99,9 @@ def make_server(
     :class:`homelabnext.status.agents.pages.AgentSite` adds the agent pages (and, behind its
     trusted front door only, the private tier); ``strategy``: a
     :class:`homelabnext.strategy.pages.StrategySite` adds the strategy pages; ``baselines``: a
-    :class:`homelabnext.compute.pages.BaselineSite` adds the Baselines page."""
+    :class:`homelabnext.compute.pages.BaselineSite` adds the Baselines page; ``approvals``: a
+    :class:`homelabnext.status.approvals.ApprovalsSite` adds the Approvals page and its one
+    ``POST`` route."""
     extra = frozenset(h.strip().lower().rstrip(".") for h in allowed_hosts if h.strip())
     if allow_remote and not extra:
         raise ValueError("allow_remote needs allowed_hosts: the hostnames clients will use")
@@ -109,6 +115,7 @@ def make_server(
     class Handler(BaseHTTPRequestHandler):
         server_version = "hnx-status"
         sys_version = ""
+        timeout = 30  # a client that stops mid-request (a form body) cannot hold a thread
 
         def _reply(self, code: int, ctype: str, body: bytes, extra: dict | None = None) -> None:
             self.send_response(code)
@@ -141,7 +148,11 @@ def make_server(
                 doc["menu"] = [m for m in doc["menu"] if m.get("group") != "private"]
                 self._reply(200, "application/json", dumps(doc).encode("utf-8"))
             elif (
-                (strategy is not None and (hit := strategy.handle(route, query, document())))
+                (
+                    approvals is not None
+                    and (hit := approvals.handle(route, query, document(), client, self.headers))
+                )
+                or (strategy is not None and (hit := strategy.handle(route, query, document())))
                 or (baselines is not None and (hit := baselines.handle(route, query, document())))
             ) or (
                 agents is not None
@@ -163,7 +174,19 @@ def make_server(
                 405, "text/plain; charset=utf-8", b"read-only: GET only\n", {"Allow": "GET, HEAD"}
             )
 
-        do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = _refuse
+        def do_POST(self) -> None:
+            route = self.path.partition("?")[0]
+            if approvals is None or route != "/approvals/decide":
+                self._refuse()
+                return
+            client = self.client_address[0] if self.client_address else None
+            if not host_allowed(self.headers.get("Host"), self.headers.get("Origin"), allowed):
+                # the same DNS-rebinding refusal as every route, and logged like every attempt
+                self._reply(*approvals.refuse(client, self.headers, 403, "host not allowed"))
+                return
+            self._reply(*approvals.decide(document(), client, self.headers, self.rfile.read))
+
+        do_PUT = do_PATCH = do_DELETE = do_OPTIONS = _refuse
 
         def log_message(self, *a: Any) -> None:  # quiet; the CLI prints the URL once
             pass

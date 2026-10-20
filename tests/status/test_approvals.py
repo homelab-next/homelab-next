@@ -1,0 +1,457 @@
+# SPDX-License-Identifier: Apache-2.0
+"""The hub's Approvals page (ADR-0017 stage 2b): the front door and the approver group, the write
+safety of the hub's one POST (same origin, CSRF token, the digest the person saw, idempotent
+re-submits, every attempt logged), escaped rendering, the config, the Caddy site, and a round trip
+through a real ``hnx broker serve`` socket."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
+from pathlib import Path
+
+import pytest
+import yaml
+from agent_helpers import AUTHORIZED, FAKE_SECRET, HOSTILE, front_door, request
+from status_helpers import ROOT, T0, VIEWS
+
+from homelabnext.status import build_status, load_views
+from homelabnext.status.agents import AgentsConfigError, load_config
+from homelabnext.status.agents.config import ApprovalsSettings
+from homelabnext.status.approvals import TOKEN_TTL_S, ApprovalsSite
+from homelabnext.status.model import iso
+from homelabnext.status.serve import LOOPBACK, make_server
+
+DIGEST = "sha256:" + "ab" * 32
+OTHER_DIGEST = "sha256:" + "cd" * 32
+RID = "req-0a1b2c3d4e5f6a7b"
+APPROVER = {**AUTHORIZED, "X-Authentik-Groups": "staff|hub-approvers"}
+VIEWER = dict(AUTHORIZED)  # in the viewer group, not the approver group
+DOC_ADDR = ".".join(["192", "0", "2", "10"])
+KEY = b"fake-csrf-key-0123456789abcdef!!"
+
+
+class FakeBroker:
+    """The relay half of ``BrokerClient``: pending rows, audit rows, and what it was asked."""
+
+    def __init__(self):
+        self.rows = [
+            {
+                "request_id": RID,
+                "action": "service.restart",
+                "actor": "profile:triage",
+                "target": "svc:queue",
+                "params": {"grace_s": 30, "why": HOSTILE},
+                "created": iso(T0 - 300),
+                "digest": DIGEST,
+                "approved": False,
+            }
+        ]
+        self.audit_rows: list[dict] = []
+        self.calls: list[tuple] = []
+        self.down = False
+
+    def _check(self):
+        if self.down:
+            err = RuntimeError("no socket")
+            err.reason = "transport-error"
+            raise err
+
+    def pending(self):
+        self._check()
+        return [dict(r) for r in self.rows]
+
+    def audit(self, *, tail=50, **match):
+        self._check()
+        rows = [r for r in self.audit_rows if all(r.get(k) == v for k, v in match.items() if v)]
+        return rows[-tail:]
+
+    def _decide(self, op, rid, issuer, subject, note=None):
+        self._check()
+        self.calls.append((op, rid, issuer, subject, note))
+        who = f"{issuer}:{subject}"
+        self.audit_rows.append(
+            {"at": iso(T0), "operation": op, "outcome": "ok", "caller": who,
+             "action": "service.restart", "request_id": rid}
+        )  # fmt: skip
+        for r in self.rows:
+            if r["request_id"] == rid:
+                r["approved"] = op == "approve"
+        if op == "deny":
+            self.rows = [r for r in self.rows if r["request_id"] != rid]
+        return {"decision": "approved" if op == "approve" else "denied"}
+
+    def approve(self, rid, issuer, subject, *, note=None):
+        return self._decide("approve", rid, issuer, subject, note)
+
+    def deny(self, rid, issuer, subject, *, note=None):
+        return self._decide("deny", rid, issuer, subject, note)
+
+
+SETTINGS = ApprovalsSettings(
+    socket=Path("/run/x.sock"), issuer="sso", approver_group="hub-approvers"
+)
+
+
+def _doc(registry):
+    snap = {"now": iso(T0), "observations": [], "sources": []}
+    return build_status(snap, load_views(VIEWS), registry, [])
+
+
+@pytest.fixture
+def broker():
+    return FakeBroker()
+
+
+@pytest.fixture
+def served(tmp_path, clock, registry, broker):
+    """``start(trusted=LOOPBACK, approvals=True) -> (base, site)``."""
+    servers = []
+
+    def start(trusted=LOOPBACK, approvals=True):
+        site = ApprovalsSite(broker, SETTINGS, front_door(tmp_path, trusted), clock=clock, key=KEY)
+        srv = make_server(lambda: _doc(registry), approvals=site if approvals else None)
+        threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
+        servers.append(srv)
+        host, port = srv.server_address[:2]
+        return f"http://{host}:{port}", site
+
+    yield start
+    for srv in servers:
+        srv.shutdown()
+        srv.server_close()
+
+
+def _form(site, *, rid=RID, digest=DIGEST, decision="approve", user="operator", **extra):
+    fields = {"request_id": rid, "digest": digest, "decision": decision}
+    fields["token"] = extra.pop("token", None) or site.token(rid, digest, user)
+    fields.update(extra)
+    return urllib.parse.urlencode(fields).encode()
+
+
+def _post(
+    base, body, headers=APPROVER, *, origin="same", ctype="application/x-www-form-urlencoded"
+):
+    h = {**headers, "Content-Type": ctype}
+    if origin == "same":
+        h["Origin"] = base
+    elif origin is not None:
+        h["Origin"] = origin
+    return request(base, "/approvals/decide", method="POST", headers=h, body=body)
+
+
+def _log(tmp_path):
+    path = tmp_path / "access.jsonl"
+    return [json.loads(x) for x in path.read_text().splitlines()] if path.exists() else []
+
+
+# ---------------------------------------------------------------- the page
+def test_the_page_lists_pending_escaped_with_its_csp_and_no_script(served, broker):
+    broker.audit_rows.append(
+        {"at": iso(T0 - 60), "operation": "deny", "outcome": "ok", "caller": "sso:operator",
+         "action": HOSTILE, "request_id": "req-older"}
+    )  # fmt: skip
+    base, _ = served()
+    status, headers, body = request(base, "/approvals", headers=APPROVER)
+    html = body.decode()
+    assert status == 200
+    csp = headers["Content-Security-Policy"]
+    assert "default-src 'none'" in csp and "form-action 'self'" in csp and "script" not in csp
+    assert "frame-ancestors 'none'" in csp
+    assert "<script" not in html and HOSTILE not in html  # escaped, never interpreted
+    assert "&lt;script&gt;" in html
+    for text in (RID, "service.restart", "profile:triage", "svc:queue", DIGEST, "5m", "req-older"):
+        assert text in html
+    assert 'action="/approvals/decide"' in html and 'name="token"' in html
+    assert "decisions are filed as <code>sso:operator</code>" in html
+
+
+def test_a_viewer_sees_the_queue_without_forms(served, tmp_path):
+    base, _ = served()
+    status, _, body = request(base, "/approvals", headers=VIEWER)
+    assert status == 200 and RID in body.decode() and "<form" not in body.decode()
+    assert _log(tmp_path)[-1]["view"] == "approvals"
+
+
+def test_request_filter_and_an_unreachable_broker(served, broker):
+    base, _ = served()
+    status, _, body = request(base, f"/approvals?request={RID}", headers=VIEWER)
+    assert status == 200 and "Showing request" in body.decode()
+    broker.down = True
+    status, _, body = request(base, "/approvals", headers=VIEWER)
+    assert status == 502 and "transport-error" in body.decode() and RID not in body.decode()
+
+
+# ---------------------------------------------------------------- the auth matrix
+@pytest.mark.parametrize(
+    "trusted, headers, get_status, post_status",
+    [
+        (DOC_ADDR, APPROVER, 403, 403),  # not from the trusted proxy
+        (LOOPBACK, {**APPROVER, "X-Hnx-Front-Door": "fake-wrong-secret"}, 403, 403),
+        (LOOPBACK, {k: v for k, v in APPROVER.items() if k != "X-Authentik-Username"}, 403, 403),
+        (LOOPBACK, {**APPROVER, "X-Authentik-Groups": "staff"}, 403, 403),  # neither group
+        (LOOPBACK, VIEWER, 200, 403),  # viewer, not approver: reads, never decides
+        (LOOPBACK, {**APPROVER, "X-Authentik-Groups": "hub-approvers"}, 200, 200),  # approver only
+        (LOOPBACK, APPROVER, 200, 200),
+    ],
+)
+def test_auth_matrix(served, broker, tmp_path, trusted, headers, get_status, post_status):
+    base, site = served(trusted)
+    assert request(base, "/approvals", headers=headers)[0] == get_status
+    status, _, _ = _post(base, _form(site), headers)
+    assert status == post_status
+    assert bool(broker.calls) is (post_status == 200)
+    assert _log(tmp_path)[-1]["outcome"] == ("ok" if post_status == 200 else "refused")
+
+
+# ---------------------------------------------------------------- CSRF and the form
+@pytest.mark.parametrize(
+    "origin, extra, reason",
+    [
+        (None, {}, "no Origin or Referer"),
+        ("https://evil.example", {}, "host not allowed"),  # the hub's own Origin guard
+        ("null", {}, "host not allowed"),
+        (None, {"Referer": "https://evil.example/x"}, "foreign Origin"),
+        ("same", {"Sec-Fetch-Site": "cross-site"}, "cross-site request"),
+    ],
+)
+def test_cross_origin_posts_are_refused(served, broker, tmp_path, origin, extra, reason):
+    base, site = served()
+    status, _, body = _post(base, _form(site), {**APPROVER, **extra}, origin=origin)
+    assert status == 403 and reason in body.decode() and broker.calls == []
+    assert _log(tmp_path)[-1]["reason"] == reason
+
+
+def test_a_same_origin_referer_is_enough_without_origin(served, broker):
+    base, site = served()
+    headers = {**APPROVER, "Referer": base + "/approvals", "Sec-Fetch-Site": "same-origin"}
+    assert _post(base, _form(site), headers, origin=None)[0] == 200
+    assert broker.calls == [("approve", RID, "sso", "operator", None)]
+
+
+@pytest.mark.parametrize(
+    "token_for, reason",
+    [
+        ({"token": "1.deadbeef"}, "bad or expired"),
+        ({"token": "fake"}, "bad or expired"),
+        ({"rid": "req-other"}, "bad or expired"),  # a token minted for another request
+        ({"user": "someone-else"}, "bad or expired"),  # ... or another approver
+        ({"digest": OTHER_DIGEST}, "bad or expired"),  # ... or another digest
+    ],
+)
+def test_a_bad_token_is_refused(served, broker, token_for, reason):
+    base, site = served()
+    if "token" in token_for:
+        token = token_for["token"]
+    else:
+        args = {"rid": RID, "digest": DIGEST, "user": "operator", **token_for}
+        token = site.token(args["rid"], args["digest"], args["user"])
+    status, _, body = _post(base, _form(site, token=token))
+    assert status == 403 and reason in body.decode() and broker.calls == []
+
+
+def test_an_expired_token_is_refused(served, broker, clock):
+    base, site = served()
+    body = _form(site)
+    clock.advance(TOKEN_TTL_S + 1)
+    assert _post(base, body)[0] == 403 and broker.calls == []
+
+
+@pytest.mark.parametrize(
+    "body, ctype, code",
+    [
+        (None, "application/json", 415),
+        ("subject=evil", None, 400),  # the approver can never come from the form
+        ("issuer=other", None, 400),
+        ("decision=maybe", None, 400),
+        ("request_id=..%2Fx", None, 400),
+        ("note=" + "x" * 2001, None, 400),
+    ],
+)
+def test_malformed_forms_are_refused(served, broker, body, ctype, code):
+    base, site = served()
+    base_form = _form(site).decode()
+    if body and body.split("=")[0] in ("decision", "request_id"):
+        key = body.split("=")[0]
+        parts = [p for p in base_form.split("&") if not p.startswith(key + "=")]
+        data = "&".join([*parts, body])
+    else:
+        data = base_form + ("&" + body if body else "")
+    status, _, _ = _post(base, data.encode(), ctype=ctype or "application/x-www-form-urlencoded")
+    assert status == code and broker.calls == []
+
+
+def test_a_large_body_is_refused_unread(served, broker):
+    base, _ = served()
+    assert _post(base, b"note=" + b"x" * 9000)[0] == 413 and broker.calls == []
+
+
+# ---------------------------------------------------------------- the digest and idempotency
+def test_the_digest_shown_must_be_the_brokers_current_one(served, broker, tmp_path):
+    base, site = served()
+    status, _, body = _post(base, _form(site, digest=OTHER_DIGEST))
+    assert status == 409 and "digest mismatch" in body.decode() and broker.calls == []
+    assert _log(tmp_path)[-1]["reason"].startswith("digest mismatch")
+
+
+def test_approve_files_the_front_door_identity_and_re_submits_are_idempotent(
+    served, broker, tmp_path
+):
+    base, site = served()
+    headers = {**APPROVER, "X-Authentik-Username": "Operator"}
+    form = _form(site, user="Operator", note="ok to restart")
+    status, _, body = _post(base, form, headers)
+    assert status == 200 and "approved" in body.decode()
+    assert broker.calls == [("approve", RID, "sso", "operator", "ok to restart")]
+    status, _, body = _post(base, form, headers)  # the same form again
+    assert status == 200 and "already approved" in body.decode()
+    assert len(broker.calls) == 1, "a re-submit files nothing"
+    log = _log(tmp_path)
+    assert [e["outcome"] for e in log] == ["ok", "unchanged"]
+    assert all(e["request"] == RID and e["view"] == "approve" for e in log)
+
+
+def test_deny_then_resubmit_and_a_request_no_longer_pending(served, broker):
+    base, site = served()
+    assert _post(base, _form(site, decision="deny"))[0] == 200
+    assert _post(base, _form(site, decision="deny"))[0] == 200  # idempotent
+    assert [c[0] for c in broker.calls] == ["deny"]
+    status, _, body = _post(base, _form(site, decision="approve"))  # denied: cannot approve
+    assert status == 409 and "not awaiting approval" in body.decode()
+
+
+def test_a_broker_refusal_is_reported_with_its_reason(served, broker):
+    def refuse(*a, **k):
+        from conformance.protocols.broker import Denied
+
+        raise Denied("no", reason="approval-self-approved")
+
+    broker.approve = refuse
+    base, site = served()
+    status, _, body = _post(base, _form(site))
+    assert status == 403 and "approval-self-approved" in body.decode()
+
+
+# ---------------------------------------------------------------- the rest stays read-only
+def test_the_hub_is_read_only_everywhere_else(served):
+    base, site = served()
+    assert _post(base, _form(site))[0] == 200
+    for path in ("/", "/approvals", "/status.json", "/approvals/decide?x=1/../"):
+        h = {**APPROVER, "Origin": base, "Content-Type": "application/x-www-form-urlencoded"}
+        if path.startswith("/approvals/decide"):
+            continue
+        assert request(base, path, method="POST", headers=h, body=b"")[0] == 405
+    assert request(base, "/approvals/decide", headers=APPROVER)[0] == 405
+    assert request(base, "/approvals", method="PUT", headers=APPROVER)[0] == 405
+    off, _ = served(approvals=False)
+    assert _post(off, _form(site))[0] == 405
+    assert request(off, "/approvals", headers=APPROVER)[0] == 404
+
+
+# ---------------------------------------------------------------- config and the edge
+def _cfg(tmp_path, registry, secret=FAKE_SECRET, **approvals):
+    doc = yaml.safe_load((ROOT / "examples" / "status" / "agents.yml").read_text())
+    doc.pop("ingest")
+    if approvals.pop("drop_private", False):
+        doc.pop("private")
+    doc["approvals"].update(approvals)
+    path = tmp_path / "agents.yml"
+    path.write_text(yaml.safe_dump(doc))
+    return load_config(path, registry, lambda ref: secret)
+
+
+def test_config(tmp_path, registry):
+    cfg = _cfg(tmp_path, registry)
+    assert cfg.approvals == ApprovalsSettings(
+        socket=Path("/run/hnx-broker/broker.sock"), issuer="sso", approver_group="hub-approvers"
+    )
+    with pytest.raises(AgentsConfigError, match="needs private"):
+        _cfg(tmp_path, registry, drop_private=True)
+    with pytest.raises(AgentsConfigError, match="must differ"):
+        _cfg(tmp_path, registry, approver_group="hub-private-viewers")
+    with pytest.raises(AgentsConfigError, match="socket"):
+        _cfg(tmp_path, registry, socket="relative/broker.sock")
+    off = _cfg(tmp_path, registry, secret=None)  # no front-door secret: no private tier
+    assert off.approvals is None and any("approvals page disabled" in w for w in off.warnings)
+
+
+def test_the_generated_caddy_site_covers_the_approvals_path(registry):
+    from homelabnext.generators.builtin import caddy
+
+    site = caddy(registry)["caddy/sites.caddy"].split("status.lab.example {", 1)[1]
+    site = site.split("\n}", 1)[0]
+    # one site-wide handler: forward auth and the front-door header apply to every path and
+    # method, /approvals and POST /approvals/decide included; no matcher narrows it
+    assert "import hnx_forward_auth" in site and "header_up X-Hnx-Front-Door" in site
+    for narrowing in ("handle", "route", "@", "path ", "method "):
+        assert narrowing not in site
+
+
+# ---------------------------------------------------------------- a real broker socket
+def _supported() -> bool:
+    from homelabnext.broker.server import supported
+
+    return supported()
+
+
+@pytest.mark.skipif(
+    not _supported(), reason="SO_PEERCRED: the broker socket authenticates peers on Linux only"
+)
+def test_round_trip_through_a_real_broker_socket(tmp_path, clock, registry):
+    from homelabnext.broker.service import BrokerService
+
+    src = ROOT / "examples" / "broker"
+    dst = tmp_path / "broker"
+    shutil.copytree(src, dst)
+    doc = yaml.safe_load((src / "manifest.yml").read_text())
+    doc.update(dev_identity=False, approval_relays=[{"uid": os.getuid(), "issuer": "sso"}])
+    (dst / "manifest.yml").write_text(yaml.safe_dump(doc))
+    state = tmp_path / "state"
+    # an agent's request, filed in process (an embedding program names its caller)
+    svc = BrokerService.from_manifest(dst / "manifest.yml", state)
+    rid = svc.submit("profile:triage", "service.restart", {"grace_s": 5}, target="svc:queue")
+    sock = tmp_path / "run" / "b.sock"
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "homelabnext.cli", "broker", "serve", "--manifest",
+         str(dst / "manifest.yml"), "--state", str(state), "--socket", str(sock)],
+        cwd=ROOT, env={**os.environ, "PYTHONPATH": str(ROOT)}, stderr=subprocess.PIPE,
+    )  # fmt: skip
+    try:
+        for _ in range(100):
+            if sock.exists():
+                break
+            time.sleep(0.1)
+        settings = ApprovalsSettings(socket=sock, issuer="sso", approver_group="hub-approvers")
+        site = ApprovalsSite.from_settings(settings, front_door(tmp_path), clock=clock)
+        srv = make_server(lambda: _doc(registry), approvals=site)
+        threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
+        base = "http://{}:{}".format(*srv.server_address[:2])
+        try:
+            who = {**APPROVER, "X-Authentik-Username": "operator-one"}
+            status, _, body = request(base, "/approvals", headers=who)
+            pending = svc.pending()[0]
+            assert status == 200 and rid in body.decode() and pending["digest"] in body.decode()
+            form = _form(site, rid=rid, digest=pending["digest"], user="operator-one")
+            status, _, body = _post(base, form, who)
+            assert status == 200, body
+            [appr] = svc.state.approvals(rid)
+            assert appr["approver"] == {"issuer": "sso", "subject": "operator-one"}
+            [rec] = svc.audit_documents(operation="approve", request_id=rid)
+            assert rec["outcome"] == "ok" and rec["via"] == f"uid:{os.getuid()}"
+            status, _, body = _post(base, form, who)  # the re-submit: already approved
+            assert status == 200 and "already approved" in body.decode()
+            assert len(svc.state.approvals(rid)) == 1
+            status, _, body = request(base, "/approvals", headers=who)
+            assert "sso:operator-one" in body.decode()  # in the recent decisions
+        finally:
+            srv.shutdown()
+            srv.server_close()
+    finally:
+        proc.terminate()
+        assert proc.wait(timeout=10) == 0

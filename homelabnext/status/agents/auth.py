@@ -12,7 +12,9 @@ configured with a trusted front door (``agents.yml`` ``private:`` naming a regis
    the listener cannot forge the identity header below without also holding the secret);
 3. it carries the **identity header** the forward-auth proxy sets (Authentik:
    ``X-Authentik-Username``);
-4. that identity is in the **viewer group** (Authentik: ``X-Authentik-Groups``, ``|``-separated).
+4. that identity is in the **viewer group** (Authentik: ``X-Authentik-Groups``, ``|``-separated),
+   or in the group the caller names (the Approvals page's approver group,
+   :mod:`homelabnext.status.approvals`).
 
 Anything missing, repeated or malformed is ``403`` -- fail closed -- and the reason is never
 "open".  Every private view that is served is appended to the access log
@@ -62,8 +64,15 @@ def _addr(text: str | None) -> str | None:
         return None
 
 
-def authorize(front_door: FrontDoor | None, client: str | None, headers: _Headers) -> Decision:
-    """The front-door decision for one request (see the module docstring)."""
+def authorize(
+    front_door: FrontDoor | None,
+    client: str | None,
+    headers: _Headers,
+    *,
+    group: str | None = None,
+) -> Decision:
+    """The front-door decision for one request (see the module docstring).  ``group``: the
+    group the identity must be in (default: the front door's viewer group)."""
     if front_door is None or not front_door.secret:
         return Decision(False, reason="no trusted front door is configured")
     if _addr(client) not in front_door.trusted:
@@ -75,13 +84,17 @@ def authorize(front_door: FrontDoor | None, client: str | None, headers: _Header
     if not user or not _IDENTITY_RE.match(user):
         return Decision(False, reason="no identity from the forward-auth proxy")
     groups = _one(headers, front_door.groups_header) or ""
-    if front_door.viewer_group not in {g.strip() for g in re.split(r"[|,]", groups)}:
-        return Decision(False, user=user, reason="identity is not in the viewer group")
+    need = front_door.viewer_group if group is None else group
+    if not need or need not in {g.strip() for g in re.split(r"[|,]", groups)}:
+        which = "viewer" if group is None else "required"
+        return Decision(False, user=user, reason=f"identity is not in the {which} group")
     return Decision(True, user=user)
 
 
 class AccessLog:
-    """Append-only JSONL of private-tier views: ``{"at", "user", "view", "session", "event"}``.
+    """Append-only JSONL of private-tier views: ``{"at", "user", "view", "session", "event"}``,
+    plus, for the Approvals page's decisions, ``request``, ``decision``, ``outcome`` and
+    ``reason``.
 
     One ``write`` per line on an ``O_APPEND`` descriptor (atomic for a line this size), fsynced,
     mode 0600.  Nothing here rewrites or truncates the file."""
@@ -91,13 +104,20 @@ class AccessLog:
         self.clock = clock
 
     def append(
-        self, user: str, view: str, *, session: str | None = None, event: str | None = None
+        self,
+        user: str,
+        view: str,
+        *,
+        session: str | None = None,
+        event: str | None = None,
+        **fields: str | None,
     ) -> dict[str, Any]:
         entry = {"at": iso(self.clock()), "user": user, "view": view}
         if session:
             entry["session"] = session
         if event:
             entry["event"] = event
+        entry.update({k: v for k, v in fields.items() if v})
         line = (json.dumps(entry, sort_keys=True) + "\n").encode("utf-8")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
