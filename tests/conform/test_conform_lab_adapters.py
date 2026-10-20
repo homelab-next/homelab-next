@@ -25,7 +25,7 @@ from conformance.suites._util import exc_text
 from homelabnext.conform.adapters import nats_jetstream as nj
 from homelabnext.conform.adapters import ntfy as ntfy_adapter
 from homelabnext.conform.adapters import openbao as bao
-from homelabnext.conform.adapters._lab import AdapterConfigError
+from homelabnext.conform.adapters._env import AdapterConfigError
 from homelabnext.conform.core import run_checks
 from homelabnext.conform.target import load_target
 from homelabnext.notify import Message, SendError
@@ -344,3 +344,67 @@ def test_lab_target_files_bind_the_adapters(cap):
     assert b.adapter and b.adapter.startswith("homelabnext.conform.adapters.")
     mod, _, fn = b.adapter.partition(":")
     assert callable(getattr(__import__(mod, fromlist=[fn]), fn))
+
+
+# ============================================================================ shared settings
+NEVER = "http://127.0.0.1:1"  # no-raw-endpoint: allow never contacted
+NOT_HTTP = "ftp://127.0.0.1:1"  # no-raw-endpoint: allow never contacted; wrong scheme
+LAB_VARS = (
+    "HNX_ENDPOINT_EVENTS",
+    "HNX_ENDPOINT_NOTIFY",
+    "HNX_ENDPOINT_SECRETS",
+    "HNX_ENDPOINT_OBJECT_STORE",
+    "HNX_ENDPOINT_LAKE_QUERY",
+    "HNX_ENDPOINT_LAKE_CATALOG",
+    "LAB_SECRETS_DEV_TOKEN",
+    "LAB_S3_ACCESS_KEY",
+    "LAB_S3_SECRET_KEY",
+    "LAB_S3_REGION",
+)
+
+
+def _factories():
+    from homelabnext.conform.adapters import lake, s3
+
+    return {
+        "events": lambda: nj.make(),
+        "notify": lambda: ntfy_adapter.make(),
+        "secrets": lambda: bao.make(),
+        "object-store": lambda: s3.make_object_store(domain="example.internal"),
+        "lake": lambda: lake.make_lake(domain="example.internal", warehouse="lab"),
+    }
+
+
+@pytest.mark.parametrize("name", ["events", "notify", "secrets", "object-store", "lake"])
+def test_every_adapter_reports_a_missing_setting_as_one_error_type(monkeypatch, name):
+    """One helper module: a missing endpoint override (or, for the adapters that resolve a
+    domain, a missing credential) is an AdapterConfigError naming the variable."""
+    for var in LAB_VARS:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HNX_ENDPOINT_OBJECT_STORE", NEVER)
+    monkeypatch.setenv("LAB_S3_REGION", "garage")
+    monkeypatch.setenv("HNX_ENDPOINT_LAKE_QUERY", NOT_HTTP)
+    want = {
+        "events": "HNX_ENDPOINT_EVENTS",
+        "notify": "HNX_ENDPOINT_NOTIFY",
+        "secrets": "HNX_ENDPOINT_SECRETS",
+        "object-store": "LAB_S3_ACCESS_KEY",
+        "lake": "HNX_ENDPOINT_LAKE_QUERY",
+    }[name]
+    with pytest.raises(AdapterConfigError, match=want):
+        _factories()[name]()
+
+
+def test_the_lake_factory_refuses_plaintext_by_the_shared_rule(monkeypatch):
+    """lake uses homelabnext._http.check_plaintext, the rule every other HTTP client applies."""
+    from homelabnext._http import check_plaintext
+    from homelabnext.conform.adapters.lake import make_lake
+    from homelabnext.lake.errors import LakeError
+
+    url = "http://192.0.2.9:8080"  # no-raw-endpoint: allow RFC 5737 documentation address
+    monkeypatch.setenv("HNX_ENDPOINT_LAKE_QUERY", url)
+    with pytest.raises(ValueError) as rule:
+        check_plaintext(url, credentials=True, allow_plaintext=False)
+    with pytest.raises(LakeError) as got:
+        make_lake(domain="example.internal", warehouse="lab")
+    assert str(rule.value) in str(got.value)

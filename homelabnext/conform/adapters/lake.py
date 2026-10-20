@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from homelabnext._http import is_loopback
+from homelabnext._http import check_plaintext
 from homelabnext.lake.errors import LakeError
 from homelabnext.lake.rest_catalog import RestCatalog
 from homelabnext.lake.trino_http import TrinoHTTP
@@ -29,14 +29,11 @@ __all__ = ["make_lake"]
 
 
 def _url(capability: str, resolver: Any, domain: str | None, allow_plaintext: bool) -> str:
-    ep = resolve(capability, resolver=resolver, domain=domain)
-    if ep.scheme not in ("http", "https"):
-        raise LakeError(f"{capability} endpoint has scheme {ep.scheme!r}, expected http(s)")
-    if ep.scheme == "http" and not allow_plaintext and not is_loopback(ep.host):
-        raise LakeError(
-            f"refusing plaintext http to the {capability} endpoint (not loopback): use https "
-            "or pass allow_plaintext=True explicitly"
-        )
+    ep = resolve(capability, resolver=resolver, domain=domain, schemes=("http", "https"))
+    try:
+        check_plaintext(ep.url, credentials=True, allow_plaintext=allow_plaintext)
+    except ValueError as exc:
+        raise LakeError(f"{capability} endpoint: {exc}") from None
     return ep.url
 
 

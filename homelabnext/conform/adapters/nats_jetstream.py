@@ -61,7 +61,7 @@ from typing import Any, Protocol
 
 from conformance.protocols.events import Delivery, EventsError
 
-from ._lab import endpoint_url
+from ._env import resolve
 
 __all__ = [
     "JetStreamApiError",
@@ -586,7 +586,7 @@ def make(
     assert stream is not None and subject_prefix is not None
     own = wire is None
     if wire is None:
-        wire = NatsPyWire(endpoint_url(capability, ("nats", "tls")))
+        wire = NatsPyWire(resolve(capability, env_only=True, schemes=("nats", "tls")).url)
     try:
         return JetStreamBus(
             wire,
