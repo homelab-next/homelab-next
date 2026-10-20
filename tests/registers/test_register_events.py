@@ -320,7 +320,7 @@ def _give_ll_003_a_control(lab):
     """A human writes the control into the prose; only then may an agent ask for ``partial``."""
     rec = lab / "lessons/LL-003.md"
     entry = load_register(lab / "lessons")["lessons"][2]
-    prose = {k: v for k, v in entry.items() if k != "recurrences"}
+    prose = dict(entry)  # as loaded: write_record puts the derived fields back to the base
     prose["preventive_control"] = "A nightly job diffs guest inventory against backup jobs."
     write_record(rec, prose)
 
@@ -586,3 +586,28 @@ def test_a_crash_between_approve_and_complete_is_finished(lab, inbox, monkeypatc
     assert _lanes(inbox)["decided/completed"] == [name]
     assert RecordsReader(inbox).list("decided/approved") == []
     assert load_register(lab / "lessons")["lessons"][2]["status"] == "partial"
+
+
+def test_a_loaded_record_round_trips_through_write_record(lab, inbox):
+    """Regression: write_record takes an entry as load_register returns it, but that entry
+    carries the derived fields (a transition's status and ``set`` fields, the recurrences
+    count), so writing back a transitioned record was refused."""
+    _give_ll_003_a_control(lab)
+    name = _intent(
+        inbox, "ll-003-partial", record="LL-003", reason="the detector shipped",
+        **{"from": "open", "to": "partial"},
+    )  # fmt: skip
+    assert _decider(lab, inbox).decide(name).result == "applied"
+    rec = lab / "lessons/LL-003.md"
+    base_status = yaml.safe_load(rec.read_text().split("---")[1])["status"]
+    entry = load_register(lab / "lessons")["lessons"][2]
+    assert entry["status"] == "partial" and "recurrences" in entry
+    entry["preventive_control"] = "A nightly job diffs guests against backup jobs, and pages."
+    write_record(rec, entry)
+    after = load_register(lab / "lessons")["lessons"][2]
+    assert after["status"] == "partial" and after["preventive_control"].endswith("and pages.")
+    front = yaml.safe_load(rec.read_text().split("---")[1])
+    assert front["status"] == base_status and "recurrences" not in front
+    entry = dict(after, status="controlled")  # a derived field changed by hand: still refused
+    with pytest.raises(RegisterError, match="derived"):
+        write_record(rec, entry)
