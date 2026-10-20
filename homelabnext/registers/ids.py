@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Id allocation and loss detection for YAML registers.
+"""Id allocation and loss detection for registers: one YAML file, or one record file per entry.
 
 Two authors who both read "the next free id" out of a file and append an entry collide. This
 module removes the read-then-write race and detects the one corruption a duplicate-id check
@@ -12,6 +12,15 @@ cannot see (an entry that silently vanished in a merge).
 
 Nothing here rewrites YAML: entries are split as text so comments survive byte for byte, and an
 existing id is never renumbered (and the module stays standard library only, for hooks).
+
+A register is either a single file (``lessons.yml``) or a directory of record files
+(``lessons/LL-001.md``, see :mod:`homelabnext.registers.records`).  In a directory each file's
+front-matter ``id:`` line is the entry id, and the file name must agree with it: ``LL-001.md``
+for an allocated id, ``LL-NEW.md`` or ``LL-NEW-<slug>.md`` for a placeholder.  A tombstone is a
+record file whose front-matter has a ``retired:`` mapping.  ``resolve`` on a directory rewrites
+the placeholder inside the file and renames the file to the allocated id.  A parent commit that
+still has the single-file register (the commit before a conversion) is read through the file, so
+an entry lost in the conversion itself is caught too.
 
 Retiring an id: an entry whose id was wrong (it collided with another register's meaning, say)
 is not deleted.  Its id moves into the register's top-level ``retired:`` mapping, a tombstone,
@@ -58,9 +67,15 @@ __all__ = [
     "RegisterSpec",
     "allocate",
     "check_lost",
+    "dir_problems",
+    "discover",
     "duplicates",
+    "entry_ids",
     "ids_in",
+    "is_record_dir",
     "placeholders",
+    "record_id",
+    "record_name_problem",
     "resolve_file",
     "retired_in",
     "spec_for",
@@ -105,8 +120,184 @@ SPECS: dict[str, RegisterSpec] = {
 
 
 def spec_for(path: str | os.PathLike) -> RegisterSpec | None:
-    """Register kind is taken from the file stem: lessons.yml, runbooks.yml, ..."""
+    """Register kind is taken from the file stem or directory name: lessons.yml, lessons/, ..."""
     return SPECS.get(pathlib.Path(path).stem.split(".")[0])
+
+
+REGISTER_SUFFIXES = (".yml", ".yaml")
+RECORD_SUFFIX = ".md"
+_FRONT = re.compile(r"\A---\r?\n(.*?)(?:\r?\n)?^---[ \t]*$", re.S | re.M)
+_FM_ID = re.compile(r"(?m)^id:[ \t]*(['\"]?)([^\s'\"#]+)\1[ \t]*(?:#.*)?$")
+_FM_RETIRED = re.compile(r"(?m)^retired:")
+_SLUG = re.compile(r"[a-z0-9][a-z0-9-]*")
+
+
+def is_record_dir(path: str | os.PathLike) -> bool:
+    """A directory register, existing or not (a path without a YAML suffix)."""
+    p = pathlib.Path(path)
+    return p.is_dir() or (not p.exists() and p.suffix not in REGISTER_SUFFIXES)
+
+
+def record_id(text: str, spec: RegisterSpec) -> tuple[str | None, bool]:
+    """(entry id or None, is a tombstone) read from a record file's front-matter as text."""
+    m = _FRONT.match(text)
+    if not m:
+        return None, False
+    fm = m.group(1)
+    im = _FM_ID.search(fm)
+    ident = im.group(2) if im and re.fullmatch(spec.id_re, im.group(2)) else None
+    return ident, bool(_FM_RETIRED.search(fm))
+
+
+def record_name_problem(name: str, ident: str | None, spec: RegisterSpec) -> str | None:
+    """Why a record file's name does not fit its id, or None.  The id is the key; the name
+    must agree so that ``[[LL-001]]`` resolves to the file and two files cannot share an id."""
+    if not name.endswith(RECORD_SUFFIX):
+        return f"{name}: a record file must end in {RECORD_SUFFIX}"
+    stem = name[: -len(RECORD_SUFFIX)]
+    if ident is None:
+        return f"{name}: front-matter has no `id:` that looks like {spec.id_re}"
+    if ident.endswith("-NEW"):
+        rest = stem[len(ident) + 1 :] if stem.startswith(ident + "-") else None
+        if stem == ident or (rest and _SLUG.fullmatch(rest)):
+            return None
+        return f"{name}: a placeholder record is named {ident}{RECORD_SUFFIX} or {ident}-<slug>.md"
+    if stem != ident:
+        return f"{name}: file name and front-matter id {ident} disagree (name it {ident}.md)"
+    return None
+
+
+def _dir_ids(texts: dict[str, str], spec: RegisterSpec):
+    """([(id, file name)], [tombstoned ids]) of a directory register's record texts."""
+    live, retired = [], []
+    for name in sorted(texts):
+        ident, tomb = record_id(texts[name], spec)
+        if ident is None:
+            continue
+        if tomb:
+            retired.append(ident)
+        else:
+            live.append((ident, name))
+    return live, retired
+
+
+def dir_problems(texts: dict[str, str], spec: RegisterSpec) -> list[str]:
+    """Name/id disagreements and allocated ids held by more than one file (or live and retired)."""
+    problems, seen = [], {}
+    for name in sorted(texts):
+        ident, _ = record_id(texts[name], spec)
+        bad = record_name_problem(name, ident, spec)
+        if bad:
+            problems.append(bad)
+        if ident is None or ident.endswith("-NEW"):
+            continue
+        if ident in seen:
+            problems.append(f"{name}: id {ident} is also the id of {seen[ident]}")
+        else:
+            seen[ident] = name
+    return problems
+
+
+def _disk_dir_texts(path: pathlib.Path) -> dict[str, str] | None:
+    if not path.is_dir():
+        return None
+    return {
+        p.name: p.read_text()
+        for p in path.iterdir()
+        if p.is_file() and not p.name.startswith(".") and p.suffix == RECORD_SUFFIX
+    }
+
+
+def _rev_dir_texts(root, rev: str, relpath: str) -> dict[str, str] | None:
+    """Every ``*.md`` blob directly under ``relpath`` at ``rev``, in one ``git cat-file`` call."""
+    out = _git(root, "ls-tree", "-z", rev, "--", relpath.rstrip("/") + "/")
+    if out.returncode:
+        return None
+    entries = []
+    for rec in out.stdout.split("\0"):
+        if not rec:
+            continue
+        meta, _, path = rec.partition("\t")
+        _mode, kind, sha = meta.split()
+        name = path.rsplit("/", 1)[-1]
+        if kind == "blob" and name.endswith(RECORD_SUFFIX) and not name.startswith("."):
+            entries.append((name, sha))
+    if not entries:
+        return None
+    cat = subprocess.run(
+        ["git", "cat-file", "--batch"],
+        cwd=root,
+        input="".join(f"{sha}\n" for _, sha in entries).encode(),
+        capture_output=True,
+    )
+    if cat.returncode:
+        raise IdError(f"git cat-file failed reading {relpath} at {rev}")
+    data, pos, texts = cat.stdout, 0, {}
+    for name, _sha in entries:
+        nl = data.index(b"\n", pos)
+        size = int(data[pos:nl].split()[2])
+        texts[name] = data[nl + 1 : nl + 1 + size].decode()
+        pos = nl + 1 + size + 1
+    return texts
+
+
+def _sibling_file(relpath: str) -> list[str]:
+    return [relpath.rstrip("/") + s for s in REGISTER_SUFFIXES]
+
+
+def _known_at(root, relpath: str, spec: RegisterSpec, rev: str | None = None) -> set[str] | None:
+    """Every id a register accounts for (live and retired) in the working tree or at ``rev``;
+    None when the register does not exist there.  A directory register that is missing falls
+    back to the single file of the same name (either side of a split or a join)."""
+    root = pathlib.Path(root)
+    if is_record_dir(root / relpath):
+        texts = (
+            _disk_dir_texts(root / relpath) if rev is None else _rev_dir_texts(root, rev, relpath)
+        )
+        if texts is not None:
+            live, retired = _dir_ids(texts, spec)
+            return {i for i, _ in live} | set(retired)
+        candidates = _sibling_file(relpath)
+    else:
+        candidates = [relpath]
+    for rel in candidates:
+        if rev is None:
+            p = root / rel
+            text = p.read_text() if p.is_file() else None
+        else:
+            text = git_show(root, rev, rel)
+        if text is not None:
+            return _known(text, spec)
+    return None
+
+
+def entry_ids(root, relpath: str, spec: RegisterSpec) -> list[str]:
+    """Live entry ids of a working-tree register (file order, or file-name order)."""
+    path = pathlib.Path(root) / relpath
+    if is_record_dir(path):
+        return [i for i, _ in _dir_ids(_disk_dir_texts(path) or {}, spec)[0]]
+    return ids_in(path.read_text(), spec) if path.is_file() else []
+
+
+def discover(root, revs: tuple[str, ...] = ("HEAD",)) -> list[str]:
+    """Register paths tracked in the index or present at any of ``revs``: ``*/lessons.yml``-style
+    files and the directories that hold ``*/lessons/*.md``-style record files."""
+    names: list[str] = []
+    out = _git(root, "ls-files", "-z")
+    if out.returncode:
+        raise IdError("not inside a git work tree")
+    names += out.stdout.split("\0")
+    for rev in revs:
+        if rev and _rev_exists(root, rev):
+            names += _git(root, "ls-tree", "-r", "-z", "--name-only", rev).stdout.split("\0")
+    found: list[str] = []
+    for n in names:
+        p = pathlib.PurePosixPath(n)
+        if p.suffix in REGISTER_SUFFIXES and spec_for(p):
+            found.append(n)
+        elif p.suffix == RECORD_SUFFIX and str(p.parent) != "." and spec_for(p.parent.name):
+            found.append(str(p.parent))
+    return sorted(set(found))
 
 
 STATE_SUBDIR = ("homelabnext", "register_ids")
@@ -299,16 +490,12 @@ def allocate(root, relpath: str, prefix: str, count: int = 1) -> list[str]:
         raise IdError(f"{lock_path}: cannot open the id lock ({ex})") from ex
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
-        disk = root / relpath
-        texts = [disk.read_text() if disk.exists() else ""]
-        for rev in ("HEAD", *upstream_refs(root)):
-            t = git_show(root, rev, relpath)
-            if t:
-                texts.append(t)
         floor = 0
-        for t in texts:
-            for ident in _known(t, spec):  # a retired number is never handed out again
-                n = _num(ident, prefix)
+        for rev in (None, "HEAD", *upstream_refs(root)):
+            if rev is not None and not _rev_exists(root, rev):
+                continue
+            for ident in _known_at(root, relpath, spec, rev) or ():
+                n = _num(ident, prefix)  # a retired number is never handed out again
                 if n is not None:
                     floor = max(floor, n)
         floor = max(floor, _read_hwm(hwm_path))
@@ -328,6 +515,8 @@ def resolve_file(root, relpath: str, dry_run: bool = False) -> list[tuple[str, s
     if spec is None:
         return []
     path = root / relpath
+    if is_record_dir(path):
+        return _resolve_dir(root, relpath, spec, dry_run)
     header, blocks = split_entries(path.read_text(), spec)
     assigned, out = [], []
     for ident, block in blocks:
@@ -339,6 +528,26 @@ def resolve_file(root, relpath: str, dry_run: bool = False) -> list[tuple[str, s
         assigned.append((ident, new_id))
     if assigned and not dry_run:
         path.write_text(header + "".join(out))
+    return assigned
+
+
+def _resolve_dir(root, relpath: str, spec: RegisterSpec, dry_run: bool):
+    """Each ``XX-NEW*.md`` record: rewrite its id (and self-citations), rename it ``XX-NNN.md``."""
+    d = root / relpath
+    assigned = []
+    for name, text in sorted((_disk_dir_texts(d) or {}).items()):
+        ident, _ = record_id(text, spec)
+        if ident is None or not ident.endswith("-NEW"):
+            continue
+        new_id = allocate(root, relpath, ident[:-4], 1)[0]
+        assigned.append((ident, new_id))
+        if dry_run:
+            continue
+        target = d / f"{new_id}{RECORD_SUFFIX}"
+        if target.exists():
+            raise IdError(f"{relpath}/{target.name} already exists; not overwriting it")
+        target.write_text(re.sub(rf"\b{re.escape(ident)}\b", new_id, text))
+        (d / name).unlink()
     return assigned
 
 
@@ -361,19 +570,18 @@ def check_lost(
     spec = spec_for(relpath)
     if spec is None or not spec.protected:
         return []
-    path = root / relpath
-    if not path.exists():
-        return []
-    now = _known(path.read_text(), spec)
+    now = _known_at(root, relpath, spec)
+    if now is None:
+        if not is_record_dir(root / relpath):
+            return []  # a deleted single-file register (its records directory is checked)
+        now = set()  # every record file of a directory register deleted: each one is lost
     parents: set[str] = set()
     revs = (base,) if base else ("HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REBASE_HEAD")
     if base and not _rev_exists(root, base):
         raise IdError(f"base revision {base!r} does not exist (fetch it first)")
     for rev in revs:
         if _rev_exists(root, rev):
-            t = git_show(root, rev, relpath)
-            if t:
-                parents |= _known(t, spec)
+            parents |= _known_at(root, relpath, spec, rev) or set()
     waived = set(allow or ()) | {
         s.strip() for s in os.environ.get("REGISTER_IDS_ALLOW_DROP", "").split(",") if s.strip()
     }

@@ -47,19 +47,30 @@ repos:
       # --hook-stage manual`), under a per-repository lock kept in the git common dir.
       # `check-lost` refuses any commit in which an id that the parent commit had has vanished (a
       # merge that fused two entries); `check-dupes` refuses an allocated id that occurs twice.
+      # Record directories (lessons/LL-001.md) are checked whole: the hooks take no file names and
+      # find every register themselves, so a commit that only deletes a record file is still seen.
       - id: register-ids-resolve
         name: register ids - resolve NEW placeholders (maintainers, at merge time)
         entry: python3 tools/register_ids.py resolve
         language: system
         stages: [manual]
-        files: '(^|/)(lessons|runbooks|invariants|queue)\.ya?ml$'
+        pass_filenames: false
+        files: '(^|/)((lessons|runbooks|invariants|queue)\.ya?ml|(lessons|runbooks)/[^/]+\.md)$'
       - id: register-ids-check-lost
         name: register ids - no id may vanish
         entry: python3 tools/register_ids.py check-lost
         language: system
-        files: '(^|/)(lessons|runbooks|invariants|queue)\.ya?ml$'
+        pass_filenames: false
+        always_run: true
       - id: register-ids-check-dupes
         name: register ids - no allocated id twice
         entry: python3 tools/register_ids.py check-dupes
         language: system
-        files: '(^|/)(lessons|runbooks|invariants|queue)\.ya?ml$'
+        pass_filenames: false
+        files: '(^|/)((lessons|runbooks|invariants|queue)\.ya?ml|(lessons|runbooks)/[^/]+\.md)$'
+      - id: register-links
+        name: register records - generated Links blocks current
+        entry: python3 -m homelabnext.registers links --check examples/registers/lessons examples/registers/runbooks
+        language: system
+        pass_filenames: false
+        files: '(^|/)(lessons|runbooks)/[^/]+\.md$'

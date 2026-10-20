@@ -11,7 +11,14 @@ import pathlib
 
 import yaml
 
-from .schema import RegisterError, validate_invariants, validate_lessons, validate_runbooks
+from .records import load_register, register_source
+from .schema import (
+    RegisterError,
+    check_related,
+    validate_invariants,
+    validate_lessons,
+    validate_runbooks,
+)
 
 __all__ = ["build_all", "load_yaml", "render_invariants", "render_lessons", "render_runbooks"]
 
@@ -49,6 +56,14 @@ def _dl(rows) -> str:
     return "<dl>" + "".join(f"<dt>{e(k)}</dt><dd>{v}</dd>" for k, v in rows if v) + "</dl>"
 
 
+def _related_html(ids) -> str:
+    """``related:`` ids as links into the lessons or runbooks page."""
+    return ", ".join(
+        f'<a href="{"lessons" if i.startswith("LL-") else "runbooks"}.html#{e(i)}">{e(i)}</a>'
+        for i in ids or ()
+    )
+
+
 def _p(x) -> str:
     return "".join(f"<p>{e(par)}</p>" for par in str(x or "").strip().split("\n\n") if par.strip())
 
@@ -78,6 +93,7 @@ def render_lessons(data) -> tuple[str, dict]:
                         f"<code>{e(v.get('observable'))}</code>" if v else "",
                     ),
                     ("Verification: expected", e(v.get("expected")) if v else ""),
+                    ("Related", _related_html(l.get("related"))),
                 ]
             )
             + "</article>"
@@ -117,6 +133,7 @@ def render_runbooks(data, lessons=None) -> tuple[str, dict]:
                     ("Systems", e(", ".join(r["systems"]))),
                     ("Checklist", f"<ol>{steps}</ol>"),
                     ("Lessons sharing these systems", f"<ul>{lessons_html}</ul>" if rel else ""),
+                    ("Related", _related_html(r.get("related"))),
                 ]
             )
             + "</article>"
@@ -209,28 +226,35 @@ def render_invariants(data, results=None) -> tuple[str, dict]:
 
 
 def build_all(src_dir, out_dir, results_path=None) -> list[pathlib.Path]:
-    """Render whichever of lessons/runbooks/invariants .yml exist in ``src_dir``.
+    """Render whichever of lessons, runbooks and invariants exist in ``src_dir``: a record
+    directory (``lessons/``, ``runbooks/``) or a single file (``lessons.yml`` ...), read through
+    :func:`homelabnext.registers.records.load_register`.
 
-    Fatal: any invalid register raises RegisterError before ANY file is written, so a broken
-    entry can never leave a half-updated site behind.
+    Fatal: any invalid register (or a ``related:`` id that is no live lesson or runbook) raises
+    RegisterError before ANY file is written, so a broken entry can never leave a half-updated
+    site behind.
     """
     src, out = pathlib.Path(src_dir), pathlib.Path(out_dir)
     rendered = {}
-    lessons = None
-    if (src / "lessons.yml").exists():
-        lessons = load_yaml(src / "lessons.yml")
+    ll: list[dict] = []
+    rb: list[dict] = []
+    if path := register_source(src, "lessons"):
+        lessons = load_register(path, "lessons")
         rendered["lessons"] = render_lessons(lessons)
-    if (src / "runbooks.yml").exists():
-        ll = validate_lessons(lessons) if lessons else []
-        rendered["runbooks"] = render_runbooks(load_yaml(src / "runbooks.yml"), ll)
+        ll = validate_lessons(lessons)
+    if path := register_source(src, "runbooks"):
+        runbooks = load_register(path, "runbooks")
+        rendered["runbooks"] = render_runbooks(runbooks, ll)
+        rb = validate_runbooks(runbooks)
+    check_related(ll, rb)
     if (src / "invariants.yml").exists():
         results = None
         rp = pathlib.Path(results_path) if results_path else src / "invariants.results.json"
         if rp.exists():
             results = json.loads(rp.read_text())
-        rendered["invariants"] = render_invariants(load_yaml(src / "invariants.yml"), results)
+        rendered["invariants"] = render_invariants(load_register(src / "invariants.yml"), results)
     if not rendered:
-        raise RegisterError("build", [f"no lessons/runbooks/invariants .yml in {src}"])
+        raise RegisterError("build", [f"no lessons/runbooks/invariants register in {src}"])
     out.mkdir(parents=True, exist_ok=True)
     written = []
     for name, (h, j) in rendered.items():

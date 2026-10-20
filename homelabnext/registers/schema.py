@@ -19,6 +19,7 @@ __all__ = [
     "LESSON_STATUSES",
     "WEAK_PHRASES",
     "RegisterError",
+    "check_related",
     "validate_invariants",
     "validate_lessons",
     "validate_runbooks",
@@ -36,6 +37,9 @@ LESSON_STATUSES = ("open", "partial", "controlled")
 LESSON_ID = re.compile(r"^LL-(?:\d{3,}|NEW)$")
 RUNBOOK_ID = re.compile(r"^RB-(?:\d{3,}|NEW)$")
 CRIT_ID = re.compile(r"^[A-Z]-(?:\d{2,}|NEW)$")
+RECORD_REF = re.compile(
+    r"^(?:LL|RB)-\d{3,}$"
+)  # a `related:` target: an allocated lesson or runbook
 MIN_TEXT = 12  # chars; a one-word root cause is a label, not a cause
 WEAK_PHRASES = (
     "be careful",
@@ -93,6 +97,37 @@ def _dupes(ids, problems):
         seen.add(i)
 
 
+def _related(e, who, problems):
+    """Optional ``related:``: typed links to other lessons/runbooks (resolved by check_related)."""
+    rel = e.get("related")
+    if rel is None:
+        return
+    if not (isinstance(rel, list) and all(isinstance(x, str) for x in rel)):
+        problems.append(f"{who}: `related` must be a list of ids (LL-001, RB-002)")
+        return
+    for x in rel:
+        if not RECORD_REF.match(x):
+            problems.append(f"{who}: related {x!r} is not an allocated lesson or runbook id")
+        elif x == who:
+            problems.append(f"{who}: related names the entry itself")
+    if len(set(rel)) != len(rel):
+        problems.append(f"{who}: `related` repeats an id")
+
+
+def check_related(*registers: list[dict]) -> None:
+    """Every ``related:`` id is a live entry of one of ``registers`` (validated lists)."""
+    live = {str(e.get("id")) for reg in registers for e in reg}
+    problems = [
+        f"{e['id']}: related {x} is not a live lesson or runbook"
+        for reg in registers
+        for e in reg
+        for x in e.get("related") or ()
+        if x not in live
+    ]
+    if problems:
+        raise RegisterError("related", problems)
+
+
 def _retired(data, live, id_rx: re.Pattern, problems: list[str]) -> dict:
     """The optional top-level ``retired:`` mapping of tombstoned ids (see registers.ids).
 
@@ -142,6 +177,7 @@ def validate_lessons(data) -> list[dict]:
         "verification",
         "open_reason",
         "notes",
+        "related",
     }
     _dupes([str(e.get("id")) for e in items if isinstance(e, dict)], problems)
     _retired(data, [str(e.get("id")) for e in items if isinstance(e, dict)], LESSON_ID, problems)
@@ -158,6 +194,7 @@ def validate_lessons(data) -> list[dict]:
         if extra:
             problems.append(f"{who}: unknown field(s) {sorted(extra)}")
         _text(e, "title", problems, who, 4)
+        _related(e, who, problems)
         if not _date(e.get("date")):
             problems.append(f"{who}: `date` must be ISO YYYY-MM-DD")
         s = e.get("systems")
@@ -220,6 +257,7 @@ def validate_runbooks(data) -> list[dict]:
         if not RUNBOOK_ID.match(who):
             problems.append(f"{who}: id must look like RB-123")
         _text(e, "title", problems, who, 4)
+        _related(e, who, problems)
         _text(e, "purpose", problems, who)
         s = e.get("systems")
         if not (isinstance(s, list) and s and all(isinstance(x, str) and x for x in s)):

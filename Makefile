@@ -10,7 +10,6 @@ ROLE_LINT := tools/role_lint.py
 ROLES := $(wildcard ansible/roles/*)
 PLAYBOOKS := $(wildcard ansible/playbooks/*.yml)
 REGISTERS_OUT := build/registers
-REGISTER_FILES := $(shell git ls-files -- $(foreach k,lessons runbooks invariants queue,'*$(k).yml' '*$(k).yaml') 2>/dev/null)
 
 .PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-eval agent-lint prompts-lint injection-check injection-report injection-eval workflows detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke
 
@@ -151,8 +150,12 @@ check: contracts
 contracts:
 	$(PY) tools/contract_coverage.py
 
+# lessons/ and runbooks/ are record directories (one Markdown file per entry); every record's
+# generated `## Links` block is current (`hnx registers links <dir>` rewrites them)
+RECORD_DIRS := examples/registers/lessons examples/registers/runbooks
 registers:
 	$(PY) -m homelabnext.registers build examples/registers $(REGISTERS_OUT)
+	$(PY) -m homelabnext.registers links --check $(RECORD_DIRS)
 
 # Every fast criterion of the example register through the invariants runner, never paging; the
 # plugin-only rows (X-04, X-06, X-09, X-10) run nowhere else.  Slow criteria (leak scans, schema
@@ -165,15 +168,18 @@ INVARIANTS_OUT := build/invariants/results.json
 invariants:
 	$(PY) -m homelabnext.invariants run examples/registers/invariants.yml --fast --no-notify --out $(INVARIANTS_OUT) $(INVARIANTS_ARGS)
 
-# no allocated register id twice; with BASE=<rev> also no id that BASE had may vanish (CI: PR base)
+# no allocated register id twice (and every record file named for its id); with BASE=<rev> also no
+# id that BASE had may vanish (CI: PR base).  Without paths the tool checks every register git
+# tracks or HEAD/BASE has (lessons.yml-style files and lessons/-style record directories), so a
+# deleted record file is seen too.
 ids-check:
-	$(PY) tools/register_ids.py check-dupes $(REGISTER_FILES)
-	$(if $(BASE),$(PY) tools/register_ids.py check-lost --base $(BASE) $(REGISTER_FILES))
+	$(PY) tools/register_ids.py check-dupes
+	$(if $(BASE),$(PY) tools/register_ids.py check-lost --base $(BASE))
 
 # maintainers, at merge time on the target branch: allocate every XX-NEW placeholder (exit 3 =
 # rewrote something, which is success here; review and commit the result)
 ids-resolve:
-	@rc=0; $(PY) tools/register_ids.py resolve $(REGISTER_FILES) || rc=$$?; [ $$rc -eq 0 ] || [ $$rc -eq 3 ]
+	@rc=0; $(PY) tools/register_ids.py resolve || rc=$$?; [ $$rc -eq 0 ] || [ $$rc -eq 3 ]
 
 # run every capability suite against the built-in fakes (TARGET=my-target aims it elsewhere)
 conform:
@@ -239,7 +245,7 @@ keyring:
 # M-16: XX-NEW is allowed on a pull request, never on main; CI runs this on every push to main
 # (not part of `check`, which pull requests run).  Maintainer fix: `make ids-resolve` on main.
 ids-placeholders:
-	$(PY) tools/register_ids.py check-placeholders $(REGISTER_FILES)
+	$(PY) tools/register_ids.py check-placeholders
 
 # Q-08: every `fix:` commit (or `Fixes:` trailer) in RANGE touches a test file; PROVE=1 also runs
 # each fix's tests on its parent, where they must fail.  Skipped with a note when RANGE's base

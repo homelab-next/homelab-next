@@ -257,9 +257,9 @@ criteria:
   statement: Register ids are never lost.
   evidence: auto
   observable: >-
-    IFS=$'\n'; f=$(git ls-files -- '*lessons.yml' '*runbooks.yml' '*invariants.yml' '*queue.yml')
-    || exit 100; [ -n "$f" ] || { echo no registers tracked; exit 100; };
-    python3 tools/register_ids.py check-lost $f && echo no ids lost
+    IFS=$'\n'; f=$(git ls-files -- '*lessons.yml' '*runbooks.yml' '*invariants.yml' '*queue.yml'
+    '*/lessons/*.md' '*/runbooks/*.md') || exit 100; [ -n "$f" ] || { echo no registers tracked; exit 100; };
+    python3 tools/register_ids.py check-lost && echo no ids lost
   expected: >-
     exit 0: an id the last commit had is still a live entry or a `retired:` tombstone
     (exit 100 outside a git checkout)
@@ -604,8 +604,8 @@ criteria:
   statement: No placeholder ids survive a commit.
   evidence: auto
   observable: >-
-    IFS=$'\n'; f=$(git ls-files -- '*lessons.yml' '*runbooks.yml' '*invariants.yml' '*queue.yml')
-    || exit 100; [ -n "$f" ] || { echo no registers tracked; exit 100; };
+    IFS=$'\n'; f=$(git ls-files -- '*lessons.yml' '*runbooks.yml' '*invariants.yml' '*queue.yml'
+    '*/lessons/*.md' '*/runbooks/*.md') || exit 100; [ -n "$f" ] || { echo no registers tracked; exit 100; };
     python3 tools/register_ids.py check-placeholders $f && echo no placeholder ids
   expected: >-
     exit 0 on main: no register entry id is an `XX-NEW` placeholder (a pull request may carry

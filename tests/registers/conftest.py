@@ -3,7 +3,8 @@ import copy
 import pathlib
 
 import pytest
-import yaml
+
+from homelabnext.registers import load_register
 
 EXAMPLES = pathlib.Path(__file__).resolve().parents[2] / "examples" / "registers"
 
@@ -21,7 +22,7 @@ def examples():
 
 @pytest.fixture
 def lessons():
-    return yaml.safe_load((EXAMPLES / "lessons.yml").read_text())
+    return load_register(EXAMPLES / "lessons")
 
 
 @pytest.fixture

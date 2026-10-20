@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
 import re
+import shutil
 
 import pytest
 import yaml
@@ -8,6 +9,7 @@ import yaml
 from homelabnext.registers import (
     RegisterError,
     build_all,
+    load_register,
     render_invariants,
     render_lessons,
     render_runbooks,
@@ -106,7 +108,7 @@ def test_duplicate_id_is_fatal(lessons):
 
 
 def test_runbook_step_without_verify_is_fatal(examples):
-    rb = yaml.safe_load((examples / "runbooks.yml").read_text())
+    rb = load_register(examples / "runbooks")
     del rb["runbooks"][0]["steps"][1]["verify"]
     with pytest.raises(RegisterError, match="step 2: every step needs its own `verify`"):
         render_runbooks(rb)
@@ -152,8 +154,9 @@ def test_invariant_defects_are_fatal(examples, mutate, needle):
 def test_build_is_atomic_when_any_register_is_invalid(examples, tmp_path):
     src = tmp_path / "src"
     src.mkdir()
-    for n in ("lessons", "runbooks", "invariants"):
-        (src / f"{n}.yml").write_text((examples / f"{n}.yml").read_text())
+    for n in ("lessons", "runbooks"):
+        shutil.copytree(examples / n, src / n)
+    (src / "invariants.yml").write_text((examples / "invariants.yml").read_text())
     bad = yaml.safe_load((src / "invariants.yml").read_text())
     del bad["criteria"][0]["remediation"]
     (src / "invariants.yml").write_text(yaml.safe_dump(bad))

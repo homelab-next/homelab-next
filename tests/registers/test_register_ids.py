@@ -392,7 +392,11 @@ def test_placeholders_ignore_prose_that_mentions_the_convention():
 
 
 def test_the_example_registers_carry_no_placeholder_ids(examples):
-    for f in sorted(examples.glob("*.yml")):
+    found = 0
+    for f in sorted([*examples.glob("*.yml"), *(p for p in examples.iterdir() if p.is_dir())]):
         spec = ids.spec_for(f)
         if spec is not None:
-            assert ids.placeholders(f.read_text(), spec) == [], f.name
+            found += 1
+            left = [i for i in ids.entry_ids(f.parent, f.name, spec) if i.endswith("-NEW")]
+            assert left == [], f.name
+    assert found == 3  # lessons/, runbooks/, invariants.yml

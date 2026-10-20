@@ -122,7 +122,10 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "detections-as-code: lint|run|map|coverage|lint-ids|compile|validate-techniques",
         _detections,
     ),
-    "registers": ("build the lessons/runbooks/invariants pages (registers build)", _registers),
+    "registers": (
+        "lessons/runbooks/invariants: build pages, split|join record files, links blocks",
+        _registers,
+    ),
     "invariants": ("run the standing invariants (invariants run)", _invariants),
     "ids": (
         "register ids: alloc|resolve|check-lost|check-dupes|check-placeholders",
