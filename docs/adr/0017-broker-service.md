@@ -112,10 +112,48 @@ guard hook to compare decisions, then cut over.
 12. **Asserted identity is a development mode.** The CLI's `--as` against the state directory is
    accepted only when the manifest sets `dev_identity: true` (absent means false).
 
-Remote agents do not get a network listener in 2a. They reach the broker through the front door
-(stage 2b) or through an SSH-forwarded socket (`ssh -L LOCAL.sock:/run/hnx-broker/broker.sock`),
+Remote agents do not get a network listener in 2a (nor in 2b). They reach the broker through an
+SSH-forwarded socket (`ssh -L LOCAL.sock:/run/hnx-broker/broker.sock`),
 where the peer the broker sees is the forwarding `sshd` session's user on the broker host, so
 each remote agent logs in as its own system user.
+
+### Stage 2b: people approve through the front door (amendment, 2026-10-20)
+
+13. **The status hub's Approvals page is the approval relay.** `hnx status serve` with an
+   `approvals:` block in `agents.yml` (`schemas/status/agents` 1.1: the broker socket, the SSO
+   issuer, the approver group) serves `/approvals` (`homelabnext/status/approvals.py`): pending
+   requests (action, actor, target, params, created, digest, age), the recent decisions, and
+   approve/deny. It speaks to the broker with `BrokerClient` as its own system user, listed in
+   `approval_relays`; the approver it names is the configured issuer and the front door's
+   username, never anything from the form. The broker judges that person by the manifest's
+   approver rules, unchanged.
+14. **Same front door, separate grant.** The page reuses the private tier's door
+   (`homelabnext/status/agents/auth.py`: trusted proxy address, shared front-door secret header,
+   forward-auth identity header) and adds an **approver group** that must differ from the viewer
+   group. Viewers may read the queue (its params are as sensitive as the private tier they already
+   read); only the approver group may decide.
+15. **The hub's one write is guarded as one.** `POST /approvals/decide` only (every other `POST`
+   stays `405`); the console's Host/Origin guard, then a same-origin `Origin` (or `Referer`) and no
+   cross-site `Sec-Fetch-Site`; a closed form of five fields; a CSRF token, an HMAC under a
+   per-process key over its issue time, the request id, the digest shown and the approver, valid
+   30 minutes; and the **digest the person saw** must equal the broker's current digest for the
+   request, or the hub refuses. A repeated decision by the same person files nothing ("already",
+   from the broker's audit trail). Every attempt is appended to the hub's access log. The generated
+   Caddy site already covers every path of the hub's hostname, so the new route needed no edge
+   change.
+16. **Notifications link the page.** With `--approvals-url` (`HNX_BROKER_APPROVALS_URL`) the broker
+   adds `link` (`<url>?request=<id>`) to `decision.requested` and to its notification (ntfy
+   `Click`).
+17. **A migration path off the vault pattern.** `hnx broker import-proposals DIR` reads a directory
+   of proposal Markdown files and files each through the broker as a `proposal.file` lane record
+   (dry run unless `--apply`), mapping fields generically and reporting what it could not map;
+   `requesting_agent` is bound to the importing caller, the original requester kept as provenance.
+   `docs/broker.md` maps the rest: writable zones to lanes, dashboard approval to the hub page, the
+   sync job to broker runs, `completion-request` to a records-lifecycle transition.
+
+Not in 2b: a menu entry for the page (the views schema's panel list is unchanged; the page is
+reached by its URL and the notification link), and a network listener for remote agents, who still
+use an SSH-forwarded socket.
 
 ## Consequences
 
@@ -146,8 +184,11 @@ each remote agent logs in as its own system user.
   the same single-winner guarantees, survive restarts, and stay readable with ordinary tools.
 - **Let agents write files directly and audit afterwards**: detection after the fact cannot undo
   a write outside the lane; the lane refuses before writing.
+- **Approvals in the broker's own web UI**: rejected; the hub already sits behind the SSO front
+  door with an access log, and a second authenticated web surface would be a second thing to
+  harden. The hub holds no broker state and decides nothing: the broker re-checks everything.
 - **An HTTP listener with bearer tokens in 2a**: deferred. A token is a secret every agent must
-  hold and could leak; a socket peer credential cannot be copied. Remote access goes through the
-  front door (2b), which already authenticates people and services.
+  hold and could leak; a socket peer credential cannot be copied. People reach the broker through
+  the front door (2b), which already authenticates them; remote agents through a forwarded socket.
 - **The caller named in the request, checked against a token**: rejected; the body is what an
   injected prompt controls, so it must carry nothing that decides identity.

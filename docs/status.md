@@ -4,7 +4,8 @@
 The status hub (`homelabnext.status`, `hnx status`, [ADR-0013](adr/0013-status-hub.md)) is the
 primary UI: a main page and a left-side menu of views over every registered source of status. It
 **observes and never acts**: anything that changes something is a link to the broker or the
-approval path. It does not need agents, the broker or an agent dashboard; each of those is an
+approval path. The one write is the broker [Approvals page](#the-approvals-page-broker-stage-2b),
+which relays a person's approve or deny to the broker and changes nothing in the hub itself. It does not need agents, the broker or an agent dashboard; each of those is an
 optional source or an optional menu entry.
 
 Stage 1 is everything that can be proven without a server: the registry format, the menu, the
@@ -216,7 +217,8 @@ runtime's, which beats the default) or `working`.
 
 `store` (SQLite), `retention_days`, `detail` (keep the private tier at all),
 `redact_personal_data`, `caps` (per-field characters), `stuck_after_s` (`default`, `runtimes`,
-`models`), `private` (the front door) and `ingest` (the senders). Schema:
+`models`), `private` (the front door), `ingest` (the senders) and `approvals` (the broker
+Approvals page; agents 1.1). Schema:
 `schemas/status/agents.schema.json`. Secrets are secret-store references (`secret:a/b`), never
 values; at run time `secret:a/b-token` is read from `HNX_SECRET_A_B_TOKEN` (or the file `a/b-token` under
 `--secrets-dir`). A reference that does not resolve **disables** what it guards (the private
@@ -327,6 +329,7 @@ the stream refreshes with a meta refresh, the inspector is a second pane chosen 
 | `/activity.csv`, `/activity.jsonl` | the same selection exported, summary tier only (CSV cells that would run as a spreadsheet formula are quoted) |
 | `/agent-analytics` | counts by outcome, runtime, model, tool and day |
 | `/private/sessions`, `/private/session?id=`, `/private/event?id=`, `/private/access-log` | the detail tier and the access log: **private** |
+| `/approvals`, `POST /approvals/decide` | broker requests awaiting an approver, recent decisions, approve and deny: **private**, with an approver group (below) |
 
 ### The private tier: Caddy + Authentik setup
 
@@ -361,6 +364,57 @@ auth response; verify on your version). Every private view is appended to the ac
 (`private.access_log`, JSONL, mode 0600: `at`, `user`, `view`, `session`, `event`), which is
 itself a private page. Detail content is rendered as escaped text only (never HTML or markdown)
 and nothing in this code feeds it back into an agent's context.
+
+### The Approvals page (broker stage 2b)
+
+With an `approvals:` block in `agents.yml` (it needs `private:`), `hnx status serve --agents FILE`
+adds `/approvals`: the broker requests awaiting an approver (action, actor, target, params,
+created, digest, age) and the last 20 approvals and denials, with an approve/deny form on each
+request. `?request=ID` shows one request (the broker's notification links there). Code:
+`homelabnext.status.approvals`; the broker side: [broker](broker.md#front-door-approvals)
+([[broker]]).
+
+```yaml
+approvals:
+  socket: /run/hnx-broker/broker.sock   # the broker's Unix socket (absolute)
+  issuer: sso                           # the broker manifest's approval_relays[].issuer for the hub
+  approver_group: hub-approvers         # required to decide; must differ from viewer_group
+  # timeout_s: 10
+```
+
+**Who.** The page is behind the same front door as the private tier, by the same code
+(`homelabnext.status.agents.auth.authorize`: trusted proxy, front-door secret, identity header),
+then a group. **Viewers** (`viewer_group`) may see the queue, read only: a pending request's
+params are as sensitive as the private tier's details, and people who already read prompts and
+commands can see what agents ask to do. **Deciding** needs the **approver group** (create it in
+Authentik next to the viewer group; a person in only the approver group may also see the page).
+The approver the hub sends to the broker is `issuer` from the config and `subject` = the
+`X-Authentik-Username` the front door passed (lower-cased: the broker compares identities
+case-folded), never a form field. The broker then applies its own approver rules (allowlist, no
+self-approval, no agent approver).
+
+**The hub's only write.** `POST /approvals/decide` (every other `POST` is still `405`) answers, in
+order: `403` the front door or the approver group fails; `403` a foreign `Host`/`Origin` (the
+console's DNS-rebinding guard), no `Origin` and no same-host `Referer`, or a `Sec-Fetch-Site` other
+than `same-origin`; `415` not `application/x-www-form-urlencoded`; `411` no length; `413` over
+8 KiB; `400` a field other than `request_id`, `digest`, `decision` (approve, deny), `token` and
+`note` (at most 2000 characters), a repeated or malformed one; `403` a CSRF token that is not the
+HMAC (under a key drawn when the hub starts) of its issue time, the request id, the digest shown
+and this approver, or older than 30 minutes; `409` the broker's current digest for the request is
+not the one in the form (**the person approves exactly what they saw**) or the request no longer
+awaits approval; `403` a broker refusal (with its reason); `502` the broker is unreachable; `200`
+done. Re-submitting a decision the same person already made answers `200` "already" and files
+nothing. Every attempt, refused or not, is a line in the access log (`view: approve | deny |
+decide`, `request`, `outcome`, `reason`), shown on `/private/access-log`. The page has no script;
+its CSP is the hub's with `form-action 'self'`.
+
+**The broker side.** Run the hub as its own system user (`hnx-hub`) in the broker socket's group
+and list it in the broker manifest's `approval_relays` with the same `issuer`; add each person who
+may approve to the manifest's `approvers` (`{issuer: sso, subject: <username>, kind: human}`).
+**Caddy:** the generated site for the hub's service (the `caddy` generator, `caddy/sites.caddy`)
+already puts every path and method of the hostname behind `import hnx_forward_auth` and the
+front-door `header_up`; it has no path matcher, so `/approvals` and `POST /approvals/decide` are
+covered with no change (a test pins this).
 
 ## 7. Product collectors (stage 2)
 

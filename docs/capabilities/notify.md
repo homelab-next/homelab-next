@@ -86,6 +86,7 @@ Defined in [`homelabnext.notify.core`](../../homelabnext/notify/core.py).
 | `tags` | `tuple[str, ...]` | `()` |  |
 | `topic` | `str \| None` | `None` | None -> the sender's default topic |
 | `email` | `str \| None` | `None` | optional extra email target |
+| `click` | `str \| None` | `None` | optional http(s) link the notification opens (ntfy `Click`) |
 
 ### Errors
 
