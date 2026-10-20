@@ -3,8 +3,9 @@
 - **Status:** proposed
 - **Date:** 2026-10-20
 - **Related:** ADR-0001, ADR-0004, ADR-0012, ADR-0013, `docs/compute-model.md`,
-  `schemas/platform/baseline_set.schema.json`, `schemas/platform/guest.schema.json` (1.3),
-  `homelabnext/compute/baselines.py`
+  `schemas/platform/baseline_set.schema.json` (1.0; 1.1 for decision 7),
+  `schemas/platform/guest.schema.json` (1.3), `homelabnext/compute/baselines.py`;
+  decision 7 amended 2026-10-20 with the first bound products
 
 ## Context
 
@@ -38,6 +39,22 @@ model would encode a product (against the swap discipline of ADR-0004 and ADR-00
    resolve to nothing.
 6. `hnx guests baselines` prints the guest x layer coverage matrix (`--json`, `--check`,
    `--require-bound`), and the status hub serves it as the Baselines page.
+7. *(Amendment, baseline set 1.1.)* **A binding says how its role reaches a guest**: `apply:
+   guest` (the default, and what every 1.0 control means) runs the role on each guest that needs
+   the control, through `control_<id>`; `apply: central` with `group: cap_<x>` runs it **once on
+   the central product host** and passes it `<role>_guests`, every guest that needs the control
+   as `{id, name, fqdn, ip, zone}`, for that product to enroll. Software on the guest (an
+   endpoint agent, a VPN client) is a guest binding; enrolment in a central product (a network
+   sensor's monitored addresses, a scanner's targets) is a central one, because nothing is
+   installed on the guest. `group` is required with `central` and refused with `guest`, and must
+   be a known inventory group; `cap_sensor` and `cap_scanner` are added for the two central
+   products. A central control whose group holds no guest of the model is reported (`NO HOST`
+   in the playbook, `unplaced` in the coverage report) and fails `--require-bound`. The first
+   bindings are the Wazuh agent (`siem-agent`, guest), Suricata (`network-sensor`, central),
+   Greenbone (`vuln-scan`, central, the authenticated internal assessment) and Tailscale
+   (`remote-access`, guest); the `tailscale-acl` target renders the tailnet policy from the site
+   model (a tag per zone, admins on SSH, the site's zone-to-zone allows), so remote access
+   follows the zones rather than hand-written policy.
 
 ## Consequences
 
@@ -46,6 +63,13 @@ an opt-out is a reviewed line with a reason rather than an omission. The coverag
 which rings of defense each guest has before any product is installed, and `--require-bound`
 turns "we have not picked a SIEM agent yet" into a visible, checkable gap. Binding a product
 touches one file and re-renders the playbook; swapping it later is the same edit.
+
+Decision 7 keeps that one-line edit true for products that do not live on the guest: without
+it, a sensor or scanner binding would have to install something pointless on every guest or
+live outside the model. A central play carries the guest list in the rendered playbook, so the
+list is reviewed in the same diff as the guest change that caused it. The roles are first
+versions to be tuned on the real lab; their limits are listed in `docs/compute-model.md`
+("Bound products").
 
 It obliges us to keep the control catalogue generic (a control names a function, never a
 product) and to keep `verify` lines honest; the model does not run them. The requirement is
@@ -61,5 +85,10 @@ a missing set is visible to `hnx guests baselines --check`, which fails without 
   gets fewer defenses, and there is no place to record why a guest is exempt.
 - **Making `baseline` required in the schema**: breaks every existing tree (not additive) and
   cannot express "required only when a set defines what baselines exist".
+- **Central products as a second, separate catalogue** (sensors and scanners outside
+  `controls`): the coverage matrix would lose them, and "is this guest scanned" would have two
+  sources. **Discovering enrolment at run time** from `groups['control_<id>']` inside the
+  central play: works, but the enrolled list would not be visible in the rendered playbook or
+  testable as a golden.
 - **Open-ended layers**: a free-text layer drifts into synonyms, and the coverage matrix would
   stop being comparable between guests and labs.

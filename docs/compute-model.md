@@ -69,6 +69,7 @@ trailing newline), then the schema, then `homelabnext.compute.validate`:
 | `firewall_rules`: unique names, ports for tcp/udp (none for icmp), valid port ranges, existing `zone:` sources and destinations, valid CIDRs; only on vm/lxc with the flag on | rules that cannot be rendered are errors, not skips |
 | `firewall_rules.outbound_allow` needs `policy_out: DROP` or `REJECT` | an allow list under an accept-all policy is dead text |
 | with a baseline set, every guest (vm, lxc and host) has `baseline.names` or `baseline.exemption.reason`; names, `extends`, `add` and `remove` resolve; no `extends` cycle; no baseline resolves to nothing | see [Baselines and defense layers](#baselines-and-defense-layers) |
+| a control with `apply: central` names a `group`, a control applied per guest names none, and the group is a known inventory group | see [Bound products](#bound-products) |
 
 The model does not import a site package. It reads zones through a small protocol:
 
@@ -94,7 +95,8 @@ have a zones file. Tests can also pass a stub.
 | `inventory` | `hosts.yml` with `cap_*` and `tag_*` groups (and, with a baseline set, `baseline_<name>` and `control_<id>`), `host_vars/<fqdn>.yml` (with `hnx_baselines`, `hnx_controls`) |
 | `registry-hosts` | a `zones:`/`hosts:` fragment for `services.yml` |
 | `backup-jobs` | members, retention and export hooks per policy |
-| `baseline-playbook` | `baseline.yml`: one play per bound control, applying its `role` to `control_<id>`; unbound controls as commented blocks |
+| `baseline-playbook` | `baseline.yml`: one play per bound control, applying its `role` to `control_<id>`, or, for an `apply: central` control, once to its product host's `group` with `<role>_guests`; unbound controls as commented blocks |
+| `tailscale-acl` | `tailscale-policy.hujson`: the tailnet policy for the guests bound to `tailscale_node` (a tag per zone, admins on SSH, the site's zone-to-zone allows); see [Bound products](#bound-products) |
 | `firewall-rules` | `firewall/<vmid>.fw` per guest (inbound drop, the outbound policy, the guest's allow rules), `firewall/verify-datacenter.sh` and `firewall/EXEMPTIONS.md` |
 
 Output is a pure function of the files: no clock, no randomness, no environment.  The `terraform-proxmox` target was validated against the real `bpg/proxmox` provider **version 0.116.1** (`terraform init && terraform validate` plus a one-guest live `plan` / `apply` / `destroy` cycle on a scoped scratch pool).  A trimmed snapshot of the provider's resource schemas is committed at `tests/compute/fixtures/bpg_proxmox_schema.json` and used by `tests/compute/test_terraform_proxmox_schema.py` as a CI-safe shape check.  Note that the real provider enforces `vm_id >= 100`, so the example fleet uses vmids in the `110-230` range; the `octet` scheme is still available but requires IPs whose last octet is `>= 100`. SSH keys are
@@ -288,6 +290,56 @@ SITE` serves the same matrix as the hub's Baselines page.
 
 There is no guest scaffold command (`hnx new` makes roles, capabilities, detections and schemas):
 a guest is created by writing its file, and the `baseline` key is what validation requires of it.
+
+### Bound products
+
+Some products are software on the guest; others are central and the guest is only **enrolled**
+in them. A control says which (`baseline_set` 1.1, ADR-0016 decision 7):
+
+```yaml
+controls:
+  siem-agent:     {layer: detection, role: wazuh_agent, ...}            # apply: guest (default)
+  network-sensor: {layer: detection, role: suricata_enroll, apply: central, group: cap_sensor, ...}
+```
+
+A guest binding is one play on `control_<id>`. A central binding is one play on `group` (the
+product host's capability group) whose role gets `<role>_guests`: each guest that needs the
+control as `{id, name, fqdn, ip, zone}`, sorted by id, written into the playbook so the list is
+reviewed with the guest change that moved it. A central control whose group holds no guest of
+the model renders with a `NO HOST` comment, is listed as `unplaced` by `hnx guests baselines`
+and fails `--require-bound`. `cap_sensor` and `cap_scanner` are the groups added for the two
+central products (no existing group fits: `cap_siem` is the SIEM manager, and a sensor or
+scanner is usually its own host).
+
+The first bindings (examples/minimal), to be tuned once the real lab runs them:
+
+| Control | Role | Applies | What it does | Health | Known limits |
+|---|---|---|---|---|---|
+| `siem-agent` | `wazuh_agent` | guest | adds the vendor apt repository (`<repo>/<major>.x/apt/ stable main`, signed by its key), installs the pinned `wazuh-agent=<version>-<revision>`, enrolls with the manager resolved by logical id (`wazuh_agent_manager_id`, host and agent port from the registry; enrollment password by secret reference), holds the package, runs the service | the state file reports `status='connected'` | the deployment variables apply on the first install only: a new manager means a reinstall; Debian-family guests only |
+| `remote-access` | `tailscale_node` | guest | adds the vendor apt repository, installs the pinned client, and, when not running, `tailscale up --auth-key=file:<transient> --advertise-tags=tag:zone-<zone>` (no exit node, no routes) | `tailscale status --json`: `Running`, online, carries its zone tag | a running node is not re-tagged (that is a `tailscale set`); Debian-family only |
+| `network-sensor` | `suricata_enroll` | central, `cap_sensor` | writes `hnx-address-groups.yaml` (`HOME_NET` = the enrolled guests, `HNX_ZONE_<ZONE>` per zone, the stock groups), runs `suricata -T`, then `suricatasc -c reload-rules` (a rule reload re-reads `vars`) | `suricatasc -c uptime` | `suricata.yaml` must hold `vars: address-groups: include: hnx-address-groups.yaml` (checked, never rewritten); mirroring the traffic to the sensor is the network's job |
+| `vuln-scan` | `greenbone_target` | central, `cap_scanner` | over gvmd's socket with `gvm-cli` (as `_gvm`; it refuses root), finds the operator's scan login by name and creates a target `hnx-<guest>` per guest that lacks one | GMP `get_version` | targets are matched by name: an address change or a guest that leaves is not followed; scan tasks and schedules stay in Greenbone |
+
+Secrets are referenced, never written: `wazuh_agent_enrollment_ref`, `tailscale_node_auth_key_ref`
+and `greenbone_target_gmp_auth_ref` hold `secret:<name>`, resolved on the controller by the
+`hnx_secret` lookup (`ansible/plugins/lookup/hnx_secret.py`: `HNX_SECRET_<NAME>`, else
+`<hnx_secrets_dir>/<name>`) in `no_log` tasks. Required inputs a deployment sets in its inventory
+(for example `group_vars/control_siem_agent.yml`): `wazuh_agent_manager_id`,
+`tailscale_node_auth_key_ref`, `greenbone_target_scan_login`.
+
+**Tailscale policy from the site model.** `hnx guests render ... --target tailscale-acl` writes
+`tailscale-policy.hujson` for the guests that need a control bound to `tailscale_node`:
+
+* `tagOwners`: `tag:zone-<zone>` for every zone with a tailnet node, owned by `autogroup:admin`;
+* `acls`: admins to every zone tag on TCP 22 (the minimal default), then one rule per allow of the
+  site's `firewall.zone_to_zone` between two zones that both have tailnet nodes, with its
+  protocols and ports. The rules are read in the network model's order (rules to a zone, then
+  rules to `any`), and an allow is dropped when an earlier port-less deny matches the same pair.
+  A zones-only site file has no flows: the policy is the minimal default.
+
+Not translated: port-level denies, `service_exceptions` (they name a service), traffic inside one
+zone, exit nodes and subnet routes. Push the file with Tailscale's own tooling; the generator only
+writes it.
 
 ### One entry wires everything
 
