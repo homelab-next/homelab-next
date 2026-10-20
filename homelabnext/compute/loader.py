@@ -15,7 +15,7 @@ from homelabnext._yaml import UniqueKeyStrDateLoader
 from homelabnext.generators.safe import control_char_paths
 
 from .baselines import BASELINES_FILE, load_baselines
-from .model import ComputeError, Fleet, Guest, Problem, ZoneLookup
+from .model import ComputeError, Fleet, Guest, Problem, ZoneFlow, ZoneLookup
 
 POLICIES_FILE = "_backup_policies.yml"
 NODES_FILE = "_nodes.yml"
@@ -136,12 +136,15 @@ def load_fleet(
     nodes_path: str | Path | None = None,
     baselines_path: str | Path | None = None,
     require_baselines: bool = True,
+    flows: tuple[ZoneFlow, ...] = (),
 ) -> Fleet:
     """Load, schema- and semantically validate; raise ComputeError listing every problem.
 
     ``baselines_path`` defaults to ``DIRECTORY/_baselines.yml``; without that file there is no
     baseline set and no guest needs a baseline.  ``require_baselines=False`` tolerates guests
-    that declare none (for the coverage report, which lists them)."""
+    that declare none (for the coverage report, which lists them).  ``flows``: the zone-to-zone
+    flows the site allows (:func:`homelabnext.compute.zones.site_flows`), for the targets that
+    follow them (``tailscale-acl``)."""
     from .validate import validate
 
     d = Path(directory)
@@ -163,6 +166,7 @@ def load_fleet(
         policies=policies,
         nodes=load_nodes(nodes_file) if nodes_file.is_file() else {},
         baselines=baselines,
+        flows=tuple(flows),
     )
     problems += validate(fleet, require_baselines=require_baselines)
     if problems:

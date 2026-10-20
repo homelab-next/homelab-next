@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# The SIEM endpoint agent (control siem-agent, applied per guest). The manager is a logical id
+# resolved through the registry; the enrollment password is a secret reference (secret:<name>)
+# resolved by the hnx_secret lookup at run time, never a value.
+wazuh_agent_version: "4.14.9"
+wazuh_agent_package_revision: "1"
+# The vendor package repository root; point it at a lab mirror to control what is served.
+wazuh_agent_repository: "https://packages.wazuh.com"
+wazuh_agent_enrollment_ref: "secret:siem/enrollment-password"
+wazuh_agent_enrollment_port: 1515
+# Empty: the agent enrolls under the host name (the vendor default).
+wazuh_agent_name: ""
+wazuh_agent_groups: []
+wazuh_agent_state_file: /var/ossec/var/run/wazuh-agentd.state
+wazuh_agent_manifest_dir: /var/lib/homelabnext/wazuh-agent

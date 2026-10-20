@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to restore (re-run main to re-enroll the agent)
+  ansible.builtin.debug:
+    msg: wazuh_agent keeps no data of its own; re-running main re-enrolls the agent
+  tags: [restore]

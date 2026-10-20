@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The bump path: validate the new pin, record it, then set wazuh_agent_version and re-run main
+# (the agent must never be newer than its manager: upgrade the manager first).
+- block:
+    - name: Refuse a downgrade, a no-op or a malformed version
+      ansible.builtin.assert:
+        that:
+          - wazuh_agent_target_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+          - wazuh_agent_target_version is version(wazuh_agent_version, '>')
+        fail_msg: "target {{ wazuh_agent_target_version }} is not a newer x.y.z than {{ wazuh_agent_version }}"
+    - name: Ensure the manifest directory exists
+      ansible.builtin.file:
+        path: "{{ wazuh_agent_manifest_dir }}"
+        state: directory
+        mode: "0750"
+    - name: Record the pending version
+      ansible.builtin.copy:
+        dest: "{{ wazuh_agent_manifest_dir }}/pending-version"
+        content: "{{ wazuh_agent_target_version }}\n"
+        mode: "0640"
+  tags: [upgrade]

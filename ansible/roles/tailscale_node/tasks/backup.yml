@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to back up (a rebuilt guest joins again with a fresh key)
+  ansible.builtin.debug:
+    msg: tailscale_node keeps no data a backup must capture
+  tags: [backup]

@@ -59,6 +59,8 @@ allow:
     reason: tests plant a loopback literal to prove role_lint flags it
   - path: "tests/roles/test_role_render.py"
     reason: render tests use synthetic example.internal endpoints and a loopback literal as expected values
+  - path: "tests/roles/test_product_roles.py"
+    reason: central product roles enroll guests by address; the synthetic guests use documentation addresses (the data under test)
   - path: "schemas/platform/negative/service.*.yml"
     reason: negative registry fixtures derived from the synthetic example lab (documentation addresses only)
   - path: "docs/compute-model.md"

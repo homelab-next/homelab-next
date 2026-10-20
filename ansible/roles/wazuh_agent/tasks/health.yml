@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Read the agent state file
+      ansible.builtin.slurp:
+        src: "{{ wazuh_agent_state_file }}"
+      register: wazuh_agent_state
+    - name: Fail unless the agent is connected to its manager
+      ansible.builtin.assert:
+        that:
+          - (wazuh_agent_state.content | b64decode) is search("^status='connected'", multiline=True)
+        fail_msg: "wazuh_agent: the agent is not connected to its manager ({{ wazuh_agent_state_file }})"
+  tags: [health]

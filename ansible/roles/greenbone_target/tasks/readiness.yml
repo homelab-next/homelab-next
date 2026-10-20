@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Fail unless gvmd's socket exists
+  ansible.builtin.stat:
+    path: "{{ greenbone_target_socket }}"
+  register: greenbone_target_sock
+  failed_when: not greenbone_target_sock.stat.exists or not greenbone_target_sock.stat.issock
+  tags: [readiness]

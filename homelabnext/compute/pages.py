@@ -33,6 +33,21 @@ def _cell(controls: list[str]) -> str:
     return "<br>".join(f"<code>{_e(c)}</code>" for c in controls)
 
 
+def _binding(control: str, info: Mapping[str, Any], unplaced: list[str]) -> str:
+    """The Role cell: the role, how it applies (ADR-0016 decision 7), or "not bound"."""
+    role = (
+        f"<code>{_e(info['role'])}</code>"
+        if info["role"]
+        else '<span class="s warn">not bound</span>'
+    )
+    if info["apply"] != "central":
+        return role
+    out = f"{role} central on <code>{_e(info['group'])}</code>"
+    if control in unplaced:
+        out += f' <span class="s warn">no host in <code>{_e(info["group"])}</code></span>'
+    return out
+
+
 class BaselineSite:
     """The ``/baselines`` route of ``hnx status serve`` over one guest directory."""
 
@@ -80,9 +95,7 @@ class BaselineSite:
             (
                 f"<code>{_e(c)}</code>",
                 _e(info["layer"]),
-                f"<code>{_e(info['role'])}</code>"
-                if info["role"]
-                else '<span class="s warn">not bound</span>',
+                _binding(c, info, rep["unplaced"]),
                 _e(info["verify"]),
                 str(len(info["needed_by"])),
             )

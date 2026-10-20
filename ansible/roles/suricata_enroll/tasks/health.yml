@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Fail unless the running sensor answers on its unix socket
+  ansible.builtin.command:
+    argv: ["{{ suricata_enroll_suricatasc_cli }}", -c, uptime]
+  changed_when: false
+  tags: [health]

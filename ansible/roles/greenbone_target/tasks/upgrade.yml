@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Not applicable (this role installs nothing)
+  ansible.builtin.debug:
+    msg: greenbone_target has no version of its own to upgrade
+  tags: [upgrade]

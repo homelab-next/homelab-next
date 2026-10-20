@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# platform/baseline_set 1.1: a guest binding and two central bindings (ADR-0016 decision 7)
+controls:
+  siem-agent:
+    layer: detection
+    description: The endpoint agent of the SIEM runs and reports.
+    role: wazuh_agent
+    apply: guest
+    verify: the SIEM lists the guest's agent as active
+  network-sensor:
+    layer: detection
+    description: The guest's segment is inspected by a network sensor.
+    role: suricata_enroll
+    apply: central
+    group: cap_sensor
+    verify: the sensor shows flows for the guest in the last hour
+  vuln-scan:
+    layer: detection
+    description: The guest is a target of the authenticated internal assessment scan.
+    role: greenbone_target
+    apply: central
+    group: cap_scanner
+    verify: the scanner's last completed scan of the guest is under seven days old
+baselines:
+  base:
+    description: What every in-scope guest gets.
+    controls: [siem-agent, network-sensor, vuln-scan]

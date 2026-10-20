@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Not applicable (this role installs nothing; Suricata's package belongs to the sensor host)
+  ansible.builtin.debug:
+    msg: suricata_enroll has no version of its own to upgrade
+  tags: [upgrade]

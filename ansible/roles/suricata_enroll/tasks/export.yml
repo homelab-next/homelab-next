@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Ensure the export directory exists
+      ansible.builtin.file:
+        path: "{{ suricata_enroll_export_dir }}"
+        state: directory
+        mode: "0750"
+    - name: Copy the generated address groups to the export directory
+      ansible.builtin.copy:
+        src: "{{ suricata_enroll_config_dir }}/{{ suricata_enroll_groups_file }}"
+        dest: "{{ suricata_enroll_export_dir }}/{{ suricata_enroll_groups_file }}"
+        remote_src: true
+        mode: "0640"
+  tags: [export]

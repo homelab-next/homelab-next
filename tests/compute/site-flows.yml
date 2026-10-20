@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# The test site's zones plus zone-to-zone firewall rules, for the tailscale-acl target (ADR-0016
+# decision 7).
+site: {id: northwind, domain: example.internal, timezone: UTC}
+zones:
+  - {id: mgmt, vlan_id: 10, subnet: 192.0.2.0/24, gateway: 192.0.2.1}
+  - {id: data, vlan_id: 20, subnet: 198.51.100.0/25, gateway: 198.51.100.1,
+     dhcp: {range: [198.51.100.100, 198.51.100.126]}}
+  - {id: compute, vlan_id: 30, subnet: 198.51.100.128/25, gateway: 198.51.100.129}
+  - {id: edge, vlan_id: 40, subnet: 203.0.113.0/24, gateway: 203.0.113.1}
+firewall:
+  default_action: deny
+  zone_to_zone:
+    - {from: mgmt, to: edge, action: allow, ports: [443, 22], protocols: [tcp]}
+    - {from: mgmt, to: data, action: allow}
+    - {from: edge, to: mgmt, action: deny, notes: "matches first: the allow below never applies"}
+    - {from: edge, to: mgmt, action: allow, ports: [53]}
+    - {from: mgmt, to: any, action: allow, protocols: [icmp]}

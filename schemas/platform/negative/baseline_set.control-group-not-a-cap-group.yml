@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# negative: rejected by the JSON Schema layer (group is a cap_* inventory group, not a host; 1.1)
+controls:
+  network-sensor:
+    layer: detection
+    description: The guest's segment is inspected by a network sensor.
+    role: suricata_enroll
+    apply: central
+    group: sensor-01.example.internal
+    verify: the sensor shows flows for the guest in the last hour
+baselines:
+  base:
+    description: What every in-scope guest gets.
+    controls: [network-sensor]

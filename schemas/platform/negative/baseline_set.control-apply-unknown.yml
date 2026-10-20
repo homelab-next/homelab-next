@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# negative: rejected by the JSON Schema layer (apply is guest or central, nothing else; 1.1)
+controls:
+  siem-agent:
+    layer: detection
+    description: The endpoint agent of the SIEM runs and reports.
+    role: wazuh_agent
+    apply: everywhere
+    verify: the SIEM lists the guest's agent as active
+baselines:
+  base:
+    description: What every in-scope guest gets.
+    controls: [siem-agent]

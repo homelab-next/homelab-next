@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: Enroll guests as Greenbone targets of the authenticated internal assessment, centrally.
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

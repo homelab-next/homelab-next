@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# platform/baseline_set 1.1: a central control whose product is not chosen yet still names its host
+controls:
+  vuln-scan:
+    layer: detection
+    description: The guest is a target of the authenticated internal assessment scan.
+    role: null
+    apply: central
+    group: cap_scanner
+    verify: the scanner's last completed scan of the guest is under seven days old
+baselines:
+  base:
+    description: What every in-scope guest gets.
+    controls: [vuln-scan]

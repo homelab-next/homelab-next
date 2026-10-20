@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# The bump path: validate the new pin, then set tailscale_node_version and re-run main.
+- name: Refuse a downgrade, a no-op or a malformed version
+  ansible.builtin.assert:
+    that:
+      - tailscale_node_target_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - tailscale_node_target_version is version(tailscale_node_version, '>')
+    fail_msg: "target {{ tailscale_node_target_version }} is not a newer x.y.z than {{ tailscale_node_version }}"
+  tags: [upgrade]

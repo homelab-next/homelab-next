@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+# Control siem-agent (ADR-0016 decision 7): the vendor's pinned agent from its signed apt
+# repository. The deployment variables (WAZUH_MANAGER, WAZUH_REGISTRATION_PASSWORD, ...) take effect
+# on the first install only: moving the agent to another manager later is a reinstall
+# (docs/compute-model.md, "Bound products").
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Refuse a host that is not Debian-family (the role installs from the vendor apt repository)
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] == 'Debian'
+    fail_msg: "wazuh_agent supports Debian-family guests only (got {{ ansible_facts['os_family'] }})"
+
+- name: Add the vendor apt repository, signed by the vendor key
+  ansible.builtin.deb822_repository:
+    name: wazuh
+    types: deb
+    uris: "{{ wazuh_agent_repository }}/{{ wazuh_agent_version.split('.')[0] }}.x/apt/"
+    suites: stable
+    components: main
+    signed_by: "{{ wazuh_agent_repository }}/key/GPG-KEY-WAZUH"
+
+- name: Install the pinned agent (the first install enrolls it with the manager)
+  ansible.builtin.apt:
+    name: "wazuh-agent={{ wazuh_agent_version }}-{{ wazuh_agent_package_revision }}"
+    update_cache: true
+  environment: >-
+    {{ {'WAZUH_MANAGER': lookup('hnx_registry', wazuh_agent_manager_id, field='host'),
+        'WAZUH_MANAGER_PORT': lookup('hnx_registry', wazuh_agent_manager_id, field='port') | string,
+        'WAZUH_REGISTRATION_PORT': wazuh_agent_enrollment_port | string,
+        'WAZUH_REGISTRATION_PASSWORD': lookup('hnx_secret', wazuh_agent_enrollment_ref)}
+       | combine({'WAZUH_AGENT_NAME': wazuh_agent_name} if wazuh_agent_name else {})
+       | combine({'WAZUH_AGENT_GROUP': wazuh_agent_groups | join(',')} if wazuh_agent_groups else {}) }}
+  no_log: true
+
+- name: Hold the package, so an unattended upgrade cannot move the agent past its manager
+  ansible.builtin.dpkg_selections:
+    name: wazuh-agent
+    selection: hold
+
+- name: Enable and start the agent
+  ansible.builtin.systemd_service:
+    name: wazuh-agent
+    enabled: true
+    state: started
+    daemon_reload: true

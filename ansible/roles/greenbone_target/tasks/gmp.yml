@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# One GMP request (greenbone_target_xml) through gvm-cli over the socket; the reply lands in
+# greenbone_target_reply. Included by main and health with the transient configuration in place.
+- name: "GMP request: {{ greenbone_target_xml | regex_search('^<[a-z_]+') }}"
+  ansible.builtin.command:
+    argv:
+      - "{{ greenbone_target_gvm_cli }}"
+      - --config
+      - "{{ greenbone_target_work_dir }}/gvm-tools.conf"
+      - socket
+      - --socketpath
+      - "{{ greenbone_target_socket }}"
+      - --xml
+      - "{{ greenbone_target_xml }}"
+  become: "{{ greenbone_target_become_user | length > 0 }}"
+  become_user: "{{ greenbone_target_become_user if greenbone_target_become_user else omit }}"
+  register: greenbone_target_reply
+  changed_when: greenbone_target_xml is match('^<create_')
+  failed_when: >-
+    greenbone_target_reply.rc != 0
+    or greenbone_target_reply.stdout is not search('status="2[0-9][0-9]"')

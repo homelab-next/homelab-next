@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Guest baselines (ADR-0016, docs/compute-model.md "Baselines and defense layers").
 # Controls are generic and product-neutral; `role` binds a control to the Ansible role that
-# implements it and is null until a product is chosen.  Every guest names a baseline (or carries
-# a documented baseline.exemption): `hnx guests baselines DIR --site SITE` prints the coverage.
+# implements it and is null until a product is chosen.  `apply: central` runs the role once on the
+# product host's group instead of on each guest, and enrolls the guests there (ADR-0016 decision 7).
+# Every guest names a baseline (or carries a documented baseline.exemption): `hnx guests baselines
+# DIR --site SITE` prints the coverage.  First bindings, to be tuned on the real lab: Wazuh agent,
+# Suricata, Greenbone and Tailscale.
 controls:
   # identity: who can get in
   ssh-hardening:
@@ -18,7 +21,7 @@ controls:
   remote-access:
     layer: identity
     description: Administrative access only through the remote-access gateway, never direct.
-    role: null
+    role: tailscale_node
     verify: an SSH attempt from outside the gateway's source range is refused
   # host: the operating system itself
   time-sync:
@@ -56,17 +59,21 @@ controls:
   siem-agent:
     layer: detection
     description: The endpoint agent of the SIEM runs and reports.
-    role: null
+    role: wazuh_agent
     verify: the SIEM lists the guest's agent as active with a heartbeat under ten minutes old
   network-sensor:
     layer: detection
     description: The guest's segment is mirrored to a network sensor that inspects its traffic.
-    role: null
+    role: suricata_enroll
+    apply: central
+    group: cap_sensor
     verify: the network sensor shows flows for the guest's address in the last hour
   vuln-scan:
     layer: detection
-    description: The guest is in the authenticated vulnerability scan's target list.
-    role: null
+    description: The guest is a target of the authenticated internal assessment scan.
+    role: greenbone_target
+    apply: central
+    group: cap_scanner
     verify: the scanner's last completed scan of the guest is under seven days old
   # data: protecting what is stored
   disk-encryption:

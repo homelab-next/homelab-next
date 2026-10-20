@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# One guest: look its target up by name and create it when missing.
+- name: Look the target up by name
+  ansible.builtin.include_tasks: gmp.yml
+  vars:
+    greenbone_target_xml: '<get_targets filter="name={{ greenbone_target_name_prefix }}{{ greenbone_target_guest.name }}"/>'
+
+- name: Create the target when missing
+  when: greenbone_target_reply.stdout is not search('<target id=')
+  ansible.builtin.include_tasks: gmp.yml
+  vars:
+    greenbone_target_xml: >-
+      <create_target><name>{{ greenbone_target_name_prefix }}{{ greenbone_target_guest.name }}</name><hosts>{{ greenbone_target_guest.ip }}</hosts><comment>zone {{ greenbone_target_guest.zone }}; homelabnext baseline vuln-scan</comment><ssh_credential id="{{ greenbone_target_login_id }}"/><port_range>{{ greenbone_target_port_range }}</port_range></create_target>

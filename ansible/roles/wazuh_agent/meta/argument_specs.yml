@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install the pinned Wazuh agent, enroll it with the manager and run it.
+    options:
+      wazuh_agent_manager_id: &manager
+        type: str
+        description: Logical id of the Wazuh manager in the registry (host and agent port).
+        required: true
+      wazuh_agent_version: &version
+        type: str
+        description: Pinned agent version (x.y.z); the vendor repository is <major>.x.
+        default: 4.14.9
+      wazuh_agent_package_revision:
+        type: str
+        description: Debian package revision appended to the version (wazuh-agent=<version>-<revision>).
+        default: "1"
+      wazuh_agent_repository:
+        type: str
+        description: Vendor package repository root (https); a lab mirror may stand in for it.
+        default: https://packages.wazuh.com
+      wazuh_agent_enrollment_ref:
+        type: str
+        description: Secret reference (secret:<name>) of the manager's enrollment password, resolved by the hnx_secret lookup.
+        default: secret:siem/enrollment-password
+      wazuh_agent_enrollment_port: &enroll_port
+        type: int
+        description: The manager's enrollment port.
+        default: 1515
+      wazuh_agent_name:
+        type: str
+        description: Agent name at enrollment; empty = the host name.
+        default: ""
+      wazuh_agent_groups:
+        type: list
+        elements: str
+        description: Existing manager agent groups to enroll into.
+        default: []
+      wazuh_agent_state_file: &state
+        type: path
+        description: The agent's state file, read by the health hook.
+        default: /var/ossec/var/run/wazuh-agentd.state
+      wazuh_agent_manifest_dir: &manifest
+        type: path
+        description: Where the backup and upgrade hooks write their records.
+        default: /var/lib/homelabnext/wazuh-agent
+  health:
+    short_description: Fail unless the agent reports itself connected to its manager.
+    options:
+      wazuh_agent_state_file: *state
+  readiness:
+    short_description: Fail unless the manager's agent and enrollment ports answer.
+    options:
+      wazuh_agent_manager_id: *manager
+      wazuh_agent_enrollment_port: *enroll_port
+  backup:
+    short_description: Record that the agent holds no data a backup must keep (it re-enrolls).
+    options:
+      wazuh_agent_manifest_dir: *manifest
+  restore:
+    short_description: Nothing to restore; re-running main re-enrolls the agent.
+    options: {}
+  upgrade:
+    short_description: Validate a newer pinned version and record it; then set the version and re-run main.
+    options:
+      wazuh_agent_version: *version
+      wazuh_agent_manifest_dir: *manifest
+      wazuh_agent_target_version:
+        type: str
+        description: Version to upgrade to (must be newer).
+        required: true
+  export:
+    short_description: Nothing to export; the agent's events live in the SIEM, which exports them.
+    options: {}

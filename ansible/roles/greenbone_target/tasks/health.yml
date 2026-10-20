@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Open the GMP session configuration
+      ansible.builtin.include_tasks: session.yml
+    - name: Ask gvmd for its GMP version
+      ansible.builtin.include_tasks: gmp.yml
+      vars:
+        greenbone_target_xml: <get_version/>
+  always:
+    - name: Remove the transient gvm-tools configuration
+      ansible.builtin.file:
+        path: "{{ greenbone_target_work_dir }}/gvm-tools.conf"
+        state: absent
+  tags: [health]

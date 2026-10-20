@@ -48,6 +48,9 @@ ROLE_GROUPS: tuple[str, ...] = (
     "cap_monitoring",
     "cap_decision",
     "cap_nifi",
+    # central defense products (ADR-0016 decision 7): the host a central control's role runs on
+    "cap_sensor",
+    "cap_scanner",
 )
 
 
@@ -73,6 +76,20 @@ class ZoneInfo:
     @property
     def network(self) -> ipaddress.IPv4Network:
         return ipaddress.ip_network(self.subnet, strict=True)  # type: ignore[return-value]
+
+
+@dataclass(frozen=True)
+class ZoneFlow:
+    """One zone-to-zone flow the site model allows (``firewall.zone_to_zone``, action allow).
+
+    Empty ``protocols`` / ``ports`` mean any.  Read by :func:`homelabnext.compute.zones.site_flows`;
+    the ``tailscale-acl`` target turns these into tailnet ACLs so remote access follows the
+    site model."""
+
+    src: str
+    dst: str
+    protocols: tuple[str, ...] = ()
+    ports: tuple[int, ...] = ()
 
 
 @runtime_checkable
@@ -253,6 +270,8 @@ class Fleet:
     #: the baseline set (``_baselines.yml``, :mod:`homelabnext.compute.baselines`); None = no set,
     #: so no guest is required to declare a baseline
     baselines: Any = None
+    #: the zone-to-zone flows the site model allows (empty: a zones-only site, or none read)
+    flows: tuple[ZoneFlow, ...] = ()
 
     def node_firewall(self, node: str) -> bool:
         """Whether the node (hypervisor) itself enforces a firewall.  Unlisted = yes (safe default)."""

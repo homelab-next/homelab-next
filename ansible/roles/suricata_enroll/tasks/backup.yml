@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to back up (the address groups are regenerated from the model)
+  ansible.builtin.debug:
+    msg: suricata_enroll writes only generated files; the guest model is their source
+  tags: [backup]

@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Ensure a Greenbone target per enrolled guest, with the scan login named by the operator.
+    options:
+      greenbone_target_guests:
+        type: list
+        elements: dict
+        description: The guests to assess, as the baseline-playbook target passes them ({id, name, fqdn, ip, zone}).
+        required: true
+      greenbone_target_scan_login:
+        type: str
+        description: Name of the Greenbone credential object (SSH) the targets use for the authenticated scan; a name, never the secret.
+        required: true
+      greenbone_target_gvm_cli: &cli
+        type: str
+        description: The gvm-cli command (gvm-tools).
+        default: gvm-cli
+      greenbone_target_socket: &sock
+        type: path
+        description: gvmd's GMP unix socket.
+        default: /run/gvmd/gvmd.sock
+      greenbone_target_gmp_user: &user
+        type: str
+        description: The GMP user the role authenticates as.
+        default: admin
+      greenbone_target_gmp_auth_ref: &auth
+        type: str
+        description: Secret reference (secret:<name>) of that GMP user's password, resolved by the hnx_secret lookup.
+        default: secret:assessment/gmp-password
+      greenbone_target_name_prefix:
+        type: str
+        description: Target names are <prefix><guest name>; the role owns only targets with this prefix.
+        default: hnx-
+      greenbone_target_port_range:
+        type: str
+        description: "GMP port range of each new target (T: and U: lists)."
+        default: T:1-65535
+      greenbone_target_become_user: &become
+        type: str
+        description: Account gvm-cli runs as (it refuses root); empty = no privilege change.
+        default: _gvm
+      greenbone_target_work_dir: &work
+        type: path
+        description: Directory for the transient gvm-tools configuration (mode 0700; the file is removed after the run).
+        default: /var/lib/homelabnext/greenbone-target
+  health:
+    short_description: Fail unless gvmd answers GMP on its socket.
+    options:
+      greenbone_target_gvm_cli: *cli
+      greenbone_target_socket: *sock
+      greenbone_target_gmp_user: *user
+      greenbone_target_gmp_auth_ref: *auth
+      greenbone_target_become_user: *become
+      greenbone_target_work_dir: *work
+  readiness:
+    short_description: Fail unless gvmd's socket exists.
+    options:
+      greenbone_target_socket: *sock
+  backup:
+    short_description: Nothing to back up; targets are regenerated from the model (gvmd's database is the scanner host's).
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-running main recreates missing targets.
+    options: {}
+  upgrade:
+    short_description: Not applicable; this role installs nothing.
+    options: {}
+  export:
+    short_description: Nothing to export; scan results are exported from Greenbone itself.
+    options: {}
