@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+controls:
+  ssh-hardening:
+    layer: identity
+    description: Key-only SSH and no direct root login.
+    role: ssh_hardening
+    verify: sshd -T shows passwordauthentication no and permitrootlogin no
+  siem-agent:
+    layer: detection
+    description: The endpoint agent of the SIEM runs and reports.
+    role: null
+    verify: the SIEM lists the guest's agent as active with a recent heartbeat
+  backup-verify:
+    layer: recovery
+    description: The guest's backups are restored in a drill and checked.
+    role: null
+    verify: a verified restore drill of the guest in the last 90 days
+baselines:
+  base:
+    description: What every in-scope guest gets.
+    controls: [ssh-hardening, siem-agent]
+  server:
+    description: A long-lived service guest.
+    extends: [base]
+    controls: [backup-verify]

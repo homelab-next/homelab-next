@@ -51,6 +51,10 @@ menu:
   - id: rfis
     title: RFIs
     panel: rfis
+  # guest baselines (docs/compute-model.md; listed as unavailable without --guests)
+  - id: baselines
+    title: Baselines
+    panel: baselines
   - id: grafana
     title: Grafana
     external: {service: dashboards}

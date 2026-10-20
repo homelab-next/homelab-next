@@ -7,3 +7,4 @@ network: {zone: mgmt, ip: 192.0.2.11}
 capability: cap:events
 tags: [prod, hypervisor]
 owners: {primary: platform-team}
+baseline: {names: [base]}

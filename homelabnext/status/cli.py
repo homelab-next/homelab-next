@@ -9,7 +9,7 @@
     hnx status render --out DIR [--state FILE] [--views FILE] [--registry FILE] [--now TIME]
     hnx status serve [--state FILE] [--views FILE] [--registry FILE] [--bind HOST] [--port N]
                      [--allow-remote --allowed-host NAME ...] [--agents FILE] [--secrets-dir DIR]
-                     [--strategy DIR]
+                     [--strategy DIR] [--guests DIR --guests-site SITE]
     hnx status ingest --agents FILE [--registry FILE] [--bind HOST] [--port N] [--publish-to URL]
                       [--allow-remote --allowed-host NAME ...] [--secrets-dir DIR]
 
@@ -18,7 +18,9 @@ drains the agent-activity sources into the activity store, ``render``/``serve`` 
 sessions to ``status.json`` and ``serve`` the agent pages (the private tier only behind the
 trusted front door); ``ingest`` is the separate push listener (``POST /ingest/agent-activity``).
 ``--strategy`` (``examples/strategy``) has ``serve`` add the strategy pages (Strategy,
-Requirements, Objectives, RFIs; ``docs/strategy.md``).
+Requirements, Objectives, RFIs; ``docs/strategy.md``); ``--guests`` (``examples/minimal/guests``
+with ``--guests-site examples/minimal/site.yml``) adds the Baselines page, the guest x
+defense-layer coverage matrix (``docs/compute-model.md``).
 
 ``collect`` runs one pass over the due sources (``--all``: every polled source) and writes the
 state file; ``render`` and ``serve`` only read it, so they never wait on a source.  Exit codes:
@@ -71,7 +73,10 @@ def _document(args, reg, specs, views, clock, site=None):
     now = clock()
     agents = site.summary(now) if site is not None else None
     strategy = bool(getattr(args, "strategy", None))
-    return build_status(hub.snapshot(now), views, reg, specs, agents=agents, strategy=strategy)
+    baselines = bool(getattr(args, "guests", None))
+    return build_status(
+        hub.snapshot(now), views, reg, specs, agents=agents, strategy=strategy, baselines=baselines
+    )
 
 
 def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.time) -> int:
@@ -138,6 +143,8 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     remote_opts(p, 8099)
     p.add_argument("--docs-base", default="docs")
     p.add_argument("--strategy", help="a strategy directory: serve its pages (docs/strategy.md)")
+    p.add_argument("--guests", help="a guest directory: serve its Baselines coverage page")
+    p.add_argument("--guests-site", help="the site model the guest directory's zones come from")
     agents_opt(p)
     p = sub.add_parser("ingest", help="the agent-activity push listener (POST only)")
     common(p)
@@ -236,6 +243,7 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
             docs_base=args.docs_base,
             agents=site,
             strategy=_strategy_site(args, clock),
+            baselines=_baseline_site(args),
         )
     except (ValueError, OSError) as exc:
         print(f"hnx status serve: {exc}", file=sys.stderr)
@@ -249,6 +257,17 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     finally:
         srv.server_close()
     return 0
+
+
+def _baseline_site(args):
+    """The Baselines page for ``--guests DIR --guests-site SITE``, or None."""
+    if not getattr(args, "guests", None):
+        return None
+    if not args.guests_site:
+        raise ValueError("--guests needs --guests-site (the site model that defines the zones)")
+    from homelabnext.compute.pages import BaselineSite
+
+    return BaselineSite(args.guests, args.guests_site)
 
 
 def _strategy_site(args, clock: Callable[[], float]):

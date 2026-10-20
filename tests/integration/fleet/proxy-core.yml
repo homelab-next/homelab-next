@@ -15,3 +15,4 @@ capability_groups: [cap_edge]
 tags: [prod]
 backup: {policy: daily}
 owners: {primary: platform-team}
+baseline: {names: [base]}

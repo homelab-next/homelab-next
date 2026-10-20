@@ -6,7 +6,8 @@ render everything else from those files: infrastructure-as-code, hypervisor comm
 seeds, an Ansible inventory, registry hosts and backup jobs. Nothing here needs hardware: the
 whole chain is tested with golden files from a synthetic fleet.
 
-* Contract: `schemas/platform/guest.schema.json` (version 1.2, additive over 1.0 and 1.1; baselines in `schemas/_frozen/`).
+* Contract: `schemas/platform/guest.schema.json` (version 1.3, additive over 1.0, 1.1 and 1.2; frozen copies in `schemas/_frozen/`).
+* Baseline set: `schemas/platform/baseline_set.schema.json` (`_baselines.yml` beside the guest files; [Baselines and defense layers](#baselines-and-defense-layers), ADR-0016).
 * Code: `homelabnext/compute/`. CLI: `hnx guests`.
 * Example fleet and goldens: `tests/compute/fleet/`, `tests/compute/golden/`.
 
@@ -29,6 +30,7 @@ capability_groups: [cap_lake, cap_query]
 backup: {policy: daily, retain: {daily: 7}, export_hook: lake-export}
 lifecycle: {on_boot: true, ignore_changes: [clone]}
 owners: {primary: data-team}
+baseline: {names: [server, sensitive]}   # 1.3: defense baselines from _baselines.yml
 ```
 
 Rules worth knowing:
@@ -66,6 +68,7 @@ trailing newline), then the schema, then `homelabnext.compute.validate`:
 | a NIC with `firewall: disabled` on a node that enforces a firewall needs `network.firewall_exemption.reason` | see below |
 | `firewall_rules`: unique names, ports for tcp/udp (none for icmp), valid port ranges, existing `zone:` sources and destinations, valid CIDRs; only on vm/lxc with the flag on | rules that cannot be rendered are errors, not skips |
 | `firewall_rules.outbound_allow` needs `policy_out: DROP` or `REJECT` | an allow list under an accept-all policy is dead text |
+| with a baseline set, every guest (vm, lxc and host) has `baseline.names` or `baseline.exemption.reason`; names, `extends`, `add` and `remove` resolve; no `extends` cycle; no baseline resolves to nothing | see [Baselines and defense layers](#baselines-and-defense-layers) |
 
 The model does not import a site package. It reads zones through a small protocol:
 
@@ -81,16 +84,17 @@ have a zones file. Tests can also pass a stub.
 
 ## Rendering
 
-`hnx guests render DIR --site SITE --target T [--out OUT] [--keys KEYS] [--policies FILE]`
+`hnx guests render DIR --site SITE --target T [--out OUT] [--keys KEYS] [--policies FILE] [--baselines FILE]`
 
 | Target | Output |
 |---|---|
 | `terraform-proxmox` | `vm-*.tf`, `ct-*.tf`, `providers.tf`, `variables.tf`, `MANUAL.md` (bpg/proxmox resource shapes; text only) |
 | `libvirt` | one `virt-install` script per VM plus `SKIPPED.txt`; refuses guests it cannot isolate (below) |
 | `cloudinit` | `<name>/user-data`, `meta-data`, `network-config` per VM |
-| `inventory` | `hosts.yml` with `cap_*` and `tag_*` groups, `host_vars/<fqdn>.yml` |
+| `inventory` | `hosts.yml` with `cap_*` and `tag_*` groups (and, with a baseline set, `baseline_<name>` and `control_<id>`), `host_vars/<fqdn>.yml` (with `hnx_baselines`, `hnx_controls`) |
 | `registry-hosts` | a `zones:`/`hosts:` fragment for `services.yml` |
 | `backup-jobs` | members, retention and export hooks per policy |
+| `baseline-playbook` | `baseline.yml`: one play per bound control, applying its `role` to `control_<id>`; unbound controls as commented blocks |
 | `firewall-rules` | `firewall/<vmid>.fw` per guest (inbound drop, the outbound policy, the guest's allow rules), `firewall/verify-datacenter.sh` and `firewall/EXEMPTIONS.md` |
 
 Output is a pure function of the files: no clock, no randomness, no environment.  The `terraform-proxmox` target was validated against the real `bpg/proxmox` provider **version 0.116.1** (`terraform init && terraform validate` plus a one-guest live `plan` / `apply` / `destroy` cycle on a scoped scratch pool).  A trimmed snapshot of the provider's resource schemas is committed at `tests/compute/fixtures/bpg_proxmox_schema.json` and used by `tests/compute/test_terraform_proxmox_schema.py` as a CI-safe shape check.  Note that the real provider enforces `vm_id >= 100`, so the example fleet uses vmids in the `110-230` range; the `octet` scheme is still available but requires IPs whose last octet is `>= 100`. SSH keys are
@@ -208,6 +212,82 @@ the flag off was never a decision; it was an omission that only showed up after 
 node firewall on. The model therefore (1) defaults the flag on, (2) always renders it explicitly
 so a diff shows any change, and (3) turns "off" into a reviewed exception with a reason and a
 review date.
+
+### Baselines and defense layers
+
+A guest names the defense baselines it gets; the controls in them are generic and the products
+that implement them are chosen later, in one place. The set lives in `_baselines.yml` beside the
+guest files (`--baselines FILE` elsewhere; contract `baseline_set.schema.json`, ADR-0016):
+
+```yaml
+controls:                 # the catalogue: product-neutral defense controls
+  siem-agent:
+    layer: detection      # identity | host | network | detection | data | recovery
+    description: The endpoint agent of the SIEM runs and reports.
+    role: null            # the Ansible role that implements it; null = no product chosen yet
+    verify: the SIEM lists the guest's agent as active with a recent heartbeat
+baselines:
+  base:   {description: "...", controls: [time-sync, patching, ssh-hardening, host-firewall, log-forward, siem-agent]}
+  server: {description: "...", extends: [base], controls: [central-auth, vuln-scan, backup-verify, config-backup]}
+```
+
+| Layer | Holds controls that decide |
+|---|---|
+| `identity` | who can get in (SSH hardening, directory accounts and MFA, the remote-access path) |
+| `host` | the state of the operating system (time, patches, hardening profile) |
+| `network` | what traffic may flow (host firewall, egress filtering) |
+| `detection` | whether attacks and weaknesses are seen (log forwarding, SIEM agent, network sensor, vulnerability scan) |
+| `data` | how stored data is protected (encryption at rest, secrets fetched from the store) |
+| `recovery` | whether the guest can come back (restore drills, configuration kept for a rebuild) |
+
+The layers are a closed set: a control sits in exactly one, so a coverage matrix shows at a glance
+which rings of defense a guest has. Each control carries a `verify` line, the observable that
+proves it is in place, so a reviewer (or a later check) knows what "done" means without knowing
+the product.
+
+**A guest declares its baselines**, and when created it is given one:
+
+```yaml
+baseline:
+  names: [server, exposed]       # one or more; controls are unioned through extends
+  add: [network-sensor]          # optional: extra controls for this guest only
+  remove:                        # optional: controls it does not get, each with a reason
+    - {control: backup-verify, reason: "Rebuilt from configuration, never restored.", review_by: "2027-03-31"}
+# or, instead of names:
+#  exemption: {reason: "Appliance firmware; no agent can run on it.", review_by: "2027-03-31"}
+```
+
+Resolution is deterministic: for each named baseline in order, depth-first through `extends`
+(parents first, in listed order), then the baseline's own controls in listed order, skipping what
+was already seen; then `add`; `remove` drops its controls.
+
+**When a set exists, every guest needs a baseline or an exemption** (vm, lxc and physical hosts
+alike): `hnx guests validate` fails otherwise, exactly like a disabled firewall flag without a
+reason. Without a set nothing is required, so trees written before 1.3 stay valid; a guest that
+names a baseline with no set to resolve it against is an error. The set itself is checked too:
+unknown controls or `extends` targets, `extends` cycles, and a baseline that resolves to no
+controls (an empty baseline is an exemption without a reason) are refused.
+
+**Binding a product.** A control's `role` is the only place a product is named. The `inventory`
+target puts each guest in `baseline_<name>` (every baseline it resolves to) and `control_<id>`
+(every control it needs) groups, with `hnx_baselines` and `hnx_controls` host variables. The
+`baseline-playbook` target writes one play per control whose `role` is set, against its
+`control_<id>` group and tagged `control_<id>` and `layer_<layer>`; a control with `role: null`
+is a commented "NOT BOUND to a product yet" block naming the guests that wait for it, and a
+control no guest needs is listed as such. Choosing a SIEM agent is then a one-line change to the
+set, and every guest that needs `siem-agent` gets it.
+
+**Coverage.** `hnx guests baselines DIR --site SITE` prints a guest x layer matrix (controls per
+layer; `MISSING` for a guest without a baseline or exemption, `exempt` with the reasons listed),
+`--json` the full report (per-guest controls by layer, each control's role, verify and the guests
+that need it, the needed-but-unbound controls). `--check` exits 1 when there is no baseline set or
+any guest has neither a baseline nor an exemption; `--require-bound` also exits 1 while a control
+some guest needs has no role. The report loads the fleet with every rule except "has a baseline",
+so it can list the gaps instead of refusing to run. `hnx status serve --guests DIR --guests-site
+SITE` serves the same matrix as the hub's Baselines page.
+
+There is no guest scaffold command (`hnx new` makes roles, capabilities, detections and schemas):
+a guest is created by writing its file, and the `baseline` key is what validation requires of it.
 
 ### One entry wires everything
 

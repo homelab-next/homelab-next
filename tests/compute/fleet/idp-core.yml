@@ -17,3 +17,4 @@ shared_dirs:
   - {host_path: /tank/idp-media, mount_path: /data/media, read_only: true}
 backup: {policy: daily, retain: {daily: 7, weekly: 4}, export_hook: idp-export}
 owners: {primary: identity-team, oncall: platform-team}
+baseline: {names: [sensitive]}

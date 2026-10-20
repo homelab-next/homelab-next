@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``hnx guests``: validate, render and plan the guest (compute) model."""
+"""``hnx guests``: validate, render and plan the guest (compute) model; report baseline coverage."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Sequence
 
+from .baselines import coverage, coverage_text
 from .loader import load_fleet
 from .model import ComputeError
 from .plan import plan as make_plan
@@ -20,6 +22,11 @@ def _common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--site", required=True, help="site model file that defines the zones")
     p.add_argument(
         "--policies", help="backup policy file (default: DIRECTORY/_backup_policies.yml)"
+    )
+    p.add_argument(
+        "--baselines",
+        help="baseline set file (default: DIRECTORY/_baselines.yml; without one no guest "
+        "needs a baseline)",
     )
     p.add_argument("--keys", help="file mapping ssh key names to public keys (optional)")
     p.add_argument(
@@ -40,6 +47,9 @@ def _fleet(args: argparse.Namespace):
         policies_path=args.policies,
         keys_path=args.keys,
         nodes_path=args.nodes,
+        baselines_path=args.baselines,
+        # the coverage report lists guests without a baseline instead of refusing to load
+        require_baselines=args.cmd != "baselines",
     )
 
 
@@ -57,7 +67,51 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("--target", required=True, choices=sorted(TARGETS))
     pl.add_argument("--against", required=True, help="directory holding the previous render")
     pl.add_argument("--exit-code", action="store_true", help="exit 2 when there are changes")
+    b = sub.add_parser("baselines", help="guest x defense-layer baseline coverage")
+    _common(b)
+    b.add_argument("--json", action="store_true", help="print the report as JSON")
+    b.add_argument(
+        "--check",
+        action="store_true",
+        help="exit 1 when there is no baseline set or a guest has neither a baseline nor an "
+        "exemption",
+    )
+    b.add_argument(
+        "--require-bound",
+        action="store_true",
+        help="like --check, and also exit 1 when a control some guest needs has no role yet",
+    )
     return ap
+
+
+def _baselines(args: argparse.Namespace, fleet) -> int:
+    if fleet.baselines is None:
+        print(
+            f"hnx guests baselines: no baseline set in {args.directory} "
+            "(_baselines.yml or --baselines)",
+            file=sys.stderr,
+        )
+        return 1 if (args.check or args.require_bound) else 0
+    report = coverage(fleet.sorted(), fleet.baselines)
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        print(coverage_text(report), end="")
+    if not (args.check or args.require_bound):
+        return 0
+    bad = [r["id"] for r in report["guests"] if r["missing"]]
+    if bad:
+        print(f"hnx guests baselines: no baseline or exemption: {', '.join(bad)}", file=sys.stderr)
+    if args.require_bound and report["unbound"]:
+        print(
+            "hnx guests baselines: needed controls not bound to a role: "
+            + ", ".join(report["unbound"]),
+            file=sys.stderr,
+        )
+        bad.append("unbound")
+    if not bad:
+        print("baselines: ok")
+    return 1 if bad else 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -67,6 +121,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ComputeError as exc:
         print(f"hnx guests: {exc}", file=sys.stderr)
         return 1
+    if args.cmd == "baselines":
+        return _baselines(args, fleet)
     if args.cmd == "validate":
         iac = len(fleet.iac())
         print(f"ok: {len(fleet.guests)} guests ({iac} rendered, {len(fleet.manual())} manual)")

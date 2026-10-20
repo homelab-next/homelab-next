@@ -79,6 +79,22 @@ criteria:
   remediation: >-
     Replace the address, domain, e-mail or MAC with a documentation value (192.0.2.0/24,
     example.org); a published private identifier maps the lab for anyone who reads the repo.
+- id: F-19
+  statement: Every guest has a defense baseline.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli guests baselines examples/minimal/guests
+    --site examples/minimal/site.yml --check
+  expected: >-
+    exit 0: the example lab has a baseline set and every guest (vm, lxc and host) names one or
+    more baselines from it or carries a documented baseline.exemption; exit 1 when a guest has
+    neither or there is no baseline set (nothing to check never reads as checked)
+  expect_regex: 'baselines: ok'
+  remediation: >-
+    Give the guest `baseline.names` from _baselines.yml (or `baseline.exemption.reason` with a
+    review date); a guest created without a decided set of defenses is the one nothing watches
+    (docs/compute-model.md, ADR-0016).
 - id: D-02
   statement: Every rule is tested.
   evidence: auto

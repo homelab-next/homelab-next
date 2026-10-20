@@ -303,6 +303,15 @@ requirements | objectives | rfis`: the strategy, the requirements board (CCIR / 
 objective tree with each MOP/MOE's grade, value and time, and the RFIs by triage. They read the
 strategy records only; see [strategy to task](strategy.md) ([[strategy]]).
 
+### Baselines page
+
+`hnx status serve --guests DIR --guests-site SITE` adds the Baselines page, menu entry `panel:
+baselines` (views 1.3): one row per guest with its baselines (or `missing` / `exempt` and the
+reason) and the controls it gets in each defense layer, then every control with its layer, its
+role (or `not bound`), its verify observable and how many guests need it. It is the same report
+as `hnx guests baselines --json` and reads the guest files only; see the
+[compute model](compute-model.md#baselines-and-defense-layers).
+
 ### Pages
 
 Menu entries in `views.yml` (`panel: agents | activity | agent-analytics`, and `agent-detail`,

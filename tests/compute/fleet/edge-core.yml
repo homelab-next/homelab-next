@@ -19,3 +19,4 @@ capability_groups: [cap_edge]
 tags: [prod, edge]
 backup: {policy: daily}
 owners: {primary: platform-team}
+baseline: {names: [exposed]}

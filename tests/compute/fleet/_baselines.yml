@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+# Test baseline set: a few controls bound to (test-only) role names, the rest unbound.
+controls:
+  ssh-hardening:
+    layer: identity
+    description: Key-only SSH and no direct root login.
+    role: ssh_hardening
+    verify: sshd -T shows passwordauthentication no and permitrootlogin no
+  time-sync:
+    layer: host
+    description: The clock follows the lab's time sources.
+    role: time_sync
+    verify: the time daemon reports synchronised
+  patching:
+    layer: host
+    description: Security updates are applied on a short, tracked cadence.
+    role: null
+    verify: no security update older than seven days is pending
+  host-firewall:
+    layer: network
+    description: A default-deny inbound firewall on the guest itself.
+    role: null
+    verify: the host ruleset loads with an inbound policy of drop
+  siem-agent:
+    layer: detection
+    description: The endpoint agent of the SIEM runs and reports.
+    role: null
+    verify: the SIEM lists the guest's agent as active
+  network-sensor:
+    layer: detection
+    description: The guest's segment is inspected by a network sensor.
+    role: null
+    verify: the sensor shows flows for the guest in the last hour
+  vuln-scan:
+    layer: detection
+    description: The guest is in the authenticated vulnerability scan.
+    role: null
+    verify: the last completed scan of the guest is under seven days old
+  disk-encryption:
+    layer: data
+    description: Data volumes are encrypted at rest.
+    role: null
+    verify: every data volume reports an encrypted mapping
+  backup-verify:
+    layer: recovery
+    description: Backups are restored in a drill and checked.
+    role: null
+    verify: a verified restore drill in the last 90 days
+baselines:
+  base:
+    description: What every in-scope guest gets.
+    controls: [time-sync, patching, ssh-hardening, host-firewall, siem-agent]
+  server:
+    description: A long-lived service guest.
+    extends: [base]
+    controls: [vuln-scan, backup-verify]
+  exposed:
+    description: A guest reachable from outside the lab.
+    extends: [server]
+    controls: [network-sensor]
+  sensitive:
+    description: A guest holding secrets or identities.
+    extends: [server]
+    controls: [disk-encryption]

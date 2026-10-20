@@ -213,6 +213,11 @@ class Guest:
         return self.raw.get("backup", {})
 
     @property
+    def baseline(self) -> Mapping[str, Any]:
+        """``baseline`` (1.3): ``names``/``add``/``remove`` or ``exemption``; {} when absent."""
+        return self.raw.get("baseline", {})
+
+    @property
     def lifecycle(self) -> Mapping[str, Any]:
         return self.raw.get("lifecycle", {})
 
@@ -245,6 +250,9 @@ class Fleet:
     policies: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     #: node name -> {"firewall": "enabled"|"disabled"}; a node not listed runs a firewall.
     nodes: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    #: the baseline set (``_baselines.yml``, :mod:`homelabnext.compute.baselines`); None = no set,
+    #: so no guest is required to declare a baseline
+    baselines: Any = None
 
     def node_firewall(self, node: str) -> bool:
         """Whether the node (hypervisor) itself enforces a firewall.  Unlisted = yes (safe default)."""

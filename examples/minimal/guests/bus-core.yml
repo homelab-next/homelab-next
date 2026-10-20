@@ -16,3 +16,4 @@ tags: [prod, legacy-net]
 backup: {policy: none}
 lifecycle: {on_boot: false, ignore_changes: [clone, operating_system]}
 owners: {primary: platform-team}
+baseline: {names: [server]}

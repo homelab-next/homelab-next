@@ -17,15 +17,16 @@ FROZEN_12 = json.loads((ROOT / "schemas/_frozen/1.2/platform/guest.schema.json")
 FIXTURES = sorted((Path(__file__).parent / "fixtures").glob("guest.1_2.*.yml"))
 
 
-def test_version_is_1_2_and_frozen():
-    assert CURRENT["$id"].endswith("/platform/guest/1.2")
-    assert CURRENT == FROZEN_12
-    assert sc.is_additive(FROZEN_11, CURRENT) == []
+def test_1_2_is_frozen_and_current_is_additive_over_it():
+    assert FROZEN_12["$id"].endswith("/platform/guest/1.2")
+    assert sc.is_additive(FROZEN_11, FROZEN_12) == []
+    assert sc.is_additive(FROZEN_12, CURRENT) == []
 
 
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.name)
 def test_1_2_documents_validate_against_1_2_only(path):
     doc = yaml.safe_load(path.read_text())
+    assert sc.errors_for(FROZEN_12, doc, REG) == []
     assert sc.errors_for(CURRENT, doc, REG) == []
     assert sc.errors_for(FROZEN_11, doc, REG) != []
 

@@ -163,9 +163,16 @@ def _check_guest(g: Guest, fleet: Fleet) -> list[Problem]:
     return out
 
 
-def validate(fleet: Fleet) -> list[Problem]:
-    """Return every semantic problem in the fleet (empty list = valid)."""
+def validate(fleet: Fleet, *, require_baselines: bool = True) -> list[Problem]:
+    """Return every semantic problem in the fleet (empty list = valid).
+
+    ``require_baselines=False`` leaves out only "this guest declares no baseline" (the coverage
+    report lists those itself); every other baseline rule still applies."""
+    from .baselines import guest_problems, set_problems
+
     out: list[Problem] = []
+    if fleet.baselines is not None:
+        out += set_problems(fleet.baselines)
     seen_id: dict[str, str] = {}
     seen_vmid: dict[tuple[str, int], str] = {}
     seen_ip: dict[str, str] = {}
@@ -186,4 +193,6 @@ def validate(fleet: Fleet) -> list[Problem]:
             out.append(Problem(g.id, f"ip {g.ip} already used by {seen_ip[g.ip]}"))
         seen_ip[g.ip] = g.id
         out += _check_guest(g, fleet)
+        if require_baselines or g.baseline:
+            out += guest_problems(g, fleet.baselines)
     return out

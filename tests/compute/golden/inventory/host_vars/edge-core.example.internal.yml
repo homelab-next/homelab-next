@@ -11,3 +11,5 @@ hnx_provisioning: "terraform"
 hnx_vmid: 110
 hnx_zone: "edge"
 hnx_tags: ["edge", "prod"]
+hnx_baselines: ["base", "server", "exposed"]
+hnx_controls: ["time-sync", "patching", "ssh-hardening", "host-firewall", "siem-agent", "vuln-scan", "backup-verify", "network-sensor"]

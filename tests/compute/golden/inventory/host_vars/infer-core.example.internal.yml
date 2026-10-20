@@ -11,3 +11,5 @@ hnx_provisioning: "terraform"
 hnx_vmid: 230
 hnx_zone: "compute"
 hnx_tags: ["gpu", "prod"]
+hnx_baselines: ["base", "server"]
+hnx_controls: ["time-sync", "patching", "ssh-hardening", "host-firewall", "siem-agent", "vuln-scan"]

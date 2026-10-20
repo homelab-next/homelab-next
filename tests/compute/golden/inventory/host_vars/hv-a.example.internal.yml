@@ -9,3 +9,6 @@ hnx_owner: "platform-team"
 hnx_provisioning: "host-only"
 hnx_zone: "mgmt"
 hnx_tags: ["hypervisor", "prod"]
+hnx_baselines: []
+hnx_controls: []
+hnx_baseline_exemption: "Hypervisor hardened by its vendor image; tracked outside the guest model."
