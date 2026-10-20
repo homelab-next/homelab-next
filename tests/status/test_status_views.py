@@ -41,7 +41,7 @@ PANEL_VIEWS = {
         {"id": "only-b", "title": "Only B", "panel": "grid", "select": {"sources": ["b"]}},
         {"id": "sources", "title": "Sources", "panel": "sources"},
         {"id": "grafana", "title": "Grafana", "external": {"service": "dashboards"}},
-        {"id": "agents", "title": "Agentmetry", "external": {"service": "agentmetry", "optional": True}},
+        {"id": "agents", "title": "Agent console", "external": {"service": "agent-console", "optional": True}},
     ],
 }  # fmt: skip
 
@@ -91,7 +91,7 @@ def test_an_optional_external_entry_is_listed_unavailable(make_hub, registry):
         and menu["grafana"]["available"]
     )
     assert menu["agents"] == {
-        "id": "agents", "title": "Agentmetry", "kind": "external", "service": "agentmetry",
+        "id": "agents", "title": "Agent console", "kind": "external", "service": "agent-console",
         "href": None, "available": False,
     }  # fmt: skip
 

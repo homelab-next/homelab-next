@@ -5,12 +5,12 @@ A collector is anything with ``collect(spec, ctx) -> list[Draft]`` (:class:`Coll
 raise anything: the scheduler runs each one in isolation and turns an exception or a timeout into
 that source's error (``homelabnext.status.scheduler``).  Everything a collector touches comes from
 the :class:`CollectContext` -- the clock, the HTTP client, the registry-name -> URL resolver, the
-root that ``poll-file`` targets are relative to, and an optional broker store -- so every one runs
-offline in tests with fakes.
+root that ``poll-file`` targets are relative to, the secret lookup a source's ``auth`` names a
+value through, and an optional broker store -- so every one runs offline in tests with fakes.
 
-Stage 2 adds product collectors (Uptime Kuma, Prometheus, StackStorm, NiFi, the orchestrator,
-an agent dashboard) as more entries of :data:`COLLECTORS` or as declarative mappings over
-``poll-http-json``; nothing else changes.
+Stage 2's product collectors (Prometheus, Uptime Kuma, StackStorm, NiFi) are more entries of
+:data:`COLLECTORS` (:mod:`.products`); the orchestrator and Agentmetry are built-in mappings over
+``poll-http-json`` (:mod:`.mapping`).
 """
 
 from __future__ import annotations
@@ -36,8 +36,11 @@ class CollectError(Exception):
 
 
 class HttpClient(Protocol):
-    def get(self, url: str, timeout: float) -> tuple[int, bytes]:
-        """``(status, body)``; raises on a transport failure."""
+    def get(
+        self, url: str, timeout: float, headers: Mapping[str, str] | None = None
+    ) -> tuple[int, bytes]:
+        """``(status, body)``; raises on a transport failure.  ``headers`` carry a source's
+        credential (``auth``) when it has one."""
         ...
 
 
@@ -50,11 +53,14 @@ class PendingApprovals(Protocol):
 class UrllibClient:
     """The stdlib client: same-origin redirects only, a bounded read (``homelabnext._http``)."""
 
-    def get(self, url: str, timeout: float) -> tuple[int, bytes]:
+    def get(
+        self, url: str, timeout: float, headers: Mapping[str, str] | None = None
+    ) -> tuple[int, bytes]:
         import urllib.error
         import urllib.request
 
-        req = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
+        hdrs = {"Accept": "application/json", **(headers or {})}
+        req = urllib.request.Request(url, headers=hdrs, method="GET")
         try:
             with safe_urlopen(req, timeout=timeout) as resp:
                 return resp.status, read_bounded(resp, MAX_PAYLOAD)
@@ -85,6 +91,8 @@ class CollectContext:
     root: Path = Path(".")
     broker: PendingApprovals | None = None
     activity: Any = None  # an agents ActivityStore (homelabnext.status.agents.store), optional
+    #: ``secret:<name>`` -> its value, or None (``homelabnext.status.agents.config.secret_lookup``)
+    secret: Callable[[str], str | None] | None = None
 
 
 class Collector(Protocol):
@@ -105,20 +113,57 @@ def _map(spec: SourceSpec, payload: Any, ctx: CollectContext) -> list[Draft]:
         raise CollectError(f"mapping: {exc}") from None
 
 
+def auth_headers(spec: SourceSpec, ctx: CollectContext) -> dict[str, str]:
+    """The request header a source's ``auth`` asks for, its value read from the secret store by
+    name.  A reference that does not resolve is an error for that source: it is never polled
+    without its credential, and the value never appears in an error."""
+    if not spec.auth:
+        return {}
+    ref = str(spec.auth["secret"])
+    value = ctx.secret(ref) if ctx.secret is not None else None
+    if not value:
+        # name the source, not the reference: nothing read for the secret store goes into a message
+        raise CollectError(
+            f"source {spec.id}: its auth credential did not resolve (environment or --secrets-dir)"
+        )
+    header = spec.auth.get("header")
+    return {str(header): value} if header else {"Authorization": f"Bearer {value}"}
+
+
+def fetch_json(
+    spec: SourceSpec,
+    ctx: CollectContext,
+    path: str | None = None,
+    query: Mapping[str, str] | None = None,
+) -> Any:
+    """GET ``<the polled service's alias><path>[?query]`` with the source's credential; 2xx JSON
+    or :class:`CollectError`.  ``path`` defaults to the source's ``target.path``."""
+    from urllib.parse import urlencode
+
+    if ctx.http is None or ctx.endpoint is None:
+        raise CollectError("no HTTP client or endpoint resolver configured")
+    rel = path or spec.path or "/"
+    url = ctx.endpoint(spec.polled_service).rstrip("/") + rel
+    if query:
+        url += ("&" if "?" in rel else "?") + urlencode(query)
+    headers = auth_headers(spec, ctx)
+    try:
+        if headers:
+            status, body = ctx.http.get(url, spec.timeout_s, headers=headers)
+        else:
+            status, body = ctx.http.get(url, spec.timeout_s)
+    except ResponseTooLarge as exc:
+        raise CollectError(str(exc)) from None
+    if not 200 <= status < 300:
+        raise CollectError(f"{spec.polled_service}{rel}: HTTP {status}")
+    return _decode_json(body, f"{spec.polled_service}{rel}")
+
+
 class HttpJsonCollector:
     """``poll-http-json``: GET ``<service alias><path>``, expect 2xx JSON, map it."""
 
     def collect(self, spec: SourceSpec, ctx: CollectContext) -> list[Draft]:
-        if ctx.http is None or ctx.endpoint is None:
-            raise CollectError("no HTTP client or endpoint resolver configured")
-        url = ctx.endpoint(spec.polled_service).rstrip("/") + (spec.path or "/")
-        try:
-            status, body = ctx.http.get(url, spec.timeout_s)
-        except ResponseTooLarge as exc:
-            raise CollectError(str(exc)) from None
-        if not 200 <= status < 300:
-            raise CollectError(f"{spec.polled_service}{spec.path}: HTTP {status}")
-        return _map(spec, _decode_json(body, f"{spec.polled_service}{spec.path}"), ctx)
+        return _map(spec, fetch_json(spec, ctx), ctx)
 
 
 def _inside(root: Path, rel: str) -> Path:
@@ -179,13 +224,6 @@ class PushCollector:
         return []
 
 
-class ReservedCollector:
-    """A kind reserved for stage 2 (``poll-prometheus``): reads as unknown until it ships."""
-
-    def collect(self, spec: SourceSpec, ctx: CollectContext) -> list[Draft]:
-        raise CollectError(f"{spec.kind} is reserved for stage 2 (no collector yet)")
-
-
 class AgentActivityCollector:
     """``agent-activity``: drain agent activity into the store and report stuck and errored
     sessions (:mod:`homelabnext.status.agents.sources`)."""
@@ -200,6 +238,15 @@ COLLECTORS: dict[str, Collector] = {
     "poll-http-json": HttpJsonCollector(),
     "poll-file": FileCollector(),
     "push-event": PushCollector(),
-    "poll-prometheus": ReservedCollector(),
     "agent-activity": AgentActivityCollector(),
 }
+
+
+def _register_products() -> None:
+    # the product collectors build on the helpers above, so they register once those exist
+    from .products import PRODUCT_COLLECTORS
+
+    COLLECTORS.update(PRODUCT_COLLECTORS)
+
+
+_register_products()

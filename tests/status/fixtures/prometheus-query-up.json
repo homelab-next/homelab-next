@@ -1,0 +1,41 @@
+{
+ "status": "success",
+ "data": {
+  "resultType": "vector",
+  "result": [
+   {
+    "metric": {
+     "__name__": "up",
+     "instance": "dead-target:9",
+     "job": "node"
+    },
+    "value": [
+     1792475811.376,
+     "0"
+    ]
+   },
+   {
+    "metric": {
+     "__name__": "up",
+     "instance": "self:9090",
+     "job": "node"
+    },
+    "value": [
+     1792475811.376,
+     "1"
+    ]
+   },
+   {
+    "metric": {
+     "__name__": "up",
+     "instance": "self:9090",
+     "job": "prometheus"
+    },
+    "value": [
+     1792475811.376,
+     "1"
+    ]
+   }
+  ]
+ }
+}

@@ -21,6 +21,17 @@ word passes through; anything else is ``unknown`` -- an unmapped value is never 
 * ``broker-pending`` -- requests waiting for an approval (a list of broker requests, or
   ``{"requests": [...]}``): ``pending-approvals``, a live-work count with the oldest age.
 
+and for products whose one endpoint says it all (``poll-http-json``; the product kinds that need
+more than one request are collectors, :mod:`.products`):
+
+* ``orchestrator-queue`` -- the LLM orchestrator's ``GET /admin/queue-summary``
+  (``store.QueueSummary``: ``by_state``, ``active``, ``oldest_queued_age_seconds``): ``queued``
+  (live work, warn when the oldest has waited over ``warn_after_s``), ``running`` (live work, per
+  agent) and ``history`` (the all-time totals, informational).
+* ``agentmetry-audit`` -- Agentmetry's ``GET /api/v1/audit/status`` (its freshness badge):
+  ``audit-trail``, warn when the audit export is off, has no event yet, or its last event is older
+  than ``warn_after_s`` (silent hook failure).
+
 A payload the mapping cannot read raises :class:`MappingError`; the scheduler turns that into the
 source's error, exactly like a timeout, so one malformed source never touches another.
 """
@@ -261,11 +272,76 @@ def broker_pending(payload: Any, mapping: Mapping[str, Any], now: float) -> list
     return [_count_item("pending-approvals", "request", created, now, mapping.get("warn_after_s"))]
 
 
+def _int(value: Any) -> int:
+    return int(value) if isinstance(value, int | float) and not isinstance(value, bool) else 0
+
+
+def orchestrator_queue(payload: Any, mapping: Mapping[str, Any], now: float) -> list[Draft]:
+    """``GET /admin/queue-summary`` of the LLM orchestrator (``internal/store`` QueueSummary)."""
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("by_state"), Mapping):
+        raise MappingError("orchestrator queue summary: expected {'by_state': {...}, ...}")
+    by_state = payload["by_state"]
+    queued, running = _int(by_state.get("queued")), _int(by_state.get("running"))
+    oldest = payload.get("oldest_queued_age_seconds")
+    warn = mapping.get("warn_after_s")
+    late = isinstance(oldest, int | float) and warn is not None and oldest > warn
+    q_summary = f"{queued} queued job" + ("" if queued == 1 else "s")
+    if queued and isinstance(oldest, int | float):
+        q_summary += f", oldest {age_text(oldest)}" + (" (over the limit)" if late else "")
+    per_agent = sorted(
+        (str(e.get("agent_key")), _int(e.get("count")))
+        for e in payload.get("active") or []  # a Go nil slice arrives as null
+        if isinstance(e, Mapping) and e.get("state") == "running"
+    )
+    r_summary = f"{running} running job" + ("" if running == 1 else "s")
+    if per_agent:
+        r_summary += ": " + ", ".join(f"{a} {n}" for a, n in per_agent)
+    totals = ", ".join(
+        f"{state} {_int(by_state[state])}"
+        for state in sorted(by_state)
+        if state not in ("queued", "running")
+    )
+    return [
+        Draft(
+            "queued", "warn" if late else "ok", clean_summary(q_summary), value=queued, work=True
+        ),
+        Draft("running", "ok", clean_summary(r_summary), value=running, work=True),
+        Draft("history", "ok", clean_summary(f"all time: {totals or 'no finished jobs'}")),
+    ]
+
+
+def agentmetry_audit(payload: Any, mapping: Mapping[str, Any], now: float) -> list[Draft]:
+    """``GET /api/v1/audit/status`` of Agentmetry: is its audit trail being written at all."""
+    if not isinstance(payload, Mapping) or "enabled" not in payload:
+        raise MappingError("agentmetry audit status: expected {'enabled': ..., ...}")
+    if not payload["enabled"]:
+        return [Draft("audit-trail", "warn", "audit export is disabled: nothing is being recorded")]
+    last = payload.get("last_event_utc")
+    if not last:
+        return [Draft("audit-trail", "warn", "audit export is on but has recorded no event yet")]
+    try:
+        age = now - parse_iso(str(last))
+    except ValueError:
+        return [
+            Draft("audit-trail", "unknown", clean_summary(f"unreadable last event time {last!r}"))
+        ]
+    warn = mapping.get("warn_after_s")
+    late = warn is not None and age > warn
+    sources = payload.get("by_source") if isinstance(payload.get("by_source"), Mapping) else {}
+    mix = ", ".join(f"{k} {_int(v)}" for k, v in sorted(sources.items()))
+    summary = f"last event {age_text(age)} ago" + (" (over the limit)" if late else "")
+    if mix:
+        summary += f"; recent {_int(payload.get('recent'))}: {mix}"
+    return [Draft("audit-trail", "warn" if late else "ok", clean_summary(summary), value=age)]
+
+
 Builtin = Callable[[Any, Mapping[str, Any], float], list[Draft]]
 BUILTINS: dict[str, Builtin] = {
     "invariants-results": invariants_results,
     "records-lanes": records_lanes,
     "broker-pending": broker_pending,
+    "orchestrator-queue": orchestrator_queue,
+    "agentmetry-audit": agentmetry_audit,
 }
 
 

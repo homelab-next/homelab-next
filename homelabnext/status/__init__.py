@@ -8,7 +8,9 @@ and is therefore on the menu (``hnx status sources``, ``docs/status/sources.md``
 * :mod:`.model` -- :class:`SourceSpec` (a registered source), :class:`Observation` (one reading);
 * :mod:`.mapping` -- payload -> drafts: declarative selectors or a named built-in mapper;
 * :mod:`.collectors` -- one :class:`Collector` per kind (``poll-http-json``, ``poll-file``,
-  ``push-event``; ``poll-prometheus`` reserved for stage 2), all through an injected context;
+  ``push-event``, ``agent-activity``), all through an injected context; :mod:`.products` the
+  product kinds of stage 2 (``poll-prometheus``, ``poll-uptime-kuma``, ``poll-stackstorm``,
+  ``poll-nifi``);
 * :mod:`.scheduler` -- each due source in its own thread under its own timeout (O-07);
 * :mod:`.hub` -- latest + bounded history, staleness from expiry (O-06), state-diffed
   notifications through ``homelabnext.notify`` (O-08), ``status.observed`` events on the bus;

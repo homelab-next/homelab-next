@@ -121,7 +121,7 @@ def test_dns_zone_records_cover_every_service():
     zone = generate(REG, ["dns_zone"])["dns_zone"]["dns/svc.example.internal.zone"]
     for s in REG.services.values():
         assert f"\n{s.capability} IN A " in zone
-    assert zone.count(" IN SRV ") == 15 and zone.count(" IN TXT ") == 15
+    assert zone.count(" IN SRV ") == 19 and zone.count(" IN TXT ") == 19
 
 
 def test_hosts_block_apply_is_idempotent_and_preserves_other_lines():

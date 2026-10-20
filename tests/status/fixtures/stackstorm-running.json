@@ -1,0 +1,48 @@
+[
+ {
+  "id": "6716f0c00000000000000006",
+  "action": {
+   "ref": "deploy.rollout",
+   "name": "rollout",
+   "pack": "deploy",
+   "runner_type": "orquesta"
+  },
+  "runner": {
+   "name": "orquesta"
+  },
+  "liveaction_id": "6716f0c10000000000000006",
+  "liveaction": {
+   "action": "deploy.rollout",
+   "status": "running"
+  },
+  "status": "running",
+  "start_timestamp": "2026-09-21T14:11:00.000000Z",
+  "context": {
+   "user": "st2admin"
+  },
+  "parameters": {}
+ },
+ {
+  "id": "6716f0c00000000000000007",
+  "action": {
+   "ref": "core.remote",
+   "name": "remote",
+   "pack": "core",
+   "runner_type": "orquesta"
+  },
+  "runner": {
+   "name": "orquesta"
+  },
+  "liveaction_id": "6716f0c10000000000000007",
+  "liveaction": {
+   "action": "core.remote",
+   "status": "running"
+  },
+  "status": "running",
+  "start_timestamp": "2026-09-21T14:12:00.000000Z",
+  "context": {
+   "user": "st2admin"
+  },
+  "parameters": {}
+ }
+]

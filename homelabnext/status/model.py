@@ -23,8 +23,17 @@ from homelabnext.registry.model import Registry
 STATES = ("ok", "warn", "fail", "unknown", "stale")
 #: worst first: a module or a view takes the worst state of what it holds
 SEVERITY = {"fail": 4, "stale": 3, "unknown": 2, "warn": 1, "ok": 0}
-KINDS = ("poll-http-json", "poll-file", "push-event", "poll-prometheus", "agent-activity")
-RESERVED_KINDS = ("poll-prometheus",)  # stage 2: product collectors
+#: kinds that GET a registry service over HTTP (target.service + target.path)
+HTTP_KINDS = (
+    "poll-http-json",
+    "poll-prometheus",
+    "poll-uptime-kuma",
+    "poll-stackstorm",
+    "poll-nifi",
+)
+KINDS = (*HTTP_KINDS[:1], "poll-file", "push-event", *HTTP_KINDS[1:], "agent-activity")
+#: kinds registered before their collector shipped (none since stage 2; kept for the contract)
+RESERVED_KINDS: tuple[str, ...] = ()
 OBSERVED_EVENT = "homelabnext.status.observed"
 DEFAULT_TIMEOUT_S = 10
 
@@ -60,6 +69,8 @@ class SourceSpec:
     timeout_s: float = DEFAULT_TIMEOUT_S
     on_error: str = "unknown"
     mapping: Mapping[str, Any] = field(default_factory=dict)
+    #: ``{secret: "secret:<name>", header?: <name>}``: the credential, by secret-store name only
+    auth: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in KINDS:
@@ -96,16 +107,28 @@ class SourceSpec:
             timeout_s=entry.get("timeout_s", DEFAULT_TIMEOUT_S),
             on_error=entry.get("on_error", "unknown"),
             mapping=dict(entry.get("mapping") or {}),
+            auth=dict(entry["auth"]) if entry.get("auth") else None,
         )
+
+    def mapping_text(self) -> str:
+        """How the payload becomes items, in a few words (the menu and the catalog)."""
+        if self.kind == "push-event":
+            return "event (observation as published)"
+        if "builtin" in self.mapping:
+            return f"builtin {self.mapping['builtin']}"
+        if self.kind == "poll-prometheus":
+            return f"instant query `{self.mapping.get('query', '')}`"
+        if self.kind in HTTP_KINDS[2:]:
+            return f"built in ({self.kind})"
+        return "selectors"
 
     def describe(self) -> dict[str, Any]:
         """The menu entry (``hnx status sources --json``, the catalog page, status.json)."""
         target: dict[str, Any] = {}
-        if self.kind in ("poll-http-json", "poll-prometheus"):
+        if self.kind in HTTP_KINDS:
             target = {"service": self.polled_service, "path": self.path}
         elif self.kind == "poll-file" or (self.kind == "agent-activity" and self.file):
             target = {"file": self.file}
-        mapping = f"builtin {self.mapping['builtin']}" if "builtin" in self.mapping else "selectors"
         return {
             "id": self.id,
             "kind": self.kind,
@@ -117,7 +140,7 @@ class SourceSpec:
             "stale_after_s": self.stale_after_s,
             "timeout_s": self.timeout_s,
             "on_error": self.on_error,
-            "mapping": mapping if self.kind != "push-event" else "event (observation as published)",
+            "mapping": self.mapping_text(),
             "reserved": self.kind in RESERVED_KINDS,
             "what": self.what,
         }

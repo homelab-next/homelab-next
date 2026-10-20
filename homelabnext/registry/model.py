@@ -239,9 +239,26 @@ def secret_env_name(ref: str) -> str:
 
 
 #: status-source kinds that poll a registry service over HTTP (target.service + target.path)
-_HTTP_STATUS_KINDS = ("poll-http-json", "poll-prometheus")
+_HTTP_STATUS_KINDS = (
+    "poll-http-json",
+    "poll-prometheus",
+    "poll-uptime-kuma",
+    "poll-stackstorm",
+    "poll-nifi",
+)
+#: the product kinds (stage 2): their mapping is the product's own (homelabnext.status.products)
+_PRODUCT_STATUS_KINDS = _HTTP_STATUS_KINDS[1:]
 #: built-in mappers of the agent-activity kind (homelabnext.status.agents.sources)
 _AGENT_BUILTINS = ("agent-spool", "agentmetry-jsonl", "agent-push")
+#: built-in mappers of one kind only, and the keys each takes beside builtin
+_KIND_BUILTINS = {
+    "invariants-results": ("poll-file", {"module"}),
+    "records-lanes": ("poll-file", {"module", "warn_after_s"}),
+    "broker-pending": ("poll-file", {"module", "warn_after_s"}),
+    "orchestrator-queue": ("poll-http-json", {"module", "warn_after_s"}),
+    "agentmetry-audit": ("poll-http-json", {"module", "warn_after_s"}),
+    "prometheus-alerts": ("poll-prometheus", {"module", "states", "item"}),
+}
 _RAW_ADDRESS = re.compile(r"://|(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w])|\blocalhost\b", re.I)
 
 
@@ -280,6 +297,10 @@ def status_source_problems(services: dict) -> list[str]:
                     problems.append(f"{where}: {kind} needs target.path")
                 if "file" in target:
                     problems.append(f"{where}: {kind} takes no target.file")
+                if kind in _PRODUCT_STATUS_KINDS:
+                    from homelabnext.status.products import source_problems
+
+                    problems += source_problems(src, where)
             elif kind == "poll-file":
                 if "file" not in target:
                     problems.append(f"{where}: poll-file needs target.file")
@@ -301,20 +322,36 @@ def status_source_problems(services: dict) -> list[str]:
                     problems.append(f"{where}: {builtin} needs target.file")
             elif target.get("path") or target.get("file"):
                 problems.append(f"{where}: push-event sources are not polled (no path or file)")
+            if src.get("auth") and kind not in _HTTP_STATUS_KINDS:
+                problems.append(f"{where}: auth is for the HTTP kinds only")
             mapping = src.get("mapping")
-            if mapping and mapping.get("builtin") in _AGENT_BUILTINS and kind != "agent-activity":
+            builtin = (mapping or {}).get("builtin")
+            if builtin in _AGENT_BUILTINS and kind != "agent-activity":
                 problems.append(f"{where}: builtin {mapping['builtin']} is for agent-activity only")
-            if kind in ("poll-http-json", "poll-file", "agent-activity") and not mapping:
-                problems.append(f"{where}: {kind} needs a mapping")
-            if (
-                mapping
-                and "builtin" in mapping
-                and set(mapping) - {"builtin", "warn_after_s", "module"}
+            if builtin in _KIND_BUILTINS and kind != _KIND_BUILTINS[builtin][0]:
+                problems.append(
+                    f"{where}: builtin {builtin} is for {_KIND_BUILTINS[builtin][0]} only"
+                )
+            if kind in ("poll-http-json", "poll-file", "agent-activity", "poll-prometheus") and (
+                not mapping
             ):
-                problems.append(f"{where}: a builtin mapping takes no selectors")
-            if mapping and "builtin" not in mapping and "state" not in mapping:
+                problems.append(f"{where}: {kind} needs a mapping")
+            if kind in _PRODUCT_STATUS_KINDS:
+                pass  # the product's own mapping keys: checked by source_problems above
+            elif mapping and builtin is not None:
+                allowed = _KIND_BUILTINS.get(builtin, (None, {"module", "warn_after_s"}))[1]
+                if set(mapping) - {"builtin"} - allowed:
+                    problems.append(f"{where}: a builtin mapping takes no selectors")
+            elif mapping and "state" not in mapping:
                 problems.append(f"{where}: a declarative mapping needs a state selector")
+            elif mapping and set(mapping) & _PRODUCT_MAPPING_KEYS:
+                extra = sorted(set(mapping) & _PRODUCT_MAPPING_KEYS)
+                problems.append(f"{where}: {extra} are for the product kinds only")
     return problems
+
+
+#: mapping keys only the product kinds read (homelabnext.status.products)
+_PRODUCT_MAPPING_KEYS = {"query", "thresholds", "empty", "window_s", "limit"}
 
 
 def _strings(value: Any) -> list[str]:

@@ -27,22 +27,36 @@ class Clock:
 
 
 class FakeHttp:
-    """``routes``: url -> (status, JSON-able body); a service in ``down`` refuses connections."""
+    """``routes``: url -> (status, JSON-able body), or path (no query) -> the same when
+    ``by_path``; a service in ``down`` refuses connections; ``headers`` records what each call
+    sent."""
 
-    def __init__(self) -> None:
+    def __init__(self, by_path: bool = False) -> None:
         self.routes: dict[str, tuple[int, object]] = {}
         self.down: set[str] = set()
         self.calls: list[str] = []
+        self.headers: list[dict[str, str]] = []
+        self.by_path = by_path
 
-    def get(self, url: str, timeout: float) -> tuple[int, bytes]:
+    def get(self, url: str, timeout: float, headers=None) -> tuple[int, bytes]:
         self.calls.append(url)
-        host = url.split("//", 1)[1].split("/", 1)[0]
+        self.headers.append(dict(headers or {}))
+        host, _, rest = url.split("//", 1)[1].partition("/")
         if host in self.down:
             raise ConnectionRefusedError(f"connection refused by {host}")
-        if url not in self.routes:
+        key = "/" + rest.split("?", 1)[0] if self.by_path else url
+        if key not in self.routes:
             return 404, b""
-        status, body = self.routes[url]
+        status, body = self.routes[key]
         return status, json.dumps(body).encode()
+
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+def fixture(name: str):
+    """A recorded (or source-verified) product response, ``tests/status/fixtures/<name>.json``."""
+    return json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
 
 
 def endpoint(service: str) -> str:

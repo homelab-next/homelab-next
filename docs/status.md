@@ -7,12 +7,12 @@ primary UI: a main page and a left-side menu of views over every registered sour
 approval path. It does not need agents, the broker or an agent dashboard; each of those is an
 optional source or an optional menu entry.
 
-Stage 1 (this page) is everything that can be proven without a server: the registry format, the
-menu, the observation and event shapes, the collector framework with built-in collectors for what
-this repository already has, the state service, the views and the page. Stage 2 adds product
-collectors (an uptime monitor, metrics queries, the orchestrator, an automation engine, a dataflow
-tool, the agent dashboard) tested in the lab-in-a-box; each is a mapping or a collector, nothing
-else changes.
+Stage 1 is everything that can be proven without a server: the registry format, the menu, the
+observation and event shapes, the collector framework with built-in collectors for what this
+repository already has, the state service, the views and the page. Stage 2 adds the product
+collectors (section 7): Prometheus, Uptime Kuma, StackStorm, NiFi, the LLM orchestrator and
+Agentmetry, each a source kind or a built-in mapping; Prometheus and Uptime Kuma also run in the
+lab-in-a-box, where the nightly smoke polls them through the real collectors.
 
 ## 1. Register a source (the menu)
 
@@ -24,7 +24,7 @@ services:
     # ...
     status_sources:
       - id: metrics-alerts           # unique; graph node status:metrics-alerts
-        kind: poll-http-json         # poll-http-json | poll-file | push-event | poll-prometheus (stage 2)
+        kind: poll-http-json         # or poll-file, push-event, agent-activity, a product kind (section 7)
         target: {path: /api/v1/alerts}   # service defaults to this one; never an address
         interval_s: 60
         timeout_s: 10                # < interval_s
@@ -51,8 +51,18 @@ generated from it (`hnx status catalog generate`, checked by `hnx status catalog
 | `poll-http-json` | `GET` the service's capability alias + `path`, 2xx JSON | `service` (default: the declaring one), `path` |
 | `poll-file` | a JSON or YAML file, or a records directory, under the status root (`--root`) | `file` (relative, no `..`) |
 | `push-event` | `homelabnext.status.observed` events the source publishes itself: the envelope `source` must be `svc:<the declaring service>` and the module the one the source reports; an `observed_at` in the future is clamped to now (kept as the source's `clock_skew_s`) and `expires_at` is capped at now + `stale_after_s` | none: silence for `stale_after_s` reads stale |
-| `poll-prometheus` | reserved for stage 2; reads `unknown` until its collector ships | `service`, `path` |
 | `agent-activity` | drains agent activity into the activity store and reports stuck and errored sessions (section 6) | `file` for `agent-spool` and `agentmetry-jsonl`, none for `agent-push` |
+| `poll-prometheus` | a Prometheus instant query, or its firing alerts (section 7) | `service`, `path` (`.../api/v1/query` or `.../api/v1/alerts`) |
+| `poll-uptime-kuma` | an Uptime Kuma public status page and its heartbeats, no login (section 7) | `service`, `path` `.../api/status-page/<slug>` |
+| `poll-stackstorm` | StackStorm executions: failures in a window, the running count (section 7) | `service`, `path` `.../executions` |
+| `poll-nifi` | NiFi controller status and bulletin board (section 7) | `service`, `path` `.../flow/status` |
+
+Every HTTP kind (`poll-http-json` and the product kinds) takes an optional **`auth`**: the
+credential by secret-store name, `{secret: "secret:<name>", header: St2-Api-Key}` (no `header`:
+`Authorization: Bearer <value>`). `hnx status collect` reads the value at run time from
+`HNX_SECRET_<NAME>` or the file `<name>` under `--secrets-dir`, the same lookup as the agents
+configuration. A reference that does not resolve is that source's error: it is never polled
+without its credential, and the value never appears in an error, the state file or the page.
 
 ### Mappings
 
@@ -70,6 +80,9 @@ Built-in mappers for sources this repository has:
 | `invariants-results` | the invariants runner's results document | one per criterion: pass ok, fail fail, error and skip unknown; link `inv:<id>` |
 | `records-lanes` | a records root (`homelabnext.records`) | `inbox`, `approved-not-completed`: live-work counts with the oldest age, warn past `warn_after_s` |
 | `broker-pending` | broker requests awaiting approval (a list or `{"requests": [...]}`), or a `PendingApprovals` store in process | `pending-approvals`: a live-work count with the oldest age |
+| `orchestrator-queue` | the LLM orchestrator's `GET /admin/queue-summary` (`poll-http-json`, section 7) | `queued`, `running` (live work), `history` |
+| `agentmetry-audit` | Agentmetry's `GET /api/v1/audit/status` (`poll-http-json`, section 7) | `audit-trail`: warn when off, empty, or silent past `warn_after_s` |
+| `prometheus-alerts` | Prometheus `GET /api/v1/alerts` (`poll-prometheus` only, section 7) | one per firing alert, by severity |
 
 ## 2. Collect
 
@@ -324,9 +337,189 @@ auth response; verify on your version). Every private view is appended to the ac
 itself a private page. Detail content is rendered as escaped text only (never HTML or markdown)
 and nothing in this code feeds it back into an agent's context.
 
-## What needs a server (stage 2)
+## 7. Product collectors (stage 2)
+
+Each product is either a **kind** with its own collector (`homelabnext.status.products`: several
+requests, product-specific options) or a **built-in mapping** over `poll-http-json` (one request
+says it all). Every one goes through the same path as stage 1: the target by registry name, the
+credential by secret name, a bounded read, its own timeout (`timeout_s` bounds the whole poll,
+every request of it), staleness from expiry, and a response it cannot read is the source's error,
+never an `ok`. The response shapes were checked against each product's source and, where it fits
+the lab, against the running product; the tests (`tests/status/test_status_products.py`) replay
+them from `tests/status/fixtures/`.
+
+| Product | How | Verified against | Where it runs in CI |
+|---|---|---|---|
+| Prometheus | kind `poll-prometheus` | `web/api/v1/api.go` (`QueryData`, `Alert`); a real 2.54.1 | fixtures (recorded) + lab-in-a-box nightly |
+| Uptime Kuma | kind `poll-uptime-kuma` | 1.23 `server/routers/status-page-router.js`, `model/{group,monitor,heartbeat,incident}.js`; a real 1.23.16 | fixtures (recorded) + lab-in-a-box nightly |
+| StackStorm | kind `poll-stackstorm` | `st2common/openapi.yaml` (`/api/v1/executions`), `ActionExecutionAPI`, `constants/action.py` | fixtures only: it needs MongoDB, RabbitMQ and a dozen st2 services, far over the 4 GB lab's remaining 256 MB |
+| Apache NiFi | kind `poll-nifi` | `FlowResource` (`/flow/status`, `/flow/bulletin-board`), `ControllerStatusDTO`, `BulletinBoardEntity`, `BulletinEntity`/`BulletinDTO` | fixtures only: its default JVM heap alone is 1 GB (`bootstrap.conf`), four times what the 4 GB lab has left |
+| LLM orchestrator | builtin `orchestrator-queue` | `internal/api/server.go` (routes), `internal/store` `QueueSummary` | fixtures only (the maintainer's own service, not in the lab) |
+| Agentmetry | builtin `agentmetry-audit` | `apps/orchestrator/api/routes/audit.py` (`/audit/status`), `core/auth.py` (`X-API-Key`) | fixtures only |
+
+### Prometheus (`poll-prometheus`)
+
+```yaml
+- id: metrics-targets
+  kind: poll-prometheus
+  target: {path: /api/v1/query}
+  interval_s: 60
+  timeout_s: 10
+  mapping:
+    query: up                      # an instant vector or a scalar; matrix results are refused
+    item: job                      # the label that names an item (default: the metric name)
+    thresholds: {fail: 0, direction: below}   # warn/fail at or above (below: at or below)
+    empty: fail                    # optional: an empty result is one item in this state
+  what: Whether each scrape job's targets answer.
+- id: metrics-alerts
+  kind: poll-prometheus
+  target: {path: /api/v1/alerts}
+  interval_s: 60
+  timeout_s: 10
+  mapping: {builtin: prometheus-alerts, item: instance}
+  what: Every firing alert, fail or warn by its severity label.
+```
+
+A **query** is sent URL-encoded as `?query=`; each series is an item named by `mapping.item`
+(series that share a name are told apart by a stable digest of their labels), its value judged by
+`thresholds` (required: a number alone is never read as healthy; NaN and native histograms read
+`unknown`). A raw address in the query (`instance="..."`) is refused like anywhere else in a
+source. An error document (`"status": "error"`) or a non-2xx answer is the source's error.
+**`prometheus-alerts`** lists only **firing** alerts: pending ones (inside their `for:`) and
+resolved ones are not reported, so a resolved alert's item disappears. The `severity` label picks
+the state: `critical`, `error`, `page`, `high` fail; `warning`, `warn`, `medium`, `low`, `info`
+warn; `none` (the always-firing-by-design convention of Watchdog and InfoInhibitor) ok; a missing
+or any other severity fails (unmapped is never healthy). `states` overrides or extends that table
+(`{ticket: warn}`); `item: <label>` appends that label's value to the alert name.
+
+### Uptime Kuma (`poll-uptime-kuma`)
+
+```yaml
+- id: uptime-monitors
+  kind: poll-uptime-kuma
+  target: {path: /api/status-page/lab}   # the status page's slug
+  interval_s: 60
+  timeout_s: 10
+  what: Every monitor on the public status page.
+```
+
+It reads the **public status page** API, which needs no login and no API key:
+`GET /api/status-page/<slug>` (the monitors of the page's public groups) and
+`GET /api/status-page/heartbeat/<slug>` (each monitor's last heartbeats and its 24-hour uptime).
+Each monitor is an item named after it, from its newest heartbeat: up `ok`, down `fail`, pending
+`warn`, maintenance `unknown`, no heartbeat yet `unknown`; the summary carries the 24-hour uptime,
+the ping and the heartbeat's age. A pinned incident is one more item (`danger` fail, any other
+style warn). `states` overrides the four words (`{maintenance: ok}`). Publish only the monitors
+the hub should see on that page. Two things from the product itself: Kuma caches these answers
+(the page 5 minutes, the heartbeats 1 minute), so a reading can be that old; and Kuma 1.23 does
+not answer at all for an unknown slug, so a wrong slug reads as a timeout, not a 404.
+
+### StackStorm (`poll-stackstorm`)
+
+```yaml
+- id: automation-executions
+  kind: poll-stackstorm
+  target: {path: /api/v1/executions}     # behind st2web's nginx; st2api itself serves /v1/executions
+  interval_s: 120
+  timeout_s: 15
+  auth: {secret: "secret:stackstorm/status-token", header: St2-Api-Key}
+  mapping: {window_s: 3600, limit: 100}
+  what: Actions with failed or timed-out executions in the last hour, and the running ones.
+```
+
+Two requests, each with the API key: `?limit=<limit>&sort_desc=true&timestamp_gt=<now -
+window_s>&exclude_attributes=result,trigger_instance` (the newest executions in the window,
+without their potentially large results) and `?status=running&limit=100`. Every action
+(`action.ref`) with an execution that is `failed`, `timeout` or `abandoned` in the window is a
+`fail` item ("1 failed, 1 timeout in the last 1h 0m; latest ..."); `executions` counts what the
+window held and `running` is live work. A canceled execution is an operator's choice and is not
+reported; `states` changes that (`{canceled: warn}`, keys are StackStorm's execution statuses).
+`limit` is at most 100, StackStorm's `api.max_page_size` for a non-admin key; a summary says when
+the window held more than one page. Use a read-only API key (an RBAC role with
+`action_execution_list`/`action_execution_view` only).
+
+### Apache NiFi (`poll-nifi`)
+
+```yaml
+- id: dataflow-status
+  kind: poll-nifi
+  target: {path: /nifi-api/flow/status}
+  interval_s: 60
+  timeout_s: 10
+  auth: {secret: "secret:nifi/status-token"}   # optional: Authorization: Bearer <token>
+  mapping:
+    thresholds: {warn: 10000, fail: 100000}  # on queued flowfiles; absent: the queue is only live work
+  what: Queued flowfiles, invalid and stopped components, and error bulletins.
+```
+
+`GET /nifi-api/flow/status` gives `queued` (flowfiles, live work, judged by `thresholds`),
+`running` (components and active threads, live work), and the counts `invalid` (`fail` when
+non-zero), `stopped` (`warn`), `disabled` (`ok`, a deliberate state) and `sync-failure`
+(versioned groups that failed to sync, `warn`; absent without registry clients).
+`GET /nifi-api/flow/bulletin-board?limit=100` adds one item per component (`bulletin:<source
+name>`) with ERROR (`fail`) or WARNING (`warn`) bulletins and its latest message; INFO and DEBUG
+are not attention, and a bulletin the credential may not read is only counted (`bulletins`).
+NiFi keeps bulletins for five minutes, so a component's bulletin item disappears once it stops
+reporting. `states` overrides the item states (`invalid`, `stopped`, `disabled`, `sync-failure`)
+and the bulletin levels (`error`, `warning`). The token is any bearer token NiFi accepts (for
+example one issued to a read-only user with the "view the user interface" policy).
+
+### The LLM orchestrator (`orchestrator-queue`)
+
+The maintainer's Go controller exposes no health or metrics endpoint; its status is
+`GET /admin/queue-summary` (`{"by_state": {...}, "active": [{agent_key, state, count}],
+"oldest_queued_run_id", "oldest_queued_age_seconds"}`), so the example declares it with
+`on_error: fail` (not answering is the reading):
+
+```yaml
+- id: orchestrator-queues
+  kind: poll-http-json
+  target: {path: /admin/queue-summary}
+  interval_s: 60
+  timeout_s: 5
+  on_error: fail
+  mapping: {builtin: orchestrator-queue, warn_after_s: 3600}
+  what: Queued and running orchestrator jobs; the oldest queued job waiting over an hour is warn.
+```
+
+Items: `queued` (live work; `warn` when the oldest queued job has waited over `warn_after_s`),
+`running` (live work, with the running count per agent) and `history` (the all-time
+done/failed/cancelled totals, informational: they never reset, so they are not a window). The
+controller binds loopback (`http_addr`), so poll it from its own host or through the edge.
+`/admin/backend-status` returns an external probe script's output verbatim and is not mapped.
+
+### Agentmetry (`agentmetry-audit`)
+
+Agentmetry is already a source through its canonical JSONL trail (`agentmetry-jsonl`, section
+6). Its orchestrator API also answers `GET /api/v1/audit/status`, the freshness behind its
+dashboard badge, which tells whether that trail is being written at all:
+
+```yaml
+- id: agentmetry-audit
+  kind: poll-http-json
+  target: {path: /api/v1/audit/status}
+  interval_s: 300
+  timeout_s: 10
+  auth: {secret: "secret:agentmetry/api-token", header: X-API-Key}   # keyless only from loopback
+  mapping: {builtin: agentmetry-audit, module: agents, warn_after_s: 86400}
+  what: Whether the agent dashboard's audit trail is being written.
+```
+
+`audit-trail` is `warn` when the export is disabled, has no event yet, or its last event is older
+than `warn_after_s` (a silent hook failure), else `ok` with the per-source counts of the last 500
+events. The export path the endpoint also returns is never shown. (`GET /api/v1/health`, no key,
+is a declarative `{state: status, states: {up: ok}}` if only liveness is wanted.)
+
+## What needs a server
 
 The checklist rows O-02 and O-07 are also measured against a real deployment: stopping a monitored
 service turns its tile red within 5 minutes, and with one source blackholed the page still renders
-in under 2 seconds. Stage 1 proves the mechanisms with fakes (`pytest tests/status`); stage 2 runs
-the same assertions against the lab-in-a-box with real product collectors.
+in under 2 seconds. Stage 1 proves the mechanisms with fakes (`pytest tests/status`). The
+lab-in-a-box runs **Prometheus** (scraping itself, with a warning and a critical rule that always
+fire) and **Uptime Kuma** (provisioned headlessly through its own socket.io API by
+`config/uptime-kuma/provision.js`: an admin user, a monitor that answers and one that cannot, the
+public status page `lab`), and the nightly smoke (`smoke_checks.py`, checks `metrics` and
+`uptime`) polls both through the real `poll-prometheus` and `poll-uptime-kuma` collectors and
+expects exactly warn + fail alerts, the self-scrape target `ok`, and the two monitors `ok` and
+`fail`. StackStorm and NiFi do not fit the lab's 4 GB budget and are tested against their
+fixtures only.

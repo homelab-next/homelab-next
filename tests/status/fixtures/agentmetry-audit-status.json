@@ -1,0 +1,10 @@
+{
+ "enabled": true,
+ "last_event_utc": "2026-09-21T14:01:40.120000+00:00",
+ "recent": 500,
+ "by_source": {
+  "claude-code": 320,
+  "hermes": 180
+ },
+ "path": "/var/lib/agentmetry/audit-forward.jsonl"
+}

@@ -119,6 +119,8 @@ every service is single node. See the README "Try it" section.
 | `notify` | ntfy | `notify` |
 | `inference` | the project's fake OpenAI-compatible server | `inference` |
 | `cases` | the project's fake case system | `cases` |
+| `metrics` | Prometheus, scraping itself, two always-firing rules | (status hub source) |
+| `uptime` | Uptime Kuma, provisioned headlessly with a public status page | (status hub source) |
 
 ### It is not a deployment: what replaces each service in production
 
@@ -127,8 +129,8 @@ only. `smoke.sh` and `make lab-up` refuse any other `LAB_BIND` unless
 `LAB_I_UNDERSTAND_UNAUTHENTICATED=1` is set **and** every credential differs from its
 `.env.example` placeholder (`compose/lab-in-a-box/bind_guard.sh`); docker publishes ports through
 its own firewall rules, ahead of ufw or firewalld, so a host firewall is no substitute. Containers
-run with `no-new-privileges` and `cap_drop: [ALL]` (postgres adds back what its entrypoint needs;
-OpenBao keeps docker's defaults). A real deployment changes each service as follows:
+run with `no-new-privileges` and `cap_drop: [ALL]` (postgres and uptime add back what their
+entrypoints need; OpenBao keeps docker's defaults). A real deployment changes each service as follows:
 
 | Lab service | Lab shortcut | Production replacement |
 |---|---|---|
@@ -140,6 +142,8 @@ OpenBao keeps docker's defaults). A real deployment changes each service as foll
 | `events` (NATS) | no authentication, plain TCP | accounts with per-client credentials (NKeys or JWT) and TLS |
 | `notify` (ntfy) | open publish and subscribe | `auth-default-access: deny-all` with per-topic users or tokens, behind the forward-auth proxy |
 | `inference`, `cases` | the project's fakes | the real inference server and case system behind the same aliases |
+| `metrics` (Prometheus) | no authentication, 2-hour retention, rules that always fire | the real metrics service with its own rules, behind the forward-auth proxy |
+| `uptime` (Uptime Kuma) | a known admin password, a public status page | a generated admin password, 2FA, behind the forward-auth proxy; only the monitors the hub should see on the public page |
 
 ## Ansible host trust
 

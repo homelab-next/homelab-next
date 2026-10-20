@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Two lab-only alerts that fire as soon as the rules are evaluated (vector(1) is always 1): the
+# status hub's prometheus-alerts mapping must turn the warning into a warn item and the critical
+# one into a fail item.  A third rule never fires (vector(0) > 0 is empty) and must not appear.
+groups:
+  - name: lab-smoke
+    rules:
+      - alert: LabSmokeWarning
+        expr: vector(1)
+        labels:
+          severity: warning
+        annotations:
+          summary: lab smoke warning, always firing
+      - alert: LabSmokeCritical
+        expr: vector(1)
+        labels:
+          severity: critical
+        annotations:
+          summary: lab smoke critical, always firing
+      - alert: LabSmokeNeverFires
+        expr: vector(0) > 0
+        labels:
+          severity: critical
