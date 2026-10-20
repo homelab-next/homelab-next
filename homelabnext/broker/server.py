@@ -413,15 +413,21 @@ def _relay_op(svc: BrokerService, who: Identity, op: str, body: Mapping[str, Any
 
 
 # ---------------------------------------------------------------- the socket server
-def _read_request(conn: socket.socket, limit: int, timeout_s: float) -> tuple[bytes | None, str]:
+def _read_request(
+    conn: socket.socket,
+    limit: int,
+    timeout_s: float,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+) -> tuple[bytes | None, str]:
     """(request bytes, "") or (None, problem): one line or everything up to EOF, at most
     ``limit`` bytes, all of it within ``timeout_s``."""
     chunks: list[bytes] = []
     size = 0
-    deadline = time.monotonic() + timeout_s
+    deadline = clock() + timeout_s
     try:
         while True:
-            remaining = deadline - time.monotonic()
+            remaining = deadline - clock()
             if remaining <= 0:
                 return None, "request-timeout"
             conn.settimeout(remaining)
@@ -442,14 +448,20 @@ def _read_request(conn: socket.socket, limit: int, timeout_s: float) -> tuple[by
     return b"".join(chunks), ""
 
 
-def _discard(conn: socket.socket, limit: int, timeout_s: float) -> None:
+def _discard(
+    conn: socket.socket,
+    limit: int,
+    timeout_s: float,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+) -> None:
     """Drop what a known peer sent and was not read (a refused or oversized request), up to
     ``limit`` bytes and for at most ``timeout_s``, so closing does not reset the connection
     before it reads the answer."""
     seen = 0
-    deadline = time.monotonic() + timeout_s
+    deadline = clock() + timeout_s
     while seen <= limit:
-        remaining = deadline - time.monotonic()
+        remaining = deadline - clock()
         if remaining <= 0:
             return
         conn.settimeout(remaining)

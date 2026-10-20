@@ -166,7 +166,9 @@ def _redact(data: bytes, values: Sequence[str], *, truncated: bool = False) -> b
     return data
 
 
-def _wait_unreaped(proc: subprocess.Popen, timeout_s: float) -> bool:
+def _wait_unreaped(
+    proc: subprocess.Popen, timeout_s: float, *, clock: Callable[[], float] = time.monotonic
+) -> bool:
     """Wait until ``proc`` exits *without reaping it*; True when it exited within ``timeout_s``.
 
     A pidfd (Linux 5.3+) becomes readable at exit; elsewhere ``waitid(WNOWAIT)`` is polled.
@@ -181,12 +183,12 @@ def _wait_unreaped(proc: subprocess.Popen, timeout_s: float) -> bool:
             return bool(poller.poll(max(0, int(timeout_s * 1000))))
         finally:
             os.close(pidfd)
-    deadline = time.monotonic() + timeout_s
+    deadline = clock() + timeout_s
     delay = 0.001
     while True:
         if os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None:
             return True
-        remaining = deadline - time.monotonic()
+        remaining = deadline - clock()
         if remaining <= 0:
             return False
         time.sleep(min(delay, remaining))

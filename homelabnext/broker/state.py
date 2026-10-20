@@ -36,7 +36,7 @@ import re
 import secrets
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -145,8 +145,11 @@ def _load(path: Path) -> Any:
 class StateDir:
     """The broker's state directory.  Created ``0700``: it holds requests and audit records."""
 
-    def __init__(self, root: str | os.PathLike[str]) -> None:
+    def __init__(
+        self, root: str | os.PathLike[str], *, clock_ns: Callable[[], int] = time.time_ns
+    ) -> None:
         self.root = Path(root)
+        self._clock_ns = clock_ns  # orders requests (``submitted_ns``)
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         index_missing = not (self.root / "open").exists()
         for name in _SUBDIRS:
@@ -175,7 +178,7 @@ class StateDir:
     # ---------------------------------------------------------------- requests and transitions
     def put_request(self, rid: str, doc: dict[str, Any]) -> bool:
         """Store a request (``submitted_ns`` is added: the order requests are listed in)."""
-        doc = {**doc, "submitted_ns": doc.get("submitted_ns", time.time_ns())}
+        doc = {**doc, "submitted_ns": doc.get("submitted_ns", self._clock_ns())}
         if not write_exclusive(self._dir("requests") / f"{self._checked(rid)}.json", _dumps(doc)):
             return False
         self._mark_open(rid, doc)
