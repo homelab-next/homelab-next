@@ -389,7 +389,7 @@ def _import(args) -> int:
     mode = "applied" if args.apply else "dry run (use --apply to file)"
     lines.append(f"{len(rows)} files, {mode}")
     _out(args, {"apply": args.apply, "files": [r.as_dict() for r in rows]}, "\n".join(lines))
-    return 1 if any(r.outcome in ("unmappable", "refused") for r in rows) else 0
+    return 1 if any(r.outcome in ("unmappable", "refused", "conflict") for r in rows) else 0
 
 
 def _serve(args) -> int:
