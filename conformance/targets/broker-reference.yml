@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# The reference broker service (homelabnext.broker.service), over a private temporary state
+# directory per check.
+#   hnx conform run broker --target broker-reference
+name: broker-reference
+capabilities:
+  broker:
+    adapter: homelabnext.broker.service:make

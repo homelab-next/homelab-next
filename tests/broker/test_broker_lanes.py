@@ -1,0 +1,239 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Write lanes: every escape attempt is refused with its machine reason and writes nothing, and the
+same lane accepts the well-formed write next to it (fail on the bad input, pass on the good)."""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+
+from homelabnext.broker.lanes import Lane, LaneError, check_params, write
+
+NOW = "2026-01-15T10:00:00Z"
+ACTOR = "profile:triage"
+
+
+def _lane(**over):
+    doc = {
+        "name": "memory",
+        "kind": "files",
+        "root": "memory",
+        "max_bytes": 64,
+        "filename_pattern": r"^[a-z0-9][a-z0-9-]{0,30}\.md$",
+    }
+    doc.update(over)
+    return Lane.from_doc(doc)
+
+
+def _refused(lane, root, params, reason, actor=ACTOR):
+    with pytest.raises(LaneError) as info:
+        write(lane, root, actor, params, NOW)
+    assert info.value.reason == reason, (info.value.reason, str(info.value))
+    return info.value
+
+
+def _files(root):
+    return sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file())
+
+
+def test_well_formed_write_lands_in_the_actors_own_dir(tmp_path):
+    out = write(_lane(), tmp_path, ACTOR, {"name": "notes.md", "content": "hello\n"}, NOW)
+    assert out["path"] == "memory/triage/notes.md" and out["bytes"] == 6
+    assert (tmp_path / "memory/triage/notes.md").read_text() == "hello\n"
+    assert out["digest"].startswith("sha256:")
+    assert _files(tmp_path) == ["memory/triage/notes.md"], "a temp file was left behind"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "../escape.md",
+        "../../etc/cron.d/x",
+        "/etc/passwd",
+        "sub/dir.md",
+        "a\\b.md",
+        ".hidden.md",
+        "..",
+        "nul\x00.md",
+        "",
+        "UPPER.md",  # outside the lane's pattern
+        "notes.txt",
+        7,
+    ],
+)
+def test_names_that_are_not_one_allowed_segment_are_refused(tmp_path, name):
+    _refused(_lane(), tmp_path, {"name": name, "content": "x"}, "lane-name-invalid")
+    assert _files(tmp_path) == []
+    write(_lane(), tmp_path, ACTOR, {"name": "ok.md", "content": "x"}, NOW)  # control
+
+
+def test_symlinked_actor_dir_cannot_redirect_the_write(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    data = tmp_path / "data"
+    (data / "memory").mkdir(parents=True)
+    os.symlink(outside, data / "memory" / "triage")
+    _refused(_lane(), data, {"name": "x.md", "content": "x"}, "lane-path-escape")
+    assert list(outside.iterdir()) == [], "the write followed the symlink out of the lane"
+    write(_lane(), data, "profile:other", {"name": "x.md", "content": "x"}, NOW)  # control
+
+
+def test_symlinked_lane_root_is_refused(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    data = tmp_path / "data"
+    data.mkdir()
+    os.symlink(outside, data / "memory")
+    _refused(_lane(), data, {"name": "x.md", "content": "x"}, "lane-path-escape")
+    assert list(outside.iterdir()) == []
+
+
+def test_lane_root_component_that_is_a_file_is_refused(tmp_path):
+    (tmp_path / "memory").write_text("not a dir")
+    _refused(_lane(), tmp_path, {"name": "x.md", "content": "x"}, "lane-path-escape")
+
+
+def test_target_name_that_is_a_symlink_is_refused(tmp_path):
+    victim = tmp_path / "victim.txt"
+    victim.write_text("original")
+    d = tmp_path / "data" / "memory" / "triage"
+    d.mkdir(parents=True)
+    os.symlink(victim, d / "x.md")
+    lane = _lane(overwrite=True)  # even a lane that may overwrite does not follow a link
+    _refused(lane, tmp_path / "data", {"name": "x.md", "content": "pwned"}, "lane-symlink")
+    assert victim.read_text() == "original"
+
+
+def test_exclusive_create_by_default_and_atomic_overwrite_when_declared(tmp_path):
+    params = {"name": "x.md", "content": "one"}
+    write(_lane(), tmp_path, ACTOR, params, NOW)
+    _refused(_lane(), tmp_path, {"name": "x.md", "content": "two"}, "lane-exists")
+    assert (tmp_path / "memory/triage/x.md").read_text() == "one"
+    write(_lane(overwrite=True), tmp_path, ACTOR, {"name": "x.md", "content": "two"}, NOW)
+    assert (tmp_path / "memory/triage/x.md").read_text() == "two"
+    assert _files(tmp_path) == ["memory/triage/x.md"]
+
+
+def test_overwrite_lane_refuses_a_directory_in_the_way(tmp_path):
+    (tmp_path / "memory/triage/x.md").mkdir(parents=True)
+    _refused(_lane(overwrite=True), tmp_path, {"name": "x.md", "content": "y"}, "lane-path-escape")
+
+
+def test_size_cap_is_enforced_before_any_write(tmp_path):
+    err = _refused(_lane(), tmp_path, {"name": "x.md", "content": "x" * 65}, "lane-too-large")
+    assert err.outcome == "invalid"
+    assert _files(tmp_path) == []
+    write(_lane(), tmp_path, ACTOR, {"name": "x.md", "content": "x" * 64}, NOW)  # at the cap
+
+
+def test_shared_lane_writes_at_the_root(tmp_path):
+    out = write(
+        _lane(per_actor=False), tmp_path, "svc-anything", {"name": "x.md", "content": "y"}, NOW
+    )
+    assert out["path"] == "memory/x.md"
+
+
+@pytest.mark.parametrize(
+    ("params", "reason"),
+    [
+        ({"name": "x.md"}, "lane-content-invalid"),
+        ({"name": "x.md", "content": "x", "mode": "0777"}, "lane-content-invalid"),
+        ({"name": "x.md", "content": {"not": "text"}}, "lane-content-invalid"),
+        ("not-a-mapping", "lane-content-invalid"),
+    ],
+)
+def test_params_shape(tmp_path, params, reason):
+    _refused(_lane(), tmp_path, params, reason)
+
+
+def test_per_actor_lane_needs_a_profile_actor(tmp_path):
+    _refused(
+        _lane(), tmp_path, {"name": "x.md", "content": "x"}, "lane-actor-invalid", actor="../x"
+    )
+
+
+def _json_lane(**over):
+    doc = {
+        "format": "json",
+        "filename_pattern": r"^[a-z0-9-]+\.json$",
+        "max_bytes": 2048,
+        "content_schema": "broker/approval",
+    }
+    return _lane(**{**doc, **over})
+
+
+APPROVAL = {
+    "approval_id": "appr-1",
+    "request_id": "req-1",
+    "request_digest": "sha256:" + "0" * 64,
+    "decision": "approved",
+    "approver": {"issuer": "sso", "subject": "operator-one"},
+    "approved_at": NOW,
+}
+
+
+def test_json_lane_validates_against_its_content_schema(tmp_path):
+    bad = dict(APPROVAL, decision="maybe")
+    _refused(_json_lane(), tmp_path, {"name": "a.json", "content": bad}, "lane-content-invalid")
+    _refused(_json_lane(), tmp_path, {"name": "a.json", "content": "text"}, "lane-content-invalid")
+    big = dict(APPROVAL, note="x" * 500)
+    _refused(
+        _json_lane(max_bytes=200), tmp_path, {"name": "a.json", "content": big}, "lane-too-large"
+    )
+    assert _files(tmp_path) == []
+    out = write(_json_lane(), tmp_path, ACTOR, {"name": "a.json", "content": APPROVAL}, NOW)
+    assert out["path"] == "memory/triage/a.json"
+
+
+def _inbox(**over):
+    doc = {"name": "proposals", "kind": "records-inbox", "root": "records", "max_bytes": 4096}
+    doc.update(over)
+    return Lane.from_doc(doc)
+
+
+NOTE = {"title": "Raise the drain timeout", "risk": "low", "rollback": "set it back"}
+
+
+def test_records_inbox_files_a_valid_note_bound_to_the_actor(tmp_path):
+    out = write(_inbox(), tmp_path, ACTOR, {"note": dict(NOTE), "body": "Why."}, NOW)
+    assert out["path"] == "records/inbox/2026-01-15-triage-raise-the-drain-timeout.md"
+    text = (tmp_path / out["path"]).read_text()
+    assert "requesting_agent: profile:triage" in text and "status: proposed" in text
+
+
+@pytest.mark.parametrize(
+    ("params", "reason"),
+    [
+        ({"note": dict(NOTE, requesting_agent="profile:someone-else")}, "lane-identity-mismatch"),
+        ({"note": dict(NOTE, type="task")}, "lane-content-invalid"),  # not in note_types
+        ({"note": {"title": "No risk or rollback"}}, "lane-content-invalid"),
+        ({"note": dict(NOTE), "body": 5}, "lane-content-invalid"),
+        ({"note": dict(NOTE), "slug": "Not A Slug"}, "lane-content-invalid"),
+        ({"note": dict(NOTE), "extra": 1}, "lane-content-invalid"),
+        ({"note": dict(NOTE), "body": "x" * 5000}, "lane-too-large"),
+    ],
+)
+def test_records_inbox_refusals(tmp_path, params, reason):
+    _refused(_inbox(), tmp_path, params, reason)
+    assert _files(tmp_path) == []
+
+
+def test_records_inbox_needs_a_profile_actor(tmp_path):
+    _refused(_inbox(), tmp_path, {"note": dict(NOTE)}, "lane-actor-invalid", actor="nobody")
+
+
+def test_check_params_needs_no_filesystem(tmp_path):
+    check_params(_lane(), ACTOR, {"name": "x.md", "content": "x"}, NOW)
+    with pytest.raises(LaneError):
+        check_params(_lane(), ACTOR, {"name": "../x.md", "content": "x"}, NOW)
+    assert _files(tmp_path) == []
+
+
+def test_lane_configuration_problems():
+    assert _lane().problems() == []
+    assert _lane(filename_pattern="(").problems()
+    assert _lane(root="a//b").problems()
+    assert _lane(content_schema="broker/approval").problems()  # text lane
+    assert _json_lane(content_schema="broker/nope").problems()
+    assert _inbox(per_actor=True).problems()

@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+# Example broker manifest (schemas/broker/manifest 1.2): one agent profile with three write lanes,
+# a read-only status action and an approval-gated restart.  Walkthrough: docs/broker.md.
+#   hnx broker validate examples/broker/manifest.yml
+manifest_id: example-lab-broker
+default: deny
+mode: enforce
+approval_ttl_s: 900
+approvers:
+  - {issuer: sso, subject: operator-one, kind: human}
+handler_docs:
+  - handlers/service-status.handler.json
+  - handlers/service-restart.handler.json
+lanes:
+  # the agent's own memory: <data-root>/memory/<profile>/<name>.md, never overwritten
+  - name: memory
+    kind: files
+    root: memory
+    per_actor: true
+    filename_pattern: '^[a-z0-9][a-z0-9-]{0,62}\.md$'
+    max_bytes: 65536
+    format: text
+  # the agent's findings: <data-root>/findings/<profile>/<YYYY-MM-DD>-<slug>.md
+  - name: findings
+    kind: files
+    root: findings
+    per_actor: true
+    filename_pattern: '^\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]{0,60}\.md$'
+    max_bytes: 262144
+    format: text
+  # proposals: a records note into <data-root>/records/inbox/, validated by the records schema
+  - name: proposals
+    kind: records-inbox
+    root: records
+    per_actor: false
+    max_bytes: 65536
+    note_types: [proposal]
+actions:
+  - {action: memory.write, tier: write, handler: builtin/lane, lane: memory, requires_approval: false}
+  - {action: finding.write, tier: write, handler: builtin/lane, lane: findings, requires_approval: false}
+  - {action: proposal.file, tier: write, handler: builtin/lane, lane: proposals, requires_approval: false}
+  - {action: service.status, tier: read, handler: handlers/service-status.sh, requires_approval: false}
+  - {action: service.restart, tier: execute, handler: handlers/service-restart.sh, requires_approval: true}
+grants:
+  - profile: profile:triage
+    actions: [memory.write, finding.write, proposal.file, service.status, service.restart]
+    max_tier: execute
+  - profile: profile:reader
+    actions: [service.status]
+    max_tier: read

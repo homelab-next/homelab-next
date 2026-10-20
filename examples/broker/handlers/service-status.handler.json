@@ -1,0 +1,21 @@
+{
+  "action": "service.status",
+  "audit": true,
+  "description": "Report one service's state (read only, stand-in).",
+  "handler": "handlers/service-status.sh",
+  "handler_digest": "sha256:3af6865e810e6456f1ba5d6a96d2ee80710d7705ce90663946c93832adb9576f",
+  "idempotent": true,
+  "max_output_bytes": 65536,
+  "params_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "verbose": {
+        "type": "boolean"
+      }
+    },
+    "type": "object"
+  },
+  "requires_approval": false,
+  "tier": "read",
+  "timeout_s": 10
+}

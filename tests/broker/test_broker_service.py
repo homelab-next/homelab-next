@@ -1,0 +1,618 @@
+# SPDX-License-Identifier: Apache-2.0
+"""The reference broker service: the conformance suite on it, the example manifest end to end, the
+approvals flow, durable single-use approvals across processes, and the audit trail."""
+
+from __future__ import annotations
+
+import json
+import multiprocessing
+import shutil
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+
+from conformance.protocols.broker import ArgSpec, BrokerError, Denied, InvalidArguments
+from homelabnext.agent.schemas import schema_errors
+from homelabnext.broker import decide, request_digest
+from homelabnext.broker.service import (
+    BrokerService,
+    ManifestError,
+    load_manifest,
+    make,
+    validate_manifest,
+)
+from homelabnext.broker.state import FileApprovalStore, StateDir, is_id, write_exclusive
+from homelabnext.conform.runner import mutation_runs, run_capability
+from homelabnext.events.envelope import event_problems
+
+ROOT = Path(__file__).resolve().parents[2]
+EXAMPLE = ROOT / "examples" / "broker" / "manifest.yml"
+T0 = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+AGENT = "profile:triage"
+APPROVER = "sso:operator-one"
+TOKEN = "fake-demo-token-4b1d"
+
+
+class Clock:
+    def __init__(self, t: datetime = T0) -> None:
+        self.t = t
+
+    def __call__(self) -> datetime:
+        return self.t
+
+    def advance(self, seconds: float) -> None:
+        self.t += timedelta(seconds=seconds)
+
+
+def _svc(tmp_path, clock=None, **kw):
+    kw.setdefault("resolve_secret", {"DEMO_API_TOKEN": TOKEN}.__getitem__)
+    return BrokerService.from_manifest(
+        EXAMPLE, tmp_path / "state", data_root=tmp_path / "data", clock=clock or Clock(), **kw
+    )
+
+
+def _audit_ok(svc):
+    docs = list(svc.state.audit_records())
+    for doc in docs:
+        assert schema_errors("broker", "audit", doc) == [], doc
+    return docs
+
+
+# -- the conformance suite ------------------------------------------------------------------------
+
+
+def test_reference_service_passes_the_suite():
+    run = run_capability("broker", "broker-reference", ROOT)
+    assert run.error is None and run.too_few is None
+    assert not run.failed_must and not run.failed_should, [r.evidence for r in run.results]
+
+
+def test_the_suite_still_catches_every_broker_mutant():
+    runs = mutation_runs("broker", ROOT)
+    assert runs and all(m.detected for m in runs), [m.name for m in runs if not m.detected]
+
+
+def test_factory_gives_each_check_a_private_state_dir():
+    a, b = make(), make()
+    assert a.state.root != b.state.root and a.state.root.is_dir()
+    assert make(manifest=str(EXAMPLE)).manifest["manifest_id"] == "example-lab-broker"
+
+
+# -- the manifest ---------------------------------------------------------------------------------
+
+
+def test_example_manifest_validates():
+    manifest, docs = load_manifest(EXAMPLE)
+    assert {d["action"] for d in docs} == {"service.status", "service.restart"}
+    assert schema_errors("broker", "manifest", manifest) == []
+
+
+def _copy_example(tmp_path):
+    dst = tmp_path / "ex"
+    shutil.copytree(EXAMPLE.parent, dst)
+    return dst / "manifest.yml"
+
+
+def test_tampered_handler_fails_validation_and_never_runs(tmp_path):
+    path = _copy_example(tmp_path)
+    load_manifest(path)  # passes as shipped
+    h = path.parent / "handlers" / "service-status.sh"
+    h.write_text(h.read_text() + "touch /tmp/never\n")
+    with pytest.raises(ManifestError) as info:
+        load_manifest(path)
+    assert any("handler_digest does not match" in p for p in info.value.problems)
+
+
+def _problems(mutate, tmp_path):
+    import yaml
+
+    path = _copy_example(tmp_path)
+    doc = yaml.safe_load(path.read_text())
+    mutate(doc)
+    return validate_manifest(doc, path.parent)[1]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "needle"),
+    [
+        (lambda d: d["actions"][0].update(lane="nowhere"), "is not declared"),
+        (lambda d: d["actions"][0].update(handler="handlers/service-status.sh"), "builtin/lane"),
+        (lambda d: d["actions"][0].update(tier="read"), "tier write"),
+        (lambda d: d["lanes"].append(dict(d["lanes"][0])), "declared twice"),
+        (lambda d: d["lanes"][0].update(filename_pattern="("), "does not compile"),
+        (lambda d: d["actions"][3].update(handler="builtin/shell"), "not a built-in handler"),
+        (lambda d: d["handler_docs"].append("handlers/absent.json"), "missing or outside"),
+        (lambda d: d["handler_docs"].pop(), "expected exactly one handler document"),
+        (lambda d: d.update(default="allow"), "manifest:"),
+    ],
+)
+def test_manifest_problems_are_reported(tmp_path, mutate, needle):
+    assert _problems(lambda d: None, tmp_path) == []
+    problems = _problems(mutate, tmp_path / "bad")
+    assert any(needle in p for p in problems), problems
+
+
+def test_handler_document_problems(tmp_path):
+    path = _copy_example(tmp_path)
+    doc_path = path.parent / "handlers" / "service-restart.handler.json"
+    doc = json.loads(doc_path.read_text())
+    doc["secrets"] = ["PATH"]
+    doc["params_schema"] = {"type": "nonsense"}
+    doc_path.write_text(json.dumps(doc))
+    problems = validate_manifest(load_yaml(path), path.parent)[1]
+    assert any("reserved" in p for p in problems) and any("params_schema" in p for p in problems)
+    doc_path.write_text(json.dumps({"action": "service.restart"}))
+    assert validate_manifest(load_yaml(path), path.parent)[1]
+    (path.parent / "handlers" / "service-restart.sh").unlink()
+    doc_path.write_text(
+        json.dumps(json.loads((EXAMPLE.parent / doc_path.relative_to(path.parent)).read_text()))
+    )
+    assert any("missing" in p for p in validate_manifest(load_yaml(path), path.parent)[1])
+
+
+def load_yaml(path):
+    import yaml
+
+    return yaml.safe_load(path.read_text())
+
+
+def test_a_manifest_that_is_not_a_mapping(tmp_path):
+    p = tmp_path / "m.json"
+    p.write_text("[]")
+    with pytest.raises(ManifestError):
+        load_manifest(p)
+
+
+# -- the example end to end -----------------------------------------------------------------------
+
+
+def test_lane_writes_through_the_broker(tmp_path):
+    svc = _svc(tmp_path)
+    out = svc.call(AGENT, "memory.write", {"name": "queue-notes.md", "content": "slow drain\n"})
+    assert out["path"] == "memory/triage/queue-notes.md"
+    assert (tmp_path / "data" / out["path"]).read_text() == "slow drain\n"
+    with pytest.raises(Denied) as info:
+        svc.call(AGENT, "memory.write", {"name": "../../etc/x.md", "content": "x"})
+    assert info.value.reason == "lane-name-invalid"
+    with pytest.raises(Denied) as info:
+        svc.call(AGENT, "memory.write", {"name": "queue-notes.md", "content": "again"})
+    assert info.value.reason == "lane-exists"
+    with pytest.raises(InvalidArguments) as info:
+        svc.call(AGENT, "memory.write", {"name": "big.md", "content": "x" * 70000})
+    assert info.value.reason == "lane-too-large"
+    with pytest.raises(Denied) as info:
+        svc.call("profile:reader", "memory.write", {"name": "r.md", "content": "x"})
+    assert info.value.reason == "not-granted"
+    outcomes = [(d["outcome"], d["reason"]) for d in _audit_ok(svc)]
+    assert outcomes == [
+        ("ok", ""),
+        ("denied", "lane-name-invalid"),
+        ("denied", "lane-exists"),
+        ("invalid", "lane-too-large"),
+        ("denied", "not-granted"),
+    ]
+    assert _audit_ok(svc)[3]["args"]["content"]["bytes"] > 70000, "large values are summarized"
+
+
+def test_findings_and_proposals_lanes(tmp_path):
+    svc = _svc(tmp_path)
+    f = svc.call(AGENT, "finding.write", {"name": "2026-01-15-queue.md", "content": "# Finding\n"})
+    assert f["path"] == "findings/triage/2026-01-15-queue.md"
+    note = {"title": "Raise the drain timeout", "risk": "low", "rollback": "set it back"}
+    p = svc.call(AGENT, "proposal.file", {"note": note, "body": "Seen twice."})
+    assert p["path"] == "records/inbox/2026-01-15-triage-raise-the-drain-timeout.md"
+    events = svc.state.outbox()
+    assert [e["type"] for e in events] == ["homelabnext.proposal.created"]
+    assert event_problems(events[0]) == [] and events[0]["data"]["risk"] == "low"
+    with pytest.raises(Denied) as info:
+        svc.call(AGENT, "proposal.file", {"note": dict(note, requesting_agent="profile:reader")})
+    assert info.value.reason == "lane-identity-mismatch"
+
+
+def test_read_only_exec_action(tmp_path):
+    svc = _svc(tmp_path)
+    out = svc.call("profile:reader", "service.status", {"verbose": True}, target="svc:queue")
+    assert out["output"] == {
+        "service": "svc:queue",
+        "state": "running",
+        "params": {"verbose": True},
+    }
+    with pytest.raises(InvalidArguments) as info:
+        svc.call("profile:reader", "service.status", {"verbose": "yes"})
+    assert info.value.reason == "invalid-params"
+    with pytest.raises(InvalidArguments) as info:
+        svc.call("profile:reader", "service.status", {}, target="https://x")
+    assert info.value.reason == "invalid-target"
+    with pytest.raises(InvalidArguments):
+        svc.call("profile:reader", "service.status", ["not", "a", "mapping"])
+
+
+def test_handler_tampered_after_load_is_refused_at_run_time(tmp_path):
+    path = _copy_example(tmp_path)
+    svc = BrokerService.from_manifest(path, tmp_path / "state", clock=Clock())
+    h = path.parent / "handlers" / "service-status.sh"
+    h.write_text(h.read_text() + "echo tampered\n")
+    with pytest.raises(Denied) as info:
+        svc.call("profile:reader", "service.status", {})
+    assert info.value.reason == "handler-digest-mismatch"
+    assert _audit_ok(svc)[-1]["reason"] == "handler-digest-mismatch"
+
+
+def test_failing_and_slow_handlers_are_contained(tmp_path):
+    path = _copy_example(tmp_path)
+    h = path.parent / "handlers" / "service-status.sh"
+    h.write_text("#!/bin/sh\necho internal-detail-9f >&2\nexit 3\n")
+    doc_path = path.parent / "handlers" / "service-status.handler.json"
+    doc = json.loads(doc_path.read_text())
+    from homelabnext.broker.execute import file_digest
+
+    doc["handler_digest"] = file_digest(h)
+    doc_path.write_text(json.dumps(doc))
+    svc = BrokerService.from_manifest(path, tmp_path / "state", clock=Clock())
+    with pytest.raises(BrokerError) as info:
+        svc.call("profile:reader", "service.status", {})
+    assert info.value.reason == "handler-failed" and "internal-detail" not in str(info.value)
+    h.write_text("#!/bin/sh\nsleep 30\n")
+    doc["handler_digest"], doc["timeout_s"] = file_digest(h), 1
+    doc_path.write_text(json.dumps(doc))
+    svc = BrokerService.from_manifest(path, tmp_path / "state", clock=Clock())
+    with pytest.raises(BrokerError) as info:
+        svc.call("profile:reader", "service.status", {})
+    assert info.value.reason == "handler-timeout"
+
+
+# -- approvals ------------------------------------------------------------------------------------
+
+
+def _restart(svc):
+    return svc.submit(AGENT, "service.restart", {"grace_s": 30}, target="svc:queue")
+
+
+def test_approval_flow_end_to_end(tmp_path):
+    clock = Clock()
+    svc = _svc(tmp_path, clock)
+    with pytest.raises(Denied) as info:  # needs approval: call refuses, submit is the way
+        svc.call(AGENT, "service.restart", {"grace_s": 30})
+    assert info.value.reason == "approval-required"
+    rid = _restart(svc)
+    assert svc.status(AGENT, rid).state == "pending"
+    [requested] = svc.state.outbox()
+    assert requested["type"] == "homelabnext.decision.requested" and event_problems(requested) == []
+    assert requested["data"]["decision_id"] == rid
+    assert [p["request_id"] for p in svc.pending()] == [rid]
+    with pytest.raises(Denied) as info:
+        svc.run(AGENT, rid)
+    assert info.value.reason == "approval-required"
+    for who, reason in (
+        ("sso:triage", "approval-self-approved"),
+        ("sso:someone-else", "approval-approver-not-allowed"),
+        ("elsewhere:operator-one", "approval-approver-not-allowed"),
+    ):
+        with pytest.raises(Denied) as info:
+            svc.approve(rid, who)
+        assert info.value.reason == reason
+    with pytest.raises(InvalidArguments):
+        svc.approve(rid, "no-issuer")
+    clock.advance(60)
+    appr = svc.approve(rid, APPROVER, note="ok for the window")
+    assert schema_errors("broker", "approval", appr) == []
+    assert appr["request_digest"] == svc.state.get_request(rid)["request"]["digest"]
+    assert svc.pending()[0]["approved"] is True
+    clock.advance(60)
+    out = svc.run(AGENT, rid)
+    assert out["output"]["would_restart"] == "svc:queue" and out["output"]["token_present"] is True
+    assert svc.status(AGENT, rid).state == "done" and svc.pending() == []
+    with pytest.raises(BrokerError) as info:
+        svc.run(AGENT, rid)
+    assert info.value.reason == "not-pending"
+    returned = [e for e in svc.state.outbox() if e["type"] == "homelabnext.decision.returned"]
+    assert len(returned) == 1 and returned[0]["data"]["verdict"] == "accept"
+    assert event_problems(returned[0]) == []
+    assert svc.detail(AGENT, rid)["result"]["state"] == "done"
+    docs = _audit_ok(svc)
+    assert all(TOKEN not in json.dumps(d) for d in docs)
+    assert not any(TOKEN in p.read_text() for p in (tmp_path / "state").rglob("*.json"))
+
+
+def test_expired_approval_leaves_the_request_pending_for_a_new_one(tmp_path):
+    clock = Clock()
+    svc = _svc(tmp_path, clock)
+    rid = _restart(svc)
+    svc.approve(rid, APPROVER)
+    clock.advance(901)
+    with pytest.raises(Denied) as info:
+        svc.run(AGENT, rid)
+    assert info.value.reason == "approval-expired"
+    assert svc.status(AGENT, rid).state == "pending"
+    svc.approve(rid, APPROVER)
+    assert svc.run(AGENT, rid)["exit_code"] == 0
+
+
+def test_denial_ends_the_request(tmp_path):
+    svc = _svc(tmp_path)
+    rid = _restart(svc)
+    with pytest.raises(Denied) as info:
+        svc.deny(rid, "sso:stranger")  # a stranger cannot deny either
+    assert info.value.reason == "approval-approver-not-allowed"
+    svc.deny(rid, APPROVER, note="not during business hours")
+    assert svc.status(AGENT, rid).state == "denied"
+    with pytest.raises(BrokerError):
+        svc.run(AGENT, rid)
+    with pytest.raises(BrokerError) as info:
+        svc.approve(rid, APPROVER)
+    assert info.value.reason == "not-awaiting-approval"
+    with pytest.raises(Denied) as info:
+        svc.approve("req-0000000000000000", APPROVER)
+    assert info.value.reason == "unknown-request"
+    verdicts = [e["data"]["verdict"] for e in svc.state.outbox() if "returned" in e["type"]]
+    assert verdicts == ["reject"]
+
+
+def test_an_allowed_request_is_not_awaiting_approval(tmp_path):
+    svc = _svc(tmp_path)
+    rid = svc.submit(AGENT, "memory.write", {"name": "a.md", "content": "x"})
+    with pytest.raises(BrokerError):
+        svc.approve(rid, APPROVER)
+    assert svc.pending() == []
+    svc.cancel(AGENT, rid)
+    assert svc.status(AGENT, rid).state == "cancelled"
+    with pytest.raises(BrokerError):
+        svc.cancel(AGENT, rid)
+
+
+def test_a_request_changed_after_approval_no_longer_matches(tmp_path):
+    svc = _svc(tmp_path)
+    rid = _restart(svc)
+    svc.approve(rid, APPROVER)
+    path = tmp_path / "state" / "requests" / f"{rid}.json"
+    rec = json.loads(path.read_text())
+    rec["request"]["params"]["grace_s"] = 0  # someone edits the stored request
+    path.write_text(json.dumps(rec))
+    with pytest.raises(Denied) as info:
+        svc.run(AGENT, rid)
+    assert info.value.reason == "approval-digest-mismatch"
+
+
+def test_approval_is_single_use_across_service_instances(tmp_path):
+    a = _svc(tmp_path)
+    b = _svc(tmp_path)  # a second process over the same state directory
+    rid = _restart(a)
+    appr = a.approve(rid, APPROVER)
+    req = a.state.get_request(rid)["request"]
+    now = "2026-01-15T10:00:00Z"
+    first = decide(a._view(), req, appr, now=now, store=a.approvals)
+    second = decide(b._view(), req, appr, now=now, store=b.approvals)
+    assert (first["reason"], second["reason"]) == ("approved", "approval-replayed")
+
+
+def test_cancel_settles_a_pending_approval(tmp_path):
+    sent = []
+    svc = _svc(tmp_path, notifier=_notifier(sent))
+    rid = _restart(svc)
+    svc.cancel(AGENT, rid)
+    assert [m.title for m in sent] == ["Broker approval needed", "Broker approval settled"]
+
+
+def _notifier(sent):
+    from homelabnext.notify.core import Notifier
+
+    class Sender:
+        def send(self, message):
+            sent.append(message)
+
+    class Store(dict):
+        def put(self, k, v):
+            self[k] = v
+
+    return Notifier(sender=Sender(), store=Store(), clock=lambda: 0.0)
+
+
+def test_notify_and_bus(tmp_path):
+    sent, published = [], []
+
+    class Bus:
+        def publish(self, subject, data, *, msg_id=None):
+            published.append((subject, json.loads(data), msg_id))
+            return len(published)
+
+    svc = _svc(tmp_path, notifier=_notifier(sent), bus=Bus())
+    rid = _restart(svc)
+    svc.approve(rid, APPROVER)
+    assert [m.title for m in sent] == ["Broker approval needed", "Broker approval settled"]
+    assert sent[0].level == "warn" and rid in sent[0].body
+    assert [p[0] for p in published] == [
+        "homelabnext.decision.requested",
+        "homelabnext.decision.returned",
+    ]
+    assert all(p[1]["id"] == p[2] for p in published)
+    assert svc.state.outbox() == [], "with a bus, nothing goes to the outbox"
+
+
+def test_a_failing_notifier_never_fails_the_operation(tmp_path):
+    class Broken:
+        def register_pair(self, *a):
+            pass
+
+        def report(self, *a):
+            raise RuntimeError("send failed")
+
+    svc = _svc(tmp_path, notifier=Broken())
+    rid = _restart(svc)
+    assert svc.status(AGENT, rid).state == "pending"
+    assert _audit_ok(svc)[1]["reason"] == "notify-failed"
+
+
+def test_shadow_mode_decides_and_runs_nothing(tmp_path):
+    manifest, docs = load_manifest(EXAMPLE)
+    manifest["mode"] = "shadow"
+    svc = BrokerService(
+        tmp_path / "state",
+        manifest,
+        handler_docs=docs,
+        base_dir=EXAMPLE.parent,
+        data_root=tmp_path / "data",
+        clock=Clock(),
+    )
+    out = svc.call(AGENT, "memory.write", {"name": "a.md", "content": "x"})
+    assert out["shadow"] is True and out["decision"]["enforced"] is False
+    assert not (tmp_path / "data").exists()
+    rid = svc.submit(AGENT, "memory.write", {"name": "a.md", "content": "x"})
+    assert svc.run(AGENT, rid)["shadow"] is True
+    assert {d["outcome"] for d in _audit_ok(svc) if d["operation"] in ("call", "run")} == {"shadow"}
+
+
+# -- in-process commands and secrets --------------------------------------------------------------
+
+
+def test_secret_arguments_never_reach_disk(tmp_path):
+    svc = BrokerService(tmp_path / "state", clock=Clock())
+    secret = "fake-opaque-value-1a2b"
+    svc.register(
+        "ops.login", lambda **kw: "ok", {"user": ArgSpec("str"), "pw": ArgSpec("str", secret=True)}
+    )
+    svc.allow("ops", ["ops.login"])
+    rid = svc.submit("ops", "ops.login", {"user": "svc", "pw": secret})
+    assert svc.run("ops", rid) == "ok"
+    for p in (tmp_path / "state").rglob("*"):
+        if p.is_file():
+            assert secret not in p.read_text(), p
+    # another process over the same state does not hold the value: it refuses rather than run
+    # the command with a placeholder
+    rid2 = svc.submit("ops", "ops.login", {"user": "svc", "pw": secret})
+    other = BrokerService(tmp_path / "state", clock=Clock())
+    other.register(
+        "ops.login", lambda **kw: "ok", {"user": ArgSpec("str"), "pw": ArgSpec("str", secret=True)}
+    )
+    other.allow("ops", ["ops.login"])
+    with pytest.raises(BrokerError) as info:
+        other.run("ops", rid2)
+    assert info.value.reason == "secret-args-lost"
+
+
+def test_registering_over_a_manifest_action_is_refused(tmp_path):
+    svc = _svc(tmp_path)
+    with pytest.raises(ValueError):
+        svc.register("memory.write", lambda **kw: None, {})
+
+
+def test_foreign_and_malformed_request_ids_look_unknown(tmp_path):
+    svc = _svc(tmp_path)
+    rid = svc.submit(AGENT, "memory.write", {"name": "a.md", "content": "x"})
+    for bad in ("../requests/x", "REQ", rid):
+        with pytest.raises(Denied) as info:
+            svc.status("profile:reader", bad)
+        assert info.value.reason == "not-request-owner"
+    assert svc.status("Profile:Triage", rid).state == "pending", "owner compared normalized"
+
+
+def test_audit_filters(tmp_path):
+    svc = _svc(tmp_path)
+    svc.call(AGENT, "memory.write", {"name": "a.md", "content": "x"})
+    with pytest.raises(Denied):
+        svc.call("profile:reader", "memory.write", {"name": "a.md", "content": "x"})
+    assert len(svc.audit_documents(outcome="denied")) == 1
+    assert len(svc.audit_documents(caller=AGENT, outcome=None)) == 1
+    assert [r.outcome for r in svc.audit()] == ["ok", "denied"]
+
+
+# -- durable state --------------------------------------------------------------------------------
+
+
+def test_write_exclusive_never_overwrites(tmp_path):
+    p = tmp_path / "a.json"
+    assert write_exclusive(p, b"one") is True
+    assert write_exclusive(p, b"two") is False
+    assert p.read_bytes() == b"one" and [x.name for x in tmp_path.iterdir()] == ["a.json"]
+
+
+def test_state_dir_refuses_symlinked_subdirs_and_bad_ids(tmp_path):
+    from homelabnext.broker.state import StateError
+
+    (tmp_path / "s").mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "s" / "audit").symlink_to(tmp_path / "elsewhere")
+    with pytest.raises(StateError):
+        StateDir(tmp_path / "s")
+    st = StateDir(tmp_path / "ok")
+    assert st.get_request("../x") is None and st.approvals("../x") == []
+    with pytest.raises(StateError):
+        st.put_request("../x", {})
+    with pytest.raises(StateError):
+        FileApprovalStore(tmp_path / "c").consume("../x")
+    with pytest.raises(StateError):
+        st.put_outbox({"id": "../x"})
+    assert not is_id("a" * 65) and is_id("req-1")
+
+
+def _consume_worker(directory, approval_id, barrier, results):
+    barrier.wait()
+    results.put(FileApprovalStore(directory).consume(approval_id))
+
+
+def test_racing_processes_consume_one_approval_exactly_once(tmp_path):
+    ctx = multiprocessing.get_context("fork")
+    n = 6
+    barrier, results = ctx.Barrier(n), ctx.Queue()
+    procs = [
+        ctx.Process(target=_consume_worker, args=(tmp_path, "appr-race", barrier, results))
+        for _ in range(n)
+    ]
+    for p in procs:
+        p.start()
+    got = [results.get(timeout=30) for _ in range(n)]
+    for p in procs:
+        p.join(timeout=30)
+    assert sorted(got) == [False] * (n - 1) + [True]
+    assert FileApprovalStore(tmp_path).consumed("appr-race")
+
+
+def _run_worker(tmp, rid, barrier, results):
+    svc = BrokerService.from_manifest(
+        EXAMPLE,
+        Path(tmp) / "state",
+        data_root=Path(tmp) / "data",
+        clock=Clock(T0 + timedelta(seconds=30)),
+        resolve_secret={"DEMO_API_TOKEN": TOKEN}.__getitem__,
+    )
+    barrier.wait()
+    try:
+        svc.run(AGENT, rid)
+        results.put("ok")
+    except BrokerError as exc:
+        results.put(getattr(exc, "reason", "error"))
+
+
+@pytest.mark.parametrize("action", ["memory.write", "service.restart"])
+def test_racing_processes_run_one_request_exactly_once(tmp_path, action):
+    svc = _svc(tmp_path)
+    if action == "memory.write":
+        rid = svc.submit(AGENT, action, {"name": "race.md", "content": "x"})
+    else:
+        rid = _restart(svc)
+        svc.approve(rid, APPROVER)
+    ctx = multiprocessing.get_context("fork")
+    n = 4
+    barrier, results = ctx.Barrier(n), ctx.Queue()
+    procs = [
+        ctx.Process(target=_run_worker, args=(tmp_path, rid, barrier, results)) for _ in range(n)
+    ]
+    for p in procs:
+        p.start()
+    got = [results.get(timeout=60) for _ in range(n)]
+    for p in procs:
+        p.join(timeout=60)
+    assert got.count("ok") == 1, got
+    assert set(got) - {"ok"} <= {"not-pending", "approval-replayed"}, got
+    runs = [
+        d for d in svc.state.audit_records() if d["operation"] == "run" and d["outcome"] == "ok"
+    ]
+    assert len(runs) == 1
+
+
+def test_request_documents_validate(tmp_path):
+    svc = _svc(tmp_path)
+    rid = _restart(svc)
+    req = svc.state.get_request(rid)["request"]
+    assert schema_errors("broker", "request", req) == []
+    assert req["digest"] == request_digest(req)
