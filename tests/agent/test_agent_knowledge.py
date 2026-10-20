@@ -277,6 +277,65 @@ def test_a_node_about_an_ungranted_capability_one_hop_away_is_excluded(root):
         assert "secrets" not in text
 
 
+def _with(graph: Graph, nodes, edges) -> Graph:
+    return Graph(
+        {**graph.nodes, **{n.id: n for n in nodes}},
+        [*graph.edges, *(Edge(s, d, t, "fake") for s, d, t in edges)],
+    )
+
+
+def test_a_tag_naming_a_product_reaches_the_services_that_run_it(root):
+    """A lesson tagged ``lake-query`` and ``garage``: the garage tag resolves to the product, the
+    product is run by the object-store service.  The profile holds lake-query only, so the lesson
+    is about something ungranted and stays out."""
+    g = _with(
+        fake_graph(),
+        [
+            _node("system:garage", "system"),
+            _node("product:garage", "product"),
+            _node("svc:object-store", "svc"),
+            _node("cap:object-store", "cap"),
+            _node("lesson:LL-020", "lesson", "lessons/LL-010.md", reviewed=FULL),
+        ],
+        [
+            ("lesson:LL-020", "system:lake-query", "about"),
+            ("lesson:LL-020", "system:garage", "about"),
+            ("system:garage", "product:garage", "resolves_to"),
+            ("svc:object-store", "product:garage", "runs"),
+            ("svc:object-store", "cap:object-store", "provides"),
+        ],
+    )
+    assert subjects(g, "lesson:LL-020") == {"cap:lake-query", "svc:object-store"}
+    sel = select_knowledge(profile_with(RULE), g, root)
+    assert "lesson:LL-020" not in ids(sel)
+    assert reasons(sel)["lesson:LL-020"] == (
+        "about what the profile is not granted: svc:object-store"
+    )
+
+
+def test_a_proxy_that_resolves_to_nothing_grantable_fails_closed(root):
+    """A product nothing registered runs (only a compose service with no capability): the tag is
+    an ungranted subject, not a pass."""
+    g = _with(
+        fake_graph(),
+        [
+            _node("system:garage", "system"),
+            _node("product:garage", "product"),
+            _node("compose:lab/garage", "compose"),
+            _node("lesson:LL-020", "lesson", "lessons/LL-010.md", reviewed=FULL),
+        ],
+        [
+            ("lesson:LL-020", "system:lake-query", "about"),
+            ("lesson:LL-020", "system:garage", "about"),
+            ("system:garage", "product:garage", "resolves_to"),
+            ("compose:lab/garage", "product:garage", "runs"),
+        ],
+    )
+    assert subjects(g, "lesson:LL-020") == {"cap:lake-query", "system:garage"}
+    sel = select_knowledge(profile_with(RULE), g, root)
+    assert "lesson:LL-020" not in ids(sel)
+
+
 def test_the_task_cannot_seed_an_ungranted_capability(root):
     rule = {"from": "task", "kinds": ["runbook", "lesson", "doc"]}
     sel = select_knowledge(

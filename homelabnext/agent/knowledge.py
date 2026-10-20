@@ -13,10 +13,11 @@ which ids and which content digests it carried.
 profile's *granted* set is its granted capabilities, its granted MCP servers and the services
 that provide a granted capability; broker actions are never in it (the access block lists them).
 A node's *subjects* are the access-bearing nodes it is directly linked to, in either direction,
-looking through the nodes that only name one: a system tag (to what it ``resolves_to``), a
-product (to the services that ``run`` it), an adapter (to what it ``implements``) and a compose
-service (to what it ``provides``).  A node is eligible only when it has a subject and **every**
-subject is granted: a page about a granted and an ungranted capability is excluded, one hop away
+looking through the nodes that only name one, transitively: a system tag (to what it
+``resolves_to``), a product (to the services and compose services that ``run`` it and the adapters
+written ``for`` it), an adapter (to what it ``implements``) and a compose service (to what it
+``provides``).  A proxy that reaches nothing access-bearing counts as an ungranted subject (fail
+closed).  A node is eligible only when it has a subject and **every** subject is granted: a page about a granted and an ungranted capability is excluded, one hop away
 or not.  Candidates are found on the graph with ungranted access-bearing nodes removed (nothing
 is reached *through* one), but subjects are read on the full graph, so removing a node can never
 make a candidate look clean.
@@ -53,13 +54,18 @@ from .pack import KNOWLEDGE_PREFIX
 
 ACCESS_KINDS = frozenset({"action", "cap", "mcp", "svc"})
 REVIEWABLE_KINDS = frozenset({"inv", "lesson", "runbook"})
-#: kinds that only name an access-bearing node: (edge type, direction) to follow from them
-_PROXIES: dict[str, tuple[str, str]] = {
-    "system": ("resolves_to", "out"),
-    "product": ("runs", "in"),
-    "adapter": ("implements", "out"),
-    "compose": ("provides", "out"),
+#: kinds that only name an access-bearing node: the (edge type, direction) pairs to follow from
+#: them -- a system tag to what it resolves to, a product to the services and compose services that
+#: run it and the adapters written for it, an adapter to what it implements, a compose service to
+#: what it provides
+_PROXIES: dict[str, tuple[tuple[str, str], ...]] = {
+    "system": (("resolves_to", "out"),),
+    "product": (("runs", "in"), ("for", "in")),
+    "adapter": (("implements", "out"),),
+    "compose": (("provides", "out"),),
 }
+#: proxies followed through at most this many in a chain (system -> product -> compose -> cap is 3)
+_PROXY_DEPTH = 4
 _UNBOUNDED = 1_000_000
 
 
@@ -114,23 +120,59 @@ def granted_nodes(graph: Graph, grants: Mapping[str, Any]) -> set[str]:
 
 
 def subjects(graph: Graph, nid: str) -> set[str]:
-    """The access-bearing nodes ``nid`` is about (see the module doc)."""
+    """The access-bearing nodes ``nid`` is about (see the module doc).
+
+    A proxy is looked through transitively (bounded by ``_PROXY_DEPTH``): a tag naming a product
+    reaches the services that run it and the capabilities its adapters implement.  A proxy that
+    links onward but reaches nothing access-bearing is itself a subject, and never granted, so a
+    record about it is excluded (fail closed).  A system tag that resolves to nothing at all is a
+    free-form topic (``tls``), not a proxy, and adds no subject."""
     out: set[str] = set()
-    edges = [(e, e.dst) for e in graph.out_edges(nid)] + [(e, e.src) for e in graph.in_edges(nid)]
-    for _, other in edges:
+    edges = [e.dst for e in graph.out_edges(nid)] + [e.src for e in graph.in_edges(nid)]
+    for other in edges:
         node = graph.nodes.get(other)
         if node is None:
             continue
         if node.kind in ACCESS_KINDS:
             out.add(other)
         elif node.kind in _PROXIES:
-            etype, direction = _PROXIES[node.kind]
-            hops = graph.out_edges(other) if direction == "out" else graph.in_edges(other)
-            for e in hops:
-                far = e.dst if direction == "out" else e.src
-                if e.type == etype and far != nid and far[: far.find(":")] in ACCESS_KINDS:
-                    out.add(far)
+            hops = _proxy_hops(graph, other, nid)
+            if hops:
+                reached = _through(graph, other, nid)
+                out |= reached or {other}
     return out
+
+
+def _proxy_hops(graph: Graph, proxy: str, origin: str) -> list[str]:
+    """The nodes ``proxy`` names, by its kind's edges (never back to ``origin``)."""
+    out = []
+    for etype, direction in _PROXIES[graph.nodes[proxy].kind]:
+        if direction == "out":
+            out += [e.dst for e in graph.out_edges(proxy) if e.type == etype]
+        else:
+            out += [e.src for e in graph.in_edges(proxy) if e.type == etype]
+    return [x for x in out if x != origin]
+
+
+def _through(graph: Graph, proxy: str, origin: str) -> set[str]:
+    """Access-bearing nodes reachable from ``proxy`` through proxies only."""
+    found: set[str] = set()
+    seen = {proxy, origin}
+    frontier = [proxy]
+    for _ in range(_PROXY_DEPTH):
+        nxt = []
+        for p in frontier:
+            for far in _proxy_hops(graph, p, origin):
+                if far in seen:
+                    continue
+                seen.add(far)
+                kind = graph.nodes[far].kind if far in graph.nodes else far.split(":", 1)[0]
+                if kind in ACCESS_KINDS:
+                    found.add(far)
+                elif kind in _PROXIES and far in graph.nodes:
+                    nxt.append(far)
+        frontier = nxt
+    return found
 
 
 def _pruned(graph: Graph, granted: set[str]) -> Graph:
