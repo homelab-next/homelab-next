@@ -226,18 +226,42 @@ vars:
 """
 
 
+SURICATA_FAKE = r"""
+import os, re, sys
+log, fail = LOG, FAIL
+args = sys.argv[1:]
+line = " ".join(args)
+if "-T" in args:  # name the groups file the tested configuration includes, and its HOME_NET
+    conf = args[args.index("-c") + 1]
+    inc = re.search(r"address-groups:\s*\n\s+include:\s*(\S+)", open(conf).read()).group(1)
+    groups = open(os.path.join(os.path.dirname(conf), inc)).read()
+    line += f" [{inc} {re.search(r'^HOME_NET: (.*)$', groups, re.M).group(1)}]"
+open(log, "a").write(line + "\n")
+sys.exit(1 if os.path.exists(fail) else 0)
+"""
+
+
 def suricata_setup(tmp_path, conf=SURICATA_YAML):
     etc = tmp_path / "etc"
     etc.mkdir(exist_ok=True)
     (etc / "suricata.yaml").write_text(conf)
     log = tmp_path / "calls.log"
-    body = f"import sys\nopen({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+
+    def cli(name):
+        body = SURICATA_FAKE.replace("LOG", repr(str(log)))
+        return fake(tmp_path / name, body.replace("FAIL", repr(str(tmp_path / f"{name}.fails"))))
+
     return {
         "suricata_enroll_guests": GUESTS,
         "suricata_enroll_config_dir": str(etc),
-        "suricata_enroll_suricata_cli": fake(tmp_path / "suricata", body),
-        "suricata_enroll_suricatasc_cli": fake(tmp_path / "suricatasc", body),
+        "suricata_enroll_suricata_cli": cli("suricata"),
+        "suricata_enroll_suricatasc_cli": cli("suricatasc"),
     }, log
+
+
+TESTED = "-T -c {etc}/.suricata.yaml.hnx-test [.hnx-address-groups.yaml.hnx-staged {home}]"
+ALL_HOME = '"[198.51.100.40,198.51.100.50,203.0.113.10]"'
+LIVE_ONLY = ["hnx-address-groups.yaml", "suricata.yaml"]  # nothing staged or pending
 
 
 def test_suricata_enroll_writes_groups_tests_and_reloads_once(tmp_path):
@@ -250,9 +274,57 @@ def test_suricata_enroll_writes_groups_tests_and_reloads_once(tmp_path):
     assert groups["HNX_ZONE_EDGE"] == "[203.0.113.10]"
     assert groups["EXTERNAL_NET"] == "!$HOME_NET" and groups["HTTP_SERVERS"] == "$HOME_NET"
     calls = log.read_text().splitlines()
-    assert calls == [f"-T -c {tmp_path}/etc/suricata.yaml", "-c reload-rules"]
+    assert calls == [TESTED.format(etc=tmp_path / "etc", home=ALL_HOME), "-c reload-rules"]
+    assert sorted(p.name for p in (tmp_path / "etc").iterdir()) == LIVE_ONLY
     again = run_role(tmp_path, "suricata_enroll", "main", v)  # unchanged: no test, no reload
     assert again.returncode == 0 and log.read_text().splitlines() == calls
+
+
+def test_suricata_enroll_never_installs_a_file_that_fails_the_test(tmp_path):
+    v, log = suricata_setup(tmp_path)
+    live = tmp_path / "etc" / "hnx-address-groups.yaml"
+    assert run_role(tmp_path, "suricata_enroll", "main", v).returncode == 0
+    good = live.read_text()
+    fewer = {**v, "suricata_enroll_guests": GUESTS[:1]}
+    (tmp_path / "suricata.fails").touch()
+    r = run_role(tmp_path, "suricata_enroll", "main", fewer)
+    assert r.returncode != 0
+    assert live.read_text() == good  # the failing file never went live
+    assert sorted(p.name for p in (tmp_path / "etc").iterdir()) == LIVE_ONLY
+    assert log.read_text().splitlines()[-1].startswith("-T ")  # tested, never reloaded
+    (tmp_path / "suricata.fails").unlink()
+    log.write_text("")
+    fixed = run_role(tmp_path, "suricata_enroll", "main", fewer)  # the next run tests again
+    assert fixed.returncode == 0, fixed.stdout
+    assert log.read_text().splitlines() == [
+        TESTED.format(etc=tmp_path / "etc", home='"[198.51.100.50]"'),
+        "-c reload-rules",
+    ]
+    assert yaml.safe_load(live.read_text())["HOME_NET"] == "[198.51.100.50]"
+
+
+def test_suricata_enroll_retries_a_failed_reload(tmp_path):
+    v, log = suricata_setup(tmp_path)
+    (tmp_path / "suricatasc.fails").touch()
+    assert run_role(tmp_path, "suricata_enroll", "main", v).returncode != 0
+    assert (tmp_path / "etc" / "hnx-address-groups.yaml").exists()  # tested, so live
+    (tmp_path / "suricatasc.fails").unlink()
+    log.write_text("")
+    again = run_role(tmp_path, "suricata_enroll", "main", v)  # file unchanged, reload still owed
+    assert again.returncode == 0, again.stdout
+    assert log.read_text().splitlines() == ["-c reload-rules"]
+    log.write_text("")
+    assert run_role(tmp_path, "suricata_enroll", "main", v).returncode == 0
+    assert log.read_text() == ""  # confirmed: nothing more to do
+    assert sorted(p.name for p in (tmp_path / "etc").iterdir()) == LIVE_ONLY
+
+
+def test_suricata_enroll_keeps_the_reload_owed_while_reloads_are_off(tmp_path):
+    v, log = suricata_setup(tmp_path)
+    off = run_role(tmp_path, "suricata_enroll", "main", {**v, "suricata_enroll_reload": False})
+    assert off.returncode == 0 and "-c reload-rules" not in log.read_text()
+    assert run_role(tmp_path, "suricata_enroll", "main", v).returncode == 0
+    assert log.read_text().splitlines()[-1] == "-c reload-rules"
 
 
 def test_suricata_enroll_refuses_a_config_that_does_not_include_the_groups(tmp_path):
