@@ -114,7 +114,7 @@ wiki-links (Parent, Objective, Measured by, Supports, Serves, Raised by), and a 
 
 * `review` events, the shared review model: `examples/review-policy.yml` has an entry per kind
   and state (`strategy`, `objective`, `measure`, `requirement`, `rfi`). An active objective,
-  measure or requirement needs an agent check and a challenge; the strategy and an achieved or
+  measure or requirement needs an agent check and an agent audit; the strategy and an achieved or
   retired objective also a human approve; an RFI needs nothing (a question is never blocked).
 * `value` events, a measure's readings (below). A reading is not content: recording one never
   makes a review stale.
@@ -151,7 +151,7 @@ defaults follow a nine-rule MOE/MOP doctrine:
 | `baseline_so` | error, `types: [PIR, FFIR]`, `exactly: 1` | each such requirement supports exactly one baseline (non-supplemental) SO, and no baseline SO is shared between two of them, so their measures roll up apart |
 | `so_supported` | warn | an active SO that no active requirement supports is an orphan |
 
-What needs judgment is listed under `judgment:` in the file for the reviewers (check, challenge,
+What needs judgment is listed under `judgment:` in the file for the reviewers (check, audit,
 approve): completeness measures windowed on write time with backfills reported apart; "print the
 predicate" when a changed predicate claims a null effect; a supplemental objective being additive
 rather than a re-labelled baseline; a MOE that is really an effect and not a disguised count.

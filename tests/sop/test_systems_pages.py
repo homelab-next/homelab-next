@@ -169,8 +169,7 @@ def test_the_committed_pages_are_drafts_that_list_their_missing_tiers(reg):
     assert rep.ok() and rep.review_problems == []
     assert set(rep.drafts) == {p.name for p in (ROOT / "docs/systems").glob("[!_]*.md")}
     assert rep.info() == [
-        "draft (needs agent check, agent challenge, human approve): "
-        + ", ".join(sorted(rep.drafts))
+        "draft (needs agent check, agent audit, human approve): " + ", ".join(sorted(rep.drafts))
     ]
 
 
@@ -209,7 +208,7 @@ def test_editing_a_human_block_invalidates_its_reviews(reg, pages):
     p.write_text(p.read_text().replace("Resolves internal names", "Resolves most internal names"))
     rep = check_pages(reg, pages, POLICY)
     assert not rep.ok()
-    assert any("needs agent check, agent challenge, human approve" in ln for ln in rep.lines())
+    assert any("needs agent check, agent audit, human approve" in ln for ln in rep.lines())
     assert any("3 review(s) are of an earlier content" in ln for ln in rep.lines())
 
 
@@ -245,7 +244,7 @@ def test_page_reviews_follow_the_same_identity_rules(reg, pages):
     p.write_text(
         p.read_text()
         .replace("author: 'human:example-operator'", "author: unknown")
-        .replace("by: 'agent:example-challenger'", "by: 'agent:example-checker'")
+        .replace("by: 'agent:example-auditor'", "by: 'agent:example-checker'")
     )
     assert any("must be a different agent" in ln for ln in check_pages(reg, pages, POLICY).lines())
 

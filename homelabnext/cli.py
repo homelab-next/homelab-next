@@ -168,7 +168,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.sop.cli").main(a),
     ),
     "agent": (
-        "agent profiles, packs, prompts: compile|verify|lint|pack|keyring|prompts|injection",
+        "agent profiles, packs, prompts: compile|verify|lint|pack|terms|keyring|prompts|injection",
         lambda a: importlib.import_module("homelabnext.agent.cli").main(a),
     ),
     "workflows": (

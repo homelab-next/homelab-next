@@ -231,8 +231,15 @@ the registry's `agent-runtime` service):
 - **may not**: every other registry capability, MCP server and broker action, explicitly;
 - the registry aliases reachable from its zone, and the profile and registry digests.
 
-`access` is a reserved section name: a manifest that defines one is refused, so a manifest cannot
-replace what the agent is told. The manifest's persona must be the profile's. Stable content is
+It also adds the project's **terms** as a second required `stable` section named `terms`: the
+vocabulary and authorized scope of [Terms and scope](terms.md) ([[terms]]) -- auditing, the
+`audit` review, auditing tools, internal assessments, the operator's own lab as the only scope,
+and threat vocabulary kept for external threats. Its single source is the packaged
+`homelabnext/agent/terms.md` (`docs/terms.md` is generated from it, `hnx agent terms --check` in
+`make check`), so every session pack carries the same text and the pack digest pins it.
+
+`access` and `terms` are reserved section names: a manifest that defines either is refused, so a
+manifest cannot replace or remove what the agent is told. The manifest's persona must be the profile's. Stable content is
 never cut, so a block that does not fit `budget_chars` defers the pack. On the command line,
 `hnx agent pack MANIFEST --inputs F --profile P --registry R [--runs-on HOST] [--broker M]`.
 
@@ -251,7 +258,7 @@ include:
     depth: 1                    # hops from the seeds, 1..3 (default 1)
     budget: 12                  # max nodes this rule includes, 1..50 (default 12)
     max_chars: 4000             # per node, the pack's section cap (default 4000)
-    require_reviews: [agent_check, challenge]       # optional
+    require_reviews: [agent_check, audit]           # optional
 ```
 
 - **Seeds are grants.** `capabilities` seeds from the granted `cap:` ids, `mcp` from the granted

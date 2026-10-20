@@ -5,7 +5,7 @@
 validate BEFORE a byte is written, with the build's own fatal rules, against the register as it
 will be: every record file of the directory, every sidecar event, the other register (links
 resolve across lessons and runbooks), the invariants (``retired_by``) and the review policy
-(identity rules: allowlist, no self-review, challenge independence).  Invalid content raises
+(identity rules: allowlist, no self-review, audit independence).  Invalid content raises
 :class:`~homelabnext.registers.schema.RegisterError` and nothing is written.
 
 One rule of the build is opt-in here: ``require_reviews=True`` also demands the review tiers

@@ -9,78 +9,78 @@ reviewers:
   # approvers); an `agent:` identity is an agent with or without an entry
   - {issuer: human, subject: example-operator, kind: human}
   - {issuer: agent, subject: example-checker, kind: agent}
-  - {issuer: agent, subject: example-challenger, kind: agent}
+  - {issuer: agent, subject: example-auditor, kind: agent}
 requirements:
   lesson.pitfall:
     open: []        # recording a problem is never blocked
     partial: []
-    controlled:     # "it is under control" is a claim: an agent checks it, another attacks it
+    controlled:     # "it is under control" is a claim: an agent checks it, another audits it
       - {role: check, kind: agent}
-      - {role: challenge, kind: agent}
+      - {role: audit, kind: agent}
     retired:        # graduating into a mechanism also needs a human approve
       - {role: check, kind: agent}
-      - {role: challenge, kind: agent}
+      - {role: audit, kind: agent}
       - {role: approve, kind: human}
   lesson.practice:
     active:
       - {role: check, kind: agent}
-      - {role: challenge, kind: agent}
+      - {role: audit, kind: agent}
     incorporated:
       - {role: check, kind: agent}
-      - {role: challenge, kind: agent}
+      - {role: audit, kind: agent}
       - {role: approve, kind: human}
     superseded:
       - {role: check, kind: agent}
-      - {role: challenge, kind: agent}
+      - {role: audit, kind: agent}
       - {role: approve, kind: human}
     retired:
       - {role: check, kind: agent}
-      - {role: challenge, kind: agent}
+      - {role: audit, kind: agent}
   runbook:
     active:
       - {role: check, kind: agent}
-      - {role: challenge, kind: agent}
+      - {role: audit, kind: agent}
     superseded: []
   system-page:
     draft: []
     reviewed:       # and no TODO(human) left in its blocks
       - {role: check, kind: agent}
-      - {role: challenge, kind: agent}
+      - {role: audit, kind: agent}
       - {role: approve, kind: human}
   # the strategy-to-task records (docs/strategy.md): the strategy itself is the owner's to sign
   strategy:
     active:
       - {role: check, kind: agent}
-      - {role: challenge, kind: agent}
+      - {role: audit, kind: agent}
       - {role: approve, kind: human}
   objective:
     active:
       - {role: check, kind: agent}
-      - {role: challenge, kind: agent}
+      - {role: audit, kind: agent}
     achieved:       # "we got there" is a claim about effect: a human signs it
       - {role: check, kind: agent}
-      - {role: challenge, kind: agent}
+      - {role: audit, kind: agent}
       - {role: approve, kind: human}
     retired:
       - {role: check, kind: agent}
-      - {role: challenge, kind: agent}
+      - {role: audit, kind: agent}
       - {role: approve, kind: human}
   measure:
-    active:         # the seven doctrine fields are checked, and attacked
+    active:         # the seven doctrine fields are checked, and audited
       - {role: check, kind: agent}
-      - {role: challenge, kind: agent}
+      - {role: audit, kind: agent}
     retired:
       - {role: check, kind: agent}
   requirement:
     active:
       - {role: check, kind: agent}
-      - {role: challenge, kind: agent}
+      - {role: audit, kind: agent}
     answered:
       - {role: check, kind: agent}
     expired: []     # the LTIOV sweep: time decided it
     retired:
       - {role: check, kind: agent}
-      - {role: challenge, kind: agent}
+      - {role: audit, kind: agent}
       - {role: approve, kind: human}
   rfi:              # an RFI is a question: raising and closing one is never blocked
     open: []

@@ -43,7 +43,7 @@ FILES = {
     "docs/orphan.md": "# orphan\nAbout nothing granted.\n",
     "suites/lake_query.py": "SUITE = ...  # two checks\n",
 }
-FULL = ["agent_check", "challenge", "human"]
+FULL = ["agent_check", "audit", "human"]
 
 
 def _node(nid, kind, path="", **attrs):
@@ -248,7 +248,7 @@ def test_include_pulls_the_runbook_and_lesson_linked_to_a_granted_capability(roo
     assert lesson["text"].endswith(FILES["lessons/LL-010.md"])  # the record itself, not a pointer
     assert "knowledge lesson:LL-010 (lesson)" in lesson["text"]
     assert "path: lessons/LL-010.md" in lesson["text"]
-    assert "reviews: agent_check, challenge, human" in lesson["text"]
+    assert "reviews: agent_check, audit, human" in lesson["text"]
     check = next(i for i in sel.included if i["id"] == "check:lake-query/a")
     assert 'severity: "must"' in check["text"]  # shared file: the node's own record
     assert "SUITE" not in check["text"]
@@ -360,23 +360,37 @@ def test_inactive_records_never_enter(root):
 
 
 def test_require_reviews_filters_records_only(root):
-    sel = select_knowledge(
-        profile_with({**RULE, "require_reviews": ["challenge"]}), fake_graph(), root
-    )
+    sel = select_knowledge(profile_with({**RULE, "require_reviews": ["audit"]}), fake_graph(), root)
     assert "lesson:LL-011" not in ids(sel)
-    assert reasons(sel)["lesson:LL-011"] == "reviews: no current challenge (has: agent_check)"
+    assert reasons(sel)["lesson:LL-011"] == "reviews: no current audit (has: agent_check)"
     assert "lesson:LL-010" in ids(sel) and "check:lake-query/a" in ids(sel)  # not a record
+
+
+def test_the_deprecated_tier_challenge_compiles_to_audit_with_a_warning(root):
+    from homelabnext.reviews import DeprecatedReviewRole
+
+    with pytest.warns(DeprecatedReviewRole, match="require_reviews"):
+        prof = profile_with({**RULE, "require_reviews": ["challenge", "agent_check"]})
+    assert prof["include"][0]["require_reviews"] == ["agent_check", "audit"]
+    assert verify_profile(prof) == []
+    # a profile written before the rename still selects as if it said audit
+    old = copy.deepcopy(profile_with({**RULE, "require_reviews": ["audit"]}))
+    old["include"][0]["require_reviews"] = ["challenge"]
+    old["digest"] = profile_digest(old)
+    with pytest.warns(DeprecatedReviewRole):  # the pack build re-checks the rules
+        sel = select_knowledge(old, fake_graph(), root)
+    assert reasons(sel)["lesson:LL-011"] == "reviews: no current audit (has: agent_check)"
 
 
 def _ll010(author: str, edit_after_review: bool = False) -> Graph:
     """The fake graph with LL-010's ``reviewed`` built by the registers reader from a record that
-    an agent checked and another challenged (against its content as written, then maybe edited)."""
+    an agent checked and another audited (against its content as written, then maybe edited)."""
     rec = {"id": "LL-010", "title": "Lake queries time out", "kind": "pitfall", "author": author}
     digest = record_digest_of(rec)
     rec["reviews"] = [
         {"by": f"agent:fake-{who}", "kind": "agent", "role": role, "date": "2026-01-02",
          "verdict": "pass", "digest": digest}
-        for who, role in (("checker", "check"), ("challenger", "challenge"))
+        for who, role in (("checker", "check"), ("auditor", "audit"))
     ]  # fmt: skip
     if edit_after_review:
         rec["title"] += " (edited after review)"
@@ -393,13 +407,13 @@ def _ll010(author: str, edit_after_review: bool = False) -> Graph:
     [
         ("agent:fake-author", False, None),  # current, independent: included
         ("agent:fake-author", True, "none"),  # content changed after the reviews
-        ("agent:fake-checker", False, "challenge"),  # the checker reviewed its own lesson
+        ("agent:fake-checker", False, "audit"),  # the checker reviewed its own lesson
     ],
 )
 def test_require_reviews_trusts_only_current_valid_reviews(root, author, edited, has):
     """``require_reviews`` reads the graph's ``reviewed``, which drops a review of an earlier
     content and a self-review, so neither can satisfy it."""
-    prof = profile_with({**RULE, "require_reviews": ["agent_check", "challenge"]})
+    prof = profile_with({**RULE, "require_reviews": ["agent_check", "audit"]})
     sel = select_knowledge(prof, _ll010(author, edited), root)
     if has is None:
         assert "lesson:LL-010" in ids(sel)
@@ -409,7 +423,7 @@ def test_require_reviews_trusts_only_current_valid_reviews(root, author, edited,
 
 
 def test_another_rule_may_include_what_one_excluded(root):
-    strict = {**RULE, "require_reviews": ["challenge"]}
+    strict = {**RULE, "require_reviews": ["audit"]}
     sel = select_knowledge(
         profile_with(strict, {"from": "task", "kinds": ["lesson"]}),
         fake_graph(),

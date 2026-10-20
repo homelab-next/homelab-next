@@ -44,7 +44,7 @@ def test_graph_nodes_and_typed_edges(graph):
 def test_closed_records_are_inactive_in_the_graph(graph):
     assert not is_active(graph.nodes["rfi:RFI-002"])  # no-find
     assert is_active(graph.nodes["rfi:RFI-001"])
-    assert graph.nodes["objective:SO-001"].attrs["reviewed"] == ["agent_check", "challenge"]
+    assert graph.nodes["objective:SO-001"].attrs["reviewed"] == ["agent_check", "audit"]
 
 
 def _doc(strategy=True):

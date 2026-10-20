@@ -72,12 +72,12 @@ lesson. The index pages list such records under **Archive**.
 
 **Review provenance.** Lessons, runbooks and criteria carry `author` and a review summary in
 their attrs when the record has them: `reviewed` lists the tiers with a current, valid, passing
-review (`agent_check` -- an agent's `check` review; `challenge`; `human` -- a human review of any
+review (`agent_check` -- an agent's `check` review; `audit` -- an agent audit review; `human` -- a human review of any
 role) and `review_count` counts the reviews. "Current and valid" is `homelabnext.reviews.evaluate`
 against the record's content digest now, with the register's review policy, exactly as the
-register validation judges it: a review of an earlier content, a self-review, a challenge from a
+register validation judges it: a review of an earlier content, a self-review, an audit by a
 checker or an agent in a human slot counts for no tier, so `require_reviews` can trust it. Reviewers are not nodes; the summary is there so a
-context pack can prefer records with full human and challenge validation.
+context pack can prefer records with full human and audit validation.
 
 The registers are read through one function, `_register_entries(path)` in
 `homelabnext/graph/sources.py`, so the record storage format can change in one place.

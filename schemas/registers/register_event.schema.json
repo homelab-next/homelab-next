@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/registers/register_event/1.1",
+  "$id": "https://schemas.example.internal/homelabnext/registers/register_event/1.2",
   "title": "Register event",
-  "description": "One append-only event about a lesson, runbook, docs/systems page or strategy record (homelabnext.strategy), stored as its own file in the sidecar directory <RECORD>.events/ and named <YYYYMMDDTHHMMSSZ>-<event>-<actor-slug>[-<n>].yml (the name rule is checked by homelabnext.registers.events). Derived fields (reviews, recurrences, last_verified, values, the current status) are computed from these files on load and never edited in place. `transition` events are written only by a decider (hnx registers decide, hnx strategy decide). 1.1 added, additively, the `value` event (one reading of a strategy measure, nested in the transition entry's else branch so allOf keeps its length) and the transition's set.resolution (why a strategy record closed).",
+  "description": "One append-only event about a lesson, runbook, docs/systems page or strategy record (homelabnext.strategy), stored as its own file in the sidecar directory <RECORD>.events/ and named <YYYYMMDDTHHMMSSZ>-<event>-<actor-slug>[-<n>].yml (the name rule is checked by homelabnext.registers.events). Derived fields (reviews, recurrences, last_verified, values, the current status) are computed from these files on load and never edited in place. `transition` events are written only by a decider (hnx registers decide, hnx strategy decide). 1.1 added, additively, the `value` event (one reading of a strategy measure, nested in the transition entry's else branch so allOf keeps its length) and the transition's set.resolution (why a strategy record closed). 1.2 adds, additively, the review role `audit` (an independent agent audit that looks for what is wrong, missing or unproven); `challenge` is its deprecated spelling, still accepted and read as `audit` with a warning (homelabnext.reviews.normalize_role).",
   "type": "object",
   "properties": {
     "event": {
@@ -61,6 +61,7 @@
           "role": {
             "enum": [
               "check",
+              "audit",
               "challenge",
               "approve"
             ]

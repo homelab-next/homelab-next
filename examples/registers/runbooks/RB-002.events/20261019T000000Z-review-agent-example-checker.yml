@@ -5,5 +5,5 @@ kind: agent
 role: check
 date: 2026-10-19
 verdict: pass
-digest: sha256:0137b7273878
+digest: sha256:fba9634ac690
 note: fictional example review

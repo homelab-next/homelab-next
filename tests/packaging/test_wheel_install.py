@@ -53,6 +53,7 @@ def test_wheel_ships_package_data_and_entry_point(wheel_dir, tmp_path):
         eps = z.read(eps_name).decode()
     assert "homelabnext/decide/examples/decision_spec.yml" in names
     assert "homelabnext/golden/examples/classifier_smoke.yml" in names
+    assert "homelabnext/agent/terms.md" in names  # the terms every session pack carries
     assert "homelabnext/generators/templates/caddy_site.tmpl" in names
     assert "homelabnext/_data/schemas/platform/site.schema.json" in names
     assert "homelabnext/_data/schemas/ocsf/authentication.v1.json" in names

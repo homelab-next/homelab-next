@@ -9,6 +9,9 @@ One derivation feeds two consumers, so they cannot disagree:
   stable section named ``access``, so an agent starts knowing what it may use, through which
   registry alias, from where it runs, and that everything else is denied.
 
+:func:`start_session` also adds the reserved stable ``terms`` section
+(:mod:`homelabnext.agent.terms`): the project's vocabulary and authorized scope.
+
 Levels.  A grant's level is the worst of its capability classes (``tool_classes.yml``):
 ``read`` -> read, ``record-write``/``file-write`` -> write, ``exec``/``egress`` -> execute,
 ``credential`` -> privileged.  A grant the table does not classify is listed as
@@ -28,6 +31,7 @@ from .digest import digest_of
 from .errors import SpecError
 from .pack import assemble_pack
 from .readers import ToolClasses, default_classes
+from .terms import TERMS_SECTION, terms_section
 
 ACCESS_SECTION = "access"
 LEVELS = ("read", "write", "execute", "privileged")
@@ -255,19 +259,24 @@ def start_session(
     denylist: Iterable[str] | None = None,
     knowledge: Any = None,
 ) -> tuple[dict, str]:
-    """Assemble a session's context pack with the profile's access block as a stable section.
+    """Assemble a session's context pack with the profile's access block and the project's terms
+    (:mod:`homelabnext.agent.terms`) as stable sections.
 
     ``knowledge``: the profile's :class:`~homelabnext.agent.knowledge.Selection`; it must have
     been selected for this very profile (id and digest), and goes into the volatile tier.
 
-    The section is named ``access`` and is reserved: a manifest that defines its own is refused,
-    so a manifest cannot replace what the agent is told about its access.  The profile's persona
+    The sections are named ``access`` and ``terms`` and are reserved: a manifest that defines
+    either is refused, so a manifest cannot replace or remove what the agent is told about its
+    access and about the project's terms and scope.  The profile's persona
     must be the manifest's.  Stable content is never cut, so a block that does not fit
     ``budget_chars`` defers the pack instead of being truncated.
     """
     _check_profile(profile)
-    if any(s.get("name") == ACCESS_SECTION for s in manifest.get("sections", [])):
-        raise SpecError(f"section name {ACCESS_SECTION!r} is reserved for the access block")
+    for s in manifest.get("sections", []):
+        if s.get("name") == ACCESS_SECTION:
+            raise SpecError(f"section name {ACCESS_SECTION!r} is reserved for the access block")
+        if s.get("name") == TERMS_SECTION:
+            raise SpecError(f"section name {TERMS_SECTION!r} is reserved for the project's terms")
     if manifest.get("persona") != profile.get("persona"):
         raise SpecError(
             f"manifest persona {manifest.get('persona')!r} is not the profile's "
@@ -292,5 +301,5 @@ def start_session(
         "max_chars": len(text),
         "text": text,
     }
-    session_manifest = {**manifest, "sections": [*manifest["sections"], section]}
+    session_manifest = {**manifest, "sections": [*manifest["sections"], section, terms_section()]}
     return assemble_pack(session_manifest, inputs, denylist=denylist, knowledge=knowledge)

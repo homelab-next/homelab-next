@@ -33,6 +33,7 @@ NEWER_THAN_1_0 = {
     "note.strategy-rfi.md": "records/note 1.3: type strategy-rfi",
     "register_event.value.yml": "registers/register_event 1.1: event value",
     "register_event.value-finding.yml": "registers/register_event 1.1: event value",
+    "register_event.review-audit.yml": "registers/register_event 1.2: review role audit",
 }
 
 

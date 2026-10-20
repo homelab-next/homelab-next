@@ -161,7 +161,7 @@ def test_derived_fields_come_from_events(lab):
     )
     again = load_register(lab / "lessons")["lessons"][0]
     assert again["recurrences"] == 2
-    with pytest.raises(RegisterError, match="status controlled needs agent check, agent challenge"):
+    with pytest.raises(RegisterError, match="status controlled needs agent check, agent audit"):
         build_all(lab, lab.parent / "out")
     text = rec.read_text().replace("review_by:", "last_verified: 2026-10-20\nreview_by:")
     rec.write_text(text)
@@ -428,11 +428,11 @@ def test_a_retirement_waits_for_a_current_human_approve(lab, inbox):
     )
     d = _decider(lab, inbox)
     out = d.decide(name)
-    assert out.result == "waiting" and "agent check, agent challenge, human approve" in out.reason
+    assert out.result == "waiting" and "agent check, agent audit, human approve" in out.reason
     assert _lanes(inbox)["inbox"] == [name]
     rec = lab / "lessons/LL-001.md"
     write_event(rec, _review("agent:example-checker", "agent", "check", out.digest), when=T0)
-    write_event(rec, _review("agent:example-challenger", "agent", "challenge", out.digest), when=T0)
+    write_event(rec, _review("agent:example-auditor", "agent", "audit", out.digest), when=T0)
     out = d.decide(name)
     assert out.result == "waiting" and out.reason.startswith("needs human approve")
     stale = _review("human:example-operator", "human", "approve", "sha256:" + "ab" * 6)

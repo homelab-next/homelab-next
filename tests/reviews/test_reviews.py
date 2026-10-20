@@ -3,6 +3,7 @@
 
 import copy
 import pathlib
+import re
 
 import pytest
 import yaml
@@ -37,7 +38,7 @@ def rv(by, kind, role, digest=DIGEST[:19], verdict="pass"):
 
 
 CHECK = rv("agent:example-checker", "agent", "check")
-ADV = rv("agent:example-challenger", "agent", "challenge")
+AUDIT = rv("agent:example-auditor", "agent", "audit")
 APPROVE = rv("human:example-operator", "human", "approve")
 
 
@@ -51,14 +52,14 @@ def test_the_example_policy_validates():
     p = load_policy(POLICY)
     assert [q.label() for q in p.required("lesson.pitfall", "retired")] == [
         "agent check",
-        "agent challenge",
+        "agent audit",
         "human approve",
     ]
     assert p.required("lesson.pitfall", "open") == ()
 
 
 def test_a_complete_set_passes_and_derives_last_reviewed(policy):
-    e = ev([CHECK, ADV, APPROVE], policy)
+    e = ev([CHECK, AUDIT, APPROVE], policy)
     assert e.problems == [] and e.missing == []
     assert str(e.last_reviewed) == "2026-10-19"
 
@@ -71,18 +72,18 @@ def test_a_complete_set_passes_and_derives_last_reviewed(policy):
     ],
 )
 def test_self_review_fails_in_any_spelling(policy, author, by):
-    e = ev([rv(by, "agent", "check"), ADV, APPROVE], policy, author=author)
+    e = ev([rv(by, "agent", "check"), AUDIT, APPROVE], policy, author=author)
     assert any("is the author" in p for p in e.problems)
 
 
-def test_challenge_by_the_check_agent_fails_and_does_not_count(policy):
-    e = ev([CHECK, rv("agent:Example-Checker", "agent", "challenge"), APPROVE], policy)
+def test_audit_by_the_check_agent_fails_and_does_not_count(policy):
+    e = ev([CHECK, rv("agent:Example-Checker", "agent", "audit"), APPROVE], policy)
     assert any("must be a different agent" in p for p in e.problems)
-    assert "agent challenge" in e.missing
+    assert "agent audit" in e.missing
 
 
 def test_agent_identity_in_a_human_slot_fails(policy):
-    e = ev([CHECK, ADV, rv("agent:example-challenger", "human", "approve")], policy)
+    e = ev([CHECK, AUDIT, rv("agent:example-auditor", "human", "approve")], policy)
     assert any("agent identity in a human review" in p for p in e.problems)
     # the broker's other agent signal: an allowlist entry of kind agent, whatever the issuer
     data = {
@@ -98,24 +99,108 @@ def policy_data_copy():
 
 
 def test_a_human_review_needs_an_allowlisted_human(policy):
-    e = ev([CHECK, ADV, rv("human:somebody-else", "human", "approve")], policy)
+    e = ev([CHECK, AUDIT, rv("human:somebody-else", "human", "approve")], policy)
     assert any("not a `kind: human` reviewer" in p for p in e.problems)
     assert "human approve" in e.missing
 
 
 def test_retire_without_a_human_approve_fails(policy):
-    assert ev([CHECK, ADV], policy).missing == ["human approve"]
+    assert ev([CHECK, AUDIT], policy).missing == ["human approve"]
 
 
 def test_a_review_of_an_earlier_content_is_ignored(policy):
-    old = [rv(r["by"], r["kind"], r["role"], digest="sha256:" + "cd" * 6) for r in (CHECK, ADV)]
+    old = [rv(r["by"], r["kind"], r["role"], digest="sha256:" + "cd" * 6) for r in (CHECK, AUDIT)]
     e = ev([*old, APPROVE], policy)
-    assert len(e.stale) == 2 and e.missing == ["agent check", "agent challenge"]
+    assert len(e.stale) == 2 and e.missing == ["agent check", "agent audit"]
 
 
 def test_only_a_passing_verdict_counts(policy):
-    e = ev([CHECK, {**ADV, "verdict": "reject"}, APPROVE], policy)
-    assert e.missing == ["agent challenge"]
+    e = ev([CHECK, {**AUDIT, "verdict": "reject"}, APPROVE], policy)
+    assert e.missing == ["agent audit"]
+
+
+# ----- `challenge`: the deprecated spelling of `audit` (read, warned about, never written) -----
+
+
+def test_normalize_role_maps_the_deprecated_alias_with_a_warning():
+    with pytest.warns(
+        reviews.DeprecatedReviewRole, match="'challenge' is deprecated; write 'audit'"
+    ):
+        assert reviews.normalize_role("challenge", "X") == "audit"
+
+
+@pytest.mark.parametrize("role", ["check", "audit", "approve", "rubber-stamp", None])
+def test_normalize_role_leaves_everything_else_alone(recwarn, role):
+    assert reviews.normalize_role(role) == role
+    assert not [w for w in recwarn if issubclass(w.category, reviews.DeprecatedReviewRole)]
+
+
+def test_a_challenge_review_counts_as_an_audit_and_warns(policy):
+    with pytest.warns(reviews.DeprecatedReviewRole):
+        e = ev([CHECK, {**AUDIT, "role": "challenge"}, APPROVE], policy)
+    assert e.problems == [] and e.missing == []
+    assert [r["role"] for r in e.current] == ["check", "audit", "approve"]
+
+
+def test_a_challenge_review_by_the_checker_still_fails_independence(policy):
+    with pytest.warns(reviews.DeprecatedReviewRole):
+        e = ev([CHECK, rv("agent:example-checker", "agent", "challenge"), APPROVE], policy)
+    assert any("must be a different agent" in p for p in e.problems)
+    assert "agent audit" in e.missing
+
+
+def test_a_policy_that_still_says_challenge_loads_as_audit_and_warns(policy_data):
+    data = copy.deepcopy(policy_data)
+    data["requirements"]["lesson.pitfall"]["retired"][1]["role"] = "challenge"
+    with pytest.warns(reviews.DeprecatedReviewRole, match="lesson.pitfall.retired #2"):
+        p = policy_from(data)
+    assert [q.label() for q in p.required("lesson.pitfall", "retired")][1] == "agent audit"
+
+
+def test_a_challenge_event_is_still_schema_valid():
+    from homelabnext.registers.events import check_event
+
+    old = {"event": "review", **rv("agent:example-auditor", "agent", "challenge")}
+    assert check_event(old) == []
+    assert check_event({**old, "role": "audit"}) == []
+
+
+# No file in examples/ or docs/ uses the old name.  Allowed: a line documenting the deprecated
+# alias, and ACME's own protocol term (a "DNS challenge" in a lesson about certificate renewal).
+_OLD_NAME = re.compile(r"challeng", re.I)
+_ALLOWED = re.compile(r"deprecated|DNS challenge", re.I)
+
+
+def old_name_hits(rel: str, text: str) -> list[str]:
+    hits = [rel] if _OLD_NAME.search(rel) else []
+    return hits + [
+        f"{rel}:{n}: {ln.strip()}"
+        for n, ln in enumerate(text.splitlines(), 1)
+        if _OLD_NAME.search(ln) and not _ALLOWED.search(ln)
+    ]
+
+
+def test_the_old_name_scan_flags_the_role_the_reviewer_and_the_file_name():
+    assert old_name_hits("x.yml", "role: challenge\n") == ["x.yml:1: role: challenge"]
+    assert old_name_hits("x.yml", "by: agent:example-challenger") != []
+    assert old_name_hits("a-review-agent-example-challenger.yml", "") != []
+    assert old_name_hits("x.md", "`challenge` is the deprecated spelling of `audit`") == []
+    assert old_name_hits("x.md", "role: audit\n") == []
+
+
+def test_examples_and_docs_no_longer_say_challenge():
+    hits = []
+    for base in ("examples", "docs"):
+        for f in sorted((REPO / base).rglob("*")):
+            rel = f.relative_to(REPO).as_posix()
+            if not f.is_file() or rel.startswith("docs/graph/"):  # docs/graph/: a local build
+                continue
+            try:
+                text = f.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                text = ""
+            hits += old_name_hits(rel, text)
+    assert hits == [], "say audit, not challenge:\n" + "\n".join(hits)
 
 
 @pytest.mark.parametrize(
@@ -145,7 +230,7 @@ def test_a_policy_change_changes_what_is_required(policy_data):
         {"role": "approve", "kind": "human", "min": 2}
     ]
     p = policy_from(data)
-    assert ev([CHECK, ADV, APPROVE], p).missing == ["human approve x2"]
+    assert ev([CHECK, AUDIT, APPROVE], p).missing == ["human approve x2"]
     data["requirements"]["lesson.pitfall"]["retired"] = []
     assert ev([], policy_from(data)).missing == []
 

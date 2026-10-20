@@ -546,7 +546,7 @@ def test_incorporated_lessons_give_way_to_their_runbook(tmp_path, repo_copy):
             ("agent:fake-checker", "agent", "check", "2026-01-13", "pass"),
             ("human:example-operator", "human", "approve", "2026-01-14", "changes"),
             ("human:example-operator", "human", "approve", "2026-01-15", "pass"),
-            ("agent:fake-red", "agent", "challenge", "2026-01-15", "reject"),
+            ("agent:fake-red", "agent", "audit", "2026-01-15", "reject"),
         ]
     ):
         review = {"event": "review", **dict(zip(keys, r, strict=True)), "digest": digest}
@@ -558,7 +558,7 @@ def test_incorporated_lessons_give_way_to_their_runbook(tmp_path, repo_copy):
     assert has(g, "runbook:RB-001", "from_lesson", "lesson:LL-005")
     attrs = g.nodes["lesson:LL-005"].attrs
     assert attrs["author"] == "agent:fake-author" and attrs["review_count"] == 4
-    assert attrs["reviewed"] == ["agent_check", "human"]  # the only challenge review rejected
+    assert attrs["reviewed"] == ["agent_check", "human"]  # the only audit review rejected
     ids = [x.id for x in related(g, ["system:proxy"], budget=50)]
     assert "runbook:RB-001" in ids and "lesson:LL-005" not in ids
     assert "lesson:LL-005" in render_views(g)["lesson.md"].split("## Archive")[1]
@@ -568,7 +568,7 @@ def test_incorporated_lessons_give_way_to_their_runbook(tmp_path, repo_copy):
 
 def test_reviewed_counts_only_current_valid_passing_reviews(tmp_path, repo_copy):
     """The graph's ``reviewed`` is what the register validation accepts of the reviews derived
-    from the sidecar events: a review of an earlier content, a self-review, a challenge from the
+    from the sidecar events: a review of an earlier content, a self-review, an audit by the
     checker and an agent in a human slot count for no tier."""
     root = _fresh(tmp_path, repo_copy)
     lesson = root / LESSONS / "LL-001.md"
@@ -576,8 +576,8 @@ def test_reviewed_counts_only_current_valid_passing_reviews(tmp_path, repo_copy)
     def reviewed():
         return build(root)[0].nodes["lesson:LL-001"].attrs.get("reviewed")
 
-    assert reviewed() == ["agent_check", "challenge"]
-    check, challenge = (yaml.safe_load(f.read_text("utf-8")) for f in _review_events(lesson))
+    assert reviewed() == ["agent_check", "audit"]
+    check, audit = (yaml.safe_load(f.read_text("utf-8")) for f in _review_events(lesson))
     meta = yaml.safe_load(lesson.read_text(encoding="utf-8").split("---\n", 2)[1])
     front(lesson, title=meta["title"] + " (edited after review)")  # content changed
     attrs = build(root)[0].nodes["lesson:LL-001"].attrs
@@ -601,10 +601,10 @@ def test_reviewed_counts_only_current_valid_passing_reviews(tmp_path, repo_copy)
             create_event(events_dir(lesson), data, when=_at(i))
         return reviewed()
 
-    assert stamp("unknown", [check, challenge]) == ["agent_check", "challenge"]
+    assert stamp("unknown", [check, audit]) == ["agent_check", "audit"]
     # the checker is the author: its check counts for nothing
-    assert stamp(check["by"], [check, challenge], refused=0) == ["challenge"]
-    # a challenge from the checker: the validation drops that reviewer's reviews altogether
-    assert stamp("unknown", [check, {**challenge, "by": check["by"]}], refused=1) is None
+    assert stamp(check["by"], [check, audit], refused=0) == ["audit"]
+    # an audit by the checker: the validation drops that reviewer's reviews altogether
+    assert stamp("unknown", [check, {**audit, "by": check["by"]}], refused=1) is None
     human_slot = {**check, "kind": "human", "role": "approve"}  # an agent in a human slot
     assert stamp("unknown", [human_slot], refused=0) is None
