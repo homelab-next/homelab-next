@@ -142,7 +142,9 @@ def check_batch(
         if ev is not None and ev["session_id"] != d["session_id"]:
             problems.append(f"detail[{i}]: session does not match its event")
     if problems:
-        _log.warning("agent ingest refused sender %s: %s", sender.name, "; ".join(problems[:5]))
+        # problems quote sender-supplied values: never let them forge or split a log line
+        text = "; ".join(problems[:5]).replace("\r", "\\r").replace("\n", "\\n")
+        _log.warning("agent ingest refused sender %s: %s", sender.name, text)
     return (403, problems) if problems else (200, [])
 
 

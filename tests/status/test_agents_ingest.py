@@ -208,3 +208,13 @@ def test_a_sender_cannot_write_into_another_senders_or_a_local_session(owned):
     assert post_json(base, {"summary": [summary(2, session="local")]}, TOKEN)[0] == 403
     assert [e["event_id"] for e in store.events(session="s-1")] == ["ev-s-1-1"]
     assert post_json(base, {"detail": [detail(1, prompt="mine")]}, TOKEN)[0] == 200  # the owner
+
+
+def test_a_refused_sender_is_logged_on_one_line(owned, caplog):
+    """The refusal log quotes sender-supplied values; it must stay one line (no log forging)."""
+    base, _ = owned
+    with caplog.at_level("WARNING", logger="homelabnext.status.agents.ingest"):
+        code, *_ = post_json(base, {"summary": [summary(runtime="hermes")]}, TOKEN)
+    assert code == 403
+    lines = [r.getMessage() for r in caplog.records if "refused sender" in r.getMessage()]
+    assert lines and all("\n" not in m and "\r" not in m for m in lines)

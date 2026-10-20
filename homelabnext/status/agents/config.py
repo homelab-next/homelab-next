@@ -174,9 +174,10 @@ def build_config(
             raise AgentsConfigError("invalid agents config", probs)
         secret = secrets(svc.front_door["secret"])
         if not secret:
+            # the message names where the setting lives, never anything read from the secret store
             cfg.warnings.append(
-                f"private tier disabled: {svc.front_door['secret']} is not set "
-                f"({secret_env_name(svc.front_door['secret'])})"
+                f"private tier disabled: the front-door secret of service {svc.name} is not set "
+                "(see its front_door entry in the registry)"
             )
         elif not trusted:
             cfg.warnings.append("private tier disabled: no trusted proxy address")
@@ -200,7 +201,10 @@ def build_config(
                     Sender(s["name"], token, s.get("detail", True), tuple(s.get("runtimes", ())))
                 )
             else:
-                cfg.warnings.append(f"ingest sender {s['name']} disabled: {s['token']} is not set")
+                cfg.warnings.append(
+                    f"ingest sender {s['name']} disabled: its token is not set "
+                    "(see its entry under ingest.senders)"
+                )
         cfg.ingest = IngestSettings(
             senders=tuple(senders),
             max_body_bytes=ing.get("max_body_bytes", 262144),
