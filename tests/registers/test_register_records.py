@@ -59,7 +59,7 @@ def _converted(kind):
         return head.stdout, texts
     commit = _git(REPO, "rev-list", "-1", "HEAD", "--", legacy).stdout.strip()
     if not commit:
-        pytest.skip("history without the single-file register (a shallow clone)")
+        pytest.skip("git history not available (a shallow clone without the single-file register)")
     old = _git(REPO, "show", f"{commit}^:{legacy}", check=False)
     if old.returncode:
         pytest.skip("the conversion commit's parent is not in this clone")
