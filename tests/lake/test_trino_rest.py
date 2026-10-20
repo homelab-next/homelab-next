@@ -262,6 +262,29 @@ def test_bad_namespace_and_base_urls_are_refused():
         )
 
 
+# ---------------------------------------------------------------- setup cache
+def test_ensure_tables_is_redone_for_other_tables_and_after_a_drop(lab):
+    """The setup cache is keyed by catalog, Trino catalog, namespace and table definitions, and
+    an explicit ensure_tables() always runs: the remedy UnknownTable names actually works."""
+    from homelabnext.lake.tables import load_schemas
+
+    every = load_schemas()
+    one = {"authentication": every["authentication"]}
+    _lake(lab, ns="t_cache", schemas=one)
+    assert set(lab.tables) == {("t_cache", "authentication")}
+    later = TrinoRestLake(  # same process, same namespace, more tables: they are created
+        TrinoHTTP(lab.url, user="tester", sleep=lambda s: None),
+        RestCatalog(lab.url, warehouse="lab"),
+        namespace="t_cache",
+    )
+    assert later.list_tables() == sorted(every)
+    del lab.tables[("t_cache", "authentication")]  # dropped behind the lake's back
+    with pytest.raises(UnknownTable, match=r"call ensure_tables\(\)"):
+        later.describe("authentication")
+    later.ensure_tables()
+    assert later.describe("authentication").row_count == 0
+
+
 # ---------------------------------------------------------------- the target factory
 def test_factory_and_target_files(lab, monkeypatch):
     from homelabnext.conform.adapters.lake import make_lake
