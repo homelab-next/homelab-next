@@ -283,7 +283,7 @@ def _parse_list(body: bytes) -> Any:
         else:
             fields[name] = (el.text or "").strip()
     if fields.get("EncodingType", "").lower() == "url":
-        keys = [urllib.parse.unquote(k) for k in keys]
+        keys = [urllib.parse.unquote_plus(k) for k in keys]  # "+" is a space (AWS, botocore)
     truncated = fields.get("IsTruncated", "false").lower() == "true"
     token = fields.get("NextContinuationToken") or None
     if truncated and not token:

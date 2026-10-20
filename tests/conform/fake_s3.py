@@ -7,6 +7,8 @@ received, payload hash from ``x-amz-content-sha256``) and refuses a bad one with
 paths.  Buckets, objects, user metadata, ListObjectsV2 with continuation tokens and
 ``encoding-type=url``, and the S3 error XML (``NoSuchBucket``, ``NoSuchKey``,
 ``BucketAlreadyOwnedByYou`` is *not* raised: Garage answers 200 for a bucket the key owns).
+``list_encoding``: ``"garage"`` percent-encodes listed keys (a space is ``%20``); ``"aws"`` encodes
+them the way AWS S3 and MinIO do, form-style (a space is ``+``, a ``+`` is ``%2B``).
 """
 
 from __future__ import annotations
@@ -29,9 +31,17 @@ LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow fake server binds loopback only
 
 class FakeS3:
     def __init__(
-        self, access: str, secret: str, region: str, *, allow_create: bool = True, tamper=None
+        self,
+        access: str,
+        secret: str,
+        region: str,
+        *,
+        allow_create: bool = True,
+        tamper=None,
+        list_encoding: str = "garage",
     ):
         self.access, self.secret, self.region = access, secret, region
+        self.quote = {"garage": urllib.parse.quote, "aws": urllib.parse.quote_plus}[list_encoding]
         self.allow_create = allow_create
         self.tamper = tamper  # callable(handler) -> None, to break a reply on purpose
         self.buckets: dict[str, dict[str, tuple[bytes, dict[str, str]]]] = {}
@@ -175,7 +185,7 @@ class FakeS3:
         url = q.get("encoding-type") == "url"
 
         def enc(k):
-            return urllib.parse.quote(k, safe="/") if url else escape(k)
+            return self.quote(k, safe="/") if url else escape(k)
 
         items = "".join(f"<Contents><Key>{enc(k)}</Key></Contents>" for k in page)
         token = ""
