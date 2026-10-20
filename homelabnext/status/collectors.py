@@ -122,7 +122,10 @@ def auth_headers(spec: SourceSpec, ctx: CollectContext) -> dict[str, str]:
     ref = str(spec.auth["secret"])
     value = ctx.secret(ref) if ctx.secret is not None else None
     if not value:
-        raise CollectError(f"credential {ref} did not resolve (environment or --secrets-dir)")
+        # name the source, not the reference: nothing read for the secret store goes into a message
+        raise CollectError(
+            f"source {spec.id}: its auth credential did not resolve (environment or --secrets-dir)"
+        )
     header = spec.auth.get("header")
     return {str(header): value} if header else {"Authorization": f"Bearer {value}"}
 

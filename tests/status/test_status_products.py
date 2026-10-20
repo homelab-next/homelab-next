@@ -265,9 +265,7 @@ def test_an_unresolved_credential_is_an_error_and_nothing_is_sent():
     http = _st2_http()
     s = spec(kind="poll-stackstorm", path="/api/v1/executions", mapping={},
              auth={"secret": "secret:stackstorm/status-token", "header": "St2-Api-Key"})  # fmt: skip
-    with pytest.raises(
-        CollectError, match="credential secret:stackstorm/status-token did not resolve"
-    ):
+    with pytest.raises(CollectError, match="auth credential did not resolve"):
         COLLECTORS["poll-stackstorm"].collect(s, _ctx(http))
     assert http.calls == []
 
