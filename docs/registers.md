@@ -161,7 +161,8 @@ fails until it is paid. `hnx registers events add RECORD EVENT.yml` is the comma
 Nobody edits `status` to move a record through its lifecycle. An agent files an intent through
 the records library (`homelabnext.records`, inbox lane), a note of `type: register-transition`
 with `record`, `from`, `to`, `reason` and the field the target needs (`retired_by`,
-`incorporated_into` or `superseded_by`; `on` for `retired_on`). `hnx registers decide` (library:
+`incorporated_into` or `superseded_by`; optionally `retired_on`, default the day it was created --
+not `on`, which YAML 1.1 reads as `true`: a note with a non-string key is invalid). `hnx registers decide` (library:
 `homelabnext.registers.transitions.TransitionDecider`) takes each one under a lock:
 
 * `from` is not the current status (another intent got there first): **denied** with that reason;
@@ -169,12 +170,14 @@ with `record`, `from`, `to`, `reason` and the field the target needs (`retired_b
 * the policy's tiers for the target are not met by current reviews of the *prospective* content:
   **waiting** (the note stays in the inbox; the output prints the digest reviewers must stamp),
   so a transition needing a human approve waits for a current human `approve` review event;
+* the note does not validate: **invalid** (it stays in the inbox for its agent to fix or withdraw;
+  a malformed note, of this type or any other, never stops the other intents);
 * otherwise **applied**: a `transition` event, then the note moves to `decided/completed/` (via
   approved), each move with its audit sidecar.
 
 Two conflicting intents (both retiring one lesson with different `retired_by`): the first decided
-applies, the second is denied. A crash between the event and the move is finished, not re-decided,
-on the next run. It is a command, not a service: run it by hand, from CI or from a timer.
+applies, the second is denied. A crash between the event and the moves (or between the two moves,
+leaving the note in `decided/approved/`) is finished, not re-decided, on the next run. It is a command, not a service: run it by hand, from CI or from a timer.
 
 ## Lessons are backlog: kinds and lifecycle
 

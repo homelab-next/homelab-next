@@ -220,7 +220,10 @@ runtime's, which beats the default) or `working`.
 `schemas/status/agents.schema.json`. Secrets are secret-store references (`secret:a/b`), never
 values; at run time `secret:a/b-token` is read from `HNX_SECRET_A_B_TOKEN` (or the file `a/b-token` under
 `--secrets-dir`). A reference that does not resolve **disables** what it guards (the private
-tier, or that one sender) with a warning; nothing falls back to open.
+tier, or that one sender) with a warning; nothing falls back to open. Since every character
+but a letter or digit becomes `_`, two different references that land in one variable
+(`a/b-token`, `a/b_token`) are refused, by the registry and by the agents config, and so are two
+senders with the same token (a token names its sender).
 
 **What happens to every record, in order:** schema validation; **secret redaction** with the
 shared screener (`homelabnext.agent.screen`: private keys, JWTs, vendor tokens, `Authorization:
@@ -238,7 +241,7 @@ Registered like every source (`status_sources`, kind `agent-activity`, registry 
 | `builtin` | Reads | Notes |
 |---|---|---|
 | `agent-spool` | `target.file`: a spool directory of one-record files `{"summary": {...}, "detail": {...}}` | the Claude Code hook writes it; so may anything else (the generic file spool). Ingested files are deleted, invalid ones moved to `rejected/` |
-| `agentmetry-jsonl` | `target.file`: an Agentmetry canonical JSONL trail, from the last offset | `action.type` maps to `kind` (`tool_called` and `tool_failed` to `tool_end`, `detection` to `notification`, `config_change` skipped); arguments are hashes there, so no detail tier |
+| `agentmetry-jsonl` | `target.file`: an Agentmetry canonical JSONL trail, from the last offset (kept with the file's inode and a hash of its first bytes, so a rotated or rewritten trail is read from the start; a line over 8 MiB is skipped and counted once) | `action.type` maps to `kind` (`tool_called` and `tool_failed` to `tool_end`, `detection` to `notification`, `config_change` skipped); arguments are hashes there, so no detail tier |
 | `agent-push` | nothing: the push ingest writes the store | reports the pushed sessions |
 
 Each source reports the sessions it fed: an errored session is a `fail` item, a stuck one a
@@ -252,9 +255,15 @@ NAME]`, default port 8098, loopback by default): `POST /ingest/agent-activity` w
 sender's `rate_per_min`, 411 no length, 413 over `max_body_bytes` or `max_events`, 415 not JSON,
 400 not the batch shape, 422 any invalid record or a detail whose event is neither in the batch
 nor stored (all or nothing), 403 the sender does not own what it writes (a runtime outside the
-sender's `runtimes`, a session another sender or a local source started), 200 `{added, duplicates, details, detail_dropped}`. A sender with
-`detail: false` has its details dropped. It is a separate listener: the console never accepts a
-write. Cloud sessions reach it through a separate edge site **without** forward auth (bearer
+sender's `runtimes`, a session another sender or a local source started, an event id already
+stored for another session or sender: what is stored decides ownership), 409 a second, different
+detail for an event (a detail is written once; the same one again is a retry), 200 `{added,
+duplicates, details, detail_dropped}`. A sender with `detail: false` has its details dropped and
+its summaries' `has_detail` cleared. With `--publish-to URL` (an events forwarder;
+`--publish-state FILE`, default `STORE.publish.json`) each summary the store accepted -- its
+redacted copy, never a duplicate -- is also published as a `homelabnext.agent.activity` event
+(one attempt in the request; what fails stays pending and is flushed at the next start). It is a
+separate listener: the console never accepts a write. Cloud sessions reach it through a separate edge site **without** forward auth (bearer
 only).
 
 ### The Claude Code hook

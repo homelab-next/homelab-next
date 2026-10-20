@@ -405,6 +405,23 @@ def test_profile_scope_bounds_the_catalog_tools(cat, tmp_path):
     assert ids == {"LL-001"}
 
 
+def test_scoped_lessons_due_reasons_name_no_out_of_scope_record(cat, tmp_path):
+    """Regression: a due row's ``reason`` named other records (LL-005's "candidate runbook(s)
+    RB-001") whatever the scope; an id the scope does not cover is now withheld."""
+    pid, scope = load_profile_scope(_granted_profile(tmp_path), cat.registry)
+    unscoped = _call(cat, "lessons_due", today="2027-06-01")
+    assert "RB-001" in unscoped["due"]["incorporate"][0]["reason"]
+    scoped = Catalog(ROOT, scope=scope | {"lesson:LL-005"}, scope_source=pid)
+    out = _call(scoped, "lessons_due", today="2027-06-01")
+    rows = [d for v in out["due"].values() for d in v]
+    assert [d["id"] for d in rows] == ["LL-005"]
+    assert "RB-001" not in json.dumps(out) and "out of scope" in rows[0]["reason"]
+    both = Catalog(ROOT, scope=scope | {"lesson:LL-005", "runbook:RB-001"}, scope_source=pid)
+    reasons = [d["reason"] for v in _call(both, "lessons_due", today="2027-06-01")["due"].values()
+               for d in v]  # fmt: skip
+    assert any("RB-001" in r for r in reasons)
+
+
 def _visible(scope, doc_id):
     from homelabnext.context import in_scope
 

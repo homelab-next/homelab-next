@@ -89,8 +89,12 @@ class Decider:
     def fulfil(self, name: str, reason: str | None = None) -> Path:
         """Approve an inbox note and close it at once, for a request the decision maker carried
         out itself (the register decider applying a ``register-transition``).  Both moves leave
-        their audit sidecar, exactly as :meth:`approve` then :meth:`complete` would."""
-        self.approve(name)
+        their audit sidecar, exactly as :meth:`approve` then :meth:`complete` would.
+
+        Idempotent across a crash between the two moves: a note already in the approved lane
+        (and no longer in the inbox) is only completed."""
+        if (self.root / AGENT_LANE / name).is_file() or not (self.root / APPROVED / name).is_file():
+            self.approve(name)
         note = self._load(APPROVED, name, validate_filename=False)
         return self._move(note, COMPLETED, "completed", reason)
 

@@ -7,6 +7,7 @@ record: LL-001
 from: controlled
 to: retired
 retired_by: [M-17]
+retired_on: '2026-10-19'
 reason: M-17 has held in every run since the control shipped
 ---
 

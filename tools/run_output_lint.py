@@ -20,7 +20,7 @@ gives each run ``runs/<run_id>/``; ``build/`` is the other place generated outpu
 lint walks the AST of every Python script carrying an ``hnx-script:`` header (the script catalog:
 ``tools/``, the lab-in-a-box helpers, the conformance fakes) and reports:
 
-  literal-write   ``open(P, "w"|"a"|"x"|...)``, ``P.write_text/write_bytes/mkdir/touch``,
+  literal-write   ``open(P, "w"|"a"|"x"|...)`` (and ``io.open``, ``codecs.open``), ``P.write_text/write_bytes/mkdir/touch``,
                   ``P.open("w")``, ``os.makedirs/mkdir(P)``, ``shutil.copy*/move(_, P)``,
                   ``os.replace/rename(_, P)`` where ``P`` is a *literal* path (a string, a
                   ``Path("...")``, a ``/``-join or an f-string with a literal head, or a
@@ -74,6 +74,7 @@ DEST_CALLS = {  # call name -> index of the destination argument
     "os.rename": 1,
 }
 TEMP_UNOWNED = {"tempfile.mkdtemp", "tempfile.mkstemp"}
+OPEN_CALLS = {"open", "io.open", "codecs.open"}  # (path, mode, ...)
 
 
 @dataclass(frozen=True)
@@ -198,19 +199,21 @@ def scan_source(rel: str, text: str) -> list[Finding]:
         if not isinstance(node, ast.Call):
             continue
         name = _dotted(node.func)
-        if name == "open" and node.args:
+        # module functions first: ``os.mkdir(P)`` or ``io.open(P, "w")`` must not fall into the
+        # Path-method branches below, which would judge the module object instead of ``P``
+        if name in OPEN_CALLS and node.args:
             mode = node.args[1] if len(node.args) > 1 else _kw(node, "mode")
             if isinstance(mode, ast.Constant) and WRITE_MODE.search(str(mode.value)):
-                judge(node, node.args[0], "open()")
+                judge(node, node.args[0], f"{name}()")
+        elif name in DEST_CALLS:
+            i = DEST_CALLS[name]
+            judge(node, node.args[i] if len(node.args) > i else _kw(node, "dst"), f"{name}()")
         elif isinstance(node.func, ast.Attribute) and node.func.attr in PATH_METHODS:
             judge(node, node.func.value, f".{node.func.attr}()")
         elif isinstance(node.func, ast.Attribute) and node.func.attr == "open":
             mode = node.args[0] if node.args else _kw(node, "mode")
             if isinstance(mode, ast.Constant) and WRITE_MODE.search(str(mode.value)):
                 judge(node, node.func.value, ".open()")
-        elif name in DEST_CALLS:
-            i = DEST_CALLS[name]
-            judge(node, node.args[i] if len(node.args) > i else _kw(node, "dst"), f"{name}()")
         elif name == "tempfile.mktemp":
             add(node, "tempfile", "tempfile.mktemp is racy; use tempfile.mkstemp or run_dir")
         elif name in TEMP_UNOWNED and _kw(node, "dir") is None:

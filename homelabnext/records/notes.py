@@ -143,10 +143,33 @@ def _validator(sdir: str):
     return Draft202012Validator(schema, registry=reg)
 
 
+def _non_string_key(value: Any) -> Any:
+    """The first mapping key anywhere in ``value`` that is not a string, else None."""
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if not isinstance(k, str):
+                return k
+            found = _non_string_key(v)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for v in value:
+            found = _non_string_key(v)
+            if found is not None:
+                return found
+    return None
+
+
 def validate_note(note: dict[str, Any] | Any) -> None:
     """Raise :class:`NoteError` (a ``ValueError``) naming the first offending field."""
     if not isinstance(note, dict):
         raise NoteError("note frontmatter must be a mapping")
+    bad = _non_string_key(note)
+    if bad is not None:
+        raise NoteError(
+            f"frontmatter key {bad!r} is not a string: YAML 1.1 reads an unquoted on, off, yes,"
+            " no, y or n as a boolean (register-transition takes retired_on, not on)"
+        )
     validator = _validator(str(schema_dir()))
     errors = sorted(validator.iter_errors(note), key=lambda e: [str(p) for p in e.absolute_path])
     if errors:

@@ -25,7 +25,12 @@ import yaml
 
 from homelabnext import paths
 from homelabnext._yaml import UniqueKeyLoader
-from homelabnext.registry.model import Registry, secret_env_name
+from homelabnext.registry.model import (
+    Registry,
+    secret_env_name,
+    secret_ref_problems,
+    service_secret_refs,
+)
 
 from .model import DEFAULT_STUCK_AFTER_S, Thresholds
 from .store import DEFAULT_CAPS, ActivityStore, Redactor
@@ -88,6 +93,15 @@ class IngestSettings:
     max_body_bytes: int = 262144
     max_events: int = 200
     rate_per_min: int = 120
+
+    def __post_init__(self) -> None:
+        # a token names its sender (sender_for): two senders with one token are one sender
+        # with two sets of rights, whichever matched last
+        by_token: dict[str, str] = {}
+        for s in self.senders:
+            other = by_token.setdefault(s.token, s.name)
+            if other != s.name:
+                raise ValueError(f"ingest senders {other} and {s.name} have the same token")
 
 
 @dataclass
@@ -193,6 +207,11 @@ def build_config(
             )
     ing = doc.get("ingest")
     if ing:
+        refs = service_secret_refs(registry.services)
+        refs += [(f"ingest sender {s['name']}: token", s["token"]) for s in ing["senders"]]
+        problems = secret_ref_problems(refs)
+        if problems:
+            raise AgentsConfigError("invalid agents config", problems)
         senders = []
         for s in ing["senders"]:
             token = secrets(s["token"])
@@ -205,12 +224,15 @@ def build_config(
                     f"ingest sender {s['name']} disabled: its token is not set "
                     "(see its entry under ingest.senders)"
                 )
-        cfg.ingest = IngestSettings(
-            senders=tuple(senders),
-            max_body_bytes=ing.get("max_body_bytes", 262144),
-            max_events=ing.get("max_events", 200),
-            rate_per_min=ing.get("rate_per_min", 120),
-        )
+        try:
+            cfg.ingest = IngestSettings(
+                senders=tuple(senders),
+                max_body_bytes=ing.get("max_body_bytes", 262144),
+                max_events=ing.get("max_events", 200),
+                rate_per_min=ing.get("rate_per_min", 120),
+            )
+        except ValueError as exc:  # names senders, never a token
+            raise AgentsConfigError("invalid agents config", [str(exc)]) from None
     return cfg
 
 

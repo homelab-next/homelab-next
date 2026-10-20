@@ -320,7 +320,7 @@ def _give_ll_003_a_control(lab):
     """A human writes the control into the prose; only then may an agent ask for ``partial``."""
     rec = lab / "lessons/LL-003.md"
     entry = load_register(lab / "lessons")["lessons"][2]
-    prose = {k: v for k, v in entry.items() if k != "recurrences"}
+    prose = dict(entry)  # as loaded: write_record puts the derived fields back to the base
     prose["preventive_control"] = "A nightly job diffs guest inventory against backup jobs."
     write_record(rec, prose)
 
@@ -498,3 +498,174 @@ def test_decide_command_dry_run_moves_nothing(lab, inbox, capsys):
     assert "applied  LL-003" in capsys.readouterr().out
     assert len(_lanes(inbox)["inbox"]) == 1
     assert load_register(lab / "lessons")["lessons"][2]["status"] == "open"
+
+
+def _raw_note(inbox, name, text):
+    (inbox / "inbox" / name).write_text(text)
+    return name
+
+
+def test_a_malformed_note_does_not_stop_the_other_intents(lab, inbox, capsys):
+    """Regression: pending() schema-validated every inbox note, so one malformed note -- even
+    an unrelated proposal -- raised NoteError and the decider decided nothing (and the command
+    printed a traceback)."""
+    _give_ll_003_a_control(lab)
+    good = _intent(
+        inbox, "ll-003-partial", record="LL-003", reason="the detector shipped",
+        **{"from": "open", "to": "partial"},
+    )  # fmt: skip
+    _raw_note(inbox, "2026-10-20-example-checker-broken.md", "---\ntype: proposal\n---\n")
+    _raw_note(inbox, "2026-10-20-example-checker-junk.md", "no front matter at all\n")
+    bad = _raw_note(
+        inbox,
+        "2026-10-20-example-checker-bad-intent.md",
+        "---\ntype: register-transition\ntitle: x\nrecord: LL-001\n---\n",
+    )
+    outs = {o.note: o for o in _decider(lab, inbox).decide_all()}
+    assert set(outs) == {good, bad}
+    assert outs[good].result == "applied", outs[good]
+    assert outs[bad].result == "invalid" and "fix or withdraw" in outs[bad].reason
+    assert bad in _lanes(inbox)["inbox"]
+    args = ["decide", str(lab), str(inbox), "--as", "human:example-operator"]
+    assert registers_main(args) == 0
+    assert "invalid  ?" in capsys.readouterr().out
+
+
+def test_an_on_key_is_refused_and_retired_on_is_honoured(lab, inbox):
+    """Regression: ``on:`` is a YAML 1.1 boolean, so the note's key was True, ``fm.get('on')``
+    was None and retired_on silently became the created date.  A boolean key is now a validation
+    error naming the pitfall; the field is ``retired_on``."""
+    from homelabnext.reviews import policy_from
+
+    free = yaml.safe_load((REPO / "examples/review-policy.yml").read_text())
+    free["requirements"]["lesson.pitfall"]["retired"] = []
+    d = _decider(lab, inbox, policy_from(free))
+    text = (
+        "---\ntype: register-transition\ntitle: Retire LL-001\n"
+        "requesting_agent: profile:example-checker\ncreated: '2026-10-20T09:30:00Z'\n"
+        "record: LL-001\nfrom: controlled\nto: retired\nretired_by: [M-17]\n"
+        "on: 2026-10-01\nreason: M-17 holds\n---\n"
+    )
+    name = _raw_note(inbox, "2026-10-20-example-checker-retire-on.md", text)
+    out = d.decide(name)
+    assert out.result == "invalid" and "YAML 1.1" in out.reason, out
+    assert load_register(lab / "lessons")["lessons"][0]["status"] == "controlled"
+    (inbox / "inbox" / name).unlink()
+    name = _intent(
+        inbox, "retire-ll-001", record="LL-001", retired_by=["M-17"], retired_on="2026-10-01",
+        reason="M-17 holds", **{"from": "controlled", "to": "retired"},
+    )  # fmt: skip
+    assert d.decide(name).result == "applied"
+    assert load_register(lab / "lessons")["lessons"][0]["retired_on"] == dt.date(2026, 10, 1)
+
+
+def test_a_crash_between_approve_and_complete_is_finished(lab, inbox, monkeypatch):
+    """Regression: fulfil() moves inbox -> approved -> completed; a crash between the two left
+    the intent in decided/approved forever, because recovery looked only in the inbox."""
+    from homelabnext.records import decider as movers
+
+    _give_ll_003_a_control(lab)
+    name = _intent(
+        inbox, "ll-003-partial", record="LL-003", reason="the detector shipped",
+        **{"from": "open", "to": "partial"},
+    )  # fmt: skip
+    real = movers.Decider._move
+
+    def crash(self, note, dest_lane, *a, **kw):
+        if dest_lane == movers.COMPLETED:
+            raise OSError("power cut")
+        return real(self, note, dest_lane, *a, **kw)
+
+    monkeypatch.setattr(movers.Decider, "_move", crash)
+    with pytest.raises(OSError):
+        _decider(lab, inbox).decide(name)
+    monkeypatch.setattr(movers.Decider, "_move", real)
+    assert RecordsReader(inbox).list("decided/approved") == [name]
+    [out] = _decider(lab, inbox).decide_all()
+    assert (out.result, out.reason) == ("applied", "already applied")
+    assert _lanes(inbox)["decided/completed"] == [name]
+    assert RecordsReader(inbox).list("decided/approved") == []
+    assert load_register(lab / "lessons")["lessons"][2]["status"] == "partial"
+
+
+def test_a_loaded_record_round_trips_through_write_record(lab, inbox):
+    """Regression: write_record takes an entry as load_register returns it, but that entry
+    carries the derived fields (a transition's status and ``set`` fields, the recurrences
+    count), so writing back a transitioned record was refused."""
+    _give_ll_003_a_control(lab)
+    name = _intent(
+        inbox, "ll-003-partial", record="LL-003", reason="the detector shipped",
+        **{"from": "open", "to": "partial"},
+    )  # fmt: skip
+    assert _decider(lab, inbox).decide(name).result == "applied"
+    rec = lab / "lessons/LL-003.md"
+    base_status = yaml.safe_load(rec.read_text().split("---")[1])["status"]
+    entry = load_register(lab / "lessons")["lessons"][2]
+    assert entry["status"] == "partial" and "recurrences" in entry
+    entry["preventive_control"] = "A nightly job diffs guests against backup jobs, and pages."
+    write_record(rec, entry)
+    after = load_register(lab / "lessons")["lessons"][2]
+    assert after["status"] == "partial" and after["preventive_control"].endswith("and pages.")
+    front = yaml.safe_load(rec.read_text().split("---")[1])
+    assert front["status"] == base_status and "recurrences" not in front
+    entry = dict(after, status="controlled")  # a derived field changed by hand: still refused
+    with pytest.raises(RegisterError, match="derived"):
+        write_record(rec, entry)
+
+
+def _old_review(date):
+    return {
+        "event": "review",
+        "by": "agent:example-checker",
+        "kind": "agent",
+        "role": "check",
+        "date": dt.date.fromisoformat(date),
+        "verdict": "pass",
+        "digest": "sha256:0123456789ab",
+        "note": "an earlier review, already an event",
+    }
+
+
+def test_a_migration_with_an_older_sidecar_review_compares_reviews_as_a_multiset(tmp_path):
+    """Regression: the before/after compare was order-sensitive, so a sidecar review older than
+    an inline one (it loads first after the migration, last before it) failed the migration."""
+    d = tmp_path / "registers" / "lessons"
+    _inline_copy(d, "lessons")
+    rec = d / "LL-001.md"
+    assert "reviews:" in rec.read_text()
+    old = _old_review("2025-01-02")
+    ev.create_event(ev.events_dir(rec), old, when=dt.datetime(2025, 1, 2, tzinfo=dt.UTC))
+    before = load_register(d)
+    assert migrate(d)
+
+    def key(doc):
+        out = []
+        for e in doc["lessons"]:
+            e = dict(e)
+            e["reviews"] = sorted(map(str, e.get("reviews") or []))
+            out.append(e)
+        return out
+
+    assert key(load_register(d)) == key(before)
+    assert "reviews:" not in rec.read_text()
+
+
+def test_a_page_migration_keeps_pre_existing_review_events(tmp_path):
+    """Regression: migrate_pages compared the migrated reviews with the inline list alone, so a
+    page that already had a review event (not a copy of an inline one) blocked every page."""
+    from homelabnext.sop.pages import page_reviews
+
+    pages = tmp_path / "docs" / "systems"
+    pages.mkdir(parents=True)
+    fixture = REPO / "tests/sop/fixtures/dns.reviewed.md"
+    page = pages / "dns.md"
+    page.write_text(fixture.read_text())
+    inline = yaml.safe_load(fixture.read_text().split("---")[1])["reviews"]
+    old = _old_review("2025-01-02")
+    ev.create_event(ev.events_dir(page), old, when=dt.datetime(2025, 1, 2, tzinfo=dt.UTC))
+    assert registers_main(["events", "migrate", str(pages)]) == 0
+    fm = yaml.safe_load(page.read_text().split("---")[1])
+    assert "reviews" not in fm
+    got = page_reviews(page, fm, [])
+    assert len(got) == len(inline) + 1
+    assert [r for r in got if r.get("note") == old["note"]]  # the earlier event is kept

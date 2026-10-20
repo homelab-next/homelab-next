@@ -34,7 +34,16 @@ from typing import Any
 from homelabnext.state import atomic_write_text
 
 from . import events as ev
-from .records import RECORD_KINDS, dir_events, load_texts, read_dir, register_source, render_record
+from .records import (
+    RECORD_KINDS,
+    _canonical,
+    dir_events,
+    load_texts,
+    parse_record,
+    read_dir,
+    register_source,
+    render_record,
+)
 from .schema import RegisterError, check_links, validate_lessons, validate_runbooks
 
 __all__ = [
@@ -291,17 +300,61 @@ def write_event(record_path, event: Mapping[str, Any], **kw) -> pathlib.Path:
     return write_events(record_path, [event], **kw)[0]
 
 
+_ABSENT = object()
+
+
+def _base_of(p: pathlib.Path, doc: Mapping[str, Any], kind: str) -> dict[str, Any]:
+    """``doc`` with every field that ``p``'s sidecar events contribute (reviews, the recurrences
+    count, last_verified, a transition's status and ``set`` fields) put back to the record
+    file's own value, or dropped where the file has none.  Such a field changed in ``doc`` is
+    refused: it is written as an event, or through the decider."""
+    out = dict(doc)
+    if not p.is_file():
+        return out
+    problems: list[str] = []
+    base = parse_record(p.read_text(), p.name, kind, problems)
+    events = ev.read_events(ev.events_dir(p), problems, p.name)
+    if problems or base is None or "retired" in base:
+        return out  # the register check names what is wrong with the file on disk
+    derived = ev.derive(base, events, kind, problems, p.name)
+    derived = _canonical({kind: [derived]}, kind)[kind][0]
+    changed = []
+    for k in sorted(set(derived) | set(base)):
+        now = derived.get(k, _ABSENT)
+        if now == base.get(k, _ABSENT) or k not in out:
+            continue  # not derived, or not given
+        if out[k] != now:
+            changed.append(k)
+        elif k in base:
+            out[k] = base[k]
+        else:
+            del out[k]
+    if changed:
+        raise RegisterError(
+            kind,
+            [
+                f"{p.name}: {', '.join(changed)} are derived from events (reviews, recurrences,"
+                " verified runs, transitions); write events or file a transition intent instead"
+            ],
+        )
+    return out
+
+
 def write_record(
     path, doc: Mapping[str, Any], *, require_reviews: bool = False, policy=None
 ) -> pathlib.Path:
     """Validate the record ``doc`` (front-matter fields and prose fields, as
     :func:`homelabnext.registers.load_register` returns an entry) in its register, then write
-    ``path`` atomically in the canonical record form.  The derived fields are refused: reviews
-    and recurrences are events (:func:`write_event`), the status changes through the decider."""
+    ``path`` atomically in the canonical record form.  What the record's events derive (reviews,
+    recurrences, last_verified, a transition's status and fields) is put back to the base record
+    first, so load -> edit the prose -> write round-trips; changing a derived field is refused:
+    reviews and recurrences are events (:func:`write_event`), the status changes through the
+    decider."""
     p = pathlib.Path(path)
     kind = p.parent.name
     if kind not in RECORD_KINDS:
         raise RegisterError(kind, [f"{p}: a record lives in a lessons/ or runbooks/ directory"])
+    doc = _base_of(p, doc, kind)
     bad = [k for k in (*INLINE_EVENTS, *ev.DERIVED_ONLY) if k in doc]
     if bad:
         raise RegisterError(

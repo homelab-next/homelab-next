@@ -268,6 +268,73 @@ def test_docker_compose_config_rejects_a_missing_required_variable(tmp_path):
 # --- smoke script --------------------------------------------------------------------------------
 
 
+# a fake Uptime Kuma 1.23 behind provision.js's client interface: the socket.io events it uses
+# (needSetup, setup, login, add, addStatusPage, saveStatusPage) and the lists Kuma sends after a
+# login; addStatusPage refuses a slug that exists, as Kuma's unique index does
+_FAKE_KUMA = r"""
+const { provision } = require(process.argv[1]);
+const state = { setup: true, monitors: {}, pages: {}, next: 1, calls: [] };
+const kuma = {
+    async call(event, ...args) {
+        state.calls.push(event);
+        switch (event) {
+        case "needSetup": return state.setup;
+        case "setup": state.setup = false; return { ok: true };
+        case "login": return { ok: !state.setup };
+        case "add": {
+            const id = state.next++;
+            state.monitors[id] = { id, name: args[0].name, url: args[0].url };
+            return { ok: true, monitorID: id };
+        }
+        case "addStatusPage":
+            if (Object.values(state.pages).some((p) => p.slug === args[1])) {
+                return { ok: false, msg: "slug already exists" };
+            }
+            state.pages[state.next] = { id: state.next++, slug: args[1], title: args[0] };
+            return { ok: true };
+        case "saveStatusPage": return { ok: true };
+        default: return { ok: false, msg: `unknown event ${event}` };
+        }
+    },
+    async lists() { return JSON.parse(JSON.stringify({ monitors: state.monitors, pages: state.pages })); },
+    async waitBeats() {},
+};
+const opts = { username: "lab", password: "fake-kuma-password", slug: "lab",
+    upURL: "http://up.example.invalid/-/healthy",
+    downURL: "http://down.example.invalid/" };
+(async () => {
+    const runs = [];
+    for (let i = 0; i < 2; i++) {
+        state.calls = [];
+        const out = await provision(kuma, opts);
+        runs.push({ calls: state.calls, out });
+    }
+    console.log(JSON.stringify({ runs, monitors: Object.keys(state.monitors).length,
+        pages: Object.keys(state.pages).length }));
+})().catch((e) => { console.error(e.message); process.exit(1); });
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_uptime_kuma_provisioning_is_idempotent():
+    """Regression: a re-run on a persisted volume added both monitors again and failed on the
+    existing status-page slug.  Run twice against a fake Kuma, the second run creates nothing.
+    (The real socket.io API -- that Kuma sends monitorList and statusPageList after a login --
+    is only exercised by the nightly lab smoke.)"""
+    script = str(LAB / "config" / "uptime-kuma" / "provision.js")
+    res = subprocess.run(
+        ["node", "-e", _FAKE_KUMA, script], capture_output=True, text=True, timeout=60, check=False
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    first, second = out["runs"]
+    assert first["calls"].count("add") == 2 and "addStatusPage" in first["calls"]
+    assert "add" not in second["calls"] and "addStatusPage" not in second["calls"]
+    assert second["calls"][-1] == "saveStatusPage" and second["out"]["created"] == []
+    assert second["out"]["monitors"] == first["out"]["monitors"]
+    assert (out["monitors"], out["pages"]) == (2, 1)
+
+
 def test_smoke_script_syntax_and_executable_bit():
     smoke = LAB / "smoke.sh"
     assert os.access(smoke, os.X_OK)

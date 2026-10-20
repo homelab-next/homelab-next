@@ -477,7 +477,13 @@ class Catalog:
         def visible(rid: str) -> bool:
             return self._sees(("runbook:" if rid.startswith("RB-") else "lesson:") + rid)
 
-        out["due"] = {a: [d for d in rows if visible(d["id"])] for a, rows in out["due"].items()}
+        def withhold(text: str) -> str:  # a reason may name other records: same id scan
+            return _RECORD_ID.sub(lambda m: m[0] if visible(m[0]) else "(out of scope)", text)
+
+        out["due"] = {
+            a: [{**d, "reason": withhold(d["reason"])} for d in rows if visible(d["id"])]
+            for a, rows in out["due"].items()
+        }
         out["warnings"] = [
             w for w in out["warnings"] if all(visible(i) for i in _RECORD_ID.findall(w))
         ]
