@@ -16,6 +16,7 @@ REGISTERS_OUT := build/registers
 help:
 	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
 	@echo "hygiene: helpers-lint dup-check tls-lint workstation-lint keyring-check keyring ids-placeholders"
+	@echo "knowledge graph (docs/graph/; checked in gates): graph"
 	@echo "script catalog (M-01, M-02, M-04): scripts-check"
 	@echo "invariants register, fast criteria, never pages (not in check; CI runs it): invariants"
 	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke"
@@ -56,7 +57,8 @@ schemas:
 
 # endpoints come from the registry; role and playbook rules come from the role interface;
 # `custom check` fails on an unowned or expired customization; the system and capability pages
-# (docs/systems/, docs/capabilities/) match the registry and the conformance code
+# (docs/systems/, docs/capabilities/) match the registry and the conformance code; the knowledge
+# graph (docs/graph/) is current and has no dangling edge or duplicate id
 gates:
 	$(PY) $(ENDPOINT_GATE) .
 	$(PY) $(ROLE_LINT) $(ROLES)
@@ -64,6 +66,7 @@ gates:
 	$(PY) -m homelabnext.cli custom check
 	$(PY) -m homelabnext.cli docs systems check examples/services.yml docs/systems
 	$(PY) -m homelabnext.cli docs capabilities check
+	$(PY) -m homelabnext.cli graph check
 
 # every decision spec git tracks is complete, asks well-formed questions, and inline specs stay fast
 decide-lint:
@@ -239,6 +242,11 @@ workstation-lint:
 KEYRING_SOURCES := examples/keyring/sources.yml
 keyring-check:
 	$(PY) -m homelabnext.cli agent keyring check $(KEYRING_SOURCES)
+
+# after changing anything the knowledge graph reads (docs/graph.md): regenerate and commit it
+.PHONY: graph
+graph:
+	$(PY) -m homelabnext.cli graph build
 
 # after changing a registry, profile or broker source of the keyring: regenerate and commit it
 keyring:

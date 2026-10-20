@@ -178,6 +178,10 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "event seam: deploy-changed (what-changed event, F-15)|enrich-coverage (T-04)",
         lambda a: importlib.import_module("homelabnext.events.cli").main(a),
     ),
+    "graph": (
+        "the repository knowledge graph: build|check|related (docs/graph/)",
+        lambda a: importlib.import_module("homelabnext.graph.cli").main(a),
+    ),
     "custom": (
         "list|check|plan|register lab/vendor customizations",
         lambda a: importlib.import_module("homelabnext.customization.cli").main(a),

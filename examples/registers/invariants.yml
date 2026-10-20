@@ -887,15 +887,19 @@ criteria:
   observable: >-
     python3 -c 'import yaml' 2>/dev/null || exit 100;
     python3 -m homelabnext.cli docs systems check examples/services.yml docs/systems &&
-    python3 -m homelabnext.cli docs capabilities check
+    python3 -m homelabnext.cli docs capabilities check &&
+    python3 -m homelabnext.cli graph check
   expected: >-
     exit 0: every service in the inventory has its system page and the generated parts match the
-    inventory, and every capability page matches its contract, suite and adapters (0 drift; TODO
-    blocks are reported, not failed)
+    inventory, every capability page matches its contract, suite and adapters, and the knowledge
+    graph (docs/graph/) is current with no dangling edge or duplicate id (0 drift; TODO blocks,
+    orphan nodes and unresolved system tags are reported, not failed)
   expect_regex: 'systems pages: ok'
   remediation: >-
-    Run `hnx docs systems generate examples/services.yml docs/systems` (or fix the inventory) and
-    commit the result; a page that disagrees with the inventory is believed over it.
+    Run `hnx docs systems generate examples/services.yml docs/systems` (or fix the inventory),
+    `hnx docs capabilities generate` and `hnx graph build`, and commit the result; for a dangling
+    edge fix the reference the check names in its source file. A page that disagrees with the
+    inventory is believed over it.
 - id: L-08
   statement: Invariant exits are unambiguous.
   evidence: auto

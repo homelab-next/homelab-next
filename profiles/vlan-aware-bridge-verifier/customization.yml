@@ -14,8 +14,6 @@ reason: >-
 owner: platform-team
 created: "2026-10-15"
 review_by: "2027-04-30"
-links:
-  lesson: LL-901
 upstream: none
 action:
   profile: vlan-aware-bridge-verifier

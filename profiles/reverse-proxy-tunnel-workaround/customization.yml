@@ -15,8 +15,6 @@ reason: >-
 owner: platform-team
 created: "2026-10-15"
 review_by: "2027-01-31"
-links:
-  runbook: RB-902
 upstream: none
 action:
   role: example_service

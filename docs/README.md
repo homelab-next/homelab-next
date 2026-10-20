@@ -43,6 +43,10 @@ relate.
   the shared review model and `hnx registers review`.
 - [Script catalog](scripts/catalog.md) ([[scripts/catalog|Script catalog]]), generated from the
   script headers; [how the catalog is kept true](scripts.md) ([[scripts]]).
+- [Knowledge graph](graph.md) ([[graph]]): every service, capability, adapter, check, schema,
+  register record, script, agent profile and page as typed nodes and edges read from the source
+  files; the [graph index](graph/README.md) ([[graph/README|graph index]]) has one page per node
+  kind, and `hnx graph related <id|path>` lists what a task should pull in.
 - [Glossary](glossary.md) ([[glossary]]).
 
 ## Opening `docs/` as an Obsidian vault
@@ -62,4 +66,5 @@ The generated pages are checked in `make check` and CI:
 hnx docs capabilities check                                # docs/capabilities/ is current
 hnx docs systems check examples/services.yml docs/systems  # docs/systems/ matches the registry
 hnx scripts catalog --check                                # docs/scripts/catalog.* is current
+hnx graph check                                            # docs/graph/ is current, no dangling edge
 ```
