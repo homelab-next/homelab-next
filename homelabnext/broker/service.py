@@ -3,7 +3,7 @@
 handlers, every outcome audited to disk.
 
 It implements the ``broker`` capability contract (``conformance.protocols.broker``) on top of
-:func:`homelabnext.broker.decide` and a manifest (``schemas/broker/manifest`` 1.2).  An action is
+:func:`homelabnext.broker.decide` and a manifest (``schemas/broker/manifest`` 1.3).  An action is
 one of three kinds:
 
 * a **lane** write (``handler: builtin/lane``, ``lane: <name>``): ``memory.write``,
@@ -29,9 +29,12 @@ Every outcome - ok, denied, invalid, error, shadow - leaves one audit record tha
 against ``schemas/broker/audit``.  Arguments an ``ArgSpec`` marks ``secret`` are redacted in the
 audit trail and never written to disk.
 
-Not in this stage (ADR-0017): a network transport, an MCP tool server, approvals through the front
-door, and a hub approvals page.  Callers are named, not authenticated: the identity is whatever
-the embedding process or the CLI's ``--as`` says.
+The service itself takes the caller as a string: an embedding program names it.  Stage 2a
+(ADR-0017) authenticates it instead: :mod:`homelabnext.broker.server` serves this service on a
+Unix socket and takes the caller from the peer's credentials, mapped through the manifest's
+``callers`` (1.3); approvals arrive from the manifest's ``approval_relays``.  While a socket
+request is being served, :data:`TRANSPORT_PEER` names the peer and every audit record carries it
+as ``via``.
 """
 
 from __future__ import annotations
@@ -43,6 +46,7 @@ import os
 import re
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -73,6 +77,7 @@ from .state import FileApprovalStore, StateDir, is_id, new_id
 
 __all__ = [
     "NOT_OWNER",
+    "TRANSPORT_PEER",
     "BrokerService",
     "ManifestError",
     "load_manifest",
@@ -93,6 +98,9 @@ APPROVAL_TITLE = "Broker approval needed"
 APPROVAL_CLEARED = "Broker approval settled"
 _SUMMARY_BYTES = 1024
 _SVC_RE = re.compile(r"^svc:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+#: the authenticated transport peer (``uid:<n>``) of the request being served on this thread, set
+#: by :mod:`homelabnext.broker.server`; every audit record written meanwhile carries it as ``via``
+TRANSPORT_PEER: ContextVar[str | None] = ContextVar("hnx_broker_transport_peer", default=None)
 
 
 def _utcnow() -> datetime:
@@ -212,7 +220,22 @@ def validate_manifest(
         else:
             exec_actions.append(a)
     problems += check_manifest_handlers({"actions": exec_actions}, docs)
+    problems += _peer_problems(manifest)
     return docs, problems
+
+
+def _peer_problems(manifest: Mapping[str, Any]) -> list[str]:
+    """Each transport peer (uid or user) is listed once, as a caller *or* a relay: one peer, one
+    identity, so an agent's process can never also be the relay that approves for a human."""
+    seen: dict[str, str] = {}
+    out = []
+    for where in ("callers", "approval_relays"):
+        for entry in manifest.get(where, []):
+            key = f"uid {entry['uid']}" if "uid" in entry else f"user {entry['user']}"
+            if key in seen:
+                out.append(f"{where}: {key} is already listed in {seen[key]}")
+            seen.setdefault(key, where)
+    return out
 
 
 def load_manifest(path: str | os.PathLike[str]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -374,10 +397,27 @@ class BrokerService:
             "manifest_id": self.manifest.get("manifest_id", "in-process"),
         }
         rec.update({k: v for k, v in extra.items() if v is not None})
+        via = TRANSPORT_PEER.get()
+        if via is not None:
+            rec["via"] = via
         problems = validation.named_errors("broker/audit", rec)
         if problems:  # a bug in the broker, never the caller's input: fail loudly
             raise BrokerError(f"audit record invalid: {problems[0]}")
         self.state.append_audit(rec, t.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ"))
+
+    def audit_refusal(
+        self,
+        caller: str,
+        operation: str,
+        outcome: str,
+        reason: str,
+        *,
+        action: str = "",
+        request_id: str | None = None,
+    ) -> None:
+        """Audit a refusal made before the service saw the request (the socket transport's:
+        an unknown peer, an actor named in the body, a malformed or oversized request)."""
+        self._audit(caller, action[:128], operation, outcome, reason=reason, request_id=request_id)
 
     def audit(self) -> Sequence[AuditRecord]:
         return [
@@ -811,6 +851,62 @@ class BrokerService:
             )
         return out
 
+    def pending_for(self, caller: str) -> list[dict[str, Any]]:
+        """``caller``'s own requests still ``pending`` (awaiting approval, or approved and not yet
+        run, or allowed and not yet run): what an agent may still run or cancel."""
+        out = []
+        for rid in self.state.request_ids():
+            rec = self.state.get_request(rid)
+            if (
+                not rec
+                or rec["request"]["actor"] != caller
+                or self.state.state_of(rid) != "pending"
+            ):
+                continue
+            req = rec["request"]
+            approved = [a for a in self.state.approvals(rid) if a["decision"] == "approved"]
+            out.append(
+                {
+                    "request_id": rid,
+                    "action": req["action"],
+                    "target": req.get("target"),
+                    "created": req["created"],
+                    "awaiting_approval": rec["verdict"] == "needs-approval" and not approved,
+                    "approved": bool(approved),
+                }
+            )
+        return out
+
+    def actions_for(self, caller: str) -> list[dict[str, Any]]:
+        """What ``caller`` may ask for: every action a grant of its names that :func:`decide`
+        would admit (``allow`` or ``needs-approval``), with its tier, kind and parameters.
+        Derived by asking ``decide`` itself (shadow mode, nothing consumed), so it cannot
+        disagree with what a call would get."""
+        view = self._view()
+        names = sorted({a for g in view["grants"] if g["profile"] == caller for a in g["actions"]})
+        out = []
+        for name in names:
+            probe = {"request_id": "req-probe", "action": name, "actor": caller, "params": {}}
+            verdict = decide(dict(view, mode="shadow"), probe, None, store=self.approvals)
+            if verdict["verdict"] not in ("allow", "needs-approval"):
+                continue
+            entry = next(a for a in view["actions"] if a["action"] == name)
+            act = self._action(name)
+            row: dict[str, Any] = {
+                "action": name,
+                "tier": entry["tier"],
+                "kind": act.kind,
+                "needs_approval": verdict["verdict"] == "needs-approval",
+            }
+            if act.kind == "lane" and act.handler is not None:
+                row["lane"] = act.handler.name
+                row["params"] = _lane_params(act.handler)
+            elif act.kind == "exec" and act.handler is not None:
+                row["params_schema"] = act.handler["params_schema"]
+                row["description"] = act.handler.get("description", "")
+            out.append(row)
+        return out
+
     def approve(self, request_id, approver: str, *, note: str | None = None) -> dict[str, Any]:
         """File an approval of ``request_id`` by ``approver`` (``issuer:subject``)."""
         return self._decide_request(request_id, approver, "approved", note)
@@ -945,6 +1041,22 @@ class BrokerService:
             self._audit(
                 "svc:broker", "", "notify", "error", reason="notify-failed", request_id=key[16:]
             )
+
+
+def _lane_params(lane: _lanes.Lane) -> dict[str, str]:
+    """A caller's description of a lane action's params (``actions_for``)."""
+    if lane.kind == "records-inbox":
+        return {
+            "note": "records note frontmatter: title, risk, rollback, ...; requesting_agent is "
+            f"bound to the caller; type one of {', '.join(lane.note_types)}",
+            "body": "optional Markdown body",
+            "slug": "optional file name slug",
+        }
+    return {
+        "name": f"file name matching {lane.filename_pattern}",
+        "content": f"{lane.format}, at most {lane.max_bytes} bytes"
+        + ("" if lane.overwrite else "; an existing file is never replaced"),
+    }
 
 
 def _digest_text(text: str) -> str:

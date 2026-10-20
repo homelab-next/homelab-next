@@ -14,7 +14,11 @@ approvals bound to the exact request. Reference evaluator: `homelabnext.broker`.
 
 Manifest 1.2 adds `lanes` (write lanes for the built-in lane handler), an action's `lane` and
 `handler_docs`; handler 1.1 adds `argv`, `secrets` (names resolved at run time) and
-`max_output_bytes`. Reference service and walkthrough: `docs/broker.md`, ADR-0017.
+`max_output_bytes`. Manifest 1.3 adds the socket transport's identities: `callers` (a peer, by
+`uid` or `user`, and the one profile it acts as), `approval_relays` (a peer that files approvals
+for the humans of one `issuer`) and `dev_identity` (whether the CLI's asserted `--as` is accepted;
+absent means false). Audit 1.1 adds the operation `connect` (a transport refusal) and `via` (the
+socket peer, `uid:<n>`). Reference service and walkthrough: `docs/broker.md`, ADR-0017.
 
 Table-driven fixtures: `tests/broker/fixtures/decision_table.yml` (manifest x tier x handler x
 approval -> decision), including every default-deny case and the digest-mismatch negatives, and `access_cases` for

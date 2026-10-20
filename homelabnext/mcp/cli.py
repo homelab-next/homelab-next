@@ -72,11 +72,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"hnx mcp: {exc}", file=sys.stderr)
         return 1
     if args.cmd == "serve":
-        try:
-            from .server import _sdk, serve
+        from .server import sdk_missing, serve
 
-            _sdk()
-        except ImportError:
+        if sdk_missing():
             print(
                 "hnx mcp serve: the MCP SDK is not installed (pip install 'homelabnext[mcp]')",
                 file=sys.stderr,

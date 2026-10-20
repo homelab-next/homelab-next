@@ -8,6 +8,10 @@ works with both SDK majors: ``mcp.server.mcpserver.MCPServer`` (2.x) and
 open-world), returns its result as one JSON text block (the catalog's own deterministic,
 size-capped serialisation) and reports a refusal as a tool error carrying the catalog's
 message.  No network transport is ever started: :func:`serve` runs stdio and nothing else.
+
+:func:`new_server`, :func:`hints`, :func:`register` and :func:`tool_error` are the plumbing
+every stdio server in the package shares (the broker's, :mod:`homelabnext.broker.mcp_tools`,
+too), so the SDK is still imported here and nowhere else.
 """
 
 from __future__ import annotations
@@ -17,7 +21,16 @@ from typing import Any
 from .catalog import TOOLS, Catalog, CatalogError
 from .scope import SERVER_NAME
 
-__all__ = ["INSTRUCTIONS", "build_server", "serve"]
+__all__ = [
+    "INSTRUCTIONS",
+    "build_server",
+    "hints",
+    "new_server",
+    "register",
+    "sdk_missing",
+    "serve",
+    "tool_error",
+]
 
 INSTRUCTIONS = (
     "Read-only answers from the homelab-next repository's source of truth (capability "
@@ -40,13 +53,53 @@ def _sdk() -> tuple[Any, Any, Any]:
     return Server, ToolError, ToolAnnotations
 
 
+def sdk_missing() -> bool:
+    """True when the ``mcp`` extra is not installed (a CLI then says how to install it)."""
+    try:
+        _sdk()
+    except ImportError:
+        return True
+    return False
+
+
+def new_server(name: str, instructions: str) -> Any:
+    """An SDK server of the installed major; shared by every stdio server in this package."""
+    return _sdk()[0](name=name, instructions=instructions, log_level="WARNING")
+
+
+def hints(*, read_only: bool, destructive: bool = False, idempotent: bool = True) -> Any:
+    """Tool annotations; never open-world (no tool here reaches outside the platform)."""
+    return _sdk()[2](
+        readOnlyHint=read_only,
+        destructiveHint=destructive,
+        idempotentHint=idempotent,
+        openWorldHint=False,
+    )
+
+
+def register(server: Any, description: str, annotations: Any):
+    """Decorator: register ``fn`` as the tool ``fn.__name__``, its result one text block."""
+
+    def wrap(fn):
+        return server.tool(
+            name=fn.__name__,
+            description=description,
+            annotations=annotations,
+            structured_output=False,
+        )(fn)
+
+    return wrap
+
+
+def tool_error(message: str) -> Exception:
+    """The SDK's tool error: the client sees ``message`` as an error result."""
+    return _sdk()[1](message)
+
+
 def build_server(catalog: Catalog) -> Any:
     """An SDK server exposing exactly :data:`~.catalog.TOOLS` over ``catalog``."""
-    server_cls, tool_error, annotations = _sdk()
-    server = server_cls(name=SERVER_NAME, instructions=INSTRUCTIONS, log_level="WARNING")
-    ro = annotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
-    )
+    server = new_server(SERVER_NAME, INSTRUCTIONS)
+    ro = hints(read_only=True)
 
     def run(name: str, **arguments: Any) -> str:
         try:
@@ -55,12 +108,7 @@ def build_server(catalog: Catalog) -> Any:
             raise tool_error(str(exc)) from None
 
     def tool(fn):
-        return server.tool(
-            name=fn.__name__,
-            description=TOOLS[fn.__name__],
-            annotations=ro,
-            structured_output=False,
-        )(fn)
+        return register(server, TOOLS[fn.__name__], ro)(fn)
 
     @tool
     def list_capabilities() -> str:
