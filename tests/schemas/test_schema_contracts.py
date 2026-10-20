@@ -38,6 +38,7 @@ EXPECTED = {
     "registers/runbook.schema.json",
     "registers/invariant.schema.json",
     "registers/kanban_item.schema.json",
+    "registers/register_event.schema.json",
     "registers/decision_spec.json",
     "platform/model_roles.json",
     "platform/capability.schema.json",

@@ -8,6 +8,8 @@ from .store import (
     StateError,
     StateStore,
     StateVersionError,
+    atomic_write_text,
+    file_lock,
     quarantined_files,
 )
 
@@ -18,5 +20,7 @@ __all__ = [
     "StateError",
     "StateStore",
     "StateVersionError",
+    "atomic_write_text",
+    "file_lock",
     "quarantined_files",
 ]

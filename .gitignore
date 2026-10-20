@@ -11,6 +11,8 @@ venv/
 .DS_Store
 /dist/
 /build/
+# per-run private output (homelabnext/runs.py; HNX_RUNS_DIR moves it)
+/runs/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/

@@ -7,8 +7,9 @@ and runbooks are **one Markdown file per record**; invariants stay **one YAML fi
 
 ```
 examples/registers/
-  lessons/LL-001.md ...        one lesson per file (pitfalls and practices)
-  runbooks/RB-001.md ...       one runbook per file
+  lessons/LL-001.md ...        one lesson per file (pitfalls and practices): prose + stable fields
+  lessons/LL-001.events/       its append-only events, one file each (reviews, recurrences, ...)
+  runbooks/RB-001.md ...       one runbook per file (and RB-001.events/)
   invariants.yml               the machine checks `hnx invariants run` executes
 examples/review-policy.yml     which reviews each artefact needs (shared with docs/systems/)
 ```
@@ -19,6 +20,9 @@ hnx registers links examples/registers/lessons [--check]  # regenerate / check t
 hnx registers review examples/registers [--today D] [--strict] [--json]   # what the review owes
 hnx registers split lessons.yml lessons/ | join lessons/ lessons.yml     # convert either way
 hnx reviews digest examples/registers/lessons/LL-002.md   # the digest a review must carry
+hnx registers events add lessons/LL-001.md event.yml   # validate, then append one event
+hnx registers events migrate examples/registers/lessons docs/systems   # inline state -> events
+hnx registers decide examples/registers RECORDS_ROOT --as human:operator [--dry-run]
 hnx ids resolve | check-lost | check-dupes | check-placeholders
 ```
 
@@ -27,7 +31,10 @@ hnx ids resolve | check-lost | check-dupes | check-placeholders
 A single-file register makes concurrent authors collide: both read "the next free id", both
 append, and the merge either renumbers by hand or fuses two entries into one record that silently
 deletes the other. With one file per record two authors never touch the same file, ids are
-allocated at merge time, and `check-lost` catches a deleted record file.
+allocated at merge time, and `check-lost` catches a deleted record file. What machines append to
+a record (reviews, recurrences, verification runs, status changes) is not in the record file at
+all but in one file per event beside it (see "Events and derived state"), so an agent adding a
+review and a person editing the prose in Obsidian never touch the same file either.
 
 Invariants stay one file on purpose: they are short machine checks (statement, observable,
 expected, remediation) with no prose body, the runner reads them as one document, seventy of them
@@ -55,13 +62,6 @@ verification:
   observable: openssl s_client -connect proxy.lab.example:443 ... | openssl x509 -noout -checkend 1209600
   expected: exit 0 while the served certificate has 14 days or more left
 related: [LL-001]
-reviews:
-- by: agent:example-checker
-  kind: agent
-  role: check
-  date: 2026-10-19
-  verdict: pass
-  digest: sha256:...
 ---
 
 ## Method
@@ -108,6 +108,74 @@ runbooks: what the graph and context packs read.
 Opening `examples/registers/` as an Obsidian vault shows records linked to each other (`[[LL-001]]`,
 `[[RB-002]]`, steps' `from_lessons`) and to their systems (`[[systems/proxy|proxy]]`).
 
+## Events and derived state
+
+Beside each record (and each `docs/systems/<service>.md` page) is a sidecar directory
+`<RECORD>.events/` holding one small YAML file per event
+(`schemas/registers/register_event.schema.json`, `homelabnext/registers/events.py`):
+
+```
+lessons/LL-005.events/
+  20261019T000000Z-review-agent-example-checker.yml
+  20261019T000001Z-review-agent-example-challenger.yml
+  20261020T093000Z-verified-agent-example-checker.yml
+  20261020T093000Z-verified-agent-example-checker-2.yml   # same second, same writer: -2
+```
+
+| event | fields | derives |
+|---|---|---|
+| `review` | the review entry (`by kind role date verdict digest note`) | `reviews` (inline first, then events in order) |
+| `recurrence` | `by date note evidence` (pitfalls only) | `recurrences` = inline base (0 when absent) + one per event |
+| `verified` | `by date outcome (pass/fail) result evidence` | `last_verified` = the latest passing run (never written by hand) |
+| `transition` | `by date from to set intent requested_by reason` | the status (base status + every applied transition, in order) |
+
+* A name is `<UTC YYYYMMDDTHHMMSSZ>-<event>-<actor slug>[-<n>].yml`; files are created
+  exclusively (an existing name is an error, never an overwrite) and the next `-<n>` is taken
+  when another writer got the same second. Events are never edited; a correction is a new event.
+* The loader computes the derived fields, so `load_register` returns the same document as before
+  and the graph, packs, context, MCP, review and render code read it unchanged. Event files are
+  not graph nodes.
+* A recurrence and a transition are content (they are in the review digest); a verification run
+  and a review are not. A transition whose `from` is not the status at that point, a misnamed or
+  invalid event, or a sidecar without its record fails the build.
+* `hnx registers events migrate DIR...` moves inline `reviews:` / `recurrences:` into events,
+  losslessly (the loaded document is deep-equal before and after, or nothing is written), and
+  re-running it finishes an interrupted run without duplicates.
+
+Who writes what: people and agents write record files (prose, stable fields) and event files
+(`review`, `recurrence`, `verified`); **only the decider writes `transition` events**.
+
+### Writing through the library
+
+`homelabnext.registers.write`: `write_record(path, doc)`, `write_event(record, event)`,
+`write_events(...)` (a batch) and `write_register(dir, files)` (a whole new directory, used by
+`split`) validate with the build's fatal rules against the register as it will be (every record,
+every event, the sibling register, the invariants and the review policy's identity rules), then
+write atomically (`homelabnext.state.atomic_write_text`). Invalid content is refused and nothing
+is written. The review-tier requirement is opt-in there (`require_reviews=True`): an edit or a
+recurrence legitimately creates review debt that a later review event pays, and the build still
+fails until it is paid. `hnx registers events add RECORD EVENT.yml` is the command form.
+
+### Status changes: intents and the decider
+
+Nobody edits `status` to move a record through its lifecycle. An agent files an intent through
+the records library (`homelabnext.records`, inbox lane), a note of `type: register-transition`
+with `record`, `from`, `to`, `reason` and the field the target needs (`retired_by`,
+`incorporated_into` or `superseded_by`; `on` for `retired_on`). `hnx registers decide` (library:
+`homelabnext.registers.transitions.TransitionDecider`) takes each one under a lock:
+
+* `from` is not the current status (another intent got there first): **denied** with that reason;
+* the record would be invalid after the change: **denied**, naming the problems;
+* the policy's tiers for the target are not met by current reviews of the *prospective* content:
+  **waiting** (the note stays in the inbox; the output prints the digest reviewers must stamp),
+  so a transition needing a human approve waits for a current human `approve` review event;
+* otherwise **applied**: a `transition` event, then the note moves to `decided/completed/` (via
+  approved), each move with its audit sidecar.
+
+Two conflicting intents (both retiring one lesson with different `retired_by`): the first decided
+applies, the second is denied. A crash between the event and the move is finished, not re-decided,
+on the next run. It is a command, not a service: run it by hand, from CI or from a timer.
+
 ## Lessons are backlog: kinds and lifecycle
 
 A lesson is knowledge not yet built into the system. It is meant to graduate and stop being a
@@ -138,17 +206,20 @@ practice (into `RB-002#1`).
 ## Reviews
 
 Every lesson and runbook (and every docs/systems page) has an `author:` (`unknown` only for the
-backfilled examples) and a `reviews:` list, shared model in `homelabnext/reviews.py`:
+backfilled examples) and reviews, each one a `review` event file in its sidecar (an inline
+`reviews:` list still loads, as the base the events add to), shared model in
+`homelabnext/reviews.py`:
 
 ```yaml
-reviews:
-  - by: agent:j8-lead            # issuer:subject
-    kind: agent                  # agent | human
-    role: check                  # check | challenge | approve
-    date: 2026-10-19
-    verdict: pass                # pass | changes | reject
-    digest: sha256:3f9a0c41e2b7  # `hnx reviews digest FILE` (a prefix of >= 12 hex digits)
-    note: optional one line or a link to the evidence
+# lessons/LL-005.events/20261019T000000Z-review-agent-j8-lead.yml
+event: review
+by: agent:j8-lead                # issuer:subject
+kind: agent                      # agent | human
+role: check                      # check | challenge | approve
+date: 2026-10-19
+verdict: pass                    # pass | changes | reject
+digest: sha256:3f9a0c41e2b7      # `hnx reviews digest FILE` (a prefix of >= 12 hex digits)
+note: optional one line or a link to the evidence
 ```
 
 * identities are normalized and compared like the broker's approvals
@@ -156,10 +227,13 @@ reviews:
 * roles: `check` (an agent confirms the record is correct and complete), `challenge` (a second,
   independent agent looks for what is wrong, missing or unproven), `approve` (a human signs off);
 * a `challenge` review comes from a different agent than every `check` review;
+* a requirement's `min` counts distinct reviewers (normalized identities), not reviews;
 * a `human` review must be by a `kind: human` reviewer in the policy's allowlist; an agent identity
   (an `agent:` issuer, or an allowlist entry of `kind: agent`) in a human slot fails;
 * a review counts only while its `digest` matches the record's current content (every field but
-  `reviews`; the Links block is not content), and only with `verdict: pass`. Editing a record
+  `id`, `reviews` and `last_verified`, with the events applied and the record's own id
+  neutralized, so allocating `LL-NEW` -> `LL-006` keeps reviews current; the Links block is not
+  content), and only with `verdict: pass`. Editing a record
   after review makes its reviews stale; there is no date to forget to bump. `last_reviewed` is
   derived (the latest current passing review) and shown on the pages.
 
@@ -202,7 +276,8 @@ fails on it; `--strict` exits 1 while anything is due, and `--json` is for agent
    `hnx registers links examples/registers/lessons` to write its Links block.
 3. `hnx registers build examples/registers build/registers` must pass. A new pitfall can be
    committed `open` with no reviews; a status that claims more needs the reviews the policy
-   names, stamped with `hnx reviews digest <file>`.
+   names, stamped with `hnx reviews digest <file>` and written as review events
+   (`hnx registers events add`).
 4. Commit and open a pull request. A maintainer runs `make ids-resolve` at merge time, which
    allocates the number under the per-repository lock, rewrites `LL-NEW` inside the file and
    renames it to `LL-NNN.md`.

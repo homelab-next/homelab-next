@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+event: review
+by: agent:example-checker
+kind: agent
+role: check
+date: 2026-10-19
+verdict: pass
+digest: sha256:0d1702c07e11
+note: fictional example review

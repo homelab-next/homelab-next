@@ -11,6 +11,15 @@ links DIR... [--check]
 review SRC_DIR [--today YYYY-MM-DD] [--strict] [--json]
                      what the lesson review should do (missing reviews, retire, incorporate,
                      supersede, update, keep); warns and exits 0 unless --strict
+events migrate PATH...
+                     move inline reviews/recurrences of a record directory (or a docs/systems
+                     directory's reviews) into <record>.events/ files, losslessly
+events add RECORD EVENT.yml [--require-reviews]
+                     validate one event (review, recurrence, verified) against the register as it
+                     will be, then append it to RECORD's sidecar under a fresh name
+decide REGISTER_ROOT RECORDS_ROOT --as ISSUER:SUBJECT [--dry-run] [--json] [--policy FILE]
+                     apply, deny or hold every register-transition intent in the records inbox
+                     (exit 0; 1 on a fatal error)
 """
 
 import argparse
@@ -47,8 +56,27 @@ def main(argv=None) -> int:
     rv.add_argument("--json", action="store_true", help="machine-readable output")
     rv.add_argument("--results", help="invariants results JSON (default SRC/...results.json)")
     rv.add_argument("--policy", help="review policy (default review-policy.yml in or beside SRC)")
+    evp = sub.add_parser("events", help="sidecar events: migrate inline state, add an event")
+    esub = evp.add_subparsers(dest="ecmd", required=True)
+    em = esub.add_parser("migrate", help="inline reviews/recurrences -> <record>.events/")
+    em.add_argument("paths", nargs="+")
+    ea = esub.add_parser("add", help="validate and append one event to a record's sidecar")
+    ea.add_argument("record")
+    ea.add_argument("event", help="a YAML file holding the event mapping")
+    ea.add_argument("--require-reviews", action="store_true", help="also demand the policy tiers")
+    dc = sub.add_parser("decide", help="apply the register-transition intents of a records inbox")
+    dc.add_argument("register_root")
+    dc.add_argument("records_root")
+    dc.add_argument("--as", dest="decided_by", required=True, help="issuer:subject of the decider")
+    dc.add_argument("--policy", help="review policy (default review-policy.yml in or beside root)")
+    dc.add_argument("--dry-run", action="store_true", help="report, write and move nothing")
+    dc.add_argument("--json", action="store_true", help="machine-readable output")
     ns = ap.parse_args(argv)
     try:
+        if ns.cmd == "events":
+            return _events(ns)
+        if ns.cmd == "decide":
+            return _decide(ns)
         if ns.cmd == "build":
             for p in build_all(ns.src, ns.out, ns.results, ns.policy):
                 print(p)
@@ -82,6 +110,52 @@ def main(argv=None) -> int:
     except RegisterError as ex:
         print(f"[registers] FATAL: {ex}", file=sys.stderr)
         return 1
+    return 0
+
+
+def _events(ns) -> int:
+    if ns.ecmd == "migrate":
+        from .migrate import migrate
+
+        for p in ns.paths:
+            written = migrate(p)
+            print(f"[registers] {p}: {len(written)} file(s) written")
+        return 0
+    import yaml
+
+    from .write import write_event
+
+    with open(ns.event, encoding="utf-8") as fh:
+        event = yaml.safe_load(fh)
+    if not isinstance(event, dict):
+        raise RegisterError("events", [f"{ns.event}: not a YAML mapping"])
+    print(write_event(ns.record, event, require_reviews=ns.require_reviews))
+    return 0
+
+
+def _decide(ns) -> int:
+    from homelabnext.reviews import ReviewError, load_policy
+
+    from .transitions import TransitionDecider
+
+    try:
+        policy = load_policy(ns.policy) if ns.policy else None
+    except ReviewError as ex:
+        raise RegisterError("review policy", ex.problems) from None
+    try:
+        d = TransitionDecider(
+            ns.register_root, ns.records_root, decided_by=ns.decided_by, policy=policy
+        )
+    except ValueError as ex:
+        raise RegisterError("decide", [str(ex)]) from None
+    outcomes = d.decide_all(dry_run=ns.dry_run)
+    if ns.json:
+        print(json.dumps([o.as_json() for o in outcomes], indent=2, sort_keys=True))
+    else:
+        for o in outcomes:
+            print(f"[registers] {o.line()}")
+        if not outcomes:
+            print("[registers] no register-transition intent in the inbox")
     return 0
 
 

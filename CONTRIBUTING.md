@@ -33,6 +33,12 @@ tests on a laptop with no network and no private context.
    in a record directory the tombstone is a record file whose front-matter is `id:` plus that
    `retired:` mapping. A solved lesson is not deleted either: it is retired (a pitfall, by the
    mechanism that replaced it) or incorporated (a practice, into a runbook).
+   Machine state is never edited inside a record: reviews, recurrences and verification runs are
+   append-only event files in `<record>.events/` (`hnx registers events add`), and a status change
+   is a `register-transition` intent in the records inbox that `hnx registers decide` applies
+   (ADR-0014, [docs/registers.md](docs/registers.md#events-and-derived-state)). Scripts write
+   scratch output only under `homelabnext.runs.run_dir(run_id)` or `build/`
+   (`make run-output-lint`).
 7. **A contract change needs an ADR** (copy `docs/adr/_template.md`; one file, five headings).
 8. Python >= 3.11, standard library first. New dependencies go in an extra in `pyproject.toml`,
    must be permissively licensed (LGPL only as an unmodified dependency), and are justified in the PR.

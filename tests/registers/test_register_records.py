@@ -88,9 +88,14 @@ def test_split_then_join_round_trips(tmp_path):
         joined = records.join_register(REPO / "examples/registers" / kind, tmp_path / f"{kind}.yml")
         again = tmp_path / "split" / kind
         records.split_register(joined, again)
-        assert load_register(again) == load_register(REPO / "examples/registers" / kind)
-        for p in again.iterdir():  # the split writes exactly the committed files
-            assert p.read_text() == (REPO / "examples/registers" / kind / p.name).read_text()
+        committed = REPO / "examples/registers" / kind
+        assert load_register(again) == load_register(committed)
+        files = sorted(p.relative_to(again) for p in again.rglob("*") if p.is_file())
+        assert files == sorted(
+            p.relative_to(committed) for p in committed.rglob("*") if p.is_file()
+        )
+        for rel in files:  # the split writes exactly the committed records and events
+            assert (again / rel).read_text() == (committed / rel).read_text()
 
 
 def test_split_refuses_a_lossy_or_invalid_register(tmp_path):
@@ -112,7 +117,8 @@ def test_split_names_placeholders_by_slug(tmp_path):
         e["id"], e["title"] = "LL-NEW", t
     src = tmp_path / "lessons.yml"
     src.write_text(yaml.safe_dump(doc))
-    names = sorted(p.name for p in records.split_register(src, tmp_path / "lessons"))
+    written = records.split_register(src, tmp_path / "lessons")
+    names = sorted(p.name for p in written if p.suffix == ".md")
     assert names == [
         *("LL-003.md", "LL-004.md", "LL-005.md"),
         *("LL-NEW-same-title-2.md", "LL-NEW-same-title.md"),
@@ -292,18 +298,59 @@ def test_new_record_is_allocated_renamed_and_rewritten(repo):
     for slug in ("first", "second"):
         text = (d / "LL-003.md").read_text().replace("id: LL-003", "id: LL-NEW")
         (d / f"LL-NEW-{slug}.md").write_text(text + "\nSee LL-NEW for the follow-up.\n")
+    shutil.copytree(d / "LL-001.events", d / "LL-NEW-first.events")  # its events move with it
     assert _tool(repo, "check-dupes").returncode == 0  # placeholders may repeat
     r = _tool(repo, "check-placeholders", "reg/lessons/LL-NEW-first.md")
     assert r.returncode == 1 and "LL-NEW" in r.stderr
     r = _tool(repo, "resolve")
     assert r.returncode == 3, r.stderr
     assert "LL-NEW -> LL-006" in r.stdout and "LL-NEW -> LL-007" in r.stdout
-    assert sorted(p.name for p in d.iterdir()) == [f"LL-00{n}.md" for n in range(1, 8)]
+    assert sorted(p.name for p in d.glob("*.md")) == [f"LL-00{n}.md" for n in range(1, 8)]
+    assert sorted(p.name for p in (d / "LL-006.events").iterdir()) == sorted(
+        p.name for p in (d / "LL-001.events").iterdir()
+    )
+    assert not list(d.glob("LL-NEW*"))
     first = (d / "LL-006.md").read_text()
     assert "id: LL-006" in first and "See LL-006 for" in first and "LL-NEW" not in first
     assert _tool(repo, "resolve").returncode == 0  # idempotent
     assert _tool(repo, "check-placeholders").returncode == 0
     assert _tool(repo, "check-dupes").returncode == 0
+
+
+def test_allocating_a_number_keeps_the_reviews_current(repo):
+    """`resolve` rewrites LL-NEW -> LL-006 (the id and self-citations); that is not an edit."""
+    from homelabnext.registers import events as ev
+    from homelabnext.registers.schema import record_digest_of, validate_lessons
+    from homelabnext.reviews import load_policy
+
+    d = repo / "reg/lessons"
+    text = (d / "LL-001.md").read_text().replace("id: LL-001", "id: LL-NEW")
+    notes = "## Notes\n\nLL-NEW cites itself.\n\n## Links"
+    (d / "LL-NEW-copy.md").write_text(text.replace("## Links", notes))
+    shutil.rmtree(d / "LL-001.events")
+    (d / "LL-001.md").unlink()
+    entry = next(e for e in load_register(d)["lessons"] if e["id"] == "LL-NEW")
+    assert "LL-NEW cites itself" in entry["notes"]
+    digest = record_digest_of(entry)[:19]
+    shutil.rmtree(d / "LL-NEW-copy.events", ignore_errors=True)
+    for f in sorted((REPO / "examples/registers/lessons/LL-001.events").glob("*-review-*.yml")):
+        data = yaml.safe_load(f.read_text())
+        ev.create_event(d / "LL-NEW-copy.events", {**data, "digest": digest}, when=_when(data))
+    policy = load_policy(REPO / "examples/review-policy.yml")
+    validate_lessons(load_register(d), policy)  # controlled, reviewed: valid before ...
+    assert _tool(repo, "resolve").returncode == 3
+    after = load_register(d)
+    assert any(
+        e["id"] == "LL-006" and "LL-006 cites itself" in e["notes"] for e in after["lessons"]
+    )
+    validate_lessons(after, policy)  # ... and after the allocation
+
+
+def _when(data):
+    import datetime as dt
+
+    d = data["date"]
+    return dt.datetime(d.year, d.month, d.day, tzinfo=dt.UTC)
 
 
 def test_check_lost_catches_a_deleted_record_file(repo):
@@ -313,7 +360,7 @@ def test_check_lost_catches_a_deleted_record_file(repo):
     assert r.returncode == 1 and "reg/lessons lost LL-002" in r.stderr
     assert "git checkout HEAD -- reg/lessons/<ID>.md" in r.stderr
     for p in (repo / "reg/lessons").iterdir():  # the whole directory gone
-        p.unlink()
+        shutil.rmtree(p) if p.is_dir() else p.unlink()
     assert "lost LL-001, LL-002, LL-003, LL-004, LL-005" in _tool(repo, "check-lost").stderr
 
 

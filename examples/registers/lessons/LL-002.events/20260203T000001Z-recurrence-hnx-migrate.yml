@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+event: recurrence
+by: hnx:migrate
+date: 2026-02-03
+note: backfilled from the inline recurrences count (its dates were not kept)

@@ -150,6 +150,21 @@ def test_a_policy_change_changes_what_is_required(policy_data):
     assert ev([], policy_from(data)).missing == []
 
 
+def test_min_counts_distinct_reviewers_not_reviews(policy_data):
+    data = copy.deepcopy(policy_data)
+    data["requirements"]["lesson.pitfall"]["controlled"] = [
+        {"role": "check", "kind": "agent", "min": 2}
+    ]
+    p = policy_from(data)
+    twice = [
+        rv("agent:example-checker", "agent", "check"),
+        rv("agent:Example_Checker", "agent", "check"),
+    ]
+    assert ev(twice, p, state="controlled").missing == ["agent check x2"]
+    two = [rv("agent:example-checker", "agent", "check"), rv("agent:fake-second", "agent", "check")]
+    assert ev(two, p, state="controlled").missing == []
+
+
 @pytest.mark.parametrize(
     "mutate, needle",
     [
@@ -196,6 +211,6 @@ def test_digest_command_is_stable(capsys):
         ln.startswith("sha256:") and len(ln.split()[0]) == 71 for ln in lines
     )
     # the committed example review was stamped with this very digest
-    rec = (REPO / "examples/registers/lessons/LL-002.md").read_text()
-    stamped = yaml.safe_load(rec.split("---")[1])["reviews"][0]["digest"]
+    events = sorted((REPO / "examples/registers/lessons/LL-002.events").glob("*-review-*.yml"))
+    stamped = yaml.safe_load(events[0].read_text())["digest"]
     assert lines[0].startswith(stamped)

@@ -102,6 +102,8 @@ jobs:
         run: python tools/tls_verify_lint.py .
       - name: nothing at runtime points at the workstation (F-17)
         run: python tools/workstation_refs.py .
+      - name: scripts write scratch output only under their run directory or build/
+        run: python tools/run_output_lint.py .
       - name: role and playbook lint
         run: |
           python tools/role_lint.py ansible/roles/*

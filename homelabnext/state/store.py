@@ -25,6 +25,11 @@ Guarantees
     created ``0600`` (state often holds tokens or cursors that are nobody else's business).
 
 ``.json`` is the default; ``.yml``/``.yaml`` use PyYAML (imported lazily).
+
+The two primitives underneath are public for any other writer of a file several processes may
+touch: :func:`file_lock` (the ``flock`` on a sidecar lock file) and :func:`atomic_write_text`
+(temp file, ``fsync``, then ``os.replace``, or with ``exclusive=True`` a hard link that fails when
+the name exists, so a create never overwrites).
 """
 
 from __future__ import annotations
@@ -77,6 +82,69 @@ def quarantined_files(path: str | os.PathLike) -> list[Path]:
     """Quarantined copies of ``path`` (oldest first)."""
     p = Path(path)
     return sorted(p.parent.glob(p.name + ".corrupt-*"))
+
+
+@contextlib.contextmanager
+def file_lock(lock_path: str | os.PathLike) -> Iterator[None]:
+    """Hold an exclusive ``flock`` on ``lock_path`` (created if missing) for the ``with`` body."""
+    with open(lock_path, "a+b") as fh:
+        if fcntl is not None:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def _fsync_dir(d: Path) -> None:
+    try:
+        fd = os.open(d, os.O_RDONLY)
+    except OSError:  # pragma: no cover - platforms that cannot open a directory
+        return
+    try:
+        os.fsync(fd)
+    except OSError:  # pragma: no cover
+        pass
+    finally:
+        os.close(fd)
+
+
+def atomic_write_text(
+    path: str | os.PathLike, text: str, *, exclusive: bool = False, mode: int | None = None
+) -> Path:
+    """Write ``text`` to ``path`` so a reader sees the whole old file or the whole new one.
+
+    The bytes go to ``.<name>.<pid>.<random>.tmp`` beside the target, are ``fsync``-ed, then
+    replace the target (``os.replace``).  With ``exclusive=True`` the temp file is hard-linked to
+    the target instead, which fails with :class:`FileExistsError` when the name already exists:
+    an exclusive create that never overwrites and never leaves a partial file under the name.
+    ``mode`` defaults to the replaced file's mode, else ``0600``.
+    """
+    p = Path(path)
+    tmp = p.with_name(f".{p.name}.{os.getpid()}.{os.urandom(4).hex()}.tmp")
+    if mode is None:
+        try:
+            mode = p.stat().st_mode & 0o7777
+        except FileNotFoundError:
+            mode = NEW_FILE_MODE
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, NEW_FILE_MODE)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            if hasattr(os, "fchmod"):
+                os.fchmod(fh.fileno(), mode)  # not subject to the umask
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        if exclusive:
+            os.link(tmp, p)  # fails if the name exists: never an overwrite
+        else:
+            os.replace(tmp, p)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            tmp.unlink()  # after a replace it is already gone; after a link it is the 2nd name
+    _fsync_dir(p.parent)
+    return p
 
 
 class StateStore:
@@ -144,16 +212,8 @@ class StateStore:
             return key in self._load()
 
     # ---------------------------------------------------------------- internals
-    @contextlib.contextmanager
-    def _locked(self) -> Iterator[None]:
-        with open(self._lock_path, "a+b") as fh:
-            if fcntl is not None:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                if fcntl is not None:
-                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    def _locked(self) -> contextlib.AbstractContextManager[None]:
+        return file_lock(self._lock_path)
 
     @property
     def _is_yaml(self) -> bool:
@@ -243,35 +303,4 @@ class StateStore:
     def _write(self, data: dict[str, Any]) -> None:
         self._sweep_orphans()
         doc = {"schema_version": self.schema_version, "data": data}
-        text = self._encode(doc)
-        tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.{os.urandom(4).hex()}.tmp")
-        try:
-            mode = self.path.stat().st_mode & 0o7777
-        except FileNotFoundError:
-            mode = NEW_FILE_MODE
-        try:
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, NEW_FILE_MODE)
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                if hasattr(os, "fchmod"):
-                    os.fchmod(fh.fileno(), mode)  # not subject to the umask
-                fh.write(text)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp, self.path)
-        except BaseException:
-            with contextlib.suppress(FileNotFoundError):
-                tmp.unlink()
-            raise
-        self._fsync_dir()
-
-    def _fsync_dir(self) -> None:
-        try:
-            fd = os.open(self.path.parent, os.O_RDONLY)
-        except OSError:  # pragma: no cover - platforms that cannot open a directory
-            return
-        try:
-            os.fsync(fd)
-        except OSError:  # pragma: no cover
-            pass
-        finally:
-            os.close(fd)
+        atomic_write_text(self.path, self._encode(doc))

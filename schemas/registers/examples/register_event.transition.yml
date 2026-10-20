@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+event: transition
+by: human:example-operator
+date: 2026-10-19
+from: controlled
+to: retired
+set:
+  retired_by: [M-17]
+  retired_on: 2026-10-19
+intent: decided/completed/2026-10-19-example-checker-retire-ll-001.md
+requested_by: profile:example-checker
+reason: M-17 holds in every run since the control shipped

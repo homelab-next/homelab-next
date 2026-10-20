@@ -462,6 +462,26 @@
     },
     {
       "exit": {
+        "0": "clean",
+        "1": "an out-of-run write or a stale allowlist entry",
+        "2": "usage error or a bad allowlist"
+      },
+      "id": "run-output-lint",
+      "inputs": "every Python script with an hnx-script header and tools/run_output_lint.allow.yml",
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per out-of-run write or stale allowlist entry",
+      "owner": "maintainers",
+      "path": "tools/run_output_lint.py",
+      "purpose": "Fail when a repository script or tool writes scratch files to a literal path outside its run directory or build/.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:run-output-lint"
+      ]
+    },
+    {
+      "exit": {
         "0": "no errors",
         "1": "errors"
       },

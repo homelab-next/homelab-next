@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/records/note/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/records/note/1.1",
   "title": "Records note frontmatter",
-  "description": "YAML frontmatter of a records note (the generalised vault note). The filename convention is <YYYY-MM-DD>-<requesting-agent>-<slug>.md (checked by tools/schema_check.py, not expressible in JSON Schema). Lanes: inbox/ (writable by agents), decided/{approved,denied,completed}/ (decision-maker only).",
+  "description": "YAML frontmatter of a records note (the generalised vault note). The filename convention is <YYYY-MM-DD>-<requesting-agent>-<slug>.md (checked by tools/schema_check.py, not expressible in JSON Schema). Lanes: inbox/ (writable by agents), decided/{approved,denied,completed}/ (decision-maker only). 1.1 added, additively, type register-transition: an agent's request to change a lesson's or runbook's lifecycle status, applied only by the register decider (hnx registers decide).",
   "type": "object",
   "properties": {
     "type": {
@@ -11,7 +11,8 @@
         "completion-request",
         "finding",
         "escalation",
-        "task"
+        "task",
+        "register-transition"
       ]
     },
     "title": {
@@ -252,6 +253,73 @@
               "closed",
               "expired"
             ]
+          }
+        }
+      },
+      "$comment": "register-transition (1.1) sits in this else branch so allOf keeps its 1.0 length (additive evolution)",
+      "else": {
+        "if": {
+          "properties": {
+            "type": {
+              "const": "register-transition"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        "then": {
+          "required": [
+            "record",
+            "from",
+            "to",
+            "reason"
+          ],
+          "properties": {
+            "record": {
+              "type": "string",
+              "pattern": "^(LL|RB)-\\d{3,}$",
+              "description": "The allocated id of the lesson or runbook."
+            },
+            "from": {
+              "type": "string",
+              "pattern": "^[a-z]+$",
+              "description": "The status the requester saw; the decider denies the intent when it is no longer current."
+            },
+            "to": {
+              "type": "string",
+              "pattern": "^[a-z]+$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "retired_by": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "incorporated_into": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "superseded_by": {
+              "type": "string",
+              "pattern": "^(LL|RB)-\\d{3,}$"
+            },
+            "on": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date",
+              "description": "retired_on for a retirement (default: the date the intent was created)."
+            }
           }
         }
       }

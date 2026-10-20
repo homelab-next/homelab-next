@@ -5,7 +5,7 @@
 Every script in the tree, read from its `# hnx-script:` header. What counts as a script,
 the header fields and the checks that keep this page honest: [docs/scripts.md](../scripts.md).
 
-25 scripts: 17 check, 1 job, 2 service, 5 tool.
+26 scripts: 18 check, 1 job, 2 service, 5 tool.
 
 | id | path | kind | owner | purpose | triggers | invariant | exit codes |
 |---|---|---|---|---|---|---|---|
@@ -30,6 +30,7 @@ the header fields and the checks that keep this page honest: [docs/scripts.md](.
 | `no-raw-endpoints` | [`tools/no_raw_endpoints.py`](../../tools/no_raw_endpoints.py) | check | maintainers | Fail when code or config writes an endpoint literal instead of a registry lookup. | `ci:ci/schemas`; `code:homelabnext/customization/lint.py`; `make:gates` | X-01 | 0 clean; 1 violations; 2 usage error or bad allowlist |
 | `register-ids` | [`tools/register_ids.py`](../../tools/register_ids.py) | check | maintainers | Allocate XX-NEW register ids, and fail when an id vanished or occurs twice. | `make:ids-check`; `make:ids-placeholders`; `make:ids-resolve`; `pre-commit:register-ids-check-dupes`; `pre-commit:register-ids-check-lost`; `pre-commit:register-ids-resolve` | M-16; M-17 | 0 nothing lost or duplicated; 1 an id vanished or occurs twice; 2 usage error; 3 resolve rewrote a placeholder |
 | `role-lint` | [`tools/role_lint.py`](../../tools/role_lint.py) | check | maintainers | Fail when a role or playbook breaks the role interface (docs/role-interface.md). | `ci:ci/schemas`; `code:homelabnext/scaffold/core.py`; `make:gates` | X-05 | 0 clean; 1 findings; 2 could not run |
+| `run-output-lint` | [`tools/run_output_lint.py`](../../tools/run_output_lint.py) | check | maintainers | Fail when a repository script or tool writes scratch files to a literal path outside its run directory or build/. | `ci:ci/schemas`; `make:run-output-lint` | - | 0 clean; 1 an out-of-run write or a stale allowlist entry; 2 usage error or a bad allowlist |
 | `schema-check` | [`tools/schema_check.py`](../../tools/schema_check.py) | check | maintainers | Fail when a schema is invalid, lacks an example or a negative, or breaks its frozen baseline. | `ci:ci/schemas`; `code:homelabnext/cli.py`; `make:schemas` | Q-10 | 0 no errors; 1 errors |
 | `shared-helpers-lint` | [`tools/shared_helpers_lint.py`](../../tools/shared_helpers_lint.py) | check | maintainers | Fail when a private notify, state or lake-query helper is re-implemented outside the shared libraries (reviewed allowlist). | `ci:ci/schemas`; `make:helpers-lint` | M-03 | 0 clean; 1 a private helper or a stale allowlist entry; 2 usage error or a missing dependency |
 | `tls-verify-lint` | [`tools/tls_verify_lint.py`](../../tools/tls_verify_lint.py) | check | maintainers | Fail when Python code or a YAML/JSON config turns TLS certificate verification off. | `ci:ci/schemas`; `make:tls-lint` | F-07 | 0 clean; 1 verification is disabled somewhere; 2 usage error or a missing dependency |

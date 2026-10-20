@@ -86,6 +86,14 @@ class Decider:
         moved.append(self._move(req, COMPLETED, "completed", reason))
         return moved
 
+    def fulfil(self, name: str, reason: str | None = None) -> Path:
+        """Approve an inbox note and close it at once, for a request the decision maker carried
+        out itself (the register decider applying a ``register-transition``).  Both moves leave
+        their audit sidecar, exactly as :meth:`approve` then :meth:`complete` would."""
+        self.approve(name)
+        note = self._load(APPROVED, name, validate_filename=False)
+        return self._move(note, COMPLETED, "completed", reason)
+
     # ---------------------------------------------------------------- internals
     def _load(self, lane: str, name: str, *, validate_filename: bool = True) -> Note:
         if "/" in name or "\\" in name or not name.endswith(".md"):

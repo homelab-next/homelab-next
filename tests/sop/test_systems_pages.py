@@ -180,6 +180,19 @@ def test_a_fully_reviewed_page_passes(reg, pages):
     assert "dns.md" not in rep.drafts
 
 
+def test_sidecar_review_events_count_like_inline_reviews(reg, pages):
+    from homelabnext.registers.migrate import migrate_pages
+
+    migrate_pages(pages)
+    p = pages / "dns.md"
+    assert "reviews" not in p.read_text().split("---")[1]
+    approve = sorted((pages / "dns.events").glob("*-review-human-*.yml"))
+    assert len(approve) == 1 and check_pages(reg, pages, POLICY).ok()
+    approve[0].unlink()  # the same page without its human approve event
+    rep = check_pages(reg, pages, POLICY)
+    assert any("dns.md: status reviewed needs human approve" in ln for ln in rep.lines())
+
+
 def test_a_reviewed_page_missing_the_human_approve_fails(reg, pages):
     p = pages / "dns.md"
     text = p.read_text()

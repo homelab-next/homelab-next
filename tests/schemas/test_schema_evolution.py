@@ -26,6 +26,10 @@ def test_current_schema_is_additive_over_frozen_v1_0(path):
     assert sc.is_additive(old, new) == []
 
 
+# examples of a feature added after the 1.0 freeze (1.0 rightly refuses them)
+NEWER_THAN_1_0 = {"note.register-transition.md": "records/note 1.1: type register-transition"}
+
+
 @pytest.mark.parametrize("path", SCHEMAS, ids=lambda p: p.relative_to(ROOT / "schemas").as_posix())
 def test_v1_0_examples_validate_against_current_schema(path):
     """The frozen v1.0 schema accepted these examples; the current v1.x must still accept them."""
@@ -33,7 +37,8 @@ def test_v1_0_examples_validate_against_current_schema(path):
     current = json.loads(path.read_text())
     for f in sc.instances_for(path, "examples"):
         doc = sc.load_instance(f)
-        assert sc.errors_for(frozen, doc, REG) == [], f.name
+        if f.name not in NEWER_THAN_1_0:
+            assert sc.errors_for(frozen, doc, REG) == [], f.name
         assert sc.errors_for(current, doc, REG) == [], f.name
 
 

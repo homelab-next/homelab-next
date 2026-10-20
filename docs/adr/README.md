@@ -20,3 +20,4 @@ only (`example.internal`, RFC 5737 addresses); see `CONTRIBUTING.md`.
 | [0011](0011-public-private-split-and-licensing.md) | public-private-split-and-licensing | What is public, what stays private, and the licence rule |
 | [0012](0012-hypervisor-is-not-modular.md) | hypervisor-is-not-modular | The hypervisor layer is deliberately not a swappable seam |
 | [0013](0013-status-hub.md) | status-hub | One read-only status hub over status sources registered in the registry; views pick from that menu |
+| [0014](0014-conflict-free-writes.md) | conflict-free-writes | Machine state is append-only sidecar events; status changes are intents a decider applies |

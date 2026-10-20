@@ -50,6 +50,13 @@ links DIR`` rewrites it and ``--check`` fails when one is stale; the loader igno
 
 A retired id is a record file whose front-matter is ``id:`` plus a ``retired:`` mapping
 (``reason``, optional ``replaced_by``), the per-file form of the YAML ``retired:`` block.
+
+What several writers append to (reviews, recurrences, verification stamps, applied lifecycle
+transitions) lives beside the record in ``<id>.events/``, one file per event
+(:mod:`homelabnext.registers.events`); the loader derives ``reviews``, ``recurrences``,
+``last_verified`` and the current status from them, so the document keeps its shape.  Inline
+``reviews:`` / ``recurrences:`` still load (the base the events add to); ``hnx registers events
+migrate`` moves them out.
 """
 
 from __future__ import annotations
@@ -60,6 +67,7 @@ from collections.abc import Mapping
 
 import yaml
 
+from . import events as ev
 from . import ids
 from .schema import RegisterError, is_active, record_digest_of
 
@@ -243,30 +251,42 @@ def parse_record(text: str, name: str, kind: str, problems: list[str]) -> dict |
     return entry
 
 
-def record_digest(text: str, name: str, kind: str) -> str:
+def record_digest(text: str, name: str, kind: str, events=()) -> str:
     """The digest a review of this record file must carry (``hnx reviews digest FILE``): the
-    parsed record without its reviews, so the Links block and formatting do not count."""
+    record as loaded (its ``events`` applied) without its reviews, so the Links block, formatting
+    and verification stamps do not count."""
     problems: list[str] = []
     entry = parse_record(text, name, kind, problems)
+    if entry is not None and not problems:
+        entry = ev.derive(entry, events, kind, problems, name)
     if problems or entry is None:
         raise RegisterError(kind, problems or [f"{name}: not a record"])
     return record_digest_of(_canonical({kind: [entry]}, kind)[kind][0])
 
 
-def load_texts(texts: Mapping[str, str], kind: str) -> dict:
-    """Record file texts ``{file name: text}`` -> the register document (fatal on any problem)."""
+def load_texts(
+    texts: Mapping[str, str], kind: str, events: Mapping[str, list[ev.Event]] | None = None
+) -> dict:
+    """Record file texts ``{file name: text}`` (and each file's sidecar events, by record file
+    name) -> the register document with derived fields filled in (fatal on any problem)."""
     if kind not in RECORD_KINDS:
         raise RegisterError(kind, [f"record directories hold {' or '.join(RECORD_KINDS)} only"])
     problems: list[str] = []
+    events = events or {}
+    for name in sorted(set(events) - set(texts)):
+        stem = name[: -len(ids.RECORD_SUFFIX)]
+        problems.append(f"{stem}{ev.EVENTS_SUFFIX}: no record file {name} beside it")
     entries, retired = [], {}
     for name in sorted(texts):
         rec = parse_record(texts[name], name, kind, problems)
         if rec is None:
             continue
         if "retired" in rec:
+            if events.get(name):
+                problems.append(f"{name}: a tombstone has no events")
             retired[str(rec.get("id"))] = rec["retired"]
         else:
-            entries.append(rec)
+            entries.append(ev.derive(rec, events.get(name, ()), kind, problems, name))
     if problems:
         raise RegisterError(kind, problems)
     doc: dict = {kind: entries}
@@ -322,20 +342,41 @@ def load_register(path, kind: str | None = None, *, active_only: bool = False) -
 def _load(p: pathlib.Path, kind: str | None) -> dict:
     kind = kind or _kind_of(p)
     if p.is_dir():
-        texts, problems = {}, []
-        for f in sorted(p.iterdir()):
-            if f.name.startswith("."):
-                continue
-            if not f.is_file() or f.suffix != ids.RECORD_SUFFIX:
-                problems.append(f"{f.name}: not a record file (a record directory holds *.md only)")
-                continue
-            texts[f.name] = f.read_text()
+        texts, problems = read_dir(p)
+        events = dir_events(p, problems)
         if problems:
             raise RegisterError(kind, problems)
-        return load_texts(texts, kind)
+        return load_texts(texts, kind, events)
     if p.is_file():
         return _canonical(yaml.safe_load(p.read_text()), kind)
     raise RegisterError(kind, [f"{p}: no such register file or directory"])
+
+
+def read_dir(p: pathlib.Path) -> tuple[dict[str, str], list[str]]:
+    """``{name: text}`` of a record directory's record files, and what else is in it that
+    should not be (``<stem>.events/`` sidecar directories belong)."""
+    texts, problems = {}, []
+    for f in sorted(p.iterdir()):
+        if f.name.startswith(".") or ev.is_events_dir(f):
+            continue
+        if not f.is_file() or f.suffix != ids.RECORD_SUFFIX:
+            problems.append(
+                f"{f.name}: not a record file (a record directory holds *.md and their"
+                f" <stem>{ev.EVENTS_SUFFIX}/ directories only)"
+            )
+            continue
+        texts[f.name] = f.read_text()
+    return texts, problems
+
+
+def dir_events(p: pathlib.Path, problems: list[str]) -> dict[str, list[ev.Event]]:
+    """Every sidecar ``<stem>.events/`` of a record directory, keyed by record file name."""
+    out = {}
+    for f in sorted(p.iterdir()):
+        if ev.is_events_dir(f):
+            name = f.name[: -len(ev.EVENTS_SUFFIX)] + ids.RECORD_SUFFIX
+            out[name] = ev.read_events(f, problems, name)
+    return out
 
 
 def register_source(src_dir, kind: str) -> pathlib.Path | None:
@@ -491,10 +532,14 @@ def _unordered(doc: dict, kind: str) -> dict:
 def split_register(src, out_dir) -> list[pathlib.Path]:
     """Convert a single-file register into a record directory, losslessly or not at all.
 
-    The register must validate first; every rendered file is parsed back and compared with its
-    entry, and nothing is written unless all of them round-trip exactly.
+    The register must validate first.  Each entry's inline reviews and recurrences become sidecar
+    events (:func:`homelabnext.registers.events.backfill`); every rendered file is parsed back,
+    its events applied, and compared with its entry, and nothing is written unless all of them
+    round-trip exactly.  The files are written by
+    :func:`homelabnext.registers.write.write_register`.
     """
     from .schema import validate_lessons, validate_runbooks
+    from .write import write_register
 
     src, out = pathlib.Path(src), pathlib.Path(out_dir)
     kind = _kind_of(src)
@@ -506,29 +551,30 @@ def split_register(src, out_dir) -> list[pathlib.Path]:
     {"lessons": validate_lessons, "runbooks": validate_runbooks}[kind](doc)
     records = [dict(e) for e in doc[kind]]
     records += [{"id": i, "retired": t} for i, t in (doc.get("retired") or {}).items()]
-    files, problems = {}, []
+    files, texts, events, problems = {}, {}, {}, []
     for e in records:
         name = record_name(e, kind, set(files))
-        text = render_record(e, kind)
+        rest, evs = (e, []) if "retired" in e else ev.backfill(e, kind)
+        text = render_record(rest, kind)
+        pending = [ev.Event(ev.event_name(x, w), x, ev.stamp_of(w), 1) for x, w in evs]
         back = parse_record(text, name, kind, problems)
+        if back is not None and "retired" not in back:
+            back = ev.derive(back, pending, kind, problems, name)
         if back is not None and (d := _diff(e, back)):
             problems.append(f"{e.get('id')}: does not survive the round trip ({d})")
-        files[name] = text
+        files[name], texts[name], events[name] = (rest, evs), text, pending
     if problems:
         raise RegisterError(kind, problems)
-    back_doc = load_texts(files, kind)
+    back_doc = load_texts(texts, kind, events)
     if _unordered(back_doc, kind) != _unordered(doc, kind):  # files load in name order
         raise RegisterError(kind, ["the record directory does not load back to the register"])
-    out.mkdir(parents=True, exist_ok=True)
-    written = []
-    for name, text in files.items():
-        (out / name).write_text(text)
-        written.append(out / name)
-    return written
+    return write_register(out, files, check_refs=False, policy=False)
 
 
 def join_register(src_dir, out_file) -> pathlib.Path:
-    """The reverse of :func:`split_register`: one YAML file, for review or a downstream tool."""
+    """The reverse of :func:`split_register`: one YAML file, for review or a downstream tool.
+    The sidecar events are folded in: the file carries the derived ``reviews`` and
+    ``recurrences`` inline (a single file has no sidecars)."""
     src, out = pathlib.Path(src_dir), pathlib.Path(out_file)
     kind = _kind_of(src)
     doc = load_register(src, kind)
@@ -544,8 +590,9 @@ def join_register(src_dir, out_file) -> pathlib.Path:
     )
     if _canonical(yaml.safe_load(text), kind) != doc:
         raise RegisterError(kind, [f"{out}: the joined file would not load back to {src}"])
-    out.write_text(text)
-    return out
+    from homelabnext.state import atomic_write_text
+
+    return atomic_write_text(out, text, mode=ev.FILE_MODE)
 
 
 # --- the generated links block -----------------------------------------------------------------
