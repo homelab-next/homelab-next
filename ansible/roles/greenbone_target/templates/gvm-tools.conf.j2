@@ -1,4 +1,4 @@
 # Managed by Ansible (role greenbone_target); transient, removed after the run.
 [gmp]
 username={{ greenbone_target_gmp_user }}
-password={{ lookup('hnx_secret', greenbone_target_gmp_auth_ref) }}
+password={{ lookup('hnx_secret', greenbone_target_gmp_auth_ref) | replace('%', '%%') }}

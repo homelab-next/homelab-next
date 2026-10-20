@@ -549,6 +549,31 @@ def test_greenbone_target_finds_a_scan_login_whose_name_has_spaces(tmp_path):
     assert '<get_targets filter="name=&quot;hnx-bus-core&quot;"/>' in calls
 
 
+@pytest.mark.parametrize("password", ["gmp%pass-fake", "gmp%(user)s-fake", "100%%-fake"])
+def test_greenbone_target_writes_a_password_with_percent_signs_gvm_tools_reads_back(
+    tmp_path, password
+):
+    v, env, state = gvm_setup(tmp_path, password=password)
+    r = run_role(tmp_path, "greenbone_target", "health", v, env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert json.loads(state.read_text())["calls"] == ["<get_version/>"]
+    assert password not in r.stdout
+
+
+@pytest.mark.parametrize(
+    "password",
+    ["gmp-pass-fake\nusername=root", "gmp-pass-fake\r", " gmp-pass-fake", "gmp-pass-fake "],
+)
+def test_greenbone_target_refuses_a_password_the_ini_file_cannot_hold(tmp_path, password):
+    v, env, state = gvm_setup(tmp_path, password=password)
+    r = run_role(tmp_path, "greenbone_target", "main", v, env)
+    assert r.returncode != 0
+    assert "the GMP password (secret:assessment/gmp-password) holds a line break" in r.stdout
+    assert json.loads(state.read_text())["calls"] == []
+    assert not (tmp_path / "work" / "gvm-tools.conf").exists()
+    assert "gmp-pass-fake" not in r.stdout
+
+
 def test_greenbone_target_creates_the_missing_targets_only(tmp_path):
     v, env, state = gvm_setup(tmp_path)
     r = run_role(tmp_path, "greenbone_target", "main", v, env)

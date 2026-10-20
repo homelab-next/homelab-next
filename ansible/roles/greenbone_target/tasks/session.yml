@@ -1,6 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 # The transient gvm-tools configuration holding the GMP login: written 0600 for the account
 # gvm-cli runs as, and removed by the caller's `always`.
+# gvm-tools reads the file with configparser: a value is one line, trimmed of surrounding white
+# space, and BasicInterpolation reads % as a reference. The template doubles every % (configparser
+# reads %% back as %); a password that one line cannot carry is refused here, before it is written.
+# The check is an expression on the secret, so neither it nor the message carries its value.
+- name: Refuse a GMP password the gvm-tools configuration cannot carry
+  ansible.builtin.assert:
+    that:
+      - lookup('hnx_secret', greenbone_target_gmp_auth_ref) is not search('[\r\n]')
+      - lookup('hnx_secret', greenbone_target_gmp_auth_ref) == lookup('hnx_secret', greenbone_target_gmp_auth_ref) | trim
+    fail_msg: >-
+      greenbone_target: the GMP password ({{ greenbone_target_gmp_auth_ref }}) holds a line break
+      or leading or trailing white space, which a gvm-tools configuration line cannot carry;
+      change the password of the GMP user {{ greenbone_target_gmp_user }}
+    quiet: true
+
 - name: Create the work directory
   ansible.builtin.file:
     path: "{{ greenbone_target_work_dir }}"
