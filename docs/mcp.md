@@ -97,3 +97,16 @@ $ hnx mcp call context_for --args '{"task_text": "add an adapter for the context
 
 The server loads the checkout's sources on first use and keeps them for its lifetime: restart it
 to see later edits.
+
+## The broker's tool server (`hnx-broker`)
+
+`hnx mcp serve` only reads. The other MCP server in the package is the broker's,
+`hnx broker mcp --socket PATH` ([broker](broker.md), [[broker]]): stdio as well, built on the same
+SDK plumbing (`homelabnext/mcp/server.py`: `new_server`, `hints`, `register`, `tool_error`), but
+its tools *act*, through a running broker that authenticates the MCP process by its uid:
+`broker_actions`, `broker_call`, `broker_submit`, `broker_status`, `broker_run`, `broker_cancel`,
+`broker_pending`, `memory_write`, `finding_write`, `proposal_file`. No tool takes an identity. It
+is registered in `homelabnext/agent/tool_classes.yml` as `hnx-broker`, classes `record-write`
+and `exec`: a profile grants it in `grants.mcp`, and the reader rule refuses it to any profile
+that reads untrusted content. Split such an agent into a reader (with `hnx-catalog`) and an
+actor (with `hnx-broker`).

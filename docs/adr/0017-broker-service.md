@@ -27,8 +27,8 @@ What was missing was a service that runs actions, keeps durable state and can be
 
 1. **Agents ask for named actions; they never get a shell or a writable directory.** The broker
    service (`homelabnext/broker/service.py`) implements the `broker` contract on top of `decide()`
-   and a manifest (`schemas/broker/manifest` 1.2) and passes the conformance suite
-   (`conformance/targets/broker-reference.yml`). Default deny: an action that is not listed, a
+   and a manifest (`schemas/broker/manifest` 1.2; 1.3 since stage 2a) and passes the conformance
+   suite (`conformance/targets/broker-reference.yml`). Default deny: an action that is not listed, a
    caller without a grant, a tier above the grant, or a missing handler is refused.
 2. **Writes go through lanes.** The built-in lane handler writes one file into a declared lane:
    kind `files` (an agent's own `memory.write` / `finding.write` directory, per-actor
@@ -78,6 +78,45 @@ migration path from a vault `proposed/` lane: map each current writable zone to 
 approval-gated job to an action with a pinned handler, run the broker in `shadow` beside the
 guard hook to compare decisions, then cut over.
 
+### Stage 2a: authenticated callers (amendment, 2026-10-20)
+
+8. **The transport says who is calling; the request never does.** `hnx broker serve` runs the
+   service on a Unix-domain socket (`homelabnext/broker/server.py`, stdlib only) and reads the
+   connecting process's uid from the kernel (`SO_PEERCRED`). Manifest 1.3 maps it: `callers`
+   (`uid` or `user` -> the one `profile` it acts as) and `approval_relays` (`uid` or `user` ->
+   the `issuer` whose humans it vouches for). A peer is listed once, as a caller or a relay, never
+   both. An unmapped peer is refused (`unknown-caller`) before a byte of its request is read; a
+   body that names an actor (`actor`, `caller`, `as`, `profile`, `uid`, ...) is refused
+   (`actor-in-body`). Every audit record written while serving a socket request carries the peer
+   as `via` (audit 1.1); refusals made by the transport itself are audited as operation `connect`.
+   Platforms without `SO_PEERCRED` (macOS, the BSDs) are unsupported: the server refuses to start
+   rather than fall back to asserted identity.
+9. **One small protocol, one request per connection.** A JSON object terminated by a newline (or
+   the client's end of stream), at most 1 MiB, read within 10 s; one JSON answer; close. A thread
+   per connection with a cap (excess connections are answered `busy`); the state directory
+   already makes runs, cancels, denials and approval consumption exactly-once.
+   `homelabnext/broker/client.py` (`BrokerClient`) is the one client: the CLI's `--socket` mode,
+   the MCP server and the hub (stage 2b) use it.
+10. **Approvals arrive through a relay, and the relay is not trusted with policy.** `approve` and
+   `deny` are accepted only from an approval relay, carrying `approver: {issuer, subject}`, the
+   human the relay authenticated; the issuer must be the relay's own. The manifest's approver
+   rules then judge that human exactly as before (allowlist, no self-approval, no agent approver).
+   Stage 2b's hub page behind the SSO front door is such a relay and needs only the client.
+11. **Agents get MCP tools, not a CLI.** `hnx broker mcp --socket PATH` is a stdio MCP server
+   (registered as `hnx-broker`, classes `record-write` and `exec`, so the reader rule keeps it
+   from profiles that read untrusted content) whose tools are thin requests to the socket:
+   `broker_actions` (what this caller may do, derived from `decide()` itself), `broker_call`,
+   `broker_submit`, `broker_status`, `broker_run`, `broker_cancel`, `broker_pending`,
+   `memory_write`, `finding_write`, `proposal_file`. No tool takes an identity; it is the MCP
+   process's uid.
+12. **Asserted identity is a development mode.** The CLI's `--as` against the state directory is
+   accepted only when the manifest sets `dev_identity: true` (absent means false).
+
+Remote agents do not get a network listener in 2a. They reach the broker through the front door
+(stage 2b) or through an SSH-forwarded socket (`ssh -L LOCAL.sock:/run/hnx-broker/broker.sock`),
+where the peer the broker sees is the forwarding `sshd` session's user on the broker host, so
+each remote agent logs in as its own system user.
+
 ## Consequences
 
 - An agent's power is the manifest: a reviewer reads one file to know what each profile can do,
@@ -87,9 +126,12 @@ guard hook to compare decisions, then cut over.
   symlinks, clobbering, oversized writes) are refused structurally and tested one by one.
 - Approvals no longer depend on a file being in the right directory; they name what they approve
   and are consumed exactly once.
-- Until stage 2, callers are named rather than authenticated: the broker is a policy engine for
-  a process that already knows who is calling (an embedding program, an operator's shell).
-  Deployments must not expose the CLI to agents as a substitute for the transport.
+- Before stage 2a, callers were named rather than authenticated. Since 2a a deployment gives
+  each agent its own system user, maps it in `callers` and serves the socket; the CLI's asserted
+  identity is refused unless the manifest opts into `dev_identity`. An embedding program that
+  calls the service in-process still names its caller and is trusted to.
+- Identity is per uid: two agents sharing a system user are one caller. Unknown local peers can
+  write audit records (each refusal is one); the socket's mode and group bound who can reach it.
 - Exec handlers are single self-contained files run from the state directory, which must not be
   mounted `noexec`. Lane writes and handler runs leave files the operator owns; retention of the
   state directory (audit, runs) is an operator decision.
@@ -104,3 +146,8 @@ guard hook to compare decisions, then cut over.
   the same single-winner guarantees, survive restarts, and stay readable with ordinary tools.
 - **Let agents write files directly and audit afterwards**: detection after the fact cannot undo
   a write outside the lane; the lane refuses before writing.
+- **An HTTP listener with bearer tokens in 2a**: deferred. A token is a secret every agent must
+  hold and could leak; a socket peer credential cannot be copied. Remote access goes through the
+  front door (2b), which already authenticates people and services.
+- **The caller named in the request, checked against a token**: rejected; the body is what an
+  injected prompt controls, so it must carry nothing that decides identity.

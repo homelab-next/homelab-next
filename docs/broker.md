@@ -8,9 +8,11 @@ writes one audit record for every outcome. Decision record: [ADR-0017](adr/0017-
 command: `hnx broker`; capability page: [broker](capabilities/broker.md)
 ([[capabilities/broker|broker]]).
 
-This is stage 1, the engine. A network transport, an MCP tool server, approvals through the front
-door and a hub approvals page are stage 2 (see the ADR); until then callers are *named*, not
-authenticated, and the CLI is the local and development path.
+Stage 1 is the engine; stage 2a (this page's [Running the service](#running-the-service)) puts it
+on a Unix socket where the caller is *authenticated* by its peer credentials, gives agents MCP
+tools, and takes approvals from a relay. Approvals through the front door and a hub approvals page
+are stage 2b (see the ADR). The CLI's asserted `--as` is the development path, accepted only when
+the manifest says `dev_identity: true`.
 
 ## What an action can be
 
@@ -114,10 +116,160 @@ run, cancel or deny), `results/`, `approvals/<request>/`, `consumed/`, `audit/` 
 file, `schemas/broker/audit`), `outbox/` and `runs/<request>/`. Keep it `0700` and owned by the
 broker's user; agents get no access to it.
 
+## Running the service
+
+`hnx broker serve` runs the broker on a Unix-domain socket. Who is calling is the **peer's uid**,
+read from the kernel (`SO_PEERCRED`, Linux), and mapped through the manifest
+(`schemas/broker/manifest` 1.3; example: `examples/broker/manifest.production.yml`):
+
+```yaml
+dev_identity: false                       # the CLI's asserted --as is refused (absent = false)
+callers:                                  # an agent's system user -> the one profile it acts as
+  - {user: hnx-agent-triage, profile: profile:triage}
+  - {uid: 2002, profile: profile:reader}
+approval_relays:                          # a process that authenticated a person, for one issuer
+  - {user: hnx-hub, issuer: sso}
+```
+
+A peer is listed once, as a caller *or* a relay (`hnx broker validate` refuses a peer in both);
+user names are resolved when the service starts, and an unknown one stops it. Linux only: macOS
+and the BSDs have `getpeereid` instead, which Python does not expose portably, so the server
+refuses to start there rather than accept an unauthenticated caller.
+
+- **An unmapped peer** is answered `unknown-caller` before its request is read, and audited
+  (`operation: connect`, `caller: uid:<n>`).
+- **The body never names the actor.** A top-level `actor`, `caller`, `as`, `who`, `profile`,
+  `identity`, `uid` or `user` is refused (`actor-in-body`); so is any field the operation does not
+  take (`request-invalid`). The broker binds everything to the peer's profile, including the
+  `requesting_agent` of a filed proposal.
+- **Only a relay approves or denies**, for the human it names; an agent's peer gets
+  `not-an-approval-relay`, a relay asking to act gets `not-a-caller`.
+- **Every audit record carries the peer** as `via: uid:<n>`.
+
+```sh
+hnx broker serve --manifest /etc/hnx-broker/manifest.yml --state /var/lib/hnx-broker/state \
+  --data-root /srv/agents --socket /run/hnx-broker/broker.sock \
+  --socket-mode 660 --socket-group hnx-broker-clients
+```
+
+The socket is created `0600` (or `--socket-mode`, which may grant nothing to others) and owned by
+the service user, `--socket-group` its group; its directory is created `0750` (`0700` without a
+group) and the server refuses a directory that is group-writable or open to others, and a file at
+the socket path that is not a stale socket. Bounds: one request per connection, at most 1 MiB
+(`--max-request-bytes`) read within 10 s (`--timeout`); 32 connections at once, more get `busy`.
+
+### A systemd unit
+
+A dedicated user owns the state; each agent runs as its own user in `hnx-broker-clients`; the hub
+runs as `hnx-hub`, also in that group.
+
+```ini
+# /etc/systemd/system/hnx-broker.service
+[Unit]
+Description=homelab-next broker (named actions for agents)
+After=network.target
+
+[Service]
+User=hnx-broker
+Group=hnx-broker
+SupplementaryGroups=hnx-broker-clients
+RuntimeDirectory=hnx-broker
+RuntimeDirectoryMode=0750
+StateDirectory=hnx-broker
+StateDirectoryMode=0700
+ExecStartPre=+/bin/chgrp hnx-broker-clients /run/hnx-broker
+ExecStart=/opt/hnx/bin/hnx broker serve --manifest /etc/hnx-broker/manifest.yml \
+  --state /var/lib/hnx-broker/state --data-root /srv/agents \
+  --socket /run/hnx-broker/broker.sock --socket-mode 660 --socket-group hnx-broker-clients
+EnvironmentFile=-/etc/hnx-broker/secrets.env
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hnx-broker /srv/agents
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`/srv/agents` (the lanes' data root) is writable by `hnx-broker` only; agents read their own
+memory there if the operator grants it, never write. Handler secrets come from
+`HNX_BROKER_SECRET_<NAME>` in the service's environment (here an environment file readable by
+root and the service user only).
+
+### Agents: the MCP tools
+
+`hnx broker mcp --socket PATH` (extra `homelabnext[mcp]`) is a stdio MCP server for one agent. It
+connects to the socket as its own process, so the agent acts as the profile its system user maps
+to and **no tool takes an identity**. Tools: `broker_actions` (what you may do: each action's tier,
+kind, parameters and whether it needs approval, derived from the manifest by `decide()` itself),
+`broker_call`, `broker_submit`, `broker_status`, `broker_run`, `broker_cancel`, `broker_pending`
+(your own pending requests), and the lane shortcuts `memory_write`, `finding_write` and
+`proposal_file`. A refusal is a tool error `refused (REASON): MESSAGE`.
+
+An agent's MCP client configuration, started under the agent's own user:
+
+```json
+{"mcpServers": {"hnx-broker": {"command": "hnx",
+  "args": ["broker", "mcp", "--socket", "/run/hnx-broker/broker.sock"]}}}
+```
+
+A compiled agent profile grants it as `hnx-broker` in `grants.mcp`;
+`homelabnext/agent/tool_classes.yml` classifies it `record-write` and `exec` (the worst a broker
+action can be), so a reader profile cannot hold it. What the agent may actually do is still the
+broker manifest's grant for its profile. See also [MCP server](mcp.md) ([[mcp]]).
+
+### The CLI against a running broker
+
+Every request command takes `--socket PATH` (or `$HNX_BROKER_SOCKET`) and then asks the running
+broker instead of opening the state: `actions`, `call`, `submit`, `status`, `run`, `cancel` and
+`pending --mine` act as this process's mapped profile (`--as` is a usage error), `approve`/`deny`
+`--as ISSUER:SUBJECT` need this process to be a relay, and `pending` and `audit` list for a relay.
+
+### Approval relays: the protocol
+
+Stage 2b's hub page (behind the SSO front door) is a relay: it authenticates a person, then
+speaks to the socket with `BrokerClient` (`homelabnext/broker/client.py`). The wire format, for a
+client in another language:
+
+- connect to the socket as the relay's user; write one JSON object and a newline (or close the
+  write side); read one JSON object and a newline; the server closes;
+- request `{"v": 1, "op": OP, ...}` with these relay operations:
+
+| op | fields | result |
+|---|---|---|
+| `pending` | - | `{"requests": [{request_id, action, actor, target, params, created, digest, approved}]}` |
+| `approve` | `request_id`, `approver: {issuer, subject}`, `note` (optional, at most 2000 chars) | the approval document (`schemas/broker/approval`) |
+| `deny` | as `approve` | the denial document |
+| `audit` | optional filters `action`, `caller`, `outcome`, `operation`, `request_id`; `tail` (default 50, 0-500) | `{"records": [...]}` (`schemas/broker/audit`) |
+
+- response `{"ok": true, "result": ...}` or `{"ok": false, "error": REASON, "kind": "Denied" |
+  "InvalidArguments" | "BrokerError", "message": TEXT}`.
+
+`approver.issuer` must be the relay's own `issuer` (else `relay-issuer-mismatch`); `subject` is the
+person's SSO subject. The broker then applies the manifest's rules to that person:
+`approval-approver-not-allowed`, `approval-self-approved`, `approval-agent-approver`. A relay
+never runs, submits or reads a request for itself (`not-a-caller`).
+
+### Remote agents
+
+There is no network listener. An agent on another host reaches the broker through the front door
+(stage 2b) or an SSH-forwarded socket, logging in as its own user on the broker host:
+
+```sh
+ssh -N -L /run/user/1000/hnx-broker.sock:/run/hnx-broker/broker.sock hnx-agent-triage@broker-host
+hnx broker mcp --socket /run/user/1000/hnx-broker.sock
+```
+
+The peer the broker sees is the forwarding `sshd` process, which runs as the logged-in user, so the
+mapping is the same as for a local agent. Restrict that user's SSH key to the forward
+(`restrict,port-forwarding,command="/bin/false"` in `authorized_keys`).
+
 ## Walkthrough
 
 From a checkout, with the example manifest (`examples/broker/`: one agent profile `triage`, three
-lanes, a read-only `service.status` and an approval-gated `service.restart` stand-in):
+lanes, a read-only `service.status` and an approval-gated `service.restart` stand-in). It sets
+`dev_identity: true`, so the CLI's asserted `--as` drives it directly:
 
 ```sh
 export HNX_BROKER_MANIFEST=examples/broker/manifest.yml
