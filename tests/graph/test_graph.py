@@ -281,6 +281,21 @@ def test_placeholder_records_are_distinct_nodes(tmp_path, repo_copy):
     assert g.nodes["lesson:LL-NEW-beta"].title == "Placeholder practice beta"
 
 
+def test_a_bare_placeholder_and_a_slugged_one_are_distinct_nodes(tmp_path, repo_copy):
+    """``LL-NEW.md`` beside ``LL-NEW-beta.md``: each record pairs with its own file."""
+    root = _fresh(tmp_path, repo_copy)
+    for name in ("LL-NEW", "LL-NEW-beta"):
+        f = root / LESSONS / f"{name}.md"
+        shutil.copy(root / LESSONS / "LL-005.md", f)
+        front(f, id="LL-NEW", title=f"Placeholder practice {name}")
+    g, rep = build(root)
+    assert rep.duplicates == [] and rep.dangling == [] and check(root).ok()
+    for name in ("LL-NEW", "LL-NEW-beta"):
+        node = g.nodes[f"lesson:{name}"]
+        assert node.path == f"{LESSONS}/{name}.md"
+        assert node.title == f"Placeholder practice {name}"
+
+
 def test_stale_and_orphan_files_fail(tmp_path, repo_copy):
     """With an explicit output directory the check also compares the generated files."""
     root = _fresh(tmp_path, repo_copy)

@@ -194,13 +194,15 @@ def _register_entries(path: str | Path) -> list[dict[str, Any]]:
                 for e in out:
                     rid = str(e.get("id"))
                     e["_key"] = rid
-                    if rid in files:
-                        e["_path"] = files[rid]
-                        used.add(rid)
-                        continue
-                    # the loader reads files in name order, so placeholders pair up in that order
+                    # the loader reads files in name order, so records sharing an id (several
+                    # placeholders: LL-NEW.md, LL-NEW-<slug>.md) pair with its files in that order
                     stem = next(
-                        (k for k in files if k.startswith(f"{rid}-") and k not in used), None
+                        (
+                            k
+                            for k in files
+                            if (k == rid or k.startswith(f"{rid}-")) and k not in used
+                        ),
+                        None,
                     )
                     if stem is not None:
                         e["_path"], e["_key"] = files[stem], stem
