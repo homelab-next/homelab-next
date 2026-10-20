@@ -8,7 +8,7 @@ import pytest
 import schema_check as sc
 
 ROOT = Path(__file__).resolve().parents[2]
-OWNED_DIRS = ["ids", "events", "records", "registers", "platform", "ocsf"]
+OWNED_DIRS = ["ids", "events", "records", "registers", "platform", "ocsf", "status"]
 EXCLUDED = {"platform/service.json"}  # owned by the registry task
 REGISTRY = sc.build_registry(ROOT)
 SCHEMAS = [
@@ -32,6 +32,7 @@ EXPECTED = {
     "events/swap.step.schema.json",
     "events/scope.denied.schema.json",
     "events/deploy.changed.schema.json",
+    "events/status.observed.schema.json",
     "records/note.schema.json",
     "registers/lesson.schema.json",
     "registers/runbook.schema.json",
@@ -53,6 +54,8 @@ EXPECTED = {
     "ocsf/dns_activity.v1.json",
     "ocsf/network_activity.v1.json",
     "ocsf/vulnerability_finding.v1.json",
+    "status/observation.schema.json",
+    "status/views.schema.json",
 }
 
 
@@ -105,6 +108,7 @@ def test_event_schemas_cover_reaction_seam_types():
             "swap.step",
             "scope.denied",
             "deploy.changed",
+            "status.observed",
         )
     }
 

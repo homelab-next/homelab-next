@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+views_version: 1
+shell: {title: Lab status, main: overview}
+menu:
+  - {id: overview, title: Overview, panel: exceptions}
+  - {id: modules, title: All modules, panel: grid}
+  - {id: governance, title: Approvals, panel: grid, select: {sources: [approvals]}}
+  - {id: sources, title: Sources, panel: sources}
+  - {id: grafana, title: Grafana, external: {service: dashboards, path: /d/fleet}}
+  - {id: agents, title: Agent dashboard, external: {service: agent-dashboard, optional: true}}

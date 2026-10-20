@@ -266,6 +266,27 @@ def read_registry(b: Builder) -> None:
             )
 
 
+def read_status(b: Builder) -> None:
+    """``examples/services.yml`` ``status_sources``: one ``status:<id>`` node per source (the
+    status hub's menu, ADR-0013) so a tile can reach its service, capability and their pages.
+
+    status -observes-> svc (the declaring service) and cap (its capability); status -polls-> svc
+    when the source polls another registered service (``target.service``)."""
+    from homelabnext.registry.model import load
+
+    reg = load(b.root / REGISTRY)
+    for s in reg.sorted_services():
+        for i, src in enumerate(s.status_sources):
+            at = f"{REGISTRY}#services.{s.name}.status_sources[{i}]"
+            nid = f"status:{src['id']}"
+            b.define(nid, "status", src["what"], REGISTRY, at, source_kind=src["kind"])
+            b.edge(nid, f"svc:{s.name}", "observes", at)
+            b.edge(nid, f"cap:{s.capability}", "observes", at)
+            target = (src.get("target") or {}).get("service")
+            if target and target != s.name:
+                b.edge(nid, f"svc:{target}", "polls", f"{at}.target.service")
+
+
 # --------------------------------------------------------------------------- compose
 
 COMPOSE_GLOB = "compose/*/docker-compose.yml"
@@ -1149,6 +1170,7 @@ def _norm(p: PurePosixPath) -> str:
 #: reader order matters only where a reader matches names an earlier one defined
 READERS: tuple[tuple[str, Callable[[Builder], None]], ...] = (
     ("registry", read_registry),
+    ("status", read_status),
     ("compose", read_compose),
     ("capabilities", read_capabilities),
     ("schemas", read_schemas),

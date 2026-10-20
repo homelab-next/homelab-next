@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/service/2.1",
+  "title": "HomelabNext service registry (services.yml)",
+  "description": "Single source of truth for what runs where. Every endpoint, scrape target, proxy site, firewall rule, DNS record and environment file is generated from this document. Schema version 1; evolve additively. 2.0 closes every free-text field that generators interpolate: owners and identifiers are slugs, paths are URL path characters, descriptions are single lines, and every pattern rejects a trailing newline (Python re lets $ match before one; ECMA-262 does not). 2.1 adds status_sources: what the status hub may poll or receive for a service, by registry name only (docs/status.md, ADR-0013).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["registry_version", "lab", "zones", "hosts", "services"],
+  "properties": {
+    "registry_version": {"const": 1},
+    "lab": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "domain"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,31}$(?!\\n)"},
+        "domain": {"type": "string", "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$(?!\\n)", "description": "Base DNS domain, e.g. example.internal"},
+        "svc_label": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,15}$(?!\\n)", "default": "svc", "description": "Alias zone is <svc_label>.<domain>"},
+        "owner": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)", "maxLength": 63, "description": "Owning team as a slug, e.g. platform-team."}
+      }
+    },
+    "zones": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"pattern": "^[a-z][a-z0-9-]{0,31}$(?!\\n)"},
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["cidr"],
+        "properties": {
+          "cidr": {"type": "string", "pattern": "^[0-9a-f:.]+/[0-9]{1,3}$(?!\\n)"},
+          "description": {"type": "string", "pattern": "^[^\\u0000-\\u001f\\u007f]*$(?!\\n)", "maxLength": 200}
+        }
+      }
+    },
+    "hosts": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"pattern": "^[a-z][a-z0-9-]{1,62}$(?!\\n)"},
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["address", "zone"],
+        "properties": {
+          "address": {"type": "string", "pattern": "^[0-9a-f:.]+$(?!\\n)"},
+          "zone": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$(?!\\n)"},
+          "role": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$(?!\\n)"},
+          "description": {"type": "string", "pattern": "^[^\\u0000-\\u001f\\u007f]*$(?!\\n)", "maxLength": 200}
+        }
+      }
+    },
+    "services": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"pattern": "^[a-z][a-z0-9-]{1,62}$(?!\\n)"},
+      "additionalProperties": {"$ref": "#/$defs/service"}
+    }
+  },
+  "$defs": {
+    "capability": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$(?!\\n)"},
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability", "host", "protocol", "port", "owner", "version", "tls"],
+      "properties": {
+        "capability": {"$ref": "#/$defs/capability", "description": "The stable alias consumers resolve: <capability>.<svc_label>.<domain>. Swapping the product behind it never changes consumers."},
+        "impl": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$(?!\\n)", "description": "Current product implementing the capability (informational)."},
+        "host": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$(?!\\n)"},
+        "protocol": {"enum": ["http", "https", "grpc", "tcp", "udp", "postgres", "nats", "dns", "ssh"]},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "health": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": {"enum": ["http", "tcp", "none"]},
+            "path": {"type": "string", "pattern": "^/[A-Za-z0-9._~/%:@+-]*$(?!\\n)", "maxLength": 200},
+            "expect_status": {"type": "integer", "minimum": 100, "maximum": 599},
+            "interval_s": {"type": "integer", "minimum": 5, "maximum": 3600}
+          },
+          "if": {"properties": {"kind": {"const": "http"}}},
+          "then": {"required": ["kind", "path"]}
+        },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path"],
+          "properties": {
+            "path": {"type": "string", "pattern": "^/[A-Za-z0-9._~/%:@+-]*$(?!\\n)", "maxLength": 200},
+            "port": {"type": "integer", "minimum": 1, "maximum": 65535}
+          }
+        },
+        "upstreams": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/capability"},
+          "description": "Capability aliases this service calls. Drives env wiring and the firewall matrix."
+        },
+        "clients": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$(?!\\n)"},
+          "description": "Extra zones (beyond dependants) allowed to reach this service."
+        },
+        "owner": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)", "maxLength": 63, "description": "Owning team as a slug, e.g. data-team; interpolated into proxy, IdP and docs output."},
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?([-+][0-9A-Za-z.-]+)?$(?!\\n)"},
+        "tls": {"enum": ["none", "internal", "public", "mtls"]},
+        "auth": {"enum": ["none", "idp", "own", "mtls"], "default": "none"},
+        "public_hostname": {"type": "string", "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$(?!\\n)"},
+        "backup_job": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,62}$(?!\\n)"},
+        "env_var": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$(?!\\n)", "description": "Override of the default endpoint env var name."},
+        "mcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name"],
+          "properties": {
+            "name": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{1,40}$(?!\\n)"},
+            "transport": {"enum": ["http", "sse", "stdio"], "default": "http"},
+            "path": {"type": "string", "pattern": "^/[A-Za-z0-9._~/%:@+-]*$(?!\\n)", "maxLength": 200, "default": "/mcp"}
+          }
+        },
+        "tags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9:_-]{0,31}$(?!\\n)"}
+        },
+        "scope": {
+          "enum": ["in", "out"],
+          "description": "Writer-tool scope (homelabnext.scope). 'out' keeps tools from filing tasks, notes or findings about this service; absent = inherit from its host guest, else in."
+        },
+        "status_sources": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/status_source"},
+          "description": "Status sources this service offers the status hub (the menu: hnx status sources, docs/status/sources.md). Targets are registry names, never addresses."
+        }
+      }
+    },
+    "status_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "interval_s", "what"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)", "maxLength": 63, "description": "Unique across the registry; the graph node is status:<id>."},
+        "kind": {"enum": ["poll-http-json", "poll-file", "push-event", "poll-prometheus"], "description": "poll-prometheus is reserved for stage 2: its collector reports unknown until then."},
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "service": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$(?!\\n)", "description": "Registry service to poll (default: the declaring service), resolved through its capability alias."},
+            "path": {"type": "string", "pattern": "^/[A-Za-z0-9._~/%@+=&?,-]*$(?!\\n)", "maxLength": 300, "description": "URL path (and query) on the target service."},
+            "file": {"type": "string", "pattern": "^(?!/)(?!.*\\.\\.)[A-Za-z0-9._/-]+$(?!\\n)", "maxLength": 256, "description": "poll-file: a file or directory relative to the status root (a checkout or the hub's data directory)."}
+          }
+        },
+        "interval_s": {"type": "integer", "minimum": 5, "maximum": 86400},
+        "stale_after_s": {"type": "integer", "minimum": 5, "maximum": 604800, "description": "Default 3 x interval_s; must be >= interval_s."},
+        "timeout_s": {"type": "integer", "minimum": 1, "maximum": 300, "default": 10, "description": "Must be below interval_s."},
+        "on_error": {"enum": ["unknown", "fail"], "default": "unknown", "description": "What a failed poll means: unknown (the items age into stale) or fail (the source is a liveness probe)."},
+        "mapping": {"$ref": "#/$defs/status_mapping"},
+        "what": {"type": "string", "minLength": 3, "maxLength": 200, "pattern": "^[^\\u0000-\\u001f\\u007f]*$(?!\\n)", "description": "One line: what this source reports."}
+      }
+    },
+    "status_selector": {"type": "string", "pattern": "^[$@A-Za-z0-9_.*\\[\\]-]{1,200}$(?!\\n)"},
+    "status_mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Payload -> status observations: a named built-in mapper, or declarative selectors (homelabnext.status.mapping).",
+      "properties": {
+        "builtin": {"enum": ["invariants-results", "records-lanes", "broker-pending"]},
+        "warn_after_s": {"type": "integer", "minimum": 1, "description": "records-lanes, broker-pending: an oldest item older than this is warn."},
+        "items": {"$ref": "#/$defs/status_selector", "description": "The list (or mapping) of items; absent = the payload is one item."},
+        "item": {"$ref": "#/$defs/status_selector", "description": "An item's name, relative to the item (@key = its key in a mapping)."},
+        "state": {"$ref": "#/$defs/status_selector", "description": "The raw state, relative to the item."},
+        "states": {
+          "type": "object",
+          "propertyNames": {"pattern": "^[A-Za-z0-9_.-]{1,40}$(?!\\n)"},
+          "additionalProperties": {"enum": ["ok", "warn", "fail", "unknown"]},
+          "description": "Raw state (as lower-cased text) -> state; an unmapped raw value is unknown."
+        },
+        "summary": {"$ref": "#/$defs/status_selector", "description": "A one-line summary, relative to the item."},
+        "module": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$(?!\\n)", "description": "Module name (default: the declaring service)."}
+      }
+    }
+  }
+}

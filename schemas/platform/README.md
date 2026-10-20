@@ -13,5 +13,5 @@
 | `swap_record.schema.json` | the persisted state of one capability swap: nine procedure steps with gates and evidence, hash-chained transition log, route before/after the flip, rollback or closure. Written by `hnx swap`; semantic checks in `homelabnext.swap.record` |
 | `script_header.schema.json` | the `# hnx-script:` header every script carries: id, kind (`check`, `tool`, `job`, `service`), purpose, owner, triggers, inputs, outputs, exit-code contract, and the invariants a check runs under. Consumed by `homelabnext.scripts` (`hnx scripts`, checklist M-01, M-02, M-04; docs/scripts.md) |
 
-`service.json` (the service-registry row) is owned by the registry task and lives in this directory;
+`service.json` (the service-registry row, 2.1 adds `status_sources`: what the status hub may poll or receive, by registry name, ADR-0013) is owned by the registry task and lives in this directory;
 it is not part of this task's checks. Backends and services are always `svc:` ids, never URLs.

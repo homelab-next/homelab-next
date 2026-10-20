@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The status hub shell (ADR-0013, docs/status.md): a main page and a left menu. Each entry is a
+# built-in panel over a selection of the registered status sources (`hnx status sources` is the
+# menu of what exists) or an external link to a registry service. Schema:
+# schemas/status/views.schema.json. Fictional, like every example.
+views_version: 1
+
+shell:
+  title: Northwind status
+  main: overview
+
+menu:
+  - id: overview
+    title: Overview
+    panel: exceptions
+  - id: modules
+    title: All modules
+    panel: grid
+  - id: governance
+    title: Proposals and approvals
+    panel: grid
+    select: {sources: [proposals, approvals]}
+  - id: fleet
+    title: Invariants and alerts
+    panel: grid
+    select: {sources: [invariants, metrics-alerts]}
+  - id: sources
+    title: Sources
+    panel: sources
+  - id: grafana
+    title: Grafana
+    external: {service: dashboards}
+  - id: agentmetry
+    title: Agentmetry
+    external: {service: agentmetry, optional: true}

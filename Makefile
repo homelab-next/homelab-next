@@ -57,8 +57,9 @@ schemas:
 
 # endpoints come from the registry; role and playbook rules come from the role interface;
 # `custom check` fails on an unowned or expired customization; the system and capability pages
-# (docs/systems/, docs/capabilities/) match the registry and the conformance code; the knowledge
-# the knowledge graph has no dangling edge or duplicate id
+# (docs/systems/, docs/capabilities/) match the registry and the conformance code; the status
+# source catalog (docs/status/sources.md) and views.yml match the registry; the knowledge graph
+# has no dangling edge or duplicate id
 gates:
 	$(PY) $(ENDPOINT_GATE) .
 	$(PY) $(ROLE_LINT) $(ROLES)
@@ -66,6 +67,8 @@ gates:
 	$(PY) -m homelabnext.cli custom check
 	$(PY) -m homelabnext.cli docs systems check examples/services.yml docs/systems
 	$(PY) -m homelabnext.cli docs capabilities check
+	$(PY) -m homelabnext.cli status catalog check
+	$(PY) -m homelabnext.cli status views check
 	$(PY) -m homelabnext.cli graph check
 
 # every decision spec git tracks is complete, asks well-formed questions, and inline specs stay fast

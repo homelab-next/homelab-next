@@ -151,6 +151,21 @@ services:
     tls: internal
     backup_job: daily-core
     tags: [data, database]
+    status_sources:
+      - id: proposals
+        kind: poll-file
+        target: {file: examples/status/records}
+        interval_s: 300
+        timeout_s: 10
+        mapping: {builtin: records-lanes, warn_after_s: 604800}
+        what: The proposal lanes - notes in the inbox and approved but not completed, with the oldest age.
+      - id: approvals
+        kind: poll-file
+        target: {file: examples/status/broker-pending.json}
+        interval_s: 300
+        timeout_s: 10
+        mapping: {builtin: broker-pending, warn_after_s: 3600}
+        what: Broker requests waiting for an approval, with the oldest age (optional - only with a broker).
 
   events:
     capability: events
@@ -193,6 +208,23 @@ services:
     tls: none
     mcp: {name: agent_runtime, transport: sse, path: /sse}
     tags: [compute, agents]
+    status_sources:
+      - id: orchestrator-queues
+        kind: poll-http-json
+        target: {path: /api/v1/status}
+        interval_s: 60
+        timeout_s: 5
+        mapping:
+          items: $.queues[*]
+          item: name
+          state: health
+          states: {healthy: ok, degraded: warn, stalled: fail}
+          summary: detail
+        what: Each orchestrator queue and whether it is draining (healthy, degraded or stalled).
+      - id: orchestrator-runs
+        kind: push-event
+        interval_s: 300
+        what: Run outcomes the orchestrator publishes itself as status.observed events.
 
   notify:
     capability: notify
@@ -206,6 +238,17 @@ services:
     version: "2.11"
     tls: none
     tags: [ops, notify]
+    status_sources:
+      - id: notify-health
+        kind: poll-http-json
+        target: {path: /v1/health}
+        interval_s: 60
+        timeout_s: 5
+        on_error: fail
+        mapping:
+          state: healthy
+          states: {"true": ok, "false": fail}
+        what: Whether the notification service answers its own health endpoint.
 
   metrics:
     capability: metrics
@@ -220,6 +263,27 @@ services:
     version: "2.54.1"
     tls: none
     tags: [ops, monitoring]
+    status_sources:
+      - id: metrics-alerts
+        kind: poll-http-json
+        target: {path: /api/v1/alerts}
+        interval_s: 60
+        timeout_s: 10
+        mapping:
+          items: $.data.alerts[*]
+          item: labels.alertname
+          state: state
+          states: {firing: fail, pending: warn, inactive: ok}
+          summary: annotations.summary
+        what: Every alert rule the metrics service evaluates; firing is fail, pending is warn.
+      - id: invariants
+        kind: poll-file
+        target: {file: examples/registers/invariants.results.json}
+        interval_s: 3600
+        stale_after_s: 10800
+        timeout_s: 10
+        mapping: {builtin: invariants-results, module: invariants}
+        what: The last invariants run, one item per criterion (pass is ok, fail is fail, error is unknown).
 
   dashboards:
     capability: dashboards

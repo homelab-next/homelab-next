@@ -43,6 +43,8 @@ allow:
     reason: loopback health probe of the service the role just started (not a cross-service endpoint)
   - path: "schemas/events/negative/alert.created.wrong-type.json"
     reason: negative schema fixture; documentation address
+  - path: "schemas/status/negative/observation.link-is-address.json"
+    reason: negative fixture - an address as a status link must be rejected (documentation range)
   - path: "schemas/ids/negative/logical-id.ip-literal.json"
     reason: negative fixture - an IP literal in a logical id must be rejected
   - path: "schemas/platform/negative/model_roles.backend-is-url.json"
