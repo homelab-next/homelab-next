@@ -147,22 +147,27 @@ def make_server(
                 doc = dict(document())  # the public contract: the private group is not listed
                 doc["menu"] = [m for m in doc["menu"] if m.get("group") != "private"]
                 self._reply(200, "application/json", dumps(doc).encode("utf-8"))
-            elif (
-                (
-                    approvals is not None
-                    and (hit := approvals.handle(route, query, document(), client, self.headers))
-                )
-                or (strategy is not None and (hit := strategy.handle(route, query, document())))
-                or (baselines is not None and (hit := baselines.handle(route, query, document())))
-            ) or (
-                agents is not None
-                and (hit := agents.handle(route, query, document(), client, self.headers))
-            ):
+            elif hit := self._page(route, query, client):
                 self._reply(*hit)
             elif route.startswith("/private"):  # no activity store: still never served
                 self._reply(403, "text/plain; charset=utf-8", b"forbidden: private view\n")
             else:
                 self._reply(404, "text/plain; charset=utf-8", b"not found\n")
+
+        def _page(self, route: str, query: str, client: str | None) -> Any:
+            """The first page site's response for ``route``, or None; the document is built
+            once, and only when some site is configured."""
+            # (site, whether its handler also judges the caller), in the order routes resolve
+            sites = [(approvals, True), (strategy, False), (baselines, False), (agents, True)]
+            sites = [(s, auth) for s, auth in sites if s is not None]
+            if not sites:
+                return None
+            doc = document()
+            for site, auth in sites:
+                args = (client, self.headers) if auth else ()
+                if hit := site.handle(route, query, doc, *args):
+                    return hit
+            return None
 
         do_GET = _get
         do_HEAD = _get

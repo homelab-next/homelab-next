@@ -39,7 +39,10 @@ decided" and files nothing; a request no longer awaiting approval is ``409``; a 
 in the hub's access log (``view: approve | deny | decide``, ``request``, ``outcome``, ``reason``).
 
 Rendering is escaped text only and the page has no script; its CSP is the hub's, except that
-``form-action`` is ``'self'`` so the decision forms can post back to the hub.
+``form-action`` is ``'self'`` so the decision forms can post back to the hub, and its
+``Referrer-Policy`` is ``same-origin`` (the hub's ``no-referrer`` would make a browser send
+``Origin: null`` with the form, which the same-origin check refuses).  A request shows its form
+again when its approval expired (``approval_state``, else ``approved``: :func:`approval_valid`).
 """
 
 from __future__ import annotations
@@ -54,6 +57,8 @@ import urllib.parse
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Any
+
+from homelabnext.broker.state import is_id
 
 from .agents.auth import AccessLog, Decision, authorize
 from .agents.config import ApprovalsSettings, FrontDoor
@@ -70,7 +75,6 @@ MAX_NOTE = 2000
 RECENT = 20
 FORM_FIELDS = frozenset({"request_id", "digest", "decision", "token", "note"})
 _REQUIRED = FORM_FIELDS - {"note"}
-_RID_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _TOKEN_RE = re.compile(r"^[0-9]{1,12}\.[0-9a-f]{64}$")
 _DECISIONS = {"approve": "approved", "deny": "denied"}
@@ -79,7 +83,11 @@ CSP = (
     f"default-src 'none'; style-src {style_hash()}; img-src 'self' data:; "
     "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 )
-_PAGE_HEADERS = {"Content-Security-Policy": CSP}
+#: ``Referrer-Policy: same-origin`` on these pages (the hub's is ``no-referrer``): under
+#: ``no-referrer`` a browser sends ``Origin: null`` and no ``Referer`` with the form's ``POST``,
+#: which the same-origin check rightly refuses; ``same-origin`` sends the real Origin to this host
+#: and still nothing to any other
+_PAGE_HEADERS = {"Content-Security-Policy": CSP, "Referrer-Policy": "same-origin"}
 
 
 def _text(code: int, message: str) -> Response:
@@ -103,6 +111,15 @@ def _age(created: str, now: float) -> str:
 
 def _reason(exc: Exception) -> str:
     return str(getattr(exc, "reason", "") or type(exc).__name__)
+
+
+def approval_valid(row: Mapping[str, Any]) -> bool:
+    """True when a pending row has a still-valid, unconsumed approval: ``approval_state`` when
+    the broker reports it (``none | valid | expired | consumed``), else its ``approved`` flag."""
+    state = row.get("approval_state")
+    if state is not None:
+        return state == "valid"
+    return bool(row.get("approved"))
 
 
 def same_origin(headers: Any) -> tuple[bool, str]:
@@ -204,7 +221,7 @@ class ApprovalsSite:
             return _text(403, "forbidden: approvals")
         q = urllib.parse.parse_qs(query)
         only = q.get("request", [None])[0]
-        only = only if only and _RID_RE.match(only) and len(only) <= 64 else None
+        only = only if is_id(only) else None
         self.access_log.append(d.user or "", "approvals", request=only)
         can_decide = self._approver(client, headers).allowed
         private = authorize(self.front_door, client, headers).allowed
@@ -258,12 +275,13 @@ class ApprovalsSite:
                 ("digest", f"<code>{_e(digest)}</code>"),
             )
         )
-        state = " (approved, not yet run)" if r.get("approved") else ""
+        valid = approval_valid(r)
+        state = " (approved, not yet run)" if valid else ""
         out = [
             f'<div class="pane" id="{_e(rid)}"><h3>Request <code>{_e(rid)}</code>{_e(state)}</h3>',
             f"<dl>{facts}</dl><h4>params</h4><pre>{_e(params)}</pre>",
         ]
-        if can_decide and not r.get("approved"):
+        if can_decide and not valid:
             hidden = "".join(
                 f'<input type="hidden" name="{k}" value="{_e(v)}">'
                 for k, v in (
@@ -282,6 +300,8 @@ class ApprovalsSite:
         return "".join(out)
 
     def _recent(self) -> list[Mapping[str, Any]]:
+        # two bounded reads (``tail``): the hub never pulls more than RECENT rows of each; the
+        # broker filters its audit trail server-side (it has no index, so it reads its trail)
         rows = [
             *self.client.audit(operation="approve", outcome="ok", tail=RECENT),
             *self.client.audit(operation="deny", outcome="ok", tail=RECENT),
@@ -356,7 +376,7 @@ class ApprovalsSite:
         if not set(f) >= _REQUIRED:
             return refuse(400, "decide", "missing form fields")
         rid, digest, op, note = f["request_id"], f["digest"], f["decision"], f.get("note") or None
-        if not (_RID_RE.match(rid) and len(rid) <= 64):
+        if not is_id(rid):
             return refuse(400, "decide", "malformed request_id")
         log["request"] = rid
         if op not in _DECISIONS:
@@ -374,8 +394,12 @@ class ApprovalsSite:
         try:
             pending = {r.get("request_id"): r for r in self.client.pending()}
             row = pending.get(rid)
-            if row is None or (row.get("approved") and op == "approve"):
-                if self._already(rid, op, subject):
+            if row is None or (approval_valid(row) and op == "approve"):
+                # "already" only while the decision still stands: a denial removes the request,
+                # a valid approval keeps it pending; an approval that ran (the request is gone)
+                # or expired (the request is pending without one) is not "already approved"
+                standing = op == "deny" if row is None else True
+                if standing and self._already(rid, op, subject):
                     self.access_log.append(user, op, outcome="unchanged", reason="already", **log)
                     return self._result(
                         doc, private, f"Request {rid} was already {_DECISIONS[op]}."

@@ -422,7 +422,11 @@ awaits approval; `403` a broker refusal (with its reason); `502` the broker is u
 done. Re-submitting a decision the same person already made answers `200` "already" and files
 nothing. Every attempt, refused or not, is a line in the access log (`view: approve | deny |
 decide`, `request`, `outcome`, `reason`), shown on `/private/access-log`. The page has no script;
-its CSP is the hub's with `form-action 'self'`.
+its CSP is the hub's with `form-action 'self'`, and it is served with `Referrer-Policy:
+same-origin` (the rest of the hub sends `no-referrer`, under which a browser posts the form with
+`Origin: null`, which is refused). "Already" means the decision still stands: a request whose
+approval expired shows its form again, and one whose approval was consumed (it ran) is no longer
+awaiting approval (`409`).
 
 **The broker side.** Run the hub as its own system user (`hnx-hub`) in the broker socket's group
 and list it in the broker manifest's `approval_relays` with the same `issuer`; add each person who

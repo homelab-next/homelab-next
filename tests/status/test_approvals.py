@@ -342,6 +342,99 @@ def test_a_broker_refusal_is_reported_with_its_reason(served, broker):
     assert status == 403 and "approval-self-approved" in body.decode()
 
 
+# ---------------------------------------------------------------- what a browser sends
+#: Referrer-Policy values under which a browser's same-origin form POST carries the page's real
+#: Origin (Fetch, "serializing a request origin": only no-referrer turns it into "null")
+REAL_ORIGIN_POLICIES = {
+    "same-origin", "strict-origin", "strict-origin-when-cross-origin", "origin",
+    "origin-when-cross-origin", "no-referrer-when-downgrade", "unsafe-url",
+}  # fmt: skip
+
+
+def _browser_post(base, site, page_headers):
+    """The POST a browser makes from a form on a page served with ``page_headers``: Origin (and
+    Referer) follow that page's Referrer-Policy, as the Fetch standard serializes them."""
+    policy = page_headers["Referrer-Policy"]
+    if policy == "no-referrer":
+        return _post(base, _form(site), origin="null")  # and no Referer at all
+    headers = {**APPROVER, "Referer": base + "/approvals", "Sec-Fetch-Site": "same-origin"}
+    return _post(base, _form(site), headers, origin="same")
+
+
+def test_a_browser_form_post_from_the_page_carries_its_real_origin(served, broker):
+    base, site = served()
+    _, headers, _ = request(base, "/approvals", headers=APPROVER)
+    assert headers["Referrer-Policy"] in REAL_ORIGIN_POLICIES
+    status, _, body = _browser_post(base, site, headers)
+    assert status == 200, body
+    assert broker.calls == [("approve", RID, "sso", "operator", None)]
+    # a literal null Origin (an opaque or no-referrer document) is still refused
+    assert _post(base, _form(site), origin="null")[0] == 403
+    # the rest of the hub keeps sending no referrer
+    assert request(base, "/status.json")[1]["Referrer-Policy"] == "no-referrer"
+
+
+# ---------------------------------------------------------------- the approval's real state
+def test_an_expired_approval_shows_the_form_again_and_re_approves(served, broker):
+    broker.rows[0].update(approved=True, approval_state="expired")
+    broker.audit_rows.append(
+        {"at": iso(T0 - 7200), "operation": "approve", "outcome": "ok", "caller": "sso:operator",
+         "action": "service.restart", "request_id": RID}
+    )  # fmt: skip
+    base, site = served()
+    _, _, body = request(base, "/approvals", headers=APPROVER)
+    assert "<form" in body.decode() and "not yet run" not in body.decode()
+    status, _, body = _post(base, _form(site))
+    assert status == 200 and "already" not in body.decode()
+    assert broker.calls == [("approve", RID, "sso", "operator", None)]  # filed again
+
+
+@pytest.mark.parametrize("state", ["valid", None])  # None: a broker without approval_state
+def test_a_still_valid_approval_is_already_approved(served, broker, state):
+    base, site = served()
+    assert _post(base, _form(site))[0] == 200
+    if state:
+        broker.rows[0]["approval_state"] = state
+    _, _, body = request(base, "/approvals", headers=APPROVER)
+    assert "<form" not in body.decode() and "approved, not yet run" in body.decode()
+    status, _, body = _post(base, _form(site))
+    assert status == 200 and "already approved" in body.decode() and len(broker.calls) == 1
+
+
+def test_a_consumed_approval_is_not_awaiting_approval(served, broker):
+    base, site = served()
+    assert _post(base, _form(site))[0] == 200
+    broker.rows = []  # the approved request ran: no longer pending
+    status, _, body = _post(base, _form(site))
+    assert status == 409 and "not awaiting approval" in body.decode()
+
+
+# ---------------------------------------------------------------- one document per request
+def test_each_request_builds_the_document_at_most_once(registry):
+    calls = []
+
+    def document():
+        calls.append(1)
+        return _doc(registry)
+
+    class Passing:  # a page site that serves none of the routes asked for
+        def handle(self, *a):
+            return None
+
+    p = Passing()
+    srv = make_server(document, agents=p, strategy=p, baselines=p, approvals=p)
+    threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
+    try:
+        host, port = srv.server_address[:2]
+        for path in ("/agents", "/no-such-page"):
+            calls.clear()
+            assert request(f"http://{host}:{port}", path)[0] == 404
+            assert len(calls) <= 1, path
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 # ---------------------------------------------------------------- the rest stays read-only
 def test_the_hub_is_read_only_everywhere_else(served):
     base, site = served()
