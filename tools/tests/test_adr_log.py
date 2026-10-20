@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The ADR log: fifteen records, five headings each, a status, sequential numbering."""
+"""The ADR log: seventeen records, five headings each, a status, sequential numbering."""
 
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ STATUSES = {"proposed", "accepted", "rejected"}
 ADRS = sorted(p for p in ADR_DIR.glob("[0-9][0-9][0-9][0-9]-*.md"))
 
 
-def test_sixteen_sequential_adrs():
-    assert [int(p.name[:4]) for p in ADRS] == list(range(1, 17))
+def test_seventeen_sequential_adrs():
+    assert [int(p.name[:4]) for p in ADRS] == list(range(1, 18))
 
 
 @pytest.mark.parametrize("path", ADRS, ids=lambda p: p.name[:4])

@@ -34,10 +34,13 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `broker/request` | one call; `digest` binds `{action, actor, target, params}` |
 | `broker/decision` | `allow` / `deny` / `needs-approval` with a closed reason vocabulary; shadow mode records but does not enforce |
 | `broker/approval` | approver identity plus `request_digest` |
+| `broker/audit` | one audit record of the broker service: operation, outcome, machine reason, redacted args |
 
 All are versioned 1.0 except `agent/profile` (1.1, additive: `reads_untrusted`; 1.2, additive: `include`),
 `agent/report_result` (1.1, additive: `output`),
-`agent/context_manifest` (1.1, additive: `screen`), `broker/manifest` (1.1, additive: approvers)
+`agent/context_manifest` (1.1, additive: `screen`), `broker/manifest` (1.1, additive: approvers;
+1.2, additive: `lanes`, an action's `lane`, `handler_docs`), `broker/handler` (1.1, additive: `argv`,
+`secrets`, `max_output_bytes`)
 and `broker/decision` (1.1 adds the approval reasons; 1.2 adds `not-request-owner` and the optional
 `operation` and `caller`), frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`
 (each has an example and several negatives). `agent/profile` is the compiler's output;
@@ -46,6 +49,9 @@ and `broker/decision` (1.1 adds the approval reasons; 1.2 adds `not-request-owne
 Rules JSON Schema cannot express are code, with tests: grants subset of ceiling, digest equals
 content, `pack_id` equals the pack hash, must-cite coverage, and that a manifest, its handler
 documents and the broker table agree (`check_manifest_handlers`).
+
+The service that runs these contracts - lanes, pinned handlers, the approvals flow, durable state
+and `hnx broker` - is described in [broker.md](broker.md) ([[broker]]) and ADR-0017.
 
 ## Profile compiler
 

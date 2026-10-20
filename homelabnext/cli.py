@@ -195,6 +195,10 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "read-only MCP server over this repository: serve (stdio)|tools|call (docs/mcp.md)",
         lambda a: importlib.import_module("homelabnext.mcp.cli").main(a),
     ),
+    "broker": (
+        "the reference broker service: validate|submit|status|run|cancel|approve|deny|pending|audit",
+        lambda a: importlib.import_module("homelabnext.broker.cli").main(a),
+    ),
     "custom": (
         "list|check|plan|register lab/vendor customizations",
         lambda a: importlib.import_module("homelabnext.customization.cli").main(a),
