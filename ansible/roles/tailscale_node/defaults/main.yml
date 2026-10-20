@@ -6,6 +6,11 @@
 tailscale_node_version: "1.88.4"
 # The vendor package repository (stable track, Debian); point it at a lab mirror to control it.
 tailscale_node_repository: "https://pkgs.tailscale.com/stable/debian"
+# The primary-key fingerprints the repository's signing key (<repository>/<release>.noarmor.gpg)
+# must carry: the vendor's "Tailscale Inc. (Package repository signing key)". A mirror serves the
+# same key; a key rotation adds the new fingerprint here.
+tailscale_node_key_fingerprints:
+  - "2596A99EAAB33821893C0A79458CA832957F5868"
 # The guest's zone from the generated inventory (hnx_zone): its tag is tag:zone-<zone>.
 tailscale_node_zone: "{{ hnx_zone }}"
 tailscale_node_extra_tags: []

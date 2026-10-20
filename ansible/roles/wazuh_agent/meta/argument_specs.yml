@@ -19,6 +19,11 @@ argument_specs:
         type: str
         description: Vendor package repository root (https); a lab mirror may stand in for it.
         default: https://packages.wazuh.com
+      wazuh_agent_key_fingerprints:
+        type: list
+        elements: str
+        description: Primary-key fingerprints (40 upper-case hex digits) the repository's signing key must carry; the key is refused otherwise.
+        default: ["0DCFCA5547B19D2A6099506096B3EE5F29111145"]
       wazuh_agent_enrollment_ref:
         type: str
         description: Secret reference (secret:<name>) of the manager's enrollment password, resolved by the hnx_secret lookup.

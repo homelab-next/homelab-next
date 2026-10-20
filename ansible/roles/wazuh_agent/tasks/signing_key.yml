@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: Apache-2.0
+# The repository root is configurable (a lab mirror may stand in for the vendor), so the key it
+# serves is not trusted for coming from it: it is fetched to a staging file and installed for apt
+# only when every primary key in it is one of the pinned vendor fingerprints.
+- name: Fetch, check and install the vendor signing key
+  block:
+    - name: Ensure the apt keyring directory exists
+      ansible.builtin.file:
+        path: "{{ wazuh_agent_keyring | dirname }}"
+        state: directory
+        mode: "0755"
+    - name: Fetch the signing key to a staging file
+      ansible.builtin.get_url:
+        url: "{{ wazuh_agent_repository }}/key/GPG-KEY-WAZUH"
+        dest: "{{ wazuh_agent_keyring }}.download"
+        mode: "0644"
+        force: true
+      changed_when: false
+    - name: Make a scratch GnuPG home (reading the key must not touch a real keyring)
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .hnx-gnupg
+      register: wazuh_agent_gnupg_home
+      changed_when: false
+    - name: List the keys in the downloaded file
+      ansible.builtin.command:
+        argv:
+          - gpg
+          - --batch
+          - --homedir
+          - "{{ wazuh_agent_gnupg_home.path }}"
+          - --with-colons
+          - --show-keys
+          - "{{ wazuh_agent_keyring }}.download"
+      register: wazuh_agent_key_listing
+      changed_when: false
+    - name: Fail unless the file holds the pinned vendor key and nothing else
+      vars:
+        wazuh_agent_key_found: "{{ wazuh_agent_key_listing.stdout | regex_findall('(?m)^pub:.*\\n^fpr:+([0-9A-F]{40}):') }}"
+      ansible.builtin.assert:
+        that:
+          - wazuh_agent_key_found | length > 0
+          - wazuh_agent_key_found | difference(wazuh_agent_key_fingerprints) | length == 0
+        fail_msg: >-
+          wazuh_agent: the signing key from {{ wazuh_agent_repository }} has primary key(s)
+          {{ wazuh_agent_key_found | join(', ') or 'none' }}, not the pinned
+          {{ wazuh_agent_key_fingerprints | join(', ') }} (wazuh_agent_key_fingerprints)
+    - name: Install the checked key for apt
+      ansible.builtin.copy:
+        src: "{{ wazuh_agent_keyring }}.download"
+        dest: "{{ wazuh_agent_keyring }}"
+        remote_src: true
+        mode: "0644"
+  always:
+    - name: Remove the staging file and the scratch GnuPG home
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ [wazuh_agent_keyring ~ '.download'] + ([wazuh_agent_gnupg_home.path] if wazuh_agent_gnupg_home.path is defined else []) }}"

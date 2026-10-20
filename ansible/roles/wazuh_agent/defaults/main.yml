@@ -6,6 +6,11 @@ wazuh_agent_version: "4.14.9"
 wazuh_agent_package_revision: "1"
 # The vendor package repository root; point it at a lab mirror to control what is served.
 wazuh_agent_repository: "https://packages.wazuh.com"
+# The primary-key fingerprints the repository's signing key (<repository>/key/GPG-KEY-WAZUH) must
+# carry: the vendor's "Wazuh.com (Wazuh Signing Key)" key. A mirror serves the same key; a key
+# rotation adds the new fingerprint here.
+wazuh_agent_key_fingerprints:
+  - "0DCFCA5547B19D2A6099506096B3EE5F29111145"
 wazuh_agent_enrollment_ref: "secret:siem/enrollment-password"
 wazuh_agent_enrollment_port: 1515
 # Empty: the agent enrolls under the host name (the vendor default).

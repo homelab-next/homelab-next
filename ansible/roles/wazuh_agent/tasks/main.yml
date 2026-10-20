@@ -11,14 +11,22 @@
     that: ansible_facts['os_family'] == 'Debian'
     fail_msg: "wazuh_agent supports Debian-family guests only (got {{ ansible_facts['os_family'] }})"
 
-- name: Add the vendor apt repository, signed by the vendor key
+- name: Install gpg (it checks the vendor key's fingerprint)
+  ansible.builtin.apt:
+    name: gpg
+    state: present
+
+- name: Fetch the vendor signing key and check it against the pinned fingerprints
+  ansible.builtin.include_tasks: signing_key.yml
+
+- name: Add the vendor apt repository, signed by the checked vendor key
   ansible.builtin.deb822_repository:
     name: wazuh
     types: deb
     uris: "{{ wazuh_agent_repository }}/{{ wazuh_agent_version.split('.')[0] }}.x/apt/"
     suites: stable
     components: main
-    signed_by: "{{ wazuh_agent_repository }}/key/GPG-KEY-WAZUH"
+    signed_by: "{{ wazuh_agent_keyring }}"
 
 # The package is held (below), so moving it to a new pin (the upgrade hook's bump path) must be
 # allowed to change that one held package; the hold is set again right after.

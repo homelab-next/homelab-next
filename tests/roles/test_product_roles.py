@@ -119,6 +119,8 @@ def test_wazuh_agent_accepts_good_inputs(tmp_path):
         {"wazuh_agent_enrollment_ref": "plain-password-fake"},
         {"wazuh_agent_enrollment_ref": "secret:../escape-token"},
         {"wazuh_agent_name": "a b"},
+        {"wazuh_agent_key_fingerprints": []},
+        {"wazuh_agent_key_fingerprints": ["0dcfca5547b19d2a6099506096b3ee5f29111145"]},
         {"wazuh_agent_groups": ["ok", "x,y"]},
     ],
 )
@@ -175,6 +177,82 @@ def test_the_pinned_install_may_move_its_own_held_package(role, package):
     assert hold == {"name": package, "selection": "hold"}
 
 
+# ---------------------------------------------------------------- the vendor signing keys
+def make_key(tmp_path: Path, name: str, out: Path, armor: bool) -> str:
+    """A throwaway OpenPGP key exported to ``out``; returns its primary fingerprint."""
+    home = tmp_path / f"gnupg-{name}"
+    home.mkdir(mode=0o700)
+    gpg = ["gpg", "--batch", "--homedir", str(home), "--pinentry-mode", "loopback"]
+    uid = f"Fake vendor key {name}"
+    subprocess.run([*gpg, "--passphrase", "", "--quick-gen-key", uid, "ed25519", "sign", "never"],
+                   check=True, capture_output=True)  # fmt: skip
+    listing = subprocess.run([*gpg, "--with-colons", "--list-keys", uid], check=True,
+                             capture_output=True, text=True).stdout  # fmt: skip
+    fpr = next(x.split(":")[9] for x in listing.splitlines() if x.startswith("fpr:"))
+    exported = subprocess.run([*gpg, *(["--armor"] if armor else []), "--export", fpr],
+                              check=True, capture_output=True).stdout  # fmt: skip
+    subprocess.run(["gpgconf", "--homedir", str(home), "--kill", "all"], capture_output=True)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(out.read_bytes() + exported if out.exists() else exported)
+    return fpr
+
+
+KEY_CASES = {
+    # role: (served path under the repository root, armoured, keyring, extra vars)
+    "wazuh_agent": ("key/GPG-KEY-WAZUH", True, "hnx-wazuh.asc", {}),
+    "tailscale_node": ("bookworm.noarmor.gpg", False, "hnx-tailscale.gpg",
+                       {"tailscale_node_release": "bookworm"}),
+}  # fmt: skip
+
+
+def key_setup(tmp_path, role, pins=None, extra_key=False):
+    served, armor, keyring, extra = KEY_CASES[role]
+    repo = tmp_path / "repo"
+    fpr = make_key(tmp_path, "vendor", repo / served, armor)
+    if extra_key:
+        make_key(tmp_path, "other", repo / served, armor)
+    ring = tmp_path / "keyrings" / keyring
+    v = {
+        f"{role}_repository": f"file://{repo}",
+        f"{role}_keyring": str(ring),
+        f"{role}_key_fingerprints": [fpr] if pins is None else pins,
+        **extra,
+    }
+    return v, ring, (repo / served).read_bytes()
+
+
+@pytest.mark.skipif(shutil.which("gpg") is None, reason="gpg not installed")
+@pytest.mark.parametrize("role", sorted(KEY_CASES))
+def test_the_signing_key_is_installed_only_when_it_is_the_pinned_one(tmp_path, role):
+    v, ring, served = key_setup(tmp_path, role)
+    ok = run_role(tmp_path, role, "signing_key", v)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert ring.read_bytes() == served
+    assert sorted(p.name for p in ring.parent.iterdir()) == [ring.name]  # no staging file left
+    ring.unlink()
+    other = run_role(tmp_path, role, "signing_key", {**v, f"{role}_key_fingerprints": ["A" * 40]})
+    assert other.returncode != 0 and "not the pinned" in other.stdout
+    assert list(ring.parent.iterdir()) == []  # refused: not installed, staging file removed
+
+
+@pytest.mark.skipif(shutil.which("gpg") is None, reason="gpg not installed")
+@pytest.mark.parametrize("role", sorted(KEY_CASES))
+def test_a_signing_key_file_with_an_unpinned_key_beside_the_pinned_one_is_refused(tmp_path, role):
+    v, ring, _ = key_setup(tmp_path, role, extra_key=True)
+    r = run_role(tmp_path, role, "signing_key", v)
+    assert r.returncode != 0 and "not the pinned" in r.stdout and not ring.exists()
+
+
+def test_the_pinned_fingerprints_are_the_vendor_keys():
+    pins = {
+        "wazuh_agent": ["0DCFCA5547B19D2A6099506096B3EE5F29111145"],  # Wazuh.com (Wazuh Signing Key)
+        "tailscale_node": ["2596A99EAAB33821893C0A79458CA832957F5868"],  # Tailscale Inc. (Package repository signing key)
+    }  # fmt: skip
+    for role, want in pins.items():
+        d = yaml.safe_load((ANSIBLE / "roles" / role / "defaults" / "main.yml").read_text())
+        assert d[f"{role}_key_fingerprints"] == want
+
+
 # ---------------------------------------------------------------- tailscale_node
 def ts_vars(tmp_path, **kw):
     d = {"tailscale_node_auth_key_ref": "secret:remote-access/authkey-secret", "hnx_zone": "edge"}
@@ -204,6 +282,8 @@ def test_the_role_and_the_policy_agree_on_the_zone_tag():
         {"tailscale_node_extra_tags": ["admin"]},
         {"tailscale_node_auth_key_ref": "tskey-auth-fake"},
         {"tailscale_node_hostname": "a b"},
+        {"tailscale_node_key_fingerprints": []},
+        {"tailscale_node_key_fingerprints": ["458CA832957F5868"]},
         {"tailscale_node_repository": "http://mirror.example.internal/debian"},
     ],
 )

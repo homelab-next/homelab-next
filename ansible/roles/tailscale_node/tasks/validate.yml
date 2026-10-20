@@ -5,14 +5,17 @@
     that:
       - tailscale_node_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
       - tailscale_node_repository is match('^https://[A-Za-z0-9.-]+(?::[0-9]+)?(?:/[A-Za-z0-9._~-]+)*\Z')
+      - tailscale_node_key_fingerprints | length > 0
+      - tailscale_node_key_fingerprints | select('match', '^[0-9A-F]{40}\Z') | list | length == tailscale_node_key_fingerprints | length
       - tailscale_node_auth_key_ref is match('^secret:[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*\Z')
       - tailscale_node_zone is match('^[a-z][a-z0-9-]{0,40}\Z')
       - tailscale_node_extra_tags | select('match', '^tag:[a-z0-9][a-z0-9-]{0,62}\Z') | list | length == tailscale_node_extra_tags | length
       - tailscale_node_hostname == '' or tailscale_node_hostname is match('^[a-z0-9][a-z0-9-]{0,62}\Z')
       - tailscale_node_auth_key_file is match('^/[A-Za-z0-9._/-]+\Z')
     fail_msg: >-
-      tailscale_node: version x.y.z, an https repository, a secret:<name> auth key reference, a
-      zone id, tags tag:<a-z0-9->, a DNS-label host name and an absolute key-file path
+      tailscale_node: version x.y.z, an https repository and its key's fingerprints (40
+      upper-case hex digits), a secret:<name> auth key reference, a zone id, tags
+      tag:<a-z0-9->, a DNS-label host name and an absolute key-file path
 
 - name: Compose the tags to advertise (the zone tag first)
   ansible.builtin.set_fact:

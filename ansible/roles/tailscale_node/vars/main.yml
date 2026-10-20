@@ -1,3 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Fixed, not settings: the zone tag must match homelabnext.compute.gen.tailscale_acl.zone_tag.
 tailscale_node_zone_tag_prefix: "tag:zone-"
+# Where the checked vendor signing key is installed for apt (the repository's Signed-By); the
+# vendor serves it as a binary (.noarmor.gpg) keyring.
+tailscale_node_keyring: /etc/apt/keyrings/hnx-tailscale.gpg
+# The guest's release codename, which names the repository suite and its key file.
+tailscale_node_release: "{{ ansible_facts['distribution_release'] }}"
