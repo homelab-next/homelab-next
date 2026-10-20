@@ -60,7 +60,7 @@ def new_id(prefix: str) -> str:
     return f"{prefix}-{secrets.token_hex(8)}"
 
 
-def write_temp(name: str, data: bytes, *, dir_fd: int, mode: int = 0o640) -> str:
+def write_temp(name: str, data: bytes, *, dir_fd: int, mode: int = 0o600) -> str:
     """Write ``data`` to a new temporary file beside ``name`` in the directory ``dir_fd`` and
     fsync it; returns the temporary name.  The one place the broker writes file bytes: callers
     then link (exclusive) or rename (replace) it into place and unlink the temp name."""
@@ -76,7 +76,7 @@ def write_temp(name: str, data: bytes, *, dir_fd: int, mode: int = 0o640) -> str
     return tmp
 
 
-def write_exclusive(path: Path, data: bytes, *, mode: int = 0o640) -> bool:
+def write_exclusive(path: Path, data: bytes, *, mode: int = 0o600) -> bool:
     """Create ``path`` with ``data`` atomically and exclusively; False when it already exists.
 
     The bytes are written and fsynced under a temporary name first, so a reader never sees a

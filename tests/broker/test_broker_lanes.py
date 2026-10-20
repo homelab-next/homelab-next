@@ -237,3 +237,20 @@ def test_lane_configuration_problems():
     assert _lane(content_schema="broker/approval").problems()  # text lane
     assert _json_lane(content_schema="broker/nope").problems()
     assert _inbox(per_actor=True).problems()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_written_files_are_owner_only(tmp_path):
+    """State and lane files can hold audit detail and agent memory: no group or other bits."""
+    from homelabnext.broker.state import write_exclusive
+
+    old = os.umask(0)
+    try:
+        assert write_exclusive(tmp_path / "rec.json", b"{}\n")
+        write(_lane(), tmp_path, ACTOR, {"name": "note.md", "content": "hi\n"}, NOW)
+    finally:
+        os.umask(old)
+    files = [p for p in tmp_path.rglob("*") if p.is_file()]
+    assert len(files) == 2
+    for p in files:
+        assert p.stat().st_mode & 0o077 == 0, (p, oct(p.stat().st_mode))
