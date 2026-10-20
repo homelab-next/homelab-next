@@ -257,7 +257,7 @@ The checks themselves.
 | L-01 | Analyst verdicts feed back | Verdicts from 30 days applied to thresholds and tuning | SERVER |
 | L-02 | Metrics are tracked | MTTD, MTTR, false-positive rate, AI agreement trended over 90 days | SERVER |
 | L-03 | Continuous checks page once | The runner pages a newly red criterion once and never the standing set (fake sender test) | PUBLIC-NOW |
-| L-04 | Detections are validated by internal testing | An authorized internal detection test <= 90 days ago, against the lab's own systems; every step maps to a firing rule or ticket | SERVER |
+| L-04 | Detections are validated by internal assessment | An authorized internal assessment of detections <= 90 days ago, against the lab's own systems; every step maps to a firing rule or ticket | SERVER |
 | L-05 | Documentation matches reality | Docs regenerated from or checked against the live inventory; 0 drift (`hnx docs systems check`; capability reference pages generated from the conformance code, `hnx docs capabilities check`) | PUBLIC-NOW |
 | L-06 | Every lesson has a root cause, control and verification | `python3 -m homelabnext.registers build` exits 0 (fatal schema) | PUBLIC-NOW |
 | L-07 | Every runbook step has a verify | Same build exits 0 | PUBLIC-NOW |
