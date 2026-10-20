@@ -65,11 +65,17 @@ def render_all(graph: Graph) -> dict[str, str]:
 
 
 def generate(root: str | Path, out_dir: str | Path | None = None) -> tuple[list[str], list[str]]:
-    """Write the generated files; return (written, removed orphans)."""
+    """Write the generated files; return (written, removed orphans).
+
+    Orphans are removed only from a directory the graph generator owns
+    (:func:`homelabnext._generated.claim`: ``docs/graph/``, or one it created or marked); any
+    other ``--out`` is written to and nothing in it is deleted."""
+    from homelabnext._generated import claim
+
     root = Path(root)
     graph, _ = build(root)
     out = Path(out_dir) if out_dir else root / GRAPH_DIR
-    out.mkdir(parents=True, exist_ok=True)
+    prune = claim(out, "hnx graph build", root / GRAPH_DIR)
     files = render_all(graph)
     written = []
     for name, text in sorted(files.items()):
@@ -78,7 +84,7 @@ def generate(root: str | Path, out_dir: str | Path | None = None) -> tuple[list[
             p.write_text(text, encoding="utf-8")
         written.append(name)
     removed = []
-    for p in sorted(out.iterdir()):
+    for p in sorted(out.iterdir()) if prune else ():
         if p.is_file() and p.name not in files and p.suffix in (".md", ".json"):
             p.unlink()
             removed.append(p.name)

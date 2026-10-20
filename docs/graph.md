@@ -25,6 +25,11 @@ hnx graph related cap:lake-query               # ranked neighbourhood of a node
 hnx graph related homelabnext/conform/adapters/openbao.py --depth 2 --json
 ```
 
+`hnx graph build` removes files it no longer generates (orphans) only from a directory it owns:
+`docs/graph/`, or an `--out` directory it created, which it marks with a `.hnx-generated` file.
+Any other `--out` (`--out docs`) is written to and nothing in it is deleted
+(`homelabnext/_generated.py`; `hnx docs capabilities generate` follows the same rule).
+
 `hnx graph check` **fails** on
 
 * a dangling edge: an edge naming an id no source defines -- a lesson naming a runbook that does

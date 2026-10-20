@@ -176,6 +176,17 @@ def test_regenerating_into_a_copy_of_the_repo_changes_nothing(reg, tmp_path):
     assert caps.generate(tmp_path / "capabilities", ROOT, reg) == ([], [])
 
 
+def test_a_foreign_out_directory_is_written_never_pruned(reg, tmp_path):
+    """``hnx docs capabilities generate --out docs`` (a copy of it here) deletes nothing."""
+    docs = tmp_path / "docs"
+    shutil.copytree(ROOT / "docs", docs)
+    before = sorted(p.name for p in docs.glob("*.md"))
+    written, removed = caps.generate(docs, ROOT, reg)
+    assert removed == [] and written
+    assert set(before) <= {p.name for p in docs.glob("*.md")}
+    assert not (docs / ".hnx-generated").exists()
+
+
 def test_pages_do_not_depend_on_what_is_imported(reg, pages, monkeypatch, tmp_path):
     """A same-named module imported from another tree (a test, a --root run) changes nothing."""
     foreign = types.ModuleType("conformance.fakes.lake_iceberg")

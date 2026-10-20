@@ -299,6 +299,26 @@ def test_stale_and_orphan_files_fail(tmp_path, repo_copy):
     assert check(root, out).ok()
 
 
+def test_a_foreign_out_directory_is_written_never_pruned(tmp_path, repo_copy):
+    """``hnx graph build --out docs`` writes its files there and deletes nothing it did not
+    write; a directory it created (marked ``.hnx-generated``) is pruned like ``docs/graph/``."""
+    root = _fresh(tmp_path, repo_copy)
+    before = {p.relative_to(root) for p in (root / "docs").rglob("*") if p.is_file()}
+    assert any(p.suffix == ".md" for p in before)
+    written, removed = generate(root, root / "docs")
+    assert removed == [] and written
+    after = {p.relative_to(root) for p in (root / "docs").rglob("*") if p.is_file()}
+    assert before <= after and not (root / "docs" / ".hnx-generated").exists()
+    own = tmp_path / "own"
+    generate(root, own)
+    assert (own / ".hnx-generated").read_text(encoding="utf-8") == "hnx graph build\n"
+    (own / "extra.md").write_text("# not generated\n", encoding="utf-8")
+    assert generate(root, own)[1] == ["extra.md"]
+    (own / ".hnx-generated").write_text("hnx docs capabilities\n", encoding="utf-8")
+    (own / "extra.md").write_text("# another generator's\n", encoding="utf-8")
+    assert generate(root, own)[1] == []  # marked as another generator's: not ours to prune
+
+
 def test_the_default_check_is_integrity_only(tmp_path, repo_copy):
     """docs/graph/ is a local build: a missing or edited copy does not fail the default check."""
     root = _fresh(tmp_path, repo_copy)
