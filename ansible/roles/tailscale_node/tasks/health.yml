@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Read the node state
+      ansible.builtin.command:
+        argv: ["{{ tailscale_node_cli }}", status, --json]
+      register: tailscale_node_health
+      changed_when: false
+    - name: Fail unless the node is running, online and tagged with its zone
+      vars:
+        tailscale_node_self: "{{ (tailscale_node_health.stdout | from_json).Self | default({}, true) }}"
+      ansible.builtin.assert:
+        that:
+          - (tailscale_node_health.stdout | from_json).BackendState == 'Running'
+          - tailscale_node_self.Online | default(false) | bool
+          - (tailscale_node_zone_tag_prefix ~ tailscale_node_zone) in (tailscale_node_self.Tags | default([], true))
+        fail_msg: "tailscale_node: not running, not online, or missing {{ tailscale_node_zone_tag_prefix ~ tailscale_node_zone }}"
+  tags: [health]

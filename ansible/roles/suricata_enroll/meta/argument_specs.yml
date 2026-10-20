@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Write Suricata's address groups from the enrolled guests, test the config and reload.
+    options:
+      suricata_enroll_guests:
+        type: list
+        elements: dict
+        description: The guests to monitor, as the baseline-playbook target passes them ({id, name, fqdn, ip, zone}).
+        required: true
+      suricata_enroll_config_dir: &dir
+        type: path
+        description: Suricata's configuration directory.
+        default: /etc/suricata
+      suricata_enroll_config_file: &conf
+        type: str
+        description: The main configuration file in that directory.
+        default: suricata.yaml
+      suricata_enroll_groups_file: &groups
+        type: str
+        description: The generated address-groups file, included by the main configuration.
+        default: hnx-address-groups.yaml
+      suricata_enroll_suricata_cli:
+        type: str
+        description: The suricata command (used for suricata -T, the configuration test).
+        default: suricata
+      suricata_enroll_suricatasc_cli: &sc
+        type: str
+        description: The suricatasc command (unix-socket client).
+        default: suricatasc
+      suricata_enroll_reload:
+        type: bool
+        description: Reload the rules (and with them the address groups) after a change.
+        default: true
+  health:
+    short_description: Fail unless the running sensor answers on its unix socket.
+    options:
+      suricata_enroll_suricatasc_cli: *sc
+  readiness:
+    short_description: Fail unless the main configuration includes the generated address groups.
+    options:
+      suricata_enroll_config_dir: *dir
+      suricata_enroll_config_file: *conf
+      suricata_enroll_groups_file: *groups
+  backup:
+    short_description: Nothing to back up; the address groups are regenerated from the model.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-running main regenerates the address groups.
+    options: {}
+  upgrade:
+    short_description: Not applicable; this role installs nothing (Suricata's own package is the sensor host's).
+    options: {}
+  export:
+    short_description: Copy the generated address-groups file (YAML, an open format) to an export directory.
+    options:
+      suricata_enroll_config_dir: *dir
+      suricata_enroll_groups_file: *groups
+      suricata_enroll_export_dir:
+        type: path
+        description: Where to write the export.
+        required: true

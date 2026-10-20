@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every value is placed inside a GMP XML request: refuse anything but plain names and IPv4
+# addresses, so no value can add an element or an attribute.
+- name: Validate the enrolled guests, names and the port range
+  ansible.builtin.assert:
+    that:
+      - greenbone_target_guests | length > 0
+      - greenbone_target_guests | map(attribute='ip') | select('match', '^(?:[0-9]{1,3}\.){3}[0-9]{1,3}\Z') | list | length == greenbone_target_guests | length
+      - greenbone_target_guests | map(attribute='zone') | select('match', '^[a-z][a-z0-9-]{0,40}\Z') | list | length == greenbone_target_guests | length
+      - greenbone_target_guests | map(attribute='name') | select('match', '^[a-z0-9][a-z0-9-]{0,62}\Z') | list | length == greenbone_target_guests | length
+      - greenbone_target_scan_login is match('^[A-Za-z0-9][A-Za-z0-9 ._-]{0,79}\Z')
+      - greenbone_target_gmp_user is match('^[A-Za-z0-9][A-Za-z0-9._-]{0,79}\Z')
+      - greenbone_target_gmp_auth_ref is match('^secret:[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*\Z')
+      - greenbone_target_name_prefix is match('^[a-z0-9][a-z0-9-]{0,20}\Z')
+      - greenbone_target_port_range is match('^[TU]:[0-9,-]+(?:,[TU]:[0-9,-]+)*\Z')
+      - greenbone_target_socket is match('^/[A-Za-z0-9._/-]+\Z')
+      - greenbone_target_work_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - greenbone_target_become_user == '' or greenbone_target_become_user is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+    fail_msg: >-
+      greenbone_target: at least one guest, each with an IPv4 ip, a zone id and a name; a plain
+      scan-login name, GMP user and target prefix; a secret:<name> GMP reference; a T:/U: port
+      range; absolute socket and work paths; a plain account name

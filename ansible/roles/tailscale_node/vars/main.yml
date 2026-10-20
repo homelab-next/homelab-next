@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: the zone tag must match homelabnext.compute.gen.tailscale_acl.zone_tag.
+tailscale_node_zone_tag_prefix: "tag:zone-"

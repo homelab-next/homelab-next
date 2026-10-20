@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# Central role for control vuln-scan (ADR-0016 decision 7): runs once on the scanner host
+# (cap_scanner) with greenbone_target_guests ({id, name, fqdn, ip, zone}) and makes sure each guest
+# is a Greenbone target of the authenticated internal assessment scan, by GMP over gvmd's unix
+# socket with gvm-cli. The GMP login's password is a secret reference (secret:<name>); the scan
+# login is the NAME of a credential object the operator created in Greenbone, never its secret.
+greenbone_target_gvm_cli: gvm-cli
+greenbone_target_socket: /run/gvmd/gvmd.sock
+greenbone_target_gmp_user: admin
+greenbone_target_gmp_auth_ref: "secret:assessment/gmp-password"
+greenbone_target_name_prefix: "hnx-"
+greenbone_target_port_range: "T:1-65535"
+# gvm-cli refuses to run as root: its commands run as this account (empty: no privilege change).
+greenbone_target_become_user: _gvm
+greenbone_target_work_dir: /var/lib/homelabnext/greenbone-target

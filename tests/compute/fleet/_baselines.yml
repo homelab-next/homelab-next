@@ -1,11 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
-# Test baseline set: a few controls bound to (test-only) role names, the rest unbound.
+# Test baseline set: a few controls bound to (test-only) role names, the rest unbound; two
+# central bindings (one placed on cap_sensor, one with no host in cap_scanner) and Tailscale.
 controls:
   ssh-hardening:
     layer: identity
     description: Key-only SSH and no direct root login.
     role: ssh_hardening
     verify: sshd -T shows passwordauthentication no and permitrootlogin no
+  remote-access:
+    layer: identity
+    description: Administrative access only through the remote-access gateway.
+    role: tailscale_node
+    verify: the guest is online in the tailnet with its zone tag
   time-sync:
     layer: host
     description: The clock follows the lab's time sources.
@@ -29,12 +35,16 @@ controls:
   network-sensor:
     layer: detection
     description: The guest's segment is inspected by a network sensor.
-    role: null
+    role: suricata_enroll
+    apply: central
+    group: cap_sensor
     verify: the sensor shows flows for the guest in the last hour
   vuln-scan:
     layer: detection
     description: The guest is in the authenticated vulnerability scan.
-    role: null
+    role: greenbone_target
+    apply: central
+    group: cap_scanner
     verify: the last completed scan of the guest is under seven days old
   disk-encryption:
     layer: data
@@ -57,7 +67,7 @@ baselines:
   exposed:
     description: A guest reachable from outside the lab.
     extends: [server]
-    controls: [network-sensor]
+    controls: [network-sensor, remote-access]
   sensitive:
     description: A guest holding secrets or identities.
     extends: [server]

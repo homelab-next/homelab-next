@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Wait for the manager's agent port and enrollment port
+  ansible.builtin.wait_for:
+    host: "{{ lookup('hnx_registry', wazuh_agent_manager_id, field='host') }}"
+    port: "{{ item }}"
+    timeout: 10
+  loop:
+    - "{{ lookup('hnx_registry', wazuh_agent_manager_id, field='port') }}"
+    - "{{ wazuh_agent_enrollment_port }}"
+  tags: [readiness]

@@ -1,22 +1,40 @@
 # SPDX-License-Identifier: Apache-2.0
 """An Ansible playbook that applies each defense control's role to the guests that need it.
 
-One play per control, by layer (identity, host, network, detection, data, recovery) then id,
-targeting the ``control_<id>`` inventory group (the ``inventory`` target writes it).  A control
-whose ``role`` is null has no product yet: it is written as a commented block that names the
-guests waiting for it, never dropped.  A control no guest needs is listed as such.  The product
-is chosen in one place, the control's ``role`` in the baseline set (ADR-0016).
+One play per control, by layer (identity, host, network, detection, data, recovery) then id.  A
+control applied per guest (``apply: guest``, the default) targets the ``control_<id>`` inventory
+group (the ``inventory`` target writes it).  A control applied centrally (``apply: central``,
+ADR-0016 decision 7) targets its ``group``, the central product host, once, and passes the role
+``<role>_guests``: every guest that needs the control as ``{id, name, fqdn, ip, zone}``, sorted
+by id, which the product enrolls (a sensor's monitored addresses, a scanner's targets).
+
+A control whose ``role`` is null has no product yet: it is written as a commented block that names
+the guests waiting for it, never dropped.  A control no guest needs is listed as such.  The
+product is chosen in one place, the control's ``role`` in the baseline set (ADR-0016).
 """
 
 from __future__ import annotations
 
-from homelabnext.compute.baselines import LAYERS, coverage
+from homelabnext.compute.baselines import APPLY_CENTRAL, LAYERS, coverage
 from homelabnext.compute.model import Fleet
 
 from ._text import HEADER, q, qlist
 from .inventory import control_group
 
 FILE = "baseline.yml"
+
+
+def enrolled(fleet: Fleet, guest_ids: list[str]) -> list[dict[str, str]]:
+    """What a central role receives for each guest: id, name, fqdn, ip and zone, sorted by id."""
+    by_id = {g.id: g for g in fleet.guests}
+    return [
+        {"id": g.id, "name": g.name, "fqdn": fleet.fqdn(g), "ip": g.ip, "zone": g.zone}
+        for g in sorted((by_id[i] for i in guest_ids), key=lambda x: x.id)
+    ]
+
+
+def _flow(row: dict[str, str]) -> str:
+    return "{" + ", ".join(f"{k}: {q(v)}" for k, v in row.items()) + "}"
 
 
 def render(fleet: Fleet) -> dict[str, str]:
@@ -27,7 +45,8 @@ def render(fleet: Fleet) -> dict[str, str]:
         return {FILE: "\n".join(L) + "\n"}
     report = coverage(fleet.sorted(), bs)
     L += [
-        "# Applies each defense control's role to its control_<id> inventory group.",
+        "# Applies each defense control's role to its control_<id> inventory group, or, for a",
+        "# central control, once to its product host's group with the guests to enroll.",
         "# Bind a product by setting the control's `role` in the baseline set.",
     ]
     plays = 0
@@ -40,7 +59,9 @@ def render(fleet: Fleet) -> dict[str, str]:
             info = report["controls"][c]
             needed = info["needed_by"]
             role = info["role"]
-            name = f"control {c} ({layer})"
+            central = info["apply"] == APPLY_CENTRAL
+            name = f"control {c} ({layer}, central)" if central else f"control {c} ({layer})"
+            hosts = info["group"] if central else control_group(c)
             if not needed:
                 L.append(f"# {name}: needed by no guest; nothing to apply")
                 continue
@@ -50,19 +71,31 @@ def render(fleet: Fleet) -> dict[str, str]:
                     f"#   needed by: {', '.join(g.removeprefix('guest:') for g in needed)}",
                     f"#   verify: {info['verify']}",
                     f"# - name: {q(name)}",
-                    f"#   hosts: {control_group(c)}",
+                    f"#   hosts: {hosts}",
                     "#   roles: [<role>]",
                 ]
                 continue
             plays += 1
             L += [
                 f"- name: {q(name)}",
-                f"  hosts: {control_group(c)}",
+                f"  hosts: {hosts}",
                 f"  tags: {qlist([control_group(c), f'layer_{layer}'])}",
                 f"  # verify: {info['verify']}",
-                "  roles:",
-                f"    - role: {role}",
             ]
+            if central:
+                if c in report["unplaced"]:
+                    L.append(
+                        f"  # NO HOST: no guest of the model is in {hosts}; this play is a no-op"
+                    )
+                L += [
+                    "  # enrolls each guest that needs the control on the central product host",
+                    "  roles:",
+                    f"    - role: {role}",
+                    f"      {role}_guests:",
+                ]
+                L += [f"        - {_flow(row)}" for row in enrolled(fleet, needed)]
+            else:
+                L += ["  roles:", f"    - role: {role}"]
     if not plays:
         L += ["", "# no control is bound to a role yet", "[]"]
     return {FILE: "\n".join(L) + "\n"}

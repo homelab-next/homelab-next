@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every value lands in a YAML file Suricata parses: refuse anything but plain names and IPv4
+# addresses (the guest model's own rules), and refuse an empty list (HOME_NET cannot be empty).
+- name: Validate the enrolled guests and the file names
+  ansible.builtin.assert:
+    that:
+      - suricata_enroll_guests | length > 0
+      - suricata_enroll_guests | map(attribute='ip') | select('match', '^(?:[0-9]{1,3}\.){3}[0-9]{1,3}\Z') | list | length == suricata_enroll_guests | length
+      - suricata_enroll_guests | map(attribute='zone') | select('match', '^[a-z][a-z0-9-]{0,40}\Z') | list | length == suricata_enroll_guests | length
+      - suricata_enroll_guests | map(attribute='name') | select('match', '^[a-z0-9][a-z0-9-]{0,62}\Z') | list | length == suricata_enroll_guests | length
+      - suricata_enroll_config_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - suricata_enroll_config_file is match('^[A-Za-z0-9._-]+\.ya?ml\Z')
+      - suricata_enroll_groups_file is match('^[A-Za-z0-9._-]+\.ya?ml\Z')
+    fail_msg: >-
+      suricata_enroll: at least one guest, each with an IPv4 ip, a zone id and a name; an absolute
+      config directory and plain .yaml file names

@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from .model import ComputeError, ZoneInfo, ZoneLookup
+from .model import ComputeError, ZoneFlow, ZoneInfo, ZoneLookup
 
 
 class MappingZones:
@@ -105,3 +105,53 @@ def open_site(path: str | Path) -> tuple[ZoneLookup, str | None]:
         raise ComputeError(f"{path}: expected a mapping with a 'zones' list")
     domain = (doc.get("site") or {}).get("domain")
     return MappingZones(zone_from_mapping(z) for z in zones), domain
+
+
+def flows_from_site(doc: Mapping[str, Any]) -> tuple[ZoneFlow, ...]:
+    """The zone-to-zone allows of a site document, in document order.
+
+    Follows the network model's evaluation order (``homelabnext.network.ir``): rules to a zone
+    first, then rules to ``any`` (expanded to every other zone).  An allow is dropped when an
+    earlier rule without ports denies the same pair, since that deny matches first.  Port-level
+    denies and ``service_exceptions`` (host-specific, to a service) are not zone flows and are
+    not read.
+    """
+    fw = doc.get("firewall") or {}
+    rules = [r for r in fw.get("zone_to_zone") or [] if isinstance(r, Mapping)]
+    zones = [z.get("id") for z in doc.get("zones") or [] if isinstance(z, Mapping)]
+    ordered = [r for r in rules if r.get("to") != "any"] + [
+        r for r in rules if r.get("to") == "any"
+    ]
+    denied: set[tuple[str, str]] = set()
+    out: list[ZoneFlow] = []
+    for r in ordered:
+        src = str(r.get("from"))
+        dsts = [z for z in zones if z != src] if r.get("to") == "any" else [str(r.get("to"))]
+        for dst in dsts:
+            if (src, dst) in denied:
+                continue
+            if r.get("action") == "deny":
+                if not r.get("ports"):
+                    denied.add((src, dst))
+                continue
+            if r.get("action") == "allow":
+                out.append(
+                    ZoneFlow(
+                        src,
+                        dst,
+                        tuple(sorted(str(p) for p in r.get("protocols") or [])),
+                        tuple(sorted(int(p) for p in r.get("ports") or [])),
+                    )
+                )
+    return tuple(out)
+
+
+def site_flows(path: str | Path) -> tuple[ZoneFlow, ...]:
+    """:func:`flows_from_site` for a site file, read by the network model's own loader."""
+    from homelabnext.network.loader import SiteError, load_site
+
+    try:
+        doc = load_site(path)
+    except SiteError as exc:
+        raise ComputeError(str(exc)) from exc
+    return flows_from_site(doc) if isinstance(doc, Mapping) else ()

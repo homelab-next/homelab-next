@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# Control vuln-scan, central (ADR-0016 decision 7): one target per guest, named <prefix><guest>,
+# scanning the guest's address with the operator's named scan login. Idempotent by name: a target
+# that exists is left as it is (an address change is not followed yet), and a guest that leaves the
+# list keeps its target until someone deletes it in Greenbone. Scan tasks and schedules are the
+# operator's, in Greenbone.
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Enroll the guests as targets
+  block:
+    - name: Open the GMP session configuration
+      ansible.builtin.include_tasks: session.yml
+
+    - name: Find the scan login by name
+      ansible.builtin.include_tasks: gmp.yml
+      vars:
+        greenbone_target_xml: '<get_credentials filter="name={{ greenbone_target_scan_login }}"/>'
+
+    - name: Keep the scan login's id
+      ansible.builtin.set_fact:
+        greenbone_target_login_id: "{{ (greenbone_target_reply.stdout | regex_search('<credential id=\"([0-9a-f-]+)\"', '\\1') or ['']) | first }}"
+
+    - name: Fail unless the scan login exists in Greenbone
+      ansible.builtin.assert:
+        that: greenbone_target_login_id | length > 0
+        fail_msg: >-
+          greenbone_target: no Greenbone credential named {{ greenbone_target_scan_login | to_json }};
+          create it in Greenbone (an SSH login for the authenticated scan) and re-run
+
+    - name: Ensure a target per guest
+      ansible.builtin.include_tasks: target.yml
+      loop: "{{ greenbone_target_guests | sort(attribute='name') }}"
+      loop_control:
+        loop_var: greenbone_target_guest
+        label: "{{ greenbone_target_name_prefix ~ greenbone_target_guest.name }}"
+  always:
+    - name: Remove the transient gvm-tools configuration
+      ansible.builtin.file:
+        path: "{{ greenbone_target_work_dir }}/gvm-tools.conf"
+        state: absent

@@ -9,3 +9,7 @@ services:
     host: lake-01.example.internal
     port: 8181
     scheme: http
+  siem:
+    host: siem-01.example.internal
+    port: 1514
+    scheme: tcp

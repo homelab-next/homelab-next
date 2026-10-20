@@ -304,9 +304,12 @@ def test_inventory_groups_and_vars(fleet):
 def test_playbook_binds_roles_and_never_drops_an_unbound_control(fleet):
     text = render(fleet, "baseline-playbook")["baseline.yml"]
     plays = yaml.safe_load(text)
-    assert [(p["hosts"], p["roles"]) for p in plays] == [
-        ("control_ssh_hardening", [{"role": "ssh_hardening"}]),
-        ("control_time_sync", [{"role": "time_sync"}]),
+    assert [(p["hosts"], p["roles"][0]["role"]) for p in plays] == [
+        ("control_remote_access", "tailscale_node"),
+        ("control_ssh_hardening", "ssh_hardening"),
+        ("control_time_sync", "time_sync"),
+        ("cap_sensor", "suricata_enroll"),  # central (tests/compute/test_products.py)
+        ("cap_scanner", "greenbone_target"),
     ]
     for c in fleet.baselines.controls:
         assert f"control {c} (" in text, c  # every control is named

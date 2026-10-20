@@ -22,4 +22,4 @@ only (`example.internal`, RFC 5737 addresses); see `CONTRIBUTING.md`.
 | [0013](0013-status-hub.md) | status-hub | One read-only status hub over status sources registered in the registry; views pick from that menu |
 | [0014](0014-conflict-free-writes.md) | conflict-free-writes | Machine state is append-only sidecar events; status changes are intents a decider applies |
 | [0015](0015-strategy-to-task.md) | strategy-to-task | A strategy, its objective cascade, measures and requirements are register records, measured from what the lab observes |
-| [0016](0016-guest-baselines-and-defense-layers.md) | guest-baselines-and-defense-layers | Guests name product-neutral defense baselines; products bind per control through its role; with a set, every guest needs a baseline or an exemption |
+| [0016](0016-guest-baselines-and-defense-layers.md) | guest-baselines-and-defense-layers | Guests name product-neutral defense baselines; products bind per control through its role, on the guest or centrally on the product host (decision 7); with a set, every guest needs a baseline or an exemption |

@@ -15,7 +15,7 @@ firewall_rules:
     - {name: https-public, proto: tcp, ports: "443", source: any}
     - {name: ssh-mgmt, proto: tcp, ports: "22", source: "zone:mgmt"}
 capability: cap:orchestration
-capability_groups: [cap_edge]
+capability_groups: [cap_edge, cap_sensor]
 tags: [prod, edge]
 backup: {policy: daily}
 owners: {primary: platform-team}

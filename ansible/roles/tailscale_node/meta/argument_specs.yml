@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install the pinned Tailscale client and join the tailnet with zone tags.
+    options:
+      tailscale_node_auth_key_ref:
+        type: str
+        description: Secret reference (secret:<name>) of a tailnet auth key allowed to apply the zone tags, resolved by the hnx_secret lookup.
+        required: true
+      tailscale_node_version: &version
+        type: str
+        description: Pinned client version (x.y.z).
+        default: 1.88.4
+      tailscale_node_repository:
+        type: str
+        description: Vendor package repository (https), stable track for Debian; a lab mirror may stand in for it.
+        default: https://pkgs.tailscale.com/stable/debian
+      tailscale_node_zone: &zone
+        type: str
+        description: The guest's zone; the node advertises tag:zone-<zone>.
+        default: "{{ hnx_zone }}"
+      tailscale_node_extra_tags: &extra
+        type: list
+        elements: str
+        description: Further tags to advertise (tag:<name>); the policy must give them owners.
+        default: []
+      tailscale_node_hostname:
+        type: str
+        description: Name in the tailnet; empty = the host name.
+        default: ""
+      tailscale_node_cli: &cli
+        type: str
+        description: The tailscale command.
+        default: tailscale
+      tailscale_node_auth_key_file:
+        type: path
+        description: Transient file the auth key is written to for tailscale up (mode 0600, removed after).
+        default: /run/homelabnext-tailscale-auth
+  health:
+    short_description: Fail unless the node is running, online and carries its zone tag.
+    options:
+      tailscale_node_cli: *cli
+      tailscale_node_zone: *zone
+  readiness:
+    short_description: Fail unless the tailscaled daemon answers.
+    options:
+      tailscale_node_cli: *cli
+  backup:
+    short_description: Nothing to back up; a rebuilt guest joins again with a fresh key.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-running main joins the node again.
+    options: {}
+  upgrade:
+    short_description: Validate a newer pinned version; then set the version and re-run main.
+    options:
+      tailscale_node_version: *version
+      tailscale_node_target_version:
+        type: str
+        description: Version to upgrade to (must be newer).
+        required: true
+  export:
+    short_description: Nothing to export; the node holds no data of its own.
+    options: {}

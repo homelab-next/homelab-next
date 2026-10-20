@@ -1,0 +1,13 @@
+%YAML 1.1
+---
+# Managed by Ansible (role suricata_enroll) from the baseline set; do not edit.
+# Included by suricata.yaml under vars.address-groups.
+{% set ips = suricata_enroll_guests | map(attribute='ip') | unique | sort | list %}
+HOME_NET: {{ ('[' ~ (ips | join(',')) ~ ']') | to_json }}
+{% for name, value in suricata_enroll_standard_groups | dictsort %}
+{{ name }}: {{ value | to_json }}
+{% endfor %}
+{% for zone in suricata_enroll_guests | map(attribute='zone') | unique | sort %}
+{% set zips = suricata_enroll_guests | selectattr('zone', 'equalto', zone) | map(attribute='ip') | unique | sort | list %}
+HNX_ZONE_{{ zone | upper | replace('-', '_') }}: {{ ('[' ~ (zips | join(',')) ~ ']') | to_json }}
+{% endfor %}

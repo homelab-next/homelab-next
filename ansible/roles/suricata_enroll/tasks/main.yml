@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+# Control network-sensor, central (ADR-0016 decision 7). HOME_NET is every enrolled guest;
+# HNX_ZONE_<ZONE> is each zone's guests, for zone-aware rules. A changed file is tested with
+# suricata -T before Suricata is told to reload (rule reloads re-read the vars section). If the test
+# fails the role stops: the running sensor keeps its old groups until the file is fixed.
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Check the main configuration includes the generated address groups
+  ansible.builtin.include_tasks:
+    file: readiness.yml
+    apply:
+      tags: [always]
+
+- name: Write the address groups
+  ansible.builtin.template:
+    src: address-groups.yaml.j2
+    dest: "{{ suricata_enroll_config_dir }}/{{ suricata_enroll_groups_file }}"
+    mode: "0644"
+  register: suricata_enroll_written
+
+- name: Test the configuration and reload the sensor
+  when: suricata_enroll_written is changed
+  block:
+    - name: Test the whole configuration with the new groups
+      ansible.builtin.command:
+        argv:
+          - "{{ suricata_enroll_suricata_cli }}"
+          - -T
+          - -c
+          - "{{ suricata_enroll_config_dir }}/{{ suricata_enroll_config_file }}"
+      changed_when: false
+    - name: Reload the rules, which re-reads the address groups
+      ansible.builtin.command:
+        argv: ["{{ suricata_enroll_suricatasc_cli }}", -c, reload-rules]
+      when: suricata_enroll_reload | bool
+      changed_when: true

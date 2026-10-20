@@ -13,6 +13,7 @@ from .gen import (
     inventory,
     libvirt,
     registry_hosts,
+    tailscale_acl,
     terraform_proxmox,
 )
 from .model import ComputeError, Fleet
@@ -26,6 +27,7 @@ TARGETS: dict[str, Callable[[Fleet], dict[str, str]]] = {
     "backup-jobs": backup_jobs.render,
     "firewall-rules": firewall_rules.render,
     "baseline-playbook": baseline_playbook.render,
+    "tailscale-acl": tailscale_acl.render,
 }
 
 

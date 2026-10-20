@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remote access over Tailscale (control remote-access, applied per guest). The node joins with
+# an auth key named by a secret reference (secret:<name>, resolved by the hnx_secret lookup),
+# and advertises tag:zone-<zone> for its zone, the same tag the tailscale-acl target writes
+# policy for. No exit node and no subnet routes are advertised.
+tailscale_node_version: "1.88.4"
+# The vendor package repository (stable track, Debian); point it at a lab mirror to control it.
+tailscale_node_repository: "https://pkgs.tailscale.com/stable/debian"
+# The guest's zone from the generated inventory (hnx_zone): its tag is tag:zone-<zone>.
+tailscale_node_zone: "{{ hnx_zone }}"
+tailscale_node_extra_tags: []
+# Empty: the host name.
+tailscale_node_hostname: ""
+tailscale_node_cli: tailscale
+# Where the auth key is written for `tailscale up --auth-key=file:...`; removed right after.
+tailscale_node_auth_key_file: /run/homelabnext-tailscale-auth

@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: Tailscale node, joined with an auth key by secret name and tagged by its zone.
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

@@ -14,7 +14,7 @@ from .model import ComputeError
 from .plan import plan as make_plan
 from .plan import read_tree, write_tree
 from .render import TARGETS, render
-from .zones import open_site
+from .zones import open_site, site_flows
 
 
 def _common(p: argparse.ArgumentParser) -> None:
@@ -50,6 +50,7 @@ def _fleet(args: argparse.Namespace):
         baselines_path=args.baselines,
         # the coverage report lists guests without a baseline instead of refusing to load
         require_baselines=args.cmd != "baselines",
+        flows=site_flows(args.site),
     )
 
 
@@ -79,7 +80,8 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument(
         "--require-bound",
         action="store_true",
-        help="like --check, and also exit 1 when a control some guest needs has no role yet",
+        help="like --check, and also exit 1 when a control some guest needs has no role yet, or "
+        "is applied centrally on a group that holds no guest",
     )
     return ap
 
@@ -109,6 +111,13 @@ def _baselines(args: argparse.Namespace, fleet) -> int:
             file=sys.stderr,
         )
         bad.append("unbound")
+    if args.require_bound and report["unplaced"]:
+        print(
+            "hnx guests baselines: central controls whose group holds no guest (nowhere to run): "
+            + ", ".join(f"{c} ({report['controls'][c]['group']})" for c in report["unplaced"]),
+            file=sys.stderr,
+        )
+        bad.append("unplaced")
     if not bad:
         print("baselines: ok")
     return 1 if bad else 0

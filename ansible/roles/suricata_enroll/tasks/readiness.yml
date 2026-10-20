@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Read the main configuration
+      ansible.builtin.slurp:
+        src: "{{ suricata_enroll_config_dir }}/{{ suricata_enroll_config_file }}"
+      register: suricata_enroll_main_conf
+    - name: Fail unless vars.address-groups includes the generated file
+      ansible.builtin.assert:
+        that:
+          - >-
+            (suricata_enroll_main_conf.content | b64decode)
+            is search('\n  address-groups:\s*\n\s+include:\s*["\']?' ~ (suricata_enroll_groups_file | regex_escape) ~ '["\']?\s*\n')
+        fail_msg: >-
+          suricata_enroll: {{ suricata_enroll_config_file }} must hold, in place of its own
+          address groups, "vars: / address-groups: / include: {{ suricata_enroll_groups_file }}"
+          (Suricata "Include Inside a Mapping"); the role never rewrites the main configuration
+  tags: [readiness]

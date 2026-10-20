@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to back up (targets are regenerated from the model; gvmd's database is the host's)
+  ansible.builtin.debug:
+    msg: greenbone_target keeps no data of its own
+  tags: [backup]

@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# The transient gvm-tools configuration holding the GMP login: written 0600 for the account
+# gvm-cli runs as, and removed by the caller's `always`.
+- name: Create the work directory
+  ansible.builtin.file:
+    path: "{{ greenbone_target_work_dir }}"
+    state: directory
+    mode: "0700"
+    owner: "{{ greenbone_target_become_user if greenbone_target_become_user else omit }}"
+- name: Write the transient gvm-tools configuration with the GMP login
+  ansible.builtin.template:
+    src: gvm-tools.conf.j2
+    dest: "{{ greenbone_target_work_dir }}/gvm-tools.conf"
+    mode: "0600"
+    owner: "{{ greenbone_target_become_user if greenbone_target_become_user else omit }}"
+  no_log: true

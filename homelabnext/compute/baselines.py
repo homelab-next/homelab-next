@@ -12,6 +12,11 @@ Resolution order is deterministic: for each named baseline in the order the gues
 depth-first through ``extends`` (parents first, in listed order), then the baseline's own
 controls in listed order; a control or baseline already seen is skipped; then ``add`` in order;
 ``remove`` drops its controls.  The product is chosen in one place: the control's ``role``.
+
+A bound role reaches a guest in one of two ways (``apply``, baseline set 1.1, ADR-0016 decision 7):
+``guest`` (the default) runs it on every guest that needs the control; ``central`` runs it once on
+the central product host (the ``group`` inventory group, e.g. ``cap_sensor``) and hands it the
+guests that need the control, which that product enrolls (monitored addresses, scan targets).
 """
 
 from __future__ import annotations
@@ -28,9 +33,12 @@ from homelabnext import paths
 from homelabnext._yaml import UniqueKeyStrDateLoader
 from homelabnext.generators.safe import control_char_paths
 
-from .model import ComputeError, Guest, Problem
+from .model import ComputeError, Guest, Problem, allowed_groups
 
 BASELINES_FILE = "_baselines.yml"
+#: how a control's role reaches a guest (baseline set 1.1): on the guest, or on a central host
+APPLY_GUEST = "guest"
+APPLY_CENTRAL = "central"
 #: the defense-in-depth layers, outermost concern first; a closed set (the schema's enum)
 LAYERS: tuple[str, ...] = ("identity", "host", "network", "detection", "data", "recovery")
 WHERE = BASELINES_FILE
@@ -49,6 +57,14 @@ class BaselineSet:
 
     def role(self, control: str) -> str | None:
         return self.controls[control].get("role")
+
+    def apply(self, control: str) -> str:
+        """``guest`` (the default) or ``central``."""
+        return self.controls[control].get("apply", APPLY_GUEST)
+
+    def group(self, control: str) -> str | None:
+        """The central product host's inventory group (``apply: central``), else None."""
+        return self.controls[control].get("group")
 
     def ordered_controls(self) -> list[str]:
         """Every control, by layer (in :data:`LAYERS` order) then id."""
@@ -130,6 +146,7 @@ def set_problems(bs: BaselineSet) -> list[Problem]:
     for c, spec in sorted(bs.controls.items()):
         if spec.get("layer") not in LAYERS:  # the schema's enum; kept for sets built in code
             out.append(Problem(w, f"control {c!r} is in no known layer ({', '.join(LAYERS)})"))
+        out += _apply_problems(w, c, spec)
     for b, spec in sorted(bs.baselines.items()):
         for parent in spec.get("extends", []):
             if parent not in bs.baselines:
@@ -145,6 +162,36 @@ def set_problems(bs: BaselineSet) -> list[Problem]:
                 Problem(w, f"baseline {b!r} resolves to no controls (use a guest exemption)")
             )
     return out
+
+
+def _apply_problems(w: str, c: str, spec: Mapping[str, Any]) -> list[Problem]:
+    """``apply``/``group`` agree (the schema cannot say so without stopping being additive)."""
+    apply, group = spec.get("apply", APPLY_GUEST), spec.get("group")
+    if apply == APPLY_CENTRAL and not group:
+        return [
+            Problem(
+                w,
+                f"control {c!r} is applied centrally but names no group "
+                "(the inventory group of its central product host, e.g. cap_sensor)",
+            )
+        ]
+    if apply != APPLY_CENTRAL and group:
+        return [
+            Problem(
+                w,
+                f"control {c!r} names group {group!r} but is applied per guest "
+                "(set apply: central, or drop group)",
+            )
+        ]
+    if group and group not in allowed_groups():
+        return [
+            Problem(
+                w,
+                f"control {c!r}: group {group!r} is not a known inventory group "
+                "(docs/role-interface.md section 5)",
+            )
+        ]
+    return []
 
 
 def _cycles(bs: BaselineSet) -> list[list[str]]:
@@ -230,9 +277,13 @@ def resolve(g: Guest, bs: BaselineSet) -> Resolution:
 
 
 def coverage(guests: list[Guest], bs: BaselineSet) -> dict[str, Any]:
-    """The guest x layer coverage report (``hnx guests baselines --json``)."""
+    """The guest x layer coverage report (``hnx guests baselines --json``).
+
+    ``unplaced``: centrally applied, bound controls some guest needs whose ``group`` holds no
+    guest of the model, so the play has nowhere to run (``--require-bound`` fails on them)."""
     rows = []
     needed: dict[str, list[str]] = {}
+    in_group: set[str] = {grp for g in guests for grp in g.groups}
     for g in sorted(guests, key=lambda x: x.id):
         r = resolve(g, bs)
         for c in r.controls:
@@ -251,6 +302,14 @@ def coverage(guests: list[Guest], bs: BaselineSet) -> dict[str, Any]:
             }
         )
     unbound = [c for c in bs.ordered_controls() if c in needed and bs.role(c) is None]
+    unplaced = [
+        c
+        for c in bs.ordered_controls()
+        if c in needed
+        and bs.role(c) is not None
+        and bs.apply(c) == APPLY_CENTRAL
+        and bs.group(c) not in in_group
+    ]
     return {
         "layers": list(LAYERS),
         "guests": rows,
@@ -258,12 +317,15 @@ def coverage(guests: list[Guest], bs: BaselineSet) -> dict[str, Any]:
             c: {
                 "layer": bs.layer(c),
                 "role": bs.role(c),
+                "apply": bs.apply(c),
+                "group": bs.group(c),
                 "verify": bs.controls[c]["verify"],
                 "needed_by": needed.get(c, []),
             }
             for c in bs.ordered_controls()
         },
         "unbound": unbound,
+        "unplaced": unplaced,
         "summary": {
             "guests": len(rows),
             "with_baseline": sum(1 for r in rows if r["baselines"]),
@@ -271,6 +333,7 @@ def coverage(guests: list[Guest], bs: BaselineSet) -> dict[str, Any]:
             "missing": sum(1 for r in rows if r["missing"]),
             "controls": len(bs.controls),
             "unbound_needed": len(unbound),
+            "unplaced_needed": len(unplaced),
         },
     }
 
@@ -297,6 +360,13 @@ def coverage_text(report: Mapping[str, Any]) -> str:
     lines.append("cells: controls per layer ('.' none). exemptions:")
     ex = [r for r in report["guests"] if r["exemption"]]
     lines += [f"  {r['id']}: {r['exemption']['reason']}" for r in ex] or ["  none"]
+    central = {c: i for c, i in report["controls"].items() if i["apply"] == APPLY_CENTRAL}
+    lines.append("central controls (one play on the product host, which enrolls the guests):")
+    lines += [
+        f"  {c}: {i['role'] or 'not bound'} on {i['group']}, {len(i['needed_by'])} guests"
+        + (" (NO HOST: no guest is in that group)" if c in report["unplaced"] else "")
+        for c, i in central.items()
+    ] or ["  none"]
     s = report["summary"]
     lines.append(
         f"{s['guests']} guests: {s['with_baseline']} with a baseline, {s['exempt']} exempt, "

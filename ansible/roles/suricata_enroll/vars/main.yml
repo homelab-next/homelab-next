@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# The address groups the stock suricata.yaml defines besides HOME_NET and EXTERNAL_NET (the
+# shipped rules reference them). The generated file replaces the whole address-groups mapping,
+# so it carries them too, with the stock values.
+suricata_enroll_standard_groups:
+  EXTERNAL_NET: "!$HOME_NET"
+  HTTP_SERVERS: "$HOME_NET"
+  SMTP_SERVERS: "$HOME_NET"
+  SQL_SERVERS: "$HOME_NET"
+  DNS_SERVERS: "$HOME_NET"
+  TELNET_SERVERS: "$HOME_NET"
+  AIM_SERVERS: "$EXTERNAL_NET"
+  DC_SERVERS: "$HOME_NET"
+  DNP3_SERVER: "$HOME_NET"
+  DNP3_CLIENT: "$HOME_NET"
+  MODBUS_CLIENT: "$HOME_NET"
+  MODBUS_SERVER: "$HOME_NET"
+  ENIP_CLIENT: "$HOME_NET"
+  ENIP_SERVER: "$HOME_NET"

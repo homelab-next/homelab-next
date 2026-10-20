@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to restore (re-run main to join the node again)
+  ansible.builtin.debug:
+    msg: tailscale_node keeps no data of its own; re-running main joins the node again
+  tags: [restore]

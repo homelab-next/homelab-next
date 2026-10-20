@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Values reach a package name, an apt source and the installer's environment: refuse anything
+# that could add a field, a line or another package before using any of them.
+- name: Validate the version, repository, manager id, secret reference and agent identity
+  ansible.builtin.assert:
+    that:
+      - wazuh_agent_manager_id is match('^[a-z0-9][a-z0-9-]*\Z')
+      - wazuh_agent_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - wazuh_agent_package_revision is match('^[0-9]+\Z')
+      - wazuh_agent_repository is match('^https://[A-Za-z0-9.-]+(?::[0-9]+)?(?:/[A-Za-z0-9._~-]+)*\Z')
+      - wazuh_agent_enrollment_ref is match('^secret:[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*\Z')
+      - wazuh_agent_enrollment_port | int >= 1 and wazuh_agent_enrollment_port | int <= 65535
+      - wazuh_agent_name == '' or wazuh_agent_name is match('^[A-Za-z0-9._-]{1,64}\Z')
+      - wazuh_agent_groups | select('match', '^[A-Za-z0-9._-]{1,64}\Z') | list | length == wazuh_agent_groups | length
+    fail_msg: >-
+      wazuh_agent: manager id (a registry logical id), version x.y.z, numeric package revision,
+      an https repository root, a secret:<name> enrollment reference, a port, and an agent name
+      and groups of [A-Za-z0-9._-] only
