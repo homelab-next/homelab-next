@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/status/agents/1.1",
+  "$id": "https://schemas.example.internal/homelabnext/status/agents/1.2",
   "title": "Status hub agent activity configuration (agents.yml)",
-  "description": "Where the hub keeps agent activity, how long, how much of each private field, when a session counts as stuck, who may see the private tier (through the trusted front door) and who may push activity (one bearer token per sender, named by its secret-store reference, never a value). ADR-0013 stage 1b, docs/status.md. 1.1 adds, additively, approvals: the broker Approvals page (ADR-0017 stage 2b), served behind the same front door as the private tier, which it requires, with its own approver group for approve and deny. Evolve additively.",
+  "description": "Where the hub keeps agent activity, how long, how much of each private field, when a session counts as stuck, who may see the private tier (through the trusted front door) and who may push activity (one bearer token per sender, named by its secret-store reference, never a value). ADR-0013 stage 1b, docs/status.md. 1.1 adds, additively, approvals: the broker Approvals page (ADR-0017 stage 2b), served behind the same front door as the private tier, which it requires, with its own approver group for approve and deny. 1.2 adds approvals.csrf_key: the secret-store name of the approval forms' token key, so tokens survive a restart and verify on every hub instance. Evolve additively.",
   "type": "object",
   "additionalProperties": false,
   "required": ["agents_version", "store"],
@@ -58,7 +58,8 @@
         "socket": {"type": "string", "pattern": "^/(?!.*\\.\\.)[A-Za-z0-9._/-]+$(?!\\n)", "maxLength": 256, "description": "The broker's Unix socket (absolute path); the hub's user must be listed in the broker manifest's approval_relays."},
         "issuer": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)", "maxLength": 64, "description": "The SSO issuer the broker maps this relay to (approval_relays[].issuer)."},
         "approver_group": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}$(?!\\n)", "description": "The group (X-Authentik-Groups) required to approve or deny; must differ from private.viewer_group."},
-        "timeout_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 120, "default": 10, "description": "Bound on one broker exchange."}
+        "timeout_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 120, "default": 10, "description": "Bound on one broker exchange."},
+        "csrf_key": {"$ref": "#/$defs/secret_ref", "description": "1.2: the secret-store name of the HMAC key the approval forms' tokens are signed with (at least 32 characters, never the front door's secret); every hub instance given the same key accepts the others' tokens. Absent or unset: a per-process key, with a startup warning (tokens stop verifying on restart and between instances)."}
       }
     },
     "ingest": {

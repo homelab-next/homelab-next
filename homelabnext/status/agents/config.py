@@ -104,15 +104,21 @@ class IngestSettings:
                 raise ValueError(f"ingest senders {other} and {s.name} have the same token")
 
 
+#: the shortest approvals CSRF key accepted from the secret store, in characters
+MIN_CSRF_KEY_CHARS = 32
+
+
 @dataclass(frozen=True)
 class ApprovalsSettings:
     """The Approvals page (:mod:`homelabnext.status.approvals`): the broker socket the hub
-    relays through, the SSO issuer it vouches for, and the group allowed to decide."""
+    relays through, the SSO issuer it vouches for, the group allowed to decide and the HMAC key
+    of its form tokens (``csrf_key``, from the secret store; None: a per-process key)."""
 
     socket: Path
     issuer: str
     approver_group: str
     timeout_s: float = 10.0
+    csrf_key: bytes | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -164,6 +170,47 @@ def _proxies(registry: Registry, names: list[str] | None) -> tuple[frozenset[str
         else:
             out.add(str(ipaddress.ip_address(host.address)))
     return frozenset(out), problems
+
+
+_PER_PROCESS = (
+    "approval form tokens use a per-process key: they stop verifying when the hub restarts "
+    "and between hub instances"
+)
+
+
+def _csrf_key(
+    doc: Mapping[str, Any], registry: Registry, secrets: SecretLookup, warnings: list[str]
+) -> bytes | None:
+    """The approvals form-token key named by ``approvals.csrf_key``, or None (a per-process key,
+    with a warning that names the setting).  Messages never carry anything read from the store."""
+    ref = doc["approvals"].get("csrf_key")
+    if ref is None:
+        warnings.append(f"approvals.csrf_key is not set: {_PER_PROCESS}")
+        return None
+    front = registry.services[doc["private"]["service"]].front_door["secret"]
+    if ref == front:
+        raise AgentsConfigError(
+            "invalid agents config",
+            ["approvals.csrf_key must name its own secret, not the front door's"],
+        )
+    refs = [*service_secret_refs(registry.services), ("approvals.csrf_key", ref)]
+    refs += [
+        (f"ingest sender {s['name']}: token", s["token"])
+        for s in (doc.get("ingest") or {}).get("senders", ())
+    ]
+    problems = secret_ref_problems(refs)
+    if problems:
+        raise AgentsConfigError("invalid agents config", problems)
+    value = secrets(ref)
+    if not value:
+        warnings.append(f"approvals.csrf_key names a secret that is not set: {_PER_PROCESS}")
+        return None
+    if len(value) < MIN_CSRF_KEY_CHARS:
+        raise AgentsConfigError(
+            "invalid agents config",
+            [f"approvals.csrf_key: the key is shorter than {MIN_CSRF_KEY_CHARS} characters"],
+        )
+    return value.encode("utf-8")
 
 
 def build_config(
@@ -240,6 +287,7 @@ def build_config(
                 issuer=appr["issuer"],
                 approver_group=appr["approver_group"],
                 timeout_s=float(appr.get("timeout_s", 10)),
+                csrf_key=_csrf_key(doc, registry, secrets, cfg.warnings),
             )
     ing = doc.get("ingest")
     if ing:

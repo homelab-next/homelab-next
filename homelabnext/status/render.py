@@ -183,11 +183,12 @@ _PANELS = {"exceptions": _exceptions, "grid": _grid, "sources": _sources}
 def nav_html(doc: Mapping[str, Any], *, live: bool = False, private: bool = False) -> str:
     """The left menu.  ``live``: served by ``hnx status serve`` (page entries link to their live
     pages; in the static file they are marked live-only).  ``private``: the request passed the
-    trusted front door -- only then is the private group rendered at all."""
+    trusted front door -- only then is the private group rendered at all, and then only its pages
+    that are served (the Approvals entry appears only when approvals are configured)."""
     prefix = "/" if live else ""
     nav, group = [], None
     for m in doc["menu"]:
-        if m.get("group") == "private" and not private:
+        if m.get("group") == "private" and not (private and m.get("available", True)):
             continue
         if m.get("group") != group:
             group = m.get("group")

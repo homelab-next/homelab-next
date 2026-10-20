@@ -70,3 +70,8 @@ menu:
     title: Access log
     panel: agent-access-log
     group: private
+  # the broker Approvals page (ADR-0017 stage 2b; listed only when agents.yml has approvals:)
+  - id: approvals
+    title: Approvals
+    panel: approvals
+    group: private

@@ -28,8 +28,10 @@ answers): the front door and the approver group (``403``); a same-origin ``Origi
 one, ``Referer``) naming the request's own host, and no cross-site ``Sec-Fetch-Site`` (``403``);
 ``application/x-www-form-urlencoded`` (``415``) with a ``Content-Length`` (``411``) of at most
 8 KiB (``413``) holding exactly the fields above, each well-formed (``400``); the CSRF token
-(``403``): an HMAC, under a key drawn when the hub starts, over the issue time, the request id, the
-digest shown and the approver, valid for :data:`TOKEN_TTL_S`; then the broker's **current** digest
+(``403``): an HMAC over the issue time, the request id, the digest shown and the approver, valid
+for :data:`TOKEN_TTL_S`, under the key ``approvals.csrf_key`` names in the secret store (so a token
+survives a restart and verifies on every hub instance with that key; without it, a key drawn when
+the hub starts, and a startup warning); then the broker's **current** digest
 for that request must equal the one the form carries -- the human approves exactly what they saw
 (``409``).  A re-submit of a decision the same approver already made answers ``200`` "already
 decided" and files nothing; a request no longer awaiting approval is ``409``; a broker refusal is
@@ -140,7 +142,10 @@ class ApprovalsSite:
         self.front_door = front_door
         self.clock = clock
         self.access_log = AccessLog(front_door.access_log, clock=clock)
-        self._key = key if key is not None else os.urandom(32)
+        #: True when the token key came from the secret store (``approvals.csrf_key``): tokens
+        #: then survive a restart and verify on every hub instance given the same key
+        self.persistent_key = key is not None or settings.csrf_key is not None
+        self._key = key if key is not None else (settings.csrf_key or os.urandom(32))
 
     @classmethod
     def from_settings(

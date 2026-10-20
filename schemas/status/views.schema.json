@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/status/views/1.3",
+  "$id": "https://schemas.example.internal/homelabnext/status/views/1.4",
   "title": "Status hub views (views.yml)",
-  "description": "The status hub shell: a main page and a left menu of views (ADR-0013). A view is a built-in panel (exceptions-first summary, per-module grid, source table) over a selection of the registered status sources, or an external link entry naming a registry service. Nothing here acts: the hub is read-only. 1.1 adds the live agent-activity pages as panels (agents, activity, agent-analytics; agent-detail and agent-access-log, which must sit in the private group and render only for an authorized request) and the optional menu group. 1.2 adds the strategy pages as panels (strategy, requirements, objectives, rfis: homelabnext.strategy.pages, served by hnx status serve --strategy DIR). 1.3 adds the baselines page as a panel (the guest x defense-layer coverage matrix: homelabnext.compute.pages, served by hnx status serve --guests DIR --guests-site SITE). Evolve additively.",
+  "description": "The status hub shell: a main page and a left menu of views (ADR-0013). A view is a built-in panel (exceptions-first summary, per-module grid, source table) over a selection of the registered status sources, or an external link entry naming a registry service. Nothing here acts: the hub is read-only. 1.1 adds the live agent-activity pages as panels (agents, activity, agent-analytics; agent-detail and agent-access-log, which must sit in the private group and render only for an authorized request) and the optional menu group. 1.2 adds the strategy pages as panels (strategy, requirements, objectives, rfis: homelabnext.strategy.pages, served by hnx status serve --strategy DIR). 1.3 adds the baselines page as a panel (the guest x defense-layer coverage matrix: homelabnext.compute.pages, served by hnx status serve --guests DIR --guests-site SITE). 1.4 adds the approvals page as a panel (the broker Approvals page, ADR-0017 stage 2b: homelabnext.status.approvals, served when agents.yml configures approvals), which must sit in the private group. Evolve additively.",
   "type": "object",
   "additionalProperties": false,
   "required": ["views_version", "shell", "menu"],
@@ -40,7 +40,7 @@
       "properties": {
         "id": {"$ref": "#/$defs/view_id"},
         "title": {"type": "string", "minLength": 1, "maxLength": 60, "pattern": "^[^\\u0000-\\u001f\\u007f<>&]*$(?!\\n)"},
-        "panel": {"enum": ["exceptions", "grid", "sources", "agents", "activity", "agent-analytics", "agent-detail", "agent-access-log", "strategy", "requirements", "objectives", "rfis", "baselines"], "description": "exceptions, grid and sources are sections of the page; the agent panels (1.1), the strategy panels (1.2) and the baselines panel (1.3) are pages of their own, served live by hnx status serve."},
+        "panel": {"enum": ["exceptions", "grid", "sources", "agents", "activity", "agent-analytics", "agent-detail", "agent-access-log", "strategy", "requirements", "objectives", "rfis", "baselines", "approvals"], "description": "exceptions, grid and sources are sections of the page; the agent panels (1.1), the strategy panels (1.2), the baselines panel (1.3) and the approvals panel (1.4) are pages of their own, served live by hnx status serve."},
         "group": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,30}$(?!\\n)", "description": "1.1: a menu group; the private group renders only for a request through the trusted front door."},
         "select": {
           "type": "object",

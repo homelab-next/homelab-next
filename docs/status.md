@@ -218,7 +218,7 @@ runtime's, which beats the default) or `working`.
 `store` (SQLite), `retention_days`, `detail` (keep the private tier at all),
 `redact_personal_data`, `caps` (per-field characters), `stuck_after_s` (`default`, `runtimes`,
 `models`), `private` (the front door), `ingest` (the senders) and `approvals` (the broker
-Approvals page; agents 1.1). Schema:
+Approvals page; agents 1.1, `approvals.csrf_key` 1.2). Schema:
 `schemas/status/agents.schema.json`. Secrets are secret-store references (`secret:a/b`), never
 values; at run time `secret:a/b-token` is read from `HNX_SECRET_A_B_TOKEN` (or the file `a/b-token` under
 `--secrets-dir`). A reference that does not resolve **disables** what it guards (the private
@@ -370,7 +370,11 @@ and nothing in this code feeds it back into an agent's context.
 With an `approvals:` block in `agents.yml` (it needs `private:`), `hnx status serve --agents FILE`
 adds `/approvals`: the broker requests awaiting an approver (action, actor, target, params,
 created, digest, age) and the last 20 approvals and denials, with an approve/deny form on each
-request. `?request=ID` shows one request (the broker's notification links there). Code:
+request. `?request=ID` shows one request (the broker's notification links there). Its menu
+entry is `panel: approvals` in `group: private` (views 1.4): it is listed only when `approvals:`
+is configured, only to a request through the front door in the viewer group, never on the
+static page or in the served `status.json`. A person in only the approver group sees no private
+menu group; they reach the page by its URL or the notification link. Code:
 `homelabnext.status.approvals`; the broker side: [broker](broker.md#front-door-approvals)
 ([[broker]]).
 
@@ -379,8 +383,20 @@ approvals:
   socket: /run/hnx-broker/broker.sock   # the broker's Unix socket (absolute)
   issuer: sso                           # the broker manifest's approval_relays[].issuer for the hub
   approver_group: hub-approvers         # required to decide; must differ from viewer_group
+  csrf_key: "secret:status/approvals-csrf-secret"   # the form tokens' HMAC key (agents 1.2)
   # timeout_s: 10
 ```
+
+**The form-token key.** `csrf_key` names, in the secret store, the HMAC key the forms' CSRF tokens
+are signed with (delivered like every reference: `HNX_SECRET_STATUS_APPROVALS_CSRF_SECRET`, or the file
+under `--secrets-dir`). With it a form survives a hub restart and verifies on every hub instance
+given the same key. The key must be at least 32 characters and its own secret (not the front
+door's): a shorter key, or the front door's reference, is refused when the config is loaded. With
+`csrf_key` absent, or naming a secret that is not set, the hub draws a key when it starts and warns
+once at startup (`approvals.csrf_key is not set: ...`, naming the setting, never a value): forms
+then stop verifying on restart and between instances (reload the page). **Rotation:** there is one
+key at a time; replacing it invalidates the forms already shown (at most 30 minutes of them), so
+rotate when no one is mid-decision, or accept that they reload the page.
 
 **Who.** The page is behind the same front door as the private tier, by the same code
 (`homelabnext.status.agents.auth.authorize`: trusted proxy, front-door secret, identity header),
@@ -399,8 +415,8 @@ console's DNS-rebinding guard), no `Origin` and no same-host `Referer`, or a `Se
 than `same-origin`; `415` not `application/x-www-form-urlencoded`; `411` no length; `413` over
 8 KiB; `400` a field other than `request_id`, `digest`, `decision` (approve, deny), `token` and
 `note` (at most 2000 characters), a repeated or malformed one; `403` a CSRF token that is not the
-HMAC (under a key drawn when the hub starts) of its issue time, the request id, the digest shown
-and this approver, or older than 30 minutes; `409` the broker's current digest for the request is
+HMAC (under the `csrf_key` above, else a key drawn when the hub starts) of its issue time, the
+request id, the digest shown and this approver, or older than 30 minutes; `409` the broker's current digest for the request is
 not the one in the form (**the person approves exactly what they saw**) or the request no longer
 awaits approval; `403` a broker refusal (with its reason); `502` the broker is unreachable; `200`
 done. Re-submitting a decision the same person already made answers `200` "already" and files

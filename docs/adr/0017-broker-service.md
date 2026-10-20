@@ -134,9 +134,10 @@ each remote agent logs in as its own system user.
    read); only the approver group may decide.
 15. **The hub's one write is guarded as one.** `POST /approvals/decide` only (every other `POST`
    stays `405`); the console's Host/Origin guard, then a same-origin `Origin` (or `Referer`) and no
-   cross-site `Sec-Fetch-Site`; a closed form of five fields; a CSRF token, an HMAC under a
-   per-process key over its issue time, the request id, the digest shown and the approver, valid
-   30 minutes; and the **digest the person saw** must equal the broker's current digest for the
+   cross-site `Sec-Fetch-Site`; a closed form of five fields; a CSRF token, an HMAC over its
+   issue time, the request id, the digest shown and the approver, valid 30 minutes, under the key
+   `approvals.csrf_key` names in the secret store (agents 1.2: at least 32 characters, not the
+   front door's secret; without it a per-process key and a startup warning); and the **digest the person saw** must equal the broker's current digest for the
    request, or the hub refuses. A repeated decision by the same person files nothing ("already",
    from the broker's audit trail). Every attempt is appended to the hub's access log. The generated
    Caddy site already covers every path of the hub's hostname, so the new route needed no edge
@@ -151,9 +152,13 @@ each remote agent logs in as its own system user.
    `docs/broker.md` maps the rest: writable zones to lanes, dashboard approval to the hub page, the
    sync job to broker runs, `completion-request` to a records-lifecycle transition.
 
-Not in 2b: a menu entry for the page (the views schema's panel list is unchanged; the page is
-reached by its URL and the notification link), and a network listener for remote agents, who still
-use an SSH-forwarded socket.
+The page has a menu entry, `panel: approvals` in the private group (views 1.4), listed only
+when approvals are configured and only to the private tier's viewers.
+
+Limits of 2b: one form-token key at a time (rotating it invalidates the forms already shown, at
+most 30 minutes of them); an approver outside the viewer group sees no private menu group and
+reaches the page by its URL or the notification link; and no network listener for remote agents,
+who still use an SSH-forwarded socket.
 
 ## Consequences
 
