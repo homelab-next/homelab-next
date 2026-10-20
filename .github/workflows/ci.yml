@@ -47,10 +47,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # the optional lake extras installed: the DuckDB/Iceberg tests run
+          # the optional lake and mcp extras installed: the DuckDB/Iceberg and MCP SDK tests run
           - python-version: "3.12"
-            extras: "test,lake"
-          # the extras absent: proves the lake tests skip cleanly instead of failing
+            extras: "test,lake,mcp"
+          # the extras absent: proves the lake and MCP SDK tests skip cleanly instead of failing
           - python-version: "3.11"
             extras: "test"
     steps:
@@ -75,7 +75,7 @@ jobs:
       - uses: ./.github/actions/python-deps
         with:
           python-version: "3.12"
-          extras: test
+          extras: test,mcp  # homelabnext/mcp's SDK binding is measured too
       - name: security-critical coverage floor (80% lines per unit)
         run: python tools/coverage_floor.py
 

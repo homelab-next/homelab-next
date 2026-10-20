@@ -33,6 +33,7 @@ unit is a reviewed change to this file.
 * ``homelabnext/workflows``         -- workflow runs: the broker executor and approval binding
 * ``homelabnext/registry/limits.py`` -- the model rate/token/cost budget (throttle + alert)
 * ``homelabnext/context``          -- context retrieval: scope enforcement and inactive records
+* ``homelabnext/mcp``              -- the read-only MCP server: path refusal, scope intersection
 
 Usage: python tools/coverage_floor.py [--floor N] [--json FILE]
   --json FILE  evaluate an existing ``coverage json`` report instead of running the tests
@@ -67,6 +68,7 @@ UNITS: dict[str, tuple[str, ...]] = {
     "homelabnext/workflows": ("tests/workflows",),
     "homelabnext/registry/limits.py": ("tests/models",),
     "homelabnext/context": ("tests/context", "conformance/context"),
+    "homelabnext/mcp": ("tests/mcp",),
 }
 
 

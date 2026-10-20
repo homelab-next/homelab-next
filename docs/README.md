@@ -47,6 +47,9 @@ relate.
   register record, script, agent profile and page as typed nodes and edges read from the source
   files; `hnx graph build` writes a local index (`docs/graph/`, one page per node kind, not
   committed), and `hnx graph related <id|path>` lists what a task should pull in.
+- [MCP server](mcp.md) ([[mcp]]): `hnx mcp serve`, read-only structured answers for agents
+  (contracts, schemas, services, the graph, scoped context, review and invariant status) over
+  stdio, scoped by a compiled agent profile.
 - [Glossary](glossary.md) ([[glossary]]).
 
 ## Opening `docs/` as an Obsidian vault

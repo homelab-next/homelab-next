@@ -89,15 +89,14 @@ class FakeContextStore:
 
     def get(self, doc_id: str, allowed: frozenset[str]) -> Hit:
         q = check_query(Query(allowed=allowed))
-        d = self._docs.get(doc_id)
-        if d is None or not self._visible(doc_id, q.allowed):
-            raise NotFound(f"no document {doc_id!r} in scope")
-        return _hit(d, 0.0, [])
+        if not self._visible(doc_id, q.allowed) or doc_id not in self._docs:
+            raise NotFound(f"no document {doc_id!r} in scope")  # unknown and hidden alike
+        return _hit(self._docs[doc_id], 0.0, [])
 
     def query(self, q: Query) -> list[Hit]:
         q = check_query(q)
         words = terms(q.text)
-        if q.budget == 0 or (not words and not q.seeds):
+        if not q.budget or not (words or q.seeds):
             return []
         meant = _concepts(words)
         visible = [d for d in self._rows() if self._visible(d.id, q.allowed) and self._active(d, q)]

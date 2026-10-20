@@ -1,0 +1,94 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+# MCP server: the repository as structured answers
+
+`hnx mcp serve` is a read-only [Model Context Protocol](https://modelcontextprotocol.io) server
+over this checkout, so an agent asks for a capability's contract, a schema or the context for a
+task and gets JSON built from the source of truth, instead of reading and re-parsing prose. It
+speaks **stdio only**: there is no network listener. Code: `homelabnext/mcp/`
+(`catalog.py` the tools, `scope.py` the profile scope, `server.py` the SDK binding).
+
+```
+pip install 'homelabnext[mcp]'          # the official mcp SDK (1.x or 2.x)
+hnx mcp serve [--root CHECKOUT] [--registry FILE] [--scope-from-profile PROFILE.json]
+hnx mcp tools                           # what each tool answers (no SDK needed)
+hnx mcp call context_for --args '{"task_text": "...", "allowed": ["doc:docs/", "cap:"]}'
+```
+
+A client configuration starts it as a subprocess, for example
+`{"command": "hnx", "args": ["mcp", "serve", "--scope-from-profile", "build/profile.json"]}`.
+`hnx mcp call` runs the same handler in-process, without the SDK, for scripts and debugging.
+
+## Tools
+
+Every result is one JSON text block: compact, keys sorted, deterministic for a given checkout,
+and at most 262,144 characters (`MAX_RESULT_CHARS`). A list that would not fit loses its trailing
+items and the result says so (`"truncated": {"dropped": N, "reason": "result size cap"}`). A
+refused call is an MCP tool error with the reason.
+
+| Tool | Answers | Built from |
+|---|---|---|
+| `list_capabilities()` | every capability: purpose, operations, MUST/SHOULD counts, fake, adapters, services | `homelabnext.sop.capabilities.summary_data` |
+| `get_contract(capability)` | operations (signature, params with types and defaults, returns, raises, docstring), data shapes (field tables), constants, errors, schemas, checks (id, level, assertion, requires), features, mutants, adapters with recorded product limits, providing and depending services | `contract_data`, the model the [capability pages](capabilities/README.md) ([[capabilities/README\|capabilities]]) are rendered from |
+| `get_schema(id_or_path)` | one JSON Schema, by graph id (`schema:schemas/...`), path (with or without `schemas/`), `$id` URL or `family/name` (`agent/profile`) | `schemas/` |
+| `find_services(capability=None, tag=None)` | registry services: name, capability, impl, owner, tags, depends_on, mcp; names only | `examples/services.yml` (or `--registry`) |
+| `related(ids_or_paths, depth=2, budget=25, include_inactive=False)` | the ranked graph neighbourhood, seeds, ids that resolved to nothing | [knowledge graph](graph.md) ([[graph]]) |
+| `context_for(task_text, allowed, paths=[], kinds=[], budget=10)` | ranked hits with content and sha256 digest, relation before keywords | the [`context`](capabilities/context.md) ([[capabilities/context\|context]]) reference store over the graph |
+| `lessons_due(today=None)` | the lesson review's due list by action | `hnx registers review` ([[registers]]) |
+| `invariants_status()` | per criterion: statement, status (`untested` without a committed result), checked_at, remediation when not passing | `examples/registers/invariants.results.json` |
+
+`context_for` is the main tool. Its seeds are the graph nodes defined by `paths` (the files the
+task edits) and the ids and names the text mentions (`seeds_for`); the store ranks documents
+related to them above keyword matches, never returns a retired, superseded or incorporated record,
+and caps each hit's content at 32,768 characters (`content_truncated` and `content_chars` then
+say so; `digest` is always the full content's). `kinds: []` means every kind.
+
+Example (trimmed):
+
+```
+$ hnx mcp call context_for --args '{"task_text": "add an adapter for the context capability",
+    "paths": ["conformance/protocols/context.py"], "allowed": ["cap:", "doc:docs/"], "budget": 3}'
+{"hits":[{"content":"scoped retrieval for agents: relation before keywords, ...","digest":"99ec33d3...",
+  "id":"cap:context","kind":"cap","path":"","score":3.261642857,"snippet":"...","title":"scoped retrieval ..."},
+  {"id":"doc:docs/capabilities/context.md","kind":"doc","path":"docs/capabilities/context.md","score":2.99,...},
+  {"id":"doc:docs/conformance.md","kind":"doc","path":"docs/conformance.md","score":1.99,...}],
+ "scope":["cap:","doc:docs/"],"scoped_by":null,"seeds":["cap:context"]}
+```
+
+## Security model
+
+* **Read-only by construction.** The tool list is exactly the eight tools above (`TOOLS`; a test
+  pins it against an allowlist, and every tool carries `readOnlyHint`, not destructive, not
+  open-world). No tool writes, runs a command or opens a connection; there is no shell, no
+  generic file read and no fetch. The server runs stdio only.
+* **Nothing outside the checkout.** A caller-supplied path is repo-relative: an absolute path,
+  `..`, `~`, a backslash or a control character is refused, and so is a path through a symbolic
+  link. Only `get_schema` reads a file a caller names, and only a `.json` file under `schemas/`.
+  Every other answer comes from the sources the documentation generators read.
+* **Scope is mandatory for content.** `context_for` refuses a call without `allowed` (a list of
+  exact ids or namespaces ending in `:` or `/`, as in the `context` contract; no wildcard).
+* **A profile bounds the server, and a call cannot widen it.** `--scope-from-profile` takes a
+  compiled agent profile ([agent profiles](agent.md), [[agent]]). The profile must verify (schema,
+  the reader rule, grants within its ceiling, digest; `verify_profile`) and must be **granted
+  this server** (`hnx-catalog` in `grants.mcp`), or the server does not start. Its scope is
+  derived from its grants: the profile node; per granted capability `cap:<x>`, `check:<x>/` and
+  `doc:docs/capabilities/<x>.md`; per granted MCP server `mcp:<m>`; and every registry service
+  providing a granted capability or exposing a granted server, with its system page. A call's
+  `allowed` is then **intersected** with that scope: an entry the grant does not cover is dropped,
+  and a wider namespace is replaced by the granted entries inside it (`cap:` against a grant of
+  `cap:lake-query` gives `cap:lake-query`). `related` is computed over the in-scope nodes only, so
+  nothing outside is returned or related through, and an out-of-scope seed reads like an unknown
+  one. The catalog tools (contracts, schemas, service names, review and invariant status)
+  describe the repository's public contracts and are not scoped.
+* **Registered like any other MCP server.** `homelabnext/agent/tool_classes.yml` classifies
+  `hnx-catalog` as `read`, so a profile may grant it, a reader profile included, and the
+  compiler, `hnx agent verify` and `hnx agent lint` judge it like every other grant. It is not a
+  row in `examples/services.yml`: the registry describes network services with an address and a
+  port, and a stdio server has neither (a registry `mcp` entry would also give the access block
+  and the keyring an HTTP endpoint that does not exist).
+* **Untrusted text.** Tool outputs return repository content: what git holds is trusted-repo
+  content, but it is still data, and a client should fence it like any other context. `task_text`
+  is only split into words for matching; it is never interpreted, executed or used as a path, and
+  it is not echoed back (refusal messages never repeat it).
+
+The server loads the checkout's sources on first use and keeps them for its lifetime: restart it
+to see later edits.

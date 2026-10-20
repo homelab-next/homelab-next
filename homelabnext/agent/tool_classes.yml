@@ -54,6 +54,7 @@ mcp:
   lake: [read]
   records: [record-write]
   cases: [record-write]
+  hnx-catalog: [read]  # `hnx mcp serve`: read-only answers from this repository (docs/mcp.md)
   # common third-party servers, classified so a profile naming one is judged, not guessed
   shell: [exec]
   bash: [exec]
