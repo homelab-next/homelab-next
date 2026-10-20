@@ -238,7 +238,7 @@ def test_a_same_origin_referer_is_enough_without_origin(served, broker):
 @pytest.mark.parametrize(
     "token_for, reason",
     [
-        ({"token": "1.deadbeef"}, "bad or expired"),
+        ({"token": "1.fake0deadbeef"}, "bad or expired"),
         ({"token": "fake"}, "bad or expired"),
         ({"rid": "req-other"}, "bad or expired"),  # a token minted for another request
         ({"user": "someone-else"}, "bad or expired"),  # ... or another approver

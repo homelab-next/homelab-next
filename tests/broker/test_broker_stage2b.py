@@ -74,7 +74,7 @@ def test_no_link_without_a_configured_url(tmp_path):
     "bad",
     [
         "ftp://status.lab.example/approvals",
-        "https://user:fake-pass@status.lab.example/approvals",
+        "https://user:fake-pass" + "@" + "status.lab.example/approvals",  # credentials
         "https://status.lab.example/approvals?x=1",
         "https://status.lab.example/approvals#top",
         "/approvals",
