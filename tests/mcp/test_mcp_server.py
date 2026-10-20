@@ -149,10 +149,14 @@ def test_get_contract_unknown_capability(cat):
         "schemas/agent/profile.schema.json",
         "agent/profile.schema.json",
         "agent/profile",
-        "https://schemas.example.internal/homelabnext/agent/profile/1.1",
+        "$id",  # the schema's current $id, read from the file (it moves with every minor version)
     ],
 )
 def test_get_schema_resolves_every_reference_form(cat, ref):
+    if ref == "$id":
+        ref = json.loads((ROOT / "schemas/agent/profile.schema.json").read_text(encoding="utf-8"))[
+            "$id"
+        ]
     out = _call(cat, "get_schema", id_or_path=ref)
     assert out["path"] == "schemas/agent/profile.schema.json"
     assert out["schema"] == json.loads((ROOT / out["path"]).read_text(encoding="utf-8"))
