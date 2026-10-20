@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+event: value
+by: profile:example-checker
+date: 2026-10-20
+value: 1.0
+observed_at: '2026-10-20T13:05:00Z'
+sample: 1
+definition_digest: sha256:ffe3be4fca7a5d2dd61d61118ae56edbb25c0b82f0306e62be573afd714c4ebf
+definition_version: 1
+evidence: 'records:inbox: 1 note(s) at 2026-10-20T13:05:00Z'

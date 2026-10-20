@@ -116,6 +116,15 @@ SPECS: dict[str, RegisterSpec] = {
         "invariants", "", tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), 2, True, r"[A-Z]-(?:\d{2,}|NEW)"
     ),
     "queue": RegisterSpec("queue", "", ("PRJ",), 3, False, r"PRJ-(?:\d{3,}(?:\.\d+)?|NEW)"),
+    # the strategy-to-task records (homelabnext.strategy, docs/strategy.md): one directory each
+    "objectives": RegisterSpec(
+        "objectives", "", ("SO", "OO", "TO", "TT"), 3, True, r"(?:SO|OO|TO|TT)-(?:\d{3,}|NEW)"
+    ),
+    "measures": RegisterSpec("measures", "", ("MOP", "MOE"), 3, True, r"MO[PE]-(?:\d{3,}|NEW)"),
+    "requirements": RegisterSpec(
+        "requirements", "", ("CCIR", "FFIR", "PIR"), 3, True, r"(?:CCIR|FFIR|PIR)-(?:\d{3,}|NEW)"
+    ),
+    "rfis": RegisterSpec("rfis", "", ("RFI",), 3, True, r"RFI-(?:\d{3,}|NEW)"),
 }
 
 

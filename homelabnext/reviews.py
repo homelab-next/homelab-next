@@ -2,7 +2,8 @@
 """Reviews: who validated an artefact, in which role, against exactly which content.
 
 One model for every reviewed artefact: lesson and runbook records
-(``examples/registers/lessons/LL-001.md``) and the per-service SOP pages (``docs/systems/``).
+(``examples/registers/lessons/LL-001.md``), the per-service SOP pages (``docs/systems/``) and the
+strategy-to-task records (``examples/strategy/``, :mod:`homelabnext.strategy`).
 An artefact carries ``author:`` and its reviews: append-only event files in the sidecar
 directory beside it (``LL-001.events/``, ``docs/systems/dns.events/``; see
 :mod:`homelabnext.registers.events`), each one review entry, or (the older form, still read) an
@@ -83,6 +84,12 @@ ARTEFACT_STATES: dict[str, tuple[str, ...]] = {
     "lesson.practice": ("active", "incorporated", "superseded", "retired"),
     "runbook": ("active", "superseded"),
     "system-page": ("draft", "reviewed"),
+    # the strategy-to-task records (homelabnext.strategy, docs/strategy.md)
+    "strategy": ("active",),
+    "objective": ("active", "achieved", "retired"),
+    "measure": ("active", "retired"),
+    "requirement": ("active", "answered", "expired", "retired"),
+    "rfi": ("open", "answered", "expired", "no-find"),
 }
 UNKNOWN_AUTHOR = "unknown"
 
@@ -375,9 +382,14 @@ def missing_message(who: str, state: str, ev: Evaluation, digest: str) -> str:
 
 
 def file_digest(path) -> str:
-    """The digest a reviewer stamps for ``path``: a register record or a docs/systems page."""
+    """The digest a reviewer stamps for ``path``: a register or strategy record, or a
+    docs/systems page."""
     p = pathlib.Path(path)
     text = p.read_text(encoding="utf-8")
+    from homelabnext.strategy.records import file_digest as strategy_digest
+
+    if (got := strategy_digest(p, text)) is not None:
+        return got
     if p.parent.name in ("lessons", "runbooks"):
         from homelabnext.registers import events as ev
         from homelabnext.registers.records import record_digest

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/registers/register_event/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/registers/register_event/1.1",
   "title": "Register event",
-  "description": "One append-only event about a lesson, runbook or docs/systems page, stored as its own file in the sidecar directory <RECORD>.events/ and named <YYYYMMDDTHHMMSSZ>-<event>-<actor-slug>[-<n>].yml (the name rule is checked by homelabnext.registers.events). Derived fields (reviews, recurrences, last_verified, the current status) are computed from these files on load and never edited in place. `transition` events are written only by the decider (hnx registers decide).",
+  "description": "One append-only event about a lesson, runbook, docs/systems page or strategy record (homelabnext.strategy), stored as its own file in the sidecar directory <RECORD>.events/ and named <YYYYMMDDTHHMMSSZ>-<event>-<actor-slug>[-<n>].yml (the name rule is checked by homelabnext.registers.events). Derived fields (reviews, recurrences, last_verified, values, the current status) are computed from these files on load and never edited in place. `transition` events are written only by a decider (hnx registers decide, hnx strategy decide). 1.1 added, additively, the `value` event (one reading of a strategy measure, nested in the transition entry's else branch so allOf keeps its length) and the transition's set.resolution (why a strategy record closed).",
   "type": "object",
   "properties": {
     "event": {
@@ -10,7 +10,8 @@
         "review",
         "recurrence",
         "verified",
-        "transition"
+        "transition",
+        "value"
       ]
     },
     "by": {
@@ -174,11 +175,21 @@
           "note": true,
           "from": {
             "type": "string",
-            "pattern": "^[a-z]+$"
+            "anyOf": [
+              {
+                "pattern": "^[a-z]+(?:-[a-z]+)*$"
+              }
+            ],
+            "description": "1.1: a lowercase status word, hyphenated for a strategy status (no-find); the 1.0 pattern ^[a-z]+$ is widened, never narrowed."
           },
           "to": {
             "type": "string",
-            "pattern": "^[a-z]+$"
+            "anyOf": [
+              {
+                "pattern": "^[a-z]+(?:-[a-z]+)*$"
+              }
+            ],
+            "description": "1.1: a lowercase status word, hyphenated for a strategy status (no-find); the 1.0 pattern ^[a-z]+$ is widened, never narrowed."
           },
           "set": {
             "type": "object",
@@ -210,6 +221,11 @@
               "retired_reason": {
                 "type": "string",
                 "minLength": 1
+              },
+              "resolution": {
+                "type": "string",
+                "minLength": 1,
+                "description": "1.1: why a strategy record reached a closed status (the intent's reason)."
               }
             },
             "additionalProperties": false
@@ -235,6 +251,89 @@
           "reason"
         ],
         "additionalProperties": false
+      },
+      "$comment": "value (1.1) sits in this else branch so allOf keeps its 1.0 length (additive evolution)",
+      "else": {
+        "if": {
+          "properties": {
+            "event": {
+              "const": "value"
+            }
+          },
+          "required": [
+            "event"
+          ]
+        },
+        "then": {
+          "description": "One reading of a strategy measure: a value or, when the binding produced none, a finding (never a blank). Written by hnx strategy measure, or by a person for a manual measure (evidence required).",
+          "properties": {
+            "event": true,
+            "by": true,
+            "date": true,
+            "note": true,
+            "value": {
+              "type": "number",
+              "description": "The reading, in the measure's unit."
+            },
+            "finding": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Why there is no value (not measurable, the source had no reading): a finding, never a blank."
+            },
+            "observed_at": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp",
+              "description": "When the data behind the value was observed (not when the event was written)."
+            },
+            "sample": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "How many data points stand behind the value (thinness)."
+            },
+            "definition_digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{12,64}$",
+              "description": "The digest of the measure's definition, source and unit this reading was taken under (a trend is only drawn on an unchanged digest)."
+            },
+            "definition_version": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Where the value came from (the binding and what it read), or a link for a manual value."
+            }
+          },
+          "required": [
+            "observed_at",
+            "definition_digest",
+            "definition_version",
+            "evidence"
+          ],
+          "oneOf": [
+            {
+              "required": [
+                "value"
+              ],
+              "not": {
+                "required": [
+                  "finding"
+                ]
+              }
+            },
+            {
+              "required": [
+                "finding"
+              ],
+              "not": {
+                "required": [
+                  "value"
+                ]
+              }
+            }
+          ],
+          "additionalProperties": false
+        }
       }
     }
   ]

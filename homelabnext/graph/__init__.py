@@ -18,7 +18,7 @@ Edge vocabulary (``from -> to: asserted by``; the table is :data:`.vocab.EDGE_TY
     runs_on        svc -> host: registry host
     in_zone        host -> zone: registry hosts.zone
     depends_on     svc -> svc: registry upstreams
-    serves         svc -> zone: registry clients
+    serves         svc -> zone: registry clients; req -> req: FFIR -> CCIR, PIR -> CCIR/FFIR
     exposes        svc -> mcp: registry mcp
     implements     adapter -> cap: target binding, contract import, make_fake
     faked_by       cap -> adapter: suite make_fake
@@ -55,6 +55,12 @@ Edge vocabulary (``from -> to: asserted by``; the table is :data:`.vocab.EDGE_TY
     applies        playbook -> role: play roles
     observes       status -> svc, cap: registry status_sources (declaring service, its capability)
     polls          status -> svc: registry status_sources target.service
+    supports       req -> objective: requirement supports (SO, OO, TO)
+    child_of       objective -> objective, strategy: parent (an SO hangs from the strategy)
+    measured_by    objective -> measure: objective measures
+    binds          measure -> inv, status: measure source binding
+    raised_by      rfi -> measure, req: rfi raised_by
+    tasked_to      req, rfi -> profile, human: tasked_to naming a known principal
 
 Node kinds and their id forms are :data:`.vocab.NODE_KINDS`.
 """

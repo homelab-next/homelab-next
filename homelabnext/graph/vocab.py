@@ -54,6 +54,11 @@ NODE_KINDS: dict[str, tuple[str, str]] = {
     "doc": ("doc:<path>", "tracked Markdown pages (not tests, examples or docs/graph/)"),
     "adr": ("adr:<slug>", "docs/adr/NNNN-<slug>.md"),
     "status": ("status:<source>", "examples/services.yml status_sources (the status hub's menu)"),
+    "strategy": ("strategy:<name>", "examples/strategy/strategy.md (the one strategy record)"),
+    "objective": ("objective:SO-NNN", "examples/strategy/objectives/ (SO, OO, TO, TT)"),
+    "measure": ("measure:MOE-NNN", "examples/strategy/measures/ (MOP, MOE)"),
+    "req": ("req:CCIR-NNN", "examples/strategy/requirements/ (CCIR, FFIR, PIR)"),
+    "rfi": ("rfi:RFI-NNN", "examples/strategy/rfis/"),
 }
 
 #: type -> (from kind(s), to kind(s), asserted by)
@@ -63,7 +68,7 @@ EDGE_TYPES: dict[str, tuple[str, str, str]] = {
     "runs_on": ("svc", "host", "registry host"),
     "in_zone": ("host", "zone", "registry hosts.zone"),
     "depends_on": ("svc", "svc", "registry upstreams"),
-    "serves": ("svc", "zone", "registry clients"),
+    "serves": ("svc, req", "zone, req", "registry clients; requirement serves (FFIR, PIR)"),
     "exposes": ("svc", "mcp", "registry mcp"),
     "implements": ("adapter", "cap", "target binding, contract import, make_fake"),
     "faked_by": ("cap", "adapter", "suite make_fake"),
@@ -112,4 +117,10 @@ EDGE_TYPES: dict[str, tuple[str, str, str]] = {
         "registry status_sources (declaring service, its capability)",
     ),
     "polls": ("status", "svc", "registry status_sources target.service"),
+    "supports": ("req", "objective", "requirement supports (SO, OO, TO)"),
+    "child_of": ("objective", "objective, strategy", "objective parent (an SO: the strategy)"),
+    "measured_by": ("objective", "measure", "objective measures"),
+    "binds": ("measure", "inv, status", "measure source binding (invariant:, status:)"),
+    "raised_by": ("rfi", "measure, req", "rfi raised_by"),
+    "tasked_to": ("req, rfi", "profile, human", "tasked_to, where it names a known principal"),
 }

@@ -22,11 +22,15 @@ Kinds (``schemas/registers/register_event.schema.json``):
 ``verified``    the record's observable was run (``outcome: pass|fail``, ``result``).
 ``transition``  an applied lifecycle change (``from``, ``to``, ``set``, the intent it applied);
                 written only by the decider (:mod:`homelabnext.registers.decide`).
+``value``       one reading of a strategy measure (``homelabnext.strategy``): ``value`` (or a
+                ``finding`` when there is none), ``observed_at``, ``sample``, the
+                ``definition_digest`` / ``definition_version`` it was read under, ``evidence``.
 
 :func:`derive` computes the derived fields on load, so the document every consumer sees keeps
 its shape: ``reviews`` (inline reviews, then review events in order), ``recurrences`` (the inline
 base, 0 when absent, plus one per recurrence event; pitfalls only), ``last_verified`` (the latest
-passing ``verified`` event; never written by hand), and the current status (the record's base
+passing ``verified`` event; never written by hand), ``values`` (a measure's readings, in order;
+never written by hand), and the current status (the record's base
 status with every transition applied in order; a transition whose ``from`` is not the status at
 that point is fatal).  Derived values are never edited in place.
 """
@@ -64,9 +68,14 @@ __all__ = [
     "render_event",
 ]
 
-EVENT_KINDS = ("review", "recurrence", "verified", "transition")
+EVENT_KINDS = ("review", "recurrence", "verified", "transition", "value")
 EVENTS_SUFFIX = ".events"
-DERIVED_ONLY = ("last_verified",)  # computed from events; a record file never carries it
+DERIVED_ONLY = ("last_verified", "values")  # computed from events; a record file never has them
+#: registers whose records have a lifecycle (every event kind); any other caller is a system page
+LIFECYCLE_REGISTERS = (
+    *("lessons", "runbooks"),
+    *("strategy", "objectives", "measures", "requirements", "rfis"),
+)
 HEADER = "# SPDX-License-Identifier: Apache-2.0\n"
 FILE_MODE = 0o644  # register files are committed documents, not secrets
 BACKFILL_BY = "hnx:migrate"
@@ -74,7 +83,9 @@ _NAME = re.compile(
     r"^(?P<ts>\d{8}T\d{6}Z)-(?P<event>[a-z]+)-(?P<rest>[a-z0-9]+(?:-[a-z0-9]+)*)\.yml$"
 )
 _ORDER = ("event", "by", "kind", "role", "date", "verdict", "digest", "outcome", "result")
-_ORDER += ("from", "to", "set", "intent", "requested_by", "reason", "evidence", "note")
+_ORDER += ("from", "to", "set", "intent", "requested_by", "reason")
+_ORDER += ("value", "finding", "observed_at", "sample", "definition_digest", "definition_version")
+_ORDER += ("evidence", "note")
 
 
 @dataclass(frozen=True)
@@ -137,7 +148,9 @@ def _name_parts(name: str, data: Mapping[str, Any]) -> tuple[str, int] | str:
 
 
 @cache
-def _validator():
+def schema_validator(family: str, name: str):
+    """A Draft 2020-12 validator for ``schemas/<family>/<name>`` with the shared ``ids`` schemas
+    registered (what every register and strategy schema ``$ref``s)."""
     from jsonschema import Draft202012Validator
     from referencing import Registry, Resource
     from referencing.jsonschema import DRAFT202012
@@ -151,17 +164,24 @@ def _validator():
         reg = reg.with_resource(
             doc["$id"], Resource.from_contents(doc, default_specification=DRAFT202012)
         )
-    schema = json.loads(
-        paths.schema_file("registers", "register_event.schema.json").read_text("utf-8")
-    )
+    schema = json.loads(paths.schema_file(family, name).read_text("utf-8"))
     return Draft202012Validator(schema, registry=reg)
+
+
+def _validator():
+    return schema_validator("registers", "register_event.schema.json")
+
+
+def _iso(v) -> str:
+    """A date or a datetime (an unquoted YAML timestamp) as its ISO text, anything else as str."""
+    return v.isoformat() if isinstance(v, dt.date) else str(v)
 
 
 def check_event(data, name: str | None = None) -> list[str]:
     """Every problem with one event (its schema and, given ``name``, the file name rule)."""
     if not isinstance(data, dict):
         return [f"{name or 'event'}: must be a mapping"]
-    plain = json.loads(json.dumps(data, default=str))  # dates as ISO strings, as JSON has them
+    plain = json.loads(json.dumps(data, default=_iso))  # dates as ISO strings, as JSON has them
     where = f"{name}: " if name else ""
     out = [
         f"{where}{'/'.join(map(str, e.absolute_path)) or '$'}: {e.message}"
@@ -265,7 +285,7 @@ def derive(
     events = list(events)
     for f in DERIVED_ONLY:
         if f in entry:
-            problems.append(f"{pre}`{f}` is derived from `verified` events; never write it")
+            problems.append(f"{pre}`{f}` is derived from events; never write it")
     reviews = [
         {k: v for k, v in e.data.items() if k != "event"} for e in events if e.kind == "review"
     ]
@@ -288,7 +308,14 @@ def derive(
     ]
     if passed:
         out["last_verified"] = max(passed, key=str)
-    if register not in ("lessons", "runbooks") and any(e.kind != "review" for e in events):
+    values = [
+        {k: v for k, v in e.data.items() if k != "event"} for e in events if e.kind == "value"
+    ]
+    if values and register != "measures":
+        problems.append(f"{pre}value events belong to a measure")
+    elif values:
+        out["values"] = values
+    if register not in LIFECYCLE_REGISTERS and any(e.kind != "review" for e in events):
         problems.append(f"{pre}a system page has review events only")
     for e in events:
         if e.kind != "transition":

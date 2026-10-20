@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+# The measurement doctrine `hnx strategy` applies (schemas/strategy/doctrine.schema.json,
+# docs/strategy.md "The doctrine policy"). Every rule a program can decide is here, each with
+# `enforce`: error (the check fails), warn (it prints), 'off' (disabled; a computed rule then does
+# not apply; quote it: YAML 1.1 reads a bare off as false). The defaults follow a MOE/MOP doctrine of nine rules; another discipline tunes them.
+# What needs judgment is listed under `judgment` for the reviewers (check | challenge | approve).
+doctrine_version: 1
+name: MOE/MOP doctrine (nine rules), the defaults
+rfi_default_ltiov_days: 30       # an RFI raised without an LTIOV expires this many days later
+expiring_soon_days: 7            # the RFI page's "expiring soon" window
+rules:
+  # 1. trend only on an unchanged definition: a trend is drawn between two readings taken
+  #    under the same definition digest; a changed definition is a re-baseline
+  trend_same_definition: {enforce: error}
+  # 2. never silently redefine: a reading's definition digest that differs from the current one
+  #    under the same definition_version fails (bump definition_version); ids never renumber
+  #    (hnx ids check-lost guards every record directory)
+  no_silent_redefinition: {enforce: error}
+  # 3. a self-measured MOE (source manual or none, or measured_by the objective's own owner)
+  #    is amber at best
+  self_measured_moe_cap: {enforce: error, cap: amber}
+  # 4. activity counts are never MOEs
+  activity_never_moe: {enforce: error, kinds: [activity]}
+  # 5. at least one MOE per objective, at every level
+  moe_per_objective: {enforce: error, min: 1, levels: [SO, OO, TO, TT]}
+  # 6. the per-owner measure ceiling: retired (it was a context limit, not a doctrine)
+  measures_per_owner: {enforce: 'off', max: 8, why: 'retired: the cap bounded context, not quality'}
+  # 7. cold start is a baseline, not a grade: the first reading(s) on a definition are ungraded
+  cold_start_baseline: {enforce: error, readings: 1}
+  # 8. "not measurable" is a finding, never a blank: source none needs its Not measurable
+  #    section, and a reading without a value carries a finding
+  not_measurable_is_finding: {enforce: error}
+  # 9. never fabricate: a measure that is not measurable has no values, and every reading
+  #    names its evidence
+  never_fabricate: {enforce: error}
+  # baseline cascade: each PIR and FFIR supports exactly one baseline (non-supplemental) SO, and
+  # no baseline SO is shared by two of them, so their measures roll up apart
+  baseline_so: {enforce: error, types: [PIR, FFIR], exactly: 1}
+  # an SO that no active requirement supports is an orphan
+  so_supported: {enforce: warn}
+judgment:
+  - rule: completeness measures are computed on write time over a recent window, and a backfill is reported apart from the window's value
+    why: whether a query windows on write time or event time is in the query, not in the record
+  - rule: print the predicate, or do not trend (a changed predicate earns a trend only by a demonstrated null effect)
+    why: the digest catches a changed definition; whether a changed predicate had no effect needs both numbers and a reviewer
+  - rule: a supplemental objective is additive, never a substitute for the baseline cascade
+    why: whether new scope is real or a re-labelling of the baseline is a judgment
+  - rule: the measure measures what its objective claims (a MOE is an effect, not a proxy for activity)
+    why: kind is declared by the author; only a reviewer can tell an outcome from a disguised count

@@ -26,6 +26,10 @@ hnx registers decide examples/registers RECORDS_ROOT --as human:operator [--dry-
 hnx ids resolve | check-lost | check-dupes | check-placeholders
 ```
 
+The strategy-to-task records (objectives, measures, requirements, RFIs; [strategy](strategy.md),
+[[strategy]]) use this same machinery: one Markdown file per record, sidecar events, `XX-NEW` ids
+and `check-lost`, review tiers, and intents applied by a decider.
+
 ## Why one file per record
 
 A single-file register makes concurrent authors collide: both read "the next free id", both
@@ -128,6 +132,7 @@ lessons/LL-005.events/
 | `recurrence` | `by date note evidence` (pitfalls only) | `recurrences` = inline base (0 when absent) + one per event |
 | `verified` | `by date outcome (pass/fail) result evidence` | `last_verified` = the latest passing run (never written by hand) |
 | `transition` | `by date from to set intent requested_by reason` | the status (base status + every applied transition, in order) |
+| `value` | `by date value-or-finding observed_at sample definition_digest definition_version evidence` | `values`, a strategy measure's readings ([strategy](strategy.md)); not content |
 
 * A name is `<UTC YYYYMMDDTHHMMSSZ>-<event>-<actor slug>[-<n>].yml`; files are created
   exclusively (an existing name is an error, never an overwrite) and the next `-<n>` is taken

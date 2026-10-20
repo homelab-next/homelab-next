@@ -17,6 +17,7 @@ help:
 	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
 	@echo "hygiene: helpers-lint dup-check tls-lint workstation-lint run-output-lint keyring-check keyring ids-placeholders"
 	@echo "knowledge graph (local docs/graph/, integrity checked in gates): graph"
+	@echo "strategy to task (examples/strategy, docs/strategy.md; in check): strategy"
 	@echo "script catalog (M-01, M-02, M-04): scripts-check"
 	@echo "invariants register, fast criteria, never pages (not in check; CI runs it): invariants"
 	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke"
@@ -164,6 +165,17 @@ registers:
 	$(PY) -m homelabnext.registers build examples/registers $(REGISTERS_OUT)
 	$(PY) -m homelabnext.registers links --check $(RECORD_DIRS)
 	$(PY) -m homelabnext.registers review examples/registers
+
+# the strategy-to-task records (docs/strategy.md): the example tree validates (schemas, link
+# rules, lifecycle, review tiers, the doctrine in examples/strategy/doctrine.yml), every record's
+# Links block and the generated index (docs/strategy/README.md) are current
+STRATEGY_DIR := examples/strategy
+.PHONY: strategy
+check: strategy
+strategy:
+	$(PY) -m homelabnext.strategy check $(STRATEGY_DIR)
+	$(PY) -m homelabnext.strategy links --check $(STRATEGY_DIR)
+	$(PY) -m homelabnext.strategy index --check $(STRATEGY_DIR)
 
 # Every fast criterion of the example register through the invariants runner, never paging; the
 # plugin-only rows (X-04, X-06, X-09, X-10) run nowhere else.  Slow criteria (leak scans, schema

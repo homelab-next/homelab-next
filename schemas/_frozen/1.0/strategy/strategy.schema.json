@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/strategy/strategy/1.0",
+  "title": "Strategy record",
+  "description": "The one strategy record of a lab (examples/strategy/strategy.md, homelabnext.strategy): mission, commander's intent and end state as prose sections; priorities of work (ranked), assumptions and constraints (each with an owner) in the front-matter. The objective cascade (SO -> OO -> TO -> TT) hangs below it. Validated as loaded: front-matter plus sections, reviews derived from its sidecar events.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "name",
+    "title",
+    "status",
+    "date",
+    "author",
+    "mission",
+    "intent",
+    "end_state",
+    "priorities",
+    "assumptions",
+    "constraints"
+  ],
+  "properties": {
+    "type": {
+      "const": "strategy"
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+      "maxLength": 63,
+      "description": "The strategy's slug: its graph node is strategy:<name>."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 200
+    },
+    "status": {
+      "enum": [
+        "active"
+      ]
+    },
+    "date": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "author": {
+      "$ref": "#/$defs/author"
+    },
+    "review_by": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "mission": {
+      "$ref": "#/$defs/text"
+    },
+    "intent": {
+      "$ref": "#/$defs/text"
+    },
+    "end_state": {
+      "$ref": "#/$defs/text"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "priorities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 4
+      },
+      "uniqueItems": true,
+      "description": "Priorities of work, most important first (priority is not weight of effort)."
+    },
+    "assumptions": {
+      "$ref": "#/$defs/strings"
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "rule",
+          "owner"
+        ],
+        "properties": {
+          "rule": {
+            "type": "string",
+            "minLength": 8
+          },
+          "owner": {
+            "$ref": "#/$defs/identity"
+          }
+        }
+      }
+    },
+    "reviews": {
+      "type": "array",
+      "description": "Derived from the review events (homelabnext.reviews); never written in the record file."
+    }
+  },
+  "$defs": {
+    "identity": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9_.@-]+$(?!\\n)",
+      "description": "issuer:subject (human:example-operator, profile:example-checker, role:on-call)."
+    },
+    "author": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "const": "unknown"
+        }
+      ]
+    },
+    "text": {
+      "type": "string",
+      "minLength": 12
+    },
+    "strings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    }
+  }
+}

@@ -9,6 +9,7 @@
     hnx status render --out DIR [--state FILE] [--views FILE] [--registry FILE] [--now TIME]
     hnx status serve [--state FILE] [--views FILE] [--registry FILE] [--bind HOST] [--port N]
                      [--allow-remote --allowed-host NAME ...] [--agents FILE] [--secrets-dir DIR]
+                     [--strategy DIR]
     hnx status ingest --agents FILE [--registry FILE] [--bind HOST] [--port N] [--publish-to URL]
                       [--allow-remote --allowed-host NAME ...] [--secrets-dir DIR]
 
@@ -16,6 +17,8 @@
 drains the agent-activity sources into the activity store, ``render``/``serve`` add the agent
 sessions to ``status.json`` and ``serve`` the agent pages (the private tier only behind the
 trusted front door); ``ingest`` is the separate push listener (``POST /ingest/agent-activity``).
+``--strategy`` (``examples/strategy``) has ``serve`` add the strategy pages (Strategy,
+Requirements, Objectives, RFIs; ``docs/strategy.md``).
 
 ``collect`` runs one pass over the due sources (``--all``: every polled source) and writes the
 state file; ``render`` and ``serve`` only read it, so they never wait on a source.  Exit codes:
@@ -67,7 +70,8 @@ def _document(args, reg, specs, views, clock, site=None):
     hub = _hub(args, reg, specs, clock)
     now = clock()
     agents = site.summary(now) if site is not None else None
-    return build_status(hub.snapshot(now), views, reg, specs, agents=agents)
+    strategy = bool(getattr(args, "strategy", None))
+    return build_status(hub.snapshot(now), views, reg, specs, agents=agents, strategy=strategy)
 
 
 def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.time) -> int:
@@ -133,6 +137,7 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     common(p, views=True, state=True)
     remote_opts(p, 8099)
     p.add_argument("--docs-base", default="docs")
+    p.add_argument("--strategy", help="a strategy directory: serve its pages (docs/strategy.md)")
     agents_opt(p)
     p = sub.add_parser("ingest", help="the agent-activity push listener (POST only)")
     common(p)
@@ -230,6 +235,7 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
             allowed_hosts=args.allowed_host,
             docs_base=args.docs_base,
             agents=site,
+            strategy=_strategy_site(args, clock),
         )
     except (ValueError, OSError) as exc:
         print(f"hnx status serve: {exc}", file=sys.stderr)
@@ -243,6 +249,15 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     finally:
         srv.server_close()
     return 0
+
+
+def _strategy_site(args, clock: Callable[[], float]):
+    """The strategy pages for ``--strategy DIR``, or None."""
+    if not getattr(args, "strategy", None):
+        return None
+    from homelabnext.strategy.pages import StrategySite
+
+    return StrategySite(args.strategy, clock=clock)
 
 
 def _ingest(args, cfg, store, clock: Callable[[], float]) -> int:

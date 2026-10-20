@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+event: value
+by: profile:example-checker
+date: 2026-10-20
+finding: status source uptime-monitors has no reading (source unknown)
+observed_at: '2026-10-20T13:05:00Z'
+sample: 0
+definition_digest: sha256:67b12580a8721fa8a2d7a1eb602fcf47e8c337c86db5eee6c9d167839e62dc49
+definition_version: 1
+evidence: status:uptime-monitors

@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/strategy/rfi/1.0",
+  "title": "Request for information record",
+  "description": "One RFI, one Markdown file per record (rfis/RFI-001.md): a question raised by a gap (a red or not-measurable measure, an unmet requirement), triaged into a collection requirement (CR: the answer needs data we do not hold) or a production requirement (PR: we hold it and must produce the answer), with a last time of value (LTIOV). Raised through the records inbox (a strategy-rfi intent) and closed only by a transition: answered, no-find (a valid outcome: the search is the answer) or expired (the LTIOV sweep).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "title",
+    "status",
+    "date",
+    "author",
+    "raised_by",
+    "triage",
+    "ltiov",
+    "question"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^RFI-(?:\\d{3,}|NEW)$(?!\\n)"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 200
+    },
+    "status": {
+      "enum": [
+        "open",
+        "answered",
+        "expired",
+        "no-find"
+      ]
+    },
+    "date": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "author": {
+      "$ref": "#/$defs/author"
+    },
+    "raised_by": {
+      "type": "string",
+      "pattern": "^(?:MOP|MOE|CCIR|FFIR|PIR)-\\d{3,}$(?!\\n)"
+    },
+    "triage": {
+      "enum": [
+        "collection",
+        "production"
+      ]
+    },
+    "ltiov": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "tasked_to": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/identity"
+      },
+      "uniqueItems": true
+    },
+    "intent": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/rel_path",
+      "description": "The strategy-rfi note that raised it, in the records tree."
+    },
+    "question": {
+      "$ref": "#/$defs/text"
+    },
+    "answer": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "resolution": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reviews": {
+      "type": "array",
+      "description": "Derived from the review events (homelabnext.reviews); never written in the record file."
+    }
+  },
+  "$defs": {
+    "identity": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9_.@-]+$(?!\\n)",
+      "description": "issuer:subject (human:example-operator, profile:example-checker, role:on-call)."
+    },
+    "author": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "const": "unknown"
+        }
+      ]
+    },
+    "text": {
+      "type": "string",
+      "minLength": 12
+    },
+    "strings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    }
+  }
+}

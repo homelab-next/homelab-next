@@ -296,6 +296,13 @@ hub's own host use `--spool build/status/agent-spool` instead of `--post`. `--su
 the local/cloud guess (`CLAUDE_CODE_REMOTE=true` reads as cloud); `--runtime codex` reports a
 CLI with the same hook shape; `--no-detail` never sends the private tier.
 
+### Strategy pages
+
+`hnx status serve --strategy DIR` adds four more live pages, menu entries `panel: strategy |
+requirements | objectives | rfis`: the strategy, the requirements board (CCIR / FFIR / PIR), the
+objective tree with each MOP/MOE's grade, value and time, and the RFIs by triage. They read the
+strategy records only; see [strategy to task](strategy.md) ([[strategy]]).
+
 ### Pages
 
 Menu entries in `views.yml` (`panel: agents | activity | agent-analytics`, and `agent-detail`,
