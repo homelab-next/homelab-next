@@ -3,7 +3,7 @@ event: review
 by: agent:example-checker
 kind: agent
 role: check
-date: 2026-10-19
+date: '2026-10-19'
 verdict: pass
 digest: sha256:4c31ecbe6eef
 note: fictional example review
