@@ -151,11 +151,13 @@ contracts:
 	$(PY) tools/contract_coverage.py
 
 # lessons/ and runbooks/ are record directories (one Markdown file per entry); every record's
-# generated `## Links` block is current (`hnx registers links <dir>` rewrites them)
+# generated `## Links` block is current (`hnx registers links <dir>` rewrites them); the lesson
+# review's due list is printed as a warning, never a failure (`... review --strict` fails on it)
 RECORD_DIRS := examples/registers/lessons examples/registers/runbooks
 registers:
 	$(PY) -m homelabnext.registers build examples/registers $(REGISTERS_OUT)
 	$(PY) -m homelabnext.registers links --check $(RECORD_DIRS)
+	$(PY) -m homelabnext.registers review examples/registers
 
 # Every fast criterion of the example register through the invariants runner, never paging; the
 # plugin-only rows (X-04, X-06, X-09, X-10) run nowhere else.  Slow criteria (leak scans, schema

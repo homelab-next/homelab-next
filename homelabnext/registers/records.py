@@ -11,12 +11,16 @@ A record file::
     ---
     id: LL-001                      # the key; the file is named <id>.md (LL-NEW-<slug>.md
     title: ...                      # until a maintainer allocates the number)
+    kind: pitfall                   # pitfall | practice, each with its lifecycle (schema.py)
+    status: controlled
     date: 2026-01-12
+    author: unknown                 # reviews: see homelabnext.reviews
     systems: [proxy, tls]
     recurrences: 1
-    status: controlled
+    review_by: 2027-01-17
     verification: {observable: ..., expected: ...}
     related: [RB-001]               # optional typed links to other lessons/runbooks
+    reviews: [...]
     ---
 
     ## Symptom
@@ -57,7 +61,7 @@ from collections.abc import Mapping
 import yaml
 
 from . import ids
-from .schema import RegisterError
+from .schema import RegisterError, is_active, record_digest_of
 
 __all__ = [
     "RECORD_KINDS",
@@ -66,6 +70,7 @@ __all__ = [
     "load_register",
     "load_texts",
     "parse_record",
+    "record_digest",
     "record_name",
     "refresh_links",
     "register_source",
@@ -83,13 +88,28 @@ SECTIONS: dict[str, tuple[tuple[str, str], ...]] = {
         ("root_cause", "Root cause"),
         ("preventive_control", "Preventive control"),
         ("open_reason", "Open reason"),
+        ("method", "Method"),
+        ("rationale", "Rationale"),
+        ("retired_reason", "Retired reason"),
         ("notes", "Notes"),
     ),
     "runbooks": (("purpose", "Purpose"), ("steps", "Steps")),
 }
 FRONT_ORDER = {
-    "lessons": ("id", "title", "date", "systems", "recurrences", "status", "verification"),
-    "runbooks": ("id", "title", "systems"),
+    "lessons": (
+        *("id", "title", "kind", "status", "date", "author", "systems", "applies_to"),
+        *("recurrences", "review_by", "retired_on", "retired_by", "incorporated_into"),
+        *("superseded_by", "verification", "related", "reviews"),
+    ),
+    "runbooks": (
+        "id",
+        "title",
+        "systems",
+        "last_reviewed",
+        "review_by",
+        "superseded_by",
+        "related",
+    ),
 }
 LINKS = "Links"
 GEN_OPEN, GEN_CLOSE = "<!-- hnx:gen:links -->", "<!-- /hnx:gen -->"
@@ -99,6 +119,8 @@ _H2 = re.compile(r"^##[ \t]+(?P<h>.+?)[ \t]*$")
 _FENCE = re.compile(r"^ {0,3}(?P<f>`{3,}|~{3,})")
 _STEP = re.compile(r"^(?P<n>\d+)\.(?:[ \t]+(?P<t>.*))?$")
 _VERIFY = re.compile(r"^[ \t]+[-*][ \t]+verify:(?:[ \t]*(?P<t>.*))?$")
+_FROM = re.compile(r"^[ \t]+[-*][ \t]+from_lessons:(?:[ \t]*(?P<t>.*))?$")
+_FROM_ID = re.compile(r"^(?:\[\[(?P<w>[^\]|]+)\]\]|(?P<p>[^\s,\[\]]+))$")
 
 
 # --- parsing ---------------------------------------------------------------------------------
@@ -148,10 +170,16 @@ def _steps(text: str, name: str, problems: list[str]) -> list[dict]:
             steps.append({"do": (m.group("t") or "").strip()})
         elif (m := _VERIFY.match(ln)) and steps and "verify" not in steps[-1]:
             steps[-1]["verify"] = (m.group("t") or "").strip()
+        elif (m := _FROM.match(ln)) and steps and "from_lessons" not in steps[-1]:
+            refs = [r.strip() for r in (m.group("t") or "").split(",") if r.strip()]
+            got = [_FROM_ID.match(r) for r in refs]
+            if not refs or not all(got):
+                problems.append(f"{name}: `## Steps` line {n}: from_lessons wants [[LL-001]], ...")
+            steps[-1]["from_lessons"] = [g.group("w") or g.group("p") for g in got if g]
         else:
             problems.append(
-                f"{name}: `## Steps` line {n} is not `N. <do>` or an indented `- verify: <check>`"
-                " under a step without one"
+                f"{name}: `## Steps` line {n} is not `N. <do>`, or an indented `- verify: <check>`"
+                " or `- from_lessons: [[LL-001]]` under a step without one"
             )
     return steps
 
@@ -215,6 +243,16 @@ def parse_record(text: str, name: str, kind: str, problems: list[str]) -> dict |
     return entry
 
 
+def record_digest(text: str, name: str, kind: str) -> str:
+    """The digest a review of this record file must carry (``hnx reviews digest FILE``): the
+    parsed record without its reviews, so the Links block and formatting do not count."""
+    problems: list[str] = []
+    entry = parse_record(text, name, kind, problems)
+    if problems or entry is None:
+        raise RegisterError(kind, problems or [f"{name}: not a record"])
+    return record_digest_of(_canonical({kind: [entry]}, kind)[kind][0])
+
+
 def load_texts(texts: Mapping[str, str], kind: str) -> dict:
     """Record file texts ``{file name: text}`` -> the register document (fatal on any problem)."""
     if kind not in RECORD_KINDS:
@@ -252,7 +290,7 @@ def _canonical(doc, kind: str):
         steps = e.get("steps") if kind == "runbooks" else None
         for st in steps if isinstance(steps, list) else ():
             if isinstance(st, dict):
-                for k in ("do", "verify"):
+                for k in ("do", "verify"):  # from_lessons ids are not prose
                     if isinstance(st.get(k), str):
                         st[k] = st[k].strip()
     return doc
@@ -262,14 +300,26 @@ def _kind_of(path: pathlib.Path) -> str:
     return path.stem.split(".")[0] if path.suffix else path.name
 
 
-def load_register(path, kind: str | None = None) -> dict:
+def load_register(path, kind: str | None = None, *, active_only: bool = False) -> dict:
     """The one reader of a register: a record directory or a single YAML file -> its document.
 
     ``kind`` defaults to the directory name or the file stem (``lessons``, ``runbooks``,
     ``invariants``, ``queue``).  Lessons and runbooks come back with prose fields stripped of
     surrounding whitespace in both forms; any other register is the YAML as parsed.
+    ``active_only`` drops retired, incorporated and superseded lessons and superseded runbooks
+    (:func:`homelabnext.registers.schema.is_active`): what a graph or a context pack should read.
+    It filters, it does not validate; validate the full document (references into the archive
+    must resolve).
     """
-    p = pathlib.Path(path)
+    doc = _load(pathlib.Path(path), kind)
+    kind = kind or _kind_of(pathlib.Path(path))
+    if active_only and kind in RECORD_KINDS:
+        entries = [e for e in doc[kind] if not isinstance(e, dict) or is_active(e, kind)]
+        doc = {**doc, kind: entries}
+    return doc
+
+
+def _load(p: pathlib.Path, kind: str | None) -> dict:
     kind = kind or _kind_of(p)
     if p.is_dir():
         texts, problems = {}, []
@@ -306,6 +356,11 @@ def _scalar_list(v) -> bool:
     return isinstance(v, list) and all(isinstance(x, (str, int, float)) for x in v)
 
 
+class _Dumper(yaml.SafeDumper):
+    def ignore_aliases(self, data):  # a repeated date is written twice, never as &id001
+        return True
+
+
 def _dump_front(entry: Mapping, kind: str) -> str:
     keys = [k for k in FRONT_ORDER.get(kind, ()) if k in entry]
     keys += [k for k in entry if k not in keys and k not in dict(SECTIONS[kind])]
@@ -317,9 +372,9 @@ def _dump_front(entry: Mapping, kind: str) -> str:
             out.append(f"{k}: {flow.strip()}")
         else:
             out.append(
-                yaml.safe_dump({k: v}, sort_keys=False, width=1 << 16, allow_unicode=True).rstrip(
-                    "\n"
-                )
+                yaml.dump(
+                    {k: v}, Dumper=_Dumper, sort_keys=False, width=1 << 16, allow_unicode=True
+                ).rstrip("\n")
             )
     return "\n".join(out)
 
@@ -328,12 +383,40 @@ def _wiki(ident: str) -> str:
     return f"[[{ident}]]"
 
 
+def _destination(ref: str) -> str:
+    path, _, anchor = ref.partition("#")
+    if path.startswith("docs/systems/"):  # the docs/ vault's own path-qualified form
+        stem = path[len("docs/systems/") : -len(".md")]
+        return f"[[systems/{stem}|{stem}]]" + (f" ({anchor})" if anchor else "")
+    return _wiki(path) + (f" step {anchor}" if anchor else "")
+
+
+def _archive_row(entry: Mapping) -> str | None:
+    """``- Archive: ...`` for an inactive record, so every reader can see it is history."""
+    status = entry.get("status")
+    if entry.get("superseded_by"):
+        return f"- Archive: superseded by {_wiki(str(entry['superseded_by']))}"
+    if status == "incorporated" and _scalar_list(entry.get("incorporated_into")):
+        dest = ", ".join(_destination(str(r)) for r in entry["incorporated_into"])
+        return f"- Archive: incorporated into {dest}"
+    if status == "retired":
+        by = entry.get("retired_by")
+        how = f" by {', '.join(f'`{r}`' for r in by)}" if _scalar_list(by) and by else ""
+        return f"- Archive: retired on {entry.get('retired_on')}{how}"
+    return None
+
+
 def links_block(entry: Mapping) -> str:
     """The generated ``## Links`` section: wiki-links for this record's typed links only."""
     rows = []
     if isinstance(entry.get("retired"), dict):
         rb = entry["retired"].get("replaced_by")
         rows.append("- Retired" + (f"; replaced by {_wiki(str(rb))}" if rb else ""))
+    if archive := _archive_row(entry):
+        rows.append(archive)
+    applies = entry.get("applies_to")
+    if _scalar_list(applies) and applies:
+        rows.append("- Applies to: " + ", ".join(f"`{a}`" for a in applies))
     systems = entry.get("systems")
     if _scalar_list(systems) and systems:
         rows.append("- Systems: " + ", ".join(f"[[systems/{s}|{s}]]" for s in systems))
@@ -342,6 +425,15 @@ def links_block(entry: Mapping) -> str:
         rows.append("- Related: " + ", ".join(_wiki(str(r)) for r in related))
     body = "\n".join(rows or ["- none"])
     return f"## {LINKS}\n\n{GEN_OPEN}\n{body}\n{GEN_CLOSE}\n"
+
+
+def _render_step(n: int, st: Mapping) -> str:
+    out = f"{n}. {st.get('do', '')}"
+    if "verify" in st:
+        out += f"\n   - verify: {st['verify']}"
+    if "from_lessons" in st:  # wiki-links in the body: the graph sees SOP -> lesson provenance
+        out += "\n   - from_lessons: " + ", ".join(_wiki(str(i)) for i in st["from_lessons"])
+    return out
 
 
 def render_record(entry: Mapping, kind: str) -> str:
@@ -353,11 +445,7 @@ def render_record(entry: Mapping, kind: str) -> str:
                 continue
             v = entry[field]
             if field == "steps":
-                v = "\n".join(
-                    f"{n}. {st.get('do', '')}"
-                    + (f"\n   - verify: {st['verify']}" if "verify" in st else "")
-                    for n, st in enumerate(v, 1)
-                )
+                v = "\n".join(_render_step(n, st) for n, st in enumerate(v, 1))
             parts.append(f"## {heading}\n\n{v}\n")
     parts.append(links_block(entry))
     return "\n".join(parts)

@@ -24,10 +24,23 @@ def test_example_registers_render_html_and_json(examples, tmp_path):
         f"{n}.{x}" for n in ("lessons", "runbooks", "invariants") for x in ("html", "json")
     }
     data = json.loads((tmp_path / "lessons.json").read_text())
-    assert data["count"] == 3 and data["by_status"] == {"open": 1, "partial": 1, "controlled": 1}
+    assert data["count"] == 5 and data["active"] == 3
+    assert data["by_kind"] == {"pitfall": 3, "practice": 2}
+    assert data["by_status"] == {
+        "active": 1,
+        "controlled": 1,
+        "incorporated": 1,
+        "open": 1,
+        "retired": 1,
+    }
+    html = (tmp_path / "lessons.html").read_text()
+    archive = html.index("<h2>Archive</h2>")
+    assert html.index('<article id="LL-002">') > archive  # retired pitfall
+    assert html.index('<article id="LL-004">') > archive  # incorporated practice
+    assert html.index('<article id="LL-001">') < archive
     rb = json.loads((tmp_path / "runbooks.json").read_text())
     rb1 = next(r for r in rb["runbooks"] if r["id"] == "RB-001")
-    assert rb1["related_lessons"] == ["LL-001"]  # joined on shared `systems`
+    assert rb1["related_lessons"] == ["LL-001", "LL-005"]  # active lessons sharing `systems`
 
 
 def test_html_is_self_contained(examples, tmp_path):

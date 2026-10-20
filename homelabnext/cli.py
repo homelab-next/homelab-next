@@ -123,10 +123,14 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         _detections,
     ),
     "registers": (
-        "lessons/runbooks/invariants: build pages, split|join record files, links blocks",
+        "lessons/runbooks/invariants: build pages, split|join record files, links blocks, review",
         _registers,
     ),
     "invariants": ("run the standing invariants (invariants run)", _invariants),
+    "reviews": (
+        "the shared review model (records, system pages): digest",
+        lambda a: importlib.import_module("homelabnext.reviews").main(a),
+    ),
     "ids": (
         "register ids: alloc|resolve|check-lost|check-dupes|check-placeholders",
         _ids,

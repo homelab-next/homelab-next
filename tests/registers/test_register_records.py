@@ -113,7 +113,10 @@ def test_split_names_placeholders_by_slug(tmp_path):
     src = tmp_path / "lessons.yml"
     src.write_text(yaml.safe_dump(doc))
     names = sorted(p.name for p in records.split_register(src, tmp_path / "lessons"))
-    assert names == ["LL-003.md", "LL-NEW-same-title-2.md", "LL-NEW-same-title.md"]
+    assert names == [
+        *("LL-003.md", "LL-004.md", "LL-005.md"),
+        *("LL-NEW-same-title-2.md", "LL-NEW-same-title.md"),
+    ]
 
 
 # --- malformed records are fatal ------------------------------------------------------------------
@@ -124,6 +127,7 @@ def src(tmp_path):
     d = tmp_path / "src"
     for kind in KINDS:
         shutil.copytree(REPO / "examples/registers" / kind, d / kind)
+    shutil.copy(REPO / "examples/registers/invariants.yml", d / "invariants.yml")
     return d
 
 
@@ -293,10 +297,10 @@ def test_new_record_is_allocated_renamed_and_rewritten(repo):
     assert r.returncode == 1 and "LL-NEW" in r.stderr
     r = _tool(repo, "resolve")
     assert r.returncode == 3, r.stderr
-    assert "LL-NEW -> LL-004" in r.stdout and "LL-NEW -> LL-005" in r.stdout
-    assert sorted(p.name for p in d.iterdir()) == [f"LL-00{n}.md" for n in range(1, 6)]
-    first = (d / "LL-004.md").read_text()
-    assert "id: LL-004" in first and "See LL-004 for" in first and "LL-NEW" not in first
+    assert "LL-NEW -> LL-006" in r.stdout and "LL-NEW -> LL-007" in r.stdout
+    assert sorted(p.name for p in d.iterdir()) == [f"LL-00{n}.md" for n in range(1, 8)]
+    first = (d / "LL-006.md").read_text()
+    assert "id: LL-006" in first and "See LL-006 for" in first and "LL-NEW" not in first
     assert _tool(repo, "resolve").returncode == 0  # idempotent
     assert _tool(repo, "check-placeholders").returncode == 0
     assert _tool(repo, "check-dupes").returncode == 0
@@ -310,7 +314,7 @@ def test_check_lost_catches_a_deleted_record_file(repo):
     assert "git checkout HEAD -- reg/lessons/<ID>.md" in r.stderr
     for p in (repo / "reg/lessons").iterdir():  # the whole directory gone
         p.unlink()
-    assert "lost LL-001, LL-002, LL-003" in _tool(repo, "check-lost").stderr
+    assert "lost LL-001, LL-002, LL-003, LL-004, LL-005" in _tool(repo, "check-lost").stderr
 
 
 def test_check_lost_counts_a_tombstone_file_as_present(repo):
@@ -350,4 +354,4 @@ def test_check_dupes_flags_a_name_id_mismatch_and_a_shared_id(repo):
 
 
 def test_allocation_floor_reads_the_directory(repo):
-    assert ids.allocate(repo, "reg/lessons", "LL") == ["LL-004"]
+    assert ids.allocate(repo, "reg/lessons", "LL") == ["LL-006"]

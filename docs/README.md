@@ -38,6 +38,9 @@ relate.
 
 - [Architecture decision log](adr/README.md) ([[adr/README|ADRs]]).
 - [Checklist](checklist.md) ([[checklist]]): what is done, public now, or needs a server.
+- [Registers](registers.md) ([[registers]]): lessons and runbooks as one file per record, the
+  lesson lifecycle (pitfalls retire into mechanisms, practices are incorporated into runbooks),
+  the shared review model and `hnx registers review`.
 - [Script catalog](scripts/catalog.md) ([[scripts/catalog|Script catalog]]), generated from the
   script headers; [how the catalog is kept true](scripts.md) ([[scripts]]).
 - [Glossary](glossary.md) ([[glossary]]).

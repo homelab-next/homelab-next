@@ -1,5 +1,11 @@
 ---
-{title: <service>, type: system, service: <service>, capability: <capability>, status: draft}
+title: <service>
+type: system
+service: <service>
+capability: <capability>
+status: draft
+author: unknown
+reviews: []
 ---
 
 # <service>

@@ -12,6 +12,8 @@ health: http
 backup_job: daily-core
 tags: [catalog, data]
 status: draft
+author: unknown
+reviews: []
 ---
 
 # lake-catalog

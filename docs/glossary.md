@@ -42,8 +42,17 @@ replayed against a gold set before it can change behaviour.
 **Invariant.** A property that should be continuously true and that a command can decide today. A
 check returns pass, fail, or "could not measure" (exit 100 or above).
 
-**Register.** A human-edited YAML list with a strict schema (a board, a lessons list, runbooks,
-invariants) from which pages and JSON are generated.
+**Register.** Human-edited records with a strict schema from which pages and JSON are generated:
+lessons and runbooks are one Markdown file per record, invariants and boards one YAML list each
+([registers](registers.md)).
+
+**Pitfall / practice.** The two kinds of lesson: a problem with a root cause and a control, which
+graduates into a mechanism (`retired_by`); a method that works, which graduates into a procedure
+(`incorporated_into`). An active lesson of either kind is backlog.
+
+**Review (of a record or page).** An entry of its `reviews:` list (agent check, adversarial agent,
+human approve) that counts only while its content digest matches; the policy says which a status
+needs (`homelabnext/reviews.py`, `examples/review-policy.yml`).
 
 **Records lifecycle.** propose, approve or deny, complete. Agents write only to `inbox/`; an
 operator moves items to `decided/`; a `completion-request` note with a `related:` list closes

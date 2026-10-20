@@ -12,6 +12,8 @@ health: http
 backup_job: weekly-lake
 tags: [data, storage]
 status: draft
+author: unknown
+reviews: []
 ---
 
 # object-store
