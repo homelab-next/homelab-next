@@ -31,8 +31,8 @@
       "description": "A working session with no event for this long is stuck. A model's threshold beats its runtime's, which beats the default.",
       "properties": {
         "default": {"$ref": "#/$defs/seconds"},
-        "runtimes": {"type": "object", "propertyNames": {"pattern": "^[a-z][a-z0-9-]{0,31}$"}, "additionalProperties": {"$ref": "#/$defs/seconds"}},
-        "models": {"type": "object", "propertyNames": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,99}$"}, "additionalProperties": {"$ref": "#/$defs/seconds"}}
+        "runtimes": {"type": "object", "propertyNames": {"pattern": "^[a-z][a-z0-9-]{0,31}$(?!\\n)"}, "additionalProperties": {"$ref": "#/$defs/seconds"}},
+        "models": {"type": "object", "propertyNames": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,99}$(?!\\n)"}, "additionalProperties": {"$ref": "#/$defs/seconds"}}
       }
     },
     "private": {
@@ -41,11 +41,11 @@
       "required": ["service", "viewer_group", "access_log"],
       "description": "The private tier. Absent: never served. Present: served only to requests from a trusted proxy that carry the front door's shared-secret header, an identity header and the viewer group.",
       "properties": {
-        "service": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$", "description": "The registry service whose front_door (header + secret reference) the edge adds."},
-        "trusted_proxies": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$"}, "description": "Registry host names allowed to front the hub; default: the hosts of every edge-proxy service."},
-        "identity_header": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,62}$", "default": "X-Authentik-Username"},
-        "groups_header": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,62}$", "default": "X-Authentik-Groups"},
-        "viewer_group": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}$"},
+        "service": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$(?!\\n)", "description": "The registry service whose front_door (header + secret reference) the edge adds."},
+        "trusted_proxies": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$(?!\\n)"}, "description": "Registry host names allowed to front the hub; default: the hosts of every edge-proxy service."},
+        "identity_header": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,62}$(?!\\n)", "default": "X-Authentik-Username"},
+        "groups_header": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,62}$(?!\\n)", "default": "X-Authentik-Groups"},
+        "viewer_group": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}$(?!\\n)"},
         "access_log": {"$ref": "#/$defs/rel_path"}
       }
     },
@@ -65,10 +65,10 @@
             "additionalProperties": false,
             "required": ["name", "token"],
             "properties": {
-              "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$"},
+              "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$(?!\\n)"},
               "token": {"$ref": "#/$defs/secret_ref"},
               "detail": {"type": "boolean", "default": true, "description": "Accept this sender's private detail tier."},
-              "runtimes": {"type": "array", "uniqueItems": true, "minItems": 1, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"}, "description": "The runtimes this sender may report (default: any). A sender may only add to sessions it started."}
+              "runtimes": {"type": "array", "uniqueItems": true, "minItems": 1, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$(?!\\n)"}, "description": "The runtimes this sender may report (default: any). A sender may only add to sessions it started."}
             }
           }
         }
@@ -76,9 +76,9 @@
     }
   },
   "$defs": {
-    "rel_path": {"type": "string", "pattern": "^(?!/)(?!.*\\.\\.)[A-Za-z0-9._/-]+$", "maxLength": 256},
+    "rel_path": {"type": "string", "pattern": "^(?!/)(?!.*\\.\\.)[A-Za-z0-9._/-]+$(?!\\n)", "maxLength": 256},
     "cap": {"type": "integer", "minimum": 0, "maximum": 262144},
     "seconds": {"type": "integer", "minimum": 30, "maximum": 604800},
-    "secret_ref": {"type": "string", "pattern": "^secret:[a-z][a-z0-9_-]*(/[a-z][a-z0-9_-]*)*$", "description": "A name in the secret store; the value is never in this file."}
+    "secret_ref": {"type": "string", "pattern": "^secret:[a-z][a-z0-9_-]*(/[a-z][a-z0-9_-]*)*$(?!\\n)", "description": "A name in the secret store; the value is never in this file."}
   }
 }

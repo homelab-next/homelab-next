@@ -121,3 +121,26 @@ def test_major_bump_is_allowed_to_break(tmp_path):
         if "lesson.schema.json" in x.where and "additive" in x.message
     ]
     assert probs == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "additive"),
+    [
+        ("^[a-z]+$", "^[a-z]+$(?!\\n)", True),  # ECMA-262 `$` is end of input: same language
+        ("^a$|^b$", "^a$|^b$(?!\\n)", True),
+        ("^[a-z]+\\$", "^[a-z]+\\$(?!\\n)", False),  # an escaped dollar is a literal
+        ("^[a-z]+$", "^[a-z]+$(?!\\r)", False),
+        ("^[a-z]+$", "^[a-y]+$(?!\\n)", False),
+        ("^[a-z]+", "^[a-z]+(?!\\n)", False),  # no closing anchor: a real tightening
+    ],
+)
+def test_a_trailing_newline_guard_is_the_only_pattern_change_proved_compatible(old, new, additive):
+    s_old = {"type": "string", "pattern": old}
+    assert (sc.is_additive(s_old, {**s_old, "pattern": new}) == []) is additive
+
+
+def test_the_newline_guard_rejects_what_python_alone_accepted():
+    """Python's ``$`` matches before a trailing newline; the guard closes that, nothing else."""
+    old, new = {"pattern": "^[a-z]+$"}, {"pattern": "^[a-z]+$(?!\\n)"}
+    assert sc.errors_for(old, "abc\n", REG) == []  # the defect, under Python's re
+    assert sc.errors_for(new, "abc\n", REG) and sc.errors_for(new, "abc", REG) == []

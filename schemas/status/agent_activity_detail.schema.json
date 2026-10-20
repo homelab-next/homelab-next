@@ -24,10 +24,10 @@
       }
     },
     "truncated": {"type": "array", "uniqueItems": true, "items": {"enum": ["prompt", "command", "tool_input", "tool_output", "error", "approval.payload"]}, "description": "Set by the hub: fields cut to their cap."},
-    "redactions": {"type": "object", "propertyNames": {"pattern": "^[a-z-]{1,20}$"}, "additionalProperties": {"type": "integer", "minimum": 0}, "description": "Set by the hub: redactions by type."}
+    "redactions": {"type": "object", "propertyNames": {"pattern": "^[a-z-]{1,20}$(?!\\n)"}, "additionalProperties": {"type": "integer", "minimum": 0}, "description": "Set by the hub: redactions by type."}
   },
   "$defs": {
-    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$(?!\\n)"},
     "text": {"type": "string", "maxLength": 262144}
   }
 }

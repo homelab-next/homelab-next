@@ -10,18 +10,18 @@
     "event_id": {"$ref": "#/$defs/id", "description": "Unique per event; a re-sent event is a duplicate."},
     "session_id": {"$ref": "#/$defs/id"},
     "parent_session_id": {"$ref": "#/$defs/id", "description": "The session that started this one (a subagent, a delegated task)."},
-    "runtime": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "description": "What runs the agent: claude-code, codex, hermes, orchestrator, agentmetry, generic, ..."},
+    "runtime": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$(?!\\n)", "description": "What runs the agent: claude-code, codex, hermes, orchestrator, agentmetry, generic, ..."},
     "surface": {"enum": ["local", "cloud"], "description": "Where the session runs: a lab or workstation host, or a cloud session."},
-    "host": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$"},
-    "project": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]{0,62}$", "description": "The project or repository name (never a path)."},
-    "model": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,99}$"},
-    "agent": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$", "description": "The agent or profile name."},
+    "host": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$(?!\\n)"},
+    "project": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]{0,62}$(?!\\n)", "description": "The project or repository name (never a path)."},
+    "model": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,99}$(?!\\n)"},
+    "agent": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$(?!\\n)", "description": "The agent or profile name."},
     "time": {"$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"},
     "kind": {
       "enum": ["session_start", "session_end", "prompt", "tool_start", "tool_end", "approval_request", "approval_response", "notification", "stop", "subagent_stop", "error", "heartbeat", "usage"],
       "description": "stop: the agent finished its turn and waits for the operator; session_end: the session is over."
     },
-    "tool": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$", "description": "The tool's NAME only, never its input."},
+    "tool": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$(?!\\n)", "description": "The tool's NAME only, never its input."},
     "outcome": {"enum": ["success", "error", "denied", "pending", "approved", "info"]},
     "tokens_in": {"type": "integer", "minimum": 0, "maximum": 10000000000},
     "tokens_out": {"type": "integer", "minimum": 0, "maximum": 10000000000},
@@ -29,6 +29,6 @@
     "has_detail": {"type": "boolean", "description": "A private detail record exists for this event."}
   },
   "$defs": {
-    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"}
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$(?!\\n)"}
   }
 }

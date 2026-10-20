@@ -13,7 +13,7 @@
       "additionalProperties": false,
       "required": ["title", "main"],
       "properties": {
-        "title": {"type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[^\\u0000-\\u001f\\u007f<>&]*$"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[^\\u0000-\\u001f\\u007f<>&]*$(?!\\n)"},
         "main": {"$ref": "#/$defs/view_id", "description": "The view shown as the main page; must be a panel view."},
         "act_via": {"$ref": "#/$defs/service_ref", "description": "Optional: where anything that changes something is done (the broker or approval path). The hub only links to it."}
       }
@@ -21,15 +21,15 @@
     "menu": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"$ref": "#/$defs/view"}}
   },
   "$defs": {
-    "view_id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,40}$"},
-    "slug": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$", "maxLength": 63},
+    "view_id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,40}$(?!\\n)"},
+    "slug": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)", "maxLength": 63},
     "service_ref": {
       "type": "object",
       "additionalProperties": false,
       "required": ["service"],
       "properties": {
-        "service": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$", "description": "A registry service name; the link is built from the registry (public hostname, else the capability alias)."},
-        "path": {"type": "string", "pattern": "^/[A-Za-z0-9._~/%@+=&?,-]*$", "maxLength": 200},
+        "service": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$(?!\\n)", "description": "A registry service name; the link is built from the registry (public hostname, else the capability alias)."},
+        "path": {"type": "string", "pattern": "^/[A-Za-z0-9._~/%@+=&?,-]*$(?!\\n)", "maxLength": 200},
         "optional": {"type": "boolean", "default": false, "description": "When the service is not registered the entry is shown as unavailable instead of failing validation (agents and their dashboards are optional)."}
       }
     },
@@ -39,16 +39,16 @@
       "required": ["id", "title"],
       "properties": {
         "id": {"$ref": "#/$defs/view_id"},
-        "title": {"type": "string", "minLength": 1, "maxLength": 60, "pattern": "^[^\\u0000-\\u001f\\u007f<>&]*$"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 60, "pattern": "^[^\\u0000-\\u001f\\u007f<>&]*$(?!\\n)"},
         "panel": {"enum": ["exceptions", "grid", "sources", "agents", "activity", "agent-analytics", "agent-detail", "agent-access-log"], "description": "exceptions, grid and sources are sections of the page; the agent panels (1.1) are pages of their own, served live by hnx status serve."},
-        "group": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,30}$", "description": "1.1: a menu group; the private group renders only for a request through the trusted front door."},
+        "group": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,30}$(?!\\n)", "description": "1.1: a menu group; the private group renders only for a request through the trusted front door."},
         "select": {
           "type": "object",
           "additionalProperties": false,
           "minProperties": 1,
           "properties": {
             "sources": {"type": "array", "uniqueItems": true, "minItems": 1, "items": {"$ref": "#/$defs/slug"}},
-            "modules": {"type": "array", "uniqueItems": true, "minItems": 1, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$"}}
+            "modules": {"type": "array", "uniqueItems": true, "minItems": 1, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$(?!\\n)"}}
           }
         },
         "external": {"$ref": "#/$defs/service_ref"}

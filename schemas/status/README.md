@@ -13,3 +13,9 @@ service registry (`status_sources:` in `schemas/platform/service.json` 2.1).
 
 The `status.json` document the hub renders is documented in `docs/status.md` (schema string
 `homelabnext.status/1`). Evolution is additive within a major version (`tools/schema_check.py`).
+
+Every pattern ends in `$(?!\n)`, as in `schemas/platform/service.json` 2.0: Python's `re` (the
+repository's validators) lets `$` match before a trailing newline, ECMA-262 does not. The guard is
+the same language under JSON Schema's ECMA-262 semantics, so `tools/schema_check.py` accepts adding
+it within a major version (the negatives `*-trailing-newline.*` pin it). `source` is the shared
+`ids/common` slug, which has no guard yet.
