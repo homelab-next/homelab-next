@@ -31,6 +31,15 @@ on unless the manifest says ``screen: {redact: false, reason: ...}``; either way
 opts out of the rest.  Static sections and pre-gate verdicts are platform-authored and are not
 screened.
 
+Knowledge.  ``knowledge=`` takes a :class:`~homelabnext.agent.knowledge.Selection` (the
+profile's ``include:`` rules run over the repository graph): each included node becomes an
+optional volatile section named ``knowledge-<rank>-<id>`` whose text is the record or page itself
+under a header with its id, path, review tiers and content digest.  It is repository content, not
+input, so it is not screened, but it is fenced and escaped like every volatile section.  When the
+pack is over budget, knowledge goes first, lowest rank first, before any other section; the
+pack's ``knowledge`` block lists the included ids and digests and every exclusion with its
+reason.  The ``knowledge-`` section prefix is reserved.
+
 ``inputs`` shape::
 
     {"sections": {<section name>: <text>}, "pregates": {<gate id>: <pregate_output dict>}}
@@ -49,6 +58,7 @@ TIERS = ("stable", "session", "volatile")
 _RANK = {t: i for i, t in enumerate(TIERS)}
 DEFAULT_DELIMITER = "====="
 PREGATE_PREFIX = "pregate-"
+KNOWLEDGE_PREFIX = "knowledge-"
 ESCAPE_PREFIX = "[escaped] "
 
 
@@ -70,10 +80,12 @@ def assemble_pack(
     inputs: Mapping[str, Any],
     *,
     denylist: Iterable[str] | None = None,
+    knowledge: Any = None,
 ) -> tuple[dict, str]:
     """Return ``(pack, hash)``.  Does no I/O and does not mutate its arguments.
 
     ``denylist``: deny-list lines whose terms are redacted from input sections (see module doc).
+    ``knowledge``: a :class:`~homelabnext.agent.knowledge.Selection` to add (see module doc).
     """
     if not isinstance(manifest, Mapping) or not manifest.get("sections"):
         raise SpecError("manifest must be a mapping with a non-empty 'sections' list")
@@ -81,6 +93,10 @@ def assemble_pack(
     if len(set(names)) != len(names):
         raise SpecError("manifest sections must have unique names")
     for s in manifest["sections"]:
+        if str(s.get("name", "")).startswith(KNOWLEDGE_PREFIX):
+            raise SpecError(
+                f"section {s.get('name')!r}: the {KNOWLEDGE_PREFIX!r} prefix is reserved"
+            )
         if s.get("tier") not in _RANK:
             raise SpecError(f"section {s.get('name')!r}: tier must be one of {list(TIERS)}")
     try:
@@ -132,6 +148,8 @@ def assemble_pack(
             continue
         keep = ("name", "tier", "max_chars", "required", "source")
         items.append({**{k: s[k] for k in keep}, "text": text})
+    if knowledge is not None:
+        items += [dict(k) for k in knowledge.sections()]
     items.sort(key=lambda i: (_RANK[i["tier"]], i["name"]))
 
     # screening: untrusted input only, in pack order so label numbers follow first appearance
@@ -161,10 +179,15 @@ def assemble_pack(
             i["text"] = i["text"][: i["max_chars"]] + _marker(cut)
             i["truncated"] = True
 
-    # whole-pack budget: cut volatile first, then session, never stable
+    # whole-pack budget: cut knowledge (lowest rank first), then volatile, then session, never
+    # stable
     limit = int(manifest["budget_chars"])
     total = sum(len(i["text"]) for i in items)
-    for i in sorted(items, key=lambda i: (_RANK[i["tier"]], i["name"]), reverse=True):
+
+    def cut_order(i: Mapping[str, Any]) -> tuple:
+        return (_RANK[i["tier"]], i["source"] == "knowledge", i["name"])
+
+    for i in sorted(items, key=cut_order, reverse=True):
         if total <= limit:
             break
         if i["tier"] == "stable":
@@ -235,4 +258,6 @@ def assemble_pack(
         "screen": screen_record,
         "text": rendered,
     }
+    if knowledge is not None:
+        pack["knowledge"] = knowledge.record()
     return pack, digest_of(pack)

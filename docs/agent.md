@@ -21,7 +21,7 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 
 | Schema | Purpose |
 |---|---|
-| `agent/profile` | compiled profile: `parts` by logical id, `grants`, `ceiling`, `budgets`, `reads_untrusted`, `digest`, `provenance` |
+| `agent/profile` | compiled profile: `parts` by logical id, `grants`, `ceiling`, `budgets`, `reads_untrusted`, `include`, `digest`, `provenance` |
 | `agent/context_manifest` | persona, skills, tools, pre-gates, memory scopes, tiered sections, character budget, must-cite sources, `screen` |
 | `agent/pregate_output` | `ok` / `degraded` / `stale` / `failed`, with per-source ages; a non-ok status needs a reason |
 | `agent/report_result` | `pack_id`, cites, unknowns, memory updates, optional structured `output`; `ok` needs at least one cite, `deferred` is how a job reports it did nothing |
@@ -35,7 +35,7 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `broker/decision` | `allow` / `deny` / `needs-approval` with a closed reason vocabulary; shadow mode records but does not enforce |
 | `broker/approval` | approver identity plus `request_digest` |
 
-All are versioned 1.0 except `agent/profile` (1.1, additive: `reads_untrusted`),
+All are versioned 1.0 except `agent/profile` (1.1, additive: `reads_untrusted`; 1.2, additive: `include`),
 `agent/report_result` (1.1, additive: `output`),
 `agent/context_manifest` (1.1, additive: `screen`), `broker/manifest` (1.1, additive: approvers)
 and `broker/decision` (1.1 adds the approval reasons; 1.2 adds `not-request-owner` and the optional
@@ -82,11 +82,13 @@ The compiler:
    listing every excess);
 3. refuses a **reader** that holds an acting grant (`ReaderViolation`, see below), even when the
    ceiling allows it;
-4. requires all four budgets to be integers within the ceiling's budget caps (`BudgetError`);
-5. sorts and de-duplicates lists, so source order never changes the result;
-6. records `provenance`: each part's id, source and content digest, plus the digest of the
+4. refuses an `include:` rule that would seed knowledge from something the profile is not granted
+   (`IncludeViolation`, see "Linked knowledge" below);
+5. requires all four budgets to be integers within the ceiling's budget caps (`BudgetError`);
+6. sorts and de-duplicates lists, so source order never changes the result;
+7. records `provenance`: each part's id, source and content digest, plus the digest of the
    normalised spec;
-7. sets `digest` to the sha256 of the canonical JSON of everything else, and validates the result
+8. sets `digest` to the sha256 of the canonical JSON of everything else, and validates the result
    against its own schema.
 
 `verify_profile(profile, policy=..., lock=...)` re-checks a profile you did not just compile:
@@ -232,6 +234,69 @@ the registry's `agent-runtime` service):
 replace what the agent is told. The manifest's persona must be the profile's. Stable content is
 never cut, so a block that does not fit `budget_chars` defers the pack. On the command line,
 `hnx agent pack MANIFEST --inputs F --profile P --registry R [--runs-on HOST] [--broker M]`.
+
+## Linked knowledge: `include:` rules
+
+A profile can carry the knowledge its task needs, not just pointers to it: the record or page
+text goes into the pack (a lab measured a 1.6% follow rate for pointers). A spec lists rules
+(`homelabnext/agent/include.py`); a spec without `include` compiles exactly as before, and its
+profile has no `include` key.
+
+```yaml
+include:
+  - from: capabilities          # capabilities | mcp | services | task
+    only: [cap:lake-query]      # optional (capabilities, mcp): a subset of the grants
+    kinds: [runbook, lesson, check, schema, doc]   # also adr, inv
+    depth: 1                    # hops from the seeds, 1..3 (default 1)
+    budget: 12                  # max nodes this rule includes, 1..50 (default 12)
+    max_chars: 4000             # per node, the pack's section cap (default 4000)
+    require_reviews: [agent_check, challenge]       # optional
+```
+
+- **Seeds are grants.** `capabilities` seeds from the granted `cap:` ids, `mcp` from the granted
+  MCP servers, `services` from the registry services providing a granted capability, `task` from
+  `seeds_for(graph, paths, text)` over the task's paths and text. The compiler refuses (`IncludeViolation`,
+  every problem listed) an `only` entry that is not granted and a rule seeding from a grant set
+  the profile does not hold; `verify_profile` and the pack build re-check the rules, so a profile
+  edited afterwards, digest recomputed or not, gains nothing. Rules are normalised (sorted,
+  defaults written) and covered by the profile digest. **Include adds knowledge, never a grant**:
+  grants, tools, the access block and the reader rule are untouched.
+- **Grant filtering.** `homelabnext/agent/knowledge.py` runs the rules over a fresh graph
+  (`homelabnext.graph`). Capabilities, services, MCP servers and broker actions are the
+  access-bearing nodes; the profile holds its granted capabilities and MCP servers and the
+  services providing a granted capability (never a broker action). A node's *subjects* are the
+  access-bearing nodes it links to directly, seen through nodes that only name one (a system tag,
+  a product, an adapter, a compose service). A node is eligible only if it has a subject and
+  **every** subject is granted: a page about a granted and an ungranted capability is excluded,
+  one hop away or not. The search runs on the graph minus ungranted access-bearing nodes, but
+  subjects are read on the full graph. System tags are transparent for `depth`: a lesson tagged
+  `backup` is one hop from `cap:backup`. An ungranted capability, service or MCP server named in
+  the task is dropped as a seed.
+- **Also excluded, never silently**: inactive records (retired, superseded, incorporated), records
+  missing a tier `require_reviews` asks for (it applies to lessons, runbooks and criteria, the
+  reviewed records; other kinds are reviewed in git), nodes over the rule's `budget` (lowest rank
+  first), unreadable content and paths outside the checkout. Another rule may still include a
+  node one rule excluded.
+- **Into the pack.** Each included node is an optional volatile section `knowledge-<rank>-<id>`:
+  a header with id, kind, title, path, current review tiers, rank and content digest, then the
+  content itself (a file only that node defines, else the node's own graph record, e.g. a
+  conformance check). It is repository content, not input, so it is not screened; it is fenced and
+  escaped like every volatile section. Order is `related` rank (distance, edge weight, id). Over
+  `budget_chars`, knowledge is dropped first, lowest rank first, before any other section, and
+  each drop is in `truncations`. The `knowledge-` prefix is reserved for manifests.
+- **Auditable.** The pack's `knowledge` block records the profile and graph digests, the
+  normalised rules, each rule's seeds, every included id with its rank, path, review tiers and
+  content digest, and every exclusion with its rule and reason. Same profile, same checkout and
+  same task give a byte-identical pack. A pack built without a selection has no `knowledge` key.
+
+```
+hnx agent pack MANIFEST --inputs F --profile P --registry R [--root .] \
+    [--task-path FILE ...] [--task-text T | --task-file F] [--explain]
+```
+
+`--explain` prints the rules, seeds, included nodes (rank, distance, score, the edge that reached
+them, review tiers) and every exclusion with its reason; the pack itself then goes only to `--out`.
+Tests: `tests/agent/test_agent_knowledge.py`.
 
 ## The keyring (M-12)
 
@@ -402,6 +467,7 @@ hnx agent compile SPEC --library LIBRARY.yml --policy POLICY.yml [--out profile.
 hnx agent verify PROFILE --policy POLICY.yml [--lock profiles.lock]
 hnx agent pack MANIFEST --inputs INPUTS.json [--out pack.json] [--denylist FILE]
                [--profile PROFILE.json --registry services.yml [--runs-on HOST] [--broker M]]
+               [--root DIR] [--task-path FILE ...] [--task-text T | --task-file F] [--explain]
 hnx agent keyring build|check SOURCES.yml
 hnx agent lint [PATH ...] [--classes FILE]
 hnx agent prompts lint [TEMPLATE|DIR ...]
@@ -411,7 +477,7 @@ hnx agent injection check-report REPORT
 ```
 
 `LIBRARY.yml` is `{parts: {<logical id>: <path relative to the file>}}`; paths may not escape its
-directory. `compile` exits 1 on a missing part, ceiling, reader or budget violation; `verify` exits 1 on
+directory. `compile` exits 1 on a missing part, ceiling, reader, include or budget violation; `verify` exits 1 on
 any problem, including a reader holding an acting grant and a digest that is not the one in the
 lock; `lint` exits 1 on any reader problem or when it finds no profile. `pack` prints the
 hash and status on stderr and exits 0 when ready, **3 when deferred**, 1 on invalid input.
@@ -421,6 +487,7 @@ Install the extra with `pip install 'homelabnext[agent]'`.
 
 `pytest tests/agent tests/broker` covers (besides the template lint and injection eval above): determinism (same input twice, shuffled inputs, three
 hash seeds), ceiling and budget rejection, missing-id errors, truncation and tier reporting,
-deferral, report validation, schema examples and negatives, the reader rule (refusal per class,
+deferral, report validation, linked knowledge (grant filtering, inactive records, review
+filters, budget by rank, pack determinism, a reader gaining no grant), schema examples and negatives, the reader rule (refusal per class,
 passing reader and actor, tampered profile, lint), the screener evaluation set, the golden-suite compatibility check,
 and the broker decision table.

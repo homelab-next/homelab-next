@@ -6,6 +6,11 @@
 ``pack MANIFEST --inputs FILE [--denylist FILE]`` assemble a context pack and print its hash.
     ``[--profile P --registry R [--runs-on HOST] [--broker M]]`` start a session: the pack gets
                                                   the profile's access block (stable ``access``).
+    ``[--root DIR] [--task-path P ...] [--task-text T | --task-file F] [--explain]``
+                                                  with a profile that has ``include:`` rules, add
+                                                  the linked knowledge from the graph of the
+                                                  checkout at DIR (default ``.``); ``--explain``
+                                                  prints what was included and excluded and why.
 ``keyring build|check SOURCES``                   generate the keyring from its sources, or fail
                                                   when the committed one has drifted (M-12).
 ``lint [PATH ...]``                               readers cannot act: every agent profile and
@@ -101,6 +106,19 @@ def _keyring(action: str, sources: str, classes: ToolClasses | None) -> int:
     return 0
 
 
+def _knowledge(profile: dict, args: argparse.Namespace) -> Any:
+    """The profile's knowledge selection over a fresh graph of ``--root``."""
+    from homelabnext.graph import build
+
+    from .knowledge import select_knowledge
+
+    text = args.task_text
+    if args.task_file:
+        text = (text + "\n" if text else "") + Path(args.task_file).read_text(encoding="utf-8")
+    graph, _ = build(args.root)
+    return select_knowledge(profile, graph, args.root, task_paths=args.task_path, task_text=text)
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="hnx agent", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -131,6 +149,15 @@ def main(argv: list[str]) -> int:
     p.add_argument("--registry", help="service registry (with --profile)")
     p.add_argument("--runs-on", help="registry host the agent runs on (default: agent-runtime)")
     p.add_argument("--broker", help="broker manifest, to list the profile's broker actions")
+    p.add_argument("--root", default=".", help="checkout whose graph feeds include: rules")
+    p.add_argument("--task-path", action="append", default=[], help="file the task edits")
+    p.add_argument("--task-text", default="", help="task text (seeds for from: task)")
+    p.add_argument("--task-file", help="read the task text from this file")
+    p.add_argument(
+        "--explain",
+        action="store_true",
+        help="print the included and excluded knowledge and why (the pack goes to --out only)",
+    )
     k = sub.add_parser("keyring", help="generate the keyring from its sources, or check drift")
     k.add_argument("action", choices=("build", "check"))
     k.add_argument("sources", help="sources file: {registry, profiles, broker, out}")
@@ -197,18 +224,30 @@ def main(argv: list[str]) -> int:
                 raise AgentError("--profile and --registry go together")
             from homelabnext.registry import load as load_registry
 
+            profile = _load(args.profile)
+            knowledge = None
+            if profile.get("include") or args.explain:
+                from .knowledge import explain
+
+                knowledge = _knowledge(profile, args)
+                if args.explain:
+                    sys.stdout.write(explain(knowledge))
             pack, digest = start_session(
                 manifest,
                 _load(args.inputs) or {},
-                _load(args.profile),
+                profile,
                 load_registry(args.registry),
                 runs_on=args.runs_on,
                 broker=_load(args.broker) if args.broker else None,
                 denylist=deny,
+                knowledge=knowledge,
             )
         else:
+            if args.explain:
+                raise AgentError("--explain needs --profile and --registry")
             pack, digest = assemble_pack(manifest, _load(args.inputs) or {}, denylist=deny)
-        _emit({"hash": digest, "pack": pack}, args.out)
+        if args.out or not args.explain:
+            _emit({"hash": digest, "pack": pack}, args.out)
         print(f"pack {digest} status={pack['status']}", file=sys.stderr)
         for r in pack["deferred_reasons"]:
             print(f"deferred: {r}", file=sys.stderr)
