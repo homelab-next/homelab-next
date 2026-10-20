@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: Apache-2.0
+# Example production broker manifest (schemas/broker/manifest 1.3): the walkthrough's actions, with
+# callers authenticated on the socket instead of asserted.  Deploying it: docs/broker.md.
+#   hnx broker validate examples/broker/manifest.production.yml
+#   hnx broker serve --manifest examples/broker/manifest.production.yml \
+#     --state /var/lib/hnx-broker/state --data-root /srv/agents \
+#     --socket /run/hnx-broker/broker.sock --socket-group hnx-broker-clients
+manifest_id: example-lab-broker-production
+default: deny
+mode: enforce
+# the CLI's asserted --as identity is refused: every caller is a socket peer listed below
+dev_identity: false
+approval_ttl_s: 900
+approvers:
+  - {issuer: sso, subject: operator-one, kind: human}
+# one system user per agent; its processes act as exactly that profile
+callers:
+  - {user: hnx-agent-triage, profile: profile:triage}
+  - {user: hnx-agent-reader, profile: profile:reader}
+# the hub behind the SSO front door files approvals for the person it authenticated (issuer sso)
+approval_relays:
+  - {user: hnx-hub, issuer: sso}
+handler_docs:
+  - handlers/service-status.handler.json
+  - handlers/service-restart.handler.json
+lanes:
+  - name: memory
+    kind: files
+    root: memory
+    per_actor: true
+    filename_pattern: '^[a-z0-9][a-z0-9-]{0,62}\.md$'
+    max_bytes: 65536
+    format: text
+  - name: findings
+    kind: files
+    root: findings
+    per_actor: true
+    filename_pattern: '^\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]{0,60}\.md$'
+    max_bytes: 262144
+    format: text
+  - name: proposals
+    kind: records-inbox
+    root: records
+    per_actor: false
+    max_bytes: 65536
+    note_types: [proposal]
+actions:
+  - {action: memory.write, tier: write, handler: builtin/lane, lane: memory, requires_approval: false}
+  - {action: finding.write, tier: write, handler: builtin/lane, lane: findings, requires_approval: false}
+  - {action: proposal.file, tier: write, handler: builtin/lane, lane: proposals, requires_approval: false}
+  - {action: service.status, tier: read, handler: handlers/service-status.sh, requires_approval: false}
+  - {action: service.restart, tier: execute, handler: handlers/service-restart.sh, requires_approval: true}
+grants:
+  - profile: profile:triage
+    actions: [memory.write, finding.write, proposal.file, service.status, service.restart]
+    max_tier: execute
+  - profile: profile:reader
+    actions: [service.status]
+    max_tier: read

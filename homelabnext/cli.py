@@ -196,7 +196,8 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.mcp.cli").main(a),
     ),
     "broker": (
-        "the reference broker service: validate|submit|status|run|cancel|approve|deny|pending|audit",
+        "the broker: validate|serve|mcp|actions|call|submit|status|run|cancel|approve|deny|"
+        "pending|audit",
         lambda a: importlib.import_module("homelabnext.broker.cli").main(a),
     ),
     "custom": (

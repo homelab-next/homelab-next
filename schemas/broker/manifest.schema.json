@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/broker/manifest/1.2",
+  "$id": "https://schemas.example.internal/homelabnext/broker/manifest/1.3",
   "title": "Broker manifest",
-  "description": "The allowlist. default is the constant deny: an action absent from actions, an actor absent from grants, or a tier above the grant's max_tier is refused. mode shadow records decisions without enforcing them. approvers is the allowlist of identities (issuer and subject, compared normalized) whose approvals count; without it no approval is accepted. An approver of kind agent, or one whose subject names a granted profile, counts only when allow_agent_approvers is true. approval_ttl_s defaults to 900 when absent. 1.1 adds approvers and allow_agent_approvers. 1.2 adds, additively, lanes (write lanes the broker's built-in lane handler writes into: kind files or records-inbox, a root under the data root, per-actor subdirectories, a filename pattern, a size cap, a format and an optional content schema, exclusive create unless overwrite), an action's optional lane (its handler is then builtin/lane) and handler_docs (the handler documents, relative to the manifest, that pin each exec handler's digest).",
+  "description": "The allowlist. default is the constant deny: an action absent from actions, an actor absent from grants, or a tier above the grant's max_tier is refused. mode shadow records decisions without enforcing them. approvers is the allowlist of identities (issuer and subject, compared normalized) whose approvals count; without it no approval is accepted. An approver of kind agent, or one whose subject names a granted profile, counts only when allow_agent_approvers is true. approval_ttl_s defaults to 900 when absent. 1.1 adds approvers and allow_agent_approvers. 1.2 adds, additively, lanes (write lanes the broker's built-in lane handler writes into: kind files or records-inbox, a root under the data root, per-actor subdirectories, a filename pattern, a size cap, a format and an optional content schema, exclusive create unless overwrite), an action's optional lane (its handler is then builtin/lane) and handler_docs (the handler documents, relative to the manifest, that pin each exec handler's digest). 1.3 adds, additively, the transport identities: callers (a peer, by numeric uid or user name, mapped to the one profile it acts as; a peer not listed is refused), approval_relays (peers trusted to carry a human approver's identity for one issuer; the approvers rules still apply) and dev_identity (whether the CLI's asserted --as identity is accepted; absent means false).",
   "type": "object",
   "properties": {
     "manifest_id": {
@@ -222,6 +222,88 @@
         ],
         "additionalProperties": false
       }
+    },
+    "callers": {
+      "type": "array",
+      "description": "Who may connect as an agent: each peer maps to exactly one profile, which is the actor of everything it asks for. The request body never names the actor.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "uid": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967294,
+            "description": "Numeric user id of the connecting process (SO_PEERCRED)."
+          },
+          "user": {
+            "type": "string",
+            "pattern": "^[a-z_][a-z0-9_-]{0,31}$",
+            "description": "User name, resolved to a uid when the service starts."
+          },
+          "profile": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "uid"
+            ]
+          },
+          {
+            "required": [
+              "user"
+            ]
+          }
+        ]
+      }
+    },
+    "approval_relays": {
+      "type": "array",
+      "description": "Peers that may file approvals and denials for a human they authenticated, for one issuer (e.g. the hub behind the SSO front door). The approver allowlist, self-approval and agent-approver rules still apply.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "uid": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967294,
+            "description": "Numeric user id of the connecting process (SO_PEERCRED)."
+          },
+          "user": {
+            "type": "string",
+            "pattern": "^[a-z_][a-z0-9_-]{0,31}$",
+            "description": "User name, resolved to a uid when the service starts."
+          },
+          "issuer": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          }
+        },
+        "required": [
+          "issuer"
+        ],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "uid"
+            ]
+          },
+          {
+            "required": [
+              "user"
+            ]
+          }
+        ]
+      }
+    },
+    "dev_identity": {
+      "type": "boolean",
+      "description": "Accept the CLI's asserted --as identity (local development only). Absent means false."
     }
   },
   "required": [

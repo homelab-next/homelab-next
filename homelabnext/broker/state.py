@@ -28,6 +28,7 @@ import json
 import os
 import re
 import secrets
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -123,6 +124,7 @@ class StateDir:
             d.mkdir(mode=0o700, exist_ok=True)
         self._seq = 0
         self._last_stamp = ""
+        self._audit_lock = threading.Lock()  # a threaded server shares one instance
 
     def _dir(self, name: str) -> Path:
         return self.root / name
@@ -187,10 +189,12 @@ class StateDir:
     def append_audit(self, record: dict[str, Any], stamp: str) -> Path:
         """Write one audit record.  ``stamp`` (sortable UTC) orders the trail; within one process
         it never goes backwards, and a sequence number breaks ties."""
-        stamp = max(stamp, self._last_stamp)
-        self._last_stamp = stamp
-        self._seq += 1
-        name = f"{stamp}-{os.getpid():07d}-{self._seq:08d}-{secrets.token_hex(3)}.json"
+        with self._audit_lock:
+            stamp = max(stamp, self._last_stamp)
+            self._last_stamp = stamp
+            self._seq += 1
+            seq = self._seq
+        name = f"{stamp}-{os.getpid():07d}-{seq:08d}-{secrets.token_hex(3)}.json"
         path = self._dir("audit") / name
         if not write_exclusive(path, _dumps(record)):  # pragma: no cover - random suffix
             raise StateError(f"audit record {name} already exists")

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/broker/audit/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/broker/audit/1.1",
   "title": "Broker audit record",
-  "description": "One outcome of one broker operation, written by the broker service as its own file (homelabnext.broker.state). Every call, submit, status, run, cancel, approve and deny leaves exactly one record, whatever the outcome: ok, denied (refused by policy, ownership, approval or a lane), invalid (malformed arguments or a request in the wrong state), error (the handler failed or timed out) or shadow (decided, not run). reason is empty for ok and required otherwise. args are the request's arguments with every argument its spec marks secret replaced by <redacted> and every value over 1 KiB replaced by its size and digest; secrets passed to handlers by name never appear.",
+  "description": "One outcome of one broker operation, written by the broker service as its own file (homelabnext.broker.state). Every call, submit, status, run, cancel, approve and deny leaves exactly one record, whatever the outcome: ok, denied (refused by policy, ownership, approval or a lane), invalid (malformed arguments or a request in the wrong state), error (the handler failed or timed out) or shadow (decided, not run). reason is empty for ok and required otherwise. args are the request's arguments with every argument its spec marks secret replaced by <redacted> and every value over 1 KiB replaced by its size and digest; secrets passed to handlers by name never appear. 1.1 adds, additively, the operation connect (a refusal by the socket transport before an operation could be attributed: an unknown peer, an actor named in the body, an oversized or malformed request) and via (the authenticated transport peer that carried the request, uid:<n>).",
   "type": "object",
   "properties": {
     "audit_id": {
@@ -31,7 +31,8 @@
         "cancel",
         "approve",
         "deny",
-        "notify"
+        "notify",
+        "connect"
       ]
     },
     "outcome": {
@@ -89,6 +90,11 @@
         }
       },
       "additionalProperties": false
+    },
+    "via": {
+      "type": "string",
+      "pattern": "^uid:[0-9]{1,10}$",
+      "description": "The authenticated socket peer that carried the request (absent for in-process and CLI calls)."
     }
   },
   "required": [

@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-# Example broker manifest (schemas/broker/manifest 1.2): one agent profile with three write lanes,
+# Example broker manifest (schemas/broker/manifest 1.3): one agent profile with three write lanes,
 # a read-only status action and an approval-gated restart.  Walkthrough: docs/broker.md.
 #   hnx broker validate examples/broker/manifest.yml
+# dev_identity: true lets the CLI's asserted --as identity drive it, for the walkthrough only; a
+# deployment authenticates callers on the socket instead (manifest.production.yml).
 manifest_id: example-lab-broker
 default: deny
 mode: enforce
+dev_identity: true
 approval_ttl_s: 900
 approvers:
   - {issuer: sso, subject: operator-one, kind: human}
