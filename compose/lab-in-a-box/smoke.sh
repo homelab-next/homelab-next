@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Lab-in-a-box smoke test: bring the stack up, wait until every service reports healthy, check
-# each service directly, run `hnx conform` where it exists, write a report, tear down.
+# each service directly (the broker end to end included), run `hnx conform` where it exists,
+# write a report, tear down.
 #
 #   compose/lab-in-a-box/smoke.sh [--keep] [--no-build] [--report-dir DIR]
 #
@@ -37,7 +38,7 @@ while [ $# -gt 0 ]; do
     --keep) keep=1 ;;
     --no-build) build=0 ;;
     --report-dir) shift; report_dir="${1:?--report-dir needs a path}" ;;
-    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     *) echo "smoke.sh: unknown option $1" >&2; exit 2 ;;
   esac
   shift
@@ -117,6 +118,11 @@ if ! dc "${up_args[@]}"; then
 fi
 
 echo "smoke.sh: every service reports healthy; checking each one directly"
+# the broker end-to-end scenario runs inside the broker-edge container (smoke_checks.py: broker)
+LAB_BROKER_E2E="$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' \
+  docker compose "${env_args[@]}" -f "$here/docker-compose.yml" exec -T broker-edge \
+  python /src/compose/lab-in-a-box/broker_e2e.py run --json)"
+export LAB_BROKER_E2E
 python3 "$here/smoke_checks.py" --report "$report_dir/checks.json" || status=1
 
 # --- conformance: only where the harness exists ---------------------------------------------

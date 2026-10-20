@@ -377,6 +377,38 @@ as unmapped. Filenames come from `created` and the slug, so a second `--apply` r
 suggested order: run the broker in `shadow` beside the guard hook, import the queue, point the
 agents at the MCP tools, then remove the agents' write access to the old directory.
 
+## Testing
+
+| Layer | What runs | Where |
+|---|---|---|
+| unit | the engine, lanes, exec handlers, the socket server (peer map, refusals, modes), the CLI, the MCP tools in memory and over stdio, the hub's Approvals page against a real `hnx broker serve` | `tests/broker/`, `tests/status/test_approvals.py` (`pytest`, every pull request) |
+| scenario, local processes | `compose/lab-in-a-box/broker_e2e.py`'s scenario against a broker socket, a hub subprocess, the agent's `hnx broker mcp` behind a real MCP stdio client and `hnx broker` CLI calls, all as the test's uid (the broker maps each process to a distinct uid by the role it was started with) | `tests/compose/test_lab_broker_e2e.py` (every pull request, with the `mcp` extra) |
+| end to end, real uids | the same scenario in the lab-in-a-box: the broker (`hnx-broker`, no network, `manifest.production.yml`), the hub (`hnx-hub`, the relay) and the edge in three containers sharing the socket volume | the nightly smoke's `broker` check; locally `make lab-broker` (or `make lab-smoke` for the whole lab) |
+
+The scenario's steps, each a line of the report (`broker_e2e.py run --json`, and the smoke's
+`broker` check detail):
+
+1. `mcp-tools`: the agent's MCP server lists its tools; `broker_actions` names the profile the
+   peer's uid maps to;
+2. `memory-write`: `memory_write` lands in `<data-root>/memory/<profile>/`, mode `600`, owned by
+   the broker, not the agent;
+3. `proposal-file`: `proposal_file` files `records/inbox/<date>-<agent>-<slug>.md`, named after the
+   peer's profile;
+4. `submit`, `run-before-approval`: an approval-gated `service.restart` is pending and
+   `broker_run` is refused (`approval-required`);
+5. `unknown-caller`: `hnx broker actions` from an unmapped uid is refused before its request is
+   read;
+6. `agent-cannot-approve`: `hnx broker approve` from the agent's uid is refused
+   (`not-an-approval-relay`);
+7. `hub-front-door`: `/approvals` without the front-door secret is `403`;
+8. `hub-approve`: the edge (the hub's one trusted proxy) reads `/approvals?request=ID` with the
+   front-door secret and the approver's identity and groups, takes the form's digest and CSRF
+   token, and posts `decision=approve` to `/approvals/decide` with a same-origin `Origin`; `200`;
+9. `run-once`, `second-run-refused`: the agent runs it once; a second run is refused
+   (`not-pending`);
+10. `audit`: the relay's `hnx broker audit` holds a record of every step, each with the peer's
+    `via: uid:<n>` (agent, unmapped uid and relay).
+
 ## Embedding
 
 ```python

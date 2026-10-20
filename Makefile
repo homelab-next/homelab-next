@@ -11,7 +11,7 @@ ROLES := $(wildcard ansible/roles/*)
 PLAYBOOKS := $(wildcard ansible/playbooks/*.yml)
 REGISTERS_OUT := build/registers
 
-.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-eval agent-lint prompts-lint injection-check injection-report injection-eval workflows detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke
+.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-eval agent-lint prompts-lint injection-check injection-report injection-eval workflows detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke lab-broker
 
 help:
 	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
@@ -20,7 +20,7 @@ help:
 	@echo "strategy to task (examples/strategy, docs/strategy.md; in check): strategy"
 	@echo "script catalog (M-01, M-02, M-04): scripts-check"
 	@echo "invariants register, fast criteria, never pages (not in check; CI runs it): invariants"
-	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke"
+	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke lab-broker"
 	@echo "live (needs a real model endpoint): injection-eval MODEL=<role> REGISTRY=<file> ROLES=<file>; models-eval REGISTRY=<file>"
 	@echo "override RUFF=/path/to/ruff if ruff is not importable as a module"
 
@@ -317,3 +317,11 @@ lab-down:
 
 lab-smoke:
 	$(LAB_DIR)/smoke.sh
+
+# the broker end to end alone: its three containers, the scenario, down again (lab-smoke runs the
+# same scenario as its broker check, with the whole stack up)
+lab-broker:
+	bash $(LAB_DIR)/bind_guard.sh
+	$(LAB_COMPOSE) up -d --build --wait --wait-timeout 180 broker status-hub broker-edge
+	$(LAB_COMPOSE) exec -T broker-edge python /src/compose/lab-in-a-box/broker_e2e.py run; \
+	  rc=$$?; $(LAB_COMPOSE) down --volumes --remove-orphans; exit $$rc

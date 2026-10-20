@@ -99,6 +99,7 @@ throwaway placeholder from `compose/lab-in-a-box/.env.example`.
 ```bash
 make lab-up       # build the fakes, start everything, wait until every healthcheck passes
 make lab-smoke    # up, check each service end to end, run `hnx conform` if present, tear down
+make lab-broker   # only the broker end to end: broker, hub and edge containers, the scenario, down
 make lab-down     # remove the stack and its volumes
 ```
 

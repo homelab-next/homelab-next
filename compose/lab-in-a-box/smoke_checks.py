@@ -22,6 +22,10 @@ The metrics and uptime checks poll their service through the status hub's real c
 (``homelabnext.status``: ``poll-prometheus``, ``poll-uptime-kuma``), so they need the project
 importable; without it they fail with that reason.
 
+The broker check runs the broker end-to-end scenario (``broker_e2e.py run --json``) through the
+command in ``LAB_BROKER_E2E`` (a JSON argv; the smoke script sets it to a ``docker compose exec``
+into the ``broker-edge`` container) and passes only when every step of it did.
+
     smoke_checks.py --report build/lab-smoke/checks.json
 """
 
@@ -30,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -245,6 +250,25 @@ def check_uptime(b: Mapping[str, str]) -> str:
     return "collector: public status page, up monitor ok, down monitor fail"
 
 
+def check_broker(b: Mapping[str, str]) -> str:
+    argv = json.loads(b["broker-e2e"])
+    proc = subprocess.run(argv, capture_output=True, text=True, timeout=300)
+    lines = proc.stdout.strip().splitlines()
+    try:
+        doc = json.loads(lines[-1])
+        steps = doc["steps"]
+    except (IndexError, KeyError, TypeError, ValueError):
+        raise CheckError(
+            f"no scenario report (rc={proc.returncode}): {proc.stderr[-300:]}"
+        ) from None
+    failed = [s for s in steps if not s.get("ok")]
+    if failed or not doc.get("ok") or proc.returncode != 0:
+        first = failed[0] if failed else {"step": "?", "detail": "incomplete"}
+        passed = ", ".join(s["step"] for s in steps if s.get("ok"))
+        raise CheckError(f"step {first['step']}: {first['detail']} (passed: {passed or 'none'})")
+    return f"{len(steps)} steps passed: " + ", ".join(s["step"] for s in steps)
+
+
 CHECKS: dict[str, Callable[[Mapping[str, str]], str]] = {
     "object-store": check_object_store,
     "lake-catalog": check_lake_catalog,
@@ -256,6 +280,7 @@ CHECKS: dict[str, Callable[[Mapping[str, str]], str]] = {
     "cases": check_cases,
     "metrics": check_metrics,
     "uptime": check_uptime,
+    "broker": check_broker,
 }
 
 
@@ -277,6 +302,8 @@ def bases_from_env(environ: Mapping[str, str]) -> dict[str, str]:
     out = {k: f"http://{bind}:{environ[v]}" for k, v in ports.items() if bind and v in environ}
     out["warehouse"] = environ.get("LAB_WAREHOUSE", "")
     out["secrets-token"] = environ.get("LAB_SECRETS_DEV_TOKEN", "")
+    if environ.get("LAB_BROKER_E2E"):  # set by the smoke script, not a setting
+        out["broker-e2e"] = environ["LAB_BROKER_E2E"]
     return out
 
 

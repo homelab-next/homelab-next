@@ -5,7 +5,7 @@
 #   kind: tool
 #   purpose: Refuse to publish the lab beyond loopback unless asked and every credential is changed.
 #   owner: lab-in-a-box
-#   trigger: [make:lab-up, script:lab-smoke]
+#   trigger: [make:lab-up, make:lab-broker, script:lab-smoke]
 #   inputs: LAB_BIND and the credentials (environment, .env, .env.example)
 #   outputs: the refusal reason on stderr
 #   exit:

@@ -5,7 +5,7 @@
 Every script in the tree, read from its `# hnx-script:` header. What counts as a script,
 the header fields and the checks that keep this page honest: [docs/scripts.md](../scripts.md).
 
-29 scripts: 18 check, 1 job, 2 service, 8 tool.
+30 scripts: 18 check, 1 job, 2 service, 9 tool.
 
 | id | path | kind | owner | purpose | triggers | invariant | exit codes |
 |---|---|---|---|---|---|---|---|
@@ -23,7 +23,8 @@ the header fields and the checks that keep this page honest: [docs/scripts.md](.
 | `fake-openai-server` | [`conformance/fakes/openai_server.py`](../../conformance/fakes/openai_server.py) | service | conformance | Serve the deterministic fake OpenAI-compatible inference API. | `compose:lab-in-a-box/inference` | - | 0 stopped cleanly |
 | `fix-has-test` | [`tools/fix_has_test.py`](../../tools/fix_has_test.py) | check | maintainers | Fail when a bugfix commit (a fix subject or a Fixes trailer) ships no regression test; with --prove, also when that test passes on the parent commit. | `ci:ci/regression-tests`; `make:fix-check` | Q-08 | 0 clean; 1 a fix lacks a regression test; 2 usage error or an unresolvable range |
 | `hermetic-lint` | [`tools/hermetic_lint.py`](../../tools/hermetic_lint.py) | check | maintainers | Fail when test code reads the wall clock or unseeded randomness directly, or library code reads the clock other than as an injectable default. | `ci:ci/lint`; `make:hermetic-lint` | Q-11 | 0 clean; 1 findings |
-| `lab-bind-guard` | [`compose/lab-in-a-box/bind_guard.sh`](../../compose/lab-in-a-box/bind_guard.sh) | tool | lab-in-a-box | Refuse to publish the lab beyond loopback unless asked and every credential is changed. | `make:lab-up`; `script:lab-smoke` | - | 0 safe to start; 4 refused |
+| `lab-bind-guard` | [`compose/lab-in-a-box/bind_guard.sh`](../../compose/lab-in-a-box/bind_guard.sh) | tool | lab-in-a-box | Refuse to publish the lab beyond loopback unless asked and every credential is changed. | `make:lab-up`; `make:lab-broker`; `script:lab-smoke` | - | 0 safe to start; 4 refused |
+| `lab-broker-e2e` | [`compose/lab-in-a-box/broker_e2e.py`](../../compose/lab-in-a-box/broker_e2e.py) | tool | lab-in-a-box | The broker end to end on real processes - socket peers, MCP agent, hub approval, audit. | `script:lab-smoke`; `compose:lab-in-a-box/status-hub` | - | 0 every step passed; 1 some step failed; 2 usage |
 | `lab-fake-cases` | [`compose/lab-in-a-box/fakes/fake_cases.py`](../../compose/lab-in-a-box/fakes/fake_cases.py) | service | lab-in-a-box | Serve an in-memory fake case system for the cases capability. | `compose:lab-in-a-box/cases` | - | 0 stopped cleanly |
 | `lab-init` | [`compose/lab-in-a-box/fakes/lab_init.py`](../../compose/lab-in-a-box/fakes/lab_init.py) | job | lab-in-a-box | Initialise the lab object store and Iceberg catalog once (idempotent). | `compose:lab-in-a-box/lab-init` | - | 0 ready; 1 a step failed or a variable is missing |
 | `lab-rehearsal-swap-lake-query` | [`compose/lab-in-a-box/rehearsals/swap-lake-query.sh`](../../compose/lab-in-a-box/rehearsals/swap-lake-query.sh) | tool | lab-in-a-box | Rehearse the lake-query swap on the lab-in-a-box (fake lake to Trino) and roll it back. | `manual` | - | 0 the swap ran to cutover, rolled back, and the record validates; 1 a step, the rollback or the record check failed; 2 usage, or the candidate lake could not be reached |

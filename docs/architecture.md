@@ -121,6 +121,17 @@ every service is single node. See the README "Try it" section.
 | `cases` | the project's fake case system | `cases` |
 | `metrics` | Prometheus, scraping itself, two always-firing rules | (status hub source) |
 | `uptime` | Uptime Kuma, provisioned headlessly with a public status page | (status hub source) |
+| `broker`, `status-hub`, `broker-edge` | `hnx broker serve` on a Unix socket, `hnx status serve` with the Approvals page, and the edge that drives them, each as its own uid (no alias for `broker`: it has no network) | `broker` (the end-to-end check below) |
+
+**The broker end to end.** The smoke's `broker` check runs `broker_e2e.py run` inside
+`broker-edge` against the real broker and hub containers: the broker serves
+`examples/broker/manifest.production.yml` (callers and the relay by system user) on a socket in a
+shared volume and has no network at all; the hub (user `hnx-hub`, the manifest's relay) serves
+`/approvals` behind a front door whose one trusted proxy is the edge's fixed address
+(`LAB_BROKER_EDGE_ADDRESS`); the edge, root with only `SETUID`/`SETGID`, starts the agent's
+`hnx broker mcp` as `hnx-agent-triage` under a real MCP stdio client, an unmapped uid, and the
+relay's audit read, and plays the edge for the approver. What it asserts, step by step:
+[broker testing](broker.md#testing). `make lab-broker` runs only these three containers.
 
 ### It is not a deployment: what replaces each service in production
 
@@ -144,6 +155,7 @@ entrypoints need; OpenBao keeps docker's defaults). A real deployment changes ea
 | `inference`, `cases` | the project's fakes | the real inference server and case system behind the same aliases |
 | `metrics` (Prometheus) | no authentication, 2-hour retention, rules that always fire | the real metrics service with its own rules, behind the forward-auth proxy |
 | `uptime` (Uptime Kuma) | a known admin password, a public status page | a generated admin password, 2FA, behind the forward-auth proxy; only the monitors the hub should see on the public page |
+| `broker`, `status-hub`, `broker-edge` | a known front-door secret, an edge that asserts the approver's identity without a login, the example handlers | the systemd unit in [broker](broker.md#a-systemd-unit) with the operator's manifest and handlers, the hub behind Caddy and Authentik with the front-door secret from the secrets capability |
 
 ## Ansible host trust
 

@@ -2,8 +2,9 @@
 name: nightly
 
 # Brings the lab-in-a-box stack up on a runner, runs the smoke script (direct service checks, the
-# status hub's Prometheus and Uptime Kuma collectors against the real products, then
-# `hnx conform` where the harness exists) and uploads the report.  Scheduled and manual only: it
+# status hub's Prometheus and Uptime Kuma collectors against the real products, the broker end to
+# end across three containers and uids, then `hnx conform` where the harness exists) and uploads
+# the report.  Scheduled and manual only: it
 # never runs on a pull request and so can never block one.
 on:
   schedule:
