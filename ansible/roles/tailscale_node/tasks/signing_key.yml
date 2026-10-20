@@ -2,11 +2,6 @@
 # The repository root is configurable (a lab mirror may stand in for the vendor), so the key it
 # serves is not trusted for coming from it: it is fetched to a staging file and installed for apt
 # only when every primary key in it is one of the pinned vendor fingerprints.
-- name: Refuse a release codename that is not a plain name (it names a URL path and a suite)
-  ansible.builtin.assert:
-    that: tailscale_node_release is match('^[a-z][a-z0-9-]{0,30}\Z')
-    fail_msg: "tailscale_node: unexpected release codename {{ tailscale_node_release | to_json }}"
-
 - name: Fetch, check and install the vendor signing key
   block:
     - name: Ensure the apt keyring directory exists
@@ -16,7 +11,7 @@
         mode: "0755"
     - name: Fetch the signing key to a staging file
       ansible.builtin.get_url:
-        url: "{{ tailscale_node_repository }}/{{ tailscale_node_release }}.noarmor.gpg"
+        url: "{{ tailscale_node_apt_uri }}/{{ tailscale_node_release }}.noarmor.gpg"
         dest: "{{ tailscale_node_keyring }}.download"
         mode: "0644"
         force: true
@@ -47,7 +42,7 @@
           - tailscale_node_key_found | length > 0
           - tailscale_node_key_found | difference(tailscale_node_key_fingerprints) | length == 0
         fail_msg: >-
-          tailscale_node: the signing key from {{ tailscale_node_repository }} has primary key(s)
+          tailscale_node: the signing key from {{ tailscale_node_apt_uri }} has primary key(s)
           {{ tailscale_node_key_found | join(', ') or 'none' }}, not the pinned
           {{ tailscale_node_key_fingerprints | join(', ') }} (tailscale_node_key_fingerprints)
     - name: Install the checked key for apt

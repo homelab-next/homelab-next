@@ -13,8 +13,8 @@ argument_specs:
         default: 1.88.4
       tailscale_node_repository:
         type: str
-        description: Vendor package repository (https), stable track for Debian; a lab mirror may stand in for it.
-        default: https://pkgs.tailscale.com/stable/debian
+        description: Vendor package repository track root (https), stable; the role appends /debian or /ubuntu for the guest. A lab mirror with the same layout may stand in for it.
+        default: https://pkgs.tailscale.com/stable
       tailscale_node_key_fingerprints:
         type: list
         elements: str

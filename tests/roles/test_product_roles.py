@@ -200,8 +200,8 @@ def make_key(tmp_path: Path, name: str, out: Path, armor: bool) -> str:
 KEY_CASES = {
     # role: (served path under the repository root, armoured, keyring, extra vars)
     "wazuh_agent": ("key/GPG-KEY-WAZUH", True, "hnx-wazuh.asc", {}),
-    "tailscale_node": ("bookworm.noarmor.gpg", False, "hnx-tailscale.gpg",
-                       {"tailscale_node_release": "bookworm"}),
+    "tailscale_node": ("debian/bookworm.noarmor.gpg", False, "hnx-tailscale.gpg",
+                       {"tailscale_node_distribution": "Debian", "tailscale_node_release": "bookworm"}),
 }  # fmt: skip
 
 
@@ -291,6 +291,42 @@ def test_tailscale_node_refuses_bad_inputs(tmp_path, over):
     r = run_role(tmp_path, "tailscale_node", "validate", ts_vars(tmp_path, **over))
     assert r.returncode != 0
     assert "tailscale_node: version" in r.stdout
+
+
+@pytest.mark.parametrize(
+    ("distribution", "release", "ok"),
+    [("Debian", "bookworm", True), ("Ubuntu", "noble", True), ("Linuxmint", "wilma", False),
+     ("Ubuntu", "noble/../x", False)],
+)  # fmt: skip
+def test_tailscale_node_takes_debian_and_ubuntu_only(tmp_path, distribution, release, ok):
+    v = ts_vars(tmp_path, tailscale_node_distribution=distribution, tailscale_node_release=release)
+    r = run_role(tmp_path, "tailscale_node", "platform", v)
+    assert (r.returncode == 0) is ok, r.stdout
+
+
+@pytest.mark.skipif(shutil.which("gpg") is None, reason="gpg not installed")
+def test_tailscale_node_reads_the_ubuntu_repository_on_ubuntu(tmp_path):
+    """The vendor's apt layout is <track>/ubuntu/<codename> on Ubuntu (its installer.sh), so the
+    key comes from there, and the apt source uses the same root."""
+    repo = tmp_path / "repo"
+    fpr = make_key(tmp_path, "vendor", repo / "ubuntu" / "noble.noarmor.gpg", armor=False)
+    ring = tmp_path / "keyrings" / "hnx-tailscale.gpg"
+    v = ts_vars(tmp_path, tailscale_node_repository=f"file://{repo}", tailscale_node_keyring=str(ring),
+                tailscale_node_key_fingerprints=[fpr], tailscale_node_distribution="Ubuntu",
+                tailscale_node_release="noble")  # fmt: skip
+    r = run_role(tmp_path, "tailscale_node", "signing_key", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert ring.read_bytes() == (repo / "ubuntu" / "noble.noarmor.gpg").read_bytes()
+    tasks = yaml.safe_load((ANSIBLE / "roles/tailscale_node/tasks/main.yml").read_text())
+    (src,) = [
+        t["ansible.builtin.deb822_repository"]
+        for t in tasks
+        if "ansible.builtin.deb822_repository" in t
+    ]
+    assert (
+        src["uris"] == "{{ tailscale_node_apt_uri }}"
+        and src["suites"] == "{{ tailscale_node_release }}"
+    )
 
 
 def status_cli(tmp_path, doc):

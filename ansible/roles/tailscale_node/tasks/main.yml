@@ -6,10 +6,8 @@
 - name: Validate the inputs
   ansible.builtin.include_tasks: validate.yml
 
-- name: Refuse a host that is not Debian-family (the role installs from the vendor apt repository)
-  ansible.builtin.assert:
-    that: ansible_facts['os_family'] == 'Debian'
-    fail_msg: "tailscale_node supports Debian-family guests only (got {{ ansible_facts['os_family'] }})"
+- name: Check the host has a vendor apt repository (Debian or Ubuntu)
+  ansible.builtin.include_tasks: platform.yml
 
 - name: Install gpg (it checks the vendor key's fingerprint)
   ansible.builtin.apt:
@@ -23,7 +21,7 @@
   ansible.builtin.deb822_repository:
     name: tailscale
     types: deb
-    uris: "{{ tailscale_node_repository }}"
+    uris: "{{ tailscale_node_apt_uri }}"
     suites: "{{ tailscale_node_release }}"
     components: main
     signed_by: "{{ tailscale_node_keyring }}"
