@@ -137,7 +137,20 @@ script, no CDN; the menu switches views with `#view-<id>` anchors and CSS `:targ
 `status.json`. The same input renders the same bytes. `hnx status serve` answers the same two
 documents live (`/`, `/index.html`, `/status.json`), **GET and HEAD only** (every other method is
 405), building each response from the state file only, so no source can stall it (O-07). It binds
-loopback; another address needs `--allow-remote` and belongs behind the forward-auth proxy.
+loopback; another address needs `--allow-remote` plus `--allowed-host NAME` (repeatable) and
+belongs behind the forward-auth proxy.
+
+**Security of the console.** Binding loopback alone does not stop DNS rebinding: a web page the
+operator visits can re-point a hostname of its own at the loopback address and read `status.json`
+as same origin. So `serve` answers `403` to any request without a `Host` header, whose `Host`
+hostname is not a loopback name (the IPv4 and IPv6 loopback addresses, `localhost`) or an
+`--allowed-host`, or that carries an `Origin` whose hostname is not in that same set
+(`Origin: null` included). It sends no CORS headers. Every response carries
+`X-Content-Type-Options: nosniff`, `Cache-Control: no-store`, `X-Frame-Options: DENY`,
+`Referrer-Policy: no-referrer` and a Content-Security-Policy of `default-src 'none'`, `style-src`
+pinned to the hash of the page's one inline stylesheet (the page has no script), `img-src 'self'
+data:`, `frame-ancestors 'none'`, `base-uri 'none'` and `form-action 'none'`. The design follows
+the AOS-1 monitor's `hostAllowed` (MIT).
 
 `status.json` is the API; the HTML is one rendering of it. Shape (`schema:
 homelabnext.status/1`, additive evolution):

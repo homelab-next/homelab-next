@@ -47,7 +47,8 @@ work.
    need attention, and nothing else when everything is healthy.
 7. **Notifications reuse the state-diffed `Notifier`** (O-08): one key per item and per source,
    paging on transitions into and out of `fail`/`stale` only.
-8. **`status.json` is the contract** (documented in `docs/status.md`); the HTML is a plain,
+8. **The live console defends itself**: loopback by default, `403` for any `Host`/`Origin` outside loopback and the configured `--allowed-host` names (DNS rebinding), no CORS, a hash-pinned CSP.
+9. **`status.json` is the contract** (documented in `docs/status.md`); the HTML is a plain,
    self-contained rendering of it and may evolve freely.
 
 ## Consequences

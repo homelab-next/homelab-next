@@ -7,29 +7,73 @@ Each request builds the document from the state file only -- it never calls a so
 or blackholed source cannot stall the console (O-07); collection runs elsewhere
 (``hnx status collect``).
 
-It binds loopback by default.  Another address is refused unless ``allow_remote=True``: the
-server has no authentication of its own, so exposing it is a decision for the proxy in front
-(the forward-auth edge), not a default.
+It binds loopback by default.  Another address is refused unless ``allow_remote=True``, which
+also requires ``allowed_hosts``: the server has no authentication of its own, so exposing it is a
+decision for the proxy in front (the forward-auth edge), not a default.
+
+**DNS rebinding.**  Binding loopback is not enough: a web page the operator visits can point a
+hostname of its own at the loopback address and read ``status.json`` same-origin.  So every request whose
+``Host`` hostname (or ``Origin`` hostname, when the header is present) is not in the allowed set --
+the IPv4 loopback address, ``localhost``, ``::1`` plus any configured ``allowed_hosts`` -- gets ``403``, as does
+a request without ``Host``.  No CORS header is ever sent.  Every response carries ``nosniff``,
+``no-store`` and a CSP that allows exactly the page's one inline stylesheet (by hash), nothing
+else (after the AOS-1 monitor's ``hostAllowed``, MIT).
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import urllib.parse
+from collections.abc import Callable, Iterable, Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from homelabnext._http import is_loopback
 
-from .render import render_html
+from .render import render_html, style_hash
 from .views import dumps
 
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow the read-only console binds loopback by default
+LOOPBACK_NAMES = frozenset({LOOPBACK, "localhost", "::1"})
 _HEADERS = {
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
-    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+    "Content-Security-Policy": (
+        f"default-src 'none'; style-src {style_hash()}; img-src 'self' data:; "
+        "frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+    ),
     "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
 }
+
+
+def host_header_name(value: str | None) -> str | None:
+    """The hostname of a ``Host`` header (``name``, ``name:port``, ``[v6]:port``), lower-cased;
+    None when absent or malformed."""
+    if not value or any(c in value for c in "/@ \t"):
+        return None
+    try:
+        name = urllib.parse.urlsplit(f"//{value.strip()}").hostname
+    except ValueError:
+        return None
+    return name.rstrip(".") if name else None
+
+
+def origin_name(value: str) -> str | None:
+    """The hostname of an ``Origin`` header (``null`` and garbage -> None)."""
+    try:
+        parts = urllib.parse.urlsplit(value.strip())
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return None
+    return parts.hostname.rstrip(".")
+
+
+def host_allowed(host: str | None, origin: str | None, allowed: frozenset[str]) -> bool:
+    """True when the Host hostname, and the Origin hostname if one was sent, are both allowed."""
+    if host_header_name(host) not in allowed:
+        return False
+    return origin is None or origin_name(origin) in allowed
 
 
 def make_server(
@@ -38,14 +82,22 @@ def make_server(
     host: str = LOOPBACK,
     port: int = 0,
     allow_remote: bool = False,
+    allowed_hosts: Iterable[str] = (),
     docs_base: str = "docs",
 ) -> ThreadingHTTPServer:
-    """A server for ``document()`` (called once per request).  ``port=0`` picks a free port."""
+    """A server for ``document()`` (called once per request).  ``port=0`` picks a free port.
+
+    ``allowed_hosts``: hostnames (no port) a request's ``Host``/``Origin`` may name besides the
+    loopback names; required with ``allow_remote``."""
+    extra = frozenset(h.strip().lower().rstrip(".") for h in allowed_hosts if h.strip())
+    if allow_remote and not extra:
+        raise ValueError("allow_remote needs allowed_hosts: the hostnames clients will use")
     if not is_loopback(host) and not allow_remote:
         raise ValueError(
             f"refusing to bind {host}: the status console is loopback-only unless allow_remote "
             "is set (put the forward-auth proxy in front of it)"
         )
+    allowed = LOOPBACK_NAMES | extra
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "hnx-status"
@@ -61,7 +113,16 @@ def make_server(
             if self.command != "HEAD":
                 self.wfile.write(body)
 
+        def _guard(self) -> bool:
+            """403 unless Host (and Origin, if sent) name an allowed host (DNS rebinding)."""
+            if host_allowed(self.headers.get("Host"), self.headers.get("Origin"), allowed):
+                return True
+            self._reply(403, "text/plain; charset=utf-8", b"forbidden: host not allowed\n")
+            return False
+
         def _get(self) -> None:
+            if not self._guard():
+                return
             route = self.path.split("?", 1)[0]
             if route in ("/", "/index.html"):
                 html = render_html(document(), docs_base=docs_base).encode("utf-8")
@@ -75,6 +136,8 @@ def make_server(
         do_HEAD = _get
 
         def _refuse(self) -> None:
+            if not self._guard():
+                return
             self._reply(
                 405, "text/plain; charset=utf-8", b"read-only: GET only\n", {"Allow": "GET, HEAD"}
             )

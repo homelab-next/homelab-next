@@ -30,7 +30,7 @@ from homelabnext.status import (
 from homelabnext.status.catalog import check as catalog_check
 from homelabnext.status.catalog import render_catalog
 from homelabnext.status.render import render_html, write
-from homelabnext.status.serve import make_server
+from homelabnext.status.serve import LOOPBACK, LOOPBACK_NAMES, make_server
 
 PANEL_VIEWS = {
     "views_version": 1,
@@ -283,3 +283,95 @@ def test_load_views_reports_unreadable_and_invalid_files(tmp_path, registry):
         load_views(bad, registry)
     with pytest.raises(ViewsError, match="cannot read"):
         load_views(tmp_path / "missing.yml")
+
+
+def _raw(base, path="/status.json", *, host="keep", origin=None, method="GET"):
+    """A request with exactly the Host/Origin given (``host=None`` sends no Host at all)."""
+    import http.client
+    import urllib.parse
+
+    u = urllib.parse.urlsplit(base)
+    conn = http.client.HTTPConnection(u.hostname, u.port, timeout=5)
+    conn.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
+    if host == "keep":
+        conn.putheader("Host", u.netloc)
+    elif host is not None:
+        conn.putheader("Host", host)
+    if origin is not None:
+        conn.putheader("Origin", origin)
+    conn.endheaders()
+    resp = conn.getresponse()
+    out = resp.status, dict(resp.getheaders()), resp.read()
+    conn.close()
+    return out
+
+
+@pytest.mark.parametrize(
+    "host, origin",
+    [
+        ("attacker.example:8099", None),  # DNS rebinding: a hostname re-resolved to loopback
+        (LOOPBACK + ".attacker.example", None),
+        (None, None),  # no Host at all
+        ("keep", "http://attacker.example"),  # loopback Host, forged Origin
+        ("keep", "null"),
+    ],
+)
+def test_serve_refuses_foreign_host_or_origin(served, host, origin):
+    base, _ = served
+    code, headers, body = _raw(base, host=host, origin=origin)
+    assert code == 403 and b"status" not in body
+    assert not any(k.lower().startswith("access-control-") for k in headers)
+    assert _raw(base, host=host, origin=origin, method="POST")[0] == 403
+
+
+@pytest.mark.parametrize(
+    "host, origin",
+    [
+        ("keep", None),
+        ("localhost", None),
+        ("[::1]", "http://localhost"),
+        ("keep", "http://" + LOOPBACK),
+    ],
+)
+def test_serve_answers_loopback_hosts_with_hardening_headers(served, host, origin):
+    base, _ = served
+    code, headers, body = _raw(base, host=host, origin=origin)
+    assert code == 200 and json.loads(body)["schema"] == "homelabnext.status/1"
+    assert headers["X-Content-Type-Options"] == "nosniff" and headers["Cache-Control"] == "no-store"
+    csp = headers["Content-Security-Policy"]
+    assert "default-src 'none'" in csp and "frame-ancestors 'none'" in csp
+    assert "unsafe-inline" not in csp and not any(
+        k.lower().startswith("access-control-") for k in headers
+    )
+
+
+def test_csp_hash_admits_exactly_the_page_stylesheet(served):
+    import base64
+    import hashlib
+    import re
+
+    base, _ = served
+    code, headers, body = _raw(base, path="/")
+    css = re.search(rb"<style>(.*?)</style>", body, re.S).group(1)
+    want = base64.b64encode(hashlib.sha256(css).digest()).decode()
+    assert code == 200 and f"style-src 'sha256-{want}'" in headers["Content-Security-Policy"]
+    assert b"<script" not in body and b"<img" not in body
+
+
+def test_allow_remote_needs_explicit_allowed_hosts(make_hub, registry):
+    with pytest.raises(ValueError, match="allowed_hosts"):
+        make_server(dict, host="0.0.0.0", allow_remote=True)
+    from homelabnext.status.serve import host_allowed
+
+    allowed = LOOPBACK_NAMES | {"status.lab.example"}
+    assert host_allowed("status.lab.example", "https://status.lab.example", allowed)
+    assert not host_allowed("other.lab.example", None, allowed)
+    assert not host_allowed("status.lab.example", "https://evil.example", allowed)
+
+
+def test_cli_refuses_allow_remote_without_allowed_host(capsys):
+    from homelabnext.status.cli import main
+
+    rc = main(["serve", "--registry", str(ROOT / "examples/services.yml"), "--views", str(VIEWS),
+               "--bind", "0.0.0.0", "--allow-remote", "--port", "0"])  # fmt: skip
+    assert rc == 2 and "allowed_hosts" in capsys.readouterr().err

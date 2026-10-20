@@ -14,6 +14,8 @@ is served): the hub links to the documentation and to the approval path, it neve
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import html
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -56,8 +58,15 @@ code{font-size:.85em}
 border-bottom:1px solid var(--line)}}
 """
 
+
 #: logical ids that always have a page (a capability has one only when it is a conformance
 #: capability: the module's ``links.contract`` names it then)
+def style_hash() -> str:
+    """CSP source for the page's one inline ``<style>`` (``hnx status serve`` sends it)."""
+    digest = hashlib.sha256(_CSS.encode("utf-8")).digest()
+    return "'sha256-" + base64.b64encode(digest).decode("ascii") + "'"
+
+
 _LOGICAL_PAGES = {
     "svc": "systems/{}.md",
     "status": "status/sources.md#{}",

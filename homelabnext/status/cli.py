@@ -8,6 +8,7 @@
                        [--notify-topic T]
     hnx status render --out DIR [--state FILE] [--views FILE] [--registry FILE] [--now TIME]
     hnx status serve [--state FILE] [--views FILE] [--registry FILE] [--bind HOST] [--port N]
+                     [--allow-remote --allowed-host NAME ...]
 
 ``collect`` runs one pass over the due sources (``--all``: every polled source) and writes the
 state file; ``render`` and ``serve`` only read it, so they never wait on a source.  Exit codes:
@@ -92,6 +93,12 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     p.add_argument("--bind", default=None, help="address to bind (default: loopback)")
     p.add_argument("--port", type=int, default=8099)
     p.add_argument("--allow-remote", action="store_true", help="permit a non-loopback --bind")
+    p.add_argument(
+        "--allowed-host",
+        action="append",
+        default=[],
+        help="hostname clients use besides loopback (repeatable; required with --allow-remote)",
+    )
     p.add_argument("--docs-base", default="docs")
     try:
         args = ap.parse_args(argv)
@@ -158,6 +165,7 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
             host=args.bind or LOOPBACK,
             port=args.port,
             allow_remote=args.allow_remote,
+            allowed_hosts=args.allowed_host,
             docs_base=args.docs_base,
         )
     except (ValueError, OSError) as exc:
