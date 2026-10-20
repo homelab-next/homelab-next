@@ -1,0 +1,16 @@
+{
+  "action": "memory.write",
+  "args": {
+    "content": "x",
+    "name": "../../etc/cron.d/x"
+  },
+  "at": "2026-01-15T10:03:00Z",
+  "audit_id": "aud-0002",
+  "caller": "profile:triage",
+  "manifest_id": "example-lab-broker",
+  "operation": "call",
+  "outcome": "denied",
+  "reason": "lane-name-invalid",
+  "request_digest": "sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+  "request_id": "req-0003"
+}

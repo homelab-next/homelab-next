@@ -1,0 +1,29 @@
+{
+  "action": "service.restart",
+  "audit": true,
+  "description": "Restart one service after a drain period (stand-in that reports only).",
+  "handler": "handlers/service-restart.sh",
+  "handler_digest": "sha256:3d3024d9fc6840f48a4c85aeaa12c3534e5813253f991f7aa8f6d18c49a4f5c1",
+  "idempotent": true,
+  "max_output_bytes": 65536,
+  "params_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "grace_s": {
+        "maximum": 600,
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "grace_s"
+    ],
+    "type": "object"
+  },
+  "requires_approval": true,
+  "secrets": [
+    "DEMO_API_TOKEN"
+  ],
+  "tier": "execute",
+  "timeout_s": 30
+}

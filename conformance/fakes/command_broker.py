@@ -14,11 +14,10 @@ from conformance.protocols.broker import (
     Denied,
     InvalidArguments,
     RequestStatus,
+    arg_problems,
 )
 
 NOT_OWNER = "not-request-owner"
-
-_TYPES = {"str": str, "int": int, "bool": bool}
 
 
 class FakeBroker:
@@ -52,16 +51,7 @@ class FakeBroker:
         if entry is None or command not in self._allow.get(caller, set()):
             self._log(caller, command, "denied", spec, args, **extra)
             raise Denied(f"{caller!r} may not run {command!r}", reason="not-allowed")
-        problems = []
-        for name, a in spec.items():
-            if name not in args:
-                if a.required:
-                    problems.append(f"missing {name}")
-            elif (isinstance(args[name], bool) and a.type != "bool") or not isinstance(
-                args[name], _TYPES[a.type]
-            ):
-                problems.append(f"{name}: wrong type")
-        problems += [f"unexpected {k}" for k in args if k not in spec]
+        problems = arg_problems(spec, args)
         if problems:
             self._log(caller, command, "invalid", spec, args, **extra)
             raise InvalidArguments("; ".join(problems))

@@ -3,6 +3,40 @@
   "scripts": [
     {
       "exit": {
+        "0": "reported"
+      },
+      "id": "broker-example-service-restart",
+      "inputs": "the validated params as JSON on stdin; HNX_BROKER_TARGET; the DEMO_API_TOKEN secret",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "the action's result as JSON on stdout (the secret's presence, never its value)",
+      "owner": "broker",
+      "path": "examples/broker/handlers/service-restart.sh",
+      "purpose": "Example approval-gated broker handler for service.restart; a stand-in that reports what it would restart.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "reported"
+      },
+      "id": "broker-example-service-status",
+      "inputs": "the validated params as JSON on stdin; HNX_BROKER_TARGET",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "the action's result as JSON on stdout",
+      "owner": "broker",
+      "path": "examples/broker/handlers/service-status.sh",
+      "purpose": "Example read-only broker handler for service.status; reports a stand-in state for the target.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
         "0": "both sections present",
         "1": "a section is missing or the version cannot be read"
       },

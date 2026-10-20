@@ -1,0 +1,62 @@
+{
+  "actions": [
+    {
+      "action": "memory.write",
+      "handler": "builtin/lane",
+      "lane": "memory",
+      "requires_approval": false,
+      "tier": "write"
+    },
+    {
+      "action": "proposal.file",
+      "handler": "builtin/lane",
+      "lane": "proposals",
+      "requires_approval": false,
+      "tier": "write"
+    },
+    {
+      "action": "service.status",
+      "handler": "handlers/service-status.sh",
+      "requires_approval": false,
+      "tier": "read"
+    }
+  ],
+  "default": "deny",
+  "grants": [
+    {
+      "actions": [
+        "memory.write",
+        "proposal.file",
+        "service.status"
+      ],
+      "max_tier": "write",
+      "profile": "profile:triage"
+    }
+  ],
+  "handler_docs": [
+    "handlers/service-status.handler.json"
+  ],
+  "lanes": [
+    {
+      "filename_pattern": "^[a-z0-9][a-z0-9-]{0,62}\\.md$",
+      "format": "text",
+      "kind": "files",
+      "max_bytes": 65536,
+      "name": "memory",
+      "per_actor": true,
+      "root": "../outside"
+    },
+    {
+      "kind": "records-inbox",
+      "max_bytes": 65536,
+      "name": "proposals",
+      "note_types": [
+        "proposal"
+      ],
+      "per_actor": false,
+      "root": "records"
+    }
+  ],
+  "manifest_id": "lanes-example",
+  "mode": "enforce"
+}

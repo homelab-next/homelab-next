@@ -21,7 +21,8 @@ of its statements on its own; one aggregate number would let a well-covered pack
 poorly covered one.  Raising a unit's coverage is always fine; lowering ``FLOOR`` or dropping a
 unit is a reviewed change to this file.
 
-* ``homelabnext/broker``  -- the broker decision evaluator (grants, tiers, approvals)
+* ``homelabnext/broker``  -- the broker decision evaluator (grants, tiers, approvals) and the
+  reference service (lanes, pinned handlers, durable single-use approvals)
 * ``homelabnext/scope``   -- the scope guard for writer tools
 * ``homelabnext/records`` -- the approval lifecycle (inbox, decided lanes, completion)
 * ``homelabnext/decide``  -- the decision cascade

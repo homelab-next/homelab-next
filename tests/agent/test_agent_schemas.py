@@ -37,7 +37,7 @@ def test_expected_schema_set():
         ),
         *(
             f"broker/{n}.schema.json"
-            for n in ("request", "decision", "handler", "manifest", "approval")
+            for n in ("request", "decision", "handler", "manifest", "approval", "audit")
         ),
     }
 

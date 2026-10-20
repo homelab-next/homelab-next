@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/broker/handler/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/broker/handler/1.1",
   "title": "Broker handler",
-  "description": "Declares one handler implementation: which action it serves, its tier, where it lives and the digest of its content. A handler that mutates (execute, privileged) must require approval; every handler is audited.",
+  "description": "Declares one handler implementation: which action it serves, its tier, where it lives and the digest of its content. A handler that mutates (execute, privileged) must require approval; every handler is audited. 1.1 adds, additively, argv (fixed arguments; the request's params arrive as JSON on stdin, never on the command line), secrets (names of secrets the broker resolves at run time and hands to this handler only, as environment variables) and max_output_bytes (stdout and stderr cap each).",
   "type": "object",
   "properties": {
     "action": {
@@ -43,6 +43,28 @@
     },
     "audit": {
       "const": true
+    },
+    "argv": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "maxItems": 32
+    },
+    "secrets": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+      },
+      "uniqueItems": true,
+      "maxItems": 16
+    },
+    "max_output_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16777216
     }
   },
   "required": [

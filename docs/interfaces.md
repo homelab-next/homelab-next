@@ -25,7 +25,7 @@ hardware that is not part of the first drop: document the interface and ship a f
 | `homelabnext/network/ schemas/platform/site.schema.json docs/network-model.md tests/network/` | W13 | |
 | `homelabnext/compute/ schemas/platform/guest.schema.json docs/compute-model.md tests/compute/` | W14 | |
 | `homelabnext/customization/ profiles/ schemas/platform/customization.schema.json docs/customization.md tests/customization/` | W15 | |
-| `homelabnext/{agent,broker}/ schemas/{agent,broker}/ docs/agent.md tests/{agent,broker}/` | W18 | |
+| `homelabnext/{agent,broker}/ schemas/{agent,broker}/ docs/{agent,broker}.md tests/{agent,broker}/ examples/broker/` | W18 | `hnx broker` |
 | `tests/integration/ tests/packaging/` | integration | cross-package end-to-end tests |
 | `homelabnext/{swap,parity}/ tools/decommission_check.py tests/swap/` | W11 | |
 | `compose/lab-in-a-box/ .github/workflows/nightly.yml docs/build-order.md docs/architecture.md` | W12 | |
@@ -244,6 +244,17 @@ validate_report(report, pack, pack_hash, manifest=None) -> list[str]
 digest_of(obj) -> "sha256:..."                           # canonical JSON digest used everywhere
 # homelabnext.broker  (reference evaluator for schemas/broker; default deny)
 decide(manifest, request, approval=None, *, now=None) -> decision; request_digest(request); check_manifest_handlers(manifest, handlers)
+# homelabnext.broker.service  (the reference broker service; hnx broker; docs/broker.md; ADR-0017)
+BrokerService(state_dir, manifest=None, *, base_dir=, data_root=, handler_docs=(), bus=None, notifier=None,
+              resolve_secret=None, clock=...)        # implements conformance.protocols.broker:Broker
+BrokerService.from_manifest(path, state_dir, **kw) ; load_manifest(path) -> (manifest, handler_docs)  # ManifestError
+validate_manifest(manifest, base_dir) -> (handler_docs, problems)   # schema, handler digests, lanes
+.call/.submit(caller, action, params, *, target=None) ; .status/.run/.cancel(caller, request_id) ; .detail(caller, rid)
+.approve/.deny(request_id, "issuer:subject", *, note=None) -> approval ; .pending() ; .audit() ; .audit_documents(**match)
+# homelabnext.broker.lanes: Lane, write(lane, data_root, actor, params, now), LaneError(.reason, .outcome)
+# homelabnext.broker.execute: run_handler(path, digest, *, params, run_dir, timeout_s, argv, env, secrets, resolve_secret,
+#   max_output) -> ExecResult ; file_digest(path) ; ExecError(.reason) ; env_secret_resolver()
+# homelabnext.broker.state: StateDir(root), FileApprovalStore(dir) (durable ApprovalStore), write_exclusive(path, data)
 # homelabnext.workflows  (hnx workflows validate|run|digest; docs/workflows.md; schemas/workflows)
 validate_repo(paths=(), *, root=None, deploy=None) -> Report ; check_pack(doc, universe) -> [(rule, detail)]
 run_fixture(pack, fixture, *, manifest, spec_labels=None, executor_factory=BrokerExecutor) -> RunResult ; pack_digest(doc)

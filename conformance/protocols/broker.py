@@ -39,6 +39,7 @@ __all__ = [
     "Denied",
     "InvalidArguments",
     "RequestStatus",
+    "arg_problems",
 ]
 
 
@@ -63,6 +64,24 @@ class ArgSpec:
     type: str  # "str" | "int" | "bool"
     required: bool = True
     secret: bool = False
+
+
+_ARG_TYPES = {"str": str, "int": int, "bool": bool}
+
+
+def arg_problems(spec: Mapping[str, ArgSpec], args: Mapping[str, Any]) -> list[str]:
+    """Shape problems of ``args`` under ``spec`` (empty = valid): a missing required argument, a
+    value of the wrong type (``bool`` is never an ``int``), an argument the spec does not name."""
+    problems = []
+    for name, a in spec.items():
+        if name not in args:
+            if a.required:
+                problems.append(f"missing {name}")
+        elif (isinstance(args[name], bool) and a.type != "bool") or not isinstance(
+            args[name], _ARG_TYPES[a.type]
+        ):
+            problems.append(f"{name}: wrong type")
+    return problems + [f"unexpected {k}" for k in args if k not in spec]
 
 
 @dataclass(frozen=True)

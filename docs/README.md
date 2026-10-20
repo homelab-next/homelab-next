@@ -30,7 +30,8 @@ relate.
   ([[role-interface]]).
 - [Events](events.md) ([[events]]), [detections](detections.md) ([[detections]]),
   [workflows](workflows.md) ([[workflows]]), [decisions and models](decide.md) ([[decide]]),
-  [agent profiles](agent.md) ([[agent]]), [scope guard](scope.md) ([[scope]]),
+  [agent profiles](agent.md) ([[agent]]), [broker service](broker.md) ([[broker]]),
+  [scope guard](scope.md) ([[scope]]),
   [customization](customization.md) ([[customization]]),
   [decommission audit](decommission.md) ([[decommission]]).
 

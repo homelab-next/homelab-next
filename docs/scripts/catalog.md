@@ -5,10 +5,12 @@
 Every script in the tree, read from its `# hnx-script:` header. What counts as a script,
 the header fields and the checks that keep this page honest: [docs/scripts.md](../scripts.md).
 
-27 scripts: 18 check, 1 job, 2 service, 6 tool.
+29 scripts: 18 check, 1 job, 2 service, 8 tool.
 
 | id | path | kind | owner | purpose | triggers | invariant | exit codes |
 |---|---|---|---|---|---|---|---|
+| `broker-example-service-restart` | [`examples/broker/handlers/service-restart.sh`](../../examples/broker/handlers/service-restart.sh) | tool | broker | Example approval-gated broker handler for service.restart; a stand-in that reports what it would restart. | `manual` | - | 0 reported |
+| `broker-example-service-status` | [`examples/broker/handlers/service-status.sh`](../../examples/broker/handlers/service-status.sh) | tool | broker | Example read-only broker handler for service.status; reports a stand-in state for the target. | `manual` | - | 0 reported |
 | `check-changelog` | [`tools/check_changelog.py`](../../tools/check_changelog.py) | check | maintainers | Fail unless CHANGELOG.md keeps an Unreleased section and one for the current version. | `ci:ci/lint`; `make:changelog-check` | - | 0 both sections present; 1 a section is missing or the version cannot be read |
 | `check-spdx` | [`tools/check_spdx.py`](../../tools/check_spdx.py) | check | maintainers | Fail when a tracked source or config file has no SPDX-License-Identifier in its first five lines. | `ci:ci/lint`; `make:spdx`; `pre-commit:spdx-header` | Q-09 | 0 every file carries the header; 1 some file does not |
 | `claude-code-activity-hook` | [`hooks/claude_code_activity.py`](../../hooks/claude_code_activity.py) | tool | status-hub | Report Claude Code (or a CLI with the same hook shape) session activity to the status hub, both tiers. | `manual` | - | 0 always -- a reporting failure never blocks or alters the agent |

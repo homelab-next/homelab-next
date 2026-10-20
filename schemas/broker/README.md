@@ -10,6 +10,11 @@ approvals bound to the exact request. Reference evaluator: `homelabnext.broker`.
 | `request` | a call for one action; `digest` is the sha256 of `{action, actor, target, params}` |
 | `decision` | `allow`, `deny` or `needs-approval` with a closed `reason` vocabulary (1.1 adds the approver, time and replay reasons; 1.2 adds `not-request-owner` with the optional `operation` and `caller`, for a read or cancel of someone else's request); shadow mode records but does not enforce |
 | `approval` | an approver identity and the `request_digest` it approved; a changed request no longer matches. Single use: the broker consumes `approval_id` |
+| `audit` | one record per outcome of the broker service (`homelabnext.broker.service`): operation, outcome (`ok`, `denied`, `invalid`, `error`, `shadow`), machine reason (empty only for `ok`), request id and digest, arguments with secret ones redacted |
+
+Manifest 1.2 adds `lanes` (write lanes for the built-in lane handler), an action's `lane` and
+`handler_docs`; handler 1.1 adds `argv`, `secrets` (names resolved at run time) and
+`max_output_bytes`. Reference service and walkthrough: `docs/broker.md`, ADR-0017.
 
 Table-driven fixtures: `tests/broker/fixtures/decision_table.yml` (manifest x tier x handler x
 approval -> decision), including every default-deny case and the digest-mismatch negatives, and `access_cases` for

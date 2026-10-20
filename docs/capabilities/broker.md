@@ -272,6 +272,14 @@ Each is a deliberately broken fake (`hnx conform run broker --target broken:<mut
 
 None yet in this repository. See [Integrating a new product](#integrating-a-new-product).
 
+### Other targets in the repository
+
+Stand-ins wired through target files (fakes or adapters over a local test double).
+
+| Target file | Adapter | What it is |
+|---|---|---|
+| [`conformance/targets/broker-reference.yml`](../../conformance/targets/broker-reference.yml) | [`homelabnext.broker.service:make`](../../homelabnext/broker/service.py) | The reference broker service: named actions for agents, decided by the manifest, run by pinned handlers, every outcome audited to disk. |
+
 ### Registry services
 
 No service in `examples/services.yml` declares `capability: broker`.
