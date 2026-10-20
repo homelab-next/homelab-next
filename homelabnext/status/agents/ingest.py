@@ -21,15 +21,18 @@ Every request, in order (the first failure answers):
 422  any record invalid against its schema, a summary carrying a detail field, or a detail
      whose event is neither in the batch nor already stored -- the batch is all or nothing
 403  the sender does not own what it writes: a runtime outside its ``runtimes``, a session
-     another sender or a local source started, a detail for another session's event
+     another sender or a local source started, an event id already stored for another session
+     or sender, a detail for another sender's or another session's event
+409  a detail for an event that already has a different one (a detail is written once)
 200  ``{"added", "duplicates", "details", "detail_dropped"}``
 ==== =======================================================================================
 
 Accepted records go through :meth:`ActivityStore.add` (redact, cap, store) with
 ``via = push:<sender>``.  A sender configured with ``detail: false`` has its detail records
-dropped (counted).  ``publish`` (optional) receives each newly accepted batch's summary events;
-the CLI turns them into ``homelabnext.agent.activity`` bus events -- the detail tier never goes
-there.
+dropped (counted) and its summaries' ``has_detail`` cleared.  ``publish`` (optional) receives
+the summaries a batch actually stored -- the store's redacted copies, duplicates left out;
+``hnx status ingest --publish-to`` turns them into ``homelabnext.agent.activity`` bus events --
+the detail tier never goes there.
 """
 
 from __future__ import annotations
@@ -98,10 +101,14 @@ def check_batch(
 ) -> tuple[int, list[str]]:
     """``(status, problems)`` for a decoded body before anything is stored.
 
-    With ``sender``: the sender must own what it writes -- each summary's ``runtime`` is one it
-    may report (``runtimes``), each session is new or was started by this sender (never one fed
-    by another sender or by a local source), and each detail belongs to an event in the batch or
-    to one this sender stored.  A violation is ``403``."""
+    **What is stored decides ownership**: an event id already stored belongs to the session and
+    the ``via`` that stored it, whatever a later batch says.  With ``sender``: the sender must
+    own what it writes -- each summary's ``runtime`` is one it may report (``runtimes``); a
+    summary naming a stored event is that event (same session, same sender) or it is refused;
+    each session is new or was started by this sender (never one fed by another sender or by a
+    local source); and each detail's event (stored, or new in this batch) is this sender's and in
+    the detail's session.  A violation is ``403``.  A detail is written once: a different
+    second detail for an event is ``409`` (the same one again is an idempotent retry)."""
     if not isinstance(body, Mapping) or set(body) - {"summary", "detail"}:
         return 400, ['the body is a JSON object {"summary": [...], "detail": [...]}']
     summary, detail = body.get("summary", []), body.get("detail", [])
@@ -115,37 +122,90 @@ def check_batch(
     problems += [f"detail[{i}] {p}" for i, d in enumerate(detail) for p in detail_problems(d)]
     if problems:
         return 422, problems
-    ids = {s["event_id"] for s in summary}
-    stored: dict[str, Mapping[str, Any]] = {}
+    stored = store.event_owners([s["event_id"] for s in summary] + [d["event_id"] for d in detail])
+    batch: dict[str, str] = {}  # event_id -> session, of the summaries in this batch
+    for i, s in enumerate(summary):
+        if batch.setdefault(s["event_id"], s["session_id"]) != s["session_id"]:
+            problems.append(f"summary[{i}]: event {s['event_id']!r} twice, in two sessions")
+    seen: set[str] = set()
     for i, d in enumerate(detail):
-        if d["event_id"] in ids:
-            continue
-        ev = store.event(d["event_id"])
-        if ev is None:
+        if d["event_id"] not in batch and d["event_id"] not in stored:
             problems.append(f"detail[{i}]: event {d['event_id']!r} is not in the batch or stored")
-        else:
-            stored[d["event_id"]] = ev
+        if d["event_id"] in seen:
+            problems.append(f"detail[{i}]: a second detail for event {d['event_id']!r}")
+        seen.add(d["event_id"])
     if problems:
         return 422, problems
-    if sender is None:
-        return 200, []
+    if sender is not None:
+        problems = _ownership(summary, detail, store, stored, batch, sender)
+        if problems:
+            # problems quote sender-supplied values: never let them forge or split a log line
+            text = "; ".join(problems[:5]).replace("\r", "\\r").replace("\n", "\\n")
+            _log.warning("agent ingest refused sender %s: %s", sender.name, text)
+            return 403, problems
+    have = store.details_of(seen)
+    for i, d in enumerate(detail):
+        old = have.get(d["event_id"])
+        if old is not None and old != store.redactor.detail(d):
+            problems.append(
+                f"detail[{i}]: event {d['event_id']!r} already has a detail (written once)"
+            )
+    return (409, problems) if problems else (200, [])
+
+
+def _ownership(
+    summary: list[Mapping[str, Any]],
+    detail: list[Mapping[str, Any]],
+    store: ActivityStore,
+    stored: Mapping[str, tuple[str, str]],
+    batch: Mapping[str, str],
+    sender: Sender,
+) -> list[str]:
+    """What ``sender`` writes that it does not own (see :func:`check_batch`)."""
     via = f"push:{sender.name}"
+    problems = []
     for i, s in enumerate(summary):
         if sender.runtimes and s["runtime"] not in sender.runtimes:
             problems.append(f"summary[{i}]: sender {sender.name} may not report {s['runtime']!r}")
+        own = stored.get(s["event_id"])
+        if own is not None and own != (s["session_id"], via):
+            problems.append(
+                f"summary[{i}]: event {s['event_id']!r} is stored for another session or sender"
+            )
     sessions = {s["session_id"] for s in summary} | {d["session_id"] for d in detail}
     for sid, vias in sorted(store.owners(sessions).items()):
         if vias != {via}:
             problems.append(f"session {sid!r} belongs to another sender or source")
     for i, d in enumerate(detail):
-        ev = stored.get(d["event_id"])
-        if ev is not None and ev["session_id"] != d["session_id"]:
+        own = stored.get(d["event_id"]) or (batch[d["event_id"]], via)
+        if own[1] != via:
+            problems.append(f"detail[{i}]: event {d['event_id']!r} belongs to another sender")
+        elif own[0] != d["session_id"]:
             problems.append(f"detail[{i}]: session does not match its event")
-    if problems:
-        # problems quote sender-supplied values: never let them forge or split a log line
-        text = "; ".join(problems[:5]).replace("\r", "\\r").replace("\n", "\\n")
-        _log.warning("agent ingest refused sender %s: %s", sender.name, text)
-    return (403, problems) if problems else (200, [])
+    return problems
+
+
+def bus_publisher(publisher: Any, source: str) -> Callable[[list[Mapping[str, Any]]], None]:
+    """A ``publish`` hook for :func:`make_ingest_server`: each stored summary as one
+    ``homelabnext.agent.activity`` event (:func:`.model.bus_event`) through ``publisher`` (a
+    :class:`homelabnext.events.publisher.Publisher`: write-ahead, so a send that fails stays
+    pending for its ``flush``).  It never raises: the ingest answers whatever the bus does."""
+    from .model import bus_event
+
+    lock = threading.Lock()  # the listener is threaded; the publisher's store is one file
+
+    def publish(summaries: list[Mapping[str, Any]]) -> None:
+        with lock:
+            for s in summaries:
+                try:
+                    res = publisher.publish(bus_event(s, source))
+                except Exception as exc:  # the bus must never fail an ingest
+                    _log.warning("agent activity not published: %s", type(exc).__name__)
+                    continue
+                if not res.ok:
+                    _log.warning("agent activity event %s is %s", res.id, res.status)
+
+    return publish
 
 
 def make_ingest_server(
@@ -221,13 +281,17 @@ def make_ingest_server(
             code, problems = check_batch(body, store, settings, sender)
             if code != 200:
                 return self._deny(code, "refused", problems)
+            summaries = body.get("summary", [])
             details = body.get("detail", []) if sender.detail else []
+            if not sender.detail:  # its details are dropped here, so none exists for these
+                summaries = [{**s, "has_detail": False} if s.get("has_detail") else s
+                             for s in summaries]  # fmt: skip
             try:
-                res = store.add(body.get("summary", []), details, via=f"push:{sender.name}")
+                res = store.add(summaries, details, via=f"push:{sender.name}")
             except ActivityError as exc:
                 return self._deny(422, "refused", exc.problems)
-            if publish is not None and res.added:
-                publish(list(body.get("summary", [])))
+            if publish is not None and res.accepted:
+                publish(res.accepted)  # what was stored, redacted; never a duplicate
             self._reply(
                 200,
                 {

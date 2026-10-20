@@ -105,6 +105,7 @@ def test_hook_posts_with_the_token_from_the_environment(monkeypatch):
     sent.clear()
     hook.main(["--post", url, "--no-detail"], stdin=raw, env=env, clock=lambda: T0)
     assert sent[0][2]["detail"] is None
+    assert "has_detail" not in sent[0][2]["summary"]  # regression: it said True with no detail
     sent.clear()
     hook.main(["--post", url], stdin=raw, env={}, clock=lambda: T0)  # no token: nothing sent
     assert sent == []

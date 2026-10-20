@@ -9,7 +9,7 @@
     hnx status render --out DIR [--state FILE] [--views FILE] [--registry FILE] [--now TIME]
     hnx status serve [--state FILE] [--views FILE] [--registry FILE] [--bind HOST] [--port N]
                      [--allow-remote --allowed-host NAME ...] [--agents FILE] [--secrets-dir DIR]
-    hnx status ingest --agents FILE [--registry FILE] [--bind HOST] [--port N]
+    hnx status ingest --agents FILE [--registry FILE] [--bind HOST] [--port N] [--publish-to URL]
                       [--allow-remote --allowed-host NAME ...] [--secrets-dir DIR]
 
 ``--agents`` (``examples/status/agents.yml``) turns on agent activity (stage 1b): ``collect``
@@ -25,6 +25,7 @@ state file; ``render`` and ``serve`` only read it, so they never wait on a sourc
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 import time
@@ -137,6 +138,15 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     common(p)
     remote_opts(p, 8098)
     agents_opt(p, required=True)
+    p.add_argument(
+        "--publish-to",
+        metavar="URL",
+        help="events forwarder URL: also publish each stored summary as homelabnext.agent.activity",
+    )
+    p.add_argument(
+        "--publish-state", help="the publisher's state file (default: STORE.publish.json)"
+    )
+    p.add_argument("--publish-source", default="svc:status-hub", help="the events' source")
     try:
         args = ap.parse_args(argv)
     except SystemExit as exc:
@@ -251,6 +261,7 @@ def _ingest(args, cfg, store, clock: Callable[[], float]) -> int:
             allow_remote=args.allow_remote,
             allowed_hosts=args.allowed_host,
             clock=clock,
+            publish=_publisher(args, cfg),
         )
     except (ValueError, OSError) as exc:
         print(f"hnx status ingest: {exc}", file=sys.stderr)
@@ -264,6 +275,27 @@ def _ingest(args, cfg, store, clock: Callable[[], float]) -> int:
     finally:
         srv.server_close()
     return 0
+
+
+def _publisher(args, cfg):
+    """The ingest's bus hook for ``--publish-to``, or None.  One send attempt per event inside
+    the request (the sender is not kept waiting on retries); what did not go stays pending in
+    the state file and is flushed when the listener next starts."""
+    if not getattr(args, "publish_to", None):
+        return None
+    from homelabnext.events.forwarder import HttpForwarder
+    from homelabnext.events.publisher import Publisher, RetryPolicy
+    from homelabnext.state import StateStore
+
+    from .agents.ingest import bus_publisher
+
+    state = args.publish_state or f"{cfg.store}.publish.json"
+    pub = Publisher(
+        HttpForwarder(args.publish_to), StateStore(state), policy=RetryPolicy(max_attempts=1)
+    )
+    with contextlib.suppress(Exception):  # an unreachable bus never stops the ingest
+        pub.flush()
+    return bus_publisher(pub, args.publish_source)
 
 
 def _collect(args, reg, specs, clock: Callable[[], float], store=None) -> int:

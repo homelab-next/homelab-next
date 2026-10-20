@@ -299,11 +299,11 @@ def main(
         summary, detail = mapped
         if args.no_detail:
             detail = None
+        if args.spool and detail is not None:
+            detail = _screen(detail)  # never write an unredacted detail to disk
+        if detail is None:  # --no-detail, or no screener: the summary must not claim one
+            summary.pop("has_detail", None)
         if args.spool:
-            if detail is not None:
-                detail = _screen(detail)  # never write an unredacted detail to disk
-            if detail is None:
-                summary.pop("has_detail", None)
             write_spool(Path(args.spool), {"summary": summary, "detail": detail}, now)
         else:
             token = environ.get(args.token_env, "")

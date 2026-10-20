@@ -125,6 +125,21 @@ def test_a_sender_without_detail_has_it_dropped(ingest):
     assert code == 200 and json.loads(body)["detail_dropped"] == 1
     assert store.detail("ev-s-1-1") is None
     assert store.events(via="push")[0]["event_id"] == "ev-s-1-1"
+    with_flag = {"summary": [summary(2, has_detail=True)], "detail": [detail(2, prompt="p")]}
+    assert post_json(base, with_flag, "fake-ingest-token-fleet")[0] == 200
+    assert store.event("ev-s-1-2")["has_detail"] is False  # regression: it kept True
+
+
+def test_publish_gets_the_stored_redacted_summaries_only(ingest):
+    """Regression: the publish hook got the raw request summaries -- unredacted, and again on
+    every batch that added anything, duplicates included."""
+    base, store, published, _ = ingest
+    token = "gh" + "p_" + "fake0123456789abcdefghijklmnopqrstuv"  # built: no literal token shape
+    assert post_json(base, {"summary": [summary(1, project=token)]}, TOKEN)[0] == 200
+    assert post_json(base, {"summary": [summary(1, project=token), summary(2)]}, TOKEN)[0] == 200
+    assert [p["event_id"] for p in published] == ["ev-s-1-1", "ev-s-1-2"]
+    assert published[0]["project"] == "redacted" and token not in json.dumps(published)
+    assert published == store.events(oldest_first=True)
 
 
 def test_rate_limit_per_sender_with_an_injected_clock(ingest):
@@ -218,3 +233,71 @@ def test_a_refused_sender_is_logged_on_one_line(owned, caplog):
     assert code == 403
     lines = [r.getMessage() for r in caplog.records if "refused sender" in r.getMessage()]
     assert lines and all("\n" not in m and "\r" not in m for m in lines)
+
+
+def test_a_duplicate_summary_does_not_carry_a_forged_detail(owned):
+    """Regression: re-sending another sender's (visible) event id as a duplicate summary in a
+    session of one's own let a detail ride along; the duplicate was ignored, the detail stored.
+    An event belongs to the session and sender that stored it."""
+    base, store = owned
+    assert post_json(base, {"summary": [summary(1, has_detail=True)]}, TOKEN)[0] == 200
+    forged = {
+        "summary": [summary(1, session="mine", runtime="hermes")],  # ev-s-1-1 again, own session
+        "detail": [detail(1, session="mine", prompt="planted")],
+    }
+    forged["summary"][0]["event_id"] = forged["detail"][0]["event_id"] = "ev-s-1-1"
+    code, _, body = post_json(base, forged, "fake-ingest-token-fleet")
+    assert code == 403 and b"another session or sender" in body
+    assert store.detail("ev-s-1-1") is None
+    same_session = {"summary": [summary(1, runtime="hermes")], "detail": [detail(1, prompt="x")]}
+    assert post_json(base, same_session, "fake-ingest-token-fleet")[0] == 403
+    assert store.detail("ev-s-1-1") is None
+    assert post_json(base, {"detail": [detail(1, prompt="mine")]}, TOKEN)[0] == 200  # the owner
+
+
+def test_a_detail_is_written_once(owned):
+    """A second, different detail for an event is refused with a reason (INSERT OR IGNORE used
+    to drop it silently); re-sending the same detail is an idempotent retry."""
+    base, store = owned
+    first = {"summary": [summary(1, has_detail=True)], "detail": [detail(1, prompt="one")]}
+    assert post_json(base, first, TOKEN)[0] == 200
+    assert post_json(base, first, TOKEN)[0] == 200  # a retry of the same batch
+    code, _, body = post_json(base, {"detail": [detail(1, prompt="two")]}, TOKEN)
+    assert code == 409 and b"already has a detail" in body
+    assert store.detail("ev-s-1-1")["prompt"] == "one"
+    twice = {"summary": [summary(2)], "detail": [detail(2, prompt="a"), detail(2, prompt="b")]}
+    assert post_json(base, twice, TOKEN)[0] == 422
+    assert store.detail("ev-s-1-2") is None
+
+
+def test_hnx_status_ingest_publish_to_puts_stored_summaries_on_the_bus(tmp_path, clock):
+    """``--publish-to`` wires the hook to a forwarder: each stored summary becomes one
+    ``homelabnext.agent.activity`` event; a re-sent batch publishes nothing new."""
+    import argparse
+
+    from homelabnext.events.forwarder import FakeForwarderServer
+    from homelabnext.status.agents.config import AgentsConfig
+    from homelabnext.status.cli import _publisher
+
+    store = ActivityStore(tmp_path / "activity.db", clock=clock)
+    cfg = AgentsConfig(store=tmp_path / "activity.db")
+    with FakeForwarderServer() as fwd:
+        args = argparse.Namespace(
+            publish_to=fwd.url, publish_state=None, publish_source="svc:status-hub"
+        )
+        srv = make_ingest_server(store, SETTINGS, clock=clock, publish=_publisher(args, cfg))
+        threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
+        host, port = srv.server_address[:2]
+        base = f"http://{host}:{port}"
+        try:
+            assert post_json(base, {"summary": [summary(1), summary(2)]}, TOKEN)[0] == 200
+            assert post_json(base, {"summary": [summary(1)]}, TOKEN)[0] == 200  # duplicate
+        finally:
+            srv.shutdown()
+            srv.server_close()
+        events = list(fwd.fake.accepted.values())
+    assert [e["type"] for e in events] == ["homelabnext.agent.activity"] * 2
+    assert sorted(e["data"]["event_id"] for e in events) == ["ev-s-1-1", "ev-s-1-2"]
+    assert (tmp_path / "activity.db.publish.json").is_file()
+    none = argparse.Namespace(publish_to=None)
+    assert _publisher(none, cfg) is None

@@ -83,6 +83,9 @@ class AddResult:
     duplicates: int = 0
     details: int = 0
     redactions: dict[str, int] = field(default_factory=dict)
+    #: the summaries this batch actually stored (redacted copies, duplicates left out): what a
+    #: bus publisher may send on
+    accepted: list[dict[str, Any]] = field(default_factory=list)
 
 
 class Redactor:
@@ -191,6 +194,8 @@ class ActivityStore:
             problems += [f"summary[{i}] {p}" for p in summary_problems(s)]
             if not problems:
                 clean = self.redactor.summary(s)
+                if not self.keep_detail and clean.get("has_detail"):
+                    clean["has_detail"] = False  # this store keeps no detail: none exists
                 s_rows.append(clean)
         details = list(details) if self.keep_detail else []
         result = AddResult()
@@ -219,6 +224,7 @@ class ActivityStore:
                 )  # fmt: skip
                 if cur.rowcount:
                     result.added += 1
+                    result.accepted.append(s)
                 else:
                     result.duplicates += 1
             for d in d_rows:
@@ -297,6 +303,19 @@ class ActivityStore:
             out.setdefault(sid, set()).add(via)
         return out
 
+    def event_owners(self, event_ids: Iterable[str]) -> dict[str, tuple[str, str]]:
+        """event_id -> ``(session_id, via)`` of each stored event: what an event belongs to is
+        decided by what was stored first, never by a later batch that names it again."""
+        ids = sorted(set(event_ids))
+        if not ids:
+            return {}
+        marks = ",".join("?" * len(ids))
+        with self._db() as db:
+            rows = db.execute(
+                f"SELECT event_id, session_id, via FROM summary WHERE event_id IN ({marks})", ids
+            ).fetchall()
+        return {eid: (sid, via) for eid, sid, via in rows}
+
     def has_event(self, event_id: str) -> bool:
         return self.event(event_id) is not None
 
@@ -311,6 +330,16 @@ class ActivityStore:
         with self._db() as db:
             row = db.execute("SELECT doc FROM detail WHERE event_id = ?", (event_id,)).fetchone()
             return json.loads(row[0]) if row else None
+
+    def details_of(self, event_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+        """event_id -> the stored detail, for those of ``event_ids`` that have one."""
+        ids = sorted(set(event_ids))
+        if not ids:
+            return {}
+        marks = ",".join("?" * len(ids))
+        with self._db() as db:
+            rows = db.execute(f"SELECT event_id, doc FROM detail WHERE event_id IN ({marks})", ids)
+            return {r[0]: json.loads(r[1]) for r in rows}
 
     def details(self, session: str) -> dict[str, dict[str, Any]]:
         """event_id -> detail for one session (callers: the authorized private view only)."""
