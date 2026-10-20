@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/registers/register_event/1.0",
+  "title": "Register event",
+  "description": "One append-only event about a lesson, runbook or docs/systems page, stored as its own file in the sidecar directory <RECORD>.events/ and named <YYYYMMDDTHHMMSSZ>-<event>-<actor-slug>[-<n>].yml (the name rule is checked by homelabnext.registers.events). Derived fields (reviews, recurrences, last_verified, the current status) are computed from these files on load and never edited in place. `transition` events are written only by the decider (hnx registers decide).",
+  "type": "object",
+  "properties": {
+    "event": {
+      "enum": [
+        "review",
+        "recurrence",
+        "verified",
+        "transition"
+      ]
+    },
+    "by": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+:[A-Za-z0-9_.@-]+$",
+      "description": "The writer, issuer-qualified (agent:j8-lead, human:operator)."
+    },
+    "date": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "note": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    }
+  },
+  "required": [
+    "event",
+    "by",
+    "date"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "review"
+          }
+        },
+        "required": [
+          "event"
+        ]
+      },
+      "then": {
+        "description": "The review entry of homelabnext.reviews, flat: the event without `event` is the review.",
+        "properties": {
+          "event": true,
+          "by": true,
+          "date": true,
+          "note": true,
+          "kind": {
+            "enum": [
+              "agent",
+              "human"
+            ]
+          },
+          "role": {
+            "enum": [
+              "check",
+              "challenge",
+              "approve"
+            ]
+          },
+          "verdict": {
+            "enum": [
+              "pass",
+              "changes",
+              "reject"
+            ]
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{12,64}$"
+          }
+        },
+        "required": [
+          "kind",
+          "role",
+          "verdict",
+          "digest"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "recurrence"
+          }
+        },
+        "required": [
+          "event"
+        ]
+      },
+      "then": {
+        "properties": {
+          "event": true,
+          "by": true,
+          "date": true,
+          "note": true,
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "description": "A link or path to what showed the problem again."
+          }
+        },
+        "required": [
+          "note"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "verified"
+          }
+        },
+        "required": [
+          "event"
+        ]
+      },
+      "then": {
+        "properties": {
+          "event": true,
+          "by": true,
+          "date": true,
+          "note": true,
+          "outcome": {
+            "enum": [
+              "pass",
+              "fail"
+            ],
+            "description": "Whether the observable gave the expected result; last_verified is the latest pass."
+          },
+          "result": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What the observable actually showed."
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "outcome",
+          "result"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "transition"
+          }
+        },
+        "required": [
+          "event"
+        ]
+      },
+      "then": {
+        "properties": {
+          "event": true,
+          "by": true,
+          "date": true,
+          "note": true,
+          "from": {
+            "type": "string",
+            "pattern": "^[a-z]+$"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^[a-z]+$"
+          },
+          "set": {
+            "type": "object",
+            "description": "The lifecycle fields the transition sets on the record.",
+            "properties": {
+              "retired_by": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "retired_on": {
+                "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+              },
+              "incorporated_into": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "superseded_by": {
+                "type": "string",
+                "pattern": "^(LL|RB)-\\d{3,}$"
+              },
+              "retired_reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "intent": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/rel_path",
+            "description": "The register-transition note this applied, in the records tree."
+          },
+          "requested_by": {
+            "type": "string",
+            "pattern": "^profile:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "intent",
+          "requested_by",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

@@ -31,6 +31,9 @@ not_in_runner:
     release hygiene of the tree (an Unreleased section and one for the current version); the
     nearest checklist row, F-15, also needs a what-changed event per deploy (SERVER), so
     registering this as F-15 would claim more than it measures
+  run-output-lint: >-
+    a lint of the repository's own script sources (where they write scratch files), not a property
+    of a running fleet; make check and CI run it, and an invariant would re-run the same AST pass
 
 # scheduled execs that are not scripts of this repository (product binaries); none yet
 external_exec: {}

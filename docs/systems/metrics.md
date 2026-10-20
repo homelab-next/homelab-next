@@ -13,7 +13,6 @@ backup_job: null
 tags: [monitoring, ops]
 status: draft
 author: unknown
-reviews: []
 ---
 
 # metrics

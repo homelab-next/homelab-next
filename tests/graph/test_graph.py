@@ -151,7 +151,7 @@ def test_every_source_contributes_and_counts(graph):
         assert kinds.get(kind), kind
     assert kinds["svc"] == 14
     assert kinds["lesson"] == 5 and kinds["runbook"] == 2
-    assert len(graph.of_kind("script")) == 25
+    assert len(graph.of_kind("script")) == 26
     assert all(n.attrs.get("status") for n in graph.of_kind("lesson"))
     # each record node points at its own file
     assert graph.nodes["lesson:LL-004"].path == f"{LESSONS}/LL-004.md"
@@ -207,6 +207,14 @@ def _fresh(tmp_path: Path, repo_copy: Path) -> Path:
 
 def test_copy_passes(repo_copy):
     assert check(repo_copy).ok()
+
+
+def test_event_files_are_not_nodes_and_derived_attrs_hold(repo_copy):
+    g, _ = build(repo_copy)
+    assert list((repo_copy / LESSONS).glob("*.events/*.yml"))  # the copy has sidecars
+    assert not [n for n in g.nodes.values() if ".events/" in n.path]
+    attrs = g.nodes["lesson:LL-001"].attrs
+    assert attrs["review_count"] == 2 and attrs["recurrences"] == 1
 
 
 def test_dangling_runbook_reference_fails(tmp_path, repo_copy):
@@ -498,6 +506,7 @@ def test_incorporated_lessons_give_way_to_their_runbook(tmp_path, repo_copy):
             },
         ],
     )
+    shutil.rmtree(root / LESSONS / "LL-001.events")  # the inline list above is every review
     rb = root / RUNBOOKS / "RB-001.md"
     text = rb.read_text(encoding="utf-8")
     old = "   - verify: the reload command exits 0 and the proxy health endpoint returns 200\n"

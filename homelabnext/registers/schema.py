@@ -64,7 +64,7 @@ LESSON_STATUSES = PITFALL_STATUSES + PRACTICE_STATUSES[:3]
 INACTIVE_STATUSES = frozenset({"retired", "incorporated", "superseded"})
 LESSON_COMMON = frozenset(
     {"id", "title", "kind", "status", "date", "systems", "author", "reviews", "review_by"}
-    | {"related", "notes"}
+    | {"related", "notes", "last_verified"}
 )
 PITFALL_FIELDS = frozenset(
     {"recurrences", "symptom", "contributing_factor", "root_cause", "preventive_control"}
@@ -76,7 +76,7 @@ PRACTICE_FIELDS = frozenset(
 )
 RUNBOOK_FIELDS = frozenset(
     {"id", "title", "purpose", "systems", "steps", "author", "reviews", "review_by"}
-    | {"superseded_by", "related"}
+    | {"superseded_by", "related", "last_verified"}
 )
 # ``XX-NEW`` is a valid committed state: a maintainer allocates the number at merge time.
 LESSON_ID = re.compile(r"^LL-(?:\d{3,}|NEW)$")
@@ -195,14 +195,38 @@ def _lifecycle_dates(e, who, problems, *, review_required: bool):
         problems.append(f"{who}: `review_by` must be ISO YYYY-MM-DD")
 
 
+# about the record, not its content: a review or a verification run never makes reviews stale,
+# and the id is rewritten mechanically when `hnx ids resolve` allocates LL-NEW -> LL-006
+NOT_CONTENT = frozenset({"id", "reviews", "last_verified"})
+SELF = "<this record>"
+
+
+def _self_neutral(v, rx: re.Pattern):
+    """``v`` with every citation of the record's own id replaced by one token (allocation
+    rewrites ``LL-NEW`` to ``LL-006`` inside the record; that is not an edit)."""
+    if isinstance(v, str):
+        return rx.sub(SELF, v)
+    if isinstance(v, list):
+        return [_self_neutral(x, rx) for x in v]
+    if isinstance(v, dict):
+        return {k: _self_neutral(x, rx) for k, x in v.items()}
+    return v
+
+
 def record_digest_of(entry: dict) -> str:
-    """The content digest a review of this record carries: every field but ``reviews``."""
+    """The content digest a review of this record carries: every field but ``id``, ``reviews``
+    and ``last_verified`` (a recurrence or a status change does count), with the record's own id
+    neutralized, so allocating its number never makes its reviews stale."""
     from homelabnext.reviews import content_digest
 
-    return content_digest({k: v for k, v in entry.items() if k != "reviews"})
+    body = {k: v for k, v in entry.items() if k not in NOT_CONTENT}
+    own = str(entry.get("id") or "")
+    if own:
+        body = _self_neutral(body, re.compile(rf"\b{re.escape(own)}\b(?!-)"))
+    return content_digest(body)
 
 
-def _reviews(e, who, artefact, state, policy, problems):
+def _reviews(e, who, artefact, state, policy, problems, require=True):
     from homelabnext.reviews import evaluate, missing_message
 
     digest = record_digest_of(e)
@@ -216,7 +240,7 @@ def _reviews(e, who, artefact, state, policy, problems):
         who=who,
     )
     problems += ev.problems
-    if ev.missing:
+    if ev.missing and require:
         problems.append(missing_message(who, state, ev, digest))
 
 
@@ -465,9 +489,10 @@ def _verification(v, who, problems):
             problems.append(f"{who}: verification is not falsifiable ({txt!r})")
 
 
-def validate_lessons(data, policy=None) -> list[dict]:
+def validate_lessons(data, policy=None, *, require_reviews: bool = True) -> list[dict]:
     """Fatal.  With a review ``policy`` (homelabnext.reviews.Policy) each lesson's status must
-    also carry the reviews the policy requires, current with its content."""
+    also carry the reviews the policy requires, current with its content (unless
+    ``require_reviews`` is false: the write path, where a later review event pays that debt)."""
     items = _entries(data, "lessons", "lessons")
     problems: list[str] = []
     _dupes([str(e.get("id")) for e in items if isinstance(e, dict)], problems)
@@ -499,13 +524,13 @@ def validate_lessons(data, policy=None) -> list[dict]:
         if not (isinstance(s, list) and s and all(isinstance(x, str) and x for x in s)):
             problems.append(f"{who}: `systems` must be a non-empty list of strings")
         art = (_pitfall if kind == "pitfall" else _practice)(e, who, e.get("status"), problems)
-        _reviews(e, who, art, str(e.get("status")), policy, problems)
+        _reviews(e, who, art, str(e.get("status")), policy, problems, require_reviews)
     if problems:
         raise RegisterError("lessons", problems)
     return items
 
 
-def validate_runbooks(data, policy=None) -> list[dict]:
+def validate_runbooks(data, policy=None, *, require_reviews: bool = True) -> list[dict]:
     items = _entries(data, "runbooks", "runbooks")
     problems: list[str] = []
     _dupes([str(e.get("id")) for e in items if isinstance(e, dict)], problems)
@@ -531,6 +556,7 @@ def validate_runbooks(data, policy=None) -> list[dict]:
             "superseded" if e.get("superseded_by") else "active",
             policy,
             problems,
+            require_reviews,
         )
         sb = e.get("superseded_by")
         if sb is not None and not (

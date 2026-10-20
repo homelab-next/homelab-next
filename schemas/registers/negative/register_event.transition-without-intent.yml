@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+event: transition
+by: human:example-operator
+date: 2026-10-19
+from: controlled
+to: retired
+requested_by: profile:example-checker
+reason: the decider always names the intent it applied

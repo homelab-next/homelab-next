@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Reviewed exemptions from tools/run_output_lint.py: a repository script that writes a literal path
+# outside build/ and its run directory (homelabnext.runs.run_dir). Each entry names a path glob,
+# optionally a `match` regex limiting it to the lines it excuses, and why. An entry that excuses
+# nothing fails the gate. Empty on purpose: every script writes under build/ or where it is told.
+allow: []

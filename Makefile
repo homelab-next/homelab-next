@@ -15,7 +15,7 @@ REGISTERS_OUT := build/registers
 
 help:
 	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
-	@echo "hygiene: helpers-lint dup-check tls-lint workstation-lint keyring-check keyring ids-placeholders"
+	@echo "hygiene: helpers-lint dup-check tls-lint workstation-lint run-output-lint keyring-check keyring ids-placeholders"
 	@echo "knowledge graph (local docs/graph/, integrity checked in gates): graph"
 	@echo "script catalog (M-01, M-02, M-04): scripts-check"
 	@echo "invariants register, fast criteria, never pages (not in check; CI runs it): invariants"
@@ -222,8 +222,9 @@ changelog-check:
 #   F-07 no client with TLS certificate verification off (Python and YAML/JSON; RL013 does roles)
 #   F-17 no runtime config points at the admin workstation (runs beside X-01's endpoint gate)
 #   M-12 the generated keyring has 0 drift from its sources
-.PHONY: helpers-lint dup-check dup-baseline tls-lint workstation-lint keyring-check keyring ids-placeholders
-check: helpers-lint dup-check tls-lint workstation-lint keyring-check
+#   scripts write scratch output under their run directory (homelabnext.runs) or build/ only
+.PHONY: helpers-lint dup-check dup-baseline tls-lint workstation-lint keyring-check keyring ids-placeholders run-output-lint
+check: helpers-lint dup-check tls-lint workstation-lint keyring-check run-output-lint
 
 helpers-lint:
 	$(PY) tools/shared_helpers_lint.py .
@@ -241,6 +242,9 @@ tls-lint:
 
 workstation-lint:
 	$(PY) tools/workstation_refs.py .
+
+run-output-lint:
+	$(PY) tools/run_output_lint.py .
 
 KEYRING_SOURCES := examples/keyring/sources.yml
 keyring-check:

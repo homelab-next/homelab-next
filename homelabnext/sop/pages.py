@@ -10,8 +10,10 @@ same names, so a bare ``[[other]]`` would be ambiguous).  The ``what`` block lin
 capability reference page when the capability is one of the conformance capabilities.
 Credentials appear as secret-store NAMES only.
 
-Reviews (:mod:`homelabnext.reviews`): the front-matter carries ``author:`` and ``reviews:``, and
-``status: reviewed`` is checked against the review policy (``system-page.reviewed``), with no
+Reviews (:mod:`homelabnext.reviews`): the front-matter carries ``author:``; the reviews are
+append-only event files beside the page, ``docs/systems/<service>.events/``
+(:mod:`homelabnext.registers.events`; an inline ``reviews:`` list still counts, ``hnx registers
+events migrate docs/systems`` moves it out), and ``status: reviewed`` is checked against the review policy (``system-page.reviewed``), with no
 TODO(human) left.  A review's digest (:func:`page_digest`) covers only what people own, the
 ``hnx:todo`` blocks and any human front-matter field, never the ``hnx:gen`` blocks, so
 regenerating machine facts keeps a review current and editing the prose drops it.
@@ -154,7 +156,6 @@ def _front(reg: Registry, s: Service | None) -> dict[str, Any]:
             "capability": "<capability>",
             "status": "draft",
             "author": "unknown",
-            "reviews": [],
         }
     return {
         "title": s.name,
@@ -171,7 +172,6 @@ def _front(reg: Registry, s: Service | None) -> dict[str, Any]:
         "tags": list(s.tags),
         "status": "draft",
         "author": "unknown",
-        "reviews": [],
     }
 
 
@@ -323,9 +323,21 @@ def page_digest(text: str) -> str:
     return content_digest({"front": human_fm, "blocks": blocks})
 
 
-def _review_page(name: str, text: str, fm: dict, policy, rep: CheckReport) -> None:
+def page_reviews(path: Path, fm: Mapping[str, Any], problems: list[str]) -> list:
+    """The page's reviews: an inline ``reviews:`` list, then its ``<service>.events/`` events."""
+    from homelabnext.registers import events as ev
+
+    events = ev.read_events(ev.events_dir(path), problems, path.name)
+    return ev.derive(dict(fm), events, "system-page", problems, path.name).get("reviews")
+
+
+def _review_page(
+    name: str, text: str, fm: dict, policy, rep: CheckReport, path: Path | None = None
+) -> None:
     from homelabnext.reviews import evaluate, missing_message
 
+    if path is not None:
+        fm = {**fm, "reviews": page_reviews(path, fm, rep.review_problems)}
     status = fm.get("status", "draft")
     if status not in ("draft", "reviewed"):
         rep.review_problems.append(f"{name}: status must be draft or reviewed, not {status!r}")
@@ -393,6 +405,6 @@ def check_pages(reg: Registry, pages_dir: str | Path, policy=None) -> CheckRepor
         if refresh_page(text, render_page(reg, s)) != text:
             rep.stale.append(p.name)
         rep.todo_open[p.name] = _unfilled(text)
-        _review_page(p.name, text, yaml.safe_load(FRONT_RE.match(text)["fm"]), policy, rep)
+        _review_page(p.name, text, yaml.safe_load(FRONT_RE.match(text)["fm"]), policy, rep, p)
     rep.orphans = sorted(p.name for n, p in by_service.items() if n not in reg.services)
     return rep

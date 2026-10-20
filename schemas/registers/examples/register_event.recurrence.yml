@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+event: recurrence
+by: agent:example-checker
+date: '2026-10-19'
+note: the proxy served an expired certificate again
+evidence: agents/findings/proxy/2026-10-19-tls.md

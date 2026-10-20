@@ -532,7 +532,8 @@ def resolve_file(root, relpath: str, dry_run: bool = False) -> list[tuple[str, s
 
 
 def _resolve_dir(root, relpath: str, spec: RegisterSpec, dry_run: bool):
-    """Each ``XX-NEW*.md`` record: rewrite its id (and self-citations), rename it ``XX-NNN.md``."""
+    """Each ``XX-NEW*.md`` record: rewrite its id (and self-citations), rename it ``XX-NNN.md``
+    and its sidecar ``XX-NEW*.events/`` directory ``XX-NNN.events/``."""
     d = root / relpath
     assigned = []
     for name, text in sorted((_disk_dir_texts(d) or {}).items()):
@@ -546,7 +547,12 @@ def _resolve_dir(root, relpath: str, spec: RegisterSpec, dry_run: bool):
         target = d / f"{new_id}{RECORD_SUFFIX}"
         if target.exists():
             raise IdError(f"{relpath}/{target.name} already exists; not overwriting it")
+        sidecar = d / (name[: -len(RECORD_SUFFIX)] + ".events")  # registers.events: moves along
+        if sidecar.is_dir() and (d / f"{new_id}.events").exists():
+            raise IdError(f"{relpath}/{new_id}.events already exists; not overwriting it")
         target.write_text(re.sub(rf"\b{re.escape(ident)}\b", new_id, text))
+        if sidecar.is_dir():
+            sidecar.rename(d / f"{new_id}.events")
         (d / name).unlink()
     return assigned
 

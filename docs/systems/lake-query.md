@@ -13,7 +13,6 @@ backup_job: null
 tags: [data, query]
 status: draft
 author: unknown
-reviews: []
 ---
 
 # lake-query

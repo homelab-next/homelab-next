@@ -13,7 +13,6 @@ backup_job: daily-core
 tags: [core, secrets]
 status: draft
 author: unknown
-reviews: []
 ---
 
 # secrets

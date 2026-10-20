@@ -16,7 +16,8 @@ hnx docs systems template                                       # print the blan
 
 * Front-matter (YAML) carries the machine facts: `service`, `capability`, `impl`, `owner`, `host`,
   `port`, `protocol`, `health`, `backup_job`, `tags`, and the fields people own and regeneration
-  keeps: `status` (`draft` / `reviewed`), `author` and `reviews` (see "Reviews" below).
+  keeps: `status` (`draft` / `reviewed`) and `author`; the reviews are event files in
+  `docs/systems/<service>.events/` (see "Reviews" below).
 * Nine fixed sections: what it does; inputs; outputs with formats; how to use it; how to verify it
   is healthy; failure modes; depends on / depended on by; credentials and access (secret-store
   names only, never values); source of truth.
@@ -41,8 +42,12 @@ unfilled TODO blocks unless `--require-complete` is given; the count is always p
 ## Reviews
 
 Pages share the review model of the lesson and runbook records
-([registers](registers.md#reviews), `homelabnext/reviews.py`): `author:` plus a `reviews:` list
-of `{by, kind, role, date, verdict, digest, note}`, the broker's identity normalization, no
+([registers](registers.md#reviews), `homelabnext/reviews.py`): `author:` plus review events,
+one file each in the sidecar `docs/systems/<service>.events/`
+([events](registers.md#events-and-derived-state); `hnx registers events add
+docs/systems/<service>.md review.yml` validates and appends one) holding `{by, kind, role, date,
+verdict, digest, note}`; an inline `reviews:` list still counts and `hnx registers events migrate
+docs/systems` moves it out. Same rules: the broker's identity normalization, no
 self-review, a challenge review by a different agent than every check, and no agent identity
 in a human slot. The policy is `examples/review-policy.yml` (`system-page`), read by `check`
 when it exists (`--policy FILE`, or `--policy none`).
@@ -56,5 +61,5 @@ when it exists (`--policy FILE`, or `--policy none`).
   review current and editing the prose drops it.
 * Draft pages are listed as `info:` with the tiers `reviewed` would still need; they never fail.
 
-The fourteen example pages are drafts with `reviews: []`; `tests/sop/fixtures/dns.reviewed.md`
-is a fully reviewed page that proves the pass path.
+The fourteen example pages are drafts with no reviews; `tests/sop/fixtures/dns.reviewed.md` is a
+fully reviewed page (inline form) that proves the pass path, in both forms in the tests.

@@ -3,7 +3,10 @@
 
 One model for every reviewed artefact: lesson and runbook records
 (``examples/registers/lessons/LL-001.md``) and the per-service SOP pages (``docs/systems/``).
-An artefact carries ``author:`` and a ``reviews:`` list::
+An artefact carries ``author:`` and its reviews: append-only event files in the sidecar
+directory beside it (``LL-001.events/``, ``docs/systems/dns.events/``; see
+:mod:`homelabnext.registers.events`), each one review entry, or (the older form, still read) an
+inline ``reviews:`` list::
 
     reviews:
       - by: agent:j8-lead        # issuer:subject, compared like the broker's approvals
@@ -347,7 +350,14 @@ def evaluate(
             ev.current = [r for r in ev.current if identity(r.get("by")) != ident]
     if policy is not None:
         for q in policy.required(artefact, state):
-            got = sum(1 for r in ev.current if r["role"] == q.role and r["kind"] == q.kind)
+            # distinct reviewers: one identity reviewing twice is still one review
+            got = len(
+                {
+                    identity(r.get("by"))
+                    for r in ev.current
+                    if r["role"] == q.role and r["kind"] == q.kind
+                }
+            )
             if got < q.min:
                 ev.missing.append(q.label())
     return ev
@@ -369,9 +379,15 @@ def file_digest(path) -> str:
     p = pathlib.Path(path)
     text = p.read_text(encoding="utf-8")
     if p.parent.name in ("lessons", "runbooks"):
+        from homelabnext.registers import events as ev
         from homelabnext.registers.records import record_digest
+        from homelabnext.registers.schema import RegisterError
 
-        return record_digest(text, p.name, p.parent.name)
+        problems: list[str] = []
+        events = ev.read_events(ev.events_dir(p), problems, p.name)
+        if problems:
+            raise RegisterError(p.parent.name, problems)
+        return record_digest(text, p.name, p.parent.name, events)
     from homelabnext.sop.pages import page_digest
 
     return page_digest(text)

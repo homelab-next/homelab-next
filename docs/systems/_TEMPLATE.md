@@ -1,11 +1,6 @@
 ---
-title: <service>
-type: system
-service: <service>
-capability: <capability>
-status: draft
-author: unknown
-reviews: []
+{title: <service>, type: system, service: <service>, capability: <capability>, status: draft,
+  author: unknown}
 ---
 
 # <service>

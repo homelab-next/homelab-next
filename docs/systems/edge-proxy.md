@@ -13,7 +13,6 @@ backup_job: null
 tags: [core, edge]
 status: draft
 author: unknown
-reviews: []
 ---
 
 # edge-proxy
