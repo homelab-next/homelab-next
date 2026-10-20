@@ -15,6 +15,7 @@ record) are not written twice, and a record without inline state is left alone.
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 from collections.abc import Mapping
@@ -57,8 +58,21 @@ def _split_done(planned, existing: list[ev.Event]):
     return todo, left
 
 
-def _new_only(planned, existing: list[ev.Event]):
-    return _split_done(planned, existing)[0]
+def _reviews_key(reviews) -> list[str]:
+    """Reviews as a multiset: their order is load order (inline first, then events by time),
+    which moving an inline review to an event may change without changing a single review."""
+    return sorted(json.dumps(r, sort_keys=True, default=str) for r in reviews or [])
+
+
+def _unordered(doc: dict, kind: str) -> dict:
+    out = dict(doc)
+    out[kind] = [
+        {**e, "reviews": _reviews_key(e["reviews"])}
+        if isinstance(e, dict) and "reviews" in e
+        else e
+        for e in doc.get(kind) or []
+    ]
+    return out
 
 
 def migrate_records(d) -> list[pathlib.Path]:
@@ -97,7 +111,7 @@ def migrate_records(d) -> list[pathlib.Path]:
         pending = [ev.Event(ev.event_name(x, w), x, ev.stamp_of(w), 1) for x, w in new]
         after_events[name] = sorted([*after_events.get(name, []), *pending], key=ev.Event.sort_key)
     after = load_texts(after_texts, kind, after_events)
-    if diff := _diff(before, after):
+    if diff := _diff(_unordered(before, kind), _unordered(after, kind)):
         raise RegisterError(kind, [f"the migration would change the loaded register ({diff})"])
     written: list[pathlib.Path] = []
     for name, (text, new) in plan.items():
@@ -129,15 +143,19 @@ def migrate_pages(d) -> list[pathlib.Path]:
         existing = ev.read_events(ev.events_dir(p), problems, p.name)
         if problems:
             raise RegisterError("system page", problems)
-        new = _new_only(planned, existing)
+        new, unmatched = _split_done(planned, existing)
         stripped = strip_keys(text, ("reviews",))
         if page_digest(stripped) != page_digest(text):
             raise RegisterError("system page", [f"{p.name}: the migration changed its digest"])
         pending = [ev.Event(ev.event_name(x, w), x, ev.stamp_of(w), 1) for x, w in new]
         fm_after = yaml.safe_load(FRONT_RE.match(stripped)["fm"])
+        # before: the inline list plus the events that are not copies of it (a review already
+        # written as an event, or an interrupted earlier run's); after: every event
+        was = ev.derive(dict(fm), unmatched, "system-page", problems, p.name)
         got = ev.derive(fm_after, [*existing, *pending], "system-page", problems, p.name)
-        if list(got.get("reviews") or []) != list(fm["reviews"] or []):
-            raise RegisterError("system page", [f"{p.name}: the reviews would not load back"])
+        if problems or _reviews_key(got.get("reviews")) != _reviews_key(was.get("reviews")):
+            why = problems or [f"{p.name}: the reviews would not load back"]
+            raise RegisterError("system page", why)
         plans.append((p, stripped, new))
     for p, stripped, new in plans:
         written += write_events(p, new, record_text=stripped, policy=False)

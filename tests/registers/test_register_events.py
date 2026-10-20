@@ -611,3 +611,61 @@ def test_a_loaded_record_round_trips_through_write_record(lab, inbox):
     entry = dict(after, status="controlled")  # a derived field changed by hand: still refused
     with pytest.raises(RegisterError, match="derived"):
         write_record(rec, entry)
+
+
+def _old_review(date):
+    return {
+        "event": "review",
+        "by": "agent:example-checker",
+        "kind": "agent",
+        "role": "check",
+        "date": dt.date.fromisoformat(date),
+        "verdict": "pass",
+        "digest": "sha256:0123456789ab",
+        "note": "an earlier review, already an event",
+    }
+
+
+def test_a_migration_with_an_older_sidecar_review_compares_reviews_as_a_multiset(tmp_path):
+    """Regression: the before/after compare was order-sensitive, so a sidecar review older than
+    an inline one (it loads first after the migration, last before it) failed the migration."""
+    d = tmp_path / "registers" / "lessons"
+    _inline_copy(d, "lessons")
+    rec = d / "LL-001.md"
+    assert "reviews:" in rec.read_text()
+    old = _old_review("2025-01-02")
+    ev.create_event(ev.events_dir(rec), old, when=dt.datetime(2025, 1, 2, tzinfo=dt.UTC))
+    before = load_register(d)
+    assert migrate(d)
+
+    def key(doc):
+        out = []
+        for e in doc["lessons"]:
+            e = dict(e)
+            e["reviews"] = sorted(map(str, e.get("reviews") or []))
+            out.append(e)
+        return out
+
+    assert key(load_register(d)) == key(before)
+    assert "reviews:" not in rec.read_text()
+
+
+def test_a_page_migration_keeps_pre_existing_review_events(tmp_path):
+    """Regression: migrate_pages compared the migrated reviews with the inline list alone, so a
+    page that already had a review event (not a copy of an inline one) blocked every page."""
+    from homelabnext.sop.pages import page_reviews
+
+    pages = tmp_path / "docs" / "systems"
+    pages.mkdir(parents=True)
+    fixture = REPO / "tests/sop/fixtures/dns.reviewed.md"
+    page = pages / "dns.md"
+    page.write_text(fixture.read_text())
+    inline = yaml.safe_load(fixture.read_text().split("---")[1])["reviews"]
+    old = _old_review("2025-01-02")
+    ev.create_event(ev.events_dir(page), old, when=dt.datetime(2025, 1, 2, tzinfo=dt.UTC))
+    assert registers_main(["events", "migrate", str(pages)]) == 0
+    fm = yaml.safe_load(page.read_text().split("---")[1])
+    assert "reviews" not in fm
+    got = page_reviews(page, fm, [])
+    assert len(got) == len(inline) + 1
+    assert [r for r in got if r.get("note") == old["note"]]  # the earlier event is kept
