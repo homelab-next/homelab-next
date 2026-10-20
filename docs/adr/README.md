@@ -19,3 +19,4 @@ only (`example.internal`, RFC 5737 addresses); see `CONTRIBUTING.md`.
 | [0010](0010-records-lifecycle-as-an-api.md) | records-lifecycle-as-an-api | The records lifecycle and register edits are an API, not file moves |
 | [0011](0011-public-private-split-and-licensing.md) | public-private-split-and-licensing | What is public, what stays private, and the licence rule |
 | [0012](0012-hypervisor-is-not-modular.md) | hypervisor-is-not-modular | The hypervisor layer is deliberately not a swappable seam |
+| [0013](0013-status-hub.md) | status-hub | One read-only status hub over status sources registered in the registry; views pick from that menu |

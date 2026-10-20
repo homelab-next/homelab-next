@@ -1,0 +1,10 @@
+{
+  "source": "metrics-alerts",
+  "module": "metrics",
+  "item": "DiskFillingUp",
+  "state": "ok",
+  "summary": "inactive",
+  "link": "192.0.2.20",
+  "observed_at": "2026-10-20T08:00:00Z",
+  "expires_at": "2026-10-20T08:03:00Z"
+}

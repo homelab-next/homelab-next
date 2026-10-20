@@ -1,0 +1,12 @@
+{
+  "source": "proposals",
+  "module": "records-db",
+  "item": "inbox",
+  "state": "ok",
+  "summary": "1 note in the inbox, oldest 2d",
+  "link": "docs/status/sources.md#proposals",
+  "observed_at": "2026-10-20T08:00:00Z",
+  "expires_at": "2026-10-20T08:15:00Z",
+  "value": 1,
+  "work": true
+}

@@ -36,6 +36,8 @@ relate.
 
 ## Decisions, status and scripts
 
+- [Status hub](status.md) ([[status]]): the read-only primary UI over every registered status
+  source; the [source catalog](status/sources.md) ([[status/sources|status sources]]) is the menu.
 - [Architecture decision log](adr/README.md) ([[adr/README|ADRs]]).
 - [Checklist](checklist.md) ([[checklist]]): what is done, public now, or needs a server.
 - [Registers](registers.md) ([[registers]]): lessons and runbooks as one file per record, the

@@ -53,6 +53,7 @@ NODE_KINDS: dict[str, tuple[str, str]] = {
     "playbook": ("playbook:<name>", "ansible/playbooks/*.yml"),
     "doc": ("doc:<path>", "tracked Markdown pages (not tests, examples or docs/graph/)"),
     "adr": ("adr:<slug>", "docs/adr/NNNN-<slug>.md"),
+    "status": ("status:<source>", "examples/services.yml status_sources (the status hub's menu)"),
 }
 
 #: type -> (from kind(s), to kind(s), asserted by)
@@ -105,4 +106,10 @@ EDGE_TYPES: dict[str, tuple[str, str, str]] = {
     "documents": ("doc", "svc, cap", "docs/systems/<svc>.md, docs/capabilities/<cap>.md"),
     "targets": ("playbook", "cap", "a cap_<name> hosts group"),
     "applies": ("playbook", "role", "play roles"),
+    "observes": (
+        "status",
+        "svc, cap",
+        "registry status_sources (declaring service, its capability)",
+    ),
+    "polls": ("status", "svc", "registry status_sources target.service"),
 }

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/status/observation/1.0",
+  "title": "Status observation",
+  "description": "One reading of one item of one module, as a status hub collector records it (homelabnext.status, ADR-0013). source is a registry status-source id; link is a logical id or a relative path, never an address. expires_at is when the reading reads as stale if nothing newer arrives (observed_at + the source's stale_after_s). Evolve additively.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source", "module", "item", "state", "summary", "observed_at", "expires_at"],
+  "properties": {
+    "source": {"$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"},
+    "module": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$"},
+    "item": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$"},
+    "state": {"enum": ["ok", "warn", "fail", "unknown", "stale"]},
+    "summary": {"type": "string", "maxLength": 300, "pattern": "^[^\\u0000-\\u001f\\u007f]*$"},
+    "link": {
+      "type": "string",
+      "maxLength": 256,
+      "anyOf": [
+        {"pattern": "^(?:svc|cap|status|inv|runbook|lesson|doc):[A-Za-z0-9._/-]{1,200}$"},
+        {"pattern": "^(?!/)(?!.*\\.\\.)(?![0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)[A-Za-z0-9._/-]+(?:#[A-Za-z0-9._-]+)?$"}
+      ],
+      "description": "A logical id (svc:metrics, cap:notify, inv:O-05) or a path relative to the docs, never a URL or an address."
+    },
+    "observed_at": {"$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"},
+    "expires_at": {"$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"},
+    "value": {"type": "number", "description": "Optional measure (a count, an age in seconds)."},
+    "work": {"type": "boolean", "description": "The item counts live work (an inbox, a queue): shown in the live-work strip while value > 0."}
+  }
+}

@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+views_version: 1
+shell: {title: Status, main: overview}
+menu: []

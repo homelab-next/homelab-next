@@ -53,6 +53,8 @@ Edge vocabulary (``from -> to: asserted by``; the table is :data:`.vocab.EDGE_TY
     documents      doc -> svc, cap: docs/systems/<svc>.md, docs/capabilities/<cap>.md
     targets        playbook -> cap: a cap_<name> hosts group
     applies        playbook -> role: play roles
+    observes       status -> svc, cap: registry status_sources (declaring service, its capability)
+    polls          status -> svc: registry status_sources target.service
 
 Node kinds and their id forms are :data:`.vocab.NODE_KINDS`.
 """

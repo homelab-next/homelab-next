@@ -111,6 +111,7 @@ The registers are read through one function, `_register_entries(path)` in
 | `playbook` | `playbook:<name>` | ansible/playbooks/\*.yml |
 | `doc` | `doc:<path>` | tracked Markdown pages (not tests, examples or docs/graph/) |
 | `adr` | `adr:<slug>` | docs/adr/NNNN-&lt;slug&gt;.md |
+| `status` | `status:<source>` | examples/services.yml status_sources (the status hub's menu) |
 
 ## Edge types
 
@@ -156,6 +157,8 @@ The registers are read through one function, `_register_entries(path)` in
 | `documents` | doc | svc, cap | docs/systems/&lt;svc&gt;.md, docs/capabilities/&lt;cap&gt;.md |
 | `targets` | playbook | cap | a cap_&lt;name&gt; hosts group |
 | `applies` | playbook | role | play roles |
+| `observes` | status | svc, cap | registry status_sources (declaring service, its capability) |
+| `polls` | status | svc | registry status_sources target.service |
 
 `grants` edges carry `level` (and `approval` when the grant needs one); `runs` edges from services
 carry the registry `version`; `exposes` carries the MCP transport.

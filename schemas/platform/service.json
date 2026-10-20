@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/service/2.0",
+  "$id": "https://schemas.example.internal/homelabnext/platform/service/2.1",
   "title": "HomelabNext service registry (services.yml)",
-  "description": "Single source of truth for what runs where. Every endpoint, scrape target, proxy site, firewall rule, DNS record and environment file is generated from this document. Schema version 1; evolve additively. 2.0 closes every free-text field that generators interpolate: owners and identifiers are slugs, paths are URL path characters, descriptions are single lines, and every pattern rejects a trailing newline (Python re lets $ match before one; ECMA-262 does not).",
+  "description": "Single source of truth for what runs where. Every endpoint, scrape target, proxy site, firewall rule, DNS record and environment file is generated from this document. Schema version 1; evolve additively. 2.0 closes every free-text field that generators interpolate: owners and identifiers are slugs, paths are URL path characters, descriptions are single lines, and every pattern rejects a trailing newline (Python re lets $ match before one; ECMA-262 does not). 2.1 adds status_sources: what the status hub may poll or receive for a service, by registry name only (docs/status.md, ADR-0013).",
   "type": "object",
   "additionalProperties": false,
   "required": ["registry_version", "lab", "zones", "hosts", "services"],
@@ -127,7 +127,57 @@
         "scope": {
           "enum": ["in", "out"],
           "description": "Writer-tool scope (homelabnext.scope). 'out' keeps tools from filing tasks, notes or findings about this service; absent = inherit from its host guest, else in."
+        },
+        "status_sources": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/status_source"},
+          "description": "Status sources this service offers the status hub (the menu: hnx status sources, docs/status/sources.md). Targets are registry names, never addresses."
         }
+      }
+    },
+    "status_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "interval_s", "what"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)", "maxLength": 63, "description": "Unique across the registry; the graph node is status:<id>."},
+        "kind": {"enum": ["poll-http-json", "poll-file", "push-event", "poll-prometheus"], "description": "poll-prometheus is reserved for stage 2: its collector reports unknown until then."},
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "service": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$(?!\\n)", "description": "Registry service to poll (default: the declaring service), resolved through its capability alias."},
+            "path": {"type": "string", "pattern": "^/[A-Za-z0-9._~/%@+=&?,-]*$(?!\\n)", "maxLength": 300, "description": "URL path (and query) on the target service."},
+            "file": {"type": "string", "pattern": "^(?!/)(?!.*\\.\\.)[A-Za-z0-9._/-]+$(?!\\n)", "maxLength": 256, "description": "poll-file: a file or directory relative to the status root (a checkout or the hub's data directory)."}
+          }
+        },
+        "interval_s": {"type": "integer", "minimum": 5, "maximum": 86400},
+        "stale_after_s": {"type": "integer", "minimum": 5, "maximum": 604800, "description": "Default 3 x interval_s; must be >= interval_s."},
+        "timeout_s": {"type": "integer", "minimum": 1, "maximum": 300, "default": 10, "description": "Must be below interval_s."},
+        "on_error": {"enum": ["unknown", "fail"], "default": "unknown", "description": "What a failed poll means: unknown (the items age into stale) or fail (the source is a liveness probe)."},
+        "mapping": {"$ref": "#/$defs/status_mapping"},
+        "what": {"type": "string", "minLength": 3, "maxLength": 200, "pattern": "^[^\\u0000-\\u001f\\u007f]*$(?!\\n)", "description": "One line: what this source reports."}
+      }
+    },
+    "status_selector": {"type": "string", "pattern": "^[$@A-Za-z0-9_.*\\[\\]-]{1,200}$(?!\\n)"},
+    "status_mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Payload -> status observations: a named built-in mapper, or declarative selectors (homelabnext.status.mapping).",
+      "properties": {
+        "builtin": {"enum": ["invariants-results", "records-lanes", "broker-pending"]},
+        "warn_after_s": {"type": "integer", "minimum": 1, "description": "records-lanes, broker-pending: an oldest item older than this is warn."},
+        "items": {"$ref": "#/$defs/status_selector", "description": "The list (or mapping) of items; absent = the payload is one item."},
+        "item": {"$ref": "#/$defs/status_selector", "description": "An item's name, relative to the item (@key = its key in a mapping)."},
+        "state": {"$ref": "#/$defs/status_selector", "description": "The raw state, relative to the item."},
+        "states": {
+          "type": "object",
+          "propertyNames": {"pattern": "^[A-Za-z0-9_.-]{1,40}$(?!\\n)"},
+          "additionalProperties": {"enum": ["ok", "warn", "fail", "unknown"]},
+          "description": "Raw state (as lower-cased text) -> state; an unmapped raw value is unknown."
+        },
+        "summary": {"$ref": "#/$defs/status_selector", "description": "A one-line summary, relative to the item."},
+        "module": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$(?!\\n)", "description": "Module name (default: the declaring service)."}
       }
     }
   }

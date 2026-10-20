@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -69,6 +70,7 @@ class Service:
     env_var: str | None = None
     mcp: dict | None = None
     tags: tuple[str, ...] = ()
+    status_sources: tuple[dict, ...] = ()
 
     @property
     def scheme(self) -> str:
@@ -219,10 +221,99 @@ def semantic_problems(doc: dict) -> list[str]:
         if var in envs:
             problems.append(f"service {sname}: env var {var} already used by {envs[var]}")
         envs[var] = sname
+    problems += status_source_problems(services)
     return problems
 
 
+#: status-source kinds that poll a registry service over HTTP (target.service + target.path)
+_HTTP_STATUS_KINDS = ("poll-http-json", "poll-prometheus")
+_RAW_ADDRESS = re.compile(r"://|(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w])|\blocalhost\b", re.I)
+
+
+def status_source_problems(services: dict) -> list[str]:
+    """Rules for ``status_sources`` (ADR-0013) that the schema cannot state: unique ids, targets
+    that name a registered http(s) service, sane timing, the target a kind needs, and no raw
+    address anywhere in a source."""
+    problems: list[str] = []
+    ids: dict[str, str] = {}
+    for sname, s in services.items():
+        for src in s.get("status_sources", []):
+            sid = src["id"]
+            where = f"service {sname}: status source {sid}"
+            if sid in ids:
+                problems.append(f"{where}: id already used by service {ids[sid]}")
+            ids[sid] = sname
+            for v in (v for v in _strings(src) if _RAW_ADDRESS.search(v)):
+                problems.append(f"{where}: raw address {v!r}; name a registry service instead")
+            interval = src["interval_s"]
+            stale = src.get("stale_after_s", 3 * interval)
+            timeout = src.get("timeout_s", 10)
+            if stale < interval:
+                problems.append(f"{where}: stale_after_s {stale} is below interval_s {interval}")
+            if timeout >= interval:
+                problems.append(f"{where}: timeout_s {timeout} must be below interval_s {interval}")
+            target = src.get("target", {})
+            kind = src["kind"]
+            if kind in _HTTP_STATUS_KINDS:
+                tname = target.get("service", sname)
+                tsvc = services.get(tname)
+                if tsvc is None:
+                    problems.append(f"{where}: target service {tname!r} is not registered")
+                elif tsvc["protocol"] not in ("http", "https"):
+                    problems.append(f"{where}: target service {tname!r} does not speak http(s)")
+                if "path" not in target:
+                    problems.append(f"{where}: {kind} needs target.path")
+                if "file" in target:
+                    problems.append(f"{where}: {kind} takes no target.file")
+            elif kind == "poll-file":
+                if "file" not in target:
+                    problems.append(f"{where}: poll-file needs target.file")
+                if "path" in target or "service" in target:
+                    problems.append(f"{where}: poll-file takes only target.file")
+            elif target.get("path") or target.get("file"):
+                problems.append(f"{where}: push-event sources are not polled (no path or file)")
+            mapping = src.get("mapping")
+            if kind in ("poll-http-json", "poll-file") and not mapping:
+                problems.append(f"{where}: {kind} needs a mapping")
+            if (
+                mapping
+                and "builtin" in mapping
+                and set(mapping) - {"builtin", "warn_after_s", "module"}
+            ):
+                problems.append(f"{where}: a builtin mapping takes no selectors")
+            if mapping and "builtin" not in mapping and "state" not in mapping:
+                problems.append(f"{where}: a declarative mapping needs a state selector")
+    return problems
+
+
+def _strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for k, v in value.items() for s in (*_strings(k), *_strings(v))]
+    if isinstance(value, list):
+        return [s for v in value for s in _strings(v)]
+    return []
+
+
+#: per-service keys the digest leaves out: read only by the status hub (ADR-0013), never by a
+#: generator, so registering a status source changes no generated file and no golden
+_UNDIGESTED_SERVICE_KEYS = ("status_sources",)
+
+
 def canonical_digest(doc: dict) -> str:
+    """sha256 of the registry as the generators consume it (every generated header cites it)."""
+    services = doc.get("services")
+    if isinstance(services, dict):
+        doc = {
+            **doc,
+            "services": {
+                k: {f: v for f, v in s.items() if f not in _UNDIGESTED_SERVICE_KEYS}
+                if isinstance(s, dict)
+                else s
+                for k, s in services.items()
+            },
+        }
     blob = json.dumps(doc, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
@@ -267,6 +358,7 @@ def build_registry(doc: dict) -> Registry:
             env_var=s.get("env_var"),
             mcp=s.get("mcp"),
             tags=tuple(sorted(s.get("tags", []))),
+            status_sources=tuple(s.get("status_sources", [])),
         )
     return Registry(
         lab_name=lab["name"],
