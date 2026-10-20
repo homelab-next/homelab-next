@@ -4,9 +4,11 @@
 Everything in the repository that names something else -- the service registry, the conformance
 suites and adapters, the schemas, the registers, the script catalog, the agent profiles and
 keyring, the customizations, the Ansible playbooks and these pages -- as one typed graph, so a
-task can pull in exactly what is directly related to it. `homelabnext.graph` builds it;
-[`docs/graph/graph.json`](graph/graph.json) is the committed data and
-[`docs/graph/`](graph/README.md) ([[graph/README|graph index]]) the generated navigation pages.
+task can pull in exactly what is directly related to it. `homelabnext.graph` builds it in about
+a second. `hnx graph build` writes a local copy, `docs/graph/graph.json` (the data) and
+`docs/graph/README.md` with one index page per node kind (navigation, e.g. for Obsidian's graph
+view). That directory is **not committed**: nearly every change in the repository would make a
+committed copy stale, so CI checks the graph's integrity instead, and `related` always builds fresh.
 
 **Facts only.** Every edge is read from a field of a source file, and the edge's `source` names
 the file and field. Nothing is inferred from prose similarity. Where names have to be matched (a
@@ -17,8 +19,8 @@ code spans of a register's text are quoted literals, not references.
 ## Commands
 
 ```
-hnx graph build                                # write docs/graph/graph.json and the index pages
-hnx graph check                                # integrity + freshness (make check, CI, invariant L-05)
+hnx graph build                                # write the local docs/graph/ (gitignored)
+hnx graph check                                # integrity (make check, CI, invariant L-05)
 hnx graph related cap:lake-query               # ranked neighbourhood of a node
 hnx graph related homelabnext/conform/adapters/openbao.py --depth 2 --json
 ```
@@ -28,14 +30,14 @@ hnx graph related homelabnext/conform/adapters/openbao.py --depth 2 --json
 * a dangling edge: an edge naming an id no source defines -- a lesson naming a runbook that does
   not exist, a page linking a missing page or file, a service depending on an unknown service;
 * a duplicate id: two places defining the same node;
-* a stale, missing or orphan file under `docs/graph/` (run `hnx graph build` and commit).
+* with `--out DIR`, a stale, missing or orphan file in that directory.
 
 It **reports**, without failing, orphan nodes (no edge at all) and lesson or runbook system tags
 that resolve to no service, capability or product, each as a count and a list.
 
 ## Querying
 
-The query functions are pure, over a loaded graph (`homelabnext.graph.load(path)` or
+The query functions are pure, over a loaded graph (`homelabnext.graph.load(path)` on a local build, or
 `build(root)`):
 
 * `neighbours(graph, ids, depth=1, edge_types=None, direction="both")` -- every node within

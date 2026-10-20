@@ -2,12 +2,13 @@
 """Build the graph from a checkout and check its integrity.
 
 :func:`build` runs every reader of :mod:`.sources` and returns the :class:`~.model.Graph` with a
-:class:`Integrity` report.  :func:`check` additionally compares the committed ``graph.json`` and
-the generated pages under ``docs/graph/`` with a fresh build.
+:class:`Integrity` report.  :func:`check` checks that integrity and, given an output directory,
+also compares the generated files there with a fresh build (``docs/graph/`` is a local,
+uncommitted build).
 
 Failures (``hnx graph check`` exits 1): a dangling edge (either end names an id no reader
-defined), a duplicate id (two places define the same node), a stale, missing or orphan
-generated file.  Reported, never failed: orphan nodes (no edge at all) and lesson/runbook system
+defined), a duplicate id (two places define the same node), and with an output directory a
+stale, missing or orphan generated file.  Reported, never failed: orphan nodes (no edge at all) and lesson/runbook system
 tags that resolve to no service, capability or product.
 """
 
@@ -113,10 +114,17 @@ class Report:
 
 
 def check(root: str | Path, out_dir: str | Path | None = None) -> Report:
+    """Integrity of a fresh build; with ``out_dir``, also that the generated files there match.
+
+    ``docs/graph/`` is not committed (almost every change in the repository would make a
+    committed copy stale), so by default only the integrity of the graph itself is checked.
+    """
     root = Path(root)
     graph, integrity = build(root)
-    out = Path(out_dir) if out_dir else root / GRAPH_DIR
     rep = Report(integrity, counts=(len(graph.nodes), len(graph.edges)))
+    if out_dir is None:
+        return rep
+    out = Path(out_dir)
     files = render_all(graph)
     for name, text in sorted(files.items()):
         p = out / name

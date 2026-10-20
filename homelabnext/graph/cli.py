@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """``hnx graph build|check|related``.
 
-* ``build [--out DIR] [--root CHECKOUT]`` writes ``docs/graph/graph.json`` and the index pages;
-* ``check [--out DIR] [--root CHECKOUT]`` fails on a dangling edge, a duplicate id, or a stale,
-  missing or orphan generated file, and reports orphan nodes and unresolved system tags;
+* ``build [--out DIR] [--root CHECKOUT]`` writes ``docs/graph/graph.json`` and the index pages
+  (a local build for Obsidian and scripts; ``docs/graph/`` is gitignored);
+* ``check [--out DIR] [--root CHECKOUT]`` fails on a dangling edge or a duplicate id (with
+  ``--out``, also on a stale, missing or orphan file there), and reports orphan nodes and
+  unresolved system tags;
 * ``related ID|PATH... [--depth N] [--budget N] [--json] [--include-inactive]`` prints the
-  ranked neighbourhood of the given node ids or edited file paths (from the committed graph, or
-  a fresh build when there is none).
+  ranked neighbourhood of the given node ids or edited file paths, from a fresh build.
 
 Exit codes: 0 ok, 1 check failed (or ``related`` resolved no seed), 2 usage error or no source
 checkout.
@@ -19,8 +20,8 @@ import json
 import sys
 from pathlib import Path
 
-from .build import GRAPH_JSON, build, check, generate
-from .model import Graph, load
+from .build import build, check, generate
+from .model import Graph
 from .query import related, seeds_for
 
 
@@ -33,10 +34,7 @@ def _root(arg: str | None) -> Path | None:
 
 
 def _graph(root: Path) -> Graph:
-    committed = root / GRAPH_JSON
-    if committed.is_file():
-        return load(committed)
-    return build(root)[0]
+    return build(root)[0]  # always fresh: docs/graph/ is a local, uncommitted build
 
 
 def main(argv: list[str] | None = None) -> int:

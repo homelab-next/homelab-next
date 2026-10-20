@@ -230,9 +230,16 @@ def test_stale_and_orphan_files_fail(tmp_path, repo_copy):
     gj = root / GRAPH_JSON
     gj.write_text(gj.read_text(encoding="utf-8").replace('"svc"', '"service"', 1), encoding="utf-8")
     (root / "docs/graph/extra.md").write_text("# not generated\n", encoding="utf-8")
-    rep = check(root)
+    rep = check(root, root / "docs/graph")
     assert "graph.json" in rep.stale and rep.orphan_files == ["extra.md"]
     generate(root)
+    assert check(root, root / "docs/graph").ok()
+
+
+def test_the_default_check_is_integrity_only(tmp_path, repo_copy):
+    """docs/graph/ is a local build: a missing or edited copy does not fail the default check."""
+    root = _fresh(tmp_path, repo_copy)
+    (root / GRAPH_JSON).write_text("{}", encoding="utf-8")
     assert check(root).ok()
 
 

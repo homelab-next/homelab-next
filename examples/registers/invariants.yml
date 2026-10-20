@@ -892,12 +892,12 @@ criteria:
   expected: >-
     exit 0: every service in the inventory has its system page and the generated parts match the
     inventory, every capability page matches its contract, suite and adapters, and the knowledge
-    graph (docs/graph/) is current with no dangling edge or duplicate id (0 drift; TODO blocks,
+    graph has no dangling edge or duplicate id (0 drift; TODO blocks,
     orphan nodes and unresolved system tags are reported, not failed)
   expect_regex: 'systems pages: ok'
   remediation: >-
     Run `hnx docs systems generate examples/services.yml docs/systems` (or fix the inventory),
-    `hnx docs capabilities generate` and `hnx graph build`, and commit the result; for a dangling
+    `hnx docs capabilities generate`, and commit the result; for a dangling
     edge fix the reference the check names in its source file. A page that disagrees with the
     inventory is believed over it.
 - id: L-08

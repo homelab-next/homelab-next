@@ -28,3 +28,6 @@ secrets/
 .coverage.*
 # Obsidian vault settings (docs/ opens as a vault; see docs/README.md)
 .obsidian/
+
+# the knowledge graph is a local build (hnx graph build): any change would make a committed copy stale
+docs/graph/

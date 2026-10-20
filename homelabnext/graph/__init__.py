@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The repository knowledge graph: every service, capability, adapter, check, schema, lesson,
 runbook, invariant, script, agent profile and page as a node, linked by typed edges read only from
-facts in the source files (``hnx graph``; guide: ``docs/graph.md``; data:
-``docs/graph/graph.json``).
+facts in the source files (``hnx graph``; guide: ``docs/graph.md``; local build:
+``docs/graph/graph.json``, not committed).
 
 Later layers call the pure query functions: :func:`neighbours`, :func:`related` (ranked,
 budgeted) and :func:`seeds_for` (edited paths and task text to seed nodes).  Retired,

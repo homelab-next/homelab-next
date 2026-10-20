@@ -171,17 +171,27 @@ def _yaml(path: Path, merge_keys: bool = False) -> Any:
 
 
 def _register_entries(path: str | Path) -> list[dict[str, Any]]:
-    """Every record of one register file (lessons, runbooks or invariant criteria).
+    """Every record of one register (lessons, runbooks or invariant criteria).
 
-    The single seam to the register storage: today a YAML file read with the registers' own
-    loader (``homelabnext.registers.render.load_yaml``), its one top-level list of records.
+    The single seam to the register storage: ``homelabnext.registers.load_register`` reads a
+    directory of one-record-per-file Markdown (lessons, runbooks) or a single YAML file
+    (invariants), and returns the document the validators take.  Inactive records are kept: the
+    graph marks them and its queries skip them.  Each record gains ``_path``, the file it lives in.
     """
-    from homelabnext.registers.render import load_yaml
+    from homelabnext.registers import load_register
 
-    data = load_yaml(path) or {}
+    path = Path(path)
+    data = load_register(path) or {}
     for key in ("lessons", "runbooks", "criteria"):
         if isinstance(data.get(key), list):
-            return [e for e in data[key] if isinstance(e, dict)]
+            out = [dict(e) for e in data[key] if isinstance(e, dict)]
+            if path.is_dir():
+                files = {f.stem: f for f in path.glob("*.md")}  # records are named <id>.md
+                for e in out:
+                    f = files.get(str(e.get("id")))
+                    if f is not None:
+                        e["_path"] = f
+            return out
     return []
 
 
@@ -464,6 +474,16 @@ def read_pipelines(b: Builder) -> None:
                 f"homelabnext/{d.name}",
                 f"homelabnext/{d.name}/__init__.py",
             )
+        elif d.suffix == ".py" and not d.name.startswith("_") and d.name != "cli.py":
+            doc = ast.get_docstring(ast.parse(d.read_text(encoding="utf-8")))  # a public module
+            title = (doc or "").strip().split("\n\n", 1)[0].replace("\n", " ")
+            b.define(
+                f"pkg:homelabnext.{d.stem}",
+                "pkg",
+                title[:160],
+                f"homelabnext/{d.name}",
+                f"homelabnext/{d.name}",
+            )
 
 
 def _cli_targets(root: Path) -> dict[str, str]:
@@ -630,17 +650,23 @@ def read_registers(b: Builder) -> None:
     inv -checks-> script/pkg/make (the ``observable`` command; ``plugin`` criteria: the package
     whose plugin registers that id)."""
     base = b.root / REGISTERS
-    lessons = _register_entries(base / "lessons.yml")
-    runbooks = _register_entries(base / "runbooks.yml")
+    lessons = _register_entries(base / "lessons")
+    runbooks = _register_entries(base / "runbooks")
     criteria = _register_entries(base / "invariants.yml")
-    lp, rp, ip = (f"{REGISTERS}/{n}.yml" for n in ("lessons", "runbooks", "invariants"))
+    ip = f"{REGISTERS}/invariants.yml"
+
+    def rel(e, kind):
+        f = e.get("_path")
+        return f.relative_to(b.root).as_posix() if f else f"{REGISTERS}/{kind}"
+
     for e in lessons:
+        lp = rel(e, "lessons")
         b.define(
             f"lesson:{e['id']}",
             "lesson",
             str(e.get("title", "")),
             lp,
-            f"{lp}#{e['id']}",
+            lp,
             status=e.get("status"),
             lesson_kind=e.get("kind"),
             date=e.get("date"),
@@ -648,12 +674,13 @@ def read_registers(b: Builder) -> None:
             **_provenance(e),
         )
     for e in runbooks:
+        rp = rel(e, "runbooks")
         b.define(
             f"runbook:{e['id']}",
             "runbook",
             str(e.get("title", "")),
             rp,
-            f"{rp}#{e['id']}",
+            rp,
             status=e.get("status"),
             **_provenance(e),
         )
@@ -685,7 +712,7 @@ def read_registers(b: Builder) -> None:
                     b.edge(nid, target, "operates", f"{at}.systems")
 
     for e in lessons:
-        nid, at = f"lesson:{e['id']}", f"{lp}#{e['id']}"
+        nid, at = f"lesson:{e['id']}", rel(e, "lessons")
         tags(nid, e, at)
         for ref in _id_refs(str(e.get("preventive_control") or ""), inv_ids):
             if ref != nid:
@@ -700,16 +727,19 @@ def read_registers(b: Builder) -> None:
             t = target if target.startswith("lesson:") else f"lesson:{target}"
             b.edge(nid, t, "superseded_by", f"{at}.superseded_by")
         for target in _listed(e.get("incorporated_into")):
-            if re.fullmatch(r"(?:runbook:)?RB-(?:\d{3,}|NEW)", target):
-                t = target if target.startswith("runbook:") else f"runbook:{target}"
+            # a runbook (``RB-002``, or a step of it: ``RB-002#1``) or a page section
+            # (``docs/systems/<svc>.md#use``); the fragment names the place, not another node
+            dest = target.split("#", 1)[0]
+            if re.fullmatch(r"(?:runbook:)?RB-(?:\d{3,}|NEW)", dest):
+                t = dest if dest.startswith("runbook:") else f"runbook:{dest}"
                 b.edge(nid, t, "incorporated_into", f"{at}.incorporated_into")
-            else:  # a page: docs/systems/<svc>.md
-                b.path_ref(nid, target, "incorporated_into", f"{at}.incorporated_into")
+            else:
+                b.path_ref(nid, dest, "incorporated_into", f"{at}.incorporated_into")
         v = e.get("verification") if isinstance(e.get("verification"), dict) else {}
         for ref in cmds.refs(str(v.get("observable", ""))):
             b.edge(nid, ref, "verified_by", f"{at}.verification.observable")
     for e in runbooks:
-        nid, at = f"runbook:{e['id']}", f"{rp}#{e['id']}"
+        nid, at = f"runbook:{e['id']}", rel(e, "runbooks")
         tags(nid, e, at)
         for ref in _id_refs(str(e.get("purpose") or ""), inv_ids):
             if ref != nid:
