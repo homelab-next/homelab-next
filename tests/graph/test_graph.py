@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 import homelabnext.graph as hg
 from homelabnext.graph import sources
@@ -36,6 +37,24 @@ def graph(built):
 
 def has(graph: Graph, src: str, etype: str, dst: str) -> bool:
     return any(e.type == etype and e.dst == dst for e in graph.out_edges(src))
+
+
+LESSONS = "examples/registers/lessons"
+RUNBOOKS = "examples/registers/runbooks"
+
+
+def front(path: Path, **changes) -> None:
+    """Rewrite a record file's YAML front matter: set each key (``None`` deletes it)."""
+    text = path.read_text(encoding="utf-8")
+    _, head, body = text.split("---\n", 2)
+    meta = yaml.safe_load(head)
+    for k, v in changes.items():
+        if v is None:
+            meta.pop(k, None)
+        else:
+            meta[k] = v
+    dumped = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True)
+    path.write_text(f"---\n{dumped}---\n{body}", encoding="utf-8")
 
 
 def copy_repo(dest: Path) -> Path:
@@ -131,9 +150,12 @@ def test_every_source_contributes_and_counts(graph):
     for kind in ("svc", "cap", "adapter", "check", "schema", "lesson", "runbook", "inv"):
         assert kinds.get(kind), kind
     assert kinds["svc"] == 14
-    assert kinds["lesson"] == 3 and kinds["runbook"] == 2
+    assert kinds["lesson"] == 5 and kinds["runbook"] == 2
     assert len(graph.of_kind("script")) == 25
     assert all(n.attrs.get("status") for n in graph.of_kind("lesson"))
+    # each record node points at its own file
+    assert graph.nodes["lesson:LL-004"].path == f"{LESSONS}/LL-004.md"
+    assert graph.nodes["runbook:RB-002"].path == f"{RUNBOOKS}/RB-002.md"
 
 
 def test_grant_edges_carry_their_level(graph):
@@ -189,16 +211,16 @@ def test_copy_passes(repo_copy):
 
 def test_dangling_runbook_reference_fails(tmp_path, repo_copy):
     root = _fresh(tmp_path, repo_copy)
-    f = root / "examples/registers/lessons.yml"
-    text = f.read_text(encoding="utf-8").replace(
-        "the result pages through the invariants runner.",
-        "the result pages through the invariants runner; RB-999 restores it.",
-    )
-    f.write_text(text, encoding="utf-8")
+    f = root / LESSONS / "LL-001.md"
+    text = f.read_text(encoding="utf-8")
+    old = "the result pages through the invariants runner."
+    assert old in text
+    f.write_text(text.replace(old, old[:-1] + "; RB-999 restores it."), encoding="utf-8")
     rep = check(root)
     assert not rep.ok()
     assert any(
-        e.dst == "runbook:RB-999" and e.type == "controlled_by" for e in rep.integrity.dangling
+        e.src == "lesson:LL-001" and e.dst == "runbook:RB-999" and e.type == "controlled_by"
+        for e in rep.integrity.dangling
     )
     assert any("RB-999" in line for line in rep.lines())
 
@@ -214,64 +236,93 @@ def test_dangling_doc_link_fails(tmp_path, repo_copy):
     assert {"file:docs/systems/nope.md", "file:docs/missing-page.md"} <= dangling
 
 
-def test_duplicate_id_fails(tmp_path, repo_copy):
+def test_duplicate_id_fails(tmp_path, repo_copy, capsys):
+    """Two record files claiming one id never reach the graph: the register loader refuses them
+    (a record file is named after its id), and ``hnx graph check`` reports that and fails.  A
+    duplicate between two other sources is the graph's own duplicate-id failure."""
+    from homelabnext.registers.schema import RegisterError
+
     root = _fresh(tmp_path, repo_copy)
-    f = root / "examples/registers/runbooks.yml"
-    text = f.read_text(encoding="utf-8")
-    second = text[text.index("- id: RB-002") :]
-    f.write_text(text + second, encoding="utf-8")
+    shutil.copy(root / RUNBOOKS / "RB-002.md", root / RUNBOOKS / "RB-003.md")
+    with pytest.raises(RegisterError, match=r"RB-003\.md: file name and front-matter id RB-002"):
+        check(root)
+    assert main(["check", "--root", str(root)]) == 1
+    assert "a register does not load" in capsys.readouterr().out
+
+    root = _fresh(tmp_path / "b", repo_copy)
+    examples = root / "schemas/agent/examples"
+    shutil.copy(examples / "profile.reader.json", examples / "profile.reader-copy.json")
     rep = check(root)
     assert not rep.ok()
-    assert [d[0] for d in rep.integrity.duplicates] == ["runbook:RB-002"]
+    assert [d[0] for d in rep.integrity.duplicates] == ["profile:reader"]
+
+
+def test_placeholder_records_are_distinct_nodes(tmp_path, repo_copy):
+    """A pull request may add several ``LL-NEW`` records; each is its own node, not a duplicate."""
+    root = _fresh(tmp_path, repo_copy)
+    for slug in ("alpha", "beta"):
+        f = root / LESSONS / f"LL-NEW-{slug}.md"
+        shutil.copy(root / LESSONS / "LL-005.md", f)
+        front(f, id="LL-NEW", title=f"Placeholder practice {slug}")
+    g, rep = build(root)
+    assert rep.duplicates == [] and rep.dangling == []
+    assert g.nodes["lesson:LL-NEW-alpha"].path == f"{LESSONS}/LL-NEW-alpha.md"
+    assert g.nodes["lesson:LL-NEW-beta"].title == "Placeholder practice beta"
 
 
 def test_stale_and_orphan_files_fail(tmp_path, repo_copy):
+    """With an explicit output directory the check also compares the generated files."""
     root = _fresh(tmp_path, repo_copy)
+    out = root / "docs/graph"
+    generate(root)
+    assert check(root, out).ok()
     gj = root / GRAPH_JSON
     gj.write_text(gj.read_text(encoding="utf-8").replace('"svc"', '"service"', 1), encoding="utf-8")
-    (root / "docs/graph/extra.md").write_text("# not generated\n", encoding="utf-8")
-    rep = check(root, root / "docs/graph")
+    (out / "extra.md").write_text("# not generated\n", encoding="utf-8")
+    (out / "svc.md").unlink()
+    rep = check(root, out)
+    assert not rep.ok()
     assert "graph.json" in rep.stale and rep.orphan_files == ["extra.md"]
+    assert rep.missing == ["svc.md"]
     generate(root)
-    assert check(root, root / "docs/graph").ok()
+    assert check(root, out).ok()
 
 
 def test_the_default_check_is_integrity_only(tmp_path, repo_copy):
     """docs/graph/ is a local build: a missing or edited copy does not fail the default check."""
     root = _fresh(tmp_path, repo_copy)
+    assert check(root).ok()  # nothing generated at all
+    (root / GRAPH_JSON).parent.mkdir(parents=True, exist_ok=True)
     (root / GRAPH_JSON).write_text("{}", encoding="utf-8")
-    assert check(root).ok()
+    (root / "docs/graph/extra.md").write_text("# stray\n", encoding="utf-8")
+    rep = check(root)
+    assert rep.ok() and rep.stale == [] and rep.orphan_files == []
+    assert not check(root, root / "docs/graph").ok()  # the explicit comparison still sees it
 
 
-def test_lifecycle_fields_become_edges_and_attrs(tmp_path, repo_copy):
+def test_lifecycle_fields_become_edges_and_attrs(graph, tmp_path, repo_copy):
+    # the real register: LL-002 is a retired pitfall
+    assert has(graph, "lesson:LL-002", "retired_by", "inv:M-17")
+    assert has(
+        graph, "lesson:LL-002", "retired_by", "test:tests/registers/test_register_records.py"
+    )
+    attrs = graph.nodes["lesson:LL-002"].attrs
+    assert attrs["lesson_kind"] == "pitfall" and attrs["status"] == "retired"
+    # a practice superseded by another lesson
     root = _fresh(tmp_path, repo_copy)
-    f = root / "examples/registers/lessons.yml"
-    text = f.read_text(encoding="utf-8")
-    text = text.replace(
-        "  systems: [registers, git]\n",
-        "  systems: [registers, git]\n  kind: pitfall\n  retired_by: Q-04\n",
-    ).replace(
-        "  systems: [backup]\n",
-        "  systems: [backup]\n  kind: practice\n  superseded_by: LL-002\n",
-    )
-    text = text.replace("  status: partial\n", "  status: retired\n").replace(
-        "  status: open\n", "  status: superseded\n"
-    )
-    f.write_text(text, encoding="utf-8")
+    front(root / LESSONS / "LL-005.md", status="superseded", superseded_by=["LL-004"])
     g, rep = build(root)
     assert rep.dangling == []
-    assert has(g, "lesson:LL-002", "retired_by", "inv:Q-04")
-    assert has(g, "lesson:LL-003", "superseded_by", "lesson:LL-002")
-    assert g.nodes["lesson:LL-002"].attrs["lesson_kind"] == "pitfall"
-    assert g.nodes["lesson:LL-002"].attrs["status"] == "retired"
+    assert has(g, "lesson:LL-005", "superseded_by", "lesson:LL-004")
     page = render_views(g)["lesson.md"]
     live, archive = page.split("## Archive")
-    assert "lesson:LL-001" in live and "lesson:LL-002" in archive and "lesson:LL-003" in archive
+    assert "lesson:LL-001" in live
+    assert "lesson:LL-002" in archive and "lesson:LL-005" in archive
     assert "lesson:LL-002" in render_views(g)["README.md"].split("## Archive")[1]
     # inactive records cost no context
-    assert "lesson:LL-002" not in [r.id for r in related(g, ["system:registers"], budget=50)]
-    assert "lesson:LL-002" in [
-        r.id for r in related(g, ["system:registers"], budget=50, include_inactive=True)
+    assert "lesson:LL-005" not in [r.id for r in related(g, ["system:tls"], budget=50)]
+    assert "lesson:LL-005" in [
+        r.id for r in related(g, ["system:tls"], budget=50, include_inactive=True)
     ]
 
 
@@ -373,9 +424,19 @@ def test_command_refs(graph):
 
 
 def test_register_entries_is_the_one_seam():
-    lessons = sources._register_entries(ROOT / "examples/registers/lessons.yml")
-    assert [e["id"] for e in lessons] == ["LL-001", "LL-002", "LL-003"]
+    lessons = sources._register_entries(ROOT / LESSONS)
+    assert [e["id"] for e in lessons] == ["LL-001", "LL-002", "LL-003", "LL-004", "LL-005"]
+    assert all(e["_path"] == ROOT / LESSONS / f"{e['id']}.md" for e in lessons)
+    assert all(e["_key"] == e["id"] for e in lessons)
+    assert [e["id"] for e in sources._register_entries(ROOT / RUNBOOKS)] == ["RB-001", "RB-002"]
     assert sources._register_entries(ROOT / "examples/registers/invariants.yml")[0]["id"] == "F-05"
+
+
+def test_step_level_incorporation_resolves_to_the_runbook(graph):
+    """LL-004 reads ``incorporated_into: [RB-002#1]``: step 1 of RB-002, the runbook node."""
+    assert has(graph, "lesson:LL-004", "incorporated_into", "runbook:RB-002")
+    assert has(graph, "runbook:RB-002", "from_lesson", "lesson:LL-004")
+    assert not any(e.dst.startswith(("runbook:RB-002#", "file:")) for e in graph.edges)
 
 
 def test_cli_check_and_related(capsys):
@@ -401,27 +462,47 @@ def test_cli_check_fails_on_a_dangling_edge(tmp_path, repo_copy, capsys):
 
 def test_incorporated_lessons_give_way_to_their_runbook(tmp_path, repo_copy):
     root = _fresh(tmp_path, repo_copy)
-    f = root / "examples/registers/lessons.yml"
-    text = f.read_text(encoding="utf-8").replace(
-        "  systems: [proxy, tls]\n  recurrences: 1\n  status: controlled\n",
-        "  systems: [proxy, tls]\n  recurrences: 1\n  status: incorporated\n"
-        "  incorporated_into: [RB-001, docs/systems/edge-proxy.md]\n"
-        "  author: agent:fake-author\n"
-        "  reviews:\n"
-        "  - {by: agent:fake-checker, kind: agent, role: check, date: 2026-01-13, verdict: pass}\n"
-        "  - {by: fake-human, kind: human, role: approve, date: 2026-01-14, verdict: fail}\n"
-        "  - {by: fake-human, kind: human, role: approve, date: 2026-01-15, verdict: pass}\n"
-        "  - {by: agent:fake-red, kind: agent, role: adversarial, date: 2026-01-15, verdict: fail}\n",
+    front(
+        root / LESSONS / "LL-001.md",
+        status="incorporated",
+        incorporated_into=["RB-001#2", "docs/systems/edge-proxy.md#use"],
+        author="agent:fake-author",
+        reviews=[
+            {
+                "by": "agent:fake-checker",
+                "kind": "agent",
+                "role": "check",
+                "date": "2026-01-13",
+                "verdict": "pass",
+            },
+            {
+                "by": "fake-human",
+                "kind": "human",
+                "role": "approve",
+                "date": "2026-01-14",
+                "verdict": "fail",
+            },
+            {
+                "by": "fake-human",
+                "kind": "human",
+                "role": "approve",
+                "date": "2026-01-15",
+                "verdict": "pass",
+            },
+            {
+                "by": "agent:fake-red",
+                "kind": "agent",
+                "role": "adversarial",
+                "date": "2026-01-15",
+                "verdict": "fail",
+            },
+        ],
     )
-    f.write_text(text, encoding="utf-8")
-    r = root / "examples/registers/runbooks.yml"
-    r.write_text(
-        r.read_text(encoding="utf-8").replace(
-            "  - do: Reload the proxy configuration.\n",
-            "  - do: Reload the proxy configuration.\n    from_lessons: [LL-001]\n",
-        ),
-        encoding="utf-8",
-    )
+    rb = root / RUNBOOKS / "RB-001.md"
+    text = rb.read_text(encoding="utf-8")
+    old = "   - verify: the reload command exits 0 and the proxy health endpoint returns 200\n"
+    assert old in text
+    rb.write_text(text.replace(old, old + "   - from_lessons: [[LL-001]]\n"), encoding="utf-8")
     g, rep = build(root)
     assert rep.dangling == [] and rep.duplicates == []
     assert has(g, "lesson:LL-001", "incorporated_into", "runbook:RB-001")
@@ -433,5 +514,5 @@ def test_incorporated_lessons_give_way_to_their_runbook(tmp_path, repo_copy):
     ids = [x.id for x in related(g, ["system:proxy"], budget=50)]
     assert "runbook:RB-001" in ids and "lesson:LL-001" not in ids
     assert "lesson:LL-001" in render_views(g)["lesson.md"].split("## Archive")[1]
-    # absent fields add nothing
-    assert "reviewed" not in g.nodes["lesson:LL-002"].attrs
+    # a record without reviews or author gets no summary attrs
+    assert "reviewed" not in g.nodes["lesson:LL-003"].attrs

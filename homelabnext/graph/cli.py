@@ -9,8 +9,8 @@
 * ``related ID|PATH... [--depth N] [--budget N] [--json] [--include-inactive]`` prints the
   ranked neighbourhood of the given node ids or edited file paths, from a fresh build.
 
-Exit codes: 0 ok, 1 check failed (or ``related`` resolved no seed), 2 usage error or no source
-checkout.
+Exit codes: 0 ok, 1 check failed (including a register that does not load), or ``related``
+resolved no seed, 2 usage error or no source checkout.
 """
 
 from __future__ import annotations
@@ -69,7 +69,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"graph: {len(written)} file(s) written, {len(removed)} orphan(s) removed")
         return 0
     if args.cmd == "check":
-        rep = check(root, args.out)
+        from homelabnext.registers.schema import RegisterError
+
+        try:
+            rep = check(root, args.out)
+        except RegisterError as exc:
+            # a register the graph reads does not load (two record files claiming one id, ...)
+            print(f"graph: FAIL, a register does not load: {exc}")
+            return 1
         for line in rep.lines():
             print(line)
         n, e = rep.counts

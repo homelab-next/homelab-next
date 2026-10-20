@@ -176,7 +176,10 @@ def _register_entries(path: str | Path) -> list[dict[str, Any]]:
     The single seam to the register storage: ``homelabnext.registers.load_register`` reads a
     directory of one-record-per-file Markdown (lessons, runbooks) or a single YAML file
     (invariants), and returns the document the validators take.  Inactive records are kept: the
-    graph marks them and its queries skip them.  Each record gains ``_path``, the file it lives in.
+    graph marks them and its queries skip them.  Each record gains ``_path``, the file it lives in,
+    and ``_key``, the id its node takes: the record id, except for an unallocated placeholder
+    (``LL-NEW`` in ``LL-NEW-<slug>.md``), which takes the file stem -- a pull request may carry
+    several placeholders, and they are distinct records, not one duplicated id.
     """
     from homelabnext.registers import load_register
 
@@ -186,11 +189,24 @@ def _register_entries(path: str | Path) -> list[dict[str, Any]]:
         if isinstance(data.get(key), list):
             out = [dict(e) for e in data[key] if isinstance(e, dict)]
             if path.is_dir():
-                files = {f.stem: f for f in path.glob("*.md")}  # records are named <id>.md
+                files = {f.stem: f for f in sorted(path.glob("*.md"))}  # named <id>[-<slug>].md
+                used: set[str] = set()
                 for e in out:
-                    f = files.get(str(e.get("id")))
-                    if f is not None:
-                        e["_path"] = f
+                    rid = str(e.get("id"))
+                    e["_key"] = rid
+                    if rid in files:
+                        e["_path"] = files[rid]
+                        used.add(rid)
+                        continue
+                    # the loader reads files in name order, so placeholders pair up in that order
+                    stem = next(
+                        (k for k in files if k.startswith(f"{rid}-") and k not in used), None
+                    )
+                    if stem is not None:
+                        e["_path"], e["_key"] = files[stem], stem
+                        used.add(stem)
+            for e in out:
+                e.setdefault("_key", str(e.get("id")))
             return out
     return []
 
@@ -662,7 +678,7 @@ def read_registers(b: Builder) -> None:
     for e in lessons:
         lp = rel(e, "lessons")
         b.define(
-            f"lesson:{e['id']}",
+            f"lesson:{e['_key']}",
             "lesson",
             str(e.get("title", "")),
             lp,
@@ -676,7 +692,7 @@ def read_registers(b: Builder) -> None:
     for e in runbooks:
         rp = rel(e, "runbooks")
         b.define(
-            f"runbook:{e['id']}",
+            f"runbook:{e['_key']}",
             "runbook",
             str(e.get("title", "")),
             rp,
@@ -712,7 +728,7 @@ def read_registers(b: Builder) -> None:
                     b.edge(nid, target, "operates", f"{at}.systems")
 
     for e in lessons:
-        nid, at = f"lesson:{e['id']}", rel(e, "lessons")
+        nid, at = f"lesson:{e['_key']}", rel(e, "lessons")
         tags(nid, e, at)
         for ref in _id_refs(str(e.get("preventive_control") or ""), inv_ids):
             if ref != nid:
@@ -739,7 +755,7 @@ def read_registers(b: Builder) -> None:
         for ref in cmds.refs(str(v.get("observable", ""))):
             b.edge(nid, ref, "verified_by", f"{at}.verification.observable")
     for e in runbooks:
-        nid, at = f"runbook:{e['id']}", rel(e, "runbooks")
+        nid, at = f"runbook:{e['_key']}", rel(e, "runbooks")
         tags(nid, e, at)
         for ref in _id_refs(str(e.get("purpose") or ""), inv_ids):
             if ref != nid:
