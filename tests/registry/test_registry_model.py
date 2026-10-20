@@ -159,3 +159,15 @@ def test_schema_file_is_valid_json_schema():
     from homelabnext.registry.model import schema
 
     jsonschema.Draft202012Validator.check_schema(schema())
+
+
+def test_two_secret_references_with_one_env_name_are_refused():
+    """``secret_env_name`` maps every non-alphanumeric to ``_``, so ``nifi/status-token`` and
+    ``nifi/status_token`` both arrive in ``HNX_SECRET_NIFI_STATUS_TOKEN``: one would silently get
+    the other's value.  The registry refuses the pair (the mapping is documented and in use)."""
+    doc = base_doc()
+    loads(yaml.safe_dump(doc))  # the same reference twice is fine: one secret
+    hub = doc["services"]["status-hub"]
+    hub["front_door"]["secret"] = "secret:nifi/status_token"
+    with pytest.raises(RegistryError, match="HNX_SECRET_NIFI_STATUS_TOKEN"):
+        loads(yaml.safe_dump(doc))

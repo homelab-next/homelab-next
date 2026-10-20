@@ -11,6 +11,7 @@ import hashlib
 import ipaddress
 import json
 import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -227,7 +228,43 @@ def semantic_problems(doc: dict) -> list[str]:
             problems.append(f"service {sname}: env var {var} already used by {envs[var]}")
         envs[var] = sname
     problems += status_source_problems(services)
+    problems += secret_ref_problems(service_secret_refs(services))
     return problems
+
+
+def service_secret_refs(services: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """``(where, reference)`` of every secret reference of the registry's services (a front
+    door's ``secret``, a status source's ``auth.secret``); ``services`` maps name to a service
+    document or a :class:`Service`."""
+    out = []
+    for sname, s in services.items():
+        get = s.get if isinstance(s, Mapping) else lambda k, d=None, s=s: getattr(s, k, d)
+        fd = get("front_door") or {}
+        if isinstance(fd, Mapping) and isinstance(fd.get("secret"), str):
+            out.append((f"service {sname}: front_door.secret", fd["secret"]))
+        for src in get("status_sources") or ():
+            auth = src.get("auth") if isinstance(src, Mapping) else None
+            if isinstance(auth, Mapping) and isinstance(auth.get("secret"), str):
+                out.append((f"status source {src.get('id')}: auth.secret", auth["secret"]))
+    return out
+
+
+def secret_ref_problems(refs: Iterable[tuple[str, str]]) -> list[str]:
+    """Two different secret references delivered in one environment variable: refused, since
+    :func:`secret_env_name` maps every non-alphanumeric to ``_`` (``a/b-c`` and ``a/b_c``
+    collide) and one would silently be given the other's value.  The same reference twice is
+    one secret, and fine."""
+    seen: dict[str, tuple[str, str]] = {}
+    out = []
+    for where, ref in refs:
+        env = secret_env_name(ref)
+        first = seen.setdefault(env, (where, ref))
+        if first[1] != ref:
+            out.append(
+                f"{where}: {ref} and {first[1]} ({first[0]}) are both delivered in {env};"
+                " rename one"
+            )
+    return out
 
 
 def secret_env_name(ref: str) -> str:

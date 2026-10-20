@@ -23,6 +23,7 @@ from homelabnext.registry.model import load
 from homelabnext.status import build_status, load_views
 from homelabnext.status.agents import ActivityStore, AgentsConfigError, authorize, load_config
 from homelabnext.status.agents.auth import AccessLog
+from homelabnext.status.agents.config import IngestSettings, Sender
 from homelabnext.status.agents.pages import AgentSite
 from homelabnext.status.model import iso
 from homelabnext.status.render import render_html
@@ -252,3 +253,27 @@ def test_config_refuses_a_literal_token_and_an_unknown_host(tmp_path):
     )
     with pytest.raises(AgentsConfigError, match="not a registry host"):
         load_config(bad, reg, {"secret:status/front-door-secret": "fake-s"}.get)
+
+
+def test_config_refuses_colliding_secret_names_and_shared_tokens(tmp_path):
+    """Two sender token references that map to one environment variable, or two senders with
+    the same token, are refused at load (``sender_for`` cannot tell such senders apart)."""
+    reg = load(VIEWS.parents[1] / "services.yml")
+    bad = tmp_path / "agents.yml"
+    head = "agents_version: 1\nstore: a.db\ningest: {senders: ["
+    bad.write_text(
+        head + '{name: a, token: "secret:status/ingest-cloud"}, '
+        '{name: b, token: "secret:status/ingest_cloud"}]}\n'
+    )
+    with pytest.raises(AgentsConfigError, match="HNX_SECRET_STATUS_INGEST_CLOUD"):
+        load_config(bad, reg, {}.get)
+    bad.write_text(
+        head
+        + '{name: a, token: "secret:status/ingest/fake-a"}, {name: b, token: "secret:status/ingest/fake-b"}]}\n'
+    )
+    shared = "fake-shared-token"
+    same = {"secret:status/ingest/fake-a": shared, "secret:status/ingest/fake-b": shared}
+    with pytest.raises(AgentsConfigError, match="same token"):
+        load_config(bad, reg, same.get)
+    with pytest.raises(ValueError, match="same token"):
+        IngestSettings(senders=(Sender("a", "fake-t"), Sender("b", "fake-t")))

@@ -220,7 +220,10 @@ runtime's, which beats the default) or `working`.
 `schemas/status/agents.schema.json`. Secrets are secret-store references (`secret:a/b`), never
 values; at run time `secret:a/b-token` is read from `HNX_SECRET_A_B_TOKEN` (or the file `a/b-token` under
 `--secrets-dir`). A reference that does not resolve **disables** what it guards (the private
-tier, or that one sender) with a warning; nothing falls back to open.
+tier, or that one sender) with a warning; nothing falls back to open. Since every character
+but a letter or digit becomes `_`, two different references that land in one variable
+(`a/b-token`, `a/b_token`) are refused, by the registry and by the agents config, and so are two
+senders with the same token (a token names its sender).
 
 **What happens to every record, in order:** schema validation; **secret redaction** with the
 shared screener (`homelabnext.agent.screen`: private keys, JWTs, vendor tokens, `Authorization:
