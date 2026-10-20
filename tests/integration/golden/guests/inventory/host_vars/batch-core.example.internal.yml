@@ -11,3 +11,5 @@ hnx_provisioning: "terraform"
 hnx_vmid: 141
 hnx_zone: "compute"
 hnx_tags: ["prod"]
+hnx_baselines: ["base", "server"]
+hnx_controls: ["ssh-hardening", "log-forward", "backup-verify"]

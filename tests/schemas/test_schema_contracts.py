@@ -44,6 +44,7 @@ EXPECTED = {
     "platform/model_roles.json",
     "platform/capability.schema.json",
     "platform/guest.schema.json",
+    "platform/baseline_set.schema.json",
     "platform/role_interface.schema.json",
     "platform/agent_profile.schema.json",
     "platform/broker_action.schema.json",

@@ -33,3 +33,4 @@ backup:
   export_hook: lake-export
 lifecycle: {on_boot: true, ignore_changes: [clone]}
 owners: {primary: data-team, oncall: platform-team}
+baseline: {names: [server, sensitive]}

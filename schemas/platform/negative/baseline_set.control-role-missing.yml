@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# negative: rejected by the JSON Schema layer (role must be stated, null when no product is chosen)
+controls:
+  ssh-hardening:
+    layer: identity
+    description: Key-only SSH and no direct root login.
+    verify: sshd -T shows passwordauthentication no
+baselines:
+  base:
+    description: What every in-scope guest gets.
+    controls: [ssh-hardening]

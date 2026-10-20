@@ -15,3 +15,4 @@ capability_groups: [cap_lake]
 tags: [prod]
 backup: {policy: daily}
 owners: {primary: platform-team}
+baseline: {names: [server]}

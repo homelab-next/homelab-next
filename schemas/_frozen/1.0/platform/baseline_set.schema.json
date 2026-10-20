@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/baseline_set/1.0",
+  "title": "Guest baseline set",
+  "description": "The defense baselines a guest can be given (ADR-0016, docs/compute-model.md). `controls` is the catalogue of generic, product-neutral defense controls, each in exactly one defense-in-depth layer, each with a human-readable `verify` observable and the Ansible `role` that implements it (null = no product chosen yet; the product is bound here and nowhere else). `baselines` are named sets of controls; a baseline may extend others. Lives as `_baselines.yml` next to the guest files; consumed by homelabnext.compute.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["controls", "baselines"],
+  "$defs": {
+    "name": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$", "maxLength": 40},
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layer", "description", "role", "verify"],
+      "properties": {
+        "layer": {
+          "enum": ["identity", "host", "network", "detection", "data", "recovery"],
+          "description": "The one defense-in-depth layer the control belongs to: identity (who can get in), host (the operating system itself), network (what traffic may flow), detection (seeing attacks and weaknesses), data (protecting what is stored), recovery (getting back after a loss)."
+        },
+        "description": {"type": "string", "minLength": 10, "maxLength": 300},
+        "role": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 64}
+          ],
+          "description": "The Ansible role that implements the control, applied to the control_<id> inventory group. null = the product is not chosen yet; the baseline-playbook target lists it as unbound, never drops it."
+        },
+        "verify": {"type": "string", "minLength": 10, "maxLength": 300, "description": "How you would prove the control is in place on a guest (a human-readable observable)."}
+      }
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["description"],
+      "properties": {
+        "description": {"type": "string", "minLength": 10, "maxLength": 300},
+        "extends": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/name"}, "description": "Baselines whose controls this one includes (resolved parents first)."},
+        "controls": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/name"}}
+      }
+    }
+  },
+  "properties": {
+    "controls": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"$ref": "#/$defs/name"},
+      "additionalProperties": {"$ref": "#/$defs/control"}
+    },
+    "baselines": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"$ref": "#/$defs/name"},
+      "additionalProperties": {"$ref": "#/$defs/baseline"}
+    }
+  }
+}

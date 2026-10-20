@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+controls:
+  ssh-hardening:
+    layer: identity
+    description: Key-only SSH and no direct root login.
+    role: ssh_hardening
+    verify: sshd -T shows passwordauthentication no
+  log-forward:
+    layer: detection
+    description: System logs are forwarded to the central pipeline.
+    role: null
+    verify: a test log line reaches the lake within five minutes
+  backup-verify:
+    layer: recovery
+    description: Backups are restored in a drill and checked.
+    role: null
+    verify: a verified restore drill in the last 90 days
+baselines:
+  base:
+    description: What every in-scope guest gets.
+    controls: [ssh-hardening, log-forward]
+  server:
+    description: A long-lived service guest.
+    extends: [base]
+    controls: [backup-verify]

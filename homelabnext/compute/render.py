@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 from .gen import (
     backup_jobs,
+    baseline_playbook,
     cloudinit,
     firewall_rules,
     inventory,
@@ -24,6 +25,7 @@ TARGETS: dict[str, Callable[[Fleet], dict[str, str]]] = {
     "registry-hosts": registry_hosts.render,
     "backup-jobs": backup_jobs.render,
     "firewall-rules": firewall_rules.render,
+    "baseline-playbook": baseline_playbook.render,
 }
 
 

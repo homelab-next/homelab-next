@@ -13,3 +13,5 @@ hnx_provisioning: "terraform"
 hnx_vmid: 140
 hnx_zone: "data"
 hnx_tags: ["prod", "stateful"]
+hnx_baselines: ["base", "server", "sensitive"]
+hnx_controls: ["time-sync", "patching", "ssh-hardening", "host-firewall", "siem-agent", "vuln-scan", "backup-verify", "disk-encryption"]

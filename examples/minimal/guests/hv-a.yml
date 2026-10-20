@@ -7,3 +7,7 @@ network: {zone: mgmt, ip: 192.0.2.10}
 capability: cap:events
 tags: [prod, hypervisor]
 owners: {primary: platform-team}
+baseline:
+  names: [server]
+  remove:
+    - {control: backup-verify, reason: "A hypervisor is rebuilt from its configuration, not restored from a backup."}

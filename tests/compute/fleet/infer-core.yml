@@ -18,3 +18,7 @@ capability_groups: [cap_inference]
 tags: [prod, gpu]
 backup: {policy: weekly, retain: {weekly: 2}}
 owners: {primary: ml-team}
+baseline:
+  names: [server]
+  remove:
+    - {control: backup-verify, reason: "Model weights are re-downloaded, never restored from backup."}

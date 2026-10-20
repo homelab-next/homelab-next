@@ -1,0 +1,112 @@
+# SPDX-License-Identifier: Apache-2.0
+# Guest baselines (ADR-0016, docs/compute-model.md "Baselines and defense layers").
+# Controls are generic and product-neutral; `role` binds a control to the Ansible role that
+# implements it and is null until a product is chosen.  Every guest names a baseline (or carries
+# a documented baseline.exemption): `hnx guests baselines DIR --site SITE` prints the coverage.
+controls:
+  # identity: who can get in
+  ssh-hardening:
+    layer: identity
+    description: Key-only SSH, no direct root login, a short list of permitted users.
+    role: null
+    verify: sshd -T shows passwordauthentication no and permitrootlogin no
+  central-auth:
+    layer: identity
+    description: Interactive accounts come from the directory; administrators use MFA.
+    role: null
+    verify: a local-only interactive account cannot log in; a directory account with MFA can
+  remote-access:
+    layer: identity
+    description: Administrative access only through the remote-access gateway, never direct.
+    role: null
+    verify: an SSH attempt from outside the gateway's source range is refused
+  # host: the operating system itself
+  time-sync:
+    layer: host
+    description: The clock follows the lab's time sources, so logs and tokens line up.
+    role: null
+    verify: the time daemon reports synchronised with an offset under one second
+  patching:
+    layer: host
+    description: Security updates are applied automatically or on a short, tracked cadence.
+    role: null
+    verify: the package manager lists no security update older than seven days
+  os-hardening:
+    layer: host
+    description: A hardened operating-system profile (kernel settings, services, file modes).
+    role: null
+    verify: the hardening audit scores no failed high-severity item
+  # network: what traffic may flow
+  host-firewall:
+    layer: network
+    description: A default-deny inbound firewall on the guest itself, beside the hypervisor one.
+    role: null
+    verify: the host firewall ruleset loads with an inbound default policy of drop
+  egress-filter:
+    layer: network
+    description: Outbound traffic only to listed destinations (resolvers, mirrors, peers).
+    role: null
+    verify: a connection to an unlisted outside address is refused
+  # detection: seeing attacks and weaknesses
+  log-forward:
+    layer: detection
+    description: System and authentication logs are forwarded to the central log pipeline.
+    role: null
+    verify: a test log line written on the guest reaches the lake within five minutes
+  siem-agent:
+    layer: detection
+    description: The endpoint agent of the SIEM runs and reports.
+    role: null
+    verify: the SIEM lists the guest's agent as active with a heartbeat under ten minutes old
+  network-sensor:
+    layer: detection
+    description: The guest's segment is mirrored to a network sensor that inspects its traffic.
+    role: null
+    verify: the network sensor shows flows for the guest's address in the last hour
+  vuln-scan:
+    layer: detection
+    description: The guest is in the authenticated vulnerability scan's target list.
+    role: null
+    verify: the scanner's last completed scan of the guest is under seven days old
+  # data: protecting what is stored
+  disk-encryption:
+    layer: data
+    description: Data volumes are encrypted at rest with keys held outside the guest.
+    role: null
+    verify: every data volume reports an encrypted mapping
+  secrets-from-store:
+    layer: data
+    description: Credentials are fetched from the secrets store at run time, never kept on disk.
+    role: null
+    verify: a secret scan of the guest's configuration directories finds nothing
+  # recovery: getting back after a loss
+  backup-verify:
+    layer: recovery
+    description: The guest's backups are restored in a drill and the restore is checked.
+    role: null
+    verify: a restore drill of the guest completed and was verified in the last 90 days
+  config-backup:
+    layer: recovery
+    description: The guest's configuration is in git or exported, so it can be rebuilt.
+    role: null
+    verify: a rebuild from the stored configuration reaches the same state
+
+baselines:
+  base:
+    description: What every in-scope guest gets, whatever it runs.
+    controls: [time-sync, patching, ssh-hardening, host-firewall, log-forward, siem-agent]
+  server:
+    description: A long-lived service guest that holds state or serves others.
+    extends: [base]
+    controls: [central-auth, vuln-scan, backup-verify, config-backup]
+  exposed:
+    description: A guest reachable from outside the lab (edge-facing).
+    extends: [server]
+    controls: [os-hardening, remote-access, egress-filter, network-sensor]
+  sensitive:
+    description: A guest that holds secrets, identities or other high-value data.
+    extends: [server]
+    controls: [os-hardening, disk-encryption, secrets-from-store, egress-filter]
+  scratch:
+    description: A throwaway lab guest (scope out) that still must not be an easy foothold.
+    controls: [time-sync, ssh-hardening, host-firewall]

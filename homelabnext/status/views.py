@@ -26,9 +26,10 @@ Panel payloads:
 * ``sources`` -- ``{"panel", "sources": [...]}``: the source table.
 
 Page panels (:data:`PAGE_PANELS`) are pages of their own, served live by ``hnx status serve``:
-the agent pages (with ``--agents``) and the strategy pages (with ``--strategy``; Strategy,
-Requirements, Objectives, RFIs: :mod:`homelabnext.strategy.pages`).  Their menu entries are
-``available`` only when that part is configured.
+the agent pages (with ``--agents``), the strategy pages (with ``--strategy``; Strategy,
+Requirements, Objectives, RFIs: :mod:`homelabnext.strategy.pages`) and the Baselines page (with
+``--guests``: :mod:`homelabnext.compute.pages`).  Their menu entries are ``available`` only when
+that part is configured.
 
 A view's ``select`` (``sources``/``modules``) narrows its panel.  An external entry links to a
 registry service by name; ``optional`` entries whose service is not registered are listed as
@@ -65,6 +66,8 @@ PAGE_PANELS = {
     "requirements": "/requirements",
     "objectives": "/objectives",
     "rfis": "/rfis",
+    # the guest baseline coverage page (homelabnext.compute.pages), served with ``--guests DIR``
+    "baselines": "/baselines",
 }
 STRATEGY_PANELS = frozenset({"strategy", "requirements", "objectives", "rfis"})
 PRIVATE_PANELS = frozenset({"agent-detail", "agent-access-log"})
@@ -278,10 +281,12 @@ def build_status(
     capability_pages: set[str] | None = None,
     agents: Mapping[str, Any] | None = None,
     strategy: bool = False,
+    baselines: bool = False,
 ) -> dict[str, Any]:
     """The ``status.json`` document (see the module docstring).  ``agents``: the summary tier's
     sessions (``{"sessions", "counts"}``) when an activity store is configured, else None.
-    ``strategy``: the strategy pages are served (a strategy directory is configured)."""
+    ``strategy``: the strategy pages are served (a strategy directory is configured);
+    ``baselines``: the Baselines page is served (a guest directory is configured)."""
     if capability_pages is None:
         from homelabnext.conform.registry import CAPABILITIES
 
@@ -298,7 +303,13 @@ def build_status(
                 "kind": "page",
                 "panel": v["panel"],
                 "href": PAGE_PANELS[v["panel"]],
-                "available": strategy if v["panel"] in STRATEGY_PANELS else agents is not None,
+                "available": (
+                    strategy
+                    if v["panel"] in STRATEGY_PANELS
+                    else baselines
+                    if v["panel"] == "baselines"
+                    else agents is not None
+                ),
             }
             if v.get("group"):
                 entry["group"] = v["group"]

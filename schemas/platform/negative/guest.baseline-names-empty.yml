@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# negative: rejected by the JSON Schema layer (baseline.names needs at least one name)
+id: guest:hv-a
+kind: host
+provisioning: host-only
+placement: {node: hv-a}
+network: {zone: mgmt, ip: 192.0.2.10}
+capability: cap:events
+owners: {primary: platform-team}
+baseline: {names: []}

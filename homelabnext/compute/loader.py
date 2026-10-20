@@ -14,6 +14,7 @@ from homelabnext import paths
 from homelabnext._yaml import UniqueKeyStrDateLoader
 from homelabnext.generators.safe import control_char_paths
 
+from .baselines import BASELINES_FILE, load_baselines
 from .model import ComputeError, Fleet, Guest, Problem, ZoneLookup
 
 POLICIES_FILE = "_backup_policies.yml"
@@ -133,8 +134,14 @@ def load_fleet(
     policies_path: str | Path | None = None,
     keys_path: str | Path | None = None,
     nodes_path: str | Path | None = None,
+    baselines_path: str | Path | None = None,
+    require_baselines: bool = True,
 ) -> Fleet:
-    """Load, schema- and semantically validate; raise ComputeError listing every problem."""
+    """Load, schema- and semantically validate; raise ComputeError listing every problem.
+
+    ``baselines_path`` defaults to ``DIRECTORY/_baselines.yml``; without that file there is no
+    baseline set and no guest needs a baseline.  ``require_baselines=False`` tolerates guests
+    that declare none (for the coverage report, which lists them)."""
     from .validate import validate
 
     d = Path(directory)
@@ -142,6 +149,12 @@ def load_fleet(
     pol_path = Path(policies_path) if policies_path else d / POLICIES_FILE
     policies = load_policies(pol_path) if pol_path.is_file() else {}
     nodes_file = Path(nodes_path) if nodes_path else d / NODES_FILE
+    bl_file = Path(baselines_path) if baselines_path else d / BASELINES_FILE
+    baselines = None
+    if baselines_path or bl_file.is_file():
+        baselines, bl_problems = load_baselines(bl_file)
+        if baselines is None:  # never read an unusable set as "no set": stop here
+            raise ComputeError(f"invalid guest set in {d}", problems + bl_problems)
     fleet = Fleet(
         tuple(guests),
         zones,
@@ -149,8 +162,9 @@ def load_fleet(
         keys=load_keys(keys_path) if keys_path else {},
         policies=policies,
         nodes=load_nodes(nodes_file) if nodes_file.is_file() else {},
+        baselines=baselines,
     )
-    problems += validate(fleet)
+    problems += validate(fleet, require_baselines=require_baselines)
     if problems:
         raise ComputeError(f"invalid guest set in {d}", problems)
     return fleet

@@ -3,13 +3,25 @@
 
 Playbooks target groups, never hosts (docs/role-interface.md section 5).  Every guest appears,
 including manual ones and physical hosts, because configuration management applies to all.
+With a baseline set, each guest is also in ``baseline_<name>`` for every baseline it resolves to
+(``extends`` included) and ``control_<id>`` for every control it needs, and carries
+``hnx_baselines`` / ``hnx_controls`` (the baseline-playbook target plays to those groups).
 """
 
 from __future__ import annotations
 
+from homelabnext.compute.baselines import resolve
 from homelabnext.compute.model import Fleet, Guest
 
 from ._text import HEADER, q, qlist
+
+
+def baseline_group(name: str) -> str:
+    return "baseline_" + name.replace("-", "_")
+
+
+def control_group(control: str) -> str:
+    return "control_" + control.replace("-", "_")
 
 
 def host_vars(fleet: Fleet, g: Guest) -> str:
@@ -36,6 +48,12 @@ def host_vars(fleet: Fleet, g: Guest) -> str:
     for k in sorted(v):
         L.append(f"{k}: {q(v[k])}")
     L.append(f"hnx_tags: {qlist(sorted(g.tags))}")
+    if fleet.baselines is not None:
+        r = resolve(g, fleet.baselines)
+        L.append(f"hnx_baselines: {qlist(list(r.baselines))}")
+        L.append(f"hnx_controls: {qlist(list(r.controls))}")
+        if r.exemption:
+            L.append(f"hnx_baseline_exemption: {q(r.exemption['reason'])}")
     return "\n".join(L) + "\n"
 
 
@@ -47,6 +65,12 @@ def hosts_yml(fleet: Fleet) -> str:
             groups.setdefault(grp, []).append(fleet.fqdn(g))
         for t in g.tags:
             groups.setdefault(f"tag_{t.replace('-', '_')}", []).append(fleet.fqdn(g))
+        if fleet.baselines is not None:
+            r = resolve(g, fleet.baselines)
+            for b in r.baselines:
+                groups.setdefault(baseline_group(b), []).append(fleet.fqdn(g))
+            for c in r.controls:
+                groups.setdefault(control_group(c), []).append(fleet.fqdn(g))
     L = [f"# {HEADER}", "all:", "  children:", "    guests:", "      hosts:"]
     L += [f"        {fleet.fqdn(g)}:" for g in guests]
     for grp in sorted(groups):

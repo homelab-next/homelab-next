@@ -107,7 +107,8 @@ def test_a_guest_that_disagrees_with_the_registry_is_a_clash(fleet):
 
 def test_end_to_end_goldens(site_doc, fleet, merged_registry_doc):
     # guests: every compute target, under one golden tree each
-    for target in ("terraform-proxmox", "cloudinit", "inventory", "backup-jobs", "registry-hosts"):
+    targets = ("terraform-proxmox", "cloudinit", "inventory", "backup-jobs", "registry-hosts")
+    for target in (*targets, "baseline-playbook"):
         check_tree(f"guests/{target}", render(fleet, target))
     # network: the same site rendered by two independent adapters
     ir = build_ir(site_doc, load_registry(REGISTRY))

@@ -149,7 +149,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.golden.cli").main(a),
     ),
     "site": ("the site/network model: validate|plan|render|ir|adapters", _site),
-    "guests": ("validate/render/plan the guest (compute) model", _guests),
+    "guests": ("validate/render/plan the guest (compute) model; baselines coverage", _guests),
     "schema-check": ("check schemas, examples, negatives and frozen baselines", _schema_check),
     "swap": (
         "run the swap procedure (plan|start|status|advance|rollback|record)",
