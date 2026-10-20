@@ -33,6 +33,7 @@ Platform-wide properties. Most need a running platform; the repository-level one
 | F-16 | The fleet runs without the admin workstation | With the workstation off for 24 h, all canaries pass and 0 jobs fail because of it | SERVER |
 | F-17 | Nothing at runtime points at the workstation | 0 runtime configs reference the admin workstation (runs as part of X-01) (`tools/workstation_refs.py`) | PUBLIC-NOW |
 | F-18 | The public tree contains no private identifiers | `tools/leak_scan.py` over the tree exits 0 (no private IPs, domains, emails, MACs, keys) | PUBLIC-NOW |
+| F-19 | Every guest has a defense baseline | With a baseline set (`_baselines.yml`), every guest (vm, lxc, host) names one or more baselines or carries a documented exemption (`hnx guests baselines DIR --site SITE --check`; `--require-bound` also fails while a needed control has no role) | PUBLIC-NOW |
 
 ## C - Collection
 
@@ -282,4 +283,4 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 
 ---
 
-**Totals:** 159 criteria across 16 pillars; 80 PUBLIC-NOW, 79 SERVER.
+**Totals:** 160 criteria across 16 pillars; 81 PUBLIC-NOW, 79 SERVER.
