@@ -813,24 +813,16 @@ def _provenance(e: dict[str, Any], policy: Any = None) -> dict[str, Any]:
     (an agent's ``check``), ``challenge`` (a ``challenge`` review) and ``human`` (a human's review
     of any role) -- and ``review_count`` counts every review.  Absent fields: nothing.
 
-    "Current and valid" is :func:`homelabnext.reviews.evaluate` against the record's content
-    digest now (:func:`homelabnext.registers.schema.record_digest_of`, the digest the register
-    validation checks), with ``policy`` (the register's ``review-policy.yml``) when there is one:
-    a review of an earlier content, a self-review, a challenge from a checker, an agent in a human
-    slot or a malformed review counts for no tier, so ``require_reviews`` can trust the attr."""
-    from homelabnext.registers.schema import record_digest_of
-    from homelabnext.reviews import evaluate
+    "Current and valid" is the register validation's own judgement of the loaded record
+    (:func:`homelabnext.registers.schema.review_evaluation`: its reviews as derived from the
+    sidecar events, against :func:`~homelabnext.registers.schema.record_digest_of`), with
+    ``policy`` (the register's ``review-policy.yml``) when there is one: a review of an earlier
+    content, a self-review, a challenge from a checker, an agent in a human slot or a malformed
+    review counts for no tier, so ``require_reviews`` can trust the attr."""
+    from homelabnext.registers.schema import review_evaluation
 
     reviews = e.get("reviews")
-    entry = {k: v for k, v in e.items() if not k.startswith("_")}
-    ev = evaluate(
-        reviews,
-        author=e.get("author", "unknown"),
-        digest=record_digest_of(entry),
-        artefact="",
-        state="",
-        policy=policy,
-    )
+    ev = review_evaluation({k: v for k, v in e.items() if not k.startswith("_")}, policy=policy)
     tiers = set()
     for r in ev.current:
         if r["kind"] == "agent" and r["role"] == "check":

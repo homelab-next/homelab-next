@@ -226,19 +226,27 @@ def record_digest_of(entry: dict) -> str:
     return content_digest(body)
 
 
-def _reviews(e, who, artefact, state, policy, problems, require=True):
-    from homelabnext.reviews import evaluate, missing_message
+def review_evaluation(e, artefact: str = "", state: str = "", policy=None, who: str = ""):
+    """:func:`homelabnext.reviews.evaluate` of a loaded record (its derived ``reviews``) against
+    its content digest: the one judgement the validation, the due list and the graph share."""
+    from homelabnext.reviews import evaluate
 
-    digest = record_digest_of(e)
-    ev = evaluate(
+    return evaluate(
         e.get("reviews"),
         author=e.get("author"),
-        digest=digest,
+        digest=record_digest_of(e),
         artefact=artefact,
         state=state,
         policy=policy,
         who=who,
     )
+
+
+def _reviews(e, who, artefact, state, policy, problems, require=True):
+    from homelabnext.reviews import missing_message
+
+    digest = record_digest_of(e)
+    ev = review_evaluation(e, artefact, state, policy, who)
     problems += ev.problems
     if ev.missing and require:
         problems.append(missing_message(who, state, ev, digest))
