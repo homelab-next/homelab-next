@@ -395,8 +395,7 @@ def _relay_op(svc: BrokerService, who: Identity, op: str, body: Mapping[str, Any
         tail = body.get("tail", 50)
         if not isinstance(tail, int) or isinstance(tail, bool) or not 0 <= tail <= MAX_AUDIT_TAIL:
             raise _BadField(f"tail is an integer from 0 to {MAX_AUDIT_TAIL}")
-        rows = svc.audit_documents(**match)
-        return {"records": rows[-tail:] if tail else []}
+        return {"records": svc.audit_documents(limit=tail, **match)}
     rid = _rid(body)
     approver = body.get("approver")
     if not isinstance(approver, Mapping) or set(approver) != {"issuer", "subject"}:
