@@ -498,3 +498,91 @@ def test_decide_command_dry_run_moves_nothing(lab, inbox, capsys):
     assert "applied  LL-003" in capsys.readouterr().out
     assert len(_lanes(inbox)["inbox"]) == 1
     assert load_register(lab / "lessons")["lessons"][2]["status"] == "open"
+
+
+def _raw_note(inbox, name, text):
+    (inbox / "inbox" / name).write_text(text)
+    return name
+
+
+def test_a_malformed_note_does_not_stop_the_other_intents(lab, inbox, capsys):
+    """Regression: pending() schema-validated every inbox note, so one malformed note -- even
+    an unrelated proposal -- raised NoteError and the decider decided nothing (and the command
+    printed a traceback)."""
+    _give_ll_003_a_control(lab)
+    good = _intent(
+        inbox, "ll-003-partial", record="LL-003", reason="the detector shipped",
+        **{"from": "open", "to": "partial"},
+    )  # fmt: skip
+    _raw_note(inbox, "2026-10-20-example-checker-broken.md", "---\ntype: proposal\n---\n")
+    _raw_note(inbox, "2026-10-20-example-checker-junk.md", "no front matter at all\n")
+    bad = _raw_note(
+        inbox,
+        "2026-10-20-example-checker-bad-intent.md",
+        "---\ntype: register-transition\ntitle: x\nrecord: LL-001\n---\n",
+    )
+    outs = {o.note: o for o in _decider(lab, inbox).decide_all()}
+    assert set(outs) == {good, bad}
+    assert outs[good].result == "applied", outs[good]
+    assert outs[bad].result == "invalid" and "fix or withdraw" in outs[bad].reason
+    assert bad in _lanes(inbox)["inbox"]
+    args = ["decide", str(lab), str(inbox), "--as", "human:example-operator"]
+    assert registers_main(args) == 0
+    assert "invalid  ?" in capsys.readouterr().out
+
+
+def test_an_on_key_is_refused_and_retired_on_is_honoured(lab, inbox):
+    """Regression: ``on:`` is a YAML 1.1 boolean, so the note's key was True, ``fm.get('on')``
+    was None and retired_on silently became the created date.  A boolean key is now a validation
+    error naming the pitfall; the field is ``retired_on``."""
+    from homelabnext.reviews import policy_from
+
+    free = yaml.safe_load((REPO / "examples/review-policy.yml").read_text())
+    free["requirements"]["lesson.pitfall"]["retired"] = []
+    d = _decider(lab, inbox, policy_from(free))
+    text = (
+        "---\ntype: register-transition\ntitle: Retire LL-001\n"
+        "requesting_agent: profile:example-checker\ncreated: '2026-10-20T09:30:00Z'\n"
+        "record: LL-001\nfrom: controlled\nto: retired\nretired_by: [M-17]\n"
+        "on: 2026-10-01\nreason: M-17 holds\n---\n"
+    )
+    name = _raw_note(inbox, "2026-10-20-example-checker-retire-on.md", text)
+    out = d.decide(name)
+    assert out.result == "invalid" and "YAML 1.1" in out.reason, out
+    assert load_register(lab / "lessons")["lessons"][0]["status"] == "controlled"
+    (inbox / "inbox" / name).unlink()
+    name = _intent(
+        inbox, "retire-ll-001", record="LL-001", retired_by=["M-17"], retired_on="2026-10-01",
+        reason="M-17 holds", **{"from": "controlled", "to": "retired"},
+    )  # fmt: skip
+    assert d.decide(name).result == "applied"
+    assert load_register(lab / "lessons")["lessons"][0]["retired_on"] == dt.date(2026, 10, 1)
+
+
+def test_a_crash_between_approve_and_complete_is_finished(lab, inbox, monkeypatch):
+    """Regression: fulfil() moves inbox -> approved -> completed; a crash between the two left
+    the intent in decided/approved forever, because recovery looked only in the inbox."""
+    from homelabnext.records import decider as movers
+
+    _give_ll_003_a_control(lab)
+    name = _intent(
+        inbox, "ll-003-partial", record="LL-003", reason="the detector shipped",
+        **{"from": "open", "to": "partial"},
+    )  # fmt: skip
+    real = movers.Decider._move
+
+    def crash(self, note, dest_lane, *a, **kw):
+        if dest_lane == movers.COMPLETED:
+            raise OSError("power cut")
+        return real(self, note, dest_lane, *a, **kw)
+
+    monkeypatch.setattr(movers.Decider, "_move", crash)
+    with pytest.raises(OSError):
+        _decider(lab, inbox).decide(name)
+    monkeypatch.setattr(movers.Decider, "_move", real)
+    assert RecordsReader(inbox).list("decided/approved") == [name]
+    [out] = _decider(lab, inbox).decide_all()
+    assert (out.result, out.reason) == ("applied", "already applied")
+    assert _lanes(inbox)["decided/completed"] == [name]
+    assert RecordsReader(inbox).list("decided/approved") == []
+    assert load_register(lab / "lessons")["lessons"][2]["status"] == "partial"

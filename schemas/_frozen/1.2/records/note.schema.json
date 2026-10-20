@@ -1,0 +1,332 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/records/note/1.2",
+  "title": "Records note frontmatter",
+  "description": "YAML frontmatter of a records note (the generalised vault note). The filename convention is <YYYY-MM-DD>-<requesting-agent>-<slug>.md (checked by tools/schema_check.py, not expressible in JSON Schema). Lanes: inbox/ (writable by agents), decided/{approved,denied,completed}/ (decision-maker only). 1.1 added, additively, type register-transition: an agent's request to change a lesson's or runbook's lifecycle status, applied only by the register decider (hnx registers decide). 1.2 added retired_on, which replaces on: an unquoted on is the YAML 1.1 boolean true, so it never arrived as a key named on (a note with a non-string key is invalid).",
+  "type": "object",
+  "properties": {
+    "type": {
+      "enum": [
+        "proposal",
+        "completion-request",
+        "finding",
+        "escalation",
+        "task",
+        "register-transition"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "requesting_agent": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+    },
+    "created": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    },
+    "related": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/rel_path"
+      },
+      "uniqueItems": true
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/svc_id"
+            },
+            {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/cap_id"
+            },
+            {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+            }
+          ]
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 50
+        },
+        "model_role": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/mdl_id"
+        }
+      },
+      "required": [
+        "source"
+      ]
+    }
+  },
+  "required": [
+    "type",
+    "title",
+    "requesting_agent",
+    "created"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "proposal"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "required": [
+          "risk",
+          "rollback"
+        ],
+        "properties": {
+          "risk": {
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "rollback": {
+            "type": "string",
+            "minLength": 1
+          },
+          "affects": {
+            "type": "array",
+            "items": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0"
+            },
+            "minItems": 1
+          },
+          "status": {
+            "enum": [
+              "proposed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "completion-request"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "required": [
+          "related"
+        ],
+        "properties": {
+          "related": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^decided/approved/[A-Za-z0-9._-]+\\.md$"
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "outcome": {
+            "enum": [
+              "implemented",
+              "already-done",
+              "superseded"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "finding"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "required": [
+          "area",
+          "severity"
+        ],
+        "properties": {
+          "area": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+          },
+          "severity": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/severity"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "escalation"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "required": [
+          "reason",
+          "to"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+            "description": "Role name, not a person."
+          },
+          "deadline": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "task"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "required": [
+          "assigned_to",
+          "done_when",
+          "expires"
+        ],
+        "properties": {
+          "assigned_to": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+          },
+          "done_when": {
+            "type": "string",
+            "minLength": 10,
+            "description": "The observable condition that defines completion."
+          },
+          "expires": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+          },
+          "status": {
+            "enum": [
+              "open",
+              "closed",
+              "expired"
+            ]
+          }
+        }
+      },
+      "$comment": "register-transition (1.1) sits in this else branch so allOf keeps its 1.0 length (additive evolution)",
+      "else": {
+        "if": {
+          "properties": {
+            "type": {
+              "const": "register-transition"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        "then": {
+          "required": [
+            "record",
+            "from",
+            "to",
+            "reason"
+          ],
+          "properties": {
+            "record": {
+              "type": "string",
+              "pattern": "^(LL|RB)-\\d{3,}$",
+              "description": "The allocated id of the lesson or runbook."
+            },
+            "from": {
+              "type": "string",
+              "pattern": "^[a-z]+$",
+              "description": "The status the requester saw; the decider denies the intent when it is no longer current."
+            },
+            "to": {
+              "type": "string",
+              "pattern": "^[a-z]+$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "retired_by": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "incorporated_into": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "superseded_by": {
+              "type": "string",
+              "pattern": "^(LL|RB)-\\d{3,}$"
+            },
+            "on": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date",
+              "description": "Deprecated (1.2): not read by the decider, which refuses it; use retired_on. An unquoted on is the YAML 1.1 boolean true."
+            },
+            "retired_on": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date",
+              "description": "1.2: retired_on for a retirement (default: the date the intent was created)."
+            }
+          }
+        }
+      }
+    }
+  ]
+}

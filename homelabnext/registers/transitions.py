@@ -13,8 +13,11 @@ writes), a note of type ``register-transition``::
     from: controlled             # the status the agent saw
     to: retired
     retired_by: [M-17]           # or incorporated_into: [...] / superseded_by: LL-007
-    on: 2026-10-19               # retired_on (default: the day the intent was created)
+    retired_on: 2026-10-19       # optional (default: the day the intent was created)
     reason: M-17 has held in every run since the control shipped
+
+(Not ``on:`` -- YAML 1.1 reads it as the boolean ``true``; a note with a non-string key is
+invalid.)
 
 :class:`TransitionDecider` (``hnx registers decide``) evaluates each one, under a lock, against
 the record as it is *now* and the review policy:
@@ -26,6 +29,8 @@ the record as it is *now* and the review policy:
 * the policy's tiers for the target status are not met by current reviews of the *prospective*
   content (the record as it will be once the transition applies; its digest is printed, so a
   reviewer can stamp it): **waiting**, the note stays in the inbox;
+* the note does not validate (a missing field, a boolean key): **invalid**, it stays in the
+  inbox for its agent to fix or withdraw, and the other intents are decided as usual;
 * otherwise **applied**: a ``transition`` event (the only writer of those) in the record's
   sidecar, then the note is approved and completed (``decided/completed/``), each move with its
   audit sidecar.  A transition the policy lets agents make (no human tier) therefore applies as
@@ -35,7 +40,8 @@ the record as it is *now* and the review policy:
 Two conflicting intents for one record (both retiring it with a different ``retired_by``, or one
 holding a stale ``from``): the first decided applies, and the second is denied because its
 ``from`` is no longer current.  Applying is idempotent: a crash after the event was written and
-before the note moved is finished, not re-decided, on the next run.
+before the note moved -- or between its two moves, approved and completed -- is finished, not
+re-decided, on the next run (an intent found in ``decided/approved/`` whose event exists).
 
 This is a library and a command, not a service: run it when convenient (by hand, from CI, from
 a timer).  Like ``homelabnext.records.decider`` it is the decision maker's tool, and its
@@ -51,7 +57,8 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from homelabnext.records import RecordsReader, check_filename
-from homelabnext.records.decider import Decider
+from homelabnext.records.decider import APPROVED, Decider
+from homelabnext.records.notes import NoteError, parse_note
 from homelabnext.state import file_lock
 
 from . import events as ev
@@ -69,7 +76,7 @@ _SET_FIELDS = ("retired_by", "incorporated_into", "superseded_by")
 class Outcome:
     note: str
     record: str
-    result: str  # applied | denied | waiting | gone
+    result: str  # applied | denied | waiting | invalid | error | gone
     reason: str
     digest: str | None = None
     event: str | None = None
@@ -106,13 +113,18 @@ def _set_of(fm: Mapping[str, Any], entry: Mapping[str, Any], register: str) -> t
             problems.append(f"a transition to {to} needs `{k}`")
         else:
             out[k] = given[k]
+    if "on" in fm:  # only a quoted 'on' gets here (the 1.1 schema still lists it)
+        problems.append("`on` is not read (YAML 1.1 makes it a boolean): use `retired_on`")
     if to == "retired" and register == "lessons":
-        on = fm.get("on") or str(fm["created"])[:10]
-        out["retired_on"] = on if isinstance(on, dt.date) else dt.date.fromisoformat(str(on))
+        on = fm.get("retired_on") or str(fm["created"])[:10]
+        try:
+            out["retired_on"] = on if isinstance(on, dt.date) else dt.date.fromisoformat(str(on))
+        except ValueError:
+            problems.append(f"retired_on {on!r} is not a date")
         if entry.get("kind") == "practice":
             out["retired_reason"] = str(fm["reason"]).strip()
-    elif "on" in fm:
-        problems.append("`on` (retired_on) belongs to a retirement only")
+    elif "retired_on" in fm:
+        problems.append("`retired_on` belongs to a retirement only")
     return out, problems
 
 
@@ -156,11 +168,38 @@ class TransitionDecider:
             self._policy = load_policy(pp) if pp else False
         return self._policy or None
 
+    def _intents(self, lane: str) -> list[str]:
+        """The ``register-transition`` notes of ``lane``, by a lenient read of their ``type``
+        only: another note, valid or not, is not the decider's to validate (one malformed note
+        must never stop the others)."""
+        out = []
+        for name in self.reader.list(lane):
+            try:
+                fm, _ = parse_note((self.records_root / lane / name).read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, NoteError):
+                continue
+            if fm.get("type") == INTENT_TYPE:
+                out.append(name)
+        return out
+
     def pending(self) -> list[str]:
-        return [n.name for n in self.reader.iter_notes("inbox", type=INTENT_TYPE)]
+        """The intents to decide: the inbox's, then any left in ``decided/approved/`` by a crash
+        between the two moves of an applied one."""
+        return self._intents("inbox") + self._intents(APPROVED)
 
     def decide_all(self, *, dry_run: bool = False) -> list[Outcome]:
-        return [self.decide(n, dry_run=dry_run) for n in self.pending()]
+        """Every pending intent; one that fails to decide is its own ``error`` outcome, never
+        the end of the run (a broken register is: :class:`RegisterError` propagates)."""
+        out = []
+        for n in self.pending():
+            try:
+                out.append(self.decide(n, dry_run=dry_run))
+            except RegisterError:
+                raise
+            except (OSError, ValueError) as ex:
+                why = f"{type(ex).__name__}: {ex}".replace("\n", " ")
+                out.append(Outcome(n, "?", "error", why))
+        return out
 
     def _record_path(self, ident: str) -> pathlib.Path:
         kind = "lessons" if ident.startswith("LL-") else "runbooks"
@@ -172,13 +211,23 @@ class TransitionDecider:
             return self._decide(name, dry_run)
 
     def _decide(self, name: str, dry_run: bool) -> Outcome:
-        if name not in self.reader.list("inbox"):
+        if name in self.reader.list("inbox"):
+            lane = "inbox"
+        elif name in self.reader.list(APPROVED):
+            lane = APPROVED
+        else:
             return Outcome(name, "?", "gone", "no longer in the inbox (decided elsewhere)")
-        note = self.reader.read("inbox", name)
+        try:
+            note = self.reader.read(lane, name)
+        except (OSError, UnicodeDecodeError, ValueError) as ex:  # NoteError is a ValueError
+            why = f"the note does not validate ({ex}); its agent must fix or withdraw it"
+            return Outcome(name, "?", "invalid", why.replace("\n", " "))
         fm = note.frontmatter
         ident = str(fm.get("record", "?"))
         if note.type != INTENT_TYPE:
             return Outcome(name, ident, "gone", f"a {note.type} note, not a {INTENT_TYPE}")
+        if lane == APPROVED:
+            return self._finish(name, ident, dry_run)
         bad = check_filename(name, fm)
         if bad:
             return self._deny(name, ident, "; ".join(bad), dry_run)
@@ -243,6 +292,25 @@ class TransitionDecider:
             return self._deny(name, ident, "; ".join(ex.problems), dry_run, digest)
         self.movers.fulfil(name, reason=f"applied: {written[0].name}")
         return Outcome(name, ident, "applied", f"{cur} -> {fm['to']}", digest, written[0].name)
+
+    def _finish(self, name: str, ident: str, dry_run: bool) -> Outcome:
+        """An intent in ``decided/approved/``: complete it when its transition event exists (a
+        crash between the moves of :meth:`Decider.fulfil`); one approved by hand is left."""
+        path = self._record_path(ident)
+        problems: list[str] = []
+        ref = f"decided/completed/{name}"
+        done = [
+            e
+            for e in (
+                ev.read_events(ev.events_dir(path), problems, path.name) if path.is_file() else []
+            )
+            if e.kind == "transition" and e.data.get("intent") == ref
+        ]
+        if not done:
+            return Outcome(name, ident, "gone", "approved outside the decider; nothing applied")
+        if not dry_run:
+            self.movers.fulfil(name, reason=f"applied: {done[0].name}")
+        return Outcome(name, ident, "applied", "already applied", event=done[0].name)
 
     def _missing(self, after: Mapping, register: str, state: str, digest: str) -> list[str]:
         from homelabnext.reviews import evaluate

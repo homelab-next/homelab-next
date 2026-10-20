@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/records/note/1.1",
+  "$id": "https://schemas.example.internal/homelabnext/records/note/1.2",
   "title": "Records note frontmatter",
-  "description": "YAML frontmatter of a records note (the generalised vault note). The filename convention is <YYYY-MM-DD>-<requesting-agent>-<slug>.md (checked by tools/schema_check.py, not expressible in JSON Schema). Lanes: inbox/ (writable by agents), decided/{approved,denied,completed}/ (decision-maker only). 1.1 added, additively, type register-transition: an agent's request to change a lesson's or runbook's lifecycle status, applied only by the register decider (hnx registers decide).",
+  "description": "YAML frontmatter of a records note (the generalised vault note). The filename convention is <YYYY-MM-DD>-<requesting-agent>-<slug>.md (checked by tools/schema_check.py, not expressible in JSON Schema). Lanes: inbox/ (writable by agents), decided/{approved,denied,completed}/ (decision-maker only). 1.1 added, additively, type register-transition: an agent's request to change a lesson's or runbook's lifecycle status, applied only by the register decider (hnx registers decide). 1.2 added retired_on, which replaces on: an unquoted on is the YAML 1.1 boolean true, so it never arrived as a key named on (a note with a non-string key is invalid).",
   "type": "object",
   "properties": {
     "type": {
@@ -318,7 +318,11 @@
             },
             "on": {
               "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date",
-              "description": "retired_on for a retirement (default: the date the intent was created)."
+              "description": "Deprecated (1.2): not read by the decider, which refuses it; use retired_on. An unquoted on is the YAML 1.1 boolean true."
+            },
+            "retired_on": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date",
+              "description": "1.2: retired_on for a retirement (default: the date the intent was created)."
             }
           }
         }

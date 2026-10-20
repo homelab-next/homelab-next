@@ -13,7 +13,7 @@ Common fields: `type`, `title`, `requesting_agent` (`profile:` id), `created` (R
 | `finding` | `area`, `severity` |
 | `escalation` | `reason`, `to` (a role slug, not a person) |
 | `task` | `assigned_to`, `done_when` (the observable completion condition), `expires` |
-| `register-transition` (1.1) | `record` (an allocated `LL-`/`RB-` id), `from`, `to`, `reason`; optional `retired_by`, `incorporated_into`, `superseded_by`, `on`. Applied only by `hnx registers decide` (docs/registers.md) |
+| `register-transition` (1.1; `retired_on` 1.2) | `record` (an allocated `LL-`/`RB-` id), `from`, `to`, `reason`; optional `retired_by`, `incorporated_into`, `superseded_by`, `retired_on` (`on`, from 1.1, is not read: YAML 1.1 parses it as `true`, and a note with a non-string key is invalid). Applied only by `hnx registers decide` (docs/registers.md) |
 
 Filename convention (checked by `tools/schema_check.py::check_note_filename`, not expressible in
 JSON Schema): `<YYYY-MM-DD>-<requesting-agent>-<slug>.md`, date equal to `created`, agent equal to
