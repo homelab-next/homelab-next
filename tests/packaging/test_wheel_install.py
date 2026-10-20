@@ -198,12 +198,12 @@ def test_installed_wheel_runs_conform_list_and_swap_plan_on_a_minimal_example(in
     assert listing.returncode == 0, listing.stderr + listing.stdout
     for cap in ("lake-query", "object-store", "detections"):
         assert cap in listing.stdout
-    assert len([ln for ln in listing.stdout.splitlines() if ln.strip()]) == 14
+    assert len([ln for ln in listing.stdout.splitlines() if ln.strip()]) == 15
     # the suites are a source-tree asset: from a wheel the listing says so instead of failing
     assert "no suite" in listing.stdout
     as_json = _run(py, ["conform", "list", "--json"], tmp_path)
     assert as_json.returncode == 0, as_json.stderr
-    assert len(json.loads(as_json.stdout)["capabilities"]) == 14
+    assert len(json.loads(as_json.stdout)["capabilities"]) == 15
 
     plan = _run(py, ["swap", "plan"], tmp_path)
     assert plan.returncode == 0, plan.stderr + plan.stdout

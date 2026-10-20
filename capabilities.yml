@@ -14,3 +14,4 @@ capabilities:
   - idp
   - records
   - detections
+  - context

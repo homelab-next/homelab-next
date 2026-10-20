@@ -182,6 +182,10 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "the repository knowledge graph: build|check|related (docs/graph/)",
         lambda a: importlib.import_module("homelabnext.graph.cli").main(a),
     ),
+    "mcp": (
+        "read-only MCP server over this repository: serve (stdio)|tools|call (docs/mcp.md)",
+        lambda a: importlib.import_module("homelabnext.mcp.cli").main(a),
+    ),
     "custom": (
         "list|check|plan|register lab/vendor customizations",
         lambda a: importlib.import_module("homelabnext.customization.cli").main(a),

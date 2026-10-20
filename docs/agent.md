@@ -121,7 +121,8 @@ through allowlisted broker actions (G-04).
   `egress`, `credential`) and lists the classes a reader may not hold (`reader_forbidden`: exec,
   file-write, egress, credential). A grant with several classes counts as its worst. A grant the
   table does not know is refused for a reader (unknown is never assumed harmless); adding a tool
-  means classifying it there in a reviewed change. `--classes FILE` substitutes another table.
+  means classifying it there in a reviewed change (the repository's own read-only server,
+  `hnx-catalog`, is `read`: [MCP server](mcp.md), [[mcp]]). `--classes FILE` substitutes another table.
 - **Enforced three times.** `compile_profile` raises `ReaderViolation` naming every offending grant
   and its class, after the ceiling check and whatever the ceiling allows; `verify_profile` (and
   `hnx agent verify`) refuses a compiled profile edited into that state, digest recomputed or not;

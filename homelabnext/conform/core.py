@@ -132,7 +132,7 @@ class Suite:
     name: str
     summary: str
     protocol: str = ""  # dotted path of the Protocol the subject implements
-    tier: str = "core"  # core: one of the fourteen capabilities; extended: additional suites
+    tier: str = "core"  # core: one of the fifteen capabilities; extended: additional suites
     _specs: dict[str, CheckSpec] = field(default_factory=dict, init=False, repr=False)
 
     def check(

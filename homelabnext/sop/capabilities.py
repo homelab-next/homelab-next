@@ -18,6 +18,9 @@ One page per conformance capability, generated entirely from code, never edited 
 * integrating       the factory/target/run steps, from the real factory pattern.
 
 ``README.md`` is the index: a capability x (operations, checks, adapters, services) matrix.
+The same model is exposed as plain data by :func:`summary_data` and :func:`contract_data` (the
+read-only MCP server, ``homelabnext.mcp``, answers from them), so a page and a tool answer cannot
+disagree.
 
 Pages assume they live at ``docs/capabilities/`` (links to sources are ``../../<path>``) and use
 relative Markdown links plus path-qualified ``[[folder/page|label]]`` wiki-links, so the same
@@ -768,6 +771,115 @@ def collect(root: Path, registry: Registry | None = None) -> list[Capability]:
     return out
 
 
+# --------------------------------------------------------------------------- data
+
+
+def features(c: Capability) -> list[tuple[str, bool, list[str]]]:
+    """``(feature, is a test hook, ids of the checks needing it)`` for every feature a check
+    requires, sorted by name."""
+    feats = sorted({r for ch in c.checks for r in ch.requires})
+    return [(f, f in c.hooks, [ch.id for ch in c.checks if f in ch.requires]) for f in feats]
+
+
+def _binding_data(b: Binding) -> dict[str, Any]:
+    return {
+        "adapter": b.adapter,
+        "module_file": b.module_file,
+        "target_file": b.target_file,
+        "target_name": b.target_name,
+        "real": b.real,
+        "client_only": b.client_only,
+        "product": b.product,
+        "factory": b.factory_sig,
+        "features": list(b.features),
+        "config": b.config,
+        "limits": list(b.limits),
+    }
+
+
+def _method_data(m: Method) -> dict[str, Any]:
+    return {
+        "name": m.name,
+        "signature": render_signature(m),
+        "params": [dataclasses.asdict(p) for p in m.params],
+        "returns": m.returns,
+        "raises": list(m.raises),
+        "doc": m.doc,
+        "defined_in": m.defined_in,
+    }
+
+
+def _shape_data(s: Shape) -> dict[str, Any]:
+    out: dict[str, Any] = {"name": s.name, "kind": s.kind, "module": s.module, "doc": s.doc}
+    if s.kind == "exception":
+        out["base"] = s.base
+    else:
+        out["frozen"] = s.frozen
+        out["fields"] = [dataclasses.asdict(f) for f in s.fields]
+        out["methods"] = [_method_data(m) for m in s.methods]
+    return out
+
+
+def summary_data(c: Capability) -> dict[str, Any]:
+    """One row of the capability index as plain data (``hnx mcp``'s ``list_capabilities``)."""
+    return {
+        "name": c.name,
+        "purpose": c.summary,
+        "operations": c.operations,
+        "must": c.count("must"),
+        "should": c.count("should"),
+        "implementations": {
+            "fake": c.fake[0] if c.fake[1] else "",
+            "adapters": [
+                {"adapter": b.adapter, "target_file": b.target_file, "real": b.real}
+                for b in c.bindings
+            ],
+            "services": [s for s, _ in c.providers],
+        },
+    }
+
+
+def contract_data(c: Capability) -> dict[str, Any]:
+    """Everything a capability page shows, as plain data (``hnx mcp``'s ``get_contract``): the
+    same model :func:`render_page` renders, so the two cannot disagree."""
+    return {
+        "name": c.name,
+        "purpose": c.summary,
+        "protocol": c.protocol,
+        "contract_module": c.contract_module,
+        "suite_module": c.suite_module,
+        "description": c.contract_doc,
+        "operations": [
+            {"protocol": p.name, **_method_data(m)} for p in c.protocols for m in p.methods
+        ],
+        "protocols": [{"name": p.name, "module": p.module, "doc": p.doc} for p in c.protocols],
+        "data_shapes": [_shape_data(s) for s in c.data],
+        "constants": [{"name": n, "value": v} for n, v in c.constants],
+        "errors": [_shape_data(e) for e in c.errors],
+        "schemas": [{"path": p, "loaded_by": m} for p, m in c.schemas],
+        "checks": [
+            {
+                "id": ch.id,
+                "level": ch.severity.upper(),
+                "assertion": ch.summary,
+                "requires": list(ch.requires),
+            }
+            for ch in c.checks
+        ],
+        "features": [
+            {"name": f, "kind": "test-hook" if hook else "product", "checks": ids}
+            for f, hook, ids in features(c)
+        ],
+        "mutants": [{"name": n, "must_fail": f, "defect": d} for n, f, d in c.mutants],
+        "fake": {"class": c.fake[0], "module": c.fake[1], "summary": c.fake[2]},
+        "adapters": [_binding_data(b) for b in c.bindings],
+        "services": {
+            "providers": [{"name": s, "impl": impl} for s, impl in c.providers],
+            "consumers": list(c.consumers),
+        },
+    }
+
+
 # --------------------------------------------------------------------------- rendering
 
 
@@ -938,17 +1050,17 @@ def render_page(c: Capability, root: Path) -> str:
             f" {', '.join(f'`{r}`' for r in ch.requires)} |"
         )
     L.append("")
-    feats = sorted({r for ch in c.checks for r in ch.requires})
+    feats = features(c)
     L += ["### Features an adapter may declare\n"]
     if feats:
         L += ["| Feature | Kind | Checks that need it |", "|---|---|---|"]
-        for f in feats:
+        for f, hook, needed_by in feats:
             kind = (
                 "test hook (a MUST check needing it is `untested` without it)"
-                if f in c.hooks
+                if hook
                 else "product feature (checks skip without it)"
             )
-            ids = ", ".join(f"`{ch.id}`" for ch in c.checks if f in ch.requires)
+            ids = ", ".join(f"`{i}`" for i in needed_by)
             L.append(f"| `{f}` | {kind} | {ids} |")
         L.append("")
     else:
