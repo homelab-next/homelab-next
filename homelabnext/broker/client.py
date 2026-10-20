@@ -56,8 +56,11 @@ class BrokerClient:
             sock.settimeout(self.timeout_s)
             try:
                 sock.connect(self.socket_path)
-                sock.sendall(data)
-                sock.shutdown(socket.SHUT_WR)
+                try:
+                    sock.sendall(data)
+                    sock.shutdown(socket.SHUT_WR)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # the broker answered without reading (busy, a stranger): read it
                 raw = self._receive(sock)
             except OSError as exc:  # TimeoutError included
                 err = BrokerError(f"broker socket {self.socket_path}: {exc.strerror or exc}")

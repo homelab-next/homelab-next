@@ -8,6 +8,7 @@ the protocol and the service are the real ones)."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -91,9 +92,12 @@ def _raw(path: Path, data: bytes, *, shut: bool = True) -> dict:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
         s.settimeout(10)
         s.connect(str(path))
-        s.sendall(data)
-        if shut:
-            s.shutdown(socket.SHUT_WR)
+        try:  # a busy broker answers and closes without reading
+            s.sendall(data)
+            if shut:
+                s.shutdown(socket.SHUT_WR)
+        except BrokenPipeError:
+            pass
         out = b""
         while chunk := s.recv(65536):
             out += chunk
@@ -318,6 +322,70 @@ def test_concurrent_runs_of_one_approved_request_run_it_once(broker):
         t.join()
     assert outcomes.count("ok") == 1, outcomes
     assert set(outcomes) - {"ok"} <= {"not-pending", "approval-replayed"}
+
+
+# -- review regressions: the deadline, strangers, relay slots, the directory's owner ----------
+
+
+def _server(tmp_path, **kw) -> BrokerServer:
+    return BrokerServer(_service(tmp_path), tmp_path / "run" / "b.sock", **kw)
+
+
+def test_the_socket_directory_must_be_owned_by_the_broker(tmp_path, monkeypatch):
+    srv = _server(tmp_path)
+    run = tmp_path / "run"
+    run.mkdir(mode=0o700)
+    if os.geteuid() == 0:
+        os.chown(run, 65534, -1)  # another account's directory
+    else:
+        monkeypatch.setattr(os, "geteuid", lambda: ME + 1)
+    with pytest.raises(BrokerError, match="owned by"):
+        srv.start()
+
+
+def test_a_slow_sender_cannot_hold_a_connection_past_the_deadline(tmp_path):
+    with _server(tmp_path, timeout_s=0.5) as srv, socket.socket(socket.AF_UNIX) as s:
+        s.settimeout(10)
+        s.connect(str(srv.path))
+        started = time.monotonic()
+        answer = b""
+        for _ in range(40):  # one byte every 0.1 s: each recv is quick, the whole is not
+            try:
+                s.sendall(b" ")
+            except OSError:
+                break
+            s.setblocking(False)
+            with contextlib.suppress(BlockingIOError):
+                answer = s.recv(65536)
+            s.setblocking(True)
+            if answer:
+                break
+            time.sleep(0.1)
+        elapsed = time.monotonic() - started
+    assert answer and json.loads(answer)["error"] == "request-timeout"
+    assert elapsed < 2.0
+
+
+def test_an_unknown_peer_is_answered_without_holding_its_slot(tmp_path):
+    srv = _server(tmp_path, max_connections=1, timeout_s=3)
+    with srv, socket.socket(socket.AF_UNIX) as stranger:
+        srv.credentials = lambda conn: (0, STRANGER_UID, 0)
+        stranger.settimeout(5)
+        stranger.connect(str(srv.path))
+        assert json.loads(stranger.recv(65536))["error"] == "unknown-caller"
+        srv.credentials = peer_credentials  # the stranger keeps its connection open
+        time.sleep(0.2)
+        assert _raw(srv.path, b'{"op": "actions"}\n')["ok"] is True
+
+
+def test_agents_cannot_starve_the_approval_relay(tmp_path):
+    srv = _server(tmp_path, max_connections=1, timeout_s=3)
+    with srv, socket.socket(socket.AF_UNIX) as hold:
+        hold.connect(str(srv.path))  # an agent's connection holds every agent slot
+        time.sleep(0.2)
+        assert _raw(srv.path, b'{"op": "actions"}\n')["error"] == "busy"
+        srv.credentials = lambda conn: (0, RELAY_UID, 0)
+        assert _raw(srv.path, b'{"op": "pending"}\n')["ok"] is True
 
 
 # -- the socket file ---------------------------------------------------------------------------
