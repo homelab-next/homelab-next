@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/broker/audit/1.0",
+  "title": "Broker audit record",
+  "description": "One outcome of one broker operation, written by the broker service as its own file (homelabnext.broker.state). Every call, submit, status, run, cancel, approve and deny leaves exactly one record, whatever the outcome: ok, denied (refused by policy, ownership, approval or a lane), invalid (malformed arguments or a request in the wrong state), error (the handler failed or timed out) or shadow (decided, not run). reason is empty for ok and required otherwise. args are the request's arguments with every argument its spec marks secret replaced by <redacted> and every value over 1 KiB replaced by its size and digest; secrets passed to handlers by name never appear.",
+  "type": "object",
+  "properties": {
+    "audit_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "at": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    },
+    "caller": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "Who asked, as presented (a profile id, a caller name, or issuer:subject for an approver)."
+    },
+    "action": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "The action named; empty when an unknown request id was named."
+    },
+    "operation": {
+      "enum": [
+        "call",
+        "submit",
+        "status",
+        "run",
+        "cancel",
+        "approve",
+        "deny",
+        "notify"
+      ]
+    },
+    "outcome": {
+      "enum": [
+        "ok",
+        "denied",
+        "invalid",
+        "error",
+        "shadow"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "pattern": "^([a-z][a-z0-9-]{0,63})?$",
+      "description": "Machine reason: a decision reason (schemas/broker/decision), not-request-owner, or a lane or handler reason (lane-path-escape, handler-digest-mismatch, ...)."
+    },
+    "decision_reason": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+      "description": "On an ok submit: the decision behind it (allowed, approval-required)."
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "The request acted on, as presented (a refused id is recorded verbatim)."
+    },
+    "request_digest": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+    },
+    "approval_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "manifest_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "args": {
+      "type": "object"
+    },
+    "result": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/rel_path"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "digest": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+        },
+        "exit_code": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "audit_id",
+    "at",
+    "caller",
+    "action",
+    "operation",
+    "outcome",
+    "reason",
+    "args"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "const": "ok"
+          }
+        },
+        "required": [
+          "outcome"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reason": {
+            "const": ""
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "denied",
+              "invalid",
+              "error",
+              "shadow"
+            ]
+          }
+        },
+        "required": [
+          "outcome"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reason": {
+            "minLength": 1
+          }
+        }
+      }
+    }
+  ]
+}
