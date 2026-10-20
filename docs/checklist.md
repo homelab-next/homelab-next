@@ -97,12 +97,12 @@ Cases, status, notifications and reports reach people.
 | ID | Must be true | Observable / pass criterion | Tag |
 |---|---|---|---|
 | O-01 | High-severity alerts become cases | Every high or critical alert has a case or documented auto-close within 15 min | SERVER |
-| O-02 | The status grid reflects reality | Stopping a monitored service turns its tile red within 5 min | SERVER |
+| O-02 | The status grid reflects reality | Stopping a monitored service turns its tile red within 5 min (mechanism tested with fakes: `tests/status`; the live 5-minute check stays on the server) | SERVER |
 | O-03 | Notifications are authenticated | Anonymous publish to an alert channel is refused | SERVER |
 | O-04 | Scheduled reports are produced | Daily and weekly reports exist for the last 7 days / 4 weeks | SERVER |
-| O-05 | The ops console shows exceptions only | With every source healthy, the console shows only the green count, live work and attention items | SERVER |
-| O-06 | A dead adapter reads as stale | Stopping an adapter marks its module stale within its SLA | SERVER |
-| O-07 | A hung source cannot stall the console | With one source blackholed, the view renders in < 2 s with that module stale | SERVER |
+| O-05 | The ops console shows exceptions only | With every source healthy, the console shows only the green count, live work and attention items (`homelabnext/status`, tested in `tests/status`; the live console is measured on the server) | PUBLIC-NOW |
+| O-06 | A dead adapter reads as stale | Stopping an adapter marks its module stale within its SLA (`stale_after_s` per status source; tested with an injected clock in `tests/status`; live SLA measured on the server) | PUBLIC-NOW |
+| O-07 | A hung source cannot stall the console | With one source blackholed, the view renders in < 2 s with that module stale (per-source timeouts in the collector scheduler; `tests/status`) | PUBLIC-NOW |
 | O-08 | Notifications are state-diffed | Same state twice sends once; recovery sends one message (fake sender test) | PUBLIC-NOW |
 
 ## P - Control plane
@@ -282,4 +282,4 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 
 ---
 
-**Totals:** 159 criteria across 16 pillars; 77 PUBLIC-NOW, 82 SERVER.
+**Totals:** 159 criteria across 16 pillars; 80 PUBLIC-NOW, 79 SERVER.
