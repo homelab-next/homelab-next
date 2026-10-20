@@ -687,6 +687,7 @@ def read_registers(b: Builder) -> None:
     inv -checks-> script/pkg/make (the ``observable`` command; ``plugin`` criteria: the package
     whose plugin registers that id)."""
     base = b.root / REGISTERS
+    policy = _policy(base)
     lessons = _register_entries(base / "lessons")
     runbooks = _register_entries(base / "runbooks")
     criteria = _register_entries(base / "invariants.yml")
@@ -708,7 +709,7 @@ def read_registers(b: Builder) -> None:
             lesson_kind=e.get("kind"),
             date=e.get("date"),
             recurrences=e.get("recurrences"),
-            **_provenance(e),
+            **_provenance(e, policy),
         )
     for e in runbooks:
         rp = rel(e, "runbooks")
@@ -719,7 +720,7 @@ def read_registers(b: Builder) -> None:
             rp,
             rp,
             status=e.get("status"),
-            **_provenance(e),
+            **_provenance(e, policy),
         )
     for e in criteria:
         b.define(
@@ -730,7 +731,7 @@ def read_registers(b: Builder) -> None:
             f"{ip}#{e['id']}",
             evidence=e.get("evidence"),
             deferred=bool(e.get("deferred")) or None,
-            **_provenance(e),
+            **_provenance(e, policy),
         )
     inv_ids = {str(e["id"]) for e in criteria}
     cmds = _commands(b)
@@ -804,35 +805,56 @@ def read_registers(b: Builder) -> None:
             b.edge(nid, plugins.get(pid, f"plugin:{pid}"), "checks", f"{at}.plugin")
 
 
-_PASSING = frozenset({"pass", "passed", "ok", "approve", "approved", "accept", "accepted"})
-
-
-def _provenance(e: dict[str, Any]) -> dict[str, Any]:
+def _provenance(e: dict[str, Any], policy: Any = None) -> dict[str, Any]:
     """``author`` and a compact summary of a record's ``reviews`` (reviewer identities are not
-    nodes): ``reviewed`` lists each tier whose most recent review passed -- ``agent_check`` (an
-    agent's ``check``), ``challenge`` (any reviewer's ``challenge`` review) and ``human`` (a
-    human's review of any role) -- and ``review_count`` counts them all.  Absent fields: nothing."""
-    reviews = [r for r in e.get("reviews") or () if isinstance(r, dict)]
-    latest: dict[str, tuple[str, int, bool]] = {}
-    for i, r in enumerate(reviews):
-        kind, role = str(r.get("kind", "")), str(r.get("role", ""))
-        ok = str(r.get("verdict", "")).lower() in _PASSING
-        tiers = []
-        if kind == "agent" and role == "check":
-            tiers.append("agent_check")
-        if role == "challenge":
-            tiers.append("challenge")
-        if kind == "human":
-            tiers.append("human")
-        for t in tiers:
-            key = (str(r.get("date", "")), i, ok)
-            if t not in latest or key[:2] >= latest[t][:2]:
-                latest[t] = key
+    nodes): ``reviewed`` lists each tier with a *current, valid, passing* review -- ``agent_check``
+    (an agent's ``check``), ``challenge`` (a ``challenge`` review) and ``human`` (a human's review
+    of any role) -- and ``review_count`` counts every review.  Absent fields: nothing.
+
+    "Current and valid" is :func:`homelabnext.reviews.evaluate` against the record's content
+    digest now (:func:`homelabnext.registers.schema.record_digest_of`, the digest the register
+    validation checks), with ``policy`` (the register's ``review-policy.yml``) when there is one:
+    a review of an earlier content, a self-review, a challenge from a checker, an agent in a human
+    slot or a malformed review counts for no tier, so ``require_reviews`` can trust the attr."""
+    from homelabnext.registers.schema import record_digest_of
+    from homelabnext.reviews import evaluate
+
+    reviews = e.get("reviews")
+    entry = {k: v for k, v in e.items() if not k.startswith("_")}
+    ev = evaluate(
+        reviews,
+        author=e.get("author", "unknown"),
+        digest=record_digest_of(entry),
+        artefact="",
+        state="",
+        policy=policy,
+    )
+    tiers = set()
+    for r in ev.current:
+        if r["kind"] == "agent" and r["role"] == "check":
+            tiers.add("agent_check")
+        if r["role"] == "challenge":
+            tiers.add("challenge")
+        if r["kind"] == "human":
+            tiers.add("human")
     return {
         "author": e.get("author"),
-        "reviewed": sorted(t for t, (_, _, ok) in latest.items() if ok) or None,
-        "review_count": len(reviews) or None,
+        "reviewed": sorted(tiers) or None,
+        "review_count": len(reviews) if isinstance(reviews, list) and reviews else None,
     }
+
+
+def _policy(base: Path) -> Any:
+    """The register's review policy (``review-policy.yml`` in or beside ``base``), or None when
+    there is none or it does not load (the identity rules that need no policy still apply)."""
+    from homelabnext.registers.render import find_policy
+    from homelabnext.reviews import ReviewError, load_policy
+
+    path = find_policy(base)
+    try:
+        return load_policy(path) if path else None
+    except ReviewError:
+        return None
 
 
 def _listed(v: Any) -> list[str]:

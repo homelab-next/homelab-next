@@ -20,6 +20,7 @@ from homelabnext.graph.model import Edge, Graph, Node, dumps, loads
 from homelabnext.graph.query import neighbours, related, seeds_for
 from homelabnext.graph.views import render_views
 from homelabnext.graph.vocab import EDGE_TYPES, NODE_KINDS
+from homelabnext.reviews import file_digest
 
 ROOT = Path(__file__).resolve().parents[2]
 OPENBAO = "adapter:homelabnext.conform.adapters.openbao:make"
@@ -472,40 +473,27 @@ def test_cli_check_fails_on_a_dangling_edge(tmp_path, repo_copy, capsys):
 
 def test_incorporated_lessons_give_way_to_their_runbook(tmp_path, repo_copy):
     root = _fresh(tmp_path, repo_copy)
+    lesson = root / LESSONS / "LL-001.md"
     front(
-        root / LESSONS / "LL-001.md",
+        lesson,
         status="incorporated",
         incorporated_into=["RB-001#2", "docs/systems/edge-proxy.md#use"],
         author="agent:fake-author",
+        reviews=None,
+    )
+    digest = file_digest(lesson)
+
+    def review(by, kind, role, date, verdict):
+        keys = ("by", "kind", "role", "date", "verdict", "digest")
+        return dict(zip(keys, (by, kind, role, date, verdict, digest), strict=True))
+
+    front(
+        lesson,
         reviews=[
-            {
-                "by": "agent:fake-checker",
-                "kind": "agent",
-                "role": "check",
-                "date": "2026-01-13",
-                "verdict": "pass",
-            },
-            {
-                "by": "fake-human",
-                "kind": "human",
-                "role": "approve",
-                "date": "2026-01-14",
-                "verdict": "fail",
-            },
-            {
-                "by": "fake-human",
-                "kind": "human",
-                "role": "approve",
-                "date": "2026-01-15",
-                "verdict": "pass",
-            },
-            {
-                "by": "agent:fake-red",
-                "kind": "agent",
-                "role": "challenge",
-                "date": "2026-01-15",
-                "verdict": "fail",
-            },
+            review("agent:fake-checker", "agent", "check", "2026-01-13", "pass"),
+            review("human:example-operator", "human", "approve", "2026-01-14", "changes"),
+            review("human:example-operator", "human", "approve", "2026-01-15", "pass"),
+            review("agent:fake-red", "agent", "challenge", "2026-01-15", "reject"),
         ],
     )
     shutil.rmtree(root / LESSONS / "LL-001.events")  # the inline list above is every review
@@ -521,9 +509,35 @@ def test_incorporated_lessons_give_way_to_their_runbook(tmp_path, repo_copy):
     assert has(g, "runbook:RB-001", "from_lesson", "lesson:LL-001")
     attrs = g.nodes["lesson:LL-001"].attrs
     assert attrs["author"] == "agent:fake-author" and attrs["review_count"] == 4
-    assert attrs["reviewed"] == ["agent_check", "human"]  # latest challenge review failed
+    assert attrs["reviewed"] == ["agent_check", "human"]  # the only challenge review rejected
     ids = [x.id for x in related(g, ["system:proxy"], budget=50)]
     assert "runbook:RB-001" in ids and "lesson:LL-001" not in ids
     assert "lesson:LL-001" in render_views(g)["lesson.md"].split("## Archive")[1]
     # a record without reviews or author gets no summary attrs
     assert "reviewed" not in g.nodes["lesson:LL-003"].attrs
+
+
+def test_reviewed_counts_only_current_valid_passing_reviews(tmp_path, repo_copy):
+    """The graph's ``reviewed`` is what the register validation would accept: a review of an
+    earlier content, a self-review and a challenge from the checker count for no tier."""
+    root = _fresh(tmp_path, repo_copy)
+    lesson = root / LESSONS / "LL-001.md"
+    assert build(root)[0].nodes["lesson:LL-001"].attrs["reviewed"] == ["agent_check", "challenge"]
+    meta = yaml.safe_load(lesson.read_text(encoding="utf-8").split("---\n", 2)[1])
+    front(lesson, title=meta["title"] + " (edited after review)")  # content changed
+    attrs = build(root)[0].nodes["lesson:LL-001"].attrs
+    assert "reviewed" not in attrs and attrs["review_count"] == 2
+
+    def stamp(author, reviews):  # reviews of the content as it is with this author
+        front(lesson, author=author)
+        digest = file_digest(lesson)
+        front(lesson, reviews=[{**r, "digest": digest} for r in reviews])
+        return build(root)[0].nodes["lesson:LL-001"].attrs.get("reviewed")
+
+    check, challenge = meta["reviews"]
+    assert stamp("unknown", [check, challenge]) == ["agent_check", "challenge"]
+    assert stamp(check["by"], [check, challenge]) == ["challenge"]  # the checker is the author
+    # a challenge from the checker: the validation drops that reviewer's reviews altogether
+    assert stamp("unknown", [check, {**challenge, "by": check["by"]}]) is None
+    human_slot = {**check, "kind": "human", "role": "approve"}  # an agent in a human slot
+    assert stamp("unknown", [human_slot]) is None

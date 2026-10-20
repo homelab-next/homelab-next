@@ -66,9 +66,12 @@ question about a system gets the runbook that now carries the knowledge, not the
 lesson. The index pages list such records under **Archive**.
 
 **Review provenance.** Lessons, runbooks and criteria carry `author` and a review summary in
-their attrs when the record has them: `reviewed` lists the tiers whose most recent review passed
-(`agent_check` -- an agent's `check` review; `challenge`; `human` -- a human review of any
-role) and `review_count` counts the reviews. Reviewers are not nodes; the summary is there so a
+their attrs when the record has them: `reviewed` lists the tiers with a current, valid, passing
+review (`agent_check` -- an agent's `check` review; `challenge`; `human` -- a human review of any
+role) and `review_count` counts the reviews. "Current and valid" is `homelabnext.reviews.evaluate`
+against the record's content digest now, with the register's review policy, exactly as the
+register validation judges it: a review of an earlier content, a self-review, a challenge from a
+checker or an agent in a human slot counts for no tier, so `require_reviews` can trust it. Reviewers are not nodes; the summary is there so a
 context pack can prefer records with full human and challenge validation.
 
 The registers are read through one function, `_register_entries(path)` in
