@@ -370,11 +370,12 @@ class AgentSite:
             self.access_log.append(user, "access-log")
             rows = [
                 (_n(a.get("at")), _n(a.get("user")), _n(a.get("view")), _n(a.get("session")),
-                 _n(a.get("event")))
+                 _n(a.get("event")), _n(a.get("request")),
+                 _e(" ".join(str(a[k]) for k in ("outcome", "reason") if a.get(k))))
                 for a in self.access_log.entries()
             ]  # fmt: skip
             main = '<h2 class="private">Private: access log</h2>' + _table(
-                ("When", "Who", "View", "Session", "Event"), rows
+                ("When", "Who", "View", "Session", "Event", "Request", "Outcome"), rows
             )
             return self._page(doc, "Private access log", main, decision)
         return 404, HTML, b"not found\n"

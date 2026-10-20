@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """``agents.yml``: the activity store, retention, caps, stuck thresholds, the private tier's front
-door and the push ingest's senders (``schemas/status/agents.schema.json``).
+door, the push ingest's senders and the broker Approvals page (``schemas/status/agents.schema.json``).
 
 Secrets are referenced by their secret-store name (``secret:status/ingest/cloud-token``), never held in
 the file.  At run time a reference is read from the environment variable
@@ -104,6 +104,17 @@ class IngestSettings:
                 raise ValueError(f"ingest senders {other} and {s.name} have the same token")
 
 
+@dataclass(frozen=True)
+class ApprovalsSettings:
+    """The Approvals page (:mod:`homelabnext.status.approvals`): the broker socket the hub
+    relays through, the SSO issuer it vouches for, and the group allowed to decide."""
+
+    socket: Path
+    issuer: str
+    approver_group: str
+    timeout_s: float = 10.0
+
+
 @dataclass
 class AgentsConfig:
     store: Path
@@ -114,6 +125,7 @@ class AgentsConfig:
     thresholds: Thresholds = field(default_factory=Thresholds)
     front_door: FrontDoor | None = None
     ingest: IngestSettings | None = None
+    approvals: ApprovalsSettings | None = None
     warnings: list[str] = field(default_factory=list)
 
     def open_store(self, clock: Callable[[], float]) -> ActivityStore:
@@ -204,6 +216,30 @@ def build_config(
                 groups_header=priv.get("groups_header", "X-Authentik-Groups"),
                 viewer_group=priv["viewer_group"],
                 access_log=base / priv["access_log"],
+            )
+    appr = doc.get("approvals")
+    if appr:
+        if not priv:
+            raise AgentsConfigError(
+                "invalid agents config",
+                [
+                    "approvals needs private: the page is served behind the private tier's front door"
+                ],
+            )
+        if appr["approver_group"] == priv["viewer_group"]:
+            # a viewer may read the queue; deciding is a separate grant, never the same group
+            raise AgentsConfigError(
+                "invalid agents config",
+                ["approvals.approver_group must differ from private.viewer_group"],
+            )
+        if cfg.front_door is None:
+            cfg.warnings.append("approvals page disabled: the private tier's front door is off")
+        else:
+            cfg.approvals = ApprovalsSettings(
+                socket=Path(appr["socket"]),
+                issuer=appr["issuer"],
+                approver_group=appr["approver_group"],
+                timeout_s=float(appr.get("timeout_s", 10)),
             )
     ing = doc.get("ingest")
     if ing:

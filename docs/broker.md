@@ -10,9 +10,11 @@ command: `hnx broker`; capability page: [broker](capabilities/broker.md)
 
 Stage 1 is the engine; stage 2a (this page's [Running the service](#running-the-service)) puts it
 on a Unix socket where the caller is *authenticated* by its peer credentials, gives agents MCP
-tools, and takes approvals from a relay. Approvals through the front door and a hub approvals page
-are stage 2b (see the ADR). The CLI's asserted `--as` is the development path, accepted only when
-the manifest says `dev_identity: true`.
+tools, and takes approvals from a relay. Stage 2b puts people's approvals behind the front door:
+the status hub's [Approvals page](#front-door-approvals) is that relay, and
+[`import-proposals`](#migrating-from-a-vault-proposal-queue) moves a vault-style proposal queue
+onto the broker. The CLI's asserted `--as` is the development path, accepted only when the
+manifest says `dev_identity: true`.
 
 ## What an action can be
 
@@ -97,7 +99,10 @@ hnx broker validate examples/broker/manifest.yml
 
 1. `submit` of an action that needs approval stores the request `pending` and emits
    `decision.requested` (to the events bus when one is configured, else to `<state>/outbox/`), plus
-   an optional notification through the state-diffed notifier.
+   an optional notification through the state-diffed notifier. With `--approvals-url URL` (or
+   `HNX_BROKER_APPROVALS_URL`; an `http(s)` page URL without credentials, query or fragment, e.g.
+   `https://status.lab.example/approvals`) the event carries `link` = `URL?request=<id>` and the
+   notification ends with `Review: <link>` (ntfy also gets it as `Click`).
 2. An approver listed in the manifest's `approvers` runs `approve` or `deny`. The approval document
    (`schemas/broker/approval`) names the request digest and expires after `approval_ttl_s`
    (default 900 s). Self-approval, an unlisted approver and an agent approver (unless
@@ -228,9 +233,9 @@ broker instead of opening the state: `actions`, `call`, `submit`, `status`, `run
 
 ### Approval relays: the protocol
 
-Stage 2b's hub page (behind the SSO front door) is a relay: it authenticates a person, then
-speaks to the socket with `BrokerClient` (`homelabnext/broker/client.py`). The wire format, for a
-client in another language:
+The hub's Approvals page (behind the SSO front door, [below](#front-door-approvals)) is a relay:
+it authenticates a person, then speaks to the socket with `BrokerClient`
+(`homelabnext/broker/client.py`). The wire format, for a client in another language:
 
 - connect to the socket as the relay's user; write one JSON object and a newline (or close the
   write side); read one JSON object and a newline; the server closes;
@@ -251,10 +256,30 @@ person's SSO subject. The broker then applies the manifest's rules to that perso
 `approval-approver-not-allowed`, `approval-self-approved`, `approval-agent-approver`. A relay
 never runs, submits or reads a request for itself (`not-a-caller`).
 
+### Front-door approvals
+
+`hnx status serve` with an `approvals:` block in its `agents.yml` serves `/approvals`: the requests
+awaiting an approver (action, actor, target, params, created, digest, age) and the recent
+decisions, with approve and deny for people in the hub's **approver group**. Setup and the full
+list of refusals: [status hub](status.md#the-approvals-page-broker-stage-2b) ([[status]]). In
+short:
+
+- the hub runs as its own user (`hnx-hub`), listed once in `approval_relays` with the issuer its
+  front door authenticates (`sso`); the people who may approve are in the manifest's `approvers`;
+- the page reuses the private tier's front door (trusted proxy, shared secret header, identity
+  header), then requires the approver group (distinct from the viewer group) to decide;
+- the approver sent to the broker is `{issuer: <configured>, subject: <the front door's
+  username>}`, never a form field;
+- the form carries the request id **and the digest shown**; the hub refuses (`409`) when the
+  broker's current digest differs, so a person approves exactly what they read, and the broker
+  binds the approval to that digest again;
+- `POST` only, same-origin `Origin`/`Referer`, an HMAC token bound to the request, the digest and
+  the approver; a re-submit is answered "already" and files nothing; every attempt is logged.
+
 ### Remote agents
 
-There is no network listener. An agent on another host reaches the broker through the front door
-(stage 2b) or an SSH-forwarded socket, logging in as its own user on the broker host:
+There is no network listener. An agent on another host reaches the broker through an
+SSH-forwarded socket, logging in as its own user on the broker host:
 
 ```sh
 ssh -N -L /run/user/1000/hnx-broker.sock:/run/hnx-broker/broker.sock hnx-agent-triage@broker-host
@@ -304,6 +329,53 @@ hnx broker audit --tail 20                        # every outcome above, refusal
 
 `--json` on any command prints machine-readable output; exit status is 0 ok, 1 refused (the reason
 is printed), 2 usage error or invalid manifest. `tests/broker/test_broker_cli.py` runs this walkthrough.
+
+## Migrating from a vault proposal queue
+
+The pattern the broker replaces (ADR-0017, "Context") is common enough to have a path off it: a
+vault directory where agents may write only into a `proposed/` zone (a guard hook enforcing it), a
+dashboard in which a person approves or denies, which moves the file into an `approved/` or
+`denied/` directory, a sync job that acts on what was approved, and a `completion-request` note
+whose `related:` list closes approved items into `completed/`.
+
+| Vault pattern | Broker |
+|---|---|
+| a writable zone per agent (guard hook allows writes under `proposed/`, `findings/`, ...) | a **lane** per zone: `proposal.file` (kind `records-inbox`) for `proposed/`, `finding.write` / `memory.write` (kind `files`, per actor) for the others; the guard's allow rules become the manifest's `grants` |
+| the dashboard's approve / deny (a file move) | the hub's **Approvals page** (`/approvals`) for actions that need approval: approve/deny bound to the request digest, by a person the front door authenticated |
+| the sync job that applies approved items | a **broker run**: each change the job made becomes an action with a pinned handler, `requires_approval: true`; the owner (or a scheduler acting as that profile) runs it once approved, and the approval is consumed exactly once |
+| reviewing a proposal note (`proposed/` -> `approved/`) | the records lifecycle ([ADR-0010](adr/0010-records-lifecycle-as-an-api.md)): `homelabnext.records.decider` moves inbox notes into `decided/approved` / `decided/denied` (run it as a different OS user from the broker's lanes) |
+| `completion-request` with `related:` | a **records-lifecycle transition**: an agent files a `completion-request` note (its own lane, `note_types: [completion-request]`) and the decider's `complete` moves every `related:` item `decided/approved` -> `decided/completed` |
+| the guard's audit / the vault's git history | the broker's audit trail: one record per outcome, refusals included, each with the authenticated peer (`via`) |
+
+**Move the existing queue** with `hnx broker import-proposals DIR`. It reads every `*.md` directly
+in `DIR` (front-matter + body), maps each proposal to a `proposal.file` lane record and reports
+the rest; it is a dry run unless `--apply`:
+
+```sh
+hnx broker import-proposals /path/to/old-vault/proposed                 # dry run: what would be filed
+hnx broker import-proposals /path/to/old-vault/proposed --default-rollback "revert the change"
+hnx broker import-proposals /path/to/old-vault/proposed --apply --socket /run/hnx-broker/broker.sock
+```
+
+| records note | taken from | if absent |
+|---|---|---|
+| `title` | `title`, `summary`, `subject`; else the body's first `# heading` | not imported |
+| `risk` | `risk`, `risk_level`, `severity` (`low`, `medium`, `high`; `med`/`moderate` -> `medium`, `critical` -> `high`) | `--default-risk`, else not imported |
+| `rollback` | `rollback`, `rollback_plan`, `backout` | `--default-rollback`, else not imported |
+| `created` | `created`, `date` (a bare date is midnight UTC) | the filename's leading date, else the file's mtime |
+| `affects`, `related` | the same keys, when valid | dropped and reported |
+| `provenance` | `inputs`: `imported-from:<file>`, `requested-by:<original agent>`; `source`: the importing caller | - |
+| slug | the filename after its date (minus the original agent's name) | from the title |
+
+`requesting_agent` is never carried over: the broker binds it to the caller doing the import (with
+`--socket`, the importer's mapped profile; without it, `--as`, only under `dev_identity`), so an
+import cannot file a note as another agent; the original requester survives as provenance.
+`status` is dropped (the broker keeps state). A `completion-request` or any other non-proposal
+`type` is skipped and reported (close those with the records lifecycle). Every other key is listed
+as unmapped. Filenames come from `created` and the slug, so a second `--apply` reports
+`lane-exists` and adds nothing. Exit status 1 when any file could not be mapped or filed. A
+suggested order: run the broker in `shadow` beside the guard hook, import the queue, point the
+agents at the MCP tools, then remove the agents' write access to the old directory.
 
 ## Embedding
 

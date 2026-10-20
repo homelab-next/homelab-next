@@ -43,7 +43,7 @@ def _header(value: str) -> str:
 
 
 class NtfySender:
-    """POST ``<endpoint>/<topic>`` with ntfy headers (Title, Priority, Tags, Email).
+    """POST ``<endpoint>/<topic>`` with ntfy headers (Title, Priority, Tags, Email, Click).
 
     ``endpoint`` is resolved at send time and is never a default literal: pass a callable
     returning a base URL (or an object with ``.url``), or leave it ``None`` to resolve the
@@ -122,6 +122,8 @@ class NtfySender:
             if not _EMAIL_RE.match(message.email):
                 raise SendError("invalid email target")
             headers["Email"] = _header(message.email)
+        if message.click:
+            headers["Click"] = _header(message.click)
         base = self.base_url()
         if self._auth is not None:
             token = self._auth()

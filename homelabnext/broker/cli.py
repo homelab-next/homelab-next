@@ -24,6 +24,12 @@ The request commands work two ways:
     approve|deny REQUEST_ID --as ISSUER:SUBJECT [--note TEXT]
     pending [--mine [--as ACTOR]]
     audit [--action A] [--caller C] [--request R] [--outcome O] [--operation P] [--tail N]
+    import-proposals DIR [--apply] [--action proposal.file] [--default-risk R]
+                     [--default-rollback TEXT] [--as ACTOR]
+
+``import-proposals`` reads a directory of vault-style proposal Markdown files (front-matter) and
+files each as a ``proposal.file`` lane record through the broker (dry run unless ``--apply``),
+reporting what it could not map (:mod:`homelabnext.broker.importer`).
 
 ``--json`` prints machine-readable output.
 
@@ -53,6 +59,11 @@ def _service_opts(p: argparse.ArgumentParser) -> None:
     p.add_argument("--manifest", default=os.environ.get("HNX_BROKER_MANIFEST"))
     p.add_argument("--state", default=os.environ.get("HNX_BROKER_STATE"))
     p.add_argument("--data-root", default=os.environ.get("HNX_BROKER_DATA_ROOT"))
+    p.add_argument(
+        "--approvals-url",
+        default=os.environ.get("HNX_BROKER_APPROVALS_URL"),
+        help="the hub's Approvals page (https://.../approvals): linked from decision.requested",
+    )
 
 
 def _common(p: argparse.ArgumentParser) -> None:
@@ -112,6 +123,15 @@ def _parser() -> argparse.ArgumentParser:
         a.add_argument(f"--{f}")
     a.add_argument("--request", dest="request_id")
     a.add_argument("--tail", type=int, help="only the last N records")
+    imp = sub.add_parser(
+        "import-proposals", help="file a directory of vault-style proposals through the broker"
+    )
+    imp.add_argument("directory")
+    imp.add_argument("--apply", action="store_true", help="file them (default: dry run)")
+    imp.add_argument("--action", default="proposal.file", help="the records-inbox lane action")
+    imp.add_argument("--default-risk", choices=("low", "medium", "high"))
+    imp.add_argument("--default-rollback", help="rollback text for proposals that have none")
+    imp.add_argument("--as", dest="who", help="the importing actor (dev identity only)")
     for p in sub.choices.values():
         if p.prog.split()[-1] not in ("validate", "serve", "mcp"):
             _common(p)
@@ -160,6 +180,7 @@ def _service(args) -> BrokerService:
         handler_docs=docs,
         base_dir=Path(args.manifest).parent,
         data_root=data_root,
+        approvals_url=args.approvals_url,
     )
 
 
@@ -244,7 +265,7 @@ class _Remote:
     def __init__(self, args) -> None:
         from .client import BrokerClient
 
-        if getattr(args, "who", None) and args.cmd in (*_AGENT_CMDS, "pending"):
+        if getattr(args, "who", None) and args.cmd in (*_AGENT_CMDS, "pending", "import-proposals"):
             raise ValueError("--as is not accepted with --socket: the broker authenticates you")
         self.c = BrokerClient(args.socket)
 
@@ -343,6 +364,34 @@ def _run(args) -> int:
     return 0
 
 
+def _import(args) -> int:
+    from . import importer
+
+    rows = importer.read_dir(
+        args.directory, default_risk=args.default_risk, default_rollback=args.default_rollback
+    )
+    if args.apply:
+        b = _Remote(args) if args.socket else _Local(args)
+        source = b.actions()["caller"]
+        importer.apply(rows, lambda params: b.call(args.action, params, None), source)
+    lines = []
+    for r in rows:
+        line = f"{r.outcome:<10} {r.source}"
+        if r.params is not None and r.outcome == "mapped":
+            line += f"  -> {r.params['note']['title']!r} (risk {r.params['note']['risk']})"
+        if r.result:
+            line += f"  {r.result}"
+        if r.problem:
+            line += f"  ({r.problem})"
+        if r.unmapped:
+            line += "  unmapped: " + ", ".join(r.unmapped)
+        lines.append(line)
+    mode = "applied" if args.apply else "dry run (use --apply to file)"
+    lines.append(f"{len(rows)} files, {mode}")
+    _out(args, {"apply": args.apply, "files": [r.as_dict() for r in rows]}, "\n".join(lines))
+    return 1 if any(r.outcome in ("unmappable", "refused") for r in rows) else 0
+
+
 def _serve(args) -> int:
     from .server import DEFAULT_MAX_REQUEST_BYTES, DEFAULT_TIMEOUT_S, BrokerServer
 
@@ -396,6 +445,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "mcp":
         return _mcp(args)
     try:
+        if args.cmd == "import-proposals":
+            return _import(args)
         return _serve(args) if args.cmd == "serve" else _run(args)
     except ManifestError as exc:
         print(f"hnx broker: {exc}", file=sys.stderr)

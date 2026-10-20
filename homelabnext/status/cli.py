@@ -17,6 +17,8 @@
 drains the agent-activity sources into the activity store, ``render``/``serve`` add the agent
 sessions to ``status.json`` and ``serve`` the agent pages (the private tier only behind the
 trusted front door); ``ingest`` is the separate push listener (``POST /ingest/agent-activity``).
+An ``approvals:`` block there has ``serve`` add the broker Approvals page (``/approvals``, behind
+the same front door; the hub's one ``POST``: ``homelabnext.status.approvals``).
 ``--strategy`` (``examples/strategy``) has ``serve`` add the strategy pages (Strategy,
 Requirements, Objectives, RFIs; ``docs/strategy.md``); ``--guests`` (``examples/minimal/guests``
 with ``--guests-site examples/minimal/site.yml``) adds the Baselines page, the guest x
@@ -244,6 +246,7 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
             agents=site,
             strategy=_strategy_site(args, clock),
             baselines=_baseline_site(args),
+            approvals=_approvals_site(agents_cfg, clock),
         )
     except (ValueError, OSError) as exc:
         print(f"hnx status serve: {exc}", file=sys.stderr)
@@ -277,6 +280,15 @@ def _strategy_site(args, clock: Callable[[], float]):
     from homelabnext.strategy.pages import StrategySite
 
     return StrategySite(args.strategy, clock=clock)
+
+
+def _approvals_site(cfg, clock: Callable[[], float]):
+    """The Approvals page when ``agents.yml`` configures it (and its front door is on)."""
+    if cfg is None or cfg.approvals is None or cfg.front_door is None:
+        return None
+    from .approvals import ApprovalsSite
+
+    return ApprovalsSite.from_settings(cfg.approvals, cfg.front_door, clock=clock)
 
 
 def _ingest(args, cfg, store, clock: Callable[[], float]) -> int:

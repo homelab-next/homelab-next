@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+agents_version: 1
+store: build/status/agents/activity.db
+private:
+  service: status-hub
+  viewer_group: hub-private-viewers
+  access_log: build/status/agents/access.jsonl
+approvals:
+  socket: /run/hnx-broker/broker.sock
+  issuer: sso
+  approver_group: hub-approvers

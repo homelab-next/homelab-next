@@ -34,3 +34,12 @@ ingest:
     - {name: cloud-sessions, token: "secret:status/ingest/cloud-sessions-token"}
     - {name: agent-fleet, token: "secret:status/ingest/agent-fleet-token"}
     - {name: orchestrator, token: "secret:status/ingest/orchestrator-token", detail: false}
+
+# the broker Approvals page (/approvals; ADR-0017 stage 2b): the hub relays approve/deny to the
+# broker socket for issuer sso, as the person the front door authenticated. Viewers see the
+# queue; only the approver group (never the viewer group) may decide. The hub's user must be in
+# the broker manifest's approval_relays with this issuer.
+approvals:
+  socket: /run/hnx-broker/broker.sock
+  issuer: sso
+  approver_group: hub-approvers
