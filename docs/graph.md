@@ -50,6 +50,12 @@ The query functions are pure, over a loaded graph (`homelabnext.graph.load(path)
   adapter file seeds its capability); and nodes whose id, bare name or multi-word title appears
   in the text as a whole word.
 
+**Who calls the queries.** The context pack (`homelabnext.agent.knowledge`, profile `include:`
+rules, `docs/agent.md` "Linked knowledge") calls `seeds_for` for `from: task` rules and `related`
+for every rule, over a fresh `build(root)` with the access-bearing nodes the profile is not
+granted removed; it reads review summaries to apply `require_reviews` and lists inactive records
+as exclusions. `hnx graph related` is the same query on the command line.
+
 **Inactive records.** A lesson or runbook whose `status` is `retired` (a pitfall fixed for good,
 `retired_by` naming an invariant or test) or `superseded` (a practice replaced, `superseded_by`
 naming the lesson that replaces it) or `incorporated` (a practice absorbed into a runbook or

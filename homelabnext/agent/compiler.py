@@ -29,7 +29,10 @@ Rules, all enforced here and tested:
   spec says ``false``, and forced true by a policy entry that says so) may hold no grant whose
   capability class is shell/exec, file-write, egress or credential, nor an unclassified one
   (:mod:`homelabnext.agent.readers`).  The compiler refuses it whatever the ceiling allows, and
-  :func:`verify_profile` refuses a compiled profile edited into that state.
+  :func:`verify_profile` refuses a compiled profile edited into that state;
+* ``include:`` rules (:mod:`homelabnext.agent.include`) say which related knowledge goes into the
+  pack; they may seed only from grants the profile holds (:class:`IncludeViolation`) and never
+  add one.  A spec without ``include`` compiles to a profile without it.
 """
 
 from __future__ import annotations
@@ -41,7 +44,15 @@ from typing import Any
 from homelabnext.ids import IdError, Resolver, UnresolvedId, parse
 
 from .digest import digest_of, sha256_text
-from .errors import BudgetError, CeilingViolation, MissingPartError, ReaderViolation, SpecError
+from .errors import (
+    AgentError,
+    BudgetError,
+    CeilingViolation,
+    MissingPartError,
+    ReaderViolation,
+    SpecError,
+)
+from .include import normalise_include
 from .readers import ToolClasses, profile_problems, reader_problems
 from .schemas import schema_errors
 
@@ -270,7 +281,10 @@ def compile_profile(
         if rproblems:
             raise ReaderViolation(rproblems)
 
-    # 4. budgets
+    # 4. include: knowledge only about what is granted (IncludeViolation), never a new grant
+    include = normalise_include(spec.get("include"), grants)
+
+    # 5. budgets
     bproblems = check_budgets(spec["budgets"], ceiling.get("budgets"))
     if bproblems:
         raise BudgetError("; ".join(bproblems))
@@ -288,6 +302,8 @@ def compile_profile(
         "budget_mode": spec.get("budget_mode", "warn"),
         "reads_untrusted": reads,
     }
+    if include:
+        profile["include"] = include
     # the spec entry digests the *normalised* spec, so list order in the source file is irrelevant
     provenance = sorted(
         ({"id": p.id, "source": library.source, "digest": p.digest} for p in parts),
@@ -347,6 +363,13 @@ def verify_profile(
         problems += _ceiling_excess(_normal_ceiling(profile["ceiling"], "profile"), ceiling)
     problems += check_ceiling(profile["grants"], ceiling)
     problems += check_budgets(profile["budgets"], ceiling.get("budgets"))
+    try:
+        if normalise_include(profile.get("include"), profile["grants"]) != profile.get(
+            "include", []
+        ):
+            problems.append("include is not in normalised form (edited after compile?)")
+    except AgentError as exc:
+        problems.append(str(exc))
     if profile_digest(profile) != profile["digest"]:
         problems.append("digest does not match the profile content (edited after compile?)")
     if lock is not None:

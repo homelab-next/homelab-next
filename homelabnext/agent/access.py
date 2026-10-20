@@ -253,8 +253,12 @@ def start_session(
     broker: Mapping[str, Any] | None = None,
     classes: ToolClasses | None = None,
     denylist: Iterable[str] | None = None,
+    knowledge: Any = None,
 ) -> tuple[dict, str]:
     """Assemble a session's context pack with the profile's access block as a stable section.
+
+    ``knowledge``: the profile's :class:`~homelabnext.agent.knowledge.Selection`; it must have
+    been selected for this very profile (id and digest), and goes into the volatile tier.
 
     The section is named ``access`` and is reserved: a manifest that defines its own is refused,
     so a manifest cannot replace what the agent is told about its access.  The profile's persona
@@ -269,6 +273,14 @@ def start_session(
             f"manifest persona {manifest.get('persona')!r} is not the profile's "
             f"{profile.get('persona')!r}"
         )
+    if knowledge is not None and (knowledge.profile, knowledge.profile_digest) != (
+        profile["id"],
+        profile["digest"],
+    ):
+        raise SpecError(
+            f"knowledge was selected for {knowledge.profile} {knowledge.profile_digest}, "
+            f"not this profile {profile['id']} {profile['digest']}"
+        )
     text = render_access_block(
         access_block(profile, registry, runs_on=runs_on, broker=broker, classes=classes)
     )
@@ -281,4 +293,4 @@ def start_session(
         "text": text,
     }
     session_manifest = {**manifest, "sections": [*manifest["sections"], section]}
-    return assemble_pack(session_manifest, inputs, denylist=denylist)
+    return assemble_pack(session_manifest, inputs, denylist=denylist, knowledge=knowledge)

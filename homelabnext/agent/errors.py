@@ -51,3 +51,15 @@ class ReaderViolation(AgentError):
             + " (no ceiling can allow this: give the acting tools to a separate actor profile "
             "with reads_untrusted: false that receives the reader's structured output)"
         )
+
+
+class IncludeViolation(AgentError):
+    """An ``include:`` rule would seed knowledge from something the profile is not granted."""
+
+    def __init__(self, problems: list[str]) -> None:
+        self.problems = list(problems)
+        super().__init__(
+            "include rule seeds from what the profile is not granted: "
+            + "; ".join(self.problems)
+            + " (include adds knowledge about grants the profile holds; it never adds a grant)"
+        )
