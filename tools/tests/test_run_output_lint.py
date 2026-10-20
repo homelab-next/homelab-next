@@ -26,12 +26,20 @@ def _rules(text: str) -> list[tuple[int, str]]:
         'shutil.copy("a", "dist/a")',
         'os.makedirs("scratch")',
         'open(f"/tmp/{name}.txt", mode="a")',
+        # regression: the attribute-name branch (mkdir, open) ran before DEST_CALLS, so these
+        # were judged on the module object (``os``, ``io``) and never flagged
+        'os.mkdir("scratch")',
+        'io.open("/tmp/fake-report.txt", "w")',
+        'io.open("/tmp/fake-report.txt", mode="a")',
+        'codecs.open("out/report.txt", "w", "utf-8")',
     ],
 )
 def test_a_literal_write_outside_the_run_dir_is_flagged(line):
     if line.startswith("REPO_ROOT"):
         line = f"({line}).write_text('x')"
-    src = f"import os, shutil\nfrom pathlib import Path\nREPO_ROOT = Path('.')\n{line}\n"
+    src = (
+        f"import codecs, io, os, shutil\nfrom pathlib import Path\nREPO_ROOT = Path('.')\n{line}\n"
+    )
     assert _rules(src) == [(4, "literal-write")]
 
 
