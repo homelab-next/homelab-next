@@ -43,7 +43,6 @@ import hashlib
 import json
 import os
 import re
-import secrets
 import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -51,6 +50,7 @@ from pathlib import Path
 from typing import Any
 
 from . import validation
+from .state import write_temp
 
 __all__ = ["DEFAULT_NAME_PATTERN", "LANE_HANDLER", "Lane", "LaneError", "check_params", "write"]
 
@@ -284,15 +284,7 @@ def _write_in(dir_fd: int, name: str, data: bytes, overwrite: bool) -> None:
             raise LaneError("lane-exists", f"{name!r} exists and the lane does not overwrite")
         if not stat.S_ISREG(st.st_mode):
             raise LaneError("lane-path-escape", f"{name!r} is not a regular file")
-    tmp = f".{name}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640, dir_fd=dir_fd)
-    try:
-        view = memoryview(data)
-        while view:
-            view = view[os.write(fd, view) :]
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    tmp = write_temp(name, data, dir_fd=dir_fd)
     try:
         if overwrite:
             os.replace(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)

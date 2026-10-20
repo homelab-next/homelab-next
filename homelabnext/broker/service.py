@@ -55,6 +55,7 @@ from conformance.protocols.broker import (
     Denied,
     InvalidArguments,
     RequestStatus,
+    arg_problems,
 )
 from homelabnext.agent.schemas import schema_errors
 
@@ -90,7 +91,6 @@ EMPTY_MANIFEST = {
 }
 APPROVAL_TITLE = "Broker approval needed"
 APPROVAL_CLEARED = "Broker approval settled"
-_TYPES = {"str": str, "int": int, "bool": bool}
 _SUMMARY_BYTES = 1024
 _SVC_RE = re.compile(r"^svc:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 
@@ -405,16 +405,7 @@ class BrokerService:
         if not isinstance(args, Mapping):
             raise _Refused("invalid", "invalid-params", "arguments must be an object")
         if act.kind == "callable":
-            problems = []
-            for name, a in act.spec.items():
-                if name not in args:
-                    if a.required:
-                        problems.append(f"missing {name}")
-                elif (isinstance(args[name], bool) and a.type != "bool") or not isinstance(
-                    args[name], _TYPES[a.type]
-                ):
-                    problems.append(f"{name}: wrong type")
-            problems += [f"unexpected {k}" for k in args if k not in act.spec]
+            problems = arg_problems(act.spec, args)
             if problems:
                 raise _Refused("invalid", "invalid-params", "; ".join(problems))
         elif act.kind == "lane":

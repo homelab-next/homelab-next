@@ -83,20 +83,11 @@ def _validator():
     global _VALIDATOR
     if _VALIDATOR is None:
         from jsonschema import Draft202012Validator
-        from referencing import Registry, Resource
-        from referencing.jsonschema import DRAFT202012
 
-        reg: Registry = Registry()
-        for p in sorted(paths.schemas_dir().rglob("*.json")):
-            if "_frozen" in p.parts:
-                continue
-            doc = json.loads(p.read_text(encoding="utf-8"))
-            if isinstance(doc, dict) and "$id" in doc:
-                reg = reg.with_resource(
-                    doc["$id"], Resource.from_contents(doc, default_specification=DRAFT202012)
-                )
+        from homelabnext.schema_registry import schema_registry
+
         schema = json.loads(schema_path().read_text(encoding="utf-8"))
-        _VALIDATOR = Draft202012Validator(schema, registry=reg)
+        _VALIDATOR = Draft202012Validator(schema, registry=schema_registry())
     return _VALIDATOR
 
 

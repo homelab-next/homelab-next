@@ -3,7 +3,7 @@
   "audit": true,
   "description": "Report one service's state (read only, stand-in).",
   "handler": "handlers/service-status.sh",
-  "handler_digest": "sha256:3af6865e810e6456f1ba5d6a96d2ee80710d7705ce90663946c93832adb9576f",
+  "handler_digest": "sha256:ad7687aeb3ebc1268fc1ed0331e6b2e2078d1645df2b37285b3182cc322a8da4",
   "idempotent": true,
   "max_output_bytes": 65536,
   "params_schema": {

@@ -15,23 +15,11 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext import paths
+from homelabnext.schema_registry import schema_registry
 
 
-@cache
 def _registry(sdir: str):
-    from referencing import Registry, Resource
-    from referencing.jsonschema import DRAFT202012
-
-    reg = Registry()
-    for p in sorted(Path(sdir).glob("*/*.json")):
-        if p.parent.name.startswith("_"):
-            continue
-        doc = json.loads(p.read_text(encoding="utf-8"))
-        if isinstance(doc, dict) and "$id" in doc:
-            reg = reg.with_resource(
-                doc["$id"], Resource.from_contents(doc, default_specification=DRAFT202012)
-            )
-    return reg
+    return schema_registry(sdir)
 
 
 @cache

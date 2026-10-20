@@ -24,6 +24,11 @@ uncalled:
     a Claude Code hook: the coding agent runs it from the operator's own settings.json (outside
     this tree, snippet in docs/status.md section 6) on every hook event; nothing in the repository
     calls it
+  broker-example-service-status: &broker-handler >-
+    an example broker handler: the broker service runs it on request through the example manifest
+    (examples/broker/manifest.yml handler_docs), from a digest-checked copy in the run directory,
+    and tests/broker run it the same way; a manifest is data, not a caller the scanner reads
+  broker-example-service-restart: *broker-handler
 
 # checks that no invariants criterion runs
 not_in_runner:

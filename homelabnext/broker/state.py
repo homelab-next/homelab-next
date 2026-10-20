@@ -39,6 +39,7 @@ __all__ = [
     "is_id",
     "new_id",
     "write_exclusive",
+    "write_temp",
 ]
 
 #: the id shape of requests, approvals and audit records (``schemas/ids/common`` slug)
@@ -59,13 +60,20 @@ def new_id(prefix: str) -> str:
     return f"{prefix}-{secrets.token_hex(8)}"
 
 
-def _fsync_dir(path: Path) -> None:
-    with contextlib.suppress(OSError):
-        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+def write_temp(name: str, data: bytes, *, dir_fd: int, mode: int = 0o640) -> str:
+    """Write ``data`` to a new temporary file beside ``name`` in the directory ``dir_fd`` and
+    fsync it; returns the temporary name.  The one place the broker writes file bytes: callers
+    then link (exclusive) or rename (replace) it into place and unlink the temp name."""
+    tmp = f".{name}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=dir_fd)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view) :]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    return tmp
 
 
 def write_exclusive(path: Path, data: bytes, *, mode: int = 0o640) -> bool:
@@ -74,24 +82,21 @@ def write_exclusive(path: Path, data: bytes, *, mode: int = 0o640) -> bool:
     The bytes are written and fsynced under a temporary name first, so a reader never sees a
     partial file, and the final name is taken with a hard link, which fails if it exists.
     """
-    tmp = path.parent / f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    dir_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
     try:
-        view = memoryview(data)
-        while view:
-            view = view[os.write(fd, view) :]
-        os.fsync(fd)
+        tmp = write_temp(path.name, data, dir_fd=dir_fd, mode=mode)
+        try:
+            os.link(tmp, path.name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd, follow_symlinks=False)
+        except FileExistsError:
+            return False
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp, dir_fd=dir_fd)
+        with contextlib.suppress(OSError):
+            os.fsync(dir_fd)
+        return True
     finally:
-        os.close(fd)
-    try:
-        os.link(tmp, path)
-    except FileExistsError:
-        return False
-    finally:
-        with contextlib.suppress(FileNotFoundError):
-            tmp.unlink()
-    _fsync_dir(path.parent)
-    return True
+        os.close(dir_fd)
 
 
 def _dumps(doc: Any) -> bytes:
