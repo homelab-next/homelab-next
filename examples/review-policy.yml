@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+# Review policy (homelabnext/reviews.py): per artefact kind and state, the reviews it must carry,
+# each one current with the artefact's content digest (`hnx reviews digest FILE`) and verdict pass.
+# Every state is listed (an empty list means none needed); an unknown kind or state is fatal.
+# The identities below are the example lab's fictional reviewers, like everything in examples/.
+version: 1
+reviewers:
+  # a human review counts only from a `kind: human` entry here (fail closed, like broker
+  # approvers); an `agent:` identity is an agent with or without an entry
+  - {issuer: human, subject: example-operator, kind: human}
+  - {issuer: agent, subject: example-checker, kind: agent}
+  - {issuer: agent, subject: example-challenger, kind: agent}
+requirements:
+  lesson.pitfall:
+    open: []        # recording a problem is never blocked
+    partial: []
+    controlled:     # "it is under control" is a claim: an agent checks it, another attacks it
+      - {role: check, kind: agent}
+      - {role: challenge, kind: agent}
+    retired:        # graduating into a mechanism also needs a human approve
+      - {role: check, kind: agent}
+      - {role: challenge, kind: agent}
+      - {role: approve, kind: human}
+  lesson.practice:
+    active:
+      - {role: check, kind: agent}
+      - {role: challenge, kind: agent}
+    incorporated:
+      - {role: check, kind: agent}
+      - {role: challenge, kind: agent}
+      - {role: approve, kind: human}
+    superseded:
+      - {role: check, kind: agent}
+      - {role: challenge, kind: agent}
+      - {role: approve, kind: human}
+    retired:
+      - {role: check, kind: agent}
+      - {role: challenge, kind: agent}
+  runbook:
+    active:
+      - {role: check, kind: agent}
+      - {role: challenge, kind: agent}
+    superseded: []
+  system-page:
+    draft: []
+    reviewed:       # and no TODO(human) left in its blocks
+      - {role: check, kind: agent}
+      - {role: challenge, kind: agent}
+      - {role: approve, kind: human}

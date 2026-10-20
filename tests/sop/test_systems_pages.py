@@ -10,8 +10,10 @@ import pytest
 
 from homelabnext.cli import COMMANDS
 from homelabnext.registry.model import load
+from homelabnext.reviews import load_policy
 from homelabnext.sop import SECTIONS, check_pages, generate_pages, render_page, render_template
 from homelabnext.sop.cli import main
+from homelabnext.sop.pages import page_digest, refresh_page
 
 ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = ROOT / "examples" / "services.yml"
@@ -140,3 +142,106 @@ def test_page_links_its_capability_reference(reg, tmp_path):
 
 def test_hnx_dispatch_registered():
     assert "docs" in COMMANDS
+
+
+# --- reviews (homelabnext.reviews): status reviewed is checked against the review policy ----------
+
+
+POLICY = load_policy(ROOT / "examples" / "review-policy.yml")
+REVIEWED = ROOT / "tests" / "sop" / "fixtures" / "dns.reviewed.md"
+
+
+@pytest.fixture
+def pages(reg, tmp_path):
+    """The committed pages, with dns.md replaced by the fully reviewed fixture."""
+    d = tmp_path / "systems"
+    d.mkdir()
+    for p in (ROOT / "docs" / "systems").glob("*.md"):
+        (d / p.name).write_text(p.read_text())
+    (d / "dns.md").write_text(
+        refresh_page(REVIEWED.read_text(), render_page(reg, reg.services["dns"]))
+    )
+    return d
+
+
+def test_the_committed_pages_are_drafts_that_list_their_missing_tiers(reg):
+    rep = check_pages(reg, ROOT / "docs" / "systems", POLICY)
+    assert rep.ok() and rep.review_problems == []
+    assert set(rep.drafts) == {p.name for p in (ROOT / "docs/systems").glob("[!_]*.md")}
+    assert rep.info() == [
+        "draft (needs agent check, agent challenge, human approve): "
+        + ", ".join(sorted(rep.drafts))
+    ]
+
+
+def test_a_fully_reviewed_page_passes(reg, pages):
+    rep = check_pages(reg, pages, POLICY)
+    assert rep.ok(), rep.lines()
+    assert "dns.md" not in rep.drafts
+
+
+def test_a_reviewed_page_missing_the_human_approve_fails(reg, pages):
+    p = pages / "dns.md"
+    text = p.read_text()
+    i = text.index("- {by: 'human:example-operator'")
+    j = text.index("---", i)
+    p.write_text(text[:i] + text[j:])
+    rep = check_pages(reg, pages, POLICY)
+    assert not rep.ok()
+    assert any("dns.md: status reviewed needs human approve" in ln for ln in rep.lines())
+
+
+def test_editing_a_human_block_invalidates_its_reviews(reg, pages):
+    p = pages / "dns.md"
+    p.write_text(p.read_text().replace("Resolves internal names", "Resolves most internal names"))
+    rep = check_pages(reg, pages, POLICY)
+    assert not rep.ok()
+    assert any("needs agent check, agent challenge, human approve" in ln for ln in rep.lines())
+    assert any("3 review(s) are of an earlier content" in ln for ln in rep.lines())
+
+
+def test_regenerating_a_gen_block_keeps_the_reviews(reg, pages):
+    p = pages / "dns.md"
+    before = page_digest(p.read_text())
+    stale = p.read_text().replace("- Owner: platform-team\n- Tags", "- Owner: someone-else\n- Tags")
+    assert page_digest(stale) == before  # machine facts are not what a human reviewed
+    p.write_text(stale)
+    assert check_pages(reg, pages, POLICY).stale == ["dns.md"]
+    generate_pages(reg, pages)
+    assert page_digest(p.read_text()) == before
+    rep = check_pages(reg, pages, POLICY)
+    assert rep.ok(), rep.lines()
+    assert "status: reviewed" in p.read_text() and "human:example-operator" in p.read_text()
+
+
+def test_a_reviewed_page_with_todo_left_fails(reg, pages):
+    p = pages / "dns.md"
+    text = p.read_text()
+    p.write_text(text.replace("status: draft", "status: reviewed"))
+    events = pages / "events.md"
+    events.write_text(events.read_text().replace("status: draft", "status: reviewed"))
+    rep = check_pages(reg, pages, POLICY)
+    assert any("events.md: status reviewed with TODO(human) left" in ln for ln in rep.lines())
+
+
+def test_page_reviews_follow_the_same_identity_rules(reg, pages):
+    p = pages / "dns.md"
+    p.write_text(p.read_text().replace("author: unknown", "author: 'human:example-operator'"))
+    rep = check_pages(reg, pages, POLICY)
+    assert any("is the author; nobody reviews their own work" in ln for ln in rep.lines())
+    p.write_text(
+        p.read_text()
+        .replace("author: 'human:example-operator'", "author: unknown")
+        .replace("by: 'agent:example-challenger'", "by: 'agent:example-checker'")
+    )
+    assert any("must be a different agent" in ln for ln in check_pages(reg, pages, POLICY).lines())
+
+
+def test_cli_prints_drafts_as_info_and_checks_reviewed_pages(reg, pages, capsys):
+    rc = main(["systems", "check", str(REGISTRY), str(pages)])
+    out = capsys.readouterr().out
+    assert (
+        rc == 0
+        and "info: draft (needs agent check" in out
+        and "dns.md" not in out.split("info:")[1].split("\n")[0]
+    )

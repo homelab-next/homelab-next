@@ -122,8 +122,15 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "detections-as-code: lint|run|map|coverage|lint-ids|compile|validate-techniques",
         _detections,
     ),
-    "registers": ("build the lessons/runbooks/invariants pages (registers build)", _registers),
+    "registers": (
+        "lessons/runbooks/invariants: build pages, split|join record files, links blocks, review",
+        _registers,
+    ),
     "invariants": ("run the standing invariants (invariants run)", _invariants),
+    "reviews": (
+        "the shared review model (records, system pages): digest",
+        lambda a: importlib.import_module("homelabnext.reviews").main(a),
+    ),
     "ids": (
         "register ids: alloc|resolve|check-lost|check-dupes|check-placeholders",
         _ids,
@@ -170,6 +177,10 @@ COMMANDS: dict[str, tuple[str, Main]] = {
     "events": (
         "event seam: deploy-changed (what-changed event, F-15)|enrich-coverage (T-04)",
         lambda a: importlib.import_module("homelabnext.events.cli").main(a),
+    ),
+    "graph": (
+        "the repository knowledge graph: build|check|related (docs/graph/)",
+        lambda a: importlib.import_module("homelabnext.graph.cli").main(a),
     ),
     "custom": (
         "list|check|plan|register lab/vendor customizations",

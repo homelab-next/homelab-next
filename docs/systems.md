@@ -15,8 +15,8 @@ hnx docs systems template                                       # print the blan
 ## How a page is built
 
 * Front-matter (YAML) carries the machine facts: `service`, `capability`, `impl`, `owner`, `host`,
-  `port`, `protocol`, `health`, `backup_job`, `tags`, and a `status` (`draft` / `reviewed`) that
-  people own.
+  `port`, `protocol`, `health`, `backup_job`, `tags`, and the fields people own and regeneration
+  keeps: `status` (`draft` / `reviewed`), `author` and `reviews` (see "Reviews" below).
 * Nine fixed sections: what it does; inputs; outputs with formats; how to use it; how to verify it
   is healthy; failure modes; depends on / depended on by; credentials and access (secret-store
   names only, never values); source of truth.
@@ -37,3 +37,24 @@ hnx docs systems template                                       # print the blan
 is malformed or misnamed, or a generated block no longer matches the registry. It does not fail on
 unfilled TODO blocks unless `--require-complete` is given; the count is always printed.
 `tests/sop/` also pins the committed template and example pages to the generator output.
+
+## Reviews
+
+Pages share the review model of the lesson and runbook records
+([registers](registers.md#reviews), `homelabnext/reviews.py`): `author:` plus a `reviews:` list
+of `{by, kind, role, date, verdict, digest, note}`, the broker's identity normalization, no
+self-review, a challenge review by a different agent than every check, and no agent identity
+in a human slot. The policy is `examples/review-policy.yml` (`system-page`), read by `check`
+when it exists (`--policy FILE`, or `--policy none`).
+
+* `status: reviewed` needs, by default, an agent check, a challenge agent review and a human
+  approve, all current, and no `TODO(human)` left. `check` fails on a page that claims it without
+  them and names the missing tier.
+* A review is current while its `digest` matches the page's: `hnx reviews digest
+  docs/systems/<service>.md`. The digest covers only what people wrote, the `hnx:todo` blocks and
+  any human front-matter field, never the `hnx:gen` blocks, so `generate` (machine facts) keeps a
+  review current and editing the prose drops it.
+* Draft pages are listed as `info:` with the tiers `reviewed` would still need; they never fail.
+
+The fourteen example pages are drafts with `reviews: []`; `tests/sop/fixtures/dns.reviewed.md`
+is a fully reviewed page that proves the pass path.

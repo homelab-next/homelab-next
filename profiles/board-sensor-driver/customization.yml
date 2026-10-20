@@ -14,9 +14,6 @@ reason: >-
 owner: platform-team
 created: "2026-10-15"
 review_by: "2027-06-30"
-links:
-  lesson: LL-900
-  runbook: RB-900
 upstream: proposed
 upstream_ref: public tracker proposal for a board-quirk table in the monitoring role
 action:

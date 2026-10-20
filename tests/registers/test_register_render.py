@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
 import re
+import shutil
 
 import pytest
 import yaml
@@ -8,6 +9,7 @@ import yaml
 from homelabnext.registers import (
     RegisterError,
     build_all,
+    load_register,
     render_invariants,
     render_lessons,
     render_runbooks,
@@ -22,10 +24,23 @@ def test_example_registers_render_html_and_json(examples, tmp_path):
         f"{n}.{x}" for n in ("lessons", "runbooks", "invariants") for x in ("html", "json")
     }
     data = json.loads((tmp_path / "lessons.json").read_text())
-    assert data["count"] == 3 and data["by_status"] == {"open": 1, "partial": 1, "controlled": 1}
+    assert data["count"] == 5 and data["active"] == 3
+    assert data["by_kind"] == {"pitfall": 3, "practice": 2}
+    assert data["by_status"] == {
+        "active": 1,
+        "controlled": 1,
+        "incorporated": 1,
+        "open": 1,
+        "retired": 1,
+    }
+    html = (tmp_path / "lessons.html").read_text()
+    archive = html.index("<h2>Archive</h2>")
+    assert html.index('<article id="LL-002">') > archive  # retired pitfall
+    assert html.index('<article id="LL-004">') > archive  # incorporated practice
+    assert html.index('<article id="LL-001">') < archive
     rb = json.loads((tmp_path / "runbooks.json").read_text())
     rb1 = next(r for r in rb["runbooks"] if r["id"] == "RB-001")
-    assert rb1["related_lessons"] == ["LL-001"]  # joined on shared `systems`
+    assert rb1["related_lessons"] == ["LL-001", "LL-005"]  # active lessons sharing `systems`
 
 
 def test_html_is_self_contained(examples, tmp_path):
@@ -106,7 +121,7 @@ def test_duplicate_id_is_fatal(lessons):
 
 
 def test_runbook_step_without_verify_is_fatal(examples):
-    rb = yaml.safe_load((examples / "runbooks.yml").read_text())
+    rb = load_register(examples / "runbooks")
     del rb["runbooks"][0]["steps"][1]["verify"]
     with pytest.raises(RegisterError, match="step 2: every step needs its own `verify`"):
         render_runbooks(rb)
@@ -152,8 +167,9 @@ def test_invariant_defects_are_fatal(examples, mutate, needle):
 def test_build_is_atomic_when_any_register_is_invalid(examples, tmp_path):
     src = tmp_path / "src"
     src.mkdir()
-    for n in ("lessons", "runbooks", "invariants"):
-        (src / f"{n}.yml").write_text((examples / f"{n}.yml").read_text())
+    for n in ("lessons", "runbooks"):
+        shutil.copytree(examples / n, src / n)
+    (src / "invariants.yml").write_text((examples / "invariants.yml").read_text())
     bad = yaml.safe_load((src / "invariants.yml").read_text())
     del bad["criteria"][0]["remediation"]
     (src / "invariants.yml").write_text(yaml.safe_dump(bad))

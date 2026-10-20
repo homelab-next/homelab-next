@@ -10,13 +10,13 @@ ROLE_LINT := tools/role_lint.py
 ROLES := $(wildcard ansible/roles/*)
 PLAYBOOKS := $(wildcard ansible/playbooks/*.yml)
 REGISTERS_OUT := build/registers
-REGISTER_FILES := $(shell git ls-files -- $(foreach k,lessons runbooks invariants queue,'*$(k).yml' '*$(k).yaml') 2>/dev/null)
 
 .PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-eval agent-lint prompts-lint injection-check injection-report injection-eval workflows detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke
 
 help:
 	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
 	@echo "hygiene: helpers-lint dup-check tls-lint workstation-lint keyring-check keyring ids-placeholders"
+	@echo "knowledge graph (local docs/graph/, integrity checked in gates): graph"
 	@echo "script catalog (M-01, M-02, M-04): scripts-check"
 	@echo "invariants register, fast criteria, never pages (not in check; CI runs it): invariants"
 	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke"
@@ -57,7 +57,8 @@ schemas:
 
 # endpoints come from the registry; role and playbook rules come from the role interface;
 # `custom check` fails on an unowned or expired customization; the system and capability pages
-# (docs/systems/, docs/capabilities/) match the registry and the conformance code
+# (docs/systems/, docs/capabilities/) match the registry and the conformance code; the knowledge
+# the knowledge graph has no dangling edge or duplicate id
 gates:
 	$(PY) $(ENDPOINT_GATE) .
 	$(PY) $(ROLE_LINT) $(ROLES)
@@ -65,6 +66,7 @@ gates:
 	$(PY) -m homelabnext.cli custom check
 	$(PY) -m homelabnext.cli docs systems check examples/services.yml docs/systems
 	$(PY) -m homelabnext.cli docs capabilities check
+	$(PY) -m homelabnext.cli graph check
 
 # every decision spec git tracks is complete, asks well-formed questions, and inline specs stay fast
 decide-lint:
@@ -151,8 +153,14 @@ check: contracts
 contracts:
 	$(PY) tools/contract_coverage.py
 
+# lessons/ and runbooks/ are record directories (one Markdown file per entry); every record's
+# generated `## Links` block is current (`hnx registers links <dir>` rewrites them); the lesson
+# review's due list is printed as a warning, never a failure (`... review --strict` fails on it)
+RECORD_DIRS := examples/registers/lessons examples/registers/runbooks
 registers:
 	$(PY) -m homelabnext.registers build examples/registers $(REGISTERS_OUT)
+	$(PY) -m homelabnext.registers links --check $(RECORD_DIRS)
+	$(PY) -m homelabnext.registers review examples/registers
 
 # Every fast criterion of the example register through the invariants runner, never paging; the
 # plugin-only rows (X-04, X-06, X-09, X-10) run nowhere else.  Slow criteria (leak scans, schema
@@ -165,15 +173,18 @@ INVARIANTS_OUT := build/invariants/results.json
 invariants:
 	$(PY) -m homelabnext.invariants run examples/registers/invariants.yml --fast --no-notify --out $(INVARIANTS_OUT) $(INVARIANTS_ARGS)
 
-# no allocated register id twice; with BASE=<rev> also no id that BASE had may vanish (CI: PR base)
+# no allocated register id twice (and every record file named for its id); with BASE=<rev> also no
+# id that BASE had may vanish (CI: PR base).  Without paths the tool checks every register git
+# tracks or HEAD/BASE has (lessons.yml-style files and lessons/-style record directories), so a
+# deleted record file is seen too.
 ids-check:
-	$(PY) tools/register_ids.py check-dupes $(REGISTER_FILES)
-	$(if $(BASE),$(PY) tools/register_ids.py check-lost --base $(BASE) $(REGISTER_FILES))
+	$(PY) tools/register_ids.py check-dupes
+	$(if $(BASE),$(PY) tools/register_ids.py check-lost --base $(BASE))
 
 # maintainers, at merge time on the target branch: allocate every XX-NEW placeholder (exit 3 =
 # rewrote something, which is success here; review and commit the result)
 ids-resolve:
-	@rc=0; $(PY) tools/register_ids.py resolve $(REGISTER_FILES) || rc=$$?; [ $$rc -eq 0 ] || [ $$rc -eq 3 ]
+	@rc=0; $(PY) tools/register_ids.py resolve || rc=$$?; [ $$rc -eq 0 ] || [ $$rc -eq 3 ]
 
 # run every capability suite against the built-in fakes (TARGET=my-target aims it elsewhere)
 conform:
@@ -232,6 +243,11 @@ KEYRING_SOURCES := examples/keyring/sources.yml
 keyring-check:
 	$(PY) -m homelabnext.cli agent keyring check $(KEYRING_SOURCES)
 
+# a local build of the knowledge graph for Obsidian and scripts (docs/graph/, gitignored)
+.PHONY: graph
+graph:
+	$(PY) -m homelabnext.cli graph build
+
 # after changing a registry, profile or broker source of the keyring: regenerate and commit it
 keyring:
 	$(PY) -m homelabnext.cli agent keyring build $(KEYRING_SOURCES)
@@ -239,7 +255,7 @@ keyring:
 # M-16: XX-NEW is allowed on a pull request, never on main; CI runs this on every push to main
 # (not part of `check`, which pull requests run).  Maintainer fix: `make ids-resolve` on main.
 ids-placeholders:
-	$(PY) tools/register_ids.py check-placeholders $(REGISTER_FILES)
+	$(PY) tools/register_ids.py check-placeholders
 
 # Q-08: every `fix:` commit (or `Fixes:` trailer) in RANGE touches a test file; PROVE=1 also runs
 # each fix's tests on its parent, where they must fail.  Skipped with a note when RANGE's base

@@ -38,8 +38,15 @@ relate.
 
 - [Architecture decision log](adr/README.md) ([[adr/README|ADRs]]).
 - [Checklist](checklist.md) ([[checklist]]): what is done, public now, or needs a server.
+- [Registers](registers.md) ([[registers]]): lessons and runbooks as one file per record, the
+  lesson lifecycle (pitfalls retire into mechanisms, practices are incorporated into runbooks),
+  the shared review model and `hnx registers review`.
 - [Script catalog](scripts/catalog.md) ([[scripts/catalog|Script catalog]]), generated from the
   script headers; [how the catalog is kept true](scripts.md) ([[scripts]]).
+- [Knowledge graph](graph.md) ([[graph]]): every service, capability, adapter, check, schema,
+  register record, script, agent profile and page as typed nodes and edges read from the source
+  files; `hnx graph build` writes a local index (`docs/graph/`, one page per node kind, not
+  committed), and `hnx graph related <id|path>` lists what a task should pull in.
 - [Glossary](glossary.md) ([[glossary]]).
 
 ## Opening `docs/` as an Obsidian vault
@@ -59,4 +66,5 @@ The generated pages are checked in `make check` and CI:
 hnx docs capabilities check                                # docs/capabilities/ is current
 hnx docs systems check examples/services.yml docs/systems  # docs/systems/ matches the registry
 hnx scripts catalog --check                                # docs/scripts/catalog.* is current
+hnx graph check                                            # no dangling edge or duplicate id
 ```

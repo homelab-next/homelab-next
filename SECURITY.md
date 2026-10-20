@@ -64,6 +64,12 @@ A bug that makes one of these run something *other* than what the trusted input 
 example a path traversal out of `--plugins-dir`, or data from an untrusted source reaching a
 command line) is in scope.
 
+## Scope of security testing
+
+The security testing this project describes is internal and authorized: the operator testing their
+own lab (see the README's "Scope of security testing"). Nothing here is for use against systems you
+do not own or are not authorized to test.
+
 ## Handling secrets and data
 
 Never include real credentials, tokens, addresses or logs in a report. If you find that the

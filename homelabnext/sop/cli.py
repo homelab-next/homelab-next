@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from homelabnext.registry.model import RegistryError, load
+from homelabnext.reviews import ReviewError, load_policy
 
 from .pages import check_pages, generate_pages, render_template
 
@@ -77,6 +78,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--require-complete", action="store_true", help="also fail on unfilled TODO blocks"
     )
+    ap.add_argument(
+        "--policy",
+        help="review policy (default examples/review-policy.yml when it exists; `none` skips)",
+    )
     try:
         args = ap.parse_args(argv)
     except SystemExit as exc:
@@ -100,9 +105,19 @@ def main(argv: list[str] | None = None) -> int:
             f" {len(res.unchanged)} unchanged in {args.dir}"
         )
         return 0
-    rep = check_pages(reg, args.dir)
+    policy_path = args.policy or (
+        "examples/review-policy.yml" if Path("examples/review-policy.yml").is_file() else "none"
+    )
+    try:
+        policy = None if policy_path == "none" else load_policy(policy_path)
+    except ReviewError as exc:
+        print(f"hnx docs systems: {exc}", file=sys.stderr)
+        return 2
+    rep = check_pages(reg, args.dir, policy)
     for line in rep.lines():
         print(line)
+    for line in rep.info():
+        print(f"info: {line}")
     open_todos = sum(rep.todo_open.values())
     ok = rep.ok(args.require_complete)
     print(

@@ -114,8 +114,13 @@ def normalize_identity(value: str) -> str:
     return _SEP_RE.sub("-", value.strip().casefold()).strip("-")
 
 
-def _qualified(issuer: str, subject: str) -> tuple[str, str]:
+def qualified_identity(issuer: str, subject: str) -> tuple[str, str]:
+    """(issuer, subject), each normalized: the identity every broker comparison uses (and the
+    review model in :mod:`homelabnext.reviews`)."""
     return normalize_identity(issuer), normalize_identity(subject)
+
+
+_qualified = qualified_identity
 
 
 def _profile_name(profile_id: str) -> str:

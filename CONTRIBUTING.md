@@ -19,7 +19,9 @@ tests on a laptop with no network and no private context.
    `203.0.113.0/24`, `2001:db8::/32`, MACs `00:00:5e:00:53:xx`, account id `123456789012`, and role
    names such as `hv-01`. This covers code, tests, fixtures, docs, commit messages and branch names.
 6. **Ids are allocated, not chosen.** In register entries write `XX-NEW` (`LL-NEW`, `RB-NEW`, ...)
-   and commit it as is; never renumber an existing entry. A maintainer allocates the numbers once,
+   and commit it as is; never renumber an existing entry. Lessons and runbooks are one Markdown
+   file per record: a new lesson is a new file `examples/registers/lessons/LL-NEW-<slug>.md`
+   (format, lifecycle, reviews and the review process: [docs/registers.md](docs/registers.md)). A maintainer allocates the numbers once,
    at merge time, on the target branch (`make ids-resolve`), so two pull requests never claim the
    same id. CI checks that no id of the base branch vanished and that no allocated id repeats.
    A placeholder is never valid on `main`: every push to `main` runs `make ids-placeholders`
@@ -27,7 +29,10 @@ tests on a laptop with no network and no private context.
    maintainer's allocation step cannot be skipped silently.
    An id that was wrong is retired, not deleted: move it to the register's top-level `retired:`
    block with a `reason:` (and `replaced_by:`), a tombstone that keeps it accounted for and
-   unreusable (see `homelabnext/registers/ids.py`; `examples/registers/invariants.yml` has three).
+   unreusable (see `homelabnext/registers/ids.py`; `examples/registers/invariants.yml` has three);
+   in a record directory the tombstone is a record file whose front-matter is `id:` plus that
+   `retired:` mapping. A solved lesson is not deleted either: it is retired (a pitfall, by the
+   mechanism that replaced it) or incorporated (a practice, into a runbook).
 7. **A contract change needs an ADR** (copy `docs/adr/_template.md`; one file, five headings).
 8. Python >= 3.11, standard library first. New dependencies go in an extra in `pyproject.toml`,
    must be permissively licensed (LGPL only as an unmodified dependency), and are justified in the PR.

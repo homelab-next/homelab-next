@@ -257,9 +257,9 @@ criteria:
   statement: Register ids are never lost.
   evidence: auto
   observable: >-
-    IFS=$'\n'; f=$(git ls-files -- '*lessons.yml' '*runbooks.yml' '*invariants.yml' '*queue.yml')
-    || exit 100; [ -n "$f" ] || { echo no registers tracked; exit 100; };
-    python3 tools/register_ids.py check-lost $f && echo no ids lost
+    IFS=$'\n'; f=$(git ls-files -- '*lessons.yml' '*runbooks.yml' '*invariants.yml' '*queue.yml'
+    '*/lessons/*.md' '*/runbooks/*.md') || exit 100; [ -n "$f" ] || { echo no registers tracked; exit 100; };
+    python3 tools/register_ids.py check-lost && echo no ids lost
   expected: >-
     exit 0: an id the last commit had is still a live entry or a `retired:` tombstone
     (exit 100 outside a git checkout)
@@ -604,8 +604,8 @@ criteria:
   statement: No placeholder ids survive a commit.
   evidence: auto
   observable: >-
-    IFS=$'\n'; f=$(git ls-files -- '*lessons.yml' '*runbooks.yml' '*invariants.yml' '*queue.yml')
-    || exit 100; [ -n "$f" ] || { echo no registers tracked; exit 100; };
+    IFS=$'\n'; f=$(git ls-files -- '*lessons.yml' '*runbooks.yml' '*invariants.yml' '*queue.yml'
+    '*/lessons/*.md' '*/runbooks/*.md') || exit 100; [ -n "$f" ] || { echo no registers tracked; exit 100; };
     python3 tools/register_ids.py check-placeholders $f && echo no placeholder ids
   expected: >-
     exit 0 on main: no register entry id is an `XX-NEW` placeholder (a pull request may carry
@@ -887,15 +887,19 @@ criteria:
   observable: >-
     python3 -c 'import yaml' 2>/dev/null || exit 100;
     python3 -m homelabnext.cli docs systems check examples/services.yml docs/systems &&
-    python3 -m homelabnext.cli docs capabilities check
+    python3 -m homelabnext.cli docs capabilities check &&
+    python3 -m homelabnext.cli graph check
   expected: >-
     exit 0: every service in the inventory has its system page and the generated parts match the
-    inventory, and every capability page matches its contract, suite and adapters (0 drift; TODO
-    blocks are reported, not failed)
+    inventory, every capability page matches its contract, suite and adapters, and the knowledge
+    graph has no dangling edge or duplicate id (0 drift; TODO blocks,
+    orphan nodes and unresolved system tags are reported, not failed)
   expect_regex: 'systems pages: ok'
   remediation: >-
-    Run `hnx docs systems generate examples/services.yml docs/systems` (or fix the inventory) and
-    commit the result; a page that disagrees with the inventory is believed over it.
+    Run `hnx docs systems generate examples/services.yml docs/systems` (or fix the inventory),
+    `hnx docs capabilities generate`, and commit the result; for a dangling
+    edge fix the reference the check names in its source file. A page that disagrees with the
+    inventory is believed over it.
 - id: L-08
   statement: Invariant exits are unambiguous.
   evidence: auto

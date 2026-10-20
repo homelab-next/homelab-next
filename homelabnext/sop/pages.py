@@ -9,6 +9,12 @@ resolve in an Obsidian vault opened at ``docs/`` (where ``docs/capabilities/`` h
 same names, so a bare ``[[other]]`` would be ambiguous).  The ``what`` block links the service's
 capability reference page when the capability is one of the conformance capabilities.
 Credentials appear as secret-store NAMES only.
+
+Reviews (:mod:`homelabnext.reviews`): the front-matter carries ``author:`` and ``reviews:``, and
+``status: reviewed`` is checked against the review policy (``system-page.reviewed``), with no
+TODO(human) left.  A review's digest (:func:`page_digest`) covers only what people own, the
+``hnx:todo`` blocks and any human front-matter field, never the ``hnx:gen`` blocks, so
+regenerating machine facts keeps a review current and editing the prose drops it.
 """
 
 from __future__ import annotations
@@ -29,6 +35,12 @@ GEN_RE = re.compile(
     re.DOTALL,
 )
 TODO_RE = re.compile(r"<!-- hnx:todo:(?P<name>[a-z-]+)")
+TODO_BLOCK_RE = re.compile(
+    r"<!-- hnx:todo:(?P<name>[a-z-]+) -->\n(?P<body>.*?)<!-- /hnx:todo -->", re.DOTALL
+)
+# front-matter keys people own: preserved by regeneration; status/author/reviews are about the
+# page, not its content, so they are outside the review digest
+HUMAN_KEYS = ("status", "reviewed", "author", "reviews")
 FRONT_RE = re.compile(r"\A---\n(?P<fm>.*?)\n---\n", re.DOTALL)
 
 # (key, heading, what the human section must say)
@@ -141,6 +153,8 @@ def _front(reg: Registry, s: Service | None) -> dict[str, Any]:
             "service": "<service>",
             "capability": "<capability>",
             "status": "draft",
+            "author": "unknown",
+            "reviews": [],
         }
     return {
         "title": s.name,
@@ -156,6 +170,8 @@ def _front(reg: Registry, s: Service | None) -> dict[str, Any]:
         "backup_job": s.backup_job,
         "tags": list(s.tags),
         "status": "draft",
+        "author": "unknown",
+        "reviews": [],
     }
 
 
@@ -210,7 +226,8 @@ def refresh_page(existing: str, fresh: str) -> str:
     if not m:
         return fresh
     fm_old = yaml.safe_load(m["fm"]) or {}
-    keep = {k: fm_old[k] for k in ("status", "reviewed") if k in fm_old}
+    machine = set(fm_new) - set(HUMAN_KEYS)
+    keep = {k: v for k, v in fm_old.items() if k not in machine}
     merged = {**fm_new, **keep}
     return _dump_front(merged) + out[m.end() :]
 
@@ -250,9 +267,11 @@ class CheckReport:
     stale: list[str] = field(default_factory=list)  # generated block differs from the registry
     malformed: list[str] = field(default_factory=list)
     todo_open: dict[str, int] = field(default_factory=dict)  # page -> unfilled TODO blocks
+    review_problems: list[str] = field(default_factory=list)  # fatal review rule or claim
+    drafts: dict[str, list[str]] = field(default_factory=dict)  # draft -> tiers `reviewed` needs
 
     def ok(self, require_complete: bool = False) -> bool:
-        bad = self.missing or self.orphans or self.stale or self.malformed
+        bad = self.missing or self.orphans or self.stale or self.malformed or self.review_problems
         return not bad and not (require_complete and any(self.todo_open.values()))
 
     def lines(self) -> list[str]:
@@ -260,14 +279,90 @@ class CheckReport:
         out += [f"orphan page (no registry row): {n}" for n in self.orphans]
         out += [f"stale generated block (run `hnx docs systems generate`): {n}" for n in self.stale]
         out += [f"malformed page: {n}" for n in self.malformed]
+        out += [f"review: {p}" for p in self.review_problems]
         return out
+
+    def info(self) -> list[str]:
+        """Draft pages grouped by the review tiers ``reviewed`` would still need."""
+        groups: dict[tuple[str, ...], list[str]] = {}
+        for name, need in sorted(self.drafts.items()):
+            groups.setdefault(tuple(need), []).append(name)
+        return [
+            f"draft ({'needs ' + ', '.join(need) if need else 'reviews complete'}): "
+            + ", ".join(names)
+            for need, names in groups.items()
+        ]
 
 
 def _unfilled(text: str) -> int:
     return text.count(TODO_TEXT)
 
 
-def check_pages(reg: Registry, pages_dir: str | Path) -> CheckReport:
+_MACHINE_KEYS = frozenset(_front_blank()) | {
+    "impl",
+    "owner",
+    "host",
+    "port",
+    "protocol",
+    "health",
+    "backup_job",
+    "tags",
+}
+
+
+def page_digest(text: str) -> str:
+    """The digest a review of this page carries: its human blocks and human front-matter only."""
+    from homelabnext.reviews import content_digest
+
+    m = FRONT_RE.match(text)
+    fm = (yaml.safe_load(m["fm"]) if m else None) or {}
+    if not isinstance(fm, dict):
+        raise ValueError("front-matter must be a mapping")
+    human_fm = {k: v for k, v in fm.items() if k not in _MACHINE_KEYS and k not in HUMAN_KEYS}
+    blocks = {b["name"]: b["body"].strip() for b in TODO_BLOCK_RE.finditer(text)}
+    return content_digest({"front": human_fm, "blocks": blocks})
+
+
+def _review_page(name: str, text: str, fm: dict, policy, rep: CheckReport) -> None:
+    from homelabnext.reviews import evaluate, missing_message
+
+    status = fm.get("status", "draft")
+    if status not in ("draft", "reviewed"):
+        rep.review_problems.append(f"{name}: status must be draft or reviewed, not {status!r}")
+        return
+    digest = page_digest(text)
+    ev = evaluate(
+        fm.get("reviews"),
+        author=fm.get("author"),
+        digest=digest,
+        artefact="system-page",
+        state=status,
+        policy=policy,
+        who=name,
+    )
+    rep.review_problems += ev.problems
+    if policy is None:
+        return
+    if status == "reviewed":
+        if ev.missing:
+            rep.review_problems.append(missing_message(name, status, ev, digest))
+        if _unfilled(text):
+            rep.review_problems.append(f"{name}: status reviewed with TODO(human) left")
+    else:
+        need = evaluate(
+            fm.get("reviews"),
+            author=fm.get("author"),
+            digest=digest,
+            artefact="system-page",
+            state="reviewed",
+            policy=policy,
+        ).missing
+        rep.drafts[name] = need
+
+
+def check_pages(reg: Registry, pages_dir: str | Path, policy=None) -> CheckReport:
+    """Missing, orphan, malformed and stale pages; and with a review ``policy``
+    (:func:`homelabnext.reviews.load_policy`) every page's status against its reviews."""
     d = Path(pages_dir)
     rep = CheckReport()
     pages = (
@@ -298,5 +393,6 @@ def check_pages(reg: Registry, pages_dir: str | Path) -> CheckReport:
         if refresh_page(text, render_page(reg, s)) != text:
             rep.stale.append(p.name)
         rep.todo_open[p.name] = _unfilled(text)
+        _review_page(p.name, text, yaml.safe_load(FRONT_RE.match(text)["fm"]), policy, rep)
     rep.orphans = sorted(p.name for n, p in by_service.items() if n not in reg.services)
     return rep
