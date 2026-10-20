@@ -144,7 +144,7 @@ backfilled examples) and a `reviews:` list, shared model in `homelabnext/reviews
 reviews:
   - by: agent:j8-lead            # issuer:subject
     kind: agent                  # agent | human
-    role: check                  # check | adversarial | approve
+    role: check                  # check | challenge | approve
     date: 2026-10-19
     verdict: pass                # pass | changes | reject
     digest: sha256:3f9a0c41e2b7  # `hnx reviews digest FILE` (a prefix of >= 12 hex digits)
@@ -153,7 +153,9 @@ reviews:
 
 * identities are normalized and compared like the broker's approvals
   (`homelabnext.broker.qualified_identity`); the author never reviews their own record;
-* an `adversarial` review comes from a different agent than every `check` review;
+* roles: `check` (an agent confirms the record is correct and complete), `challenge` (a second,
+  independent agent looks for what is wrong, missing or unproven), `approve` (a human signs off);
+* a `challenge` review comes from a different agent than every `check` review;
 * a `human` review must be by a `kind: human` reviewer in the policy's allowlist; an agent identity
   (an `agent:` issuer, or an allowlist entry of `kind: agent`) in a human slot fails;
 * a review counts only while its `digest` matches the record's current content (every field but
@@ -163,7 +165,7 @@ reviews:
 
 `examples/review-policy.yml` says, per artefact kind and state, what a status needs. The defaults:
 an open or partial pitfall needs nothing (recording a problem is never blocked); a controlled
-pitfall, an active practice and an active runbook need an agent check and an adversarial agent
+pitfall, an active practice and an active runbook need an agent check and a challenge agent
 review; retiring a pitfall, and incorporating or superseding a practice, also need a human
 approve. A record whose status lacks what the policy requires fails the build, naming the
 missing tier. The policy is validated fatally: every artefact kind lists every state.

@@ -8,7 +8,7 @@ Later layers call the pure query functions: :func:`neighbours`, :func:`related` 
 budgeted) and :func:`seeds_for` (edited paths and task text to seed nodes).  Retired,
 superseded and incorporated records are excluded from all three unless
 ``include_inactive=True``.  Lessons, runbooks and criteria carry ``author`` and a review summary
-(``reviewed``: the tiers -- ``agent_check``, ``adversarial``, ``human`` -- whose latest review
+(``reviewed``: the tiers -- ``agent_check``, ``challenge``, ``human`` -- whose latest review
 passed; ``review_count``) when the record has them.
 
 Edge vocabulary (``from -> to: asserted by``; the table is :data:`.vocab.EDGE_TYPES`)::

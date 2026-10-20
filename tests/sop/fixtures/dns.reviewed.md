@@ -16,7 +16,7 @@ author: unknown
 reviews:
 - {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-19', verdict: pass,
   digest: 'sha256:9ac56b5d5963', note: test fixture}
-- {by: 'agent:example-red-team', kind: agent, role: adversarial, date: '2026-10-19',
+- {by: 'agent:example-challenger', kind: agent, role: challenge, date: '2026-10-19',
   verdict: pass, digest: 'sha256:9ac56b5d5963', note: test fixture}
 - {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-19', verdict: pass,
   digest: 'sha256:9ac56b5d5963', note: test fixture}

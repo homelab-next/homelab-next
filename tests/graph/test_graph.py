@@ -492,7 +492,7 @@ def test_incorporated_lessons_give_way_to_their_runbook(tmp_path, repo_copy):
             {
                 "by": "agent:fake-red",
                 "kind": "agent",
-                "role": "adversarial",
+                "role": "challenge",
                 "date": "2026-01-15",
                 "verdict": "fail",
             },
@@ -510,7 +510,7 @@ def test_incorporated_lessons_give_way_to_their_runbook(tmp_path, repo_copy):
     assert has(g, "runbook:RB-001", "from_lesson", "lesson:LL-001")
     attrs = g.nodes["lesson:LL-001"].attrs
     assert attrs["author"] == "agent:fake-author" and attrs["review_count"] == 4
-    assert attrs["reviewed"] == ["agent_check", "human"]  # latest adversarial review failed
+    assert attrs["reviewed"] == ["agent_check", "human"]  # latest challenge review failed
     ids = [x.id for x in related(g, ["system:proxy"], budget=50)]
     assert "runbook:RB-001" in ids and "lesson:LL-001" not in ids
     assert "lesson:LL-001" in render_views(g)["lesson.md"].split("## Archive")[1]

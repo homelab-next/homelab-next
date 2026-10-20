@@ -37,7 +37,7 @@ def rv(by, kind, role, digest=DIGEST[:19], verdict="pass"):
 
 
 CHECK = rv("agent:example-checker", "agent", "check")
-ADV = rv("agent:example-red-team", "agent", "adversarial")
+ADV = rv("agent:example-challenger", "agent", "challenge")
 APPROVE = rv("human:example-operator", "human", "approve")
 
 
@@ -51,7 +51,7 @@ def test_the_example_policy_validates():
     p = load_policy(POLICY)
     assert [q.label() for q in p.required("lesson.pitfall", "retired")] == [
         "agent check",
-        "agent adversarial",
+        "agent challenge",
         "human approve",
     ]
     assert p.required("lesson.pitfall", "open") == ()
@@ -75,14 +75,14 @@ def test_self_review_fails_in_any_spelling(policy, author, by):
     assert any("is the author" in p for p in e.problems)
 
 
-def test_adversarial_by_the_check_agent_fails_and_does_not_count(policy):
-    e = ev([CHECK, rv("agent:Example-Checker", "agent", "adversarial"), APPROVE], policy)
+def test_challenge_by_the_check_agent_fails_and_does_not_count(policy):
+    e = ev([CHECK, rv("agent:Example-Checker", "agent", "challenge"), APPROVE], policy)
     assert any("must be a different agent" in p for p in e.problems)
-    assert "agent adversarial" in e.missing
+    assert "agent challenge" in e.missing
 
 
 def test_agent_identity_in_a_human_slot_fails(policy):
-    e = ev([CHECK, ADV, rv("agent:example-red-team", "human", "approve")], policy)
+    e = ev([CHECK, ADV, rv("agent:example-challenger", "human", "approve")], policy)
     assert any("agent identity in a human review" in p for p in e.problems)
     # the broker's other agent signal: an allowlist entry of kind agent, whatever the issuer
     data = {
@@ -110,12 +110,12 @@ def test_retire_without_a_human_approve_fails(policy):
 def test_a_review_of_an_earlier_content_is_ignored(policy):
     old = [rv(r["by"], r["kind"], r["role"], digest="sha256:" + "cd" * 6) for r in (CHECK, ADV)]
     e = ev([*old, APPROVE], policy)
-    assert len(e.stale) == 2 and e.missing == ["agent check", "agent adversarial"]
+    assert len(e.stale) == 2 and e.missing == ["agent check", "agent challenge"]
 
 
 def test_only_a_passing_verdict_counts(policy):
     e = ev([CHECK, {**ADV, "verdict": "reject"}, APPROVE], policy)
-    assert e.missing == ["agent adversarial"]
+    assert e.missing == ["agent challenge"]
 
 
 @pytest.mark.parametrize(

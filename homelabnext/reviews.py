@@ -8,7 +8,7 @@ An artefact carries ``author:`` and a ``reviews:`` list::
     reviews:
       - by: agent:j8-lead        # issuer:subject, compared like the broker's approvals
         kind: agent              # agent | human
-        role: check              # check | adversarial | approve
+        role: check              # check | challenge | approve
         date: 2026-10-19
         verdict: pass            # pass | changes | reject
         digest: sha256:3f9a...   # the content reviewed (`hnx reviews digest FILE`); prefix >= 12
@@ -20,7 +20,7 @@ Identity rules (always fatal):
   :func:`homelabnext.broker.qualified_identity`, so ``agent:J8_Lead`` and ``agent:j8-lead`` are
   one reviewer;
 * the ``author`` never reviews their own artefact, in any role;
-* an ``adversarial`` review comes from an agent identity other than every ``check`` reviewer;
+* a ``challenge`` review comes from an agent identity other than every ``check`` reviewer;
 * a review's ``kind`` must match the identity: an identity is an agent when the policy's
   ``reviewers`` allowlist says ``kind: agent`` or its issuer is ``agent`` (the broker's rule: an
   allowlisted agent, or an identity naming an agent profile); a ``human`` review must come from a
@@ -69,7 +69,7 @@ __all__ = [
 ]
 
 KINDS = ("agent", "human")
-ROLES = ("check", "adversarial", "approve")
+ROLES = ("check", "challenge", "approve")
 VERDICTS = ("pass", "changes", "reject")
 FIELDS = frozenset({"by", "kind", "role", "date", "verdict", "digest", "note"})
 REQUIRED_FIELDS = ("by", "kind", "role", "date", "verdict", "digest")
@@ -253,7 +253,7 @@ def evaluate(
 ) -> Evaluation:
     """Check ``reviews`` of one artefact whose current content digest is ``digest``.
 
-    Without a policy only the rules that need none run (shape, self-review, adversarial
+    Without a policy only the rules that need none run (shape, self-review, challenge
     independence, an ``agent:`` identity in a human slot); with one, the allowlist and the
     requirement for (``artefact``, ``state``) apply too.
     """
@@ -274,7 +274,7 @@ def evaluate(
         ev.problems.append(f"{pre}`reviews` must be a list")
         reviews = []
     checks: list[tuple[str, str]] = []
-    adversarial: list[tuple[int, tuple[str, str]]] = []
+    challenge: list[tuple[int, tuple[str, str]]] = []
     for n, r in enumerate(reviews, 1):
         at = f"{pre}review #{n}"
         if not isinstance(r, dict):
@@ -330,18 +330,18 @@ def evaluate(
             bad = True
         if role == "check":
             checks.append(ident)
-        elif role == "adversarial":
-            adversarial.append((n, ident))
+        elif role == "challenge":
+            challenge.append((n, ident))
         if bad:
             continue
         if r["verdict"] == "pass" and digest.startswith(r["digest"]):
             ev.current.append(r)
         elif not digest.startswith(r["digest"]):
             ev.stale.append(r)
-    for n, ident in adversarial:
+    for n, ident in challenge:
         if ident in checks:
             ev.problems.append(
-                f"{pre}review #{n}: the adversarial review comes from {_show(ident)}, who also "
+                f"{pre}review #{n}: the challenge review comes from {_show(ident)}, who also "
                 "made a check review; it must be a different agent"
             )
             ev.current = [r for r in ev.current if identity(r.get("by")) != ident]

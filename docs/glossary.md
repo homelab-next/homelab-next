@@ -50,7 +50,7 @@ lessons and runbooks are one Markdown file per record, invariants and boards one
 graduates into a mechanism (`retired_by`); a method that works, which graduates into a procedure
 (`incorporated_into`). An active lesson of either kind is backlog.
 
-**Review (of a record or page).** An entry of its `reviews:` list (agent check, adversarial agent,
+**Review (of a record or page).** An entry of its `reviews:` list (agent check, challenge agent,
 human approve) that counts only while its content digest matches; the policy says which a status
 needs (`homelabnext/reviews.py`, `examples/review-policy.yml`).
 

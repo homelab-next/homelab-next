@@ -61,9 +61,9 @@ lesson. The index pages list such records under **Archive**.
 
 **Review provenance.** Lessons, runbooks and criteria carry `author` and a review summary in
 their attrs when the record has them: `reviewed` lists the tiers whose most recent review passed
-(`agent_check` -- an agent's `check` review; `adversarial`; `human` -- a human review of any
+(`agent_check` -- an agent's `check` review; `challenge`; `human` -- a human review of any
 role) and `review_count` counts the reviews. Reviewers are not nodes; the summary is there so a
-context pack can prefer records with full human and adversarial validation.
+context pack can prefer records with full human and challenge validation.
 
 The registers are read through one function, `_register_entries(path)` in
 `homelabnext/graph/sources.py`, so the record storage format can change in one place.

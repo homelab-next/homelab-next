@@ -43,11 +43,11 @@ unfilled TODO blocks unless `--require-complete` is given; the count is always p
 Pages share the review model of the lesson and runbook records
 ([registers](registers.md#reviews), `homelabnext/reviews.py`): `author:` plus a `reviews:` list
 of `{by, kind, role, date, verdict, digest, note}`, the broker's identity normalization, no
-self-review, an adversarial review by a different agent than every check, and no agent identity
+self-review, a challenge review by a different agent than every check, and no agent identity
 in a human slot. The policy is `examples/review-policy.yml` (`system-page`), read by `check`
 when it exists (`--policy FILE`, or `--policy none`).
 
-* `status: reviewed` needs, by default, an agent check, an adversarial agent review and a human
+* `status: reviewed` needs, by default, an agent check, a challenge agent review and a human
   approve, all current, and no `TODO(human)` left. `check` fails on a page that claims it without
   them and names the missing tier.
 * A review is current while its `digest` matches the page's: `hnx reviews digest

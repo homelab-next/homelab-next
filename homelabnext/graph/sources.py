@@ -789,7 +789,7 @@ _PASSING = frozenset({"pass", "passed", "ok", "approve", "approved", "accept", "
 def _provenance(e: dict[str, Any]) -> dict[str, Any]:
     """``author`` and a compact summary of a record's ``reviews`` (reviewer identities are not
     nodes): ``reviewed`` lists each tier whose most recent review passed -- ``agent_check`` (an
-    agent's ``check``), ``adversarial`` (any reviewer's ``adversarial`` review) and ``human`` (a
+    agent's ``check``), ``challenge`` (any reviewer's ``challenge`` review) and ``human`` (a
     human's review of any role) -- and ``review_count`` counts them all.  Absent fields: nothing."""
     reviews = [r for r in e.get("reviews") or () if isinstance(r, dict)]
     latest: dict[str, tuple[str, int, bool]] = {}
@@ -799,8 +799,8 @@ def _provenance(e: dict[str, Any]) -> dict[str, Any]:
         tiers = []
         if kind == "agent" and role == "check":
             tiers.append("agent_check")
-        if role == "adversarial":
-            tiers.append("adversarial")
+        if role == "challenge":
+            tiers.append("challenge")
         if kind == "human":
             tiers.append("human")
         for t in tiers:

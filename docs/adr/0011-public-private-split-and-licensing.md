@@ -18,8 +18,8 @@ identifying or security-relevant material, and ambiguity about licence and third
 2. Public: schemas, libraries, generators, fakes, conformance tests, example data (a complete
    fictional lab using `example.internal` and RFC 5737/3849/7042 documentation values), ADRs and
    docs. Private: real inventory, detection content that is the lab's playbook, tuned thresholds,
-   credentials and their locations, red-team and honeypot material, personal and employer
-   context.
+   credentials and their locations, internal security-testing and deception (honeypot) material,
+   personal and employer context.
 3. Leaks are prevented three times: a pre-commit hook and public CI run the generic scanner
    (`tools/leak_scan.py`) and a secret scanner; a private pre-push check on the maintainer's
    machine runs a real deny-list supplied only at run time (`HNX_DENYLIST`) and never published.
