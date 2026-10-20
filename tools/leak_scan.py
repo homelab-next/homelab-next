@@ -102,6 +102,10 @@ ALLOWED_EMAIL_DOMAINS = (
     "example.org",
     "example.net",
     "example.internal",
+    # reserved top-level names (RFC 2606, RFC 6761): no real mailbox can exist under them
+    "example",
+    "invalid",
+    "test",
     "users.noreply.github.com",
 )
 # Exact addresses (not domains) that are public by construction, e.g. co-author trailers.

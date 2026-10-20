@@ -100,6 +100,16 @@ def test_example_internal_ok_but_other_internal_flagged(tmp_path: Path):
     assert run_scan(str(f)).returncode == 1
 
 
+def test_reserved_tld_emails_ok_but_lookalikes_flagged(tmp_path: Path):
+    f = tmp_path / "x.txt"
+    at = "@"
+    f.write_text(f"user{at}status.lab.example ops{at}host.test bot{at}x.invalid\n")
+    assert run_scan(str(f)).returncode == 0
+    for addr in (f"user{at}lab.examples", f"user{at}example.co", f"user{at}tested.dev"):
+        f.write_text(addr + "\n")
+        assert run_scan(str(f)).returncode == 1, addr
+
+
 def test_documentation_ipv4_and_public_dns_not_flagged(tmp_path: Path):
     f = tmp_path / "x.txt"
     f.write_text(f"{dot(203, 0, 113, 9)} {dot(8, 8, 8, 8)} version 1.2.3.4\n")
