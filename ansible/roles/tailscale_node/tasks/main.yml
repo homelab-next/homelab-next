@@ -20,12 +20,15 @@
     components: main
     signed_by: "{{ tailscale_node_repository }}/{{ ansible_facts['distribution_release'] }}.noarmor.gpg"
 
+# The package is held (below), so moving it to a new pin (the upgrade hook's bump path) must be
+# allowed to change that one held package; the hold is set again right after.
 - name: Install the pinned client
   ansible.builtin.apt:
     name: "tailscale={{ tailscale_node_version }}"
+    allow_change_held_packages: true
     update_cache: true
 
-- name: Hold the package at its pin
+- name: Hold the package at its pin again
   ansible.builtin.dpkg_selections:
     name: tailscale
     selection: hold

@@ -156,6 +156,25 @@ def test_wazuh_agent_upgrade_and_backup_hooks(tmp_path):
     assert bad.returncode != 0
 
 
+# ---------------------------------------------------------------- the pinned, held packages
+@pytest.mark.parametrize(
+    ("role", "package"), [("wazuh_agent", "wazuh-agent"), ("tailscale_node", "tailscale")]
+)
+def test_the_pinned_install_may_move_its_own_held_package(role, package):
+    """The package is dpkg-held, so the bump path (set a new version, re-run main) needs apt to
+    change that held package, for that package alone, and the hold must be set again after."""
+    tasks = yaml.safe_load((ANSIBLE / "roles" / role / "tasks" / "main.yml").read_text())
+    names = [t.get("ansible.builtin.apt", {}).get("name", "") for t in tasks]
+    (i,) = [n for n, name in enumerate(names) if str(name).startswith(f"{package}=")]
+    install = tasks[i]["ansible.builtin.apt"]
+    assert install["allow_change_held_packages"] is True
+    assert isinstance(install["name"], str) and "," not in install["name"]  # this package only
+    holds = [n for n, t in enumerate(tasks) if "ansible.builtin.dpkg_selections" in t]
+    assert holds and min(holds) > i
+    hold = tasks[min(holds)]["ansible.builtin.dpkg_selections"]
+    assert hold == {"name": package, "selection": "hold"}
+
+
 # ---------------------------------------------------------------- tailscale_node
 def ts_vars(tmp_path, **kw):
     d = {"tailscale_node_auth_key_ref": "secret:remote-access/authkey-secret", "hnx_zone": "edge"}
