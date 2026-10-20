@@ -128,6 +128,10 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         _registers,
     ),
     "invariants": ("run the standing invariants (invariants run)", _invariants),
+    "strategy": (
+        "strategy to task: check|links|measure|rollup|rfis|decide|index (docs/strategy.md)",
+        lambda a: importlib.import_module("homelabnext.strategy.cli").main(a),
+    ),
     "reviews": (
         "the shared review model (records, system pages): digest",
         lambda a: importlib.import_module("homelabnext.reviews").main(a),

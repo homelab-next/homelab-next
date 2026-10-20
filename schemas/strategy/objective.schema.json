@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/strategy/objective/1.0",
+  "title": "Objective record",
+  "description": "One objective of the cascade, one Markdown file per record (objectives/SO-001.md): a strategic (SO), operational (OO), tactical (TO) objective or a tactical task (TT). An SO has no parent; an OO's parent is an SO, a TO's an OO, a TT's a TO (checked by homelabnext.strategy, as are the doctrine rules over its measures). Lifecycle: active -> achieved | retired, only through a strategy-transition intent (the resolution is set by the transition).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "level",
+    "title",
+    "status",
+    "date",
+    "author",
+    "owner",
+    "statement",
+    "measures"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^(?:SO|OO|TO|TT)-(?:\\d{3,}|NEW)$(?!\\n)"
+    },
+    "level": {
+      "enum": [
+        "SO",
+        "OO",
+        "TO",
+        "TT"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 200
+    },
+    "status": {
+      "enum": [
+        "active",
+        "achieved",
+        "retired"
+      ]
+    },
+    "date": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "author": {
+      "$ref": "#/$defs/author"
+    },
+    "owner": {
+      "$ref": "#/$defs/identity"
+    },
+    "parent": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:SO|OO|TO|TT)-\\d{3,}$(?!\\n)"
+        }
+      ],
+      "description": "The objective one level up (none for an SO)."
+    },
+    "supplemental": {
+      "type": "boolean",
+      "description": "An objective proposed beyond the baseline cascade (the baseline-SO rule does not count it)."
+    },
+    "measures": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^MO[PE]-\\d{3,}$(?!\\n)"
+      },
+      "uniqueItems": true,
+      "description": "Its MOPs and MOEs; each names this objective back."
+    },
+    "review_by": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "statement": {
+      "$ref": "#/$defs/text"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "resolution": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Why it was achieved or retired (set by the transition)."
+    },
+    "reviews": {
+      "type": "array",
+      "description": "Derived from the review events (homelabnext.reviews); never written in the record file."
+    }
+  },
+  "$defs": {
+    "identity": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9_.@-]+$(?!\\n)",
+      "description": "issuer:subject (human:example-operator, profile:example-checker, role:on-call)."
+    },
+    "author": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "const": "unknown"
+        }
+      ]
+    },
+    "text": {
+      "type": "string",
+      "minLength": 12
+    },
+    "strings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    }
+  }
+}

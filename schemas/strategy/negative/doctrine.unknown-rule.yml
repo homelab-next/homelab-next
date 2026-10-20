@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+doctrine_version: 1
+name: tuned doctrine
+rules:
+  be_careful: {enforce: error}

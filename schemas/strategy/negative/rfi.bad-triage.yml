@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# triage is collection or production
+id: RFI-001
+title: Which monitors cover the core services
+status: open
+date: '2026-10-20'
+author: profile:example-checker
+raised_by: MOE-001
+triage: research
+ltiov: '2026-11-19'
+tasked_to:
+- profile:reader
+question: Which uptime monitors cover each core service (DNS, proxy, secrets), and are they reporting
+  to the status hub? MOE-001 has no reading to grade.

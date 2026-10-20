@@ -38,6 +38,19 @@ menu:
   - id: agent-analytics
     title: Agent analytics
     panel: agent-analytics
+  # strategy to task (docs/strategy.md; listed as unavailable without --strategy)
+  - id: strategy
+    title: Strategy
+    panel: strategy
+  - id: requirements
+    title: Requirements
+    panel: requirements
+  - id: objectives
+    title: Objectives
+    panel: objectives
+  - id: rfis
+    title: RFIs
+    panel: rfis
   - id: grafana
     title: Grafana
     external: {service: dashboards}

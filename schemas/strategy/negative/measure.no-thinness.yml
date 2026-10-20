@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# confidence and thinness are doctrine fields
+id: MOE-001
+title: Share of uptime monitors that are up
+status: active
+date: '2026-10-20'
+author: human:example-planner
+objective: SO-001
+kind: outcome
+source: status:uptime-monitors
+unit: share of monitors
+target:
+  op: '>='
+  green: 1.0
+  amber: 0.9
+confidence: high
+measured_by: profile:example-checker
+definition_version: 1
+review_by: '2027-04-20'
+definition: The share of the uptime service's monitors whose latest reading is up (ok) in the status hub,
+  over every monitor on its public status page.

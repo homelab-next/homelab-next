@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# an unquoted off is the YAML 1.1 boolean false
+doctrine_version: 1
+name: tuned doctrine
+rules:
+  measures_per_owner: {enforce: off}

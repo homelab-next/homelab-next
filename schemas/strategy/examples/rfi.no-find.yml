@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+id: RFI-002
+title: Has the status host been scanned in the last month
+status: no-find
+date: '2026-10-06'
+author: profile:example-checker
+raised_by: PIR-001
+triage: production
+ltiov: '2026-11-03'
+tasked_to:
+- profile:reader
+question: Do the proxy logs the lab already holds show any scan of the status or uptime host in the last
+  30 days?
+resolution: Searched the proxy access logs of 2026-09-20 to 2026-10-20 for the status and uptime hosts;
+  no request from outside the lab's zones. A no-find is the answer.

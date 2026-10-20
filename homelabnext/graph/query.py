@@ -36,7 +36,11 @@ __all__ = [
     "seeds_for",
 ]
 
-INACTIVE_STATUSES = frozenset({"retired", "superseded", "incorporated"})
+INACTIVE_STATUSES = frozenset(
+    {"retired", "superseded", "incorporated"}
+    # the strategy records' closed statuses (homelabnext.strategy.rules.CLOSED)
+    | {"achieved", "answered", "expired", "no-find"}
+)
 
 #: edge type -> weight in (0, 1]; a type absent here weighs DEFAULT_WEIGHT, 0 is not traversed.
 #: Structural edges (what implements, provides, checks or documents a thing) outrank incidental

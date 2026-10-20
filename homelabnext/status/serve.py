@@ -85,13 +85,15 @@ def make_server(
     allowed_hosts: Iterable[str] = (),
     docs_base: str = "docs",
     agents: Any = None,
+    strategy: Any = None,
 ) -> ThreadingHTTPServer:
     """A server for ``document()`` (called once per request).  ``port=0`` picks a free port.
 
     ``allowed_hosts``: hostnames (no port) a request's ``Host``/``Origin`` may name besides the
     loopback names; required with ``allow_remote``.  ``agents``: an
     :class:`homelabnext.status.agents.pages.AgentSite` adds the agent pages (and, behind its
-    trusted front door only, the private tier)."""
+    trusted front door only, the private tier); ``strategy``: a
+    :class:`homelabnext.strategy.pages.StrategySite` adds the strategy pages."""
     extra = frozenset(h.strip().lower().rstrip(".") for h in allowed_hosts if h.strip())
     if allow_remote and not extra:
         raise ValueError("allow_remote needs allowed_hosts: the hostnames clients will use")
@@ -136,8 +138,9 @@ def make_server(
                 doc = dict(document())  # the public contract: the private group is not listed
                 doc["menu"] = [m for m in doc["menu"] if m.get("group") != "private"]
                 self._reply(200, "application/json", dumps(doc).encode("utf-8"))
-            elif agents is not None and (
-                hit := agents.handle(route, query, document(), client, self.headers)
+            elif (strategy is not None and (hit := strategy.handle(route, query, document()))) or (
+                agents is not None
+                and (hit := agents.handle(route, query, document(), client, self.headers))
             ):
                 self._reply(*hit)
             elif route.startswith("/private"):  # no activity store: still never served

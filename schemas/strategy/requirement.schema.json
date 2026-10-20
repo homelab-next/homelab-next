@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/strategy/requirement/1.0",
+  "title": "Requirement record (CCIR, FFIR or PIR)",
+  "description": "One requirement, one Markdown file per record (requirements/CCIR-001.md). Requirements is the parent category; each record is exactly one of three types: CCIR (what the owner needs to know), FFIR (what the rest of the lab needs to know: friendly readiness and posture) or PIR (what we need to know about the environment or adversary). supports names one or more SO/OO/TO it serves; serves names requirements it feeds: an FFIR may serve CCIRs, a PIR CCIRs or FFIRs, a CCIR nothing (checked by homelabnext.strategy). Lifecycle: active -> answered | expired | retired.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "title",
+    "status",
+    "date",
+    "author",
+    "question",
+    "decision_supported",
+    "consumer",
+    "cadence",
+    "ltiov",
+    "supports",
+    "acceptance"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^(?:CCIR|FFIR|PIR)-(?:\\d{3,}|NEW)$(?!\\n)"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 200
+    },
+    "status": {
+      "enum": [
+        "active",
+        "answered",
+        "expired",
+        "retired"
+      ]
+    },
+    "date": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "author": {
+      "$ref": "#/$defs/author"
+    },
+    "question": {
+      "$ref": "#/$defs/text"
+    },
+    "decision_supported": {
+      "$ref": "#/$defs/text"
+    },
+    "consumer": {
+      "$ref": "#/$defs/identity"
+    },
+    "cadence": {
+      "type": "string",
+      "pattern": "^(?:P(?:\\d+[YMWD])+(?:T(?:\\d+[HMS])+)?|PT(?:\\d+[HMS])+|continuous|on-change)$(?!\\n)",
+      "description": "An ISO 8601 duration (PT15M, P1W), continuous or on-change."
+    },
+    "ltiov": {
+      "anyOf": [
+        {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+        },
+        {
+          "const": "standing"
+        }
+      ],
+      "description": "Last time the information is of value: a date (swept to expired after it) or standing."
+    },
+    "sirs": {
+      "$ref": "#/$defs/strings",
+      "description": "Specific information requirements the question breaks into."
+    },
+    "indicators": {
+      "$ref": "#/$defs/strings",
+      "description": "Indicators and essential elements of information."
+    },
+    "sources": {
+      "$ref": "#/$defs/strings",
+      "description": "Collection sources."
+    },
+    "tasked_to": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/identity"
+      },
+      "uniqueItems": true
+    },
+    "supports": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^(?:SO|OO|TO)-\\d{3,}$(?!\\n)"
+      },
+      "uniqueItems": true
+    },
+    "serves": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(?:CCIR|FFIR)-\\d{3,}$(?!\\n)"
+      },
+      "uniqueItems": true
+    },
+    "acceptance": {
+      "$ref": "#/$defs/text"
+    },
+    "guardrails": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "review_by": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "resolution": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reviews": {
+      "type": "array",
+      "description": "Derived from the review events (homelabnext.reviews); never written in the record file."
+    }
+  },
+  "$defs": {
+    "identity": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9_.@-]+$(?!\\n)",
+      "description": "issuer:subject (human:example-operator, profile:example-checker, role:on-call)."
+    },
+    "author": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "const": "unknown"
+        }
+      ]
+    },
+    "text": {
+      "type": "string",
+      "minLength": 12
+    },
+    "strings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    }
+  }
+}

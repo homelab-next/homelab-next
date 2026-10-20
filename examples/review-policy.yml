@@ -47,3 +47,43 @@ requirements:
       - {role: check, kind: agent}
       - {role: challenge, kind: agent}
       - {role: approve, kind: human}
+  # the strategy-to-task records (docs/strategy.md): the strategy itself is the owner's to sign
+  strategy:
+    active:
+      - {role: check, kind: agent}
+      - {role: challenge, kind: agent}
+      - {role: approve, kind: human}
+  objective:
+    active:
+      - {role: check, kind: agent}
+      - {role: challenge, kind: agent}
+    achieved:       # "we got there" is a claim about effect: a human signs it
+      - {role: check, kind: agent}
+      - {role: challenge, kind: agent}
+      - {role: approve, kind: human}
+    retired:
+      - {role: check, kind: agent}
+      - {role: challenge, kind: agent}
+      - {role: approve, kind: human}
+  measure:
+    active:         # the seven doctrine fields are checked, and attacked
+      - {role: check, kind: agent}
+      - {role: challenge, kind: agent}
+    retired:
+      - {role: check, kind: agent}
+  requirement:
+    active:
+      - {role: check, kind: agent}
+      - {role: challenge, kind: agent}
+    answered:
+      - {role: check, kind: agent}
+    expired: []     # the LTIOV sweep: time decided it
+    retired:
+      - {role: check, kind: agent}
+      - {role: challenge, kind: agent}
+      - {role: approve, kind: human}
+  rfi:              # an RFI is a question: raising and closing one is never blocked
+    open: []
+    answered: []
+    expired: []
+    no-find: []

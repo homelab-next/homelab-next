@@ -102,6 +102,27 @@ SECTIONS: dict[str, tuple[tuple[str, str], ...]] = {
         ("notes", "Notes"),
     ),
     "runbooks": (("purpose", "Purpose"), ("steps", "Steps")),
+    # the strategy-to-task records (homelabnext.strategy): parsed and linked by the same code
+    "strategy": (
+        ("mission", "Mission"),
+        ("intent", "Intent"),
+        ("end_state", "End state"),
+        ("notes", "Notes"),
+    ),
+    "objectives": (("statement", "Statement"), ("notes", "Notes")),
+    "measures": (
+        ("definition", "Definition"),
+        ("not_measurable", "Not measurable"),
+        ("notes", "Notes"),
+    ),
+    "requirements": (
+        ("question", "Question"),
+        ("decision_supported", "Decision supported"),
+        ("acceptance", "Acceptance"),
+        ("guardrails", "Guardrails"),
+        ("notes", "Notes"),
+    ),
+    "rfis": (("question", "Question"), ("answer", "Answer"), ("notes", "Notes")),
 }
 FRONT_ORDER = {
     "lessons": (
@@ -118,7 +139,20 @@ FRONT_ORDER = {
         "superseded_by",
         "related",
     ),
+    "rfis": (
+        *("id", "title", "status", "date", "author", "raised_by", "triage", "ltiov"),
+        *("tasked_to", "intent"),
+    ),
 }
+# typed links of the strategy records, shown in their Links block: field -> label
+LINK_FIELDS = (
+    ("parent", "Parent"),
+    ("objective", "Objective"),
+    ("measures", "Measured by"),
+    ("supports", "Supports"),
+    ("serves", "Serves"),
+    ("raised_by", "Raised by"),
+)
 LINKS = "Links"
 GEN_OPEN, GEN_CLOSE = "<!-- hnx:gen:links -->", "<!-- /hnx:gen -->"
 
@@ -211,9 +245,9 @@ def parse_record(text: str, name: str, kind: str, problems: list[str]) -> dict |
     if not isinstance(fm, dict):
         problems.append(f"{name}: front-matter must be a mapping")
         return None
-    spec = ids.SPECS[kind]
+    spec = ids.SPECS.get(kind)  # None: a single record that is not an id register (strategy)
     ident = fm.get("id")
-    bad = ids.record_name_problem(
+    bad = spec and ids.record_name_problem(
         name,
         str(ident) if ident is not None and re.fullmatch(spec.id_re, str(ident)) else None,
         spec,
@@ -269,8 +303,8 @@ def load_texts(
 ) -> dict:
     """Record file texts ``{file name: text}`` (and each file's sidecar events, by record file
     name) -> the register document with derived fields filled in (fatal on any problem)."""
-    if kind not in RECORD_KINDS:
-        raise RegisterError(kind, [f"record directories hold {' or '.join(RECORD_KINDS)} only"])
+    if kind not in SECTIONS:
+        raise RegisterError(kind, [f"record directories hold {' or '.join(SECTIONS)} only"])
     problems: list[str] = []
     events = events or {}
     for name in sorted(set(events) - set(texts)):
@@ -298,7 +332,7 @@ def load_texts(
 def _canonical(doc, kind: str):
     """Prose fields without surrounding whitespace (YAML folding adds a trailing newline that no
     reader uses; a Markdown section cannot carry one), so both forms load to equal dicts."""
-    if kind not in RECORD_KINDS or not isinstance(doc, dict) or not isinstance(doc.get(kind), list):
+    if kind not in SECTIONS or not isinstance(doc, dict) or not isinstance(doc.get(kind), list):
         return doc
     prose = [f for f, _ in SECTIONS[kind] if f != "steps"]
     for e in doc[kind]:
@@ -443,7 +477,8 @@ def _archive_row(entry: Mapping) -> str | None:
     if status == "retired":
         by = entry.get("retired_by")
         how = f" by {', '.join(f'`{r}`' for r in by)}" if _scalar_list(by) and by else ""
-        return f"- Archive: retired on {entry.get('retired_on')}{how}"
+        on = f" on {entry['retired_on']}" if entry.get("retired_on") else ""
+        return f"- Archive: retired{on}{how}"
     return None
 
 
@@ -464,6 +499,11 @@ def links_block(entry: Mapping) -> str:
     related = entry.get("related")
     if _scalar_list(related) and related:
         rows.append("- Related: " + ", ".join(_wiki(str(r)) for r in related))
+    for field, label in LINK_FIELDS:
+        v = entry.get(field)
+        refs = [v] if isinstance(v, str) else v if _scalar_list(v) else []
+        if refs:
+            rows.append(f"- {label}: " + ", ".join(_wiki(str(r)) for r in refs))
     body = "\n".join(rows or ["- none"])
     return f"## {LINKS}\n\n{GEN_OPEN}\n{body}\n{GEN_CLOSE}\n"
 

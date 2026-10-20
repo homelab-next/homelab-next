@@ -69,3 +69,30 @@ and a fake ship; the implementation does not.
 **Placeholder values.** `example.internal`, `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`,
 `2001:db8::/32`, `00:00:5e:00:53:xx`, account id `123456789012`. The only values allowed in
 examples, fixtures and prose.
+
+**Strategy.** The one record a lab's strategy-to-task layer hangs from (`docs/strategy.md`):
+mission, intent, end state, priorities of work, assumptions and constraints (each with an owner).
+
+**SO / OO / TO / TT.** The objective cascade: a strategic objective (an enduring end state), an
+operational objective (a decomposition of an SO), a tactical objective (assignable work under an
+OO) and a tactical task (a step of a TO). Each is measured by MOPs and MOEs.
+
+**MOP / MOE.** A measure of performance asks whether the work is being done; a measure of
+effectiveness asks whether it is working. Activity counts are MOPs, never MOEs. Each measure has
+seven fields: id, objective, definition, source, value and time, target, confidence and thinness.
+
+**Requirements: CCIR, FFIR, PIR.** The three types of requirement: a commander's critical
+information requirement (what the owner needs to know to decide), a friendly force information
+requirement (what the lab needs to know about its own readiness and posture) and a priority
+intelligence requirement (what we need to know about the environment or an adversary). An FFIR may
+serve CCIRs, a PIR CCIRs or FFIRs; every requirement supports objectives.
+
+**LTIOV.** Last time information is of value: the date after which an answer no longer helps. An
+RFI past its LTIOV is expired by the sweep.
+
+**RFI.** A request for information: a question raised by a gap (a red or not-measurable measure,
+an unmet requirement), triaged into a CR or a PR, closed by an answer, a no-find or expiry.
+
+**CR / PR.** A collection requirement (the answer needs data the lab does not hold, so it must be
+collected) and a production requirement (the lab holds the data and must produce the answer): the
+two triage outcomes of an RFI.

@@ -27,7 +27,13 @@ def test_current_schema_is_additive_over_frozen_v1_0(path):
 
 
 # examples of a feature added after the 1.0 freeze (1.0 rightly refuses them)
-NEWER_THAN_1_0 = {"note.register-transition.md": "records/note 1.1: type register-transition"}
+NEWER_THAN_1_0 = {
+    "note.register-transition.md": "records/note 1.1: type register-transition",
+    "note.strategy-transition.md": "records/note 1.3: type strategy-transition",
+    "note.strategy-rfi.md": "records/note 1.3: type strategy-rfi",
+    "register_event.value.yml": "registers/register_event 1.1: event value",
+    "register_event.value-finding.yml": "registers/register_event 1.1: event value",
+}
 
 
 @pytest.mark.parametrize("path", SCHEMAS, ids=lambda p: p.relative_to(ROOT / "schemas").as_posix())

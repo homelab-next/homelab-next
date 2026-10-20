@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+id: SO-001
+level: SO
+title: Core services stay available
+status: active
+date: '2026-10-20'
+author: human:example-planner
+owner: human:example-operator
+parent: null
+measures:
+- MOE-001
+review_by: '2027-04-20'
+statement: The services the lab's users depend on (DNS, the proxy, the secrets store) are up when they
+  are needed, and an outage is known to the operator before a user reports it.

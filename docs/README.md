@@ -40,6 +40,10 @@ relate.
   source; the [source catalog](status/sources.md) ([[status/sources|status sources]]) is the menu.
 - [Architecture decision log](adr/README.md) ([[adr/README|ADRs]]).
 - [Checklist](checklist.md) ([[checklist]]): what is done, public now, or needs a server.
+- [Strategy to task](strategy.md) ([[strategy]]): a strategy, its objective cascade
+  (SO -> OO -> TO -> TT) measured by MOPs and MOEs bound to invariants, status sources and
+  records, the requirements it answers (CCIR, FFIR, PIR) and the RFIs its gaps raise; the
+  [example index](strategy/README.md) ([[strategy/README|strategy index]]).
 - [Registers](registers.md) ([[registers]]): lessons and runbooks as one file per record, the
   lesson lifecycle (pitfalls retire into mechanisms, practices are incorporated into runbooks),
   the shared review model and `hnx registers review`.

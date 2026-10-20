@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+event: transition
+by: human:example-operator
+date: '2026-10-20'
+from: open
+to: no-find
+set:
+  resolution: Searched the proxy access logs of 2026-09-20 to 2026-10-20 for the status and uptime hosts; no request from outside the lab's zones. A no-find is the answer.
+intent: decided/completed/2026-10-20-example-checker-close-rfi-002-as-a-no-find.md
+requested_by: profile:example-checker
+reason: Searched the proxy access logs of 2026-09-20 to 2026-10-20 for the status and uptime hosts; no request from outside the lab's zones. A no-find is the answer.

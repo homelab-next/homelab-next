@@ -1,0 +1,340 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/registers/register_event/1.1",
+  "title": "Register event",
+  "description": "One append-only event about a lesson, runbook, docs/systems page or strategy record (homelabnext.strategy), stored as its own file in the sidecar directory <RECORD>.events/ and named <YYYYMMDDTHHMMSSZ>-<event>-<actor-slug>[-<n>].yml (the name rule is checked by homelabnext.registers.events). Derived fields (reviews, recurrences, last_verified, values, the current status) are computed from these files on load and never edited in place. `transition` events are written only by a decider (hnx registers decide, hnx strategy decide). 1.1 added, additively, the `value` event (one reading of a strategy measure, nested in the transition entry's else branch so allOf keeps its length) and the transition's set.resolution (why a strategy record closed).",
+  "type": "object",
+  "properties": {
+    "event": {
+      "enum": [
+        "review",
+        "recurrence",
+        "verified",
+        "transition",
+        "value"
+      ]
+    },
+    "by": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+:[A-Za-z0-9_.@-]+$",
+      "description": "The writer, issuer-qualified (agent:j8-lead, human:operator)."
+    },
+    "date": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "note": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    }
+  },
+  "required": [
+    "event",
+    "by",
+    "date"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "review"
+          }
+        },
+        "required": [
+          "event"
+        ]
+      },
+      "then": {
+        "description": "The review entry of homelabnext.reviews, flat: the event without `event` is the review.",
+        "properties": {
+          "event": true,
+          "by": true,
+          "date": true,
+          "note": true,
+          "kind": {
+            "enum": [
+              "agent",
+              "human"
+            ]
+          },
+          "role": {
+            "enum": [
+              "check",
+              "challenge",
+              "approve"
+            ]
+          },
+          "verdict": {
+            "enum": [
+              "pass",
+              "changes",
+              "reject"
+            ]
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{12,64}$"
+          }
+        },
+        "required": [
+          "kind",
+          "role",
+          "verdict",
+          "digest"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "recurrence"
+          }
+        },
+        "required": [
+          "event"
+        ]
+      },
+      "then": {
+        "properties": {
+          "event": true,
+          "by": true,
+          "date": true,
+          "note": true,
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "description": "A link or path to what showed the problem again."
+          }
+        },
+        "required": [
+          "note"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "verified"
+          }
+        },
+        "required": [
+          "event"
+        ]
+      },
+      "then": {
+        "properties": {
+          "event": true,
+          "by": true,
+          "date": true,
+          "note": true,
+          "outcome": {
+            "enum": [
+              "pass",
+              "fail"
+            ],
+            "description": "Whether the observable gave the expected result; last_verified is the latest pass."
+          },
+          "result": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What the observable actually showed."
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "outcome",
+          "result"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "transition"
+          }
+        },
+        "required": [
+          "event"
+        ]
+      },
+      "then": {
+        "properties": {
+          "event": true,
+          "by": true,
+          "date": true,
+          "note": true,
+          "from": {
+            "type": "string",
+            "anyOf": [
+              {
+                "pattern": "^[a-z]+(?:-[a-z]+)*$"
+              }
+            ],
+            "description": "1.1: a lowercase status word, hyphenated for a strategy status (no-find); the 1.0 pattern ^[a-z]+$ is widened, never narrowed."
+          },
+          "to": {
+            "type": "string",
+            "anyOf": [
+              {
+                "pattern": "^[a-z]+(?:-[a-z]+)*$"
+              }
+            ],
+            "description": "1.1: a lowercase status word, hyphenated for a strategy status (no-find); the 1.0 pattern ^[a-z]+$ is widened, never narrowed."
+          },
+          "set": {
+            "type": "object",
+            "description": "The lifecycle fields the transition sets on the record.",
+            "properties": {
+              "retired_by": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "retired_on": {
+                "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+              },
+              "incorporated_into": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "superseded_by": {
+                "type": "string",
+                "pattern": "^(LL|RB)-\\d{3,}$"
+              },
+              "retired_reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "resolution": {
+                "type": "string",
+                "minLength": 1,
+                "description": "1.1: why a strategy record reached a closed status (the intent's reason)."
+              }
+            },
+            "additionalProperties": false
+          },
+          "intent": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/rel_path",
+            "description": "The register-transition note this applied, in the records tree."
+          },
+          "requested_by": {
+            "type": "string",
+            "pattern": "^profile:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "intent",
+          "requested_by",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "$comment": "value (1.1) sits in this else branch so allOf keeps its 1.0 length (additive evolution)",
+      "else": {
+        "if": {
+          "properties": {
+            "event": {
+              "const": "value"
+            }
+          },
+          "required": [
+            "event"
+          ]
+        },
+        "then": {
+          "description": "One reading of a strategy measure: a value or, when the binding produced none, a finding (never a blank). Written by hnx strategy measure, or by a person for a manual measure (evidence required).",
+          "properties": {
+            "event": true,
+            "by": true,
+            "date": true,
+            "note": true,
+            "value": {
+              "type": "number",
+              "description": "The reading, in the measure's unit."
+            },
+            "finding": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Why there is no value (not measurable, the source had no reading): a finding, never a blank."
+            },
+            "observed_at": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp",
+              "description": "When the data behind the value was observed (not when the event was written)."
+            },
+            "sample": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "How many data points stand behind the value (thinness)."
+            },
+            "definition_digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{12,64}$",
+              "description": "The digest of the measure's definition, source and unit this reading was taken under (a trend is only drawn on an unchanged digest)."
+            },
+            "definition_version": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Where the value came from (the binding and what it read), or a link for a manual value."
+            }
+          },
+          "required": [
+            "observed_at",
+            "definition_digest",
+            "definition_version",
+            "evidence"
+          ],
+          "oneOf": [
+            {
+              "required": [
+                "value"
+              ],
+              "not": {
+                "required": [
+                  "finding"
+                ]
+              }
+            },
+            {
+              "required": [
+                "finding"
+              ],
+              "not": {
+                "required": [
+                  "value"
+                ]
+              }
+            }
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+event: value
+by: human:example-operator
+date: 2026-10-13
+value: 0.75
+observed_at: '2026-10-13T17:00:00Z'
+sample: 4
+definition_digest: sha256:1feb07056b2c05c656b5883960cb2c48bc228d86b0287449f73fcbed06b91078
+definition_version: 1
+evidence: 'weekly inbox review 2026-10-13: 3 of 4 notes decided (fictional example)'

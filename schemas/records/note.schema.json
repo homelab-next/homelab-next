@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/records/note/1.2",
+  "$id": "https://schemas.example.internal/homelabnext/records/note/1.3",
   "title": "Records note frontmatter",
-  "description": "YAML frontmatter of a records note (the generalised vault note). The filename convention is <YYYY-MM-DD>-<requesting-agent>-<slug>.md (checked by tools/schema_check.py, not expressible in JSON Schema). Lanes: inbox/ (writable by agents), decided/{approved,denied,completed}/ (decision-maker only). 1.1 added, additively, type register-transition: an agent's request to change a lesson's or runbook's lifecycle status, applied only by the register decider (hnx registers decide). 1.2 added retired_on, which replaces on: an unquoted on is the YAML 1.1 boolean true, so it never arrived as a key named on (a note with a non-string key is invalid).",
+  "description": "YAML frontmatter of a records note (the generalised vault note). The filename convention is <YYYY-MM-DD>-<requesting-agent>-<slug>.md (checked by tools/schema_check.py, not expressible in JSON Schema). Lanes: inbox/ (writable by agents), decided/{approved,denied,completed}/ (decision-maker only). 1.1 added, additively, type register-transition: an agent's request to change a lesson's or runbook's lifecycle status, applied only by the register decider (hnx registers decide). 1.2 added retired_on, which replaces on: an unquoted on is the YAML 1.1 boolean true, so it never arrived as a key named on (a note with a non-string key is invalid). 1.3 added, additively, type strategy-transition (a request to close or retire a strategy record: an objective, measure, requirement or RFI; applied only by hnx strategy decide) and type strategy-rfi (a request to raise an RFI from a gap: a red or not-measurable measure, or an unmet requirement).",
   "type": "object",
   "properties": {
     "type": {
@@ -12,7 +12,9 @@
         "finding",
         "escalation",
         "task",
-        "register-transition"
+        "register-transition",
+        "strategy-transition",
+        "strategy-rfi"
       ]
     },
     "title": {
@@ -323,6 +325,98 @@
             "retired_on": {
               "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date",
               "description": "1.2: retired_on for a retirement (default: the date the intent was created)."
+            }
+          }
+        },
+        "$comment": "strategy-transition and strategy-rfi (1.3) nest in this else branch so allOf keeps its 1.0 length",
+        "else": {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "strategy-transition"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "record",
+              "from",
+              "to",
+              "reason"
+            ],
+            "properties": {
+              "record": {
+                "type": "string",
+                "pattern": "^(?:SO|OO|TO|TT|MOP|MOE|CCIR|FFIR|PIR|RFI)-\\d{3,}$",
+                "description": "The allocated id of the objective, measure, requirement or RFI."
+              },
+              "from": {
+                "type": "string",
+                "pattern": "^[a-z]+(?:-[a-z]+)*$",
+                "description": "The status the requester saw; denied when it is no longer current."
+              },
+              "to": {
+                "type": "string",
+                "pattern": "^[a-z]+(?:-[a-z]+)*$"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Why: the answer, the no-find, the expiry; it becomes the record's resolution."
+              }
+            }
+          },
+          "else": {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "strategy-rfi"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "required": [
+                "raised_by",
+                "question",
+                "triage"
+              ],
+              "properties": {
+                "raised_by": {
+                  "type": "string",
+                  "pattern": "^(?:MOP|MOE|CCIR|FFIR|PIR)-\\d{3,}$",
+                  "description": "The measure or requirement whose gap raises the RFI."
+                },
+                "question": {
+                  "type": "string",
+                  "minLength": 10,
+                  "maxLength": 1000
+                },
+                "triage": {
+                  "enum": [
+                    "collection",
+                    "production"
+                  ],
+                  "description": "collection: the answer needs data we do not hold; production: we hold it and must produce the answer."
+                },
+                "ltiov": {
+                  "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date",
+                  "description": "Last time the information is of value (default: the doctrine's rfi_default_ltiov_days after created)."
+                },
+                "tasked_to": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9_.@-]+$"
+                  },
+                  "uniqueItems": true
+                }
+              }
             }
           }
         }

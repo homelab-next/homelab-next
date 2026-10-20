@@ -136,6 +136,10 @@ def prospective(entry: Mapping[str, Any], event: Mapping[str, Any], register: st
 
 
 class TransitionDecider:
+    #: the note types this decider takes from the inbox (a subclass decides others:
+    #: :class:`homelabnext.strategy.rfis.StrategyDecider`)
+    INTENT_TYPES: tuple[str, ...] = (INTENT_TYPE,)
+
     def __init__(
         self,
         register_root,
@@ -178,7 +182,7 @@ class TransitionDecider:
                 fm, _ = parse_note((self.records_root / lane / name).read_text(encoding="utf-8"))
             except (OSError, UnicodeDecodeError, NoteError):
                 continue
-            if fm.get("type") == INTENT_TYPE:
+            if fm.get("type") in self.INTENT_TYPES:
                 out.append(name)
         return out
 
@@ -224,10 +228,17 @@ class TransitionDecider:
             return Outcome(name, "?", "invalid", why.replace("\n", " "))
         fm = note.frontmatter
         ident = str(fm.get("record", "?"))
-        if note.type != INTENT_TYPE:
-            return Outcome(name, ident, "gone", f"a {note.type} note, not a {INTENT_TYPE}")
+        if note.type not in self.INTENT_TYPES:
+            want = " or ".join(self.INTENT_TYPES)
+            return Outcome(name, ident, "gone", f"a {note.type} note, not a {want}")
         if lane == APPROVED:
             return self._finish(name, ident, dry_run)
+        return self._decide_note(name, note, dry_run)
+
+    def _decide_note(self, name: str, note, dry_run: bool) -> Outcome:
+        """An inbox intent of :attr:`INTENT_TYPES`, its file read and its type checked."""
+        fm = note.frontmatter
+        ident = str(fm.get("record", "?"))
         bad = check_filename(name, fm)
         if bad:
             return self._deny(name, ident, "; ".join(bad), dry_run)
@@ -236,16 +247,8 @@ class TransitionDecider:
         if not path.is_file():
             return self._deny(name, ident, f"no record {ident} in {path.parent}", dry_run)
         intent_ref = f"decided/completed/{name}"
-        problems: list[str] = []
-        done = [
-            e
-            for e in ev.read_events(ev.events_dir(path), problems, path.name)
-            if e.kind == "transition" and e.data.get("intent") == intent_ref
-        ]
-        if done:  # applied before a crash; finish the move
-            if not dry_run:
-                self.movers.fulfil(name, reason=f"applied: {done[0].name}")
-            return Outcome(name, ident, "applied", "already applied", event=done[0].name)
+        if done := self._applied_before(name, ident, path, dry_run):
+            return done
         doc = load_register(path.parent, register)
         entry = next((e for e in doc[register] if str(e.get("id")) == ident), None)
         if entry is None:
@@ -292,6 +295,22 @@ class TransitionDecider:
             return self._deny(name, ident, "; ".join(ex.problems), dry_run, digest)
         self.movers.fulfil(name, reason=f"applied: {written[0].name}")
         return Outcome(name, ident, "applied", f"{cur} -> {fm['to']}", digest, written[0].name)
+
+    def _applied_before(self, name: str, ident: str, path: pathlib.Path, dry_run: bool):
+        """The outcome for an intent whose transition event ``path`` already has (applied
+        before a crash: finish the move, never apply twice), else None."""
+        problems: list[str] = []
+        ref = f"decided/completed/{name}"
+        done = [
+            e
+            for e in ev.read_events(ev.events_dir(path), problems, path.name)
+            if e.kind == "transition" and e.data.get("intent") == ref
+        ]
+        if not done:
+            return None
+        if not dry_run:
+            self.movers.fulfil(name, reason=f"applied: {done[0].name}")
+        return Outcome(name, ident, "applied", "already applied", event=done[0].name)
 
     def _finish(self, name: str, ident: str, dry_run: bool) -> Outcome:
         """An intent in ``decided/approved/``: complete it when its transition event exists (a

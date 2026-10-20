@@ -882,6 +882,85 @@ def _plugin_owners(b: Builder) -> dict[str, str]:
     return out
 
 
+# --------------------------------------------------------------------------- strategy
+
+STRATEGY = "examples/strategy"
+_STRATEGY_NODE = {"objectives": "objective", "measures": "measure", "requirements": "req"}
+_STRATEGY_NODE["rfis"] = "rfi"
+
+
+def read_strategy(b: Builder) -> None:
+    """The strategy-to-task records (``examples/strategy/``, :mod:`homelabnext.strategy`).
+
+    ``strategy:<name>``, ``objective:SO-001``, ``measure:MOE-001``, ``req:CCIR-001``,
+    ``rfi:RFI-001`` (a placeholder takes its file stem, like a lesson), each with its
+    ``status``; objective -child_of-> objective (``parent``) or the strategy (an SO);
+    objective -measured_by-> measure (``measures``); measure -binds-> inv/status (``source``
+    ``invariant:`` / ``status:``); req -supports-> objective; req -serves-> req (FFIR -> CCIR,
+    PIR -> CCIR/FFIR); rfi -raised_by-> measure/req; req/rfi -tasked_to-> profile/human, only
+    where ``tasked_to`` names a principal the keyring defines (a role or a tag is not a node)."""
+    from homelabnext.strategy.records import load_tree
+
+    root = b.root / STRATEGY
+    if not (root / "strategy.md").is_file():
+        return
+    tree = load_tree(root)
+    policy = _policy(root)
+    sid = None
+    if tree.strategy is not None:
+        s, at = tree.strategy, b.rel(tree.paths["strategy"])
+        sid = f"strategy:{s.get('name')}"
+        b.define(sid, "strategy", str(s.get("title", "")), at, at, status=s.get("status"))
+
+    def nid(ident) -> str:
+        from homelabnext.strategy.records import dir_for
+
+        return f"{_STRATEGY_NODE.get(str(dir_for(ident)), 'unknown')}:{ident}"
+
+    for kind, key, e in tree.items():
+        if kind == "strategy":
+            continue
+        at = b.rel(tree.paths[key])
+        content = {k: v for k, v in e.items() if k != "values"}
+        b.define(
+            f"{_STRATEGY_NODE[kind]}:{key}",
+            _STRATEGY_NODE[kind],
+            str(e.get("title", "")),
+            at,
+            at,
+            status=e.get("status"),
+            level=e.get("level"),
+            triage=e.get("triage"),
+            **_provenance(content, policy),
+        )
+    for kind, key, e in tree.items():
+        if kind == "strategy":
+            continue
+        me, at = f"{_STRATEGY_NODE[kind]}:{key}", b.rel(tree.paths[key])
+        if kind == "objectives":
+            if e.get("parent"):
+                b.edge(me, nid(e["parent"]), "child_of", f"{at}#parent")
+            elif sid:
+                b.edge(me, sid, "child_of", f"{at}#level")
+            for m in _listed(e.get("measures")):
+                b.edge(me, nid(m), "measured_by", f"{at}#measures")
+        elif kind == "measures":
+            src, _, arg = str(e.get("source") or "").partition(":")
+            target = {"invariant": f"inv:{arg}", "status": f"status:{arg.split('/')[0]}"}
+            if src in target:
+                b.edge(me, target[src], "binds", f"{at}#source")
+        elif kind == "requirements":
+            for o in _listed(e.get("supports")):
+                b.edge(me, nid(o), "supports", f"{at}#supports")
+            for r in _listed(e.get("serves")):
+                b.edge(me, nid(r), "serves", f"{at}#serves")
+        else:
+            b.edge(me, nid(e.get("raised_by")), "raised_by", f"{at}#raised_by")
+        for t in _listed(e.get("tasked_to")):
+            if b.has(t) and b.nodes[t].kind in ("profile", "human"):
+                b.edge(me, t, "tasked_to", f"{at}#tasked_to")
+
+
 # --------------------------------------------------------------------------- agent
 
 KEYRING_SOURCES = "examples/keyring/sources.yml"
@@ -1194,6 +1273,7 @@ READERS: tuple[tuple[str, Callable[[Builder], None]], ...] = (
     ("scripts", read_scripts),
     ("registers", read_registers),
     ("agent", read_agent),
+    ("strategy", read_strategy),
     ("customizations", read_customizations),
     ("ansible", read_ansible),
     ("docs", read_docs),
