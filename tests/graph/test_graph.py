@@ -151,7 +151,9 @@ def test_every_source_contributes_and_counts(graph):
         assert kinds.get(kind), kind
     assert kinds["svc"] == 15
     assert kinds["lesson"] == 5 and kinds["runbook"] == 2
-    assert len(graph.of_kind("script")) == 26
+    # one script node per catalogued script (the catalog is the source of truth for the count)
+    catalog = json.loads((ROOT / "docs/scripts/catalog.json").read_text(encoding="utf-8"))
+    assert len(graph.of_kind("script")) == len(catalog["scripts"])
     assert all(n.attrs.get("status") for n in graph.of_kind("lesson"))
     # each record node points at its own file
     assert graph.nodes["lesson:LL-004"].path == f"{LESSONS}/LL-004.md"
