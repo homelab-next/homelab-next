@@ -486,22 +486,32 @@ def test_suricata_enroll_refuses_bad_guests(tmp_path, guests):
 
 # ---------------------------------------------------------------- greenbone_target
 GVM_CLI = r"""
-import json, re, sys
+import configparser, json, re, sys
+import xml.etree.ElementTree as ET
 args = sys.argv[1:]
 state_file = STATE
-conf = args[args.index("--config") + 1]
-assert "[gmp]" in open(conf).read() and "password=gmp-pass-fake" in open(conf).read()
+conf = configparser.ConfigParser(default_section="main")  # as gvm-tools reads its config
+conf.read(args[args.index("--config") + 1])
+assert dict(conf.items("gmp"))["password"] == PASSWORD, "gvm-tools would read another password"
 assert args[args.index("--socketpath") + 1] == "/run/gvmd/gvmd.sock"
 xml = args[args.index("--xml") + 1]
 state = json.load(open(state_file))
 state["calls"].append(xml)
+
+
+def filter_name():
+    # gvmd's split_filter: a quoted value is one term; an unquoted one ends at the first space
+    f = ET.fromstring(xml).get("filter")
+    m = re.fullmatch(r'name="([^"]*)"', f)
+    return m.group(1) if m else re.match(r"name=(\S*)", f).group(1)
+
+
 if xml.startswith("<get_credentials"):
-    name = re.search(r'name=([^"]+)"', xml).group(1)
-    body = '<credential id="11111111-2222-3333-4444-555555555555"/>' if name == "lab-ssh" else ""
+    found = filter_name() in ("lab-ssh", "Lab SSH login")
+    body = '<credential id="11111111-2222-3333-4444-555555555555"/>' if found else ""
     out = '<get_credentials_response status="200" status_text="OK">' + body + "</get_credentials_response>"
 elif xml.startswith("<get_targets"):
-    name = re.search(r'name=([^"]+)"', xml).group(1)
-    body = '<target id="t-1"/>' if name in state["targets"] else ""
+    body = '<target id="t-1"/>' if filter_name() in state["targets"] else ""
     out = '<get_targets_response status="200" status_text="OK">' + body + "</get_targets_response>"
 elif xml.startswith("<create_target"):
     state["targets"].append(re.search("<name>([^<]+)</name>", xml).group(1))
@@ -513,10 +523,11 @@ print(out)
 """
 
 
-def gvm_setup(tmp_path, **kw):
+def gvm_setup(tmp_path, password="gmp-pass-fake", **kw):
     state = tmp_path / "gvm-state.json"
     state.write_text(json.dumps({"calls": [], "targets": ["hnx-edge-core"]}))
-    cli = fake(tmp_path / "gvm-cli", GVM_CLI.replace("STATE", repr(str(state))))
+    body = GVM_CLI.replace("STATE", repr(str(state))).replace("PASSWORD", repr(password))
+    cli = fake(tmp_path / "gvm-cli", body)
     v = {
         "greenbone_target_guests": GUESTS,
         "greenbone_target_scan_login": "lab-ssh",
@@ -525,8 +536,17 @@ def gvm_setup(tmp_path, **kw):
         "greenbone_target_work_dir": str(tmp_path / "work"),
         **kw,
     }
-    env = {"HNX_SECRET_ASSESSMENT_GMP_PASSWORD": "gmp-pass-fake"}
+    env = {"HNX_SECRET_ASSESSMENT_GMP_PASSWORD": password}
     return v, env, state
+
+
+def test_greenbone_target_finds_a_scan_login_whose_name_has_spaces(tmp_path):
+    v, env, state = gvm_setup(tmp_path, greenbone_target_scan_login="Lab SSH login")
+    r = run_role(tmp_path, "greenbone_target", "main", v, env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = json.loads(state.read_text())["calls"]
+    assert calls[0] == '<get_credentials filter="name=&quot;Lab SSH login&quot;"/>'
+    assert '<get_targets filter="name=&quot;hnx-bus-core&quot;"/>' in calls
 
 
 def test_greenbone_target_creates_the_missing_targets_only(tmp_path):

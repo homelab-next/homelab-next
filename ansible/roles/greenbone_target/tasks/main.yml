@@ -12,10 +12,12 @@
     - name: Open the GMP session configuration
       ansible.builtin.include_tasks: session.yml
 
+    # GMP filter terms end at a space unless quoted, so the name is quoted (name="My Login");
+    # &quot; is the quote inside the XML attribute. validate.yml refuses quotes in the name.
     - name: Find the scan login by name
       ansible.builtin.include_tasks: gmp.yml
       vars:
-        greenbone_target_xml: '<get_credentials filter="name={{ greenbone_target_scan_login }}"/>'
+        greenbone_target_xml: '<get_credentials filter="name=&quot;{{ greenbone_target_scan_login }}&quot;"/>'
 
     - name: Keep the scan login's id
       ansible.builtin.set_fact:

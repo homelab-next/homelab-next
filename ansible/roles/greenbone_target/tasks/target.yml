@@ -3,7 +3,7 @@
 - name: Look the target up by name
   ansible.builtin.include_tasks: gmp.yml
   vars:
-    greenbone_target_xml: '<get_targets filter="name={{ greenbone_target_name_prefix }}{{ greenbone_target_guest.name }}"/>'
+    greenbone_target_xml: '<get_targets filter="name=&quot;{{ greenbone_target_name_prefix }}{{ greenbone_target_guest.name }}&quot;"/>'
 
 - name: Create the target when missing
   when: greenbone_target_reply.stdout is not search('<target id=')
