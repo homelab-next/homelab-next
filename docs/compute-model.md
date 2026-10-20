@@ -331,13 +331,16 @@ and `greenbone_target_gmp_auth_ref` hold `secret:<name>`, resolved on the contro
 `tailscale-policy.hujson` for the guests that need a control bound to `tailscale_node`:
 
 * `tagOwners`: `tag:zone-<zone>` for every zone with a tailnet node, owned by `autogroup:admin`;
-* `acls`: admins to every zone tag on TCP 22 (the minimal default), then one rule per allow of the
-  site's `firewall.zone_to_zone` between two zones that both have tailnet nodes, with its
-  protocols and ports. The rules are read in the network model's order (rules to a zone, then
-  rules to `any`), and an allow is dropped when an earlier port-less deny matches the same pair.
-  A zones-only site file has no flows: the policy is the minimal default.
+* `acls`: admins to every zone tag on TCP 22 (the minimal default), then, between two zones that
+  both have tailnet nodes, rules for exactly the (protocol, port) pairs the network IR allows
+  from one to the other: the flows come from `homelabnext.network.ir`'s evaluated
+  `firewall.zone_to_zone` rules (first match wins; rules to a zone before rules to `any`; ports
+  without `protocols` mean TCP; ICMP beside ports is dropped), not from a second reading of the
+  file. A zones-only site file has no flows: the policy is the minimal default. An allow of a
+  whole protocol after a port-level deny of it (the site validator refuses such a deny) is an
+  error, since Tailscale rules only allow.
 
-Not translated: port-level denies, `service_exceptions` (they name a service), traffic inside one
+Not translated: `service_exceptions` (they name a service), traffic inside one
 zone, exit nodes and subnet routes. Push the file with Tailscale's own tooling; the generator only
 writes it.
 
