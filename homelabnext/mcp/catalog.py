@@ -88,6 +88,7 @@ TOOLS: dict[str, str] = {
 }
 
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_RECORD_ID = re.compile(r"(?<![\w-])(?:LL|RB)-(?:\d{3,}|NEW)(?![\w])")
 
 
 class CatalogError(Exception):
@@ -154,10 +155,13 @@ def _no_symlink(base: Path, rel: str) -> Path:
 class Catalog:
     """The tools over the checkout at ``root``.
 
-    ``scope`` (from :func:`homelabnext.mcp.scope.load_profile_scope`) bounds ``context_for`` and
-    ``related``: a call's ``allowed`` is intersected with it, and the graph neighbourhood is
-    computed over the in-scope nodes only.  ``None`` means unscoped (``context_for`` still
-    requires its own ``allowed``)."""
+    ``scope`` (from :func:`homelabnext.mcp.scope.load_profile_scope`) bounds every tool that
+    names capabilities, services or register records: ``context_for`` intersects a call's
+    ``allowed`` with it, ``related`` computes the neighbourhood over the in-scope nodes only, and
+    ``list_capabilities``, ``get_contract``, ``find_services`` and ``lessons_due`` return only
+    in-scope capabilities, services and records (an out-of-scope one reads like an unknown one).
+    ``get_schema`` and ``invariants_status`` describe the repository's public contracts and are
+    not scoped.  ``None`` means unscoped (``context_for`` still requires its own ``allowed``)."""
 
     def __init__(
         self,
@@ -249,20 +253,44 @@ class Catalog:
                 return text
         raise CatalogError(f"the result exceeds the {MAX_RESULT_CHARS}-character cap; narrow it")
 
+    # -- scope ------------------------------------------------------------------------------
+    def _sees(self, nid: str) -> bool:
+        return in_any(nid, self.scope)
+
+    def _svcs(self, names: Iterable[str]) -> list[str]:
+        return [n for n in names if self._sees(f"svc:{n}")]
+
+    def _visible_caps(self) -> dict[str, Any]:
+        return {n: c for n, c in self.capabilities.items() if self._sees(f"cap:{n}")}
+
     # -- tools ------------------------------------------------------------------------------
     def list_capabilities(self) -> dict[str, Any]:
         from homelabnext.sop.capabilities import summary_data
 
-        return {"capabilities": [summary_data(c) for c in self.capabilities.values()]}
+        out = []
+        for c in self._visible_caps().values():
+            row = summary_data(c)
+            impl = row["implementations"]
+            row["implementations"] = {**impl, "services": self._svcs(impl["services"])}
+            out.append(row)
+        return {"capabilities": out}
 
     def get_contract(self, capability: str) -> dict[str, Any]:
         from homelabnext.sop.capabilities import contract_data
 
         name = capability.removeprefix("cap:") if isinstance(capability, str) else ""
-        c = self.capabilities.get(name)
+        caps = self._visible_caps()
+        c = caps.get(name)
         if c is None:
-            raise CatalogError("no such capability; known: " + ", ".join(sorted(self.capabilities)))
-        return contract_data(c)
+            raise CatalogError("no such capability; known: " + ", ".join(sorted(caps)))
+        out = contract_data(c)
+        svc = out["services"]
+        out["services"] = {
+            **svc,
+            "providers": [p for p in svc["providers"] if self._sees(f"svc:{p['name']}")],
+            "consumers": self._svcs(svc["consumers"]),
+        }
+        return out
 
     def _schema_index(self) -> dict[str, str]:
         if self._schema_ids is None:
@@ -312,6 +340,8 @@ class Catalog:
         cap = capability.removeprefix("cap:") if capability else None
         out = []
         for s in self.registry.sorted_services():
+            if not self._sees(f"svc:{s.name}"):
+                continue
             if cap is not None and s.capability != cap:
                 continue
             if tag is not None and tag not in s.tags:
@@ -323,7 +353,7 @@ class Catalog:
                     "impl": s.impl,
                     "owner": s.owner,
                     "tags": list(s.tags),
-                    "depends_on": list(s.upstreams),
+                    "depends_on": self._svcs(s.upstreams),
                     "mcp": (s.mcp or {}).get("name", ""),
                 }
             )
@@ -355,14 +385,15 @@ class Catalog:
             raise CatalogError("include_inactive must be a boolean")
         g = self._scoped_graph()
         ids = [i for i in items if i in g.nodes]
-        paths = [relpath(i) for i in items if i not in g.nodes]
+        raw_paths = {i: relpath(i) for i in items if i not in g.nodes}  # raw -> normalised
+        paths = sorted(set(raw_paths.values()))
         found = set(seeds_for(g, paths, include_inactive=include_inactive)) if paths else set()
         seeds = sorted(set(ids) | found)
         rel = related(g, seeds, budget=budget, max_depth=depth, include_inactive=include_inactive)
-        resolved = set(ids) | {p for p in paths if seeds_for(g, [p], include_inactive=True)}
+        resolved = {p for p in paths if seeds_for(g, [p], include_inactive=True)}
         return {
             "seeds": seeds,
-            "unresolved": sorted(i for i in items if i not in resolved and i not in g.nodes),
+            "unresolved": sorted(raw for raw, p in raw_paths.items() if p not in resolved),
             "related": [r.as_dict() for r in rel],
             "scoped": self.scope is not None,
         }
@@ -439,21 +470,39 @@ class Catalog:
                 day = dt.date.fromisoformat(today)
             except ValueError:
                 raise CatalogError("today must be a valid date, YYYY-MM-DD") from None
-        rep = review(load_sources(self.root / "examples" / "registers"), day)
-        return rep.as_json()
+        out = review(load_sources(self.root / "examples" / "registers"), day).as_json()
+        if self.scope is None:
+            return out
+
+        def visible(rid: str) -> bool:
+            return self._sees(("runbook:" if rid.startswith("RB-") else "lesson:") + rid)
+
+        out["due"] = {a: [d for d in rows if visible(d["id"])] for a, rows in out["due"].items()}
+        out["warnings"] = [
+            w for w in out["warnings"] if all(visible(i) for i in _RECORD_ID.findall(w))
+        ]
+        return out
 
     def invariants_status(self) -> dict[str, Any]:
-        import yaml
+        """The invariants page's own verdict (:func:`homelabnext.registers.render.
+        criterion_status` and :func:`~homelabnext.registers.render.invariants_verdict`), so the
+        counts and ``all_hold`` here are the page's."""
+        from homelabnext.registers.records import load_register
+        from homelabnext.registers.render import ALL_HOLD, criterion_status, invariants_verdict
+        from homelabnext.registers.schema import RegisterError, validate_invariants
 
         src = self.root / "examples" / "registers"
-        reg = yaml.safe_load((src / "invariants.yml").read_text(encoding="utf-8")) or {}
+        try:
+            reg = validate_invariants(load_register(src / "invariants.yml"))
+        except RegisterError:
+            raise CatalogError("the invariants register does not validate") from None
         rp = src / "invariants.results.json"
         results = json.loads(rp.read_text(encoding="utf-8")) if rp.is_file() else {}
         res = results.get("results") or {}
         rows, counts = [], {}
-        for c in reg.get("criteria") or []:
+        for c in reg["criteria"]:
             r = res.get(c["id"]) or {}
-            status = str(r.get("status") or c.get("status") or "untested")
+            status = criterion_status(c, r)
             counts[status] = counts.get(status, 0) + 1
             row = {
                 "id": c["id"],
@@ -465,10 +514,12 @@ class Catalog:
             if status != "pass":
                 row["remediation"] = str(c.get("remediation", "")).strip()
             rows.append(row)
+        verdict = invariants_verdict(counts)
         return {
             "source": "examples/registers/invariants.results.json",
             "last_run": results.get("last_run", ""),
-            "all_hold": bool(rows) and counts.get("pass", 0) == len(rows),
+            "verdict": verdict,
+            "all_hold": verdict == ALL_HOLD,
             "counts": dict(sorted(counts.items())),
             "criteria": rows,
         }

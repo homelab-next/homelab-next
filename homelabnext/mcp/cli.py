@@ -3,8 +3,8 @@
 
 * ``serve [--root CHECKOUT] [--registry FILE] [--scope-from-profile PROFILE.json]`` runs the
   read-only MCP server on stdio (needs ``pip install 'homelabnext[mcp]'``); there is no network
-  transport.  With ``--scope-from-profile``, ``context_for`` and ``related`` are bounded by the
-  compiled profile's grants (the profile must verify and be granted ``hnx-catalog``);
+  transport.  With ``--scope-from-profile``, every tool but ``get_schema`` and
+  ``invariants_status`` is bounded by the compiled profile's grants (the profile must verify and be granted ``hnx-catalog``);
 * ``tools`` lists the tools and what each answers (no SDK needed);
 * ``call TOOL [--args JSON] [...]`` runs one tool in-process and prints its JSON result, the
   same handler the server calls (no SDK needed; for debugging and scripts).
@@ -49,7 +49,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--scope-from-profile",
         metavar="PROFILE",
-        help="a compiled agent profile whose grants bound context_for and related",
+        help="a compiled agent profile whose grants bound the tools (all but get_schema and "
+        "invariants_status)",
     )
     try:
         args = ap.parse_args(argv)
