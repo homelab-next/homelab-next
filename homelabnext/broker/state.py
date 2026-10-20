@@ -6,6 +6,10 @@ hard-linked to its final name, which fails when the name exists), so two process
 the same file and nothing is ever rewritten in place.  State is *derived* from which files exist:
 
 ``requests/<rid>.json``          the request as admitted (immutable)
+``open/<rid>.json``              an index of the requests with no claim yet (``pending``), so a
+                                 listing of what is pending reads only those; written after the
+                                 request, removed after its claim, rebuilt for an older state
+                                 directory, and checked against ``claims/`` on every read
 ``claims/<rid>.json``            the one terminal-or-running transition: ``run``, ``cancel`` or
                                  ``deny``.  Exclusive create: of a racing run and cancel, or two
                                  runs, exactly one wins
@@ -15,6 +19,8 @@ the same file and nothing is ever rewritten in place.  State is *derived* from w
                                  approval is single use across processes and restarts
 ``audit/<stamp>-<pid>-<n>-<rand>.json``  one audit record per file (``schemas/broker/audit``)
 ``outbox/<event id>.json``       events emitted when no bus is configured
+``digest.key``                   the broker-held key (hex) for the keyed hash of secret arguments in a
+                                 request digest (created once, exclusively)
 ``runs/<rid>/``                  a run's private directory (handler copy, stdout, stderr)
 
 A request's state: no claim -> ``pending``; claim ``cancel`` -> ``cancelled``; claim ``deny`` ->
@@ -29,6 +35,7 @@ import os
 import re
 import secrets
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -45,7 +52,18 @@ __all__ = [
 
 #: the id shape of requests, approvals and audit records (``schemas/ids/common`` slug)
 _ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
-_SUBDIRS = ("requests", "claims", "results", "approvals", "consumed", "audit", "outbox", "runs")
+_SUBDIRS = (
+    "requests",
+    "open",
+    "claims",
+    "results",
+    "approvals",
+    "consumed",
+    "audit",
+    "outbox",
+    "runs",
+)
+_KEY_BYTES = 32
 
 
 class StateError(RuntimeError):
@@ -104,6 +122,19 @@ def _dumps(doc: Any) -> bytes:
     return (json.dumps(doc, sort_keys=True, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
 
 
+def _order(doc: dict[str, Any]) -> int:
+    """A request record's position in time: ``submitted_ns``, else its ``created`` stamp."""
+    if isinstance(doc.get("submitted_ns"), int):
+        return doc["submitted_ns"]
+    from datetime import datetime
+
+    created = str((doc.get("request") or {}).get("created", ""))
+    try:
+        return int(datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp() * 1e9)
+    except ValueError:
+        return 0
+
+
 def _load(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -117,6 +148,7 @@ class StateDir:
     def __init__(self, root: str | os.PathLike[str]) -> None:
         self.root = Path(root)
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        index_missing = not (self.root / "open").exists()
         for name in _SUBDIRS:
             d = self.root / name
             if d.is_symlink():
@@ -125,6 +157,11 @@ class StateDir:
         self._seq = 0
         self._last_stamp = ""
         self._audit_lock = threading.Lock()  # a threaded server shares one instance
+        self._key: bytes | None = None
+        if index_missing:  # a state directory from before the index: build it once
+            for rid in self.request_ids():
+                if self.get_claim(rid) is None:
+                    self._mark_open(rid, self.get_request(rid) or {})
 
     def _dir(self, name: str) -> Path:
         return self.root / name
@@ -137,17 +174,48 @@ class StateDir:
 
     # ---------------------------------------------------------------- requests and transitions
     def put_request(self, rid: str, doc: dict[str, Any]) -> bool:
-        return write_exclusive(self._dir("requests") / f"{self._checked(rid)}.json", _dumps(doc))
+        """Store a request (``submitted_ns`` is added: the order requests are listed in)."""
+        doc = {**doc, "submitted_ns": doc.get("submitted_ns", time.time_ns())}
+        if not write_exclusive(self._dir("requests") / f"{self._checked(rid)}.json", _dumps(doc)):
+            return False
+        self._mark_open(rid, doc)
+        return True
+
+    def _mark_open(self, rid: str, doc: dict[str, Any]) -> None:
+        marker = {"request_id": rid, "submitted_ns": _order(doc)}
+        write_exclusive(self._dir("open") / f"{rid}.json", _dumps(marker))
 
     def get_request(self, rid: str) -> dict[str, Any] | None:
         return _load(self._dir("requests") / f"{rid}.json") if is_id(rid) else None
 
     def request_ids(self) -> list[str]:
-        return sorted(p.stem for p in self._dir("requests").glob("*.json") if is_id(p.stem))
+        """Every request id, oldest first.  Reads every request: the full-history path."""
+        rids = [p.stem for p in self._dir("requests").glob("*.json") if is_id(p.stem)]
+        return sorted(rids, key=lambda r: (_order(self.get_request(r) or {}), r))
+
+    def open_request_ids(self) -> list[str]:
+        """The ids of requests with no claim yet (``pending``), oldest first; reads only the
+        ``open/`` index, dropping a marker whose request has since been claimed."""
+        keyed = []
+        for p in self._dir("open").glob("*.json"):
+            rid = p.stem
+            if not is_id(rid):
+                continue
+            if (self._dir("claims") / f"{rid}.json").exists():
+                with contextlib.suppress(FileNotFoundError):
+                    p.unlink()  # a claim whose marker removal was interrupted
+                continue
+            marker = _load(p) or {}
+            keyed.append((marker.get("submitted_ns", 0), rid))
+        return [rid for _, rid in sorted(keyed)]
 
     def claim(self, rid: str, doc: dict[str, Any]) -> bool:
         """Take the request's single transition; False when another one already took it."""
-        return write_exclusive(self._dir("claims") / f"{self._checked(rid)}.json", _dumps(doc))
+        if not write_exclusive(self._dir("claims") / f"{self._checked(rid)}.json", _dumps(doc)):
+            return False
+        with contextlib.suppress(FileNotFoundError):
+            (self._dir("open") / f"{rid}.json").unlink()
+        return True
 
     def get_claim(self, rid: str) -> dict[str, Any] | None:
         return _load(self._dir("claims") / f"{rid}.json") if is_id(rid) else None
@@ -200,11 +268,30 @@ class StateDir:
             raise StateError(f"audit record {name} already exists")
         return path
 
-    def audit_records(self) -> Iterator[dict[str, Any]]:
-        for p in sorted(self._dir("audit").glob("*.json")):
+    def audit_records(self, *, newest_first: bool = False) -> Iterator[dict[str, Any]]:
+        """Audit records in trail order (or newest first): names are listed, and a record is
+        read only when the iteration reaches it, so a tail reads only the tail."""
+        for p in sorted(self._dir("audit").glob("*.json"), reverse=newest_first):
             doc = _load(p)
             if doc is not None:
                 yield doc
+
+    # ---------------------------------------------------------------- the digest key
+    def digest_key(self) -> bytes:
+        """The broker-held key for the keyed hash of secret arguments (``digest.key``, 0600):
+        created once, exclusively, so every process sharing this directory uses the same one."""
+        if self._key is None:
+            path = self.root / "digest.key"
+            fresh = secrets.token_hex(_KEY_BYTES) + "\n"
+            write_exclusive(path, fresh.encode("ascii"))  # False: another process made it first
+            try:
+                key = bytes.fromhex(path.read_text(encoding="ascii").strip())
+            except ValueError:
+                key = b""
+            if len(key) != _KEY_BYTES:
+                raise StateError(f"{path} is not a {_KEY_BYTES}-byte hex key")
+            self._key = key
+        return self._key
 
     def put_outbox(self, event: dict[str, Any]) -> bool:
         """Record an event (idempotent per event id: a repeat is a no-op)."""

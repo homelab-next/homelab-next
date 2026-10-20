@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from functools import cache
+from functools import cache, lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -51,12 +51,18 @@ def named_errors(ref: str, doc: Any) -> list[str]:
     return _messages(_named(str(paths.schemas_dir()), ref), doc)
 
 
-def inline_errors(schema: Mapping[str, Any], doc: Any) -> list[str]:
-    """Errors of ``doc`` against an inline schema (a handler's ``params_schema``)."""
+@lru_cache(maxsize=256)
+def _inline_validator(sdir: str, schema_json: str):
     from jsonschema import Draft202012Validator
 
-    v = Draft202012Validator(dict(schema), registry=_registry(str(paths.schemas_dir())))
-    return _messages(v, doc)
+    return Draft202012Validator(json.loads(schema_json), registry=_registry(sdir))
+
+
+def inline_errors(schema: Mapping[str, Any], doc: Any) -> list[str]:
+    """Errors of ``doc`` against an inline schema (a handler's ``params_schema``).  The validator
+    is built once per distinct schema (keyed by its canonical JSON), not on every admit and run."""
+    key = json.dumps(schema, sort_keys=True, ensure_ascii=False)
+    return _messages(_inline_validator(str(paths.schemas_dir()), key), doc)
 
 
 def schema_problems(schema: Any) -> list[str]:

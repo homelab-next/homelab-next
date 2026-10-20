@@ -55,8 +55,10 @@ What was missing was a service that runs actions, keeps durable state and can be
    request edited after approval no longer matches. Self-approval and unlisted or agent approvers
    are refused by the same `decide()` rules, for a denial as well as an approval. Running
    consumes the approval through a durable store (an exclusive-create marker per approval id),
-   so it is single use across processes and restarts. A `decision.returned` event records the
-   approver's verdict.
+   so it is single use across processes and restarts; it is consumed only after the run has
+   taken the request's claim, so a run refused on the way never burns it. A secret argument
+   enters the digest as a hash keyed with a broker-held key, so the persisted digest cannot be
+   used to guess it. A `decision.returned` event records the approver's verdict.
 5. **State is files, one per fact, created exclusively** (ADR-0014): requests, the single claim
    that moves a request out of `pending` (run, cancel or deny: of any racing pair exactly one
    wins), results, approvals, consumed-approval markers and the audit trail, one record per file,
@@ -92,8 +94,9 @@ guard hook to compare decisions, then cut over.
    Platforms without `SO_PEERCRED` (macOS, the BSDs) are unsupported: the server refuses to start
    rather than fall back to asserted identity.
 9. **One small protocol, one request per connection.** A JSON object terminated by a newline (or
-   the client's end of stream), at most 1 MiB, read within 10 s; one JSON answer; close. A thread
-   per connection with a cap (excess connections are answered `busy`); the state directory
+   the client's end of stream), at most 1 MiB, read within 10 s in all; one JSON answer; close. A
+   thread per connection with a cap, and a few slots kept for approval relays (excess connections
+   are answered `busy`); the state directory
    already makes runs, cancels, denials and approval consumption exactly-once.
    `homelabnext/broker/client.py` (`BrokerClient`) is the one client: the CLI's `--socket` mode,
    the MCP server and the hub (stage 2b) use it.

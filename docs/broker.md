@@ -108,17 +108,32 @@ hnx broker validate examples/broker/manifest.yml
    (default 900 s). Self-approval, an unlisted approver and an agent approver (unless
    `allow_agent_approvers`) are refused by the same rules for a denial as for an approval.
    `decision.returned` records the verdict.
-3. The owner runs it. The broker re-decides with the approval, consumes it (an exclusive-create
-   marker, so single use across processes and restarts) and runs once. An expired approval leaves
-   the request pending for a fresh one; a denied request can never run; a request edited after
-   approval no longer matches its digest.
+3. The owner runs it. The broker re-decides with the approval, takes the request's claim, and
+   only then consumes the approval (an exclusive-create marker, so single use across processes and
+   restarts) and runs once: a run refused on the way (arguments that no longer validate, a lost
+   race) leaves the approval unused. An expired approval leaves the request pending for a fresh
+   one; a denied request can never run; a request edited after approval no longer matches its
+   digest.
+
+`pending` (for a relay) and `pending --mine` report each request's `approval_state`, judged by the
+same decision a run gets: `none`, `valid` (it can run now), `expired` (past the TTL: file a fresh
+approval), `consumed`, `denied`, `invalid` (no longer matches the request or the approver rules),
+or `not-required` (an allowed request, in `pending --mine` only). `approved` is kept as
+`approval_state == "valid"`.
+
+A request's digest binds its action, actor, target and params. An argument an in-process command
+marks `secret` enters the request (and the digest, which is persisted, audited and sent with
+`decision.requested`) as `hmac-sha256:<hex>`, keyed with the state directory's `digest.key`, so
+the digest still changes with the value but cannot be used to guess a short secret offline.
 
 ## State
 
 One directory, one file per fact, every file created exclusively (ADR-0014), so several broker
-processes share it without locks: `requests/`, `claims/` (the one transition out of `pending`:
-run, cancel or deny), `results/`, `approvals/<request>/`, `consumed/`, `audit/` (one record per
-file, `schemas/broker/audit`), `outbox/` and `runs/<request>/`. Keep it `0700` and owned by the
+processes share it without locks: `requests/`, `open/` (an index of the requests still pending,
+so listing them reads only those; rebuilt once for an older state directory), `claims/` (the one
+transition out of `pending`: run, cancel or deny), `results/`, `approvals/<request>/`,
+`consumed/`, `audit/` (one record per file, `schemas/broker/audit`; a tail is read newest first),
+`outbox/`, `runs/<request>/` and `digest.key`. Keep it `0700` and owned by the
 broker's user; agents get no access to it.
 
 ## Running the service
@@ -142,7 +157,8 @@ and the BSDs have `getpeereid` instead, which Python does not expose portably, s
 refuses to start there rather than accept an unauthenticated caller.
 
 - **An unmapped peer** is answered `unknown-caller` before its request is read, and audited
-  (`operation: connect`, `caller: uid:<n>`).
+  (`operation: connect`, `caller: uid:<n>`); the server drops only what already arrived, without
+  waiting or parsing, and closes.
 - **The body never names the actor.** A top-level `actor`, `caller`, `as`, `who`, `profile`,
   `identity`, `uid` or `user` is refused (`actor-in-body`); so is any field the operation does not
   take (`request-invalid`). The broker binds everything to the peer's profile, including the
@@ -159,9 +175,11 @@ hnx broker serve --manifest /etc/hnx-broker/manifest.yml --state /var/lib/hnx-br
 
 The socket is created `0600` (or `--socket-mode`, which may grant nothing to others) and owned by
 the service user, `--socket-group` its group; its directory is created `0750` (`0700` without a
-group) and the server refuses a directory that is group-writable or open to others, and a file at
-the socket path that is not a stale socket. Bounds: one request per connection, at most 1 MiB
-(`--max-request-bytes`) read within 10 s (`--timeout`); 32 connections at once, more get `busy`.
+group) and the server refuses a directory owned by another user (other than root), one that is
+group-writable or open to others, and a file at the socket path that is not a stale socket.
+Bounds: one request per connection, at most 1 MiB (`--max-request-bytes`) read within 10 s
+(`--timeout`, for the whole request, not each read); 32 connections at once for callers, plus 4
+kept for approval relays so agents cannot crowd out the hub; more get `busy`.
 
 ### A systemd unit
 
@@ -243,13 +261,19 @@ it authenticates a person, then speaks to the socket with `BrokerClient`
 
 | op | fields | result |
 |---|---|---|
-| `pending` | - | `{"requests": [{request_id, action, actor, target, params, created, digest, approved}]}` |
+| `pending` | - | `{"requests": [{request_id, action, actor, target, params, created, digest, approved, approval_state}]}` |
 | `approve` | `request_id`, `approver: {issuer, subject}`, `note` (optional, at most 2000 chars) | the approval document (`schemas/broker/approval`) |
 | `deny` | as `approve` | the denial document |
 | `audit` | optional filters `action`, `caller`, `outcome`, `operation`, `request_id`; `tail` (default 50, 0-500) | `{"records": [...]}` (`schemas/broker/audit`) |
 
 - response `{"ok": true, "result": ...}` or `{"ok": false, "error": REASON, "kind": "Denied" |
   "InvalidArguments" | "BrokerError", "message": TEXT}`.
+
+A `pending` row's `approval_state` is what a relay shows and acts on: `none` (show approve and
+deny), `valid` (approved, the owner may run it now: no form), `expired` or `consumed` (the earlier
+approval can no longer be used: show the form again, a fresh approval is accepted), `invalid`
+(the approval no longer matches: show the form). `approved` is `true` exactly when the state is
+`valid`; a relay written against the older field keeps working and stops hiding an expired one.
 
 `approver.issuer` must be the relay's own `issuer` (else `relay-issuer-mismatch`); `subject` is the
 person's SSO subject. The broker then applies the manifest's rules to that person:
@@ -365,7 +389,7 @@ hnx broker import-proposals /path/to/old-vault/proposed --apply --socket /run/hn
 | `created` | `created`, `date` (a bare date is midnight UTC) | the filename's leading date, else the file's mtime |
 | `affects`, `related` | the same keys, when valid | dropped and reported |
 | `provenance` | `inputs`: `imported-from:<file>`, `requested-by:<original agent>`; `source`: the importing caller | - |
-| slug | the filename after its date (minus the original agent's name) | from the title |
+| slug | the original agent's name, then the filename after its date (and that name) | the agent's name, then the title |
 
 `requesting_agent` is never carried over: the broker binds it to the caller doing the import (with
 `--socket`, the importer's mapped profile; without it, `--as`, only under `dev_identity`), so an
@@ -373,7 +397,10 @@ import cannot file a note as another agent; the original requester survives as p
 `status` is dropped (the broker keeps state). A `completion-request` or any other non-proposal
 `type` is skipped and reported (close those with the records lifecycle). Every other key is listed
 as unmapped. Filenames come from `created` and the slug, so a second `--apply` reports
-`lane-exists` and adds nothing. Exit status 1 when any file could not be mapped or filed. A
+`lane-exists` and adds nothing; the slug keeps the original agent's name, so two agents' proposals
+with the same date and title get two files, and two source files that would still share one name
+are a `conflict` (the second is not filed). Exit status 1 when any file could not be mapped or
+filed, or conflicts. A
 suggested order: run the broker in `shadow` beside the guard hook, import the queue, point the
 agents at the MCP tools, then remove the agents' write access to the old directory.
 
