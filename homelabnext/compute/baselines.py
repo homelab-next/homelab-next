@@ -312,6 +312,8 @@ def settings_problems(bs: BaselineSet) -> list[Problem]:
         if bs.role(c) is None:
             out.append(Problem(w, f"control {c!r} declares settings but is bound to no role"))
         elif o is None:
+            if bs.roles_dir is None:
+                continue  # a bare install ships no roles: nothing to check settings against
             out.append(
                 Problem(
                     w,
@@ -339,6 +341,8 @@ def settings_problems(bs: BaselineSet) -> list[Problem]:
                 )
                 continue
             if o is None:
+                if bs.roles_dir is None:
+                    continue  # a bare install ships no roles: nothing to check settings against
                 out.append(
                     Problem(
                         w,

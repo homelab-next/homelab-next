@@ -11,5 +11,9 @@ hnx_provisioning: "terraform"
 hnx_vmid: 72
 hnx_zone: "data"
 hnx_tags: ["prod"]
+hnx_firewall:
+  policy_out: "ACCEPT"
+  inbound_allow: []
+  outbound_allow: []
 hnx_baselines: ["base", "server"]
 hnx_controls: ["ssh-hardening", "log-forward", "backup-verify"]

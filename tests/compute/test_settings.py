@@ -259,3 +259,24 @@ def test_the_example_lab_binds_every_needed_control_and_sets_its_inputs(capsys, 
         "severity": "HIGH",
         "scan_containers": True,
     }
+
+
+# ---------------------------------------------------------------- without the roles
+def test_a_bare_install_skips_the_settings_check_but_a_named_roles_dir_must_hold_the_specs(
+    tmp_path, monkeypatch
+):
+    """An installed wheel ships no roles, so settings cannot be checked there and are not
+    refused; a roles directory that is named (HNX_ROLES_DIR) but lacks the spec still is."""
+    from homelabnext.compute import baselines
+
+    zones, domain = open_site(EXAMPLE_SITE)
+    monkeypatch.delenv("HNX_ROLES_DIR")
+    found = baselines.default_roles_dir
+    monkeypatch.setattr(baselines, "default_roles_dir", lambda: None)
+    load_fleet(EXAMPLE, zones, domain=domain, flows=site_flows(EXAMPLE_SITE))
+    monkeypatch.setattr(baselines, "default_roles_dir", found)
+    empty = tmp_path / "no-roles"
+    empty.mkdir()
+    monkeypatch.setenv("HNX_ROLES_DIR", str(empty))
+    with pytest.raises(ComputeError, match=r"cannot read the meta/argument_specs\.yml"):
+        load_fleet(EXAMPLE, zones, domain=domain, flows=site_flows(EXAMPLE_SITE))

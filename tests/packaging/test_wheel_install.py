@@ -166,7 +166,7 @@ def test_installed_cli_validates_shipped_examples(installed, tmp_path):
         py, ["guests", "validate", str(ex / "guests"), "--site", str(ex / "site.yml")], tmp_path
     )
     assert guests.returncode == 0, guests.stderr + guests.stdout
-    assert guests.stdout.startswith("ok: 2 guests")
+    assert guests.stdout.startswith("ok: 3 guests")
     custom = _run(py, ["custom", "list"], tmp_path)
     assert custom.returncode == 0, custom.stderr + custom.stdout
     assert "custom:vlan-aware-bridge-verifier" in custom.stdout
