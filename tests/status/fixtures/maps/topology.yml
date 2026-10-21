@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# The synthetic topology input of tests/status/test_maps.py (documentation addresses only): a
+# site document, guest documents and the zone flows, as topology.build takes them.
+site:
+  site: {id: lab}
+  zones:
+    - {id: mgmt, purpose: management, vlan_id: 10, subnet: 192.0.2.0/26, gateway: 192.0.2.1,
+       egress: {internet: deny}}
+    - {id: data, vlan_id: 20, subnet: 192.0.2.64/26, gateway: 192.0.2.65}
+  firewall: {default_action: deny}
+guests:
+  - {id: "guest:hv-a", kind: host, placement: {node: hv-a}, network: {zone: mgmt, ip: 192.0.2.10},
+     capability: "cap:events", baseline: {names: [server]}}
+  - {id: "guest:db-1", kind: vm, placement: {node: hv-a}, network: {zone: data, ip: 192.0.2.70},
+     capability: "cap:events", baseline: {names: [server, db]}}
+  - {id: "guest:app-1", kind: lxc, placement: {node: hv-b}, network: {zone: data, ip: 192.0.2.71},
+     capability: "cap:events", baseline: {exemption: {reason: lab}}}
+  - {id: "guest:odd-1", kind: vm, placement: {node: hv-b}, network: {zone: lab, ip: 192.0.2.72},
+     capability: "cap:events"}
+flows:
+  - {src: mgmt, dst: data}
+  - {src: mgmt, dst: data, protocols: [tcp], ports: [22, 443]}

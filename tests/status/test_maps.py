@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from status_helpers import REGISTRY, ROOT, VIEWS
 
 from homelabnext.compute.model import ZoneFlow
@@ -25,6 +26,7 @@ from homelabnext.status.model import sources_from_registry
 from homelabnext.status.views import build_status, load_views
 
 GOLDEN = Path(__file__).parent / "golden" / "maps"
+FIXTURES = Path(__file__).parent / "fixtures" / "maps"
 GUESTS = ROOT / "examples" / "minimal" / "guests"
 SITE = ROOT / "examples" / "minimal" / "site.yml"
 HOSTILE = '<script>alert("x")</script>'
@@ -76,23 +78,13 @@ def _guest(gid, kind, node, zone, ip, **extra):
     return SimpleNamespace(raw=raw)
 
 
-SITE_DOC = {
-    "site": {"id": "lab"},
-    "zones": [
-        {"id": "mgmt", "purpose": "management", "vlan_id": 10, "subnet": "192.0.2.0/26",
-         "gateway": "192.0.2.1", "egress": {"internet": "deny"}},
-        {"id": "data", "vlan_id": 20, "subnet": "192.0.2.64/26", "gateway": "192.0.2.65"},
-    ],
-    "firewall": {"default_action": "deny"},
-}  # fmt: skip
-GUEST_SET = [
-    _guest("guest:hv-a", "host", "hv-a", "mgmt", "192.0.2.10", baseline={"names": ["server"]}),
-    _guest("guest:db-1", "vm", "hv-a", "data", "192.0.2.70", baseline={"names": ["server", "db"]}),
-    _guest("guest:app-1", "lxc", "hv-b", "data", "192.0.2.71",
-           baseline={"exemption": {"reason": "lab"}}),
-    _guest("guest:odd-1", "vm", "hv-b", "lab", "192.0.2.72"),
-]  # fmt: skip
-FLOWS = [ZoneFlow("mgmt", "data"), ZoneFlow("mgmt", "data", ("tcp",), (22, 443))]
+_TOPO = yaml.safe_load((FIXTURES / "topology.yml").read_text(encoding="utf-8"))
+SITE_DOC = _TOPO["site"]
+GUEST_SET = [SimpleNamespace(raw=g) for g in _TOPO["guests"]]
+FLOWS = [
+    ZoneFlow(f["src"], f["dst"], tuple(f.get("protocols", ())), tuple(f.get("ports", ())))
+    for f in _TOPO["flows"]
+]
 
 
 def test_topology_view_model_and_page_match_their_goldens():
