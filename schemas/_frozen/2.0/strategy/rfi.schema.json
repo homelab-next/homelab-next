@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/strategy/rfi/2.0",
+  "title": "Request for information record",
+  "description": "One RFI, one Markdown file per record (rfis/RFI-001.md): a question raised by a gap (a red or not-measurable measure, an unmet requirement), triaged into a collection requirement (CR: the answer needs data we do not hold) or a production requirement (PR: we hold it and must produce the answer), with a last time of value (LTIOV). Raised through the records inbox (a strategy-rfi intent) and closed only by a transition: answered, no-find (a valid outcome: the search is the answer) or expired (the LTIOV sweep). 2.0 (ADR-0019): a record is identified by its `uid` (a UUIDv7) and names its `type`; every link is a uid; the numbered `id` is gone (the number a record is shown with is computed from type, parent and sibling `order`, never stored). The record-type rules of a link (which types a parent, supports, serves or raised_by may name) are the doctrine's `hierarchy` and `links`, checked by homelabnext.strategy. 1.x records are read only by `hnx records assign-uids`, which migrates them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "uid",
+    "type",
+    "title",
+    "status",
+    "date",
+    "author",
+    "raised_by",
+    "triage",
+    "ltiov",
+    "question"
+  ],
+  "properties": {
+    "uid": {
+      "$ref": "#/$defs/uid"
+    },
+    "type": {
+      "const": "RFI"
+    },
+    "order": {
+      "type": "number",
+      "description": "Optional: the sort key among its siblings (same type, same parent). Siblings without one follow, in creation (uid) order."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 200
+    },
+    "status": {
+      "enum": [
+        "open",
+        "answered",
+        "expired",
+        "no-find"
+      ]
+    },
+    "date": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "author": {
+      "$ref": "#/$defs/author"
+    },
+    "raised_by": {
+      "$ref": "#/$defs/uid",
+      "description": "The uid of the measure or requirement whose gap raised it."
+    },
+    "triage": {
+      "enum": [
+        "collection",
+        "production"
+      ]
+    },
+    "ltiov": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "tasked_to": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/identity"
+      },
+      "uniqueItems": true
+    },
+    "intent": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/rel_path",
+      "description": "The strategy-rfi note that raised it, in the records tree."
+    },
+    "question": {
+      "$ref": "#/$defs/text"
+    },
+    "answer": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "resolution": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reviews": {
+      "type": "array",
+      "description": "Derived from the review events (homelabnext.reviews); never written in the record file."
+    }
+  },
+  "$defs": {
+    "identity": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9_.@-]+$(?!\\n)",
+      "description": "issuer:subject (human:example-operator, profile:example-checker, role:on-call)."
+    },
+    "author": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "const": "unknown"
+        }
+      ]
+    },
+    "text": {
+      "type": "string",
+      "minLength": 12
+    },
+    "strings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "uid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)",
+      "description": "A record uid: a canonical UUIDv7 (lowercase, version 7), created with the record and never changed (ADR-0019)."
+    }
+  }
+}

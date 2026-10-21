@@ -1,5 +1,6 @@
 {
-  "id": "RB-NEW",
+  "uid": "01a15e4e-0000-7000-8000-000000000003",
+  "type": "runbook",
   "title": "Deploy a web service",
   "systems": [
     "web-proxy"

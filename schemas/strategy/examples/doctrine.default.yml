@@ -13,8 +13,9 @@ rules:
   #    under the same definition digest; a changed definition is a re-baseline
   trend_same_definition: {enforce: error}
   # 2. never silently redefine: a reading's definition digest that differs from the current one
-  #    under the same definition_version fails (bump definition_version); ids never renumber
-  #    (hnx ids check-lost guards every record directory)
+  #    under the same definition_version fails (bump definition_version); a record is its uid and
+  #    its number is computed, so nothing is ever renumbered (hnx ids check-lost guards every
+  #    record directory)
   no_silent_redefinition: {enforce: error}
   # 3. a self-measured MOE (source manual or none, or measured_by the objective's own owner)
   #    is amber at best
@@ -38,6 +39,27 @@ rules:
   baseline_so: {enforce: error, types: [PIR, FFIR], exactly: 1}
   # an SO that no active requirement supports is an orphan
   so_supported: {enforce: warn}
+# The model's shape (ADR-0019).  hierarchy: each record type's parent types ([] = top level; an SO
+# hangs from the strategy).  A record's display number is computed from it and never stored: OO
+# 1.2 is the second OO under SO 1, MOE 1.2.1 the first MOE of OO 1.2, PIR 2.1 a PIR under PIR 2.
+# Siblings sort by `order` (a number), then by uid (creation order).
+hierarchy:
+  SO: {parent: []}
+  OO: {parent: [SO]}
+  TO: {parent: [OO]}
+  TT: {parent: [TO]}
+  MOE: {parent: [SO, OO, TO, TT]}
+  MOP: {parent: [SO, OO, TO, TT]}
+  CCIR: {parent: []}
+  FFIR: {parent: []}
+  PIR: {parent: [PIR], optional: true}
+  RFI: {parent: []}
+# links: per typed link field, the record types that may carry it and the types each may name
+# (by uid); the serves graph has no cycle, and an active record never links to a closed one
+links:
+  supports: {CCIR: [SO, OO, TO], FFIR: [SO, OO, TO], PIR: [SO, OO, TO]}
+  serves: {FFIR: [CCIR], PIR: [CCIR, FFIR]}
+  raised_by: {RFI: [MOP, MOE, CCIR, FFIR, PIR]}
 judgment:
   - rule: completeness measures are computed on write time over a recent window, and a backfill is reported apart from the window's value
     why: whether a query windows on write time or event time is in the query, not in the record

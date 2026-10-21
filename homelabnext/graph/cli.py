@@ -86,8 +86,12 @@ def main(argv: list[str] | None = None) -> int:
         print("hnx graph related: give at least one node id or path", file=sys.stderr)
         return 2
     graph = _graph(root)
-    ids = [i for i in args.items if i in graph.nodes]
-    rest = [i for i in args.items if i not in graph.nodes]
+    from .query import resolve_ids
+    from .sources import record_aliases
+
+    items = resolve_ids(graph, args.items, record_aliases(root))  # a uid, a legacy code
+    ids = [i for i in items if i in graph.nodes]
+    rest = [i for i in items if i not in graph.nodes]
     seeds = sorted(set(ids) | set(seeds_for(graph, rest, include_inactive=args.include_inactive)))
     if not seeds:
         print(f"hnx graph related: no node matches {args.items}", file=sys.stderr)

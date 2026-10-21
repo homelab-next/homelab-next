@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-# nothing serves a PIR
-id: PIR-001
+# serves names uids, never numbered codes
+uid: 01a15e4e-758d-75ee-a451-ea98b7fcd567
+type: PIR
 title: Is anyone probing the lab's monitoring or status endpoints?
 status: active
 date: '2026-10-20'
@@ -9,12 +10,12 @@ consumer: human:example-operator
 cadence: P1D
 ltiov: standing
 supports:
-- SO-002
+- 01a15e4e-758c-7319-b5cb-c9a62a360c20
 serves:
-- PIR-002
+- FFIR-001
 sirs:
-- 1.1 Requests to the status hub or the uptime service from outside the lab's own zones.
-- 1.2 Repeated authentication failures against the monitoring stack.
+- Requests to the status hub or the uptime service from outside the lab's own zones.
+- Repeated authentication failures against the monitoring stack.
 indicators:
 - proxy logs naming the status or uptime host from an unknown client
 - an auth-failure burst detection firing on a monitoring host
@@ -25,7 +26,7 @@ tasked_to:
 - profile:reader
 question: Is anyone outside the lab probing or attacking its monitoring and status endpoints, which would
   blind the lab to an outage?
-decision_supported: Whether to restrict the monitoring endpoints further (a proposal) and whether FFIR-001's
+decision_supported: Whether to restrict the monitoring endpoints further (a proposal) and whether [[01a15e4e-758d-75ed-a383-a78599b3d065]]'s
   answer may be under attack.
 acceptance: A request burst against the status host from an address outside the lab's zones is reported
   as a finding within a day, naming the client and the window.

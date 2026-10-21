@@ -35,7 +35,7 @@ from typing import Any
 
 from .doctrine import Doctrine
 from .records import Tree, definition_digest
-from .rules import _active, self_measured
+from .rules import OBJECTIVE_TYPES, _active, measures_of, self_measured
 
 __all__ = [
     "Context",
@@ -199,7 +199,7 @@ def _same(a: Any, b: Any) -> bool:
 
 @dataclass
 class Grade:
-    measure: str
+    measure: str  # the measure's uid
     state: str  # green | amber | red | baseline | unmeasured | pending
     value: float | None = None
     observed_at: str | None = None
@@ -209,6 +209,7 @@ class Grade:
     trend: str | None = None  # up | down | flat | re-baseline
     capped: bool = False  # a self-measured MOE held at the cap
     readings: int = 0
+    label: str | None = None  # its display number (MOE 1.2.1), computed
 
     def as_json(self) -> dict[str, Any]:
         return {k: v for k, v in asdict(self).items() if v is not None}
@@ -230,7 +231,7 @@ def _target(v: float, target: Mapping[str, Any]) -> str:
 
 def grade(measure: Mapping[str, Any], tree: Tree, doctrine: Doctrine, now: dt.datetime) -> Grade:
     """The measure's current grade from its recorded readings (and the doctrine)."""
-    ident = str(measure.get("id"))
+    ident = str(measure.get("uid"))
     values = list(measure.get("values") or ())
     conf = measure.get("confidence")
     if measure.get("source") == "none":
@@ -267,7 +268,7 @@ def grade(measure: Mapping[str, Any], tree: Tree, doctrine: Doctrine, now: dt.da
     out.state = _target(out.value, measure.get("target") or {})
     if (
         doctrine.on("self_measured_moe_cap")
-        and str(ident).startswith("MOE")
+        and measure.get("type") == "MOE"
         and self_measured(measure, tree)
     ):
         cap = doctrine.opt("self_measured_moe_cap", "cap")
@@ -289,8 +290,14 @@ def _thin(measure: Mapping[str, Any], last: Mapping[str, Any], now: dt.datetime)
 
 
 def grade_all(tree: Tree, doctrine: Doctrine, now: dt.datetime) -> dict[str, Grade]:
-    """Every active measure's grade, by measure key."""
-    return {k: grade(m, tree, doctrine, now) for k, m in tree.of("measures").items() if _active(m)}
+    """Every active measure's grade, by measure uid, in display-number order."""
+    out = {}
+    for k in tree.ordered("measures"):
+        m = tree.of("measures")[k]
+        if _active(m):
+            out[k] = grade(m, tree, doctrine, now)
+            out[k].label = tree.label(k)
+    return out
 
 
 def worst(states: Sequence[str]) -> str:
@@ -299,27 +306,26 @@ def worst(states: Sequence[str]) -> str:
 
 def rollup(tree: Tree, grades: Mapping[str, Grade]) -> dict[str, dict[str, Any]]:
     """Per active objective: ``state`` (the rollup), ``effect`` (its MOEs and children),
-    ``performance`` (its MOPs) and ``children`` -- every SO's subtree, from the leaves up."""
+    ``performance`` (its MOPs) and ``children`` -- every SO's subtree, from the leaves up.
+    Children and measures are in display-number order; ``label`` is the objective's number."""
     objectives = {k: o for k, o in tree.of("objectives").items() if _active(o)}
-    kids: dict[str, list[str]] = {}
-    for k, o in objectives.items():
-        if o.get("parent"):
-            kids.setdefault(str(o["parent"]), []).append(k)
+    measures = tree.of("measures")
     out: dict[str, dict[str, Any]] = {}
 
     def visit(k: str) -> str:
         if k in out:
             return out[k]["state"]
-        o = objectives[k]
-        ms = [str(m) for m in o.get("measures") or () if str(m) in grades]
-        moe = [grades[m].state for m in ms if m.startswith("MOE")]
-        mop = [grades[m].state for m in ms if m.startswith("MOP")]
-        children = sorted(kids.get(k, ()))
+        ms = [m for m in measures_of(tree, k) if m in grades]
+        moe = [grades[m].state for m in ms if measures[m].get("type") == "MOE"]
+        mop = [grades[m].state for m in ms if measures[m].get("type") == "MOP"]
+        children = [c for c in tree.children(k, OBJECTIVE_TYPES) if c in objectives]
+        out[k] = {"state": "pending"}  # a parent cycle (the validation reports it) ends here
         child_states = [visit(c) for c in children]
         effect = worst(moe + child_states)
         performance = worst(mop)
         state = effect if SEVERITY[effect] >= SEVERITY["green"] else worst([effect, performance])
         out[k] = {
+            "label": tree.label(k),
             "state": "red" if state == "unmeasured" else state,
             "effect": effect,
             "performance": performance,
@@ -328,8 +334,9 @@ def rollup(tree: Tree, grades: Mapping[str, Grade]) -> dict[str, dict[str, Any]]
         }
         return out[k]["state"]
 
-    for k in sorted(objectives):
-        visit(k)
+    for k in tree.ordered("objectives"):
+        if k in objectives:
+            visit(k)
     return out
 
 

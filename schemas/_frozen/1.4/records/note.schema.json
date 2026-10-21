@@ -1,0 +1,459 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/records/note/1.4",
+  "title": "Records note frontmatter",
+  "description": "YAML frontmatter of a records note (the generalised vault note). The filename convention is <YYYY-MM-DD>-<requesting-agent>-<slug>.md (checked by tools/schema_check.py, not expressible in JSON Schema). Lanes: inbox/ (writable by agents), decided/{approved,denied,completed}/ (decision-maker only). 1.1 added, additively, type register-transition: an agent's request to change a lesson's or runbook's lifecycle status, applied only by the register decider (hnx registers decide). 1.2 added retired_on, which replaces on: an unquoted on is the YAML 1.1 boolean true, so it never arrived as a key named on (a note with a non-string key is invalid). 1.3 added, additively, type strategy-transition (a request to close or retire a strategy record: an objective, measure, requirement or RFI; applied only by hnx strategy decide) and type strategy-rfi (a request to raise an RFI from a gap: a red or not-measurable measure, or an unmet requirement). 1.4 widens, additively, every record reference (record, superseded_by, raised_by) to a record uid (a UUIDv7, ADR-0019); the numbered code a record carried before uids is still accepted and resolves through the tree's aliases.yml with a deprecation warning.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "enum": [
+        "proposal",
+        "completion-request",
+        "finding",
+        "escalation",
+        "task",
+        "register-transition",
+        "strategy-transition",
+        "strategy-rfi"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "requesting_agent": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+    },
+    "created": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    },
+    "related": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/rel_path"
+      },
+      "uniqueItems": true
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/svc_id"
+            },
+            {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/cap_id"
+            },
+            {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+            }
+          ]
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 50
+        },
+        "model_role": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/mdl_id"
+        }
+      },
+      "required": [
+        "source"
+      ]
+    }
+  },
+  "required": [
+    "type",
+    "title",
+    "requesting_agent",
+    "created"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "proposal"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "required": [
+          "risk",
+          "rollback"
+        ],
+        "properties": {
+          "risk": {
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "rollback": {
+            "type": "string",
+            "minLength": 1
+          },
+          "affects": {
+            "type": "array",
+            "items": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0"
+            },
+            "minItems": 1
+          },
+          "status": {
+            "enum": [
+              "proposed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "completion-request"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "required": [
+          "related"
+        ],
+        "properties": {
+          "related": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^decided/approved/[A-Za-z0-9._-]+\\.md$"
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "outcome": {
+            "enum": [
+              "implemented",
+              "already-done",
+              "superseded"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "finding"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "required": [
+          "area",
+          "severity"
+        ],
+        "properties": {
+          "area": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+          },
+          "severity": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/severity"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "escalation"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "required": [
+          "reason",
+          "to"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+            "description": "Role name, not a person."
+          },
+          "deadline": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "task"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "required": [
+          "assigned_to",
+          "done_when",
+          "expires"
+        ],
+        "properties": {
+          "assigned_to": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+          },
+          "done_when": {
+            "type": "string",
+            "minLength": 10,
+            "description": "The observable condition that defines completion."
+          },
+          "expires": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+          },
+          "status": {
+            "enum": [
+              "open",
+              "closed",
+              "expired"
+            ]
+          }
+        }
+      },
+      "$comment": "register-transition (1.1) sits in this else branch so allOf keeps its 1.0 length (additive evolution)",
+      "else": {
+        "if": {
+          "properties": {
+            "type": {
+              "const": "register-transition"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        "then": {
+          "required": [
+            "record",
+            "from",
+            "to",
+            "reason"
+          ],
+          "properties": {
+            "record": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(LL|RB)-\\d{3,}$"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)"
+                }
+              ],
+              "description": "The record's uid (1.4); a legacy numbered code still resolves, with a warning."
+            },
+            "from": {
+              "type": "string",
+              "pattern": "^[a-z]+$",
+              "description": "The status the requester saw; the decider denies the intent when it is no longer current."
+            },
+            "to": {
+              "type": "string",
+              "pattern": "^[a-z]+$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "retired_by": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "incorporated_into": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "superseded_by": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(LL|RB)-\\d{3,}$"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)"
+                }
+              ],
+              "description": "The replacing record's uid (1.4); a legacy numbered code still resolves, with a warning."
+            },
+            "on": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date",
+              "description": "Deprecated (1.2): not read by the decider, which refuses it; use retired_on. An unquoted on is the YAML 1.1 boolean true."
+            },
+            "retired_on": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date",
+              "description": "1.2: retired_on for a retirement (default: the date the intent was created)."
+            }
+          }
+        },
+        "$comment": "strategy-transition and strategy-rfi (1.3) nest in this else branch so allOf keeps its 1.0 length",
+        "else": {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "strategy-transition"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "record",
+              "from",
+              "to",
+              "reason"
+            ],
+            "properties": {
+              "record": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^(?:SO|OO|TO|TT|MOP|MOE|CCIR|FFIR|PIR|RFI)-\\d{3,}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)"
+                  }
+                ],
+                "description": "The record's uid (1.4); a legacy numbered code still resolves, with a warning."
+              },
+              "from": {
+                "type": "string",
+                "pattern": "^[a-z]+(?:-[a-z]+)*$",
+                "description": "The status the requester saw; denied when it is no longer current."
+              },
+              "to": {
+                "type": "string",
+                "pattern": "^[a-z]+(?:-[a-z]+)*$"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Why: the answer, the no-find, the expiry; it becomes the record's resolution."
+              }
+            }
+          },
+          "else": {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "strategy-rfi"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "required": [
+                "raised_by",
+                "question",
+                "triage"
+              ],
+              "properties": {
+                "raised_by": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^(?:MOP|MOE|CCIR|FFIR|PIR)-\\d{3,}$"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)"
+                    }
+                  ],
+                  "description": "The uid of the measure or requirement whose gap raises the RFI (1.4); a legacy numbered code still resolves, with a warning."
+                },
+                "question": {
+                  "type": "string",
+                  "minLength": 10,
+                  "maxLength": 1000
+                },
+                "triage": {
+                  "enum": [
+                    "collection",
+                    "production"
+                  ],
+                  "description": "collection: the answer needs data we do not hold; production: we hold it and must produce the answer."
+                },
+                "ltiov": {
+                  "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date",
+                  "description": "Last time the information is of value (default: the doctrine's rfi_default_ltiov_days after created)."
+                },
+                "tasked_to": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9_.@-]+$"
+                  },
+                  "uniqueItems": true
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -23,6 +23,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import unquote
 
+from homelabnext.identity.uid import UID_PATTERN, is_uid
+
 from .model import Edge, Node
 
 # --------------------------------------------------------------------------- builder
@@ -176,39 +178,25 @@ def _register_entries(path: str | Path) -> list[dict[str, Any]]:
     The single seam to the register storage: ``homelabnext.registers.load_register`` reads a
     directory of one-record-per-file Markdown (lessons, runbooks) or a single YAML file
     (invariants), and returns the document the validators take.  Inactive records are kept: the
-    graph marks them and its queries skip them.  Each record gains ``_path``, the file it lives in,
-    and ``_key``, the id its node takes: the record id, except for an unallocated placeholder
-    (``LL-NEW`` in ``LL-NEW-<slug>.md``), which takes the file stem -- a pull request may carry
-    several placeholders, and they are distinct records, not one duplicated id.
+    graph marks them and its queries skip them.  Each record gains ``_path``, the file it lives in
+    (``<uid>.md``), ``_key``, the id its node takes (a record's uid, a criterion's id), and
+    ``_label``, the display number a record is shown with (``LL 3``, computed, never stored).
     """
     from homelabnext.registers import load_register
+    from homelabnext.registers.schema import labels_of
 
     path = Path(path)
     data = load_register(path) or {}
     for key in ("lessons", "runbooks", "criteria"):
         if isinstance(data.get(key), list):
             out = [dict(e) for e in data[key] if isinstance(e, dict)]
-            if path.is_dir():
-                files = {f.stem: f for f in sorted(path.glob("*.md"))}  # named <id>[-<slug>].md
-                used: set[str] = set()
-                for e in out:
-                    rid = str(e.get("id"))
-                    e["_key"] = rid
-                    # the loader reads files in name order, so records sharing an id (several
-                    # placeholders: LL-NEW.md, LL-NEW-<slug>.md) pair with its files in that order
-                    stem = next(
-                        (
-                            k
-                            for k in files
-                            if (k == rid or k.startswith(f"{rid}-")) and k not in used
-                        ),
-                        None,
-                    )
-                    if stem is not None:
-                        e["_path"], e["_key"] = files[stem], stem
-                        used.add(stem)
+            labels = labels_of(out) if key != "criteria" else {}
             for e in out:
-                e.setdefault("_key", str(e.get("id")))
+                e["_key"] = str(e.get("uid") if key != "criteria" else e.get("id"))
+                if key != "criteria":
+                    e["_label"] = labels.get(e["_key"])
+                    if path.is_dir() and (path / f"{e['_key']}.md").is_file():
+                        e["_path"] = path / f"{e['_key']}.md"
             return out
     return []
 
@@ -665,17 +653,18 @@ def read_scripts(b: Builder) -> None:
 # --------------------------------------------------------------------------- registers
 
 REGISTERS = "examples/registers"
-_LESSON_REF = re.compile(r"(?<![\w-])(LL|RB)-(\d{3,})(?![\w-])")
+_RECORD_REF = re.compile(rf"(?<![\w-])({UID_PATTERN})(?![\w-])")
 _INV_REF = re.compile(r"(?<![\w-])([A-Z]-\d{2,})(?![\w-])")
 
 
-def _id_refs(text: str, inv_ids: set[str]) -> list[str]:
-    """Record ids a register text names.  Code spans are quoted literals (``LL-040`` in "two
-    authors each added `LL-040`"), not references, and are skipped."""
+def _id_refs(text: str, inv_ids: set[str], records: dict[str, str]) -> list[str]:
+    """What a register text names: a record by its uid (``[[<uid>]]`` or bare; ``records`` maps
+    a uid to its node id, and an unknown uid is ``record:<uid>``, which the integrity check
+    reports as dangling) and an invariant by its id.  Code spans are quoted literals (``LL-040``
+    in "two authors each added `LL-040`"), not references, and are skipped."""
     text = _CODE.sub("", text)
-    out = [
-        ("lesson:" if k == "LL" else "runbook:") + f"{k}-{n}" for k, n in _LESSON_REF.findall(text)
-    ]
+    # a uid no register record has stays a reference (``record:<uid>``): a dangling edge
+    out = [records.get(u, f"record:{u}") for u in _RECORD_REF.findall(text)]
     out += [f"inv:{i}" for i in _INV_REF.findall(text) if i in inv_ids]
     return sorted(set(out))
 
@@ -710,6 +699,7 @@ def read_registers(b: Builder) -> None:
             str(e.get("title", "")),
             lp,
             lp,
+            label=e.get("_label"),
             status=e.get("status"),
             lesson_kind=e.get("kind"),
             date=e.get("date"),
@@ -724,6 +714,7 @@ def read_registers(b: Builder) -> None:
             str(e.get("title", "")),
             rp,
             rp,
+            label=e.get("_label"),
             status=e.get("status"),
             **_provenance(e, policy),
         )
@@ -739,6 +730,8 @@ def read_registers(b: Builder) -> None:
             **_provenance(e, policy),
         )
     inv_ids = {str(e["id"]) for e in criteria}
+    records = {e["_key"]: f"lesson:{e['_key']}" for e in lessons}
+    records.update({e["_key"]: f"runbook:{e['_key']}" for e in runbooks})
     cmds = _commands(b)
     resolved: dict[str, list[str]] = {}
     for n in b.nodes.values():
@@ -757,11 +750,11 @@ def read_registers(b: Builder) -> None:
     for e in lessons:
         nid, at = f"lesson:{e['_key']}", rel(e, "lessons")
         tags(nid, e, at)
-        for ref in _id_refs(str(e.get("preventive_control") or ""), inv_ids):
+        for ref in _id_refs(str(e.get("preventive_control") or ""), inv_ids, records):
             if ref != nid:
                 b.edge(nid, ref, "controlled_by", f"{at}.preventive_control")
         for key in ("symptom", "contributing_factor", "root_cause", "open_reason", "notes"):
-            for ref in _id_refs(str(e.get(key) or ""), inv_ids):
+            for ref in _id_refs(str(e.get(key) or ""), inv_ids, records):
                 if ref != nid:
                     b.edge(nid, ref, "mentions", f"{at}.{key}")
         for target in _listed(e.get("retired_by")):
@@ -770,10 +763,10 @@ def read_registers(b: Builder) -> None:
             t = target if target.startswith("lesson:") else f"lesson:{target}"
             b.edge(nid, t, "superseded_by", f"{at}.superseded_by")
         for target in _listed(e.get("incorporated_into")):
-            # a runbook (``RB-002``, or a step of it: ``RB-002#1``) or a page section
+            # a runbook (its uid, or a step of it: ``<uid>#1``) or a page section
             # (``docs/systems/<svc>.md#use``); the fragment names the place, not another node
             dest = target.split("#", 1)[0]
-            if re.fullmatch(r"(?:runbook:)?RB-(?:\d{3,}|NEW)", dest):
+            if is_uid(dest.removeprefix("runbook:")):
                 t = dest if dest.startswith("runbook:") else f"runbook:{dest}"
                 b.edge(nid, t, "incorporated_into", f"{at}.incorporated_into")
             else:
@@ -784,7 +777,7 @@ def read_registers(b: Builder) -> None:
     for e in runbooks:
         nid, at = f"runbook:{e['_key']}", rel(e, "runbooks")
         tags(nid, e, at)
-        for ref in _id_refs(str(e.get("purpose") or ""), inv_ids):
+        for ref in _id_refs(str(e.get("purpose") or ""), inv_ids, records):
             if ref != nid:
                 b.edge(nid, ref, "mentions", f"{at}.purpose")
         for ll in _listed(e.get("from_lessons")):
@@ -797,7 +790,7 @@ def read_registers(b: Builder) -> None:
             text = f"{st.get('do', '')}\n{st.get('verify', '')}" if isinstance(st, dict) else ""
             for ref in cmds.refs(text):
                 b.edge(nid, ref, "invokes", f"{at}.steps[{i}]")
-            for ref in _id_refs(text, inv_ids):
+            for ref in _id_refs(text, inv_ids, records):
                 if ref != nid:
                     b.edge(nid, ref, "mentions", f"{at}.steps[{i}]")
     plugins = _plugin_owners(b)
@@ -885,6 +878,13 @@ def _plugin_owners(b: Builder) -> dict[str, str]:
     return out
 
 
+def record_aliases(root: Path):
+    """The legacy code -> uid maps of the registers and the strategy (``aliases.yml``)."""
+    from homelabnext.identity.aliases import load_aliases
+
+    return load_aliases(root / REGISTERS, root / STRATEGY)
+
+
 # --------------------------------------------------------------------------- strategy
 
 STRATEGY = "examples/strategy"
@@ -895,13 +895,15 @@ _STRATEGY_NODE["rfis"] = "rfi"
 def read_strategy(b: Builder) -> None:
     """The strategy-to-task records (``examples/strategy/``, :mod:`homelabnext.strategy`).
 
-    ``strategy:<name>``, ``objective:SO-001``, ``measure:MOE-001``, ``req:CCIR-001``,
-    ``rfi:RFI-001`` (a placeholder takes its file stem, like a lesson), each with its
-    ``status``; objective -child_of-> objective (``parent``) or the strategy (an SO);
-    objective -measured_by-> measure (``measures``); measure -binds-> inv/status (``source``
-    ``invariant:`` / ``status:``); req -supports-> objective; req -serves-> req (FFIR -> CCIR,
-    PIR -> CCIR/FFIR); rfi -raised_by-> measure/req; req/rfi -tasked_to-> profile/human, only
-    where ``tasked_to`` names a principal the keyring defines (a role or a tag is not a node)."""
+    ``strategy:<name>``, ``objective:<uid>``, ``measure:<uid>``, ``req:<uid>``, ``rfi:<uid>``,
+    each with its ``status``, its ``type`` (``level`` for an objective, as before) and its
+    computed display number (``label``: ``OO 1.2``); objective -child_of-> objective
+    (``parent``) or the strategy (an SO); objective -measured_by-> measure (the measure's
+    ``parent``); measure -binds-> inv/status (``source`` ``invariant:`` / ``status:``);
+    req -child_of-> req (a PIR's optional ``parent``); req -supports-> objective; req -serves->
+    req (FFIR -> CCIR, PIR -> CCIR/FFIR); rfi -raised_by-> measure/req; req/rfi -tasked_to->
+    profile/human, only where ``tasked_to`` names a principal the keyring defines (a role or a
+    tag is not a node)."""
     from homelabnext.strategy.records import load_tree
 
     root = b.root / STRATEGY
@@ -915,10 +917,9 @@ def read_strategy(b: Builder) -> None:
         sid = f"strategy:{s.get('name')}"
         b.define(sid, "strategy", str(s.get("title", "")), at, at, status=s.get("status"))
 
-    def nid(ident) -> str:
-        from homelabnext.strategy.records import dir_for
-
-        return f"{_STRATEGY_NODE.get(str(dir_for(ident)), 'unknown')}:{ident}"
+    def nid(uid) -> str:
+        kind = tree.kind_of(str(uid))
+        return f"{_STRATEGY_NODE.get(str(kind), 'unknown')}:{uid}"
 
     for kind, key, e in tree.items():
         if kind == "strategy":
@@ -931,8 +932,10 @@ def read_strategy(b: Builder) -> None:
             str(e.get("title", "")),
             at,
             at,
+            label=tree.label(key),
             status=e.get("status"),
-            level=e.get("level"),
+            level=e.get("type") if kind == "objectives" else None,
+            record_type=e.get("type"),
             triage=e.get("triage"),
             **_provenance(content, policy),
         )
@@ -944,15 +947,17 @@ def read_strategy(b: Builder) -> None:
             if e.get("parent"):
                 b.edge(me, nid(e["parent"]), "child_of", f"{at}#parent")
             elif sid:
-                b.edge(me, sid, "child_of", f"{at}#level")
-            for m in _listed(e.get("measures")):
-                b.edge(me, nid(m), "measured_by", f"{at}#measures")
+                b.edge(me, sid, "child_of", f"{at}#type")
         elif kind == "measures":
+            if e.get("parent"):  # the objective lists nothing: the measure names its parent
+                b.edge(nid(e["parent"]), me, "measured_by", f"{at}#parent")
             src, _, arg = str(e.get("source") or "").partition(":")
             target = {"invariant": f"inv:{arg}", "status": f"status:{arg.split('/')[0]}"}
             if src in target:
                 b.edge(me, target[src], "binds", f"{at}#source")
         elif kind == "requirements":
+            if e.get("parent"):
+                b.edge(me, nid(e["parent"]), "child_of", f"{at}#parent")
             for o in _listed(e.get("supports")):
                 b.edge(me, nid(o), "supports", f"{at}#supports")
             for r in _listed(e.get("serves")):
@@ -1103,7 +1108,12 @@ def read_agent(b: Builder) -> None:
 
 def read_customizations(b: Builder) -> None:
     """``profiles/*/customization.yml``: custom -applies_to-> cap/svc/host (``scope``),
-    custom -governed_by-> adr (``contract``), custom -links-> lesson/runbook (``links``)."""
+    custom -governed_by-> adr (``contract``), custom -links-> lesson/runbook (``links``: a
+    record's uid; a legacy code resolves through ``examples/registers/aliases.yml``, with a
+    deprecation warning)."""
+    from homelabnext.identity.aliases import load_aliases, resolve
+
+    aliases = load_aliases(b.root / REGISTERS)
     for f in sorted(b.root.glob("profiles/*/customization.yml")):
         rel = b.rel(f)
         doc = _yaml(f) or {}
@@ -1135,7 +1145,9 @@ def read_customizations(b: Builder) -> None:
         for key, prefix in (("lesson", "lesson:"), ("runbook", "runbook:")):
             vals = links.get(key)
             for v in [vals] if isinstance(vals, str) else vals or ():
-                b.edge(cid, f"{prefix}{v}", "links", f"{rel}#links.{key}")
+                # a uid; a legacy code (LL-001) resolves through the registers' alias map
+                uid = resolve(str(v), aliases, f"{rel}#links.{key}")
+                b.edge(cid, f"{prefix}{uid}", "links", f"{rel}#links.{key}")
 
 
 # --------------------------------------------------------------------------- ansible
@@ -1222,6 +1234,11 @@ def read_docs(b: Builder) -> None:
     for rel in docs:
         if rel.startswith("docs/"):
             by_stem.setdefault(PurePosixPath(rel).stem, []).append(rel)
+    records = {
+        PurePosixPath(f).stem: f
+        for f in b.files()
+        if f.endswith(".md") and is_uid(PurePosixPath(f).stem)
+    }
     for rel in docs:
         if not rel.startswith("docs/"):
             continue
@@ -1239,6 +1256,9 @@ def read_docs(b: Builder) -> None:
         for raw in _WIKI.findall(text):
             raw = raw.strip().rstrip("\\")  # a table cell escapes the pipe: [[a/b\\|label]]
             if not raw:
+                continue
+            if is_uid(raw) and (hit := records.get(raw)):  # a record: [[<uid>|PIR 2.1 ...]]
+                targets.add(hit)
                 continue
             cand = [f"docs/{raw}.md", f"docs/{raw}"]
             hit = next((c for c in cand if (b.root / c).is_file()), "")

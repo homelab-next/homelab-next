@@ -5,15 +5,18 @@ schema violation.
 
 | Schema | Core idea |
 |---|---|
-| `lesson.schema.json` | `contributing_factors` (what enabled it) vs `root_cause` (why the conditions existed), `preventive_control`, falsifiable `verification`; `control_installed_at` required once graded `controlled`/`partial`; `retired_by` required when `retired` |
-| `runbook.schema.json` | ordered `steps`, each with its own `verify` |
+| `lesson.schema.json` (2.0) | `uid` (a UUIDv7) and `type: lesson` identify it (no stored number, ADR-0019); `contributing_factors` (what enabled it) vs `root_cause` (why the conditions existed), `preventive_control`, falsifiable `verification`; `control_installed_at` required once graded `controlled`/`partial`; `retired_by` required when `retired` |
+| `runbook.schema.json` (2.0) | `uid` and `type: runbook`; ordered `steps`, each with its own `verify` |
 | `invariant.schema.json` | `statement`, `observable`, `expected`, `evidence: auto|manual`; auto needs `check` (exit 0 pass, non-zero fail, >=100 could not measure) |
-| `register_event.schema.json` | one append-only event in a record's `<id>.events/` sidecar: `review` (the review entry; role `check`, `audit` or `approve`, and since 1.2 `audit` replaces the deprecated `challenge`, still accepted), `recurrence`, `verified` (`outcome`, `result`), `transition` (`from`, `to`, `set`, the `intent` applied; decider only), and (1.1) `value` (one reading of a strategy measure: `value` or `finding`, `observed_at`, `sample`, `definition_digest`, `definition_version`, `evidence`); file name `<UTC stamp>-<event>-<actor>[-<n>].yml` checked by `homelabnext.registers.events` |
+| `register_event.schema.json` | one append-only event in a record's `<id>.events/` sidecar: `review` (the review entry; role `check`, `audit` or `approve`, and since 1.2 `audit` replaces the deprecated `challenge`, still accepted), `recurrence`, `verified` (`outcome`, `result`), `transition` (`from`, `to`, `set`, the `intent` applied; decider only), and (1.1) `value` (one reading of a strategy measure: `value` or `finding`, `observed_at`, `sample`, `definition_digest`, `definition_version`, `evidence`); (1.3) `rekey` (`from` -> `to` digest, written only by `hnx:migrate`: the uid migration's identity rewrite carries the reviews of `from` to `to`); file name `<UTC stamp>-<event>-<actor>[-<n>].yml` checked by `homelabnext.registers.events` |
 | `kanban_item.schema.json` | columns `rfi blocked todo progress partial done`; project card (`PRJ-NNN`, `steps[]`, column `partial`) vs step card (`PRJ-NNN.M`) |
 | `decision_spec.json` (1.3) | `question_set`, `decision_table`, `tiers`, `error_direction`, `on_error: escalate`, `latency_budget_ms`, `sample_audit_pct`; optional `callers` (`inline`, `batch`); optional `noise_gate` (`deescalate` labels, named `corroborators`) |
 
-`LL-NEW`, `RB-NEW`, `A-NEW`, `PRJ-NEW` are schema-legal placeholders: a pre-commit hook allocates the
-number under a lock, so nobody picks an id by reading "the next free one".
+Lessons and runbooks are identified by uids (ADR-0019): nothing is allocated, so there is no
+placeholder. The 1.0 baselines (numbered `LL-NNN` ids) stay in `schemas/_frozen/1.0/`; only the
+migration (`hnx records assign-uids`) reads records of that form. Invariant ids are the checklist's
+row ids. `PRJ-NEW` remains schema-legal for kanban cards, a work queue this repository does not
+allocate.
 
 Cross-record rules (unique ids, step cards must reference an open step, an all-done project cannot sit
 in `partial`) are in `tools/schema_check.py::check_kanban_board`.

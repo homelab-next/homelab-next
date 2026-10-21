@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# a uid is canonical lowercase: an upper-case spelling is refused, never normalized
+uid: 01a15e4e-758c-731e-84af-04a7d009239b
+type: MOE
+title: Share of uptime monitors that are up
+status: active
+date: '2026-10-20'
+author: human:example-planner
+parent: 01A15E4E-758C-7318-BBC3-04740E2D7038
+kind: outcome
+source: status:uptime-monitors
+unit: share of monitors
+target:
+  op: '>='
+  green: 1.0
+  amber: 0.9
+confidence: high
+thinness:
+  min_sample: 3
+  max_age_h: 1
+measured_by: profile:example-checker
+definition_version: 1
+review_by: '2027-04-20'
+definition: The share of the uptime service's monitors whose latest reading is up (ok) in the status hub,
+  over every monitor on its public status page.

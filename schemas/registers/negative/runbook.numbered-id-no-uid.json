@@ -1,5 +1,6 @@
 {
-  "id": "RUN-1",
+  "id": "RB-001",
+  "type": "runbook",
   "title": "x y z",
   "systems": [
     "a"

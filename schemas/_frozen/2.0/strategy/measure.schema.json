@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/strategy/measure/2.0",
+  "title": "Measure record (MOP or MOE)",
+  "description": "One measure, one Markdown file per record (measures/MOE-001.md), with the seven doctrine fields: id, objective, definition, source, value+time (its readings: value events in the sidecar, never written in the record), target, confidence+thinness. A MOP (measure of performance) asks whether the work is being done, a MOE (measure of effectiveness) whether it is working. source is a typed binding: invariant:<id>, status:<source>[/<item>], records:<lane>[?type=<type>], manual or none (not measurable: a finding, written in the Not measurable section). 2.0 (ADR-0019): a record is identified by its `uid` (a UUIDv7) and names its `type`; every link is a uid; the numbered `id` is gone (the number a record is shown with is computed from type, parent and sibling `order`, never stored). The record-type rules of a link (which types a parent, supports, serves or raised_by may name) are the doctrine's `hierarchy` and `links`, checked by homelabnext.strategy. 1.x records are read only by `hnx records assign-uids`, which migrates them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "uid",
+    "type",
+    "title",
+    "status",
+    "date",
+    "author",
+    "parent",
+    "kind",
+    "definition",
+    "source",
+    "target",
+    "confidence",
+    "thinness",
+    "definition_version"
+  ],
+  "properties": {
+    "uid": {
+      "$ref": "#/$defs/uid"
+    },
+    "type": {
+      "enum": [
+        "MOP",
+        "MOE"
+      ]
+    },
+    "parent": {
+      "$ref": "#/$defs/uid",
+      "description": "The uid of the objective it measures (SO, OO, TO or TT, per the doctrine's hierarchy)."
+    },
+    "order": {
+      "type": "number",
+      "description": "Optional: the sort key among its siblings (same type, same parent). Siblings without one follow, in creation (uid) order."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 200
+    },
+    "status": {
+      "enum": [
+        "active",
+        "retired"
+      ]
+    },
+    "date": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "author": {
+      "$ref": "#/$defs/author"
+    },
+    "kind": {
+      "enum": [
+        "activity",
+        "output",
+        "outcome"
+      ],
+      "description": "activity: a count of work done (never a MOE); output: a property of what the work produced; outcome: an effect on the lab."
+    },
+    "definition": {
+      "$ref": "#/$defs/text"
+    },
+    "source": {
+      "type": "string",
+      "pattern": "^(?:invariant:[A-Z]-\\d{2,}|status:[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:/[A-Za-z0-9._:@-]+)?|records:(?:inbox|decided/approved|decided/denied|decided/completed)(?:\\?type=[a-z]+(?:-[a-z]+)*)?|manual|none)$(?!\\n)"
+    },
+    "unit": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "green"
+      ],
+      "properties": {
+        "op": {
+          "enum": [
+            ">=",
+            "<=",
+            "=="
+          ]
+        },
+        "green": {
+          "type": "number"
+        },
+        "amber": {
+          "type": "number"
+        }
+      },
+      "description": "green when value op green; else amber when value op amber; else red."
+    },
+    "confidence": {
+      "enum": [
+        "high",
+        "moderate",
+        "low"
+      ],
+      "description": "The author's confidence in the method; a thin reading is reported low."
+    },
+    "thinness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min_sample"
+      ],
+      "properties": {
+        "min_sample": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_age_h": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "description": "A reading is thin when fewer data points than min_sample stand behind it, or it is older than max_age_h."
+    },
+    "measured_by": {
+      "$ref": "#/$defs/identity"
+    },
+    "definition_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Bumped whenever definition, source or unit changes (a redefinition is never silent)."
+    },
+    "review_by": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "not_measurable": {
+      "$ref": "#/$defs/text"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "resolution": {
+      "type": "string",
+      "minLength": 1
+    },
+    "values": {
+      "type": "array",
+      "description": "Derived from the value events; never written in the record file."
+    },
+    "reviews": {
+      "type": "array",
+      "description": "Derived from the review events (homelabnext.reviews); never written in the record file."
+    }
+  },
+  "$defs": {
+    "identity": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9_.@-]+$(?!\\n)",
+      "description": "issuer:subject (human:example-operator, profile:example-checker, role:on-call)."
+    },
+    "author": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "const": "unknown"
+        }
+      ]
+    },
+    "text": {
+      "type": "string",
+      "minLength": 12
+    },
+    "strings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "uid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)",
+      "description": "A record uid: a canonical UUIDv7 (lowercase, version 7), created with the record and never changed (ADR-0019)."
+    }
+  }
+}

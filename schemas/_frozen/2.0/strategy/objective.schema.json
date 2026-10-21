@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/strategy/objective/2.0",
+  "title": "Objective record",
+  "description": "One objective of the cascade, one Markdown file per record (objectives/<uid>.md): a strategic (SO), operational (OO), tactical (TO) objective or a tactical task (TT). An SO has no parent; an OO's parent is an SO, a TO's an OO, a TT's a TO (checked by homelabnext.strategy, as are the doctrine rules over its measures). Lifecycle: active -> achieved | retired, only through a strategy-transition intent (the resolution is set by the transition). 2.0 (ADR-0019): a record is identified by its `uid` (a UUIDv7) and names its `type`; every link is a uid; the numbered `id` is gone (the number a record is shown with is computed from type, parent and sibling `order`, never stored). The record-type rules of a link (which types a parent, supports, serves or raised_by may name) are the doctrine's `hierarchy` and `links`, checked by homelabnext.strategy. 1.x records are read only by `hnx records assign-uids`, which migrates them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "uid",
+    "type",
+    "title",
+    "status",
+    "date",
+    "author",
+    "owner",
+    "statement"
+  ],
+  "properties": {
+    "uid": {
+      "$ref": "#/$defs/uid"
+    },
+    "type": {
+      "enum": [
+        "SO",
+        "OO",
+        "TO",
+        "TT"
+      ]
+    },
+    "parent": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/uid"
+        }
+      ],
+      "description": "The uid of the objective one level up (none for an SO; the doctrine's hierarchy names the type)."
+    },
+    "order": {
+      "type": "number",
+      "description": "Optional: the sort key among its siblings (same type, same parent). Siblings without one follow, in creation (uid) order."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 200
+    },
+    "status": {
+      "enum": [
+        "active",
+        "achieved",
+        "retired"
+      ]
+    },
+    "date": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "author": {
+      "$ref": "#/$defs/author"
+    },
+    "owner": {
+      "$ref": "#/$defs/identity"
+    },
+    "supplemental": {
+      "type": "boolean",
+      "description": "An objective proposed beyond the baseline cascade (the baseline-SO rule does not count it)."
+    },
+    "review_by": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "statement": {
+      "$ref": "#/$defs/text"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "resolution": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Why it was achieved or retired (set by the transition)."
+    },
+    "reviews": {
+      "type": "array",
+      "description": "Derived from the review events (homelabnext.reviews); never written in the record file."
+    }
+  },
+  "$defs": {
+    "identity": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9_.@-]+$(?!\\n)",
+      "description": "issuer:subject (human:example-operator, profile:example-checker, role:on-call)."
+    },
+    "author": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "const": "unknown"
+        }
+      ]
+    },
+    "text": {
+      "type": "string",
+      "minLength": 12
+    },
+    "strings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "uid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)",
+      "description": "A record uid: a canonical UUIDv7 (lowercase, version 7), created with the record and never changed (ADR-0019)."
+    }
+  }
+}

@@ -2,7 +2,7 @@
 """Registers: the sources of truth for lessons, runbooks and invariants.
 
 Lessons and runbooks are directories of record files, one Markdown file per entry with YAML
-front-matter (``examples/registers/lessons/LL-001.md``); invariants stay one YAML file.
+front-matter (``examples/registers/lessons/<uid>.md``, ADR-0019); invariants stay one YAML file.
 :func:`load_register` reads either form (a legacy single ``lessons.yml`` still loads) and is the
 one reader the rest of the code uses; machine state (reviews, recurrences, verification runs,
 applied transitions) is append-only sidecar events (:mod:`.events`) it derives fields from, and

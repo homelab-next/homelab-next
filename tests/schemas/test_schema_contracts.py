@@ -84,14 +84,18 @@ def test_schema_has_examples_and_negatives_and_they_behave(path):
         assert exs and negs
 
 
+MAJOR_BUMPED = {"registers/lesson.schema.json", "registers/runbook.schema.json"}
+
+
 @pytest.mark.parametrize("path", SCHEMAS, ids=IDS)
 def test_id_convention(path):
     schema = json.loads(path.read_text())
     name, major, minor = sc.parse_id(schema)
     d = path.parent.name
     assert name.startswith(d + "/")
-    # minor bumps are additive (see _frozen), so any minor of major 1 is allowed
-    assert major == 1
+    # minor bumps are additive (see _frozen); a major bump is a breaking change that keeps every
+    # earlier major's baseline (lesson and runbook 2.0: records are identified by uids, ADR-0019)
+    assert major == 1 or path.relative_to(ROOT / "schemas").as_posix() in MAJOR_BUMPED
     assert minor >= 0
 
 
@@ -136,7 +140,7 @@ def test_a_negative_that_is_accepted_would_be_reported(tmp_path):
 
     shutil.copytree(ROOT / "schemas", tmp_path / "schemas")
     (tmp_path / "schemas/registers/negative/lesson.planted.json").write_text(
-        (tmp_path / "schemas/registers/examples/lesson.open-new-id.json").read_text()
+        (tmp_path / "schemas/registers/examples/lesson.open.json").read_text()
     )
     probs = sc.check_repo(tmp_path, ["registers"])
     assert any("ACCEPTED" in p.message for p in probs)

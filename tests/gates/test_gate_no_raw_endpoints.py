@@ -67,11 +67,23 @@ def test_all_planted_reported_with_line_and_rule(tmp_path):
 CLEAN = {
     "app/client.py": "from homelabnext.registry import resolve\nep = resolve('lake-query')\n",
     "app/versions.txt": "pkg==" + DOT.join("1234") + "\nversion " + DOT.join("5678") + "\n",
+    # a record's computed display number (ADR-0019): its type, then the number
+    "docs/strategy.md": "- TT "
+    + DOT.join("1111")
+    + " Read the inbox; MOE "
+    + DOT.join("2111")
+    + "\n",
     "app/bind.conf": "listen = 0.0.0.0\n",
     "app/time.log": "12:30:45 started at example.internal\n",
     "docs/link.md": "see https://example.com/docs and https://example.com\n",
     "app/blob.bin": "\0\0" + f"{IP_PRIV}",
 }
+
+
+def test_a_dotted_quad_after_a_non_record_word_is_still_an_address(tmp_path):
+    plant(tmp_path, {"docs/x.md": "- XX " + DOT.join("1111") + " is not a record number\n"})
+    rc, _, err = run(tmp_path)
+    assert rc == 1 and "docs/x.md" in err
 
 
 def test_clean_tree_passes(tmp_path):

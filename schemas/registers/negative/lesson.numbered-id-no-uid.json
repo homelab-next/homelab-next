@@ -1,5 +1,6 @@
 {
-  "id": "LL-4",
+  "id": "LL-001",
+  "type": "lesson",
   "title": "Stale cache served after config change",
   "date": "2026-01-01",
   "systems": [

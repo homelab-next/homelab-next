@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from homelabnext.agent.compiler import profile_digest
+from homelabnext.identity.aliases import load_aliases
 from homelabnext.mcp import (
     MAX_RESULT_CHARS,
     SERVER_NAME,
@@ -334,7 +335,7 @@ def test_context_for_returns_scoped_hits_with_content_and_digests(cat):
         (["check:lake-query/x"], ["check:lake-query/"], {"check:lake-query/x"}),
         (["check:"], ["check:lake-query/"], {"check:lake-query/"}),
         (["check:lake-query/"], ["check:lake-query/x"], {"check:lake-query/x"}),
-        (["lesson:LL-001"], ["cap:lake-query"], set()),
+        (["lesson:0199"], ["cap:lake-query"], set()),
         (["cap:lake"], ["cap:lake-query"], set()),  # an exact id is not a prefix
         (["cap:lake-query-x"], ["cap:lake-query"], set()),
         (["cap:lake-query/"], ["cap:lake-query"], set()),
@@ -409,27 +410,46 @@ def test_profile_scope_bounds_the_catalog_tools(cat, tmp_path):
     due = _call(scoped, "lessons_due", today="2027-06-01")
     assert not any(due["due"].values())  # lessons and runbooks are not in a reader's scope
     assert any(_call(cat, "lessons_due", today="2027-06-01")["due"].values())
-    with_lessons = Catalog(ROOT, scope=scope | {"lesson:LL-001"}, scope_source=pid)
+    u = load_aliases(ROOT / "examples/registers").codes
+    with_lessons = Catalog(ROOT, scope=scope | {f"lesson:{u['LL-001']}"}, scope_source=pid)
     ids = {d["id"] for v in _call(with_lessons, "lessons_due", today="2027-06-01")["due"].values()
            for d in v}  # fmt: skip
-    assert ids == {"LL-001"}
+    assert ids == {u["LL-001"]}
 
 
 def test_scoped_lessons_due_reasons_name_no_out_of_scope_record(cat, tmp_path):
-    """Regression: a due row's ``reason`` named other records (LL-005's "candidate runbook(s)
-    RB-001") whatever the scope; an id the scope does not cover is now withheld."""
+    """Regression: a due row's ``reason`` named other records (LL 5's "candidate runbook(s)
+    RB 1") whatever the scope; a record the scope does not cover is now withheld -- its number
+    in the reason, its uid in ``refs`` and in ``labels``."""
+    u = load_aliases(ROOT / "examples/registers").codes
     pid, scope = load_profile_scope(_granted_profile(tmp_path), cat.registry)
     unscoped = _call(cat, "lessons_due", today="2027-06-01")
-    assert "RB-001" in unscoped["due"]["incorporate"][0]["reason"]
-    scoped = Catalog(ROOT, scope=scope | {"lesson:LL-005"}, scope_source=pid)
+    row = unscoped["due"]["incorporate"][0]
+    assert "RB 1" in row["reason"] and row["refs"] == [u["RB-001"]] and row["label"] == "LL 5"
+    assert unscoped["labels"][u["RB-001"]] == "RB 1"
+    scoped = Catalog(ROOT, scope=scope | {f"lesson:{u['LL-005']}"}, scope_source=pid)
     out = _call(scoped, "lessons_due", today="2027-06-01")
     rows = [d for v in out["due"].values() for d in v]
-    assert [d["id"] for d in rows] == ["LL-005"]
-    assert "RB-001" not in json.dumps(out) and "out of scope" in rows[0]["reason"]
-    both = Catalog(ROOT, scope=scope | {"lesson:LL-005", "runbook:RB-001"}, scope_source=pid)
+    assert [d["id"] for d in rows] == [u["LL-005"]]
+    dumped = json.dumps(out)
+    assert "RB 1" not in dumped and u["RB-001"] not in dumped
+    assert "out of scope" in rows[0]["reason"]
+    both = Catalog(
+        ROOT, scope=scope | {f"lesson:{u['LL-005']}", f"runbook:{u['RB-001']}"}, scope_source=pid
+    )
     reasons = [d["reason"] for v in _call(both, "lessons_due", today="2027-06-01")["due"].values()
                for d in v]  # fmt: skip
-    assert any("RB-001" in r for r in reasons)
+    assert any("RB 1" in r for r in reasons)
+
+
+def test_related_takes_a_uid_or_a_legacy_code(cat):
+    from homelabnext.identity.aliases import LegacyRecordCode
+
+    u = load_aliases(ROOT / "examples/registers").codes
+    assert _call(cat, "related", ids_or_paths=[u["LL-001"]])["seeds"] == [f"lesson:{u['LL-001']}"]
+    with pytest.warns(LegacyRecordCode):
+        got = _call(cat, "related", ids_or_paths=["lesson:LL-001"])
+    assert got["seeds"] == [f"lesson:{u['LL-001']}"] and got["unresolved"] == []
 
 
 def _visible(scope, doc_id):

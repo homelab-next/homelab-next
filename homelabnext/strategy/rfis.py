@@ -15,8 +15,8 @@ two intent types under the same lock, with the same outcomes (applied, denied, w
 invalid) and the same crash recovery:
 
 * ``strategy-rfi`` -- the raised_by record must exist and have no open RFI already; applied,
-  it creates ``rfis/RFI-NEW-<slug>.md`` (status open, the triage, the LTIOV: the note's, else
-  the doctrine's ``rfi_default_ltiov_days`` after it was filed; ``hnx ids resolve`` numbers it);
+  it creates ``rfis/<uid>.md`` under a fresh uid (status open, the triage, the LTIOV: the
+  note's, else the doctrine's ``rfi_default_ltiov_days`` after it was filed);
 * ``strategy-transition`` -- ``from`` must be current and ``to`` a status the record's lifecycle
   reaches from it (:data:`homelabnext.strategy.rules.LIFECYCLE`); applied, a ``transition``
   event whose ``set.resolution`` is the intent's reason, once the review policy's tiers for the
@@ -26,6 +26,11 @@ invalid) and the same crash recovery:
 before ``today`` gets a ``strategy-transition`` intent to ``expired``, filed by the sweep's own
 identity and decided at once.  A no-find is a valid closed outcome (``to: no-find``, the search
 being the reason), not a failure.
+
+Intents name records by uid (``record:``, ``raised_by:``).  One filed before the uid migration
+may still name a legacy code (``RFI-002``): it resolves through the tree's ``aliases.yml`` with
+a :class:`~homelabnext.identity.aliases.LegacyRecordCode` warning.  Generated titles name records
+by title, never by number: a number is computed, and the RFI's title is stored.
 """
 
 from __future__ import annotations
@@ -36,6 +41,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from homelabnext.identity.aliases import load_aliases, resolve
+from homelabnext.identity.uid import is_uid, uuid7
 from homelabnext.records import Records, RecordsReader, check_filename, slugify
 from homelabnext.records.decider import APPROVED
 from homelabnext.registers.records import render_record
@@ -46,8 +53,8 @@ from .doctrine import Doctrine, load_doctrine
 from .measure import Grade, rollup
 from .records import (
     ARTEFACT,
+    DIRS,
     Tree,
-    dir_for,
     load_tree,
     record_digest,
     write_events,
@@ -74,11 +81,12 @@ SWEEP_AGENT = "profile:ltiov-sweep"
 
 @dataclass(frozen=True)
 class Gap:
-    raised_by: str
+    raised_by: str  # the uid of the measure or requirement
     triage: str  # collection | production
     title: str
     question: str
     why: str
+    label: str = ""  # the raising record's display number, for printing (never stored)
 
 
 def _date(v: Any) -> dt.date | None:
@@ -110,21 +118,28 @@ def _pending(records_root, note_type: str, field: str) -> set[str]:
 
 def gaps(tree: Tree, grades: Mapping[str, Grade], today: dt.date, records_root=None) -> list[Gap]:
     """The gaps no open RFI or pending ``strategy-rfi`` intent covers yet."""
+    aliases = load_aliases(tree.root)
     covered = {str(r.get("raised_by")) for r in tree.of("rfis").values() if _active(r)}
-    covered |= _pending(records_root, RAISE_TYPE, "raised_by")
+    covered |= {
+        resolve(x, aliases, "strategy-rfi raised_by")
+        for x in _pending(records_root, RAISE_TYPE, "raised_by")
+    }
     out: list[Gap] = []
-    for k, g in sorted(grades.items()):
+    for k, g in grades.items():  # display-number order (grade_all)
         m = tree.of("measures")[k]
         if g.state not in ("red", "unmeasured") or k in covered:
             continue
+        title = str(m.get("title"))
         if g.state == "unmeasured":
             out.append(
                 Gap(
                     k,
                     "collection",
-                    f"Make {k} measurable",
-                    f"What data would let {k} ({m.get('title')}) be measured, and where can it be collected?",
+                    _cap(f"Make measurable: {title}"),
+                    f"What data would let the measure '{title}' be measured, and where can it be "
+                    "collected?",
                     g.finding or "not measurable",
+                    tree.label(k),
                 )
             )
         else:
@@ -132,22 +147,32 @@ def gaps(tree: Tree, grades: Mapping[str, Grade], today: dt.date, records_root=N
                 Gap(
                     k,
                     "production",
-                    f"Why is {k} red",
-                    f"Why is {k} ({m.get('title')}) at {g.value:g} against its target, and what would move it?",
+                    _cap(f"Why is it red: {title}"),
+                    f"Why is the measure '{title}' at {g.value:g} against its target, and what "
+                    "would move it?",
                     f"red at {g.observed_at}",
+                    tree.label(k),
                 )
             )
     states = rollup(tree, grades)
-    for k, r in sorted(tree.of("requirements").items()):
+    for k in tree.ordered("requirements"):
+        r = tree.of("requirements")[k]
         if not _active(r) or k in covered:
             continue
         red = [s for s in r.get("supports") or () if states.get(str(s), {}).get("state") == "red"]
         lt = _date(r.get("ltiov"))
         if red or (lt and lt < today):
-            why = f"supports {', '.join(red)} (red)" if red else f"LTIOV {lt} passed"
+            names = ", ".join(tree.label(s) for s in red)
+            why = f"supports {names} (red)" if red else f"LTIOV {lt} passed"
             q = str(r.get("question") or r.get("title")).strip().split("\n")[0]
-            out.append(Gap(k, "production", f"{k} is unmet", f"{q} (unmet: {why})", why))
+            title = _cap(f"Unmet: {r.get('title')}")
+            out.append(Gap(k, "production", title, f"{q} (unmet: {why})", why, tree.label(k)))
     return out
+
+
+def _cap(title: str, n: int = 200) -> str:
+    """A record title fits the schema's 200 characters."""
+    return title if len(title) <= n else title[: n - 3].rstrip() + "..."
 
 
 def raise_intents(
@@ -169,13 +194,15 @@ def raise_intents(
 
 
 def expiring(tree: Tree, today: dt.date, within_days: int) -> list[tuple[str, dt.date]]:
-    """Open RFIs whose LTIOV falls within ``within_days`` of ``today`` (or has passed)."""
+    """Open RFIs whose LTIOV falls within ``within_days`` of ``today`` (or has passed), soonest
+    first (ties in display-number order)."""
     out = []
-    for k, r in sorted(tree.of("rfis").items()):
+    for k in tree.ordered("rfis"):
+        r = tree.of("rfis")[k]
         lt = _date(r.get("ltiov"))
         if _active(r) and lt and (lt - today).days <= within_days:
             out.append((k, lt))
-    return sorted(out, key=lambda kv: (kv[1], kv[0]))
+    return sorted(out, key=lambda kv: kv[1])
 
 
 class StrategyDecider(TransitionDecider):
@@ -183,12 +210,30 @@ class StrategyDecider(TransitionDecider):
 
     INTENT_TYPES = (TRANSITION_TYPE, RAISE_TYPE)
 
-    def __init__(self, strategy_root, records_root, *, doctrine: Doctrine | None = None, **kw):
+    def __init__(
+        self,
+        strategy_root,
+        records_root,
+        *,
+        doctrine: Doctrine | None = None,
+        new_uid: Callable[[], str] = uuid7,
+        **kw,
+    ):
         super().__init__(strategy_root, records_root, **kw)
         self.doctrine = doctrine or load_doctrine(strategy_root)
+        self.new_uid = new_uid  # injectable: a test pins the uid a raised RFI gets
 
     def _record_path(self, ident: str) -> pathlib.Path:
-        return self.register_root / str(dir_for(ident) or "unknown") / f"{ident}.md"
+        """The record file of a uid, in whichever directory holds it."""
+        for kind in DIRS:
+            if (p := self.register_root / kind / f"{ident}.md").is_file():
+                return p
+        return self.register_root / "unknown" / f"{ident}.md"
+
+    def _resolve(self, ident: str) -> str:
+        if is_uid(ident):
+            return ident
+        return resolve(ident, load_aliases(self.register_root), "strategy intent")
 
     def _decide_note(self, name: str, note, dry_run: bool) -> Outcome:
         fm = note.frontmatter
@@ -207,7 +252,7 @@ class StrategyDecider(TransitionDecider):
 
     def _raise(self, name: str, note, dry_run: bool) -> Outcome:
         fm = note.frontmatter
-        src = str(fm["raised_by"])
+        src = self._resolve(str(fm["raised_by"]))
         tree = load_tree(self.register_root)
         if done := self._raised(tree, name):  # created before a crash; finish the move
             if not dry_run:
@@ -216,18 +261,25 @@ class StrategyDecider(TransitionDecider):
         target = tree.get(src)
         if target is None or not _active(target):
             return self._deny(name, src, f"{src} is not an active measure or requirement", dry_run)
+        if target.get("type") not in ("MOP", "MOE", "CCIR", "FFIR", "PIR"):
+            rtype = str(target.get("type"))
+            art = "an" if rtype in ("SO", "OO", "FFIR", "RFI") else "a"
+            why = f"{tree.label(src)} is {art} {rtype}, not a measure or requirement"
+            return self._deny(name, src, why, dry_run)
         dup = next(
             (k for k, r in tree.of("rfis").items() if _active(r) and r.get("raised_by") == src),
             None,
         )
         if dup:
-            return self._deny(name, src, f"{dup} is already open for {src}", dry_run)
+            why = f"{tree.label(dup)} {dup} is already open for {tree.label(src)}"
+            return self._deny(name, src, why, dry_run)
         created = str(fm["created"])[:10]
         ltiov = fm.get("ltiov") or (
             dt.date.fromisoformat(created) + dt.timedelta(days=self.doctrine.rfi_default_ltiov_days)
         )
         entry: dict[str, Any] = {
-            "id": "RFI-NEW",
+            "uid": self.new_uid(),
+            "type": "RFI",
             "title": str(fm["title"]),
             "status": "open",
             "date": dt.date.fromisoformat(created),
@@ -240,8 +292,7 @@ class StrategyDecider(TransitionDecider):
         }
         if fm.get("tasked_to"):
             entry["tasked_to"] = list(fm["tasked_to"])
-        taken = {p.name for p in (self.register_root / "rfis").glob("*.md")}
-        rel = f"rfis/{_new_name(entry, taken)}"
+        rel = f"rfis/{entry['uid']}.md"
         if dry_run:
             return Outcome(name, src, "applied", f"would create {rel} (dry run)")
         try:
@@ -268,7 +319,7 @@ class StrategyDecider(TransitionDecider):
     # --- strategy-transition --------------------------------------------------------------------
 
     def _transition(self, name: str, fm: Mapping[str, Any], dry_run: bool) -> Outcome:
-        ident = str(fm["record"])
+        ident = self._resolve(str(fm["record"]))
         path = self._record_path(ident)
         if not path.is_file():
             return self._deny(name, ident, f"no record {ident} in {path.parent.name}/", dry_run)
@@ -339,12 +390,6 @@ class StrategyDecider(TransitionDecider):
         return res.missing
 
 
-def _new_name(entry: Mapping[str, Any], taken: set[str]) -> str:
-    from homelabnext.registers.records import record_name
-
-    return record_name(entry, "rfis", taken)
-
-
 def sweep(
     strategy_root,
     records_root,
@@ -352,26 +397,27 @@ def sweep(
     today: dt.date,
     decided_by: str,
     clock: Callable[[], dt.datetime],
-) -> tuple[list[pathlib.Path], list[Outcome], list[str]]:
+) -> tuple[list[pathlib.Path], list[Outcome]]:
     """The LTIOV sweep: an expiry intent for every open RFI and active requirement whose dated
     LTIOV is before ``today`` (filed as :data:`SWEEP_AGENT`), then every pending intent decided.
-    Returns (intents filed, outcomes, placeholders skipped: an unnumbered record cannot be
-    named by an intent until ``hnx ids resolve`` numbers it)."""
+    Returns (intents filed, outcomes)."""
     tree = load_tree(strategy_root)
+    aliases = load_aliases(strategy_root)
     rec = Records(records_root, clock, agent=SWEEP_AGENT)
-    pending = _pending(records_root, TRANSITION_TYPE, "record")
-    filed, skipped = [], []
+    pending = {
+        resolve(x, aliases, "strategy-transition record")
+        for x in _pending(records_root, TRANSITION_TYPE, "record")
+    }
+    filed = []
     for kind, initial in (("rfis", "open"), ("requirements", "active")):
-        for k, r in sorted(tree.of(kind).items()):
+        for k in tree.ordered(kind):
+            r = tree.of(kind)[k]
             lt = _date(r.get("ltiov"))
             if r.get("status") != initial or lt is None or lt >= today or k in pending:
                 continue
-            if str(r.get("id")).endswith("-NEW"):
-                skipped.append(k)
-                continue
             note = {
                 "type": TRANSITION_TYPE,
-                "title": f"Expire {k}: LTIOV {lt} passed",
+                "title": f"Expire {tree.label(k)}: LTIOV {lt} passed",
                 "record": k,
                 "from": initial,
                 "to": "expired",
@@ -379,4 +425,4 @@ def sweep(
             }
             filed.append(rec.submit(note, body="Filed by the LTIOV sweep.\n"))
     decider = StrategyDecider(strategy_root, records_root, decided_by=decided_by, clock=clock)
-    return filed, decider.decide_all(), skipped
+    return filed, decider.decide_all()

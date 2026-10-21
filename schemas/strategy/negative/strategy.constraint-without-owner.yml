@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # every constraint has an owner
+uid: 01a15e4e-758c-7310-80ae-2e4fe878b14e
 type: strategy
 name: northwind
 title: Keep the Northwind lab available and defended
@@ -15,7 +16,9 @@ assumptions:
 - Credentials and tokens will be stolen at some point; detection matters as much as prevention.
 - Agents are optional; every decision still has a human owner.
 constraints:
-- rule: No change without an approved proposal
+- rule: No change to a live system without an approved proposal
+- rule: No paid feeds or keys; prefer what the lab already runs
+  owner: role:lab-lead
 mission: Run a small, self-hosted lab that stays available to its users and notices when someone attacks
   it.
 intent: 'Spend human time on decisions, not on toil: the lab reports what is broken or at risk, and every

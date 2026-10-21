@@ -173,14 +173,7 @@ jobs:
           python-version: "3.12"
           extras: test
       - name: invariants register, fast criteria
-        env:
-          EVENT: ${{ github.event_name }}
-        run: |
-          set -euo pipefail
-          # M-16 holds on main only: a pull request may carry XX-NEW placeholders until merge
-          args=""
-          if [ "$EVENT" = pull_request ]; then args="--skip M-16"; fi
-          make invariants PY=python INVARIANTS_ARGS="$args"
+        run: make invariants PY=python
 
   # Build the sdist and wheel exactly as a release would and leak-scan what they contain (the
   # path allowlist for both artefacts is tests/packaging/test_artifacts.py, run by `test`).
@@ -256,7 +249,7 @@ jobs:
           python-version: "3.12"
           extras: yaml  # the register tooling parses YAML
           install-project: "false"
-      - name: no id vanished relative to the base, no allocated id twice
+      - name: no record vanished relative to the base, no key twice, every record has its uid
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
@@ -267,10 +260,6 @@ jobs:
           else
             make ids-check PY=python
           fi
-      # M-16: placeholders are allocated at merge time, so main may never carry one
-      - name: no XX-NEW placeholder id on main
-        if: github.event_name == 'push'
-        run: make ids-placeholders PY=python
 
   # Q-08: every bugfix commit of this push or pull request touches a test file, and that test fails
   # on the fix's parent (tools/fix_has_test.py --prove; CONTRIBUTING.md "Bug fixes").

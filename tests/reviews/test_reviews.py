@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from homelabnext import reviews
+from homelabnext.identity.aliases import load_aliases
 from homelabnext.reviews import ReviewError, evaluate, load_policy, policy_from
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -286,7 +287,8 @@ def test_bad_policies_fail(policy_data, mutate, needle, tmp_path):
 
 
 def test_digest_command_is_stable(capsys):
-    files = [str(REPO / "examples/registers/lessons/LL-002.md"), str(REPO / "docs/systems/dns.md")]
+    ll2 = load_aliases(REPO / "examples/registers").codes["LL-002"]
+    files = [str(REPO / f"examples/registers/lessons/{ll2}.md"), str(REPO / "docs/systems/dns.md")]
     assert reviews.main(["digest", *files]) == 0
     first = capsys.readouterr().out
     assert reviews.main(["digest", *files]) == 0
@@ -295,7 +297,7 @@ def test_digest_command_is_stable(capsys):
     assert len(lines) == 2 and all(
         ln.startswith("sha256:") and len(ln.split()[0]) == 71 for ln in lines
     )
-    # the committed example review was stamped with this very digest
-    events = sorted((REPO / "examples/registers/lessons/LL-002.events").glob("*-review-*.yml"))
-    stamped = yaml.safe_load(events[0].read_text())["digest"]
+    # the latest committed example review was stamped with this very digest
+    events = sorted((REPO / f"examples/registers/lessons/{ll2}.events").glob("*-review-*.yml"))
+    stamped = yaml.safe_load(events[-1].read_text())["digest"]
     assert lines[0].startswith(stamped)

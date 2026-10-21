@@ -20,9 +20,11 @@ into the system), not a permanent record:
   ``incorporated_into`` (a runbook, optionally a step, or a docs/systems page), ``superseded``
   needs ``superseded_by``, ``retired`` needs ``retired_reason`` and ``retired_on``.
 
-Every lesson and runbook has ``last_reviewed``.  Retired, incorporated and superseded lessons,
-and runbooks with ``superseded_by``, stay (their ids are cited) but are inactive
-(:func:`is_active`).  :func:`check_links` resolves every reference across records and into the
+Every lesson and runbook is identified by its ``uid`` (a UUIDv7, ADR-0019) and carries its
+``type``; every reference to another record is a uid, and the number a record is shown with
+(``LL 3``) is computed, never stored (:mod:`homelabnext.identity.numbers`).  Every lesson and
+runbook has ``last_reviewed``.  Retired, incorporated and superseded lessons, and runbooks with
+``superseded_by``, stay (their uids are cited) but are inactive (:func:`is_active`).  :func:`check_links` resolves every reference across records and into the
 repository (fatal); :func:`sync_warnings` reports an incorporation the runbook does not cite back.
 """
 
@@ -31,6 +33,9 @@ from __future__ import annotations
 import datetime as dt
 import pathlib
 import re
+from collections.abc import Iterable
+
+from homelabnext.identity import UID_PATTERN, is_uid, label_map, node_of, order_problems
 
 __all__ = [
     "INACTIVE_STATUSES",
@@ -42,6 +47,7 @@ __all__ = [
     "RegisterError",
     "check_links",
     "is_active",
+    "labels_of",
     "record_digest_of",
     "sync_warnings",
     "validate_invariants",
@@ -63,8 +69,8 @@ PRACTICE_STATUSES = ("active", "incorporated", "superseded", "retired")
 LESSON_STATUSES = PITFALL_STATUSES + PRACTICE_STATUSES[:3]
 INACTIVE_STATUSES = frozenset({"retired", "incorporated", "superseded"})
 LESSON_COMMON = frozenset(
-    {"id", "title", "kind", "status", "date", "systems", "author", "reviews", "review_by"}
-    | {"related", "notes", "last_verified"}
+    {"uid", "type", "order", "title", "kind", "status", "date", "systems", "author", "reviews"}
+    | {"review_by", "related", "notes", "last_verified"}
 )
 PITFALL_FIELDS = frozenset(
     {"recurrences", "symptom", "contributing_factor", "root_cause", "preventive_control"}
@@ -75,28 +81,27 @@ PRACTICE_FIELDS = frozenset(
     | {"retired_on", "retired_reason"}
 )
 RUNBOOK_FIELDS = frozenset(
-    {"id", "title", "purpose", "systems", "steps", "author", "reviews", "review_by"}
-    | {"superseded_by", "related", "last_verified"}
+    {"uid", "type", "order", "title", "purpose", "systems", "steps", "author", "reviews"}
+    | {"review_by", "superseded_by", "related", "last_verified"}
 )
-# ``XX-NEW`` is a valid committed state: a maintainer allocates the number at merge time.
-LESSON_ID = re.compile(r"^LL-(?:\d{3,}|NEW)$")
-RUNBOOK_ID = re.compile(r"^RB-(?:\d{3,}|NEW)$")
-CRIT_ID = re.compile(r"^[A-Z]-(?:\d{2,}|NEW)$")
+#: the record type each register holds (its entries' ``type``)
+RECORD_TYPE = {"lessons": "lesson", "runbooks": "runbook"}
+# criterion ids are docs/checklist.md row ids, chosen to match a row (never allocated)
+CRIT_ID = re.compile(r"^[A-Z]-\d{2,}$")
 CRIT_REF = re.compile(r"^[A-Z]-\d{2,}$")
 # retired_by: an invariant id, a repository path (a test, a lint) or a make target (a gate)
 MECHANISM_REF = re.compile(r"^(?:[A-Z]-\d{2,}|make:[A-Za-z0-9_.-]+|[\w.-]+(?:/[\w.-]+)+)$")
 MECHANISM_WHAT = "an invariant id (M-17), a repository path (tests/x/test_y.py) or make:<target>"
 # incorporated_into: a runbook (optionally one step) or a system page's human block
-RUNBOOK_REF_RX = re.compile(r"^RB-\d{3,}(?:#\d+)?$")
+RUNBOOK_REF_RX = re.compile(rf"^{UID_PATTERN}(?:#\d+)?$")
 DESTINATION_REF = re.compile(
-    r"^(?:RB-\d{3,}(?:#[1-9]\d*)?|docs/systems/[a-z0-9._-]+\.md(?:#(?:use|verify|failure))?)$"
+    rf"^(?:{UID_PATTERN}(?:#[1-9]\d*)?|docs/systems/[a-z0-9._-]+\.md(?:#(?:use|verify|failure))?)$"
 )
 DESTINATION_WHAT = (
-    "a runbook (RB-001, RB-001#2 for step 2) or docs/systems/<service>.md[#use|verify|failure]"
+    "a runbook's uid (<uid>, <uid>#2 for step 2) or docs/systems/<service>.md[#use|verify|failure]"
 )
-RECORD_REF = re.compile(
-    r"^(?:LL|RB)-\d{3,}$"
-)  # a `related:` target: an allocated lesson or runbook
+LEGACY_CODE = re.compile(r"^(?:LL|RB)-(?:\d{3,}|NEW)(?:#\d+)?$")
+LEGACY_HINT = "a legacy numbered code; records refer to each other by uid (hnx records assign-uids)"
 MIN_TEXT = 12  # chars; a one-word root cause is a label, not a cause
 WEAK_PHRASES = (
     "be careful",
@@ -144,14 +149,47 @@ def _entries(data, key, register):
     return data[key]
 
 
-def _dupes(ids, problems):
+def _dupes(ids, problems, what="id"):
     seen = set()
     for i in ids:
-        if i.endswith("-NEW"):
-            continue  # placeholders may repeat until allocated
         if i in seen:
-            problems.append(f"duplicate id {i}")
+            problems.append(f"duplicate {what} {i}")
         seen.add(i)
+
+
+def labels_of(entries: Iterable[dict]) -> dict[str, str]:
+    """uid -> display label (``LL 3``) of a register's loaded entries."""
+    return label_map(node_of(e) for e in entries if isinstance(e, dict) and is_uid(e.get("uid")))
+
+
+def _who(e, labels: dict[str, str]) -> str:
+    """How a problem names a record: its display label and its uid (``LL 3 <uid>``)."""
+    uid = str(e.get("uid", "<no uid>"))
+    return f"{labels[uid]} {uid}" if uid in labels else uid
+
+
+def _uid_ref(x, what: str) -> str | None:
+    """Why ``x`` is not a uid reference, or None."""
+    if is_uid(x):
+        return None
+    if isinstance(x, str) and LEGACY_CODE.match(x):
+        return f"{what} {x!r} is {LEGACY_HINT}"
+    return f"{what} {x!r} is not a uid"
+
+
+def _identity(e, who, kind, problems):
+    """``uid`` (canonical UUIDv7), ``type`` (the register's), ``order`` (a number, if any)."""
+    if "uid" not in e and "id" in e:
+        problems.append(f"{who}: numbered `id: {e['id']}` and no `uid`; {LEGACY_HINT}")
+    elif not is_uid(e.get("uid")):
+        problems.append(f"{who}: `uid` must be a canonical UUIDv7 (lowercase, version 7)")
+    if e.get("type") != RECORD_TYPE[kind]:
+        problems.append(f"{who}: `type` must be {RECORD_TYPE[kind]}, not {e.get('type')!r}")
+    o = e.get("order")
+    if o is not None and (isinstance(o, bool) or not isinstance(o, int | float)):
+        problems.append(f"{who}: `order` must be a number (the sort key among its siblings)")
+    if "parent" in e:
+        problems.append(f"{who}: a {RECORD_TYPE[kind]} has no parent (registers are flat)")
 
 
 def _related(e, who, problems):
@@ -160,15 +198,15 @@ def _related(e, who, problems):
     if rel is None:
         return
     if not (isinstance(rel, list) and all(isinstance(x, str) for x in rel)):
-        problems.append(f"{who}: `related` must be a list of ids (LL-001, RB-002)")
+        problems.append(f"{who}: `related` must be a list of uids")
         return
     for x in rel:
-        if not RECORD_REF.match(x):
-            problems.append(f"{who}: related {x!r} is not an allocated lesson or runbook id")
-        elif x == who:
+        if bad := _uid_ref(x, "related"):
+            problems.append(f"{who}: {bad}")
+        elif x == e.get("uid"):
             problems.append(f"{who}: related names the entry itself")
     if len(set(rel)) != len(rel):
-        problems.append(f"{who}: `related` repeats an id")
+        problems.append(f"{who}: `related` repeats a uid")
 
 
 def _ref_list(e, key, who, problems, rx: re.Pattern, what: str) -> list[str]:
@@ -177,7 +215,9 @@ def _ref_list(e, key, who, problems, rx: re.Pattern, what: str) -> list[str]:
         problems.append(f"{who}: `{key}` must be a non-empty list of {what}")
         return []
     for x in v:
-        if not rx.match(x):
+        if LEGACY_CODE.match(x):
+            problems.append(f"{who}: {key} {x!r} is {LEGACY_HINT}")
+        elif not rx.match(x):
             problems.append(f"{who}: {key} {x!r} is not {what}")
     return v
 
@@ -195,15 +235,17 @@ def _lifecycle_dates(e, who, problems, *, review_required: bool):
         problems.append(f"{who}: `review_by` must be ISO YYYY-MM-DD")
 
 
-# about the record, not its content: a review or a verification run never makes reviews stale,
-# and the id is rewritten mechanically when `hnx ids resolve` allocates LL-NEW -> LL-006
-NOT_CONTENT = frozenset({"id", "reviews", "last_verified"})
+# about the record, not its content: its identity (uid; the numbered id of a record written before
+# uids), a review or a verification run never makes reviews stale, and neither does `order` (where
+# it sorts among its siblings: moving a record changes its shown number, not what it says)
+NOT_CONTENT = frozenset({"id", "uid", "order", "reviews", "last_verified"})
 SELF = "<this record>"
 
 
 def _self_neutral(v, rx: re.Pattern):
-    """``v`` with every citation of the record's own id replaced by one token (allocation
-    rewrites ``LL-NEW`` to ``LL-006`` inside the record; that is not an edit)."""
+    """``v`` with every citation of the record's own numbered id replaced by one token: how a
+    record written before uids was digested (allocating ``LL-NEW`` -> ``LL-006`` was no edit),
+    kept so the uid migration can prove which reviews were current (``rekey`` events)."""
     if isinstance(v, str):
         return rx.sub(SELF, v)
     if isinstance(v, list):
@@ -214,9 +256,10 @@ def _self_neutral(v, rx: re.Pattern):
 
 
 def record_digest_of(entry: dict) -> str:
-    """The content digest a review of this record carries: every field but ``id``, ``reviews``
-    and ``last_verified`` (a recurrence or a status change does count), with the record's own id
-    neutralized, so allocating its number never makes its reviews stale."""
+    """The content digest a review of this record carries: every field but its identity
+    (``uid``), ``order``, ``reviews`` and ``last_verified`` (a recurrence or a status change does
+    count).  A record written before uids is digested as it always was (its own numbered ``id``
+    left out and neutralized where it cites itself), so the migration can compare."""
     from homelabnext.reviews import content_digest
 
     body = {k: v for k, v in entry.items() if k not in NOT_CONTENT}
@@ -281,26 +324,27 @@ def _repo_targets(root: pathlib.Path) -> set[str]:
 def check_links(lessons, runbooks, criteria=None, root=None) -> None:
     """Every cross-record and outward reference resolves (fatal; validated lists in).
 
-    ``related``, ``superseded_by`` and step ``from_lessons`` name live records;
+    ``related``, ``superseded_by`` and step ``from_lessons`` name live records (by uid);
     ``incorporated_into`` names a runbook (and step) or a ``docs/systems/`` page that exists;
     ``retired_by`` names a live invariant of ``criteria`` (ids), a file under ``root`` or a
     ``make:<target>`` of root's Makefile.
     """
     root = pathlib.Path(root or ".")
-    ll = {str(e["id"]): e for e in lessons}
-    rb = {str(e["id"]): e for e in runbooks}
+    ll = {str(e["uid"]): e for e in lessons}
+    rb = {str(e["uid"]): e for e in runbooks}
+    labels = {**labels_of(lessons), **labels_of(runbooks)}
     live = set(ll) | set(rb)
     targets = None
     problems = []
     for reg in (lessons, runbooks):
         for e in reg:
             problems += [
-                f"{e['id']}: related {x} is not a live lesson or runbook"
+                f"{_who(e, labels)}: related {x} is not a lesson or runbook"
                 for x in e.get("related") or ()
                 if x not in live
             ]
     for e in lessons:
-        who = e["id"]
+        who = _who(e, labels)
         sb = e.get("superseded_by")
         if sb and (sb not in ll or ll[sb].get("kind") != "practice"):
             problems.append(f"{who}: superseded_by {sb} is not a practice in this register")
@@ -330,18 +374,21 @@ def check_links(lessons, runbooks, criteria=None, root=None) -> None:
     for e in runbooks:
         sb = e.get("superseded_by")
         if sb and sb not in rb:
-            problems.append(f"{e['id']}: superseded_by {sb} is not a runbook in this register")
+            problems.append(
+                f"{_who(e, labels)}: superseded_by {sb} is not a runbook in this register"
+            )
         for n, st in enumerate(e.get("steps") or (), 1):
             for x in st.get("from_lessons") or ():
                 if x not in ll:
-                    problems.append(f"{e['id']} step {n}: from_lessons {x} is not a lesson")
+                    problems.append(f"{_who(e, labels)} step {n}: from_lessons {x} is not a lesson")
     if problems:
         raise RegisterError("links", problems)
 
 
 def sync_warnings(lessons, runbooks) -> list[str]:
     """Practices incorporated into a runbook the runbook does not cite back (``from_lessons``)."""
-    rb = {str(e["id"]): e for e in runbooks}
+    rb = {str(e["uid"]): e for e in runbooks}
+    labels = {**labels_of(lessons), **labels_of(runbooks)}
     out = []
     for e in lessons:
         for ref in e.get("incorporated_into") or ():
@@ -350,20 +397,21 @@ def sync_warnings(lessons, runbooks) -> list[str]:
                 continue
             steps = rb[path].get("steps") or []
             pick = [steps[int(anchor) - 1]] if anchor and int(anchor) <= len(steps) else steps
-            if not any(e["id"] in (st.get("from_lessons") or ()) for st in pick):
-                where = f"step {anchor} of {path}" if anchor else f"any step of {path}"
+            if not any(e["uid"] in (st.get("from_lessons") or ()) for st in pick):
+                name = labels.get(path, path)
+                where = f"step {anchor} of {name}" if anchor else f"any step of {name}"
                 out.append(
-                    f"{e['id']} is incorporated into {ref} but {where} does not cite it back "
-                    f"(add `from_lessons: [{e['id']}]`)"
+                    f"{labels.get(e['uid'], e['uid'])} is incorporated into {name}"
+                    f"{'#' + anchor if anchor else ''} but {where} does not cite it back "
+                    f"(add `- from_lessons: [[{e['uid']}]]`)"
                 )
     return out
 
 
 def _retired(data, live, id_rx: re.Pattern, problems: list[str]) -> dict:
-    """The optional top-level ``retired:`` mapping of tombstoned ids (see registers.ids).
-
-    {ID: {reason: why it was retired, replaced_by: live ID or omitted}}.  A tombstone may not
-    name a live id (that is reuse) and may only point at an id that is live.
+    """The invariants' optional top-level ``retired:`` mapping of tombstoned criterion ids (see
+    registers.ids): {ID: {reason: why it was retired, replaced_by: live ID or omitted}}.  A
+    tombstone may not name a live id (that is reuse) and may only point at an id that is live.
     """
     ret = data.get("retired") if isinstance(data, dict) else None
     if ret is None:
@@ -371,11 +419,11 @@ def _retired(data, live, id_rx: re.Pattern, problems: list[str]) -> dict:
     if not isinstance(ret, dict):
         problems.append("`retired` must be a mapping of id -> {reason, replaced_by}")
         return {}
-    live = {i for i in live if not i.endswith("-NEW")}
+    live = set(live)
     for k, v in ret.items():
         who = f"retired {k}"
-        if not id_rx.match(str(k)) or str(k).endswith("-NEW"):
-            problems.append(f"{who}: only an allocated id can be retired")
+        if not id_rx.match(str(k)):
+            problems.append(f"{who}: is not a criterion id")
         if str(k) in live:
             problems.append(f"{who}: is also a live entry (delete the tombstone to reuse it)")
         if not isinstance(v, dict):
@@ -458,9 +506,10 @@ def _practice(e, who, status, problems):
         _ref_list(e, "incorporated_into", who, problems, DESTINATION_REF, DESTINATION_WHAT)
     if status == "superseded":
         sb = e.get("superseded_by")
-        if not (isinstance(sb, str) and re.fullmatch(r"LL-\d{3,}", sb)):
-            problems.append(f"{who}: status superseded needs `superseded_by` (a practice id)")
-        elif sb == who:
+        if not isinstance(sb, str) or (bad := _uid_ref(sb, "superseded_by")):
+            why = bad if isinstance(sb, str) else "status superseded needs `superseded_by`"
+            problems.append(f"{who}: {why} (the uid of the practice that replaced it)")
+        elif sb == e.get("uid"):
             problems.append(f"{who}: superseded_by names the entry itself")
     if status == "retired":
         _text(e, "retired_reason", problems, who)
@@ -503,17 +552,14 @@ def validate_lessons(data, policy=None, *, require_reviews: bool = True) -> list
     ``require_reviews`` is false: the write path, where a later review event pays that debt)."""
     items = _entries(data, "lessons", "lessons")
     problems: list[str] = []
-    _dupes([str(e.get("id")) for e in items if isinstance(e, dict)], problems)
-    _retired(data, [str(e.get("id")) for e in items if isinstance(e, dict)], LESSON_ID, problems)
+    _common(data, items, "lessons", problems)
+    labels = labels_of(items)
     for e in items:
         if not isinstance(e, dict):
             problems.append(f"entry is not a mapping: {e!r}")
             continue
-        who = str(e.get("id", "<no id>"))
-        if not LESSON_ID.match(who):
-            problems.append(
-                f"{who}: id must look like LL-123 (use LL-NEW and let register_ids allocate)"
-            )
+        who = _who(e, labels)
+        _identity(e, who, "lessons", problems)
         kind = e.get("kind")
         if kind not in LESSON_KINDS:
             problems.append(
@@ -541,15 +587,14 @@ def validate_lessons(data, policy=None, *, require_reviews: bool = True) -> list
 def validate_runbooks(data, policy=None, *, require_reviews: bool = True) -> list[dict]:
     items = _entries(data, "runbooks", "runbooks")
     problems: list[str] = []
-    _dupes([str(e.get("id")) for e in items if isinstance(e, dict)], problems)
-    _retired(data, [str(e.get("id")) for e in items if isinstance(e, dict)], RUNBOOK_ID, problems)
+    _common(data, items, "runbooks", problems)
+    labels = labels_of(items)
     for e in items:
         if not isinstance(e, dict):
             problems.append(f"entry is not a mapping: {e!r}")
             continue
-        who = str(e.get("id", "<no id>"))
-        if not RUNBOOK_ID.match(who):
-            problems.append(f"{who}: id must look like RB-123")
+        who = _who(e, labels)
+        _identity(e, who, "runbooks", problems)
         extra = set(e) - RUNBOOK_FIELDS
         if extra:
             problems.append(f"{who}: unknown field(s) {sorted(extra)}")
@@ -567,10 +612,11 @@ def validate_runbooks(data, policy=None, *, require_reviews: bool = True) -> lis
             require_reviews,
         )
         sb = e.get("superseded_by")
-        if sb is not None and not (
-            isinstance(sb, str) and re.fullmatch(r"RB-\d{3,}", sb) and sb != who
-        ):
-            problems.append(f"{who}: superseded_by must be another runbook id")
+        if sb is not None and (not isinstance(sb, str) or _uid_ref(sb, "") or sb == e.get("uid")):
+            why = _uid_ref(sb, "superseded_by") if isinstance(sb, str) else None
+            problems.append(
+                f"{who}: superseded_by must be another runbook's uid" + (f" ({why})" if why else "")
+            )
         s = e.get("systems")
         if not (isinstance(s, list) and s and all(isinstance(x, str) and x for x in s)):
             problems.append(f"{who}: `systems` must be a non-empty list of strings")
@@ -589,14 +635,30 @@ def validate_runbooks(data, policy=None, *, require_reviews: bool = True) -> lis
                 problems.append(f"{who} step {n}: unknown field(s) {sorted(extra)}")
             fl = st.get("from_lessons")
             if fl is not None and not (
-                isinstance(fl, list)
-                and fl
-                and all(isinstance(x, str) and re.fullmatch(r"LL-\d{3,}", x) for x in fl)
+                isinstance(fl, list) and fl and all(isinstance(x, str) and is_uid(x) for x in fl)
             ):
-                problems.append(f"{who} step {n}: `from_lessons` must be a list of lesson ids")
+                legacy = [x for x in fl or () if isinstance(x, str) and LEGACY_CODE.match(x)]
+                why = f" ({', '.join(legacy)}: {LEGACY_HINT})" if legacy else ""
+                problems.append(
+                    f"{who} step {n}: `from_lessons` must be a list of lesson uids{why}"
+                )
     if problems:
         raise RegisterError("runbooks", problems)
     return items
+
+
+def _common(data, items, kind: str, problems: list[str]) -> None:
+    """What spans a register's records: unique uids, unique ``order`` among siblings, and no
+    top-level key but the record list (the per-id ``retired:`` block of the numbered registers
+    is gone: a uid is never reused, so there is nothing to tombstone)."""
+    good = [e for e in items if isinstance(e, dict)]
+    _dupes([str(e.get("uid")) for e in good if is_uid(e.get("uid"))], problems, "uid")
+    extra = set(data) - {kind} if isinstance(data, dict) else set()
+    if extra:
+        problems.append(f"top level: unknown key(s) {sorted(extra)} (only `{kind}:`)")
+    labels = labels_of(good)
+    nodes = [node_of(e) for e in good if is_uid(e.get("uid"))]
+    problems += order_problems(nodes, labels)
 
 
 def validate_invariants(data) -> dict:

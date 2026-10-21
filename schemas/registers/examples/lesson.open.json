@@ -1,5 +1,6 @@
 {
-  "id": "LL-NEW",
+  "uid": "01a15e4e-0000-7000-8000-000000000001",
+  "type": "lesson",
   "title": "Stale cache served after config change",
   "date": "2026-01-01",
   "systems": [

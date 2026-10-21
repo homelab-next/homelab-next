@@ -1,14 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
-# an RFI is raised by a measure or a requirement
-id: RFI-001
+# raised_by is the uid of a measure or requirement, never a numbered code
+uid: 01a15e4e-758d-75ef-b0de-ee2ec6316a77
+type: RFI
 title: Which monitors cover the core services
 status: open
 date: '2026-10-20'
 author: profile:example-checker
-raised_by: SO-001
+raised_by: MOE-001
 triage: collection
 ltiov: '2026-11-19'
 tasked_to:
 - profile:reader
 question: Which uptime monitors cover each core service (DNS, proxy, secrets), and are they reporting
-  to the status hub? MOE-001 has no reading to grade.
+  to the status hub? [[01a15e4e-758c-731e-84af-04a7d009239b]] has no reading to grade.
