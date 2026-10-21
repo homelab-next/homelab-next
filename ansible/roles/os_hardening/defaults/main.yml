@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# OS hardening (control os-hardening, applied per guest): a small, documented CIS-lite set. Each
+# item is named in os_hardening_items and can be left out; nothing here needs a reboot (a module
+# already loaded stays loaded until the next boot, a running service is stopped now).
+#
+# Kernel settings: kernel pointer and dmesg restrictions, ptrace limited to parents, protected
+# links and FIFOs, no core dumps from setuid programs, full ASLR, and IPv4 that ignores redirects
+# and source routes, logs martians, drops broadcast echo and uses SYN cookies. IP forwarding is
+# deliberately not touched (container hosts and gateways need it).
+os_hardening_sysctl:
+  kernel.kptr_restrict: 2
+  kernel.dmesg_restrict: 1
+  kernel.yama.ptrace_scope: 1
+  kernel.randomize_va_space: 2
+  fs.protected_hardlinks: 1
+  fs.protected_symlinks: 1
+  fs.protected_fifos: 1
+  fs.suid_dumpable: 0
+  net.ipv4.conf.all.accept_redirects: 0
+  net.ipv4.conf.default.accept_redirects: 0
+  net.ipv4.conf.all.secure_redirects: 0
+  net.ipv4.conf.all.send_redirects: 0
+  net.ipv4.conf.default.send_redirects: 0
+  net.ipv4.conf.all.accept_source_route: 0
+  net.ipv4.conf.all.log_martians: 1
+  net.ipv4.icmp_echo_ignore_broadcasts: 1
+  net.ipv4.tcp_syncookies: 1
+# Filesystems a server never mounts; their modules are refused (install ... /bin/false).
+# squashfs is left alone (snaps use it) and so is vfat (EFI system partitions).
+os_hardening_filesystems: [cramfs, freevxfs, hfs, hfsplus, jffs2, udf]
+# Desktop and printing services, stopped, disabled and masked when present.
+os_hardening_services: [avahi-daemon.service, avahi-daemon.socket, cups.service, cups.socket, cups-browsed.service]
+# Files whose mode is set when they exist (owners are never changed).
+os_hardening_file_modes:
+  - {path: /etc/passwd, mode: "0644"}
+  - {path: /etc/group, mode: "0644"}
+  - {path: /etc/shadow, mode: "0640"}
+  - {path: /etc/gshadow, mode: "0640"}
+  - {path: /etc/crontab, mode: "0600"}
+  - {path: /etc/ssh/sshd_config, mode: "0600"}
+os_hardening_sysctl_file: /etc/sysctl.d/60-homelabnext-hardening.conf
+os_hardening_modprobe_file: /etc/modprobe.d/homelabnext-hardening.conf
+os_hardening_limits_file: /etc/security/limits.d/60-homelabnext-hardening.conf
+os_hardening_sysctl_cli: sysctl
+os_hardening_state_dir: /var/lib/homelabnext/os-hardening

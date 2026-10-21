@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Patching (control patching, applied per guest): the distribution's unattended-upgrades applying
+# security updates daily. Only the distribution's security origin is allowed by default (the
+# role's file clears the lists the package ships, so they cannot widen it); extra origins are
+# opt-in. Packages a role holds (dpkg hold: the SIEM agent, the Tailscale client) are never moved.
+unattended_upgrades_distribution: "{{ ansible_facts['distribution'] | default('') }}"
+# Further Origins-Pattern entries (for example a lab mirror's own origin).
+unattended_upgrades_extra_origins: []
+# Package-name regular expressions never upgraded automatically.
+unattended_upgrades_blocklist: []
+# Empty: no mail. A mail address for the report needs a working local MTA (mailx).
+unattended_upgrades_mail: ""
+unattended_upgrades_remove_unused: true
+# The health hook fails when the last unattended run is older than this.
+unattended_upgrades_max_age_hours: 48
+unattended_upgrades_config_file: /etc/apt/apt.conf.d/52homelabnext-unattended-upgrades
+unattended_upgrades_stamp_file: /var/lib/apt/periodic/unattended-upgrades-stamp
+unattended_upgrades_apt_config_cli: apt-config
+unattended_upgrades_state_dir: /var/lib/homelabnext/unattended-upgrades

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Control time-sync (ADR-0016 decision 7): the distribution's chrony, its configuration rendered
+# from the registry and checked by chronyd -p before it replaces the live file.
+- name: Refuse a host that is not Debian-family (the role installs the distribution's package)
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] == 'Debian'
+    fail_msg: "chrony supports Debian-family guests only (got {{ ansible_facts['os_family'] }})"
+
+- name: Install chrony (it replaces systemd-timesyncd, which the package removes)
+  ansible.builtin.apt:
+    name: chrony
+    state: present
+
+- name: Write the configuration and restart while a restart is owed
+  ansible.builtin.include_tasks: config.yml
+
+- name: Enable and start chrony
+  ansible.builtin.systemd_service:
+    name: "{{ chrony_service }}"
+    enabled: true
+    state: started

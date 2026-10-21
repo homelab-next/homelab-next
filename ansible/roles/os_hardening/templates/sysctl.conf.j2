@@ -1,0 +1,4 @@
+# Managed by homelabnext (role os_hardening, control os-hardening); local changes are overwritten.
+{% for key in os_hardening_sysctl | sort %}
+{{ key }} = {{ os_hardening_sysctl[key] }}
+{% endfor %}

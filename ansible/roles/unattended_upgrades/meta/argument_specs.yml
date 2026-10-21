@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install unattended-upgrades and apply the distribution's security updates daily.
+    options:
+      unattended_upgrades_reboot_time: &reboot
+        type: str
+        description: The reboot window (HH:MM, host time) used when an update needs a reboot, or "never" (updates that need a reboot then wait for an operator).
+        required: true
+      unattended_upgrades_distribution: &dist
+        type: str
+        description: Debian or Ubuntu (selects the security origin).
+        default: "{{ ansible_facts['distribution'] | default('') }}"
+      unattended_upgrades_extra_origins: &extra
+        type: list
+        elements: str
+        description: Further Origins-Pattern entries to allow (key=value pairs, comma separated).
+        default: []
+      unattended_upgrades_blocklist: &block
+        type: list
+        elements: str
+        description: Package-name regular expressions never upgraded automatically.
+        default: []
+      unattended_upgrades_mail: &mail
+        type: str
+        description: Address to mail the report to on a change; empty = no mail.
+        default: ""
+      unattended_upgrades_remove_unused: &unused
+        type: bool
+        description: Remove kernels and dependencies no longer needed after an upgrade.
+        default: true
+      unattended_upgrades_max_age_hours: &age
+        type: int
+        description: The health hook fails when the last unattended run is older than this.
+        default: 48
+      unattended_upgrades_config_file: &conf
+        type: path
+        description: The role's apt configuration file (sorts after the package's 50unattended-upgrades).
+        default: /etc/apt/apt.conf.d/52homelabnext-unattended-upgrades
+      unattended_upgrades_stamp_file: &stamp
+        type: path
+        description: The stamp apt's daily job touches after an unattended run.
+        default: /var/lib/apt/periodic/unattended-upgrades-stamp
+      unattended_upgrades_apt_config_cli: &aptcfg
+        type: str
+        description: The apt-config command (it parses the file before it is installed).
+        default: apt-config
+      unattended_upgrades_state_dir: &state
+        type: path
+        description: Where the hooks write their records.
+        default: /var/lib/homelabnext/unattended-upgrades
+  config:
+    short_description: Write the apt configuration, parsed by apt-config before it goes live.
+    options:
+      unattended_upgrades_reboot_time: *reboot
+      unattended_upgrades_distribution: *dist
+      unattended_upgrades_extra_origins: *extra
+      unattended_upgrades_blocklist: *block
+      unattended_upgrades_mail: *mail
+      unattended_upgrades_remove_unused: *unused
+      unattended_upgrades_config_file: *conf
+      unattended_upgrades_apt_config_cli: *aptcfg
+  health:
+    short_description: Fail unless an unattended run finished within unattended_upgrades_max_age_hours.
+    options:
+      unattended_upgrades_stamp_file: *stamp
+      unattended_upgrades_max_age_hours: *age
+  readiness:
+    short_description: Fail unless apt's configuration parses (the package sources are the mirror's concern).
+    options:
+      unattended_upgrades_apt_config_cli: *aptcfg
+  backup:
+    short_description: Record that nothing needs keeping (the configuration is rendered).
+    options:
+      unattended_upgrades_state_dir: *state
+  restore:
+    short_description: Nothing to restore; re-running main renders the configuration again.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; unattended-upgrades updates itself through its own security origin.
+    options: {}
+  export:
+    short_description: Nothing to export; the run logs stay in /var/log/unattended-upgrades.
+    options: {}

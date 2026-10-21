@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Fail unless apt's configuration parses
+  ansible.builtin.command:
+    argv: ["{{ unattended_upgrades_apt_config_cli }}", dump, "Unattended-Upgrade"]
+  changed_when: false
+  tags: [readiness]

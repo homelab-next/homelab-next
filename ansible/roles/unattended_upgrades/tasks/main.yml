@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Control patching (ADR-0016 decision 7): the distribution's unattended-upgrades, configured by one
+# file that sorts after the package's own and clears its origin lists.
+- name: Refuse a host that is not Debian-family (the role uses apt's unattended-upgrades)
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] == 'Debian'
+    fail_msg: "unattended_upgrades supports Debian-family guests only (got {{ ansible_facts['os_family'] }})"
+
+- name: Install unattended-upgrades
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: present
+
+- name: Write the configuration
+  ansible.builtin.include_tasks: config.yml
+
+- name: Enable apt's daily timers (they run the upgrade)
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop: [apt-daily.timer, apt-daily-upgrade.timer]

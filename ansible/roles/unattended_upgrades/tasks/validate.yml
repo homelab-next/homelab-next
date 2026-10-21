@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Values land inside quoted apt configuration strings: refuse a quote, a semicolon, a brace or a
+# line break, any of which could end the string and add settings of its own.
+- name: Validate the reboot window, distribution, origins and mail address
+  ansible.builtin.assert:
+    that:
+      - unattended_upgrades_reboot_time == 'never' or unattended_upgrades_reboot_time is match('^(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z')
+      - unattended_upgrades_distribution in unattended_upgrades_security_origins
+      - unattended_upgrades_extra_origins | select('match', '^[A-Za-z]+=[^"\;{}\n\r]+(?:,[A-Za-z]+=[^"\;{}\n\r,]+)*\Z') | list | length == unattended_upgrades_extra_origins | length
+      - unattended_upgrades_blocklist | select('match', '^[^"\;{}\n\r]+\Z') | list | length == unattended_upgrades_blocklist | length
+      - unattended_upgrades_mail == '' or unattended_upgrades_mail is match('^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\Z')
+      - unattended_upgrades_max_age_hours | int > 0
+    fail_msg: >-
+      unattended_upgrades: a reboot window HH:MM or "never", Debian or Ubuntu, origins as
+      key=value pairs and blocklist patterns without quotes, semicolons, braces or line breaks,
+      and an e-mail address or nothing

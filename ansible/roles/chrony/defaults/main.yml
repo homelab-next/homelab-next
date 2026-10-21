@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Time sync (control time-sync, applied per guest): the distribution's chrony following the lab's
+# own time sources, each a registry logical id (its host). Public pools are opt-in, so a guest in a
+# zone without internet egress never waits on one.
+chrony_pools: []
+# makestep: step the clock (instead of slewing) when it is off by more than this many seconds, in
+# the first chrony_makestep_limit updates only (a cold-booted guest is often far off).
+chrony_makestep_threshold: 1.0
+chrony_makestep_limit: 3
+# The health hook's limit on the offset chronyc reports (the control's "under one second").
+chrony_max_offset: 1.0
+chrony_config_file: /etc/chrony/chrony.conf
+chrony_cli: chronyc
+chrony_daemon_cli: chronyd
+chrony_systemctl_cli: systemctl
+chrony_service: chrony
+chrony_restart: true
+chrony_state_dir: /var/lib/homelabnext/chrony

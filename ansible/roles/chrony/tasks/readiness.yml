@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# NTP is UDP, which cannot be probed without a query: readiness is that every source resolves.
+- name: Resolve every time source through the registry
+  ansible.builtin.include_tasks:
+    file: validate.yml
+    apply:
+      tags: [readiness]
+  tags: [readiness]

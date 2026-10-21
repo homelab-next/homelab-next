@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to export (chrony holds no data of its own)
+  ansible.builtin.debug:
+    msg: chrony holds no data of its own to export
+  tags: [export]

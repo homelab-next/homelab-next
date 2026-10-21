@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing pinned (unattended-upgrades updates itself from the security origin)
+  ansible.builtin.debug:
+    msg: unattended-upgrades is the distribution's package and is updated by its own runs
+  tags: [upgrade]

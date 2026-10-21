@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# chronyc -c tracking prints one CSV line: reference id, reference name, stratum, reference time,
+# system time offset (seconds), last offset, RMS offset, frequency, residual frequency, skew, root
+# delay, root dispersion, update interval, leap status.
+- block:
+    - name: Read the tracking state
+      ansible.builtin.command:
+        argv: ["{{ chrony_cli }}", -c, tracking]
+      register: chrony_tracking
+      changed_when: false
+    - name: Fail unless the clock is synchronised to a source, with a small offset
+      vars:
+        chrony_fields: "{{ chrony_tracking.stdout.strip().split(',') }}"
+      ansible.builtin.assert:
+        that:
+          - chrony_fields | length >= 14
+          - chrony_fields[13] != 'Not synchronised'
+          - chrony_fields[2] | int > 0 and chrony_fields[2] | int < 16
+          - (chrony_fields[4] | float) | abs < chrony_max_offset | float
+        fail_msg: "chrony: not synchronised, or the offset is over {{ chrony_max_offset }}s ({{ chrony_tracking.stdout | trim }})"
+  tags: [health]

@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: each supported distribution's security origin (its Release file's Origin,
+# Label and Suite/Codename). ${distro_codename} is expanded by unattended-upgrades itself.
+unattended_upgrades_security_origins:
+  Debian: "origin=Debian,codename=${distro_codename}-security,label=Debian-Security"
+  Ubuntu: "origin=Ubuntu,archive=${distro_codename}-security"

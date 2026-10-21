@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install chrony, point it at the lab's time sources and run it.
+    options:
+      chrony_server_ids: &servers
+        type: list
+        elements: str
+        description: Logical ids of the lab's time sources in the registry (their host is used; NTP is UDP 123).
+        required: true
+      chrony_pools: &pools
+        type: list
+        elements: str
+        description: Public NTP pool host names to add (opt-in; only for zones with internet egress).
+        default: []
+      chrony_makestep_threshold: &step
+        type: float
+        description: Step the clock when it is off by more than this many seconds...
+        default: 1.0
+      chrony_makestep_limit: &limit
+        type: int
+        description: ...in the first this-many clock updates only.
+        default: 3
+      chrony_max_offset: &offset
+        type: float
+        description: The health hook fails when chronyc reports a larger offset (seconds).
+        default: 1.0
+      chrony_config_file: &conf
+        type: path
+        description: chrony's main configuration file (the role owns it).
+        default: /etc/chrony/chrony.conf
+      chrony_cli: &cli
+        type: str
+        description: The chronyc command.
+        default: chronyc
+      chrony_daemon_cli: &daemon
+        type: str
+        description: The chronyd command (its -p checks a configuration file before it is installed).
+        default: chronyd
+      chrony_systemctl_cli: &systemctl
+        type: str
+        description: The systemctl command (restarts the daemon after a configuration change).
+        default: systemctl
+      chrony_service: &service
+        type: str
+        description: The daemon's systemd unit.
+        default: chrony
+      chrony_restart: &restart
+        type: bool
+        description: Restart the daemon after a configuration change (false leaves the restart owed to a later run).
+        default: true
+      chrony_state_dir: &state
+        type: path
+        description: Where the role keeps its restart-pending marker and hook records.
+        default: /var/lib/homelabnext/chrony
+  config:
+    short_description: Write the tested configuration and restart the daemon while a restart is owed.
+    options:
+      chrony_server_ids: *servers
+      chrony_pools: *pools
+      chrony_makestep_threshold: *step
+      chrony_makestep_limit: *limit
+      chrony_max_offset: *offset
+      chrony_config_file: *conf
+      chrony_daemon_cli: *daemon
+      chrony_systemctl_cli: *systemctl
+      chrony_service: *service
+      chrony_restart: *restart
+      chrony_state_dir: *state
+  health:
+    short_description: Fail unless chrony is synchronised to a source with an offset under chrony_max_offset.
+    options:
+      chrony_cli: *cli
+      chrony_max_offset: *offset
+  readiness:
+    short_description: Fail unless every time source resolves through the registry.
+    options:
+      chrony_server_ids: *servers
+  backup:
+    short_description: Record that chrony holds no data a backup must keep (the configuration is rendered).
+    options:
+      chrony_state_dir: *state
+  restore:
+    short_description: Nothing to restore; re-running main renders the configuration again.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; the distribution package follows the patching control.
+    options: {}
+  export:
+    short_description: Nothing to export; chrony holds no data of its own.
+    options: {}

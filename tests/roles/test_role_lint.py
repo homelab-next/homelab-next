@@ -56,11 +56,14 @@ def test_every_rule_has_a_fixture():
 
 
 SHIPPED = [
+    "chrony",
     "compose_app",
     "example_service",
     "greenbone_target",
+    "os_hardening",
     "suricata_enroll",
     "tailscale_node",
+    "unattended_upgrades",
     "wazuh_agent",
 ]
 

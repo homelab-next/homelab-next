@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: A small, documented CIS-lite hardening set (kernel settings, unused filesystems and services, file modes, core dumps), each item optional, no reboot.
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# Names and values become lines of sysctl.d, modprobe.d and limits.d files: plain tokens only.
+- name: Validate the items, kernel settings, filesystems and file modes
+  ansible.builtin.assert:
+    that:
+      - os_hardening_items | difference(os_hardening_known_items) | length == 0
+      - os_hardening_sysctl.keys() | select('match', '^[a-z0-9_]+(?:\.[A-Za-z0-9_-]+)+\Z') | list | length == os_hardening_sysctl | length
+      - os_hardening_sysctl.values() | map('string') | select('match', '^-?[0-9]+\Z') | list | length == os_hardening_sysctl | length
+      - os_hardening_filesystems | select('match', '^[a-z0-9_]+\Z') | list | length == os_hardening_filesystems | length
+      - os_hardening_services | select('match', '^[A-Za-z0-9@._-]+\.(?:service|socket)\Z') | list | length == os_hardening_services | length
+      - os_hardening_file_modes | selectattr('path', 'match', '^/[^\n]*\Z') | selectattr('mode', 'match', '^0[0-7]{3}\Z') | list | length == os_hardening_file_modes | length
+    fail_msg: >-
+      os_hardening: items among {{ os_hardening_known_items | join(', ') }}, kernel settings as
+      dotted names with integer values, filesystem module names, .service/.socket units, and
+      {path, mode} pairs with absolute paths and 0NNN modes

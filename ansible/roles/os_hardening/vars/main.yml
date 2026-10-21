@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: the items the role knows.
+os_hardening_known_items: [sysctl, filesystems, services, file_modes, core_dumps]
