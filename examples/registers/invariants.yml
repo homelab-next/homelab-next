@@ -132,6 +132,16 @@ criteria:
   remediation: >-
     Fix the backend or rule that changed the compiled output, or, if the change is intended,
     refresh the goldens with UPDATE_GOLDEN=1 and review the diff.
+- id: P-08
+  statement: Work follows the board rules and links to strategy records by uid.
+  evidence: auto
+  observable: python3 -m homelabnext.cli projects check --dir examples/projects --strategy examples/strategy
+  expected: exit 0
+  expect_regex: '0 problem\(s\) in'
+  remediation: >-
+    Run `hnx projects check` and fix what it names: close a project whose steps are all
+    finished, give a finished item its one-line result, re-point a link at an existing record or
+    item (by uid). A broken rule here means the board can no longer be trusted as the work queue.
 - id: Q-04
   statement: Every component ships tests.
   evidence: auto
