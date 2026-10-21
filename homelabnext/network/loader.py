@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from homelabnext import paths
+from homelabnext import paths, sops
 
 
 class SiteError(Exception):
@@ -53,9 +53,11 @@ def load_site(path: str | Path) -> dict:
     """Return the parsed (unvalidated) site document."""
     p = Path(path)
     try:
-        text = p.read_text(encoding="utf-8")
+        text = sops.read_text(p)
     except OSError as exc:
         raise SiteError(f"cannot read site file {p}: {exc}") from exc
+    except sops.SopsError as exc:
+        raise SiteError(str(exc)) from exc
     doc = parse_document(text, name=str(p))
     if not isinstance(doc, dict):
         raise SiteError(f"{p}: site root must be a mapping")

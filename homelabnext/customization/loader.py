@@ -28,7 +28,7 @@ from typing import Any
 
 import yaml
 
-from homelabnext import paths
+from homelabnext import paths, sops
 from homelabnext._yaml import UniqueKeyStrDateLoader
 
 from .model import Customization, Finding
@@ -61,7 +61,7 @@ _StrLoader = UniqueKeyStrDateLoader
 
 
 def read_document(path: Path) -> Any:
-    text = path.read_text(encoding="utf-8")
+    text = sops.read_text(path)
     if path.suffix == ".json":
         return json.loads(text)
     return yaml.load(text, Loader=_StrLoader)
