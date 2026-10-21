@@ -83,7 +83,10 @@ def _(s):
     raises(lambda: s.link(_MISSING, _record(s), "supports"), "link", NotFound)
 
 
-@SUITE.check("step-needs-an-open-project", "a step names an existing, open project")
+@SUITE.check(
+    "step-needs-an-open-project",
+    "a step names an existing project; nothing is created or reopened in a closed one",
+)
 def _(s):
     raises(lambda: s.create("step", "orphan"), "step without project", InvalidReference)
     raises(lambda: s.create("step", "x", project=_MISSING), "missing project", ProjectsError)
@@ -93,6 +96,11 @@ def _(s):
     s.close(p.uid, "nothing left")
     raises(lambda: s.create("step", "late", project=p.uid), "step in closed project", InvalidTransition)  # fmt: skip
     assert not s.list(project=p.uid), "a step was stored under a closed project"
+    p, (a,) = _project(s, 1)
+    done = s.close(a.uid, "the only step")  # closes p
+    assert s.get(p.uid).status == "closed", "the last step finished, the project is open"
+    raises(lambda: s.update(a.uid, done.version, status="todo"), "reopen in closed project", InvalidTransition)  # fmt: skip
+    assert s.get(a.uid).status == "done", "a step was reopened in a closed project"
 
 
 @SUITE.check(
@@ -111,6 +119,21 @@ def _(s):
     assert done.result and done.closed_on, "the closed project carries a result and a date"
     assert not [x for x in s.list(kind="project", status="open") if x.uid == p.uid]
     raises(lambda: s.update(p.uid, done.version, status="open"), "reopen", InvalidTransition)
+
+
+@SUITE.check(
+    "open-task-holds-project-open",
+    "a task in a project holds it open: no manual close, no auto-close until it finishes too",
+)
+def _(s):
+    p, (a,) = _project(s, 1)
+    t = s.create("task", uniq("Task"), project=p.uid)
+    s.close(a.uid, "the only step")
+    assert s.get(p.uid).status == "open", "closed with a task of the project still open"
+    raises(lambda: s.close(p.uid, "early"), "close with an open task", InvalidTransition)
+    s.close(t.uid, "the task too")
+    done = s.get(p.uid)
+    assert done.status == "closed", f"every step and task finished, project is {done.status}"
 
 
 @SUITE.check("finish-needs-result", "done or cancelled needs a one-line result; the date is kept")
@@ -269,6 +292,16 @@ MUTANTS = {
     ),
     "never-closes": Mutant(
         fakes.NeverClosesStore, "last-step-closes-project", "finished projects stay open"
+    ),
+    "reopen-in-closed-project": Mutant(
+        fakes.ReopenInClosedProjectStore,
+        "step-needs-an-open-project",
+        "finished steps reopen in closed projects",
+    ),
+    "steps-only-close": Mutant(
+        fakes.StepsOnlyCloseStore,
+        "open-task-holds-project-open",
+        "projects close over their open tasks",
     ),
     "duplicate-key": Mutant(
         fakes.DuplicateKeyStore, "create-is-idempotent-by-external-key", "keys create duplicates"

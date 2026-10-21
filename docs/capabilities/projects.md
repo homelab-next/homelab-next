@@ -13,7 +13,7 @@ generated_by: hnx docs capabilities generate
 **Projects, steps and one-off tasks under the board rules; uid links, versions, a change feed.**
 
 - Contract: [`conformance.protocols.projects`](../../conformance/protocols/projects.py) (`conformance.protocols.projects:ProjectStore`)
-- Conformance suite: [`conformance.suites.projects`](../../conformance/suites/projects.py) (14 checks: 13 MUST, 1 SHOULD)
+- Conformance suite: [`conformance.suites.projects`](../../conformance/suites/projects.py) (15 checks: 14 MUST, 1 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -27,8 +27,9 @@ the library's own, `homelabnext.projects.model`, re-exported here.  An item is a
 `version` that grows by one on every change.
 
 The board rules are MUSTs of the suite: uids are unique and an `external_key` names at most one
-item (create is idempotent by it); a step belongs to an existing open project; a project with
-unfinished steps cannot close, and the project closes in the same write as its last step
+item (create is idempotent by it); a step belongs to an existing open project and is neither
+created nor reopened in a closed one; a project with an unfinished step or task cannot close,
+and a project with steps closes in the same write as its last unfinished step or task
 finishes, never to be reopened; a finished item carries a one-line result and its date; a
 `blocks` link holds back the blocked item's completion.  Links name uids that resolve: an
 external record (`records()`) for `supports`/`serves`/`measures`/`answers`, a step or
@@ -329,8 +330,9 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `uids-are-unique-uuidv7` | MUST | every item gets its own UUIDv7 uid, version 1 |  |
 | `create-is-idempotent-by-external-key` | MUST | a second create with a key returns the first |  |
 | `fields-and-uids-validated` | MUST | kind, title, status, assignee and due date are checked; a missing uid is NotFound |  |
-| `step-needs-an-open-project` | MUST | a step names an existing, open project |  |
+| `step-needs-an-open-project` | MUST | a step names an existing project; nothing is created or reopened in a closed one |  |
 | `last-step-closes-project` | MUST | a project closes only when its steps have, then in the same write, and for good |  |
+| `open-task-holds-project-open` | MUST | a task in a project holds it open: no manual close, no auto-close until it finishes too |  |
 | `finish-needs-result` | MUST | done or cancelled needs a one-line result; the date is kept |  |
 | `stale-version-conflicts` | MUST | a stale version fails and changes nothing; every change adds one, a no-op none |  |
 | `changes-since-is-complete` | MUST | every item changed after a cursor is reported at its latest version; no cursor: a snapshot |  |
@@ -357,8 +359,10 @@ Each is a deliberately broken fake (`hnx conform run projects --target broken:<m
 | `last-writer-wins` | `stale-version-conflicts` | stale updates overwrite |
 | `lossy-feed` | `changes-since-is-complete` | the feed drops changes |
 | `never-closes` | `last-step-closes-project` | finished projects stay open |
+| `reopen-in-closed-project` | `step-needs-an-open-project` | finished steps reopen in closed projects |
 | `resultless-finish` | `finish-needs-result` | items finish without a result |
 | `step-in-closed-project` | `step-needs-an-open-project` | steps land in closed projects |
+| `steps-only-close` | `open-task-holds-project-open` | projects close over their open tasks |
 
 ## Implementations
 
@@ -419,4 +423,4 @@ No service in `examples/services.yml` declares `capability: projects`.
    hnx conform run projects --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (13) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (14) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.

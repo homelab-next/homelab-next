@@ -5,12 +5,12 @@ The board rules (``docs/projects.md``), each one a MUST of the conformance suite
 
 1. **Unique identities.** Every item has its own UUIDv7 ``uid``; an ``external_key`` names at
    most one item (a second create with it returns the first).
-2. **A step belongs to an open project.** A step names an existing project; a step cannot be
-   created under (or reopened in) a closed project, and a project with unfinished steps cannot
-   be closed.
-3. **A finished project closes.** When the last unfinished step of a project reaches ``done`` or
-   ``cancelled``, the project closes in the same write; a project whose steps are all finished
-   is never open, and it is not reopened (start a new one).
+2. **A step belongs to an open project.** A step names an existing project; a step (or a task
+   that names a project) cannot be created under, or reopened in, a closed project, and a
+   project with an unfinished step or task cannot be closed.
+3. **A finished project closes.** When the last unfinished step or task of a project with steps
+   reaches ``done`` or ``cancelled``, the project closes in the same write; a project whose
+   steps and tasks are all finished is never open, and it is not reopened (start a new one).
 
 Plus link integrity: every link names a uid that resolves (an external record for
 ``supports``/``serves``/``measures``/``answers``, a step or task for ``blocks``/``precedes``),
@@ -51,6 +51,7 @@ __all__ = [
     "check_title",
     "find_cycle",
     "steps_of",
+    "unfinished_of",
 ]
 
 MAX_TITLE = 200
@@ -112,6 +113,15 @@ def steps_of(items: Iterable[WorkItem], project: str) -> list[WorkItem]:
     """The project's steps in order."""
     out = [i for i in items if i.kind == "step" and i.project == project]
     return sorted(out, key=lambda s: (s.order or 0, s.uid))
+
+
+def unfinished_of(items: Iterable[WorkItem], project: str) -> list[WorkItem]:
+    """The project's steps and tasks that have not finished (they hold the project open)."""
+    return [
+        i
+        for i in items
+        if i.kind in ITEM_KINDS and i.project == project and i.status not in TERMINAL
+    ]
 
 
 def find_cycle(edges: Mapping[str, Iterable[str]], start: str) -> list[str] | None:
@@ -205,7 +215,7 @@ def board_problems(items: Iterable[WorkItem], records: Iterable[str] | None = No
         allowed = PROJECT_STATUSES if i.kind == "project" else ITEM_STATUSES
         if i.status not in allowed:
             out.append(f"{i.uid}: status {i.status!r} is not a {i.kind} status")
-        if i.status in TERMINAL and i.kind != "project" and not (i.result and i.closed_on):
+        if i.status in TERMINAL and not (i.result and i.closed_on):
             out.append(f"{i.uid}: a finished {i.kind} needs a result and a date")
     recs = None if records is None else frozenset(records)
     for i in items:
@@ -217,8 +227,10 @@ def board_problems(items: Iterable[WorkItem], records: Iterable[str] | None = No
                 out.append(f"{i.uid}: unfinished {i.kind} in closed project {p.uid}")
         if i.kind == "project":
             steps = steps_of(items, i.uid)
-            if steps and i.status == "open" and all(s.status in TERMINAL for s in steps):
-                out.append(f"{i.uid}: every step is finished, so the project must be closed")
+            if steps and i.status == "open" and not unfinished_of(items, i.uid):
+                out.append(
+                    f"{i.uid}: every step and task is finished, so the project must be closed"
+                )
         for lk in i.links:
             if lk.relation in LINK_RELATIONS:
                 if recs is not None and lk.target not in recs:

@@ -14,6 +14,7 @@ from homelabnext.identity import is_uid
 from homelabnext.projects import (
     Conflict,
     InvalidField,
+    InvalidTransition,
     MarkdownBackend,
     ProjectStore,
     markdown_store,
@@ -120,10 +121,38 @@ def test_check_reports_every_rule_a_hand_edit_breaks(tmp_path):
     )  # a copy under another name
     problems = "\n".join(s.check() + s.backend.problems)
     assert "a finished step needs a result and a date" in problems
-    assert "every step is finished, so the project must be closed" in problems
+    assert "every step and task is finished, so the project must be closed" in problems
     assert "resolves to no record" in problems
     assert "notes.md: no front-matter" in problems
     assert "the file is named <uid>.md for its uid" in problems
+
+
+def test_an_open_task_holds_its_project_open_and_check_agrees(tmp_path):
+    """Rule 3 counts a project's tasks as well as its steps: no auto-close and no manual close
+    over an open task (which check() would then report), and check() does not ask for a
+    project with an open task to be closed."""
+    s = store(tmp_path)
+    p = s.create("project", "P")
+    a = s.create("step", "a", project=p.uid)
+    t = s.create("task", "t", project=p.uid)
+    s.close(a.uid, "the only step")
+    assert s.get(p.uid).status == "open" and s.check() == []
+    with pytest.raises(InvalidTransition, match="unfinished task"):
+        s.close(p.uid, "early")
+    s.close(t.uid, "the task too")
+    closed = s.get(p.uid)
+    assert closed.status == "closed" and closed.result.startswith("all 1 steps finished")
+    assert s.check() == []
+
+
+def test_check_wants_a_closed_project_to_carry_its_result_and_date(tmp_path):
+    s = store(tmp_path)
+    p = s.create("project", "P")
+    s.close(p.uid, "nothing to do after all")
+    assert s.check() == []
+    f = tmp_path / f"{p.uid}.md"
+    f.write_text(render_item({**parse_item(f.read_text(), f.name), "result": None}))
+    assert s.check() == [f"{p.uid}: a finished project needs a result and a date"]
 
 
 def test_check_reports_cycles_and_orphans_written_by_hand(tmp_path):
@@ -234,3 +263,27 @@ def test_completion_feeds_a_mop_and_never_a_moe():
         completion_reading(s.list(), recs["MOE-001"], now=EPOCH)
     empty = completion_reading([], recs["MOP-001"], now=EPOCH)
     assert "finding" in empty and "value" not in empty
+
+
+@pytest.mark.parametrize("enforce", ["error", "warn", "off"])
+def test_a_moe_reading_follows_the_doctrine_rule(enforce):
+    """completion_reading reads activity_never_moe from the doctrine instead of hard-coding it:
+    error refuses a MOE, warn reads it with a warning, off reads it silently."""
+    import warnings
+
+    from homelabnext.strategy.doctrine import Doctrine
+
+    recs = by_code()
+    d = Doctrine()
+    d.rules["activity_never_moe"]["enforce"] = enforce
+    moe = recs["MOE-001"]
+    if enforce == "error":
+        with pytest.raises(ValueError, match="activity_never_moe"):
+            completion_reading([], moe, now=EPOCH, doctrine=d)
+        return
+    with warnings.catch_warnings(record=True) as got:
+        warnings.simplefilter("always")
+        reading = completion_reading([], moe, now=EPOCH, doctrine=d)
+    assert reading["sample"] == 0 and "finding" in reading
+    warned = [str(w.message) for w in got if "activity_never_moe" in str(w.message)]
+    assert len(warned) == (1 if enforce == "warn" else 0), warned

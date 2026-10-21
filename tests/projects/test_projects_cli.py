@@ -96,9 +96,18 @@ def test_check_fails_on_a_hand_edit_and_passes_on_the_examples(run, capsys):
     assert hnx(["projects", "check", "--dir", str(REPO / "examples/projects"), "--strategy", STRATEGY]) == 0  # fmt: skip
 
 
-def test_refs_must_be_unambiguous(run):
+def test_refs_must_be_unambiguous(run, capsys):
+    run("new", "task", "something to point at")
     assert run("show", "abc")[0] == 1  # too short
     assert run("show", "0123456789ab")[0] == 1  # matches nothing
+    ex = ["--dir", str(REPO / "examples/projects"), "--strategy", STRATEGY, "--json"]
+    project = "01a15edd-032d-77ed-ab75-53a6402b1c8d"
+    for ref in ("01a15edd-032d", "01a15edd032d", "53a6402b1c8d", "402b1c8d"):  # prefix, suffix
+        capsys.readouterr()
+        assert cli(["show", ref, *ex]) == 0, ref
+        assert json.loads(capsys.readouterr().out)["uid"] == project
+    assert cli(["show", "01a15edd", *ex]) == 1  # a prefix every example shares
+    assert "matches 5 items" in capsys.readouterr().err
 
 
 # --- the hub page ----------------------------------------------------------------------------------
@@ -155,3 +164,57 @@ def test_serve_routes_the_page():
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_the_documented_commands_run_against_the_examples(tmp_path, capsys):
+    """Every `hnx projects` line of docs/projects.md's example block runs, in order, against a
+    copy of examples/projects (the refs in it are real prefixes and suffixes of example uids)."""
+    import re
+    import shlex
+
+    d = tmp_path / "projects"
+    shutil.copytree(REPO / "examples/projects", d)
+    doc = (REPO / "docs/projects.md").read_text()
+    block = doc.split("Over `examples/projects`", 1)[1].split("```bash\n", 1)[1].split("```")[0]
+    lines = [ln.split("  #")[0] for ln in block.splitlines() if ln.startswith("hnx projects ")]
+    assert len(lines) >= 8, lines
+    for line in lines:
+        args = shlex.split(line)[2:]
+        code = cli([*args, "--dir", str(d), "--strategy", STRATEGY])
+        out = capsys.readouterr()
+        assert code == 0, f"{line}: exit {code}: {out.err}"
+    assert cli(["check", "--dir", str(d), "--strategy", STRATEGY]) == 0
+    assert re.search(r" 0 problem\(s\) in 6 item\(s\) of ", capsys.readouterr().err)
+
+
+def test_a_read_needs_an_existing_directory(tmp_path, capsys):
+    """check, list, show and feed refuse a --dir that is not there (exit 2) and do not create
+    it; only `new` does.  The P-08 invariant cannot pass over a missing or empty board."""
+    gone = tmp_path / "nowhere"
+    for args in (["check"], ["list"], ["show", "abcdef"], ["feed"]):
+        assert cli([*args, "--dir", str(gone), "--strategy", STRATEGY]) == 2, args
+        assert "no projects directory" in capsys.readouterr().err
+    assert not gone.exists()
+    assert cli(["new", "task", "first", "--dir", str(gone), "--strategy", STRATEGY]) == 0
+    assert gone.is_dir()
+    capsys.readouterr()
+    assert cli(["check", "--dir", str(gone), "--strategy", STRATEGY]) == 0
+    assert "0 problem(s) in 1 item(s) of" in capsys.readouterr().err
+
+
+def test_the_p08_invariant_needs_a_non_empty_board():
+    import re
+
+    import yaml
+
+    crit = next(
+        c
+        for c in yaml.safe_load((REPO / "examples/registers/invariants.yml").read_text())[
+            "criteria"
+        ]
+        if c["id"] == "P-08"
+    )
+    rx = re.compile(crit["expect_regex"])
+    assert rx.search("hnx projects check: 0 problem(s) in 5 item(s) of examples/projects")
+    assert not rx.search("hnx projects check: 0 problem(s) in 0 item(s) of examples/projects")
+    assert not rx.search("hnx projects check: 10 problem(s) in 5 item(s) of examples/projects")
