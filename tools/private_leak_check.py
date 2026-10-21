@@ -6,6 +6,7 @@
 #   purpose: Fail when a private overlay holds a plaintext secret or an unencrypted sealed file, or when this public tree holds any part of a private overlay.
 #   owner: maintainers
 #   trigger: [ci:ci/schemas, make:private-overlay-check]
+#   invariant: [F-21]
 #   inputs: "mode: private (the private overlay's CI) or public (this repository); a checkout root"
 #   outputs: one line per finding
 #   exit:

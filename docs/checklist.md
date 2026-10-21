@@ -35,6 +35,7 @@ Platform-wide properties. Most need a running platform; the repository-level one
 | F-18 | The public tree contains no private identifiers | `tools/leak_scan.py` over the tree exits 0 (no private IPs, domains, emails, MACs, keys) | PUBLIC-NOW |
 | F-19 | Every guest has a defense baseline | With a baseline set (`_baselines.yml`), every guest (vm, lxc, host) names one or more baselines or carries a documented exemption (`hnx guests baselines DIR --site SITE --check`; `--require-bound` also fails while a needed control has no role) | PUBLIC-NOW |
 | F-20 | Every machine says what powers it | With a site `power` section, the router, every switch and edge device, every hypervisor and physical host names a known UPS or `none` with a reason (or takes `power.default`), and every UPS feeds something (`hnx guests validate DIR --site SITE`; `homelabnext/power.py`) | PUBLIC-NOW |
+| F-21 | The public tree carries no part of a private overlay | `tools/private_leak_check.py public .` exits 0: no overlay marker outside the fictional skeleton, no file under the skeleton's private layout paths, no `.sops.yaml`, no SOPS ciphertext, no key file; a private overlay's CI runs the same tool as `private ROOT` (no plaintext credential value, every file `.sops.yaml` covers sealed, every vault file vault-encrypted; ADR-0021) | PUBLIC-NOW |
 
 ## C - Collection
 
@@ -286,4 +287,4 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 
 ---
 
-**Totals:** 163 criteria across 16 pillars; 83 PUBLIC-NOW, 80 SERVER.
+**Totals:** 164 criteria across 16 pillars; 84 PUBLIC-NOW, 80 SERVER.

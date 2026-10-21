@@ -52,6 +52,7 @@ def test_retired_ids_are_checklist_conflicts_with_a_live_replacement():
 # rows whose gate already runs in `make check`; each must be runnable from a checkout
 GATED = ["F-05", "F-18", "D-02", "D-07", "Q-04", "Q-07", "Q-09", "Q-10", "Q-11"]
 GATED += ["M-01", "M-02", "M-03", "M-04", "M-17", "L-06", "L-07", "F-07", "F-17", "Q-05", "Q-08"]
+GATED += ["F-21"]
 # the CLI gates of `make check` and CI (fast: they run in `make invariants`)
 FAST_GATES = ["D-04", "T-07", "R-01", "R-03", "R-04", "R-07", "M-12", "G-01", "G-02", "G-03"]
 FAST_GATES += ["G-11", "K-02", "K-03", "K-04", "K-12", "K-15", "L-05", "F-19"]

@@ -606,6 +606,9 @@
       },
       "id": "private-leak-check",
       "inputs": "mode: private (the private overlay's CI) or public (this repository); a checkout root",
+      "invariant": [
+        "F-21"
+      ],
       "kind": "check",
       "language": "python",
       "outputs": "one line per finding",

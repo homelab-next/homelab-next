@@ -111,6 +111,20 @@ criteria:
     Give the device `power: {ups: <id>}` (or `{ups: none, reason: ...}`), fix the UPS id, or
     remove a UPS that feeds nothing; a machine whose power nobody wrote down is the one that
     surprises you in a power cut (docs/network-model.md, Power).
+- id: F-21
+  statement: The public tree carries no part of a private overlay.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml' 2>/dev/null || exit 100;
+    python3 tools/private_leak_check.py public . && echo no private overlay
+  expected: >-
+    exit 0 (no overlay marker outside the fictional skeleton, nothing under its private layout
+    paths, no .sops.yaml, no SOPS ciphertext, no key file)
+  expect_regex: no private overlay
+  remediation: >-
+    Move the file to the private overlay repository and rotate anything it could open (ADR-0021);
+    a marker, ciphertext or key in public git hands the lab's layout or its keys to every reader,
+    and the history keeps it after the file is deleted.
 - id: D-02
   statement: Every rule is tested.
   evidence: auto
