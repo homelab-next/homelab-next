@@ -99,9 +99,9 @@ SETTINGS = ApprovalsSettings(
 )
 
 
-def _doc(registry):
+def _doc(registry, approvals=False):
     snap = {"now": iso(T0), "observations": [], "sources": []}
-    return build_status(snap, load_views(VIEWS), registry, [])
+    return build_status(snap, load_views(VIEWS), registry, [], approvals=approvals)
 
 
 @pytest.fixture
@@ -111,12 +111,16 @@ def broker():
 
 @pytest.fixture
 def served(tmp_path, clock, registry, broker):
-    """``start(trusted=LOOPBACK, approvals=True) -> (base, site)``."""
+    """``start(trusted=LOOPBACK, approvals=True, settings=SETTINGS, key=KEY) -> (base, site)``
+    (``key=None``: the key the settings give, as ``hnx status serve`` builds it)."""
     servers = []
 
-    def start(trusted=LOOPBACK, approvals=True):
-        site = ApprovalsSite(broker, SETTINGS, front_door(tmp_path, trusted), clock=clock, key=KEY)
-        srv = make_server(lambda: _doc(registry), approvals=site if approvals else None)
+    def start(trusted=LOOPBACK, approvals=True, settings=SETTINGS, key=KEY):
+        fd = front_door(tmp_path, trusted)
+        site = ApprovalsSite(broker, settings, fd, clock=clock, key=key)
+        srv = make_server(
+            lambda: _doc(registry, approvals=approvals), approvals=site if approvals else None
+        )
         threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
         servers.append(srv)
         host, port = srv.server_address[:2]
@@ -338,6 +342,99 @@ def test_a_broker_refusal_is_reported_with_its_reason(served, broker):
     assert status == 403 and "approval-self-approved" in body.decode()
 
 
+# ---------------------------------------------------------------- what a browser sends
+#: Referrer-Policy values under which a browser's same-origin form POST carries the page's real
+#: Origin (Fetch, "serializing a request origin": only no-referrer turns it into "null")
+REAL_ORIGIN_POLICIES = {
+    "same-origin", "strict-origin", "strict-origin-when-cross-origin", "origin",
+    "origin-when-cross-origin", "no-referrer-when-downgrade", "unsafe-url",
+}  # fmt: skip
+
+
+def _browser_post(base, site, page_headers):
+    """The POST a browser makes from a form on a page served with ``page_headers``: Origin (and
+    Referer) follow that page's Referrer-Policy, as the Fetch standard serializes them."""
+    policy = page_headers["Referrer-Policy"]
+    if policy == "no-referrer":
+        return _post(base, _form(site), origin="null")  # and no Referer at all
+    headers = {**APPROVER, "Referer": base + "/approvals", "Sec-Fetch-Site": "same-origin"}
+    return _post(base, _form(site), headers, origin="same")
+
+
+def test_a_browser_form_post_from_the_page_carries_its_real_origin(served, broker):
+    base, site = served()
+    _, headers, _ = request(base, "/approvals", headers=APPROVER)
+    assert headers["Referrer-Policy"] in REAL_ORIGIN_POLICIES
+    status, _, body = _browser_post(base, site, headers)
+    assert status == 200, body
+    assert broker.calls == [("approve", RID, "sso", "operator", None)]
+    # a literal null Origin (an opaque or no-referrer document) is still refused
+    assert _post(base, _form(site), origin="null")[0] == 403
+    # the rest of the hub keeps sending no referrer
+    assert request(base, "/status.json")[1]["Referrer-Policy"] == "no-referrer"
+
+
+# ---------------------------------------------------------------- the approval's real state
+def test_an_expired_approval_shows_the_form_again_and_re_approves(served, broker):
+    broker.rows[0].update(approved=True, approval_state="expired")
+    broker.audit_rows.append(
+        {"at": iso(T0 - 7200), "operation": "approve", "outcome": "ok", "caller": "sso:operator",
+         "action": "service.restart", "request_id": RID}
+    )  # fmt: skip
+    base, site = served()
+    _, _, body = request(base, "/approvals", headers=APPROVER)
+    assert "<form" in body.decode() and "not yet run" not in body.decode()
+    status, _, body = _post(base, _form(site))
+    assert status == 200 and "already" not in body.decode()
+    assert broker.calls == [("approve", RID, "sso", "operator", None)]  # filed again
+
+
+@pytest.mark.parametrize("state", ["valid", None])  # None: a broker without approval_state
+def test_a_still_valid_approval_is_already_approved(served, broker, state):
+    base, site = served()
+    assert _post(base, _form(site))[0] == 200
+    if state:
+        broker.rows[0]["approval_state"] = state
+    _, _, body = request(base, "/approvals", headers=APPROVER)
+    assert "<form" not in body.decode() and "approved, not yet run" in body.decode()
+    status, _, body = _post(base, _form(site))
+    assert status == 200 and "already approved" in body.decode() and len(broker.calls) == 1
+
+
+def test_a_consumed_approval_is_not_awaiting_approval(served, broker):
+    base, site = served()
+    assert _post(base, _form(site))[0] == 200
+    broker.rows = []  # the approved request ran: no longer pending
+    status, _, body = _post(base, _form(site))
+    assert status == 409 and "not awaiting approval" in body.decode()
+
+
+# ---------------------------------------------------------------- one document per request
+def test_each_request_builds_the_document_at_most_once(registry):
+    calls = []
+
+    def document():
+        calls.append(1)
+        return _doc(registry)
+
+    class Passing:  # a page site that serves none of the routes asked for
+        def handle(self, *a):
+            return None
+
+    p = Passing()
+    srv = make_server(document, agents=p, strategy=p, baselines=p, approvals=p)
+    threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
+    try:
+        host, port = srv.server_address[:2]
+        for path in ("/agents", "/no-such-page"):
+            calls.clear()
+            assert request(f"http://{host}:{port}", path)[0] == 404
+            assert len(calls) <= 1, path
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 # ---------------------------------------------------------------- the rest stays read-only
 def test_the_hub_is_read_only_everywhere_else(served):
     base, site = served()
@@ -355,22 +452,34 @@ def test_the_hub_is_read_only_everywhere_else(served):
 
 
 # ---------------------------------------------------------------- config and the edge
-def _cfg(tmp_path, registry, secret=FAKE_SECRET, **approvals):
+CSRF_REF = "secret:status/approvals-csrf-secret"
+CSRF_KEY = "fake-shared-csrf-key-0123456789abcdef"
+
+
+def _cfg(tmp_path, registry, secret=FAKE_SECRET, csrf=CSRF_KEY, **approvals):
+    """The example agents.yml (no ingest) with ``approvals`` overrides; ``csrf``: the value the
+    secret store holds for ``approvals.csrf_key`` (None: not set); ``csrf_key=None`` drops the
+    setting itself."""
     doc = yaml.safe_load((ROOT / "examples" / "status" / "agents.yml").read_text())
     doc.pop("ingest")
     if approvals.pop("drop_private", False):
         doc.pop("private")
     doc["approvals"].update(approvals)
+    doc["approvals"] = {k: v for k, v in doc["approvals"].items() if v is not None}
     path = tmp_path / "agents.yml"
     path.write_text(yaml.safe_dump(doc))
-    return load_config(path, registry, lambda ref: secret)
+    return load_config(path, registry, lambda ref: csrf if ref == CSRF_REF else secret)
 
 
 def test_config(tmp_path, registry):
     cfg = _cfg(tmp_path, registry)
     assert cfg.approvals == ApprovalsSettings(
-        socket=Path("/run/hnx-broker/broker.sock"), issuer="sso", approver_group="hub-approvers"
+        socket=Path("/run/hnx-broker/broker.sock"),
+        issuer="sso",
+        approver_group="hub-approvers",
+        csrf_key=CSRF_KEY.encode(),
     )
+    assert CSRF_KEY not in repr(cfg.approvals) and cfg.warnings == []
     with pytest.raises(AgentsConfigError, match="needs private"):
         _cfg(tmp_path, registry, drop_private=True)
     with pytest.raises(AgentsConfigError, match="must differ"):
@@ -379,6 +488,115 @@ def test_config(tmp_path, registry):
         _cfg(tmp_path, registry, socket="relative/broker.sock")
     off = _cfg(tmp_path, registry, secret=None)  # no front-door secret: no private tier
     assert off.approvals is None and any("approvals page disabled" in w for w in off.warnings)
+
+
+# ---------------------------------------------------------------- the persistent CSRF key
+def _settings(tmp_path, registry, **kw):
+    return _cfg(tmp_path, registry, **kw).approvals
+
+
+def _two_sites(settings, broker, tmp_path, clock, other=None):
+    """Two hub instances (two processes' worth of ApprovalsSite) over the same broker."""
+    fd = front_door(tmp_path)
+    a = ApprovalsSite(broker, settings, fd, clock=clock)
+    b = ApprovalsSite(broker, other or settings, fd, clock=clock)
+    return a, b
+
+
+def test_a_token_from_one_instance_verifies_on_another_with_the_same_key(
+    served, broker, tmp_path, clock, registry
+):
+    settings = _settings(tmp_path, registry)
+    a, b = _two_sites(settings, broker, tmp_path, clock)
+    assert a.persistent_key and b.persistent_key
+    token = a.token(RID, DIGEST, "operator")
+    assert b.token_ok(token, RID, DIGEST, "operator")
+    # the token still binds the request, the digest and the approver on the second instance
+    assert not b.token_ok(token, "req-other", DIGEST, "operator")
+    assert not b.token_ok(token, RID, OTHER_DIGEST, "operator")
+    assert not b.token_ok(token, RID, DIGEST, "someone-else")
+    clock.advance(TOKEN_TTL_S + 1)  # ... and its issue time
+    assert not b.token_ok(token, RID, DIGEST, "operator")
+    # end to end: a form rendered by instance a is accepted by a restarted hub (instance b)
+    clock.t = T0
+    base, _ = served(settings=settings, key=None)
+    assert _post(base, _form(a))[0] == 200
+    assert broker.calls == [("approve", RID, "sso", "operator", None)]
+
+
+def test_a_token_is_refused_by_an_instance_with_another_key(broker, tmp_path, clock, registry):
+    settings = _settings(tmp_path, registry)
+    other = _settings(tmp_path, registry, csrf="fake-another-csrf-key-0123456789abcdef")
+    a, b = _two_sites(settings, broker, tmp_path, clock, other)
+    assert not b.token_ok(a.token(RID, DIGEST, "operator"), RID, DIGEST, "operator")
+
+
+@pytest.mark.parametrize("value", ["fake-short-key", "f" * 31])
+def test_a_short_csrf_key_is_refused_at_config_load(tmp_path, registry, value):
+    with pytest.raises(AgentsConfigError, match="csrf_key: the key is shorter than 32") as exc:
+        _cfg(tmp_path, registry, csrf=value)
+    assert value not in str(exc.value)  # the message names the setting, never the value
+
+
+def test_the_csrf_key_is_its_own_secret(tmp_path, registry):
+    front = registry.services["status-hub"].front_door["secret"]
+    with pytest.raises(AgentsConfigError, match="not the front door's"):
+        _cfg(tmp_path, registry, csrf_key=front)
+
+
+@pytest.mark.parametrize(
+    "kw, warning",
+    [
+        ({"csrf_key": None}, "approvals.csrf_key is not set"),  # the setting is absent
+        ({"csrf": None}, "approvals.csrf_key names a secret that is not set"),  # unresolved
+    ],
+)
+def test_without_a_csrf_key_a_per_process_key_still_works_within_the_process(
+    served, broker, tmp_path, clock, registry, kw, warning
+):
+    cfg = _cfg(tmp_path, registry, **kw)
+    assert cfg.approvals is not None and cfg.approvals.csrf_key is None
+    assert any(w.startswith(warning) and "per-process key" in w for w in cfg.warnings)
+    assert not any(FAKE_SECRET in w or CSRF_KEY in w for w in cfg.warnings)
+    a, b = _two_sites(cfg.approvals, broker, tmp_path, clock)
+    assert not a.persistent_key
+    token = a.token(RID, DIGEST, "operator")
+    assert a.token_ok(token, RID, DIGEST, "operator")  # within one process: as before
+    assert not b.token_ok(token, RID, DIGEST, "operator")  # a restart (new key) refuses it
+    base, site = served(settings=cfg.approvals, key=None)
+    assert _post(base, _form(site))[0] == 200
+
+
+# ---------------------------------------------------------------- the menu entry
+def test_the_menu_lists_approvals_only_when_configured_and_only_privately(served, registry):
+    from homelabnext.status.render import nav_html
+
+    on, off = _doc(registry, approvals=True), _doc(registry)
+    entry = next(m for m in on["menu"] if m["id"] == "approvals")
+    assert entry == {
+        "id": "approvals", "title": "Approvals", "kind": "page", "panel": "approvals",
+        "href": "/approvals", "available": True, "group": "private",
+    }  # fmt: skip
+    assert not next(m for m in off["menu"] if m["id"] == "approvals")["available"]
+    link = 'href="/approvals"'
+    assert link in nav_html(on, live=True, private=True)
+    assert link not in nav_html(on, live=True, private=False)  # the public view: never linked
+    assert link not in nav_html(on, private=True)  # the static page: never linked
+    assert ">Approvals<" not in nav_html(off, live=True, private=True)  # not configured: absent
+    base, _ = served()
+    _, _, page = request(base, "/approvals", headers=VIEWER)
+    assert link in page.decode()  # the page's own menu, for a private viewer
+    _, _, body = request(base, "/status.json")
+    assert all(m["id"] != "approvals" for m in json.loads(body)["menu"])  # not in the contract
+
+
+def test_the_approvals_entry_must_sit_in_the_private_group(registry, specs):
+    from homelabnext.status.views import views_problems
+
+    doc = yaml.safe_load(VIEWS.read_text())
+    assert views_problems(doc, registry, specs) == []
+    next(v for v in doc["menu"] if v["id"] == "approvals").pop("group")
+    assert any("private" in p for p in views_problems(doc, registry, specs))
 
 
 def test_the_generated_caddy_site_covers_the_approvals_path(registry):

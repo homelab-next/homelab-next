@@ -50,7 +50,7 @@ from typing import Any
 
 from conformance.protocols.broker import BrokerError
 
-from .service import BrokerService, ManifestError, load_manifest, validate_manifest
+from .service import BrokerService, ManifestError, _reasoned, load_manifest, validate_manifest
 
 _AGENT_CMDS = ("actions", "call", "submit", "status", "run", "cancel")
 
@@ -194,12 +194,6 @@ def _params(args) -> dict[str, Any]:
     return value
 
 
-def _refused(reason: str, message: str) -> BrokerError:
-    err = BrokerError(message)
-    err.reason = reason  # type: ignore[attr-defined]
-    return err
-
-
 class _Local:
     """The request commands against the state directory, with the asserted ``--as``."""
 
@@ -207,13 +201,16 @@ class _Local:
         self.svc = _service(args)
         self.args = args
 
-    def _who(self) -> str:
+    def _dev_only(self, message: str) -> None:
+        """Refuse an asserted identity unless the manifest sets ``dev_identity: true``."""
         if self.svc.manifest.get("dev_identity") is not True:
-            raise _refused(
-                "dev-identity-disabled",
-                "this manifest does not accept an asserted --as identity (dev_identity is not "
-                "true); use --socket against a running broker",
-            )
+            raise _reasoned(message, "dev-identity-disabled")
+
+    def _who(self) -> str:
+        self._dev_only(
+            "this manifest does not accept an asserted --as identity (dev_identity is not "
+            "true); use --socket against a running broker"
+        )
         if not self.args.who:
             raise ValueError("--as is required without --socket")
         return self.args.who
@@ -240,17 +237,12 @@ class _Local:
         self.svc.cancel(self._who(), rid)
 
     def decide(self, cmd, rid, who, note):
-        self._who_is_dev()
+        self._dev_only(
+            "this manifest does not accept an asserted approver; approvals come from an "
+            "approval relay over the socket"
+        )
         fn = self.svc.approve if cmd == "approve" else self.svc.deny
         return fn(rid, who, note=note)
-
-    def _who_is_dev(self):
-        if self.svc.manifest.get("dev_identity") is not True:
-            raise _refused(
-                "dev-identity-disabled",
-                "this manifest does not accept an asserted approver; approvals come from an "
-                "approval relay over the socket",
-            )
 
     def pending(self, mine):
         return self.svc.pending_for(self._who()) if mine else self.svc.pending()
@@ -344,6 +336,11 @@ def _run(args) -> int:
             f"{r['request_id']}  {r.get('actor', '')}  {r['action']}  "
             + json.dumps(r.get("params", {}), sort_keys=True)
             + ("  [approved, not yet run]" if r["approved"] else "")
+            + (
+                f"  [approval {r['approval_state']}: approve again]"
+                if r.get("approval_state") in ("expired", "consumed", "invalid")
+                else ""
+            )
             for r in rows
         )
         _out(args, rows, text or ("nothing pending" if args.mine else "nothing awaiting approval"))
@@ -389,7 +386,7 @@ def _import(args) -> int:
     mode = "applied" if args.apply else "dry run (use --apply to file)"
     lines.append(f"{len(rows)} files, {mode}")
     _out(args, {"apply": args.apply, "files": [r.as_dict() for r in rows]}, "\n".join(lines))
-    return 1 if any(r.outcome in ("unmappable", "refused") for r in rows) else 0
+    return 1 if any(r.outcome in ("unmappable", "refused", "conflict") for r in rows) else 0
 
 
 def _serve(args) -> int:

@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# The vendor publishes one apt repository per distribution and release
+# (<track>/debian/<codename>, <track>/ubuntu/<codename>): refuse anything else before using either.
+- name: Refuse a host that is neither Debian nor Ubuntu (the vendor repository has one per distribution)
+  ansible.builtin.assert:
+    that: tailscale_node_distribution in ['Debian', 'Ubuntu']
+    fail_msg: >-
+      tailscale_node supports Debian and Ubuntu guests only (got
+      {{ tailscale_node_distribution | to_json }}): the vendor apt repository is
+      <track>/debian/<release> or <track>/ubuntu/<release>
+
+- name: Refuse a release codename that is not a plain name (it names a URL path and a suite)
+  ansible.builtin.assert:
+    that: tailscale_node_release is match('^[a-z][a-z0-9-]{0,30}\Z')
+    fail_msg: "tailscale_node: unexpected release codename {{ tailscale_node_release | to_json }}"

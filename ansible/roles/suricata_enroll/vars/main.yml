@@ -17,3 +17,7 @@ suricata_enroll_standard_groups:
   MODBUS_SERVER: "$HOME_NET"
   ENIP_CLIENT: "$HOME_NET"
   ENIP_SERVER: "$HOME_NET"
+
+# Beside the live groups file: present while a changed file has gone live without a successful
+# reload-rules since (main retries the reload until it succeeds).
+suricata_enroll_pending_file: ".hnx-address-groups.reload-pending"

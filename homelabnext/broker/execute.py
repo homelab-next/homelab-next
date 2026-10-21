@@ -17,10 +17,19 @@ What :func:`run_handler` guarantees, in order:
 4. **Secrets by name.**  The handler document lists secret *names*; each is resolved at run time
    by the broker's resolver and handed to that one process as an environment variable.  Values
    never appear in a request, an approval, the audit trail or a result; any occurrence of one in
-   the captured output is replaced by ``<redacted>``.
-5. **Bounded.**  ``timeout_s`` is enforced (the whole process group is killed); stdout and stderr
-   are each captured up to ``max_output_bytes`` and the rest discarded, into ``stdout`` /
-   ``stderr`` files in the run directory.
+   the captured output is replaced by ``<redacted>``, and when the output is cut at its cap, a
+   tail that is the beginning of a secret is dropped too (the cut cannot leak a prefix).
+5. **Bounded.**  ``timeout_s`` is enforced; stdout and stderr are each captured up to
+   ``max_output_bytes`` and the rest discarded, into ``stdout`` / ``stderr`` files in the run
+   directory.  When the handler exits, or at the timeout, its whole process group is killed
+   (anything it left running) *before* the handler is reaped: the unreaped leader keeps its
+   process-group id in use, so the kill cannot reach an unrelated group that reused the number.
+   A descendant that left the group (``setsid``) is out of reach; contain that with the service
+   manager (a systemd unit's cgroup) where it matters.
+
+The handler copy is written through a close-on-exec descriptor.  If another thread forks while
+that descriptor is open, the child holds it until it execs and the handler's own exec fails with
+``ETXTBSY``; the spawn is retried a few times before it counts as ``handler-spawn-failed``.
 """
 
 from __future__ import annotations
@@ -30,9 +39,11 @@ import errno
 import hashlib
 import json
 import os
+import select
 import signal
 import subprocess
 import threading
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,6 +64,7 @@ SAFE_PATH = "/usr/local/bin:/usr/bin:/bin"
 RESERVED_ENV = frozenset({"PATH", "LANG", "HOME", "TMPDIR"})
 SECRET_ENV_PREFIX = "HNX_BROKER_SECRET_"
 _CHUNK = 65536
+_SPAWN_ATTEMPTS = 5
 
 
 class ExecError(Exception):
@@ -137,10 +149,61 @@ def _feed(stream, data: bytes) -> None:
         stream.close()
 
 
-def _redact(data: bytes, values: Sequence[str]) -> bytes:
-    for v in sorted({v for v in values if v}, key=len, reverse=True):
-        data = data.replace(v.encode("utf-8"), b"<redacted>")
+def _redact(data: bytes, values: Sequence[str], *, truncated: bool = False) -> bytes:
+    """Every secret in ``data`` replaced by ``<redacted>``; for output cut at its cap
+    (``truncated``), a tail that begins a secret is dropped as well."""
+    secrets_ = sorted({v.encode("utf-8") for v in values if v}, key=len, reverse=True)
+    for v in secrets_:
+        data = data.replace(v, b"<redacted>")
+    changed = truncated
+    while changed:
+        changed = False
+        for v in secrets_:
+            for n in range(min(len(v) - 1, len(data)), 0, -1):
+                if data.endswith(v[:n]):
+                    data, changed = data[:-n], True
+                    break
     return data
+
+
+def _wait_unreaped(
+    proc: subprocess.Popen, timeout_s: float, *, clock: Callable[[], float] = time.monotonic
+) -> bool:
+    """Wait until ``proc`` exits *without reaping it*; True when it exited within ``timeout_s``.
+
+    A pidfd (Linux 5.3+) becomes readable at exit; elsewhere ``waitid(WNOWAIT)`` is polled.
+    """
+    pidfd = None
+    with contextlib.suppress(AttributeError, OSError):
+        pidfd = os.pidfd_open(proc.pid)
+    if pidfd is not None:
+        try:
+            poller = select.poll()
+            poller.register(pidfd, select.POLLIN)
+            return bool(poller.poll(max(0, int(timeout_s * 1000))))
+        finally:
+            os.close(pidfd)
+    deadline = clock() + timeout_s
+    delay = 0.001
+    while True:
+        if os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None:
+            return True
+        remaining = deadline - clock()
+        if remaining <= 0:
+            return False
+        time.sleep(min(delay, remaining))
+        delay = min(delay * 2, 0.05)
+
+
+def _spawn(cmd: list[str], **kw: Any) -> subprocess.Popen:
+    for attempt in range(_SPAWN_ATTEMPTS):
+        try:
+            return subprocess.Popen(cmd, **kw)
+        except OSError as exc:
+            if exc.errno != errno.ETXTBSY or attempt == _SPAWN_ATTEMPTS - 1:
+                raise
+        time.sleep(0.01 * (attempt + 1))  # another thread's fork still holds the copy open
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def run_handler(
@@ -171,7 +234,8 @@ def run_handler(
         except Exception:
             raise ExecError("secret-unavailable", f"secret {name} could not be resolved") from None
     exe = run / ("handler" + Path(path).suffix)
-    fd = os.open(exe, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o700)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+    fd = os.open(exe, flags, 0o700)
     with os.fdopen(fd, "wb") as fh:
         fh.write(content)
     tmp = run / "tmp"
@@ -180,7 +244,7 @@ def run_handler(
     child_env.update(env or {})
     child_env.update(values)
     try:
-        proc = subprocess.Popen(
+        proc = _spawn(
             [str(exe), *argv],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -199,18 +263,17 @@ def run_handler(
         target=_feed, args=(proc.stdin, json.dumps(dict(params)).encode()), daemon=True
     )
     feeder.start()
-    timed_out = False
-    try:
-        proc.wait(timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        timed_out = True
+    timed_out = not _wait_unreaped(proc, timeout_s)
     with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.killpg(proc.pid, signal.SIGKILL)  # the handler and anything it left running
+        # the handler and anything it left running; the leader is not reaped yet, so its
+        # process-group id cannot have been reused
+        os.killpg(proc.pid, signal.SIGKILL)
     proc.wait()
     for t in (feeder, out, err):
         t.join(timeout=5)
-    stdout = _redact(bytes(out.kept), list(values.values()))
-    stderr = _redact(bytes(err.kept), list(values.values()))
+    secret_values = list(values.values())
+    stdout = _redact(bytes(out.kept), secret_values, truncated=out.total > max_output)
+    stderr = _redact(bytes(err.kept), secret_values, truncated=err.total > max_output)
     (run / "stdout").write_bytes(stdout)
     (run / "stderr").write_bytes(stderr)
     return ExecResult(

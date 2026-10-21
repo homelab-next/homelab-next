@@ -30,7 +30,7 @@ argument_specs:
         default: suricatasc
       suricata_enroll_reload:
         type: bool
-        description: Reload the rules (and with them the address groups) after a change.
+        description: Reload the rules (and with them the address groups) after a change; while false, a reload stays owed and the next run with true does it.
         default: true
   health:
     short_description: Fail unless the running sensor answers on its unix socket.

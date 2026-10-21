@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: where the checked vendor signing key is installed for apt (the repository's
+# Signed-By). The vendor serves it ASCII-armoured, which apt reads from a .asc file.
+wazuh_agent_keyring: /etc/apt/keyrings/hnx-wazuh.asc

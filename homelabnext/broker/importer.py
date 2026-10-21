@@ -25,10 +25,17 @@ records note       taken from                                      if absent or 
 ``provenance``     ``inputs``: ``imported-from:<file>`` and, when   -
                    the file names one, ``requested-by:<agent>``;
                    ``source``: the importing caller
-slug               the filename after its date (and the original    from the title
-                   agent's name, when that prefix is present)
+slug               the original requester (sanitised), then the     from the title
+                   filename after its date and that requester's
+                   name
 body               the Markdown after the front-matter              empty
 =================  ==============================================  ============================
+
+The filed name is ``<date>-<importer>-<slug>.md`` (the lane binds ``requesting_agent`` to the
+importing caller), so the original requester is kept in the slug: two agents' proposals with the
+same date and title land in two files.  Two source files that still map to one name are a
+``conflict`` -- the second is not filed and the command exits nonzero -- rather than an
+``exists`` that would hide a different proposal behind the first.
 
 ``requesting_agent`` is **never** carried over: the broker binds it to the caller doing the
 import, so an import cannot file a note as someone else (the original requester survives as
@@ -82,7 +89,7 @@ class Mapped:
     problem: str | None = None
     unmapped: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
-    outcome: str = "mapped"  # mapped | skipped | unmappable | filed | exists | refused
+    outcome: str = "mapped"  # mapped | skipped | unmappable | conflict | filed | exists | refused
     result: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -128,18 +135,22 @@ def _slug(name: str, agent: str | None, title: str) -> str | None:
 
     rest = _NAME_RE.match(name)
     text = rest.group(2) if rest else ""
-    if text and agent:
+    prefix = ""
+    if agent:
         try:
-            prefix = slugify(agent.partition(":")[2] or agent) + "-"
+            prefix = slugify(agent.partition(":")[2] or agent)
         except NoteError:
             prefix = ""
-        if prefix and text.startswith(prefix):
-            text = text[len(prefix) :]
+    if prefix and text.startswith(prefix + "-"):
+        text = text[len(prefix) + 1 :]
     for candidate in (text, title):
+        if not candidate:
+            continue
         try:
-            return slugify(candidate) if candidate else None
+            base = slugify(candidate)
         except NoteError:
             continue
+        return slugify(f"{prefix}-{base}") if prefix else base
     return None
 
 
@@ -268,14 +279,30 @@ def read_dir(
             out.append(Mapped(p.name, outcome="unmappable", problem=f"unreadable: {exc}"))
             continue
         out.append(map_proposal(p.name, text, mtime=st.st_mtime, **kw))
-    return out
+    return mark_conflicts(out)
+
+
+def mark_conflicts(rows: list[Mapped]) -> list[Mapped]:
+    """Mark every mapped row whose filed name (date and slug) an earlier row already takes as a
+    ``conflict``: it would otherwise be answered ``exists`` and silently not filed."""
+    first: dict[tuple[str, str], str] = {}
+    for row in rows:
+        if row.params is None or row.outcome != "mapped":
+            continue
+        key = (str(row.params["note"]["created"])[:10], str(row.params["slug"]))
+        if key in first:
+            row.outcome = "conflict"
+            row.problem = f"maps to the same file name as {first[key]}; rename one and re-run"
+        else:
+            first[key] = row.source
+    return rows
 
 
 def apply(rows: list[Mapped], call: Callable[[dict[str, Any]], Any], source: str) -> list[Mapped]:
     """File every mapped row with ``call(params)`` (the broker's ``proposal.file``), setting
-    ``provenance.source`` to ``source`` (the importing caller)."""
-    for row in rows:
-        if row.params is None:
+    ``provenance.source`` to ``source`` (the importing caller).  A ``conflict`` is not filed."""
+    for row in mark_conflicts(rows):
+        if row.params is None or row.outcome != "mapped":
             continue
         row.params["note"]["provenance"]["source"] = source
         try:

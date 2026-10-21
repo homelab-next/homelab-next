@@ -307,7 +307,28 @@
       "status": "active",
       "trigger": [
         "make:lab-up",
+        "make:lab-broker",
         "script:lab-smoke"
+      ]
+    },
+    {
+      "exit": {
+        "0": "every step passed",
+        "1": "some step failed",
+        "2": "usage"
+      },
+      "id": "lab-broker-e2e",
+      "inputs": "a running broker socket and status hub (the lab's broker services, or a test's processes)",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one line per step, or a JSON report with --json",
+      "owner": "lab-in-a-box",
+      "path": "compose/lab-in-a-box/broker_e2e.py",
+      "purpose": "The broker end to end on real processes - socket peers, MCP agent, hub approval, audit.",
+      "status": "active",
+      "trigger": [
+        "script:lab-smoke",
+        "compose:lab-in-a-box/status-hub"
       ]
     },
     {

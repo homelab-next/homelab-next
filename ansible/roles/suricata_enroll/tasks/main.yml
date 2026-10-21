@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Control network-sensor, central (ADR-0016 decision 7). HOME_NET is every enrolled guest;
-# HNX_ZONE_<ZONE> is each zone's guests, for zone-aware rules. A changed file is tested with
-# suricata -T before Suricata is told to reload (rule reloads re-read the vars section). If the test
-# fails the role stops: the running sensor keeps its old groups until the file is fixed.
+# HNX_ZONE_<ZONE> is each zone's guests, for zone-aware rules. A changed file never goes live
+# untested: it is staged beside the live one with a staged copy of the main configuration that
+# includes it, and suricata -T runs on that copy; only a passing file replaces the live one. If the
+# test fails the role stops and the live file, and the running sensor, keep the old groups.
+# Replacing the live file leaves a reload-pending marker that only a successful reload removes, so
+# a failed (or disabled) reload is retried on the next run even though the file no longer changes.
 - name: Validate the inputs
   ansible.builtin.include_tasks: validate.yml
 
@@ -12,26 +15,74 @@
     apply:
       tags: [always]
 
-- name: Write the address groups
+- name: Compare the address groups with the live file
   ansible.builtin.template:
     src: address-groups.yaml.j2
     dest: "{{ suricata_enroll_config_dir }}/{{ suricata_enroll_groups_file }}"
     mode: "0644"
+  check_mode: true
   register: suricata_enroll_written
 
-- name: Test the configuration and reload the sensor
+- name: Test the new groups, then install them
   when: suricata_enroll_written is changed
+  vars:
+    suricata_enroll_staged_groups: ".{{ suricata_enroll_groups_file }}.hnx-staged"
+    suricata_enroll_staged_conf: ".{{ suricata_enroll_config_file }}.hnx-test"
   block:
+    - name: Stage the new groups beside the live file
+      ansible.builtin.template:
+        src: address-groups.yaml.j2
+        dest: "{{ suricata_enroll_config_dir }}/{{ suricata_enroll_staged_groups }}"
+        mode: "0644"
+    - name: Stage a copy of the main configuration that includes the staged groups
+      ansible.builtin.copy:
+        dest: "{{ suricata_enroll_config_dir }}/{{ suricata_enroll_staged_conf }}"
+        content: >-
+          {{ (suricata_enroll_main_conf.content | b64decode)
+             | regex_replace('(\n  address-groups:\s*\n\s+include:\s*)["\']?' ~ (suricata_enroll_groups_file | regex_escape) ~ '["\']?(\s*\n)',
+                             '\g<1>' ~ suricata_enroll_staged_groups ~ '\g<2>') }}
+        mode: "0600"
     - name: Test the whole configuration with the new groups
       ansible.builtin.command:
         argv:
           - "{{ suricata_enroll_suricata_cli }}"
           - -T
           - -c
-          - "{{ suricata_enroll_config_dir }}/{{ suricata_enroll_config_file }}"
+          - "{{ suricata_enroll_config_dir }}/{{ suricata_enroll_staged_conf }}"
       changed_when: false
+    - name: Mark a reload as pending before the live file changes
+      ansible.builtin.copy:
+        dest: "{{ suricata_enroll_config_dir }}/{{ suricata_enroll_pending_file }}"
+        content: "the live address groups changed; reload-rules has not succeeded since\n"
+        mode: "0644"
+    - name: Install the tested groups as the live file
+      ansible.builtin.copy:
+        src: "{{ suricata_enroll_config_dir }}/{{ suricata_enroll_staged_groups }}"
+        dest: "{{ suricata_enroll_config_dir }}/{{ suricata_enroll_groups_file }}"
+        remote_src: true
+        mode: "0644"
+  always:
+    - name: Remove the staged files
+      ansible.builtin.file:
+        path: "{{ suricata_enroll_config_dir }}/{{ item }}"
+        state: absent
+      loop:
+        - "{{ suricata_enroll_staged_groups }}"
+        - "{{ suricata_enroll_staged_conf }}"
+
+- name: Look for a reload still pending
+  ansible.builtin.stat:
+    path: "{{ suricata_enroll_config_dir }}/{{ suricata_enroll_pending_file }}"
+  register: suricata_enroll_pending
+
+- name: Reload the sensor while a reload is pending
+  when: suricata_enroll_pending.stat.exists and suricata_enroll_reload | bool
+  block:
     - name: Reload the rules, which re-reads the address groups
       ansible.builtin.command:
         argv: ["{{ suricata_enroll_suricatasc_cli }}", -c, reload-rules]
-      when: suricata_enroll_reload | bool
       changed_when: true
+    - name: Clear the pending reload
+      ansible.builtin.file:
+        path: "{{ suricata_enroll_config_dir }}/{{ suricata_enroll_pending_file }}"
+        state: absent

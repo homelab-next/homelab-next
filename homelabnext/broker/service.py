@@ -27,7 +27,10 @@ claim, result, approval, consumed approval and audit record, each created exclus
 number of processes share it without locks and an approval is single use across all of them.
 Every outcome - ok, denied, invalid, error, shadow - leaves one audit record that validates
 against ``schemas/broker/audit``.  Arguments an ``ArgSpec`` marks ``secret`` are redacted in the
-audit trail and never written to disk.
+audit trail and never written to disk; in the request (and so in its digest, which is persisted,
+audited and sent with events) each is replaced by ``hmac-sha256:<hex>``, a hash keyed with the
+state directory's ``digest.key``, so a low-entropy secret cannot be recovered from the digest by
+guessing, while the digest still changes with the value.
 
 The service itself takes the caller as a string: an embedding program names it.  Stage 2a
 (ADR-0017) authenticates it instead: :mod:`homelabnext.broker.server` serves this service on a
@@ -41,6 +44,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -96,6 +100,13 @@ EMPTY_MANIFEST = {
     "grants": [],
 }
 APPROVAL_TITLE = "Broker approval needed"
+#: decide()'s reason for a request's latest approval -> the approval_state pending() reports
+_APPROVAL_STATES = {
+    "approved": "valid",
+    "approval-expired": "expired",
+    "approval-replayed": "consumed",
+    "approval-denied": "denied",
+}
 APPROVAL_CLEARED = "Broker approval settled"
 _SUMMARY_BYTES = 1024
 _SVC_RE = re.compile(r"^svc:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
@@ -154,6 +165,13 @@ def _read_doc(path: Path) -> Any:
     return yaml.safe_load(text)
 
 
+def _parse_errors() -> tuple[type[BaseException], ...]:
+    """What reading a JSON or YAML document can raise on a bad file."""
+    import yaml
+
+    return (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError)
+
+
 def _inside(base: Path, rel: str) -> Path | None:
     """``base/rel`` when it resolves inside ``base`` (symlinks followed), else None."""
     p = (base / rel).resolve()
@@ -180,7 +198,11 @@ def validate_manifest(
         if p is None or not p.is_file():
             problems.append(f"handler_docs: {rel} is missing or outside {base}")
             continue
-        doc = _read_doc(p)
+        try:
+            doc = _read_doc(p)
+        except _parse_errors() as exc:
+            problems.append(f"{rel}: cannot be read ({type(exc).__name__})")
+            continue
         errs = schema_errors("broker", "handler", doc)
         if errs:
             problems += [f"{rel}: {e}" for e in errs]
@@ -242,7 +264,10 @@ def _peer_problems(manifest: Mapping[str, Any]) -> list[str]:
 def load_manifest(path: str | os.PathLike[str]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Read and validate a manifest file; raises :class:`ManifestError` listing every problem."""
     p = Path(path)
-    manifest = _read_doc(p)
+    try:
+        manifest = _read_doc(p)
+    except _parse_errors() as exc:
+        raise ManifestError([f"{p}: cannot be read ({type(exc).__name__})"]) from None
     if not isinstance(manifest, dict):
         raise ManifestError([f"{p}: not a mapping"])
     docs, problems = validate_manifest(manifest, p.parent)
@@ -388,11 +413,14 @@ class BrokerService:
         **extra: Any,
     ) -> None:
         t = self._now()
+        # what a caller supplied (its name, an action name, a request id) is cut to the schema's
+        # bounds here, so no input can make the record of its own refusal unwritable
+        who = (caller if isinstance(caller, str) else repr(caller))[:256] or "<none>"
         rec: dict[str, Any] = {
             "audit_id": new_id("aud"),
             "at": t.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-            "caller": caller if isinstance(caller, str) else repr(caller),
-            "action": str(action),
+            "caller": who,
+            "action": str(action)[:128],
             "operation": operation,
             "outcome": outcome,
             "reason": reason if outcome not in ("ok",) else "",
@@ -400,13 +428,30 @@ class BrokerService:
             "manifest_id": self.manifest.get("manifest_id", "in-process"),
         }
         rec.update({k: v for k, v in extra.items() if v is not None})
+        if isinstance(rec.get("request_id"), str):
+            rec["request_id"] = rec["request_id"][:128]
         via = TRANSPORT_PEER.get()
         if via is not None:
             rec["via"] = via
+        stamp = t.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         problems = validation.named_errors("broker/audit", rec)
-        if problems:  # a bug in the broker, never the caller's input: fail loudly
+        if problems:
+            # a bug in the broker, never the caller's input: still leave a record of the
+            # outcome (a denial is never silently unrecorded), then fail loudly
+            fallback = {
+                k: rec[k]
+                for k in ("audit_id", "at", "caller", "operation", "outcome", "via")
+                if k in rec
+            }
+            fallback.update(
+                action="",
+                reason="" if outcome == "ok" else "audit-record-invalid",
+                args={"audit_problem": problems[0][:200]},
+            )
+            if not validation.named_errors("broker/audit", fallback):
+                self.state.append_audit(fallback, stamp)
             raise BrokerError(f"audit record invalid: {problems[0]}")
-        self.state.append_audit(rec, t.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ"))
+        self.state.append_audit(rec, stamp)
 
     def audit_refusal(
         self,
@@ -420,7 +465,7 @@ class BrokerService:
     ) -> None:
         """Audit a refusal made before the service saw the request (the socket transport's:
         an unknown peer, an actor named in the body, a malformed or oversized request)."""
-        self._audit(caller, action[:128], operation, outcome, reason=reason, request_id=request_id)
+        self._audit(caller, action, operation, outcome, reason=reason, request_id=request_id)
 
     def audit(self) -> Sequence[AuditRecord]:
         return [
@@ -436,12 +481,25 @@ class BrokerService:
             for r in self.state.audit_records()
         ]
 
-    def audit_documents(self, **match: Any) -> list[dict[str, Any]]:
-        """Raw audit records whose fields equal every ``match`` value (None = any)."""
+    def audit_documents(self, *, limit: int | None = None, **match: Any) -> list[dict[str, Any]]:
+        """Raw audit records whose fields equal every ``match`` value (None = any), oldest first;
+        with ``limit``, only the newest ``limit`` of them, read newest first (a tail reads the
+        tail, not the whole trail)."""
         want = {k: v for k, v in match.items() if v is not None}
-        return [
-            r for r in self.state.audit_records() if all(r.get(k) == v for k, v in want.items())
-        ]
+
+        def hit(r: Mapping[str, Any]) -> bool:
+            return all(r.get(k) == v for k, v in want.items())
+
+        if limit is None:
+            return [r for r in self.state.audit_records() if hit(r)]
+        out: list[dict[str, Any]] = []
+        if limit > 0:
+            for r in self.state.audit_records(newest_first=True):
+                if hit(r):
+                    out.append(r)
+                    if len(out) >= limit:
+                        break
+        return out[::-1]
 
     # ---------------------------------------------------------------- argument checks
     def _check_args(self, act: _Action, caller: str, args: Any, now: str) -> None:
@@ -472,11 +530,17 @@ class BrokerService:
         rid = new_id("req")
         act = self._action(action) if isinstance(action, str) else None
         spec = act.spec if act else None
+        params = dict(args) if isinstance(args, Mapping) else {}
+        if spec is not None:  # secret arguments enter the request, and its digest, keyed
+            params = {
+                k: self._keyed(v) if spec.get(k, ArgSpec("str")).secret else v
+                for k, v in params.items()
+            }
         request: dict[str, Any] = {
             "request_id": rid,
             "action": str(action),
             "actor": caller if isinstance(caller, str) else repr(caller),
-            "params": dict(args) if isinstance(args, Mapping) else {},
+            "params": params,
             "created": _stamp(now),
         }
         if target is not None:
@@ -514,6 +578,12 @@ class BrokerService:
             )
             raise _contract_error(exc) from None
         return act, request, decision
+
+    def _keyed(self, value: Any) -> str:
+        """``hmac-sha256:<hex>`` of a secret argument, keyed with the broker-held key."""
+        raw = json.dumps(value, sort_keys=True, ensure_ascii=False, default=repr).encode("utf-8")
+        mac = hmac.new(self.state.digest_key(), raw, hashlib.sha256).hexdigest()
+        return f"hmac-sha256:{mac}"
 
     # ---------------------------------------------------------------- execution
     def _execute(self, act: _Action, request: Mapping[str, Any], args: Mapping[str, Any]) -> Any:
@@ -667,13 +737,11 @@ class BrokerService:
     def submit(self, caller, command, args, *, target: str | None = None):
         act, request, decision = self._admit(caller, command, args, "submit", target)
         rid = request["request_id"]
-        stored = dict(request)
         secret = {}
         if act.kind == "callable":
             secret = {k: v for k, v in args.items() if act.spec.get(k, ArgSpec("str")).secret}
-            stored["params"] = {k: ("<redacted>" if k in secret else v) for k, v in args.items()}
         record = {
-            "request": stored,
+            "request": request,
             "kind": act.kind,
             "verdict": decision["verdict"],
             "decision_reason": decision["reason"],
@@ -745,12 +813,20 @@ class BrokerService:
             raise _reasoned(f"request {request_id!r} is {state}, not pending", "not-pending")
         act = self._action(req["action"])
         args = {**req["params"], **self._secret_args.get(request_id, {})}
-        approvals = [a for a in self.state.approvals(request_id) if a["decision"] == "approved"]
-        approval = approvals[-1] if approvals else None
+        approval = self._latest_approval(request_id)
         now = _stamp(self._now())
         view = self._view()
-        decision = decide(view, req, approval, now=now, store=self.approvals)
-        if not decision["enforced"]:
+        # decide without consuming: the approval is consumed only once this run holds the
+        # request's claim, so a refusal on the way (arguments, a lost claim) never burns it
+        enforce = view.get("mode", "enforce") == "enforce"
+        decision = decide(
+            dict(view, mode="shadow") if enforce else view,
+            req,
+            approval,
+            now=now,
+            store=self.approvals,
+        )
+        if not enforce:
             return self._shadow(caller, act, req, decision, "run")
         if decision["verdict"] != "allow":
             reason = decision["reason"]
@@ -795,6 +871,26 @@ class BrokerService:
         if not claimed:
             self._audit(caller, req["action"], "run", "invalid", reason="not-pending", **extra)
             raise _reasoned(f"request {request_id!r} is no longer pending", "not-pending")
+        aid = decision.get("approval_id")
+        if decision["reason"] == "approved" and not self.approvals.consume(aid):
+            # only a run holding the claim consumes, so this means the approval was used
+            # outside this request's run: refuse, and end the claimed request as an error
+            self._secret_args.pop(request_id, None)
+            self.state.put_result(
+                request_id, {"state": "error", "at": now, "reason": "approval-replayed"}
+            )
+            self._audit(
+                caller,
+                req["action"],
+                "run",
+                "denied",
+                reason="approval-replayed",
+                approval_id=aid,
+                **extra,
+            )
+            raise Denied(
+                f"request {request_id!r}: approval already used", reason="approval-replayed"
+            )
         try:
             result = self._run_audited(caller, act, req, args, "run")
         except BrokerError as exc:
@@ -827,18 +923,40 @@ class BrokerService:
             self._notify_settled(request_id, "cancelled by its owner")
 
     # ---------------------------------------------------------------- approvals
-    def pending(self) -> list[dict[str, Any]]:
-        """Requests waiting for an approver: needs-approval, still pending, not yet approved."""
+    def _latest_approval(self, request_id: str) -> dict[str, Any] | None:
+        approved = [a for a in self.state.approvals(request_id) if a["decision"] == "approved"]
+        return approved[-1] if approved else None
+
+    def approval_state(self, request_id: str, request: Mapping[str, Any]) -> str:
+        """Where a request's latest approval stands, judged by :func:`decide` itself (shadow
+        mode: nothing consumed): ``none`` (no approval filed), ``valid`` (it would let the
+        request run now), ``expired`` (past its TTL: a fresh approval may be filed),
+        ``consumed`` (already used), ``denied`` or ``invalid`` (it no longer matches the request
+        or the manifest's approver rules)."""
+        docs = self.state.approvals(request_id)
+        if docs and docs[-1]["decision"] != "approved":
+            return "denied"
+        approval = self._latest_approval(request_id)
+        if approval is None:
+            return "none"
+        probe = decide(
+            dict(self._view(), mode="shadow"),
+            request,
+            approval,
+            now=_stamp(self._now()),
+            store=self.approvals,
+        )
+        return _APPROVAL_STATES.get(probe["reason"], "invalid")
+
+    def _open_rows(self, keep: Callable[[Mapping[str, Any]], bool]) -> list[dict[str, Any]]:
+        """One row per pending request whose stored record ``keep`` selects, oldest first.  Reads only the open-request index, so it costs O(open), not O(history)."""
         out = []
-        for rid in self.state.request_ids():
+        for rid in self.state.open_request_ids():
             rec = self.state.get_request(rid)
-            if (
-                not rec
-                or rec["verdict"] != "needs-approval"
-                or self.state.state_of(rid) != "pending"
-            ):
+            if not rec or not keep(rec):
                 continue
-            approved = [a for a in self.state.approvals(rid) if a["decision"] == "approved"]
+            needs = rec["verdict"] == "needs-approval"
+            state = self.approval_state(rid, rec["request"]) if needs else "not-required"
             req = rec["request"]
             out.append(
                 {
@@ -849,36 +967,49 @@ class BrokerService:
                     "params": req["params"],
                     "created": req["created"],
                     "digest": req["digest"],
-                    "approved": bool(approved),
+                    "approved": state == "valid",
+                    "approval_state": state,
+                    "awaiting_approval": needs and state != "valid",
                 }
             )
         return out
 
+    def pending(self) -> list[dict[str, Any]]:
+        """Requests waiting for an approver: needs-approval and still pending.  ``approved`` is
+        true while a valid, unconsumed approval is on file (it can run now); ``approval_state``
+        says why not otherwise, and an ``expired`` one takes a fresh approval."""
+        fields = (
+            "request_id",
+            "action",
+            "actor",
+            "target",
+            "params",
+            "created",
+            "digest",
+            "approved",
+            "approval_state",
+        )
+        return [
+            {k: r[k] for k in fields}
+            for r in self._open_rows(lambda rec: rec["verdict"] == "needs-approval")
+        ]
+
     def pending_for(self, caller: str) -> list[dict[str, Any]]:
         """``caller``'s own requests still ``pending`` (awaiting approval, or approved and not yet
         run, or allowed and not yet run): what an agent may still run or cancel."""
-        out = []
-        for rid in self.state.request_ids():
-            rec = self.state.get_request(rid)
-            if (
-                not rec
-                or rec["request"]["actor"] != caller
-                or self.state.state_of(rid) != "pending"
-            ):
-                continue
-            req = rec["request"]
-            approved = [a for a in self.state.approvals(rid) if a["decision"] == "approved"]
-            out.append(
-                {
-                    "request_id": rid,
-                    "action": req["action"],
-                    "target": req.get("target"),
-                    "created": req["created"],
-                    "awaiting_approval": rec["verdict"] == "needs-approval" and not approved,
-                    "approved": bool(approved),
-                }
-            )
-        return out
+        fields = (
+            "request_id",
+            "action",
+            "target",
+            "created",
+            "awaiting_approval",
+            "approved",
+            "approval_state",
+        )
+        return [
+            {k: r[k] for k in fields}
+            for r in self._open_rows(lambda rec: rec["request"]["actor"] == caller)
+        ]
 
     def actions_for(self, caller: str) -> list[dict[str, Any]]:
         """What ``caller`` may ask for: every action a grant of its names that :func:`decide`

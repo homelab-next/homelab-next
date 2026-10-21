@@ -8,10 +8,11 @@ the tailnet when one of its resolved baseline controls is bound to the ``tailsca
 * ``tagOwners``: one entry per zone tag in use, owned by ``autogroup:admin`` (the tailnet's
   admins), so only an admin, or an auth key an admin made, can put a node in a zone;
 * ``acls``, first the minimal default: admins reach every zone tag on SSH (port 22) only;
-* then one rule per zone-to-zone allow of the site model (``firewall.zone_to_zone``, read through
-  :func:`homelabnext.compute.zones.site_flows`) whose two zones both have tailnet nodes, with the
-  rule's protocols and ports (none listed = any).  A zones-only site model has no flows, and the
-  policy is the minimal default alone.
+* then one rule per protocol of each flow the site model allows between two zones that both
+  have tailnet nodes: the network IR's evaluated ``firewall.zone_to_zone`` rules, read through
+  :func:`homelabnext.compute.zones.site_flows`, so the tailnet allows exactly what the IR allows
+  between zones (tcp, udp, icmp; a flow with no protocols is any of them).  A zones-only site
+  model has no flows, and the policy is the minimal default alone.
 
 Not modelled: port-level denies, ``service_exceptions`` (they name a service, not a zone),
 traffic inside one zone, exit nodes and subnet routes (the role advertises neither).  Everything

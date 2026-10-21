@@ -119,6 +119,8 @@ def test_wazuh_agent_accepts_good_inputs(tmp_path):
         {"wazuh_agent_enrollment_ref": "plain-password-fake"},
         {"wazuh_agent_enrollment_ref": "secret:../escape-token"},
         {"wazuh_agent_name": "a b"},
+        {"wazuh_agent_key_fingerprints": []},
+        {"wazuh_agent_key_fingerprints": ["0dcfca5547b19d2a6099506096b3ee5f29111145"]},
         {"wazuh_agent_groups": ["ok", "x,y"]},
     ],
 )
@@ -156,6 +158,101 @@ def test_wazuh_agent_upgrade_and_backup_hooks(tmp_path):
     assert bad.returncode != 0
 
 
+# ---------------------------------------------------------------- the pinned, held packages
+@pytest.mark.parametrize(
+    ("role", "package"), [("wazuh_agent", "wazuh-agent"), ("tailscale_node", "tailscale")]
+)
+def test_the_pinned_install_may_move_its_own_held_package(role, package):
+    """The package is dpkg-held, so the bump path (set a new version, re-run main) needs apt to
+    change that held package, for that package alone, and the hold must be set again after."""
+    tasks = yaml.safe_load((ANSIBLE / "roles" / role / "tasks" / "main.yml").read_text())
+    names = [t.get("ansible.builtin.apt", {}).get("name", "") for t in tasks]
+    (i,) = [n for n, name in enumerate(names) if str(name).startswith(f"{package}=")]
+    install = tasks[i]["ansible.builtin.apt"]
+    assert install["allow_change_held_packages"] is True
+    assert isinstance(install["name"], str) and "," not in install["name"]  # this package only
+    holds = [n for n, t in enumerate(tasks) if "ansible.builtin.dpkg_selections" in t]
+    assert holds and min(holds) > i
+    hold = tasks[min(holds)]["ansible.builtin.dpkg_selections"]
+    assert hold == {"name": package, "selection": "hold"}
+
+
+# ---------------------------------------------------------------- the vendor signing keys
+def make_key(tmp_path: Path, name: str, out: Path, armor: bool) -> str:
+    """A throwaway OpenPGP key exported to ``out``; returns its primary fingerprint."""
+    home = tmp_path / f"gnupg-{name}"
+    home.mkdir(mode=0o700)
+    gpg = ["gpg", "--batch", "--homedir", str(home), "--pinentry-mode", "loopback"]
+    uid = f"Fake vendor key {name}"
+    subprocess.run([*gpg, "--passphrase", "", "--quick-gen-key", uid, "ed25519", "sign", "never"],
+                   check=True, capture_output=True)  # fmt: skip
+    listing = subprocess.run([*gpg, "--with-colons", "--list-keys", uid], check=True,
+                             capture_output=True, text=True).stdout  # fmt: skip
+    fpr = next(x.split(":")[9] for x in listing.splitlines() if x.startswith("fpr:"))
+    exported = subprocess.run([*gpg, *(["--armor"] if armor else []), "--export", fpr],
+                              check=True, capture_output=True).stdout  # fmt: skip
+    subprocess.run(["gpgconf", "--homedir", str(home), "--kill", "all"], capture_output=True)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(out.read_bytes() + exported if out.exists() else exported)
+    return fpr
+
+
+KEY_CASES = {
+    # role: (served path under the repository root, armoured, keyring, extra vars)
+    "wazuh_agent": ("key/GPG-KEY-WAZUH", True, "hnx-wazuh.asc", {}),
+    "tailscale_node": ("debian/bookworm.noarmor.gpg", False, "hnx-tailscale.gpg",
+                       {"tailscale_node_distribution": "Debian", "tailscale_node_release": "bookworm"}),
+}  # fmt: skip
+
+
+def key_setup(tmp_path, role, pins=None, extra_key=False):
+    served, armor, keyring, extra = KEY_CASES[role]
+    repo = tmp_path / "repo"
+    fpr = make_key(tmp_path, "vendor", repo / served, armor)
+    if extra_key:
+        make_key(tmp_path, "other", repo / served, armor)
+    ring = tmp_path / "keyrings" / keyring
+    v = {
+        f"{role}_repository": f"file://{repo}",
+        f"{role}_keyring": str(ring),
+        f"{role}_key_fingerprints": [fpr] if pins is None else pins,
+        **extra,
+    }
+    return v, ring, (repo / served).read_bytes()
+
+
+@pytest.mark.skipif(shutil.which("gpg") is None, reason="gpg not installed")
+@pytest.mark.parametrize("role", sorted(KEY_CASES))
+def test_the_signing_key_is_installed_only_when_it_is_the_pinned_one(tmp_path, role):
+    v, ring, served = key_setup(tmp_path, role)
+    ok = run_role(tmp_path, role, "signing_key", v)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert ring.read_bytes() == served
+    assert sorted(p.name for p in ring.parent.iterdir()) == [ring.name]  # no staging file left
+    ring.unlink()
+    other = run_role(tmp_path, role, "signing_key", {**v, f"{role}_key_fingerprints": ["A" * 40]})
+    assert other.returncode != 0 and "not the pinned" in other.stdout
+    assert list(ring.parent.iterdir()) == []  # refused: not installed, staging file removed
+
+
+@pytest.mark.skipif(shutil.which("gpg") is None, reason="gpg not installed")
+@pytest.mark.parametrize("role", sorted(KEY_CASES))
+def test_a_signing_key_file_with_an_unpinned_key_beside_the_pinned_one_is_refused(tmp_path, role):
+    v, ring, _ = key_setup(tmp_path, role, extra_key=True)
+    r = run_role(tmp_path, role, "signing_key", v)
+    assert r.returncode != 0 and "not the pinned" in r.stdout and not ring.exists()
+
+
+def test_the_pinned_fingerprints_are_the_vendor_keys():
+    pins = {
+        "wazuh_agent": ["0DCFCA5547B19D2A6099506096B3EE5F29111145"],  # Wazuh.com (Wazuh Signing Key)
+        "tailscale_node": ["2596A99EAAB33821893C0A79458CA832957F5868"],  # Tailscale Inc. (Package repository signing key)
+    }  # fmt: skip
+    for role, want in pins.items():
+        d = yaml.safe_load((ANSIBLE / "roles" / role / "defaults" / "main.yml").read_text())
+        assert d[f"{role}_key_fingerprints"] == want
+
+
 # ---------------------------------------------------------------- tailscale_node
 def ts_vars(tmp_path, **kw):
     d = {"tailscale_node_auth_key_ref": "secret:remote-access/authkey-secret", "hnx_zone": "edge"}
@@ -185,6 +282,8 @@ def test_the_role_and_the_policy_agree_on_the_zone_tag():
         {"tailscale_node_extra_tags": ["admin"]},
         {"tailscale_node_auth_key_ref": "tskey-auth-fake"},
         {"tailscale_node_hostname": "a b"},
+        {"tailscale_node_key_fingerprints": []},
+        {"tailscale_node_key_fingerprints": ["458CA832957F5868"]},
         {"tailscale_node_repository": "http://mirror.example.internal/debian"},
     ],
 )
@@ -192,6 +291,42 @@ def test_tailscale_node_refuses_bad_inputs(tmp_path, over):
     r = run_role(tmp_path, "tailscale_node", "validate", ts_vars(tmp_path, **over))
     assert r.returncode != 0
     assert "tailscale_node: version" in r.stdout
+
+
+@pytest.mark.parametrize(
+    ("distribution", "release", "ok"),
+    [("Debian", "bookworm", True), ("Ubuntu", "noble", True), ("Linuxmint", "wilma", False),
+     ("Ubuntu", "noble/../x", False)],
+)  # fmt: skip
+def test_tailscale_node_takes_debian_and_ubuntu_only(tmp_path, distribution, release, ok):
+    v = ts_vars(tmp_path, tailscale_node_distribution=distribution, tailscale_node_release=release)
+    r = run_role(tmp_path, "tailscale_node", "platform", v)
+    assert (r.returncode == 0) is ok, r.stdout
+
+
+@pytest.mark.skipif(shutil.which("gpg") is None, reason="gpg not installed")
+def test_tailscale_node_reads_the_ubuntu_repository_on_ubuntu(tmp_path):
+    """The vendor's apt layout is <track>/ubuntu/<codename> on Ubuntu (its installer.sh), so the
+    key comes from there, and the apt source uses the same root."""
+    repo = tmp_path / "repo"
+    fpr = make_key(tmp_path, "vendor", repo / "ubuntu" / "noble.noarmor.gpg", armor=False)
+    ring = tmp_path / "keyrings" / "hnx-tailscale.gpg"
+    v = ts_vars(tmp_path, tailscale_node_repository=f"file://{repo}", tailscale_node_keyring=str(ring),
+                tailscale_node_key_fingerprints=[fpr], tailscale_node_distribution="Ubuntu",
+                tailscale_node_release="noble")  # fmt: skip
+    r = run_role(tmp_path, "tailscale_node", "signing_key", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert ring.read_bytes() == (repo / "ubuntu" / "noble.noarmor.gpg").read_bytes()
+    tasks = yaml.safe_load((ANSIBLE / "roles/tailscale_node/tasks/main.yml").read_text())
+    (src,) = [
+        t["ansible.builtin.deb822_repository"]
+        for t in tasks
+        if "ansible.builtin.deb822_repository" in t
+    ]
+    assert (
+        src["uris"] == "{{ tailscale_node_apt_uri }}"
+        and src["suites"] == "{{ tailscale_node_release }}"
+    )
 
 
 def status_cli(tmp_path, doc):
@@ -226,18 +361,42 @@ vars:
 """
 
 
+SURICATA_FAKE = r"""
+import os, re, sys
+log, fail = LOG, FAIL
+args = sys.argv[1:]
+line = " ".join(args)
+if "-T" in args:  # name the groups file the tested configuration includes, and its HOME_NET
+    conf = args[args.index("-c") + 1]
+    inc = re.search(r"address-groups:\s*\n\s+include:\s*(\S+)", open(conf).read()).group(1)
+    groups = open(os.path.join(os.path.dirname(conf), inc)).read()
+    line += f" [{inc} {re.search(r'^HOME_NET: (.*)$', groups, re.M).group(1)}]"
+open(log, "a").write(line + "\n")
+sys.exit(1 if os.path.exists(fail) else 0)
+"""
+
+
 def suricata_setup(tmp_path, conf=SURICATA_YAML):
     etc = tmp_path / "etc"
     etc.mkdir(exist_ok=True)
     (etc / "suricata.yaml").write_text(conf)
     log = tmp_path / "calls.log"
-    body = f"import sys\nopen({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+
+    def cli(name):
+        body = SURICATA_FAKE.replace("LOG", repr(str(log)))
+        return fake(tmp_path / name, body.replace("FAIL", repr(str(tmp_path / f"{name}.fails"))))
+
     return {
         "suricata_enroll_guests": GUESTS,
         "suricata_enroll_config_dir": str(etc),
-        "suricata_enroll_suricata_cli": fake(tmp_path / "suricata", body),
-        "suricata_enroll_suricatasc_cli": fake(tmp_path / "suricatasc", body),
+        "suricata_enroll_suricata_cli": cli("suricata"),
+        "suricata_enroll_suricatasc_cli": cli("suricatasc"),
     }, log
+
+
+TESTED = "-T -c {etc}/.suricata.yaml.hnx-test [.hnx-address-groups.yaml.hnx-staged {home}]"
+ALL_HOME = '"[198.51.100.40,198.51.100.50,203.0.113.10]"'
+LIVE_ONLY = ["hnx-address-groups.yaml", "suricata.yaml"]  # nothing staged or pending
 
 
 def test_suricata_enroll_writes_groups_tests_and_reloads_once(tmp_path):
@@ -250,9 +409,57 @@ def test_suricata_enroll_writes_groups_tests_and_reloads_once(tmp_path):
     assert groups["HNX_ZONE_EDGE"] == "[203.0.113.10]"
     assert groups["EXTERNAL_NET"] == "!$HOME_NET" and groups["HTTP_SERVERS"] == "$HOME_NET"
     calls = log.read_text().splitlines()
-    assert calls == [f"-T -c {tmp_path}/etc/suricata.yaml", "-c reload-rules"]
+    assert calls == [TESTED.format(etc=tmp_path / "etc", home=ALL_HOME), "-c reload-rules"]
+    assert sorted(p.name for p in (tmp_path / "etc").iterdir()) == LIVE_ONLY
     again = run_role(tmp_path, "suricata_enroll", "main", v)  # unchanged: no test, no reload
     assert again.returncode == 0 and log.read_text().splitlines() == calls
+
+
+def test_suricata_enroll_never_installs_a_file_that_fails_the_test(tmp_path):
+    v, log = suricata_setup(tmp_path)
+    live = tmp_path / "etc" / "hnx-address-groups.yaml"
+    assert run_role(tmp_path, "suricata_enroll", "main", v).returncode == 0
+    good = live.read_text()
+    fewer = {**v, "suricata_enroll_guests": GUESTS[:1]}
+    (tmp_path / "suricata.fails").touch()
+    r = run_role(tmp_path, "suricata_enroll", "main", fewer)
+    assert r.returncode != 0
+    assert live.read_text() == good  # the failing file never went live
+    assert sorted(p.name for p in (tmp_path / "etc").iterdir()) == LIVE_ONLY
+    assert log.read_text().splitlines()[-1].startswith("-T ")  # tested, never reloaded
+    (tmp_path / "suricata.fails").unlink()
+    log.write_text("")
+    fixed = run_role(tmp_path, "suricata_enroll", "main", fewer)  # the next run tests again
+    assert fixed.returncode == 0, fixed.stdout
+    assert log.read_text().splitlines() == [
+        TESTED.format(etc=tmp_path / "etc", home='"[198.51.100.50]"'),
+        "-c reload-rules",
+    ]
+    assert yaml.safe_load(live.read_text())["HOME_NET"] == "[198.51.100.50]"
+
+
+def test_suricata_enroll_retries_a_failed_reload(tmp_path):
+    v, log = suricata_setup(tmp_path)
+    (tmp_path / "suricatasc.fails").touch()
+    assert run_role(tmp_path, "suricata_enroll", "main", v).returncode != 0
+    assert (tmp_path / "etc" / "hnx-address-groups.yaml").exists()  # tested, so live
+    (tmp_path / "suricatasc.fails").unlink()
+    log.write_text("")
+    again = run_role(tmp_path, "suricata_enroll", "main", v)  # file unchanged, reload still owed
+    assert again.returncode == 0, again.stdout
+    assert log.read_text().splitlines() == ["-c reload-rules"]
+    log.write_text("")
+    assert run_role(tmp_path, "suricata_enroll", "main", v).returncode == 0
+    assert log.read_text() == ""  # confirmed: nothing more to do
+    assert sorted(p.name for p in (tmp_path / "etc").iterdir()) == LIVE_ONLY
+
+
+def test_suricata_enroll_keeps_the_reload_owed_while_reloads_are_off(tmp_path):
+    v, log = suricata_setup(tmp_path)
+    off = run_role(tmp_path, "suricata_enroll", "main", {**v, "suricata_enroll_reload": False})
+    assert off.returncode == 0 and "-c reload-rules" not in log.read_text()
+    assert run_role(tmp_path, "suricata_enroll", "main", v).returncode == 0
+    assert log.read_text().splitlines()[-1] == "-c reload-rules"
 
 
 def test_suricata_enroll_refuses_a_config_that_does_not_include_the_groups(tmp_path):
@@ -279,22 +486,32 @@ def test_suricata_enroll_refuses_bad_guests(tmp_path, guests):
 
 # ---------------------------------------------------------------- greenbone_target
 GVM_CLI = r"""
-import json, re, sys
+import configparser, json, re, sys
+import xml.etree.ElementTree as ET
 args = sys.argv[1:]
 state_file = STATE
-conf = args[args.index("--config") + 1]
-assert "[gmp]" in open(conf).read() and "password=gmp-pass-fake" in open(conf).read()
+conf = configparser.ConfigParser(default_section="main")  # as gvm-tools reads its config
+conf.read(args[args.index("--config") + 1])
+assert dict(conf.items("gmp"))["password"] == PASSWORD, "gvm-tools would read another password"
 assert args[args.index("--socketpath") + 1] == "/run/gvmd/gvmd.sock"
 xml = args[args.index("--xml") + 1]
 state = json.load(open(state_file))
 state["calls"].append(xml)
+
+
+def filter_name():
+    # gvmd's split_filter: a quoted value is one term; an unquoted one ends at the first space
+    f = ET.fromstring(xml).get("filter")
+    m = re.fullmatch(r'name="([^"]*)"', f)
+    return m.group(1) if m else re.match(r"name=(\S*)", f).group(1)
+
+
 if xml.startswith("<get_credentials"):
-    name = re.search(r'name=([^"]+)"', xml).group(1)
-    body = '<credential id="11111111-2222-3333-4444-555555555555"/>' if name == "lab-ssh" else ""
+    found = filter_name() in ("lab-ssh", "Lab SSH login")
+    body = '<credential id="11111111-2222-3333-4444-555555555555"/>' if found else ""
     out = '<get_credentials_response status="200" status_text="OK">' + body + "</get_credentials_response>"
 elif xml.startswith("<get_targets"):
-    name = re.search(r'name=([^"]+)"', xml).group(1)
-    body = '<target id="t-1"/>' if name in state["targets"] else ""
+    body = '<target id="t-1"/>' if filter_name() in state["targets"] else ""
     out = '<get_targets_response status="200" status_text="OK">' + body + "</get_targets_response>"
 elif xml.startswith("<create_target"):
     state["targets"].append(re.search("<name>([^<]+)</name>", xml).group(1))
@@ -306,10 +523,11 @@ print(out)
 """
 
 
-def gvm_setup(tmp_path, **kw):
+def gvm_setup(tmp_path, password="gmp-pass-fake", **kw):
     state = tmp_path / "gvm-state.json"
     state.write_text(json.dumps({"calls": [], "targets": ["hnx-edge-core"]}))
-    cli = fake(tmp_path / "gvm-cli", GVM_CLI.replace("STATE", repr(str(state))))
+    body = GVM_CLI.replace("STATE", repr(str(state))).replace("PASSWORD", repr(password))
+    cli = fake(tmp_path / "gvm-cli", body)
     v = {
         "greenbone_target_guests": GUESTS,
         "greenbone_target_scan_login": "lab-ssh",
@@ -318,8 +536,42 @@ def gvm_setup(tmp_path, **kw):
         "greenbone_target_work_dir": str(tmp_path / "work"),
         **kw,
     }
-    env = {"HNX_SECRET_ASSESSMENT_GMP_PASSWORD": "gmp-pass-fake"}
+    env = {"HNX_SECRET_ASSESSMENT_GMP_PASSWORD": password}
     return v, env, state
+
+
+def test_greenbone_target_finds_a_scan_login_whose_name_has_spaces(tmp_path):
+    v, env, state = gvm_setup(tmp_path, greenbone_target_scan_login="Lab SSH login")
+    r = run_role(tmp_path, "greenbone_target", "main", v, env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = json.loads(state.read_text())["calls"]
+    assert calls[0] == '<get_credentials filter="name=&quot;Lab SSH login&quot;"/>'
+    assert '<get_targets filter="name=&quot;hnx-bus-core&quot;"/>' in calls
+
+
+@pytest.mark.parametrize("password", ["gmp%pass-fake", "gmp%(user)s-fake", "100%%-fake"])
+def test_greenbone_target_writes_a_password_with_percent_signs_gvm_tools_reads_back(
+    tmp_path, password
+):
+    v, env, state = gvm_setup(tmp_path, password=password)
+    r = run_role(tmp_path, "greenbone_target", "health", v, env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert json.loads(state.read_text())["calls"] == ["<get_version/>"]
+    assert password not in r.stdout
+
+
+@pytest.mark.parametrize(
+    "password",
+    ["gmp-pass-fake\nusername=root", "gmp-pass-fake\r", " gmp-pass-fake", "gmp-pass-fake "],
+)
+def test_greenbone_target_refuses_a_password_the_ini_file_cannot_hold(tmp_path, password):
+    v, env, state = gvm_setup(tmp_path, password=password)
+    r = run_role(tmp_path, "greenbone_target", "main", v, env)
+    assert r.returncode != 0
+    assert "the GMP password (secret:assessment/gmp-password) holds a line break" in r.stdout
+    assert json.loads(state.read_text())["calls"] == []
+    assert not (tmp_path / "work" / "gvm-tools.conf").exists()
+    assert "gmp-pass-fake" not in r.stdout
 
 
 def test_greenbone_target_creates_the_missing_targets_only(tmp_path):

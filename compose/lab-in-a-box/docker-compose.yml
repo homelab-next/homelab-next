@@ -2,10 +2,10 @@
 #
 # Lab-in-a-box: a laptop/CI-sized reference environment for the capability seams, inside a 4 GB
 # RAM budget (the sum of the mem_limit values below is asserted by tests/compose):
-# the mem_limit values sum to 3328 MB of the 3584 MB the test allows (4 GB less OS/docker headroom).
-# StackStorm (MongoDB, RabbitMQ and its own services) and NiFi (a 1 GB default heap) do not fit in
-# what is left; the status hub tests them against source-verified responses instead
-# (tests/status/test_status_products.py).
+# the mem_limit values sum to 3584 MB of the 3584 MB the test allows (4 GB less OS/docker headroom);
+# the broker end-to-end services took the last 256 MB.  StackStorm (MongoDB, RabbitMQ and its own
+# services) and NiFi (a 1 GB default heap) do not fit; the status hub tests them against
+# source-verified responses instead (tests/status/test_status_products.py).
 #
 # Every capability is reachable inside the compose network by its registry alias
 # <capability>.svc.example.internal, so clients resolve it the same way they will on a real lab.
@@ -43,6 +43,8 @@ volumes:
   events-data:
   query-data:
   uptime-data:
+  broker-run:
+  broker-data:
 
 services:
   # --- object-store: S3 API ---------------------------------------------------------------
@@ -381,3 +383,93 @@ services:
       retries: 60
     mem_limit: 96m
     networks: [lab]
+
+  # --- broker end to end (ADR-0017; docs/broker.md, "Testing") ----------------------------
+  # Three containers, three users, one socket on a shared volume.  The broker serves the example
+  # production manifest (examples/broker/manifest.production.yml: callers and the relay by system
+  # user, created in broker/Dockerfile); the hub relays approvals to it; broker-edge plays the
+  # edge in front of the hub (its address is the hub's one trusted proxy) and starts every other
+  # peer of the socket as its own uid: the agent's `hnx broker mcp`, an unmapped uid and the
+  # relay's audit read.  smoke_checks.py runs broker_e2e.py in it.  Nothing here is published.
+  broker:
+    <<: [*restart, *hardened]
+    image: hnx-lab-broker:local
+    build: &broker-build
+      context: ../..
+      dockerfile: compose/lab-in-a-box/broker/Dockerfile
+    user: "10010:10010"
+    group_add: ["10020"]  # SupplementaryGroups=hnx-broker-clients, to give the socket that group
+    command: ["python", "-m", "homelabnext.cli", "broker", "serve",
+              "--manifest", "/src/examples/broker/manifest.production.yml",
+              "--state", "/var/lib/hnx-broker/state", "--data-root", "/srv/agents",
+              "--socket", "/run/hnx-broker/broker.sock", "--socket-mode", "660",
+              "--socket-group", "hnx-broker-clients"]
+    environment:
+      HNX_BROKER_SECRET_DEMO_API_TOKEN: ${LAB_BROKER_DEMO_TOKEN:?see .env.example}
+    volumes:
+      - broker-run:/run/hnx-broker
+      - broker-data:/srv/agents
+    network_mode: none  # the broker has no network listener; its socket is its only door
+    healthcheck:
+      test: ["CMD", "test", "-S", "/run/hnx-broker/broker.sock"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    mem_limit: 48m  # measured peak 35 MB
+
+  status-hub:
+    <<: [*restart, *hardened]
+    image: hnx-lab-broker:local
+    build: *broker-build
+    user: "10012:10012"
+    group_add: ["10020"]  # hnx-broker-clients: may connect to the socket
+    command: ["python", "/src/compose/lab-in-a-box/broker_e2e.py", "serve-hub",
+              "--dir", "/var/lib/hnx-hub", "--bind", "0.0.0.0", "--port", "8099"]
+    environment:
+      LAB_BROKER_EDGE_ADDRESS: ${LAB_BROKER_EDGE_ADDRESS:?see .env.example}
+      HNX_SECRET_STATUS_FRONT_DOOR_SECRET: ${LAB_HUB_FRONT_DOOR_SECRET:?see .env.example}
+    volumes:
+      - broker-run:/run/hnx-broker
+    depends_on:
+      broker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8099/status.json', timeout=3)"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    mem_limit: 64m  # measured peak 42 MB
+    networks:
+      lab:
+        aliases: [status-hub.svc.example.internal]
+
+  # root with only SETUID/SETGID: it starts each peer as that peer's uid (broker_e2e.py as ...);
+  # in the broker's group only to stat the lane file the agent wrote (the data root is read-only)
+  broker-edge:
+    <<: [*restart, *hardened]
+    image: hnx-lab-broker:local
+    build: *broker-build
+    user: "0:0"
+    cap_add: [SETUID, SETGID]
+    group_add: ["10010", "10020"]
+    command: ["sleep", "infinity"]
+    environment:
+      HNX_SECRET_STATUS_FRONT_DOOR_SECRET: ${LAB_HUB_FRONT_DOOR_SECRET:?see .env.example}
+      MALLOC_ARENA_MAX: "2"
+    volumes:
+      - broker-run:/run/hnx-broker
+      - broker-data:/srv/agents:ro
+    depends_on:
+      broker:
+        condition: service_healthy
+      status-hub:
+        condition: service_healthy
+    healthcheck:  # a shell test, not python: the scenario's processes need the memory
+      test: ["CMD", "test", "-S", "/run/hnx-broker/broker.sock"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    mem_limit: 144m  # measured peak 120 MB: the MCP client and server, one CLI at a time
+    networks:
+      lab:
+        ipv4_address: ${LAB_BROKER_EDGE_ADDRESS:?see .env.example}

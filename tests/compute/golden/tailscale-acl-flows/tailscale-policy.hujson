@@ -29,9 +29,9 @@
       "src": [
         "tag:zone-mgmt"
       ],
-      "proto": "tcp",
+      "proto": "icmp",
       "dst": [
-        "tag:zone-edge:22,443"
+        "tag:zone-edge:*"
       ]
     },
     {
@@ -39,9 +39,9 @@
       "src": [
         "tag:zone-mgmt"
       ],
-      "proto": "icmp",
+      "proto": "tcp",
       "dst": [
-        "tag:zone-edge:*"
+        "tag:zone-edge:22,443"
       ]
     }
   ]

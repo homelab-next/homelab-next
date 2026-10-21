@@ -70,14 +70,21 @@ def _hub(args, reg, specs, clock):
     return StatusHub(specs, StateStore(args.state, clock=clock), clock=clock)
 
 
-def _document(args, reg, specs, views, clock, site=None):
+def _document(args, reg, specs, views, clock, site=None, *, approvals=False):
     hub = _hub(args, reg, specs, clock)
     now = clock()
     agents = site.summary(now) if site is not None else None
     strategy = bool(getattr(args, "strategy", None))
     baselines = bool(getattr(args, "guests", None))
     return build_status(
-        hub.snapshot(now), views, reg, specs, agents=agents, strategy=strategy, baselines=baselines
+        hub.snapshot(now),
+        views,
+        reg,
+        specs,
+        agents=agents,
+        strategy=strategy,
+        baselines=baselines,
+        approvals=approvals,
     )
 
 
@@ -235,9 +242,11 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         return 0
     from .serve import LOOPBACK, make_server
 
+    approvals = _approvals_site(agents_cfg, clock)
+    served = approvals is not None
     try:
         srv = make_server(
-            lambda: _document(args, reg, specs, views, clock, site),
+            lambda: _document(args, reg, specs, views, clock, site, approvals=served),
             host=args.bind or LOOPBACK,
             port=args.port,
             allow_remote=args.allow_remote,
@@ -246,7 +255,7 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
             agents=site,
             strategy=_strategy_site(args, clock),
             baselines=_baseline_site(args),
-            approvals=_approvals_site(agents_cfg, clock),
+            approvals=approvals,
         )
     except (ValueError, OSError) as exc:
         print(f"hnx status serve: {exc}", file=sys.stderr)

@@ -91,14 +91,13 @@ def test_third_party_images_are_pinned_by_tag_and_digest(compose):
 
 
 def test_dockerfile_base_is_pinned_by_digest():
-    froms = [
-        line
-        for line in (LAB / "fakes" / "Dockerfile").read_text().splitlines()
-        if line.startswith("FROM ")
-    ]
-    assert froms
-    for line in froms:
-        assert re.search(r"@sha256:[0-9a-f]{64}$", line), line
+    dockerfiles = sorted(LAB.glob("*/Dockerfile"))
+    assert {d.parent.name for d in dockerfiles} >= {"fakes", "broker"}
+    for dockerfile in dockerfiles:
+        froms = [line for line in dockerfile.read_text().splitlines() if line.startswith("FROM ")]
+        assert froms, dockerfile
+        for line in froms:
+            assert re.search(r"@sha256:[0-9a-f]{64}$", line), (dockerfile, line)
 
 
 def mem_total(compose) -> int:
@@ -454,6 +453,72 @@ def test_a_missing_endpoint_is_a_failure_not_a_skip(checks):
     assert results and all(r["status"] == "fail" for r in results)
 
 
+def _report_cmd(doc: dict, rc: int = 0) -> str:
+    """A stand-in for the docker exec: prints ``doc`` as the scenario's JSON report."""
+    code = f"import json, sys; print(json.dumps({doc!r})); sys.exit({rc})"
+    return json.dumps([sys.executable, "-c", code])
+
+
+def test_broker_check_passes_only_when_every_scenario_step_did(checks):
+    good = {"ok": True, "steps": [{"step": "mcp-tools", "ok": True, "detail": "x"},
+                                  {"step": "audit", "ok": True, "detail": "y"}]}  # fmt: skip
+    (result,) = checks.run_checks({"broker-e2e": _report_cmd(good)}, only=["broker"], retries=1)
+    assert result["status"] == "pass", result
+    assert result["detail"] == "2 steps passed: mcp-tools, audit"
+    bad = {"ok": False, "steps": [{"step": "mcp-tools", "ok": True, "detail": "x"},
+                                  {"step": "hub-approve", "ok": False, "detail": "HTTP 403"}]}  # fmt: skip
+    (result,) = checks.run_checks({"broker-e2e": _report_cmd(bad, 1)}, only=["broker"], retries=1)
+    assert result["status"] == "fail"
+    assert "step hub-approve: HTTP 403 (passed: mcp-tools)" in result["detail"]
+    for broken in (json.dumps([sys.executable, "-c", "print('not json')"]), _report_cmd(good, 1)):
+        (result,) = checks.run_checks({"broker-e2e": broken}, only=["broker"], retries=1)
+        assert result["status"] == "fail", broken
+    (result,) = checks.run_checks({}, only=["broker"], retries=1)
+    assert result["status"] == "fail" and "broker-e2e" in result["detail"]
+
+
+def test_smoke_script_runs_the_broker_scenario_in_the_edge_container():
+    text = (LAB / "smoke.sh").read_text()
+    exported = text.index("export LAB_BROKER_E2E")
+    assert "exec -T broker-edge" in text[:exported]
+    assert "broker_e2e.py run --json" in text[:exported]
+    assert exported < text.index('smoke_checks.py" --report')
+
+
+def test_broker_services_are_three_users_on_one_socket(compose, env_vars):
+    e2e = load_module("broker_e2e", LAB / "broker_e2e.py")
+    svc = compose["services"]
+    broker, hub, edge = svc["broker"], svc["status-hub"], svc["broker-edge"]
+    # the broker: its own user, no network at all, nothing published anywhere
+    assert broker["user"] == "10010:10010" and broker["network_mode"] == "none"
+    assert str(e2e.LAB_CLIENTS_GID) in broker["group_add"]
+    assert "manifest.production.yml" in " ".join(broker["command"])
+    for s in (broker, hub, edge):
+        assert "ports" not in s
+        assert "broker-run:/run/hnx-broker" in s["volumes"]
+    # the hub is the manifest's relay user, the edge reaches it by its alias
+    assert hub["user"] == f"{e2e.LAB_UIDS['relay']}:{e2e.LAB_UIDS['relay']}"
+    assert "status-hub.svc.example.internal" in hub["networks"]["lab"]["aliases"]
+    assert e2e.LAB_HUB.startswith("http://status-hub.svc.example.internal:")
+    # the edge: root with only what it needs to start peers as their uids; the data root read-only
+    assert edge["user"] == "0:0" and sorted(edge["cap_add"]) == ["SETGID", "SETUID"]
+    assert "broker-data:/srv/agents:ro" in edge["volumes"]
+    assert edge["networks"]["lab"]["ipv4_address"] == "${LAB_BROKER_EDGE_ADDRESS:?see .env.example}"
+    import ipaddress
+
+    edge_ip = ipaddress.ip_address(env_vars["LAB_BROKER_EDGE_ADDRESS"])
+    assert edge_ip in ipaddress.ip_network(env_vars["LAB_SUBNET"])
+    # the uids the scenario expects are the users the image creates and the manifest maps
+    dockerfile = (LAB / "broker" / "Dockerfile").read_text()
+    manifest = yaml.safe_load((ROOT / "examples/broker/manifest.production.yml").read_text())
+    users = {"agent": "hnx-agent-triage", "relay": "hnx-hub"}
+    for role, user in users.items():
+        assert f"--uid {e2e.LAB_UIDS[role]} " in dockerfile and dockerfile.count(user) >= 1
+    assert f"--uid {e2e.LAB_UIDS['stranger']} " not in dockerfile  # nobody's uid
+    assert {"user": users["agent"], "profile": "profile:triage"} in manifest["callers"]
+    assert {"user": users["relay"], "issuer": "sso"} in manifest["approval_relays"]
+
+
 def test_bases_come_from_the_documented_env_names(checks, env_vars):
     bases = checks.bases_from_env(env_vars)
     assert bases["lake-query"] == f"http://{LOOPBACK}:8080"
@@ -515,6 +580,8 @@ CREDENTIALS = (
     "LAB_CATALOG_ENCRYPTION_KEY",
     "LAB_SECRETS_DEV_TOKEN",
     "LAB_UPTIME_PASSWORD",
+    "LAB_HUB_FRONT_DOOR_SECRET",
+    "LAB_BROKER_DEMO_TOKEN",
 )
 
 

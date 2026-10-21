@@ -4,11 +4,15 @@ timeout and output caps.  Each refusal is shown failing on the bad input and pas
 
 from __future__ import annotations
 
+import errno
 import json
 import os
+import subprocess
+import time
 
 import pytest
 
+from homelabnext.broker import execute as execute_mod
 from homelabnext.broker.execute import (
     ExecError,
     env_secret_resolver,
@@ -125,3 +129,71 @@ def test_unexecutable_handler_is_a_spawn_failure(tmp_path):
     with pytest.raises(ExecError) as info:
         _run(tmp_path, p)
     assert info.value.reason == "handler-spawn-failed"
+
+
+# -- review regressions: the process group, redaction at the cap, close-on-exec ------------
+
+
+def _unreaped(pid: int) -> bool:
+    """True while ``pid`` is still our child: running, or a zombie nobody has reaped."""
+    try:
+        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except ChildProcessError:
+        return False
+    return True
+
+
+@pytest.mark.parametrize("body", ["true\n", "sleep 30\n"])
+def test_the_process_group_is_killed_before_the_handler_is_reaped(tmp_path, monkeypatch, body):
+    seen = []
+    real = os.killpg
+
+    def killpg(pgid, sig):
+        seen.append(_unreaped(pgid))  # the leader still pins its pgid: it cannot be reused
+        real(pgid, sig)
+
+    monkeypatch.setattr(execute_mod.os, "killpg", killpg)
+    res = _run(tmp_path, _handler(tmp_path, body), timeout_s=1)[0]
+    assert seen == [True]
+    assert res.timed_out is (body != "true\n")
+
+
+def test_leftover_children_are_still_killed(tmp_path):
+    marker = tmp_path / "late"
+    _run(tmp_path, _handler(tmp_path, f"(sleep 1; touch {marker}) &\nexit 0\n"))
+    time.sleep(1.5)
+    assert not marker.exists()
+
+
+def test_a_secret_cut_at_the_cap_leaves_no_prefix(tmp_path):
+    secret = "fake-secret-value-0f3c9d"
+    h = _handler(tmp_path, 'printf "%s" "$(head -c 95 /dev/zero | tr "\\0" a)$DEMO"\n')
+    res, _ = _run(
+        tmp_path, h, secrets=["DEMO"], resolve_secret={"DEMO": secret}.get, max_output=100
+    )
+    assert res.stdout_truncated
+    text = res.stdout.decode()
+    assert not any(text.endswith(secret[:n]) for n in range(1, len(secret) + 1)), text
+    assert text.startswith("a" * 95)
+
+
+def test_the_handler_copy_is_close_on_exec_and_a_busy_text_file_is_retried(tmp_path, monkeypatch):
+    real_open, real_popen = os.open, subprocess.Popen
+    flags, calls = [], []
+
+    def spy_open(path, fl, *a, **k):
+        if str(path).endswith("handler.sh"):
+            flags.append(fl)
+        return real_open(path, fl, *a, **k)
+
+    def busy_once(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:  # another thread's fork still held the copy open for write
+            raise OSError(errno.ETXTBSY, "Text file busy")
+        return real_popen(*a, **k)
+
+    monkeypatch.setattr(execute_mod.os, "open", spy_open)
+    monkeypatch.setattr(execute_mod.subprocess, "Popen", busy_once)
+    res, _ = _run(tmp_path, _handler(tmp_path, "echo hi\n"))
+    assert res.exit_code == 0 and res.stdout == b"hi\n" and len(calls) == 2
+    assert flags and all(f & os.O_CLOEXEC for f in flags)

@@ -6,26 +6,35 @@
 - name: Validate the inputs
   ansible.builtin.include_tasks: validate.yml
 
-- name: Refuse a host that is not Debian-family (the role installs from the vendor apt repository)
-  ansible.builtin.assert:
-    that: ansible_facts['os_family'] == 'Debian'
-    fail_msg: "tailscale_node supports Debian-family guests only (got {{ ansible_facts['os_family'] }})"
+- name: Check the host has a vendor apt repository (Debian or Ubuntu)
+  ansible.builtin.include_tasks: platform.yml
 
-- name: Add the vendor apt repository, signed by the vendor key
+- name: Install gpg (it checks the vendor key's fingerprint)
+  ansible.builtin.apt:
+    name: gpg
+    state: present
+
+- name: Fetch the vendor signing key and check it against the pinned fingerprints
+  ansible.builtin.include_tasks: signing_key.yml
+
+- name: Add the vendor apt repository, signed by the checked vendor key
   ansible.builtin.deb822_repository:
     name: tailscale
     types: deb
-    uris: "{{ tailscale_node_repository }}"
-    suites: "{{ ansible_facts['distribution_release'] }}"
+    uris: "{{ tailscale_node_apt_uri }}"
+    suites: "{{ tailscale_node_release }}"
     components: main
-    signed_by: "{{ tailscale_node_repository }}/{{ ansible_facts['distribution_release'] }}.noarmor.gpg"
+    signed_by: "{{ tailscale_node_keyring }}"
 
+# The package is held (below), so moving it to a new pin (the upgrade hook's bump path) must be
+# allowed to change that one held package; the hold is set again right after.
 - name: Install the pinned client
   ansible.builtin.apt:
     name: "tailscale={{ tailscale_node_version }}"
+    allow_change_held_packages: true
     update_cache: true
 
-- name: Hold the package at its pin
+- name: Hold the package at its pin again
   ansible.builtin.dpkg_selections:
     name: tailscale
     selection: hold

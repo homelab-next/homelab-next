@@ -315,9 +315,9 @@ The first bindings (examples/minimal), to be tuned once the real lab runs them:
 
 | Control | Role | Applies | What it does | Health | Known limits |
 |---|---|---|---|---|---|
-| `siem-agent` | `wazuh_agent` | guest | adds the vendor apt repository (`<repo>/<major>.x/apt/ stable main`, signed by its key), installs the pinned `wazuh-agent=<version>-<revision>`, enrolls with the manager resolved by logical id (`wazuh_agent_manager_id`, host and agent port from the registry; enrollment password by secret reference), holds the package, runs the service | the state file reports `status='connected'` | the deployment variables apply on the first install only: a new manager means a reinstall; Debian-family guests only |
-| `remote-access` | `tailscale_node` | guest | adds the vendor apt repository, installs the pinned client, and, when not running, `tailscale up --auth-key=file:<transient> --advertise-tags=tag:zone-<zone>` (no exit node, no routes) | `tailscale status --json`: `Running`, online, carries its zone tag | a running node is not re-tagged (that is a `tailscale set`); Debian-family only |
-| `network-sensor` | `suricata_enroll` | central, `cap_sensor` | writes `hnx-address-groups.yaml` (`HOME_NET` = the enrolled guests, `HNX_ZONE_<ZONE>` per zone, the stock groups), runs `suricata -T`, then `suricatasc -c reload-rules` (a rule reload re-reads `vars`) | `suricatasc -c uptime` | `suricata.yaml` must hold `vars: address-groups: include: hnx-address-groups.yaml` (checked, never rewritten); mirroring the traffic to the sensor is the network's job |
+| `siem-agent` | `wazuh_agent` | guest | adds the vendor apt repository (`<repo>/<major>.x/apt/ stable main`, signed by its key, which is fetched and installed only if its primary key is a pinned fingerprint, `wazuh_agent_key_fingerprints`), installs the pinned `wazuh-agent=<version>-<revision>`, enrolls with the manager resolved by logical id (`wazuh_agent_manager_id`, host and agent port from the registry; enrollment password by secret reference), holds the package (the pinned install may move that held package, so a version bump is a re-run), runs the service | the state file reports `status='connected'` | the deployment variables apply on the first install only: a new manager means a reinstall; Debian-family guests only |
+| `remote-access` | `tailscale_node` | guest | adds the vendor apt repository (its key fetched and installed only if its primary key is a pinned fingerprint, `tailscale_node_key_fingerprints`), installs the pinned client and holds it (the pinned install may move that held package, so a version bump is a re-run), and, when not running, `tailscale up --auth-key=file:<transient> --advertise-tags=tag:zone-<zone>` (no exit node, no routes) | `tailscale status --json`: `Running`, online, carries its zone tag | a running node is not re-tagged (that is a `tailscale set`); Debian and Ubuntu only (the vendor repository is `<track>/debian/<codename>` or `<track>/ubuntu/<codename>`; `tailscale_node_repository` is the track root) |
+| `network-sensor` | `suricata_enroll` | central, `cap_sensor` | writes `hnx-address-groups.yaml` (`HOME_NET` = the enrolled guests, `HNX_ZONE_<ZONE>` per zone, the stock groups), stages a changed file and runs `suricata -T` on a staged copy of `suricata.yaml` that includes it, installs it only if that passes, then `suricatasc -c reload-rules` (a rule reload re-reads `vars`); a reload that fails, or is turned off, stays owed and is retried on the next run | `suricatasc -c uptime` | `suricata.yaml` must hold `vars: address-groups: include: hnx-address-groups.yaml` (checked, never rewritten); mirroring the traffic to the sensor is the network's job |
 | `vuln-scan` | `greenbone_target` | central, `cap_scanner` | over gvmd's socket with `gvm-cli` (as `_gvm`; it refuses root), finds the operator's scan login by name and creates a target `hnx-<guest>` per guest that lacks one | GMP `get_version` | targets are matched by name: an address change or a guest that leaves is not followed; scan tasks and schedules stay in Greenbone |
 
 Secrets are referenced, never written: `wazuh_agent_enrollment_ref`, `tailscale_node_auth_key_ref`
@@ -331,13 +331,16 @@ and `greenbone_target_gmp_auth_ref` hold `secret:<name>`, resolved on the contro
 `tailscale-policy.hujson` for the guests that need a control bound to `tailscale_node`:
 
 * `tagOwners`: `tag:zone-<zone>` for every zone with a tailnet node, owned by `autogroup:admin`;
-* `acls`: admins to every zone tag on TCP 22 (the minimal default), then one rule per allow of the
-  site's `firewall.zone_to_zone` between two zones that both have tailnet nodes, with its
-  protocols and ports. The rules are read in the network model's order (rules to a zone, then
-  rules to `any`), and an allow is dropped when an earlier port-less deny matches the same pair.
-  A zones-only site file has no flows: the policy is the minimal default.
+* `acls`: admins to every zone tag on TCP 22 (the minimal default), then, between two zones that
+  both have tailnet nodes, rules for exactly the (protocol, port) pairs the network IR allows
+  from one to the other: the flows come from `homelabnext.network.ir`'s evaluated
+  `firewall.zone_to_zone` rules (first match wins; rules to a zone before rules to `any`; ports
+  without `protocols` mean TCP; ICMP beside ports is dropped), not from a second reading of the
+  file. A zones-only site file has no flows: the policy is the minimal default. An allow of a
+  whole protocol after a port-level deny of it (the site validator refuses such a deny) is an
+  error, since Tailscale rules only allow.
 
-Not translated: port-level denies, `service_exceptions` (they name a service), traffic inside one
+Not translated: `service_exceptions` (they name a service), traffic inside one
 zone, exit nodes and subnet routes. Push the file with Tailscale's own tooling; the generator only
 writes it.
 

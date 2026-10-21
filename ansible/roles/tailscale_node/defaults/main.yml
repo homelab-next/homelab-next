@@ -4,8 +4,14 @@
 # and advertises tag:zone-<zone> for its zone, the same tag the tailscale-acl target writes
 # policy for. No exit node and no subnet routes are advertised.
 tailscale_node_version: "1.88.4"
-# The vendor package repository (stable track, Debian); point it at a lab mirror to control it.
-tailscale_node_repository: "https://pkgs.tailscale.com/stable/debian"
+# The vendor package repository's track root (stable); the role appends debian/ or ubuntu/ for
+# the guest. Point it at a lab mirror (same layout) to control what is served.
+tailscale_node_repository: "https://pkgs.tailscale.com/stable"
+# The primary-key fingerprints the repository's signing key
+# (<repository>/<debian|ubuntu>/<release>.noarmor.gpg) must carry: the vendor's "Tailscale Inc. (Package repository signing key)". A mirror serves the
+# same key; a key rotation adds the new fingerprint here.
+tailscale_node_key_fingerprints:
+  - "2596A99EAAB33821893C0A79458CA832957F5868"
 # The guest's zone from the generated inventory (hnx_zone): its tag is tag:zone-<zone>.
 tailscale_node_zone: "{{ hnx_zone }}"
 tailscale_node_extra_tags: []

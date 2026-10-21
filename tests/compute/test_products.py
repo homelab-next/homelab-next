@@ -217,12 +217,139 @@ def test_the_hub_page_shows_central_bindings(tmp_path):
 def test_flows_follow_the_network_models_order():
     doc = yaml.safe_load(SITE_FLOWS.read_text())
     assert flows_from_site(doc) == (
+        ZoneFlow("mgmt", "edge", ("icmp",)),
         ZoneFlow("mgmt", "edge", ("tcp",), (22, 443)),
         ZoneFlow("mgmt", "data"),
-        ZoneFlow("mgmt", "data", ("icmp",)),
         ZoneFlow("mgmt", "compute", ("icmp",)),
-        ZoneFlow("mgmt", "edge", ("icmp",)),
     )  # edge -> mgmt port 53 is shadowed by the earlier deny
+
+
+Z4 = [{"id": z} for z in ("mgmt", "data", "compute", "edge")]
+
+
+def z2z(*rules):
+    return {"zones": Z4, "firewall": {"default_action": "deny", "zone_to_zone": list(rules)}}
+
+
+@pytest.mark.parametrize(
+    ("rules", "flows"),
+    [
+        # ports without protocols are tcp only (the IR's default), not tcp+udp+icmp
+        ([{"from": "mgmt", "to": "data", "action": "allow", "ports": [53]}],
+         (ZoneFlow("mgmt", "data", ("tcp",), (53,)),)),
+        # icmp beside ports is dropped, as the IR drops it
+        ([{"from": "mgmt", "to": "data", "action": "allow", "ports": [22],
+           "protocols": ["tcp", "icmp"]}],
+         (ZoneFlow("mgmt", "data", ("tcp",), (22,)),)),
+        # a deny of one protocol leaves the others to later rules
+        ([{"from": "mgmt", "to": "data", "action": "deny", "protocols": ["udp"]},
+          {"from": "mgmt", "to": "any", "action": "allow"}],
+         (ZoneFlow("mgmt", "data", ("tcp", "icmp")), ZoneFlow("mgmt", "compute"),
+          ZoneFlow("mgmt", "edge"))),
+    ],
+)  # fmt: skip
+def test_flows_take_the_irs_protocol_defaults(rules, flows):
+    assert flows_from_site(z2z(*rules)) == flows
+
+
+def test_an_allow_after_a_port_level_deny_is_refused():
+    deny = {"from": "mgmt", "to": "data", "action": "deny", "ports": [22]}
+    with pytest.raises(ComputeError, match="mgmt -> data allows tcp on every port but"):
+        flows_from_site(z2z(deny, {"from": "mgmt", "to": "any", "action": "allow"}))
+    narrow = {"from": "mgmt", "to": "any", "action": "allow", "ports": [22, 443]}
+    assert ZoneFlow("mgmt", "data", ("tcp",), (443,)) in flows_from_site(z2z(deny, narrow))
+
+
+PORTS = (22, 53, 443, 9000)
+
+
+def _random_rules(rng):
+    rules = []
+    for _ in range(rng.randint(1, 6)):
+        src = rng.choice(Z4)["id"]
+        r = {"from": src, "to": rng.choice([z["id"] for z in Z4 if z["id"] != src] + ["any"]),
+             "action": rng.choice(["allow", "deny"])}  # fmt: skip
+        if rng.random() < 0.5:
+            r["ports"] = rng.sample(PORTS, rng.randint(1, 3))
+        if rng.random() < 0.5:
+            r["protocols"] = rng.sample(["tcp", "udp", "icmp"], rng.randint(1, 3))
+        rules.append(r)
+    return rules
+
+
+def _ir_allows(rules, src, dst, proto, port):
+    """First match over the network IR's own rules (default deny)."""
+    for r in rules:
+        if r.src.kind != "zone" or r.src.name != src:
+            continue
+        if r.dst.kind != "any" and not (r.dst.kind == "zone" and r.dst.name == dst):
+            continue
+        if r.protocol not in ("any", proto) or (r.ports and port not in r.ports):
+            continue
+        return r.action == "allow"
+    return False
+
+
+def _flows_allow(flows, src, dst, proto, port):
+    return any(
+        f.src == src and f.dst == dst
+        and (not f.protocols or proto in f.protocols)
+        and (not f.ports or (proto != "icmp" and port in f.ports))
+        for f in flows
+    )  # fmt: skip
+
+
+def _policy_allows(acls, src, dst, proto, port):
+    from homelabnext.compute.gen.tailscale_acl import zone_tag
+
+    for a in acls:
+        if a["src"] != [zone_tag(src)] or a.get("proto", proto) != proto:
+            continue
+        for d in a["dst"]:
+            tag, _, ports = d.rpartition(":")
+            if tag == zone_tag(dst) and (ports == "*" or str(port) in ports.split(",")):
+                return True
+    return False
+
+
+def test_tailnet_flows_allow_exactly_what_the_ir_allows(fleet):
+    """Property: over random site rules, every (src zone, dst zone, proto, port) the flows, and
+    the rendered tailnet policy, allow is allowed by the IR's first-match evaluation, and every
+    one the IR allows between two zones is allowed by them."""
+    import random
+
+    from homelabnext.compute.gen.tailscale_acl import tailnet_guests
+    from homelabnext.network.ir import _rules
+
+    tailnet = sorted({g.zone for g in tailnet_guests(fleet)})
+    assert tailnet == ["edge", "mgmt"]
+    nets = {z["id"]: "" for z in Z4}
+    checked = refused = 0
+    for seed in range(300):
+        rules = _random_rules(random.Random(seed))
+        doc = z2z(*rules)
+        try:
+            flows = flows_from_site(doc)
+        except ComputeError:
+            assert any(r["action"] == "deny" and "ports" in r for r in rules), rules
+            refused += 1
+            continue
+        ir = _rules({"firewall": doc["firewall"], "zones": []}, None, nets, {})
+        acls = policy(replace(fleet, flows=flows))["acls"]
+        for src in nets:
+            for dst in nets:
+                if src == dst:
+                    continue
+                for proto in ("tcp", "udp", "icmp"):
+                    for port in (None,) if proto == "icmp" else (*PORTS, 8080):
+                        want = _ir_allows(ir, src, dst, proto, port)
+                        got = _flows_allow(flows, src, dst, proto, port)
+                        assert got == want, (seed, rules, src, dst, proto, port, flows)
+                        if src in tailnet and dst in tailnet:
+                            ts = _policy_allows(acls, src, dst, proto, port)
+                            assert ts == want, (seed, rules, src, dst, proto, port, acls)
+                        checked += 1
+    assert checked > 30_000 and refused < 30, (checked, refused)  # most cases are expressible
 
 
 def test_a_zones_only_site_has_no_flows():
@@ -234,8 +361,8 @@ def test_the_example_sites_flows():
     assert site_flows(EXAMPLE_SITE) == (
         ZoneFlow("mgmt", "data"),
         ZoneFlow("mgmt", "compute", ("tcp",), (22, 443)),
-        ZoneFlow("compute", "data", (), (9000,)),
-    )  # sandbox -> any is a deny; edge -> data is a deny
+        ZoneFlow("compute", "data", ("tcp",), (9000,)),
+    )  # sandbox -> any is a deny; edge -> data is a deny; ports alone are tcp
 
 
 # ---------------------------------------------------------------- Tailscale policy

@@ -11,13 +11,15 @@ uid through the manifest (``schemas/broker/manifest`` 1.3):
   one issuer.  The manifest's approver rules (allowlist, no self-approval, no agent approver)
   still apply to the human it names.
 
-A peer in neither list is refused (``unknown-caller``) before its request is read, and audited.
+A peer in neither list is refused (``unknown-caller``) before its request is read, and audited;
+the server answers at once and closes without waiting for, or parsing, anything it sent.
 A peer is listed once (``hnx broker validate`` refuses a peer that is both a caller and a relay).
 
 Protocol: one request per connection.  The client sends one JSON object, terminated by a newline
 or by closing its write side, of at most ``max_request_bytes`` (default 1 MiB); the server
 answers one JSON object and a newline, then closes.  Reading the request is bounded by
-``timeout_s`` (default 10 s); running the action is not (a handler has its own timeout).
+``timeout_s`` (default 10 s) for the whole request, not per read, so a sender trickling bytes
+cannot hold a connection open; running the action is not (a handler has its own timeout).
 
 Request: ``{"v": 1, "op": OP, ...}``; ``v`` is optional, any other value is refused.
 
@@ -46,8 +48,10 @@ broker contract's exception, which :class:`homelabnext.broker.client.BrokerClien
 Every request is audited by the service as usual, with ``via: uid:<n>``; a refusal made here,
 before the service sees the request, is audited with operation ``connect`` when no operation
 could be attributed.  Concurrency: one thread per connection, at most ``max_connections`` at once
-(more are answered ``busy``); the state directory already makes runs, cancels, denials and
-approval consumption exactly-once across threads and processes.
+for callers and unknown peers, plus ``relay_connections`` (default 4) kept for approval relays,
+so agents holding every slot cannot keep the hub from approving or denying (more are answered
+``busy``); the state directory already makes runs, cancels, denials and approval consumption
+exactly-once across threads and processes.
 
 Platforms: peer credentials are read with ``SO_PEERCRED``, which Linux provides.  macOS and the
 BSDs have ``getpeereid``/``LOCAL_PEERCRED`` instead, which Python does not expose portably; the
@@ -67,6 +71,7 @@ import socketserver
 import stat
 import struct
 import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,6 +101,7 @@ PROTOCOL_VERSION = 1
 DEFAULT_MAX_REQUEST_BYTES = 1 << 20
 DEFAULT_TIMEOUT_S = 10.0
 DEFAULT_MAX_CONNECTIONS = 32
+DEFAULT_RELAY_CONNECTIONS = 4
 MAX_AUDIT_TAIL = 500
 #: what an agent's process may ask, and the fields each operation takes (beyond ``v``, ``op``)
 CALLER_OPS: dict[str, frozenset[str]] = {
@@ -389,8 +395,7 @@ def _relay_op(svc: BrokerService, who: Identity, op: str, body: Mapping[str, Any
         tail = body.get("tail", 50)
         if not isinstance(tail, int) or isinstance(tail, bool) or not 0 <= tail <= MAX_AUDIT_TAIL:
             raise _BadField(f"tail is an integer from 0 to {MAX_AUDIT_TAIL}")
-        rows = svc.audit_documents(**match)
-        return {"records": rows[-tail:] if tail else []}
+        return {"records": svc.audit_documents(limit=tail, **match)}
     rid = _rid(body)
     approver = body.get("approver")
     if not isinstance(approver, Mapping) or set(approver) != {"issuer", "subject"}:
@@ -408,13 +413,24 @@ def _relay_op(svc: BrokerService, who: Identity, op: str, body: Mapping[str, Any
 
 
 # ---------------------------------------------------------------- the socket server
-def _read_request(conn: socket.socket, limit: int) -> tuple[bytes | None, str]:
+def _read_request(
+    conn: socket.socket,
+    limit: int,
+    timeout_s: float,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+) -> tuple[bytes | None, str]:
     """(request bytes, "") or (None, problem): one line or everything up to EOF, at most
-    ``limit`` bytes."""
+    ``limit`` bytes, all of it within ``timeout_s``."""
     chunks: list[bytes] = []
     size = 0
+    deadline = clock() + timeout_s
     try:
         while True:
+            remaining = deadline - clock()
+            if remaining <= 0:
+                return None, "request-timeout"
+            conn.settimeout(remaining)
             chunk = conn.recv(65536)
             if not chunk:
                 break
@@ -432,11 +448,23 @@ def _read_request(conn: socket.socket, limit: int) -> tuple[bytes | None, str]:
     return b"".join(chunks), ""
 
 
-def _discard(conn: socket.socket, limit: int) -> None:
-    """Drop what the peer sent and was not read (a refused or oversized request), up to
-    ``limit`` bytes, so closing does not reset the connection before it reads the answer."""
+def _discard(
+    conn: socket.socket,
+    limit: int,
+    timeout_s: float,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+) -> None:
+    """Drop what a known peer sent and was not read (a refused or oversized request), up to
+    ``limit`` bytes and for at most ``timeout_s``, so closing does not reset the connection
+    before it reads the answer."""
     seen = 0
+    deadline = clock() + timeout_s
     while seen <= limit:
+        remaining = deadline - clock()
+        if remaining <= 0:
+            return
+        conn.settimeout(remaining)
         chunk = conn.recv(65536)
         if not chunk:
             return
@@ -456,8 +484,16 @@ class _Handler(socketserver.BaseRequestHandler):
         conn.settimeout(srv.timeout_s)
         if srv.peers.lookup(uid) is None:  # refuse before reading a byte from a stranger
             response = handle_request(srv.service, srv.peers, uid, b"")
+            with contextlib.suppress(OSError):
+                conn.sendall(json.dumps(response, sort_keys=True).encode("utf-8") + b"\n")
+                conn.shutdown(socket.SHUT_WR)
+                # never wait for a stranger: drop only what already arrived, unparsed, so the
+                # close does not reset the connection before the peer reads its answer
+                conn.setblocking(False)
+                conn.recv(srv.max_request_bytes)
+            return
         else:
-            raw, problem = _read_request(conn, srv.max_request_bytes)
+            raw, problem = _read_request(conn, srv.max_request_bytes, srv.timeout_s)
             try:
                 response = handle_request(srv.service, srv.peers, uid, raw, problem=problem)
             except Exception:  # a broker bug: the service audited what it could; say so
@@ -467,7 +503,7 @@ class _Handler(socketserver.BaseRequestHandler):
         with contextlib.suppress(OSError):
             conn.sendall(json.dumps(response, sort_keys=True).encode("utf-8") + b"\n")
             conn.shutdown(socket.SHUT_WR)
-            _discard(conn, srv.max_request_bytes)
+            _discard(conn, srv.max_request_bytes, srv.timeout_s)
 
 
 class _UnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
@@ -489,8 +525,22 @@ class _UnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
             os.chown(self.server_address, -1, b.gid)
         os.chmod(self.server_address, b.mode)
 
+    def _pool(self, request) -> threading.BoundedSemaphore:
+        """The connection slots this peer draws from: the relays' own, or everyone else's."""
+        try:
+            _pid, uid, _gid = self.broker.credentials(request)
+        except OSError:
+            return self.broker.slots
+        who = self.broker.peers.lookup(uid)
+        return (
+            self.broker.relay_slots
+            if who is not None and who.role == "relay"
+            else self.broker.slots
+        )
+
     def process_request(self, request, client_address) -> None:
-        if not self.broker.slots.acquire(blocking=False):
+        pool = self._pool(request)
+        if not pool.acquire(blocking=False):
             # answered on the accepting thread, so nothing here may block: a non-blocking
             # drain of what already arrived keeps the close from resetting the connection
             with contextlib.suppress(OSError):
@@ -501,22 +551,26 @@ class _UnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
                 request.recv(self.broker.max_request_bytes)
             self.shutdown_request(request)
             return
-        super().process_request(request, client_address)
+        # the handler ignores the address (a Unix peer has none); it carries the slot's pool
+        super().process_request(request, (client_address, pool))
 
     def process_request_thread(self, request, client_address) -> None:
+        address, pool = client_address
         try:
-            super().process_request_thread(request, client_address)
+            super().process_request_thread(request, address)
         finally:
-            self.broker.slots.release()
+            pool.release()
 
 
 class BrokerServer:
     """:class:`BrokerService` on a Unix socket at ``socket_path``.
 
     ``mode`` is the socket file's mode (default ``0o600``, the service user only; ``0o660`` with
-    ``group`` lets that group's processes connect); it may grant nothing to others.  The parent directory is created ``0750`` (``0700`` without a
-    group) when missing, and must not be writable by its group or reachable by others when it
-    exists.  A stale socket file at ``socket_path`` is replaced; any other file is refused.
+    ``group`` lets that group's processes connect); it may grant nothing to others.  The parent
+    directory is created ``0750`` (``0700`` without a group) when missing; when it exists it must
+    be owned by the broker's user (or root), not writable by its group and not reachable by
+    others, so no other account can swap the socket.  A stale socket file at ``socket_path`` is
+    replaced; any other file is refused.
     """
 
     def __init__(
@@ -529,6 +583,7 @@ class BrokerServer:
         max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES,
         timeout_s: float = DEFAULT_TIMEOUT_S,
         max_connections: int = DEFAULT_MAX_CONNECTIONS,
+        relay_connections: int = DEFAULT_RELAY_CONNECTIONS,
         peers: PeerMap | None = None,
     ) -> None:
         if not supported():
@@ -538,8 +593,10 @@ class BrokerServer:
             )
         if mode & 0o007 or mode & 0o600 != 0o600 or mode & ~0o777:
             raise ValueError(f"socket mode {mode:o}: owner rw, nothing for others")
-        if max_request_bytes < 1 or timeout_s <= 0 or max_connections < 1:
-            raise ValueError("max_request_bytes, timeout_s and max_connections are positive")
+        if max_request_bytes < 1 or timeout_s <= 0 or max_connections < 1 or relay_connections < 1:
+            raise ValueError(
+                "max_request_bytes, timeout_s, max_connections and relay_connections are positive"
+            )
         self.service = service
         self.path = Path(socket_path)
         self.mode = mode
@@ -553,6 +610,7 @@ class BrokerServer:
         self.max_request_bytes = max_request_bytes
         self.timeout_s = timeout_s
         self.slots = threading.BoundedSemaphore(max_connections)
+        self.relay_slots = threading.BoundedSemaphore(relay_connections)
         self.peers = peers if peers is not None else PeerMap(service.manifest)
         self.credentials = peer_credentials
         self._server: _UnixServer | None = None
@@ -567,6 +625,11 @@ class BrokerServer:
         st = parent.lstat()
         if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
             raise BrokerError(f"{parent} is not a real directory")
+        if st.st_uid not in (os.geteuid(), 0):
+            raise BrokerError(
+                f"{parent} is owned by uid {st.st_uid}; the socket's directory must be owned by "
+                "the broker's user or root"
+            )
         if st.st_mode & 0o027:
             raise BrokerError(
                 f"{parent} is mode {stat.S_IMODE(st.st_mode):o}; the socket's directory must be "

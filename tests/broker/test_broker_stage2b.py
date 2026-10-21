@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from conformance.protocols.broker import BrokerError
 from homelabnext.broker import importer
 from homelabnext.broker.cli import main
 from homelabnext.broker.service import BrokerService, check_approvals_url
@@ -114,7 +115,7 @@ def _by_source(rows):
 def test_import_dry_run_maps_generically_and_reports_what_it_cannot():
     rows = _by_source(importer.read_dir(VAULT))
     a = rows["2026-03-02-queue-bot-raise-drain-timeout.md"]
-    assert a.outcome == "mapped" and a.params["slug"] == "raise-drain-timeout"
+    assert a.outcome == "mapped" and a.params["slug"] == "queue-bot-raise-drain-timeout"
     note = a.params["note"]
     assert (note["title"], note["risk"], note["created"]) == (
         "Raise the queue drain timeout",
@@ -180,8 +181,8 @@ def test_import_dry_run_writes_nothing_and_apply_files_through_the_broker(tmp_pa
     assert out["2026-03-02-queue-bot-raise-drain-timeout.md"]["outcome"] == "filed"
     names = sorted(p.name for p in inbox.iterdir())
     assert names == [
-        "2026-03-02-triage-raise-drain-timeout.md",
-        "2026-03-03-triage-rotate-audit-logs.md",
+        "2026-03-02-triage-queue-bot-raise-drain-timeout.md",
+        "2026-03-03-triage-log-bot-rotate-audit-logs.md",
     ]
     fm, body = parse_note((inbox / names[0]).read_text())
     assert fm["requesting_agent"] == AGENT and fm["provenance"]["source"] == AGENT
@@ -208,3 +209,38 @@ def test_import_apply_needs_an_authenticated_caller(tmp_path, capsys):
     assert main(args) == 1
     assert "dev-identity-disabled" in capsys.readouterr().err
     assert not (tmp_path / "data" / "records").exists()
+
+
+# -- review regressions: two agents, one name ------------------------------------------------
+
+
+def _proposal(agent: str) -> str:
+    return f"---\ntitle: Fix x\nrisk: low\nrollback: undo\nrequesting_agent: {agent}\n---\nbody\n"
+
+
+def test_same_named_proposals_from_two_agents_get_two_files(tmp_path):
+    (tmp_path / "2026-09-04-agent-a-fix-x.md").write_text(_proposal("agent-a"))
+    (tmp_path / "2026-09-04-agent-b-fix-x.md").write_text(_proposal("agent-b"))
+    rows = importer.read_dir(tmp_path)
+    assert [r.params["slug"] for r in rows] == ["agent-a-fix-x", "agent-b-fix-x"]
+    filed: set[str] = set()
+
+    def call(params):
+        key = (params["note"]["created"], params["slug"])
+        if key in filed:
+            err = BrokerError("exists")
+            err.reason = "lane-exists"
+            raise err
+        filed.add(key)
+        return {"path": "/".join(key)}
+
+    assert [r.outcome for r in importer.apply(rows, call, "profile:importer")] == ["filed"] * 2
+
+
+def test_two_sources_mapping_to_one_name_are_a_conflict(tmp_path):
+    text = "---\ntitle: Same title\nrisk: low\nrollback: undo\ncreated: 2026-09-04\n---\n"
+    (tmp_path / "a.md").write_text(text)
+    (tmp_path / "b.md").write_text(text.replace("undo", "undo it"))
+    rows = importer.apply(importer.read_dir(tmp_path), lambda p: {"path": "x"}, "profile:i")
+    assert [r.outcome for r in rows] == ["filed", "conflict"]
+    assert "a.md" in rows[1].problem

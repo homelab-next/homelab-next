@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -107,42 +109,97 @@ def open_site(path: str | Path) -> tuple[ZoneLookup, str | None]:
     return MappingZones(zone_from_mapping(z) for z in zones), domain
 
 
-def flows_from_site(doc: Mapping[str, Any]) -> tuple[ZoneFlow, ...]:
-    """The zone-to-zone allows of a site document, in document order.
+#: the protocols a Tailscale rule can name (an IR rule for ``any`` covers them all)
+TAILNET_PROTOCOLS = ("tcp", "udp", "icmp")
 
-    Follows the network model's evaluation order (``homelabnext.network.ir``): rules to a zone
-    first, then rules to ``any`` (expanded to every other zone).  An allow is dropped when an
-    earlier rule without ports denies the same pair, since that deny matches first.  Port-level
-    denies and ``service_exceptions`` (host-specific, to a service) are not zone flows and are
-    not read.
+
+@dataclass
+class _Decided:
+    """First-match state of one protocol on one zone pair."""
+
+    whole: str | None = None  # the action of the first rule matching every port
+    ports: dict[int, str] = field(default_factory=dict)  # port -> the first matching action
+
+
+def _ir_zone_rules(doc: Mapping[str, Any], zones: list[str]) -> list[Any]:
+    """The network IR's own firewall rules for ``zone_to_zone``, in its evaluation order.
+
+    ``homelabnext.network.ir`` builds the rules (protocol defaults, icmp beside ports, the
+    ``to: any`` rules last); this only hands it the zone rules, so no registry is needed.
     """
+    from homelabnext.network.ir import _rules
+
     fw = doc.get("firewall") or {}
-    rules = [r for r in fw.get("zone_to_zone") or [] if isinstance(r, Mapping)]
-    zones = [z.get("id") for z in doc.get("zones") or [] if isinstance(z, Mapping)]
-    ordered = [r for r in rules if r.get("to") != "any"] + [
-        r for r in rules if r.get("to") == "any"
-    ]
-    denied: set[tuple[str, str]] = set()
-    out: list[ZoneFlow] = []
-    for r in ordered:
-        src = str(r.get("from"))
-        dsts = [z for z in zones if z != src] if r.get("to") == "any" else [str(r.get("to"))]
+    z2z = [dict(r) for r in fw.get("zone_to_zone") or [] if isinstance(r, Mapping)]
+    nets: defaultdict[str, str] = defaultdict(str, dict.fromkeys(zones, ""))
+    try:
+        return _rules({"firewall": {"zone_to_zone": z2z}, "zones": []}, None, nets, {})
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ComputeError(
+            f"firewall.zone_to_zone: cannot read the rules ({exc!r}); check with hnx site validate"
+        ) from exc
+
+
+def flows_from_site(doc: Mapping[str, Any]) -> tuple[ZoneFlow, ...]:
+    """The zone-to-zone traffic a site document allows, as flows between distinct zones.
+
+    Derived from the network IR's evaluated rules (``homelabnext.network.ir``: first match wins,
+    rules to a zone before rules to ``any``), never re-read from the document, so a flow allows
+    exactly the (protocol, port) pairs the IR allows between the two zones, for tcp, udp and icmp.
+    A zone pair whose three protocols are all allowed on every port is one flow with no
+    protocols or ports (any).  ``service_exceptions`` (host-specific, to a service) are not zone
+    flows and are not read.  An allow of a whole protocol after a port-level deny of it on the
+    same pair (which the site validator refuses) cannot be written as allows and is an error.
+    """
+    zones = [str(z["id"]) for z in doc.get("zones") or [] if isinstance(z, Mapping) and z.get("id")]
+    state: dict[tuple[str, str], dict[str, _Decided]] = {}
+    for rule in _ir_zone_rules(doc, zones):
+        if rule.src.kind != "zone":
+            continue
+        if rule.dst.kind == "zone":
+            dsts = [rule.dst.name]
+        elif rule.dst.kind == "any":
+            dsts = list(zones)
+        else:
+            continue
+        protos = TAILNET_PROTOCOLS if rule.protocol == "any" else (rule.protocol,)
         for dst in dsts:
-            if (src, dst) in denied:
+            if dst == rule.src.name:
                 continue
-            if r.get("action") == "deny":
-                if not r.get("ports"):
-                    denied.add((src, dst))
-                continue
-            if r.get("action") == "allow":
-                out.append(
-                    ZoneFlow(
-                        src,
-                        dst,
-                        tuple(sorted(str(p) for p in r.get("protocols") or [])),
-                        tuple(sorted(int(p) for p in r.get("ports") or [])),
+            pair = state.setdefault(
+                (rule.src.name, dst), {p: _Decided() for p in TAILNET_PROTOCOLS}
+            )
+            for proto in protos:
+                d = pair.get(proto)
+                if d is None or d.whole is not None:
+                    continue
+                if rule.ports:
+                    for port in rule.ports:
+                        d.ports.setdefault(port, rule.action)
+                else:
+                    d.whole = rule.action
+    out: list[ZoneFlow] = []
+    for (src, dst), pair in state.items():
+        whole: list[str] = []
+        ported: dict[tuple[int, ...], list[str]] = {}
+        for proto, d in pair.items():
+            if d.whole == "allow":
+                denied = sorted(p for p, a in d.ports.items() if a == "deny")
+                if denied:
+                    raise ComputeError(
+                        f"firewall.zone_to_zone: {src} -> {dst} allows {proto} on every port but "
+                        f"{denied} after a port-level deny; a deny applies to the whole zone pair"
                     )
-                )
+                whole.append(proto)
+                continue
+            allowed = tuple(sorted(p for p, a in d.ports.items() if a == "allow"))
+            if allowed:
+                ported.setdefault(allowed, []).append(proto)
+        if len(whole) == len(TAILNET_PROTOCOLS):
+            out.append(ZoneFlow(src, dst))
+        elif whole:
+            out.append(ZoneFlow(src, dst, tuple(whole)))
+        out.extend(ZoneFlow(src, dst, tuple(protos), ports) for ports, protos in ported.items())
     return tuple(out)
 
 

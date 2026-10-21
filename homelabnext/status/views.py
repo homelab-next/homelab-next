@@ -28,8 +28,11 @@ Panel payloads:
 Page panels (:data:`PAGE_PANELS`) are pages of their own, served live by ``hnx status serve``:
 the agent pages (with ``--agents``), the strategy pages (with ``--strategy``; Strategy,
 Requirements, Objectives, RFIs: :mod:`homelabnext.strategy.pages`) and the Baselines page (with
-``--guests``: :mod:`homelabnext.compute.pages`).  Their menu entries are ``available`` only when
-that part is configured.
+``--guests``: :mod:`homelabnext.compute.pages`) and the Approvals page (when ``agents.yml``
+configures ``approvals:``: :mod:`homelabnext.status.approvals`).  Their menu entries are
+``available`` only when that part is configured.  The private pages (:data:`PRIVATE_PANELS`, the
+``private`` menu group) are never in the public ``status.json`` and render only for a request
+through the trusted front door.
 
 A view's ``select`` (``sources``/``modules``) narrows its panel.  An external entry links to a
 registry service by name; ``optional`` entries whose service is not registered are listed as
@@ -68,9 +71,11 @@ PAGE_PANELS = {
     "rfis": "/rfis",
     # the guest baseline coverage page (homelabnext.compute.pages), served with ``--guests DIR``
     "baselines": "/baselines",
+    # the broker Approvals page (homelabnext.status.approvals), with approvals: in agents.yml
+    "approvals": "/approvals",
 }
 STRATEGY_PANELS = frozenset({"strategy", "requirements", "objectives", "rfis"})
-PRIVATE_PANELS = frozenset({"agent-detail", "agent-access-log"})
+PRIVATE_PANELS = frozenset({"agent-detail", "agent-access-log", "approvals"})
 PRIVATE_GROUP = "private"
 #: at most this many sessions go into status.json (worst state first)
 MAX_SESSIONS = 200
@@ -272,6 +277,18 @@ def _panel(
     return {"panel": panel, "sources": s}
 
 
+def _page_available(
+    panel: str, *, agents: Any, strategy: bool, baselines: bool, approvals: bool
+) -> bool:
+    if panel in STRATEGY_PANELS:
+        return strategy
+    if panel == "baselines":
+        return baselines
+    if panel == "approvals":
+        return approvals
+    return agents is not None
+
+
 def build_status(
     snapshot: Mapping[str, Any],
     views: Mapping[str, Any],
@@ -282,11 +299,13 @@ def build_status(
     agents: Mapping[str, Any] | None = None,
     strategy: bool = False,
     baselines: bool = False,
+    approvals: bool = False,
 ) -> dict[str, Any]:
     """The ``status.json`` document (see the module docstring).  ``agents``: the summary tier's
     sessions (``{"sessions", "counts"}``) when an activity store is configured, else None.
     ``strategy``: the strategy pages are served (a strategy directory is configured);
-    ``baselines``: the Baselines page is served (a guest directory is configured)."""
+    ``baselines``: the Baselines page is served (a guest directory is configured);
+    ``approvals``: the Approvals page is served (``agents.yml`` configures it)."""
     if capability_pages is None:
         from homelabnext.conform.registry import CAPABILITIES
 
@@ -303,12 +322,12 @@ def build_status(
                 "kind": "page",
                 "panel": v["panel"],
                 "href": PAGE_PANELS[v["panel"]],
-                "available": (
-                    strategy
-                    if v["panel"] in STRATEGY_PANELS
-                    else baselines
-                    if v["panel"] == "baselines"
-                    else agents is not None
+                "available": _page_available(
+                    v["panel"],
+                    agents=agents,
+                    strategy=strategy,
+                    baselines=baselines,
+                    approvals=approvals,
                 ),
             }
             if v.get("group"):
