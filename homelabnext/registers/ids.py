@@ -9,8 +9,11 @@ vanished in a merge -- and two files claiming one uid.  This module detects both
 
     check_lost    fail if a key a parent commit had is absent now (a lost record)
     duplicates    a key that occurs twice in a single-file register
-    dir_problems  a record file that is not named ``<uid>.md``, has no uid, or shares one
+    dir_problems  a record file that is not named for its uid, or shares one
     missing_uids  record files that carry no canonical uid (a legacy ``id:`` or a placeholder)
+
+Each defect is reported by one of them only: a file without a uid is :func:`missing_uids`'
+(``check-uids``), not also a naming problem of :func:`dir_problems` (``check-dupes``).
 
 Nothing here rewrites a file, and the module imports only the standard library (and
 :mod:`homelabnext.identity`, which does too), for hooks; reading a tree's ``aliases.yml`` (only
@@ -162,15 +165,16 @@ def _dir_keys(texts: dict[str, str], spec: RegisterSpec) -> list[tuple[str, str]
 
 
 def dir_problems(texts: dict[str, str], spec: RegisterSpec) -> list[str]:
-    """Name/uid disagreements, files without a uid and uids held by more than one file."""
+    """Name/uid disagreements and uids held by more than one file (a file with no uid at all is
+    :func:`missing_uids`' to report)."""
     problems, seen = [], {}
     for name in sorted(texts):
         ident = record_id(texts[name], spec)
+        if ident is None:
+            continue
         bad = record_name_problem(name, ident, spec)
         if bad:
             problems.append(bad)
-        if ident is None:
-            continue
         if ident in seen:
             problems.append(f"{name}: uid {ident} is also the uid of {seen[ident]}")
         else:

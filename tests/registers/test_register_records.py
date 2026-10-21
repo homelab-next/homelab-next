@@ -293,8 +293,17 @@ def test_check_uids_flags_a_record_without_its_uid(repo):
     assert "reg/lessons/LL-003.md: no uid (still numbered LL-003)" in r.stderr
     assert "LL-NEW-x.md: no uid (still numbered LL-NEW)" in r.stderr
     assert "hnx records assign-uids" in r.stderr
-    r = _tool(repo, "check-dupes", "reg/lessons")  # the same file breaks the name rule too
-    assert r.returncode == 1 and "front-matter has no canonical `uid:`" in r.stderr
+    r = _tool(repo, "check-dupes", "reg/lessons")  # check-uids' to report, and only there
+    assert r.returncode == 0 and "uid" not in r.stderr, r.stderr
+
+
+def test_check_uids_runs_as_a_pre_commit_hook():
+    """idcli's docstring says check-uids runs in pre-commit: the hook exists and runs it."""
+    import yaml
+
+    cfg = yaml.safe_load((REPO / ".pre-commit-config.yaml").read_text())
+    hooks = {h["id"]: h for r in cfg["repos"] for h in r["hooks"]}
+    assert hooks["register-ids-check-uids"]["entry"] == "python3 tools/register_ids.py check-uids"
 
 
 def test_check_lost_catches_a_deleted_record_file(repo):
