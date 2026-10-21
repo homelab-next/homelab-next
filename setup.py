@@ -32,6 +32,12 @@ from setuptools.command.sdist import sdist
 HERE = Path(__file__).resolve().parent
 DATA_TREES = ("schemas", "profiles", "examples")  # keep in sync with homelabnext/paths.py KINDS
 SKIP_PARTS = {"__pycache__"}
+#: tracked paths under the data trees that hnx never reads at run time, so they are not packaged
+#: (keep in sync with tests/packaging/test_wheel_install.py)
+NOT_PACKAGED = (
+    # a template for a separate private repository: dotfiles, a client script, workflows
+    "examples/private-overlay/",
+)
 
 
 def _source_files() -> set[str]:
@@ -93,7 +99,9 @@ class BuildPyFromTracked(build_py):
             chosen = sorted(
                 f
                 for f in self.tracked()
-                if f.startswith(tree + "/") and not SKIP_PARTS & set(f.split("/"))
+                if f.startswith(tree + "/")
+                and not f.startswith(NOT_PACKAGED)
+                and not SKIP_PARTS & set(f.split("/"))
             )
             for rel in chosen:
                 _check_not_symlink(rel)

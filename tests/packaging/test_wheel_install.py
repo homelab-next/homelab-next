@@ -20,6 +20,7 @@ from pkgbuild import build, export_tree, git
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_TREES = ("schemas", "profiles", "examples")
+NOT_PACKAGED = ("examples/private-overlay/",)  # setup.py NOT_PACKAGED: templates, not data
 
 pytestmark = pytest.mark.slow
 
@@ -78,7 +79,11 @@ def test_packaged_data_equals_the_source_of_truth(wheel_dir, tmp_path):
     tracked = git(ROOT, "ls-files", "-z").decode().split("\0")
     for tree in DATA_TREES:
         packaged = tmp_path / "homelabnext" / "_data" / tree
-        source = {n[len(tree) + 1 :] for n in tracked if n.startswith(tree + "/")}
+        source = {
+            n[len(tree) + 1 :]
+            for n in tracked
+            if n.startswith(tree + "/") and not n.startswith(NOT_PACKAGED)
+        }
         assert _tree_files(packaged) == source, tree
         _match, mismatch, errors = filecmp.cmpfiles(
             ROOT / tree, packaged, sorted(source), shallow=False

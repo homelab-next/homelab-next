@@ -1,0 +1,12 @@
+# Keys and passwords never live in this repository, not even ignored-but-present by habit: keep
+# them in the password manager and the protected Actions Environment.  These lines stop the
+# common accidents.
+*.agekey
+age-key.txt
+keys.txt
+.vault[-_]pass*
+vault-password.txt
+# decrypted scratch copies (`sops -d file > file.dec.yml`): never commit plaintext of a sealed file
+*.dec.*
+# the public checkout the deploy workflow puts next to this repository
+/hnx/

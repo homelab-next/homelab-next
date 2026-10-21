@@ -580,6 +580,25 @@
     },
     {
       "exit": {
+        "0": "password printed",
+        "1": "OpenBao refused or returned no value",
+        "2": "not configured"
+      },
+      "id": "overlay-vault-pass-client",
+      "inputs": "--vault-id ID (passed by Ansible); env HNX_VAULT_PASSWORD, or HNX_VAULT_PASSWORD_REF plus BAO_ADDR and a token or AppRole",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the password on stdout, nothing else",
+      "owner": "maintainers",
+      "path": "examples/private-overlay/bin/vault-pass-client.py",
+      "purpose": "Print the ansible-vault password of a private overlay from the environment or OpenBao, never from a file.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
         "0": "nothing lost or duplicated",
         "1": "an id vanished or occurs twice",
         "2": "usage error",

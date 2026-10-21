@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: Apache-2.0
+# TEMPLATE for the PRIVATE overlay repository (fictional; docs/private-overlay.md).  Copy it to
+# .github/workflows/checks.yml there and make it a required status check of main.
+#
+# Runs on every pull request and push with no secret and no Environment: it proves nothing was
+# committed in plain text that should have been sealed, and no credential value was committed at
+# all.  Decrypting and validating the sealed files happens only in deploy.yml, behind the
+# Environment's reviewers.  `pull_request` (never pull_request_target): a pull request's code
+# runs with a read-only token and no secrets.
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  private-leak-check:
+    name: private leak check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: refuse an unpinned hnx
+        env:
+          HNX_REF: ${{ vars.HNX_REF }}
+        run: |
+          set -euo pipefail
+          [[ "$HNX_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::HNX_REF must be a full commit SHA"; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: homelab-next at the pinned commit (the check and the secret patterns)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: homelab-next/homelab-next
+          ref: ${{ vars.HNX_REF }}
+          path: hnx
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: PyYAML, hash-pinned
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --require-hashes --no-deps -r hnx/constraints/bootstrap.txt
+          python -m pip install --disable-pip-version-check -c hnx/constraints/ci.txt PyYAML
+
+      - name: no plaintext secret, every sealed file sealed, no key next to its ciphertext
+        run: python hnx/tools/private_leak_check.py private .
