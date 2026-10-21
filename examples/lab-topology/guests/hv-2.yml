@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:hv-2
+display_name: Hypervisor 2
+description: Runs the data tier, the edge and the isolated lab.
+kind: host
+provisioning: host-only
+placement: {node: hv-2}
+network: {zone: mgmt, ip: 192.0.2.11}
+capability: cap:orchestration
+tags: [prod, hypervisor]
+owners: {primary: platform-team}

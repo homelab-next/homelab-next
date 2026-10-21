@@ -1,22 +1,78 @@
 # SPDX-License-Identifier: Apache-2.0
 # The synthetic topology input of tests/status/test_maps.py (documentation addresses only): a
-# site document, guest documents and the zone flows, as topology.build takes them.
+# site document, guest documents, the zone flows, the hypervisors (_nodes.yml), the registry's
+# plain facts (lab_of) and a dataflow view-model, as topology.build takes them.
 site:
   site: {id: lab}
   zones:
     - {id: mgmt, purpose: management, vlan_id: 10, subnet: 192.0.2.0/26, gateway: 192.0.2.1,
        egress: {internet: deny}}
-    - {id: data, vlan_id: 20, subnet: 192.0.2.64/26, gateway: 192.0.2.65}
-  firewall: {default_action: deny}
+    - {id: data, vlan_id: 20, subnet: 192.0.2.64/26, gateway: 192.0.2.65,
+       egress: {internet: allow}}
+  router: {id: gw, model: unifi, mgmt_endpoint: "svc:console"}
+  switches:
+    - {id: sw-1, model: unifi, uplink_port: 1, port_assignments: [{ports: [1], kind: trunk, vlans: [10, 20]}]}
+  firewall:
+    default_action: deny
+    service_exceptions:
+      - {from: ["zone:mgmt"], to: "svc:db", action: allow, ports: [5432]}
 guests:
-  - {id: "guest:hv-a", kind: host, placement: {node: hv-a}, network: {zone: mgmt, ip: 192.0.2.10},
-     capability: "cap:events", baseline: {names: [server]}}
-  - {id: "guest:db-1", kind: vm, placement: {node: hv-a}, network: {zone: data, ip: 192.0.2.70},
-     capability: "cap:events", baseline: {names: [server, db]}}
-  - {id: "guest:app-1", kind: lxc, placement: {node: hv-b}, network: {zone: data, ip: 192.0.2.71},
-     capability: "cap:events", baseline: {exemption: {reason: lab}}}
-  - {id: "guest:odd-1", kind: vm, placement: {node: hv-b}, network: {zone: lab, ip: 192.0.2.72},
-     capability: "cap:events"}
+  - {id: "guest:hv-a", kind: host, provisioning: host-only, placement: {node: hv-a},
+     network: {zone: mgmt, ip: 192.0.2.10}, capability: "cap:events", baseline: {names: [server]}}
+  - {id: "guest:db-1", kind: vm, provisioning: terraform, placement: {node: hv-a, vmid: 170},
+     network: {zone: data, ip: 192.0.2.70}, capability: "cap:events", capability_groups: [cap_lake],
+     resources: {cpu: {cores: 2}, memory: {size_mb: 3072}, disks: [{name: root, size_gb: 20, pool: fast}]},
+     image: {logical: debian-12, kind: template-clone, os_type: linux-6},
+     description: Holds the tables.,
+     firewall_rules: {inbound_allow: [{name: app, proto: tcp, ports: "5432", source: 192.0.2.71/32},
+                                      {name: web, proto: tcp, ports: "443", source: any}]},
+     baseline: {names: [server, db]}}
+  - {id: "guest:app-1", kind: lxc, provisioning: terraform, placement: {node: hv-b, vmid: 171},
+     network: {zone: data, ip: 192.0.2.71}, capability: "cap:events",
+     capability_groups: [cap_orchestration], baseline: {exemption: {reason: lab}}}
+  - {id: "guest:cache-1", kind: lxc, provisioning: terraform, status: planned,
+     placement: {node: hv-b, vmid: 172}, network: {zone: data, ip: 192.0.2.72},
+     capability: "cap:events", capability_groups: [cap_lake]}
+  - {id: "guest:old-1", kind: lxc, provisioning: terraform, status: retired,
+     placement: {node: hv-b, vmid: 173}, network: {zone: data, ip: 192.0.2.73},
+     capability: "cap:events", capability_groups: [cap_scanner]}
+  - {id: "guest:job-1", kind: vm, provisioning: manual, placement: {node: hv-b, vmid: 174},
+     network: {zone: data, ip: 192.0.2.74}, capability: "cap:events",
+     capability_groups: [cap_orchestration], display_name: Batch runner}
+  - {id: "guest:odd-1", kind: vm, provisioning: terraform, placement: {node: hv-b},
+     network: {zone: lab, ip: 192.0.2.75}, capability: "cap:events"}
 flows:
   - {src: mgmt, dst: data}
   - {src: mgmt, dst: data, protocols: [tcp], ports: [22, 443]}
+nodes: [hv-a]
+lab:
+  hosts:
+    gw: {address: 192.0.2.1, zone: mgmt, role: router}
+    db-1: {address: 192.0.2.70, zone: data, role: db}
+    app-1: {address: 192.0.2.71, zone: data, role: app}
+    cache-1: {address: 192.0.2.72, zone: data, role: cache}
+    old-1: {address: 192.0.2.73, zone: data, role: scan}
+  services:
+    - {name: app, capability: orchestration, impl: example-app, host: app-1, protocol: https,
+       port: 8443, description: The app., upstreams: [db, cache]}
+    - {name: cache, capability: cache, impl: example-cache, host: cache-1, protocol: tcp,
+       port: 6379, description: "", upstreams: []}
+    - {name: console, capability: router-console, impl: unifi, host: gw, protocol: https,
+       port: 443, description: The router console., upstreams: []}
+    - {name: db, capability: db, impl: postgres, host: db-1, protocol: postgres, port: 5432,
+       description: Stores rows., upstreams: []}
+    - {name: events, capability: events, impl: nats, host: db-1, protocol: nats, port: 4222,
+       description: The bus., upstreams: []}
+    - {name: scan, capability: scan, impl: example-scan, host: old-1, protocol: https, port: 443,
+       description: Retired scanner., upstreams: [events]}
+dataflow:
+  transports:
+    - {id: bus, title: Event bus, service: events, impl: nats, source: null, flows: 2}
+    - {id: broker, title: Broker, service: null, impl: null, source: m.yml, flows: 1}
+  flows:
+    - {transport: bus, label: homelabnext.thing.made, detail: event type, sample: false,
+       from: {id: "svc:app", title: app, kind: service}, to: {id: "svc:cache", title: cache, kind: service}}
+    - {transport: bus, label: homelabnext.thing.made, detail: event type, sample: false,
+       from: {id: "pkg:homelabnext.maker", title: maker, kind: code}, to: {id: null, title: no consumer declared, kind: kind-none}}
+    - {transport: broker, label: db.write, detail: workflow action, sample: false,
+       from: {id: "svc:app", title: app, kind: service}, to: {id: "svc:db", title: db, kind: service}}

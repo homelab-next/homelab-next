@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# A fictional lab for the generated Topology and Dataflow maps (docs/status.md, ADR-0018): two
+# hypervisors, five zones, sixteen guests (physical, manual, planned and retired ones among
+# them), the registry in services.yml beside it. Addresses come from the RFC 5737 documentation
+# ranges and names live under example.internal; nothing here describes a real network.
+site_version: 1
+
+site:
+  id: harbor
+  domain: example.internal
+  timezone: UTC
+
+zones:
+  - id: mgmt
+    purpose: management
+    vlan_id: 10
+    subnet: 192.0.2.0/26
+    gateway: 192.0.2.1
+    egress: {internet: deny, inter_zone: {default: deny}}
+    tags: [infra]
+  - id: services
+    purpose: security_services
+    vlan_id: 20
+    subnet: 192.0.2.64/26
+    gateway: 192.0.2.65
+    egress: {internet: deny, inter_zone: {default: deny}}
+    tags: [prod]
+  - id: data
+    purpose: storage_and_bus
+    vlan_id: 30
+    subnet: 192.0.2.128/26
+    gateway: 192.0.2.129
+    egress: {internet: deny, inter_zone: {default: deny}}
+    tags: [prod]
+  - id: edge
+    purpose: internet_ingress
+    vlan_id: 40
+    subnet: 198.51.100.0/26
+    gateway: 198.51.100.1
+    egress: {internet: allow, inter_zone: {default: deny}}
+    tags: [untrusted]
+  - id: lab
+    purpose: isolated_lab
+    vlan_id: 50
+    subnet: 203.0.113.0/26
+    gateway: 203.0.113.1
+    egress: {internet: deny, inter_zone: {default: deny}, one_way: true}
+    tags: [untrusted, lab]
+
+router:
+  id: harbor-gw
+  model: unifi
+  mgmt_endpoint: svc:router-console
+  tls_pin:
+    sha256: REPLACE_WITH_CONSOLE_CERT_FINGERPRINT
+
+switches:
+  - id: core-sw
+    model: unifi
+    uplink_port: 1
+    port_assignments:
+      - {ports: [1], kind: trunk, vlans: [10, 20, 30, 40, 50]}
+      - {ports: ["2-3"], kind: trunk, vlan: 10, vlans: [20, 30, 40, 50]}
+      - {ports: [4], kind: access, vlan: 10}
+
+firewall:
+  default_action: deny
+  zone_to_zone:
+    - {from: mgmt, to: services, action: allow, ports: [22, 443], protocols: [tcp]}
+    - {from: mgmt, to: data, action: allow, ports: [22], protocols: [tcp]}
+    - {from: services, to: data, action: allow, ports: [4222, 9000, 8181], protocols: [tcp]}
+    - {from: edge, to: services, action: allow, ports: [443], protocols: [tcp]}
+    - {from: lab, to: any, action: deny, one_way_contract: true}
+  service_exceptions:
+    - {from: [zone:services, zone:data, zone:edge], to: svc:idp, action: allow}
+    - {from: zone:lab, to: svc:events, action: allow, ports: [4222], notes: "the one-way telemetry pipe"}

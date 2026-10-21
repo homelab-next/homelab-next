@@ -25,7 +25,7 @@ never guessed.
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -421,17 +421,22 @@ def build(inputs: Mapping[str, Any]) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------------------------ render
-END_W, LABEL_W, T_W, ROW_H, HEAD_H = 230, 250, 150, 30, 26
-X_FROM, X_T = 8, 8 + END_W + LABEL_W
-X_TO = X_T + T_W + 60
-WIDTH = X_TO + END_W + 8
-
-
-def _end_box(x: int, y: int, end: Mapping[str, Any]) -> str:
-    cls = "end muted" if end["kind"] in (NONE_DECLARED, "sample") else "end"
-    kind = "not declared" if end["kind"] == NONE_DECLARED else end["kind"]
-    tip = f"{end['id'] or end['title']} ({kind})"
-    return svg.node(x, y, END_W, ROW_H - 6, [end["title"]], cls=cls, tip=tip)
+#: what each end kind is, on its row's second line when no host places it
+END_KIND = {
+    "code": "code",
+    "workflow": "workflow pack",
+    "sample": "contract sample",
+    "lane": "broker lane",
+    "agent": "agent profiles",
+    "target": "broker target",
+}
+STATE_LABEL = {
+    "live": "live",
+    "planned": "planned",
+    "retired": "retired",
+    "gap": "gap",
+    "sample": "sample",
+}
 
 
 def _sub(t: Mapping[str, Any]) -> str:
@@ -440,45 +445,160 @@ def _sub(t: Mapping[str, Any]) -> str:
     return t["source"] or "not registered"
 
 
-def render(vm: Mapping[str, Any]) -> str:
-    body, y = [], 4
-    marker = "dataflow-arrow"
-    shown = [t for t in vm["transports"] if t["flows"]]
-    for t in shown:
-        rows = [f for f in vm["flows"] if f["transport"] == t["id"]]
-        top = y
-        h = HEAD_H + len(rows) * ROW_H + 6
-        body.append(svg.band(4, top, WIDTH - 8, h, "lane"))
-        body.append(svg.text(12, top + 18, f"{t['title']} \u00b7 {_sub(t)}", width=WIDTH - 24))
-        y = top + HEAD_H
-        body.append(
-            svg.node(X_T, y, T_W, len(rows) * ROW_H - 6, [t["title"], _sub(t)], cls="transport")
-        )
-        for f in rows:
-            mid = y + (ROW_H - 6) // 2
-            body.append(_end_box(X_FROM, y, f["from"]))
-            cls = "dash" if f["sample"] or f["from"]["kind"] == NONE_DECLARED else ""
-            body.append(svg.arrow([(X_FROM + END_W, mid), (X_T, mid)], marker, cls=cls))
-            body.append(
-                f"<g><title>{svg.e(f['label'] + ' - ' + f['detail'])}</title>"
-                + svg.text(X_FROM + END_W + 8, mid - 4, f["label"], width=LABEL_W - 16, cls="lbl")
-                + "</g>"
+def _place(e: Mapping[str, Any], idx: Any) -> tuple[dict[str, Any], str | None]:
+    """A flow end as the page shows it (title, the line under it) and its node, if placed."""
+    name = e["id"][4:] if e["kind"] == "service" and e.get("id") else None
+    node = idx.service_node(name) if (idx is not None and name) else None
+    if e["kind"] == NONE_DECLARED:
+        on = "not declared"
+    elif name and idx is not None and name in idx.services:
+        host = idx.services[name]["host"]
+        addr = (idx.hosts.get(host) or {}).get("address")
+        on = f"on {host}" + (f" · {addr}" if addr else "")
+    elif name:
+        on = "service"
+    else:
+        on = END_KIND.get(e["kind"], e["kind"])
+    return {
+        "title": e["title"],
+        "id": e.get("id"),
+        "on": on,
+        "none": e["kind"] == NONE_DECLARED,
+    }, node
+
+
+def page(
+    vm: Mapping[str, Any], *, idx: Any = None, extra: Sequence[Mapping[str, Any]] = ()
+) -> dict[str, Any]:
+    """The Dataflow page model: one group per transport in use (producer -> label and transport
+    -> consumer, each row with a state), then the host-level groups of :mod:`.lab` in ``extra``
+    (service calls, firewall allows), and the counts on top.  ``idx``: a :class:`.lab.Index`
+    that places services on hosts and knows which guests are planned or retired.
+
+    A row's state: ``gap`` when an end is not declared, ``sample`` when the producer is a
+    contract sample, else the state of the guests it touches (``retired``, ``planned``,
+    ``live``; ``live`` when nothing places it)."""
+    groups = []
+    for t in vm["transports"]:
+        rows = []
+        hub = idx.service_node(t["service"]) if (idx is not None and t["service"]) else None
+        for f in (f for f in vm["flows"] if f["transport"] == t["id"]):
+            src, a = _place(f["from"], idx)
+            dst, b = _place(f["to"], idx)
+            if src["none"] or dst["none"]:
+                state = "gap"
+            elif f["sample"]:
+                state = "sample"
+            else:
+                state = idx.state(a, b, hub) if idx is not None else "live"
+            rows.append(
+                {"from": src, "to": dst, "label": f["label"], "detail": f["detail"], "state": state}
             )
-            cls = "dash" if f["to"]["kind"] == NONE_DECLARED else ""
-            body.append(svg.arrow([(X_T + T_W, mid), (X_TO, mid)], marker, cls=cls))
-            body.append(_end_box(X_TO, y, f["to"]))
-            y += ROW_H
-        y = top + h + 8
-    if not shown:
-        body.append(svg.text(12, 24, "no flows", width=200, cls="sub"))
-        y = 40
-    n = len(vm["flows"])
-    desc = (
-        f"{n} flow(s) in {len(shown)} transport lane(s): each row is a producer on the left, the "
-        "flow's event type, table, status source or action on its arrow, the transport in the "
-        "middle and the consumer on the right. Dashed: a contract sample or an undeclared end. "
-        "The table below lists the same flows."
+        if rows:
+            host = ""
+            if idx is not None and t["service"] in idx.services:
+                host = f" on {idx.services[t['service']]['host']}"
+            groups.append({"id": t["id"], "title": t["title"], "sub": _sub(t) + host, "rows": rows})
+    by_group: dict[str, list[dict[str, Any]]] = {}
+    for f in extra:
+        on = {}
+        for side in ("from", "to"):
+            e = f[side]
+            on[side] = {
+                "title": e["title"] or "not placed",
+                "id": e["node"],
+                "on": _where(e["node"], idx),
+                "none": not e["node"],
+            }
+        by_group.setdefault(f["group"], []).append(
+            {
+                "from": on["from"],
+                "to": on["to"],
+                "label": f["label"],
+                "detail": f["detail"],
+                "state": f["state"],
+            }
+        )
+    for g in ("Service calls", "Firewall allows"):
+        if by_group.get(g):
+            sub = (
+                "registry upstreams"
+                if g == "Service calls"
+                else "guest firewall_rules, site service_exceptions"
+            )
+            groups.append(
+                {"id": g.lower().replace(" ", "-"), "title": g, "sub": sub, "rows": by_group[g]}
+            )
+    rows = [r for g in groups for r in g["rows"]]
+    count = {s: sum(1 for r in rows if r["state"] == s) for s in STATE_LABEL}
+    hosts = {
+        r[side]["id"]
+        for r in rows
+        for side in ("from", "to")
+        if r[side]["id"] and str(r[side]["id"]).startswith("guest:")
+    }
+    stats = [
+        {"n": len(rows), "label": f"flows in {len(groups)} groups", "cls": "plain"},
+        {"n": count["live"], "label": "live: every end declared, no planned guest", "cls": "live"},
+        {"n": count["planned"], "label": "planned: an end is a planned guest", "cls": "planned"},
+        {"n": count["gap"], "label": "gaps: an end the repository does not declare", "cls": "gap"},
+        {
+            "n": count["sample"],
+            "label": "from contract samples, not deployed producers",
+            "cls": "plain",
+        },
+        {"n": len(hosts), "label": "guests placed on a flow", "cls": "plain"},
+    ]
+    return {"groups": groups, "stats": stats, "counts": count}
+
+
+def _where(node: str | None, idx: Any) -> str:
+    """The line under a host-level flow's end: a guest's address, else its node id."""
+    if not node:
+        return "not placed"
+    if idx is not None and node.startswith("guest:") and node[6:] in idx.guests:
+        ip = (idx.guests[node[6:]].get("network") or {}).get("ip")
+        return f"{node} \u00b7 {ip}" if ip else node
+    return node
+
+
+def _end_html(e: Mapping[str, Any], cls: str) -> str:
+    none = " none" if e["none"] else ""
+    tip = f' title="{svg.e(e["id"])}"' if e.get("id") else ""
+    return (
+        f'<div class="end {cls}{none}"{tip}>{svg.e(e["title"])}'
+        f'<span class="on">{svg.e(e["on"])}</span></div>'
     )
+
+
+def _row_html(r: Mapping[str, Any]) -> str:
+    search = " ".join(
+        str(x)
+        for x in (
+            r["from"]["title"],
+            r["from"]["on"],
+            r["label"],
+            r["detail"],
+            r["to"]["title"],
+            r["to"]["on"],
+            r["state"],
+        )
+        if x
+    )
+    return (
+        f'<div class="flow-row state-{svg.e(r["state"])}" data-state="{svg.e(r["state"])}" '
+        f'data-search="{svg.e(search)}">' + _end_html(r["from"], "src") + '<div class="arrow-col">'
+        f'<div class="via-text">{svg.e(r["label"])}</div>'
+        f'<div class="via-detail">{svg.e(r["detail"])}</div>'
+        '<div class="arrow-line" aria-hidden="true"></div>'
+        f'<span class="status-tag">{svg.e(STATE_LABEL.get(r["state"], r["state"]))}</span></div>'
+        + _end_html(r["to"], "dst")
+        + "</div>"
+    )
+
+
+def tables(vm: Mapping[str, Any]) -> str:
+    """The table view of the dataflow model (and the no-script reading of it)."""
     rows = [
         (
             svg.e(next(t["title"] for t in vm["transports"] if t["id"] == f["transport"])),
@@ -495,7 +615,62 @@ def render(vm: Mapping[str, Any]) -> str:
     ]
     t_rows = [(svg.e(t["title"]), svg.e(_sub(t)), svg.e(t["flows"])) for t in vm["transports"]]
     return (
-        svg.svg("dataflow", WIDTH, y, "Dataflow: producer, transport, consumer", desc, body)
+        '<section class="maptables" aria-label="Table view"><h3>Table view</h3>'
         + svg.table("Flows", ("Transport", "Producer", "Carries", "What", "Consumer"), rows)
         + svg.table("Transports", ("Transport", "Implemented by", "Flows"), t_rows)
+        + "</section>"
     )
+
+
+def render(
+    vm: Mapping[str, Any], *, idx: Any = None, extra: Sequence[Mapping[str, Any]] = ()
+) -> str:
+    """The page body: toolbar, legend, the counts, one collapsible group of flow rows per
+    transport (and the host-level groups in ``extra``), then the table view.  Every row is
+    server-rendered and escaped; the shared script (:mod:`.assets`) only filters and collapses."""
+    from .topology import toolbar
+
+    pm = page(vm, idx=idx, extra=extra)
+    n = sum(len(g["rows"]) for g in pm["groups"])
+    states = "".join(
+        f'<button type="button" class="tb-btn js-only{" active" if s == "all" else ""}" '
+        f'data-state-filter="{s}">{svg.e(label)}</button>'
+        for s, label in (("all", "All"), ("live", "Live"), ("planned", "Planned"), ("gap", "Gaps"))
+    )
+    out = [
+        '<div class="hx hx-dataflow">',
+        toolbar(
+            f"{n} flows",
+            flows=False,
+            placeholder="Filter: service, host, event, table",
+            extra=states,
+        ),
+        '<p class="legend"><span><i></i>live</span><span><i class="planned"></i>planned guest</span>'
+        '<span><i class="gap"></i>gap: an end not declared</span><span><i class="sample"></i>'
+        "contract sample or retired guest</span></p>",
+        '<div class="df-stats">',
+    ]
+    out += [
+        f'<div class="df-stat {svg.e(s["cls"])}"><div class="n">{svg.e(s["n"])}</div>'
+        f'<div class="l">{svg.e(s["label"])}</div></div>'
+        for s in pm["stats"]
+    ]
+    out.append('</div><div id="df-groups">')
+    for i, g in enumerate(pm["groups"]):
+        gid = f"df-group-{i}"
+        out.append(
+            f'<section class="df-group" aria-label="{svg.e(g["title"])}">'
+            f'<button type="button" class="group-title" aria-expanded="true" data-collapse="{gid}">'
+            f'<span>{svg.e(g["title"])}</span><span class="sub">{svg.e(g["sub"])}</span>'
+            f'<span class="n">{len(g["rows"])} flows</span>'
+            '<span class="vlan-chevron" aria-hidden="true">▾</span></button>'
+            f'<div class="df-rows" id="{gid}">'
+            + "".join(_row_html(r) for r in g["rows"])
+            + "</div></section>"
+        )
+    if not pm["groups"]:
+        out.append('<p class="muted">no flows</p>')
+    out.append("</div>")
+    out.append(tables(vm))
+    out.append("</div>")
+    return "".join(out)

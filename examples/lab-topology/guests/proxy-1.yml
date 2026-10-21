@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:proxy-1
+description: Reverse proxy, the one way in from the internet, behind forward-auth.
+kind: lxc
+provisioning: terraform
+placement: {node: hv-2, vmid: 160}
+resources:
+  cpu: {cores: 2}
+  memory: {size_mb: 2048}
+  disks: [{name: rootfs, size_gb: 16, pool: fast}]
+image: {logical: debian-12-standard, kind: tarball, os_type: debian}
+network: {zone: edge, ip: 198.51.100.10}
+firewall_rules:
+  inbound_allow:
+    - {name: https, proto: tcp, ports: "443", source: any}
+  policy_out: DROP
+  outbound_allow:
+    - {name: to-services, proto: tcp, ports: "443", dest: "zone:services"}
+    - {name: to-idp, proto: tcp, ports: "9443", dest: "192.0.2.6/32"}
+capability: cap:idp
+capability_groups: [cap_edge]
+tags: [prod]
+owners: {primary: platform-team}

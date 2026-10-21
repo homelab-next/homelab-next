@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:decoy-1
+description: A decoy host that records every connection attempt.
+kind: lxc
+provisioning: manual
+placement: {node: hv-2, vmid: 171}
+resources:
+  cpu: {cores: 1}
+  memory: {size_mb: 1024}
+  disks: [{name: rootfs, size_gb: 8, pool: fast}]
+image: {logical: debian-12-standard, kind: tarball, os_type: debian}
+network: {zone: lab, ip: 203.0.113.21}
+capability: cap:detections
+capability_groups: [cap_siem]
+tags: [lab]
+lifecycle:
+  requires_root_steps: ["create the guest by hand from the lab template, then join it to the lab zone"]
+owners: {primary: platform-team}

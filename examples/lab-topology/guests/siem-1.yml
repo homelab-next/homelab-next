@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:siem-1
+description: Collects, decodes and correlates the fleet's logs into alerts.
+kind: vm
+provisioning: terraform
+placement: {node: hv-1, vmid: 120}
+resources:
+  cpu: {cores: 8}
+  memory: {size_mb: 16384}
+  disks: [{name: rootfs, size_gb: 200, pool: fast}]
+image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
+network: {zone: services, ip: 192.0.2.70}
+firewall_rules:
+  inbound_allow:
+    - {name: agents, proto: tcp, ports: "1514", source: "zone:services"}
+    - {name: lab-telemetry, proto: tcp, ports: "1514", source: "zone:lab"}
+    - {name: console, proto: tcp, ports: "443", source: "zone:mgmt"}
+capability: cap:detections
+capability_groups: [cap_siem]
+tags: [prod]
+owners: {primary: platform-team}

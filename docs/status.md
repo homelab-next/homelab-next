@@ -320,24 +320,75 @@ Four pages in the `maps` menu group (views 1.5, `panel: topology | dataflow | ar
 roadmap`), each **generated** from models already in the repository and never drawn by hand
 ([ADR-0018](adr/0018-generated-maps.md) ([[adr/0018-generated-maps|ADR-0018]])). Each is a pure
 function model -> view-model -> page (`homelabnext/status/maps/`, goldens in
-`tests/status/golden/maps/`): an inline SVG (no script, no `style` attribute, themed by the hub's
-one stylesheet, so it reads in light and dark; `title` and `desc` for assistive technology) and
-the same facts as tables below it. A map whose inputs are not given is listed as unavailable; a
-source that cannot be read gives the page an error line instead of a half-drawn picture.
+`tests/status/golden/maps/`). Architecture and Roadmap are an inline SVG (no script, no `style`
+attribute, themed by the hub's one stylesheet, so it reads in light and dark; `title` and `desc`
+for assistive technology) with the same facts as tables below it. A map whose inputs are not
+given is listed as unavailable; a source that cannot be read gives the page an error line
+instead of a half-drawn picture.
 
 | Page | Input | Drawn from |
 |---|---|---|
-| `/topology` | `--guests DIR --guests-site SITE` (as the Baselines page) | the site model (zones, VLANs, subnets, gateways, internet egress), the zone-to-zone flows the network IR allows (first match wins), the guest model (node, zone, address, capability, baselines): nodes as rows, zones as columns, then the zone flow matrix |
-| `/dataflow` | `--maps ROOT` (a checkout) | producer -> transport -> consumer, one row per flow, labelled: event types (`schemas/events`, their contract samples, an AST scan of the code for who builds and who decodes each type, workflow pack triggers), status sources (polled, or pushed on the bus), the OCSF lake tables and workflow lookups, object-store upstreams, broker actions and lanes |
+| `/topology` | `--guests DIR --guests-site SITE` (as the Baselines page), `--guests-registry FILE` (default `--registry`) and, for the event flows, `--maps ROOT` | the site model (zones, VLANs, subnets, gateways, internet egress, router, switches, the zone flows the network IR allows, service exceptions), the guest model (status, placement, resources, image, zone and address, capability groups, firewall rules, baselines) with `_nodes.yml`, the registry (services per guest, with their descriptions) and the dataflow model's flows |
+| `/dataflow` | `--maps ROOT` (a checkout), with the same `--guests` options to place services on guests | producer -> transport -> consumer, one row per flow, labelled: event types (`schemas/events`, their contract samples, an AST scan of the code for who builds and who decodes each type, workflow pack triggers), status sources (polled, or pushed on the bus), the OCSF lake tables and workflow lookups, object-store upstreams, broker actions and lanes; with the guests also the registry's service calls and the guests' firewall allows |
 | `/architecture` | `--maps ROOT` | capabilities -> fakes, real adapters, products -> registry services (the knowledge graph's registry, compose and capability readers: the [capabilities](capabilities/README.md) matrix), then the control plane: agents, bus, workflows, decision, broker, status hub, with an edge only where the repository declares one |
 | `/roadmap` | `--maps ROOT [--invariants-results FILE]` | `docs/build-order.md` phases and steps; each phase's `Checklist` cell names its `docs/checklist.md` rows (a section letter for that section's rows of the phase's tag, an id, or a range); per criterion `pass`, `fail`, `error`, `skip` from the results file (`make invariants` writes `build/invariants/results.json`), else `untested`; a progress bar per phase and every row no phase names as unphased |
 
+**Topology.** A canvas of server-rendered cards: on top the internet, the router, the switches,
+then the hypervisors (`_nodes.yml`, or any node another guest is placed on) and every other
+physical host; below, one lane per zone (VLAN badge, purpose, subnet, gateway, internet egress;
+a zone the site does not define gets a dashed lane), collapsible. A lane with more than four
+guests in at least two capability groups is split into **stacks**, one per guest's first
+`capability_groups` entry (the grouping the Ansible inventory already deploys by, so no new
+field). Each card shows the name and address; kind and provisioning, resources, image,
+capability and its hypervisor; badges for its service count, `vmid`, `not IaC` (`manual` or
+`host-only`) and `planned` / `retired` (guest schema 1.4 `status`). Click a card for the detail
+panel: the guest descriptor as YAML, "What it does" (`description`, else `display_name`), its
+services with their descriptions (service registry 2.4 `description`), and its data flow as IN
+and OUT lines. "Show Data Flows" draws curved arrows between cards (and zone lanes): the
+dataflow model's flows split at their transport's host, the registry's `upstreams`, each guest's
+`firewall_rules` (a /32 that is a guest's address is that guest, `any` is the internet) and the
+site's service exceptions; an arrow with a planned end is dashed, one with a retired end is not
+drawn; a selected card highlights its own flows and dims the rest. The toolbar filters by host,
+address, service or type (Ctrl+F focuses it, Esc clears), resets the view, and switches between
+the dark theme the page starts in and the hub's light one; drag pans, the wheel zooms, the view
+fits on load and on resize, a hover shows the address, VLAN, type and services.
+
+**Dataflow.** Counts on top (flows, live, planned, gaps, samples, guests touched), then one
+collapsible group per transport (and, with the guests, *Service calls* and *Firewall allows*);
+each row is producer -> what it carries (and how) -> consumer, the service ends placed on their
+guest and address, with a state: `gap` when an end is not declared, `sample` for a contract
+sample, else `retired` / `planned` / `live` from the guests it touches. The toolbar filters the
+rows by text and by state.
+
+**Script and CSP.** These two pages are the hub's only script. One packaged file,
+`homelabnext/status/maps/static/maps.js` (with `maps.css`), serves both. Live, the page loads it
+from `/static/maps.js` under its own CSP (`script-src 'self'`, the two stylesheets by hash;
+every other page keeps the script-free policy); `hnx status render` inlines both and pins them by
+sha256 in a CSP `<meta>`, so `topology.html` and `dataflow.html` are self-contained and can be
+served on their own. No font or CDN is fetched. The data travels as `<script
+type="application/json">` with `<`, `>` and `&` written as JSON escapes, and the script builds
+the DOM with `textContent` only (a test refuses the HTML-parsing sinks and `eval`). The cards,
+rows and a **table view** (guests, zones, host flows, the zone flow matrix; the dataflow's flows
+and transports) are server-rendered, so the page reads without script.
+`tests/status/test_maps_browser.py` drives both pages in headless Chromium (Playwright for Node;
+skipped when it is not installed), with hostile names, and fails on any console error or CSP
+violation.
+
+`examples/lab-topology/` is a fictional lab to look at: two hypervisors, five zones, seventeen
+guests (physical, manual, planned and retired ones among them) and its registry:
+
+```bash
+hnx status render --out build/hub --guests examples/lab-topology/guests \
+  --guests-site examples/lab-topology/site.yml \
+  --guests-registry examples/lab-topology/services.yml --maps .
+```
+
 `hnx status serve ... --maps . --invariants-results build/invariants/results.json` serves them
 live; `hnx status render --out DIR` with the same options writes each available map as
-`<panel>.html` beside `index.html`, and the static menu links to it. The dataflow and
-architecture are built once per process (they change only with the code); the topology and the
-roadmap are read on each request. A test keeps `docs/build-order.md` naming every checklist row
-and only real ones.
+`<panel>.html` beside `index.html`, and the static menu links to it. The architecture and the
+dataflow model are built once per process (they change only with the code); the topology, the
+dataflow's placement on guests and the roadmap are read on each request. A test keeps
+`docs/build-order.md` naming every checklist row and only real ones.
 
 ### Pages
 

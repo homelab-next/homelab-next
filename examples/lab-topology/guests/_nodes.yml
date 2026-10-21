@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# The hypervisors of the fictional harbor lab and whether each enforces guest firewalls.
+nodes:
+  hv-1: {firewall: enabled}
+  hv-2: {firewall: enabled}

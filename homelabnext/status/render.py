@@ -237,16 +237,29 @@ def nav_html(
 
 
 def shell_html(
-    doc: Mapping[str, Any], title: str, main: str, *, nav: str, refresh_s: int | None = None
+    doc: Mapping[str, Any],
+    title: str,
+    main: str,
+    *,
+    nav: str,
+    refresh_s: int | None = None,
+    head: str = "",
+    tail: str = "",
+    theme: str | None = None,
 ) -> str:
-    """One page of the shell: the menu and ``main`` (already-escaped HTML)."""
+    """One page of the shell: the menu and ``main`` (already-escaped HTML).  ``head``/``tail``:
+    trusted markup before the hub's stylesheet (so a CSP meta comes first) and at the end of
+    ``body`` (the interactive maps' own
+    stylesheet and script, :mod:`homelabnext.status.maps.assets`); ``theme``: a fixed
+    ``data-theme`` on ``<html>`` (those maps start dark)."""
     meta = f'<meta http-equiv="refresh" content="{int(refresh_s)}">' if refresh_s else ""
+    attrs = f' data-theme="{_e(theme)}"' if theme else ""
     return (
         "<!doctype html>\n"
-        '<html lang="en"><head><meta charset="utf-8">'
+        f'<html lang="en"{attrs}><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width,initial-scale=1">{meta}'
-        f"<title>{_e(title)}</title><style>{_CSS}</style></head><body>"
-        f"{nav}<main>{main}</main></body></html>\n"
+        f"<title>{_e(title)}</title>{head}<style>{_CSS}</style></head><body>"
+        f"{nav}<main>{main}</main>{tail}</body></html>\n"
     )
 
 

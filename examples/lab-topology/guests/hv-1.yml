@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:hv-1
+display_name: Hypervisor 1
+description: Runs the security services and the identity guests.
+kind: host
+provisioning: host-only
+placement: {node: hv-1}
+network: {zone: mgmt, ip: 192.0.2.10}
+capability: cap:orchestration
+tags: [prod, hypervisor]
+owners: {primary: platform-team}

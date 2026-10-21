@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:sandbox-1
+description: Detonation sandbox for authorized internal testing; telemetry leaves one way.
+kind: vm
+provisioning: manual
+placement: {node: hv-2, vmid: 170}
+resources:
+  cpu: {cores: 4}
+  memory: {size_mb: 8192}
+  disks: [{name: rootfs, size_gb: 80, pool: fast}]
+image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
+network: {zone: lab, ip: 203.0.113.20}
+firewall_rules:
+  policy_out: DROP
+  outbound_allow:
+    - {name: telemetry, proto: tcp, ports: "4222", dest: "192.0.2.140/32"}
+capability: cap:detections
+capability_groups: [cap_siem]
+tags: [lab]
+lifecycle:
+  requires_root_steps: ["create the guest by hand from the lab template, then join it to the lab zone"]
+owners: {primary: platform-team}

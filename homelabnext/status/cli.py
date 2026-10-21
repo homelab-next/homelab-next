@@ -7,11 +7,12 @@
     hnx status collect [--registry FILE] [--root DIR] [--state FILE] [--all | --source ID ...]
                        [--notify-topic T] [--secrets-dir DIR]
     hnx status render --out DIR [--state FILE] [--views FILE] [--registry FILE] [--now TIME]
-                      [--guests DIR --guests-site SITE] [--maps ROOT] [--invariants-results FILE]
+                      [--guests DIR --guests-site SITE [--guests-registry FILE]] [--maps ROOT]
+                      [--invariants-results FILE]
     hnx status serve [--state FILE] [--views FILE] [--registry FILE] [--bind HOST] [--port N]
                      [--allow-remote --allowed-host NAME ...] [--agents FILE] [--secrets-dir DIR]
-                     [--strategy DIR] [--guests DIR --guests-site SITE] [--maps ROOT]
-                     [--invariants-results FILE]
+                     [--strategy DIR] [--guests DIR --guests-site SITE [--guests-registry FILE]]
+                     [--maps ROOT] [--invariants-results FILE]
     hnx status ingest --agents FILE [--registry FILE] [--bind HOST] [--port N] [--publish-to URL]
                       [--allow-remote --allowed-host NAME ...] [--secrets-dir DIR]
 
@@ -123,6 +124,12 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     def map_opts(p):
         p.add_argument("--guests", help="a guest directory: the Baselines and Topology pages")
         p.add_argument("--guests-site", help="the site model the guest directory's zones come from")
+        p.add_argument(
+            "--guests-registry",
+            metavar="FILE",
+            help="the registry that places services on those guests (Topology, Dataflow; "
+            "default: --registry)",
+        )
         p.add_argument(
             "--maps", metavar="ROOT", help="a checkout: the Dataflow, Architecture, Roadmap maps"
         )
@@ -319,12 +326,24 @@ def _map_site(args, reg):
         raise ValueError(f"--maps {root}: not a directory")
     if results and not root:
         raise ValueError("--invariants-results needs --maps (the checkout the roadmap reads)")
+    lab_file = getattr(args, "guests_registry", None)
+    if lab_file and not guests:
+        raise ValueError("--guests-registry needs --guests (the guests its services run on)")
     if not guests and not root:
         return None
     from .maps import MapSite
 
+    try:
+        lab = load(lab_file) if lab_file else None
+    except RegistryError as exc:
+        raise ValueError(f"--guests-registry {lab_file}: {exc}") from None
     return MapSite(
-        root=root, registry=reg, guests=guests, guests_site=args.guests_site, results=results
+        root=root,
+        registry=reg,
+        guests=guests,
+        guests_site=args.guests_site,
+        results=results,
+        lab_registry=lab,
     )
 
 

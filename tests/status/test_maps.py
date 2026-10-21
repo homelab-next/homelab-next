@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import urllib.request
 from pathlib import Path
@@ -20,7 +21,8 @@ from homelabnext.compute.model import ZoneFlow
 from homelabnext.graph.model import Edge, Graph, Node
 from homelabnext.registry.model import load
 from homelabnext.status.cli import main
-from homelabnext.status.maps import MapSite, architecture, dataflow, roadmap, topology
+from homelabnext.status.maps import MapSite, architecture, assets, dataflow, roadmap, topology
+from homelabnext.status.maps.lab import host_flows
 from homelabnext.status.maps.mdtables import parse_tables, split_row
 from homelabnext.status.model import sources_from_registry
 from homelabnext.status.views import build_status, load_views
@@ -29,6 +31,7 @@ GOLDEN = Path(__file__).parent / "golden" / "maps"
 FIXTURES = Path(__file__).parent / "fixtures" / "maps"
 GUESTS = ROOT / "examples" / "minimal" / "guests"
 SITE = ROOT / "examples" / "minimal" / "site.yml"
+LAB = ROOT / "examples" / "lab-topology"
 HOSTILE = '<script>alert("x")</script>'
 
 
@@ -49,6 +52,15 @@ def assert_safe(html: str) -> None:
     """Script-free and CSP-clean: no script, no inline style attribute, no event handler."""
     low = html.lower()
     assert "<script" not in low and " style=" not in low and "<img" not in low
+
+
+def assert_interactive_safe(html: str, *, scripts: int) -> None:
+    """An interactive map: exactly ``scripts`` script elements (the data, and the page's own
+    script), no inline style attribute, no event-handler attribute, no markup from data."""
+    low = html.lower()
+    assert low.count("<script") == scripts == low.count("</script>")
+    assert " style=" not in low and "<img" not in low
+    assert not re.search(r"<[a-z][^<>]*\son[a-z]+\s*=", low)  # an event-handler attribute
 
 
 # ------------------------------------------------------------------------- Markdown tables
@@ -87,36 +99,118 @@ FLOWS = [
 ]
 
 
+LAB_FACTS, NODES, DATAFLOW_VM = _TOPO["lab"], _TOPO["nodes"], _TOPO["dataflow"]
+
+
+def _topo(**kw):
+    args = {"lab": LAB_FACTS, "nodes": NODES, "dataflow": DATAFLOW_VM, **kw}
+    return topology.build(SITE_DOC, GUEST_SET, FLOWS, **args)
+
+
+def _data(html: str) -> dict:
+    m = re.search(r'<script type="application/json" id="topo-data">(.*?)</script>', html, re.S)
+    assert m and "<" not in m.group(1) and ">" not in m.group(1) and "&" not in m.group(1)
+    return json.loads(m.group(1))
+
+
 def test_topology_view_model_and_page_match_their_goldens():
-    vm = topology.build(SITE_DOC, GUEST_SET, FLOWS)
+    vm = _topo()
     assert [z["id"] for z in vm["zones"]] == ["mgmt", "data", "lab"]  # site order, then unknown
     assert vm["zones"][-1]["known"] is False
-    assert [(n["id"], n["hypervisor"]) for n in vm["nodes"]] == [("hv-a", True), ("hv-b", False)]
+    # the top cluster: internet, router, switches, then hypervisors and physical hosts
+    assert [[c["node"] for c in row] for row in vm["top"]] == [
+        ["internet"], ["router:gw"], ["switch:sw-1"], ["guest:hv-a", "node:hv-b"]]  # fmt: skip
+    assert vm["top"][3][0]["category"] == "hypervisor" and vm["top"][3][1]["category"] == "node"
+    # lanes: the data lane has more than STACK_MIN guests in several groups, so it is stacked
+    lanes = {ln["id"]: ln for ln in vm["lanes"]}
+    assert [s["title"] for s in lanes["data"]["stacks"]] == ["lake", "orchestration", "scanner"]
+    assert lanes["mgmt"]["stacks"] == [{"title": None, "cards": [], "cols": 1}]
+    assert lanes["lab"]["known"] is False
+    cards = {c["node"]: c for ln in vm["lanes"] for s in ln["stacks"] for c in s["cards"]}
+    badges = {n: [b["text"] for b in c["badges"]] for n, c in cards.items()}
+    assert badges["guest:db-1"] == ["2 services"] and cards["guest:db-1"]["vmid"] == 170
+    assert badges["guest:cache-1"] == ["1 service", "planned"]
+    assert badges["guest:old-1"] == ["1 service", "retired"]
+    assert badges["guest:job-1"] == ["not IaC"]
+    assert cards["guest:db-1"]["meta"] == [
+        "vm \u00b7 terraform", "2 vCPU \u00b7 3 GB \u00b7 20 GB disk", "debian-12 (linux-6)",
+        "cap:events", "on hv-a"]  # fmt: skip
+    # flows: transport hops, upstreams, firewall allows and service exceptions; a planned end
+    # makes a planned arrow, a retired end none at all
+    assert vm["edges"] == [
+        {"source": "guest:app-1", "dest": "guest:cache-1", "label": "calls cache",
+         "state": "planned"},
+        {"source": "guest:app-1", "dest": "guest:db-1",
+         "label": "db.write, homelabnext.thing.made, allow app, calls db", "state": "live"},
+        {"source": "guest:db-1", "dest": "guest:cache-1", "label": "homelabnext.thing.made",
+         "state": "planned"},
+        {"source": "internet", "dest": "guest:db-1", "label": "allow web", "state": "live"},
+        {"source": "zone:mgmt", "dest": "guest:db-1", "label": "exception to svc:db",
+         "state": "live"},
+    ]  # fmt: skip
+    assert not any("old-1" in e["source"] + e["dest"] for e in vm["edges"])
+    d = vm["details"]["guest:db-1"]
+    assert d["does"] == "Holds the tables." and d["yaml"].startswith("id: guest:db-1\nkind: vm\n")
+    assert [s["name"] for s in d["services"]] == ["svc:db", "svc:events"]
+    assert "IN <- any (the internet): allow web [tcp 443]" in [f["text"] for f in d["flows"]]
     assert vm["flows"] == [{"from": "mgmt", "to": "data", "allowed": "any; tcp 22, 443"}]
     golden("topology.json", as_json(vm))
     html = topology.render(vm)
-    assert_safe(html)
-    assert 'role="img" aria-labelledby="topology-hosts-title topology-hosts-desc"' in html
+    assert_interactive_safe(html, scripts=1)
+    assert _data(html)["edges"] == vm["edges"]
     assert "<caption>Guests</caption>" in html and "not in the site model" in html
+    assert 'data-node="guest:db-1"' in html and 'data-collapse="lane-1-content"' in html
+    assert 'role="img" aria-labelledby="topology-flows-title topology-flows-desc"' in html
     golden("topology.html", html)
+
+
+def test_topology_without_a_registry_or_flows_still_draws_the_lanes():
+    vm = topology.build(SITE_DOC, GUEST_SET, FLOWS)
+    assert [(e["source"], e["label"]) for e in vm["edges"]] == [
+        ("guest:app-1", "allow app"), ("internet", "allow web")]  # fmt: skip
+    assert vm["details"]["guest:db-1"]["services"] == []
+    assert [[c["node"] for c in row] for row in vm["top"]][3] == ["guest:hv-a", "node:hv-b"]
 
 
 def test_topology_escapes_hostile_names_and_honours_the_default_action():
     site = {"zones": [{"id": HOSTILE, "purpose": HOSTILE}, {"id": "b"}],
             "firewall": {"default_action": "allow"}}  # fmt: skip
-    vm = topology.build(site, [_guest("guest:x", HOSTILE, "n<1>", HOSTILE, "&")], [])
+    hostile = _guest("guest:x", HOSTILE, "n<1>", HOSTILE, "&", display_name=HOSTILE,
+                     description='</script><script>alert(1)</script><img src=x onerror="y">')  # fmt: skip
+    lab = {"hosts": {}, "services": [{"name": "s", "capability": "c", "impl": HOSTILE,
+           "host": "x", "protocol": "tcp", "port": 1, "description": HOSTILE, "upstreams": []}]}  # fmt: skip
+    vm = topology.build(site, [hostile], [], lab=lab)
     html = topology.render(vm)
-    assert_safe(html)
+    assert_interactive_safe(html, scripts=1)
     assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in html and "n&lt;1&gt;" in html
     assert "no rule, the default action (allow)" in html and "every other pair: allow" in html
+    detail = _data(html)["details"]["guest:x"]  # the JSON round-trips to the hostile text
+    assert (
+        detail["does"].startswith("</script><script>")
+        and detail["services"][0]["description"] == HOSTILE
+    )
 
 
 def test_topology_of_the_example_lab():
     vm = topology.load(GUESTS, SITE)
     assert {z["id"] for z in vm["zones"]} >= {"mgmt", "data", "compute", "edge", "sandbox"}
-    assert [g["id"] for n in vm["nodes"] for g in n["guests"]] == ["guest:bus-core", "guest:hv-a"]
+    assert [g["id"] for g in vm["guests"]] == ["guest:bus-core", "guest:hv-a"]
     flows = {(f["from"], f["to"]): f["allowed"] for f in vm["flows"]}
     assert flows[("mgmt", "compute")] == "tcp 22, 443" and ("edge", "data") not in flows
+
+
+def test_topology_of_the_lab_topology_example():
+    reg = load(LAB / "services.yml")
+    vm = topology.load(LAB / "guests", LAB / "site.yml", registry=reg)
+    assert len(vm["guests"]) == 17 and [ln["id"] for ln in vm["lanes"]] == [
+        "mgmt", "services", "data", "edge", "lab"]  # fmt: skip
+    assert [c["node"] for c in vm["top"][-1]] == ["guest:hv-1", "guest:hv-2", "guest:nas-1"]
+    services = next(ln for ln in vm["lanes"] if ln["id"] == "services")
+    assert len(services["stacks"]) >= 3 and services["grid"] == 3
+    states = {g["name"]: g["status"] for g in vm["guests"]}
+    assert states["query-1"] == "planned" and states["old-scan-1"] == "retired"
+    assert {"live", "planned"} == {e["state"] for e in vm["edges"]} and len(vm["edges"]) > 15
+    assert vm["details"]["guest:siem-1"]["services"][0]["name"] == "svc:detections"
 
 
 # ------------------------------------------------------------------------------ dataflow
@@ -187,8 +281,30 @@ def test_dataflow_view_model_and_page_match_their_goldens():
     assert ("broker", "agent profiles", "memory.write", "lane memory") in edges
     golden("dataflow.json", as_json(vm))
     html = dataflow.render(vm)
-    assert_safe(html)
+    assert_interactive_safe(html, scripts=0)  # the page adds the shared script, not the body
+    assert '<div class="flow-row state-gap" data-state="gap"' in html
+    assert 'data-collapse="df-group-0"' in html and "<caption>Flows</caption>" in html
     golden("dataflow.html", html)
+
+
+def test_the_dataflow_page_places_services_on_guests_and_grades_each_row():
+    raws = [g.raw for g in GUEST_SET]
+    idx = topology.index_for(SITE_DOC, raws, LAB_FACTS, NODES)
+    extra = host_flows(SITE_DOC, idx)
+    pm = dataflow.page(DATAFLOW_VM, idx=idx, extra=extra)
+    assert [g["title"] for g in pm["groups"]] == ["Event bus", "Broker", "Service calls",
+                                                  "Firewall allows"]  # fmt: skip
+    bus = pm["groups"][0]
+    assert bus["sub"] == "svc:events (nats) on db-1"
+    first, second = bus["rows"]
+    assert first["from"]["on"] == "on app-1 \u00b7 192.0.2.71" and first["state"] == "planned"
+    assert second["state"] == "gap" and second["from"]["on"] == "code"
+    calls = {(r["from"]["title"], r["to"]["title"]): r["state"] for r in pm["groups"][2]["rows"]}
+    assert calls[("app on app-1", "cache on cache-1")] == "planned"
+    assert calls[("scan on old-1", "events on db-1")] == "retired"
+    assert pm["counts"] == {"live": 5, "planned": 2, "retired": 1, "gap": 1, "sample": 0}
+    html = dataflow.render(DATAFLOW_VM, idx=idx, extra=extra)
+    assert 'data-state-filter="planned"' in html and "Firewall allows" in html
 
 
 def test_dataflow_escapes_hostile_names():
@@ -196,7 +312,7 @@ def test_dataflow_escapes_hostile_names():
               "packs": [{"name": HOSTILE, "event": HOSTILE, "actions": [(HOSTILE, HOSTILE)],
                          "tables": [], "decides": []}]}  # fmt: skip
     html = dataflow.render(dataflow.build(inputs))
-    assert_safe(html)
+    assert_interactive_safe(html, scripts=0)
     assert html.count("&lt;script&gt;") > 5
 
 
@@ -389,8 +505,9 @@ def test_the_site_serves_only_its_configured_maps():
     site = MapSite(guests=GUESTS, guests_site=SITE)
     assert site.available() == {"topology"}
     assert site.handle("/roadmap", "", _doc()) is None and site.handle("/x", "", _doc()) is None
-    code, ctype, body = site.handle("/topology", "", _doc({"topology"}))
+    code, ctype, body, headers = site.handle("/topology", "", _doc({"topology"}))
     assert code == 200 and ctype.startswith("text/html")
+    assert "script-src 'self'" in headers["Content-Security-Policy"]
     html = body.decode()
     assert "<h2>Topology</h2>" in html and "guest:bus-core" in html
     assert '<a href="/topology">Topology</a>' in html
@@ -407,6 +524,11 @@ def test_an_unreadable_source_is_an_error_line_not_a_crash(tmp_path):
     assert "cannot build the map" in site.body("roadmap")  # no docs/ in this root
 
 
+def _get(host, port, route):
+    with urllib.request.urlopen(f"http://{host}:{port}{route}", timeout=10) as r:  # loopback
+        return r.headers, r.read().decode()
+
+
 def test_serve_routes_the_maps():
     from homelabnext.status.serve import make_server
 
@@ -415,19 +537,35 @@ def test_serve_routes_the_maps():
     threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
     host, port = srv.server_address[:2]
     try:
-        for route in ("/dataflow", "/architecture", "/roadmap"):
-            with urllib.request.urlopen(
-                f"http://{host}:{port}{route}", timeout=10
-            ) as r:  # loopback
-                html = r.read().decode()
-                assert r.headers["Content-Security-Policy"].startswith("default-src 'none'")
+        for route in ("/architecture", "/roadmap"):
+            headers, html = _get(host, port, route)
+            assert headers["Content-Security-Policy"].startswith("default-src 'none'")
+            assert "script-src" not in headers["Content-Security-Policy"]
             assert '<svg class="map"' in html and "cannot build" not in html
             assert_safe(html)
+        # the interactive dataflow: its own CSP (scripts from the hub only), the shared script
+        headers, html = _get(host, port, "/dataflow")
+        csp = headers["Content-Security-Policy"]
+        assert csp == assets.live_csp() and "script-src 'self';" in csp
+        assert "unsafe-inline" not in csp and "unsafe-eval" not in csp
+        assert assets.sha256_source(assets.css()) in csp
+        assert '<script src="/static/maps.js"></script>' in html and "cannot build" not in html
+        assert_interactive_safe(html, scripts=1)
+        headers, js = _get(host, port, assets.SCRIPT_ROUTE)
+        assert headers["Content-Type"].startswith("text/javascript") and js == assets.js()
+        assert headers["X-Content-Type-Options"] == "nosniff"
         with pytest.raises(urllib.error.HTTPError):
             urllib.request.urlopen(f"http://{host}:{port}/topology", timeout=10)  # loopback
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_the_script_is_served_only_with_an_interactive_map():
+    assert MapSite(root=ROOT).handle(assets.SCRIPT_ROUTE, "", _doc()) is None  # roadmap only
+    site = MapSite(guests=GUESTS, guests_site=SITE)
+    code, ctype, body = site.handle(assets.SCRIPT_ROUTE, "", _doc())
+    assert code == 200 and ctype == assets.JS_TYPE and body.decode() == assets.js()
 
 
 def test_render_writes_the_maps_beside_the_page(tmp_path, capsys):
@@ -447,6 +585,46 @@ def test_render_writes_the_maps_beside_the_page(tmp_path, capsys):
     page = (out / "roadmap.html").read_text()
     assert 'href="index.html#view-overview"' in page and "invariants results of 2026-10-20" in page
     assert_safe(page)
+    for name in ("topology.html", "dataflow.html"):  # self-contained: inline, pinned by hash
+        page = (out / name).read_text()
+        assert_static_interactive(page)
+        assert 'src="/static' not in page and "<link" not in page
+
+
+def assert_static_interactive(page: str) -> None:
+    """A written interactive map: its CSP meta pins exactly the inline script and styles."""
+    import html as htmllib
+
+    meta = re.search(r'<meta http-equiv="Content-Security-Policy" content="([^"]*)">', page)
+    csp = htmllib.unescape(meta.group(1))
+    scripts = re.findall(r"<script>(.*?)</script>", page, re.S)
+    styles = re.findall(r"<style>(.*?)</style>", page, re.S)
+    assert scripts == [assets.js()] and len(styles) == 2
+    assert f"script-src {assets.sha256_source(scripts[0])};" in csp
+    for st in styles:
+        assert assets.sha256_source(st) in csp
+    assert "unsafe-inline" not in csp and "unsafe-eval" not in csp and "http" not in csp
+    assert page.index("Content-Security-Policy") < page.index("<style>")
+    assert_interactive_safe(page, scripts=1 + page.count('type="application/json"'))
+
+
+def test_json_text_cannot_close_its_element_and_round_trips():
+    data = {"a": '</script><script>alert("x")</script>', "b": "<!-- & -->", "c": "\u2028"}
+    text = assets.json_text(data)
+    assert not set("<>&") & set(text)
+    assert json.loads(text) == data
+    assert assets.json_script("x", data).count("</script>") == 1
+
+
+def test_the_script_has_no_markup_or_eval_sinks():
+    """CodeQL's DOM-XSS and code-injection queries, enforced here first: the script writes the
+    page with textContent and attributes only."""
+    js = assets.js()
+    for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(",
+                 "new Function", "setAttribute(\"style", "setAttribute('style", "CSS.escape"):  # fmt: skip
+        assert sink not in js, sink
+    assert "textContent" in js and "<script" not in js.lower() and "<!--" not in js  # inlined
+    assert assets.css().count("@import") == 0 and "url(http" not in assets.css()
 
 
 def test_map_options_are_checked(tmp_path, capsys):
@@ -455,6 +633,12 @@ def test_map_options_are_checked(tmp_path, capsys):
     assert main([*base, "--guests", str(GUESTS)]) == 2
     assert main([*base, "--maps", str(tmp_path / "nope")]) == 2
     assert main([*base, "--invariants-results", str(tmp_path / "r.json")]) == 2
+    assert main([*base, "--guests-registry", str(LAB / "services.yml")]) == 2
+    bad = tmp_path / "bad.yml"
+    bad.write_text("registry_version: 1\n")
+    assert main([*base, "--guests", str(GUESTS), "--guests-site", str(SITE),
+                 "--guests-registry", str(bad)]) == 2  # fmt: skip
     err = capsys.readouterr().err
+    assert "--guests-registry needs --guests" in err and "--guests-registry " in err
     assert "--guests needs --guests-site" in err and "not a directory" in err
     assert "--invariants-results needs --maps" in err
