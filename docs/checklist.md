@@ -34,6 +34,7 @@ Platform-wide properties. Most need a running platform; the repository-level one
 | F-17 | Nothing at runtime points at the workstation | 0 runtime configs reference the admin workstation (runs as part of X-01) (`tools/workstation_refs.py`) | PUBLIC-NOW |
 | F-18 | The public tree contains no private identifiers | `tools/leak_scan.py` over the tree exits 0 (no private IPs, domains, emails, MACs, keys) | PUBLIC-NOW |
 | F-19 | Every guest has a defense baseline | With a baseline set (`_baselines.yml`), every guest (vm, lxc, host) names one or more baselines or carries a documented exemption (`hnx guests baselines DIR --site SITE --check`; `--require-bound` also fails while a needed control has no role) | PUBLIC-NOW |
+| F-20 | Every machine says what powers it | With a site `power` section, the router, every switch and edge device, every hypervisor and physical host names a known UPS or `none` with a reason (or takes `power.default`), and every UPS feeds something (`hnx guests validate DIR --site SITE`; `homelabnext/power.py`) | PUBLIC-NOW |
 
 ## C - Collection
 
@@ -283,4 +284,4 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 
 ---
 
-**Totals:** 160 criteria across 16 pillars; 81 PUBLIC-NOW, 79 SERVER.
+**Totals:** 161 criteria across 16 pillars; 82 PUBLIC-NOW, 79 SERVER.
