@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Read the state file
+      ansible.builtin.stat:
+        path: "{{ needrestart_state_dir }}/state.json"
+      register: needrestart_state
+    - name: Fail unless a check ran recently
+      ansible.builtin.assert:
+        that:
+          - needrestart_state.stat.exists
+          - (now(utc=true).timestamp() - needrestart_state.stat.mtime) < needrestart_max_age_hours | int * 3600
+        fail_msg: "needrestart: no check in the last {{ needrestart_max_age_hours }}h ({{ needrestart_state_dir }}/state.json is missing or older)"
+  tags: [health]

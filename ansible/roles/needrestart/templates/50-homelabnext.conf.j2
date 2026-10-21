@@ -1,0 +1,7 @@
+# Managed by homelabnext (role needrestart, control restart-required); local changes are overwritten.
+# List only: needrestart reports what needs a restart and never restarts anything itself.
+$nrconf{restart} = 'l';
+# Report a pending kernel and microcode (the check records them; reboots belong to patching).
+$nrconf{kernelhints} = 1;
+$nrconf{ucodehints} = 1;
+1;

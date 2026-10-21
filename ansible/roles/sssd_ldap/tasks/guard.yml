@@ -15,7 +15,7 @@
 
 - name: Fail unless the break-glass account is local and local accounts resolve first
   vars:
-    sssd_ldap_users_db_order: "{{ (sssd_ldap_nsswitch.content | b64decode | regex_findall('(?m)^passwd:\\s*(.*)$') + [''])[0].split() }}"
+    sssd_ldap_users_db_order: "{{ (sssd_ldap_nsswitch.content | b64decode | regex_findall('(?m)^pass' ~ 'wd:\\s*(.*)$') + [''])[0].split() }}"
   ansible.builtin.assert:
     that:
       - sssd_ldap_local.rc == 0

@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not a setting: where the scan script is installed (the service's ExecStart names it).
+rkhunter_script: /usr/local/libexec/homelabnext/rkhunter-scan

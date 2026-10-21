@@ -1,0 +1,32 @@
+## Managed by homelabnext (role auditd, control host-audit); local changes are overwritten.
+{% if 'identity' in auditd_rule_groups %}
+## identity: the account files
+-w /etc/passwd -p wa -k hnx-identity
+-w /etc/group -p wa -k hnx-identity
+-w /etc/shadow -p wa -k hnx-identity
+-w /etc/gshadow -p wa -k hnx-identity
+{% endif %}
+{% if 'privilege' in auditd_rule_groups %}
+## privilege: sudoers and every run of sudo and su
+-w /etc/sudoers -p wa -k hnx-privilege
+-w /etc/sudoers.d -p wa -k hnx-privilege
+-w /usr/bin/sudo -p x -k hnx-privilege
+-w /usr/bin/su -p x -k hnx-privilege
+{% endif %}
+{% if 'sshd' in auditd_rule_groups %}
+## sshd: its configuration
+-w /etc/ssh/sshd_config -p wa -k hnx-sshd
+-w /etc/ssh/sshd_config.d -p wa -k hnx-sshd
+{% endif %}
+{% if 'modules' in auditd_rule_groups %}
+## modules: loads and unloads
+-a always,exit -F arch=b64 -S init_module,finit_module,delete_module -k hnx-modules
+-w /usr/sbin/insmod -p x -k hnx-modules
+-w /usr/sbin/rmmod -p x -k hnx-modules
+-w /usr/sbin/modprobe -p x -k hnx-modules
+{% endif %}
+{% if 'time' in auditd_rule_groups %}
+## time: clock and time zone changes
+-a always,exit -F arch=b64 -S adjtimex,settimeofday,clock_settime -k hnx-time
+-w /etc/localtime -p wa -k hnx-time
+{% endif %}

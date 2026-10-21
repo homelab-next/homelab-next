@@ -626,7 +626,8 @@ CATALOG = "docs/scripts/catalog.json"
 
 def read_scripts(b: Builder) -> None:
     """``docs/scripts/catalog.json`` (generated from the script headers):
-    script -triggered_by-> make/ci/pre-commit/compose/script/pkg (``trigger``),
+    script -triggered_by-> make/ci/pre-commit/compose/script/pkg/role (``trigger``; a ``timer:R/U``
+    trigger is the role ``R`` that ships the timer),
     script -enforces-> inv (``invariant``), script -reads-> node (``inputs`` that are paths)."""
     cat = json.loads((b.root / CATALOG).read_text(encoding="utf-8"))
     for s in cat.get("scripts") or ():
@@ -650,6 +651,8 @@ def read_scripts(b: Builder) -> None:
                 b.path_ref(sid, value, "triggered_by", f"{at}.trigger", policy="owner")
             elif kind in ("ci", "make", "pre-commit", "compose", "script"):
                 b.edge(sid, f"{kind}:{value}", "triggered_by", f"{at}.trigger")
+            elif kind in ("role", "timer"):  # a role's task file, or a timer the role ships
+                b.edge(sid, f"role:{value.split('/', 1)[0]}", "triggered_by", f"{at}.trigger")
             else:
                 b.edge(sid, f"trigger:{t}", "triggered_by", f"{at}.trigger")
         for inv in s.get("invariant") or ():

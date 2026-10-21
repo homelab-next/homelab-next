@@ -1,0 +1,13 @@
+# Managed by homelabnext (role lynis, control host-assessment); local changes are overwritten.
+[Unit]
+Description=homelabnext Lynis host audit (control host-assessment)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/homelabnext/lynis-scan
+{% if lynis_dpkg_verify | bool %}
+# the package integrity sweep, on the same timer
+ExecStart=/usr/local/libexec/homelabnext/lynis-dpkg-verify
+{% endif %}
+Nice=10
+IOSchedulingClass=idle

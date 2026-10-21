@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Host audit (control host-audit, applied per guest): the Linux audit daemon with a small,
+# documented rule set, each group optional (auditd_rule_groups):
+#   identity   writes to the account files (passwd, group, shadow, gshadow)
+#   privilege  sudoers changes and every run of sudo and su
+#   sshd       writes to sshd's configuration
+#   modules    kernel module loads and unloads (syscalls and the modprobe tools)
+#   time       clock changes (adjtimex, settimeofday, clock_settime) and the time zone
+# Every rule carries the key hnx-<group>, so a search (ausearch -k) or a SIEM rule can find it; the
+# SIEM agent reads /var/log/audit/audit.log as an audit log source. The audit log rotates at
+# auditd_max_log_file MB, keeping auditd_num_logs files.
+auditd_rule_groups: [identity, privilege, sshd, modules, time]
+auditd_max_log_file: 50
+auditd_num_logs: 5
+auditd_rules_file: /etc/audit/rules.d/50-homelabnext.rules
+auditd_conf_file: /etc/audit/auditd.conf
+auditd_augenrules_cli: augenrules
+auditd_auditctl_cli: auditctl
+auditd_systemctl_cli: systemctl

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Read the audit status
+      ansible.builtin.command:
+        argv: ["{{ auditd_auditctl_cli }}", -s]
+      register: auditd_status
+      changed_when: false
+    - name: List the loaded rules
+      ansible.builtin.command:
+        argv: ["{{ auditd_auditctl_cli }}", -l]
+      register: auditd_loaded
+      changed_when: false
+    - name: Fail unless auditing is on and every chosen group is loaded
+      vars:
+        auditd_missing: "{{ auditd_rule_groups | map('regex_replace', '^', 'hnx-') | reject('in', auditd_loaded.stdout | regex_findall('(?:-k |key=)(hnx-[a-z]+)')) | list }}"
+      ansible.builtin.assert:
+        that:
+          - auditd_status.stdout is search('(?m)^enabled [12]$')
+          - auditd_missing | length == 0
+        fail_msg: "auditd: auditing is off, or no rule is loaded for {{ auditd_missing | join(', ') }}"
+  tags: [health]

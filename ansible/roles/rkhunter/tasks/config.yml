@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: Apache-2.0
+# rkhunter cannot check a local file on its own, so the previous file is kept, the new one is
+# checked in place with rkhunter --config-check, and the previous one is put back if the check
+# fails (the run then stops).
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Ensure the state directory exists
+  ansible.builtin.file:
+    path: "{{ rkhunter_state_dir }}"
+    state: directory
+    mode: "0700"
+
+- name: Write the local configuration, keeping the previous one
+  ansible.builtin.template:
+    src: local.conf.j2
+    dest: "{{ rkhunter_local_config }}"
+    mode: "0640"
+    backup: true
+  register: rkhunter_written
+
+- name: Check it, and put the previous file back if the check fails
+  when: rkhunter_written is changed
+  block:
+    - name: Check the configuration
+      ansible.builtin.command:
+        argv: ["{{ rkhunter_cli }}", --config-check, --nocolors]
+      changed_when: false
+  rescue:
+    - name: Put the previous file back (or remove the new one)
+      ansible.builtin.copy:
+        src: "{{ rkhunter_written.backup_file }}"
+        dest: "{{ rkhunter_local_config }}"
+        remote_src: true
+        mode: "0640"
+      when: rkhunter_written.backup_file is defined
+    - name: Remove the rejected file (there was none before)
+      ansible.builtin.file:
+        path: "{{ rkhunter_local_config }}"
+        state: absent
+      when: rkhunter_written.backup_file is not defined
+    - name: Stop the run
+      ansible.builtin.fail:
+        msg: "rkhunter: rkhunter --config-check rejected the new {{ rkhunter_local_config }}; the previous one is back"
+  always:
+    - name: Remove the kept copy
+      ansible.builtin.file:
+        path: "{{ rkhunter_written.backup_file }}"
+        state: absent
+      when: rkhunter_written.backup_file is defined
+
+- name: Refresh properties after every package run, and leave the scheduled check to the timer
+  ansible.builtin.lineinfile:
+    path: "{{ rkhunter_default_file }}"
+    regexp: "^#?\\s*{{ item.key }}="
+    line: '{{ item.key }}="{{ item.value }}"'
+    create: true
+    mode: "0644"
+  loop: "{{ {'APT_AUTOGEN': 'true', 'CRON_DAILY_RUN': 'false'} | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Ensure the script directory exists
+  ansible.builtin.file:
+    path: "{{ rkhunter_script | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Write the scan script
+  ansible.builtin.template:
+    src: scan.sh.j2
+    dest: "{{ rkhunter_script }}"
+    mode: "0750"
+
+- name: Write the service and timer units
+  ansible.builtin.template:
+    src: "scan.{{ item }}.j2"
+    dest: "{{ rkhunter_unit_dir }}/hnx-rkhunter.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+  register: rkhunter_units
+
+- name: Reload systemd and enable the timer when the units changed
+  ansible.builtin.command:
+    argv: "{{ [rkhunter_systemctl_cli] + item }}"
+  loop: "{{ [['daemon-reload'], ['enable', '--now', 'hnx-rkhunter.timer']] if rkhunter_units is changed else [] }}"
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  changed_when: true

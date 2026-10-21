@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Ensure the script directory exists
+  ansible.builtin.file:
+    path: "{{ trivy_script | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Write the scan script
+  ansible.builtin.template:
+    src: scan.sh.j2
+    dest: "{{ trivy_script }}"
+    mode: "0750"
+
+- name: Write the service and timer units
+  ansible.builtin.template:
+    src: "scan.{{ item }}.j2"
+    dest: "{{ trivy_unit_dir }}/hnx-trivy.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+  register: trivy_units
+
+- name: Reload systemd and enable the timer when the units changed
+  ansible.builtin.command:
+    argv: "{{ [trivy_systemctl_cli] + item }}"
+  loop: "{{ [['daemon-reload'], ['enable', '--now', 'hnx-trivy.timer']] if trivy_units is changed else [] }}"
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  changed_when: true

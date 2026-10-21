@@ -27,7 +27,7 @@
       - ssh_hardening_keys.stat.exists and ssh_hardening_keys.stat.size > 0
     fail_msg: >-
       ssh_hardening: {{ ssh_hardening_keep_user }} does not exist or has no
-      ~/.ssh/authorized_keys; key-only SSH would lock it out
+      .ssh/authorized_keys in its home; key-only SSH would lock it out
 
 - name: Put the kept account in the first allow group
   when: ssh_hardening_manage_membership | bool

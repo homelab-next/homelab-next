@@ -11,3 +11,4 @@ baseline:
   names: [server]
   remove:
     - {control: backup-verify, reason: "A hypervisor is rebuilt from its configuration, not restored from a backup."}
+    - {control: host-firewall, reason: "The hypervisor's own firewall (pve-firewall) filters it; a second ruleset beside it is refused."}

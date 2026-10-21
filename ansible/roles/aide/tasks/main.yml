@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Refuse a host that is not Debian-family (the role installs the distribution's package)
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] == 'Debian'
+    fail_msg: "aide supports Debian-family guests only (got {{ ansible_facts['os_family'] }})"
+
+- name: Install aide, aide-common
+  ansible.builtin.apt:
+    name: ['aide', 'aide-common']
+    state: present
+
+- name: Write the configuration, the scan script and its timer
+  ansible.builtin.include_tasks: config.yml
+
+- name: Build the baseline database once (aideinit; it takes minutes on a large guest)
+  ansible.builtin.command:
+    argv: [aideinit, --yes, --force]
+    creates: /var/lib/aide/aide.db

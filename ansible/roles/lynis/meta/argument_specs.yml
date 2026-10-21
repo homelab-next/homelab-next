@@ -1,0 +1,157 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install Lynis and audit the host on a timer.
+    options:
+      lynis_min_hardening_index: &index
+        type: int
+        description: "The health hook fails under this hardening index (0-100); the example lab's server baseline sets 60."
+        required: true
+      lynis_max_warnings: &warnings
+        type: int
+        description: "The health hook fails with more warnings than this."
+        default: 0
+      lynis_broker_socket: &broker
+        type: str
+        description: "A broker socket to file each run's summary through (finding.write); empty = none."
+        default: ""
+      lynis_hnx_cli: &hnx
+        type: str
+        description: "The hnx command (used only with a broker socket)."
+        default: hnx
+      lynis_cli: &cli
+        type: str
+        description: "The lynis command."
+        default: lynis
+      lynis_schedule: &schedule
+        type: str
+        description: "When the scheduled run starts (systemd OnCalendar, ending in UTC)."
+        default: "*-*-* 04:10:00 UTC"
+      lynis_max_age_hours: &age
+        type: int
+        description: "The health hook fails when the last run is older than this."
+        default: 48
+      lynis_systemctl_cli: &systemctl
+        type: str
+        description: "The systemctl command (daemon-reload, enable the timer)."
+        default: systemctl
+      lynis_unit_dir: &units
+        type: path
+        description: "Where the service and timer units are written."
+        default: /etc/systemd/system
+      lynis_state_dir: &state
+        type: path
+        description: "Where each run writes its report and its exit status (last-run)."
+        default: /var/lib/homelabnext/lynis
+      lynis_dpkg_verify: &verify
+        type: bool
+        description: "Run the package integrity sweep (dpkg --verify) on the same timer."
+        default: true
+      lynis_dpkg_verify_include_conffiles: &conffiles
+        type: bool
+        description: "Also report conffiles (attribute c); off because administrators edit them and AIDE and auditd watch them."
+        default: false
+      lynis_dpkg_verify_allow: &allow
+        type: list
+        elements: dict
+        description: "Accepted findings, each {path: <glob>, reason} or {package: <name>, reason}."
+        default: []
+      lynis_dpkg_verify_max_findings: &vmax
+        type: int
+        description: "The health hook fails with more integrity findings than this."
+        default: 0
+      lynis_dpkg_cfg_files: &dpkgcfg
+        type: list
+        elements: path
+        description: "dpkg configuration files or directories whose path-exclude/path-include filters mark files missing by design."
+        default: [/etc/dpkg/dpkg.cfg, /etc/dpkg/dpkg.cfg.d]
+      lynis_notify: &notify
+        type: str
+        description: "How a change in the set of integrity findings is alerted: none, notify, mail or auto (mail where a local MTA and a root alias exist)."
+        default: auto
+      lynis_notify_id: &notify_id
+        type: str
+        description: "Logical id of the notify service in the registry (with notify)."
+        default: notify
+      lynis_notify_topic: &topic
+        type: str
+        description: "The ntfy topic (with notify)."
+        default: homelabnext-integrity
+      lynis_notify_priority: &priority
+        type: int
+        description: "ntfy priority 1-5 (with notify)."
+        default: 4
+      lynis_notify_auth_ref: &auth
+        type: str
+        description: "Secret reference (secret:<name>) of an ntfy access token; empty = none."
+        default: ""
+      lynis_mail_to: &mail_to
+        type: str
+        description: "Local mail recipient (with mail)."
+        default: root
+      lynis_dpkg_cli: &dpkg
+        type: str
+        description: "The dpkg command."
+        default: dpkg
+      lynis_debsums_cli: &debsums
+        type: str
+        description: "The debsums command (only where dpkg has no --verify)."
+        default: debsums
+      lynis_sendmail_cli: &sendmail
+        type: str
+        description: "The local MTA's sendmail command (with mail; its presence decides auto)."
+        default: /usr/sbin/sendmail
+      lynis_aliases_file: &aliases
+        type: path
+        description: "The local mail aliases file (a root alias makes auto choose mail)."
+        default: /etc/aliases
+  config:
+    short_description: Write the checked configuration, the scan script and its timer, and enable the timer.
+    options:
+      lynis_min_hardening_index: *index
+      lynis_max_warnings: *warnings
+      lynis_broker_socket: *broker
+      lynis_hnx_cli: *hnx
+      lynis_cli: *cli
+      lynis_schedule: *schedule
+      lynis_systemctl_cli: *systemctl
+      lynis_unit_dir: *units
+      lynis_state_dir: *state
+      lynis_dpkg_verify: *verify
+      lynis_dpkg_verify_include_conffiles: *conffiles
+      lynis_dpkg_verify_allow: *allow
+      lynis_dpkg_cfg_files: *dpkgcfg
+      lynis_notify: *notify
+      lynis_notify_id: *notify_id
+      lynis_notify_topic: *topic
+      lynis_notify_priority: *priority
+      lynis_notify_auth_ref: *auth
+      lynis_mail_to: *mail_to
+      lynis_dpkg_cli: *dpkg
+      lynis_debsums_cli: *debsums
+      lynis_sendmail_cli: *sendmail
+      lynis_aliases_file: *aliases
+  health:
+    short_description: Fail unless the integrity sweep found at most lynis_dpkg_verify_max_findings unaccepted files and a recent audit reports a hardening index of at least lynis_min_hardening_index and at most lynis_max_warnings warnings.
+    options:
+      lynis_min_hardening_index: *index
+      lynis_max_warnings: *warnings
+      lynis_max_age_hours: *age
+      lynis_state_dir: *state
+      lynis_dpkg_verify: *verify
+      lynis_dpkg_verify_max_findings: *vmax
+  readiness:
+    short_description: No dependency; succeeds.
+    options: {}
+  backup:
+    short_description: Nothing to back up; every run rewrites its report.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-running main writes the configuration again.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; the distribution package follows the patching control.
+    options: {}
+  export:
+    short_description: Nothing to export beyond the reports in the state directory.
+    options: {}

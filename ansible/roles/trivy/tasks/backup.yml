@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to do for backup (every run rewrites its report; main writes the configuration)
+  ansible.builtin.debug:
+    msg: trivy keeps no data a backup hook must handle
+  tags: [backup]

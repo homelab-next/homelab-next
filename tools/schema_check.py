@@ -220,6 +220,18 @@ def _as_types(t: Any) -> set[str]:
     return set(t) if isinstance(t, list) else {t}
 
 
+def _widened_to_any_of(old: Any, new: Any) -> bool:
+    """``new`` is ``{"anyOf": [..., B, ...]}`` (plus annotations only) where ``old`` is not an
+    ``anyOf`` and evolves additively into the branch ``B``: whatever ``old`` accepted, ``B``
+    accepts, so the alternatives only widen it (for example a name that may now also be an
+    object)."""
+    if not isinstance(new, dict) or "anyOf" in old or not isinstance(new.get("anyOf"), list):
+        return False
+    if any(k not in _ANNOTATIONS for k in new if k != "anyOf"):
+        return False
+    return any(is_additive(old, branch) == [] for branch in new["anyOf"])
+
+
 def is_additive(old: Any, new: Any, path: str = "$") -> list[str]:
     """Return reasons ``new`` is NOT an additive evolution of ``old`` (empty = compatible).
 
@@ -229,6 +241,8 @@ def is_additive(old: Any, new: Any, path: str = "$") -> list[str]:
     """
     if isinstance(old, bool) or isinstance(new, bool):
         return [] if (new is True or old == new) else [f"{path}: schema became {new}"]
+    if _widened_to_any_of(old, new):
+        return []
     out: list[str] = []
     for key, ov in old.items():
         if key in _ANNOTATIONS:

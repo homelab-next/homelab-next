@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the rule groups and log rotation
+  ansible.builtin.assert:
+    that:
+      - auditd_rule_groups | length > 0
+      - auditd_rule_groups | difference(auditd_known_groups) | length == 0
+      - auditd_max_log_file | int >= 1
+      - auditd_num_logs | int >= 1 and auditd_num_logs | int <= 999
+    fail_msg: >-
+      auditd: rule groups among {{ auditd_known_groups | join(', ') }} (at least one), a log size
+      of at least 1 MB, and 1 to 999 kept logs

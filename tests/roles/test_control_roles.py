@@ -13,7 +13,7 @@ import json
 import shutil
 
 import pytest
-from rolerun import calls, fake, logging_fake, run_role
+from rolerun import calls, fake, logging_fake, run_cases, run_role
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ansible-playbook") is None, reason="ansible-playbook not installed"
@@ -26,7 +26,9 @@ import os, sys
 args = sys.argv[1:]
 path = [a for a in args if os.path.isfile(a)][-1]
 open(LOG, "a").write(NAME + " " + " ".join(a if a != path else "<staged>" for a in args) + "\n")
-sys.exit(1 if "bogus" in open(path).read() else 0)
+text = open(path).read()
+text += "".join(open(t).read() for t in text.split() if t.startswith("/") and os.path.isfile(t))  # includes
+sys.exit(1 if "bogus" in text else 0)
 """
 
 
@@ -80,33 +82,35 @@ def test_chrony_keeps_a_failed_restart_owed(tmp_path):
     assert not (tmp_path / "state" / "restart-pending").exists()
 
 
-@pytest.mark.parametrize(
-    "over",
-    [
-        {"chrony_server_ids": []},
-        {"chrony_server_ids": ["Time"]},
-        {"chrony_pools": ["pool.example.internal\nallow all"]},
-        {"chrony_max_offset": 0},
-    ],
-)
-def test_chrony_refuses_bad_inputs(tmp_path, over):
-    r = run_role(tmp_path, "chrony", "config", chrony_vars(tmp_path, **over))
-    assert r.returncode != 0 and "chrony: time sources are registry" in r.stdout
+def test_chrony_refuses_bad_inputs(tmp_path):
+    results = run_cases(
+        tmp_path,
+        "chrony",
+        "config",
+        chrony_vars(tmp_path),
+        [
+            {"chrony_server_ids": []},
+            {"chrony_server_ids": ["Time"]},
+            {"chrony_pools": ["pool.example.internal\nallow all"]},
+            {"chrony_max_offset": 0},
+        ],
+    )
+    assert all(f and "chrony: time sources are registry" in m for f, m in results), results
     assert not (tmp_path / "chrony.conf").exists()
 
 
-@pytest.mark.parametrize(
-    ("line", "ok"),
-    [
-        ("C0000201,time-01,3,1792500000.1,-0.000012,0.0,0.0,1.0,0.0,0.1,0.01,0.01,64.0,Normal", True),
-        ("C0000201,time-01,3,1792500000.1,1.5,0.0,0.0,1.0,0.0,0.1,0.01,0.01,64.0,Normal", False),
-        ("00000000,,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.0,Not synchronised", False),
-    ],
-)  # fmt: skip
-def test_chrony_health_reads_the_tracking_line(tmp_path, line, ok):
-    cli = fake(tmp_path / "chronyc", f"print({line!r})\n")
-    r = run_role(tmp_path, "chrony", "health", chrony_vars(tmp_path, chrony_cli=cli))
-    assert (r.returncode == 0) is ok, r.stdout
+CHRONY_TRACKING = [
+    ("C0000201,time-01,3,1792500000.1,-0.000012,0.0,0.0,1.0,0.0,0.1,0.01,0.01,64.0,Normal", True),
+    ("C0000201,time-01,3,1792500000.1,1.5,0.0,0.0,1.0,0.0,0.1,0.01,0.01,64.0,Normal", False),
+    ("00000000,,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.0,Not synchronised", False),
+]  # fmt: skip
+
+
+def test_chrony_health_reads_the_tracking_line(tmp_path):
+    cases = [{"chrony_cli": fake(tmp_path / f"chronyc-{i}", f"print({line!r})\n")}
+             for i, (line, _) in enumerate(CHRONY_TRACKING)]  # fmt: skip
+    results = run_cases(tmp_path, "chrony", "health", chrony_vars(tmp_path), cases)
+    assert [not f for f, _ in results] == [ok for _, ok in CHRONY_TRACKING], results
 
 
 # ---------------------------------------------------------------- unattended_upgrades
@@ -164,24 +168,26 @@ def test_unattended_upgrades_never_installs_a_file_apt_cannot_parse(tmp_path):
     assert bad.returncode != 0 and (tmp_path / "52hnx").read_text() == good
 
 
-@pytest.mark.parametrize(
-    "over",
-    [
-        {"unattended_upgrades_reboot_time": "3:30"},
-        {"unattended_upgrades_reboot_time": "25:00"},
-        {"unattended_upgrades_distribution": "Fedora"},
-        {
-            "unattended_upgrades_extra_origins": [
-                'origin=Lab"; APT::Periodic::Unattended-Upgrade "0'
-            ]
-        },
-        {"unattended_upgrades_blocklist": ["linux-};"]},
-        {"unattended_upgrades_mail": "root\n"},
-    ],
-)
-def test_unattended_upgrades_refuses_bad_inputs(tmp_path, over):
-    r = run_role(tmp_path, "unattended_upgrades", "config", uu_vars(tmp_path, **over))
-    assert r.returncode != 0 and "unattended_upgrades: a reboot window" in r.stdout
+def test_unattended_upgrades_refuses_bad_inputs(tmp_path):
+    results = run_cases(
+        tmp_path,
+        "unattended_upgrades",
+        "config",
+        uu_vars(tmp_path),
+        [
+            {"unattended_upgrades_reboot_time": "3:30"},
+            {"unattended_upgrades_reboot_time": "25:00"},
+            {"unattended_upgrades_distribution": "Fedora"},
+            {
+                "unattended_upgrades_extra_origins": [
+                    'origin=Lab"; APT::Periodic::Unattended-Upgrade "0'
+                ]
+            },
+            {"unattended_upgrades_blocklist": ["linux-};"]},
+            {"unattended_upgrades_mail": "root\n"},
+        ],
+    )
+    assert all(f and "unattended_upgrades: a reboot window" in m for f, m in results), results
     assert not (tmp_path / "52hnx").exists()
 
 
@@ -247,20 +253,22 @@ def test_os_hardening_leaves_out_what_is_not_chosen(tmp_path):
     assert oct((tmp_path / "shadow").stat().st_mode & 0o777) == "0o644" and calls(tmp_path) == []
 
 
-@pytest.mark.parametrize(
-    "over",
-    [
-        {"os_hardening_items": ["sysctl", "selinux"]},
-        {"os_hardening_sysctl": {"kernel.dmesg_restrict\nkernel.x": 1}},
-        {"os_hardening_sysctl": {"kernel.dmesg_restrict": "1\nkernel.x = 0"}},
-        {"os_hardening_filesystems": ["cramfs /bin/true"]},
-        {"os_hardening_file_modes": [{"path": "etc/shadow", "mode": "0640"}]},
-        {"os_hardening_file_modes": [{"path": "/etc/shadow", "mode": "640"}]},
-    ],
-)
-def test_os_hardening_refuses_bad_inputs(tmp_path, over):
-    r = run_role(tmp_path, "os_hardening", "config", osh_vars(tmp_path, **over))
-    assert r.returncode != 0 and "os_hardening: items among" in r.stdout
+def test_os_hardening_refuses_bad_inputs(tmp_path):
+    results = run_cases(
+        tmp_path,
+        "os_hardening",
+        "config",
+        osh_vars(tmp_path),
+        [
+            {"os_hardening_items": ["sysctl", "selinux"]},
+            {"os_hardening_sysctl": {"kernel.dmesg_restrict\nkernel.x": 1}},
+            {"os_hardening_sysctl": {"kernel.dmesg_restrict": "1\nkernel.x = 0"}},
+            {"os_hardening_filesystems": ["cramfs /bin/true"]},
+            {"os_hardening_file_modes": [{"path": "etc/shadow", "mode": "0640"}]},
+            {"os_hardening_file_modes": [{"path": "/etc/shadow", "mode": "640"}]},
+        ],
+    )
+    assert all(f and "os_hardening: items among" in m for f, m in results), results
     assert not list(tmp_path.glob("*.conf"))
 
 
@@ -394,19 +402,21 @@ def test_ssh_hardening_refuses_a_drop_in_sshd_rejects_or_that_another_file_overr
     assert r.returncode != 0 and "not key-only" in r.stdout
 
 
-@pytest.mark.parametrize(
-    "over",
-    [
-        {"ssh_hardening_keep_user": "root"},
-        {"ssh_hardening_keep_user": "ansible\nPermitRootLogin yes"},
-        {"ssh_hardening_allow_groups": []},
-        {"ssh_hardening_allow_groups": ["hnx-ssh root"]},
-        {"ssh_hardening_authorized_keys_command": "sss_ssh_authorizedkeys"},
-    ],
-)
-def test_ssh_hardening_refuses_bad_inputs(tmp_path, over):
-    r = run_role(tmp_path, "ssh_hardening", "config", ssh_setup(tmp_path, **over))
-    assert r.returncode != 0 and "ssh_hardening: the kept account" in r.stdout
+def test_ssh_hardening_refuses_bad_inputs(tmp_path):
+    results = run_cases(
+        tmp_path,
+        "ssh_hardening",
+        "config",
+        ssh_setup(tmp_path),
+        [
+            {"ssh_hardening_keep_user": "root"},
+            {"ssh_hardening_keep_user": "ansible\nPermitRootLogin yes"},
+            {"ssh_hardening_allow_groups": []},
+            {"ssh_hardening_allow_groups": ["hnx-ssh root"]},
+            {"ssh_hardening_authorized_keys_command": "sss_ssh_authorizedkeys"},
+        ],
+    )
+    assert all(f and "ssh_hardening: the kept account" in m for f, m in results), results
 
 
 # ---------------------------------------------------------------- nftables_host
@@ -489,57 +499,64 @@ def test_nftables_host_retries_a_failed_load(tmp_path):
     assert not (tmp_path / "state" / "load-pending").exists()
 
 
-@pytest.mark.parametrize(
-    "over",
-    [
-        {"nftables_host_firewall": {**FIREWALL, "policy_out": "ACCEPT"}},  # egress required
-        {"nftables_host_firewall": {**FIREWALL, "policy_out": "accept"}},
-        {"nftables_host_ssh_sources": []},
-        {"nftables_host_ssh_sources": ["192.0.2.0/26 accept"]},
-        {
-            "nftables_host_firewall": {
-                **FIREWALL,
-                "inbound_allow": [{"name": "x", "proto": "tcp", "source": "any"}],
-            }
-        },
-        {
-            "nftables_host_firewall": {
-                **FIREWALL,
-                "inbound_allow": [{"name": 'x"; accept', "proto": "icmp", "source": "any"}],
-            }
-        },
-        {
-            "nftables_host_firewall": {
-                **FIREWALL,
-                "inbound_allow": [{"name": "x", "proto": "icmp", "source": "zone:mgmt"}],
-            }
-        },
-        {
-            "nftables_host_firewall": {
-                **FIREWALL,
-                "outbound_allow": [{"name": "x", "proto": "udp", "ports": "53"}],
-            }
-        },
-    ],
-)
-def test_nftables_host_refuses_bad_inputs(tmp_path, over):
-    r = run_role(tmp_path, "nftables_host", "config", nft_vars(tmp_path, **over))
-    assert r.returncode != 0 and "nftables_host: policy_out ACCEPT, DROP or REJECT" in r.stdout
+def test_nftables_host_refuses_bad_inputs(tmp_path):
+    results = run_cases(
+        tmp_path,
+        "nftables_host",
+        "config",
+        nft_vars(tmp_path),
+        [
+            {"nftables_host_firewall": {**FIREWALL, "policy_out": "ACCEPT"}},  # egress required
+            {"nftables_host_firewall": {**FIREWALL, "policy_out": "accept"}},
+            {"nftables_host_ssh_sources": []},
+            {"nftables_host_ssh_sources": ["192.0.2.0/26 accept"]},
+            {
+                "nftables_host_firewall": {
+                    **FIREWALL,
+                    "inbound_allow": [{"name": "x", "proto": "tcp", "source": "any"}],
+                }
+            },
+            {
+                "nftables_host_firewall": {
+                    **FIREWALL,
+                    "inbound_allow": [{"name": 'x"; accept', "proto": "icmp", "source": "any"}],
+                }
+            },
+            {
+                "nftables_host_firewall": {
+                    **FIREWALL,
+                    "inbound_allow": [{"name": "x", "proto": "icmp", "source": "zone:mgmt"}],
+                }
+            },
+            {
+                "nftables_host_firewall": {
+                    **FIREWALL,
+                    "outbound_allow": [{"name": "x", "proto": "udp", "ports": "53"}],
+                }
+            },
+        ],
+    )
+    want = "nftables_host: policy_out ACCEPT, DROP or REJECT"
+    assert all(f and want in m for f, m in results), results
     assert not (tmp_path / "nftables.conf").exists() and calls(tmp_path) == []
 
 
-@pytest.mark.parametrize(
-    ("policies", "egress", "ok"),
-    [({"input": "drop", "output": "drop"}, True, True), ({"input": "drop", "output": "accept"}, False, True),
-     ({"input": "drop", "output": "accept"}, True, False), ({"input": "accept", "output": "drop"}, False, False)],
-)  # fmt: skip
-def test_nftables_host_health_reads_the_hook_policies(tmp_path, policies, egress, ok):
-    doc = {"nftables": [{"metainfo": {}}, {"table": {"family": "inet", "name": "homelabnext"}}]
-           + [{"chain": {"family": "inet", "table": "homelabnext", "name": h, "type": "filter",
-                         "hook": h, "prio": 0, "policy": p}} for h, p in policies.items()]}  # fmt: skip
-    cli = fake(tmp_path / "nft-json", f"print({json.dumps(doc)!r})\n")
-    v = nft_vars(tmp_path, nftables_host_nft_cli=cli, nftables_host_require_egress=egress)
-    assert (run_role(tmp_path, "nftables_host", "health", v).returncode == 0) is ok
+NFT_POLICIES = [
+    ({"input": "drop", "output": "drop"}, True, True), ({"input": "drop", "output": "accept"}, False, True),
+    ({"input": "drop", "output": "accept"}, True, False), ({"input": "accept", "output": "drop"}, False, False),
+]  # fmt: skip
+
+
+def test_nftables_host_health_reads_the_hook_policies(tmp_path):
+    cases = []
+    for i, (policies, egress, _) in enumerate(NFT_POLICIES):
+        doc = {"nftables": [{"metainfo": {}}, {"table": {"family": "inet", "name": "homelabnext"}}]
+               + [{"chain": {"family": "inet", "table": "homelabnext", "name": h, "type": "filter",
+                             "hook": h, "prio": 0, "policy": p}} for h, p in policies.items()]}  # fmt: skip
+        cli = fake(tmp_path / f"nft-json-{i}", f"print({json.dumps(doc)!r})\n")
+        cases.append({"nftables_host_nft_cli": cli, "nftables_host_require_egress": egress})
+    results = run_cases(tmp_path, "nftables_host", "health", nft_vars(tmp_path), cases)
+    assert [not f for f, _ in results] == [ok for _, _, ok in NFT_POLICIES], results
 
 
 @pytest.mark.skipif(
@@ -618,19 +635,20 @@ def test_sssd_ldap_never_installs_a_config_sssctl_rejects(tmp_path):
     assert BIND not in r.stdout + r.stderr
 
 
-@pytest.mark.parametrize(
-    ("over", "env"),
-    [
-        ({"sssd_ldap_ldap_id": "siem"}, SSSD_ENV),  # tcp, not ldaps
-        ({"sssd_ldap_bind_dn": "cn=svc\nldap_tls_reqcert = never"}, SSSD_ENV),
-        ({"sssd_ldap_break_glass_user": "root"}, SSSD_ENV),
-        ({"sssd_ldap_allow_groups": []}, SSSD_ENV),
-        ({"sssd_ldap_bind_ref": "bind-pass-fake"}, SSSD_ENV),
-    ],
-)
-def test_sssd_ldap_refuses_bad_inputs(tmp_path, over, env):
-    r = run_role(tmp_path, "sssd_ldap", "config", sssd_vars(tmp_path, **over), env)
-    assert r.returncode != 0 and "sssd_ldap: the outpost is a registry logical id" in r.stdout
+def test_sssd_ldap_refuses_bad_inputs(tmp_path):
+    cases = [
+        over
+        for over, _ in [
+            ({"sssd_ldap_ldap_id": "siem"}, SSSD_ENV),  # tcp, not ldaps
+            ({"sssd_ldap_bind_dn": "cn=svc\nldap_tls_reqcert = never"}, SSSD_ENV),
+            ({"sssd_ldap_break_glass_user": "root"}, SSSD_ENV),
+            ({"sssd_ldap_allow_groups": []}, SSSD_ENV),
+            ({"sssd_ldap_bind_ref": "bind-pass-fake"}, SSSD_ENV),
+        ]
+    ]
+    results = run_cases(tmp_path, "sssd_ldap", "config", sssd_vars(tmp_path), cases, SSSD_ENV)
+    want = "sssd_ldap: the outpost is a registry logical id"
+    assert all(f and want in m for f, m in results), results
     assert not (tmp_path / "sssd.conf").exists()
 
 
@@ -696,18 +714,22 @@ def test_rsyslog_forward_never_installs_a_rule_rsyslogd_rejects(tmp_path):
     assert calls(tmp_path)[-1] == "rsyslogd -N1 -f <staged>"
 
 
-@pytest.mark.parametrize(
-    "over",
-    [
-        {"rsyslog_forward_collector_id": "Logs"},
-        {"rsyslog_forward_permitted_peer": 'logs" StreamDriverMode="0'},
-        {"rsyslog_forward_selector": "*.* /dev/null\n*.*"},
-        {"rsyslog_forward_queue_max_disk": "1 g"},
-    ],
-)
-def test_rsyslog_forward_refuses_bad_inputs(tmp_path, over):
-    r = run_role(tmp_path, "rsyslog_forward", "config", rsyslog_vars(tmp_path, **over))
-    assert r.returncode != 0 and "rsyslog_forward: the receiver is a registry" in r.stdout
+def test_rsyslog_forward_refuses_bad_inputs(tmp_path):
+    results = run_cases(
+        tmp_path,
+        "rsyslog_forward",
+        "config",
+        rsyslog_vars(tmp_path),
+        [
+            {"rsyslog_forward_collector_id": "Logs"},
+            {"rsyslog_forward_permitted_peer": 'logs" StreamDriverMode="0'},
+            {"rsyslog_forward_selector": "*.* /dev/null\n*.*"},
+            {"rsyslog_forward_queue_max_disk": "1 g"},
+        ],
+    )
+    assert all(f and "rsyslog_forward: the receiver is a registry" in m for f, m in results), (
+        results
+    )
     assert not (tmp_path / "60-forward.conf").exists()
 
 
@@ -943,23 +965,22 @@ def test_restore_drill_backup_export_and_restore_keep_the_records(tmp_path):
     )
 
 
-@pytest.mark.parametrize(
-    "over",
-    [
-        {"restore_drill_guests": []},
-        {"restore_drill_guests": [{**DRILL_GUESTS[0], "id": "bus-core"}]},
-        {"restore_drill_guests": [{**DRILL_GUESTS[0], "name": "bus core; rm"}]},
-        {"restore_drill_max_age_days": 10},
-        {"restore_drill_now": "yesterday"},
-    ],
-)
-def test_restore_drill_refuses_bad_inputs(tmp_path, over):
-    r = run_role(tmp_path, "restore_drill", "main", drill_vars(tmp_path, **over))
-    assert (
-        r.returncode != 0
-        and "restore_drill: at least one guest" in r.stdout
-        and calls(tmp_path) == []
+def test_restore_drill_refuses_bad_inputs(tmp_path):
+    results = run_cases(
+        tmp_path,
+        "restore_drill",
+        "main",
+        drill_vars(tmp_path),
+        [
+            {"restore_drill_guests": []},
+            {"restore_drill_guests": [{**DRILL_GUESTS[0], "id": "bus-core"}]},
+            {"restore_drill_guests": [{**DRILL_GUESTS[0], "name": "bus core; rm"}]},
+            {"restore_drill_max_age_days": 10},
+            {"restore_drill_now": "yesterday"},
+        ],
     )
+    assert all(f and "restore_drill: at least one guest" in m for f, m in results), results
+    assert calls(tmp_path) == []
 
 
 # ---------------------------------------------------------------- etckeeper
@@ -1033,3 +1054,721 @@ def test_etckeeper_refuses_a_git_service_not_reached_over_ssh(tmp_path):
     v = {"etckeeper_remote_id": "log-collector", "etckeeper_dir": str(tmp_path)}
     r = run_role(tmp_path, "etckeeper", "config", v)
     assert r.returncode != 0 and "etckeeper: the git service is a registry logical id" in r.stdout
+
+
+# ---------------------------------------------------------------- the scheduled scanners
+# Each scanner role writes a scan script and an OnCalendar timer; the tests render both, run the
+# script itself against a fake scanner, and point the health hook at what the run left behind.
+def scanner_vars(tmp_path, role, **kw):
+    d = {
+        f"{role}_unit_dir": str(tmp_path / "units"),
+        f"{role}_script": str(tmp_path / "bin" / "scan"),
+        f"{role}_state_dir": str(tmp_path / "state"),
+        f"{role}_systemctl_cli": logging_fake(tmp_path, "systemctl"),
+    }
+    (tmp_path / "units").mkdir(exist_ok=True)
+    d.update(kw)
+    return d
+
+
+def run_scan(tmp_path):
+    import subprocess
+
+    subprocess.run(["sh", str(tmp_path / "bin" / "scan")], check=True, capture_output=True)
+
+
+def test_scanner_units_are_oncalendar_timers_enabled_once(tmp_path):
+    v = scanner_vars(
+        tmp_path,
+        "lynis",
+        lynis_min_hardening_index=60,
+        lynis_dpkg_verify=False,
+    )
+    r = run_role(tmp_path, "lynis", "config", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    timer = (tmp_path / "units" / "hnx-lynis.timer").read_text()
+    assert "OnCalendar=*-*-* 04:10:00 UTC\nPersistent=true\n" in timer
+    assert "OnBootSec" not in timer and "OnUnitActiveSec" not in timer  # docs/role-interface.md 8
+    # the unit names the script's catalogued install path (docs/scripts.md, installs_to)
+    service = (tmp_path / "units" / "hnx-lynis.service").read_text()
+    assert "ExecStart=/usr/local/libexec/homelabnext/lynis-scan\n" in service
+    assert calls(tmp_path) == ["systemctl daemon-reload", "systemctl enable --now hnx-lynis.timer"]
+    assert run_role(tmp_path, "lynis", "config", v).returncode == 0 and len(calls(tmp_path)) == 2
+    bad = run_role(tmp_path, "lynis", "config", {**v, "lynis_schedule": "daily\nExecStart=/bin/sh"})
+    assert bad.returncode != 0 and "lynis: an OnCalendar schedule ending in UTC" in bad.stdout
+
+
+LYNIS = r"""
+import sys
+args = sys.argv[1:]
+report = args[args.index("--report-file") + 1]
+open(report, "w").write(REPORT)
+"""
+
+
+@pytest.mark.parametrize(
+    ("report", "ok", "why"),
+    [
+        ("hardening_index=72\nsuggestion[]=SSH-7408|tune|\n", True, ""),
+        ("hardening_index=55\n", False, "hardening index 55 (at least 60)"),
+        (
+            "hardening_index=80\nwarning[]=KRNL-5830|Reboot of system is most likely needed|\n",
+            False,
+            "1\nwarning(s)",
+        ),
+    ],
+)
+def test_lynis_run_and_health(tmp_path, report, ok, why):
+    cli = fake(tmp_path / "lynis-cli", LYNIS.replace("REPORT", repr(report)))
+    v = scanner_vars(
+        tmp_path, "lynis", lynis_min_hardening_index=60, lynis_dpkg_verify=False, lynis_cli=cli
+    )
+    assert run_role(tmp_path, "lynis", "health", v).returncode != 0  # never ran
+    assert run_role(tmp_path, "lynis", "config", v).returncode == 0
+    run_scan(tmp_path)
+    r = run_role(tmp_path, "lynis", "health", v)
+    assert (r.returncode == 0) is ok, r.stdout
+    assert why.split("\n")[0] in r.stdout
+
+
+def test_lynis_files_the_run_through_the_broker_when_a_socket_is_set(tmp_path):
+    cli = fake(
+        tmp_path / "lynis-cli",
+        LYNIS.replace("REPORT", repr("hardening_index=70\nwarning[]=X-1|w|\n")),
+    )
+    filed, argv = tmp_path / "filed.json", tmp_path / "argv"
+    hnx = fake(
+        tmp_path / "hnx",
+        "import shutil, sys\n"
+        f"shutil.copy(sys.argv[sys.argv.index('--params-file') + 1], {str(filed)!r})\n"
+        f"open({str(argv)!r}, 'w').write(' '.join(sys.argv[1:5]))\n",
+    )
+    v = scanner_vars(tmp_path, "lynis", lynis_min_hardening_index=60, lynis_dpkg_verify=False, lynis_cli=cli,
+                     lynis_hnx_cli=hnx, lynis_broker_socket="/run/hnx-broker/broker.sock")  # fmt: skip
+    assert run_role(tmp_path, "lynis", "config", v).returncode == 0
+    run_scan(tmp_path)
+    assert (tmp_path / "argv").read_text() == "broker call finding.write --socket"
+    filed = json.loads((tmp_path / "filed.json").read_text())
+    assert filed["name"].startswith("lynis-") and "Hardening index: 70" in filed["content"]
+    assert "- X-1|w|" in filed["content"]
+
+
+# ---------------------------------------------------------------- aide
+AIDE_PATHS = [{"path": "/etc/ssh", "rule": "p+i+n+u+g+s+m+c+sha256"}]
+
+
+def test_aide_checks_the_drop_in_in_a_test_config_before_it_goes_live(tmp_path):
+    main = tmp_path / "aide.conf"
+    main.write_text("database_in=file:/var/lib/aide/aide.db\n")
+    v = scanner_vars(tmp_path, "aide", aide_paths=AIDE_PATHS, aide_config_file=str(main),
+                     aide_dropin=str(tmp_path / "90_homelabnext"), aide_cli=checker(tmp_path, "aide"))  # fmt: skip
+    r = run_role(tmp_path, "aide", "config", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (tmp_path / "90_homelabnext").read_text().splitlines()[1:] == [
+        "/etc/ssh p+i+n+u+g+s+m+c+sha256"
+    ]
+    assert calls(tmp_path)[0] == "aide --config-check --config <staged>"
+    bad = run_role(
+        tmp_path, "aide", "config", {**v, "aide_paths": [{"path": "/bogus", "rule": "p"}]}
+    )
+    assert bad.returncode != 0
+    assert "/bogus" not in (tmp_path / "90_homelabnext").read_text()
+    assert sorted(p.name for p in (tmp_path / "state").iterdir()) == []  # nothing staged is left
+
+
+def test_aide_refuses_bad_paths(tmp_path):
+    cases = [
+        {"aide_paths": paths}
+        for paths in [
+            [{"path": "/etc/ssh\n/ R", "rule": "p"}],
+            [{"path": "/etc", "rule": "p+i\n!/"}],
+            [{"path": "etc"}],
+        ]
+    ]
+    v = scanner_vars(tmp_path, "aide", aide_paths=[])
+    results = run_cases(tmp_path, "aide", "config", v, cases)
+    assert all(f and "aide: an OnCalendar schedule ending in UTC" in m for f, m in results), results
+
+
+@pytest.mark.parametrize(("rc", "ok"), [(0, True), (4, False)])
+def test_aide_health_follows_the_checks_exit_status(tmp_path, rc, ok):
+    cli = fake(
+        tmp_path / "aide-cli",
+        f"import sys\nprint('changed: /etc/ssh/sshd_config')\nsys.exit({rc} if '--check' in sys.argv else 0)\n",
+    )
+    v = scanner_vars(tmp_path, "aide", aide_paths=AIDE_PATHS, aide_cli=cli,
+                     aide_dropin=str(tmp_path / "90_homelabnext"), aide_config_file=str(tmp_path / "aide.conf"))  # fmt: skip
+    (tmp_path / "aide.conf").write_text("")
+    assert run_role(tmp_path, "aide", "config", v).returncode == 0
+    run_scan(tmp_path)
+    r = run_role(tmp_path, "aide", "health", v)
+    assert (r.returncode == 0) is ok and (ok or "the last check exited 4" in r.stdout)
+
+
+# ---------------------------------------------------------------- rkhunter
+def rk_vars(tmp_path, **kw):
+    (tmp_path / "default").write_text('CRON_DAILY_RUN="true"\nAPT_AUTOGEN="false"\n')
+    return scanner_vars(tmp_path, "rkhunter", rkhunter_whitelist={"ALLOWHIDDENDIR": ["/etc/.git"]},
+                        rkhunter_local_config=str(tmp_path / "rkhunter-local.conf"),
+                        rkhunter_default_file=str(tmp_path / "default"), **kw)  # fmt: skip
+
+
+def test_rkhunter_writes_its_settings_refreshes_after_apt_and_puts_back_a_rejected_file(tmp_path):
+    # the fake config check rejects a local file that holds "bogus"
+    local = str(tmp_path / "rkhunter-local.conf")
+    check = fake(
+        tmp_path / "rkhunter-cli",
+        f"import sys\nsys.exit(1 if 'bogus' in open({local!r}).read() else 0)\n",
+    )
+    v = rk_vars(tmp_path, rkhunter_cli=check)
+    r = run_role(tmp_path, "rkhunter", "config", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    local = (tmp_path / "rkhunter-local.conf").read_text()
+    assert (
+        "PKGMGR=DPKG\n" in local
+        and 'WEB_CMD=""\n' in local
+        and "ALLOWHIDDENDIR=/etc/.git\n" in local
+    )
+    assert (tmp_path / "default").read_text() == 'CRON_DAILY_RUN="false"\nAPT_AUTOGEN="true"\n'
+    bad = run_role(tmp_path, "rkhunter", "config", {**v, "rkhunter_settings": {"PKGMGR": "bogus"}})
+    assert bad.returncode != 0 and "the previous one is back" in bad.stdout
+    assert (tmp_path / "rkhunter-local.conf").read_text() == local
+    assert sorted(p.name for p in tmp_path.glob("rkhunter-local.conf*")) == ["rkhunter-local.conf"]
+
+
+def test_rkhunter_refuses_bad_inputs(tmp_path):
+    results = run_cases(
+        tmp_path,
+        "rkhunter",
+        "config",
+        rk_vars(tmp_path),
+        [
+            {"rkhunter_whitelist": {"ALLOWHIDDENDIR": ["relative"]}},
+            {"rkhunter_whitelist": {"PKGMGR": ["/x"]}},
+            {"rkhunter_settings": {"PKGMGR": "DPKG\nWEB_CMD=curl"}},
+        ],
+    )
+    assert all(f and "rkhunter: an OnCalendar schedule" in m for f, m in results), results
+
+
+@pytest.mark.parametrize(("rc", "ok"), [(0, True), (1, False)])
+def test_rkhunter_health_follows_the_checks_exit_status(tmp_path, rc, ok):
+    cli = fake(
+        tmp_path / "rkhunter-cli", f"import sys\nsys.exit({rc} if '--check' in sys.argv else 0)\n"
+    )
+    v = rk_vars(tmp_path, rkhunter_cli=cli)
+    assert run_role(tmp_path, "rkhunter", "config", v).returncode == 0
+    run_scan(tmp_path)
+    assert (run_role(tmp_path, "rkhunter", "health", v).returncode == 0) is ok
+
+
+# ---------------------------------------------------------------- clamav
+@pytest.mark.parametrize(
+    ("rc", "fresh", "ok"), [(0, True, True), (1, True, False), (0, False, False)]
+)
+def test_clamav_scans_the_paths_that_exist_and_health_wants_fresh_signatures(
+    tmp_path, rc, fresh, ok
+):
+    import os
+
+    share = tmp_path / "share"
+    share.mkdir()
+    db = tmp_path / "clamdb"
+    db.mkdir()
+    (db / "daily.cld").write_text("")
+    if not fresh:
+        os.utime(db / "daily.cld", (86400, 86400))
+    out = str(tmp_path / "argv")
+    cli = fake(
+        tmp_path / "clamscan",
+        f"import sys\nopen({out!r}, 'w').write(' '.join(sys.argv[1:]))\nsys.exit({rc})\n",
+    )
+    v = scanner_vars(tmp_path, "clamav", clamav_paths=[str(share), str(tmp_path / "absent")], clamav_cli=cli,
+                     clamav_exclude_dirs=["^/srv/cache"], clamav_database_dir=str(db),
+                     clamav_freshclam_config=str(tmp_path / "freshclam.conf"))  # fmt: skip
+    assert run_role(tmp_path, "clamav", "config", v).returncode == 0
+    run_scan(tmp_path)
+    argv = (tmp_path / "argv").read_text()
+    assert argv.startswith("--recursive --infected --no-summary --exclude-dir=^/srv/cache --log=")
+    assert argv.endswith(f" {share}")  # the absent path is left out
+    assert (run_role(tmp_path, "clamav", "health", v).returncode == 0) is ok
+
+
+def test_clamav_uses_a_private_mirror_when_set(tmp_path):
+    conf = tmp_path / "freshclam.conf"
+    conf.write_text("DatabaseMirror database.clamav.net\n")
+    v = scanner_vars(tmp_path, "clamav", clamav_paths=["/srv"], clamav_freshclam_config=str(conf),
+                     clamav_private_mirror="clamav-mirror.example.internal")  # fmt: skip
+    assert run_role(tmp_path, "clamav", "config", v).returncode == 0
+    assert "PrivateMirror clamav-mirror.example.internal\n" in conf.read_text()
+    bad = run_role(
+        tmp_path, "clamav", "config", {**v, "clamav_private_mirror": "x\nDatabaseMirror y"}
+    )
+    assert bad.returncode != 0 and "clamav: an OnCalendar schedule" in bad.stdout
+
+
+# ---------------------------------------------------------------- trivy
+TRIVY = r"""
+import json, sys
+args = sys.argv[1:]
+open(LOG, "a").write(" ".join(args) + "\n")
+out = args[args.index("--output") + 1]
+if args[0] == "rootfs" and "cyclonedx" in args:
+    json.dump({"bomFormat": "CycloneDX"}, open(out, "w"))
+else:
+    json.dump({"Results": [{"Target": "debian", "Vulnerabilities": VULNS}, {"Target": "x"}]}, open(out, "w"))
+"""
+
+
+@pytest.mark.parametrize(
+    ("vulns", "ok"), [([], True), ([{"VulnerabilityID": "CVE-2026-0001-FAKE"}], False)]
+)
+def test_trivy_scans_the_root_filesystem_and_writes_an_sbom(tmp_path, vulns, ok):
+    cli = fake(
+        tmp_path / "trivy-cli",
+        TRIVY.replace("LOG", repr(str(tmp_path / "trivy.log"))).replace("VULNS", repr(vulns)),
+    )
+    v = scanner_vars(tmp_path, "trivy", trivy_severity="HIGH", trivy_cli=cli, trivy_skip_db_update=True,
+                     trivy_scan_containers=False)  # fmt: skip
+    r = run_role(tmp_path, "trivy", "config", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    run_scan(tmp_path)
+    runs = (tmp_path / "trivy.log").read_text().splitlines()
+    assert runs[0].startswith(
+        "rootfs --quiet --severity HIGH,CRITICAL --skip-db-update --scanners vuln --format json"
+    )
+    assert runs[0].endswith(
+        " --skip-dirs /proc,/sys,/dev,/run,/var/lib/docker,/var/lib/containers /"
+    )
+    assert "--format cyclonedx" in runs[1] and (tmp_path / "state" / "sbom.cdx.json").exists()
+    h = run_role(tmp_path, "trivy", "health", v)
+    assert (h.returncode == 0) is ok, h.stdout
+    if not ok:
+        assert "1 finding(s) (at most 0):" in h.stdout and "CVE-2026-0001-FAKE" in h.stdout
+
+
+def test_trivy_refuses_bad_inputs(tmp_path):
+    v = scanner_vars(tmp_path, "trivy", trivy_severity="HIGH")
+    results = run_cases(
+        tmp_path,
+        "trivy",
+        "config",
+        v,
+        [
+            {"trivy_severity": "high"},
+            {"trivy_version": "0.60"},
+            {"trivy_db_repository": "mirror db"},
+            {"trivy_repository": "http://mirror.example.internal/deb"},
+            {"trivy_key_fingerprints": []},
+        ],
+    )
+    assert all(f and "trivy: an OnCalendar schedule" in m for f, m in results), results
+
+
+# ---------------------------------------------------------------- auditd
+def auditd_vars(tmp_path, **kw):
+    (tmp_path / "auditd.conf").write_text(
+        "max_log_file = 8\nnum_logs = 5\nmax_log_file_action = ROTATE\n"
+    )
+    d = {
+        "auditd_rule_groups": ["identity", "privilege", "sshd", "modules", "time"],
+        "auditd_rules_file": str(tmp_path / "50-homelabnext.rules"),
+        "auditd_conf_file": str(tmp_path / "auditd.conf"),
+        "auditd_augenrules_cli": logging_fake(tmp_path, "augenrules", "No change\n"),
+        "auditd_systemctl_cli": logging_fake(tmp_path, "systemctl"),
+    }
+    d.update(kw)
+    return d
+
+
+def test_auditd_writes_the_keyed_rules_loads_them_and_rotates_the_log(tmp_path):
+    v = auditd_vars(tmp_path)
+    r = run_role(tmp_path, "auditd", "config", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    rules = (tmp_path / "50-homelabnext.rules").read_text()
+    for key in ("identity", "privilege", "sshd", "modules", "time"):
+        assert f"-k hnx-{key}\n" in rules
+    assert "-w /usr/bin/sudo -p x -k hnx-privilege" in rules
+    assert "-S init_module,finit_module,delete_module -k hnx-modules" in rules
+    conf = (tmp_path / "auditd.conf").read_text()
+    assert "max_log_file = 50\n" in conf and "num_logs = 5\n" in conf
+    assert calls(tmp_path) == [
+        "augenrules --check",
+        "augenrules --load",
+        "systemctl kill --signal=SIGHUP auditd",
+    ]
+    assert run_role(tmp_path, "auditd", "config", v).returncode == 0
+    assert calls(tmp_path)[3:] == ["augenrules --check"]  # unchanged: nothing loaded or signalled
+    only = run_role(tmp_path, "auditd", "config", {**v, "auditd_rule_groups": ["time"]})
+    assert (
+        only.returncode == 0
+        and "hnx-identity" not in (tmp_path / "50-homelabnext.rules").read_text()
+    )
+
+
+def test_auditd_reloads_rules_augenrules_says_are_stale(tmp_path):
+    v = auditd_vars(tmp_path)
+    assert run_role(tmp_path, "auditd", "config", v).returncode == 0
+    stale = logging_fake(
+        tmp_path, "augenrules", "/usr/sbin/augenrules: Rules have changed and should be updated\n"
+    )
+    assert (
+        run_role(tmp_path, "auditd", "config", {**v, "auditd_augenrules_cli": stale}).returncode
+        == 0
+    )
+    assert calls(tmp_path)[-1] == "augenrules --load"
+
+
+AUDIT_STATES = [
+    ("-w /etc/passwd -p wa -k hnx-identity\n-a always,exit -S adjtimex -F key=hnx-time\n", "enabled 1\n", True),
+    ("-w /etc/passwd -p wa -k hnx-identity\n", "enabled 1\n", False),
+    ("-w /etc/passwd -p wa -k hnx-identity\n-a always,exit -F key=hnx-time\n", "enabled 0\n", False),
+]  # fmt: skip
+
+
+def test_auditd_health(tmp_path):
+    cases = [
+        {"auditd_auditctl_cli": fake(tmp_path / f"auditctl-{i}",
+                                     f"import sys\nprint({status!r} if sys.argv[1] == '-s' else {loaded!r}, end='')\n")}
+        for i, (loaded, status, _) in enumerate(AUDIT_STATES)
+    ]  # fmt: skip
+    v = auditd_vars(tmp_path, auditd_rule_groups=["identity", "time"])
+    results = run_cases(tmp_path, "auditd", "health", v, cases)
+    assert [not f for f, _ in results] == [ok for _, _, ok in AUDIT_STATES], results
+
+
+def test_auditd_refuses_bad_inputs(tmp_path):
+    results = run_cases(
+        tmp_path,
+        "auditd",
+        "config",
+        auditd_vars(tmp_path),
+        [{"auditd_rule_groups": []}, {"auditd_rule_groups": ["network"]}, {"auditd_num_logs": 0}],
+    )
+    assert all(f and "auditd: rule groups among" in m for f, m in results), results
+
+
+# ---------------------------------------------------------------- needrestart
+NEEDRESTART = r"""
+import sys
+open(LOG, "a").write("needrestart " + " ".join(sys.argv[1:]) + "\n")
+sys.stdout.write(open(OUT).read())
+"""
+BATCH = (
+    "NEEDRESTART-VER: 3.6\nNEEDRESTART-KCUR: 6.1.0-25-amd64\nNEEDRESTART-KEXP: 6.1.0-25-amd64\n"
+    "NEEDRESTART-KSTA: 1\n"
+)
+
+
+def nr_setup(tmp_path, **kw):
+    log = str(tmp_path / "calls.log")
+    out = tmp_path / "nr.out"
+    out.write_text(BATCH)
+    mail = fake(
+        tmp_path / "sendmail",
+        f"import sys\nopen({str(tmp_path / 'mail.log')!r}, 'a').write(sys.stdin.read() + '\\0')\n",
+    )
+    d = {
+        "needrestart_notify": "mail",
+        "needrestart_cli": fake(
+            tmp_path / "needrestart",
+            NEEDRESTART.replace("LOG", repr(log)).replace("OUT", repr(str(out))),
+        ),
+        "needrestart_sendmail_cli": mail,
+        "needrestart_perl_cli": checker(tmp_path, "perl"),
+        "needrestart_systemctl_cli": logging_fake(tmp_path, "systemctl"),
+        "needrestart_dropin": str(tmp_path / "50-homelabnext.conf"),
+        "needrestart_aliases_file": str(tmp_path / "aliases"),
+        "needrestart_unit_dir": str(tmp_path / "units"),
+        "needrestart_state_dir": str(tmp_path / "state"),
+        "needrestart_script": str(tmp_path / "bin" / "needrestart-check"),
+    }
+    (tmp_path / "units").mkdir(exist_ok=True)
+    d.update(kw)
+    return d, out
+
+
+def nr_check(tmp_path):
+    import subprocess
+    import sys
+
+    return subprocess.run(
+        [sys.executable, str(tmp_path / "bin" / "needrestart-check")],
+        capture_output=True,
+        text=True,
+    )
+
+
+def mails(tmp_path):
+    p = tmp_path / "mail.log"
+    return [m for m in p.read_text().split("\0") if m] if p.exists() else []
+
+
+def test_needrestart_is_list_only_and_alerts_only_when_the_set_changes(tmp_path):
+    import os
+
+    v, out = nr_setup(tmp_path)
+    r = run_role(tmp_path, "needrestart", "config", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    conf = (tmp_path / "50-homelabnext.conf").read_text()
+    assert "$nrconf{restart} = 'l';" in conf and "$nrconf{kernelhints} = 1;" in conf
+    assert "perl -c <staged>" in calls(tmp_path)
+    timer = (tmp_path / "units" / "hnx-needrestart.timer").read_text()
+    assert "OnCalendar=*-*-* 07:40:00 UTC\n" in timer and "OnBootSec" not in timer
+    service = (tmp_path / "units" / "hnx-needrestart.service").read_text()
+    assert "After=apt-daily-upgrade.service" in service
+    assert "ExecStart=/usr/local/libexec/homelabnext/needrestart-check\n" in service
+    assert nr_check(tmp_path).returncode == 0 and mails(tmp_path) == []  # nothing needs a restart
+    state = tmp_path / "state" / "state.json"
+    assert oct(state.stat().st_mode & 0o777) == "0o600"
+    out.write_text(BATCH + "NEEDRESTART-SVC: ssh.service\nNEEDRESTART-SVC: cron.service\n")
+    assert nr_check(tmp_path).returncode == 0
+    (first,) = mails(tmp_path)
+    assert first.startswith("To: root\nSubject: ") and "restart-required: 2 service(s)" in first
+    assert "- cron.service\n- ssh.service" in first and "nothing was restarted" in first
+    assert nr_check(tmp_path).returncode == 0 and len(mails(tmp_path)) == 1  # unchanged: silent
+    out.write_text(BATCH)
+    assert nr_check(tmp_path).returncode == 0
+    assert "nothing needs a restart now" in mails(tmp_path)[-1] and len(mails(tmp_path)) == 2
+    assert nr_check(tmp_path).returncode == 0 and len(mails(tmp_path)) == 2
+    # it only ever ran `needrestart -b` (batch, list only) and restarted nothing itself
+    nr_calls = [c for c in calls(tmp_path) if c.startswith("needrestart")]
+    assert nr_calls and set(nr_calls) == {"needrestart -b"}
+    assert not [c for c in calls(tmp_path) if "restart" in c.split()[1:2]]
+    assert run_role(tmp_path, "needrestart", "health", v).returncode == 0
+    os.utime(state, (86400, 86400))
+    assert run_role(tmp_path, "needrestart", "health", v).returncode != 0
+
+
+def test_needrestart_leaves_a_pending_kernel_to_patching_unless_asked(tmp_path):
+    v, out = nr_setup(tmp_path)
+    assert run_role(tmp_path, "needrestart", "config", v).returncode == 0
+    out.write_text(BATCH.replace("KSTA: 1", "KSTA: 3").replace("KEXP: 6.1.0-25", "KEXP: 6.1.0-26"))
+    assert (
+        nr_check(tmp_path).returncode == 0 and mails(tmp_path) == []
+    )  # unattended-upgrades mails reboots
+    doc = json.loads((tmp_path / "state" / "state.json").read_text())
+    assert doc["kernel"]["reboot_pending"] is True and doc["kernel"]["expected"] == "6.1.0-26-amd64"
+    assert (
+        run_role(
+            tmp_path, "needrestart", "config", {**v, "needrestart_alert_kernel": True}
+        ).returncode
+        == 0
+    )
+    assert nr_check(tmp_path).returncode == 0
+    assert "reboot into kernel 6.1.0-26-amd64" in mails(tmp_path)[0]
+
+
+@pytest.mark.parametrize(
+    ("aliases", "mode"),
+    [("root: ops@example.org\n", "mail"), ("postmaster: root\n", "none"), (None, "none")],
+)
+def test_needrestart_auto_mails_only_where_root_mail_is_forwarded(tmp_path, aliases, mode):
+    v, out = nr_setup(tmp_path, needrestart_notify="auto")
+    if aliases is not None:
+        (tmp_path / "aliases").write_text(aliases)
+    assert run_role(tmp_path, "needrestart", "config", v).returncode == 0
+    assert f'MODE = "{mode}"' in (tmp_path / "bin" / "needrestart-check").read_text()
+    out.write_text(BATCH + "NEEDRESTART-SVC: ssh.service\n")
+    assert nr_check(tmp_path).returncode == 0
+    assert len(mails(tmp_path)) == (1 if mode == "mail" else 0)
+
+
+def test_needrestart_posts_to_the_notify_endpoint_and_retries_a_failed_alert(tmp_path):
+    import http.server
+    import threading
+
+    got = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers["Content-Length"])).decode()
+            got.append((self.path, dict(self.headers), body))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)  # no-raw-endpoint: allow test server
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    reg = tmp_path / "registry.yml"
+    reg.write_text(
+        f"services:\n  notify:\n    host: 127.0.0.1\n    port: {srv.server_port}\n    scheme: http\n"
+    )
+    v, out = nr_setup(
+        tmp_path,
+        needrestart_notify="notify",
+        needrestart_notify_priority=4,
+        hnx_registry_file=str(reg),
+    )
+    try:
+        assert run_role(tmp_path, "needrestart", "config", v).returncode == 0
+        out.write_text(BATCH + "NEEDRESTART-SVC: ssh.service\n")
+        srv.shutdown()
+        srv.server_close()
+        failed = nr_check(tmp_path)
+        assert failed.returncode == 2 and "alert not sent" in failed.stderr  # owed, not lost
+        srv2 = http.server.HTTPServer(
+            ("127.0.0.1", srv.server_port), H
+        )  # no-raw-endpoint: allow test server
+        threading.Thread(target=srv2.serve_forever, daemon=True).start()
+        assert nr_check(tmp_path).returncode == 0
+        assert nr_check(tmp_path).returncode == 0  # unchanged now: silent
+        srv2.shutdown()
+        srv2.server_close()
+    finally:
+        srv.server_close()
+    (path, headers, body) = got[0]
+    assert len(got) == 1 and path == "/homelabnext-restarts"
+    assert headers["Priority"] == "4" and headers["Tags"] == "homelabnext,restart-required"
+    assert "restart-required: 1 service(s)" in headers["Title"] and "- ssh.service" in body
+    assert "Authorization" not in headers
+
+
+def test_needrestart_refuses_bad_inputs_and_a_token_over_plain_http(tmp_path):
+    v, _ = nr_setup(tmp_path)
+    cases = [{"needrestart_notify": "slack"}, {"needrestart_notify_topic": "a/b"}, {"needrestart_notify_priority": 9},
+             {"needrestart_notify_auth_ref": "tk_fake"}, {"needrestart_schedule": "daily"}]  # fmt: skip
+    results = run_cases(tmp_path, "needrestart", "config", v, cases)
+    # an unknown channel is refused by the argument spec's choices, the rest by validate.yml
+    assert results[0][0] and "needrestart_notify must be one of" in results[0][1]
+    want = "needrestart: notify is auto, none, notify or mail"
+    assert all(f and want in m for f, m in results[1:]), results
+    reg = tmp_path / "registry.yml"
+    reg.write_text(
+        "services:\n  notify:\n    host: ntfy-01.example.internal\n    port: 80\n    scheme: http\n"
+    )
+    plain = {
+        **v,
+        "needrestart_notify": "notify",
+        "needrestart_notify_auth_ref": "secret:notify/token-fake",
+        "hnx_registry_file": str(reg),
+    }
+    r = run_role(
+        tmp_path, "needrestart", "config", plain, {"HNX_SECRET_NOTIFY_TOKEN_FAKE": "tk-fake"}
+    )
+    assert r.returncode != 0 and "a token would go over plain http" in r.stdout
+
+
+# ---------------------------------------------------------------- lynis: package integrity sweep
+DPKG = r"""
+import os, sys
+args = sys.argv[1:]
+if args == ["--verify"]:
+    sys.stdout.write(open(OUT).read())
+elif args[0] == "-S":
+    pkg = {"/usr/bin/sudo": "sudo", "/usr/lib/libfoo.so.1": "libfoo1", "/opt/vendor/agent": "vendor-agent"}
+    if args[1] in pkg:
+        print(f"{pkg[args[1]]}: {args[1]}")
+    else:
+        sys.exit(1)
+"""
+VERIFY_DIRTY = (
+    "??5??????   /usr/bin/sudo\n"  # digest mismatch: a finding
+    "missing     /usr/lib/libfoo.so.1\n"  # missing: a finding
+    "??5?????? c /etc/ssh/sshd_config\n"  # conffile: left out by default
+    "??5??????   /opt/vendor/agent\n"  # accepted by package
+)
+
+
+def sweep_setup(tmp_path, verify_out, **kw):
+    cfg = tmp_path / "dpkg.cfg.d"
+    cfg.mkdir(exist_ok=True)
+    (cfg / "excludes").write_text(
+        "path-exclude=/usr/share/doc/*\npath-include=/usr/share/doc/*/copyright\n"
+    )
+    out = tmp_path / "verify.out"
+    out.write_text(verify_out)
+    mail = fake(
+        tmp_path / "sendmail",
+        f"import sys\nopen({str(tmp_path / 'mail.log')!r}, 'a').write(sys.stdin.read() + '\\0')\n",
+    )
+    v = scanner_vars(
+        tmp_path, "lynis", lynis_min_hardening_index=60,
+        lynis_cli=fake(tmp_path / "lynis-cli", LYNIS.replace("REPORT", repr("hardening_index=70\n"))),
+        lynis_dpkg_cli=fake(tmp_path / "dpkg", DPKG.replace("OUT", repr(str(out)))),
+        lynis_verify_script=str(tmp_path / "bin" / "verify"), lynis_notify="mail", lynis_sendmail_cli=mail,
+        lynis_dpkg_verify_allow=[{"package": "vendor-agent", "reason": "the vendor patches its own binary in place"}],
+        lynis_dpkg_cfg_files=[str(tmp_path / "dpkg.cfg.d")],
+        **kw,
+    )  # fmt: skip
+    return v, out
+
+
+def run_sweep(tmp_path):
+    import subprocess
+    import sys
+
+    return subprocess.run(
+        [sys.executable, str(tmp_path / "bin" / "verify")], capture_output=True, text=True
+    )
+
+
+def test_dpkg_verify_flags_digest_mismatches_and_missing_files_but_not_conffiles(tmp_path):
+    v, out = sweep_setup(tmp_path, VERIFY_DIRTY)
+    assert run_role(tmp_path, "lynis", "config", v).returncode == 0
+    assert (
+        "ExecStart=/usr/local/libexec/homelabnext/lynis-dpkg-verify"
+        in (tmp_path / "units" / "hnx-lynis.service").read_text()
+    )
+    run_scan(tmp_path)
+    assert run_sweep(tmp_path).returncode == 0
+    result = tmp_path / "state" / "dpkg-verify.json"
+    assert oct(result.stat().st_mode & 0o777) == "0o600"
+    doc = json.loads(result.read_text())
+    assert doc["findings"] == [
+        {"path": "/usr/bin/sudo", "problem": "digest", "package": "sudo"},
+        {"path": "/usr/lib/libfoo.so.1", "problem": "missing", "package": "libfoo1"},
+    ]
+    assert doc["accepted"][0]["path"] == "/opt/vendor/agent" and doc["conffiles_skipped"] == 1
+    (mail,) = [m for m in (tmp_path / "mail.log").read_text().split("\0") if m]
+    assert (
+        "package integrity: 2 file(s) differ" in mail and "- digest: /usr/bin/sudo (sudo)" in mail
+    )
+    r = run_role(tmp_path, "lynis", "health", v)
+    assert r.returncode != 0 and "package integrity: 2 finding(s)" in r.stdout
+    assert run_sweep(tmp_path).returncode == 0  # unchanged: no second alert
+    assert len([m for m in (tmp_path / "mail.log").read_text().split("\0") if m]) == 1
+    out.write_text("")  # clean again: one more alert, then health passes with the count
+    assert run_sweep(tmp_path).returncode == 0
+    mails = [m for m in (tmp_path / "mail.log").read_text().split("\0") if m]
+    assert len(mails) == 2 and "clean again" in mails[1]
+    ok = run_role(tmp_path, "lynis", "health", v, verbose=True)
+    assert (
+        ok.returncode == 0
+        and "package integrity: 0 findings, 0 accepted, 0 conffile(s) skipped" in ok.stdout
+    )
+
+
+def test_dpkg_verify_reports_conffiles_when_asked(tmp_path):
+    v, _ = sweep_setup(tmp_path, VERIFY_DIRTY, lynis_dpkg_verify_include_conffiles=True)
+    assert run_role(tmp_path, "lynis", "config", v).returncode == 0
+    assert run_sweep(tmp_path).returncode == 0
+    doc = json.loads((tmp_path / "state" / "dpkg-verify.json").read_text())
+    assert (
+        "/etc/ssh/sshd_config" in [f["path"] for f in doc["findings"]]
+        and doc["conffiles_skipped"] == 0
+    )
+
+
+def test_dpkg_verify_clean_host_and_bad_allow_entries(tmp_path):
+    clean = ".M.......   /usr/bin/env\nmissing     /usr/share/doc/x/README.gz\n"
+    v, _ = sweep_setup(tmp_path, clean)  # a mode difference; a doc file dpkg never unpacked
+    assert run_role(tmp_path, "lynis", "config", v).returncode == 0
+    assert run_sweep(tmp_path).returncode == 0
+    assert json.loads((tmp_path / "state" / "dpkg-verify.json").read_text())["findings"] == []
+    assert not (tmp_path / "mail.log").exists()  # nothing changed from the empty set: silent
+    cases = [{"lynis_dpkg_verify_allow": [{"path": "/usr/bin/*"}]},
+             {"lynis_dpkg_verify_allow": [{"reason": "no target"}]},
+             {"lynis_notify": "pager"}]  # fmt: skip
+    results = run_cases(tmp_path, "lynis", "config", v, cases)
+    assert all(f for f, _ in results), results
+
+
+def test_dpkg_verify_still_reports_a_missing_file_dpkg_was_told_to_keep(tmp_path):
+    v, _ = sweep_setup(tmp_path, "missing     /usr/share/doc/sudo/copyright\n")  # path-include
+    assert run_role(tmp_path, "lynis", "config", v).returncode == 0
+    assert run_sweep(tmp_path).returncode == 0
+    doc = json.loads((tmp_path / "state" / "dpkg-verify.json").read_text())
+    assert [f["path"] for f in doc["findings"]] == ["/usr/share/doc/sudo/copyright"]

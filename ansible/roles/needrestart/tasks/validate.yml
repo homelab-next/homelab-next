@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Values reach a unit, a Perl drop-in, the check script and HTTP headers.
+- name: Validate the alert channel, schedule and limits
+  ansible.builtin.assert:
+    that:
+      - needrestart_notify in ['auto', 'none', 'notify', 'mail']
+      - needrestart_notify_id is match('^[a-z0-9][a-z0-9-]*\Z')
+      - needrestart_notify_topic is match('^[A-Za-z0-9_-]{1,64}\Z')
+      - needrestart_notify_priority | int >= 1 and needrestart_notify_priority | int <= 5
+      - needrestart_notify_auth_ref == '' or needrestart_notify_auth_ref is match('^secret:[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*\Z')
+      - needrestart_mail_to is match('^[A-Za-z0-9._%+@-]+\Z')
+      - needrestart_schedule is match('^[A-Za-z0-9*:,./~ -]+ UTC\Z')
+      - needrestart_max_age_hours | int > 0
+    fail_msg: >-
+      needrestart: notify is auto, none, notify or mail; a registry logical id; an ntfy topic of
+      [A-Za-z0-9_-]; a priority 1-5; a secret:<name> token reference or nothing; a plain mail
+      recipient; and an OnCalendar schedule ending in UTC

@@ -1,0 +1,11 @@
+# Managed by homelabnext (role clamav, control malware-scan); local changes are overwritten.
+[Unit]
+Description=homelabnext ClamAV malware scan, scheduled (control malware-scan)
+
+[Timer]
+OnCalendar={{ clamav_schedule }}
+Persistent=true
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target

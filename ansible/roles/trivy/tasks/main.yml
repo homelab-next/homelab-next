@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+# Control package-scan (ADR-0016 decision 7): the internal assessment of the operator's own lab
+# for known-vulnerable packages.
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Refuse a host that is not Debian-family (the role installs from the vendor apt repository)
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] == 'Debian'
+    fail_msg: "trivy supports Debian-family guests only (got {{ ansible_facts['os_family'] }})"
+
+- name: Install gpg (it checks the vendor key's fingerprint)
+  ansible.builtin.apt:
+    name: gpg
+    state: present
+
+- name: Fetch the vendor signing key and check it against the pinned fingerprints
+  ansible.builtin.include_tasks: signing_key.yml
+
+- name: Add the vendor apt repository, signed by the checked vendor key
+  ansible.builtin.deb822_repository:
+    name: trivy
+    types: deb
+    uris: "{{ trivy_repository }}"
+    suites: generic
+    components: main
+    signed_by: "{{ trivy_keyring }}"
+
+# A pinned package is held; moving it to a new pin must be allowed to change that one package.
+- name: Install Trivy (the pinned version, or the repository's newest)
+  ansible.builtin.apt:
+    name: "{{ 'trivy=' ~ trivy_version if trivy_version else 'trivy' }}"
+    allow_change_held_packages: true
+    update_cache: true
+
+- name: Hold a pinned version, release an unpinned one
+  ansible.builtin.dpkg_selections:
+    name: trivy
+    selection: "{{ 'hold' if trivy_version else 'install' }}"
+
+- name: Write the configuration, the scan script and its timer
+  ansible.builtin.include_tasks: config.yml

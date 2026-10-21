@@ -1,0 +1,9 @@
+# Managed by homelabnext (role needrestart, control restart-required); local changes are overwritten.
+[Unit]
+Description=homelabnext needrestart check, list only (control restart-required)
+After=apt-daily-upgrade.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/homelabnext/needrestart-check
+Nice=10

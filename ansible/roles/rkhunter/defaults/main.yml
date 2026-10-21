@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Rootkit check (control rootkit-check, applied per guest): the distribution's rkhunter. Its file
+# properties database is refreshed after every apt run (APT_AUTOGEN in /etc/default/rkhunter, the
+# Debian package's own hook), so patching does not read as tampering; file hashes come from dpkg
+# (PKGMGR=DPKG); rkhunter never downloads anything itself (no mirror updates, no WEB_CMD). The
+# role's timer runs the check (the package's own daily cron run is turned off), exit 0 = no
+# warning. In `server`, not `base`: a full check walks the system's binaries for minutes.
+rkhunter_settings:
+  PKGMGR: DPKG
+  UPDATE_MIRRORS: "0"
+  MIRRORS_MODE: "1"
+  WEB_CMD: '""'
+  ALLOW_SSH_ROOT_USER: "no"
+rkhunter_local_config: /etc/rkhunter.conf.local  # scrub-allow: the rkhunter file name
+rkhunter_default_file: /etc/default/rkhunter
+rkhunter_cli: rkhunter
+rkhunter_schedule: "*-*-* 04:40:00 UTC"
+rkhunter_max_age_hours: 48
+rkhunter_systemctl_cli: systemctl
+rkhunter_unit_dir: /etc/systemd/system
+rkhunter_state_dir: /var/lib/homelabnext/rkhunter

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Wait for the notify endpoint's port (with notify)
+  ansible.builtin.wait_for:
+    host: "{{ lookup('hnx_registry', needrestart_notify_id, field='host') }}"
+    port: "{{ lookup('hnx_registry', needrestart_notify_id, field='port') }}"
+    timeout: 10
+  when: needrestart_notify == 'notify'
+  tags: [readiness]

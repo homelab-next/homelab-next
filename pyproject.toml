@@ -115,7 +115,9 @@ markers = [
 # any other skip fails.  `pytest --suite-times` prints the table.
 suite_budget_default = "60"
 suite_budgets = [
-  "tests/roles = 480",  # runs ansible-playbook against localhost (skipped where ansible is absent)
+  # runs ansible-playbook against localhost (skipped where ansible is absent); 900 since the
+  # baseline-control roles (21 roles, each config hook run end to end against fake daemons)
+  "tests/roles = 900",
   "tools/tests = 240",  # the gate tools run pytest, git and builds in subprocesses
   "tests/packaging = 120",  # builds and installs the wheel and the sdist
 ]

@@ -92,7 +92,7 @@ have a zones file. Tests can also pass a stub.
 | `terraform-proxmox` | `vm-*.tf`, `ct-*.tf`, `providers.tf`, `variables.tf`, `MANUAL.md` (bpg/proxmox resource shapes; text only) |
 | `libvirt` | one `virt-install` script per VM plus `SKIPPED.txt`; refuses guests it cannot isolate (below) |
 | `cloudinit` | `<name>/user-data`, `meta-data`, `network-config` per VM |
-| `inventory` | `hosts.yml` with `cap_*` and `tag_*` groups (and, with a baseline set, `baseline_<name>` and `control_<id>`), `host_vars/<fqdn>.yml` (with `hnx_baselines`, `hnx_controls`) |
+| `inventory` | `hosts.yml` with `cap_*` and `tag_*` groups (and, with a baseline set, `baseline_<name>` and `control_<id>`), `host_vars/<fqdn>.yml` (with `hnx_firewall`, the guest's firewall rules with zones resolved; with a set, `hnx_baselines`, `hnx_controls` and the baseline settings of its per-guest controls) |
 | `registry-hosts` | a `zones:`/`hosts:` fragment for `services.yml` |
 | `backup-jobs` | members, retention and export hooks per policy |
 | `baseline-playbook` | `baseline.yml`: one play per bound control, applying its `role` to `control_<id>`, or, for an `apply: central` control, once to its product host's `group` with `<role>_guests`; unbound controls as commented blocks |
@@ -279,6 +279,37 @@ is a commented "NOT BOUND to a product yet" block naming the guests that wait fo
 control no guest needs is listed as such. Choosing a SIEM agent is then a one-line change to the
 set, and every guest that needs `siem-agent` gets it.
 
+**Settings (baseline set 1.2).** A baseline lists a control as its id or as `{id, with}`; `with`
+sets inputs of the control's bound role, named as that role's `meta/argument_specs.yml` main
+options without the `<role>_` prefix and typed there, which is the one source of truth (the
+compute model reads the roles from `HNX_ROLES_DIR`, else the checkout's `ansible/roles`):
+
+```yaml
+controls:
+  package-scan: {layer: detection, role: trivy, settings: [severity, max_findings], ...}
+baselines:
+  server:    {extends: [base], controls: [{id: package-scan, with: {severity: HIGH}}, ...]}
+  sensitive: {extends: [server], controls: [{id: package-scan, with: {severity: MEDIUM}}, ...]}
+```
+
+* An unknown input, a value of the wrong type (`str`/`path`, `int`, `float`, `bool`, `list` with
+  its `elements`, `dict`, `choices`), `with` on an unbound control, or an input outside the
+  control's `settings` list (when it has one) is an error.
+* A guest's settings for a control merge over the baselines it resolves to, parents first, so a
+  baseline overrides what it extends (a `sensitive` guest scans at MEDIUM). Two baselines that set
+  one input differently are a conflict unless the later one extends the other: refused in the set
+  (a baseline that extends two disagreeing ones must settle the value itself) and for a guest
+  that names both. Two controls bound to one role that set one variable differently on a guest
+  are refused too.
+* A guest file carries no settings: a per-guest value is a one-guest baseline that extends the
+  shared one, so every value is reviewed in the set.
+* The `inventory` target writes the settings of per-guest controls into the guest's host
+  variables as the role's prefixed variables (`trivy_severity: "HIGH"`); a central control's
+  `<role>_guests` rows carry them as `settings: {<role>_<input>: value}` (the first central roles
+  do not read per-guest settings yet). The coverage report (`settings`, and each guest row's
+  `settings`), its text and the hub's Baselines page list every value that differs from the
+  role's default (a required input has none and is always listed).
+
 **Coverage.** `hnx guests baselines DIR --site SITE` prints a guest x layer matrix (controls per
 layer; `MISSING` for a guest without a baseline or exemption, `exempt` with the reasons listed),
 `--json` the full report (per-guest controls by layer, each control's role, verify and the guests
@@ -307,11 +338,19 @@ product host's capability group) whose role gets `<role>_guests`: each guest tha
 control as `{id, name, fqdn, ip, zone}`, sorted by id, written into the playbook so the list is
 reviewed with the guest change that moved it. A central control whose group holds no guest of
 the model renders with a `NO HOST` comment, is listed as `unplaced` by `hnx guests baselines`
-and fails `--require-bound`. `cap_sensor` and `cap_scanner` are the groups added for the two
-central products (no existing group fits: `cap_siem` is the SIEM manager, and a sensor or
-scanner is usually its own host).
+and fails `--require-bound`. `cap_sensor`, `cap_scanner` and `cap_backup` are the groups added
+for the central products (no existing group fits: `cap_siem` is the SIEM manager, and a sensor,
+a scanner or a backup host is usually its own host).
 
-The first bindings (examples/minimal), to be tuned once the real lab runs them:
+Every control of the example catalogue is bound (examples/minimal; `hnx guests baselines
+examples/minimal/guests --site examples/minimal/site.yml --require-bound` passes). These are first
+versions with mainstream defaults, to be tuned once the real lab runs them. Every role follows
+docs/role-interface.md (argument_specs, the seven hooks, logical ids through `hnx_registry`,
+secrets by name through `hnx_secret`), supports Debian-family guests only, and is tested in
+`tests/roles` against fake daemon commands. A configuration file never goes live untested: it is
+checked by the daemon's own checker before it replaces the live one (template `validate`, or a
+staged file and a test configuration that includes it), and a reload or restart that fails stays
+owed (a pending marker) until a later run succeeds.
 
 | Control | Role | Applies | What it does | Health | Known limits |
 |---|---|---|---|---|---|
@@ -319,13 +358,56 @@ The first bindings (examples/minimal), to be tuned once the real lab runs them:
 | `remote-access` | `tailscale_node` | guest | adds the vendor apt repository (its key fetched and installed only if its primary key is a pinned fingerprint, `tailscale_node_key_fingerprints`), installs the pinned client and holds it (the pinned install may move that held package, so a version bump is a re-run), and, when not running, `tailscale up --auth-key=file:<transient> --advertise-tags=tag:zone-<zone>` (no exit node, no routes) | `tailscale status --json`: `Running`, online, carries its zone tag | a running node is not re-tagged (that is a `tailscale set`); Debian and Ubuntu only (the vendor repository is `<track>/debian/<codename>` or `<track>/ubuntu/<codename>`; `tailscale_node_repository` is the track root) |
 | `network-sensor` | `suricata_enroll` | central, `cap_sensor` | writes `hnx-address-groups.yaml` (`HOME_NET` = the enrolled guests, `HNX_ZONE_<ZONE>` per zone, the stock groups), stages a changed file and runs `suricata -T` on a staged copy of `suricata.yaml` that includes it, installs it only if that passes, then `suricatasc -c reload-rules` (a rule reload re-reads `vars`); a reload that fails, or is turned off, stays owed and is retried on the next run | `suricatasc -c uptime` | `suricata.yaml` must hold `vars: address-groups: include: hnx-address-groups.yaml` (checked, never rewritten); mirroring the traffic to the sensor is the network's job |
 | `vuln-scan` | `greenbone_target` | central, `cap_scanner` | over gvmd's socket with `gvm-cli` (as `_gvm`; it refuses root), finds the operator's scan login by name and creates a target `hnx-<guest>` per guest that lacks one | GMP `get_version` | targets are matched by name: an address change or a guest that leaves is not followed; scan tasks and schedules stay in Greenbone |
+| `time-sync` | `chrony` | guest | renders chrony.conf from the registry's time sources (`chrony_server_ids`; public pools opt-in), checked with `chronyd -p`, restart owed until it succeeds | `chronyc -c tracking`: synchronised, stratum 1-15, offset under `chrony_max_offset` (1 s) | the whole chrony.conf is the role's |
+| `patching` | `unattended_upgrades` | guest | one apt.conf.d file after the package's: `#clear` drops the package's origin lists, then only the distribution's security origin (plus opt-in extras), a required reboot window (`HH:MM` or `never`), optional mail; checked with `apt-config -c FILE dump` | the run stamp is under 48 h old | held packages (the pinned agents) are never moved; it does not list pending updates |
+| `restart-required` | `needrestart` | guest | the distribution's needrestart in list-only mode (`$nrconf{restart} = 'l'` in a conf.d drop-in checked with `perl -c`; kernel and microcode hints on), so its apt hook only lists and nothing is ever restarted automatically; a timer after the patch run (`After=apt-daily-upgrade.service`, 07:40 UTC) runs `needrestart -b` and writes the services and kernel state to an owner-only `state.json`; it alerts state-diffed, only when the set of services needing a restart differs from the last one alerted (once more when it empties; a failed alert stays owed). `needrestart_notify`: `notify` posts to the notify capability's ntfy endpoint by logical id (`<url>/<topic>`, Title, Priority, Tags; a token by secret reference, never over plain http), `mail` sends local mail (`sendmail -t`), `auto` (the base baseline's choice) is mail where the host has a local MTA and `/etc/aliases` forwards root, else none | the state file is under 48 h old | to avoid double alerts, needrestart owns service restarts and reboots stay with patching (unattended-upgrades mails its reboot notice and reboots in its window); a pending kernel is recorded, and alerted only with `needrestart_alert_kernel` |
+| `ssh-hardening` | `ssh_hardening` | guest | one drop-in sorting first in `sshd_config.d`: key-only, no root, `AllowGroups`, client-alive limits; the kept account (`ssh_hardening_keep_user`, never root) must exist and hold a key, and a staged drop-in must pass `sshd -t` and, through `sshd -T -C user=<kept>`, be key-only, refuse root and admit one of its groups before it goes live; on central-auth guests it reads directory keys through `sss_ssh_authorizedkeys` | the live `sshd -T` for the kept account | a drop-in that sorts before `00-homelabnext-hardening.conf` wins (health catches it); MFA for SSH is not set up (keys only) |
+| `central-auth` | `sssd_ldap` | guest | sssd against the identity provider's LDAP outpost by logical id, LDAPS only (`ldap_tls_reqcert = demand`), Authentik's layout by default, `simple_allow_groups`; the bind credential by secret reference in a 0600 sssd.conf checked with `sssctl config-check`; the break-glass account must exist in the local files, passwd must resolve `files` first, and sssd filters that name | `sssctl domain-status --online` and the break-glass check | the bind credential is on disk (sssd needs it); MFA is the identity provider's (a code with the password on the outpost) |
+| `os-hardening` | `os_hardening` | guest | CIS-lite, each item named in the required `os_hardening_items`: kernel settings (pointer and dmesg restrictions, ptrace, protected links, no setuid dumps, redirects and source routes off; forwarding untouched), unused filesystem modules refused, desktop and print services masked, file modes, no core dumps; no reboot | the live kernel settings and file modes | a module already loaded stays loaded until a reboot; its verify is the host-assessment audit |
+| `host-assessment` | `lynis` | guest | a daily `lynis audit system` on an OnCalendar timer, report to the state directory; optionally files the summary through the broker's `finding.write` lane (`lynis_broker_socket`, needs the `hnx` command and a broker identity on the guest). On the same timer, a **package integrity sweep**: `dpkg --verify` (`debsums -s` only where dpkg has no `--verify`) flags package-owned files whose digest differs (the `5` column) or that are missing; conffiles (attribute `c`) are left out by default (`lynis_dpkg_verify_include_conffiles`; administrators edit them, and file-integrity and host-audit watch them), files dpkg's own `path-exclude` never unpacked are not missing, and `lynis_dpkg_verify_allow` accepts paths or packages with a reason; the result goes to an owner-only `dpkg-verify.json` beside the report, and a change in the set of findings is alerted state-diffed through `lynis_notify` (none, notify, mail, auto, as for needrestart). Why: it catches tampered package binaries and libraries cheaply | the run is fresh, hardening index at least `lynis_min_hardening_index` (the server baseline sets 60), at most `lynis_max_warnings` (0) warnings and the integrity sweep found at most `lynis_dpkg_verify_max_findings` (0) unaccepted files (health prints the counts) | the distribution's Lynis lags upstream; the integrity sweep's MD5 sums live on the host itself, so it is a cheap tripwire, not proof: whoever can replace a binary can rewrite its sum |
+| `host-firewall`, `egress-filter` | `nftables_host` | guest | one `inet homelabnext` table in /etc/nftables.conf (no `flush ruleset`: a container engine's tables stay), from the guest model's own `firewall_rules`, which the inventory carries as `hnx_firewall` with zones resolved by the hypervisor rules' resolver; inbound drop, established and loopback, ICMP errors and neighbour discovery, a management SSH rule from `nftables_host_ssh_sources`, then the guest's rules; outbound from `policy_out` (REJECT ends in a reject); checked with `nft -c` (the tests use the real nft), load owed until `nft -f` succeeds; with egress-filter (from `hnx_controls`) an ACCEPT `policy_out` is refused | `nft -j list table`: input policy drop, and output drop with egress-filter | IPv4 rules only (the guest schema's CIDRs); refuses to run beside pve-firewall, ufw or firewalld (the example hypervisor removes the control with that reason) |
+| `log-forward` | `rsyslog_forward` | guest | every message as RFC 5424 over TCP with TLS (gtls, `x509/name`, the receiver's registry name as the peer) to the log pipeline's receiver by logical id, through a disk-assisted queue; checked with `rsyslogd -N1`; rsyslog over Fluent Bit because it is in every Debian-family main archive and speaks syslog over TLS natively | rsyslog is active | arrival at the lake is the pipeline's ingest audit, not this hook |
+| `host-audit` | `auditd` | guest | keyed rule groups (`hnx-identity`, `-privilege`, `-sshd`, `-modules`, `-time`; required `auditd_rule_groups`), loaded with `augenrules --load` when the file or `augenrules --check` says so; size rotation in auditd.conf, re-read on SIGHUP (the unit refuses a manual stop); the SIEM agent reads the audit log | auditing enabled and every chosen key loaded | 64-bit syscall rules only |
+| `package-scan` | `trivy` | guest | the vendor apt repository (`https://get.trivy.dev/deb generic main`), its key pinned by fingerprint; a daily `trivy rootfs` at or above the required `trivy_severity` (server: HIGH, sensitive: MEDIUM), a CycloneDX SBOM, running container images with `trivy_scan_containers` (container-host), `trivy_skip_db_update` / `trivy_db_repository` for an offline lab; `trivy_version` empty = newest, set = pinned and held | the run is fresh and reported at most `trivy_max_findings` (0) | the vulnerability database comes from the vendor unless mirrored |
+| `file-integrity` | `aide` | guest | the stock AIDE rules plus the required `aide_paths` (sensitive sets /etc, /usr/local, /opt), a drop-in checked with `aide --config-check` on a test configuration, the baseline database once (`aideinit`), a daily check; AIDE over Wazuh syscheck so the control survives a SIEM swap | the last check exited 0 | every legitimate change (a patch run) fails health until an operator accepts it with `aide --update` |
+| `rootkit-check` | `rkhunter` | guest | dpkg hashes, no downloads, required per-guest allow options (`rkhunter_whitelist`), properties refreshed after each apt run (the package's `APT_AUTOGEN`), a daily check on the role's timer; a local file `rkhunter --config-check` rejects is put back; in `server`, not `base`, because a full check walks the system's binaries for minutes | the last check exited 0 | rkhunter's false positives are settled per guest in the allow options |
+| `malware-scan` | `clamav` | guest | freshclam (optionally from `clamav_private_mirror`), a weekly `clamscan` of the required `clamav_paths`; no on-access scanning; in no default baseline (file and download hosts add it) | the scan exited 0 and the daily signatures are under 3 days old | the scan is single-threaded |
+| `disk-encryption` | `disk_encryption_check` | guest, verification only | lists mounted filesystems outside the system mounts whose `lsblk --inverse` chain has no `crypt` layer; volumes encrypted below the guest (the hypervisor's pool) are accepted in the required `disk_encryption_check_accepted` with a reason; changes nothing | no unaccepted unencrypted data volume | encrypting an existing volume is destructive: encryption happens when the guest is provisioned |
+| `secrets-from-store` | `config_leak_scan` | guest, verification only | copies the repository's own `tools/leak_scan.py` (and `homelabnext/shapes.py`) to the guest for the run and runs its `secret` patterns over the required `config_leak_scan_paths`; reports path, line and pattern, never the value; host keys, TLS private keys and password hashes accepted by path | no unaccepted hit | not named after the control (role_lint reads "secret..." variables as secrets); binaries are skipped |
+| `backup-verify` | `restore_drill` | central, `cap_backup` | runs the backup product's drill command (`<cli> <guest id> <guest name>`: restore the latest backup to scratch, check it against its checksum, print `{"snapshot", "verified"}`) for each guest due (last verified drill older than 30 days), records the last verified drill and the last failure per guest in `drills.json` (the role's data: backup, export and restore hooks) | every enrolled guest has a verified drill within 90 days | the drill command belongs to the backup product (for example a script around `proxmox-backup-client restore`) and is not shipped |
+| `config-backup` | `etckeeper` | guest | /etc in git, committed by every package run and daily, pushed to the lab's git service by logical id (`etckeeper_remote_id`, ssh) | everything committed and HEAD equals origin's copy | the push needs root's key registered on the git service; the repository holds /etc as it is (hashes, service credentials) |
 
 Secrets are referenced, never written: `wazuh_agent_enrollment_ref`, `tailscale_node_auth_key_ref`
 and `greenbone_target_gmp_auth_ref` hold `secret:<name>`, resolved on the controller by the
 `hnx_secret` lookup (`ansible/plugins/lookup/hnx_secret.py`: `HNX_SECRET_<NAME>`, else
-`<hnx_secrets_dir>/<name>`) in `no_log` tasks. Required inputs a deployment sets in its inventory
-(for example `group_vars/control_siem_agent.yml`): `wazuh_agent_manager_id`,
-`tailscale_node_auth_key_ref`, `greenbone_target_scan_login`.
+`<hnx_secrets_dir>/<name>`) in `no_log` tasks, and so is `sssd_ldap_bind_ref`. A role's required
+inputs come from the baseline (`with`, as the example sets most of them: time sources, the reboot
+window, the kept SSH account, the management SSH sources, the log receiver, the SIEM manager, the
+audit groups, the directory, the git service, the scan severity, the audit floor) or, for a value
+that is not a property of a kind of guest, from the deployment's inventory (for example
+`group_vars/control_vuln_scan.yml`): `tailscale_node_auth_key_ref`, `greenbone_target_scan_login`,
+`clamav_paths` on a guest that adds malware-scan.
+
+**An alternative binding for `package-scan`: Vuls** (future-architect/vuls), documented, not
+built (no role). It is agentless: a central scanner logs in over SSH, reads the installed packages
+and reports the vulnerable ones, including which running processes still use an affected library.
+Where a guest cannot take Trivy (an appliance, a minimal LXC, a scratch guest), bind
+`package-scan` centrally (`apply: central`) to a `vuls` role on the scanner host then, the same
+way `vuln-scan` binds Greenbone.
+
+**Verified and assumed vendor facts.** Verified here: the Trivy repository key's fingerprint
+(`825AD9036F7C850E6A6FED4935B8ACA44FD9CA9F`, `trivy-repo (Aqua Security)`, read from the vendor's
+`aquasecurity/trivy-repo` `deb/public.key`; get.trivy.dev itself was not reachable) and its
+`generic main` suite (the vendor's README); apt's `#clear` and `apt-config -c FILE dump` (run with
+the real apt-config in the tests); the nftables ruleset syntax (the tests check it with the real
+`nft -c`); the `dpkg --verify` line format (`??5?????? c <path>`, `missing     <path>`) and the
+`path-exclude` filters of a minimal image (read from the real dpkg here); the `lsblk --json --inverse` shape. Assumed from the vendors' documentation and not run
+here: `chronyd -p`, the `chronyc -c tracking` field order, `sshd -T -C`, `sssctl config-check -c`
+and `domain-status --online`, Authentik's LDAP outpost layout, `rsyslogd -N1` and the
+`StreamDriver.CAFile` action parameter (rsyslog 8.2108 and later), `augenrules --check` wording,
+the AIDE exit codes and `@@include`, rkhunter's `APT_AUTOGEN` and `--config-check`, Lynis's
+`report.dat` keys, `clamscan` exit codes, etckeeper's `-d` and `unclean`, needrestart's `-b` batch keys
+(`NEEDRESTART-KSTA`/`-KCUR`/`-KEXP`/`-SVC`) and `$nrconf{restart} = 'l'`.
 
 **Tailscale policy from the site model.** `hnx guests render ... --target tailscale-acl` writes
 `tailscale-policy.hujson` for the guests that need a control bound to `tailscale_node`:

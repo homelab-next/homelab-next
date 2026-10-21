@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to do for export (the rules are rendered; the events reach the SIEM through its agent)
+  ansible.builtin.debug:
+    msg: auditd keeps no data a export hook must handle
+  tags: [export]

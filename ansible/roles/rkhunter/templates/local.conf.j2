@@ -1,0 +1,9 @@
+# Managed by homelabnext (role rkhunter, control rootkit-check); local changes are overwritten.
+{% for key in rkhunter_settings | sort %}
+{{ key }}={{ rkhunter_settings[key] }}
+{% endfor %}
+{% for key in rkhunter_whitelist | sort %}
+{% for path in rkhunter_whitelist[key] %}
+{{ key }}={{ path }}
+{% endfor %}
+{% endfor %}

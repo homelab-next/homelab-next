@@ -3,9 +3,10 @@
 - **Status:** proposed
 - **Date:** 2026-10-20
 - **Related:** ADR-0001, ADR-0004, ADR-0012, ADR-0013, `docs/compute-model.md`,
-  `schemas/platform/baseline_set.schema.json` (1.0; 1.1 for decision 7),
+  `schemas/platform/baseline_set.schema.json` (1.0; 1.1 for decision 7; 1.2 for decision 8),
   `schemas/platform/guest.schema.json` (1.3), `homelabnext/compute/baselines.py`;
-  decision 7 amended 2026-10-20 with the first bound products
+  decision 7 amended 2026-10-20 with the first bound products and 2026-10-21 with the rest;
+  decision 8 added 2026-10-21
 
 ## Context
 
@@ -55,6 +56,32 @@ model would encode a product (against the swap discipline of ADR-0004 and ADR-00
    (`remote-access`, guest); the `tailscale-acl` target renders the tailnet policy from the site
    model (a tag per zone, admins on SSH, the site's zone-to-zone allows), so remote access
    follows the zones rather than hand-written policy.
+   *(Addendum, 2026-10-21.)* Every control of the example catalogue is now bound, each to a
+   first-version role with the same interface (`docs/compute-model.md`, "Bound products"): chrony,
+   unattended-upgrades, an OpenSSH drop-in, sssd against the identity provider's LDAP outpost,
+   nftables from the guest model's own `firewall_rules` (host-firewall and egress-filter share
+   it), rsyslog over TLS, a CIS-lite hardening set, auditd, Lynis, Trivy, AIDE, rkhunter, ClamAV
+   and etckeeper on the guest; restore drills centrally on the backup host (`cap_backup`, added
+   beside `cap_sensor` and `cap_scanner`). Two controls are **verified, not applied**, because
+   applying them is destructive or belongs elsewhere: disk-encryption (encryption happens at
+   provisioning; the role reports data volumes without a crypt layer) and secrets-from-store (the
+   repository's leak scanner runs over the guest's configuration directories). Six controls were
+   added to the catalogue: host-audit, host-assessment (the verify of os-hardening),
+   package-scan, file-integrity, rootkit-check and malware-scan, with a `container-host`
+   baseline; then restart-required (needrestart, list-only, in `base` beside patching).
+8. *(Amendment, baseline set 1.2.)* **A baseline may set the inputs of a control's role**: its
+   `controls` list takes a control id or `{id, with}`, where `with` names inputs of the bound
+   role's `meta/argument_specs.yml` main options without the role prefix. Their names and types
+   come from that file, the one source of truth; a control's `settings` list may narrow which of
+   them a baseline may set, and `with` on an unbound control is refused. Settings merge parent
+   first through `extends`, so a baseline overrides what it extends (`sensitive` scans packages
+   at MEDIUM where `server` says HIGH); two baselines that set one input differently are refused
+   unless the later one extends the other, for the set and for each guest's names. A guest file
+   carries no settings: a per-guest value is a one-guest baseline that extends the shared one, so
+   every value is reviewed in the set. The `inventory` target writes the settings of per-guest
+   controls as the role's prefixed host variables; a central control's enrolled rows carry them
+   as `settings`; the coverage report and the Baselines page list every value that differs from
+   the role's default.
 
 ## Consequences
 
@@ -77,6 +104,11 @@ conditional on the set existing, so a lab that never writes one gets no baseline
 this is deliberate, because a pre-1.3 tree must stay valid (ADR-0001's additive evolution), and
 a missing set is visible to `hnx guests baselines --check`, which fails without one.
 
+Decision 8 lets a baseline say "this kind of guest is scanned more strictly" without a second
+rule language and without a value per guest file; the price is that the compute model reads the
+roles' argument_specs (`HNX_ROLES_DIR`, or the checkout's `ansible/roles`), so a set with
+settings cannot be checked where the roles are absent.
+
 ## Alternatives
 
 - **Products in the guest file** (for example `siem: product-x`): every product choice or swap
@@ -90,5 +122,10 @@ a missing set is visible to `hnx guests baselines --check`, which fails without 
   sources. **Discovering enrolment at run time** from `groups['control_<id>']` inside the
   central play: works, but the enrolled list would not be visible in the rendered playbook or
   testable as a golden.
+- **Settings in the guest file or in hand-written `group_vars`** (for decision 8): a value per
+  guest repeats what a baseline means, and `group_vars/baseline_<name>.yml` would merge by
+  Ansible's group precedence (alphabetical at one depth), not by `extends`, and nothing would
+  check the keys. **A separate settings schema per control in the set**: a second copy of every
+  role's inputs that drifts from the role.
 - **Open-ended layers**: a free-text layer drifts into synonyms, and the coverage matrix would
   stop being comparable between guests and labs.

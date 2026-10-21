@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Look for a local MTA and a root alias (for notify auto)
+  block:
+    - name: Look for the local MTA's sendmail
+      ansible.builtin.stat:
+        path: "{{ needrestart_sendmail_cli }}"
+      register: needrestart_mta
+    - name: Look for the aliases file
+      ansible.builtin.stat:
+        path: "{{ needrestart_aliases_file }}"
+      register: needrestart_aliases_stat
+    - name: Read the aliases file
+      ansible.builtin.slurp:
+        src: "{{ needrestart_aliases_file }}"
+      register: needrestart_aliases
+      when: needrestart_aliases_stat.stat.exists
+
+- name: Choose the alert channel
+  ansible.builtin.set_fact:
+    needrestart_mode: >-
+      {{ needrestart_notify if needrestart_notify != 'auto' else
+         ('mail' if needrestart_mta.stat.exists and needrestart_aliases_stat.stat.exists
+                    and (needrestart_aliases.content | b64decode) is search('(?m)^root\s*:\s*\S')
+          else 'none') }}
+    needrestart_notify_url: "{{ lookup('hnx_registry', needrestart_notify_id, field='url') if needrestart_notify == 'notify' else '' }}"
+
+- name: Refuse a notify endpoint that is not http(s), or a token over plain http
+  ansible.builtin.assert:
+    that:
+      - needrestart_mode != 'notify' or needrestart_notify_url is match('^https?://')
+      - needrestart_mode != 'notify' or needrestart_notify_auth_ref == '' or needrestart_notify_url is match('^https://')
+    fail_msg: "needrestart: the notify endpoint {{ needrestart_notify_url }} is not http(s), or a token would go over plain http"
+
+- name: Write the ntfy token (owner-only)
+  when: needrestart_mode == 'notify' and needrestart_notify_auth_ref != ''
+  block:
+    - name: Ensure the token directory exists
+      ansible.builtin.file:
+        path: "{{ needrestart_notify_auth_file | dirname }}"
+        state: directory
+        mode: "0700"
+    - name: Write the token
+      ansible.builtin.copy:
+        dest: "{{ needrestart_notify_auth_file }}"
+        content: "{{ lookup('hnx_secret', needrestart_notify_auth_ref) }}\n"
+        mode: "0600"
+      no_log: true
+
+- name: Write the list-only drop-in, checked by perl -c before it goes live
+  ansible.builtin.template:
+    src: 50-homelabnext.conf.j2
+    dest: "{{ needrestart_dropin }}"
+    mode: "0644"
+    validate: "{{ needrestart_perl_cli }} -c %s"
+
+- name: Ensure the state and script directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ needrestart_state_dir }}", mode: "0700"}
+    - {path: "{{ needrestart_script | dirname }}", mode: "0755"}
+
+- name: Write the check script
+  ansible.builtin.template:
+    src: needrestart-check.py.j2
+    dest: "{{ needrestart_script }}"
+    mode: "0700"
+
+- name: Write the service and timer units
+  ansible.builtin.template:
+    src: "check.{{ item }}.j2"
+    dest: "{{ needrestart_unit_dir }}/hnx-needrestart.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+  register: needrestart_units
+
+- name: Reload systemd and enable the timer when the units changed
+  ansible.builtin.command:
+    argv: "{{ [needrestart_systemctl_cli] + item }}"
+  loop: "{{ [['daemon-reload'], ['enable', '--now', 'hnx-needrestart.timer']] if needrestart_units is changed else [] }}"
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  changed_when: true

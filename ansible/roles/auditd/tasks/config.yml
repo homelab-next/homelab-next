@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# augenrules compiles rules.d into audit.rules; --check says whether that would change what is
+# loaded, and --load compiles and loads (a rule the kernel refuses fails the load and the run).
+# auditd re-reads auditd.conf on SIGHUP (its unit refuses a manual stop, so it is never restarted).
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Write the rule set
+  ansible.builtin.template:
+    src: homelabnext.rules.j2
+    dest: "{{ auditd_rules_file }}"
+    mode: "0640"
+  register: auditd_written
+
+- name: Ask augenrules whether the loaded rules are out of date
+  ansible.builtin.command:
+    argv: ["{{ auditd_augenrules_cli }}", --check]
+  register: auditd_check
+  changed_when: false
+
+- name: Compile and load the rules
+  ansible.builtin.command:
+    argv: ["{{ auditd_augenrules_cli }}", --load]
+  when: auditd_written is changed or auditd_check.stdout is search('Rules have changed')
+  changed_when: true
+
+- name: Rotate the audit log by size
+  ansible.builtin.lineinfile:
+    path: "{{ auditd_conf_file }}"
+    regexp: "^\\s*{{ item.key }}\\s*="
+    line: "{{ item.key }} = {{ item.value }}"
+  loop: "{{ {'max_log_file': auditd_max_log_file | int, 'num_logs': auditd_num_logs | int, 'max_log_file_action': 'ROTATE'} | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: auditd_conf
+
+- name: Have auditd re-read its configuration
+  ansible.builtin.command:
+    argv: ["{{ auditd_systemctl_cli }}", kill, --signal=SIGHUP, auditd]
+  when: auditd_conf is changed
+  changed_when: true

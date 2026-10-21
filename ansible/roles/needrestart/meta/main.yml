@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "needrestart in list-only mode (it never restarts anything) and a timer that alerts, state-diffed, when the services needing a restart change."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

@@ -1,0 +1,11 @@
+# Managed by homelabnext (role rkhunter, control rootkit-check); local changes are overwritten.
+[Unit]
+Description=homelabnext rkhunter rootkit check, scheduled (control rootkit-check)
+
+[Timer]
+OnCalendar={{ rkhunter_schedule }}
+Persistent=true
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target

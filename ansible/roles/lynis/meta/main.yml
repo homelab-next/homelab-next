@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "A scheduled Lynis audit of the host (internal assessment of the operator's own lab): hardening index and warnings in a report, optionally filed as a finding through the broker."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

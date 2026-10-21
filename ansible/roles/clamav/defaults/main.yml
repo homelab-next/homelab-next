@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Malware scan (control malware-scan, applied per guest; in no default baseline: file and download
+# hosts add it): the distribution's ClamAV. freshclam (its own service) keeps the signatures
+# current, from clamav_private_mirror when one is set; a weekly timer runs clamscan over
+# clamav_paths (exit 0 clean, 1 found, 2 error). On-access scanning is not set up.
+clamav_exclude_dirs: []
+clamav_private_mirror: ""
+clamav_max_signature_age_days: 3
+clamav_freshclam_config: /etc/clamav/freshclam.conf
+clamav_database_dir: /var/lib/clamav
+clamav_cli: clamscan
+clamav_schedule: "Sun *-*-* 02:50:00 UTC"
+clamav_max_age_hours: 192
+clamav_systemctl_cli: systemctl
+clamav_unit_dir: /etc/systemd/system
+clamav_state_dir: /var/lib/homelabnext/clamav

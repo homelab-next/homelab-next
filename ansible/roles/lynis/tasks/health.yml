@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Read the last run's status
+      ansible.builtin.stat:
+        path: "{{ lynis_state_dir }}/last-run"
+      register: lynis_last
+    - name: Read its exit status
+      ansible.builtin.slurp:
+        src: "{{ lynis_state_dir }}/last-run"
+      register: lynis_last_rc
+      when: lynis_last.stat.exists
+    - name: Fail unless a run finished recently
+      ansible.builtin.assert:
+        that:
+          - lynis_last.stat.exists
+          - (now(utc=true).timestamp() - lynis_last.stat.mtime) < lynis_max_age_hours | int * 3600
+        fail_msg: "lynis: no Lynis host audit in the last {{ lynis_max_age_hours }}h ({{ lynis_state_dir }}/last-run is missing or older)"
+    - name: Read the report
+      ansible.builtin.slurp:
+        src: "{{ lynis_state_dir }}/report.dat"
+      register: lynis_report
+    - name: Fail unless the hardening index and the warnings are within the limits
+      vars:
+        lynis_text: "{{ lynis_report.content | b64decode }}"
+        lynis_index: "{{ (lynis_text | regex_findall('(?m)^hardening_index=([0-9]+)$') + ['-1'])[0] | int }}"
+        lynis_warnings: "{{ lynis_text | regex_findall('(?m)^warning\\[\\]=(.*)$') }}"
+      ansible.builtin.assert:
+        that:
+          - lynis_index | int >= lynis_min_hardening_index | int
+          - lynis_warnings | length <= lynis_max_warnings | int
+        fail_msg: >-
+          lynis: hardening index {{ lynis_index }} (at least {{ lynis_min_hardening_index }}), {{ lynis_warnings | length }}
+          warning(s) (at most {{ lynis_max_warnings }}): {{ lynis_warnings | map('regex_replace', '\\|.*$', '') | join(', ') }}
+
+    - name: Read the package integrity sweep
+      ansible.builtin.slurp:
+        src: "{{ lynis_state_dir }}/dpkg-verify.json"
+      register: lynis_verify
+      when: lynis_dpkg_verify | bool
+    - name: Report and check the integrity findings
+      vars:
+        lynis_verify_doc: "{{ lynis_verify.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that: lynis_verify_doc.findings | length <= lynis_dpkg_verify_max_findings | int
+        success_msg: "lynis: package integrity: 0 findings, {{ lynis_verify_doc.accepted | length }} accepted, {{ lynis_verify_doc.conffiles_skipped }} conffile(s) skipped"
+        fail_msg: >-
+          lynis: package integrity: {{ lynis_verify_doc.findings | length }} finding(s) (at most
+          {{ lynis_dpkg_verify_max_findings }}): {{ lynis_verify_doc.findings | map(attribute='path') | join(', ') | truncate(400) }}
+      when: lynis_dpkg_verify | bool
+  tags: [health]

@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Read the last run's status
+      ansible.builtin.stat:
+        path: "{{ aide_state_dir }}/last-run"
+      register: aide_last
+    - name: Read its exit status
+      ansible.builtin.slurp:
+        src: "{{ aide_state_dir }}/last-run"
+      register: aide_last_rc
+      when: aide_last.stat.exists
+    - name: Fail unless a run finished recently
+      ansible.builtin.assert:
+        that:
+          - aide_last.stat.exists
+          - (now(utc=true).timestamp() - aide_last.stat.mtime) < aide_max_age_hours | int * 3600
+        fail_msg: "aide: no AIDE file integrity check in the last {{ aide_max_age_hours }}h ({{ aide_state_dir }}/last-run is missing or older)"
+    - name: Fail unless the last check found nothing changed
+      ansible.builtin.assert:
+        that: (aide_last_rc.content | b64decode | trim) == '0'
+        fail_msg: >-
+          aide: the last check exited {{ aide_last_rc.content | b64decode | trim }} (1 added, 2 removed,
+          4 changed, 14+ error); review {{ aide_state_dir }}/report.txt, then accept with aide --update
+
+  tags: [health]

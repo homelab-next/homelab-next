@@ -1,0 +1,9 @@
+# Managed by homelabnext (role trivy, control package-scan); local changes are overwritten.
+[Unit]
+Description=homelabnext Trivy package scan (control package-scan)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/homelabnext/trivy-scan
+Nice=10
+IOSchedulingClass=idle

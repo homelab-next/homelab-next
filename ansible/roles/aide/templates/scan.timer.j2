@@ -1,0 +1,11 @@
+# Managed by homelabnext (role aide, control file-integrity); local changes are overwritten.
+[Unit]
+Description=homelabnext AIDE file integrity check, scheduled (control file-integrity)
+
+[Timer]
+OnCalendar={{ aide_schedule }}
+Persistent=true
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target

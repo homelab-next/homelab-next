@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Package scan (control package-scan, applied per guest): Trivy from the vendor's apt repository
+# (signed by its key, fetched and installed only if its primary key is a pinned fingerprint). A
+# timer scans the root filesystem (trivy rootfs) for vulnerabilities at or above trivy_severity
+# and writes a CycloneDX SBOM of it; with trivy_scan_containers it also scans the image of every
+# running container where docker or podman runs. For an offline lab, trivy_skip_db_update keeps
+# the database as it is and trivy_db_repository points at a mirror. Health fails when the run is
+# stale or more than trivy_max_findings findings were reported.
+trivy_version: ""
+trivy_repository: "https://get.trivy.dev/deb"
+# The primary-key fingerprints the repository's signing key (<repository>/public.key) must carry:
+# "trivy-repo (Aqua Security)", as published in the vendor's aquasecurity/trivy-repo
+# repository (deb/public.key). A key rotation adds the new fingerprint here.
+trivy_key_fingerprints:
+  - "825AD9036F7C850E6A6FED4935B8ACA44FD9CA9F"
+trivy_max_findings: 0
+trivy_sbom: true
+trivy_scan_containers: false
+trivy_skip_db_update: false
+trivy_db_repository: ""
+trivy_skip_dirs: [/proc, /sys, /dev, /run, /var/lib/docker, /var/lib/containers]
+trivy_cli: trivy
+trivy_schedule: "*-*-* 03:10:00 UTC"
+trivy_max_age_hours: 48
+trivy_systemctl_cli: systemctl
+trivy_unit_dir: /etc/systemd/system
+trivy_state_dir: /var/lib/homelabnext/trivy

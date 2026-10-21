@@ -56,21 +56,28 @@ def test_every_rule_has_a_fixture():
 
 
 SHIPPED = [
+    "aide",
+    "auditd",
     "chrony",
+    "clamav",
     "compose_app",
     "config_leak_scan",
     "disk_encryption_check",
     "etckeeper",
     "example_service",
     "greenbone_target",
+    "lynis",
+    "needrestart",
     "nftables_host",
     "os_hardening",
     "restore_drill",
+    "rkhunter",
     "rsyslog_forward",
     "ssh_hardening",
     "sssd_ldap",
     "suricata_enroll",
     "tailscale_node",
+    "trivy",
     "unattended_upgrades",
     "wazuh_agent",
 ]

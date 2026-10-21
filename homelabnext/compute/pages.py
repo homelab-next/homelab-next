@@ -9,6 +9,7 @@ value is escaped.  The stylesheet is the hub's one inline style, so the hub's CS
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import Any
 
@@ -106,9 +107,28 @@ class BaselineSite:
             f"{s['guests']} guests: {s['with_baseline']} with a baseline, {s['exempt']} exempt, "
             f"{s['missing']} missing; {s['unbound_needed']} needed controls not bound to a role"
         )
+        set_rows = [
+            (
+                _e(x["baseline"]),
+                f"<code>{_e(x['control'])}</code>",
+                f"<code>{_e(x['setting'])}</code>",
+                f"<code>{_e(json.dumps(x['value'], sort_keys=True))}</code>",
+                "required"
+                if x["default"] is None
+                else f"<code>{_e(json.dumps(x['default'], sort_keys=True))}</code>",
+            )
+            for x in rep["settings"]
+        ]
+        settings = (
+            _table(("Baseline", "Control", "Setting", "Value", "Role default"), set_rows)
+            if set_rows
+            else '<p class="muted">no baseline sets a control setting</p>'
+        )
         return (
             f'<h2>Baselines</h2><p class="muted">{_e(summary)}</p>'
             + _table(("Guest", "Kind", "Baselines", *rep["layers"]), rows)
             + "<h3>Controls</h3>"
             + _table(("Control", "Layer", "Role", "Verify", "Guests"), ctrl_rows)
+            + "<h3>Settings</h3>"
+            + settings
         )

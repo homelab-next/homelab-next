@@ -1,0 +1,42 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: trivy-scan
+#   kind: job
+#   purpose: Run one scheduled Trivy package scan (root filesystem, SBOM, optionally container images) and record its exit status.
+#   owner: platform
+#   trigger: [timer:trivy/scan, role:trivy]
+#   inputs: the role's rendered settings (baked into this file)
+#   outputs: the report and last-run (exit status) under the role's state directory
+#   installs_to: /usr/local/libexec/homelabnext/trivy-scan
+#   exit:
+#     "0": the run finished (the scanner's own status is in last-run)
+# Managed by homelabnext (role trivy, control package-scan); local changes are overwritten.
+# One scheduled run: Trivy package scan. The exit status lands in last-run (its mtime is the run's time),
+# which the role's health hook reads beside the report.
+set -u
+STATE={{ trivy_state_dir | quote }}
+mkdir -p "$STATE"
+OPTS="--quiet --severity {{ trivy_severity_list | join(',') }}{{ ' --skip-db-update' if trivy_skip_db_update | bool else '' }}{{ (' --db-repository ' ~ (trivy_db_repository | quote)) if trivy_db_repository else '' }}"
+rc=0
+rm -rf "$STATE/images" && mkdir -p "$STATE/images"
+# shellcheck disable=SC2086
+{{ trivy_cli | quote }} rootfs $OPTS --scanners vuln --format json --output "$STATE/rootfs.json" \
+  --skip-dirs {{ trivy_skip_dirs | join(',') | quote }} / || rc=$?
+{% if trivy_sbom | bool %}
+{{ trivy_cli | quote }} rootfs --quiet --format cyclonedx --output "$STATE/sbom.cdx.json" \
+  --skip-dirs {{ trivy_skip_dirs | join(',') | quote }} / || rc=$?
+{% endif %}
+{% if trivy_scan_containers | bool %}
+for engine in docker podman; do
+  command -v "$engine" > /dev/null 2>&1 || continue
+  "$engine" ps --format '{% raw %}{{.Image}}{% endraw %}' 2>/dev/null | sort -u | while read -r image; do
+    out="$STATE/images/$(printf '%s' "$image" | tr -c 'A-Za-z0-9._-' '_').json"
+    # shellcheck disable=SC2086
+    {{ trivy_cli | quote }} image $OPTS --scanners vuln --format json --output "$out" "$image" || echo "$image" >> "$STATE/images/failed"
+  done
+done
+[ -e "$STATE/images/failed" ] && rc=1
+{% endif %}
+echo "$rc" > "$STATE/last-run.tmp" && mv "$STATE/last-run.tmp" "$STATE/last-run"
+exit 0

@@ -155,6 +155,7 @@ def make_key(tmp_path: Path, name: str, out: Path, armor: bool) -> str:
 KEY_CASES = {
     # role: (served path under the repository root, armoured, keyring, extra vars)
     "wazuh_agent": ("key/GPG-KEY-WAZUH", True, "hnx-wazuh.asc", {}),
+    "trivy": ("public.key", True, "hnx-trivy.asc", {"trivy_severity": "HIGH"}),
     "tailscale_node": ("debian/bookworm.noarmor.gpg", False, "hnx-tailscale.gpg",
                        {"tailscale_node_distribution": "Debian", "tailscale_node_release": "bookworm"}),
 }  # fmt: skip
@@ -202,6 +203,7 @@ def test_the_pinned_fingerprints_are_the_vendor_keys():
     pins = {
         "wazuh_agent": ["0DCFCA5547B19D2A6099506096B3EE5F29111145"],  # Wazuh.com (Wazuh Signing Key)
         "tailscale_node": ["2596A99EAAB33821893C0A79458CA832957F5868"],  # Tailscale Inc. (Package repository signing key)
+        "trivy": ["825AD9036F7C850E6A6FED4935B8ACA44FD9CA9F"],  # trivy-repo (Aqua Security) (aquasecurity/trivy-repo deb/public.key)
     }  # fmt: skip
     for role, want in pins.items():
         d = yaml.safe_load((ANSIBLE / "roles" / role / "defaults" / "main.yml").read_text())

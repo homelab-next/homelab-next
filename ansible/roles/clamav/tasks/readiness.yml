@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: No dependency to wait for
+  ansible.builtin.debug:
+    msg: clamav depends on no other service
+  tags: [readiness]

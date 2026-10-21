@@ -1,0 +1,11 @@
+# Managed by homelabnext (role lynis, control host-assessment); local changes are overwritten.
+[Unit]
+Description=homelabnext Lynis host audit, scheduled (control host-assessment)
+
+[Timer]
+OnCalendar={{ lynis_schedule }}
+Persistent=true
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target

@@ -110,6 +110,7 @@ def copy_repo(dest: Path) -> Path:
         ("script:leak-scan", "triggered_by", "make:leak-scan"),
         ("script:leak-scan", "triggered_by", "ci:ci/leak-scan"),
         ("script:schema-check", "triggered_by", "pkg:homelabnext"),
+        ("script:trivy-scan", "triggered_by", "role:trivy"),  # timer:trivy/scan and role:trivy
         ("inv:Q-04", "checks", "script:component-tests"),
         ("inv:G-03", "checks", "pkg:homelabnext.agent"),
         ("inv:S-07", "checks", "pkg:homelabnext.lake"),

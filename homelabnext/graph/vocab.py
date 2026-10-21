@@ -78,7 +78,7 @@ EDGE_TYPES: dict[str, tuple[str, str, str]] = {
     "refs": ("schema", "schema", "$ref"),
     "triggered_by": (
         "script",
-        "make, ci, pre-commit, compose, script, pkg",
+        "make, ci, pre-commit, compose, script, pkg, role",
         "catalog trigger",
     ),
     "enforces": ("script", "inv", "catalog invariant"),
