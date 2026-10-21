@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""One record per file: the format, the loader, split/join, links blocks and the id tooling."""
+"""One record per file: the format, the loader, split/join, links blocks and the key tooling
+(uids, ADR-0019)."""
 
 import pathlib
 import re
@@ -9,8 +10,9 @@ import sys
 
 import pytest
 import yaml
+from register_helpers import EXAMPLES, U, edit, f
 
-from homelabnext.registers import RegisterError, build_all, ids, load_register, records
+from homelabnext.registers import RegisterError, build_all, load_register, records
 from homelabnext.registers.__main__ import main as registers_main
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -45,42 +47,7 @@ def _tool(cwd, *args):
     )
 
 
-# --- the conversion lost nothing ------------------------------------------------------------------
-
-
-def _converted(kind):
-    """(legacy YAML text, {record name: text}) on either side of the split, from git."""
-    legacy, rdir = f"examples/registers/{kind}.yml", f"examples/registers/{kind}"
-    if _git(REPO, "rev-parse", "--git-dir", check=False).returncode:
-        pytest.skip("not a git checkout")
-    head = _git(REPO, "show", f"HEAD:{legacy}", check=False)
-    if head.returncode == 0:  # conversion not committed yet: HEAD's file vs the working tree
-        texts = {p.name: p.read_text() for p in (REPO / rdir).glob("*.md")}
-        return head.stdout, texts
-    commit = _git(REPO, "rev-list", "-1", "HEAD", "--", legacy).stdout.strip()
-    if not commit:
-        pytest.skip("git history not available (a shallow clone without the single-file register)")
-    old = _git(REPO, "show", f"{commit}^:{legacy}", check=False)
-    if old.returncode:
-        pytest.skip("the conversion commit's parent is not in this clone")
-    return old.stdout, ids._rev_dir_texts(REPO, commit, rdir)
-
-
-@pytest.mark.parametrize("kind", KINDS)
-def test_the_conversion_lost_nothing(kind, tmp_path):
-    old_text, texts = _converted(kind)
-    (tmp_path / f"{kind}.yml").write_text(old_text)
-    old = load_register(tmp_path / f"{kind}.yml")
-    new = records.load_texts(texts, kind)
-    assert new == old  # every entry, every field, deep
-    # and against the raw YAML: only surrounding whitespace of prose fields may differ
-    prose = {f for f, _ in records.SECTIONS[kind] if f != "steps"}
-    raw = yaml.safe_load(old_text)[kind]
-    assert [
-        {k: v.strip() if k in prose and isinstance(v, str) else v for k, v in e.items()}
-        for e in raw
-    ] == new[kind]
-    assert sorted(texts) == sorted(f"{e['id']}.md" for e in raw)
+# --- split and join -----------------------------------------------------------------------------
 
 
 def test_split_then_join_round_trips(tmp_path):
@@ -90,12 +57,10 @@ def test_split_then_join_round_trips(tmp_path):
         records.split_register(joined, again)
         committed = REPO / "examples/registers" / kind
         assert load_register(again) == load_register(committed)
-        files = sorted(p.relative_to(again) for p in again.rglob("*") if p.is_file())
-        assert files == sorted(
-            p.relative_to(committed) for p in committed.rglob("*") if p.is_file()
-        )
-        for rel in files:  # the split writes exactly the committed records and events
-            assert (again / rel).read_text() == (committed / rel).read_text()
+        names = sorted(p.name for p in again.glob("*.md"))
+        assert names == sorted(p.name for p in committed.glob("*.md"))  # <uid>.md each
+        for name in names:  # the split writes exactly the committed record files
+            assert (again / name).read_text() == (committed / name).read_text()
 
 
 def test_split_refuses_a_lossy_or_invalid_register(tmp_path):
@@ -106,23 +71,21 @@ def test_split_refuses_a_lossy_or_invalid_register(tmp_path):
     with pytest.raises(RegisterError, match="round trip"):
         records.split_register(src, tmp_path / "out")
     assert not (tmp_path / "out").exists()
-    src.write_text("runbooks:\n- id: RB-001\n  title: no steps at all\n")
+    src.write_text(f"runbooks:\n- uid: {U['RB-001']}\n  type: runbook\n  title: no steps at all\n")
     with pytest.raises(RegisterError, match="steps"):
         records.split_register(src, tmp_path / "out")
 
 
-def test_split_names_placeholders_by_slug(tmp_path):
+def test_a_joined_register_without_uids_is_refused(tmp_path):
+    """A single-file register written before uids is migrated, not split: every entry needs its
+    uid (``hnx records assign-uids``)."""
     doc = load_register(REPO / "examples/registers/lessons")
-    for e, t in zip(doc["lessons"][:2], ("Same title", "Same title"), strict=True):
-        e["id"], e["title"] = "LL-NEW", t
+    for e in doc["lessons"]:
+        e["id"] = "LL-00" + e.pop("uid")[-1]
     src = tmp_path / "lessons.yml"
     src.write_text(yaml.safe_dump(doc))
-    written = records.split_register(src, tmp_path / "lessons")
-    names = sorted(p.name for p in written if p.suffix == ".md")
-    assert names == [
-        *("LL-003.md", "LL-004.md", "LL-005.md"),
-        *("LL-NEW-same-title-2.md", "LL-NEW-same-title.md"),
-    ]
+    with pytest.raises(RegisterError, match="numbered `id: LL-00"):
+        records.split_register(src, tmp_path / "lessons")
 
 
 # --- malformed records are fatal ------------------------------------------------------------------
@@ -137,56 +100,77 @@ def src(tmp_path):
     return d
 
 
-def _edit(path, old, new):
-    text = path.read_text()
-    assert old in text, old
-    path.write_text(text.replace(old, new))
+_edit = edit
+
+
+OTHER = "01a15e4e-0000-7000-8000-00000000000f"  # a valid uid no example record has
 
 
 @pytest.mark.parametrize(
-    "file, old, new, needle",
+    "code, old, new, needle",
     [
         # a missing root cause section: the same schema error as a missing YAML field
-        ("LL-001.md", "## Root cause\n", "## Notes\n", "root_cause"),
-        ("LL-001.md", "id: LL-001", "id: LL-1", "front-matter has no `id:`"),
-        ("LL-001.md", "id: LL-001", "id: LL-009", "file name and front-matter id LL-009 disagree"),
-        ("LL-001.md", "## Symptom", "## Symtom", "unknown section `## Symtom`"),
-        ("LL-001.md", "## Root cause", "## Symptom", "appears twice"),
+        ("LL-001", "## Root cause\n", "## Notes\n", "root_cause"),
+        ("LL-001", "uid: {u}", "uid: LL-1", "`uid` must be a canonical UUIDv7"),
+        ("LL-001", "uid: {u}", "uid: {U}", "`uid` must be a canonical UUIDv7"),  # upper case
+        ("LL-001", "uid: {u}", f"uid: {OTHER}", f"file name and front-matter uid {OTHER} disagree"),
+        ("LL-001", "uid: {u}", "id: LL-001", "numbered `id: LL-001` and no `uid:`"),
+        ("LL-001", "uid: {u}\n", "", "`uid` must be a canonical UUIDv7"),
+        ("LL-001", "type: lesson", "type: runbook", "`type` must be lesson"),
+        ("LL-001", "type: lesson", "type: lesson\nparent: {u}", "registers are flat"),
+        ("LL-001", "## Symptom", "## Symtom", "unknown section `## Symtom`"),
+        ("LL-001", "## Root cause", "## Symptom", "appears twice"),
         (
-            "LL-001.md",
+            "LL-001",
             "status: controlled",
             "status: controlled\nroot_cause: x",
             "belongs in the body",
         ),
-        ("LL-001.md", "---\n\n## Symptom", "---\nstray prose\n\n## Symptom", "before the first"),
-        ("LL-001.md", "id: LL-001\n", "", "front-matter has no `id:`"),
-        ("LL-001.md", "systems: [proxy, tls]", "systems: [proxy, tls\n", "not YAML"),
+        ("LL-001", "---\n\n## Symptom", "---\nstray prose\n\n## Symptom", "before the first"),
+        ("LL-001", "systems: [proxy, tls]", "systems: [proxy, tls\n", "not YAML"),
     ],
 )
-def test_malformed_records_fail_validation(src, tmp_path, file, old, new, needle):
-    _edit(src / "lessons" / file, old, new)
+def test_malformed_records_fail_validation(src, tmp_path, code, old, new, needle):
+    u = U[code]
+    old, new = old.format(u=u, U=u.upper()), new.format(u=u, U=u.upper())
+    _edit(src / "lessons" / f(code), old, new)
     with pytest.raises(RegisterError, match=re.escape(needle)):
         build_all(src, tmp_path / "out")
     assert not (tmp_path / "out").exists()
 
 
-def test_duplicate_id_across_files_fails(src, tmp_path):
-    shutil.copy(src / "lessons/LL-001.md", src / "lessons/LL-002.md")
+def test_duplicate_uid_across_files_fails(src, tmp_path):
+    shutil.copy(src / "lessons" / f("LL-001"), src / "lessons" / f("LL-002"))
     with pytest.raises(RegisterError) as ex:
         build_all(src, tmp_path / "out")
-    assert "duplicate id LL-001" in str(ex.value) or "disagree" in str(ex.value)
-    # the schema's own duplicate check sees ids from different files (a placeholder name)
-    shutil.copy(src / "lessons/LL-001.md", src / "lessons/LL-NEW-copy.md")
-    _edit(src / "lessons/LL-002.md", "id: LL-001", "id: LL-002")
+    assert f"file name and front-matter uid {U['LL-001']} disagree" in str(ex.value)
+    # the schema's own duplicate check sees uids from any file
     texts = {p.name: p.read_text() for p in (src / "lessons").glob("*.md")}
-    texts["LL-NEW-copy.md"] = texts["LL-NEW-copy.md"].replace("id: LL-001", "id: LL-NEW")
-    texts["LL-004.md"] = texts["LL-001.md"]
-    with pytest.raises(RegisterError, match=r"LL-004\.md: file name and front-matter id LL-001"):
-        records.load_texts(texts, "lessons")
+    entries = records.load_texts({n: t for n, t in texts.items() if n != f("LL-002")}, "lessons")[
+        "lessons"
+    ]
+    from homelabnext.registers.schema import validate_lessons
+
+    with pytest.raises(RegisterError, match=f"duplicate uid {U['LL-001']}"):
+        validate_lessons({"lessons": [*entries, entries[0]]})
+
+
+def test_two_siblings_may_not_share_an_order(src, tmp_path):
+    for code in ("LL-001", "LL-003"):
+        _edit(src / "lessons" / f(code), "type: lesson", "type: lesson\norder: 1")
+    with pytest.raises(RegisterError, match="LL 2: order 1 is also the order of its sibling LL 1"):
+        build_all(src, tmp_path / "out")
+    _edit(src / "lessons" / f("LL-003"), "order: 1", "order: 0.5")  # before LL-001 now
+    build_all(src, tmp_path / "ok")
+    from homelabnext.registers.schema import labels_of
+
+    labels = labels_of(load_register(src / "lessons")["lessons"])
+    assert labels[U["LL-003"]] == "LL 1" and labels[U["LL-001"]] == "LL 2"
+    assert labels[U["LL-002"]] == "LL 3"  # unordered siblings follow, in creation order
 
 
 def test_steps_section_grammar(src, tmp_path):
-    rb = src / "runbooks/RB-001.md"
+    rb = src / "runbooks" / f("RB-001")
     _edit(rb, "   - verify: the reload command", "   - verfy: the reload command")
     with pytest.raises(RegisterError, match="`## Steps` line 4"):
         build_all(src, tmp_path / "out")
@@ -199,7 +183,7 @@ def test_steps_section_grammar(src, tmp_path):
 
 def test_fenced_code_may_hold_heading_lines(src, tmp_path):
     _edit(
-        src / "lessons/LL-003.md",
+        src / "lessons" / f("LL-003"),
         "five weeks.\n",
         "five weeks.\n\n```text\n## not a heading\n```\n",
     )
@@ -223,34 +207,30 @@ def test_both_forms_at_once_is_ambiguous(src, tmp_path):
         build_all(src, tmp_path / "out")
 
 
-def test_related_ids_must_resolve(src, tmp_path):
-    _edit(src / "lessons/LL-001.md", "status: controlled", "status: controlled\nrelated: [RB-001]")
+def test_related_uids_must_resolve(src, tmp_path):
+    ll1, rb1 = src / "lessons" / f("LL-001"), U["RB-001"]
+    _edit(ll1, "status: controlled", f"status: controlled\nrelated: [{rb1}]")
     records.stale_links(src / "lessons", write=True)
-    assert "- Related: [[RB-001]]" in (src / "lessons/LL-001.md").read_text()
+    assert f"- Related: [[{rb1}]]" in ll1.read_text()  # a uid, never a number or a title
     build_all(src, tmp_path / "ok")
-    _edit(src / "lessons/LL-001.md", "related: [RB-001]", "related: [RB-009]")
-    with pytest.raises(RegisterError, match="related RB-009 is not a live"):
+    _edit(ll1, f"related: [{rb1}]", f"related: [{OTHER}]")
+    with pytest.raises(RegisterError, match=f"related {OTHER} is not a lesson or runbook"):
         build_all(src, tmp_path / "bad")
-    _edit(src / "lessons/LL-001.md", "related: [RB-009]", "related: [LL-001]")
+    _edit(ll1, f"related: [{OTHER}]", "related: [RB-001]")
+    with pytest.raises(RegisterError, match="related 'RB-001' is a legacy numbered code"):
+        build_all(src, tmp_path / "bad")
+    _edit(ll1, "related: [RB-001]", f"related: [{U['LL-001']}]")
     with pytest.raises(RegisterError, match="names the entry itself"):
         build_all(src, tmp_path / "bad")
 
 
-def test_tombstone_record(src):
-    (src / "lessons/LL-007.md").write_text(
-        records.render_record(
-            {
-                "id": "LL-007",
-                "retired": {"reason": "merged into LL-001 on review", "replaced_by": "LL-001"},
-            },
-            "lessons",
-        )
-    )
-    doc = load_register(src / "lessons")
-    assert doc["retired"] == {
-        "LL-007": {"reason": "merged into LL-001 on review", "replaced_by": "LL-001"}
-    }
-    assert "- Retired; replaced by [[LL-001]]" in (src / "lessons/LL-007.md").read_text()
+def test_a_top_level_retired_block_is_refused_in_a_records_register():
+    """A uid is never reused, so a lessons register has nothing to tombstone."""
+    from homelabnext.registers.schema import validate_lessons
+
+    doc = load_register(REPO / "examples/registers/lessons")
+    with pytest.raises(RegisterError, match=r"unknown key\(s\) \['retired'\]"):
+        validate_lessons({**doc, "retired": {"LL-007": {"reason": "merged into another"}}})
 
 
 # --- the generated links block ---------------------------------------------------------------
@@ -262,7 +242,7 @@ def test_links_blocks_of_the_repository_are_current():
 
 
 def test_links_block_is_regenerated_and_checked(src, capsys):
-    rec = src / "runbooks/RB-001.md"
+    rec = src / "runbooks" / f("RB-001")
     _edit(rec, "systems: [proxy, tls]", "systems: [proxy, tls, backup]")
     assert registers_main(["links", "--check", str(src / "runbooks")]) == 1
     assert "stale links block" in capsys.readouterr().out
@@ -279,12 +259,11 @@ def test_links_block_is_regenerated_and_checked(src, capsys):
     assert rec.read_text() == text
 
 
-# --- ids across a record directory -------------------------------------------------------------
+# --- keys across a record directory -------------------------------------------------------------
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOMELABNEXT_IDS_STATE", str(tmp_path / "idstate"))
+def repo(tmp_path):
     r = tmp_path / "repo"
     shutil.copytree(REPO / "examples/registers/lessons", r / "reg/lessons")
     _git(r, "init")
@@ -293,86 +272,67 @@ def repo(tmp_path, monkeypatch):
     return r
 
 
-def test_new_record_is_allocated_renamed_and_rewritten(repo):
+def test_a_new_record_needs_nothing_at_merge_time(repo):
+    """Two branches that each add a lesson take a uid each: nothing to allocate or rename."""
     d = repo / "reg/lessons"
-    for slug in ("first", "second"):
-        text = (d / "LL-003.md").read_text().replace("id: LL-003", "id: LL-NEW")
-        (d / f"LL-NEW-{slug}.md").write_text(text + "\nSee LL-NEW for the follow-up.\n")
-    shutil.copytree(d / "LL-001.events", d / "LL-NEW-first.events")  # its events move with it
-    assert _tool(repo, "check-dupes").returncode == 0  # placeholders may repeat
-    r = _tool(repo, "check-placeholders", "reg/lessons/LL-NEW-first.md")
-    assert r.returncode == 1 and "LL-NEW" in r.stderr
-    r = _tool(repo, "resolve")
-    assert r.returncode == 3, r.stderr
-    assert "LL-NEW -> LL-006" in r.stdout and "LL-NEW -> LL-007" in r.stdout
-    assert sorted(p.name for p in d.glob("*.md")) == [f"LL-00{n}.md" for n in range(1, 8)]
-    assert sorted(p.name for p in (d / "LL-006.events").iterdir()) == sorted(
-        p.name for p in (d / "LL-001.events").iterdir()
-    )
-    assert not list(d.glob("LL-NEW*"))
-    first = (d / "LL-006.md").read_text()
-    assert "id: LL-006" in first and "See LL-006 for" in first and "LL-NEW" not in first
-    assert _tool(repo, "resolve").returncode == 0  # idempotent
-    assert _tool(repo, "check-placeholders").returncode == 0
-    assert _tool(repo, "check-dupes").returncode == 0
+    for new in ("01a15e4e-0000-7000-8000-0000000000a1", "01a15e4e-0000-7000-8000-0000000000a2"):
+        text = (d / f("LL-003")).read_text().replace(U["LL-003"], new)
+        (d / f"{new}.md").write_text(text)
+    for cmd in ("check-dupes", "check-uids", "check-lost"):
+        r = _tool(repo, cmd)
+        assert r.returncode == 0, (cmd, r.stderr)
 
 
-def test_allocating_a_number_keeps_the_reviews_current(repo):
-    """`resolve` rewrites LL-NEW -> LL-006 (the id and self-citations); that is not an edit."""
-    from homelabnext.registers import events as ev
-    from homelabnext.registers.schema import record_digest_of, validate_lessons
-    from homelabnext.reviews import load_policy
-
+def test_check_uids_flags_a_record_without_its_uid(repo):
     d = repo / "reg/lessons"
-    text = (d / "LL-001.md").read_text().replace("id: LL-001", "id: LL-NEW")
-    notes = "## Notes\n\nLL-NEW cites itself.\n\n## Links"
-    (d / "LL-NEW-copy.md").write_text(text.replace("## Links", notes))
-    shutil.rmtree(d / "LL-001.events")
-    (d / "LL-001.md").unlink()
-    entry = next(e for e in load_register(d)["lessons"] if e["id"] == "LL-NEW")
-    assert "LL-NEW cites itself" in entry["notes"]
-    digest = record_digest_of(entry)[:19]
-    shutil.rmtree(d / "LL-NEW-copy.events", ignore_errors=True)
-    for f in sorted((REPO / "examples/registers/lessons/LL-001.events").glob("*-review-*.yml")):
-        data = yaml.safe_load(f.read_text())
-        ev.create_event(d / "LL-NEW-copy.events", {**data, "digest": digest}, when=_when(data))
-    policy = load_policy(REPO / "examples/review-policy.yml")
-    validate_lessons(load_register(d), policy)  # controlled, reviewed: valid before ...
-    assert _tool(repo, "resolve").returncode == 3
-    after = load_register(d)
-    assert any(
-        e["id"] == "LL-006" and "LL-006 cites itself" in e["notes"] for e in after["lessons"]
-    )
-    validate_lessons(after, policy)  # ... and after the allocation
-
-
-def _when(data):
-    import datetime as dt
-
-    d = data["date"]
-    return dt.datetime(d.year, d.month, d.day, tzinfo=dt.UTC)
+    text = (d / f("LL-003")).read_text().replace(f"uid: {U['LL-003']}", "id: LL-003")
+    (d / "LL-003.md").write_text(text)
+    (d / "LL-NEW-x.md").write_text(text.replace("id: LL-003", "id: LL-NEW"))
+    r = _tool(repo, "check-uids", "reg/lessons")
+    assert r.returncode == 1
+    assert "reg/lessons/LL-003.md: no uid (still numbered LL-003)" in r.stderr
+    assert "LL-NEW-x.md: no uid (still numbered LL-NEW)" in r.stderr
+    assert "hnx records assign-uids" in r.stderr
+    r = _tool(repo, "check-dupes", "reg/lessons")  # the same file breaks the name rule too
+    assert r.returncode == 1 and "front-matter has no canonical `uid:`" in r.stderr
 
 
 def test_check_lost_catches_a_deleted_record_file(repo):
     assert _tool(repo, "check-lost").returncode == 0
-    (repo / "reg/lessons/LL-002.md").unlink()
+    (repo / "reg/lessons" / f("LL-002")).unlink()
     r = _tool(repo, "check-lost")
-    assert r.returncode == 1 and "reg/lessons lost LL-002" in r.stderr
-    assert "git checkout HEAD -- reg/lessons/<ID>.md" in r.stderr
+    assert r.returncode == 1 and f"reg/lessons lost {U['LL-002']}" in r.stderr
+    assert "git checkout HEAD -- reg/lessons/<uid>.md" in r.stderr
     for p in (repo / "reg/lessons").iterdir():  # the whole directory gone
         shutil.rmtree(p) if p.is_dir() else p.unlink()
-    assert "lost LL-001, LL-002, LL-003, LL-004, LL-005" in _tool(repo, "check-lost").stderr
+    lost = ", ".join(sorted(U[f"LL-00{n}"] for n in range(1, 6)))
+    assert f"lost {lost}" in _tool(repo, "check-lost").stderr
 
 
-def test_check_lost_counts_a_tombstone_file_as_present(repo):
-    d = repo / "reg/lessons"
-    (d / "LL-002.md").write_text(
-        records.render_record(
-            {"id": "LL-002", "retired": {"reason": "duplicate of LL-001 found in review"}},
-            "lessons",
-        )
+def test_check_lost_reads_the_migration_commit_through_the_alias_map(tmp_path):
+    """A base that still has LL-001.md: the migrated <uid>.md accounts for it through
+    aliases.yml; a record dropped in the migration commit is reported by its old code."""
+    r = tmp_path / "repo"
+    d = r / "reg/lessons"
+    d.mkdir(parents=True)
+    for code in ("LL-001", "LL-003"):
+        text = (EXAMPLES / "lessons" / f(code)).read_text()
+        text = text.replace(f"uid: {U[code]}\ntype: lesson", f"id: {code}")
+        (d / f"{code}.md").write_text(text)
+    _git(r, "init")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-m", "numbered")
+    for code in ("LL-001", "LL-003"):
+        text = (d / f"{code}.md").read_text().replace(f"id: {code}", f"uid: {U[code]}")
+        (d / f(code)).write_text(text)
+        (d / f"{code}.md").unlink()
+    (r / "reg/aliases.yml").write_text(
+        f"aliases:\n  LL-001: {U['LL-001']}\n  LL-003: {U['LL-003']}\n"
     )
-    assert _tool(repo, "check-lost").returncode == 0
+    assert _tool(r, "check-lost").returncode == 0, _tool(r, "check-lost").stderr
+    (d / f("LL-003")).unlink()
+    out = _tool(r, "check-lost")
+    assert out.returncode == 1 and "reg/lessons lost LL-003" in out.stderr
 
 
 def test_check_lost_against_a_base_reads_the_single_file_before_a_split(repo):
@@ -384,21 +344,17 @@ def test_check_lost_against_a_base_reads_the_single_file_before_a_split(repo):
     base = _git(repo, "rev-parse", "HEAD").stdout.strip()
     records.split_register(repo / "reg/lessons.yml", d)
     (repo / "reg/lessons.yml").unlink()
-    (d / "LL-003.md").unlink()  # lost in the conversion itself
+    (d / f("LL-003")).unlink()  # lost in the conversion itself
     _git(repo, "add", "-A")
     _git(repo, "commit", "-m", "split, dropping one")
     r = _tool(repo, "check-lost", "--base", base)
-    assert r.returncode == 1 and "lost LL-003" in r.stderr
+    assert r.returncode == 1 and f"lost {U['LL-003']}" in r.stderr
 
 
-def test_check_dupes_flags_a_name_id_mismatch_and_a_shared_id(repo):
+def test_check_dupes_flags_a_name_uid_mismatch_and_a_shared_uid(repo):
     d = repo / "reg/lessons"
-    shutil.copy(d / "LL-001.md", d / "LL-009.md")
+    shutil.copy(d / f("LL-001"), d / f"{OTHER}.md")
     r = _tool(repo, "check-dupes", "reg/lessons")
     assert r.returncode == 1
-    assert "LL-009.md: file name and front-matter id LL-001 disagree" in r.stderr
-    assert "LL-009.md: id LL-001 is also the id of LL-001.md" in r.stderr
-
-
-def test_allocation_floor_reads_the_directory(repo):
-    assert ids.allocate(repo, "reg/lessons", "LL") == ["LL-006"]
+    assert f"{OTHER}.md: file name and front-matter uid {U['LL-001']} disagree" in r.stderr
+    assert f"{f('LL-001')}: uid {U['LL-001']} is also the uid of {OTHER}.md" in r.stderr

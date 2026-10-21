@@ -5,6 +5,11 @@
 
 The record: [strategy.md](../../examples/strategy/strategy.md).
 
+Each record is identified by its uid, which every link uses; the number it is shown
+with (SO 1, OO 1.2, MOE 1.2.1, PIR 2.1) is computed from its type, its parent and its
+place among its siblings each time this page is generated, so it can change when a
+record is inserted or moved (docs/adr/0019-record-uids-computed-numbers.md).
+
 ## Priorities of work
 
 1. Keep the core services available
@@ -13,24 +18,24 @@ The record: [strategy.md](../../examples/strategy/strategy.md).
 
 ## Objectives (SO -> OO -> TO -> TT)
 
-- [SO-001](../../examples/strategy/objectives/SO-001.md) Core services stay available; measured by [MOE-001](../../examples/strategy/measures/MOE-001.md)
-  - [OO-001](../../examples/strategy/objectives/OO-001.md) The lab's pages describe what actually runs; measured by [MOE-002](../../examples/strategy/measures/MOE-002.md), [MOP-001](../../examples/strategy/measures/MOP-001.md)
-    - [TO-001](../../examples/strategy/objectives/TO-001.md) Decide and finish proposals within a week; measured by [MOE-003](../../examples/strategy/measures/MOE-003.md), [MOP-002](../../examples/strategy/measures/MOP-002.md)
-      - [TT-001](../../examples/strategy/objectives/TT-001.md) Read the proposal inbox every week; measured by [MOE-004](../../examples/strategy/measures/MOE-004.md)
-- [SO-002](../../examples/strategy/objectives/SO-002.md) Hostile activity against the lab is detected; measured by [MOE-005](../../examples/strategy/measures/MOE-005.md)
-  - [OO-002](../../examples/strategy/objectives/OO-002.md) Every detection rule is tested before it ships; measured by [MOE-006](../../examples/strategy/measures/MOE-006.md)
+- [SO 1 Core services stay available](../../examples/strategy/objectives/01a15e4e-758c-7318-bbc3-04740e2d7038.md) ([[01a15e4e-758c-7318-bbc3-04740e2d7038|SO 1 Core services stay available]]); measured by [MOE 1.1](../../examples/strategy/measures/01a15e4e-758c-731e-84af-04a7d009239b.md) ([[01a15e4e-758c-731e-84af-04a7d009239b|MOE 1.1 Share of uptime monitors that are up]])
+  - [OO 1.1 The lab's pages describe what actually runs](../../examples/strategy/objectives/01a15e4e-758c-731a-834b-280b76e29792.md) ([[01a15e4e-758c-731a-834b-280b76e29792|OO 1.1 The lab's pages describe what actually runs]]); measured by [MOE 1.1.1](../../examples/strategy/measures/01a15e4e-758c-731f-a2fa-6be863e6f99b.md) ([[01a15e4e-758c-731f-a2fa-6be863e6f99b|MOE 1.1.1 The system and capability pages match the registry]]), [MOP 1.1.1](../../examples/strategy/measures/01a15e4e-758d-75ea-a3c2-9f03395128ed.md) ([[01a15e4e-758d-75ea-a3c2-9f03395128ed|MOP 1.1.1 Notes waiting in the records inbox]])
+    - [TO 1.1.1 Decide and finish proposals within a week](../../examples/strategy/objectives/01a15e4e-758c-731c-9d6a-fb9bbdb29c50.md) ([[01a15e4e-758c-731c-9d6a-fb9bbdb29c50|TO 1.1.1 Decide and finish proposals within a week]]); measured by [MOE 1.1.1.1](../../examples/strategy/measures/01a15e4e-758d-75e6-bdbf-67980431a919.md) ([[01a15e4e-758d-75e6-bdbf-67980431a919|MOE 1.1.1.1 Approved proposals not yet completed]]), [MOP 1.1.1.1](../../examples/strategy/measures/01a15e4e-758d-75eb-90be-6709e42f34cf.md) ([[01a15e4e-758d-75eb-90be-6709e42f34cf|MOP 1.1.1.1 Proposals completed]])
+      - [TT 1.1.1.1 Read the proposal inbox every week](../../examples/strategy/objectives/01a15e4e-758c-731d-bd24-5471fca21d48.md) ([[01a15e4e-758c-731d-bd24-5471fca21d48|TT 1.1.1.1 Read the proposal inbox every week]]); measured by [MOE 1.1.1.1.1](../../examples/strategy/measures/01a15e4e-758d-75e7-9c71-772f18ad54ee.md) ([[01a15e4e-758d-75e7-9c71-772f18ad54ee|MOE 1.1.1.1.1 Inbox reviews that ended every note with a decision]])
+- [SO 2 Hostile activity against the lab is detected](../../examples/strategy/objectives/01a15e4e-758c-7319-b5cb-c9a62a360c20.md) ([[01a15e4e-758c-7319-b5cb-c9a62a360c20|SO 2 Hostile activity against the lab is detected]]); measured by [MOE 2.1](../../examples/strategy/measures/01a15e4e-758d-75e8-ae50-b9bee8b9ff5c.md) ([[01a15e4e-758d-75e8-ae50-b9bee8b9ff5c|MOE 2.1 Share of in-scope attack techniques with a tested rule]])
+  - [OO 2.1 Every detection rule is tested before it ships](../../examples/strategy/objectives/01a15e4e-758c-731b-8804-a6bc53dbd36b.md) ([[01a15e4e-758c-731b-8804-a6bc53dbd36b|OO 2.1 Every detection rule is tested before it ships]]); measured by [MOE 2.1.1](../../examples/strategy/measures/01a15e4e-758d-75e9-9acc-acecb66e857a.md) ([[01a15e4e-758d-75e9-9acc-acecb66e857a|MOE 2.1.1 Every detection rule passes its fixtures]])
 
 ## Requirements
 
-| Requirement | Type | Question | Supports | Serves | Cadence | LTIOV | Status |
-|---|---|---|---|---|---|---|---|
-| [CCIR-001](../../examples/strategy/requirements/CCIR-001.md) | CCIR | Is any core service down for more than 15 minutes? | [SO-001](../../examples/strategy/objectives/SO-001.md) | - | PT15M | standing | active |
-| [FFIR-001](../../examples/strategy/requirements/FFIR-001.md) | FFIR | Is the monitoring that would show an outage healthy itself? | [SO-001](../../examples/strategy/objectives/SO-001.md), [OO-001](../../examples/strategy/objectives/OO-001.md) | [CCIR-001](../../examples/strategy/requirements/CCIR-001.md) | PT1H | standing | active |
-| [PIR-001](../../examples/strategy/requirements/PIR-001.md) | PIR | Is anyone probing the lab's monitoring or status endpoints? | [SO-002](../../examples/strategy/objectives/SO-002.md) | [FFIR-001](../../examples/strategy/requirements/FFIR-001.md) | P1D | standing | active |
+| Requirement | Type | Supports | Serves | Cadence | LTIOV | Status |
+|---|---|---|---|---|---|---|
+| [CCIR 1 Is any core service down for more than 15 minutes?](../../examples/strategy/requirements/01a15e4e-758d-75ec-a231-651e79c1beb7.md) ([[01a15e4e-758d-75ec-a231-651e79c1beb7\|CCIR 1 Is any core service down for more than 15 minutes?]]) | CCIR | [SO 1](../../examples/strategy/objectives/01a15e4e-758c-7318-bbc3-04740e2d7038.md) ([[01a15e4e-758c-7318-bbc3-04740e2d7038\|SO 1 Core services stay available]]) | - | PT15M | standing | active |
+| [FFIR 1 Is the monitoring that would show an outage healthy itself?](../../examples/strategy/requirements/01a15e4e-758d-75ed-a383-a78599b3d065.md) ([[01a15e4e-758d-75ed-a383-a78599b3d065\|FFIR 1 Is the monitoring that would show an outage healthy itself?]]) | FFIR | [SO 1](../../examples/strategy/objectives/01a15e4e-758c-7318-bbc3-04740e2d7038.md) ([[01a15e4e-758c-7318-bbc3-04740e2d7038\|SO 1 Core services stay available]]), [OO 1.1](../../examples/strategy/objectives/01a15e4e-758c-731a-834b-280b76e29792.md) ([[01a15e4e-758c-731a-834b-280b76e29792\|OO 1.1 The lab's pages describe what actually runs]]) | [CCIR 1](../../examples/strategy/requirements/01a15e4e-758d-75ec-a231-651e79c1beb7.md) ([[01a15e4e-758d-75ec-a231-651e79c1beb7\|CCIR 1 Is any core service down for more than 15 minutes?]]) | PT1H | standing | active |
+| [PIR 1 Is anyone probing the lab's monitoring or status endpoints?](../../examples/strategy/requirements/01a15e4e-758d-75ee-a451-ea98b7fcd567.md) ([[01a15e4e-758d-75ee-a451-ea98b7fcd567\|PIR 1 Is anyone probing the lab's monitoring or status endpoints?]]) | PIR | [SO 2](../../examples/strategy/objectives/01a15e4e-758c-7319-b5cb-c9a62a360c20.md) ([[01a15e4e-758c-7319-b5cb-c9a62a360c20\|SO 2 Hostile activity against the lab is detected]]) | [FFIR 1](../../examples/strategy/requirements/01a15e4e-758d-75ed-a383-a78599b3d065.md) ([[01a15e4e-758d-75ed-a383-a78599b3d065\|FFIR 1 Is the monitoring that would show an outage healthy itself?]]) | P1D | standing | active |
 
 ## RFIs
 
 | RFI | Raised by | Triage | LTIOV | Status |
 |---|---|---|---|---|
-| [RFI-001](../../examples/strategy/rfis/RFI-001.md) Which monitors cover the core services | [MOE-001](../../examples/strategy/measures/MOE-001.md) | collection | 2026-11-19 | open |
-| [RFI-002](../../examples/strategy/rfis/RFI-002.md) Has the status host been scanned in the last month | [PIR-001](../../examples/strategy/requirements/PIR-001.md) | production | 2026-11-03 | no-find |
+| [RFI 1 Which monitors cover the core services](../../examples/strategy/rfis/01a15e4e-758d-75ef-b0de-ee2ec6316a77.md) ([[01a15e4e-758d-75ef-b0de-ee2ec6316a77\|RFI 1 Which monitors cover the core services]]) | [MOE 1.1](../../examples/strategy/measures/01a15e4e-758c-731e-84af-04a7d009239b.md) ([[01a15e4e-758c-731e-84af-04a7d009239b\|MOE 1.1 Share of uptime monitors that are up]]) | collection | 2026-11-19 | open |
+| [RFI 2 Has the status host been scanned in the last month](../../examples/strategy/rfis/01a15e4e-758d-75f0-b53b-19ec2c792e88.md) ([[01a15e4e-758d-75f0-b53b-19ec2c792e88\|RFI 2 Has the status host been scanned in the last month]]) | [PIR 1](../../examples/strategy/requirements/01a15e4e-758d-75ee-a451-ea98b7fcd567.md) ([[01a15e4e-758d-75ee-a451-ea98b7fcd567\|PIR 1 Is anyone probing the lab's monitoring or status endpoints?]]) | production | 2026-11-03 | no-find |

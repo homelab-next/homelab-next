@@ -29,13 +29,12 @@ def completion_reading(
     ``sample``, ``evidence``."""
     if measure.type != "MOP":
         raise ValueError(
-            f"{measure.id or measure.uid} is a {measure.type}: work completion is activity and "
+            f"{measure.label or measure.uid} is a {measure.type}: work completion is activity and "
             "feeds a MOP only, never a MOE (doctrine rule activity_never_moe)"
         )
-    objectives = [t for rel, t in measure.links if rel == "measures"]
-    if len(objectives) != 1:
-        raise ValueError(f"{measure.id or measure.uid} measures no single objective")
-    target = objectives[0]
+    target = measure.parent_uid  # a measure's parent is the objective it measures
+    if not target:
+        raise ValueError(f"{measure.label or measure.uid} measures no objective")
     work = [
         i
         for i in items

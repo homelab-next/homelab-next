@@ -7,8 +7,8 @@ source of truth (ADR-0020); OpenProject shows the records so execution work can 
 * **Upsert by uid.** Each record is the work package whose External key is the record's uid
   (:mod:`homelabnext.projects.strategy`): found -> ``PATCH`` with its ``lockVersion``, not found ->
   ``POST``.  The type is the record's type (SO ... MOE, RFI), the status the record's status.
-* **Cascade and links.** ``parent`` is the work package parent (parents are written first);
-  ``supports``/``serves``/``measures``/``raised_by`` are ``relates`` relations with the edge name
+* **Cascade and links.** ``parent`` is the work package parent (parents are written first; a
+  measure's parent is its objective); ``supports``/``serves``/``raised_by`` are ``relates`` relations with the edge name
   in the relation's description.  Stale relations are deleted only when both ends are strategy
   work packages; a relation to execution work is never touched.
 * **Content hash.** The hash of what the sync writes is kept in the ``hnx state`` field.  Equal
@@ -74,6 +74,12 @@ class SyncReport:
         return out
 
 
+def _number(label: str) -> tuple[int, ...]:
+    """``OO 1.10`` -> (1, 10): parents sort before their children."""
+    tail = label.rsplit(" ", 1)[-1]
+    return tuple(int(p) if p.isdigit() else 0 for p in tail.split("."))
+
+
 def _shown(wp: Mapping[str, Any], fields: Mapping[str, str]) -> dict[str, Any]:
     """What a strategy work package shows of the fields the sync owns."""
     return {
@@ -91,7 +97,7 @@ def _hash(shown: Mapping[str, Any]) -> str:
 
 
 def _description(rec: StrategyRecord) -> str:
-    head = f"_{BANNER}_\n\n**{rec.id}** ({rec.type})"
+    head = f"_{BANNER}_\n\n**{rec.label or rec.type}**"
     return f"{head}\n\n{rec.text}".rstrip() if rec.text else head
 
 
@@ -112,19 +118,19 @@ def sync_strategy(
         key = wp.get(ext)
         if key:
             existing[str(key)] = wp
-    recs = sorted(records, key=lambda r: (_ORDER.get(r.type, 99), r.id))
+    recs = sorted(records, key=lambda r: (_ORDER.get(r.type, 99), _number(r.label), r.uid))
     wp_of = {k: int(w["id"]) for k, w in existing.items()}
     for rec in recs:
         if rec.type not in setup.types:
-            rep.problems.append(f"{rec.id}: no work package type {rec.type!r}")
+            rep.problems.append(f"{rec.label}: no work package type {rec.type!r}")
             continue
         status = cfg.strategy_statuses.get(rec.status)
         if status not in setup.statuses:
-            rep.problems.append(f"{rec.id}: no status for {rec.status!r}")
+            rep.problems.append(f"{rec.label}: no status for {rec.status!r}")
             continue
         parent = wp_of.get(rec.parent_uid or "")
         if rec.parent_uid and parent is None and apply:
-            rep.problems.append(f"{rec.id}: its parent is not mirrored")
+            rep.problems.append(f"{rec.label}: its parent is not mirrored")
             continue
         want = {
             "subject": rec.title[:255],
@@ -147,7 +153,7 @@ def sync_strategy(
             },
         }
         cur = existing.get(rec.uid)
-        label = f"{rec.id} ({rec.uid})"
+        label = f"{rec.label} ({rec.uid})"
         if cur is None:
             rep.created.append(label)
             if apply:
@@ -188,9 +194,9 @@ def _sync_links(client, setup, recs, wp_of, rep: SyncReport, apply: bool) -> Non
             a, b = wp_of.get(rec.uid), wp_of.get(target)
             if a is None or b is None:
                 if apply:
-                    rep.problems.append(f"{rec.id}: {label} target not mirrored")
+                    rep.problems.append(f"{rec.label}: {label} target not mirrored")
                 else:
-                    rep.relations_added.append(f"{rec.id} {label} {target}")
+                    rep.relations_added.append(f"{rec.label} {label} {target}")
                 continue
             want.add((a, b, label))
     for a, b, label in sorted(want - set(have)):

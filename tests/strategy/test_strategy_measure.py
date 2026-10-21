@@ -6,7 +6,7 @@ import datetime as dt
 import json
 
 import pytest
-from strategy_helpers import NOW, edit
+from strategy_helpers import NOW, U, edit
 
 from homelabnext.strategy import Context, grade_all, load_doctrine, load_tree, read, rollup
 from homelabnext.strategy.measure import Grade, measure_all, value_event
@@ -83,32 +83,36 @@ def test_measure_records_value_events_and_a_repeat_adds_nothing(lab, records):
     before = set(lab.rglob("*-value-*.yml"))
     written, tree = measure_all(lab, ctx, by="profile:example-checker")
     new = {p.name for p in set(lab.rglob("*-value-*.yml")) - before}
-    assert sorted(k for k, e in written.items() if e) == ["MOE-001", "MOE-002", "MOE-003", "MOE-006", "MOP-001", "MOP-002"]  # fmt: skip
+    want = sorted(U[c] for c in ("MOE-001", "MOE-002", "MOE-003", "MOE-006", "MOP-001", "MOP-002"))
+    assert sorted(k for k, e in written.items() if e) == want
     assert len(set(lab.rglob("*-value-*.yml")) - before) == 6 and new == {"20261020T131500Z-value-profile-example-checker.yml"}  # fmt: skip
-    moe6 = tree.of("measures")["MOE-006"]["values"][-1]
+    moe6 = tree.of("measures")[U["MOE-006"]]["values"][-1]
     assert (moe6["value"], moe6["evidence"]) == (0.0, "invariant:D-02 fail at 2026-10-20T13:01:00+00:00")  # fmt: skip
     again, _ = measure_all(lab, ctx, by="profile:example-checker")
     assert not any(again.values())  # the same data again: nothing new
     ctx.now = later = later + dt.timedelta(hours=1)
     again, _ = measure_all(lab, ctx, by="profile:example-checker")
-    assert {k for k, e in again.items() if e} == {"MOP-001", "MOP-002"}  # counts are taken now
+    assert {k for k, e in again.items() if e} == {
+        U["MOP-001"],
+        U["MOP-002"],
+    }  # counts are taken now
     grades = grade_all(load_tree(lab), load_doctrine(lab), later)
-    assert grades["MOE-006"].state == "red" and grades["MOE-006"].trend == "down"
-    assert grades["MOE-001"].state == "baseline"  # its first value (after a finding): cold start
+    assert grades[U["MOE-006"]].state == "red" and grades[U["MOE-006"]].trend == "down"
+    assert grades[U["MOE-001"]].state == "baseline"  # its first value (after a finding): cold start
 
 
 def test_dry_run_writes_nothing(lab):
     before = sorted(p.name for p in lab.rglob("*.yml"))
     written, tree = measure_all(lab, Context(NOW, results=RESULTS), by="profile:x", write=False)
-    assert written["MOE-002"] is not None
+    assert written[U["MOE-002"]] is not None
     assert sorted(p.name for p in lab.rglob("*.yml")) == before
-    assert tree.of("measures")["MOE-002"]["values"][-1]["observed_at"] == "2026-10-20T13:00:00+00:00"  # fmt: skip
+    assert tree.of("measures")[U["MOE-002"]]["values"][-1]["observed_at"] == "2026-10-20T13:00:00+00:00"  # fmt: skip
 
 
 def test_a_value_event_carries_the_seven_fields(lab):
     from homelabnext.registers.events import check_event
 
-    m = load_tree(lab).of("measures")["MOE-002"]
+    m = load_tree(lab).of("measures")[U["MOE-002"]]
     r = read(m, Context(NOW, results=RESULTS))
     e = value_event({**m, "values": []}, r, "profile:example-checker", NOW)
     assert check_event(json.loads(json.dumps(e, default=str))) == []
@@ -119,39 +123,41 @@ def test_rollup_is_the_worst_moe_and_child_with_mops_as_fallback(lab):
     tree = load_tree(lab)
     grades = grade_all(tree, load_doctrine(lab), NOW)
     states = rollup(tree, grades)
-    assert states["TT-001"]["state"] == "amber"  # MOE-004, capped
-    assert states["TO-001"] == {
+    assert states[U["TT-001"]]["state"] == "amber"  # MOE-004, capped
+    assert states[U["TO-001"]] == {
         "state": "amber", "effect": "amber", "performance": "green",
-        "children": ["TT-001"], "measures": ["MOE-003", "MOP-002"],
+        "children": [U["TT-001"]], "measures": [U["MOE-003"], U["MOP-002"]], "label": "TO 1.1.1",
     }  # fmt: skip
-    assert states["OO-002"]["state"] == "green"
-    assert states["SO-002"]["state"] == "red"  # MOE-005 is not measurable: a finding rolls up red
-    assert states["SO-001"]["children"] == ["OO-001"]
+    assert states[U["OO-002"]]["state"] == "green"
+    assert (
+        states[U["SO-002"]]["state"] == "red"
+    )  # MOE-005 is not measurable: a finding rolls up red
+    assert states[U["SO-001"]]["children"] == [U["OO-001"]]
 
 
 def test_rollup_falls_back_to_mops_when_no_effect_is_graded(lab):
     tree = load_tree(lab)
     grades = {
-        "MOE-003": Grade("MOE-003", "baseline"),
-        "MOP-002": Grade("MOP-002", "red"),
-        "MOE-004": Grade("MOE-004", "pending"),
+        U["MOE-003"]: Grade(U["MOE-003"], "baseline"),
+        U["MOP-002"]: Grade(U["MOP-002"], "red"),
+        U["MOE-004"]: Grade(U["MOE-004"], "pending"),
     }
     states = rollup(tree, grades)
-    assert states["TT-001"]["state"] == "pending"
-    assert (states["TO-001"]["effect"], states["TO-001"]["state"]) == ("baseline", "red")
+    assert states[U["TT-001"]]["state"] == "pending"
+    assert (states[U["TO-001"]]["effect"], states[U["TO-001"]]["state"]) == ("baseline", "red")
 
 
 def test_a_retired_measure_or_objective_is_skipped(lab):
     edit(lab, "measures/MOE-004.md", "kind: output", "kind: output")
     tree = load_tree(lab)
-    tree.of("measures")["MOE-004"]["status"] = "retired"
-    assert "MOE-004" not in grade_all(tree, load_doctrine(lab), NOW)
-    tree.of("objectives")["TT-001"]["status"] = "retired"
+    tree.of("measures")[U["MOE-004"]]["status"] = "retired"
+    assert U["MOE-004"] not in grade_all(tree, load_doctrine(lab), NOW)
+    tree.of("objectives")[U["TT-001"]]["status"] = "retired"
     assert "TT-001" not in rollup(tree, grade_all(tree, load_doctrine(lab), NOW))
 
 
 def test_grading_ages_readings_with_the_injected_clock(lab):
     tree = load_tree(lab)
     later = NOW + dt.timedelta(days=30)
-    g = grade_all(tree, load_doctrine(lab), later)["MOE-002"]
+    g = grade_all(tree, load_doctrine(lab), later)[U["MOE-002"]]
     assert g.state == "green" and g.thin and g.confidence == "low"

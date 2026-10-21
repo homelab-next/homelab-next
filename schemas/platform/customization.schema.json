@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/customization/1.1",
+  "$id": "https://schemas.example.internal/homelabnext/platform/customization/1.2",
   "title": "Customization",
   "description": "One lab- or vendor-specific deviation from the core, held outside the core so it is visible, owned and expiring. A customization can only use a sanctioned extension point (variable override, role hook, template overlay, registry patch, opt-in host profile); it can never edit core files or bypass a schema.",
   "type": "object",
@@ -73,8 +73,20 @@
     "links": {
       "type": "object",
       "properties": {
-        "lesson": { "type": "string", "pattern": "^LL-[0-9]{3,}$" },
-        "runbook": { "type": "string", "pattern": "^RB-[0-9]{3,}$" }
+        "lesson": {
+          "anyOf": [
+            { "type": "string", "pattern": "^LL-[0-9]{3,}$" },
+            { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)" }
+          ],
+          "description": "1.2: the lesson's uid (ADR-0019); a legacy numbered code still validates and resolves through examples/registers/aliases.yml with a deprecation warning."
+        },
+        "runbook": {
+          "anyOf": [
+            { "type": "string", "pattern": "^RB-[0-9]{3,}$" },
+            { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)" }
+          ],
+          "description": "1.2: the runbook's uid, as for lesson."
+        }
       },
       "additionalProperties": false
     },

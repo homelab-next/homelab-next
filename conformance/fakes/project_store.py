@@ -11,12 +11,15 @@ import dataclasses
 import datetime as dt
 import itertools
 
-from homelabnext.projects import MemoryBackend, ProjectStore, derived_uid
+from homelabnext.projects import MemoryBackend, ProjectStore
 from homelabnext.projects.model import LINK_RELATIONS, WorkItem
 from homelabnext.projects.store import doc_of
 
-RECORDS = tuple(
-    derived_uid("hnx:conformance", f"record-{n}", dt.date(2026, 1, 1)) for n in (1, 2, 3)
+#: three fictional external record uids (UUIDv7) the fake can link to
+RECORDS = (
+    "01941f29-7c00-7a3e-8b2c-000000000001",
+    "01941f29-7c00-7a3e-8b2c-000000000002",
+    "01941f29-7c00-7a3e-8b2c-000000000003",
 )
 _EPOCH = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
 

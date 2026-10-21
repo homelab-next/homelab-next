@@ -14,15 +14,19 @@
 (``strategy``, ``requirements``, ``objectives``, ``rfis``).  Each request reads the record files
 and their events only -- it never runs a measurement -- and every value is escaped.  The
 stylesheet is the hub's one inline style, so the CSP hash ``hnx status serve`` sends covers
-these pages unchanged.
+these pages unchanged.  Records are shown by their computed display numbers (``OO 1.2``; the
+uid in the element's title), numbered afresh on every request (ADR-0019); a ``[[<uid>]]`` link
+in a record's prose is shown as the number of the record it names.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import re
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from homelabnext.identity.uid import UID_PATTERN
 from homelabnext.status.agents.pages import _table
 from homelabnext.status.render import _e, nav_html, shell_html
 
@@ -54,8 +58,26 @@ def _badge(state: str) -> str:
     return f'<span class="s {_CLASS.get(state, "unknown")}">{_e(state)}</span>'
 
 
-def _p(text: Any) -> str:
-    return "".join(f"<p>{_e(par)}</p>" for par in str(text or "").split("\n\n") if par.strip())
+_WIKI = re.compile(rf"\[\[({UID_PATTERN})(?:\|[^\]]*)?\]\]")
+
+
+def _ref(tree: Tree, uid: Any) -> str:
+    """A record reference as its display number, the uid in the title."""
+    uid = str(uid)
+    return f'<span class="ref" title="{_e(uid)}">{_e(tree.label(uid))}</span>'
+
+
+def _p(text: Any, tree: Tree | None = None) -> str:
+    def para(s: str) -> str:
+        if tree is None:
+            return _e(s)
+        out, pos = [], 0
+        for m in _WIKI.finditer(s):  # escape around the links, render each as its number
+            out += [_e(s[pos : m.start()]), _ref(tree, m[1])]
+            pos = m.end()
+        return "".join(out) + _e(s[pos:])
+
+    return "".join(f"<p>{para(par)}</p>" for par in str(text or "").split("\n\n") if par.strip())
 
 
 def _ul(items) -> str:
@@ -96,8 +118,8 @@ class StrategySite:
         ]
         main = (
             f"<h2>{_e(s.get('title', 'Strategy'))}</h2>"
-            f'<div class="split"><div class="pane"><h3>Mission</h3>{_p(s.get("mission"))}'
-            f"<h3>Intent</h3>{_p(s.get('intent'))}<h3>End state</h3>{_p(s.get('end_state'))}</div>"
+            f'<div class="split"><div class="pane"><h3>Mission</h3>{_p(s.get("mission"), tree)}'
+            f"<h3>Intent</h3>{_p(s.get('intent'), tree)}<h3>End state</h3>{_p(s.get('end_state'), tree)}</div>"
             f'<div class="pane"><h3>Priorities of work</h3><ol>{prio}</ol>'
             f"<h3>Assumptions</h3>{_ul(_e(a) for a in s.get('assumptions') or ())}</div></div>"
             f"<h3>Constraints</h3>{_table(('Rule', 'Owner'), rows)}"
@@ -112,20 +134,28 @@ class StrategySite:
             ("PIR", "what we need to know about the environment and adversary"),
         ):
             cards = []
-            for k, r in sorted(tree.of("requirements").items()):
-                if not k.startswith(f"{rtype}-"):
+            for k in tree.ordered("requirements"):
+                r = tree.of("requirements")[k]
+                if r.get("type") != rtype:
                     continue
+                num = tree.label(k).partition(" ")[2]
+                sirs = "".join(
+                    f"<li>SIR {_e(num)}.{n} {_e(s)}</li>"
+                    for n, s in enumerate(r.get("sirs") or (), 1)
+                )
                 facts = (
-                    ("Supports", ", ".join(_e(x) for x in r.get("supports") or ())),
-                    ("Serves", ", ".join(_e(x) for x in r.get("serves") or ()) or "-"),
+                    ("Supports", ", ".join(_ref(tree, x) for x in r.get("supports") or ())),
+                    ("Serves", ", ".join(_ref(tree, x) for x in r.get("serves") or ()) or "-"),
                     ("Cadence", _e(r.get("cadence"))),
                     ("LTIOV", _e(r.get("ltiov"))),
                     ("Consumer", f"<code>{_e(r.get('consumer'))}</code>"),
+                    ("SIRs", f"<ul>{sirs}</ul>" if sirs else ""),
                 )
-                dl = "".join(f"<dt>{_e(a)}</dt><dd>{b}</dd>" for a, b in facts)
+                dl = "".join(f"<dt>{_e(a)}</dt><dd>{b}</dd>" for a, b in facts if b)
                 cards.append(
                     f'<div class="tile {_CLASS.get(str(r.get("status")), "unknown")}">'
-                    f"<h3>{_e(k)}</h3>{_badge(str(r.get('status')))} {_e(r.get('title'))}"
+                    f'<h3 title="{_e(k)}">{_e(tree.label(k))}</h3>'
+                    f"{_badge(str(r.get('status')))} {_e(r.get('title'))}"
                     f"<dl>{dl}</dl></div>"
                 )
             body = "".join(cards) or '<p class="muted">none</p>'
@@ -145,7 +175,7 @@ class StrategySite:
             more += [g.finding] if g.finding else []
             note = f' <span class="muted">{_e("; ".join(more))}</span>' if more else ""
             return (
-                f"<li>{_badge(g.state)} <code>{_e(m)}</code> "
+                f'<li>{_badge(g.state)} <code title="{_e(m)}">{_e(tree.label(m))}</code> '
                 f"{_e(tree.of('measures')[m].get('title'))}: <b>{_e(v)}</b> "
                 f'<span class="muted">at {_e(g.observed_at or "never")}, '
                 f"confidence {_e(g.confidence)}</span>{note}</li>"
@@ -156,12 +186,13 @@ class StrategySite:
             ms = "".join(measure(m) for m in s["measures"])
             kids = "".join(node(c) for c in s["children"])
             return (
-                f"<li>{_badge(s['state'])} <b>{_e(k)}</b> {_e(o.get('title'))} "
+                f'<li>{_badge(s["state"])} <b title="{_e(k)}">{_e(tree.label(k))}</b> '
+                f"{_e(o.get('title'))} "
                 f'<span class="muted">owner {_e(o.get("owner"))}</span>'
                 f"<ul>{ms}{kids}</ul></li>"
             )
 
-        roots = sorted(k for k in states if objs[k].get("level") == "SO")
+        roots = [k for k in tree.ordered("objectives", states) if objs[k].get("type") == "SO"]
         tree_html = "".join(node(k) for k in roots)
         main = (
             '<h2>Objectives</h2><p class="muted">The rollup is the worst of an objective\'s MOEs '
@@ -179,9 +210,9 @@ class StrategySite:
             return [
                 (
                     _badge(str(rfis[k].get("status"))),
-                    f"<code>{_e(k)}</code>",
+                    f'<code title="{_e(k)}">{_e(tree.label(k))}</code>',
                     _e(rfis[k].get("title")),
-                    _e(rfis[k].get("raised_by")),
+                    _ref(tree, rfis[k].get("raised_by")),
                     _e(rfis[k].get("ltiov")),
                     _e(rfis[k].get("resolution") or ""),
                 )
@@ -194,12 +225,16 @@ class StrategySite:
             ("collection", "collection requirements: the answer needs data the lab does not hold"),
             ("production", "production requirements: the lab holds the data, the answer is owed"),
         ):
-            keys = sorted(k for k, r in rfis.items() if _active(r) and r.get("triage") == triage)
+            keys = [
+                k
+                for k in tree.ordered("rfis")
+                if _active(rfis[k]) and rfis[k].get("triage") == triage
+            ]
             parts.append(f'<h3>Open: {triage}</h3><p class="muted">{_e(what)}</p>')
             parts.append(_table(head, rows(keys)))
         soon = expiring(tree, now.date(), doctrine.expiring_soon_days)
         parts.append(f"<h3>Expiring within {doctrine.expiring_soon_days} days</h3>")
         parts.append(_table(head, rows(k for k, _ in soon)))
-        closed = sorted(k for k, r in rfis.items() if not _active(r))
+        closed = [k for k in tree.ordered("rfis") if not _active(rfis[k])]
         parts.append("<h3>Closed</h3>" + _table(head, rows(closed)))
         return "RFIs", "".join(parts)

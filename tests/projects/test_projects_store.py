@@ -10,14 +10,12 @@ import pytest
 
 from conformance.fakes.project_store import RECORDS, FakeProjectStore
 from homelabnext.events.envelope import event_problems
+from homelabnext.identity import is_uid
 from homelabnext.projects import (
     Conflict,
     InvalidField,
     MarkdownBackend,
     ProjectStore,
-    UidGenerator,
-    derived_uid,
-    is_uid,
     markdown_store,
     strategy_records,
 )
@@ -25,7 +23,6 @@ from homelabnext.projects.events import change_event, change_events
 from homelabnext.projects.markdown import parse_item, render_item
 from homelabnext.projects.measures import completion_reading
 from homelabnext.projects.model import Change
-from homelabnext.projects.uid import uid_time
 
 REPO = Path(__file__).resolve().parents[2]
 EXAMPLE_STRATEGY = REPO / "examples/strategy"
@@ -41,24 +38,13 @@ def store(path, **kw):
     return ProjectStore(MarkdownBackend(path), records=lambda: RECORDS, clock=clock(), **kw)
 
 
-# --- uids -----------------------------------------------------------------------------------------
+def by_code(root=EXAMPLE_STRATEGY):
+    """legacy code (aliases.yml, history only) -> the record, to name records in assertions"""
+    import yaml
 
-
-def test_uids_are_uuidv7_and_monotonic_within_one_millisecond():
-    gen = UidGenerator(lambda: EPOCH, randbytes=lambda n: bytes(n))
-    uids = [gen() for _ in range(5000)]  # past the 12-bit counter: rolls into the next ms
-    assert all(is_uid(u) for u in uids) and uids == sorted(uids) and len(set(uids)) == 5000
-    assert uid_time(uids[0]) == EPOCH
-
-
-def test_derived_uid_is_deterministic_and_dated():
-    a = derived_uid("ns", "SO-001", dt.date(2026, 10, 20))
-    assert a == derived_uid("ns", "SO-001", dt.date(2026, 10, 20)) and is_uid(a)
-    assert a != derived_uid("ns", "SO-002", dt.date(2026, 10, 20))
-    assert uid_time(a) == dt.datetime(2026, 10, 20, tzinfo=dt.UTC)
-    assert not is_uid("01890000-0000-4000-8000-000000000000")  # a v4
-    with pytest.raises(ValueError):
-        derived_uid("ns", "x", dt.datetime(2026, 1, 1))  # naive
+    codes = yaml.safe_load((Path(root) / "aliases.yml").read_text())["aliases"]
+    recs = {r.uid: r for r in strategy_records(root)}
+    return {code: recs[uid] for code, uid in codes.items() if uid in recs}
 
 
 # --- the Markdown files ----------------------------------------------------------------------------
@@ -174,31 +160,28 @@ def test_parse_item_refuses_malformed_files():
 # --- the strategy seam ------------------------------------------------------------------------------
 
 
-def test_the_seam_maps_todays_ids_to_stable_uids_and_edges():
-    recs = {r.id: r for r in strategy_records(EXAMPLE_STRATEGY)}
+def test_the_seam_yields_uids_types_parents_links_and_computed_labels():
+    recs = by_code()
     assert {"SO-001", "OO-001", "TO-001", "TT-001", "CCIR-001", "MOP-001", "RFI-002"} <= set(recs)
     assert all(is_uid(r.uid) for r in recs.values())
     assert recs["TO-001"].parent_uid == recs["OO-001"].uid and recs["SO-001"].parent_uid is None
     assert recs["TO-001"].as_dict()["type"] == "TO"
     assert ("serves", recs["CCIR-001"].uid) in recs["FFIR-001"].links
-    assert ("measures", recs["OO-001"].uid) in recs["MOP-001"].links
+    assert recs["MOP-001"].parent_uid == recs["OO-001"].uid  # a measure's parent: its objective
     assert ("raised_by", recs["PIR-001"].uid) in recs["RFI-002"].links
-    again = {r.id: r.uid for r in strategy_records(EXAMPLE_STRATEGY)}
-    assert again == {k: r.uid for k, r in recs.items()}  # stable across reads
+    assert recs["SO-001"].label == "SO 1" and recs["OO-001"].label.startswith("OO 1.")
 
 
-def test_a_record_that_carries_a_uid_keeps_it(tmp_path):
-    import shutil
+def test_records_resolve_from_uid_label_or_legacy_code_with_a_warning():
+    from homelabnext.identity.aliases import LegacyRecordCode
+    from homelabnext.projects import resolve_record
 
-    lab = tmp_path / "strategy"
-    shutil.copytree(EXAMPLE_STRATEGY, lab)
-    own = "01923456-7890-7abc-8def-0123456789ab"
-    f = lab / "objectives/SO-001.md"
-    f.write_text(f.read_text().replace("id: SO-001\n", f"id: SO-001\nuid: {own}\n", 1))
-    from homelabnext.projects import strategy as seam
-
-    recs = {r.id: r for r in seam.strategy_records(lab)}
-    assert recs["SO-001"].uid == own and recs["OO-001"].parent_uid == own
+    oo = by_code()["OO-001"]
+    assert resolve_record(oo.uid, EXAMPLE_STRATEGY) == oo.uid
+    assert resolve_record(oo.label.replace(" ", "  "), EXAMPLE_STRATEGY) == oo.uid
+    with pytest.warns(LegacyRecordCode):
+        assert resolve_record("OO-001", EXAMPLE_STRATEGY) == oo.uid
+    assert resolve_record("OO 9.9", EXAMPLE_STRATEGY) == "OO 9.9"
 
 
 def test_the_example_projects_link_to_example_records_and_pass_check():
@@ -235,7 +218,7 @@ def test_openproject_events_are_keyed_by_work_package_version():
 
 
 def test_completion_feeds_a_mop_and_never_a_moe():
-    recs = {r.id: r for r in strategy_records(EXAMPLE_STRATEGY)}
+    recs = by_code()
     objective = recs["OO-001"].uid
     s = ProjectStore(
         FakeProjectStore().backend, records=lambda: [objective], clock=clock()

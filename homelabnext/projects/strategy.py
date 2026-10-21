@@ -3,39 +3,34 @@
 
 :func:`strategy_records` yields one :class:`StrategyRecord` per strategy record -- ``uid``,
 ``type`` (SO, OO, TO, TT, CCIR, FFIR, PIR, RFI, MOP, MOE), ``title``, ``parent_uid`` and
-``links`` (``(relation, uid)`` pairs) -- plus what a mirror shows (the display ``id``, ``status``,
-the prose ``text``).  Nothing else in :mod:`homelabnext.projects` reads the strategy tree.
+``links`` (``(relation, uid)`` pairs) -- plus what a mirror shows: the display ``label``
+(``OO 1.2``, computed by :mod:`homelabnext.identity` from type, parent and order, never stored),
+``status`` and the prose ``text``.  Nothing else in :mod:`homelabnext.projects` reads the
+strategy tree.
 
-**Today** it reads the current loader (:func:`homelabnext.strategy.load_tree`) and maps today's
-ids to uids: a record that carries a ``uid`` field keeps it; one that does not gets
-:func:`~.uid.derived_uid` of its id and date (stable across runs, so a sync keys it the same each
-time).  Edges map as ``parent`` -> ``parent_uid``; ``supports`` and ``serves`` keep their names; a
-measure's ``objective`` becomes ``measures``; an RFI's ``raised_by`` becomes ``raised_by``.
+It reads :func:`homelabnext.strategy.load_tree` (ADR-0019: every record is ``<uid>.md`` with
+``uid``, ``type``, ``parent``, ``order`` and links by uid).  ``parent`` is the cascade (an
+objective's parent objective, a measure's objective, a requirement's parent requirement);
+``supports`` and ``serves`` keep their names and an RFI's ``raised_by`` becomes ``raised_by``.
 
-**When ADR-0019 lands** (UUIDv7 ``uid`` on every record, display numbers computed), point
-:func:`strategy_records` at the new loader and drop the id mapping; callers do not change.  The
-records' own ``uid`` wins over the derived one already, so a tree that carries uids needs no
-change here at all -- but OpenProject items mirrored under a *derived* uid would be keyed anew:
-mint each record's uid as ``derived_uid(NAMESPACE, id, date)`` in that migration, or re-key the
-mirror once (``docs/projects.md``, "Identity").
+:func:`resolve_record` turns what a person types into a uid: a uid, a display label
+(``OO 1.1``) or a legacy code (``OO-001``, through ``aliases.yml`` with a deprecation warning).
 """
 
 from __future__ import annotations
 
-import datetime as dt
 import pathlib
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
-from .uid import derived_uid, is_uid
+from homelabnext.identity import is_uid
 
-__all__ = ["NAMESPACE", "StrategyRecord", "record_uids", "strategy_records"]
+__all__ = ["StrategyRecord", "record_uids", "resolve_record", "strategy_records"]
 
-NAMESPACE = "homelabnext:strategy"
-#: the prose sections a mirror carries, by record directory (first one present wins first)
+#: the prose sections a mirror carries (the first one present)
 _TEXT = ("statement", "definition", "question", "decision_supported", "acceptance")
-_EDGES = (("supports", "supports"), ("serves", "serves"), ("objective", "measures"))
+_EDGES = (("supports", "supports"), ("serves", "serves"), ("raised_by", "raised_by"))
 
 
 @dataclass(frozen=True)
@@ -45,7 +40,7 @@ class StrategyRecord:
     title: str
     parent_uid: str | None
     links: tuple[tuple[str, str], ...]  # (relation, target uid)
-    id: str = ""  # today's display id (SO-001)
+    label: str = ""  # the computed display number (``OO 1.2``): shown, never stored
     status: str = ""
     text: str = ""
 
@@ -59,52 +54,48 @@ class StrategyRecord:
         }
 
 
-def _type_of(ident: str, entry: Mapping[str, Any]) -> str:
-    return str(entry.get("level") or ident.rsplit("-", 1)[0])
-
-
-def _uid_of(ident: str, entry: Mapping[str, Any]) -> str:
-    own = entry.get("uid")
-    if is_uid(own):
-        return str(own)
-    when = entry.get("date")
-    day = when if isinstance(when, dt.date) else dt.date.fromisoformat(str(when or "1970-01-01"))
-    return derived_uid(NAMESPACE, ident, day)
+def _uids(value: Any) -> list[str]:
+    vals = [value] if isinstance(value, str) else list(value or ())
+    return [str(v) for v in vals if is_uid(str(v))]
 
 
 def strategy_records(root: str | pathlib.Path) -> Iterator[StrategyRecord]:
-    """Every strategy record under ``root`` (objectives, measures, requirements, RFIs), in id
-    order; the strategy record itself is not one (it has no type in the cascade)."""
+    """Every strategy record under ``root`` (objectives, measures, requirements, RFIs) in
+    display-number order; the strategy record itself is not one (it has no type in the cascade)."""
     from homelabnext.strategy import load_tree
 
     tree = load_tree(root)
-    entries: dict[str, Mapping[str, Any]] = {}
-    for kind, key, entry in tree.items():
-        if kind != "strategy" and not key.endswith("-NEW") and "-NEW-" not in key:
-            entries[key] = entry
-    uids = {k: _uid_of(k, e) for k, e in entries.items()}
-    for key in sorted(entries):
-        e = entries[key]
-        links: list[tuple[str, str]] = []
-        for field, rel in _EDGES:
-            vals = e.get(field)
-            for v in [vals] if isinstance(vals, str) else vals or ():
-                if str(v) in uids:
-                    links.append((rel, uids[str(v)]))
-        if e.get("raised_by") and str(e["raised_by"]) in uids:
-            links.append(("raised_by", uids[str(e["raised_by"])]))
+    for kind, uid, e in tree.items():
+        if kind == "strategy" or not is_uid(uid):
+            continue
+        links = [(rel, t) for field, rel in _EDGES for t in _uids(e.get(field))]
         parent = e.get("parent")
-        text = next((str(e[s]).strip() for s in _TEXT if e.get(s)), "")
         yield StrategyRecord(
-            uid=uids[key],
-            type=_type_of(key, e),
-            title=str(e.get("title") or key),
-            parent_uid=uids.get(str(parent)) if parent else None,
+            uid=uid,
+            type=str(e.get("type") or ""),
+            title=str(e.get("title") or uid),
+            parent_uid=str(parent) if parent and is_uid(str(parent)) else None,
             links=tuple(links),
-            id=key,
+            label=tree.label(uid),
             status=str(e.get("status") or ""),
-            text=text,
+            text=next((str(e[s]).strip() for s in _TEXT if e.get(s)), ""),
         )
+
+
+def resolve_record(
+    ref: str, root: str | pathlib.Path, records: Iterable[StrategyRecord] | None = None
+) -> str:
+    """A record's uid from a uid, its display label (``OO 1.1``, any spacing) or a legacy code
+    (``aliases.yml``, with a deprecation warning); anything else comes back unchanged."""
+    from homelabnext.identity.aliases import load_aliases, resolve
+
+    if is_uid(ref):
+        return ref
+    want = " ".join(str(ref).split())
+    for r in records if records is not None else strategy_records(root):
+        if r.label == want:
+            return r.uid
+    return resolve(ref, load_aliases(root), "hnx projects")
 
 
 def record_uids(root: str | pathlib.Path | None):

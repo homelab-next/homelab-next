@@ -10,7 +10,7 @@ Everything is a :class:`WorkItem` of one of three kinds:
 
 Steps and tasks move through ``blocked``, ``todo``, ``in_progress``, ``done`` and
 ``cancelled`` (the last two are terminal and carry a one-line ``result`` and the date).  Every
-item has a ``uid`` (UUIDv7, :mod:`.uid`) and a ``version`` that grows by one on every change,
+item has a ``uid`` (UUIDv7, :mod:`homelabnext.identity`) and a ``version`` that grows by one on every change,
 which is what an update must quote (optimistic concurrency).  ``links`` relate an item to an
 external record (a strategy objective, a requirement, an RFI: ``supports``, ``serves``,
 ``measures``, ``answers``) or to another item (``blocks``, ``precedes``), always by uid.

@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-id: MOE-001
+uid: 01a15e4e-758c-731e-84af-04a7d009239b
+type: MOE
 title: Share of uptime monitors that are up
 status: active
 date: '2026-10-20'
 author: human:example-planner
-objective: SO-001
+parent: 01a15e4e-758c-7318-bbc3-04740e2d7038
 kind: outcome
 source: status:uptime-monitors
 unit: share of monitors

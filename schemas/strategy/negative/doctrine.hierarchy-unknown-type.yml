@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# a hierarchy names record types only: KPI is not one
+doctrine_version: 1
+name: a doctrine with an unknown type in its hierarchy
+rules: {}
+hierarchy:
+  KPI: {parent: [SO]}

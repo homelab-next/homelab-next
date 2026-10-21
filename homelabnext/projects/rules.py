@@ -25,6 +25,8 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Iterable, Mapping
 
+from homelabnext.identity import is_uid
+
 from .model import (
     ASSIGNEE_RE,
     DEPENDENCY_RELATIONS,
@@ -39,7 +41,6 @@ from .model import (
     InvalidReference,
     WorkItem,
 )
-from .uid import is_uid
 
 __all__ = [
     "board_problems",

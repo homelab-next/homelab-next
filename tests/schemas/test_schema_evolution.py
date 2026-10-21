@@ -18,12 +18,20 @@ SCHEMAS = [
 ]
 
 
+def _major(path) -> int:
+    return sc.parse_id(json.loads(path.read_text()))[1]
+
+
 @pytest.mark.parametrize("path", SCHEMAS, ids=lambda p: p.relative_to(ROOT / "schemas").as_posix())
 def test_current_schema_is_additive_over_frozen_v1_0(path):
-    frozen = sc.frozen_path(ROOT, path, 1, 0)
-    assert frozen.is_file(), f"missing baseline {frozen}"
-    old, new = json.loads(frozen.read_text()), json.loads(path.read_text())
-    assert sc.is_additive(old, new) == []
+    """Additive over the x.0 baseline of its own major; a major bump (a breaking change, ADR-0001:
+    the registers' lesson and runbook 2.0 require a uid, ADR-0019) keeps every earlier major's
+    baseline frozen, for the migration that reads it."""
+    major = _major(path)
+    for m in range(1, major + 1):
+        assert sc.frozen_path(ROOT, path, m, 0).is_file(), f"missing baseline {m}.0 of {path}"
+    old = json.loads(sc.frozen_path(ROOT, path, major, 0).read_text())
+    assert sc.is_additive(old, json.loads(path.read_text())) == []
 
 
 # examples of a feature added after the 1.0 freeze (1.0 rightly refuses them)
@@ -34,6 +42,8 @@ NEWER_THAN_1_0 = {
     "register_event.value.yml": "registers/register_event 1.1: event value",
     "register_event.value-finding.yml": "registers/register_event 1.1: event value",
     "register_event.review-audit.yml": "registers/register_event 1.2: review role audit",
+    "register_event.rekey.yml": "registers/register_event 1.3: event rekey",
+    "note.register-transition-legacy-code.md": "records/note 1.1: type register-transition",
 }
 
 
@@ -44,7 +54,7 @@ def test_v1_0_examples_validate_against_current_schema(path):
     current = json.loads(path.read_text())
     for f in sc.instances_for(path, "examples"):
         doc = sc.load_instance(f)
-        if f.name not in NEWER_THAN_1_0:
+        if f.name not in NEWER_THAN_1_0 and _major(path) == 1:
             assert sc.errors_for(frozen, doc, REG) == [], f.name
         assert sc.errors_for(current, doc, REG) == [], f.name
 
@@ -120,7 +130,8 @@ def test_major_bump_is_allowed_to_break(tmp_path):
     p = tmp_path / "schemas/registers/lesson.schema.json"
     s = json.loads(p.read_text())
     s["required"].append("owner")
-    s["$id"] = s["$id"].replace("/1.0", "/2.0")
+    base, _, ver = s["$id"].rpartition("/")
+    s["$id"] = f"{base}/{int(ver.split('.')[0]) + 1}.0"  # the next major
     p.write_text(json.dumps(s))
     probs = [
         x

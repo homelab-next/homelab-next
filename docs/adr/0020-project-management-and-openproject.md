@@ -2,7 +2,7 @@
 
 - **Status:** proposed
 - **Date:** 2026-10-21
-- **Related:** ADR-0005, ADR-0011, ADR-0014, ADR-0015, ADR-0019 (uid identities, in flight),
+- **Related:** ADR-0005, ADR-0011, ADR-0014, ADR-0015, ADR-0019 (record uids, computed numbers),
   `docs/projects.md`, `conformance/protocols/projects.py`, `schemas/events/project.changed.schema.json`
 
 ## Context
@@ -25,7 +25,8 @@ people who should not be the source of truth for strategy.
    idempotent create by external key, optimistic concurrency, a complete change feed and link
    integrity, a built-in fake and mutants each caught by its check.
 2. Items are identified by a UUIDv7 `uid`; display numbers are computed, never stored. Links
-   name uids, never display ids, both to other items and to strategy records.
+   name uids, never display numbers, both to other items and to strategy records; uids come from
+   `homelabnext.identity`.
 3. The reference implementation keeps one Markdown file per item and an append-only change
    journal, written under ADR-0014's rules (exclusive creates, version-checked atomic replaces, no
    lock file in the tree). It backs `hnx projects`, the hub's Projects page and
@@ -37,8 +38,8 @@ people who should not be the source of truth for strategy.
    is one way, upserts by uid into a permission-isolated Strategy project, skips unchanged
    records by a content hash, writes back and reports edits made in OpenProject, and never closes
    or deletes a record on its own.
-6. Strategy records are read through one seam (`strategy_records`), so the move to uid
-   identities (ADR-0019) changes one function.
+6. Strategy records are read through one seam (`strategy_records`, over the ADR-0019 loader),
+   so a change in how records are stored changes one function.
 7. The change feed from OpenProject treats the webhook as a trigger and an `updatedAt` poll as the
    guarantee; both derive the event id from `wp:<id>:v<lockVersion>`, so they converge on one
    event. A webhook without a valid signature is refused.
@@ -51,9 +52,8 @@ people who should not be the source of truth for strategy.
 
 - The board's rules become checks any project tool must pass, and a lab can move from the
   Markdown files to OpenProject (or later to another tool) through the swap procedure.
-- The repository gains a second record family with uid identities ahead of the strategy records;
-  until ADR-0019 lands, strategy records are keyed by a deterministic uid derived from id and
-  date, which that migration must keep or re-key once.
+- Projects and work items use the same identity as strategy records (ADR-0019): a uid, with
+  numbers only on display, so nothing is allocated or renumbered when work is added or moved.
 - The OpenProject adapter reads the whole work project per operation: simple and correct for a
   lab, not built for a large instance.
 - Setup stays manual and can drift; `doctor` makes the drift visible but cannot fix it.

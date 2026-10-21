@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Append-only sidecar events: the machine-mutated state of a record, one file per event.
 
-A record file (``lessons/LL-005.md``, ``docs/systems/dns.md``) holds what people write: prose and
+A record file (``lessons/<uid>.md``, ``docs/systems/dns.md``) holds what people write: prose and
 stable fields.  Everything that several writers append to over time lives beside it, in
-``<RECORD>.events/`` (``lessons/LL-005.events/``), one small YAML file per event::
+``<RECORD>.events/`` (``lessons/<uid>.events/``), one small YAML file per event::
 
     20261019T093000Z-review-agent-example-checker.yml
     20261019T093000Z-review-agent-example-checker-2.yml     # same second, same writer
@@ -25,9 +25,15 @@ Kinds (``schemas/registers/register_event.schema.json``):
 ``value``       one reading of a strategy measure (``homelabnext.strategy``): ``value`` (or a
                 ``finding`` when there is none), ``observed_at``, ``sample``, the
                 ``definition_digest`` / ``definition_version`` it was read under, ``evidence``.
+``rekey``       the record's content digest changed without its content changing (``from`` ->
+                ``to``, ``reason``): written only by the uid migration (``by: hnx:migrate``),
+                which rewrote numbered references as uids.  Every review recorded before it
+                whose digest was ``from`` counts for ``to``, so the identity rewrite does not
+                send every reviewed record back to review; a later edit still does.
 
 :func:`derive` computes the derived fields on load, so the document every consumer sees keeps
-its shape: ``reviews`` (inline reviews, then review events in order), ``recurrences`` (the inline
+its shape: ``reviews`` (inline reviews, then review events in order, each carried across any
+later ``rekey`` whose ``from`` it reviewed), ``recurrences`` (the inline
 base, 0 when absent, plus one per recurrence event; pitfalls only), ``last_verified`` (the latest
 passing ``verified`` event; never written by hand), ``values`` (a measure's readings, in order;
 never written by hand), and the current status (the record's base
@@ -68,7 +74,7 @@ __all__ = [
     "render_event",
 ]
 
-EVENT_KINDS = ("review", "recurrence", "verified", "transition", "value")
+EVENT_KINDS = ("review", "recurrence", "verified", "transition", "value", "rekey")
 EVENTS_SUFFIX = ".events"
 DERIVED_ONLY = ("last_verified", "values")  # computed from events; a record file never has them
 #: registers whose records have a lifecycle (every event kind); any other caller is a system page
@@ -104,7 +110,7 @@ class Event:
 
 
 def events_dir(record_path) -> pathlib.Path:
-    """``lessons/LL-005.md`` -> ``lessons/LL-005.events``."""
+    """``lessons/<uid>.md`` -> ``lessons/<uid>.events``."""
     p = pathlib.Path(record_path)
     return p.with_name(p.stem + EVENTS_SUFFIX)
 
@@ -286,10 +292,19 @@ def derive(
     for f in DERIVED_ONLY:
         if f in entry:
             problems.append(f"{pre}`{f}` is derived from events; never write it")
-    reviews = [
-        {k: v for k, v in e.data.items() if k != "event"} for e in events if e.kind == "review"
-    ]
-    if reviews:
+    reviews: list[dict[str, Any]] = []
+    for e in events:
+        if e.kind == "review":
+            reviews.append({k: v for k, v in e.data.items() if k != "event"})
+        elif e.kind == "rekey":
+            reviews = [_rekeyed(r, e.data) for r in reviews]
+    rekeys = [e.data for e in events if e.kind == "rekey"]
+    if reviews or (rekeys and entry.get("reviews")):
+        inline = entry.get("reviews")
+        if isinstance(inline, list):  # the older inline form: reviewed before any event
+            for rk in rekeys:
+                inline = [_rekeyed(r, rk) for r in inline]
+            entry = {**entry, "reviews": inline}
         inline = entry.get("reviews")
         if inline is not None and not isinstance(inline, list):
             problems.append(f"{pre}`reviews` must be a list")
@@ -332,6 +347,17 @@ def derive(
             problems.append(f"{pre}transition {e.name} does not reach {e.data['to']}")
             break
     return out
+
+
+def _rekeyed(review: Any, rekey: Mapping[str, Any]) -> Any:
+    """``review`` carried across one ``rekey``: a review of ``from`` (its digest a prefix of
+    it, as :func:`homelabnext.reviews.evaluate` compares) now reviews ``to``."""
+    if not isinstance(review, dict):
+        return review
+    d = review.get("digest")
+    if isinstance(d, str) and d and str(rekey.get("from", "")).startswith(d):
+        return {**review, "digest": rekey["to"]}
+    return review
 
 
 # --- backfill (the migration of inline state into events) ----------------------------------------

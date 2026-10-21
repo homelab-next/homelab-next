@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+event: rekey
+by: hnx:migrate
+date: 2026-10-21
+from: sha256:6ff43217e1d045717aa9db772bce58c5f6bb8c00e28320bf96457e27f3693449
+to: sha256:555f8a172ef2b3d0b09848d412cdca189df376b471b950be64336e4e41e94ca7
+reason: 'hnx records assign-uids: numbered references rewritten as uids (ADR-0019); the content is otherwise
+  unchanged'

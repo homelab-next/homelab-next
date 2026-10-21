@@ -31,8 +31,7 @@ from .model import (
     WorkItem,
 )
 from .store import MemoryBackend, ProjectStore
-from .strategy import StrategyRecord, record_uids, strategy_records
-from .uid import UidGenerator, derived_uid, is_uid
+from .strategy import StrategyRecord, record_uids, resolve_record, strategy_records
 
 __all__ = [
     "DEPENDENCY_RELATIONS",
@@ -55,13 +54,11 @@ __all__ = [
     "ProjectStore",
     "ProjectsError",
     "StrategyRecord",
-    "UidGenerator",
     "WorkItem",
-    "derived_uid",
-    "is_uid",
     "markdown_store",
     "record_uids",
     "reference_subject",
+    "resolve_record",
     "strategy_records",
 ]
 

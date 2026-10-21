@@ -6,13 +6,13 @@ through the records library (``homelabnext.records``: the inbox is the only lane
 writes), a note of type ``register-transition``::
 
     type: register-transition
-    title: Retire LL-001, M-17 holds
+    title: Retire the stale-certificate lesson, M-17 holds
     requesting_agent: profile:example-checker
     created: 2026-10-19T09:30:00Z
-    record: LL-001
-    from: controlled             # the status the agent saw
+    record: 0199d5a0-...         # the record's uid (a legacy code such as LL-001 still resolves
+    from: controlled             # through the tree's aliases.yml, with a deprecation warning)
     to: retired
-    retired_by: [M-17]           # or incorporated_into: [...] / superseded_by: LL-007
+    retired_by: [M-17]           # or incorporated_into: [...] / superseded_by: <uid>
     retired_on: 2026-10-19       # optional (default: the day the intent was created)
     reason: M-17 has held in every run since the control shipped
 
@@ -56,6 +56,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from homelabnext.identity.uid import is_uid
 from homelabnext.records import RecordsReader, check_filename
 from homelabnext.records.decider import APPROVED, Decider
 from homelabnext.records.notes import NoteError, parse_note
@@ -205,9 +206,22 @@ class TransitionDecider:
                 out.append(Outcome(n, "?", "error", why))
         return out
 
+    def _resolve(self, ident: str) -> str:
+        """A uid as is; a legacy code (``LL-001``) through the tree's alias map, with a
+        :class:`~homelabnext.identity.aliases.LegacyRecordCode` warning (an intent filed
+        before the uid migration still decides)."""
+        from homelabnext.identity.aliases import load_aliases, resolve
+
+        if is_uid(ident):
+            return ident
+        return resolve(ident, load_aliases(self.register_root), "register-transition record")
+
     def _record_path(self, ident: str) -> pathlib.Path:
-        kind = "lessons" if ident.startswith("LL-") else "runbooks"
-        return self.register_root / kind / f"{ident}.md"
+        """The record file of a uid: ``lessons/<uid>.md`` or ``runbooks/<uid>.md``."""
+        for kind in ("lessons", "runbooks"):
+            if (p := self.register_root / kind / f"{ident}.md").is_file():
+                return p
+        return self.register_root / "lessons" / f"{ident}.md"
 
     def decide(self, name: str, *, dry_run: bool = False) -> Outcome:
         self.records_root.mkdir(parents=True, exist_ok=True)
@@ -238,7 +252,7 @@ class TransitionDecider:
     def _decide_note(self, name: str, note, dry_run: bool) -> Outcome:
         """An inbox intent of :attr:`INTENT_TYPES`, its file read and its type checked."""
         fm = note.frontmatter
-        ident = str(fm.get("record", "?"))
+        ident = self._resolve(str(fm.get("record", "?")))
         bad = check_filename(name, fm)
         if bad:
             return self._deny(name, ident, "; ".join(bad), dry_run)
@@ -250,9 +264,9 @@ class TransitionDecider:
         if done := self._applied_before(name, ident, path, dry_run):
             return done
         doc = load_register(path.parent, register)
-        entry = next((e for e in doc[register] if str(e.get("id")) == ident), None)
+        entry = next((e for e in doc[register] if str(e.get("uid")) == ident), None)
         if entry is None:
-            return self._deny(name, ident, f"{ident} is a tombstone", dry_run)
+            return self._deny(name, ident, f"no record {ident} in {path.parent}", dry_run)
         cur = ev.current_status(entry, register)
         if fm["from"] != cur:
             why = f"`from: {fm['from']}` is no longer current: {ident} is {cur}"
@@ -262,6 +276,15 @@ class TransitionDecider:
         fields, problems = _set_of(fm, entry, register)
         if problems:
             return self._deny(name, ident, "; ".join(problems), dry_run)
+        if "superseded_by" in fields:  # an intent may still name the record by its legacy code
+            fields["superseded_by"] = self._resolve(str(fields["superseded_by"]))
+        if isinstance(fields.get("incorporated_into"), list):
+            fields["incorporated_into"] = [
+                self._resolve(r.partition("#")[0]) + "".join(r.partition("#")[1:])
+                if not str(r).startswith("docs/")
+                else r
+                for r in map(str, fields["incorporated_into"])
+            ]
         now = self.clock()
         event = {
             "event": "transition",
@@ -315,6 +338,7 @@ class TransitionDecider:
     def _finish(self, name: str, ident: str, dry_run: bool) -> Outcome:
         """An intent in ``decided/approved/``: complete it when its transition event exists (a
         crash between the moves of :meth:`Decider.fulfil`); one approved by hand is left."""
+        ident = self._resolve(ident)
         path = self._record_path(ident)
         problems: list[str] = []
         ref = f"decided/completed/{name}"

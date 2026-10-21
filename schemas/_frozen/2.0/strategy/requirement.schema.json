@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/strategy/requirement/2.0",
+  "title": "Requirement record (CCIR, FFIR or PIR)",
+  "description": "One requirement, one Markdown file per record (requirements/CCIR-001.md). Requirements is the parent category; each record is exactly one of three types: CCIR (what the owner needs to know), FFIR (what the rest of the lab needs to know: friendly readiness and posture) or PIR (what we need to know about the environment or adversary). supports names one or more SO/OO/TO it serves; serves names requirements it feeds: an FFIR may serve CCIRs, a PIR CCIRs or FFIRs, a CCIR nothing (checked by homelabnext.strategy). Lifecycle: active -> answered | expired | retired. 2.0 (ADR-0019): a record is identified by its `uid` (a UUIDv7) and names its `type`; every link is a uid; the numbered `id` is gone (the number a record is shown with is computed from type, parent and sibling `order`, never stored). The record-type rules of a link (which types a parent, supports, serves or raised_by may name) are the doctrine's `hierarchy` and `links`, checked by homelabnext.strategy. 1.x records are read only by `hnx records assign-uids`, which migrates them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "uid",
+    "type",
+    "title",
+    "status",
+    "date",
+    "author",
+    "question",
+    "decision_supported",
+    "consumer",
+    "cadence",
+    "ltiov",
+    "supports",
+    "acceptance"
+  ],
+  "properties": {
+    "uid": {
+      "$ref": "#/$defs/uid"
+    },
+    "type": {
+      "enum": [
+        "CCIR",
+        "FFIR",
+        "PIR"
+      ]
+    },
+    "parent": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/uid"
+        }
+      ],
+      "description": "Optional: the uid of the requirement it refines (a PIR under a PIR: PIR 2.1)."
+    },
+    "order": {
+      "type": "number",
+      "description": "Optional: the sort key among its siblings (same type, same parent). Siblings without one follow, in creation (uid) order."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 200
+    },
+    "status": {
+      "enum": [
+        "active",
+        "answered",
+        "expired",
+        "retired"
+      ]
+    },
+    "date": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "author": {
+      "$ref": "#/$defs/author"
+    },
+    "question": {
+      "$ref": "#/$defs/text"
+    },
+    "decision_supported": {
+      "$ref": "#/$defs/text"
+    },
+    "consumer": {
+      "$ref": "#/$defs/identity"
+    },
+    "cadence": {
+      "type": "string",
+      "pattern": "^(?:P(?:\\d+[YMWD])+(?:T(?:\\d+[HMS])+)?|PT(?:\\d+[HMS])+|continuous|on-change)$(?!\\n)",
+      "description": "An ISO 8601 duration (PT15M, P1W), continuous or on-change."
+    },
+    "ltiov": {
+      "anyOf": [
+        {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+        },
+        {
+          "const": "standing"
+        }
+      ],
+      "description": "Last time the information is of value: a date (swept to expired after it) or standing."
+    },
+    "sirs": {
+      "$ref": "#/$defs/strings",
+      "description": "Specific information requirements the question breaks into."
+    },
+    "indicators": {
+      "$ref": "#/$defs/strings",
+      "description": "Indicators and essential elements of information."
+    },
+    "sources": {
+      "$ref": "#/$defs/strings",
+      "description": "Collection sources."
+    },
+    "tasked_to": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/identity"
+      },
+      "uniqueItems": true
+    },
+    "supports": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/uid"
+      },
+      "uniqueItems": true
+    },
+    "serves": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/uid"
+      },
+      "uniqueItems": true
+    },
+    "acceptance": {
+      "$ref": "#/$defs/text"
+    },
+    "guardrails": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "review_by": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "resolution": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reviews": {
+      "type": "array",
+      "description": "Derived from the review events (homelabnext.reviews); never written in the record file."
+    }
+  },
+  "$defs": {
+    "identity": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9_.@-]+$(?!\\n)",
+      "description": "issuer:subject (human:example-operator, profile:example-checker, role:on-call)."
+    },
+    "author": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "const": "unknown"
+        }
+      ]
+    },
+    "text": {
+      "type": "string",
+      "minLength": 12
+    },
+    "strings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "uid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)",
+      "description": "A record uid: a canonical UUIDv7 (lowercase, version 7), created with the record and never changed (ADR-0019)."
+    }
+  }
+}

@@ -16,7 +16,8 @@
 Common options: ``--dir DIR`` (the projects directory, default ``examples/projects``),
 ``--strategy DIR`` (the strategy records links may name, default ``examples/strategy``),
 ``--json``.  A REF is a uid or a unique prefix or suffix of one (at least 6 hex digits); a link
-TARGET may also be a strategy record's display id (``SO-001``), resolved to its uid.  ``move``
+TARGET may also be a strategy record's display number (``"OO 1.1"``, computed by
+``homelabnext.identity``) or a legacy code from ``aliases.yml``, resolved to its uid.  ``move``
 and ``close`` read the current version when ``--version`` is not given (a version given is
 checked: a stale one is a conflict, exit 1).  OpenProject's API token is read by its secret name
 from the environment (``HNX_SECRET_OPENPROJECT_API_TOKEN`` for ``secret:openproject/api-token``).
@@ -120,14 +121,11 @@ def _resolve(store, ref: str, items: Sequence[WorkItem] | None = None) -> str:
 
 
 def _target(store, a, ref: str) -> str:
-    from .strategy import strategy_records
+    from .strategy import resolve_record
 
     if a.relation in ("blocks", "precedes"):
         return _resolve(store, ref)
-    for r in strategy_records(a.strategy):
-        if ref in (r.uid, r.id):
-            return r.uid
-    return ref  # refused by the store when it resolves to no record
+    return resolve_record(ref, a.strategy)  # refused by the store when it resolves to nothing
 
 
 def _line(i: WorkItem) -> str:
@@ -260,12 +258,12 @@ def _run(a) -> int:
 
 
 def _target_ref(store, a, ref: str) -> str:
-    from .strategy import strategy_records
+    from homelabnext.identity import is_uid
 
-    for r in strategy_records(a.strategy):
-        if ref in (r.uid, r.id):
-            return r.uid
-    return _resolve(store, ref)
+    from .strategy import resolve_record
+
+    uid = resolve_record(ref, a.strategy)
+    return uid if is_uid(uid) else _resolve(store, ref)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

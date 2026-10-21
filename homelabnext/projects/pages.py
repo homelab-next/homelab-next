@@ -7,7 +7,7 @@
   each step's state, date and one-line result;
 * **Blocked** steps and tasks, with what blocks them;
 * **Work by objective**: for each strategy objective, the steps, tasks and projects linked to it
-  (any relation), by the record's display id when the strategy tree is given.
+  (any relation), by the record's computed display number when the strategy tree is given.
 
 Each request reads the item files only (it never writes), and every value is escaped.
 """
@@ -76,7 +76,9 @@ class ProjectsSite:
                 return f"{_e(it.title)} <code>{_e(_short(uid))}</code>"
             rec = records.get(uid)
             return (
-                f"<code>{_e(rec.id)}</code> {_e(rec.title)}" if rec else f"<code>{_e(uid)}</code>"
+                f"<code>{_e(rec.label)}</code> {_e(rec.title)}"
+                if rec
+                else f"<code>{_e(uid)}</code>"
             )
 
         parts = [

@@ -20,6 +20,15 @@ STRATEGY = str(REPO / "examples/strategy")
 NOW = 1_792_000_000.0  # 2026-10-15
 
 
+def by_code(root=REPO / "examples/strategy"):
+    """legacy code (aliases.yml, history only) -> the record, to name records in assertions"""
+    import yaml
+
+    codes = yaml.safe_load((Path(root) / "aliases.yml").read_text())["aliases"]
+    recs = {r.uid: r for r in strategy_records(root)}
+    return {code: recs[uid] for code, uid in codes.items() if uid in recs}
+
+
 @pytest.fixture
 def run(tmp_path, capsys):
     d = str(tmp_path / "projects")
@@ -58,14 +67,15 @@ def test_new_list_show_move_close_and_the_auto_close(run):
 
 
 def test_link_by_display_id_and_the_feed(run, capsys):
-    recs = {r.id: r.uid for r in strategy_records(STRATEGY)}
+    recs = {k: r.uid for k, r in by_code().items()}
     _, (t,), _ = run("new", "task", "Answer the RFI", "--assignee", "profile:reader")
-    _, (linked,), _ = run("link", t["uid"], "RFI-002", "answers")
+    rfi = by_code()["RFI-002"].label  # the computed display number, e.g. "RFI 1.1"
+    _, (linked,), _ = run("link", t["uid"], rfi, "answers")
     assert linked["links"] == [{"relation": "answers", "target": recs["RFI-002"]}]
-    assert [i["uid"] for i in run("list", "--linked-to", "RFI-002")[1]] == [t["uid"]]
+    assert [i["uid"] for i in run("list", "--linked-to", rfi)[1]] == [t["uid"]]
     code, _, err = run("link", t["uid"], "SO-999", "supports")
     assert code == 1 and "uid" in err  # an unknown display id resolves to nothing
-    assert run("link", t["uid"], "RFI-002", "answers", "--unlink")[1][0]["links"] == []
+    assert run("link", t["uid"], recs["RFI-002"], "answers", "--unlink")[1][0]["links"] == []
     capsys.readouterr()
     assert cli(["feed", "--dir", str(run.dir), "--strategy", STRATEGY]) == 0
     out = capsys.readouterr()
@@ -124,7 +134,9 @@ def test_the_page_shows_progress_blocked_work_and_records_escaped(tmp_path):
     assert "<script>x" not in html and "&lt;script&gt;x&lt;/script&gt; Answer" in html
     assert "Move the edge proxy to the new host" in html and "1 of 3 steps done (33%)" in html
     assert "<h3>Blocked</h3>" in html and "Switch the alias and retire the old guest" in html
-    assert "<code>OO-001</code>" in html and "<code>RFI-002</code>" in html
+    codes = by_code()
+    assert f"<code>{codes['OO-001'].label}</code>" in html
+    assert f"<code>{codes['RFI-002'].label}</code>" in html
     assert site.handle("/projects/x", "", _doc()) is None
     assert sorted(p.name for p in lab.iterdir()) == sorted(p.name for p in (REPO / "examples/projects").iterdir())  # fmt: skip
 

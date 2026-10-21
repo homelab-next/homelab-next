@@ -52,7 +52,7 @@ try:  # POSIX; elsewhere the store still works, without a cross-process lock
     import fcntl
 except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
-from .uid import is_uid
+from homelabnext.identity import is_uid
 
 __all__ = ["FIELD_ORDER", "MarkdownBackend", "parse_item", "render_item"]
 

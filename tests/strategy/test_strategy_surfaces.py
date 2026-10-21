@@ -9,7 +9,7 @@ import threading
 import urllib.request
 
 import pytest
-from strategy_helpers import EXAMPLE, NOW, REPO, edit
+from strategy_helpers import EXAMPLE, NOW, REPO, U, edit, rel, uids
 
 from homelabnext.graph import build, is_active
 from homelabnext.registers import ids
@@ -26,25 +26,31 @@ def edges(graph, etype):
     return {(e.src, e.dst) for e in graph.edges if e.type == etype}
 
 
+def n(kind_code: str) -> str:
+    """``objective:SO-001`` -> ``objective:<uid>``: graph node ids are uids."""
+    return uids(kind_code)
+
+
 def test_graph_nodes_and_typed_edges(graph):
     assert graph.nodes["strategy:northwind"].kind == "strategy"
-    assert {graph.nodes[n].kind for n in ("objective:SO-001", "measure:MOE-001", "req:PIR-001", "rfi:RFI-001")} == {"objective", "measure", "req", "rfi"}  # fmt: skip
-    assert ("req:FFIR-001", "objective:OO-001") in edges(graph, "supports")
-    assert {("req:FFIR-001", "req:CCIR-001"), ("req:PIR-001", "req:FFIR-001")} <= edges(graph, "serves")  # fmt: skip
-    assert {("objective:TT-001", "objective:TO-001"), ("objective:SO-001", "strategy:northwind")} <= edges(graph, "child_of")  # fmt: skip
-    assert ("objective:TO-001", "measure:MOP-002") in edges(graph, "measured_by")
-    assert {("measure:MOE-006", "inv:D-02"), ("measure:MOE-003", "status:proposals")} <= edges(graph, "binds")  # fmt: skip
-    assert {("rfi:RFI-001", "measure:MOE-001"), ("rfi:RFI-002", "req:PIR-001")} <= edges(graph, "raised_by")  # fmt: skip
-    assert {("req:CCIR-001", "profile:responder"), ("rfi:RFI-001", "profile:reader")} <= edges(graph, "tasked_to")  # fmt: skip
+    assert {graph.nodes[n(x)].kind for x in ("objective:SO-001", "measure:MOE-001", "req:PIR-001", "rfi:RFI-001")} == {"objective", "measure", "req", "rfi"}  # fmt: skip
+    assert (n("req:FFIR-001"), n("objective:OO-001")) in edges(graph, "supports")
+    assert {(n("req:FFIR-001"), n("req:CCIR-001")), (n("req:PIR-001"), n("req:FFIR-001"))} <= edges(graph, "serves")  # fmt: skip
+    assert {(n("objective:TT-001"), n("objective:TO-001")), (n("objective:SO-001"), "strategy:northwind")} <= edges(graph, "child_of")  # fmt: skip
+    assert (n("objective:TO-001"), n("measure:MOP-002")) in edges(graph, "measured_by")
+    assert {(n("measure:MOE-006"), "inv:D-02"), (n("measure:MOE-003"), "status:proposals")} <= edges(graph, "binds")  # fmt: skip
+    assert {(n("rfi:RFI-001"), n("measure:MOE-001")), (n("rfi:RFI-002"), n("req:PIR-001"))} <= edges(graph, "raised_by")  # fmt: skip
+    assert {(n("req:CCIR-001"), "profile:responder"), (n("rfi:RFI-001"), "profile:reader")} <= edges(graph, "tasked_to")  # fmt: skip
+    assert graph.nodes[n("objective:OO-001")].attrs["label"] == "OO 1.1"  # computed, not stored
     assert not any(
-        src == "measure:MOE-005" for src, _ in edges(graph, "binds")
+        src == n("measure:MOE-005") for src, _ in edges(graph, "binds")
     )  # none binds nothing
 
 
 def test_closed_records_are_inactive_in_the_graph(graph):
-    assert not is_active(graph.nodes["rfi:RFI-002"])  # no-find
-    assert is_active(graph.nodes["rfi:RFI-001"])
-    assert graph.nodes["objective:SO-001"].attrs["reviewed"] == ["agent_check", "audit"]
+    assert not is_active(graph.nodes[n("rfi:RFI-002")])  # no-find
+    assert is_active(graph.nodes[n("rfi:RFI-001")])
+    assert graph.nodes[n("objective:SO-001")].attrs["reviewed"] == ["agent_check", "audit"]
 
 
 def _doc(strategy=True):
@@ -81,9 +87,11 @@ def test_the_pages_render_escaped(lab):
     assert req.index("<h3>CCIR</h3>") < req.index("<h3>FFIR</h3>") < req.index("<h3>PIR</h3>")
     assert "&lt;b&gt;bold&lt;/b&gt; &amp; Run a small" in pages["/strategy"][2].decode()
     obj = pages["/objectives"][2].decode()
-    assert 'class="s warn">amber</span> <code>MOE-004</code>' in obj and "self-measured: capped" in obj  # fmt: skip
+    moe4 = f'class="s warn">amber</span> <code title="{U["MOE-004"]}">MOE 1.1.1.1.1</code>'
+    assert moe4 in obj and "self-measured: capped" in obj
     rfis = pages["/rfis"][2].decode()
-    assert "Open: collection" in rfis and "RFI-001" in rfis and "Searched the proxy access logs" in rfis  # fmt: skip
+    assert "Open: collection" in rfis and ">RFI 1</code>" in rfis and "Searched the proxy access logs" in rfis  # fmt: skip
+    assert "<li>SIR 1.1 Requests to the status hub" in req  # SIRs numbered under their PIR
     assert site.handle("/strategy/../etc", "", _doc()) is None
 
 
@@ -109,7 +117,10 @@ def test_the_index_is_current_and_the_cli_checks_it(tmp_path, capsys):
     out = tmp_path / "docs/strategy/README.md"
     assert cli(["index", str(EXAMPLE), "--out", str(out), "--check"]) == 1
     assert cli(["index", str(EXAMPLE), "--out", str(out)]) == 0
-    assert "[SO-001](" in out.read_text() and "| PIR |" in out.read_text()
+    text = out.read_text()
+    assert "[SO 1 Core services stay available](" in text and f"/{rel('SO-001')})" in text
+    assert f"([[{U['SO-001']}|SO 1 Core services stay available]])" in text  # Obsidian alias
+    assert f"[[{U['PIR-001']}\\|PIR 1 " in text and "| PIR |" in text  # a table escapes the pipe
 
 
 def test_cli_check_links_and_rollup(lab, capsys):
@@ -121,17 +132,15 @@ def test_cli_check_links_and_rollup(lab, capsys):
     assert cli(["check", str(lab)]) == 1  # the content changed: its reviews are stale
     capsys.readouterr()
     assert cli(["rollup", str(lab), "--now", "2026-10-20T13:10:00Z"]) == 0
-    assert "TT-001 [amber] Read the proposal inbox every week" in capsys.readouterr().out
+    assert "TT 1.1.1.1 [amber] Read the proposal inbox every week" in capsys.readouterr().out
 
 
 def test_cli_rfis_lists_open_by_triage_and_what_expires(capsys):
     clock = lambda: dt.datetime(2026, 11, 15, tzinfo=dt.UTC)  # noqa: E731
     assert cli(["rfis", str(EXAMPLE)], clock=clock) == 0
     out = capsys.readouterr().out
-    assert (
-        "collection requirements: RFI-001" in out and "expiring soon: RFI-001 (2026-11-19)" in out
-    )
-    assert "gap: MOE-005 -> collection" in out
+    assert "collection requirements: RFI 1" in out and "expiring soon: RFI 1 (2026-11-19)" in out
+    assert "gap: MOE 2.1 -> collection: " in out and f"[{U['MOE-005']}]" in out
 
 
 def git(cwd, *args):
@@ -152,19 +161,17 @@ def repo(tmp_path):
     return r
 
 
-def test_new_prefixes_allocate_from_placeholders(repo):
+def test_a_new_record_needs_no_allocation(repo):
+    """A new record is a new uid: check-dupes and check-lost pass at once, nothing renames."""
     d = repo / "strategy/requirements"
-    shutil.copy(d / "PIR-001.md", d / "PIR-NEW-scans.md")
-    edit(repo, "strategy/requirements/PIR-NEW-scans.md", "id: PIR-001", "id: PIR-NEW")
-    shutil.copy(d / "CCIR-001.md", d / "CCIR-NEW.md")
-    edit(repo, "strategy/requirements/CCIR-NEW.md", "id: CCIR-001", "id: CCIR-NEW")
-    shutil.copy(repo / "strategy/objectives/TT-001.md", repo / "strategy/objectives/TT-NEW.md")
-    edit(repo, "strategy/objectives/TT-NEW.md", "id: TT-001", "id: TT-NEW")
-    got = ids.resolve_file(repo, "strategy/requirements") + ids.resolve_file(repo, "strategy/objectives")  # fmt: skip
-    assert sorted(got) == [("CCIR-NEW", "CCIR-002"), ("PIR-NEW", "PIR-002"), ("TT-NEW", "TT-002")]
-    assert (d / "PIR-002.md").read_text().startswith("---\nid: PIR-002\n")
-    assert ids.allocate(repo, "strategy/rfis", "RFI") == ["RFI-003"]
-    assert ids.allocate(repo, "strategy/measures", "MOP") == ["MOP-003"]
+    new = "01a15e4f-0000-7000-8000-000000000001"
+    (d / f"{new}.md").write_text(
+        (d / rel("PIR-001").split("/")[1]).read_text().replace(U["PIR-001"], new)
+    )
+    texts = {p.name: p.read_text() for p in d.glob("*.md")}
+    spec = ids.spec_for("requirements")
+    assert ids.dir_problems(texts, spec) == [] and ids.missing_uids(texts, spec) == []
+    assert ids.check_lost(repo, "strategy/requirements") == []
 
 
 def test_check_lost_covers_the_strategy_directories(repo):
@@ -172,8 +179,8 @@ def test_check_lost_covers_the_strategy_directories(repo):
     assert {f"strategy/{d}" for d in ("objectives", "measures", "requirements", "rfis")} <= set(
         found
     )
-    (repo / "strategy/rfis/RFI-002.md").unlink()
-    assert ids.check_lost(repo, "strategy/rfis") == ["RFI-002"]
+    (repo / "strategy" / rel("RFI-002")).unlink()
+    assert ids.check_lost(repo, "strategy/rfis") == [U["RFI-002"]]
     assert ids.check_lost(repo, "strategy/measures") == []
 
 
@@ -189,10 +196,12 @@ def test_hnx_reviews_digest_reads_strategy_records(lab):
 
     tree = load_tree(lab)
     assert file_digest(tree.paths["strategy"]) == record_digest(tree.strategy)
-    for key in ("MOE-002", "PIR-001", "RFI-002"):
+    for key in (U["MOE-002"], U["PIR-001"], U["RFI-002"]):
         assert file_digest(tree.paths[key]) == record_digest(tree.get(key))
     # a reading is not content: the digest of a measure with values ignores them
-    assert "values" in tree.get("MOE-002") and record_digest(tree.get("MOE-002")) == record_digest(
-        {k: v for k, v in tree.get("MOE-002").items() if k != "values"}
+    moe2 = tree.get(U["MOE-002"])
+    assert "values" in moe2 and record_digest(moe2) == record_digest(
+        {k: v for k, v in moe2.items() if k != "values"}
     )
-    assert file_digest(REPO / "examples/registers/lessons/LL-005.md").startswith("sha256:")
+    lesson = next((REPO / "examples/registers/lessons").glob("*.md"))
+    assert file_digest(lesson).startswith("sha256:")

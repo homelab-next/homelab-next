@@ -28,6 +28,15 @@ baseline_so              each requirement of ``types`` supports ``exactly`` base
                          baseline SO is shared between two of them (rules)
 so_supported             an active SO no active requirement supports is an orphan (rules)
 ======================== ==========================================================================
+
+The model's shape is in the file too, so it is read in one place (and a discipline with another
+cascade can say so):
+
+``hierarchy``  each record type's ``parent`` types (``[]``: top level, no parent) and whether
+               the parent is ``optional``.  A record's display number is drawn from it
+               (``OO 1.2`` is the second OO under SO 1): :data:`DEFAULT_HIERARCHY`.
+``links``      each typed link field: per record type that may carry it, the types it may name
+               (``serves``: an FFIR names CCIRs, a PIR CCIRs or FFIRs): :data:`DEFAULT_LINKS`.
 """
 
 from __future__ import annotations
@@ -41,7 +50,7 @@ import yaml
 
 from homelabnext.registers.schema import RegisterError
 
-__all__ = ["DEFAULT_RULES", "Doctrine", "load_doctrine"]
+__all__ = ["DEFAULT_HIERARCHY", "DEFAULT_LINKS", "DEFAULT_RULES", "Doctrine", "load_doctrine"]
 
 DEFAULT_RULES: dict[str, dict[str, Any]] = {
     "trend_same_definition": {"enforce": "error"},
@@ -56,6 +65,28 @@ DEFAULT_RULES: dict[str, dict[str, Any]] = {
     "baseline_so": {"enforce": "error", "types": ["PIR", "FFIR"], "exactly": 1},
     "so_supported": {"enforce": "warn"},
 }
+_OBJECTIVES = ["SO", "OO", "TO", "TT"]
+#: type -> {parent: [types], optional: bool}; a type not listed takes no parent
+DEFAULT_HIERARCHY: dict[str, dict[str, Any]] = {
+    "SO": {"parent": []},
+    "OO": {"parent": ["SO"]},
+    "TO": {"parent": ["OO"]},
+    "TT": {"parent": ["TO"]},
+    "MOE": {"parent": list(_OBJECTIVES)},
+    "MOP": {"parent": list(_OBJECTIVES)},
+    "CCIR": {"parent": []},
+    "FFIR": {"parent": []},
+    "PIR": {"parent": ["PIR"], "optional": True},  # a sub-PIR numbers under its PIR (PIR 2.1)
+    "RFI": {"parent": []},
+}
+_SUPPORTABLE = ["SO", "OO", "TO"]
+#: link field -> {record type carrying it: [types it may name]}; a type not listed under a field
+#: may not carry it (a CCIR serves nothing)
+DEFAULT_LINKS: dict[str, dict[str, list[str]]] = {
+    "supports": {t: list(_SUPPORTABLE) for t in ("CCIR", "FFIR", "PIR")},
+    "serves": {"FFIR": ["CCIR"], "PIR": ["CCIR", "FFIR"]},
+    "raised_by": {"RFI": ["MOP", "MOE", "CCIR", "FFIR", "PIR"]},
+}
 
 
 @dataclass
@@ -65,6 +96,25 @@ class Doctrine:
     rfi_default_ltiov_days: int = 30
     expiring_soon_days: int = 7
     judgment: list[dict[str, str]] = field(default_factory=list)
+    hierarchy: dict[str, dict[str, Any]] = field(
+        default_factory=lambda: copy.deepcopy(DEFAULT_HIERARCHY)
+    )
+    links: dict[str, dict[str, list[str]]] = field(
+        default_factory=lambda: copy.deepcopy(DEFAULT_LINKS)
+    )
+
+    def parents(self, rtype: str) -> list[str]:
+        """The types a record of ``rtype`` may name as its parent (``[]``: none)."""
+        return list((self.hierarchy.get(rtype) or {}).get("parent") or ())
+
+    def parent_optional(self, rtype: str) -> bool:
+        return bool((self.hierarchy.get(rtype) or {}).get("optional"))
+
+    def link_targets(self, field_: str, rtype: str) -> list[str] | None:
+        """The types a ``field_`` link of a ``rtype`` record may name; None: it may not carry
+        the field at all."""
+        allowed = self.links.get(field_) or {}
+        return list(allowed[rtype]) if rtype in allowed else None
 
     def on(self, rule: str) -> bool:
         return self.rules[rule]["enforce"] != "off"
@@ -100,4 +150,6 @@ def load_doctrine(root) -> Doctrine:
         rfi_default_ltiov_days=data.get("rfi_default_ltiov_days", 30),
         expiring_soon_days=data.get("expiring_soon_days", 7),
         judgment=list(data.get("judgment") or ()),
+        hierarchy={**copy.deepcopy(DEFAULT_HIERARCHY), **(data.get("hierarchy") or {})},
+        links={**copy.deepcopy(DEFAULT_LINKS), **(data.get("links") or {})},
     )

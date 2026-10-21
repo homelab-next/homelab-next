@@ -301,8 +301,8 @@ ProjectStore(backend, *, records=callable->uids, clock=, new_uid=) ; MemoryBacke
   .get(uid) / .list(*, kind, status, project, assignee, linked_to) / .update(uid, version, **fields)
   .close(uid, result, *, version) / .link(uid, target, relation) / .unlink(...) / .changes_since(cursor) -> ChangeSet
   .records() / .check() -> list[str]          # board rules over hand-edited files
-markdown_store(dir, *, strategy=DIR) ; strategy_records(root) -> {uid, type, title, parent_uid, links}  # the ADR-0019 seam
-UidGenerator(clock) / derived_uid(ns, key, date) / is_uid ; events.change_event(change, origin=) -> homelabnext.project.changed
+markdown_store(dir, *, strategy=DIR) ; strategy_records(root) -> {uid, type, title, parent_uid, links}  # the strategy seam (ADR-0019 loader)
+resolve_record(ref, root) (uid, display number or legacy code) ; events.change_event(change, origin=) -> homelabnext.project.changed
 measures.completion_reading(items, mop, now=) (MOP only) ; pages.ProjectsSite (hnx status serve --projects DIR)
 # homelabnext.projects.openproject: OpenProjectClient, load_config, discover, doctor, openproject_store(cfg),
 #   sync_strategy(client, cfg, setup, records, apply=), ChangeFeed(backend, sink).poll/on_webhook, make_webhook_server, adopt

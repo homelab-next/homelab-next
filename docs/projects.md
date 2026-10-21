@@ -68,7 +68,7 @@ name read and is complete within one working copy (after a pull, read from a sna
 ```bash
 hnx projects new project "Move the edge proxy" --key edge-move --due 2026-12-15
 hnx projects new step "Build the new guest" --project 3eaf74e3 --assignee profile:responder
-hnx projects link 3eaf74e3 OO-001 supports        # a display id resolves to the record's uid
+hnx projects link 3eaf74e3 "OO 1.1" supports      # a display number resolves to the uid
 hnx projects move 62fc01d0 in_progress
 hnx projects close 62fc01d0 "guest built and enrolled"
 hnx projects list --status blocked
@@ -87,7 +87,7 @@ rule refused the change or `check` found problems, 2 usage or input error. `make
 `hnx status serve --projects DIR [--strategy DIR]` adds **Projects** (`/projects`, menu panel
 `projects`, `schemas/status/views.schema.json` 1.6): open projects with their step progress
 (done of all, cancelled not counted) and every step's state, date and result; blocked steps and
-tasks with what blocks them; and the work linked to each strategy record, by its display id.
+tasks with what blocks them; and the work linked to each strategy record, by its display number.
 Read-only, server-rendered, every value escaped.
 
 ## Events
@@ -101,13 +101,14 @@ version. The id derives from `<uid>:v<version>` (Markdown) or `wp:<id>:v<lockVer
 ## Strategy records: the seam and the identity
 
 `homelabnext.projects.strategy.strategy_records(root)` is the only reader of the strategy tree:
-it yields `{uid, type, title, parent_uid, links}` (plus the display id, status and prose a
-mirror shows). Today it reads the current loader and maps ids to uids: a record with a `uid`
-field keeps it, one without gets a deterministic UUIDv7 derived from its id and date (the same on
-every run). When uid identities land for strategy records (ADR-0019), point this function at the
-new loader; nothing else changes. If that migration mints *new* uids, mirrors keyed by the
-derived ones must be re-keyed once (or the migration mints `derived_uid("homelabnext:strategy",
-id, date)`, which keeps them).
+it yields `{uid, type, title, parent_uid, links}` (plus the display label, status and prose a
+mirror shows). It reads the strategy loader of ADR-0019: every record is `<uid>.md` with `uid`,
+`type`, `parent` and `order`, linking by uid. `parent_uid` is the cascade (a measure's parent is
+the objective it measures); `supports`, `serves` and `raised_by` are the links. Display numbers
+(`OO 1.2`) are computed by `homelabnext.identity` from type, parent and order and are never
+stored here either: projects link by uid, and `resolve_record` turns a typed display number, or
+a legacy code from `aliases.yml` (with a deprecation warning), into the uid. Uids are minted by
+`homelabnext.identity.UidGenerator`.
 
 ### MOP readings, never MOE
 
@@ -190,8 +191,8 @@ mirrors every strategy record into the Strategy project:
 
 * **upsert by uid**: the work package whose External key is the record's uid is patched (with
   its `lockVersion`), a missing one created; type and status are the record's;
-* **cascade and links**: `parent` becomes the work package parent (parents first);
-  `supports`, `serves`, `measures` and `raised_by` become `relates` relations with the edge name
+* **cascade and links**: `parent` becomes the work package parent (parents first: an objective's
+  parent objective, a measure's objective); `supports`, `serves` and `raised_by` become `relates` relations with the edge name
   in the description; stale ones are removed only between two strategy work packages, never a
   relation to execution work;
 * **content hash**: what the sync wrote is hashed into `hnx state`; an unchanged repository makes

@@ -29,6 +29,8 @@ import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import Any, Protocol
 
+from homelabnext.identity import UidGenerator, is_uid
+
 from . import rules
 from .model import (
     KINDS,
@@ -44,7 +46,6 @@ from .model import (
     NotFound,
     WorkItem,
 )
-from .uid import UidGenerator, is_uid
 
 __all__ = [
     "Backend",
@@ -144,7 +145,7 @@ class ProjectStore:
         self.backend = backend
         self._records = records
         self._clock = clock
-        self._new_uid = new_uid or UidGenerator(clock)
+        self._new_uid = new_uid or UidGenerator(lambda: int(clock().timestamp() * 1000))
         self.actor = actor
 
     # ------------------------------------------------------------------ helpers

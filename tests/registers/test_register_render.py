@@ -5,6 +5,7 @@ import shutil
 
 import pytest
 import yaml
+from register_helpers import U
 
 from homelabnext.registers import (
     RegisterError,
@@ -35,12 +36,19 @@ def test_example_registers_render_html_and_json(examples, tmp_path):
     }
     html = (tmp_path / "lessons.html").read_text()
     archive = html.index("<h2>Archive</h2>")
-    assert html.index('<article id="LL-002">') > archive  # retired pitfall
-    assert html.index('<article id="LL-004">') > archive  # incorporated practice
-    assert html.index('<article id="LL-001">') < archive
+    assert html.index(f'<article id="{U["LL-002"]}">') > archive  # retired pitfall
+    assert html.index(f'<article id="{U["LL-004"]}">') > archive  # incorporated practice
+    assert html.index(f'<article id="{U["LL-001"]}">') < archive
+    # anchored by uid, shown by the computed number, in number order
+    assert f'<article id="{U["LL-001"]}"><h3>LL 1 Certificate expired' in html
+    assert html.index("<h3>LL 1 ") < html.index("<h3>LL 3 ") < html.index("<h3>LL 5 ")
+    assert [e["label"] for e in data["lessons"]] == [f"LL {n}" for n in range(1, 6)]
     rb = json.loads((tmp_path / "runbooks.json").read_text())
-    rb1 = next(r for r in rb["runbooks"] if r["id"] == "RB-001")
-    assert rb1["related_lessons"] == ["LL-001", "LL-005"]  # active lessons sharing `systems`
+    rb1 = next(r for r in rb["runbooks"] if r["uid"] == U["RB-001"])
+    assert rb1["label"] == "RB 1"
+    assert rb1["related_lessons"] == [U["LL-001"], U["LL-005"]]  # active, sharing `systems`
+    rb_html = (tmp_path / "runbooks.html").read_text()
+    assert f'<a href="lessons.html#{U["LL-001"]}">LL 1</a>' in rb_html
 
 
 def test_html_is_self_contained(examples, tmp_path):
@@ -83,7 +91,10 @@ def test_rebuild_is_idempotent(examples, tmp_path):
         (lambda l: l["verification"].update(observable="manual inspection of it"), "falsifiable"),
         (lambda l: l.pop("contributing_factor"), "contributing_factor"),
         (lambda l: l.update(status="solved"), "status"),
-        (lambda l: l.update(id="LL-7"), "id must look like"),
+        (lambda l: l.update(uid="LL-7"), "`uid` must be a canonical UUIDv7"),
+        (lambda l: l.update(type="runbook"), "`type` must be lesson"),
+        (lambda l: l.update(order="first"), "`order` must be a number"),
+        (lambda l: l.update(related=["RB-001"]), "is a legacy numbered code"),
         (lambda l: l.update(date="yesterday"), "date"),
         (lambda l: l.update(systems=[]), "systems"),
         (lambda l: l.update(recurrences=-1), "recurrences"),
@@ -116,7 +127,7 @@ def test_all_problems_reported_together(lessons):
 
 def test_duplicate_id_is_fatal(lessons):
     lessons["lessons"].append(dict(lessons["lessons"][0]))
-    with pytest.raises(RegisterError, match="duplicate id LL-001"):
+    with pytest.raises(RegisterError, match=f"duplicate uid {U['LL-001']}"):
         validate_lessons(lessons)
 
 
@@ -207,7 +218,7 @@ def test_example_tombstones_render_with_their_replacement(examples, tmp_path):
         ({"F-77": {"reason": "points at nothing real", "replaced_by": "F-99"}}, "not a live"),
         ({"F-77": {"replaced_by": "Q-09"}}, "reason"),
         ({"F-77": {"reason": "a field nobody reads", "when": "x"}}, "unknown field"),
-        ({"F-NEW": {"reason": "never allocated, never cited"}}, "only an allocated id"),
+        ({"F-NEW": {"reason": "never a checklist row, never cited"}}, "is not a criterion id"),
         ({"F-77": "just a string"}, "must be a mapping"),
         (["F-77"], "`retired` must be a mapping"),
     ],
@@ -219,11 +230,9 @@ def test_bad_tombstones_are_fatal(examples, tomb, needle):
         render_invariants(inv)
 
 
-def test_lessons_and_runbooks_accept_tombstones(lessons):
-    lessons["retired"] = {
-        "LL-099": {"reason": "merged into LL-001 on review", "replaced_by": "LL-001"}
-    }
+def test_lessons_and_runbooks_have_no_tombstones(lessons):
+    """A uid is never reused, so a records register has no `retired:` block (ADR-0019)."""
     assert validate_lessons(lessons)
-    lessons["retired"] = {"LL-001": {"reason": "cannot be both retired and live"}}
-    with pytest.raises(RegisterError, match="also a live entry"):
+    lessons["retired"] = {"LL-099": {"reason": "merged into another lesson on review"}}
+    with pytest.raises(RegisterError, match=r"unknown key\(s\) \['retired'\]"):
         validate_lessons(lessons)

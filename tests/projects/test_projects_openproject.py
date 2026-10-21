@@ -24,7 +24,8 @@ from conformance.fakes.project_store import RECORDS
 from conformance.suites.projects import SUITE
 from homelabnext.conform.core import run_checks
 from homelabnext.events.envelope import event_problems
-from homelabnext.projects import Conflict, NotFound, UidGenerator, strategy_records
+from homelabnext.identity import UidGenerator
+from homelabnext.projects import Conflict, NotFound, strategy_records
 from homelabnext.projects.cli import main as cli
 from homelabnext.projects.openproject import (
     ApiError,
@@ -46,6 +47,17 @@ from homelabnext.projects.openproject import (
 REPO = Path(__file__).resolve().parents[2]
 ENV = {"HNX_SECRET_OPENPROJECT_API_TOKEN": TOKEN}
 WEBHOOK_SECRET = "fake-webhook-secret"
+
+
+def by_code(root=REPO / "examples/strategy"):
+    """legacy code (aliases.yml, history only) -> the record, to name records in assertions"""
+    import yaml
+
+    codes = yaml.safe_load((Path(root) / "aliases.yml").read_text())["aliases"]
+    recs = {r.uid: r for r in strategy_records(root)}
+    return {code: recs[uid] for code, uid in codes.items() if uid in recs}
+
+
 DOC_HOST = "192.0.2.10"  # no-raw-endpoint: allow RFC 5737 documentation address, never bound
 
 
@@ -245,11 +257,11 @@ def test_sync_dry_run_writes_nothing_then_apply_mirrors_the_tree(op):
     done = sync_strategy(c, cfg, st, records(), apply=True)
     assert done.problems == [] and len(done.created) == len(records())
     by_key = {w[EXT_CF]: w for w in op.wps.values()}
-    recs = {r.id: r for r in records()}
+    recs = by_code()
     to, oo = by_key[recs["TO-001"].uid], by_key[recs["OO-001"].uid]
     assert to["_links"]["parent"]["href"].endswith(f"/{oo['id']}")
     labels = {r["description"] for r in op.relations.values()}
-    assert {"supports", "serves", "measures", "raised_by"} <= labels
+    assert {"supports", "serves", "raised_by"} <= labels  # a measure hangs from its objective
     assert "Mirrored from the strategy repository" in to["description"]["raw"]
 
 
@@ -266,12 +278,12 @@ def test_an_edit_in_openproject_is_reverted_and_reported_and_the_repo_wins(op):
     c, cfg = client_for(op), cfg_for(op)
     st = discover(c, cfg)
     sync_strategy(c, cfg, st, records(), apply=True)
-    recs = {r.id: r for r in records()}
+    recs = by_code()
     wp = next(w for w in op.wps.values() if w[EXT_CF] == recs["SO-001"].uid)
     closed = st.statuses["Achieved"]
     c.patch(f"/api/v3/work_packages/{wp['id']}", {"lockVersion": wp["lockVersion"], "subject": "renamed in the UI", "_links": {"status": {"href": f"/api/v3/statuses/{closed}"}}})  # fmt: skip
     rep = sync_strategy(c, cfg, st, records(), apply=True)
-    assert rep.reverted == [f"SO-001 ({recs['SO-001'].uid})"] and not rep.updated
+    assert rep.reverted == [f"{recs['SO-001'].label} ({recs['SO-001'].uid})"] and not rep.updated
     now = op.wps[wp["id"]]
     assert now["subject"] == recs["SO-001"].title
     assert now["_links"]["status"]["href"].endswith(f"/{st.statuses['Active']}")  # never closed
@@ -281,10 +293,12 @@ def test_a_repo_change_is_an_update_and_a_vanished_record_an_orphan(op):
     c, cfg = client_for(op), cfg_for(op)
     st = discover(c, cfg)
     sync_strategy(c, cfg, st, records(), apply=True)
-    changed = [r if r.id != "TT-001" else type(r)(**{**r.__dict__, "title": "Renamed"}) for r in records()]  # fmt: skip
-    changed = [r for r in changed if r.id != "RFI-001"]
+    codes = by_code()
+    tt, rfi = codes["TT-001"].uid, codes["RFI-001"].uid
+    changed = [r if r.uid != tt else type(r)(**{**r.__dict__, "title": "Renamed"}) for r in records()]  # fmt: skip
+    changed = [r for r in changed if r.uid != rfi]
     rep = sync_strategy(c, cfg, st, changed, apply=True)
-    assert [x.split()[0] for x in rep.updated] == ["TT-001"]
+    assert rep.updated == [f"{codes['TT-001'].label} ({tt})"]
     assert len(rep.orphans) == 1 and rep.reverted == []
     assert any("raised_by" in x for x in rep.relations_removed)  # RFI-001's edge is gone
     orphan_wp = int(rep.orphans[0].split()[0].removeprefix("wp:"))
@@ -297,7 +311,7 @@ def test_sync_never_touches_relations_to_execution_work(op):
     sync_strategy(c, cfg, st, records(), apply=True)
     s = store_for(op)
     t = s.create("task", "Work on the objective")
-    so = {r.id: r for r in records()}["SO-001"].uid
+    so = by_code()["SO-001"].uid
     s.link(t.uid, so, "supports")
     rep = sync_strategy(c, cfg, st, records(), apply=True)
     assert rep.relations_removed == [] and s.get(t.uid).links[0].target == so

@@ -11,11 +11,11 @@ ROLES := $(wildcard ansible/roles/*)
 PLAYBOOKS := $(wildcard ansible/playbooks/*.yml)
 REGISTERS_OUT := build/registers
 
-.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-eval agent-lint prompts-lint injection-check injection-report injection-eval workflows detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke lab-broker
+.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-eval agent-lint prompts-lint injection-check injection-report injection-eval workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke lab-broker
 
 help:
-	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check ids-resolve conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
-	@echo "hygiene: helpers-lint dup-check tls-lint workstation-lint run-output-lint keyring-check keyring ids-placeholders"
+	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
+	@echo "hygiene: helpers-lint dup-check tls-lint workstation-lint run-output-lint keyring-check keyring"
 	@echo "knowledge graph (local docs/graph/, integrity checked in gates): graph"
 	@echo "strategy to task (examples/strategy, docs/strategy.md; in check): strategy"
 	@echo "script catalog (M-01, M-02, M-04): scripts-check"
@@ -189,25 +189,21 @@ projects:
 # plugin-only rows (X-04, X-06, X-09, X-10) run nowhere else.  Slow criteria (leak scans, schema
 # check, coverage floor, pytest selections) are gates of their own.  Not a prerequisite of `check`:
 # `test` already runs the fast CLI gates through the register and the rest would repeat ~30 s of
-# gates `check` has just run; CI runs it as its own job (INVARIANTS_ARGS="--skip M-16" on a pull
-# request, which may carry XX-NEW placeholders until merge).
+# gates `check` has just run; CI runs it as its own job (INVARIANTS_ARGS="--skip X-NN" skips one).
 INVARIANTS_OUT := build/invariants/results.json
 .PHONY: invariants
 invariants:
 	$(PY) -m homelabnext.invariants run examples/registers/invariants.yml --fast --no-notify --out $(INVARIANTS_OUT) $(INVARIANTS_ARGS)
 
-# no allocated register id twice (and every record file named for its id); with BASE=<rev> also no
-# id that BASE had may vanish (CI: PR base).  Without paths the tool checks every register git
-# tracks or HEAD/BASE has (lessons.yml-style files and lessons/-style record directories), so a
-# deleted record file is seen too.
+# M-16, M-17: every record carries its uid and is named <uid>.md, no key occurs twice; with
+# BASE=<rev> also no record that BASE had may vanish (CI: PR base).  Without paths the tool checks
+# every register git tracks or HEAD/BASE has (record directories and invariants.yml), so a deleted
+# record file is seen too.  Records are identified by uids (ADR-0019): nothing is allocated, so
+# there is no merge-time step.
 ids-check:
 	$(PY) tools/register_ids.py check-dupes
+	$(PY) tools/register_ids.py check-uids
 	$(if $(BASE),$(PY) tools/register_ids.py check-lost --base $(BASE))
-
-# maintainers, at merge time on the target branch: allocate every XX-NEW placeholder (exit 3 =
-# rewrote something, which is success here; review and commit the result)
-ids-resolve:
-	@rc=0; $(PY) tools/register_ids.py resolve || rc=$$?; [ $$rc -eq 0 ] || [ $$rc -eq 3 ]
 
 # run every capability suite against the built-in fakes (TARGET=my-target aims it elsewhere)
 conform:
@@ -243,7 +239,7 @@ changelog-check:
 #   F-17 no runtime config points at the admin workstation (runs beside X-01's endpoint gate)
 #   M-12 the generated keyring has 0 drift from its sources
 #   scripts write scratch output under their run directory (homelabnext.runs) or build/ only
-.PHONY: helpers-lint dup-check dup-baseline tls-lint workstation-lint keyring-check keyring ids-placeholders run-output-lint
+.PHONY: helpers-lint dup-check dup-baseline tls-lint workstation-lint keyring-check keyring run-output-lint
 check: helpers-lint dup-check tls-lint workstation-lint keyring-check run-output-lint
 
 helpers-lint:
@@ -278,11 +274,6 @@ graph:
 # after changing a registry, profile or broker source of the keyring: regenerate and commit it
 keyring:
 	$(PY) -m homelabnext.cli agent keyring build $(KEYRING_SOURCES)
-
-# M-16: XX-NEW is allowed on a pull request, never on main; CI runs this on every push to main
-# (not part of `check`, which pull requests run).  Maintainer fix: `make ids-resolve` on main.
-ids-placeholders:
-	$(PY) tools/register_ids.py check-placeholders
 
 # Q-08: every `fix:` commit (or `Fixes:` trailer) in RANGE touches a test file; PROVE=1 also runs
 # each fix's tests on its parent, where they must fail.  Skipped with a note when RANGE's base

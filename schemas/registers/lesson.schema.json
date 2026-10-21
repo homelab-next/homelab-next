@@ -1,13 +1,21 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/registers/lesson/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/registers/lesson/2.0",
   "title": "Lesson (post-incident learning)",
-  "description": "Separates contributing factors (conditions that enabled the problem) from the root cause (why those conditions existed). A lesson needs a preventive control and a falsifiable verification; graded statuses need control_installed_at. An id of the form LL-NEW is legal: a pre-commit hook allocates the number under a lock.",
+  "description": "Separates contributing factors (conditions that enabled the problem) from the root cause (why those conditions existed). A lesson needs a preventive control and a falsifiable verification; graded statuses need control_installed_at. 2.0 (ADR-0019): a lesson is identified by its `uid` (a UUIDv7 created with it) and names its `type`; the numbered `id` (and the LL-NEW placeholder a hook used to allocate) is gone, and the number it is shown with is computed from its place among its siblings (`order`, then creation).",
   "type": "object",
   "properties": {
-    "id": {
+    "uid": {
       "type": "string",
-      "pattern": "^LL-(\\d{3,}|NEW)$"
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)",
+      "description": "A canonical UUIDv7: the record's identity, never changed."
+    },
+    "type": {
+      "const": "lesson"
+    },
+    "order": {
+      "type": "number",
+      "description": "Optional sort key among its siblings."
     },
     "title": {
       "type": "string",
@@ -80,7 +88,8 @@
     }
   },
   "required": [
-    "id",
+    "uid",
+    "type",
     "title",
     "date",
     "systems",
