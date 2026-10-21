@@ -68,3 +68,27 @@ def test_the_rendered_map_is_sorted_by_code_and_number():
     lines = [ln.strip() for ln in text.splitlines() if ln.startswith("  ")]
     assert lines == [f"LL-002: {U2}  # a title", f"LL-010: {U1}", f"RB-001: {U2}"]
     assert text.startswith("# SPDX-License-Identifier: Apache-2.0\n")
+
+
+def test_a_retired_code_renders_reads_back_and_resolves_to_its_successor(tmp_path):
+    retired = {"LL-002": {"reason": "a duplicate: filed twice", "replaced_by": U1}}
+    (tmp_path / "aliases.yml").write_text(render_aliases({"LL-001": U1}, retired=retired))
+    amap = load_aliases(tmp_path)
+    assert amap.retired == retired and amap.codes == {"LL-001": U1}
+    with pytest.warns(LegacyRecordCode, match="retired"):
+        assert resolve("LL-002", amap) == U1
+
+
+@pytest.mark.parametrize(
+    "retired",
+    [
+        "  LL-002: {}\n",  # no reason
+        "  LL-002: {reason: dup, replaced_by: LL-001}\n",  # a code, not the successor's uid
+        "  LL-001: {reason: dup}\n",  # retired and an alias at once
+        "  LL-002: {reason: dup, owner: someone}\n",  # an unknown field
+    ],
+)
+def test_a_malformed_retired_block_is_refused(tmp_path, retired):
+    (tmp_path / "aliases.yml").write_text(f"aliases:\n  LL-001: {U1}\nretired:\n" + retired)
+    with pytest.raises(ValueError, match="retired"):
+        load_aliases(tmp_path)

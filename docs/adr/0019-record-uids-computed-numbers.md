@@ -65,7 +65,12 @@ allocated, and allocation is the problem:
    old digest recorded before it count for the new one), and writes `<tree>/aliases.yml`
    (legacy code -> uid). A legacy code met outside the repository -- an intent filed earlier, an
    id typed into `hnx graph related`, an MCP call -- resolves through that map on read, with a
-   `LegacyRecordCode` deprecation warning; a code inside a record is a validation error.
+   `LegacyRecordCode` deprecation warning; a code inside a record is a validation error. A
+   tombstone (a numbered code retired before uids: a file holding only `id:` and `retired:
+   {reason, replaced_by}`) gets no uid, since a uid is never reused and there is nothing left to
+   guard: its code moves to the `retired:` block of `aliases.yml` with its reason and the
+   successor's uid, resolves to that successor on read (with the same warning), and counts as
+   accounted for in `check-lost`.
 8. Schemas: requiring `uid` is breaking, so the strategy record schemas, `lesson` and `runbook`
    are major-bumped to 2.0 (frozen baselines of 1.0 stay, and the migration reads 1.x records);
    the records note (1.4), the register event (1.3) and the doctrine (1.1) widen additively.
