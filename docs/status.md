@@ -314,6 +314,31 @@ role (or `not bound`), its verify observable and how many guests need it. It is 
 as `hnx guests baselines --json` and reads the guest files only; see the
 [compute model](compute-model.md#baselines-and-defense-layers).
 
+### Generated maps: topology, dataflow, architecture, roadmap
+
+Four pages in the `maps` menu group (views 1.5, `panel: topology | dataflow | architecture |
+roadmap`), each **generated** from models already in the repository and never drawn by hand
+([ADR-0018](adr/0018-generated-maps.md) ([[adr/0018-generated-maps|ADR-0018]])). Each is a pure
+function model -> view-model -> page (`homelabnext/status/maps/`, goldens in
+`tests/status/golden/maps/`): an inline SVG (no script, no `style` attribute, themed by the hub's
+one stylesheet, so it reads in light and dark; `title` and `desc` for assistive technology) and
+the same facts as tables below it. A map whose inputs are not given is listed as unavailable; a
+source that cannot be read gives the page an error line instead of a half-drawn picture.
+
+| Page | Input | Drawn from |
+|---|---|---|
+| `/topology` | `--guests DIR --guests-site SITE` (as the Baselines page) | the site model (zones, VLANs, subnets, gateways, internet egress), the zone-to-zone flows the network IR allows (first match wins), the guest model (node, zone, address, capability, baselines): nodes as rows, zones as columns, then the zone flow matrix |
+| `/dataflow` | `--maps ROOT` (a checkout) | producer -> transport -> consumer, one row per flow, labelled: event types (`schemas/events`, their contract samples, an AST scan of the code for who builds and who decodes each type, workflow pack triggers), status sources (polled, or pushed on the bus), the OCSF lake tables and workflow lookups, object-store upstreams, broker actions and lanes |
+| `/architecture` | `--maps ROOT` | capabilities -> fakes, real adapters, products -> registry services (the knowledge graph's registry, compose and capability readers: the [capabilities](capabilities/README.md) matrix), then the control plane: agents, bus, workflows, decision, broker, status hub, with an edge only where the repository declares one |
+| `/roadmap` | `--maps ROOT [--invariants-results FILE]` | `docs/build-order.md` phases and steps; each phase's `Checklist` cell names its `docs/checklist.md` rows (a section letter for that section's rows of the phase's tag, an id, or a range); per criterion `pass`, `fail`, `error`, `skip` from the results file (`make invariants` writes `build/invariants/results.json`), else `untested`; a progress bar per phase and every row no phase names as unphased |
+
+`hnx status serve ... --maps . --invariants-results build/invariants/results.json` serves them
+live; `hnx status render --out DIR` with the same options writes each available map as
+`<panel>.html` beside `index.html`, and the static menu links to it. The dataflow and
+architecture are built once per process (they change only with the code); the topology and the
+roadmap are read on each request. A test keeps `docs/build-order.md` naming every checklist row
+and only real ones.
+
 ### Pages
 
 Menu entries in `views.yml` (`panel: agents | activity | agent-analytics`, and `agent-detail`,
