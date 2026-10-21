@@ -54,13 +54,13 @@ def create(
     kind: str,
     title: str,
     *,
-    project: str | None = None,
-    parent: str | None = None,
-    external_key: str | None = None,
-    status: str | None = None,
     assignee: str | None = None,
-    due: str | None = None,
     description: str = '',
+    due: str | None = None,
+    external_key: str | None = None,
+    parent: str | None = None,
+    project: str | None = None,
+    status: str | None = None,
 ) -> WorkItem
 ```
 
@@ -68,17 +68,17 @@ def create(
 |---|---|---|---|
 | `kind` | `str` | required | positional or keyword |
 | `title` | `str` | required | positional or keyword |
-| `project` | `str \| None` | `None` | keyword-only |
-| `parent` | `str \| None` | `None` | keyword-only |
-| `external_key` | `str \| None` | `None` | keyword-only |
-| `status` | `str \| None` | `None` | keyword-only |
 | `assignee` | `str \| None` | `None` | keyword-only |
-| `due` | `str \| None` | `None` | keyword-only |
 | `description` | `str` | `''` | keyword-only |
+| `due` | `str \| None` | `None` | keyword-only |
+| `external_key` | `str \| None` | `None` | keyword-only |
+| `parent` | `str \| None` | `None` | keyword-only |
+| `project` | `str \| None` | `None` | keyword-only |
+| `status` | `str \| None` | `None` | keyword-only |
 
 **Returns:** `WorkItem`
 
-A new item at version 1.  With an `external_key` that already names an item, that
+A new item at version 1 (keyword arguments in any order).  With an `external_key` that already names an item, that
 item is returned unchanged (idempotent create).
 
 #### `ProjectStore.get`

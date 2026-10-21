@@ -75,15 +75,15 @@ class ProjectStore(Protocol):
         kind: str,
         title: str,
         *,
-        project: str | None = None,
-        parent: str | None = None,
-        external_key: str | None = None,
-        status: str | None = None,
         assignee: str | None = None,
-        due: str | None = None,
         description: str = "",
+        due: str | None = None,
+        external_key: str | None = None,
+        parent: str | None = None,
+        project: str | None = None,
+        status: str | None = None,
     ) -> WorkItem:
-        """A new item at version 1.  With an ``external_key`` that already names an item, that
+        """A new item at version 1 (keyword arguments in any order).  With an ``external_key`` that already names an item, that
         item is returned unchanged (idempotent create)."""
 
     def get(self, uid: str) -> WorkItem: ...
