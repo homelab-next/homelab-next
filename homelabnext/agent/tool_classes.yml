@@ -38,6 +38,7 @@ capabilities:
   cap:records-propose: [record-write]
   cap:records: [record-write]
   cap:cases: [record-write]
+  cap:projects: [record-write]
   cap:events: [record-write]
   cap:detections: [record-write]
   cap:object-store: [read, file-write]

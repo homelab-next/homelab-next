@@ -13,7 +13,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-#: The fifteen capabilities named in docs/interfaces.md (``hnx conform --list``).
+#: The sixteen capabilities named in docs/interfaces.md (``hnx conform --list``).
 KNOWN_CAPABILITIES: tuple[str, ...] = (
     "lake-query",
     "lake-catalog",
@@ -30,6 +30,7 @@ KNOWN_CAPABILITIES: tuple[str, ...] = (
     "records",
     "detections",
     "context",
+    "projects",
 )
 
 #: The capability inventory groups named in docs/role-interface.md section 5.

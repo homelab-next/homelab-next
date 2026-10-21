@@ -15,7 +15,7 @@ are listed as such in [docs/checklist.md](docs/checklist.md).
 > linter, detections as code, register and invariant tooling, shared libraries with in-memory fakes
 > (lake, notify, state, records, decision cascade, golden tasks), the site/network, guest/compute
 > and customization models, the **swap kit** (`hnx swap`, parity tools), the **conformance harness**
-> (`hnx conform`, 15 capability suites) and the **lab-in-a-box** compose environment. All of it is
+> (`hnx conform`, 16 capability suites) and the **lab-in-a-box** compose environment. All of it is
 > proven by unit tests, golden files and fakes on a laptop or CI runner. **Nothing has been tested
 > on real hardware or against a live deployment**; the only thing that has run against real
 > containers is the lab-in-a-box smoke test, on a laptop-class host. Parts that need a real server
@@ -25,7 +25,7 @@ are listed as such in [docs/checklist.md](docs/checklist.md).
 
 * `hnx registry|site|guests validate` and `hnx gen`: check the synthetic lab and render artefacts
   from it (resolver config, Terraform, cloud-init, Ansible inventory, network configs) against goldens.
-* `hnx conform list|run|mutants|report`: 15 capability suites run against a built-in fake, against a
+* `hnx conform list|run|mutants|report`: 16 capability suites run against a built-in fake, against a
   deliberately broken fake (every suite must catch its mutants) or against your own adapter named in
   a target file; `hnx conform report --json` lists capabilities without a passing test (invariant X-10).
 * `hnx swap plan|start|status|advance|rollback|record`: the nine-step swap procedure with gates,
@@ -36,7 +36,7 @@ are listed as such in [docs/checklist.md](docs/checklist.md).
 * `make lab-smoke`: a pinned Docker Compose stack within a 4 GB budget, checked service by service
   (needs Docker; the compose smoke on a laptop-class host is the only live test so far).
 * `make check`: lint, tests, schemas, gates, detections, registers, SPDX, leak scan, changelog and a
-  conformance coverage check that fails if any of the 15 capabilities lacks a passing test.
+  conformance coverage check that fails if any of the 16 capabilities lacks a passing test.
 
 ## The capabilities and their seams
 
@@ -48,6 +48,7 @@ are listed as such in [docs/checklist.md](docs/checklist.md).
 | `secrets`, `idp` | key issue and revoke, claim-to-role mapping | issue/expire/revoke checks |
 | `cases`, `records`, `detections` | case round-trip, propose/approve/complete, Sigma + fixtures | lifecycle and fixture runs |
 | `context` | scoped retrieval over the knowledge graph for agents | scope, inactive-record, ranking and stale-copy checks |
+| `projects` | projects, steps and tasks under board rules, linked to strategy records by uid | board-rule, idempotency, version-conflict and change-feed checks |
 
 The authoritative list and the Python interfaces are in [docs/interfaces.md](docs/interfaces.md).
 The vocabulary is in [docs/glossary.md](docs/glossary.md).
@@ -65,7 +66,7 @@ pip install -e ".[dev]"
 make check          # lint, tests, schemas, gates, detections, registers, SPDX, leak scan, conformance coverage, changelog
 hnx --help          # registry, new, gen, detections, registers, invariants, ids, decide, golden, site, guests, swap, conform, custom, schema-check
 hnx registry validate examples/services.yml
-hnx conform list                      # the 15 capabilities and their suites (needs a checkout)
+hnx conform list                      # the 16 capabilities and their suites (needs a checkout)
 hnx conform run lake-query --target fake
 hnx swap plan                         # the nine steps, their gates and evidence
 ```
@@ -75,7 +76,7 @@ The package is not on PyPI yet; install the wheel attached to a [GitHub release]
 profiles and a minimal example lab (`examples/minimal/`) inside the package, so `hnx site validate`,
 `hnx guests validate`, `hnx registry validate`, `hnx custom list` and `hnx swap plan` work without a
 checkout (the conformance suites, `compose/` and `tools/` stay in the source tree: from a wheel,
-`hnx conform list` names the 15 capabilities and says no suite is installed). An
+`hnx conform list` names the 16 capabilities and says no suite is installed). An
 editable install (`pip install -e .`) reads the same directories from the checkout instead. Every
 lookup goes through `homelabnext/paths.py`: an explicit override (`HNX_SCHEMAS_DIR`,
 `HNX_PROFILES_DIR`, `HNX_EXAMPLES_DIR`, or `HNX_DATA_DIR` for all three), then the packaged copy,
@@ -124,10 +125,11 @@ memory budget) and skips the parts that need a daemon. The architecture behind i
 | [docs/adr/](docs/adr/README.md) | architecture decision records |
 | `schemas/` | JSON Schemas (ids, events, records, registers, platform, OCSF subsets) with examples, negative cases and frozen baselines |
 | `examples/` | synthetic lab: `services.yml` registry, example registers and the minimal example lab (`examples/minimal/`) |
-| `conformance/`, `capabilities.yml` | the 15 capability suites (protocol, fake, broken twin, pytest glue), target files, and the list of capabilities the tree declares ([docs/conformance.md](docs/conformance.md)) |
+| `conformance/`, `capabilities.yml` | the 16 capability suites (protocol, fake, broken twin, pytest glue), target files, and the list of capabilities the tree declares ([docs/conformance.md](docs/conformance.md)) |
 | `compose/` | the lab-in-a-box reference environment (not shipped in the wheel) |
 | [docs/agent.md](docs/agent.md) | agent profile compiler, context packs and the broker contracts (`hnx agent`, `schemas/agent/`, `schemas/broker/`) |
 | [docs/swap.md](docs/swap.md) | the swap kit: record, gates, parity, flip, decommission |
+| [docs/projects.md](docs/projects.md) | project management: projects, steps and tasks under board rules (`hnx projects`), the Projects hub page, OpenProject setup, strategy sync and change feed |
 | `homelabnext/` | the Python package: registry, generators, ids, paths, lake, notify, state, records, decide, golden, network, compute, customization, conform, swap, parity, agent, broker, detections, registers, invariants, scaffolds, `cli.py` |
 | `profiles/` | shipped optional customization profiles (inert until enabled; see [docs/customization.md](docs/customization.md)) |
 | [docs/network-model.md](docs/network-model.md), [docs/compute-model.md](docs/compute-model.md) | the site/network and guest models |

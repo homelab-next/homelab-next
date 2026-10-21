@@ -1,0 +1,25 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "cap:projects",
+  "type": "homelabnext.project.updated",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "info",
+  "subject": "project:01941f29-7c00-7a3e-8b2c-5d6e7f8091a2",
+  "data": {
+    "uid": "01941f29-7c00-7a3e-8b2c-5d6e7f8091a2",
+    "kind": "step",
+    "version": 3,
+    "op": "closed",
+    "status": "done",
+    "title": "Move the edge proxy to the new host",
+    "project": "01941f29-7c00-7b11-9c3d-0a1b2c3d4e5f",
+    "origin": "markdown",
+    "links": [
+      {
+        "relation": "supports",
+        "target": "01941f29-7c00-7c22-ad4e-1b2c3d4e5f60"
+      }
+    ]
+  }
+}

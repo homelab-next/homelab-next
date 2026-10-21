@@ -3,7 +3,7 @@
 # hnx-script:
 #   id: conform-coverage
 #   kind: check
-#   purpose: Fail unless each of the fifteen capabilities has a passing conformance suite.
+#   purpose: Fail unless each of the sixteen capabilities has a passing conformance suite.
 #   owner: maintainers
 #   trigger: [ci:ci/schemas, make:conform-check]
 #   inputs: the conformance suites and the target (--target, default fake)
@@ -12,7 +12,7 @@
 #     "0": all capabilities pass
 #     "1": some capability lacks a passing test
 #     "2": the report could not be produced
-"""Gate: every one of the fifteen capabilities has a passing conformance test.
+"""Gate: every one of the sixteen capabilities has a passing conformance test.
 
 Runs ``hnx conform list`` and ``hnx conform report --json`` (the exporter behind invariant X-10)
 and fails when any capability of ``homelabnext.conform.CAPABILITIES`` is missing from the report,

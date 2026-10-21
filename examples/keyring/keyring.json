@@ -1,7 +1,7 @@
 {
   "generated_from": {
     "broker": "sha256:329adee08662989613b59c3c85b509ad24a094c804dafa683f28b805d0ada2cc",
-    "classes": "sha256:aee72f521c4c1f8fd609ad6ca0f4be78f771109024b376577b3706bccbab2667",
+    "classes": "sha256:303e82d6a1f4f6306f46ec92085c6e303da2e695f21c3caeeb4b5c772ff26fd6",
     "profiles": {
       "profile:reader": "sha256:b855f7d3bf4d947b92df54cdb815d2099722c7a62166abf05cd2af0c62837114",
       "profile:responder": "sha256:ed744f7e5a9beed4c46712e50eb47055c08f9e7d0e51c4d7e45fa3b6ac30012d"

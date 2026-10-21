@@ -54,10 +54,10 @@ The "example tenants" are illustrations only: the reference environment in
 | 10 | Internal assessment, detection and code security | Authorized internal assessment plans and findings as typed records (own environment only; [terms](terms.md)) | auditing tools | detection fixtures and coverage map |
 | 11 | LLM serving, orchestration, agents | OpenAI-compatible chat; model-role aliases (ADR-0007); scoped context retrieval | an inference server (fake*), a context store | `inference` and `context` suites, golden tasks |
 | 12 | Observability, alerting, backup, power | OpenMetrics, state-diffed paging, export hooks (ADR-0008) | a metrics stack, ntfy* | `notify` suite; restore drill |
-| 13 | Governance and control plane | Records lifecycle as an API (ADR-0010), approvals bound to a request digest | a broker, the records library | lifecycle and fixture runs |
+| 13 | Governance and control plane | Records lifecycle as an API (ADR-0010), approvals bound to a request digest; projects and work items linked to strategy records by uid (ADR-0020) | a broker, the records library, a project tool (OpenProject) | lifecycle and fixture runs, `projects` suite |
 
-Fifteen capabilities carry a conformance directory (fourteen at first drop, ADR-0005, then
-`context`); the list is authoritative in [interfaces.md](interfaces.md).
+Sixteen capabilities carry a conformance directory (fourteen at first drop, ADR-0005, then
+`context` and `projects`); the list is authoritative in [interfaces.md](interfaces.md).
 
 ## The spine
 
