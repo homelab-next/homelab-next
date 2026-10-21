@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# The synthetic topology input of tests/status/test_maps.py (documentation addresses only): a
+# The synthetic topology input of tests/maps/test_maps.py (documentation addresses only): a
 # site document, guest documents, the zone flows, the hypervisors (_nodes.yml), the registry's
 # plain facts (lab_of) and a dataflow view-model, as topology.build takes them.
 site:

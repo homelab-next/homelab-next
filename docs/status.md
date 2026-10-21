@@ -320,7 +320,7 @@ Four pages in the `maps` menu group (views 1.5, `panel: topology | dataflow | ar
 roadmap`), each **generated** from models already in the repository and never drawn by hand
 ([ADR-0018](adr/0018-generated-maps.md) ([[adr/0018-generated-maps|ADR-0018]])). Each is a pure
 function model -> view-model -> page (`homelabnext/status/maps/`, goldens in
-`tests/status/golden/maps/`). Architecture and Roadmap are an inline SVG (no script, no `style`
+`tests/maps/golden/maps/`). Architecture and Roadmap are an inline SVG (no script, no `style`
 attribute, themed by the hub's one stylesheet, so it reads in light and dark; `title` and `desc`
 for assistive technology) with the same facts as tables below it. A map whose inputs are not
 given is listed as unavailable; a source that cannot be read gives the page an error line

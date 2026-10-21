@@ -15,7 +15,6 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
-from status_helpers import REGISTRY, ROOT, VIEWS
 
 from homelabnext.compute.model import ZoneFlow
 from homelabnext.graph.model import Edge, Graph, Node
@@ -27,6 +26,9 @@ from homelabnext.status.maps.mdtables import parse_tables, split_row
 from homelabnext.status.model import sources_from_registry
 from homelabnext.status.views import build_status, load_views
 
+ROOT = Path(__file__).resolve().parents[2]
+REGISTRY = ROOT / "examples" / "services.yml"
+VIEWS = ROOT / "examples" / "status" / "views.yml"
 GOLDEN = Path(__file__).parent / "golden" / "maps"
 FIXTURES = Path(__file__).parent / "fixtures" / "maps"
 GUESTS = ROOT / "examples" / "minimal" / "guests"
