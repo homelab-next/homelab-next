@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when the tree, a commit range or stdin carries a private identifier or a secret shape.
 #   owner: maintainers
-#   trigger: [ci:ci/leak-scan, ci:ci/packaging, ci:release/build, make:leak-scan, make:leak-scan-history, make:secret-scan, pre-commit:leak-scan, pre-commit:secret-scan]
+#   trigger: [ci:ci/leak-scan, ci:ci/packaging, ci:release/build, make:leak-scan, make:leak-scan-history, make:secret-scan, pre-commit:leak-scan, pre-commit:secret-scan, script:private-leak-check]
 #   invariant: [F-05, F-18]
 #   inputs: paths, --history RANGE, --stdin or --check-authors RANGE; optional HNX_DENYLIST file
 #   outputs: one line per hit
@@ -422,6 +422,13 @@ PATTERNS: tuple[Pattern, ...] = (
         redact=True,
     ),
     _p("vault-blob", "secret", r"[$]ANSIBLE_VAUL[T]", "encrypted vault blob", redact=True),
+    _p(
+        "age-secret-key",
+        "secret",
+        r"AGE-SECRET-KE[Y]-1[0-9A-Z]{58}",
+        "age identity (private key): it decrypts every SOPS file sealed to it",
+        redact=True,
+    ),
     _p(
         "github-token",
         "secret",

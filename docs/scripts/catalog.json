@@ -490,7 +490,8 @@
         "make:leak-scan-history",
         "make:secret-scan",
         "pre-commit:leak-scan",
-        "pre-commit:secret-scan"
+        "pre-commit:secret-scan",
+        "script:private-leak-check"
       ]
     },
     {
@@ -595,6 +596,26 @@
       "status": "active",
       "trigger": [
         "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "clean",
+        "1": "at least one finding",
+        "2": "misconfiguration (not an overlay, unreadable .sops.yaml or marker)"
+      },
+      "id": "private-leak-check",
+      "inputs": "mode: private (the private overlay's CI) or public (this repository); a checkout root",
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per finding",
+      "owner": "maintainers",
+      "path": "tools/private_leak_check.py",
+      "purpose": "Fail when a private overlay holds a plaintext secret or an unencrypted sealed file, or when this public tree holds any part of a private overlay.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:private-overlay-check"
       ]
     },
     {
