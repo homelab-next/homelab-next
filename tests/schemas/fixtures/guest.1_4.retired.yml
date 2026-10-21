@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# 1.4-only: a physical host kept for the record after it was taken out of service
+id: guest:old-nas
+kind: host
+provisioning: host-only
+status: retired
+placement: {node: old-nas}
+network: {zone: mgmt, ip: 192.0.2.30}
+capability: cap:object-store
+owners: {primary: platform-team}

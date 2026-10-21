@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+"""platform/service 2.4 (additive): a service's one-line ``description`` (the generated maps
+show it, ADR-0018); the registry model keeps it."""
+
+import json
+from pathlib import Path
+
+import schema_check as sc
+
+from homelabnext.registry.model import build_registry
+
+ROOT = Path(__file__).resolve().parents[2]
+REG = sc.build_registry(ROOT)
+CURRENT = json.loads((ROOT / "schemas/platform/service.json").read_text())
+FROZEN_23 = json.loads((ROOT / "schemas/_frozen/2.3/platform/service.json").read_text())
+FROZEN_24 = json.loads((ROOT / "schemas/_frozen/2.4/platform/service.json").read_text())
+
+DOC = {
+    "registry_version": 1,
+    "lab": {"name": "lab", "domain": "example.internal", "svc_label": "svc", "owner": "ops"},
+    "zones": {"mgmt": {"cidr": "192.0.2.0/26"}},
+    "hosts": {"bus-1": {"address": "192.0.2.10", "zone": "mgmt"}},
+    "services": {
+        "events": {"capability": "events", "host": "bus-1", "protocol": "nats", "port": 4222,
+                   "owner": "ops", "version": "2.10", "tls": "none",
+                   "description": "The event bus every producer publishes to."},
+    },
+}  # fmt: skip
+
+
+def test_version_is_2_4_frozen_and_additive():
+    assert CURRENT["$id"].endswith("/platform/service/2.4")
+    assert CURRENT == FROZEN_24
+    assert sc.is_additive(FROZEN_23, CURRENT) == []
+
+
+def test_description_validates_in_2_4_only_and_reaches_the_model():
+    assert sc.errors_for(CURRENT, DOC, REG) == []
+    assert sc.errors_for(FROZEN_23, DOC, REG) != []
+    assert build_registry(DOC).services["events"].description.startswith("The event bus")
+
+
+def test_a_multiline_description_is_refused():
+    bad = json.loads(json.dumps(DOC))
+    bad["services"]["events"]["description"] = "one\ntwo"
+    assert sc.errors_for(CURRENT, bad, REG) != []

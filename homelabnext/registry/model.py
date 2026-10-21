@@ -73,6 +73,7 @@ class Service:
     tags: tuple[str, ...] = ()
     status_sources: tuple[dict, ...] = ()
     front_door: dict | None = None
+    description: str = ""  # 2.4: one line, informational (the generated maps)
 
     @property
     def scheme(self) -> str:
@@ -465,6 +466,7 @@ def build_registry(doc: dict) -> Registry:
             tags=tuple(sorted(s.get("tags", []))),
             status_sources=tuple(s.get("status_sources", [])),
             front_door=s.get("front_door"),
+            description=s.get("description", ""),
         )
     return Registry(
         lab_name=lab["name"],

@@ -6,7 +6,7 @@ render everything else from those files: infrastructure-as-code, hypervisor comm
 seeds, an Ansible inventory, registry hosts and backup jobs. Nothing here needs hardware: the
 whole chain is tested with golden files from a synthetic fleet.
 
-* Contract: `schemas/platform/guest.schema.json` (version 1.3, additive over 1.0, 1.1 and 1.2; frozen copies in `schemas/_frozen/`).
+* Contract: `schemas/platform/guest.schema.json` (version 1.4, additive over 1.0 to 1.3; frozen copies in `schemas/_frozen/`).
 * Baseline set: `schemas/platform/baseline_set.schema.json` (`_baselines.yml` beside the guest files; [Baselines and defense layers](#baselines-and-defense-layers), ADR-0016).
 * Code: `homelabnext/compute/`. CLI: `hnx guests`.
 * Example fleet and goldens: `tests/compute/fleet/`, `tests/compute/golden/`.
@@ -31,6 +31,8 @@ backup: {policy: daily, retain: {daily: 7}, export_hook: lake-export}
 lifecycle: {on_boot: true, ignore_changes: [clone]}
 owners: {primary: data-team}
 baseline: {names: [server, sensitive]}   # 1.3: defense baselines from _baselines.yml
+status: live                              # 1.4: planned | live (default) | retired
+description: SQL over the lake tables.    # 1.4: one line, "What it does" on the maps
 ```
 
 Rules worth knowing:
@@ -47,6 +49,10 @@ Rules worth knowing:
   `lifecycle.requires_root_steps`. They are left out of Terraform, libvirt and cloud-init output
   and printed in `MANUAL.md`, but still appear in the inventory, registry hosts and backup jobs.
 * `kind: host` is a physical machine: inventoried, never provisioned (`provisioning: host-only`).
+* `status: planned | live | retired` and `description` (1.4) are informational: no generator reads
+  them. The generated Topology and Dataflow maps do ([status hub](status.md#generated-maps-topology-dataflow-architecture-roadmap)):
+  a planned guest's card is badged and its flows drawn dashed, a retired guest's flows are not
+  drawn, and `description` is the card's "What it does".
 
 ## Validation
 

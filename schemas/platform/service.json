@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/service/2.3",
+  "$id": "https://schemas.example.internal/homelabnext/platform/service/2.4",
   "title": "HomelabNext service registry (services.yml)",
-  "description": "Single source of truth for what runs where. Every endpoint, scrape target, proxy site, firewall rule, DNS record and environment file is generated from this document. Schema version 1; evolve additively. 2.0 closes every free-text field that generators interpolate: owners and identifiers are slugs, paths are URL path characters, descriptions are single lines, and every pattern rejects a trailing newline (Python re lets $ match before one; ECMA-262 does not). 2.1 adds status_sources: what the status hub may poll or receive for a service, by registry name only (docs/status.md, ADR-0013). 2.2 adds the agent-activity status-source kind with its built-in mappers, and front_door: the shared-secret header the edge adds in front of a service that trusts its forward-auth identity headers (the status hub's private tier). 2.3 adds the product status kinds (poll-uptime-kuma, poll-stackstorm, poll-nifi; poll-prometheus is no longer reserved), a source's auth (a credential by secret-store name) and the product mapping keys (query, thresholds, empty, window_s, limit) with the built-ins prometheus-alerts, orchestrator-queue and agentmetry-audit.",
+  "description": "Single source of truth for what runs where. Every endpoint, scrape target, proxy site, firewall rule, DNS record and environment file is generated from this document. Schema version 1; evolve additively. 2.0 closes every free-text field that generators interpolate: owners and identifiers are slugs, paths are URL path characters, descriptions are single lines, and every pattern rejects a trailing newline (Python re lets $ match before one; ECMA-262 does not). 2.1 adds status_sources: what the status hub may poll or receive for a service, by registry name only (docs/status.md, ADR-0013). 2.2 adds the agent-activity status-source kind with its built-in mappers, and front_door: the shared-secret header the edge adds in front of a service that trusts its forward-auth identity headers (the status hub's private tier). 2.3 adds the product status kinds (poll-uptime-kuma, poll-stackstorm, poll-nifi; poll-prometheus is no longer reserved), a source's auth (a credential by secret-store name) and the product mapping keys (query, thresholds, empty, window_s, limit) with the built-ins prometheus-alerts, orchestrator-queue and agentmetry-audit. 2.4 adds a service's one-line description, shown by the generated maps (ADR-0018).",
   "type": "object",
   "additionalProperties": false,
   "required": ["registry_version", "lab", "zones", "hosts", "services"],
@@ -107,6 +107,7 @@
         "tls": {"enum": ["none", "internal", "public", "mtls"]},
         "auth": {"enum": ["none", "idp", "own", "mtls"], "default": "none"},
         "public_hostname": {"type": "string", "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$(?!\\n)"},
+        "description": {"type": "string", "pattern": "^[^\\u0000-\\u001f\\u007f]*$(?!\\n)", "maxLength": 200, "description": "(2.4) What the service does, in one line (the topology and dataflow maps show it). Informational only; no generator interpolates it."},
         "backup_job": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,62}$(?!\\n)"},
         "env_var": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$(?!\\n)", "description": "Override of the default endpoint env var name."},
         "mcp": {
