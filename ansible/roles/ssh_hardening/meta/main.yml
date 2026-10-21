@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: Key-only OpenSSH with no root login and an allow-group, checked with sshd -t/-T before it goes live, never locking out the ansible account.
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: The break-glass account still resolves from the local files first
+      ansible.builtin.include_tasks:
+        file: guard.yml
+        apply:
+          tags: [health]
+    - name: Read the domain's online status
+      ansible.builtin.command:
+        argv: ["{{ sssd_ldap_sssctl_cli }}", domain-status, "{{ sssd_ldap_domain }}", --online]
+      register: sssd_ldap_status
+      changed_when: false
+    - name: Fail unless the directory domain is online
+      ansible.builtin.assert:
+        that: sssd_ldap_status.stdout is search('Online status:\s*Online')
+        fail_msg: "sssd_ldap: domain {{ sssd_ldap_domain }} is not online ({{ sssd_ldap_status.stdout | trim }})"
+  tags: [health]

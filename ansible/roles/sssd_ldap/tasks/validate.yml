@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Values become sssd.conf lines (an ini file): names and DNs without line breaks or quotes.
+- name: Validate the outpost, DNs, accounts and groups
+  ansible.builtin.assert:
+    that:
+      - sssd_ldap_ldap_id is match('^[a-z0-9][a-z0-9-]*\Z')
+      - lookup('hnx_registry', sssd_ldap_ldap_id, field='url') is match('^ldaps://[A-Za-z0-9.-]+:[0-9]+\Z')
+      - sssd_ldap_bind_dn is match(sssd_ldap_dn_pattern)
+      - sssd_ldap_base_dn is match(sssd_ldap_dn_pattern)
+      - sssd_ldap_break_glass_user is match('^[a-z_][a-z0-9_-]{0,31}\Z') and sssd_ldap_break_glass_user != 'root'
+      - sssd_ldap_domain is match('^[a-z][a-z0-9-]{0,31}\Z')
+      - sssd_ldap_allow_groups | length > 0
+      - sssd_ldap_allow_groups | select('match', '^[A-Za-z0-9_][A-Za-z0-9 _.-]{0,63}\Z') | list | length == sssd_ldap_allow_groups | length
+      - sssd_ldap_bind_ref is match('^secret:[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*\Z')
+    fail_msg: >-
+      sssd_ldap: the outpost is a registry logical id served over ldaps, the bind and base DNs
+      are plain attr=value lists, the break-glass account is a local user name (not root), the
+      domain is a plain name, at least one allow group, and the bind credential is a
+      secret:<name> reference

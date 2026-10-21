@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to export (the accounts live in the identity provider)
+  ansible.builtin.debug:
+    msg: sssd_ldap holds no data of its own to export
+  tags: [export]

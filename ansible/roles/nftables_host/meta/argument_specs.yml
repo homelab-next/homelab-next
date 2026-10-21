@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Render the guest's rules into one nftables table, check it with nft -c, load it, and load it at boot.
+    options:
+      nftables_host_ssh_sources: &ssh
+        type: list
+        elements: str
+        description: Sources (IPv4 CIDRs, or any) always allowed to the SSH port, so ansible's management path survives any rule change.
+        required: true
+      nftables_host_firewall: &fw
+        type: dict
+        description: "The guest's rules: {policy_out, inbound_allow, outbound_allow} as the inventory's hnx_firewall carries them."
+        default: "{{ hnx_firewall | default({'policy_out': 'ACCEPT', 'inbound_allow': [], 'outbound_allow': []}) }}"
+      nftables_host_require_egress: &egress
+        type: bool
+        description: Refuse (and fail health on) an outbound policy of ACCEPT; on when the guest needs egress-filter.
+        default: "{{ 'egress-filter' in (hnx_controls | default([])) }}"
+      nftables_host_ssh_port: &port
+        type: int
+        description: The SSH port of the management rule.
+        default: 22
+      nftables_host_table: &table
+        type: str
+        description: The inet table the role owns (it never touches other tables).
+        default: homelabnext
+      nftables_host_config_file: &conf
+        type: path
+        description: The file nftables.service loads at boot (the role owns it).
+        default: /etc/nftables.conf
+      nftables_host_nft_cli: &nft
+        type: str
+        description: The nft command (-c checks a file, -f loads it).
+        default: nft
+      nftables_host_apply: &apply
+        type: bool
+        description: Load a changed ruleset now (false leaves the load owed to a later run).
+        default: true
+      nftables_host_state_dir: &state
+        type: path
+        description: Where the role keeps its load-pending marker and hook records.
+        default: /var/lib/homelabnext/nftables-host
+  config:
+    short_description: Render, check (nft -c), install and load the ruleset while a load is owed.
+    options:
+      nftables_host_ssh_sources: *ssh
+      nftables_host_firewall: *fw
+      nftables_host_require_egress: *egress
+      nftables_host_ssh_port: *port
+      nftables_host_table: *table
+      nftables_host_config_file: *conf
+      nftables_host_nft_cli: *nft
+      nftables_host_apply: *apply
+      nftables_host_state_dir: *state
+  health:
+    short_description: Fail unless the table is loaded with an inbound policy of drop (and outbound drop when egress is required).
+    options:
+      nftables_host_require_egress: *egress
+      nftables_host_table: *table
+      nftables_host_nft_cli: *nft
+  readiness:
+    short_description: Fail unless the installed file passes nft -c.
+    options:
+      nftables_host_config_file: *conf
+      nftables_host_nft_cli: *nft
+  backup:
+    short_description: Record that nothing needs keeping (the ruleset is rendered from the guest model).
+    options:
+      nftables_host_state_dir: *state
+  restore:
+    short_description: Nothing to restore; re-running main renders the ruleset again.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; nftables follows the patching control.
+    options: {}
+  export:
+    short_description: Nothing to export.
+    options: {}

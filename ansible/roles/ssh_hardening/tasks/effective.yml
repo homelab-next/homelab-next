@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# Read the effective configuration of ssh_hardening_test_config for the kept account and fail
+# unless it is key-only, refuses root, and its AllowGroups admits one of the account's groups.
+- name: Print the effective configuration for the kept account
+  ansible.builtin.command:
+    argv:
+      - "{{ ssh_hardening_sshd_cli }}"
+      - -T
+      - -f
+      - "{{ ssh_hardening_test_config }}"
+      - -C
+      - "{{ ssh_hardening_match_spec }}"
+  register: ssh_hardening_effective
+  changed_when: false
+
+- name: List the kept account's groups
+  ansible.builtin.command:
+    argv: ["{{ ssh_hardening_id_cli }}", -nG, "{{ ssh_hardening_keep_user }}"]
+  register: ssh_hardening_user_groups
+  changed_when: false
+
+- name: Fail unless the configuration is key-only, refuses root and keeps the account's access
+  vars:
+    ssh_hardening_settings: "{{ dict(ssh_hardening_effective.stdout | regex_findall('(?m)^(\\S+) (.*)$')) }}"
+    ssh_hardening_held: "{{ ssh_hardening_settings | dict2items | selectattr('key', 'in', ssh_hardening_required) | items2dict }}"
+    ssh_hardening_allowed: "{{ (ssh_hardening_settings.allowgroups | default('')).split() }}"
+  ansible.builtin.assert:
+    that:
+      - ssh_hardening_held == ssh_hardening_required
+      - ssh_hardening_allowed | length == 0 or ssh_hardening_allowed | intersect(ssh_hardening_user_groups.stdout.split()) | length > 0
+    fail_msg: >-
+      ssh_hardening: refusing {{ ssh_hardening_test_config }}: it would lock out
+      {{ ssh_hardening_keep_user }} (groups {{ ssh_hardening_user_groups.stdout | trim }}, AllowGroups
+      {{ ssh_hardening_allowed | join(' ') or 'any' }}), or it is not key-only without root login
+      ({{ ssh_hardening_held | to_json }})

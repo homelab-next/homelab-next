@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to export
+  ansible.builtin.debug:
+    msg: ssh_hardening holds no data of its own to export
+  tags: [export]

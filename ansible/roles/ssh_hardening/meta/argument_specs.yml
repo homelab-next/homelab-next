@@ -1,0 +1,124 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install the hardening drop-in, tested by sshd before it goes live, and reload sshd.
+    options:
+      ssh_hardening_keep_user: &keep
+        type: str
+        description: The account that must keep key-based SSH access (the one ansible connects as; never root).
+        required: true
+      ssh_hardening_allow_groups: &groups
+        type: list
+        elements: str
+        description: Only members of these groups may log in over SSH (AllowGroups).
+        default: [hnx-ssh]
+      ssh_hardening_manage_membership: &manage
+        type: bool
+        description: Create the first allow group and add the kept account to it.
+        default: true
+      ssh_hardening_authorized_keys_command: &akc
+        type: str
+        description: AuthorizedKeysCommand (absolute path) for directory keys; empty = none. Defaults to sssd's helper when the guest has central-auth.
+        default: "{{ '/usr/bin/sss_ssh_authorizedkeys' if 'central-auth' in (hnx_controls | default([])) else '' }}"
+      ssh_hardening_max_auth_tries: &tries
+        type: int
+        description: MaxAuthTries.
+        default: 3
+      ssh_hardening_login_grace_time: &grace
+        type: int
+        description: LoginGraceTime (seconds).
+        default: 30
+      ssh_hardening_client_alive_interval: &alive
+        type: int
+        description: ClientAliveInterval (seconds).
+        default: 300
+      ssh_hardening_client_alive_count_max: &alivemax
+        type: int
+        description: ClientAliveCountMax.
+        default: 2
+      ssh_hardening_x11_forwarding: &x11
+        type: bool
+        description: X11Forwarding.
+        default: false
+      ssh_hardening_dropin: &dropin
+        type: path
+        description: The role's drop-in; it must sort before every other file in sshd_config.d.
+        default: /etc/ssh/sshd_config.d/00-homelabnext-hardening.conf
+      ssh_hardening_main_config: &main
+        type: path
+        description: sshd's main configuration (it must Include the drop-in directory first, as Debian's does).
+        default: /etc/ssh/sshd_config
+      ssh_hardening_sshd_cli: &sshd
+        type: str
+        description: The sshd command (-t tests a configuration, -T prints the effective one).
+        default: sshd
+      ssh_hardening_id_cli: &id
+        type: str
+        description: The id command (lists the kept account's groups).
+        default: id
+      ssh_hardening_getent_cli: &getent
+        type: str
+        description: The getent command (looks up the kept account's home).
+        default: getent
+      ssh_hardening_systemctl_cli: &systemctl
+        type: str
+        description: The systemctl command (reloads sshd).
+        default: systemctl
+      ssh_hardening_service: &service
+        type: str
+        description: sshd's systemd unit (ssh on Debian and Ubuntu).
+        default: ssh
+      ssh_hardening_reload: &reload
+        type: bool
+        description: Reload sshd after a change (false leaves the reload owed to a later run).
+        default: true
+      ssh_hardening_state_dir: &state
+        type: path
+        description: Where the role stages and tests a new drop-in and keeps its reload-pending marker.
+        default: /var/lib/homelabnext/ssh-hardening
+  config:
+    short_description: The lockout guard, the tested install of the drop-in, and the owed reload.
+    options:
+      ssh_hardening_keep_user: *keep
+      ssh_hardening_allow_groups: *groups
+      ssh_hardening_manage_membership: *manage
+      ssh_hardening_authorized_keys_command: *akc
+      ssh_hardening_max_auth_tries: *tries
+      ssh_hardening_login_grace_time: *grace
+      ssh_hardening_client_alive_interval: *alive
+      ssh_hardening_client_alive_count_max: *alivemax
+      ssh_hardening_x11_forwarding: *x11
+      ssh_hardening_dropin: *dropin
+      ssh_hardening_main_config: *main
+      ssh_hardening_sshd_cli: *sshd
+      ssh_hardening_id_cli: *id
+      ssh_hardening_getent_cli: *getent
+      ssh_hardening_systemctl_cli: *systemctl
+      ssh_hardening_service: *service
+      ssh_hardening_reload: *reload
+      ssh_hardening_state_dir: *state
+  health:
+    short_description: Fail unless the live effective configuration is key-only, refuses root and admits the kept account.
+    options:
+      ssh_hardening_keep_user: *keep
+      ssh_hardening_main_config: *main
+      ssh_hardening_sshd_cli: *sshd
+      ssh_hardening_id_cli: *id
+  readiness:
+    short_description: Fail unless the live configuration passes sshd -t.
+    options:
+      ssh_hardening_main_config: *main
+      ssh_hardening_sshd_cli: *sshd
+  backup:
+    short_description: Record that nothing needs keeping (the drop-in is rendered; host keys belong to the guest image).
+    options:
+      ssh_hardening_state_dir: *state
+  restore:
+    short_description: Nothing to restore; re-running main renders the drop-in again.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; OpenSSH follows the patching control.
+    options: {}
+  export:
+    short_description: Nothing to export.
+    options: {}

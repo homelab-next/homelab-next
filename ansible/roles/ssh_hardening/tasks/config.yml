@@ -1,0 +1,116 @@
+# SPDX-License-Identifier: Apache-2.0
+# The lockout guard comes first: the kept account must exist and hold a key. A changed drop-in is
+# staged (outside sshd_config.d's *.conf glob), and a test configuration that reads the staged
+# file before the main one (so it wins, as the live drop-in will) must pass sshd -t and, through
+# sshd -T for the kept account, be key-only, refuse root and admit that account. Only then does it
+# replace the live file. Replacing it leaves a reload-pending marker that only a successful reload
+# removes, so a failed (or disabled) reload is retried on the next run.
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Look up the kept account (name:x:uid:gid:gecos:home:shell)
+  ansible.builtin.command:
+    argv: ["{{ ssh_hardening_getent_cli }}", passwd, "{{ ssh_hardening_keep_user }}"]
+  register: ssh_hardening_account
+  changed_when: false
+  failed_when: false
+
+- name: Look for the kept account's authorized keys
+  ansible.builtin.stat:
+    path: "{{ (ssh_hardening_account.stdout.split(':') + [''] * 7)[5] or '/nonexistent' }}/.ssh/authorized_keys"
+  register: ssh_hardening_keys
+
+- name: Refuse to make SSH key-only for an account that has no key
+  ansible.builtin.assert:
+    that:
+      - ssh_hardening_account.rc == 0
+      - ssh_hardening_keys.stat.exists and ssh_hardening_keys.stat.size > 0
+    fail_msg: >-
+      ssh_hardening: {{ ssh_hardening_keep_user }} does not exist or has no
+      ~/.ssh/authorized_keys; key-only SSH would lock it out
+
+- name: Put the kept account in the first allow group
+  when: ssh_hardening_manage_membership | bool
+  block:
+    - name: Ensure the allow group exists
+      ansible.builtin.group:
+        name: "{{ ssh_hardening_allow_groups[0] }}"
+        system: true
+    - name: Add the kept account to it
+      ansible.builtin.user:
+        name: "{{ ssh_hardening_keep_user }}"
+        groups: ["{{ ssh_hardening_allow_groups[0] }}"]
+        append: true
+
+- name: Ensure the state directory exists
+  ansible.builtin.file:
+    path: "{{ ssh_hardening_state_dir }}"
+    state: directory
+    mode: "0700"
+
+- name: Compare the drop-in with the live file
+  ansible.builtin.template:
+    src: hardening.conf.j2
+    dest: "{{ ssh_hardening_dropin }}"
+    mode: "0600"
+  check_mode: true
+  register: ssh_hardening_written
+
+- name: Test the new drop-in, then install it
+  when: ssh_hardening_written is changed
+  vars:
+    ssh_hardening_staged: "{{ ssh_hardening_state_dir }}/staged.conf"
+    ssh_hardening_test_config: "{{ ssh_hardening_state_dir }}/test-sshd_config"
+  block:
+    - name: Stage the new drop-in
+      ansible.builtin.template:
+        src: hardening.conf.j2
+        dest: "{{ ssh_hardening_staged }}"
+        mode: "0600"
+    - name: Write a test configuration that reads the staged drop-in first, then the live one
+      ansible.builtin.copy:
+        dest: "{{ ssh_hardening_test_config }}"
+        content: "Include {{ ssh_hardening_staged }}\nInclude {{ ssh_hardening_main_config }}\n"
+        mode: "0600"
+    - name: Test the whole configuration with the new drop-in
+      ansible.builtin.command:
+        argv: ["{{ ssh_hardening_sshd_cli }}", -t, -f, "{{ ssh_hardening_test_config }}"]
+      changed_when: false
+    - name: Check the effective configuration keeps the account's access
+      ansible.builtin.include_tasks: effective.yml
+    - name: Mark a reload as owed before the live file changes
+      ansible.builtin.copy:
+        dest: "{{ ssh_hardening_state_dir }}/reload-pending"
+        content: "the drop-in changed; sshd has not reloaded since\n"
+        mode: "0600"
+    - name: Install the tested drop-in as the live file
+      ansible.builtin.copy:
+        src: "{{ ssh_hardening_staged }}"
+        dest: "{{ ssh_hardening_dropin }}"
+        remote_src: true
+        mode: "0600"
+  always:
+    - name: Remove the staged files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ ssh_hardening_state_dir }}/staged.conf"
+        - "{{ ssh_hardening_state_dir }}/test-sshd_config"
+
+- name: Look for a reload still owed
+  ansible.builtin.stat:
+    path: "{{ ssh_hardening_state_dir }}/reload-pending"
+  register: ssh_hardening_pending
+
+- name: Reload sshd while a reload is owed (open sessions stay up)
+  when: ssh_hardening_pending.stat.exists and ssh_hardening_reload | bool
+  block:
+    - name: Reload sshd
+      ansible.builtin.command:
+        argv: ["{{ ssh_hardening_systemctl_cli }}", reload, "{{ ssh_hardening_service }}"]
+      changed_when: true
+    - name: Clear the owed reload
+      ansible.builtin.file:
+        path: "{{ ssh_hardening_state_dir }}/reload-pending"
+        state: absent

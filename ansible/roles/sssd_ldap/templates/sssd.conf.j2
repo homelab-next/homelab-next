@@ -1,0 +1,33 @@
+# Managed by homelabnext (role sssd_ldap, control central-auth); local changes are overwritten.
+[sssd]
+config_file_version = 2
+services = nss, pam, ssh
+domains = {{ sssd_ldap_domain }}
+
+[nss]
+# root and the break-glass account always come from the local files, never the directory.
+filter_users = root, {{ sssd_ldap_break_glass_user }}
+filter_groups = root
+
+[domain/{{ sssd_ldap_domain }}]
+id_provider = ldap
+auth_provider = ldap
+access_provider = simple
+simple_allow_groups = {{ sssd_ldap_allow_groups | join(', ') }}
+ldap_uri = {{ lookup('hnx_registry', sssd_ldap_ldap_id, field='url') }}
+ldap_tls_reqcert = demand
+ldap_tls_cacert = {{ sssd_ldap_ca_file }}
+ldap_schema = rfc2307bis
+ldap_search_base = {{ sssd_ldap_base_dn }}
+ldap_user_search_base = ou=users,{{ sssd_ldap_base_dn }}
+ldap_group_search_base = ou=groups,{{ sssd_ldap_base_dn }}
+ldap_user_object_class = user
+ldap_user_name = cn
+ldap_group_object_class = group
+ldap_group_name = cn
+ldap_user_ssh_public_key = sshPublicKey
+ldap_default_bind_dn = {{ sssd_ldap_bind_dn }}
+ldap_default_authtok_type = password
+ldap_default_authtok = {{ lookup('hnx_secret', sssd_ldap_bind_ref) }}
+cache_credentials = false
+enumerate = false

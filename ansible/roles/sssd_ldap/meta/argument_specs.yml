@@ -1,0 +1,113 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install sssd, point it at the directory over LDAPS and keep the break-glass account working.
+    options:
+      sssd_ldap_ldap_id: &ldap
+        type: str
+        description: Logical id of the identity provider's LDAP outpost in the registry (its scheme must be ldaps).
+        required: true
+      sssd_ldap_bind_dn: &binddn
+        type: str
+        description: DN of the directory service account sssd binds as (a name, never the secret).
+        required: true
+      sssd_ldap_break_glass_user: &bg
+        type: str
+        description: The local account that must keep working when the directory is down; it must already exist in /etc/passwd.
+        required: true
+      sssd_ldap_domain: &domain
+        type: str
+        description: sssd's name for the directory domain.
+        default: lab
+      sssd_ldap_base_dn: &base
+        type: str
+        description: Search base; users and groups are under ou=users and ou=groups of it.
+        default: dc=ldap,dc=goauthentik,dc=io
+      sssd_ldap_bind_ref: &ref
+        type: str
+        description: Secret reference (secret:<name>) of the bind account's password, resolved by the hnx_secret lookup.
+        default: secret:idp/ldap-bind-password
+      sssd_ldap_allow_groups: &groups
+        type: list
+        elements: str
+        description: Directory groups whose members may log in (at least one).
+        default: [hnx-admins]
+      sssd_ldap_ca_file: &ca
+        type: path
+        description: CA bundle the outpost's certificate must chain to.
+        default: /etc/ssl/certs/ca-certificates.crt
+      sssd_ldap_mkhomedir:
+        type: bool
+        description: Create a directory account's home on first login (pam_mkhomedir).
+        default: true
+      sssd_ldap_config_file: &conf
+        type: path
+        description: sssd's configuration (the role owns it).
+        default: /etc/sssd/sssd.conf
+      sssd_ldap_nsswitch_file: &nss
+        type: path
+        description: The name service switch file (passwd must list files before sss).
+        default: /etc/nsswitch.conf
+      sssd_ldap_sssctl_cli: &sssctl
+        type: str
+        description: The sssctl command (config-check, domain-status).
+        default: sssctl
+      sssd_ldap_getent_cli: &getent
+        type: str
+        description: The getent command (finds the break-glass account in the local files).
+        default: getent
+      sssd_ldap_systemctl_cli: &systemctl
+        type: str
+        description: The systemctl command (restarts sssd after a change).
+        default: systemctl
+      sssd_ldap_restart: &restart
+        type: bool
+        description: Restart sssd after a change (false leaves the restart owed to a later run).
+        default: true
+      sssd_ldap_state_dir: &state
+        type: path
+        description: Where the role keeps its restart-pending marker and hook records.
+        default: /var/lib/homelabnext/sssd-ldap
+  config:
+    short_description: The break-glass guard, the checked sssd.conf, and the owed restart.
+    options:
+      sssd_ldap_ldap_id: *ldap
+      sssd_ldap_bind_dn: *binddn
+      sssd_ldap_break_glass_user: *bg
+      sssd_ldap_domain: *domain
+      sssd_ldap_base_dn: *base
+      sssd_ldap_bind_ref: *ref
+      sssd_ldap_allow_groups: *groups
+      sssd_ldap_ca_file: *ca
+      sssd_ldap_config_file: *conf
+      sssd_ldap_nsswitch_file: *nss
+      sssd_ldap_sssctl_cli: *sssctl
+      sssd_ldap_getent_cli: *getent
+      sssd_ldap_systemctl_cli: *systemctl
+      sssd_ldap_restart: *restart
+      sssd_ldap_state_dir: *state
+  health:
+    short_description: Fail unless the domain is online and the break-glass account still resolves from the local files first.
+    options:
+      sssd_ldap_break_glass_user: *bg
+      sssd_ldap_domain: *domain
+      sssd_ldap_nsswitch_file: *nss
+      sssd_ldap_sssctl_cli: *sssctl
+      sssd_ldap_getent_cli: *getent
+  readiness:
+    short_description: Fail unless the LDAP outpost's port answers.
+    options:
+      sssd_ldap_ldap_id: *ldap
+  backup:
+    short_description: Record that nothing needs keeping (the configuration is rendered; the cache is rebuilt).
+    options:
+      sssd_ldap_state_dir: *state
+  restore:
+    short_description: Nothing to restore; re-running main renders the configuration again.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; sssd follows the patching control.
+    options: {}
+  export:
+    short_description: Nothing to export; the accounts live in the identity provider.
+    options: {}

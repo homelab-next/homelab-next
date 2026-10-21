@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# The break-glass account: present in the local files (getent -s files), and passwd resolved from
+# the local files before sss, so the directory can neither shadow nor replace it.
+- name: Look up the break-glass account in the local files only
+  ansible.builtin.command:
+    argv: ["{{ sssd_ldap_getent_cli }}", -s, files, passwd, "{{ sssd_ldap_break_glass_user }}"]
+  register: sssd_ldap_local
+  changed_when: false
+  failed_when: false
+
+- name: Read the name service switch
+  ansible.builtin.slurp:
+    src: "{{ sssd_ldap_nsswitch_file }}"
+  register: sssd_ldap_nsswitch
+
+- name: Fail unless the break-glass account is local and local accounts resolve first
+  vars:
+    sssd_ldap_users_db_order: "{{ (sssd_ldap_nsswitch.content | b64decode | regex_findall('(?m)^passwd:\\s*(.*)$') + [''])[0].split() }}"
+  ansible.builtin.assert:
+    that:
+      - sssd_ldap_local.rc == 0
+      - sssd_ldap_users_db_order[:1] == ['files']
+    fail_msg: >-
+      sssd_ldap: the break-glass account {{ sssd_ldap_break_glass_user }} is not in /etc/passwd,
+      or passwd in {{ sssd_ldap_nsswitch_file }} does not resolve files first
+      ({{ sssd_ldap_users_db_order | join(' ') }}); the directory must never be the only way in

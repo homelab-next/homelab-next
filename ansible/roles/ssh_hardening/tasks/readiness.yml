@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Fail unless the live configuration passes sshd -t
+  ansible.builtin.command:
+    argv: ["{{ ssh_hardening_sshd_cli }}", -t, -f, "{{ ssh_hardening_main_config }}"]
+  changed_when: false
+  tags: [readiness]

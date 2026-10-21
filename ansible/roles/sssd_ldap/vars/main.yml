@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: the shape of an LDAP distinguished name the role accepts.
+sssd_ldap_dn_pattern: '^[A-Za-z]+=[^,=\n\r\\"]+(?:,[A-Za-z]+=[^,=\n\r\\"]+)*\Z'

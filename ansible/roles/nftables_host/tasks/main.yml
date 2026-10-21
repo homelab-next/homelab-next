@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# Controls host-firewall and egress-filter (ADR-0016 decision 7): both bind this role; the egress
+# requirement follows from the guest's hnx_controls.
+- name: Refuse a host that is not Debian-family (nftables.service loads /etc/nftables.conf there)
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] == 'Debian'
+    fail_msg: "nftables_host supports Debian-family guests only (got {{ ansible_facts['os_family'] }})"
+
+- name: List the units
+  ansible.builtin.service_facts:
+
+- name: Refuse to run beside another firewall manager (exempt the guest from the control instead)
+  vars:
+    nftables_host_running: "{{ nftables_host_conflicting_units | select('in', ansible_facts.services) | map('extract', ansible_facts.services) | selectattr('state', 'eq', 'running') | map(attribute='name') | list }}"
+  ansible.builtin.assert:
+    that: nftables_host_running | length == 0
+    fail_msg: >-
+      nftables_host: {{ nftables_host_running | join(', ') }} manages this host's firewall;
+      remove host-firewall from the guest's baseline with a reason instead
+
+- name: Install nftables
+  ansible.builtin.apt:
+    name: nftables
+    state: present
+
+- name: Render, check, install and load the ruleset
+  ansible.builtin.include_tasks: config.yml
+
+- name: Load the ruleset at boot
+  ansible.builtin.systemd_service:
+    name: nftables
+    enabled: true

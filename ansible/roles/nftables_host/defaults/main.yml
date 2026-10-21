@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# The guest's own firewall (controls host-firewall and egress-filter, applied per guest): one
+# nftables table, inbound default drop, built from the guest model's firewall_rules as the
+# inventory carries them (hnx_firewall, zones already resolved to subnets by the same code as the
+# hypervisor's rules file), so there is one rule language for both. Outbound follows the model's
+# policy_out; a guest that needs egress-filter must have DROP or REJECT there. SSH from
+# nftables_host_ssh_sources (the management path ansible uses) is always allowed, and established
+# connections are never cut by a reload.
+nftables_host_firewall: "{{ hnx_firewall | default({'policy_out': 'ACCEPT', 'inbound_allow': [], 'outbound_allow': []}) }}"
+nftables_host_require_egress: "{{ 'egress-filter' in (hnx_controls | default([])) }}"
+nftables_host_ssh_port: 22
+nftables_host_table: homelabnext
+nftables_host_config_file: /etc/nftables.conf
+nftables_host_nft_cli: nft
+nftables_host_apply: true
+nftables_host_state_dir: /var/lib/homelabnext/nftables-host

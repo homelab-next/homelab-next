@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing pinned (nftables follows the patching control)
+  ansible.builtin.debug:
+    msg: nftables is the distribution's package; security updates arrive through the patching control
+  tags: [upgrade]

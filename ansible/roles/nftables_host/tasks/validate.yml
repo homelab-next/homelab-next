@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# The rules come from the generated inventory, but every field still becomes nftables syntax:
+# the same shapes the guest schema allows, nothing else.
+- name: Validate the rules, the management sources and the egress requirement
+  vars:
+    nftables_host_rules: "{{ nftables_host_firewall.inbound_allow | default([]) + nftables_host_firewall.outbound_allow | default([]) }}"
+  ansible.builtin.assert:
+    that:
+      - nftables_host_firewall.policy_out | default('') in ['ACCEPT', 'DROP', 'REJECT']
+      - not (nftables_host_require_egress | bool) or nftables_host_firewall.policy_out != 'ACCEPT'
+      - nftables_host_ssh_sources | length > 0
+      - nftables_host_ssh_sources | select('match', nftables_host_cidr) | list | length == nftables_host_ssh_sources | length
+      - nftables_host_ssh_port | int >= 1 and nftables_host_ssh_port | int <= 65535
+      - nftables_host_table is match('^[a-z][a-z0-9_]{0,31}\Z')
+      - nftables_host_rules | selectattr('name', 'defined') | selectattr('name', 'match', '^[a-z][a-z0-9_-]{0,39}\Z') | list | length == nftables_host_rules | length
+      - nftables_host_rules | selectattr('proto', 'defined') | selectattr('proto', 'in', ['tcp', 'udp', 'icmp']) | list | length == nftables_host_rules | length
+      - nftables_host_rules | selectattr('ports', 'defined') | rejectattr('ports', 'match', '^[0-9]{1,5}(?::[0-9]{1,5})?\Z') | list | length == 0
+      - nftables_host_rules | rejectattr('proto', 'eq', 'icmp') | rejectattr('ports', 'defined') | list | length == 0
+      - nftables_host_firewall.inbound_allow | default([]) | rejectattr('source', 'defined') | list | length == 0
+      - nftables_host_firewall.inbound_allow | default([]) | rejectattr('source', 'match', nftables_host_cidr) | list | length == 0
+      - nftables_host_firewall.outbound_allow | default([]) | rejectattr('dest', 'defined') | list | length == 0
+      - nftables_host_firewall.outbound_allow | default([]) | rejectattr('dest', 'match', nftables_host_cidr) | list | length == 0
+    fail_msg: >-
+      nftables_host: policy_out ACCEPT, DROP or REJECT (not ACCEPT when the guest needs
+      egress-filter), at least one SSH source, and rules of the guest schema's shape (name, tcp,
+      udp or icmp, ports for tcp and udp, any or an IPv4 CIDR)
