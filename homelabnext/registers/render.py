@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Static HTML + JSON generators. No external assets, no scripts, no timestamps of their own
 (output is a pure function of the inputs, so a regenerate with no change produces no diff).
+
+Records are anchored by uid (``lessons.html#<uid>``: a link never breaks when numbers move) and
+shown with their computed display number (``LL 3``, :mod:`homelabnext.identity.numbers`), in
+number order.  The JSON carries each record's ``label`` beside its ``uid``.
 """
 
 from __future__ import annotations
@@ -11,11 +15,15 @@ import pathlib
 
 import yaml
 
+from homelabnext.identity import node_of
+from homelabnext.identity.numbers import sibling_key
+
 from .records import load_register, register_source
 from .schema import (
     RegisterError,
     check_links,
     is_active,
+    labels_of,
     validate_invariants,
     validate_lessons,
     validate_runbooks,
@@ -66,12 +74,29 @@ def _dl(rows) -> str:
     return "<dl>" + "".join(f"<dt>{e(k)}</dt><dd>{v}</dd>" for k, v in rows if v) + "</dl>"
 
 
-def _related_html(ids) -> str:
-    """``related:`` ids as links into the lessons or runbooks page."""
-    return ", ".join(
-        f'<a href="{"lessons" if i.startswith("LL-") else "runbooks"}.html#{e(i)}">{e(i)}</a>'
-        for i in ids or ()
-    )
+#: uid -> (page, label) of every record a page may link to
+Index = dict[str, tuple[str, str]]
+
+
+def index_of(lessons=(), runbooks=()) -> Index:
+    """Where each record is shown and with which number, for cross-page links."""
+    out: Index = {u: ("lessons", lab) for u, lab in labels_of(lessons).items()}
+    out.update({u: ("runbooks", lab) for u, lab in labels_of(runbooks).items()})
+    return out
+
+
+def _related_html(uids, index: Index) -> str:
+    """Record uids as links into the lessons or runbooks page, shown by display number."""
+    out = []
+    for u in uids or ():
+        page_, label = index.get(u, ("", u))
+        out.append(f'<a href="{page_}.html#{e(u)}">{e(label)}</a>' if page_ else e(u))
+    return ", ".join(out)
+
+
+def _ordered(items) -> list[dict]:
+    """Records in display-number order (``order``, then creation: the uid)."""
+    return sorted(items, key=lambda x: sibling_key(node_of(x)))
 
 
 def _p(x) -> str:
@@ -105,17 +130,29 @@ def _archive(cards: list[str], archived: list[str]) -> str:
     )
 
 
-def _lesson_card(l: dict) -> str:
+def _destinations(refs, index: Index) -> str:
+    """``incorporated_into``: a runbook (``<uid>#2``: its step 2) or a docs/systems page."""
+    out = []
+    for r in refs or ():
+        uid, _, step = r.partition("#")
+        if uid in index:
+            out.append(_related_html([uid], index) + (f" step {e(step)}" if step else ""))
+        else:
+            out.append(e(r))
+    return ", ".join(out)
+
+
+def _lesson_card(l: dict, index: Index) -> str:
     v = l.get("verification") or {}
     if l["kind"] == "practice":
         rows = [
             ("Applies to", e(", ".join(l["applies_to"]))),
             ("Method", _p(l["method"])),
             ("Rationale", _p(l.get("rationale"))),
-            ("Incorporated into", e(", ".join(l.get("incorporated_into") or ()))),
+            ("Incorporated into", _destinations(l.get("incorporated_into"), index)),
             (
                 "Superseded by",
-                _related_html([l["superseded_by"]] if l.get("superseded_by") else []),
+                _related_html([l["superseded_by"]] if l.get("superseded_by") else [], index),
             ),
             ("Retired", _p(l.get("retired_reason"))),
         ]
@@ -131,8 +168,9 @@ def _lesson_card(l: dict) -> str:
                 e(", ".join(l.get("retired_by") or ())) if l["status"] == "retired" else "",
             ),
         ]
+    label = index.get(l["uid"], ("", l["uid"]))[1]
     return (
-        f'<article id="{e(l["id"])}"><h3>{e(l["id"])} {e(l["title"])} '
+        f'<article id="{e(l["uid"])}"><h3>{e(label)} {e(l["title"])} '
         f'<span class="pill">{e(l["kind"])}</span> '
         f'<span class="pill {e(l["status"])}">{e(l["status"])}</span></h3>'
         + _dl(
@@ -144,18 +182,20 @@ def _lesson_card(l: dict) -> str:
                 ("Verification: expected", e(v.get("expected")) if v else ""),
                 ("Review by", e(l.get("review_by"))),
                 ("Reviews", _review_html(l)),
-                ("Related", _related_html(l.get("related"))),
+                ("Related", _related_html(l.get("related"), index)),
+                ("uid", f"<code>{e(l['uid'])}</code>"),
             ]
         )
         + "</article>"
     )
 
 
-def render_lessons(data, policy=None) -> tuple[str, dict]:
+def render_lessons(data, policy=None, index: Index | None = None) -> tuple[str, dict]:
     items = validate_lessons(data, policy)
-    ordered = sorted(items, key=lambda x: x["id"])
-    cards = [_lesson_card(l) for l in ordered if is_active(l)]
-    archived = [_lesson_card(l) for l in ordered if not is_active(l)]
+    index = {**index_of(lessons=items), **(index or {})}
+    ordered = _ordered(items)
+    cards = [_lesson_card(l, index) for l in ordered if is_active(l)]
+    archived = [_lesson_card(l, index) for l in ordered if not is_active(l)]
     counts: dict[str, int] = {}
     for l in items:
         counts[l["status"]] = counts.get(l["status"], 0) + 1
@@ -166,7 +206,7 @@ def render_lessons(data, policy=None) -> tuple[str, dict]:
         "active": len(cards),
         "by_kind": by_kind,
         "by_status": dict(sorted(counts.items())),
-        "lessons": ordered,
+        "lessons": [{**l, "label": index[l["uid"]][1]} for l in ordered],
     }
     summary = f"{len(items)} lessons ({len(cards)} active, {len(archived)} archived): " + ", ".join(
         f"{n} {s}" for s, n in sorted(counts.items())
@@ -178,14 +218,15 @@ def render_lessons(data, policy=None) -> tuple[str, dict]:
 
 def render_runbooks(data, lessons=None, policy=None) -> tuple[str, dict]:
     items = validate_runbooks(data, policy)
+    index = index_of(lessons or (), items)
     lessons = [l for l in lessons or [] if is_active(l)]
     cards, archived, out = [], [], []
-    for r in sorted(items, key=lambda x: x["id"]):
+    for r in _ordered(items):
         rel = [l for l in lessons if set(l["systems"]) & set(r["systems"])]
         steps = "".join(
             f"<li>{e(s['do'])}<br><small>verify: <code>{e(s['verify'])}</code></small>"
             + (
-                f"<br><small>from {_related_html(s['from_lessons'])}</small>"
+                f"<br><small>from {_related_html(s['from_lessons'], index)}</small>"
                 if s.get("from_lessons")
                 else ""
             )
@@ -193,11 +234,10 @@ def render_runbooks(data, lessons=None, policy=None) -> tuple[str, dict]:
             for s in r["steps"]
         )
         lessons_html = "".join(
-            f'<li><a href="lessons.html#{e(l["id"])}">{e(l["id"])}</a> {e(l["title"])}</li>'
-            for l in sorted(rel, key=lambda x: x["id"])
+            f"<li>{_related_html([l['uid']], index)} {e(l['title'])}</li>" for l in _ordered(rel)
         )
         card = (
-            f'<article id="{e(r["id"])}"><h3>{e(r["id"])} {e(r["title"])}</h3>'
+            f'<article id="{e(r["uid"])}"><h3>{e(index[r["uid"]][1])} {e(r["title"])}</h3>'
             + _dl(
                 [
                     ("Purpose", _p(r["purpose"])),
@@ -206,17 +246,26 @@ def render_runbooks(data, lessons=None, policy=None) -> tuple[str, dict]:
                     ("Lessons sharing these systems", f"<ul>{lessons_html}</ul>" if rel else ""),
                     (
                         "Superseded by",
-                        _related_html([r["superseded_by"]] if r.get("superseded_by") else []),
+                        _related_html(
+                            [r["superseded_by"]] if r.get("superseded_by") else [], index
+                        ),
                     ),
                     ("Review by", e(r.get("review_by"))),
                     ("Reviews", _review_html(r)),
-                    ("Related", _related_html(r.get("related"))),
+                    ("Related", _related_html(r.get("related"), index)),
+                    ("uid", f"<code>{e(r['uid'])}</code>"),
                 ]
             )
             + "</article>"
         )
         (cards if is_active(r, "runbooks") else archived).append(card)
-        out.append({**r, "related_lessons": sorted(l["id"] for l in rel)})
+        out.append(
+            {
+                **r,
+                "label": index[r["uid"]][1],
+                "related_lessons": [l["uid"] for l in _ordered(rel)],
+            }
+        )
     doc = {"register": "runbooks", "count": len(items), "active": len(cards), "runbooks": out}
     return page(
         "Runbooks", _archive(cards, archived), f"{len(items)} runbooks, every step has a verify"
@@ -375,7 +424,9 @@ def build_all(src_dir, out_dir, results_path=None, policy_path=None) -> list[pat
     ll: list[dict] = []
     rb: list[dict] = []
     if s["lessons"] is not None:
-        rendered["lessons"] = render_lessons(s["lessons"], s["policy"])
+        runbooks = (s["runbooks"] or {}).get("runbooks") or ()
+        index = index_of(runbooks=[r for r in runbooks if isinstance(r, dict)])
+        rendered["lessons"] = render_lessons(s["lessons"], s["policy"], index)
         ll = s["lessons"]["lessons"]
     if s["runbooks"] is not None:
         rendered["runbooks"] = render_runbooks(s["runbooks"], ll, s["policy"])

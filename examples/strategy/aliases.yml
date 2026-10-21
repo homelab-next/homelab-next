@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# Legacy record codes -> uids, written by `hnx records assign-uids` (docs/adr/0019).
+# History only: records refer to each other by uid; a legacy code met in an intent, a
+# query or an old note resolves through this map on read, with a deprecation warning.
+aliases_version: 1
+aliases:
+  CCIR-001: 01a15e4e-758d-75ec-a231-651e79c1beb7  # Is any core service down for more than 15 minutes?
+  FFIR-001: 01a15e4e-758d-75ed-a383-a78599b3d065  # Is the monitoring that would show an outage healthy itself?
+  MOE-001: 01a15e4e-758c-731e-84af-04a7d009239b  # Share of uptime monitors that are up
+  MOE-002: 01a15e4e-758c-731f-a2fa-6be863e6f99b  # The system and capability pages match the registry
+  MOE-003: 01a15e4e-758d-75e6-bdbf-67980431a919  # Approved proposals not yet completed
+  MOE-004: 01a15e4e-758d-75e7-9c71-772f18ad54ee  # Inbox reviews that ended every note with a decision
+  MOE-005: 01a15e4e-758d-75e8-ae50-b9bee8b9ff5c  # Share of in-scope attack techniques with a tested rule
+  MOE-006: 01a15e4e-758d-75e9-9acc-acecb66e857a  # Every detection rule passes its fixtures
+  MOP-001: 01a15e4e-758d-75ea-a3c2-9f03395128ed  # Notes waiting in the records inbox
+  MOP-002: 01a15e4e-758d-75eb-90be-6709e42f34cf  # Proposals completed
+  OO-001: 01a15e4e-758c-731a-834b-280b76e29792  # The lab's pages describe what actually runs
+  OO-002: 01a15e4e-758c-731b-8804-a6bc53dbd36b  # Every detection rule is tested before it ships
+  PIR-001: 01a15e4e-758d-75ee-a451-ea98b7fcd567  # Is anyone probing the lab's monitoring or status endpoints?
+  RFI-001: 01a15e4e-758d-75ef-b0de-ee2ec6316a77  # Which monitors cover the core services
+  RFI-002: 01a15e4e-758d-75f0-b53b-19ec2c792e88  # Has the status host been scanned in the last month
+  SO-001: 01a15e4e-758c-7318-bbc3-04740e2d7038  # Core services stay available
+  SO-002: 01a15e4e-758c-7319-b5cb-c9a62a360c20  # Hostile activity against the lab is detected
+  TO-001: 01a15e4e-758c-731c-9d6a-fb9bbdb29c50  # Decide and finish proposals within a week
+  TT-001: 01a15e4e-758c-731d-bd24-5471fca21d48  # Read the proposal inbox every week

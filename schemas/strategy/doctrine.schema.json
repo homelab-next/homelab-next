@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/strategy/doctrine/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/strategy/doctrine/1.1",
   "title": "Measurement doctrine policy",
-  "description": "The data-driven doctrine homelabnext.strategy applies (examples/strategy/doctrine.yml): which mechanical rules run and how hard (error fails the check, warn prints, off disables; computed rules apply unless off). The defaults follow a MOE/MOP doctrine of nine rules; another discipline tunes or disables them here. Rules that need judgment are listed for reviewers, not enforced.",
+  "description": "The data-driven doctrine homelabnext.strategy applies (examples/strategy/doctrine.yml): which mechanical rules run and how hard (error fails the check, warn prints, off disables; computed rules apply unless off). The defaults follow a MOE/MOP doctrine of nine rules; another discipline tunes or disables them here. Rules that need judgment are listed for reviewers, not enforced. 1.1 adds, additively, `hierarchy` (each record type's parent types, from which a record's computed display number is drawn: OO 1.2 is the second OO under SO 1) and `links` (per typed link field, the record types that may carry it and the types each may name); both default to the shipped model when absent (ADR-0019).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -324,6 +324,78 @@
         }
       },
       "description": "Doctrine rules no code can decide; listed so reviewers check them."
+    },
+    "hierarchy": {
+      "type": "object",
+      "description": "Record type -> its parent types ([] for a top-level type) and whether the parent is optional. A type not listed keeps the default (homelabnext.strategy.doctrine.DEFAULT_HIERARCHY).",
+      "propertyNames": {
+        "$ref": "#/$defs/rtype"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "parent"
+        ],
+        "properties": {
+          "parent": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/rtype"
+            },
+            "uniqueItems": true
+          },
+          "optional": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "links": {
+      "type": "object",
+      "description": "Typed link field -> {record type that may carry it: [types it may name]}. A field not listed keeps the default (DEFAULT_LINKS).",
+      "additionalProperties": false,
+      "properties": {
+        "supports": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/rtype"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/rtype"
+            },
+            "uniqueItems": true
+          }
+        },
+        "serves": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/rtype"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/rtype"
+            },
+            "uniqueItems": true
+          }
+        },
+        "raised_by": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/rtype"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/rtype"
+            },
+            "uniqueItems": true
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -353,6 +425,20 @@
         "minLength": 1
       },
       "uniqueItems": true
+    },
+    "rtype": {
+      "enum": [
+        "SO",
+        "OO",
+        "TO",
+        "TT",
+        "MOP",
+        "MOE",
+        "CCIR",
+        "FFIR",
+        "PIR",
+        "RFI"
+      ]
     }
   }
 }

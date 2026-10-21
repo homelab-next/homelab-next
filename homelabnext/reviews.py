@@ -2,10 +2,10 @@
 """Reviews: who validated an artefact, in which role, against exactly which content.
 
 One model for every reviewed artefact: lesson and runbook records
-(``examples/registers/lessons/LL-001.md``), the per-service SOP pages (``docs/systems/``) and the
+(``examples/registers/lessons/<uid>.md``), the per-service SOP pages (``docs/systems/``) and the
 strategy-to-task records (``examples/strategy/``, :mod:`homelabnext.strategy`).
 An artefact carries ``author:`` and its reviews: append-only event files in the sidecar
-directory beside it (``LL-001.events/``, ``docs/systems/dns.events/``; see
+directory beside it (``<uid>.events/``, ``docs/systems/dns.events/``; see
 :mod:`homelabnext.registers.events`), each one review entry, or (the older form, still read) an
 inline ``reviews:`` list::
 

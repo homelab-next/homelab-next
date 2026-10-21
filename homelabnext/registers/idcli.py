@@ -1,26 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Id allocation and loss detection for registers (single YAML files or record directories).
+"""Loss and duplicate detection for registers (record directories and the invariants file).
 
-  hnx ids alloc REGISTER [--prefix LL] [-n N]
-  hnx ids resolve [PATH...]      rewrite XX-NEW placeholders (exit 3 if it changed anything);
-                                 in a record directory also renames LL-NEW-<slug>.md to LL-NNN.md
   hnx ids check-lost [PATH...] [--base REV]
-                                 fail if a parent commit's (or REV's) id vanished (exit 1)
-  hnx ids check-dupes [PATH...]  fail if an allocated id occurs twice, is live and retired, or a
-                                 record file's name disagrees with its id (exit 1)
-  hnx ids check-placeholders [PATH...]
-                                 fail if any entry id is still an XX-NEW placeholder (exit 1);
-                                 CI runs it on every push to main, never on a pull request
+                                 fail if a parent commit's (or REV's) record vanished (exit 1)
+  hnx ids check-dupes [PATH...]  fail if a key occurs twice, an invariant id is live and retired,
+                                 or a record file is not named for its uid (exit 1)
+  hnx ids check-uids [PATH...]   fail if a record file carries no canonical uid: a legacy
+                                 numbered id or an XX-NEW placeholder (exit 1)
 
-A PATH is a register file (lessons.yml), a record directory (lessons/) or a record file inside
-one (lessons/LL-001.md, which stands for its directory).  Without PATHs every register git tracks
-or HEAD (and --base) has is checked, so a commit that only deletes a record file is still seen.
+A PATH is a register file (invariants.yml), a record directory (lessons/, objectives/) or a
+record file inside one (lessons/<uid>.md, which stands for its directory).  Without PATHs every
+register git tracks or HEAD (and --base) has is checked, so a commit that only deletes a record
+file is still seen.
 
-Contributors commit `XX-NEW`; `check-lost` and `check-dupes` run in the pre-commit hook and in CI
-against the pull request's base.  A maintainer runs `resolve` once, at merge time, on the target
-branch (`make ids-resolve`), so two pull requests never claim the same number; a push to main
-that still carries a placeholder fails CI (`make ids-placeholders`) until that step is done.
-tools/register_ids.py is a thin wrapper.
+Records are identified by uids (ADR-0019): nothing is allocated, so there is no placeholder to
+resolve and no merge-time step.  `check-lost`, `check-dupes` and `check-uids` run in the
+pre-commit hook and in CI against the pull request's base.  tools/register_ids.py is a thin
+wrapper.
 """
 
 import argparse
@@ -29,24 +25,27 @@ import sys
 
 from . import ids
 
-EXPLAIN = """An id a parent commit HAD is missing from {path}: {lost}.
-Ids are append-only here, so this is not an edit. Likely a merge conflict resolved inside an
-entry body, producing one record with one entry's head and another's tail. Recover with
-`git show MERGE_HEAD:{path}` (or HEAD) and re-append the entry whole; never renumber to
-silence this. An id that was wrong on purpose is retired, not deleted: move it to the
-register's top-level `retired:` block with `reason:` (and `replaced_by:`), a tombstone that
-check-lost counts as present. A one-off consolidation in a local commit:
-REGISTER_IDS_ALLOW_DROP={lost} git commit ...
+EXPLAIN = """A record a parent commit HAD is missing from {path}: {lost}.
+Records are never deleted, so this is not an edit. Likely a merge conflict resolved by keeping
+one side's directory, or a rename gone wrong. Recover with `git show MERGE_HEAD:{path}` (or
+HEAD) and restore the record whole. A record that was wrong is retired through its lifecycle
+(a register-transition or strategy-transition intent), never deleted. A deliberate removal in a
+local commit: REGISTER_IDS_ALLOW_DROP={lost} git commit ...
+"""
+
+EXPLAIN_FILE = """{path} is a single-file register: an id that was wrong is retired, not deleted --
+move it to the register's top-level `retired:` block with `reason:` (and `replaced_by:`), a
+tombstone check-lost counts as present.
 """
 
 EXPLAIN_DIR = """{path} is a record directory: a deleted record file is restored with
-`git checkout HEAD -- {path}/<ID>.md` (or MERGE_HEAD); a wrong id is retired by replacing the
-file's front-matter with `id:` and a `retired:` mapping (`reason:`, `replaced_by:`).
+`git checkout HEAD -- {path}/<uid>.md` (or MERGE_HEAD), with its <uid>.events/ directory.
 """
 
-PLACEHOLDER_HELP = """XX-NEW is fine on a pull request branch, never on main. Maintainer step: on an
-up-to-date main, run `make ids-resolve`, review the diff and push it (resolve allocates under the
-per-repository lock, so the numbers cannot collide with another merge).
+UIDS_HELP = """Every record is identified by a UUIDv7 in its front-matter `uid:` and lives in
+<uid>.md. A record written before uids (a numbered `id:` such as LL-001, or an XX-NEW
+placeholder) is migrated with `hnx records assign-uids <tree>`, which also rewrites every
+reference to it and records the old code in the tree's aliases.yml.
 """
 
 
@@ -66,61 +65,35 @@ def _registers(root: pathlib.Path, paths: list[str], base: str | None) -> list[s
     return out
 
 
+def _texts(d: pathlib.Path) -> dict[str, str]:
+    return {p.name: p.read_text() for p in sorted(d.glob("*.md"))}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="hnx ids", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    a = sub.add_parser("alloc")
-    a.add_argument("register")
-    a.add_argument("--prefix")
-    a.add_argument("-n", type=int, default=1)
-    r = sub.add_parser("resolve")
-    r.add_argument("paths", nargs="*")
-    r.add_argument("--dry-run", action="store_true")
     c = sub.add_parser("check-lost")
     c.add_argument("paths", nargs="*")
     c.add_argument("--base", help="compare with this revision only (CI: the PR base commit)")
     d = sub.add_parser("check-dupes")
     d.add_argument("paths", nargs="*")
-    pl = sub.add_parser("check-placeholders")
-    pl.add_argument("paths", nargs="*")
+    u = sub.add_parser("check-uids")
+    u.add_argument("paths", nargs="*")
     ns = ap.parse_args(argv)
     try:
         root = ids.repo_root()
-        if ns.cmd == "alloc":
-            spec = ids.spec_for(ns.register)
-            if spec is None:
-                raise ids.IdError(f"{ns.register}: unknown register kind")
-            prefix = ns.prefix or (spec.prefixes[0] if len(spec.prefixes) == 1 else None)
-            if prefix is None:
-                raise ids.IdError(f"{ns.register} has several prefixes; pass --prefix")
-            print("\n".join(ids.allocate(root, ns.register, prefix, ns.n)))
-            return 0
         rels = _registers(root, ns.paths, getattr(ns, "base", None))
-        if ns.cmd == "resolve":
-            changed = False
-            for rel in rels:
-                if not (root / rel).exists():
-                    continue
-                for old, new in ids.resolve_file(root, rel, ns.dry_run):
-                    changed = True
-                    print(f"[register-ids] {rel}: {old} -> {new}")
-            return 3 if changed else 0
         bad = False
-        if ns.cmd == "check-placeholders":
+        if ns.cmd == "check-uids":
             for rel in rels:
                 spec = ids.spec_for(rel)
-                if spec is None:
+                if spec is None or spec.key != "uid" or not (root / rel).is_dir():
                     continue
-                left = [i for i in ids.entry_ids(root, rel, spec) if i.endswith("-NEW")]
-                if left:
+                for problem in ids.missing_uids(_texts(root / rel), spec):
                     bad = True
-                    print(
-                        f"[register-ids] FATAL: {rel} still has {len(left)} placeholder id(s): "
-                        f"{', '.join(sorted(set(left)))}",
-                        file=sys.stderr,
-                    )
+                    print(f"[register-ids] FATAL: {rel}/{problem}", file=sys.stderr)
             if bad:
-                print(PLACEHOLDER_HELP, file=sys.stderr)
+                print(UIDS_HELP, file=sys.stderr)
             return 1 if bad else 0
         if ns.cmd == "check-dupes":
             for rel in rels:
@@ -128,8 +101,7 @@ def main(argv=None) -> int:
                 if spec is None or not (root / rel).exists():
                     continue
                 if ids.is_record_dir(root / rel):
-                    texts = {p.name: p.read_text() for p in sorted((root / rel).glob("*.md"))}
-                    for problem in ids.dir_problems(texts, spec):
+                    for problem in ids.dir_problems(_texts(root / rel), spec):
                         bad = True
                         print(f"[register-ids] FATAL: {rel}/{problem}", file=sys.stderr)
                     continue
@@ -156,6 +128,8 @@ def main(argv=None) -> int:
                 print(EXPLAIN.format(path=rel, lost=",".join(lost)), file=sys.stderr)
                 if ids.is_record_dir(root / rel):
                     print(EXPLAIN_DIR.format(path=rel), file=sys.stderr)
+                else:
+                    print(EXPLAIN_FILE.format(path=rel), file=sys.stderr)
         return 1 if bad else 0
     except ids.IdError as ex:
         print(f"[register-ids] FATAL: {ex}", file=sys.stderr)

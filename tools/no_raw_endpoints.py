@@ -18,7 +18,8 @@
 Endpoints are looked up through the service registry (capability alias), never
 written as literals. This scans a tree for:
 
-  ipv4        any IPv4 address literal (0.0.0.0 bind-all is exempt)
+  ipv4        any IPv4 address literal (0.0.0.0 bind-all, a version and a record's display
+              number such as ``TT 1.1.1.1`` are exempt)
   localhost   ``localhost:<port>`` / ``localhost`` inside a URL with a port
   url-port    ``scheme://host:port`` with a literal host and explicit port
   host-port   ``name.<internal-ish tld>:<port>`` outside a URL
@@ -65,6 +66,8 @@ _OCT = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
 IPV4 = re.compile(rf"(?<![\w.]){_OCT}(?:\.{_OCT}){{3}}(?![\w]|\.\d)")
 # a version-ish context: "==1.2.3.4", "version 1.2.3.4", "v1.2.3.4"
 VERSIONISH = re.compile(r"(?:==|>=|<=|~=|!=|\bversion\b\W{0,3}|\bv)\s*$", re.IGNORECASE)
+# a record's computed display number, "TT 1.1.1.1" (ADR-0019): its type, a space, the number
+RECORD_NUMBER = re.compile(r"\b(?:SO|OO|TO|TT|MOP|MOE|CCIR|FFIR|PIR|SIR|RFI|LL|RB) $")
 URL_PORT = re.compile(
     r"\b[a-z][a-z0-9+.-]*://(?:[^\s/@:'\"<>]+@)?(\[[0-9a-f:]+\]|[A-Za-z0-9_.-]+):(\d{1,5})\b"
 )
@@ -140,7 +143,7 @@ def scan_text(rel: str, text: str) -> list[Finding]:
         for m in IPV4.finditer(line):
             if m.group(0) == "0.0.0.0":
                 continue
-            if VERSIONISH.search(line[: m.start()]):
+            if VERSIONISH.search(line[: m.start()]) or RECORD_NUMBER.search(line[: m.start()]):
                 continue
             if any(s <= m.start() < e for s, e in spans):
                 # already reported as part of a URL; still an ipv4 literal, report once under url-port

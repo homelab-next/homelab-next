@@ -93,7 +93,7 @@ TOOLS: dict[str, str] = {
 }
 
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
-_RECORD_ID = re.compile(r"(?<![\w-])(?:LL|RB)-(?:\d{3,}|NEW)(?![\w])")
+_RECORD_LABEL = re.compile(r"(?<![\w-])(?:LL|RB) \d+(?![\w.])")
 
 
 class CatalogError(Exception):
@@ -389,8 +389,13 @@ class Catalog:
         if not isinstance(include_inactive, bool):
             raise CatalogError("include_inactive must be a boolean")
         g = self._scoped_graph()
-        ids = [i for i in items if i in g.nodes]
-        raw_paths = {i: relpath(i) for i in items if i not in g.nodes}  # raw -> normalised
+        from homelabnext.graph import resolve_ids
+        from homelabnext.graph.sources import record_aliases
+
+        # a record by uid, or by a legacy code (resolved through the alias map, with a warning)
+        named = dict(zip(items, resolve_ids(g, items, record_aliases(self.root)), strict=True))
+        ids = [named[i] for i in items if named[i] in g.nodes]
+        raw_paths = {i: relpath(i) for i in items if named[i] not in g.nodes}  # raw -> normalised
         paths = sorted(set(raw_paths.values()))
         found = set(seeds_for(g, paths, include_inactive=include_inactive)) if paths else set()
         seeds = sorted(set(ids) | found)
@@ -475,23 +480,33 @@ class Catalog:
                 day = dt.date.fromisoformat(today)
             except ValueError:
                 raise CatalogError("today must be a valid date, YYYY-MM-DD") from None
-        out = review(load_sources(self.root / "examples" / "registers"), day).as_json()
+        rep = review(load_sources(self.root / "examples" / "registers"), day)
+        out, labels = rep.as_json(), rep.labels
         if self.scope is None:
-            return out
+            return {**out, "labels": labels}
 
-        def visible(rid: str) -> bool:
-            return self._sees(("runbook:" if rid.startswith("RB-") else "lesson:") + rid)
+        kind = {u: "runbook:" if lab.startswith("RB ") else "lesson:" for u, lab in labels.items()}
+        by_label = {lab: u for u, lab in labels.items()}
 
-        def withhold(text: str) -> str:  # a reason may name other records: same id scan
-            return _RECORD_ID.sub(lambda m: m[0] if visible(m[0]) else "(out of scope)", text)
+        def visible(uid: str) -> bool:
+            return self._sees(kind.get(uid, "lesson:") + uid)
+
+        def withhold(d: dict) -> dict:  # a reason names other records by label: hide those
+            hidden = {labels[u] for u in d.get("refs") or () if u in labels and not visible(u)}
+            reason = _RECORD_LABEL.sub(
+                lambda m: "(out of scope)" if m[0] in hidden else m[0], d["reason"]
+            )
+            return {**d, "reason": reason, "refs": [u for u in d.get("refs") or () if visible(u)]}
 
         out["due"] = {
-            a: [{**d, "reason": withhold(d["reason"])} for d in rows if visible(d["id"])]
-            for a, rows in out["due"].items()
+            a: [withhold(d) for d in rows if visible(d["id"])] for a, rows in out["due"].items()
         }
         out["warnings"] = [
-            w for w in out["warnings"] if all(visible(i) for i in _RECORD_ID.findall(w))
+            w
+            for w in out["warnings"]
+            if all(visible(by_label[x]) for x in _RECORD_LABEL.findall(w) if x in by_label)
         ]
+        out["labels"] = {u: lab for u, lab in labels.items() if visible(u)}
         return out
 
     def invariants_status(self) -> dict[str, Any]:

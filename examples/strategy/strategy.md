@@ -1,4 +1,5 @@
 ---
+uid: 01a15e4e-758c-7310-80ae-2e4fe878b14e
 type: strategy
 name: northwind
 title: Keep the Northwind lab available and defended

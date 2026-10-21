@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+event: review
+by: human:example-operator
+kind: human
+role: approve
+date: '2026-10-21'
+verdict: pass
+digest: sha256:469b2a6f7306a3da470cf993e28285083edc4cbb01b3854bdf7d4d7883728700
+note: fictional example review (the preventive control is uids now)

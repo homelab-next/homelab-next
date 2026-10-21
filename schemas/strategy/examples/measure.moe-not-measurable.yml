@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-id: MOE-005
+uid: 01a15e4e-758d-75e8-ae50-b9bee8b9ff5c
+type: MOE
 title: Share of in-scope attack techniques with a tested rule
 status: active
 date: '2026-10-20'
 author: human:example-planner
-objective: SO-002
+parent: 01a15e4e-758c-7319-b5cb-c9a62a360c20
 kind: outcome
 source: none
 unit: share of techniques

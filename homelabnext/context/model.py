@@ -74,7 +74,7 @@ class InvalidDocument(ContextError, ValueError):
 class Document:
     """One unit of context, as the indexer hands it over."""
 
-    id: str  # namespaced, ``<kind>:<name>`` (``doc:docs/graph.md``, ``lesson:LL-001``)
+    id: str  # namespaced, ``<kind>:<name>`` (``doc:docs/graph.md``, ``lesson:<uid>``)
     kind: str  # node kind (``doc``, ``lesson``, ``runbook``, ``cap``, ...)
     content: str  # returned byte-for-byte; its sha256 is the hit's digest
     title: str = ""
@@ -87,9 +87,9 @@ class Document:
 class Query:
     """What a caller asks.  ``allowed`` has no default: a caller always states what it may see.
 
-    ``allowed`` entries are exact ids (``lesson:LL-001``) or namespaces: an entry ending in
+    ``allowed`` entries are exact ids (``lesson:<uid>``) or namespaces: an entry ending in
     ``:`` or ``/`` matches every id that starts with it (``lesson:``, ``doc:docs/capabilities/``).
-    Nothing else is a pattern: ``lesson:LL-1`` does not admit ``lesson:LL-10``, an entry
+    Nothing else is a pattern: ``doc:docs/a`` does not admit ``doc:docs/ab``, an entry
     without ``:`` can name no id and is invalid, and so is any ``*``.
     """
 

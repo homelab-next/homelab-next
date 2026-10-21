@@ -29,10 +29,12 @@ __all__ = [
     "BARE_NAME_KINDS",
     "DEFAULT_WEIGHTS",
     "INACTIVE_STATUSES",
+    "RECORD_KINDS",
     "Related",
     "is_active",
     "neighbours",
     "related",
+    "resolve_ids",
     "seeds_for",
 ]
 
@@ -202,6 +204,31 @@ def related(
 BARE_NAME_KINDS = frozenset(
     {"cap", "svc", "product", "script", "role", "custom", "profile", "mdl", "skill", "persona"}
 )
+#: node kinds whose body is a record uid (ADR-0019): a bare uid, or the record's computed
+#: display number (``attrs.label``, ``PIR 2.1``), names the node too
+RECORD_KINDS = frozenset({"lesson", "runbook", "objective", "measure", "req", "rfi"})
+
+
+def resolve_ids(graph: Graph, items: Iterable[str], aliases=None) -> list[str]:
+    """``items`` with every record reference as its node id: ``lesson:<uid>`` as is, a bare
+    ``<uid>`` as the node that has it, and a legacy code (``lesson:LL-001``, ``LL-001``) through
+    ``aliases`` (:class:`homelabnext.identity.aliases.AliasMap`) with a deprecation warning.
+    Anything else (another node id, a path) is returned unchanged."""
+    from homelabnext.identity.aliases import resolve
+    from homelabnext.identity.types import LEGACY_CODE_RE
+    from homelabnext.identity.uid import is_uid
+
+    by_uid = {n.id.split(":", 1)[1]: n.id for n in graph.nodes.values() if n.kind in RECORD_KINDS}
+    out = []
+    for item in items:
+        body = str(item).split(":", 1)[1] if ":" in str(item) else str(item)
+        if str(item) in graph.nodes or not (is_uid(body) or LEGACY_CODE_RE.fullmatch(body)):
+            out.append(str(item))
+            continue
+        uid = resolve(body, aliases, "graph id")
+        out.append(by_uid.get(uid, str(item)))
+    return out
+
 
 #: an edited node also seeds what it is the identity of: an adapter file is about its capability
 _ANCHOR_EDGES = frozenset({"implements", "documents"})
@@ -240,8 +267,10 @@ def seeds_for(
     if text:
         for n in graph.nodes.values():
             names = {n.id}
-            if n.kind in BARE_NAME_KINDS:
+            if n.kind in BARE_NAME_KINDS or n.kind in RECORD_KINDS:
                 names.add(n.id.split(":", 1)[-1])
+            if n.kind in RECORD_KINDS and n.attrs.get("label"):
+                names.add(str(n.attrs["label"]))
             if len(n.title.split()) >= 3 and len(n.title) <= 120:
                 names.add(n.title)
             for name in names:

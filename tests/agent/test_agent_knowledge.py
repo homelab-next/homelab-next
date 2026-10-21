@@ -27,6 +27,7 @@ from homelabnext.agent import (
 from homelabnext.agent.knowledge import explain, select_knowledge, subjects
 from homelabnext.graph import Edge, Graph, Node
 from homelabnext.graph.sources import _provenance
+from homelabnext.identity.aliases import load_aliases
 from homelabnext.registers.schema import record_digest_of
 from homelabnext.registry import load
 
@@ -571,12 +572,13 @@ def test_cli_explain_on_the_repository_graph(tmp_path, capsys):
     capsys.readouterr()
     assert cli.main([*argv, "--explain"]) == 0
     out = capsys.readouterr().out
-    assert "lesson:LL-003" in out.split("excluded (")[0]
+    ll3 = "lesson:" + load_aliases(REPO / "examples/registers").codes["LL-003"]
+    assert ll3 in out.split("excluded (")[0]
     assert "cap:secrets  rule 0: task names cap:secrets" in out
     assert "over budget" in out
     assert cli.main([*argv, "--out", str(tmp_path / "pack.json")]) == 0
     pack = json.loads((tmp_path / "pack.json").read_text())["pack"]
-    assert "lesson:LL-003" in [i["id"] for i in pack["knowledge"]["included"]]
+    assert ll3 in [i["id"] for i in pack["knowledge"]["included"]]
     assert "Backup job silently skipped a new guest" in pack["text"]
     assert cli.main(["agent", "pack", str(tmp_path / "manifest.json"), "--inputs",
                      str(tmp_path / "inputs.json"), "--explain"]) == 1  # fmt: skip

@@ -1,0 +1,15 @@
+{
+  "id": "RB-001",
+  "type": "runbook",
+  "title": "x y z",
+  "systems": [
+    "a"
+  ],
+  "steps": [
+    {
+      "n": 1,
+      "text": "do",
+      "verify": "ok!"
+    }
+  ]
+}

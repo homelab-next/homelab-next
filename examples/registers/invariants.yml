@@ -289,16 +289,18 @@ criteria:
   statement: Register ids are never lost.
   evidence: auto
   observable: >-
-    IFS=$'\n'; f=$(git ls-files -- '*lessons.yml' '*runbooks.yml' '*invariants.yml' '*queue.yml'
-    '*/lessons/*.md' '*/runbooks/*.md') || exit 100; [ -n "$f" ] || { echo no registers tracked; exit 100; };
+    IFS=$'\n'; f=$(git ls-files -- '*invariants.yml' '*/lessons/*.md' '*/runbooks/*.md'
+    '*/objectives/*.md' '*/measures/*.md' '*/requirements/*.md' '*/rfis/*.md') || exit 100;
+    [ -n "$f" ] || { echo no registers tracked; exit 100; };
     python3 tools/register_ids.py check-lost && echo no ids lost
   expected: >-
-    exit 0: an id the last commit had is still a live entry or a `retired:` tombstone
-    (exit 100 outside a git checkout)
+    exit 0: every record uid the last commit had is still a record, and every invariant id is
+    still a live criterion or a `retired:` tombstone (exit 100 outside a git checkout)
   expect_regex: no ids lost
   remediation: >-
-    Restore the entry whole from `git show HEAD:<register>` (or MERGE_HEAD); if the id was wrong,
-    retire it under `retired:` with a reason instead of deleting it. Never renumber to silence it.
+    Restore the record whole from `git show HEAD:<path>` (or MERGE_HEAD), with its <uid>.events/;
+    a record that is wrong is retired through its lifecycle, never deleted. An invariant id that
+    was wrong is retired under `retired:` with a reason instead.
 - id: L-06
   statement: Every lesson has a root cause, control and verification.
   evidence: auto
@@ -636,16 +638,19 @@ criteria:
   statement: No placeholder ids survive a commit.
   evidence: auto
   observable: >-
-    IFS=$'\n'; f=$(git ls-files -- '*lessons.yml' '*runbooks.yml' '*invariants.yml' '*queue.yml'
-    '*/lessons/*.md' '*/runbooks/*.md') || exit 100; [ -n "$f" ] || { echo no registers tracked; exit 100; };
-    python3 tools/register_ids.py check-placeholders $f && echo no placeholder ids
+    IFS=$'\n'; f=$(git ls-files -- '*invariants.yml' '*/lessons/*.md' '*/runbooks/*.md'
+    '*/objectives/*.md' '*/measures/*.md' '*/requirements/*.md' '*/rfis/*.md') || exit 100;
+    [ -n "$f" ] || { echo no registers tracked; exit 100; };
+    python3 tools/register_ids.py check-uids && echo no placeholder ids
   expected: >-
-    exit 0 on main: no register entry id is an `XX-NEW` placeholder (a pull request may carry
-    them, so CI skips this on pull requests; exit 100 outside a git checkout)
+    exit 0: every record carries its canonical uid and is named for it, so no record is keyed by a
+    placeholder or a number (records are identified by uids, ADR-0019; exit 100 outside a git
+    checkout)
   expect_regex: no placeholder ids
   remediation: >-
-    Run `make ids-resolve` on main and commit the allocated ids; a placeholder that reaches main
-    is an id two branches can both allocate, which is how entries get fused or lost.
+    Run `hnx records assign-uids <tree>` on the tree that holds the record (it gives every record
+    without a uid its UUIDv7 and rewrites every reference) and commit the result; a record keyed
+    by a number is a key two branches can both claim.
 - id: A-03
   statement: The screener redacts sensitive data.
   evidence: auto

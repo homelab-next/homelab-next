@@ -9,6 +9,9 @@ import threading
 
 import pytest
 import yaml
+from register_helpers import U, evd, f
+
+OTHER = "01a15e4e-0000-7000-8000-00000000000f"  # a valid uid no example record has
 
 from homelabnext.records import Records, RecordsReader
 from homelabnext.records.decider import init_tree
@@ -59,7 +62,7 @@ def _files(d: pathlib.Path) -> set[pathlib.Path]:
 
 
 def test_two_review_events_in_the_same_second_never_collide(lab):
-    rec = lab / "lessons/LL-005.md"
+    rec = lab / "lessons" / f("LL-005")
     digest = record_digest_of(load_register(lab / "lessons")["lessons"][4])
     a = write_event(rec, _review("agent:example-checker", "agent", "check", digest), when=T0)
     b = write_event(rec, _review("agent:example-checker", "agent", "check", digest), when=T0)
@@ -94,7 +97,7 @@ def test_racing_writers_in_one_second_each_get_their_own_file(tmp_path):
 
 
 def test_editing_the_prose_and_adding_events_never_touch_the_same_file(lab):
-    rec = lab / "lessons/LL-001.md"
+    rec = lab / "lessons" / f("LL-001")
     entry = dict(load_register(lab / "lessons")["lessons"][0])
     digest = record_digest_of(entry)
     events_before = _files(ev.events_dir(rec))
@@ -114,8 +117,8 @@ def test_editing_the_prose_and_adding_events_never_touch_the_same_file(lab):
 
 
 def test_event_files_are_checked_by_name_and_schema(lab):
-    d = lab / "lessons/LL-005.events"
-    good = next(d.iterdir())
+    d = lab / "lessons" / evd("LL-005")
+    good = next(p for p in sorted(d.iterdir()) if "-review-" in p.name)
     (d / "20261020T093000Z-review-agent-someone-else.yml").write_text(good.read_text())
     with pytest.raises(RegisterError, match="writer part must be 'agent-example-"):
         load_register(lab / "lessons")
@@ -128,8 +131,8 @@ def test_event_files_are_checked_by_name_and_schema(lab):
         load_register(lab / "lessons")
     for p in d.glob("*recurrence*"):
         p.unlink()
-    shutil.copytree(d, lab / "lessons/LL-099.events")
-    with pytest.raises(RegisterError, match=r"LL-099\.events: no record file LL-099\.md"):
+    shutil.copytree(d, lab / "lessons" / f"{OTHER}.events")
+    with pytest.raises(RegisterError, match=rf"{OTHER}\.events: no record file {OTHER}\.md"):
         load_register(lab / "lessons")
 
 
@@ -137,7 +140,7 @@ def test_event_files_are_checked_by_name_and_schema(lab):
 
 
 def test_derived_fields_come_from_events(lab):
-    rec = lab / "lessons/LL-001.md"
+    rec = lab / "lessons" / f("LL-001")
     before = load_register(lab / "lessons")["lessons"][0]
     assert before["recurrences"] == 1 and "recurrences" not in rec.read_text()
     verified = {
@@ -170,7 +173,7 @@ def test_derived_fields_come_from_events(lab):
 
 
 def test_a_transition_whose_from_is_not_current_is_fatal(lab):
-    rec = lab / "lessons/LL-003.md"
+    rec = lab / "lessons" / f("LL-003")
     event = {
         "event": "transition",
         "by": "human:example-operator",
@@ -197,7 +200,7 @@ def _inline_copy(dst: pathlib.Path, kind: str) -> dict:
     for k in ("lessons", "runbooks"):
         (dst.parent / k).mkdir(parents=True, exist_ok=True)
         for e in load_register(EXAMPLES / k)[k]:
-            (dst.parent / k / f"{e['id']}.md").write_text(records.render_record(e, k))
+            (dst.parent / k / f"{e['uid']}.md").write_text(records.render_record(e, k))
     shutil.copy(EXAMPLES / "invariants.yml", dst.parent / "invariants.yml")
     return load_register(EXAMPLES / kind)
 
@@ -221,7 +224,7 @@ def test_the_migration_is_lossless_and_idempotent(tmp_path, kind):
 def test_a_migration_interrupted_after_its_events_finishes_without_duplicates(tmp_path):
     d = tmp_path / "registers" / "lessons"
     before = _inline_copy(d, "lessons")
-    rec = d / "LL-002.md"
+    rec = d / f("LL-002")
     _, planned = ev.backfill(
         records.parse_record(rec.read_text(), rec.name, "lessons", []), "lessons"
     )
@@ -249,26 +252,26 @@ def test_migrate_command_moves_system_page_reviews(tmp_path, capsys):
 
 
 def test_write_record_refuses_an_invalid_record_without_writing(lab):
-    rec = lab / "lessons/LL-003.md"
+    rec = lab / "lessons" / f("LL-003")
     entry = {
         k: v for k, v in load_register(lab / "lessons")["lessons"][2].items() if k != "recurrences"
     }
     before = _sha(rec)
     with pytest.raises(RegisterError, match="root_cause is a person"):
         write_record(rec, {**entry, "root_cause": "operator error during the change window"})
-    with pytest.raises(RegisterError, match="related LL-404 is not a live lesson"):
-        write_record(rec, {**entry, "related": ["LL-404"]})
+    with pytest.raises(RegisterError, match=f"related {OTHER} is not a lesson or runbook"):
+        write_record(rec, {**entry, "related": [OTHER]})
     with pytest.raises(RegisterError, match="derived from events"):
         write_record(rec, {**entry, "recurrences": 4})
-    new = lab / "lessons/LL-NEW-broken.md"
+    new = lab / "lessons" / f"{OTHER}.md"
     with pytest.raises(RegisterError):
-        write_record(new, {**entry, "id": "LL-NEW", "symptom": "short"})
+        write_record(new, {**entry, "uid": OTHER, "symptom": "short"})
     assert _sha(rec) == before and not new.exists()
     assert sorted(p.name for p in (lab / "lessons").glob(".*")) == []  # no temp file left
 
 
 def test_write_event_refuses_invalid_events_without_writing(lab):
-    rec = lab / "lessons/LL-005.md"
+    rec = lab / "lessons" / f("LL-005")
     before = _files(ev.events_dir(rec))
     with pytest.raises(RegisterError, match="digest"):
         write_event(
@@ -291,12 +294,12 @@ def test_write_event_refuses_invalid_events_without_writing(lab):
 
 
 def test_add_command_validates_and_appends(lab, tmp_path, capsys):
-    f = tmp_path / "e.yml"
-    f.write_text("event: verified\nby: agent:example-checker\ndate: 2026-10-20\noutcome: pass\n")
-    assert registers_main(["events", "add", str(lab / "lessons/LL-001.md"), str(f)]) == 1
+    e = tmp_path / "e.yml"
+    e.write_text("event: verified\nby: agent:example-checker\ndate: 2026-10-20\noutcome: pass\n")
+    assert registers_main(["events", "add", str(lab / "lessons" / f("LL-001")), str(e)]) == 1
     assert "'result' is a required property" in capsys.readouterr().err
-    f.write_text(f.read_text() + "result: exit 0\n")
-    assert registers_main(["events", "add", str(lab / "lessons/LL-001.md"), str(f)]) == 0
+    e.write_text(e.read_text() + "result: exit 0\n")
+    assert registers_main(["events", "add", str(lab / "lessons" / f("LL-001")), str(e)]) == 0
     assert "-verified-agent-example-checker" in capsys.readouterr().out
 
 
@@ -318,7 +321,7 @@ def _intent(inbox, slug, **fields):
 
 def _give_ll_003_a_control(lab):
     """A human writes the control into the prose; only then may an agent ask for ``partial``."""
-    rec = lab / "lessons/LL-003.md"
+    rec = lab / "lessons" / f("LL-003")
     entry = load_register(lab / "lessons")["lessons"][2]
     prose = dict(entry)  # as loaded: write_record puts the derived fields back to the base
     prose["preventive_control"] = "A nightly job diffs guest inventory against backup jobs."
@@ -340,12 +343,12 @@ def test_a_transition_the_policy_lets_agents_make_applies_at_once(lab, inbox):
     name = _intent(
         inbox,
         "ll-003-partial",
-        record="LL-003",
+        record=U["LL-003"],
         **{"from": "open", "to": "partial"},
         reason="a detector exists; the backup gap is still open for new guests",
     )
     _give_ll_003_a_control(lab)
-    rec = lab / "lessons/LL-003.md"
+    rec = lab / "lessons" / f("LL-003")
     before = _sha(rec)
     [out] = _decider(lab, inbox).decide_all()
     assert out.result == "applied", out
@@ -361,8 +364,8 @@ def test_a_runbook_is_superseded_through_an_intent(lab, inbox):
     name = _intent(
         inbox,
         "supersede-rb-001",
-        record="RB-001",
-        superseded_by="RB-002",
+        record=U["RB-001"],
+        superseded_by=U["RB-002"],
         reason="the proxy renewal is now a step of the generic procedure",
         **{"from": "active", "to": "superseded"},
     )
@@ -370,18 +373,18 @@ def test_a_runbook_is_superseded_through_an_intent(lab, inbox):
     assert out.result == "applied", out
     rb = load_register(lab / "runbooks")["runbooks"][0]
     assert (
-        rb["superseded_by"] == "RB-002"
-        and "superseded_by" not in (lab / "runbooks/RB-001.md").read_text().split("---")[1]
+        rb["superseded_by"] == U["RB-002"]
+        and "superseded_by" not in (lab / "runbooks" / f("RB-001")).read_text().split("---")[1]
     )
     again = _intent(
         inbox,
         "supersede-rb-001-again",
-        record="RB-001",
-        superseded_by="RB-002",
+        record=U["RB-001"],
+        superseded_by=U["RB-002"],
         reason="a stale copy",
         **{"from": "active", "to": "superseded"},
     )
-    assert "RB-001 is superseded" in _decider(lab, inbox).decide(again).reason
+    assert f"{U['RB-001']} is superseded" in _decider(lab, inbox).decide(again).reason
 
 
 @pytest.mark.parametrize("first", ["m17", "m16"])
@@ -395,7 +398,7 @@ def test_conflicting_intents_one_applies_the_other_is_denied(lab, inbox, first):
         tag: _intent(
             inbox,
             f"retire-ll-001-{tag}",
-            record="LL-001",
+            record=U["LL-001"],
             retired_by=[ref],
             reason=f"{ref} holds",
             **{"from": "controlled", "to": "retired"},
@@ -421,7 +424,7 @@ def test_a_retirement_waits_for_a_current_human_approve(lab, inbox):
     name = _intent(
         inbox,
         "retire-ll-001",
-        record="LL-001",
+        record=U["LL-001"],
         retired_by=["M-17"],
         reason="M-17 holds",
         **{"from": "controlled", "to": "retired"},
@@ -430,7 +433,7 @@ def test_a_retirement_waits_for_a_current_human_approve(lab, inbox):
     out = d.decide(name)
     assert out.result == "waiting" and "agent check, agent audit, human approve" in out.reason
     assert _lanes(inbox)["inbox"] == [name]
-    rec = lab / "lessons/LL-001.md"
+    rec = lab / "lessons" / f("LL-001")
     write_event(rec, _review("agent:example-checker", "agent", "check", out.digest), when=T0)
     write_event(rec, _review("agent:example-auditor", "agent", "audit", out.digest), when=T0)
     out = d.decide(name)
@@ -452,7 +455,7 @@ def test_an_invalid_target_is_denied_and_an_applied_one_is_finished_after_a_cras
     bad = _intent(
         inbox,
         "retire-ll-001-nowhere",
-        record="LL-001",
+        record=U["LL-001"],
         retired_by=["M-99"],
         reason="names no mechanism",
         **{"from": "controlled", "to": "retired"},
@@ -463,7 +466,7 @@ def test_an_invalid_target_is_denied_and_an_applied_one_is_finished_after_a_cras
     name = _intent(
         inbox,
         "ll-003-partial",
-        record="LL-003",
+        record=U["LL-003"],
         reason="the detector shipped",
         **{"from": "open", "to": "partial"},
     )
@@ -477,7 +480,7 @@ def test_an_invalid_target_is_denied_and_an_applied_one_is_finished_after_a_cras
         "requested_by": "profile:example-checker",
         "reason": "the detector shipped",
     }
-    write_events(lab / "lessons/LL-003.md", [event], when=T0, _decider=True)  # then: the crash
+    write_events(lab / "lessons" / f("LL-003"), [event], when=T0, _decider=True)  # then: the crash
     out = _decider(lab, inbox).decide(name)
     assert (out.result, out.reason) == ("applied", "already applied")
     assert _lanes(inbox)["decided/completed"] == [name]
@@ -489,13 +492,13 @@ def test_decide_command_dry_run_moves_nothing(lab, inbox, capsys):
     _intent(
         inbox,
         "ll-003-partial",
-        record="LL-003",
+        record=U["LL-003"],
         reason="the detector shipped",
         **{"from": "open", "to": "partial"},
     )
     args = ["decide", str(lab), str(inbox), "--as", "human:example-operator", "--dry-run"]
     assert registers_main(args) == 0
-    assert "applied  LL-003" in capsys.readouterr().out
+    assert f"applied  {U['LL-003']}" in capsys.readouterr().out
     assert len(_lanes(inbox)["inbox"]) == 1
     assert load_register(lab / "lessons")["lessons"][2]["status"] == "open"
 
@@ -511,7 +514,7 @@ def test_a_malformed_note_does_not_stop_the_other_intents(lab, inbox, capsys):
     printed a traceback)."""
     _give_ll_003_a_control(lab)
     good = _intent(
-        inbox, "ll-003-partial", record="LL-003", reason="the detector shipped",
+        inbox, "ll-003-partial", record=U["LL-003"], reason="the detector shipped",
         **{"from": "open", "to": "partial"},
     )  # fmt: skip
     _raw_note(inbox, "2026-10-20-example-checker-broken.md", "---\ntype: proposal\n---\n")
@@ -552,7 +555,7 @@ def test_an_on_key_is_refused_and_retired_on_is_honoured(lab, inbox):
     assert load_register(lab / "lessons")["lessons"][0]["status"] == "controlled"
     (inbox / "inbox" / name).unlink()
     name = _intent(
-        inbox, "retire-ll-001", record="LL-001", retired_by=["M-17"], retired_on="2026-10-01",
+        inbox, "retire-ll-001", record=U["LL-001"], retired_by=["M-17"], retired_on="2026-10-01",
         reason="M-17 holds", **{"from": "controlled", "to": "retired"},
     )  # fmt: skip
     assert d.decide(name).result == "applied"
@@ -566,7 +569,7 @@ def test_a_crash_between_approve_and_complete_is_finished(lab, inbox, monkeypatc
 
     _give_ll_003_a_control(lab)
     name = _intent(
-        inbox, "ll-003-partial", record="LL-003", reason="the detector shipped",
+        inbox, "ll-003-partial", record=U["LL-003"], reason="the detector shipped",
         **{"from": "open", "to": "partial"},
     )  # fmt: skip
     real = movers.Decider._move
@@ -594,11 +597,11 @@ def test_a_loaded_record_round_trips_through_write_record(lab, inbox):
     count), so writing back a transitioned record was refused."""
     _give_ll_003_a_control(lab)
     name = _intent(
-        inbox, "ll-003-partial", record="LL-003", reason="the detector shipped",
+        inbox, "ll-003-partial", record=U["LL-003"], reason="the detector shipped",
         **{"from": "open", "to": "partial"},
     )  # fmt: skip
     assert _decider(lab, inbox).decide(name).result == "applied"
-    rec = lab / "lessons/LL-003.md"
+    rec = lab / "lessons" / f("LL-003")
     base_status = yaml.safe_load(rec.read_text().split("---")[1])["status"]
     entry = load_register(lab / "lessons")["lessons"][2]
     assert entry["status"] == "partial" and "recurrences" in entry
@@ -631,7 +634,7 @@ def test_a_migration_with_an_older_sidecar_review_compares_reviews_as_a_multiset
     an inline one (it loads first after the migration, last before it) failed the migration."""
     d = tmp_path / "registers" / "lessons"
     _inline_copy(d, "lessons")
-    rec = d / "LL-001.md"
+    rec = d / f("LL-001")
     assert "reviews:" in rec.read_text()
     old = _old_review("2025-01-02")
     ev.create_event(ev.events_dir(rec), old, when=dt.datetime(2025, 1, 2, tzinfo=dt.UTC))
@@ -669,3 +672,41 @@ def test_a_page_migration_keeps_pre_existing_review_events(tmp_path):
     got = page_reviews(page, fm, [])
     assert len(got) == len(inline) + 1
     assert [r for r in got if r.get("note") == old["note"]]  # the earlier event is kept
+
+
+# --- rekey: the uid migration's identity rewrite does not void reviews --------------------------
+
+
+def _ll5(lab):
+    return next(e for e in load_register(lab / "lessons")["lessons"] if e["uid"] == U["LL-005"])
+
+
+def test_a_rekey_carries_earlier_reviews_of_its_from_digest_only(lab):
+    policy = load_policy(REPO / "examples/review-policy.yml")
+    rec = lab / "lessons" / f("LL-005")
+    old = record_digest_of(_ll5(lab))
+    validate_lessons(load_register(lab / "lessons"), policy)  # reviewed: valid
+    rec.write_text(rec.read_text().replace("instead of trusting", "rather than trusting"))
+    new = record_digest_of(_ll5(lab))
+    assert new != old
+    with pytest.raises(RegisterError, match="needs agent check, agent audit"):
+        validate_lessons(load_register(lab / "lessons"), policy)  # an edit: stale
+    rekey = {"event": "rekey", "by": "hnx:migrate", "date": dt.date(2026, 10, 22)}
+    rekey.update({"from": old, "to": new, "reason": "identity rewrite, content unchanged"})
+    ev.create_event(ev.events_dir(rec), rekey, when=dt.datetime(2026, 10, 22, tzinfo=dt.UTC))
+    validate_lessons(load_register(lab / "lessons"), policy)  # carried: valid again
+    assert {r["digest"] for r in _ll5(lab)["reviews"]} == {new}
+    # a review of the old digest recorded after the rekey is not carried
+    late = _review("agent:example-auditor", "agent", "audit", old, "2026-10-23")
+    ev.create_event(ev.events_dir(rec), late, when=dt.datetime(2026, 10, 23, tzinfo=dt.UTC))
+    assert [r["digest"] for r in _ll5(lab)["reviews"]][-1] == old[:19]
+
+
+def test_only_the_migration_writes_a_rekey(lab):
+    rec = lab / "lessons" / f("LL-005")
+    rekey = {"event": "rekey", "by": "agent:example-checker", "date": dt.date(2026, 10, 21)}
+    rekey.update({"from": "sha256:" + "1" * 64, "to": "sha256:" + "2" * 64, "reason": "x" * 20})
+    before = _files(ev.events_dir(rec))
+    with pytest.raises(RegisterError, match="'hnx:migrate' was expected"):
+        write_event(rec, rekey)
+    assert _files(ev.events_dir(rec)) == before

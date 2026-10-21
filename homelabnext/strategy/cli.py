@@ -13,7 +13,9 @@
     hnx strategy index [ROOT] [--out FILE] [--check]          the Markdown index (docs/strategy/)
 
 ROOT defaults to ``examples/strategy``; a lab keeps its real strategy in a private repository
-and passes its path (the same loader, ADR-0011).  ``--now`` / ``--today`` inject the clock
+and passes its path (the same loader, ADR-0011).  Records are printed with their computed
+display numbers (``OO 1.2``) and their uids; the JSON keys records by uid and carries each
+one's ``label`` (ADR-0019).  ``--now`` / ``--today`` inject the clock
 (default: the real one).  Exit codes: 0 ok, 1 a check failed (invalid records, a stale Links
 block or index, a denied or invalid intent), 2 usage or input error.
 """
@@ -65,7 +67,10 @@ def _grade_line(k: str, g) -> str:
     extra += ["capped (self-measured)"] if g.capped else []
     extra += [f"finding: {g.finding}"] if g.finding else []
     at = g.observed_at or "-"
-    return f"  {k:<8} {g.state:<10} {v:>8} at {at}  {g.confidence or ''}  {'; '.join(extra)}"
+    return (
+        f"  {g.label or k:<10} {g.state:<10} {v:>8} at {at}  {g.confidence or ''}  "
+        f"{'; '.join(extra)}  [{k}]"
+    )
 
 
 def main(argv: list[str] | None = None, *, clock: Callable[[], dt.datetime] | None = None) -> int:
@@ -202,7 +207,7 @@ def _measure(args, clock, doctrine) -> int:
         print(json.dumps(out, indent=1, sort_keys=True, default=str))
         return 0
     verb = "would record" if args.dry_run else "recorded"
-    for k, g in sorted(grades.items()):
+    for k, g in grades.items():
         print(_grade_line(k, g) + (f"  [{verb}]" if written.get(k) else ""))
     n = sum(1 for e in written.values() if e)
     print(f"[strategy] {verb} {n} reading(s) at {now.isoformat()}")
@@ -214,16 +219,17 @@ def _tree_lines(tree, states, grades) -> list[str]:
 
     def walk(k: str, depth: int) -> None:
         o, s = tree.of("objectives")[k], states[k]
-        lines.append(f"{'  ' * depth}{k} [{s['state']}] {o.get('title')}")
+        lines.append(f"{'  ' * depth}{tree.label(k)} [{s['state']}] {o.get('title')}  [{k}]")
         for m in s["measures"]:
             g = grades[m]
             v = "-" if g.value is None else f"{g.value:g}"
-            lines.append(f"{'  ' * (depth + 1)}- {m} {g.state} {v}")
+            lines.append(f"{'  ' * (depth + 1)}- {tree.label(m)} {g.state} {v}  [{m}]")
         for c in s["children"]:
             walk(c, depth + 1)
 
-    for k in sorted(k for k in states if tree.of("objectives")[k].get("level") == "SO"):
-        walk(k, 0)
+    for k in [k for k in tree.ordered("objectives") if k in states]:
+        if tree.of("objectives")[k].get("type") == "SO":
+            walk(k, 0)
     return lines
 
 
@@ -255,13 +261,11 @@ def _rfis(args, clock, doctrine) -> int:
         print("hnx strategy rfis: --raise and --sweep need --records and --as", file=sys.stderr)
         return 2
     if args.sweep:
-        filed, outcomes, skipped = sweep(
+        filed, outcomes = sweep(
             args.root, args.records, today=today, decided_by=args.who, clock=now_fn
         )
         for o in outcomes:
             print(f"[strategy] {o.line()}")
-        for k in skipped:
-            print(f"[strategy] skipped {k}: unnumbered (run hnx ids resolve)")
         print(f"[strategy] LTIOV sweep {today}: {len(filed)} expiry intent(s) filed")
         return 1 if any(o.result in ("denied", "invalid", "error") for o in outcomes) else 0
     tree = load_tree(args.root)
@@ -278,7 +282,7 @@ def _rfis(args, clock, doctrine) -> int:
     if args.json:
         doc = {
             "open": {
-                k: {"triage": r.get("triage"), "ltiov": str(r.get("ltiov"))}
+                k: {"label": tree.label(k), "triage": r.get("triage"), "ltiov": str(r.get("ltiov"))}
                 for k, r in open_.items()
             },
             "expiring": [k for k, _ in soon],
@@ -287,11 +291,13 @@ def _rfis(args, clock, doctrine) -> int:
         print(json.dumps(doc, indent=1, sort_keys=True))
         return 0
     for triage in ("collection", "production"):
-        rows = [k for k, r in sorted(open_.items()) if r.get("triage") == triage]
+        rows = [
+            tree.label(k) for k in tree.ordered("rfis", open_) if open_[k].get("triage") == triage
+        ]
         print(f"{triage} requirements: {', '.join(rows) or 'none'}")
-    print("expiring soon: " + (", ".join(f"{k} ({d})" for k, d in soon) or "none"))
+    print("expiring soon: " + (", ".join(f"{tree.label(k)} ({d})" for k, d in soon) or "none"))
     for g in found:
-        print(f"gap: {g.raised_by} -> {g.triage}: {g.why}")
+        print(f"gap: {g.label or g.raised_by} -> {g.triage}: {g.why}  [{g.raised_by}]")
     return 0
 
 

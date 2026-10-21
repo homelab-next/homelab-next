@@ -100,8 +100,8 @@ The registers are read through one function, `_register_entries(path)` in
 | `pre-commit` | `pre-commit:<hook>` | .pre-commit-config.yaml hooks |
 | `pkg` | `pkg:homelabnext[.<sub>]` | homelabnext/ packages |
 | `script` | `script:<id>` | docs/scripts/catalog.json |
-| `lesson` | `lesson:LL-NNN` | examples/registers/lessons.yml |
-| `runbook` | `runbook:RB-NNN` | examples/registers/runbooks.yml |
+| `lesson` | `lesson:<uid>` | examples/registers/lessons/&lt;uid&gt;.md |
+| `runbook` | `runbook:<uid>` | examples/registers/runbooks/&lt;uid&gt;.md |
 | `inv` | `inv:<criterion>` | examples/registers/invariants.yml criteria |
 | `system` | `system:<tag>` | lesson/runbook systems tags |
 | `test` | `test:<path>` | a lesson's retired_by naming a test file |
@@ -121,10 +121,10 @@ The registers are read through one function, `_register_entries(path)` in
 | `adr` | `adr:<slug>` | docs/adr/NNNN-&lt;slug&gt;.md |
 | `status` | `status:<source>` | examples/services.yml status_sources (the status hub's menu) |
 | `strategy` | `strategy:<name>` | examples/strategy/strategy.md (the one strategy record) |
-| `objective` | `objective:SO-NNN` | examples/strategy/objectives/ (SO, OO, TO, TT) |
-| `measure` | `measure:MOE-NNN` | examples/strategy/measures/ (MOP, MOE) |
-| `req` | `req:CCIR-NNN` | examples/strategy/requirements/ (CCIR, FFIR, PIR) |
-| `rfi` | `rfi:RFI-NNN` | examples/strategy/rfis/ |
+| `objective` | `objective:<uid>` | examples/strategy/objectives/ (SO, OO, TO, TT) |
+| `measure` | `measure:<uid>` | examples/strategy/measures/ (MOP, MOE) |
+| `req` | `req:<uid>` | examples/strategy/requirements/ (CCIR, FFIR, PIR) |
+| `rfi` | `rfi:<uid>` | examples/strategy/rfis/ |
 
 ## Edge types
 
@@ -173,8 +173,8 @@ The registers are read through one function, `_register_entries(path)` in
 | `observes` | status | svc, cap | registry status_sources (declaring service, its capability) |
 | `polls` | status | svc | registry status_sources target.service |
 | `supports` | req | objective | requirement supports (SO, OO, TO) |
-| `child_of` | objective | objective, strategy | objective parent (an SO: the strategy) |
-| `measured_by` | objective | measure | objective measures |
+| `child_of` | objective, req | objective, strategy, req | parent (an SO: the strategy; a PIR: its PIR) |
+| `measured_by` | objective | measure | a measure's parent |
 | `binds` | measure | inv, status | measure source binding (invariant:, status:) |
 | `raised_by` | rfi | measure, req | rfi raised_by |
 | `tasked_to` | req, rfi | profile, human | tasked_to, where it names a known principal |

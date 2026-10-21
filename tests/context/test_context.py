@@ -22,6 +22,7 @@ from homelabnext.context import (
     repo_store,
 )
 from homelabnext.graph import Graph, Node
+from homelabnext.identity.aliases import load_aliases
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -177,9 +178,10 @@ def test_capability_page_is_next_to_its_seed(repo):
 def test_retired_lessons_need_include_inactive(repo):
     hits = repo.query(_q({"lesson:"}, text="lesson", budget=50))
     statuses = {h.id for h in hits}
-    assert "lesson:LL-002" not in statuses  # retired in the example register
+    ll2 = "lesson:" + load_aliases(ROOT / "examples/registers").codes["LL-002"]
+    assert ll2 not in statuses  # retired in the example register
     every = repo.query(_q({"lesson:"}, text="lesson", budget=50, include_inactive=True))
-    assert "lesson:LL-002" in {h.id for h in every}
+    assert ll2 in {h.id for h in every}
 
 
 def test_repo_scope_holds(repo):

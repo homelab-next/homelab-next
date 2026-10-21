@@ -192,8 +192,7 @@ def write_register(
 
 
 def _file_of(entry: Mapping, name: str) -> bool:
-    ident = str(entry.get("id"))
-    return name == f"{ident}.md" or (ident.endswith("-NEW") and name.startswith(ident))
+    return name == f"{entry.get('uid')}.md"
 
 
 def check_page(
@@ -314,7 +313,7 @@ def _base_of(p: pathlib.Path, doc: Mapping[str, Any], kind: str) -> dict[str, An
     problems: list[str] = []
     base = parse_record(p.read_text(), p.name, kind, problems)
     events = ev.read_events(ev.events_dir(p), problems, p.name)
-    if problems or base is None or "retired" in base:
+    if problems or base is None:
         return out  # the register check names what is wrong with the file on disk
     derived = ev.derive(base, events, kind, problems, p.name)
     derived = _canonical({kind: [derived]}, kind)[kind][0]

@@ -69,7 +69,16 @@ from __future__ import annotations
 
 from .build import GRAPH_JSON, Integrity, build, check, generate
 from .model import Edge, Graph, Node, dumps, load, loads
-from .query import DEFAULT_WEIGHTS, Related, is_active, neighbours, related, seeds_for
+from .query import (
+    DEFAULT_WEIGHTS,
+    RECORD_KINDS,
+    Related,
+    is_active,
+    neighbours,
+    related,
+    resolve_ids,
+    seeds_for,
+)
 from .vocab import EDGE_TYPES, NODE_KINDS
 
 __all__ = [
@@ -77,6 +86,7 @@ __all__ = [
     "EDGE_TYPES",
     "GRAPH_JSON",
     "NODE_KINDS",
+    "RECORD_KINDS",
     "Edge",
     "Graph",
     "Integrity",
@@ -91,5 +101,6 @@ __all__ = [
     "loads",
     "neighbours",
     "related",
+    "resolve_ids",
     "seeds_for",
 ]

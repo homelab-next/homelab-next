@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# a type outside SO, OO, TO, TT
+uid: 01a15e4e-758c-731a-834b-280b76e29792
+type: XO
+title: The lab's pages describe what actually runs
+status: active
+date: '2026-10-20'
+author: human:example-planner
+owner: human:example-operator
+parent: 01a15e4e-758c-7318-bbc3-04740e2d7038
+review_by: '2027-04-20'
+statement: When something breaks, the system pages and runbooks an operator reaches for match the services
+  as they run, so recovery does not start with archaeology.

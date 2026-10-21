@@ -41,33 +41,25 @@ repos:
         language: system
         files: '\.(py|sh|ya?ml|toml)$'
         exclude: '(^|/)golden/'
-      # Register ids: never pick one by hand.  Write XX-NEW (LL-NEW, RB-NEW, ...) and commit it as
-      # is: XX-NEW is a valid committed state.  A maintainer allocates numbers once, at merge time,
-      # on the target branch (`make ids-resolve`, or `pre-commit run register-ids-resolve
-      # --hook-stage manual`), under a per-repository lock kept in the git common dir.
-      # `check-lost` refuses any commit in which an id that the parent commit had has vanished (a
-      # merge that fused two entries); `check-dupes` refuses an allocated id that occurs twice.
-      # Record directories (lessons/LL-001.md) are checked whole: the hooks take no file names and
-      # find every register themselves, so a commit that only deletes a record file is still seen.
-      - id: register-ids-resolve
-        name: register ids - resolve NEW placeholders (maintainers, at merge time)
-        entry: python3 tools/register_ids.py resolve
-        language: system
-        stages: [manual]
-        pass_filenames: false
-        files: '(^|/)((lessons|runbooks|invariants|queue)\.ya?ml|(lessons|runbooks)/[^/]+\.md)$'
+      # Register keys: every record is identified by a uid (a UUIDv7 created with it, ADR-0019),
+      # so nothing is allocated and two authors never collide.  `check-lost` refuses any commit in
+      # which a record that the parent commit had has vanished (a merge that kept one side's
+      # directory); `check-dupes` refuses a key that occurs twice, or a record file that carries no
+      # uid or is not named <uid>.md.  Record directories are checked
+      # whole: the hooks take no file names and find every register themselves, so a commit that
+      # only deletes a record file is still seen.
       - id: register-ids-check-lost
-        name: register ids - no id may vanish
+        name: register keys - no record may vanish
         entry: python3 tools/register_ids.py check-lost
         language: system
         pass_filenames: false
         always_run: true
       - id: register-ids-check-dupes
-        name: register ids - no allocated id twice
+        name: register keys - no key twice, every record carries its uid and is named for it
         entry: python3 tools/register_ids.py check-dupes
         language: system
         pass_filenames: false
-        files: '(^|/)((lessons|runbooks|invariants|queue)\.ya?ml|(lessons|runbooks)/[^/]+\.md)$'
+        files: '(^|/)(invariants\.ya?ml|(lessons|runbooks|objectives|measures|requirements|rfis)/[^/]+\.md)$'
       - id: register-links
         name: register records - generated Links blocks current
         entry: python3 -m homelabnext.registers links --check examples/registers/lessons examples/registers/runbooks

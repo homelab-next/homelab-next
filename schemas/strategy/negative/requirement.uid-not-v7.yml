@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# a uid is a UUIDv7: a version 4 uuid is refused
+uid: 0f6b1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4
+type: PIR
+title: Is anyone probing the lab's monitoring or status endpoints?
+status: active
+date: '2026-10-20'
+author: human:example-planner
+consumer: human:example-operator
+cadence: P1D
+ltiov: standing
+supports:
+- 01a15e4e-758c-7319-b5cb-c9a62a360c20
+serves:
+- 01a15e4e-758d-75ed-a383-a78599b3d065
+sirs:
+- Requests to the status hub or the uptime service from outside the lab's own zones.
+- Repeated authentication failures against the monitoring stack.
+indicators:
+- proxy logs naming the status or uptime host from an unknown client
+- an auth-failure burst detection firing on a monitoring host
+sources:
+- proxy access logs in the lake
+- detection findings in the lake
+tasked_to:
+- profile:reader
+question: Is anyone outside the lab probing or attacking its monitoring and status endpoints, which would
+  blind the lab to an outage?
+decision_supported: Whether to restrict the monitoring endpoints further (a proposal) and whether [[01a15e4e-758d-75ed-a383-a78599b3d065]]'s
+  answer may be under attack.
+acceptance: A request burst against the status host from an address outside the lab's zones is reported
+  as a finding within a day, naming the client and the window.
+guardrails: Authorized internal testing of the operator's own lab only; findings stay internal and identifying
+  details are redacted before any summary leaves the lab.

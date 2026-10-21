@@ -8,6 +8,9 @@ import pathlib
 import shutil
 
 import pytest
+from register_helpers import U, f
+
+OTHER = "01a15e4e-0000-7000-8000-00000000000f"  # a valid uid no example record has
 
 from homelabnext.registers import RegisterError, build_all, load_register, records
 from homelabnext.registers.__main__ import main as registers_main
@@ -38,8 +41,9 @@ def rb():
     return load_register(EX / "runbooks")
 
 
-def by_id(doc, kind, ident):
-    return next(e for e in doc[kind] if e["id"] == ident)
+def by_id(doc, kind, code):
+    """The example record the code ``LL-001`` named before uids (examples/registers/aliases.yml)."""
+    return next(e for e in doc[kind] if e["uid"] == U[code])
 
 
 def restamp(e, *keep_roles):
@@ -162,9 +166,9 @@ def test_superseded_practice_needs_superseded_by(ll, rb):
     e["status"] = "superseded"
     with pytest.raises(RegisterError, match="needs `superseded_by`"):
         validate_lessons(ll)
-    e["superseded_by"] = "LL-003"  # a pitfall cannot supersede a practice
+    e["superseded_by"] = U["LL-003"]  # a pitfall cannot supersede a practice
     validate_lessons(ll)
-    with pytest.raises(RegisterError, match="superseded_by LL-003 is not a practice"):
+    with pytest.raises(RegisterError, match=f"superseded_by {U['LL-003']} is not a practice"):
         links(ll, rb)
 
 
@@ -184,8 +188,9 @@ def test_incorporated_without_a_destination_fails(ll):
 @pytest.mark.parametrize(
     "dest, needle",
     [
-        ("RB-009", "no runbook RB-009"),
-        ("RB-002#9", "RB-002 has no step 9"),
+        (OTHER, f"no runbook {OTHER}"),
+        (U["RB-002"] + "#9", f"{U['RB-002']} has no step 9"),
+        ("RB-002#1", "is a legacy numbered code"),
         ("docs/systems/no-such-service.md", "does not exist"),
         ("docs/notes.md", "is not a runbook"),
     ],
@@ -207,45 +212,50 @@ def test_missing_back_reference_warns(ll, rb):
     validate_runbooks(rb)
     links(ll, rb)  # not fatal
     (w,) = sync_warnings(ll["lessons"], rb["runbooks"])
-    assert "LL-004 is incorporated into RB-002#1 but step 1 of RB-002 does not cite it" in w
+    assert "LL 4 is incorporated into RB 2#1 but step 1 of RB 2 does not cite it" in w
+    assert f"add `- from_lessons: [[{U['LL-004']}]]`" in w
 
 
 def test_from_lessons_must_name_a_lesson(ll, rb):
-    by_id(rb, "runbooks", "RB-002")["steps"][1]["from_lessons"] = ["LL-099"]
-    with pytest.raises(RegisterError, match="from_lessons LL-099 is not a lesson"):
+    by_id(rb, "runbooks", "RB-002")["steps"][1]["from_lessons"] = [OTHER]
+    with pytest.raises(RegisterError, match=f"from_lessons {OTHER} is not a lesson"):
         links(ll, rb)
 
 
 def test_from_lessons_round_trips_as_wiki_links():
-    text = (EX / "runbooks/RB-002.md").read_text()
-    assert "   - from_lessons: [[LL-004]]" in text
-    assert load_register(EX / "runbooks")["runbooks"][1]["steps"][0]["from_lessons"] == ["LL-004"]
+    text = (EX / "runbooks" / f("RB-002")).read_text()
+    assert f"   - from_lessons: [[{U['LL-004']}]]" in text
+    step = by_id(load_register(EX / "runbooks"), "runbooks", "RB-002")["steps"][0]
+    assert step["from_lessons"] == [U["LL-004"]]
 
 
 # --- active_only and the archive ---------------------------------------------------------------
 
 
 def test_active_only_skips_graduated_and_replaced_records(tmp_path):
-    assert [e["id"] for e in load_register(EX / "lessons", active_only=True)["lessons"]] == [
-        "LL-001",
-        "LL-003",
-        "LL-005",
+    assert [e["uid"] for e in load_register(EX / "lessons", active_only=True)["lessons"]] == [
+        U["LL-001"],
+        U["LL-003"],
+        U["LL-005"],
     ]
     d = tmp_path / "runbooks"
     shutil.copytree(EX / "runbooks", d)
-    p = d / "RB-001.md"
-    p.write_text(p.read_text().replace("review_by:", "superseded_by: RB-002\nreview_by:"))
-    assert [e["id"] for e in load_register(d, active_only=True)["runbooks"]] == ["RB-002"]
+    p = d / f("RB-001")
+    p.write_text(p.read_text().replace("review_by:", f"superseded_by: {U['RB-002']}\nreview_by:"))
+    assert [e["uid"] for e in load_register(d, active_only=True)["runbooks"]] == [U["RB-002"]]
     assert len(load_register(d)["runbooks"]) == 2
 
 
 def test_archived_records_say_so_in_their_links_block():
-    assert "- Archive: retired on 2026-10-19 by `M-17`" in (EX / "lessons/LL-002.md").read_text()
     assert (
-        "- Archive: incorporated into [[RB-002]] step 1" in (EX / "lessons/LL-004.md").read_text()
+        "- Archive: retired on 2026-10-19 by `M-17`" in (EX / "lessons" / f("LL-002")).read_text()
     )
-    entry = {"id": "LL-009", "kind": "practice", "status": "superseded", "superseded_by": "LL-005"}
-    assert "- Archive: superseded by [[LL-005]]" in records.links_block(entry)
+    assert (
+        f"- Archive: incorporated into [[{U['RB-002']}]] step 1"
+        in (EX / "lessons" / f("LL-004")).read_text()
+    )
+    entry = {"uid": OTHER, "kind": "practice", "status": "superseded", "superseded_by": U["LL-005"]}
+    assert f"- Archive: superseded by [[{U['LL-005']}]]" in records.links_block(entry)
 
 
 # --- the review ------------------------------------------------------------------------------
@@ -256,8 +266,8 @@ def src(tmp_path):
     d = tmp_path / "src"
     for kind in ("lessons", "runbooks"):
         shutil.copytree(EX / kind, d / kind)
-    for f in ("invariants.yml", "invariants.results.json"):
-        shutil.copy(EX / f, d / f)
+    for name in ("invariants.yml", "invariants.results.json"):
+        shutil.copy(EX / name, d / name)
     shutil.copy(REPO / "examples/review-policy.yml", d / "review-policy.yml")
     return d
 
@@ -269,44 +279,46 @@ def test_review_lists_what_is_due_deterministically(src):
     assert rep.lines() == [
         "lesson review as of 2027-05-01: 5 item(s) due",
         "incorporate:",
-        "  LL-005 Measure certificate lifetime from the client side: candidate runbook(s) "
-        "RB-001; incorporated will need human approve",
+        "  LL 5 Measure certificate lifetime from the client side: candidate runbook(s) "
+        "RB 1; incorporated will need human approve",
         "update:",
-        "  RB-001 Renew the internal proxy certificate: review_by 2027-04-19; methods and "
+        "  RB 1 Renew the internal proxy certificate: review_by 2027-04-19; methods and "
         "tools change",
-        "  RB-002 Add a lesson to the register: review_by 2027-04-19; methods and tools change",
+        "  RB 2 Add a lesson to the register: review_by 2027-04-19; methods and tools change",
         "keep:",
-        "  LL-001 Certificate expired on the internal reverse proxy: review_by 2027-01-17; name "
+        "  LL 1 Certificate expired on the internal reverse proxy: review_by 2027-01-17; name "
         "the mechanism that would retire it in `retired_by`, or bump review_by",
-        "  LL-003 Backup job silently skipped a new guest: review_by 2027-01-17; still unsolved: "
+        "  LL 3 Backup job silently skipped a new guest: review_by 2027-01-17; still unsolved: "
         "work it, or bump review_by",
     ]
     assert review(load_sources(src), dt.date(2027, 5, 1)).as_json() == rep.as_json()
 
 
 def test_review_suggests_retiring_a_pitfall_its_invariant_already_proves(src):
-    p = src / "lessons/LL-001.md"
+    p = src / "lessons" / f("LL-001")
     p.write_text(
         p.read_text().replace("review_by: 2027-01-17", "review_by: 2027-01-17\nretired_by: [M-03]")
     )
     rep = review(load_sources(src), dt.date(2026, 10, 19))
     (retire,) = [d for d in rep.items if d.action == "retire"]
-    assert retire.id == "LL-001" and "retired_by M-03 already holds" in retire.reason
+    assert retire.id == U["LL-001"] and retire.label == "LL 1"
+    assert "retired_by M-03 already holds" in retire.reason
     assert "retired will need" in retire.reason
     # the edit made the reviews stale: the record needs re-review, by tier
     (again,) = [d for d in rep.items if d.action == "review"]
-    assert again.id == "LL-001" and again.reason == "missing agent check, agent audit"
+    assert again.id == U["LL-001"] and again.reason == "missing agent check, agent audit"
 
 
 def test_review_suggests_superseding_by_a_newer_practice(src):
-    old = src / "lessons/LL-005.md"
+    old = src / "lessons" / f("LL-005")
     new = copy.copy(old.read_text())
-    new = new.replace("id: LL-005", "id: LL-006").replace("date: 2026-10-19", "date: 2026-12-01")
-    (src / "lessons/LL-006.md").write_text(new)
+    newer = "01a15e4f-0000-7000-8000-000000000001"  # created after every example record
+    new = new.replace(U["LL-005"], newer).replace("date: 2026-10-19", "date: 2026-12-01")
+    (src / "lessons" / f"{newer}.md").write_text(new)
     rep = review(load_sources(src), dt.date(2027, 5, 1))
-    assert [(d.action, d.id) for d in rep.items if d.action == "supersede"] == [
-        ("supersede", "LL-005")
-    ]
+    (sup,) = [d for d in rep.items if d.action == "supersede"]
+    assert (sup.id, sup.label, sup.refs) == (U["LL-005"], "LL 5", (newer,))
+    assert sup.reason.startswith("newer practice LL 6 covers")  # named by its number
 
 
 def test_review_cli_warns_by_default_and_fails_strict(src, capsys):
@@ -317,13 +329,14 @@ def test_review_cli_warns_by_default_and_fails_strict(src, capsys):
     capsys.readouterr()
     assert registers_main([*args, "--json"]) == 0
     doc = json.loads(capsys.readouterr().out)
-    assert [d["id"] for d in doc["due"]["keep"]] == ["LL-001", "LL-003"]
+    assert [d["id"] for d in doc["due"]["keep"]] == [U["LL-001"], U["LL-003"]]
+    assert [d["label"] for d in doc["due"]["keep"]] == ["LL 1", "LL 3"]
     assert registers_main(["review", str(src), "--today", "2026-10-19", "--strict"]) == 0
 
 
 def test_build_enforces_the_policy_beside_the_registers(src, tmp_path):
     build_all(src, tmp_path / "ok")
-    p = src / "lessons/LL-004.md"
+    p = src / "lessons" / f("LL-004")
     p.write_text(p.read_text().replace("never append", "rarely append"))
-    with pytest.raises(RegisterError, match="LL-004: status incorporated needs"):
+    with pytest.raises(RegisterError, match=f"LL 4 {U['LL-004']}: status incorporated needs"):
         build_all(src, tmp_path / "bad")
