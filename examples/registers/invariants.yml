@@ -133,7 +133,7 @@ criteria:
     Fix the backend or rule that changed the compiled output, or, if the change is intended,
     refresh the goldens with UPDATE_GOLDEN=1 and review the diff.
 - id: P-08
-  statement: Work follows the board rules and links to strategy records by uid.
+  statement: Work follows the board rules and links to strategy by uid.
   evidence: auto
   observable: python3 -m homelabnext.cli projects check --dir examples/projects --strategy examples/strategy
   expected: exit 0
