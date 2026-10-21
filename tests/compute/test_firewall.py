@@ -328,3 +328,40 @@ def test_outbound_rules_need_a_deny_policy_and_a_known_zone(tmp_path):
     assert "dest zone 'nope' does not exist" in problems(
         fleet_dir(tmp_path / "b", "lake-core", bad_zone)
     )
+
+
+def test_the_inventory_carries_the_same_rules_for_the_guests_own_firewall(good, tmp_path):
+    """``hnx_firewall`` (read by the nftables_host role) is the rules file's content: same order,
+    same policies, zones resolved to the same subnets, from the same resolver."""
+
+    def deny(doc):
+        doc["firewall_rules"]["policy_out"] = "REJECT"
+        doc["firewall_rules"]["outbound_allow"] = [
+            {"name": "dns", "proto": "udp", "ports": "53", "dest": "zone:mgmt"},
+            {"name": "https-out", "proto": "tcp", "ports": "443", "dest": "any"},
+        ]
+
+    f = load_fleet(fleet_dir(tmp_path, "lake-core", deny), STUB)
+    hv = yaml.safe_load(render(f, "inventory")["host_vars/lake-core.example.internal.yml"])
+    assert hv["hnx_firewall"] == {
+        "policy_out": "REJECT",
+        "inbound_allow": [
+            {"name": "query-api", "proto": "tcp", "ports": "8443", "source": "198.51.100.128/25"},
+            {"name": "ssh-mgmt", "proto": "tcp", "ports": "22", "source": "192.0.2.0/24"},
+            {"name": "ping", "proto": "icmp", "source": "192.0.2.0/24"},
+        ],
+        "outbound_allow": [
+            {"name": "dns", "proto": "udp", "ports": "53", "dest": "192.0.2.0/24"},
+            {"name": "https-out", "proto": "tcp", "ports": "443", "dest": "any"},
+        ],
+    }
+    fw = render(f, "firewall-rules")["firewall/140.fw"]
+    names = [line.rsplit("# ", 1)[1] for line in fw.splitlines() if " ACCEPT " in line]
+    rows = hv["hnx_firewall"]["inbound_allow"] + hv["hnx_firewall"]["outbound_allow"]
+    assert names == [r["name"] for r in rows]
+    plain = yaml.safe_load(render(good, "inventory")["host_vars/hv-a.example.internal.yml"])
+    assert plain["hnx_firewall"] == {
+        "policy_out": "ACCEPT",
+        "inbound_allow": [],
+        "outbound_allow": [],
+    }

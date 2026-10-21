@@ -51,6 +51,7 @@ ROLE_GROUPS: tuple[str, ...] = (
     # central defense products (ADR-0016 decision 7): the host a central control's role runs on
     "cap_sensor",
     "cap_scanner",
+    "cap_backup",
 )
 
 

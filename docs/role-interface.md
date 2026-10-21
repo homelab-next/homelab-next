@@ -87,11 +87,12 @@ Playbooks target capabilities, not machines:
 
 `cap_siem cap_lake cap_query cap_inference cap_edge cap_idp cap_secrets
 cap_orchestration cap_broker cap_cases cap_tip cap_monitoring cap_decision
-cap_nifi cap_sensor cap_scanner`
+cap_nifi cap_sensor cap_scanner cap_backup`
 
-`cap_sensor` (the network sensor) and `cap_scanner` (the internal assessment scanner) are the
-product hosts of the centrally applied baseline controls (ADR-0016 decision 7): their roles run
-once there and receive the guests to enroll as `<role>_guests`.
+`cap_sensor` (the network sensor), `cap_scanner` (the internal assessment scanner) and
+`cap_backup` (the backup host, where restore drills run) are the product hosts of the centrally
+applied baseline controls (ADR-0016 decision 7): their roles run once there and receive the
+guests to enroll as `<role>_guests`.
 
 `ansible/inventory/example/hosts.yml` shows the layout (hosts under the reserved
 `example.internal` domain). Moving a capability to another guest is a group

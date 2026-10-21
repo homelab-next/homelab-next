@@ -14,6 +14,7 @@ from homelabnext.compute.baselines import resolve
 from homelabnext.compute.model import Fleet, Guest
 
 from ._text import HEADER, q, qlist
+from .firewall_rules import resolve_address
 
 
 def baseline_group(name: str) -> str:
@@ -22,6 +23,29 @@ def baseline_group(name: str) -> str:
 
 def control_group(control: str) -> str:
     return "control_" + control.replace("-", "_")
+
+
+def _fw_rule(fleet: Fleet, rule: dict, side: str) -> str:
+    row = {"name": rule["name"], "proto": rule["proto"]}
+    if rule.get("ports"):
+        row["ports"] = rule["ports"]
+    row[side] = resolve_address(fleet, rule[side]) or "any"
+    return "{" + ", ".join(f"{k}: {q(v)}" for k, v in row.items()) + "}"
+
+
+def firewall_vars(fleet: Fleet, g: Guest) -> list[str]:
+    """``hnx_firewall``: the guest's firewall rules with zones resolved to subnets."""
+    L = ["hnx_firewall:", f"  policy_out: {q(g.policy_out)}"]
+    for key, rules, side in (
+        ("inbound_allow", g.firewall_rules, "source"),
+        ("outbound_allow", g.outbound_rules, "dest"),
+    ):
+        if not rules:
+            L.append(f"  {key}: []")
+            continue
+        L.append(f"  {key}:")
+        L += [f"    - {_fw_rule(fleet, dict(r), side)}" for r in rules]
+    return L
 
 
 def host_vars(fleet: Fleet, g: Guest) -> str:
@@ -48,6 +72,7 @@ def host_vars(fleet: Fleet, g: Guest) -> str:
     for k in sorted(v):
         L.append(f"{k}: {q(v[k])}")
     L.append(f"hnx_tags: {qlist(sorted(g.tags))}")
+    L += firewall_vars(fleet, g)
     if fleet.baselines is not None:
         r = resolve(g, fleet.baselines)
         L.append(f"hnx_baselines: {qlist(list(r.baselines))}")

@@ -13,5 +13,12 @@ hnx_provisioning: "terraform"
 hnx_vmid: 140
 hnx_zone: "data"
 hnx_tags: ["prod", "stateful"]
+hnx_firewall:
+  policy_out: "ACCEPT"
+  inbound_allow:
+    - {name: "query-api", proto: "tcp", ports: "8443", source: "198.51.100.128/25"}
+    - {name: "ssh-mgmt", proto: "tcp", ports: "22", source: "192.0.2.0/24"}
+    - {name: "ping", proto: "icmp", source: "192.0.2.0/24"}
+  outbound_allow: []
 hnx_baselines: ["base", "server", "sensitive"]
 hnx_controls: ["time-sync", "patching", "ssh-hardening", "host-firewall", "siem-agent", "vuln-scan", "backup-verify", "disk-encryption"]
