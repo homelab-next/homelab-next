@@ -36,6 +36,12 @@ TEMPLATES = sorted((SKELETON / ".github" / "workflows").glob("*.yml"))
 OWN = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
 CLIENT = SKELETON / "bin" / "vault-pass-client.py"
 
+# the sdist and the wheel leave the template out (setup.py NOT_PACKAGED, MANIFEST.in)
+pytestmark = pytest.mark.skipif(
+    not (SKELETON / ".hnx-private-overlay.yml").is_file(),
+    reason="the private-overlay template is not in this tree (an sdist leaves it out)",
+)
+
 USES = re.compile(r"^\s*(?:-\s+)?uses:\s*(?P<ref>\S+)(?P<rest>.*)$")
 PINNED = re.compile(r"^[\w.-]+/[\w.-]+(?:/[\w./-]+)?@[0-9a-f]{40}$")
 RELEASE_COMMENT = re.compile(r"^\s+#\s+v\d+(?:\.\d+)*\b")
@@ -231,7 +237,7 @@ class FakeOpenBao:
 
 
 BAO = {
-    "BAO_ADDR": "https://bao.example.internal:8200",
+    "BAO_ADDR": "https://bao.example.internal",
     "HNX_VAULT_PASSWORD_REF": "secret:ansible/fake-vault",
 }
 
@@ -245,7 +251,7 @@ def test_password_from_openbao_with_a_token(client):
     assert client.password({**BAO, "BAO_TOKEN": "fake-token"}, bao) == "fake-vault-password"
     ((method, url, headers, _),) = bao.calls
     assert method == "GET"
-    assert url == "https://bao.example.internal:8200/v1/secret/data/ansible/fake-vault"
+    assert url == "https://bao.example.internal/v1/secret/data/ansible/fake-vault"
     assert headers["X-vault-token"] == "fake-token"
 
 

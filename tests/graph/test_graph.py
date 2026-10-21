@@ -156,7 +156,9 @@ def test_every_source_contributes_and_counts(graph):
     for kind in ("svc", "cap", "adapter", "check", "schema", "lesson", "runbook", "inv"):
         assert kinds.get(kind), kind
     assert kinds["svc"] == 19
-    assert kinds["lesson"] == 5 and kinds["runbook"] == 2
+    assert kinds["lesson"] == 5
+    # one runbook node per record file (RB-NEW-<slug>.md placeholders included)
+    assert kinds["runbook"] == len(list((ROOT / "examples/registers/runbooks").glob("RB-*.md")))
     # one script node per catalogued script (the catalog is the source of truth for the count)
     catalog = json.loads((ROOT / "docs/scripts/catalog.json").read_text(encoding="utf-8"))
     assert len(graph.of_kind("script")) == len(catalog["scripts"])
@@ -479,7 +481,9 @@ def test_register_entries_is_the_one_seam():
     assert [e["id"] for e in lessons] == ["LL-001", "LL-002", "LL-003", "LL-004", "LL-005"]
     assert all(e["_path"] == ROOT / LESSONS / f"{e['id']}.md" for e in lessons)
     assert all(e["_key"] == e["id"] for e in lessons)
-    assert [e["id"] for e in sources._register_entries(ROOT / RUNBOOKS)] == ["RB-001", "RB-002"]
+    runbooks = [e["id"] for e in sources._register_entries(ROOT / RUNBOOKS)]
+    assert runbooks[:2] == ["RB-001", "RB-002"]  # then allocated or RB-NEW placeholder records
+    assert len(runbooks) == len(list((ROOT / RUNBOOKS).glob("RB-*.md")))
     assert sources._register_entries(ROOT / "examples/registers/invariants.yml")[0]["id"] == "F-05"
 
 

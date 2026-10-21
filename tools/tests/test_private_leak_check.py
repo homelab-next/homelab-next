@@ -21,6 +21,12 @@ SKELETON = ROOT / "examples" / "private-overlay"
 sys.path.insert(0, str(ROOT / "tools"))
 import private_leak_check as plc
 
+# the sdist leaves the template out (MANIFEST.in); the tests that read it skip there
+needs_skeleton = pytest.mark.skipif(
+    not (SKELETON / ".hnx-private-overlay.yml").is_file(),
+    reason="the private-overlay template is not in this tree (an sdist leaves it out)",
+)
+
 MARKER = "hnx_private_overlay: 1\nansible_vault_files:\n  - inv/*/group_vars/*/vault.yml\n"
 SOPS_RULES = "creation_rules:\n  - path_regex: (^|/)lab/sealed/.*\\.sops\\.ya?ml$\n    age: x\n"
 VAULT = "$" + "ANSIBLE_VAULT;1.1;AES256\n" + "6331" * 16 + "\n" + "3964" * 16 + "\n"
@@ -83,6 +89,7 @@ def test_a_good_overlay_passes_with_real_looking_addresses(tmp_path):
     assert plc.check_private(root) == []
 
 
+@needs_skeleton
 def test_skeleton_passes_private_mode():
     assert plc.check_private(SKELETON) == []
 
@@ -190,10 +197,12 @@ def test_this_repository_passes_public_mode():
     assert r.returncode == 0, r.stdout
 
 
+@needs_skeleton
 def test_public_tree_with_only_the_skeleton_passes(tmp_path):
     assert plc.check_public(public_tree(tmp_path)) == []
 
 
+@needs_skeleton
 @pytest.mark.parametrize(
     ("rel", "text", "rule"),
     [
@@ -214,6 +223,7 @@ def test_public_tree_with_private_material_fails(tmp_path, rel, text, rule):
     assert run("public", str(root)).returncode == 1
 
 
+@needs_skeleton
 def test_skeleton_marker_must_stay_fictional(tmp_path):
     root = public_tree(tmp_path)
     m = root / "examples" / "private-overlay" / ".hnx-private-overlay.yml"
@@ -221,6 +231,7 @@ def test_skeleton_marker_must_stay_fictional(tmp_path):
     assert rules(plc.check_public(root)) == {"overlay-marker"}
 
 
+@needs_skeleton
 def test_skeleton_declares_the_private_layout():
     doc = plc.read_marker(SKELETON / ".hnx-private-overlay.yml")
     assert doc["fictional"] is True

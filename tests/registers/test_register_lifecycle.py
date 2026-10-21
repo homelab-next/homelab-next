@@ -235,8 +235,9 @@ def test_active_only_skips_graduated_and_replaced_records(tmp_path):
     shutil.copytree(EX / "runbooks", d)
     p = d / "RB-001.md"
     p.write_text(p.read_text().replace("review_by:", "superseded_by: RB-002\nreview_by:"))
-    assert [e["id"] for e in load_register(d, active_only=True)["runbooks"]] == ["RB-002"]
-    assert len(load_register(d)["runbooks"]) == 2
+    active = [e["id"] for e in load_register(d, active_only=True)["runbooks"]]
+    assert "RB-001" not in active and active[0] == "RB-002"
+    assert len(load_register(d)["runbooks"]) == len(active) + 1
 
 
 def test_archived_records_say_so_in_their_links_block():
