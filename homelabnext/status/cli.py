@@ -11,7 +11,8 @@
                       [--invariants-results FILE]
     hnx status serve [--state FILE] [--views FILE] [--registry FILE] [--bind HOST] [--port N]
                      [--allow-remote --allowed-host NAME ...] [--agents FILE] [--secrets-dir DIR]
-                     [--strategy DIR] [--guests DIR --guests-site SITE [--guests-registry FILE]]
+                     [--strategy DIR] [--projects DIR]
+                     [--guests DIR --guests-site SITE [--guests-registry FILE]]
                      [--maps ROOT] [--invariants-results FILE]
     hnx status ingest --agents FILE [--registry FILE] [--bind HOST] [--port N] [--publish-to URL]
                       [--allow-remote --allowed-host NAME ...] [--secrets-dir DIR]
@@ -23,7 +24,9 @@ trusted front door); ``ingest`` is the separate push listener (``POST /ingest/ag
 An ``approvals:`` block there has ``serve`` add the broker Approvals page (``/approvals``, behind
 the same front door; the hub's one ``POST``: ``homelabnext.status.approvals``).
 ``--strategy`` (``examples/strategy``) has ``serve`` add the strategy pages (Strategy,
-Requirements, Objectives, RFIs; ``docs/strategy.md``); ``--guests`` (``examples/minimal/guests``
+Requirements, Objectives, RFIs; ``docs/strategy.md``); ``--projects`` (``examples/projects``)
+adds the Projects page (open projects and their steps, blocked work, work by strategy record;
+``docs/projects.md``); ``--guests`` (``examples/minimal/guests``
 with ``--guests-site examples/minimal/site.yml``) adds the Baselines page, the guest x
 defense-layer coverage matrix (``docs/compute-model.md``).
 The generated maps (ADR-0018, ``homelabnext.status.maps``): ``--guests``/``--guests-site`` also
@@ -83,6 +86,7 @@ def _document(args, reg, specs, views, clock, site=None, *, approvals=False, map
     now = clock()
     agents = site.summary(now) if site is not None else None
     strategy = bool(getattr(args, "strategy", None))
+    projects = bool(getattr(args, "projects", None))
     baselines = getattr(args, "cmd", "serve") == "serve" and bool(getattr(args, "guests", None))
     return build_status(
         hub.snapshot(now),
@@ -94,6 +98,7 @@ def _document(args, reg, specs, views, clock, site=None, *, approvals=False, map
         baselines=baselines,
         approvals=approvals,
         maps=maps.available() if maps is not None else (),
+        projects=projects,
     )
 
 
@@ -178,6 +183,9 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     remote_opts(p, 8099)
     p.add_argument("--docs-base", default="docs")
     p.add_argument("--strategy", help="a strategy directory: serve its pages (docs/strategy.md)")
+    p.add_argument(
+        "--projects", help="a projects directory: serve the Projects page (docs/projects.md)"
+    )
     map_opts(p)
     agents_opt(p)
     p = sub.add_parser("ingest", help="the agent-activity push listener (POST only)")
@@ -286,6 +294,7 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
             docs_base=args.docs_base,
             agents=site,
             strategy=_strategy_site(args, clock),
+            projects=_projects_site(args, clock),
             baselines=_baseline_site(args),
             approvals=approvals,
             maps=maps,
@@ -354,6 +363,15 @@ def _strategy_site(args, clock: Callable[[], float]):
     from homelabnext.strategy.pages import StrategySite
 
     return StrategySite(args.strategy, clock=clock)
+
+
+def _projects_site(args, clock: Callable[[], float]):
+    """The Projects page for ``--projects DIR`` (linking to ``--strategy DIR``), or None."""
+    if not getattr(args, "projects", None):
+        return None
+    from homelabnext.projects.pages import ProjectsSite
+
+    return ProjectsSite(args.projects, strategy=getattr(args, "strategy", None), clock=clock)
 
 
 def _approvals_site(cfg, clock: Callable[[], float]):

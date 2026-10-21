@@ -305,6 +305,13 @@ requirements | objectives | rfis`: the strategy, the requirements board (CCIR / 
 objective tree with each MOP/MOE's grade, value and time, and the RFIs by triage. They read the
 strategy records only; see [strategy to task](strategy.md) ([[strategy]]).
 
+### Projects page
+
+`hnx status serve --projects DIR [--strategy DIR]` adds the Projects page, menu entry `panel:
+projects` (views schema 1.6): open projects with their step progress, blocked work and what
+blocks it, and the work linked to each strategy record. It reads the project files only; see
+[projects](projects.md) ([[projects]]).
+
 ### Baselines page
 
 `hnx status serve --guests DIR --guests-site SITE` adds the Baselines page, menu entry `panel:

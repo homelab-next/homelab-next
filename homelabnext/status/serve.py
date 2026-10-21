@@ -90,6 +90,7 @@ def make_server(
     agents: Any = None,
     strategy: Any = None,
     baselines: Any = None,
+    projects: Any = None,
     approvals: Any = None,
     maps: Any = None,
 ) -> ThreadingHTTPServer:
@@ -103,7 +104,8 @@ def make_server(
     :class:`homelabnext.compute.pages.BaselineSite` adds the Baselines page; ``approvals``: a
     :class:`homelabnext.status.approvals.ApprovalsSite` adds the Approvals page and its one
     ``POST`` route; ``maps``: a :class:`homelabnext.status.maps.MapSite` adds the generated maps
-    (topology, dataflow, architecture, roadmap: ADR-0018)."""
+    (topology, dataflow, architecture, roadmap: ADR-0018); ``projects``: a
+    :class:`homelabnext.projects.pages.ProjectsSite` adds the Projects page."""
     extra = frozenset(h.strip().lower().rstrip(".") for h in allowed_hosts if h.strip())
     if allow_remote and not extra:
         raise ValueError("allow_remote needs allowed_hosts: the hostnames clients will use")
@@ -163,6 +165,7 @@ def make_server(
             sites = [
                 (approvals, True),
                 (strategy, False),
+                (projects, False),
                 (baselines, False),
                 (maps, False),
                 (agents, True),

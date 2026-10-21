@@ -178,6 +178,13 @@ strategy:
 	$(PY) -m homelabnext.strategy links --check $(STRATEGY_DIR)
 	$(PY) -m homelabnext.strategy index --check $(STRATEGY_DIR)
 
+# the example projects (docs/projects.md) keep the board rules and link to existing strategy records
+PROJECTS_DIR := examples/projects
+.PHONY: projects
+check: projects
+projects:
+	$(PY) -m homelabnext.cli projects check --dir $(PROJECTS_DIR) --strategy $(STRATEGY_DIR)
+
 # Every fast criterion of the example register through the invariants runner, never paging; the
 # plugin-only rows (X-04, X-06, X-09, X-10) run nowhere else.  Slow criteria (leak scans, schema
 # check, coverage floor, pytest selections) are gates of their own.  Not a prerequisite of `check`:
@@ -206,7 +213,7 @@ ids-resolve:
 conform:
 	$(PY) -m homelabnext.cli conform run all --target $(or $(TARGET),fake)
 
-# `hnx conform list` and `hnx conform report --json`; fails if any of the 15 capabilities lacks a passing test
+# `hnx conform list` and `hnx conform report --json`; fails if any of the 16 capabilities lacks a passing test
 conform-check:
 	$(PY) tools/conform_coverage.py
 
