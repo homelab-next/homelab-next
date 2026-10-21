@@ -4,8 +4,8 @@
 #
 # Runs on every pull request and push with no secret and no Environment: it proves nothing was
 # committed in plain text that should have been sealed, and no credential value was committed at
-# all.  Decrypting and validating the sealed files happens only in deploy.yml, behind the
-# Environment's reviewers.  `pull_request` (never pull_request_target): a pull request's code
+# all.  Decrypting and validating the sealed files happens only in deploy.yml, which runs only
+# when the operator dispatches it from main.  `pull_request` (never pull_request_target): a pull request's code
 # runs with a read-only token and no secrets.
 name: checks
 

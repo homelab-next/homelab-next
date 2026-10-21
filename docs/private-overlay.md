@@ -125,16 +125,18 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
    * **a self-hosted runner inside the lab**: a dedicated VM in the management zone, registered to
      the private repository only, with labels `self-hosted, linux, hnx-deploy`, running as an
      unprivileged user, ideally ephemeral (`--ephemeral`, re-registered per job).
-6. **The protected Environment.** In the private repository's settings create the Environment
-   `production`: required reviewers (the operator), deployment branches `main` only, and the
+6. **The Environment.** In the private repository's settings create the Environment
+   `production`: deployment branches `main` only (plus required reviewers where your plan has
+   them, see [GitHub plans](#github-plans)), and the
    secrets `ANSIBLE_VAULT_PASSWORD`, `SOPS_AGE_KEY` (the deploy identity), `DEPLOY_SSH_KEY`, and for
    Tailscale `TS_OAUTH_CLIENT_ID` / `TS_OAUTH_SECRET`; role credentials as `HNX_SECRET_<NAME>`.
    Variables: `HNX_REF` (a full homelab-next commit SHA), `SOPS_VERSION`, `SOPS_SHA256`,
    `HNX_DEPLOY_PATH` (`tailscale` or `self-hosted`).
 7. **Host keys.** Record each host's public SSH key in `ansible/known_hosts` after checking its
    fingerprint out of band (or one `@cert-authority` line for an SSH host CA).
-8. **First deploy.** Merge to `main`, approve the deployment in the Environment, watch the run.
-   The runbook walks through each check.
+8. **First deploy.** Merge to `main` (that runs `checks.yml` only), then start the deploy by hand:
+   `gh workflow run deploy.yml --ref main` (or *Run workflow* in the Actions tab), and watch the
+   run. The runbook walks through each check.
 
 ### Tailscale: the deploy tag, least access
 
@@ -156,15 +158,48 @@ SSH (22) to the zones the deploy configures, nothing else: no subnet routes, no 
 access from any zone tag back to `tag:ci-deploy`. The OAuth client mints a pre-authorized,
 **ephemeral** key per run, so the node disappears when the job ends and a leaked key expires.
 
+## GitHub plans
+
+What a private repository's Environments can do depends on the account's plan. As of this
+writing (verify on GitHub's "Deployments and environments" docs page before relying on it):
+
+| Plan | Environments on a private repository | Secrets, variables, deployment-branch policy | Required reviewers, wait timer |
+|---|---|---|---|
+| Free | no | (repository secrets only) | no |
+| Pro, Team | yes | yes | no |
+| Enterprise | yes | yes | yes |
+
+The template therefore assumes Pro or Team: the deploy runs on `workflow_dispatch` only, and the
+manual dispatch from `main` is the approval step. Merges and pull requests run `checks.yml` only.
+
+* **Starting a deploy:** `gh workflow run deploy.yml --ref main`, then `gh run watch`.
+* **Creating the Environment through the API on Pro or Team:** omit `reviewers` (and
+  `wait_timer`), which those plans reject for a private repository, and set the branch policy:
+
+  ```bash
+  gh api -X PUT repos/<owner>/<repo>/environments/production \
+    -F 'deployment_branch_policy[protected_branches]=false' \
+    -F 'deployment_branch_policy[custom_branch_policies]=true'
+  gh api -X POST repos/<owner>/<repo>/environments/production/deployment-branch-policies \
+    -f name=main -f type=branch
+  ```
+
+* **On Enterprise, or for a public repository** (where reviewers are available): add required
+  reviewers to `production` first (`reviewers` in the same API call, or the Environment's
+  settings page), then add `push: {branches: [main]}` back to `on:` in `deploy.yml`. Never add
+  the push trigger without reviewers: every merge would deploy unreviewed. Keep the
+  `github.ref == 'refs/heads/main'` guard either way.
+
 ## The deploy workflow, step by step
 
 [`examples/private-overlay/.github/workflows/deploy.yml`](../examples/private-overlay/.github/workflows/deploy.yml):
 
-1. **Triggers**: `push` to `main` and `workflow_dispatch`, nothing else; the job also checks
-   `github.ref == 'refs/heads/main'`. No `pull_request`, never `pull_request_target`.
+1. **Trigger**: `workflow_dispatch` only, so a deploy happens when the operator starts it
+   (`gh workflow run deploy.yml --ref main`); the job also checks `github.ref ==
+   'refs/heads/main'`. No `push` by default, no `pull_request`, never `pull_request_target`.
 2. **Permissions**: `{}` at the top, `contents: read` for the job. The token cannot write.
-3. **Environment `production`**: the run waits for a reviewer; only then are the Environment's
-   secrets available, and only to a run from `main`.
+3. **Environment `production`**: its deployment-branch policy releases its secrets only to a run
+   from `main` (and, on a plan with required reviewers, only after a reviewer approves).
 4. **Pins**: refuses to start unless `HNX_REF` is a 40-hex commit SHA and the sops version and
    checksum are set. Actions are pinned to full commit SHAs (`tailscale/github-action` v4.2.0
    included).
@@ -236,7 +271,7 @@ What an attacker gets from each piece, and what still stands in the way.
 | An attacker obtains | They get | They do not get |
 |---|---|---|
 | the public repository | the code, schemas, fictional examples, the CI | any real address, host, credential, ciphertext or key (leak scan, reverse guard) |
-| the private repository (a leaked clone, a compromised collaborator account) | the lab's layout, addresses, inventory, procedures; secret *names* | credential values (OpenBao), sealed values (no age identity in git), vaulted values (no password in git), the deploy (Environment reviewers, `main` only) |
+| the private repository (a leaked clone, a compromised collaborator account) | the lab's layout, addresses, inventory, procedures; secret *names* | credential values (OpenBao), sealed values (no age identity in git), vaulted values (no password in git), the deploy (a manual dispatch from `main` by someone with write access; Environment branch policy) |
 | an Actions log | what the workflow printed: step names, check results | secrets (masked, never echoed, never expanded in a command line, no debug logging, diffs off) |
 | the GitHub-hosted runner during a deploy | the Environment's secrets for that run, a tailnet node limited to SSH on the deploy zones, for the job's lifetime | standing access: the node is ephemeral and the key single-use |
 | the self-hosted runner host | whatever the runner user can read while a job runs, and a host inside the management zone | the unseal keys and the operator's age identity (offline); other repositories' jobs (registered to the private repository only) |

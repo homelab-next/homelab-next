@@ -3,9 +3,14 @@
 # workflow").  It lives under examples/ in the public repository, where GitHub never runs it.
 # Copy it to .github/workflows/deploy.yml of the private repository.
 #
-# Deploys from main only, through the protected Environment `production` (required reviewers,
-# deployment branches: main).  Every credential is an Environment secret, read only by the steps
-# that need it, never echoed:
+# Deploys from main only, and only when the operator starts it: `workflow_dispatch` is the
+# approval step (`gh workflow run deploy.yml --ref main`).  On GitHub Pro or Team a private
+# repository's Environment has secrets and a deployment-branch policy but no required reviewers,
+# so a push trigger would deploy every merge unreviewed; pushes and pull requests run checks.yml
+# only.  On Enterprise (or a public repository) you may add `push: {branches: [main]}` back AND
+# required reviewers on the Environment (docs/private-overlay.md "GitHub plans").  Environment
+# `production`: deployment branches main only.  Every credential is an Environment secret, read
+# only by the steps that need it, never echoed:
 #   ANSIBLE_VAULT_PASSWORD   the ansible-vault password (to bin/vault-pass-client.py by env)
 #   SOPS_AGE_KEY             the deploy age identity (sops reads it from the environment)
 #   DEPLOY_SSH_KEY           the deploy user's SSH private key (into ssh-agent, never on disk)
@@ -24,9 +29,7 @@
 name: deploy
 
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:
+  workflow_dispatch:  # the only trigger: a manual dispatch from main is the approval
 
 permissions: {}
 

@@ -122,7 +122,7 @@ memory budget) and skips the parts that need a daemon. The architecture behind i
 | [docs/interfaces.md](docs/interfaces.md) | the index of contracts, Python interfaces and who owns them |
 | [docs/checklist.md](docs/checklist.md) | what is done, what is public-now, what needs a server |
 | [docs/adr/](docs/adr/README.md) | architecture decision records |
-| [docs/private-overlay.md](docs/private-overlay.md) | the public/private split: a real lab in a private overlay repository, credentials in OpenBao, deploys from a protected Actions Environment (skeleton: `examples/private-overlay/`) |
+| [docs/private-overlay.md](docs/private-overlay.md) | the public/private split: a real lab in a private overlay repository, credentials in OpenBao, deploys dispatched by hand from an Actions Environment (skeleton: `examples/private-overlay/`) |
 | `schemas/` | JSON Schemas (ids, events, records, registers, platform, OCSF subsets) with examples, negative cases and frozen baselines |
 | `examples/` | synthetic lab: `services.yml` registry, example registers and the minimal example lab (`examples/minimal/`) |
 | `conformance/`, `capabilities.yml` | the 15 capability suites (protocol, fake, broken twin, pytest glue), target files, and the list of capabilities the tree declares ([docs/conformance.md](docs/conformance.md)) |
@@ -158,7 +158,7 @@ Twelve architecture decision records live in [docs/adr/](docs/adr/README.md): sc
 registry and DNS aliases, shared libraries, role interface, swap procedure, detections as code,
 model roles, export hooks, bus placement, records lifecycle, the public/private split, and the
 deliberately non-modular substrate. Where a real lab lives (a private overlay repository read by
-the same commands, credentials in OpenBao, deploys from a protected Actions Environment) is
+the same commands, credentials in OpenBao, deploys dispatched by hand from an Actions Environment) is
 [ADR-0021](docs/adr/0021-public-and-private-repositories.md), with the full guide in
 [docs/private-overlay.md](docs/private-overlay.md).
 

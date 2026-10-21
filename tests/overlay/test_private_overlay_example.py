@@ -78,6 +78,9 @@ def lint_workflow(path: Path) -> list[str]:
             out.append(f"line {n}: {ref} has no trailing '# vX.Y.Z' naming the release")
     if "pull_request_target" in _triggers(doc):
         out.append("pull_request_target runs untrusted code with secrets")
+    jobs = (doc.get("jobs") or {}).values()
+    if "pull_request" in _triggers(doc) and any("environment" in j for j in jobs):
+        out.append("a job with an Environment runs on pull_request (its secrets reach PR code)")
     perms = doc.get("permissions")
     if perms is None:
         out.append("no top-level permissions (the default token is too broad)")
@@ -107,7 +110,7 @@ def test_workflow_follows_the_repository_rules(path):
 def test_the_lint_catches_what_it_claims(tmp_path):
     bad = tmp_path / "bad.yml"
     bad.write_text(
-        "on: [pull_request_target]\n"
+        "on: [pull_request_target, pull_request]\n"
         "permissions: write-all\n"
         "jobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
         "      - uses: actions/checkout@v7\n"
@@ -115,6 +118,7 @@ def test_the_lint_catches_what_it_claims(tmp_path):
         "      - uses: actions/setup-python@" + "b" * 40 + "  # v7.0.0\n"
         "      - uses: actions/checkout@" + "c" * 40 + "  # v7.0.1\n"
         "      - run: echo ${{ secrets.FAKE_TOKEN }}\n"
+        "  d:\n    runs-on: ubuntu-latest\n    environment: production\n    steps: []\n"
     )
     problems = "\n".join(lint_workflow(bad))
     for needle in (
@@ -125,6 +129,7 @@ def test_the_lint_catches_what_it_claims(tmp_path):
         "no timeout-minutes",
         "without persist-credentials",
         "expression inside run",
+        "runs on pull_request",
     ):
         assert needle in problems, needle
 
@@ -149,9 +154,11 @@ def deploy() -> dict:
     return yaml.safe_load((SKELETON / ".github" / "workflows" / "deploy.yml").read_text())
 
 
-def test_deploy_runs_from_main_through_the_protected_environment(deploy):
-    assert _triggers(deploy) == {"push", "workflow_dispatch"}
-    assert _on(deploy)["push"] == {"branches": ["main"]}
+def test_deploy_is_dispatched_by_hand_from_main_through_the_environment(deploy):
+    # GitHub Pro/Team: a private repository's Environment has no required reviewers, so the
+    # manual dispatch is the approval step; a push or pull-request trigger would deploy unreviewed
+    assert _triggers(deploy) == {"workflow_dispatch"}
+    assert not _triggers(deploy) & {"push", "pull_request", "pull_request_target"}
     assert deploy["permissions"] == {}
     assert deploy["concurrency"]["cancel-in-progress"] is False
     (job,) = deploy["jobs"].values()

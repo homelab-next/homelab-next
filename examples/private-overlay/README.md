@@ -18,7 +18,7 @@ lab-private/                       (a new PRIVATE repository; copy this director
 ├── .gitignore                     keys and decrypted scratch copies never get added
 ├── .github/workflows/
 │   ├── checks.yml                 every pull request: private_leak_check (no secrets)
-│   └── deploy.yml                 main only, protected Environment `production`
+│   └── deploy.yml                 manual dispatch from main, Environment `production`
 ├── ansible.cfg                    roles from ./hnx, vault password from bin/vault-pass-client.py
 ├── ansible/
 │   ├── inventory/production/      hosts.yml, group_vars/all/{main,vault}.yml (vault.yml vaulted)

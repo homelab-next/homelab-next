@@ -32,8 +32,9 @@ workstation was both a single point of failure (F-16) and the place where every 
 4. **Keys stay offline.** OpenBao unseal keys, the initial root token and the operator's age
    identity live in a password manager and on paper, never in a repository or an Actions secret.
 5. **Deploys run without the workstation**: a GitHub Actions workflow in the private repository,
-   on `main` only, through a protected Environment (required reviewers, deployment branch `main`)
-   that holds the vault password, the deploy's age identity, its SSH key and the Tailscale OAuth
+   started by hand (`workflow_dispatch` is the approval step: required reviewers on a private
+   repository need GitHub Enterprise) on `main` only, through an Environment whose
+   deployment-branch policy admits `main` alone and which holds the vault password, the deploy's age identity, its SSH key and the Tailscale OAuth
    client. It reaches the lab either by joining the tailnet with an ephemeral key tagged
    `tag:ci-deploy` (SSH to the deploy zones only) or through a self-hosted runner inside the lab
    registered to the private repository alone. Action pins are full commit SHAs; no
@@ -47,7 +48,7 @@ workstation was both a single point of failure (F-16) and the place where every 
 ## Consequences
 
 - A leaked private clone exposes the lab's layout but no credential, sealed value or deploy
-  right; a leaked log exposes nothing secret; a runner holds secrets only while a reviewed job runs.
+  right; a leaked log exposes nothing secret; a runner holds secrets only while a deploy the operator dispatched runs.
 - The workstation is no longer needed to deploy, and no longer holds the keys a deploy uses.
 - The operator maintains an Environment, an OpenBao AppRole, a Tailscale tag and its ACL (or a
   runner host), and the rotation routine in `docs/private-overlay.md`.
