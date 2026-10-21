@@ -5,7 +5,8 @@ Topology and Dataflow pages of ``examples/lab-topology`` plus one hostile guest 
 error, no CSP violation, the flow overlay draws arrows, a card fills the detail panel, the filter
 highlights and Esc clears, a lane and a group collapse, the hostile names stay text.
 
-Skips (with a registered reason) when Node, its Playwright package or a Chromium build is not
+Its own suite (``tests/browser``), so a browser's start-up never eats into the status hub
+suite's time budget.  Skips (with a registered reason) when Node, its Playwright package or a Chromium build is not
 installed.  ``HNX_MAP_SHOTS=DIR`` also saves screenshots there."""
 
 from __future__ import annotations
@@ -17,10 +18,12 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from status_helpers import REGISTRY, ROOT, VIEWS
 
 from homelabnext.status.cli import main
 
+ROOT = Path(__file__).resolve().parents[2]
+REGISTRY = ROOT / "examples" / "services.yml"
+VIEWS = ROOT / "examples" / "status" / "views.yml"
 LAB = ROOT / "examples" / "lab-topology"
 SMOKE = Path(__file__).with_name("map_smoke.mjs")
 EVIL_IP = "198.51.100.20"  # no-raw-endpoint: allow RFC 5737 documentation address

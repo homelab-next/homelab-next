@@ -370,7 +370,7 @@ type="application/json">` with `<`, `>` and `&` written as JSON escapes, and the
 the DOM with `textContent` only (a test refuses the HTML-parsing sinks and `eval`). The cards,
 rows and a **table view** (guests, zones, host flows, the zone flow matrix; the dataflow's flows
 and transports) are server-rendered, so the page reads without script.
-`tests/status/test_maps_browser.py` drives both pages in headless Chromium (Playwright for Node;
+`tests/browser/test_maps_browser.py` drives both pages in headless Chromium (Playwright for Node;
 skipped when it is not installed), with hostile names, and fails on any console error or CSP
 violation.
 

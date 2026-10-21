@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Browser smoke test of the interactive maps (driven by tests/status/test_maps_browser.py):
+// Browser smoke test of the interactive maps (driven by tests/browser/test_maps_browser.py):
 // loads the static topology.html and dataflow.html in headless Chromium through Playwright,
 // exercises them, and prints one JSON object of observations for the Python test to judge.
 // Usage: node map_smoke.mjs <topology.html> <dataflow.html> <hostile node id> [screenshot dir]
