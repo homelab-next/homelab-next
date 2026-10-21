@@ -45,14 +45,13 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from .aliases import ALIASES_FILE, read_aliases, render_aliases
-from .types import LEGACY_CODE_RE
+from .types import LEGACY_CODE_RE, TYPE_ORDER
 from .uid import UID_PATTERN, is_uid, uuid7
 
 __all__ = ["MigrationError", "Plan", "assign_uids"]
 
 REGISTER_DIRS = {"lessons": "lesson", "runbooks": "runbook"}
 STRATEGY_DIRS = ("objectives", "measures", "requirements", "rfis")
-_TYPE_ORDER = ("SO", "OO", "TO", "TT", "MOE", "MOP", "CCIR", "FFIR", "PIR", "RFI")
 _FRONT = re.compile(r"\A---\n(?P<fm>.*?\n)---[ \t]*(?:\n|\Z)", re.S)
 _TOP = re.compile(r"^(?P<key>[A-Za-z_][\w-]*):")
 _SIR_NUM = re.compile(r"^(?P<lead>\s*-\s+)(?P<q>['\"]?)\d+(?:\.\d+)*\.?\s+")
@@ -165,7 +164,7 @@ def _read_tree(tree: pathlib.Path, problems: list[str]) -> list[Record]:
 
 def _sort_key(r: Record) -> tuple:
     prefix, _, num = (r.code or "").rpartition("-")
-    t = _TYPE_ORDER.index(prefix) if prefix in _TYPE_ORDER else -1
+    t = TYPE_ORDER.index(prefix) if prefix in TYPE_ORDER else -1
     return (r.kind != "strategy", t, prefix, num == "NEW", int(num) if num.isdigit() else 0, r.path)
 
 

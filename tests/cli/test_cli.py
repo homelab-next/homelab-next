@@ -123,3 +123,12 @@ def test_invariants_and_registers_reachable(tmp_path, capsys):
     assert cli.main(["registers", "build", str(tmp_path / "src"), str(out)]) == 0
     capsys.readouterr()
     assert json.loads(next(out.glob("*.json")).read_text()) is not None
+
+
+def test_interfaces_md_lists_every_subcommand_in_order():
+    """docs/interfaces.md section 2.2 names every row of COMMANDS, in order (it had dropped
+    `records` and a dozen others)."""
+    doc = (ROOT / "docs/interfaces.md").read_text()
+    para = doc.split("### 2.2 Command line", 1)[1].split("`parity` is a library only", 1)[0]
+    names = re.findall(r"`([a-z][a-z-]*)`", para.split("Current names", 1)[1])
+    assert names == list(cli.COMMANDS)
