@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:lake-1
+description: The lake catalog and its table writers.
+kind: vm
+provisioning: terraform
+placement: {node: hv-2, vmid: 141}
+resources:
+  cpu: {cores: 4}
+  memory: {size_mb: 16384}
+  disks: [{name: rootfs, size_gb: 120, pool: fast}]
+image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
+network: {zone: data, ip: 192.0.2.141}
+firewall_rules:
+  inbound_allow:
+    - {name: catalog, proto: tcp, ports: "8181", source: "zone:services"}
+    - {name: query, proto: tcp, ports: "8181", source: "192.0.2.142/32"}
+capability: cap:lake-catalog
+capability_groups: [cap_lake]
+tags: [prod]
+owners: {primary: platform-team}

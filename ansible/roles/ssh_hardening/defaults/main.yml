@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# SSH hardening (control ssh-hardening, applied per guest): one drop-in that sorts first under
+# sshd_config.d (sshd keeps the first value it reads), key-only, no root login, and only members
+# of ssh_hardening_allow_groups may log in. The account ansible connects as
+# (ssh_hardening_keep_user) is never locked out: the role refuses to install a configuration under
+# which that account could not log in with its key, and checks the effective configuration
+# (sshd -T) before the file goes live.
+ssh_hardening_allow_groups: [hnx-ssh]
+# Create the first allow group and add the kept account to it (off: the groups already exist).
+ssh_hardening_manage_membership: true
+# Keys from the directory when the guest also has central-auth (sssd serves them); empty = none.
+ssh_hardening_authorized_keys_command: "{{ '/usr/bin/sss_ssh_authorizedkeys' if 'central-auth' in (hnx_controls | default([])) else '' }}"
+ssh_hardening_max_auth_tries: 3
+ssh_hardening_login_grace_time: 30
+ssh_hardening_client_alive_interval: 300
+ssh_hardening_client_alive_count_max: 2
+ssh_hardening_x11_forwarding: false
+ssh_hardening_dropin: /etc/ssh/sshd_config.d/00-homelabnext-hardening.conf
+ssh_hardening_main_config: /etc/ssh/sshd_config
+ssh_hardening_sshd_cli: sshd
+ssh_hardening_id_cli: id
+ssh_hardening_getent_cli: getent
+ssh_hardening_systemctl_cli: systemctl
+ssh_hardening_service: ssh
+ssh_hardening_reload: true
+ssh_hardening_state_dir: /var/lib/homelabnext/ssh-hardening

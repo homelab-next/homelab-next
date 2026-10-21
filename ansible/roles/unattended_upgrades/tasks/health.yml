@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Read the stamp of the last unattended run
+      ansible.builtin.stat:
+        path: "{{ unattended_upgrades_stamp_file }}"
+      register: unattended_upgrades_stamp
+    - name: Fail unless an unattended run finished recently
+      ansible.builtin.assert:
+        that:
+          - unattended_upgrades_stamp.stat.exists
+          - (now(utc=true).timestamp() - unattended_upgrades_stamp.stat.mtime) < unattended_upgrades_max_age_hours | int * 3600
+        fail_msg: >-
+          unattended_upgrades: no unattended run in the last {{ unattended_upgrades_max_age_hours }}h
+          ({{ unattended_upgrades_stamp_file }} is missing or older)
+  tags: [health]

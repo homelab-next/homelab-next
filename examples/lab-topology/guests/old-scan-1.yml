@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:old-scan-1
+description: The vulnerability scanner the siem now runs itself; kept for the record.
+kind: lxc
+status: retired
+provisioning: terraform
+placement: {node: hv-2, vmid: 126}
+resources:
+  cpu: {cores: 2}
+  memory: {size_mb: 2048}
+  disks: [{name: rootfs, size_gb: 16, pool: fast}]
+image: {logical: debian-12-standard, kind: tarball, os_type: debian}
+network: {zone: services, ip: 192.0.2.76}
+capability: cap:detections
+capability_groups: [cap_scanner]
+tags: [prod]
+owners: {primary: platform-team}

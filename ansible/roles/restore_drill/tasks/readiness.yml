@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Look for the drill command
+      ansible.builtin.stat:
+        path: "{{ restore_drill_cli }}"
+      register: restore_drill_cli_stat
+    - name: Fail unless the drill command exists and is executable
+      ansible.builtin.assert:
+        that: restore_drill_cli_stat.stat.exists and restore_drill_cli_stat.stat.executable
+        fail_msg: "restore_drill: {{ restore_drill_cli }} is missing or not executable (the backup product's drill command)"
+  tags: [readiness]

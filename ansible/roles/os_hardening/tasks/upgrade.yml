@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing pinned (the role installs no package)
+  ansible.builtin.debug:
+    msg: os_hardening installs no package
+  tags: [upgrade]

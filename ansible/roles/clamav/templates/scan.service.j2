@@ -1,0 +1,9 @@
+# Managed by homelabnext (role clamav, control malware-scan); local changes are overwritten.
+[Unit]
+Description=homelabnext ClamAV malware scan (control malware-scan)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/homelabnext/clamav-scan
+Nice=10
+IOSchedulingClass=idle

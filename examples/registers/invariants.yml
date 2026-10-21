@@ -95,6 +95,22 @@ criteria:
     Give the guest `baseline.names` from _baselines.yml (or `baseline.exemption.reason` with a
     review date); a guest created without a decided set of defenses is the one nothing watches
     (docs/compute-model.md, ADR-0016).
+- id: F-20
+  statement: Every machine says what powers it.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli guests validate examples/lab-topology/guests
+    --site examples/lab-topology/site.yml
+  expected: >-
+    exit 0: the example lab's site lists its UPSes, and its router, switch, edge devices,
+    hypervisors and physical hosts each name a UPS of the site or `none` with a reason (or take
+    power.default), and every UPS feeds something; exit 1 names the device or UPS that breaks it
+  expect_regex: '^ok: '
+  remediation: >-
+    Give the device `power: {ups: <id>}` (or `{ups: none, reason: ...}`), fix the UPS id, or
+    remove a UPS that feeds nothing; a machine whose power nobody wrote down is the one that
+    surprises you in a power cut (docs/network-model.md, Power).
 - id: D-02
   statement: Every rule is tested.
   evidence: auto

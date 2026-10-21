@@ -1,0 +1,30 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: clamav-scan
+#   kind: job
+#   purpose: Run one scheduled ClamAV scan of the configured paths and record its exit status for the role's health hook.
+#   owner: platform
+#   trigger: [timer:clamav/scan, role:clamav]
+#   inputs: the role's rendered settings (baked into this file)
+#   outputs: the report and last-run (exit status) under the role's state directory
+#   installs_to: /usr/local/libexec/homelabnext/clamav-scan
+#   exit:
+#     "0": the run finished (the scanner's own status is in last-run)
+# Managed by homelabnext (role clamav, control malware-scan); local changes are overwritten.
+# One scheduled run: ClamAV malware scan. The exit status lands in last-run (its mtime is the run's time),
+# which the role's health hook reads beside the report.
+set -u
+STATE={{ clamav_state_dir | quote }}
+mkdir -p "$STATE"
+set --
+{% for p in clamav_paths %}
+[ -e {{ p | quote }} ] && set -- "$@" {{ p | quote }}
+{% endfor %}
+if [ "$#" -eq 0 ]; then rc=0; : > "$STATE/clamscan.log"; else
+{{ clamav_cli | quote }} --recursive --infected --no-summary{% for d in clamav_exclude_dirs %} --exclude-dir={{ d | quote }}{% endfor %} \
+  --log="$STATE/clamscan.log" "$@" > /dev/null 2>&1
+rc=$?
+fi
+echo "$rc" > "$STATE/last-run.tmp" && mv "$STATE/last-run.tmp" "$STATE/last-run"
+exit 0

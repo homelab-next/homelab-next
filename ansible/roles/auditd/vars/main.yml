@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: the rule groups the role knows (see defaults/main.yml).
+auditd_known_groups: [identity, privilege, sshd, modules, time]

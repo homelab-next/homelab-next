@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "Scheduled Trivy scans of the root filesystem (and running container images) for known-vulnerable packages, with an SBOM; the vendor repository, its key pinned by fingerprint."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Apply the chosen hardening items; none needs a reboot.
+    options:
+      os_hardening_items: &items
+        type: list
+        elements: str
+        description: "The items to apply, any of: sysctl, filesystems, services, file_modes, core_dumps (all five is the documented set)."
+        required: true
+      os_hardening_sysctl: &sysctl
+        type: dict
+        description: Kernel settings (name -> integer) written to the role's sysctl.d file and applied now.
+        default:
+          kernel.kptr_restrict: 2
+          kernel.dmesg_restrict: 1
+          kernel.yama.ptrace_scope: 1
+          kernel.randomize_va_space: 2
+          fs.protected_hardlinks: 1
+          fs.protected_symlinks: 1
+          fs.protected_fifos: 1
+          fs.suid_dumpable: 0
+          net.ipv4.conf.all.accept_redirects: 0
+          net.ipv4.conf.default.accept_redirects: 0
+          net.ipv4.conf.all.secure_redirects: 0
+          net.ipv4.conf.all.send_redirects: 0
+          net.ipv4.conf.default.send_redirects: 0
+          net.ipv4.conf.all.accept_source_route: 0
+          net.ipv4.conf.all.log_martians: 1
+          net.ipv4.icmp_echo_ignore_broadcasts: 1
+          net.ipv4.tcp_syncookies: 1
+      os_hardening_filesystems: &fs
+        type: list
+        elements: str
+        description: Filesystem modules refused by modprobe (install <name> /bin/false) and blacklisted.
+        default: [cramfs, freevxfs, hfs, hfsplus, jffs2, udf]
+      os_hardening_services:
+        type: list
+        elements: str
+        description: Units stopped, disabled and masked when present.
+        default: [avahi-daemon.service, avahi-daemon.socket, cups.service, cups.socket, cups-browsed.service]
+      os_hardening_file_modes: &modes
+        type: list
+        elements: dict
+        description: "{path, mode} pairs: the mode is set on each path that exists; owners are never changed."
+        default:
+          - {path: /etc/passwd, mode: "0644"}
+          - {path: /etc/group, mode: "0644"}
+          - {path: /etc/shadow, mode: "0640"}
+          - {path: /etc/gshadow, mode: "0640"}
+          - {path: /etc/crontab, mode: "0600"}
+          - {path: /etc/ssh/sshd_config, mode: "0600"}
+      os_hardening_sysctl_file: &sysctl_file
+        type: path
+        description: The role's sysctl.d file.
+        default: /etc/sysctl.d/60-homelabnext-hardening.conf
+      os_hardening_modprobe_file: &modprobe
+        type: path
+        description: The role's modprobe.d file.
+        default: /etc/modprobe.d/homelabnext-hardening.conf
+      os_hardening_limits_file: &limits
+        type: path
+        description: The role's limits.d file (no core dumps).
+        default: /etc/security/limits.d/60-homelabnext-hardening.conf
+      os_hardening_sysctl_cli: &cli
+        type: str
+        description: The sysctl command (applies the file and reads live values).
+        default: sysctl
+      os_hardening_state_dir: &state
+        type: path
+        description: Where the hooks write their records.
+        default: /var/lib/homelabnext/os-hardening
+  config:
+    short_description: Write and apply the file-based items (sysctl, filesystems, file modes, core dumps).
+    options:
+      os_hardening_items: *items
+      os_hardening_sysctl: *sysctl
+      os_hardening_filesystems: *fs
+      os_hardening_file_modes: *modes
+      os_hardening_sysctl_file: *sysctl_file
+      os_hardening_modprobe_file: *modprobe
+      os_hardening_limits_file: *limits
+      os_hardening_sysctl_cli: *cli
+  health:
+    short_description: Fail unless every chosen kernel setting is live and every chosen file mode holds.
+    options:
+      os_hardening_items: *items
+      os_hardening_sysctl: *sysctl
+      os_hardening_file_modes: *modes
+      os_hardening_sysctl_cli: *cli
+  readiness:
+    short_description: No dependency; succeeds.
+    options: {}
+  backup:
+    short_description: Record that nothing needs keeping (the settings are rendered).
+    options:
+      os_hardening_state_dir: *state
+  restore:
+    short_description: Nothing to restore; re-running main applies the settings again.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; the role installs no package.
+    options: {}
+  export:
+    short_description: Nothing to export.
+    options: {}

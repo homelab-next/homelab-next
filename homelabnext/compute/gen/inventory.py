@@ -5,15 +5,20 @@ Playbooks target groups, never hosts (docs/role-interface.md section 5).  Every 
 including manual ones and physical hosts, because configuration management applies to all.
 With a baseline set, each guest is also in ``baseline_<name>`` for every baseline it resolves to
 (``extends`` included) and ``control_<id>`` for every control it needs, and carries
-``hnx_baselines`` / ``hnx_controls`` (the baseline-playbook target plays to those groups).
+``hnx_baselines`` / ``hnx_controls`` (the baseline-playbook target plays to those groups), and
+the baseline settings (``with:``, baseline set 1.2) of its per-guest controls as the bound roles'
+prefixed variables (``trivy_severity: "HIGH"``).
 """
 
 from __future__ import annotations
 
-from homelabnext.compute.baselines import resolve
+import json
+
+from homelabnext.compute.baselines import resolve, role_vars
 from homelabnext.compute.model import Fleet, Guest
 
 from ._text import HEADER, q, qlist
+from .firewall_rules import resolve_address
 
 
 def baseline_group(name: str) -> str:
@@ -22,6 +27,29 @@ def baseline_group(name: str) -> str:
 
 def control_group(control: str) -> str:
     return "control_" + control.replace("-", "_")
+
+
+def _fw_rule(fleet: Fleet, rule: dict, side: str) -> str:
+    row = {"name": rule["name"], "proto": rule["proto"]}
+    if rule.get("ports"):
+        row["ports"] = rule["ports"]
+    row[side] = resolve_address(fleet, rule[side]) or "any"
+    return "{" + ", ".join(f"{k}: {q(v)}" for k, v in row.items()) + "}"
+
+
+def firewall_vars(fleet: Fleet, g: Guest) -> list[str]:
+    """``hnx_firewall``: the guest's firewall rules with zones resolved to subnets."""
+    L = ["hnx_firewall:", f"  policy_out: {q(g.policy_out)}"]
+    for key, rules, side in (
+        ("inbound_allow", g.firewall_rules, "source"),
+        ("outbound_allow", g.outbound_rules, "dest"),
+    ):
+        if not rules:
+            L.append(f"  {key}: []")
+            continue
+        L.append(f"  {key}:")
+        L += [f"    - {_fw_rule(fleet, dict(r), side)}" for r in rules]
+    return L
 
 
 def host_vars(fleet: Fleet, g: Guest) -> str:
@@ -48,12 +76,17 @@ def host_vars(fleet: Fleet, g: Guest) -> str:
     for k in sorted(v):
         L.append(f"{k}: {q(v[k])}")
     L.append(f"hnx_tags: {qlist(sorted(g.tags))}")
+    L += firewall_vars(fleet, g)
     if fleet.baselines is not None:
         r = resolve(g, fleet.baselines)
         L.append(f"hnx_baselines: {qlist(list(r.baselines))}")
         L.append(f"hnx_controls: {qlist(list(r.controls))}")
         if r.exemption:
             L.append(f"hnx_baseline_exemption: {q(r.exemption['reason'])}")
+        settings = role_vars(fleet.baselines, r)
+        if settings:
+            L.append("# baseline settings (with:) of the controls applied on this guest")
+            L += [f"{k}: {json.dumps(v, sort_keys=True)}" for k, v in sorted(settings.items())]
     return "\n".join(L) + "\n"
 
 

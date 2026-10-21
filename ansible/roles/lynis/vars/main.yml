@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not a setting: where the scan script is installed (the service's ExecStart names it).
+lynis_script: /usr/local/libexec/homelabnext/lynis-scan
+# Fixed, not settings: the integrity sweep's script and the ntfy token file.
+lynis_verify_script: /usr/local/libexec/homelabnext/lynis-dpkg-verify
+lynis_notify_auth_file: /etc/homelabnext/lynis-notify.auth

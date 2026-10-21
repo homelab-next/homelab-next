@@ -33,8 +33,10 @@ authentication is a `secret:<name>` reference to an entry in the secret store.
 |---|---|
 | `site` | `id`, `domain`, `timezone` (UTC unless there is a reason) |
 | `zones[]` | `id`, `purpose`, `vlan_id`, `subnet`, `gateway`, optional `dhcp.range`, `dns.resolvers`, `egress`, `tags` |
-| `router` | `id`, `model` (the adapter), `mgmt_endpoint` (a `svc:` reference), optional `tls_pin`, `auth.reads` / `auth.writes` as `{mode, secret_ref}` |
-| `switches[]` | `id`, `model`, `device_mac`, `uplink_port`, `port_assignments` (access or trunk, ports and ranges) |
+| `router` | `id`, `model` (the adapter), `mgmt_endpoint` (a `svc:` reference), optional `tls_pin`, `auth.reads` / `auth.writes` as `{mode, secret_ref}`, `power` (1.1) |
+| `switches[]` | `id`, `model`, `device_mac`, `uplink_port`, `port_assignments` (access or trunk, ports and ranges), `power` (1.1) |
+| `edge[]` (1.1) | the uplink chain, outermost first: `{id, kind: internet \| modem \| ont \| router \| firewall \| switch \| other, model, power}`; an entry whose `id` is the router's or a switch's is that device |
+| `power` (1.1) | `ups[]` (`id`, the logical id everything names; `model`, `monitored_by: nut \| snmp \| usb \| none`, `nut_name` (what the power monitor queries), `serial`, `mac` only for a UPS with a network card) and `default` (the power of a device that declares none) |
 | `dhcp_reservations[]` | pin a registry host to a hardware address |
 | `firewall` | `default_action` (always `deny`), `zone_to_zone[]`, `service_exceptions[]` |
 | `dns` | `resolvers[]`, `records.static[]`, `policy` (`split_horizon`, `ttl_default`) |
@@ -63,6 +65,34 @@ pattern's `$` match before a trailing newline, so a pattern alone does not keep 
 * A URL, or an IP literal outside the fields that define addressing, is rejected: use a reference.
 * DNS names stay inside the site domain and do not shadow a name generated from the registry.
 * The router and switch `model`, and `adapters.*`, must name a known adapter.
+
+### Power (1.1)
+
+What feeds each machine is data, so a power cut can be reasoned about before it happens. The site
+lists its UPSes under `power.ups`; every device names what it draws from with
+`power: {ups: <id> | [<id>, ...]}` (two power supplies on two UPSes is a list) or
+`{ups: none, reason: "..."}`, and `power.default` covers the common case. The devices are the
+router, every switch, every `edge` entry but the internet, every hypervisor (`_nodes.yml`:
+`nodes: {hv-1: {power: {ups: ups-a}}}`, or any node a guest is placed on) and every physical host
+(a guest with `kind: host`, guest schema 1.4). A VM or container never declares power: it is only
+as protected as its hypervisor and inherits that.
+
+The rules live in one place, `homelabnext/power.py`. `hnx site validate` checks the site's half:
+an unknown UPS id; a UPS named `none` (reserved); duplicate UPS or edge ids; `none` without a
+reason; a router, switch or edge device with no declaration and no default; a device declared
+both on its `edge` entry and on the router or switch it is; power on the internet. `hnx guests
+validate DIR --site SITE` checks the rest against the site: the hypervisors and physical hosts
+(declared or defaulted, known ids, a reason with `none`, `_nodes.yml` and a host guest file not
+disagreeing), a VM or container with its own `power`, and **a UPS that feeds nothing, which is an
+error**: a UPS in the model is part of the lab, so it is wired to something or it does not belong
+in the model (a spare on a shelf is inventory, not topology). A site without a `power` section
+asks none of this, so sites written before 1.1 stay valid.
+
+The Topology map draws the edge chain at the top, the UPSes with what they feed (dotted lines on
+"Show Power"), a `UPS: <id>` or `no UPS` badge on every powered card (the reason in its tooltip
+and detail panel), and each guest's inherited power in its detail panel
+([status hub](status.md#generated-maps-topology-dataflow-architecture-roadmap)). Reading a UPS's
+live state (a NUT status source) is a later step.
 
 ### One-way zones
 

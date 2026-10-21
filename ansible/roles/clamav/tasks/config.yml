@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Point freshclam at the lab mirror
+  ansible.builtin.lineinfile:
+    path: "{{ clamav_freshclam_config }}"
+    regexp: '^PrivateMirror '
+    line: "PrivateMirror {{ clamav_private_mirror }}"
+    state: "{{ 'present' if clamav_private_mirror else 'absent' }}"
+  when: clamav_private_mirror | length > 0 or clamav_freshclam_config is file
+
+- name: Ensure the script directory exists
+  ansible.builtin.file:
+    path: "{{ clamav_script | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Write the scan script
+  ansible.builtin.template:
+    src: scan.sh.j2
+    dest: "{{ clamav_script }}"
+    mode: "0750"
+
+- name: Write the service and timer units
+  ansible.builtin.template:
+    src: "scan.{{ item }}.j2"
+    dest: "{{ clamav_unit_dir }}/hnx-clamav.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+  register: clamav_units
+
+- name: Reload systemd and enable the timer when the units changed
+  ansible.builtin.command:
+    argv: "{{ [clamav_systemctl_cli] + item }}"
+  loop: "{{ [['daemon-reload'], ['enable', '--now', 'hnx-clamav.timer']] if clamav_units is changed else [] }}"
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  changed_when: true

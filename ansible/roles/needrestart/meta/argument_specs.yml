@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install needrestart in list-only mode and check, state-diffed, on a timer.
+    options:
+      needrestart_notify: &notify
+        type: str
+        description: "How a change is alerted: none, notify (the notify capability's ntfy endpoint), mail (local mail), or auto (mail when the host has a local MTA and a root alias, else none); the example base baseline sets auto."
+        choices: [auto, none, notify, mail]
+        required: true
+      needrestart_notify_id: &notify_id
+        type: str
+        description: Logical id of the notify service in the registry (with notify).
+        default: notify
+      needrestart_notify_topic: &topic
+        type: str
+        description: The ntfy topic (with notify).
+        default: homelabnext-restarts
+      needrestart_notify_priority: &priority
+        type: int
+        description: ntfy priority 1-5 (with notify).
+        default: 3
+      needrestart_notify_auth_ref: &token
+        type: str
+        description: Secret reference (secret:<name>) of an ntfy access token, resolved by the hnx_secret lookup; empty = none.
+        default: ""
+      needrestart_mail_to: &mail_to
+        type: str
+        description: Local mail recipient (with mail).
+        default: root
+      needrestart_alert_kernel: &kernel
+        type: bool
+        description: Also alert when a newer kernel waits for a reboot (off by default; unattended-upgrades owns reboots).
+        default: false
+      needrestart_schedule: &schedule
+        type: str
+        description: When the check runs (systemd OnCalendar, ending in UTC), after the patch run.
+        default: "*-*-* 07:40:00 UTC"
+      needrestart_max_age_hours: &age
+        type: int
+        description: The health hook fails when the state file is older than this.
+        default: 48
+      needrestart_cli: &cli
+        type: str
+        description: The needrestart command.
+        default: needrestart
+      needrestart_sendmail_cli: &sendmail
+        type: str
+        description: The local MTA's sendmail command (with mail; its presence decides auto).
+        default: /usr/sbin/sendmail
+      needrestart_perl_cli: &perl
+        type: str
+        description: The perl command (perl -c checks the drop-in).
+        default: perl
+      needrestart_systemctl_cli: &systemctl
+        type: str
+        description: The systemctl command (daemon-reload, enable the timer).
+        default: systemctl
+      needrestart_dropin: &dropin
+        type: path
+        description: The role's needrestart conf.d drop-in.
+        default: /etc/needrestart/conf.d/50-homelabnext.conf
+      needrestart_aliases_file: &aliases
+        type: path
+        description: The local mail aliases file (a root alias makes auto choose mail).
+        default: /etc/aliases
+      needrestart_unit_dir: &units
+        type: path
+        description: Where the service and timer units are written.
+        default: /etc/systemd/system
+      needrestart_state_dir: &state
+        type: path
+        description: Where the check writes its state file (owner-only).
+        default: /var/lib/homelabnext/needrestart
+  config:
+    short_description: Write the list-only drop-in (checked by perl -c), the check script and its timer.
+    options:
+      needrestart_notify: *notify
+      needrestart_notify_id: *notify_id
+      needrestart_notify_topic: *topic
+      needrestart_notify_priority: *priority
+      needrestart_notify_auth_ref: *token
+      needrestart_mail_to: *mail_to
+      needrestart_alert_kernel: *kernel
+      needrestart_schedule: *schedule
+      needrestart_cli: *cli
+      needrestart_sendmail_cli: *sendmail
+      needrestart_perl_cli: *perl
+      needrestart_systemctl_cli: *systemctl
+      needrestart_dropin: *dropin
+      needrestart_aliases_file: *aliases
+      needrestart_unit_dir: *units
+      needrestart_state_dir: *state
+  health:
+    short_description: Fail unless the state file was written within needrestart_max_age_hours.
+    options:
+      needrestart_max_age_hours: *age
+      needrestart_state_dir: *state
+  readiness:
+    short_description: With notify, fail unless the notify endpoint's port answers.
+    options:
+      needrestart_notify: *notify
+      needrestart_notify_id: *notify_id
+  backup:
+    short_description: Nothing to back up; the next check rewrites the state.
+    options: {}
+  restore:
+    short_description: Nothing to restore.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; needrestart follows the patching control.
+    options: {}
+  export:
+    short_description: Nothing to export beyond the state file.
+    options: {}

@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Fail unless the guest has a Python 3 for the scanner
+  ansible.builtin.command:
+    argv: ["{{ config_leak_scan_python }}", --version]
+  changed_when: false
+  tags: [readiness]

@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: Apache-2.0
+# Derived, not a setting: each time source's host, resolved through the registry.
+chrony_server_hosts: "{{ query('hnx_registry', *chrony_server_ids, field='host') }}"

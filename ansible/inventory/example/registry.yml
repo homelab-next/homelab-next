@@ -13,3 +13,23 @@ services:
     host: siem-01.example.internal
     port: 1514
     scheme: tcp
+  # the lab's own time source (control time-sync, role chrony)
+  time:
+    host: time-01.example.internal
+    port: 123
+    scheme: udp
+  # the log pipeline's syslog receiver (control log-forward, role rsyslog_forward)
+  log-collector:
+    host: logs-01.example.internal
+    port: 6514
+    scheme: tcp
+  # the identity provider's LDAP outpost (control central-auth, role sssd_ldap)
+  idp-ldap:
+    host: idp-01.example.internal
+    port: 636
+    scheme: ldaps
+  # the git service guests push their /etc to (control config-backup, role etckeeper)
+  config-git:
+    host: git-01.example.internal
+    port: 22
+    scheme: ssh

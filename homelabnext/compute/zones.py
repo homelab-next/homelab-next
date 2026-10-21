@@ -203,6 +203,19 @@ def flows_from_site(doc: Mapping[str, Any]) -> tuple[ZoneFlow, ...]:
     return tuple(out)
 
 
+def site_power(path: str | Path) -> dict[str, Any] | None:
+    """The site's power facts (:func:`homelabnext.power.site_power`) for a site file, or None
+    when it has no ``power`` section."""
+    from homelabnext.network.loader import SiteError, load_site
+    from homelabnext.power import site_power as facts
+
+    try:
+        doc = load_site(path)
+    except SiteError as exc:
+        raise ComputeError(str(exc)) from exc
+    return facts(doc) if isinstance(doc, Mapping) else None
+
+
 def site_flows(path: str | Path) -> tuple[ZoneFlow, ...]:
     """:func:`flows_from_site` for a site file, read by the network model's own loader."""
     from homelabnext.network.loader import SiteError, load_site

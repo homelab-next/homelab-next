@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/baseline_set/1.2",
+  "title": "Guest baseline set",
+  "description": "The defense baselines a guest can be given (ADR-0016, docs/compute-model.md). `controls` is the catalogue of generic, product-neutral defense controls, each in exactly one defense-in-depth layer, each with a human-readable `verify` observable and the Ansible `role` that implements it (null = no product chosen yet; the product is bound here and nowhere else). 1.1 adds `apply`: the role runs on every guest that needs the control (`guest`, the default) or once on the central product host named by `group`, which enrolls those guests (`central`, ADR-0016 decision 7). `baselines` are named sets of controls; a baseline may extend others. 1.2 adds per-control settings: a baseline lists a control as its id or as {id, with}, where `with` sets the bound role's own inputs (its meta/argument_specs.yml main options, named without the role prefix, typed there; a control's `settings` may narrow which of them a baseline may set), merged parent-first through `extends` and passed to the role as its prefixed variables. Lives as `_baselines.yml` next to the guest files; consumed by homelabnext.compute.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "controls",
+    "baselines"
+  ],
+  "$defs": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "maxLength": 40
+    },
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "layer",
+        "description",
+        "role",
+        "verify"
+      ],
+      "properties": {
+        "layer": {
+          "enum": [
+            "identity",
+            "host",
+            "network",
+            "detection",
+            "data",
+            "recovery"
+          ],
+          "description": "The one defense-in-depth layer the control belongs to: identity (who can get in), host (the operating system itself), network (what traffic may flow), detection (seeing attacks and weaknesses), data (protecting what is stored), recovery (getting back after a loss)."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 300
+        },
+        "role": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "maxLength": 64
+            }
+          ],
+          "description": "The Ansible role that implements the control: with `apply: guest` applied to the control_<id> inventory group; with `apply: central` applied once to `group`, given the guests that need the control as <role>_guests. null = the product is not chosen yet; the baseline-playbook target lists it as unbound, never drops it."
+        },
+        "apply": {
+          "enum": [
+            "guest",
+            "central"
+          ],
+          "default": "guest",
+          "description": "How the role reaches a guest (1.1, ADR-0016 decision 7). guest: it runs on every guest that needs the control (an endpoint agent). central: it runs once on the central product host (`group`) and enrolls every such guest there (a sensor's monitored addresses, a scanner's targets). `group` is required with central and refused with guest; that is a semantic rule (homelabnext.compute.baselines), so the schema stays additive."
+        },
+        "group": {
+          "type": "string",
+          "pattern": "^cap_[a-z][a-z0-9_]*$",
+          "maxLength": 64,
+          "description": "With apply: central (1.1): the capability inventory group of the central product host, for example cap_sensor or cap_scanner (docs/role-interface.md section 5)."
+        },
+        "verify": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 300,
+          "description": "How you would prove the control is in place on a guest (a human-readable observable)."
+        },
+        "settings": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/setting_key"
+          },
+          "description": "(1.2) The bound role's inputs a baseline may set for this control with `with` (main options of its meta/argument_specs.yml, without the role prefix). Absent: any of them. Keys and value types come from the role's argument_specs, the one source of truth (homelabnext.compute.baselines checks them)."
+        }
+      }
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "description"
+      ],
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 300
+        },
+        "extends": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/name"
+          },
+          "description": "Baselines whose controls this one includes (resolved parents first)."
+        },
+        "controls": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/name"
+              },
+              {
+                "$ref": "#/$defs/control_entry"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "setting_key": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "maxLength": 64
+    },
+    "control_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "with"
+      ],
+      "description": "(1.2) A control with settings: `with` maps the bound role's inputs (without its prefix) to values for every guest that gets the control through this baseline.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/name"
+        },
+        "with": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/setting_key"
+          }
+        }
+      }
+    }
+  },
+  "properties": {
+    "controls": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/name"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/control"
+      }
+    },
+    "baselines": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/name"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/baseline"
+      }
+    }
+  }
+}

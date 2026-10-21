@@ -1,0 +1,31 @@
+// Managed by homelabnext (role unattended_upgrades, control patching); local changes are overwritten.
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
+#clear Unattended-Upgrade::Origins-Pattern;
+#clear Unattended-Upgrade::Allowed-Origins;
+#clear Unattended-Upgrade::Package-Blacklist;
+Unattended-Upgrade::Origins-Pattern {
+        "{{ unattended_upgrades_security_origins[unattended_upgrades_distribution] }}";
+{% for origin in unattended_upgrades_extra_origins %}
+        "{{ origin }}";
+{% endfor %}
+};
+Unattended-Upgrade::Package-Blacklist {
+{% for pattern in unattended_upgrades_blocklist %}
+        "{{ pattern }}";
+{% endfor %}
+};
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "{{ unattended_upgrades_remove_unused | bool | lower }}";
+Unattended-Upgrade::Remove-Unused-Dependencies "{{ unattended_upgrades_remove_unused | bool | lower }}";
+{% if unattended_upgrades_reboot_time == 'never' %}
+Unattended-Upgrade::Automatic-Reboot "false";
+{% else %}
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+Unattended-Upgrade::Automatic-Reboot-Time "{{ unattended_upgrades_reboot_time }}";
+{% endif %}
+{% if unattended_upgrades_mail %}
+Unattended-Upgrade::Mail "{{ unattended_upgrades_mail }}";
+Unattended-Upgrade::MailReport "on-change";
+{% endif %}

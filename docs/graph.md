@@ -143,7 +143,7 @@ The registers are read through one function, `_register_entries(path)` in
 | `checked_by` | cap | check | suite specs |
 | `loads_schema` | cap | schema | schema paths the contract's code loads |
 | `refs` | schema | schema | $ref |
-| `triggered_by` | script | make, ci, pre-commit, compose, script, pkg | catalog trigger |
+| `triggered_by` | script | make, ci, pre-commit, compose, script, pkg, role | catalog trigger |
 | `enforces` | script | inv | catalog invariant |
 | `reads` | script | any node owning the path | catalog inputs |
 | `about` | lesson, runbook | system | systems tags |

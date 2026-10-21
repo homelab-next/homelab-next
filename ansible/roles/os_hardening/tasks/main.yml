@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Control os-hardening (ADR-0016 decision 7): CIS-lite, each item optional, no reboot.
+- name: Refuse a host that is not Debian-family (the files and units are Debian's layout)
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] == 'Debian'
+    fail_msg: "os_hardening supports Debian-family guests only (got {{ ansible_facts['os_family'] }})"
+
+- name: Write and apply the file-based items
+  ansible.builtin.include_tasks: config.yml
+
+- name: Stop, disable and mask the unused services that are present
+  when: "'services' in os_hardening_items"
+  block:
+    - name: List the units
+      ansible.builtin.service_facts:
+    - name: Stop, disable and mask each one present
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+        masked: true
+      loop: "{{ os_hardening_services | select('in', ansible_facts.services) | list }}"

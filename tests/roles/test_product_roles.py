@@ -9,15 +9,13 @@ run here and their install path is proven only by ``--syntax-check`` of the gene
 on a good one."""
 
 import json
-import os
 import shutil
-import stat
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 import yaml
+from rolerun import fake, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
 ANSIBLE = ROOT / "ansible"
@@ -47,49 +45,6 @@ GUESTS = [
         "zone": "data",
     },
 ]
-
-
-def run_role(tmp_path, role, tasks_from, extra_vars, env=None, verbose=False):
-    play = [
-        {
-            "hosts": "localhost",
-            "connection": "local",
-            "gather_facts": False,
-            "tasks": [{"ansible.builtin.include_role": {"name": role, "tasks_from": tasks_from}}],
-        }
-    ]
-    pb = tmp_path / "play.yml"
-    pb.write_text(yaml.safe_dump(play))
-    ev = tmp_path / "vars.json"
-    ev.write_text(
-        json.dumps(
-            {
-                "hnx_registry_file": str(ANSIBLE / "inventory/example/registry.yml"),
-                "ansible_python_interpreter": sys.executable,
-                **extra_vars,
-            }
-        )
-    )
-    run_env = dict(
-        os.environ,
-        ANSIBLE_CONFIG=str(ANSIBLE / "ansible.cfg"),
-        ANSIBLE_ERROR_ON_UNDEFINED_VARS="True",
-        ANSIBLE_LOCALHOST_WARNING="False",
-        ANSIBLE_HOME=str(tmp_path / ".ansible"),
-        ANSIBLE_NOCOLOR="1",
-        **(env or {}),
-    )
-    cmd = ["ansible-playbook", "-i", "localhost,", "-e", f"@{ev}", str(pb)]
-    if verbose:
-        cmd.append("-v")
-    return subprocess.run(cmd, capture_output=True, text=True, env=run_env, cwd=tmp_path)
-
-
-def fake(path: Path, body: str) -> str:
-    """An executable Python script at ``path`` (a stand-in for a vendor command)."""
-    path.write_text(f"#!{sys.executable}\n{body}")
-    path.chmod(path.stat().st_mode | stat.S_IEXEC)
-    return str(path)
 
 
 # ---------------------------------------------------------------- wazuh_agent
@@ -200,6 +155,7 @@ def make_key(tmp_path: Path, name: str, out: Path, armor: bool) -> str:
 KEY_CASES = {
     # role: (served path under the repository root, armoured, keyring, extra vars)
     "wazuh_agent": ("key/GPG-KEY-WAZUH", True, "hnx-wazuh.asc", {}),
+    "trivy": ("public.key", True, "hnx-trivy.asc", {"trivy_severity": "HIGH"}),
     "tailscale_node": ("debian/bookworm.noarmor.gpg", False, "hnx-tailscale.gpg",
                        {"tailscale_node_distribution": "Debian", "tailscale_node_release": "bookworm"}),
 }  # fmt: skip
@@ -247,6 +203,7 @@ def test_the_pinned_fingerprints_are_the_vendor_keys():
     pins = {
         "wazuh_agent": ["0DCFCA5547B19D2A6099506096B3EE5F29111145"],  # Wazuh.com (Wazuh Signing Key)
         "tailscale_node": ["2596A99EAAB33821893C0A79458CA832957F5868"],  # Tailscale Inc. (Package repository signing key)
+        "trivy": ["825AD9036F7C850E6A6FED4935B8ACA44FD9CA9F"],  # trivy-repo (Aqua Security) (aquasecurity/trivy-repo deb/public.key)
     }  # fmt: skip
     for role, want in pins.items():
         d = yaml.safe_load((ANSIBLE / "roles" / role / "defaults" / "main.yml").read_text())

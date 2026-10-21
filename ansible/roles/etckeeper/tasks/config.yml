@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the git service and repository path
+  ansible.builtin.assert:
+    that:
+      - etckeeper_remote_id is match('^[a-z0-9][a-z0-9-]*\Z')
+      - lookup('hnx_registry', etckeeper_remote_id, field='url') is match('^ssh://[A-Za-z0-9.-]+:[0-9]+\Z')
+      - etckeeper_remote_path is match('^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\Z')
+      - etckeeper_remote_path is not search('(^|/)\.\.(/|$)')
+    fail_msg: >-
+      etckeeper: the git service is a registry logical id served over ssh, and the repository
+      path is a plain relative path
+
+- name: Start the repository if the package did not
+  ansible.builtin.command:
+    argv: ["{{ etckeeper_cli }}", init, -d, "{{ etckeeper_dir }}"]
+    creates: "{{ etckeeper_dir }}/.git"
+
+- name: Push after every commit
+  ansible.builtin.lineinfile:
+    path: "{{ etckeeper_conf_file }}"
+    regexp: '^#?\s*PUSH_REMOTE='
+    line: PUSH_REMOTE="origin"
+
+- name: Read the repository's origin
+  ansible.builtin.command:
+    argv: ["{{ etckeeper_git_cli }}", -C, "{{ etckeeper_dir }}", config, --get, remote.origin.url]
+  register: etckeeper_origin
+  changed_when: false
+  failed_when: false
+
+- name: Point origin at the git service
+  vars:
+    etckeeper_url: "{{ lookup('hnx_registry', etckeeper_remote_id, field='url') }}/{{ etckeeper_remote_path }}"
+  ansible.builtin.command:
+    argv: "{{ [etckeeper_git_cli, '-C', etckeeper_dir, 'remote', 'set-url' if etckeeper_origin.rc == 0 else 'add', 'origin', etckeeper_url] }}"
+  when: etckeeper_origin.stdout | trim != etckeeper_url
+  changed_when: true
+
+- name: Look for uncommitted changes
+  ansible.builtin.command:
+    argv: ["{{ etckeeper_cli }}", unclean, -d, "{{ etckeeper_dir }}"]
+  register: etckeeper_unclean
+  changed_when: false
+  failed_when: false
+
+- name: Commit them (etckeeper then pushes to origin)
+  ansible.builtin.command:
+    argv: ["{{ etckeeper_cli }}", commit, -d, "{{ etckeeper_dir }}", "homelabnext: configuration run"]
+  when: etckeeper_unclean.rc == 0
+  changed_when: true

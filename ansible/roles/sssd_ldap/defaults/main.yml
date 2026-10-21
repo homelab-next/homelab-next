@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# Central auth (control central-auth, applied per guest): sssd resolving and authenticating
+# directory accounts against the identity provider's LDAP outpost, found by logical id (LDAPS
+# only, certificate checked). The bind credential is a secret reference resolved at run time and
+# written only into sssd.conf (mode 0600, which sssd itself requires). A local break-glass account
+# is preserved: it must exist in /etc/passwd before anything changes, passwd stays "files" first,
+# and sssd is told never to serve a directory account of the same name.
+#
+# The directory layout defaults to the Authentik LDAP outpost's (base DN dc=ldap,dc=goauthentik,
+# dc=io, ou=users / ou=groups, objectClass user / group, names in cn).
+sssd_ldap_domain: lab
+sssd_ldap_base_dn: "dc=ldap,dc=goauthentik,dc=io"
+sssd_ldap_bind_ref: "secret:idp/ldap-bind-password"
+# Only members of these directory groups may log in (access_provider simple).
+sssd_ldap_allow_groups: [hnx-admins]
+sssd_ldap_ca_file: /etc/ssl/certs/ca-certificates.crt
+sssd_ldap_mkhomedir: true
+sssd_ldap_config_file: /etc/sssd/sssd.conf
+sssd_ldap_nsswitch_file: /etc/nsswitch.conf
+sssd_ldap_sssctl_cli: sssctl
+sssd_ldap_getent_cli: getent
+sssd_ldap_systemctl_cli: systemctl
+sssd_ldap_restart: true
+sssd_ldap_state_dir: /var/lib/homelabnext/sssd-ldap

@@ -1,0 +1,1053 @@
+{
+ "default": "deny",
+ "details": {
+  "edge:modem-1": {
+   "does": "A modem in the uplink chain between the internet and the lab.",
+   "flows": [],
+   "name": "modem-1",
+   "power": [
+    "UPS ups-1 (the site's power.default)"
+   ],
+   "services": [],
+   "subtitle": null,
+   "yaml": "id: modem-1\nkind: modem\nmodel: Example DOCSIS"
+  },
+  "guest:app-1": {
+   "does": "Provides cap:events.",
+   "flows": [
+    {
+     "dir": "out",
+     "state": "live",
+     "text": "OUT -> db on db-1: db.write [workflow action]"
+    },
+    {
+     "dir": "out",
+     "state": "live",
+     "text": "OUT -> events on db-1: homelabnext.thing.made [event type via events]"
+    },
+    {
+     "dir": "out",
+     "state": "live",
+     "text": "OUT -> db-1: allow app [tcp 5432]"
+    },
+    {
+     "dir": "out",
+     "state": "planned",
+     "text": "OUT -> cache on cache-1: calls cache [tcp 6379] (planned)"
+    },
+    {
+     "dir": "out",
+     "state": "live",
+     "text": "OUT -> db on db-1: calls db [postgres 5432]"
+    }
+   ],
+   "name": "app-1",
+   "power": [
+    "inherits hv-b: UPS ups-1"
+   ],
+   "services": [
+    {
+     "description": "The app.",
+     "name": "svc:app",
+     "sub": "example-app \u00b7 https 8443"
+    }
+   ],
+   "subtitle": null,
+   "yaml": "id: guest:app-1\nkind: lxc\nprovisioning: terraform\nstatus: live\nplacement:\n  node: hv-b\n  vmid: 171\nnetwork:\n  zone: data\n  ip: 192.0.2.71\ncapability: cap:events\ncapability_groups:\n- cap_orchestration\nbaseline:\n  exemption:\n    reason: lab"
+  },
+  "guest:cache-1": {
+   "does": "Provides cap:events.",
+   "flows": [
+    {
+     "dir": "in",
+     "state": "planned",
+     "text": "IN <- events on db-1: homelabnext.thing.made [event type via events] (planned)"
+    },
+    {
+     "dir": "in",
+     "state": "planned",
+     "text": "IN <- app on app-1: calls cache [tcp 6379] (planned)"
+    }
+   ],
+   "name": "cache-1",
+   "power": [
+    "inherits hv-b: UPS ups-1"
+   ],
+   "services": [
+    {
+     "description": "",
+     "name": "svc:cache",
+     "sub": "example-cache \u00b7 tcp 6379"
+    }
+   ],
+   "subtitle": null,
+   "yaml": "id: guest:cache-1\nkind: lxc\nprovisioning: terraform\nstatus: planned\nplacement:\n  node: hv-b\n  vmid: 172\nnetwork:\n  zone: data\n  ip: 192.0.2.72\ncapability: cap:events\ncapability_groups:\n- cap_lake"
+  },
+  "guest:db-1": {
+   "does": "Holds the tables.",
+   "flows": [
+    {
+     "dir": "in",
+     "state": "live",
+     "text": "IN <- app on app-1: db.write [workflow action]"
+    },
+    {
+     "dir": "in",
+     "state": "live",
+     "text": "IN <- app on app-1: homelabnext.thing.made [event type via events]"
+    },
+    {
+     "dir": "out",
+     "state": "planned",
+     "text": "OUT -> cache on cache-1: homelabnext.thing.made [event type via events] (planned)"
+    },
+    {
+     "dir": "in",
+     "state": "live",
+     "text": "IN <- any (the internet): allow web [tcp 443]"
+    },
+    {
+     "dir": "in",
+     "state": "live",
+     "text": "IN <- app-1: allow app [tcp 5432]"
+    },
+    {
+     "dir": "in",
+     "state": "live",
+     "text": "IN <- zone mgmt: exception to svc:db [site firewall, 5432]"
+    },
+    {
+     "dir": "in",
+     "state": "live",
+     "text": "IN <- app on app-1: calls db [postgres 5432]"
+    },
+    {
+     "dir": "in",
+     "state": "retired",
+     "text": "IN <- scan on old-1: calls events [nats 4222] (retired)"
+    }
+   ],
+   "name": "db-1",
+   "power": [
+    "inherits hv-a: UPS ups-2"
+   ],
+   "services": [
+    {
+     "description": "Stores rows.",
+     "name": "svc:db",
+     "sub": "postgres \u00b7 postgres 5432"
+    },
+    {
+     "description": "The bus.",
+     "name": "svc:events",
+     "sub": "nats \u00b7 nats 4222"
+    }
+   ],
+   "subtitle": null,
+   "yaml": "id: guest:db-1\nkind: vm\nprovisioning: terraform\nstatus: live\nplacement:\n  node: hv-a\n  vmid: 170\nresources:\n  cpu:\n    cores: 2\n  memory:\n    size_mb: 3072\n  disks:\n  - name: root\n    size_gb: 20\n    pool: fast\nimage:\n  logical: debian-12\n  kind: template-clone\n  os_type: linux-6\nnetwork:\n  zone: data\n  ip: 192.0.2.70\nfirewall_rules:\n  inbound_allow:\n  - name: app\n    proto: tcp\n    ports: '5432'\n    source: 192.0.2.71/32\n  - name: web\n    proto: tcp\n    ports: '443'\n    source: any\ncapability: cap:events\ncapability_groups:\n- cap_lake\nbaseline:\n  names:\n  - server\n  - db"
+  },
+  "guest:hv-a": {
+   "does": "Provides cap:events.",
+   "flows": [],
+   "name": "hv-a",
+   "power": [
+    "UPS ups-2 (declared)"
+   ],
+   "services": [],
+   "subtitle": null,
+   "yaml": "id: guest:hv-a\nkind: host\nprovisioning: host-only\nstatus: live\nplacement:\n  node: hv-a\nnetwork:\n  zone: mgmt\n  ip: 192.0.2.10\ncapability: cap:events\nbaseline:\n  names:\n  - server\npower:\n  ups: ups-2"
+  },
+  "guest:job-1": {
+   "does": "Batch runner",
+   "flows": [],
+   "name": "job-1",
+   "power": [
+    "inherits hv-b: UPS ups-1"
+   ],
+   "services": [],
+   "subtitle": "Batch runner",
+   "yaml": "id: guest:job-1\ndisplay_name: Batch runner\nkind: vm\nprovisioning: manual\nstatus: live\nplacement:\n  node: hv-b\n  vmid: 174\nnetwork:\n  zone: data\n  ip: 192.0.2.74\ncapability: cap:events\ncapability_groups:\n- cap_orchestration"
+  },
+  "guest:odd-1": {
+   "does": "Provides cap:events.",
+   "flows": [],
+   "name": "odd-1",
+   "power": [
+    "inherits hv-b: UPS ups-1"
+   ],
+   "services": [],
+   "subtitle": null,
+   "yaml": "id: guest:odd-1\nkind: vm\nprovisioning: terraform\nstatus: live\nplacement:\n  node: hv-b\nnetwork:\n  zone: lab\n  ip: 192.0.2.75\ncapability: cap:events"
+  },
+  "guest:old-1": {
+   "does": "Provides cap:events.",
+   "flows": [
+    {
+     "dir": "out",
+     "state": "retired",
+     "text": "OUT -> events on db-1: calls events [nats 4222] (retired)"
+    }
+   ],
+   "name": "old-1",
+   "power": [
+    "inherits hv-b: UPS ups-1"
+   ],
+   "services": [
+    {
+     "description": "Retired scanner.",
+     "name": "svc:scan",
+     "sub": "example-scan \u00b7 https 443"
+    }
+   ],
+   "subtitle": null,
+   "yaml": "id: guest:old-1\nkind: lxc\nprovisioning: terraform\nstatus: retired\nplacement:\n  node: hv-b\n  vmid: 173\nnetwork:\n  zone: data\n  ip: 192.0.2.73\ncapability: cap:events\ncapability_groups:\n- cap_scanner"
+  },
+  "internet": {
+   "does": "Everything outside the lab. Zones reach it only where the site allows egress.",
+   "flows": [
+    {
+     "dir": "out",
+     "state": "live",
+     "text": "OUT -> db-1: allow web [tcp 443]"
+    }
+   ],
+   "name": "internet",
+   "power": [],
+   "services": [],
+   "subtitle": null,
+   "yaml": "internet_egress:\n  mgmt: deny\n  data: allow\n  lab: not set"
+  },
+  "node:hv-b": {
+   "does": "A hypervisor named by the guests' placement; it has no guest file.",
+   "flows": [],
+   "name": "hv-b",
+   "power": [
+    "UPS ups-1 (the site's power.default)"
+   ],
+   "services": [],
+   "subtitle": null,
+   "yaml": "node: hv-b"
+  },
+  "router:gw": {
+   "does": "The edge: routes between the zones and enforces the site firewall.",
+   "flows": [],
+   "name": "gw",
+   "power": [
+    "UPS ups-1 (declared)"
+   ],
+   "services": [
+    {
+     "description": "The router console.",
+     "name": "svc:console",
+     "sub": "unifi \u00b7 https 443"
+    }
+   ],
+   "subtitle": null,
+   "yaml": "id: gw\nmodel: unifi\nmgmt_endpoint: svc:console\npower:\n  ups: ups-1"
+  },
+  "switch:sw-1": {
+   "does": "Carries the zones' VLANs between the router and the hypervisors.",
+   "flows": [],
+   "name": "sw-1",
+   "power": [
+    "UPS ups-1, ups-2 (declared)"
+   ],
+   "services": [],
+   "subtitle": null,
+   "yaml": "id: sw-1\nmodel: unifi\nuplink_port: 1\npower:\n  ups:\n  - ups-1\n  - ups-2\nport_assignments:\n- ports:\n  - 1\n  kind: trunk\n  vlans:\n  - 10\n  - 20"
+  },
+  "ups:ups-1": {
+   "does": "Keeps what it feeds running through a power cut, for as long as its battery lasts.",
+   "flows": [],
+   "name": "ups-1",
+   "power": [
+    "feeds modem-1",
+    "feeds hv-b",
+    "feeds gw",
+    "feeds sw-1"
+   ],
+   "services": [],
+   "subtitle": null,
+   "yaml": "id: ups-1\nmodel: Example 1500VA\nmonitored_by: nut\nnut_name: ups-1"
+  },
+  "ups:ups-2": {
+   "does": "Keeps what it feeds running through a power cut, for as long as its battery lasts.",
+   "flows": [],
+   "name": "ups-2",
+   "power": [
+    "feeds hv-a",
+    "feeds sw-1"
+   ],
+   "services": [],
+   "subtitle": null,
+   "yaml": "id: ups-2"
+  }
+ },
+ "edges": [
+  {
+   "dest": "guest:cache-1",
+   "label": "calls cache",
+   "source": "guest:app-1",
+   "state": "planned"
+  },
+  {
+   "dest": "guest:db-1",
+   "label": "db.write, homelabnext.thing.made, allow app, calls db",
+   "source": "guest:app-1",
+   "state": "live"
+  },
+  {
+   "dest": "guest:cache-1",
+   "label": "homelabnext.thing.made",
+   "source": "guest:db-1",
+   "state": "planned"
+  },
+  {
+   "dest": "guest:db-1",
+   "label": "allow web",
+   "source": "internet",
+   "state": "live"
+  },
+  {
+   "dest": "guest:db-1",
+   "label": "exception to svc:db",
+   "source": "zone:mgmt",
+   "state": "live"
+  }
+ ],
+ "flows": [
+  {
+   "allowed": "any; tcp 22, 443",
+   "from": "mgmt",
+   "to": "data"
+  }
+ ],
+ "guests": [
+  {
+   "baselines": [
+    "exempt"
+   ],
+   "capability": "cap:events",
+   "id": "guest:app-1",
+   "ip": "192.0.2.71",
+   "kind": "lxc",
+   "name": "app-1",
+   "node": "hv-b",
+   "provisioning": "terraform",
+   "services": [
+    "app"
+   ],
+   "status": "live",
+   "zone": "data"
+  },
+  {
+   "baselines": [],
+   "capability": "cap:events",
+   "id": "guest:cache-1",
+   "ip": "192.0.2.72",
+   "kind": "lxc",
+   "name": "cache-1",
+   "node": "hv-b",
+   "provisioning": "terraform",
+   "services": [
+    "cache"
+   ],
+   "status": "planned",
+   "zone": "data"
+  },
+  {
+   "baselines": [
+    "server",
+    "db"
+   ],
+   "capability": "cap:events",
+   "id": "guest:db-1",
+   "ip": "192.0.2.70",
+   "kind": "vm",
+   "name": "db-1",
+   "node": "hv-a",
+   "provisioning": "terraform",
+   "services": [
+    "db",
+    "events"
+   ],
+   "status": "live",
+   "zone": "data"
+  },
+  {
+   "baselines": [
+    "server"
+   ],
+   "capability": "cap:events",
+   "id": "guest:hv-a",
+   "ip": "192.0.2.10",
+   "kind": "host",
+   "name": "hv-a",
+   "node": "hv-a",
+   "provisioning": "host-only",
+   "services": [],
+   "status": "live",
+   "zone": "mgmt"
+  },
+  {
+   "baselines": [],
+   "capability": "cap:events",
+   "id": "guest:job-1",
+   "ip": "192.0.2.74",
+   "kind": "vm",
+   "name": "job-1",
+   "node": "hv-b",
+   "provisioning": "manual",
+   "services": [],
+   "status": "live",
+   "zone": "data"
+  },
+  {
+   "baselines": [],
+   "capability": "cap:events",
+   "id": "guest:odd-1",
+   "ip": "192.0.2.75",
+   "kind": "vm",
+   "name": "odd-1",
+   "node": "hv-b",
+   "provisioning": "terraform",
+   "services": [],
+   "status": "live",
+   "zone": "lab"
+  },
+  {
+   "baselines": [],
+   "capability": "cap:events",
+   "id": "guest:old-1",
+   "ip": "192.0.2.73",
+   "kind": "lxc",
+   "name": "old-1",
+   "node": "hv-b",
+   "provisioning": "terraform",
+   "services": [
+    "scan"
+   ],
+   "status": "retired",
+   "zone": "data"
+  }
+ ],
+ "host_flows": [
+  {
+   "detail": "workflow action",
+   "from": {
+    "node": "guest:app-1",
+    "title": "app on app-1"
+   },
+   "group": "Broker",
+   "label": "db.write",
+   "state": "live",
+   "to": {
+    "node": "guest:db-1",
+    "title": "db on db-1"
+   }
+  },
+  {
+   "detail": "event type via events",
+   "from": {
+    "node": "guest:app-1",
+    "title": "app on app-1"
+   },
+   "group": "Event bus",
+   "label": "homelabnext.thing.made",
+   "state": "live",
+   "to": {
+    "node": "guest:db-1",
+    "title": "events on db-1"
+   }
+  },
+  {
+   "detail": "event type via events",
+   "from": {
+    "node": "guest:db-1",
+    "title": "events on db-1"
+   },
+   "group": "Event bus",
+   "label": "homelabnext.thing.made",
+   "state": "planned",
+   "to": {
+    "node": "guest:cache-1",
+    "title": "cache on cache-1"
+   }
+  },
+  {
+   "detail": "tcp 443",
+   "from": {
+    "node": "internet",
+    "title": "any (the internet)"
+   },
+   "group": "Firewall allows",
+   "label": "allow web",
+   "state": "live",
+   "to": {
+    "node": "guest:db-1",
+    "title": "db-1"
+   }
+  },
+  {
+   "detail": "tcp 5432",
+   "from": {
+    "node": "guest:app-1",
+    "title": "app-1"
+   },
+   "group": "Firewall allows",
+   "label": "allow app",
+   "state": "live",
+   "to": {
+    "node": "guest:db-1",
+    "title": "db-1"
+   }
+  },
+  {
+   "detail": "site firewall, 5432",
+   "from": {
+    "node": "zone:mgmt",
+    "title": "zone mgmt"
+   },
+   "group": "Firewall allows",
+   "label": "exception to svc:db",
+   "state": "live",
+   "to": {
+    "node": "guest:db-1",
+    "title": "db on db-1"
+   }
+  },
+  {
+   "detail": "tcp 6379",
+   "from": {
+    "node": "guest:app-1",
+    "title": "app on app-1"
+   },
+   "group": "Service calls",
+   "label": "calls cache",
+   "state": "planned",
+   "to": {
+    "node": "guest:cache-1",
+    "title": "cache on cache-1"
+   }
+  },
+  {
+   "detail": "postgres 5432",
+   "from": {
+    "node": "guest:app-1",
+    "title": "app on app-1"
+   },
+   "group": "Service calls",
+   "label": "calls db",
+   "state": "live",
+   "to": {
+    "node": "guest:db-1",
+    "title": "db on db-1"
+   }
+  },
+  {
+   "detail": "nats 4222",
+   "from": {
+    "node": "guest:old-1",
+    "title": "scan on old-1"
+   },
+   "group": "Service calls",
+   "label": "calls events",
+   "state": "retired",
+   "to": {
+    "node": "guest:db-1",
+    "title": "events on db-1"
+   }
+  }
+ ],
+ "lanes": [
+  {
+   "color": 0,
+   "gateway": "192.0.2.1",
+   "grid": 1,
+   "id": "mgmt",
+   "internet": "deny",
+   "known": true,
+   "purpose": "management",
+   "stacks": [
+    {
+     "cards": [],
+     "cols": 1,
+     "title": null
+    }
+   ],
+   "subnet": "192.0.2.0/26",
+   "vlan": 10
+  },
+  {
+   "color": 1,
+   "gateway": "192.0.2.65",
+   "grid": 3,
+   "id": "data",
+   "internet": "allow",
+   "known": true,
+   "purpose": null,
+   "stacks": [
+    {
+     "cards": [
+      {
+       "badges": [
+        {
+         "cls": "count",
+         "text": "1 service"
+        },
+        {
+         "cls": "planned",
+         "text": "planned"
+        }
+       ],
+       "category": "lxc",
+       "ip": "192.0.2.72",
+       "meta": [
+        "lxc \u00b7 terraform",
+        "cap:events",
+        "on hv-b"
+       ],
+       "name": "cache-1",
+       "node": "guest:cache-1",
+       "power": null,
+       "services": [
+        "cache"
+       ],
+       "status": "planned",
+       "tag": "LXC",
+       "type": "lxc \u00b7 terraform",
+       "vlan": 20,
+       "vmid": 172,
+       "zone": "data"
+      },
+      {
+       "badges": [
+        {
+         "cls": "count",
+         "text": "2 services"
+        }
+       ],
+       "category": "vm",
+       "ip": "192.0.2.70",
+       "meta": [
+        "vm \u00b7 terraform",
+        "2 vCPU \u00b7 3 GB \u00b7 20 GB disk",
+        "debian-12 (linux-6)",
+        "cap:events",
+        "on hv-a"
+       ],
+       "name": "db-1",
+       "node": "guest:db-1",
+       "power": null,
+       "services": [
+        "db",
+        "events"
+       ],
+       "status": "live",
+       "tag": "VM",
+       "type": "vm \u00b7 terraform",
+       "vlan": 20,
+       "vmid": 170,
+       "zone": "data"
+      }
+     ],
+     "cols": 1,
+     "title": "lake"
+    },
+    {
+     "cards": [
+      {
+       "badges": [
+        {
+         "cls": "count",
+         "text": "1 service"
+        }
+       ],
+       "category": "lxc",
+       "ip": "192.0.2.71",
+       "meta": [
+        "lxc \u00b7 terraform",
+        "cap:events",
+        "on hv-b"
+       ],
+       "name": "app-1",
+       "node": "guest:app-1",
+       "power": null,
+       "services": [
+        "app"
+       ],
+       "status": "live",
+       "tag": "LXC",
+       "type": "lxc \u00b7 terraform",
+       "vlan": 20,
+       "vmid": 171,
+       "zone": "data"
+      },
+      {
+       "badges": [
+        {
+         "cls": "notiac",
+         "text": "not IaC"
+        }
+       ],
+       "category": "vm",
+       "ip": "192.0.2.74",
+       "meta": [
+        "vm \u00b7 manual",
+        "cap:events",
+        "on hv-b"
+       ],
+       "name": "job-1",
+       "node": "guest:job-1",
+       "power": null,
+       "services": [],
+       "status": "live",
+       "tag": "VM",
+       "type": "vm \u00b7 manual",
+       "vlan": 20,
+       "vmid": 174,
+       "zone": "data"
+      }
+     ],
+     "cols": 1,
+     "title": "orchestration"
+    },
+    {
+     "cards": [
+      {
+       "badges": [
+        {
+         "cls": "count",
+         "text": "1 service"
+        },
+        {
+         "cls": "retired",
+         "text": "retired"
+        }
+       ],
+       "category": "lxc",
+       "ip": "192.0.2.73",
+       "meta": [
+        "lxc \u00b7 terraform",
+        "cap:events",
+        "on hv-b"
+       ],
+       "name": "old-1",
+       "node": "guest:old-1",
+       "power": null,
+       "services": [
+        "scan"
+       ],
+       "status": "retired",
+       "tag": "LXC",
+       "type": "lxc \u00b7 terraform",
+       "vlan": 20,
+       "vmid": 173,
+       "zone": "data"
+      }
+     ],
+     "cols": 1,
+     "title": "scanner"
+    }
+   ],
+   "subnet": "192.0.2.64/26",
+   "vlan": 20
+  },
+  {
+   "color": 2,
+   "grid": 1,
+   "id": "lab",
+   "known": false,
+   "stacks": [
+    {
+     "cards": [
+      {
+       "badges": [],
+       "category": "vm",
+       "ip": "192.0.2.75",
+       "meta": [
+        "vm \u00b7 terraform",
+        "cap:events",
+        "on hv-b"
+       ],
+       "name": "odd-1",
+       "node": "guest:odd-1",
+       "power": null,
+       "services": [],
+       "status": "live",
+       "tag": "VM",
+       "type": "vm \u00b7 terraform",
+       "vlan": "lab",
+       "vmid": null,
+       "zone": "lab"
+      }
+     ],
+     "cols": 1,
+     "title": null
+    }
+   ]
+  }
+ ],
+ "power": [
+  {
+   "dest": "edge:modem-1",
+   "source": "ups:ups-1"
+  },
+  {
+   "dest": "node:hv-b",
+   "source": "ups:ups-1"
+  },
+  {
+   "dest": "router:gw",
+   "source": "ups:ups-1"
+  },
+  {
+   "dest": "switch:sw-1",
+   "source": "ups:ups-1"
+  },
+  {
+   "dest": "guest:hv-a",
+   "source": "ups:ups-2"
+  },
+  {
+   "dest": "switch:sw-1",
+   "source": "ups:ups-2"
+  }
+ ],
+ "site": "lab",
+ "top": [
+  [
+   {
+    "badges": [],
+    "category": "internet",
+    "ip": null,
+    "meta": [
+     "egress from data"
+    ],
+    "name": "internet",
+    "node": "internet",
+    "power": null,
+    "services": [],
+    "status": "live",
+    "tag": "NET",
+    "type": "upstream",
+    "vlan": null,
+    "vmid": null,
+    "zone": null
+   }
+  ],
+  [
+   {
+    "badges": [
+     {
+      "cls": "power",
+      "text": "UPS: ups-1"
+     }
+    ],
+    "category": "modem",
+    "ip": null,
+    "meta": [
+     "in the uplink chain"
+    ],
+    "name": "modem-1",
+    "node": "edge:modem-1",
+    "power": "ups-1",
+    "services": [],
+    "status": "live",
+    "tag": "MDM",
+    "type": "modem \u00b7 Example DOCSIS",
+    "vlan": null,
+    "vmid": null,
+    "zone": null
+   }
+  ],
+  [
+   {
+    "badges": [
+     {
+      "cls": "count",
+      "text": "1 service"
+     },
+     {
+      "cls": "power",
+      "text": "UPS: ups-1"
+     }
+    ],
+    "category": "router",
+    "ip": "192.0.2.1",
+    "meta": [
+     "gateway of 2 zones"
+    ],
+    "name": "gw",
+    "node": "router:gw",
+    "power": "ups-1",
+    "services": [
+     "console"
+    ],
+    "status": "live",
+    "tag": "GW",
+    "type": "router \u00b7 unifi",
+    "vlan": null,
+    "vmid": null,
+    "zone": null
+   }
+  ],
+  [
+   {
+    "badges": [
+     {
+      "cls": "power",
+      "text": "UPS: ups-1, ups-2"
+     }
+    ],
+    "category": "switch",
+    "ip": null,
+    "meta": [
+     "1 port group",
+     "uplink port 1"
+    ],
+    "name": "sw-1",
+    "node": "switch:sw-1",
+    "power": "ups-1, ups-2",
+    "services": [],
+    "status": "live",
+    "tag": "SW",
+    "type": "switch \u00b7 unifi",
+    "vlan": null,
+    "vmid": null,
+    "zone": null
+   }
+  ],
+  [
+   {
+    "badges": [
+     {
+      "cls": "count",
+      "text": "feeds 4"
+     }
+    ],
+    "category": "ups",
+    "ip": null,
+    "meta": [
+     "monitored by nut (ups-1)"
+    ],
+    "name": "ups-1",
+    "node": "ups:ups-1",
+    "power": null,
+    "services": [],
+    "status": "live",
+    "tag": "UPS",
+    "type": "UPS \u00b7 Example 1500VA",
+    "vlan": null,
+    "vmid": null,
+    "zone": null
+   },
+   {
+    "badges": [
+     {
+      "cls": "count",
+      "text": "feeds 2"
+     }
+    ],
+    "category": "ups",
+    "ip": null,
+    "meta": [
+     "monitored by none"
+    ],
+    "name": "ups-2",
+    "node": "ups:ups-2",
+    "power": null,
+    "services": [],
+    "status": "live",
+    "tag": "UPS",
+    "type": "UPS",
+    "vlan": null,
+    "vmid": null,
+    "zone": null
+   }
+  ],
+  [
+   {
+    "badges": [
+     {
+      "cls": "notiac",
+      "text": "not IaC"
+     },
+     {
+      "cls": "power",
+      "text": "UPS: ups-2"
+     }
+    ],
+    "category": "hypervisor",
+    "ip": "192.0.2.10",
+    "meta": [
+     "host \u00b7 host-only",
+     "cap:events",
+     "hypervisor \u00b7 1 guest"
+    ],
+    "name": "hv-a",
+    "node": "guest:hv-a",
+    "power": "ups-2",
+    "services": [],
+    "status": "live",
+    "tag": "HV",
+    "type": "host \u00b7 host-only",
+    "vlan": 10,
+    "vmid": null,
+    "zone": "mgmt"
+   },
+   {
+    "badges": [
+     {
+      "cls": "notiac",
+      "text": "not IaC"
+     },
+     {
+      "cls": "power",
+      "text": "UPS: ups-1"
+     }
+    ],
+    "category": "node",
+    "ip": null,
+    "meta": [
+     "hypervisor \u00b7 5 guests",
+     "no guest file"
+    ],
+    "name": "hv-b",
+    "node": "node:hv-b",
+    "power": "ups-1",
+    "services": [],
+    "status": "live",
+    "tag": "HV",
+    "type": "hypervisor",
+    "vlan": null,
+    "vmid": null,
+    "zone": null
+   }
+  ]
+ ],
+ "zones": [
+  {
+   "gateway": "192.0.2.1",
+   "id": "mgmt",
+   "internet": "deny",
+   "known": true,
+   "purpose": "management",
+   "subnet": "192.0.2.0/26",
+   "vlan": 10
+  },
+  {
+   "gateway": "192.0.2.65",
+   "id": "data",
+   "internet": "allow",
+   "known": true,
+   "purpose": null,
+   "subnet": "192.0.2.64/26",
+   "vlan": 20
+  },
+  {
+   "id": "lab",
+   "known": false
+  }
+ ]
+}

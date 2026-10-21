@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: Directory accounts through sssd against the identity provider's LDAP outpost (LDAPS), with a local break-glass account preserved.
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Load the records
+      ansible.builtin.include_tasks:
+        file: records.yml
+        apply:
+          tags: [health]
+    - name: Fail for every guest without a recent verified drill
+      vars:
+        restore_drill_stale: "{{ restore_drill_ages | dict2items | selectattr('value', 'none') | map(attribute='key') | list
+                                 + restore_drill_ages | dict2items | rejectattr('value', 'none') | selectattr('value', 'gt', restore_drill_max_age_days | int) | map(attribute='key') | list }}"
+      ansible.builtin.assert:
+        that: restore_drill_stale | length == 0
+        fail_msg: "restore_drill: no verified restore drill within {{ restore_drill_max_age_days }} days for {{ restore_drill_stale | sort | join(', ') }}"
+  tags: [health]

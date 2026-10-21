@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install AIDE, add the watched paths, build the baseline once and check on a timer.
+    options:
+      aide_paths: &paths
+        type: list
+        elements: dict
+        description: "Extra watched paths, each {path, rule} (rule: AIDE attributes such as p+i+n+u+g+s+m+c+sha256); the example lab's sensitive baseline sets them."
+        required: true
+      aide_config_file: &conf
+        type: path
+        description: "AIDE's main configuration (it includes aide.conf.d)."
+        default: /etc/aide/aide.conf
+      aide_dropin: &dropin
+        type: path
+        description: "The role's drop-in (aide.conf.d reads names of letters, digits, _ and - only)."
+        default: /etc/aide/aide.conf.d/90_homelabnext
+      aide_cli: &cli
+        type: str
+        description: "The aide command."
+        default: aide
+      aide_schedule: &schedule
+        type: str
+        description: "When the scheduled run starts (systemd OnCalendar, ending in UTC)."
+        default: "*-*-* 05:20:00 UTC"
+      aide_max_age_hours: &age
+        type: int
+        description: "The health hook fails when the last run is older than this."
+        default: 48
+      aide_systemctl_cli: &systemctl
+        type: str
+        description: "The systemctl command (daemon-reload, enable the timer)."
+        default: systemctl
+      aide_unit_dir: &units
+        type: path
+        description: "Where the service and timer units are written."
+        default: /etc/systemd/system
+      aide_state_dir: &state
+        type: path
+        description: "Where each run writes its report and its exit status (last-run)."
+        default: /var/lib/homelabnext/aide
+  config:
+    short_description: Write the checked configuration, the scan script and its timer, and enable the timer.
+    options:
+      aide_paths: *paths
+      aide_config_file: *conf
+      aide_dropin: *dropin
+      aide_cli: *cli
+      aide_schedule: *schedule
+      aide_systemctl_cli: *systemctl
+      aide_unit_dir: *units
+      aide_state_dir: *state
+  health:
+    short_description: Fail unless a recent check found no added, removed or changed file.
+    options:
+      aide_max_age_hours: *age
+      aide_state_dir: *state
+  readiness:
+    short_description: No dependency; succeeds.
+    options: {}
+  backup:
+    short_description: Nothing to back up; every run rewrites its report.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-running main writes the configuration again.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; the distribution package follows the patching control.
+    options: {}
+  export:
+    short_description: Nothing to export beyond the reports in the state directory.
+    options: {}

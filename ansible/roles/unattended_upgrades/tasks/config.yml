@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# apt reads the file at the next run, so there is nothing to reload: the check is that apt-config
+# parses the staged file (apt-config -c FILE dump fails on a syntax error) before it goes live.
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Write the configuration, parsed by apt-config before it goes live
+  ansible.builtin.template:
+    src: unattended-upgrades.conf.j2
+    dest: "{{ unattended_upgrades_config_file }}"
+    mode: "0644"
+    validate: "{{ unattended_upgrades_apt_config_cli }} -c %s dump"

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Fail unless the live configuration is key-only, refuses root and admits the kept account
+  ansible.builtin.include_tasks:
+    file: effective.yml
+    apply:
+      tags: [health]
+      vars:
+        ssh_hardening_test_config: "{{ ssh_hardening_main_config }}"
+  tags: [health]

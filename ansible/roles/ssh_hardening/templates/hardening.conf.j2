@@ -1,0 +1,18 @@
+# Managed by homelabnext (role ssh_hardening, control ssh-hardening); local changes are overwritten.
+# sshd keeps the first value it reads, and this file sorts first under sshd_config.d.
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+X11Forwarding {{ 'yes' if ssh_hardening_x11_forwarding | bool else 'no' }}
+MaxAuthTries {{ ssh_hardening_max_auth_tries | int }}
+LoginGraceTime {{ ssh_hardening_login_grace_time | int }}
+ClientAliveInterval {{ ssh_hardening_client_alive_interval | int }}
+ClientAliveCountMax {{ ssh_hardening_client_alive_count_max | int }}
+AllowGroups {{ ssh_hardening_allow_groups | join(' ') }}
+{% if ssh_hardening_authorized_keys_command %}
+AuthorizedKeysCommand {{ ssh_hardening_authorized_keys_command }}
+AuthorizedKeysCommandUser nobody
+{% endif %}

@@ -1,0 +1,204 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Registry of the fictional harbor lab (site.yml and guests/ beside it): which service runs on
+# which guest (`host` is the guest's name), what it calls (`upstreams`) and what it tells the
+# status hub. The generated Topology and Dataflow maps read it (docs/status.md, ADR-0018).
+# Same shape as schemas/platform/service.json; documentation addresses only.
+registry_version: 1
+
+lab:
+  name: harbor
+  domain: example.internal
+  svc_label: svc
+  owner: platform-team
+
+zones:
+  mgmt:     {cidr: 192.0.2.0/26,     description: management and identity}
+  services: {cidr: 192.0.2.64/26,    description: security services}
+  data:     {cidr: 192.0.2.128/26,   description: storage and bus}
+  edge:     {cidr: 198.51.100.0/26,  description: internet ingress}
+  lab:      {cidr: 203.0.113.0/26,   description: isolated lab (one-way)}
+
+hosts:
+  harbor-gw: {address: 192.0.2.1,     zone: mgmt,     role: router}
+  idp-1:     {address: 192.0.2.6,     zone: mgmt,     role: identity}
+  siem-1:    {address: 192.0.2.70,    zone: services, role: siem}
+  sensor-1:  {address: 192.0.2.71,    zone: services, role: sensor}
+  cases-1:   {address: 192.0.2.72,    zone: services, role: cases}
+  soar-1:    {address: 192.0.2.73,    zone: services, role: orchestration}
+  mon-1:     {address: 192.0.2.74,    zone: services, role: monitoring}
+  hub-1:     {address: 192.0.2.75,    zone: services, role: status}
+  bus-1:     {address: 192.0.2.140,   zone: data,     role: events}
+  lake-1:    {address: 192.0.2.141,   zone: data,     role: lake}
+  query-1:   {address: 192.0.2.142,   zone: data,     role: query}
+  nas-1:     {address: 192.0.2.150,   zone: data,     role: storage}
+  proxy-1:   {address: 198.51.100.10, zone: edge,     role: edge}
+
+services:
+  router-console:
+    capability: router-console
+    impl: unifi
+    host: harbor-gw
+    protocol: https
+    port: 443
+    health: {kind: none}
+    owner: platform-team
+    version: "1.0"
+    tls: internal
+    description: The router's management console (reads by API key).
+  idp:
+    capability: idp
+    impl: authentik
+    host: idp-1
+    protocol: https
+    port: 9443
+    health: {kind: http, path: /-/health/live/, expect_status: 204}
+    owner: identity-team
+    version: "2024.8"
+    tls: internal
+    auth: own
+    description: Single sign-on and the forward-auth check in front of every web console.
+  edge-proxy:
+    capability: edge-proxy
+    impl: caddy
+    host: proxy-1
+    protocol: https
+    port: 443
+    health: {kind: tcp}
+    upstreams: [idp]
+    owner: platform-team
+    version: "2.8"
+    tls: public
+    description: Terminates TLS for the published consoles and asks the IdP who is calling.
+  detections:
+    capability: detections
+    impl: example-siem
+    host: siem-1
+    protocol: https
+    port: 443
+    health: {kind: tcp}
+    upstreams: [events, object-store]
+    owner: security-team
+    version: "4.9"
+    tls: internal
+    auth: idp
+    description: Decodes the fleet's logs, runs the detection rules and raises alerts on the bus.
+    status_sources:
+      - id: alerts
+        kind: push-event
+        interval_s: 300
+        what: Alert counts the siem publishes as status.observed events.
+  network-sensor:
+    capability: network-sensor
+    impl: example-ids
+    host: sensor-1
+    protocol: tcp
+    port: 1514
+    health: {kind: tcp}
+    upstreams: [detections]
+    owner: security-team
+    version: "7.0"
+    tls: none
+    description: Watches the mirrored uplink and ships flow and alert records to the siem.
+  cases:
+    capability: cases
+    impl: example-cases
+    host: cases-1
+    protocol: https
+    port: 9000
+    health: {kind: http, path: /api/status, expect_status: 200}
+    upstreams: [notify]
+    owner: security-team
+    version: "5.3"
+    tls: internal
+    auth: idp
+    description: One case per alert worth a look; analysts work them here.
+  orchestration:
+    capability: orchestration
+    impl: example-soar
+    host: soar-1
+    protocol: https
+    port: 8443
+    health: {kind: tcp}
+    upstreams: [events, cases, notify]
+    owner: security-team
+    version: "1.4"
+    tls: internal
+    auth: idp
+    description: Runs the response workflows; every write goes through the broker for approval.
+    status_sources:
+      - id: runs
+        kind: push-event
+        interval_s: 300
+        what: Workflow run outcomes, published as status.observed events.
+  notify:
+    capability: notify
+    impl: ntfy
+    host: mon-1
+    protocol: http
+    port: 8080
+    health: {kind: http, path: /v1/health, expect_status: 200}
+    owner: platform-team
+    version: "2.11"
+    tls: none
+    description: Pages the operator; every other service notifies through it.
+  status-hub:
+    capability: status-hub
+    impl: hnx-status
+    host: hub-1
+    protocol: http
+    port: 8090
+    health: {kind: http, path: /status.json, expect_status: 200}
+    upstreams: [events]
+    owner: platform-team
+    version: "0.1"
+    tls: none
+    auth: idp
+    description: The read-only status hub, including these generated maps.
+  events:
+    capability: events
+    impl: nats
+    host: bus-1
+    protocol: nats
+    port: 4222
+    health: {kind: tcp}
+    owner: data-team
+    version: "2.10.20"
+    tls: mtls
+    description: The event bus every producer publishes to and every consumer reads.
+  lake-catalog:
+    capability: lake-catalog
+    impl: iceberg-rest
+    host: lake-1
+    protocol: http
+    port: 8181
+    health: {kind: http, path: /v1/config, expect_status: 200}
+    upstreams: [object-store]
+    owner: data-team
+    version: "1.6"
+    tls: internal
+    description: The lake's table catalog; table files live in the object store.
+  lake-query:
+    capability: lake-query
+    impl: trino
+    host: query-1
+    protocol: https
+    port: 8443
+    health: {kind: tcp}
+    upstreams: [lake-catalog]
+    owner: data-team
+    version: "460.0"
+    tls: internal
+    auth: idp
+    description: SQL over the lake tables (planned).
+  object-store:
+    capability: object-store
+    impl: minio
+    host: nas-1
+    protocol: https
+    port: 9000
+    health: {kind: tcp}
+    owner: data-team
+    version: "2024.9"
+    tls: internal
+    description: S3-compatible object storage on the storage appliance.

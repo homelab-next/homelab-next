@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# 1.4-only: a guest that is declared but not built yet, with what it will do
+id: guest:query-1
+kind: vm
+provisioning: terraform
+status: planned
+description: SQL over the lake tables for analysts and agents.
+placement: {node: hv-a, vmid: 142}
+resources:
+  cpu: {cores: 4}
+  memory: {size_mb: 8192}
+  disks: [{name: rootfs, size_gb: 40, pool: fast}]
+image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
+network: {zone: data, ip: 192.0.2.80}
+capability: cap:lake-query
+owners: {primary: data-team}

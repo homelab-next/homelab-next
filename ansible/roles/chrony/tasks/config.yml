@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# A changed configuration is parsed by chronyd -p (print the configuration and exit) on the staged
+# file before it replaces the live one, so a bad value never reaches the daemon. Replacing the
+# live file leaves a restart-pending marker that only a successful restart removes, so a failed
+# (or disabled) restart is retried on the next run even though the file no longer changes.
+- name: Resolve and validate the time sources
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Ensure the state directory exists
+  ansible.builtin.file:
+    path: "{{ chrony_state_dir }}"
+    state: directory
+    mode: "0750"
+
+- name: Write the configuration, checked by chronyd before it goes live
+  ansible.builtin.template:
+    src: chrony.conf.j2
+    dest: "{{ chrony_config_file }}"
+    mode: "0644"
+    validate: "{{ chrony_daemon_cli }} -p -f %s"
+  register: chrony_written
+
+- name: Mark a restart as owed
+  ansible.builtin.copy:
+    dest: "{{ chrony_state_dir }}/restart-pending"
+    content: "chrony.conf changed; the daemon has not been restarted since\n"
+    mode: "0640"
+  when: chrony_written is changed
+
+- name: Look for a restart still owed
+  ansible.builtin.stat:
+    path: "{{ chrony_state_dir }}/restart-pending"
+  register: chrony_pending
+
+- name: Restart the daemon while a restart is owed
+  when: chrony_pending.stat.exists and chrony_restart | bool
+  block:
+    - name: Restart chrony (it reads its sources only at start)
+      ansible.builtin.command:
+        argv: ["{{ chrony_systemctl_cli }}", restart, "{{ chrony_service }}"]
+      changed_when: true
+    - name: Clear the owed restart
+      ansible.builtin.file:
+        path: "{{ chrony_state_dir }}/restart-pending"
+        state: absent

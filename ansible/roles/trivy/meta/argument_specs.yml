@@ -1,0 +1,114 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install Trivy from the vendor repository and scan on a timer.
+    options:
+      trivy_severity: &severity
+        type: str
+        description: "The lowest severity reported (UNKNOWN, LOW, MEDIUM, HIGH or CRITICAL); the example lab's server baseline sets HIGH, its sensitive one MEDIUM."
+        required: true
+      trivy_version: &version
+        type: str
+        description: "Pinned package version (held; the pinned install may move it); empty = the repository's newest, not held."
+        default: ""
+      trivy_repository: &repo
+        type: str
+        description: "Vendor package repository root (https); a lab mirror may stand in for it."
+        default: https://get.trivy.dev/deb
+      trivy_key_fingerprints: &fpr
+        type: list
+        elements: str
+        description: "Primary-key fingerprints (40 upper-case hex digits) the repository's signing key must carry; the key is refused otherwise."
+        default: ["825AD9036F7C850E6A6FED4935B8ACA44FD9CA9F"]
+      trivy_max_findings: &max
+        type: int
+        description: "The health hook fails with more findings than this."
+        default: 0
+      trivy_sbom: &sbom
+        type: bool
+        description: "Write a CycloneDX SBOM of the root filesystem each run."
+        default: true
+      trivy_scan_containers: &images
+        type: bool
+        description: "Also scan the images of running containers (docker or podman, when present); the example lab's container-host baseline turns it on."
+        default: false
+      trivy_skip_db_update: &skipdb
+        type: bool
+        description: "Never download the vulnerability database (offline; it must be provided)."
+        default: false
+      trivy_db_repository: &dbrepo
+        type: str
+        description: "An OCI mirror of the vulnerability database; empty = the vendor's."
+        default: ""
+      trivy_skip_dirs: &skip
+        type: list
+        elements: path
+        description: "Directories the root filesystem scan skips."
+        default: [/proc, /sys, /dev, /run, /var/lib/docker, /var/lib/containers]
+      trivy_cli: &cli
+        type: str
+        description: "The trivy command."
+        default: trivy
+      trivy_schedule: &schedule
+        type: str
+        description: "When the scheduled run starts (systemd OnCalendar, ending in UTC)."
+        default: "*-*-* 03:10:00 UTC"
+      trivy_max_age_hours: &age
+        type: int
+        description: "The health hook fails when the last run is older than this."
+        default: 48
+      trivy_systemctl_cli: &systemctl
+        type: str
+        description: "The systemctl command (daemon-reload, enable the timer)."
+        default: systemctl
+      trivy_unit_dir: &units
+        type: path
+        description: "Where the service and timer units are written."
+        default: /etc/systemd/system
+      trivy_state_dir: &state
+        type: path
+        description: "Where each run writes its report and its exit status (last-run)."
+        default: /var/lib/homelabnext/trivy
+  config:
+    short_description: Write the checked configuration, the scan script and its timer, and enable the timer.
+    options:
+      trivy_severity: *severity
+      trivy_sbom: *sbom
+      trivy_scan_containers: *images
+      trivy_skip_db_update: *skipdb
+      trivy_db_repository: *dbrepo
+      trivy_skip_dirs: *skip
+      trivy_cli: *cli
+      trivy_version: *version
+      trivy_repository: *repo
+      trivy_key_fingerprints: *fpr
+      trivy_schedule: *schedule
+      trivy_systemctl_cli: *systemctl
+      trivy_unit_dir: *units
+      trivy_state_dir: *state
+  health:
+    short_description: Fail unless a recent scan reported at most trivy_max_findings findings at or above the severity.
+    options:
+      trivy_max_findings: *max
+      trivy_max_age_hours: *age
+      trivy_state_dir: *state
+  readiness:
+    short_description: No dependency; succeeds.
+    options: {}
+  backup:
+    short_description: Nothing to back up; every run rewrites its report.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-running main writes the configuration again.
+    options: {}
+  upgrade:
+    short_description: Validate a newer pinned version; then set trivy_version and re-run main.
+    options:
+      trivy_version: *version
+      trivy_target_version:
+        type: str
+        description: Version to upgrade to (must be newer than the pin).
+        required: true
+  export:
+    short_description: Nothing to export beyond the reports in the state directory.
+    options: {}

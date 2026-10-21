@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every value reaches a unit file, the scan script or a configuration line.
+- name: Validate the inputs
+  ansible.builtin.assert:
+    that:
+      - trivy_schedule is match('^[A-Za-z0-9*:,./~ -]+ UTC\Z')
+      - trivy_max_age_hours | int > 0
+      - trivy_severity in trivy_severities
+      - trivy_version == '' or trivy_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - trivy_repository is match('^https://[A-Za-z0-9.-]+(?::[0-9]+)?(?:/[A-Za-z0-9._~-]+)*\Z')
+      - trivy_key_fingerprints | length > 0
+      - trivy_key_fingerprints | select('match', '^[0-9A-F]{40}\Z') | list | length == trivy_key_fingerprints | length
+      - trivy_max_findings | int >= 0
+      - trivy_db_repository == '' or trivy_db_repository is match('^[A-Za-z0-9][A-Za-z0-9./:@_-]*\Z')
+      - trivy_skip_dirs | select('match', '^/[A-Za-z0-9._/-]*\Z') | list | length == trivy_skip_dirs | length
+    fail_msg: >-
+      trivy: an OnCalendar schedule ending in UTC, a severity among UNKNOWN LOW MEDIUM HIGH CRITICAL, a version x.y.z or nothing, an https repository and its key's fingerprints (40 upper-case hex digits), a database mirror reference, and plain absolute skip directories

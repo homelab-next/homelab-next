@@ -1,0 +1,41 @@
+{% macro rule(r, side) -%}
+{% set addr = r.source if side == 'saddr' else r.dest -%}
+{{ ('ip ' ~ side ~ ' ' ~ addr ~ ' ') if addr != 'any' else '' -}}
+{% if r.proto == 'icmp' %}ip protocol icmp{% else %}{{ r.proto }} dport {{ r.ports | replace(':', '-') }}{% endif %} accept comment "{{ r.name }}"
+{%- endmacro -%}
+#!/usr/sbin/nft -f
+# Managed by homelabnext (role nftables_host, controls host-firewall and egress-filter); local
+# changes are overwritten. The rules are the guest model's firewall_rules; only this table is
+# replaced (the first two lines make the delete safe when it does not exist yet).
+table inet {{ nftables_host_table }}
+delete table inet {{ nftables_host_table }}
+table inet {{ nftables_host_table }} {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ct state established,related accept
+		ct state invalid drop
+		iif "lo" accept
+		icmp type { destination-unreachable, time-exceeded, parameter-problem } accept
+		icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+{% for src in nftables_host_ssh_sources %}
+		{{ ('ip saddr ' ~ src ~ ' ') if src != 'any' else '' }}tcp dport {{ nftables_host_ssh_port | int }} accept comment "homelabnext-management-ssh"
+{% endfor %}
+{% for r in nftables_host_firewall.inbound_allow | default([]) %}
+		{{ rule(r, 'saddr') }}
+{% endfor %}
+	}
+	chain output {
+		type filter hook output priority filter; policy {{ 'accept' if nftables_host_firewall.policy_out == 'ACCEPT' else 'drop' }};
+{% if nftables_host_firewall.policy_out != 'ACCEPT' %}
+		ct state established,related accept
+		oif "lo" accept
+		icmpv6 type { nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert } accept
+{% for r in nftables_host_firewall.outbound_allow | default([]) %}
+		{{ rule(r, 'daddr') }}
+{% endfor %}
+{% if nftables_host_firewall.policy_out == 'REJECT' %}
+		reject with icmpx type admin-prohibited
+{% endif %}
+{% endif %}
+	}
+}

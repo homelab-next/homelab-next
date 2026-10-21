@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Control restart-required (ADR-0016 decision 7): needrestart lists, never restarts.
+- name: Refuse a host that is not Debian-family (the role installs the distribution's needrestart)
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] == 'Debian'
+    fail_msg: "needrestart supports Debian-family guests only (got {{ ansible_facts['os_family'] }})"
+
+- name: Install needrestart
+  ansible.builtin.apt:
+    name: needrestart
+    state: present
+
+- name: Write the list-only configuration, the check script and its timer
+  ansible.builtin.include_tasks: config.yml

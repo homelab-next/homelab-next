@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every value reaches a unit file, the scan script or a configuration line.
+- name: Validate the inputs
+  ansible.builtin.assert:
+    that:
+      - clamav_schedule is match('^[A-Za-z0-9*:,./~ -]+ UTC\Z')
+      - clamav_max_age_hours | int > 0
+      - clamav_paths | select('match', '^/[^\n\r]*\Z') | list | length == clamav_paths | length
+      - clamav_exclude_dirs | select('match', '^[^\n\r]+\Z') | list | length == clamav_exclude_dirs | length
+      - clamav_private_mirror == '' or clamav_private_mirror is match('^[A-Za-z0-9][A-Za-z0-9.:-]*\Z')
+      - clamav_max_signature_age_days | int > 0
+    fail_msg: >-
+      clamav: an OnCalendar schedule ending in UTC, absolute paths, one-line exclusions, and a mirror host name or nothing

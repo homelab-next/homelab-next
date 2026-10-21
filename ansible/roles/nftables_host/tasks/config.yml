@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# The ruleset is written only after nft -c accepts it (template validate), and loading it leaves
+# a load-pending marker until nft -f succeeds, so a failed (or disabled) load is retried on the
+# next run. nft -f replaces the table in one transaction: established connections, ansible's own
+# included, survive it.
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Ensure the state directory exists
+  ansible.builtin.file:
+    path: "{{ nftables_host_state_dir }}"
+    state: directory
+    mode: "0750"
+
+- name: Write the ruleset, checked by nft -c before it is installed
+  ansible.builtin.template:
+    src: nftables.conf.j2
+    dest: "{{ nftables_host_config_file }}"
+    mode: "0750"
+    validate: "{{ nftables_host_nft_cli }} -c -f %s"
+  register: nftables_host_written
+
+- name: Mark a load as owed
+  ansible.builtin.copy:
+    dest: "{{ nftables_host_state_dir }}/load-pending"
+    content: "the ruleset changed; nft -f has not succeeded since\n"
+    mode: "0640"
+  when: nftables_host_written is changed
+
+- name: Look for a load still owed
+  ansible.builtin.stat:
+    path: "{{ nftables_host_state_dir }}/load-pending"
+  register: nftables_host_pending
+
+- name: Load the ruleset while a load is owed
+  when: nftables_host_pending.stat.exists and nftables_host_apply | bool
+  block:
+    - name: Load the ruleset (one transaction)
+      ansible.builtin.command:
+        argv: ["{{ nftables_host_nft_cli }}", -f, "{{ nftables_host_config_file }}"]
+      changed_when: true
+    - name: Clear the owed load
+      ansible.builtin.file:
+        path: "{{ nftables_host_state_dir }}/load-pending"
+        state: absent

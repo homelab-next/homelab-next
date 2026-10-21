@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: Apache-2.0
+# sssd.conf holds the bind credential, so its tasks are no_log; it is checked by sssctl
+# config-check before it replaces the live file, and the restart stays owed until it succeeds.
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Keep the break-glass account working
+  ansible.builtin.include_tasks: guard.yml
+
+- name: Refuse a bind credential an sssd.conf line cannot carry
+  ansible.builtin.assert:
+    that:
+      - lookup('hnx_secret', sssd_ldap_bind_ref) is not search('[\r\n]')
+      - lookup('hnx_secret', sssd_ldap_bind_ref) == lookup('hnx_secret', sssd_ldap_bind_ref) | trim
+    fail_msg: >-
+      sssd_ldap: the bind credential ({{ sssd_ldap_bind_ref }}) holds a line break or leading or
+      trailing white space, which an sssd.conf value cannot carry
+    quiet: true
+
+- name: Ensure the state directory exists
+  ansible.builtin.file:
+    path: "{{ sssd_ldap_state_dir }}"
+    state: directory
+    mode: "0700"
+
+- name: Write sssd.conf (0600, as sssd requires), checked by sssctl before it goes live
+  ansible.builtin.template:
+    src: sssd.conf.j2
+    dest: "{{ sssd_ldap_config_file }}"
+    mode: "0600"
+    validate: "{{ sssd_ldap_sssctl_cli }} config-check -c %s"
+  register: sssd_ldap_written
+  no_log: true
+
+- name: Mark a restart as owed
+  ansible.builtin.copy:
+    dest: "{{ sssd_ldap_state_dir }}/restart-pending"
+    content: "sssd.conf changed; sssd has not restarted since\n"
+    mode: "0600"
+  when: sssd_ldap_written is changed
+
+- name: Look for a restart still owed
+  ansible.builtin.stat:
+    path: "{{ sssd_ldap_state_dir }}/restart-pending"
+  register: sssd_ldap_pending
+
+- name: Restart sssd while a restart is owed
+  when: sssd_ldap_pending.stat.exists and sssd_ldap_restart | bool
+  block:
+    - name: Restart sssd
+      ansible.builtin.command:
+        argv: ["{{ sssd_ldap_systemctl_cli }}", restart, sssd]
+      changed_when: true
+    - name: Clear the owed restart
+      ansible.builtin.file:
+        path: "{{ sssd_ldap_state_dir }}/restart-pending"
+        state: absent

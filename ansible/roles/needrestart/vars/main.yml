@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: where the check script and the token are installed (the service's
+# ExecStart names the script).
+needrestart_script: /usr/local/libexec/homelabnext/needrestart-check
+needrestart_notify_auth_file: /etc/homelabnext/needrestart-notify.auth

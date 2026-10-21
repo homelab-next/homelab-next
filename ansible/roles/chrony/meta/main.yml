@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: Time sync with the distribution's chrony, following the lab's time sources by logical id.
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

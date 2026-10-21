@@ -1,0 +1,111 @@
+{
+ "phases": [
+  {
+   "counts": {
+    "error": 0,
+    "fail": 1,
+    "pass": 1,
+    "skip": 0,
+    "total": 2,
+    "untested": 0
+   },
+   "criteria": [
+    {
+     "id": "F-02",
+     "statement": "No leaks",
+     "status": "pass",
+     "tag": "PUBLIC-NOW"
+    },
+    {
+     "id": "Q-01",
+     "statement": "Tests run",
+     "status": "fail",
+     "tag": "PUBLIC-NOW"
+    }
+   ],
+   "goal": "CI",
+   "id": "P0",
+   "steps": [],
+   "tag": "PUBLIC-NOW"
+  },
+  {
+   "counts": {
+    "error": 1,
+    "fail": 0,
+    "pass": 0,
+    "skip": 0,
+    "total": 2,
+    "untested": 1
+   },
+   "criteria": [
+    {
+     "id": "T-01",
+     "statement": "One bus",
+     "status": "untested",
+     "tag": "SERVER"
+    },
+    {
+     "id": "T-02",
+     "statement": "Valid events",
+     "status": "error",
+     "tag": "PUBLIC-NOW"
+    }
+   ],
+   "goal": "Contracts",
+   "id": "P1",
+   "steps": [
+    {
+     "deliverable": "schemas",
+     "exit": "they validate",
+     "id": "P1.1"
+    }
+   ],
+   "tag": "PUBLIC-NOW"
+  },
+  {
+   "counts": {
+    "error": 0,
+    "fail": 0,
+    "pass": 0,
+    "skip": 0,
+    "total": 1,
+    "untested": 1
+   },
+   "criteria": [
+    {
+     "id": "F-01",
+     "statement": "Rebuildable",
+     "status": "untested",
+     "tag": "SERVER"
+    }
+   ],
+   "goal": "Hardware",
+   "id": "S1",
+   "steps": [],
+   "tag": "SERVER"
+  }
+ ],
+ "problems": [
+  "P1: 'Z-99' names no checklist row",
+  "P1: 'Y' names no checklist row"
+ ],
+ "results": {
+  "last_run": "2026-10-20"
+ },
+ "unphased": [
+  {
+   "id": "T-03",
+   "statement": "Nothing dropped",
+   "status": "untested",
+   "tag": "SERVER"
+  }
+ ],
+ "unphased_counts": {
+  "error": 0,
+  "fail": 0,
+  "pass": 0,
+  "skip": 0,
+  "total": 1,
+  "untested": 1
+ }
+}

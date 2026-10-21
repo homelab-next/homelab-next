@@ -21,7 +21,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from .views import dumps
+from .views import MAP_PANELS, dumps
 
 _CSS = """
 :root{--bg:#f6f7f9;--panel:#fff;--ink:#1d2330;--mute:#5b6475;--line:#d9dde4;
@@ -66,6 +66,19 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);border:1px 
 padding:.5rem;border-radius:.3rem;font-size:.82rem;max-height:30rem;overflow:auto}
 .working{color:var(--ok)}.waiting{color:var(--warn)}.stuck{color:var(--stale)}.errored{color:var(--fail)}
 .done{color:var(--mute)}.private{border-left:.35rem solid var(--fail);padding-left:.6rem}
+.mapwrap{overflow-x:auto;margin:0 0 1rem}.map{display:block;max-width:none;font:12px system-ui,sans-serif}
+.map text{fill:var(--ink)}.map .sub,.map .lbl{fill:var(--mute)}
+.map .bx{fill:var(--panel);stroke:var(--line)}.map .band{fill:var(--bg);stroke:var(--line)}
+.map .zone .bx,.map .transport .bx{stroke:var(--stale);stroke-width:1.5}
+.map .unknown .bx,.map .muted .bx{stroke-dasharray:4 3}.map .muted text{fill:var(--mute)}
+.map .edge{fill:none;stroke:var(--mute);stroke-width:1.3}.map .edge.dash{stroke-dasharray:5 4}
+.map .head{fill:var(--mute)}.map .allow .bx{fill:var(--ok);fill-opacity:.18;stroke:var(--ok)}
+.map .deny text,.map .self text{fill:var(--mute)}.map .other .bx{stroke:var(--warn)}
+.map .adapter .bx{stroke:var(--ok)}.map .fake .bx{stroke-dasharray:4 3}
+.map .track{fill:var(--bg);stroke:var(--line)}.map .f-pass{fill:var(--ok)}
+.map .f-fail{fill:var(--fail)}.map .f-error{fill:var(--warn)}.map .f-skip{fill:var(--stale)}
+.map .f-untested{fill:var(--unknown);fill-opacity:.35}
+.maptable{margin:0 0 1.25rem}.maptable caption{text-align:left;font-weight:600;padding:.3rem 0}
 @media (max-width:60rem){.split{grid-template-columns:1fr}}
 @media (max-width:40rem){body{display:block}nav{width:auto;border-right:0;
 border-bottom:1px solid var(--line)}}
@@ -180,12 +193,16 @@ def _sources(p: Mapping[str, Any], docs_base: str) -> str:
 _PANELS = {"exceptions": _exceptions, "grid": _grid, "sources": _sources}
 
 
-def nav_html(doc: Mapping[str, Any], *, live: bool = False, private: bool = False) -> str:
+def nav_html(
+    doc: Mapping[str, Any], *, live: bool = False, private: bool = False, home: str | None = None
+) -> str:
     """The left menu.  ``live``: served by ``hnx status serve`` (page entries link to their live
-    pages; in the static file they are marked live-only).  ``private``: the request passed the
-    trusted front door -- only then is the private group rendered at all, and then only its pages
-    that are served (the Approvals entry appears only when approvals are configured)."""
-    prefix = "/" if live else ""
+    pages; in the static file they are marked live-only, except the maps ``hnx status render``
+    writes beside it as ``<panel>.html``).  ``private``: the request passed the trusted front
+    door -- only then is the private group rendered at all, and then only its pages that are
+    served (the Approvals entry appears only when approvals are configured).  ``home``: the page
+    the panel anchors live on, for a static page other than ``index.html``."""
+    prefix = "/" if live else (home or "")
     nav, group = [], None
     for m in doc["menu"]:
         if m.get("group") == "private" and not (private and m.get("available", True)):
@@ -199,6 +216,8 @@ def nav_html(doc: Mapping[str, Any], *, live: bool = False, private: bool = Fals
         elif m["kind"] == "page":
             if live and m["available"]:
                 nav.append(f'<a href="{_e(m["href"])}">{_e(m["title"])}</a>')
+            elif m["available"] and m.get("panel") in MAP_PANELS:  # written beside index.html
+                nav.append(f'<a href="{_e(m["panel"])}.html">{_e(m["title"])}</a>')
             else:
                 why = "served live by hnx status serve" if not live else "no activity store"
                 nav.append(f'<span class="off" title="{why}">{_e(m["title"])}</span>')
@@ -218,16 +237,29 @@ def nav_html(doc: Mapping[str, Any], *, live: bool = False, private: bool = Fals
 
 
 def shell_html(
-    doc: Mapping[str, Any], title: str, main: str, *, nav: str, refresh_s: int | None = None
+    doc: Mapping[str, Any],
+    title: str,
+    main: str,
+    *,
+    nav: str,
+    refresh_s: int | None = None,
+    head: str = "",
+    tail: str = "",
+    theme: str | None = None,
 ) -> str:
-    """One page of the shell: the menu and ``main`` (already-escaped HTML)."""
+    """One page of the shell: the menu and ``main`` (already-escaped HTML).  ``head``/``tail``:
+    trusted markup before the hub's stylesheet (so a CSP meta comes first) and at the end of
+    ``body`` (the interactive maps' own
+    stylesheet and script, :mod:`homelabnext.status.maps.assets`); ``theme``: a fixed
+    ``data-theme`` on ``<html>`` (those maps start dark)."""
     meta = f'<meta http-equiv="refresh" content="{int(refresh_s)}">' if refresh_s else ""
+    attrs = f' data-theme="{_e(theme)}"' if theme else ""
     return (
         "<!doctype html>\n"
-        '<html lang="en"><head><meta charset="utf-8">'
+        f'<html lang="en"{attrs}><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width,initial-scale=1">{meta}'
-        f"<title>{_e(title)}</title><style>{_CSS}</style></head><body>"
-        f"{nav}<main>{main}</main></body></html>\n"
+        f"<title>{_e(title)}</title>{head}<style>{_CSS}</style></head><body>"
+        f"{nav}<main>{main}</main>{tail}</body></html>\n"
     )
 
 

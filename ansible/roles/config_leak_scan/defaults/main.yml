@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Secrets from the store (control secrets-from-store, applied per guest) is VERIFIED here. The
+# repository's own leak scanner (tools/leak_scan.py with homelabnext/shapes.py, copied from the
+# controller's checkout for the run and removed after, never forked) runs on the guest with its
+# "secret" patterns only over config_leak_scan_paths, and every hit outside
+# config_leak_scan_accepted fails health. (The role is not named after the control because
+# role_lint reads any variable named "secret..." as one that holds a secret.)
+# Only path, line and pattern name are ever reported, never the matched text.
+# Files that must hold key material on disk by design (host keys, TLS private keys, password
+# hashes) are accepted by path; files the scanner cannot read as text (binaries) are skipped.
+config_leak_scan_accepted:
+  - /etc/ssh/ssh_host_*_key
+  - /etc/ssl/private/*
+  - /etc/shadow
+  - /etc/shadow-
+  - /etc/gshadow
+  - /etc/gshadow-
+config_leak_scan_python: python3
+# The checkout the scanner is copied from, on the controller.
+config_leak_scan_source_dir: "{{ role_path }}/../../.."
+config_leak_scan_state_dir: /var/lib/homelabnext/config-leak-scan

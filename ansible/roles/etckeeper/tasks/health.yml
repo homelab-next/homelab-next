@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# A commit has reached the git service when origin's remote-tracking branch (moved by the push)
+# is the local HEAD; nothing uncommitted may be left beside it.
+- block:
+    - name: Read the branch
+      ansible.builtin.command:
+        argv: ["{{ etckeeper_git_cli }}", -C, "{{ etckeeper_dir }}", symbolic-ref, --short, HEAD]
+      register: etckeeper_branch
+      changed_when: false
+    - name: Read HEAD and origin's copy of the branch
+      ansible.builtin.command:
+        argv: ["{{ etckeeper_git_cli }}", -C, "{{ etckeeper_dir }}", rev-parse, HEAD, "refs/remotes/origin/{{ etckeeper_branch.stdout | trim }}"]
+      register: etckeeper_heads
+      changed_when: false
+      failed_when: false
+    - name: Read the working tree state
+      ansible.builtin.command:
+        argv: ["{{ etckeeper_git_cli }}", -C, "{{ etckeeper_dir }}", status, --porcelain]
+      register: etckeeper_status
+      changed_when: false
+    - name: Fail unless everything is committed and pushed
+      ansible.builtin.assert:
+        that:
+          - etckeeper_status.stdout | trim == ''
+          - etckeeper_heads.rc == 0
+          - etckeeper_heads.stdout_lines | unique | length == 1
+        fail_msg: >-
+          etckeeper: {{ etckeeper_dir }} has uncommitted changes, or its last commit has not
+          reached origin ({{ etckeeper_heads.stdout_lines | join(' vs ') or etckeeper_heads.stderr | trim }})
+  tags: [health]

@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# rejected: setting keys are the role's input names without its prefix (lower-case words)
+controls:
+  package-scan:
+    layer: detection
+    description: Installed packages are scanned for known vulnerabilities.
+    role: trivy
+    verify: the last scan is under a day old
+baselines:
+  server:
+    description: A long-lived service guest.
+    controls: [{id: package-scan, with: {Severity: HIGH}}]

@@ -3,6 +3,25 @@
   "scripts": [
     {
       "exit": {
+        "0": "the run finished (the scanner's own status is in last-run)"
+      },
+      "id": "aide-scan",
+      "inputs": "the role's rendered settings (baked into this file)",
+      "installs_to": "/usr/local/libexec/homelabnext/aide-scan",
+      "kind": "job",
+      "language": "shell",
+      "outputs": "the report and last-run (exit status) under the role's state directory",
+      "owner": "platform",
+      "path": "ansible/roles/aide/templates/scan.sh.j2",
+      "purpose": "Run one scheduled AIDE file integrity check and record its exit status for the role's health hook.",
+      "status": "active",
+      "trigger": [
+        "timer:aide/scan",
+        "role:aide"
+      ]
+    },
+    {
+      "exit": {
         "0": "reported"
       },
       "id": "broker-example-service-restart",
@@ -78,6 +97,25 @@
         "ci:ci/lint",
         "make:spdx",
         "pre-commit:spdx-header"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the run finished (the scanner's own status is in last-run)"
+      },
+      "id": "clamav-scan",
+      "inputs": "the role's rendered settings (baked into this file)",
+      "installs_to": "/usr/local/libexec/homelabnext/clamav-scan",
+      "kind": "job",
+      "language": "shell",
+      "outputs": "the report and last-run (exit status) under the role's state directory",
+      "owner": "platform",
+      "path": "ansible/roles/clamav/templates/scan.sh.j2",
+      "purpose": "Run one scheduled ClamAV scan of the configured paths and record its exit status for the role's health hook.",
+      "status": "active",
+      "trigger": [
+        "timer:clamav/scan",
+        "role:clamav"
       ]
     },
     {
@@ -457,6 +495,67 @@
     },
     {
       "exit": {
+        "0": "checked (and alerted, if the set changed)",
+        "1": "neither dpkg --verify nor debsums could run; the result is not rewritten",
+        "2": "the alert could not be sent; it stays owed to the next run"
+      },
+      "id": "lynis-dpkg-verify",
+      "inputs": "dpkg --verify (or debsums -s where dpkg has no --verify); the previous result",
+      "installs_to": "/usr/local/libexec/homelabnext/lynis-dpkg-verify",
+      "kind": "job",
+      "language": "python",
+      "outputs": "dpkg-verify.json (owner-only) beside the Lynis report and, on a change, one alert",
+      "owner": "platform",
+      "path": "ansible/roles/lynis/templates/dpkg-verify.py.j2",
+      "purpose": "Check package-owned files against dpkg's recorded digests and alert when the set of mismatched or missing files changes.",
+      "status": "active",
+      "trigger": [
+        "timer:lynis/scan",
+        "role:lynis"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the run finished (the scanner's own status is in last-run)"
+      },
+      "id": "lynis-scan",
+      "inputs": "the role's rendered settings (baked into this file)",
+      "installs_to": "/usr/local/libexec/homelabnext/lynis-scan",
+      "kind": "job",
+      "language": "shell",
+      "outputs": "the report and last-run (exit status) under the role's state directory",
+      "owner": "platform",
+      "path": "ansible/roles/lynis/templates/scan.sh.j2",
+      "purpose": "Run one scheduled Lynis host audit (optionally filing it through the broker) and record its exit status.",
+      "status": "active",
+      "trigger": [
+        "timer:lynis/scan",
+        "role:lynis"
+      ]
+    },
+    {
+      "exit": {
+        "0": "checked (and alerted, if the set changed)",
+        "1": "needrestart failed; the state file is not rewritten",
+        "2": "the alert could not be sent; it stays owed to the next run"
+      },
+      "id": "needrestart-check",
+      "inputs": "needrestart -b batch output; the previous state file",
+      "installs_to": "/usr/local/libexec/homelabnext/needrestart-check",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the state file (owner-only) and, on a change, one alert (ntfy or local mail)",
+      "owner": "platform",
+      "path": "ansible/roles/needrestart/templates/needrestart-check.py.j2",
+      "purpose": "List what needs a restart (needrestart -b, never restarting anything) and alert when that set changes.",
+      "status": "active",
+      "trigger": [
+        "timer:needrestart/check",
+        "role:needrestart"
+      ]
+    },
+    {
+      "exit": {
         "0": "clean",
         "1": "violations",
         "2": "usage error or bad allowlist"
@@ -506,6 +605,25 @@
         "pre-commit:register-ids-check-dupes",
         "pre-commit:register-ids-check-lost",
         "pre-commit:register-ids-resolve"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the run finished (the scanner's own status is in last-run)"
+      },
+      "id": "rkhunter-scan",
+      "inputs": "the role's rendered settings (baked into this file)",
+      "installs_to": "/usr/local/libexec/homelabnext/rkhunter-scan",
+      "kind": "job",
+      "language": "shell",
+      "outputs": "the report and last-run (exit status) under the role's state directory",
+      "owner": "platform",
+      "path": "ansible/roles/rkhunter/templates/scan.sh.j2",
+      "purpose": "Run one scheduled rkhunter rootkit check and record its exit status for the role's health hook.",
+      "status": "active",
+      "trigger": [
+        "timer:rkhunter/scan",
+        "role:rkhunter"
       ]
     },
     {
@@ -619,6 +737,25 @@
       "trigger": [
         "ci:ci/schemas",
         "make:tls-lint"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the run finished (the scanner's own status is in last-run)"
+      },
+      "id": "trivy-scan",
+      "inputs": "the role's rendered settings (baked into this file)",
+      "installs_to": "/usr/local/libexec/homelabnext/trivy-scan",
+      "kind": "job",
+      "language": "shell",
+      "outputs": "the report and last-run (exit status) under the role's state directory",
+      "owner": "platform",
+      "path": "ansible/roles/trivy/templates/scan.sh.j2",
+      "purpose": "Run one scheduled Trivy package scan (root filesystem, SBOM, optionally container images) and record its exit status.",
+      "status": "active",
+      "trigger": [
+        "timer:trivy/scan",
+        "role:trivy"
       ]
     },
     {

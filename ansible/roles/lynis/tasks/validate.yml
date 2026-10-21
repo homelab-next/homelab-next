@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every value reaches a unit file, the scan script or a configuration line.
+- name: Validate the inputs
+  ansible.builtin.assert:
+    that:
+      - lynis_schedule is match('^[A-Za-z0-9*:,./~ -]+ UTC\Z')
+      - lynis_max_age_hours | int > 0
+      - lynis_min_hardening_index | int >= 0 and lynis_min_hardening_index | int <= 100
+      - lynis_max_warnings | int >= 0
+      - lynis_broker_socket == '' or lynis_broker_socket is match('^/[A-Za-z0-9._/-]+\Z')
+      - lynis_notify in ['auto', 'none', 'notify', 'mail']
+      - lynis_notify_id is match('^[a-z0-9][a-z0-9-]*\Z')
+      - lynis_notify_topic is match('^[A-Za-z0-9_-]{1,64}\Z')
+      - lynis_notify_priority | int >= 1 and lynis_notify_priority | int <= 5
+      - lynis_notify_auth_ref == '' or lynis_notify_auth_ref is match('^secret:[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*\Z')
+      - lynis_mail_to is match('^[A-Za-z0-9._%+@-]+\Z')
+      - lynis_dpkg_verify_max_findings | int >= 0
+      - lynis_dpkg_verify_allow | rejectattr('reason', 'defined') | list | length == 0
+      - lynis_dpkg_verify_allow | map(attribute='reason') | map('string') | map('trim') | select | list | length == lynis_dpkg_verify_allow | length
+      - lynis_dpkg_verify_allow | selectattr('path', 'undefined') | selectattr('package', 'undefined') | list | length == 0
+    fail_msg: >-
+      lynis: an OnCalendar schedule ending in UTC, an index 0-100, a warning count, and a broker socket that is an absolute path or empty; notify is auto, none, notify or mail with an ntfy topic, a priority 1-5 and a secret:<name> token or nothing; and each accepted integrity finding names a path or a package and a reason

@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# lsblk --inverse puts each top device (a mounted partition, logical volume or mapping) at the root
+# with the devices it sits on as its children, so a volume is encrypted when a crypt node appears
+# anywhere in its own subtree.
+- name: Validate the inputs
+  ansible.builtin.assert:
+    that:
+      - disk_encryption_check_accepted is mapping
+      - disk_encryption_check_accepted.values() | map('string') | map('trim') | select | list | length == disk_encryption_check_accepted | length
+    fail_msg: "disk_encryption_check: disk_encryption_check_accepted maps each mount point to a non-empty reason"
+
+- name: List the block devices, mounted ones at the root with what they sit on below
+  ansible.builtin.command:
+    argv: ["{{ disk_encryption_check_lsblk_cli }}", --json, --inverse, --output, "NAME,TYPE,MOUNTPOINTS"]
+  register: disk_encryption_check_lsblk
+  changed_when: false
+
+- name: Find the data volumes without an encrypted mapping
+  vars:
+    disk_encryption_check_tops: "{{ (disk_encryption_check_lsblk.stdout | from_json).blockdevices }}"
+  ansible.builtin.set_fact:
+    disk_encryption_check_unencrypted: >-
+      {%- set out = [] -%}
+      {%- for dev in disk_encryption_check_tops -%}
+      {%- set crypt = (dev | to_json) is search('"type": "crypt"') -%}
+      {%- for mp in dev.mountpoints | default([]) | select -%}
+      {%- if not crypt and mp not in disk_encryption_check_system_mounts and mp not in disk_encryption_check_accepted -%}
+      {%- set _ = out.append({'mountpoint': mp, 'device': dev.name}) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- endfor -%}
+      {{ out | sort(attribute='mountpoint') }}

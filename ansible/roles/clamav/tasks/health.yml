@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Read the last run's status
+      ansible.builtin.stat:
+        path: "{{ clamav_state_dir }}/last-run"
+      register: clamav_last
+    - name: Read its exit status
+      ansible.builtin.slurp:
+        src: "{{ clamav_state_dir }}/last-run"
+      register: clamav_last_rc
+      when: clamav_last.stat.exists
+    - name: Fail unless a run finished recently
+      ansible.builtin.assert:
+        that:
+          - clamav_last.stat.exists
+          - (now(utc=true).timestamp() - clamav_last.stat.mtime) < clamav_max_age_hours | int * 3600
+        fail_msg: "clamav: no ClamAV malware scan in the last {{ clamav_max_age_hours }}h ({{ clamav_state_dir }}/last-run is missing or older)"
+    - name: Look at the daily signatures
+      ansible.builtin.find:
+        paths: "{{ clamav_database_dir }}"
+        patterns: ["daily.cvd", "daily.cld"]
+      register: clamav_daily
+    - name: Fail unless the last scan was clean and the signatures are current
+      ansible.builtin.assert:
+        that:
+          - (clamav_last_rc.content | b64decode | trim) == '0'
+          - clamav_daily.files | length > 0
+          - (now(utc=true).timestamp() - (clamav_daily.files | map(attribute='mtime') | max)) < clamav_max_signature_age_days | int * 86400
+        fail_msg: >-
+          clamav: the last scan exited {{ clamav_last_rc.content | b64decode | trim }} (1 found, 2 error;
+          see {{ clamav_state_dir }}/clamscan.log), or the daily signatures are missing or older than
+          {{ clamav_max_signature_age_days }} days
+
+  tags: [health]

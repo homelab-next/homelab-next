@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Scan the configuration directories
+      ansible.builtin.include_tasks:
+        file: scan.yml
+        apply:
+          tags: [health]
+    - name: Fail while a secret-looking value sits outside the accepted paths
+      ansible.builtin.assert:
+        that: config_leak_scan_hits | length == 0
+        fail_msg: >-
+          config_leak_scan: {{ config_leak_scan_hits | map('dict2items') | map('map', attribute='value') | map('join', ':') | join(', ') }}
+  tags: [health]

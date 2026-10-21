@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run the due restore drills and record the last verified restore per guest.
+    options:
+      restore_drill_guests: &guests
+        type: list
+        elements: dict
+        description: The guests to drill, as the baseline-playbook target passes them ({id, name, fqdn, ip, zone}).
+        required: true
+      restore_drill_cli: &cli
+        type: str
+        description: The backup product's drill command (`<cli> <guest id> <guest name>`, prints {"snapshot", "verified"}).
+        default: /usr/local/sbin/hnx-restore-drill
+      restore_drill_interval_days: &interval
+        type: int
+        description: Drill a guest again once its last verified drill is older than this.
+        default: 30
+      restore_drill_max_age_days: &max
+        type: int
+        description: The health hook fails for a guest whose last verified drill is older than this.
+        default: 90
+      restore_drill_run:
+        type: bool
+        description: Run the due drills (false only reports what is due).
+        default: true
+      restore_drill_now: &now
+        type: str
+        description: The evaluation time (UTC, YYYY-MM-DDTHH:MM:SSZ); empty = now.
+        default: ""
+      restore_drill_state_file: &state
+        type: path
+        description: The drill records (JSON), the role's only data.
+        default: /var/lib/homelabnext/restore-drill/drills.json
+  health:
+    short_description: Fail for every guest without a verified drill within restore_drill_max_age_days.
+    options:
+      restore_drill_guests: *guests
+      restore_drill_max_age_days: *max
+      restore_drill_now: *now
+      restore_drill_state_file: *state
+  readiness:
+    short_description: Fail unless the drill command exists and is executable.
+    options:
+      restore_drill_cli: *cli
+  backup:
+    short_description: Declare the drill records as the data a backup keeps.
+    options:
+      restore_drill_state_file: *state
+  restore:
+    short_description: Put the drill records back from restore_drill_restore_source.
+    options:
+      restore_drill_state_file: *state
+      restore_drill_restore_source:
+        type: path
+        description: A drills.json written by the export hook or a backup.
+        required: true
+  upgrade:
+    short_description: Nothing pinned; the drill command belongs to the backup product.
+    options: {}
+  export:
+    short_description: Copy the drill records (JSON, an open format) to restore_drill_export_dir.
+    options:
+      restore_drill_state_file: *state
+      restore_drill_export_dir:
+        type: path
+        description: Where the exit copy is written.
+        required: true

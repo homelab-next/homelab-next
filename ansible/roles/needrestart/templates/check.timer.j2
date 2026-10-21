@@ -1,0 +1,11 @@
+# Managed by homelabnext (role needrestart, control restart-required); local changes are overwritten.
+[Unit]
+Description=homelabnext needrestart check, after the patch run (control restart-required)
+
+[Timer]
+OnCalendar={{ needrestart_schedule }}
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

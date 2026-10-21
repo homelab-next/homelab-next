@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Look for a local MTA and a root alias (for notify auto)
+  block:
+    - name: Look for the local MTA's sendmail
+      ansible.builtin.stat:
+        path: "{{ lynis_sendmail_cli }}"
+      register: lynis_mta
+    - name: Look for the aliases file
+      ansible.builtin.stat:
+        path: "{{ lynis_aliases_file }}"
+      register: lynis_aliases_stat
+    - name: Read the aliases file
+      ansible.builtin.slurp:
+        src: "{{ lynis_aliases_file }}"
+      register: lynis_aliases
+      when: lynis_aliases_stat.stat.exists
+
+- name: Choose the integrity sweep's alert channel
+  ansible.builtin.set_fact:
+    lynis_notify_mode: >-
+      {{ lynis_notify if lynis_notify != 'auto' else
+         ('mail' if lynis_mta.stat.exists and lynis_aliases_stat.stat.exists
+                    and (lynis_aliases.content | b64decode) is search('(?m)^root\s*:\s*\S')
+          else 'none') }}
+    lynis_notify_url: "{{ lookup('hnx_registry', lynis_notify_id, field='url') if lynis_notify == 'notify' else '' }}"
+
+- name: Refuse a notify endpoint that is not http(s), or a token over plain http
+  ansible.builtin.assert:
+    that:
+      - lynis_notify_mode != 'notify' or lynis_notify_url is match('^https?://')
+      - lynis_notify_mode != 'notify' or lynis_notify_auth_ref == '' or lynis_notify_url is match('^https://')
+    fail_msg: "lynis: the notify endpoint {{ lynis_notify_url }} is not http(s), or a token would go over plain http"
+
+- name: Write the ntfy token (owner-only)
+  when: lynis_notify_mode == 'notify' and lynis_notify_auth_ref != ''
+  block:
+    - name: Ensure the token directory exists
+      ansible.builtin.file:
+        path: "{{ lynis_notify_auth_file | dirname }}"
+        state: directory
+        mode: "0700"
+    - name: Write the token
+      ansible.builtin.copy:
+        dest: "{{ lynis_notify_auth_file }}"
+        content: "{{ lookup('hnx_secret', lynis_notify_auth_ref) }}\n"
+        mode: "0600"
+      no_log: true
+
+- name: Ensure the script directory exists
+  ansible.builtin.file:
+    path: "{{ lynis_script | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Write the scan script
+  ansible.builtin.template:
+    src: scan.sh.j2
+    dest: "{{ lynis_script }}"
+    mode: "0750"
+
+- name: Write the package integrity sweep
+  ansible.builtin.template:
+    src: dpkg-verify.py.j2
+    dest: "{{ lynis_verify_script }}"
+    mode: "0700"
+  when: lynis_dpkg_verify | bool
+
+- name: Write the service and timer units
+  ansible.builtin.template:
+    src: "scan.{{ item }}.j2"
+    dest: "{{ lynis_unit_dir }}/hnx-lynis.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+  register: lynis_units
+
+- name: Reload systemd and enable the timer when the units changed
+  ansible.builtin.command:
+    argv: "{{ [lynis_systemctl_cli] + item }}"
+  loop: "{{ [['daemon-reload'], ['enable', '--now', 'hnx-lynis.timer']] if lynis_units is changed else [] }}"
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  changed_when: true

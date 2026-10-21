@@ -1,0 +1,9 @@
+# Managed by homelabnext (role rkhunter, control rootkit-check); local changes are overwritten.
+[Unit]
+Description=homelabnext rkhunter rootkit check (control rootkit-check)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/homelabnext/rkhunter-scan
+Nice=10
+IOSchedulingClass=idle

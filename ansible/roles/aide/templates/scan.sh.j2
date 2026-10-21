@@ -1,0 +1,23 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: aide-scan
+#   kind: job
+#   purpose: Run one scheduled AIDE file integrity check and record its exit status for the role's health hook.
+#   owner: platform
+#   trigger: [timer:aide/scan, role:aide]
+#   inputs: the role's rendered settings (baked into this file)
+#   outputs: the report and last-run (exit status) under the role's state directory
+#   installs_to: /usr/local/libexec/homelabnext/aide-scan
+#   exit:
+#     "0": the run finished (the scanner's own status is in last-run)
+# Managed by homelabnext (role aide, control file-integrity); local changes are overwritten.
+# One scheduled run: AIDE file integrity check. The exit status lands in last-run (its mtime is the run's time),
+# which the role's health hook reads beside the report.
+set -u
+STATE={{ aide_state_dir | quote }}
+mkdir -p "$STATE"
+{{ aide_cli | quote }} --check --config {{ aide_config_file | quote }} > "$STATE/report.txt" 2>&1
+rc=$?
+echo "$rc" > "$STATE/last-run.tmp" && mv "$STATE/last-run.tmp" "$STATE/last-run"
+exit 0

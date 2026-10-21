@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every value reaches a unit file, the scan script or a configuration line.
+- name: Validate the inputs
+  ansible.builtin.assert:
+    that:
+      - aide_schedule is match('^[A-Za-z0-9*:,./~ -]+ UTC\Z')
+      - aide_max_age_hours | int > 0
+      - aide_paths | selectattr('path', 'defined') | selectattr('path', 'match', '^/[A-Za-z0-9._/-]*\Z') | list | length == aide_paths | length
+      - aide_paths | selectattr('rule', 'defined') | selectattr('rule', 'match', '^[A-Za-z0-9+]+\Z') | list | length == aide_paths | length
+      - aide_dropin | basename is match('^[A-Za-z0-9_-]+\Z')
+    fail_msg: >-
+      aide: an OnCalendar schedule ending in UTC, {path, rule} pairs with plain absolute paths and attribute rules, and a drop-in name aide.conf.d reads

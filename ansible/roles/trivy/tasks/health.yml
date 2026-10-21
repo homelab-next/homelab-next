@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Read the last run's status
+      ansible.builtin.stat:
+        path: "{{ trivy_state_dir }}/last-run"
+      register: trivy_last
+    - name: Read its exit status
+      ansible.builtin.slurp:
+        src: "{{ trivy_state_dir }}/last-run"
+      register: trivy_last_rc
+      when: trivy_last.stat.exists
+    - name: Fail unless a run finished recently
+      ansible.builtin.assert:
+        that:
+          - trivy_last.stat.exists
+          - (now(utc=true).timestamp() - trivy_last.stat.mtime) < trivy_max_age_hours | int * 3600
+        fail_msg: "trivy: no Trivy package scan in the last {{ trivy_max_age_hours }}h ({{ trivy_state_dir }}/last-run is missing or older)"
+    - name: Find the scan reports
+      ansible.builtin.find:
+        paths: ["{{ trivy_state_dir }}", "{{ trivy_state_dir }}/images"]
+        patterns: ["rootfs.json", "*.json"]
+        excludes: ["sbom.cdx.json"]
+      register: trivy_reports
+    - name: Read them
+      ansible.builtin.slurp:
+        src: "{{ item.path }}"
+      loop: "{{ trivy_reports.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+      register: trivy_docs
+    - name: Fail unless the last run succeeded with at most the allowed findings
+      vars:
+        trivy_found: >-
+          {{ trivy_docs.results | map(attribute='content') | map('b64decode') | map('from_json')
+             | map(attribute='Results', default=[]) | flatten | map(attribute='Vulnerabilities', default=[])
+             | map('default', [], true) | flatten }}
+      ansible.builtin.assert:
+        that:
+          - (trivy_last_rc.content | b64decode | trim) == '0'
+          - trivy_reports.files | selectattr('path', 'search', '/rootfs\\.json$') | list | length == 1
+          - trivy_found | length <= trivy_max_findings | int
+        fail_msg: >-
+          trivy: the last run exited {{ trivy_last_rc.content | b64decode | trim }}, or it reported
+          {{ trivy_found | length }} finding(s) (at most {{ trivy_max_findings }}):
+          {{ trivy_found | map(attribute='VulnerabilityID', default='?') | unique | sort | join(', ') | truncate(400) }}
+
+  tags: [health]

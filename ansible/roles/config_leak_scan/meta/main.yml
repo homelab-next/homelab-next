@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: Verify that no secret sits in a guest's configuration directories, with the repository's own leak-scanner patterns.
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

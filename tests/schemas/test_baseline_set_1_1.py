@@ -19,10 +19,10 @@ FROZEN_11 = json.loads((ROOT / "schemas/_frozen/1.1/platform/baseline_set.schema
 FIXTURES = sorted((Path(__file__).parent / "fixtures").glob("baseline_set.1_1.*.yml"))
 
 
-def test_version_is_1_1_frozen_and_additive():
-    assert CURRENT["$id"].endswith("/platform/baseline_set/1.1")
-    assert CURRENT == FROZEN_11
-    assert sc.is_additive(FROZEN_10, CURRENT) == []
+def test_1_1_is_frozen_and_current_is_additive_over_it():
+    assert FROZEN_11["$id"].endswith("/platform/baseline_set/1.1")
+    assert sc.is_additive(FROZEN_10, FROZEN_11) == []
+    assert sc.is_additive(FROZEN_11, CURRENT) == []
 
 
 def test_fixtures_exist():
@@ -32,6 +32,7 @@ def test_fixtures_exist():
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.name)
 def test_1_1_documents_validate_against_1_1_only(path):
     doc = yaml.safe_load(path.read_text())
+    assert sc.errors_for(FROZEN_11, doc, REG) == []
     assert sc.errors_for(CURRENT, doc, REG) == []
     assert sc.errors_for(FROZEN_10, doc, REG) != []
 

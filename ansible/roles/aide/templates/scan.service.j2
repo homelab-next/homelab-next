@@ -1,0 +1,9 @@
+# Managed by homelabnext (role aide, control file-integrity); local changes are overwritten.
+[Unit]
+Description=homelabnext AIDE file integrity check (control file-integrity)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/homelabnext/aide-scan
+Nice=10
+IOSchedulingClass=idle

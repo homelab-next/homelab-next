@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# Control central-auth (ADR-0016 decision 7). MFA is the identity provider's: the Authentik
+# outpost can require a code with the password on an LDAP bind. SSH stays key-only
+# (ssh_hardening reads directory keys through sss_ssh_authorizedkeys on these guests).
+- name: Refuse a host that is not Debian-family (the role installs the distribution's sssd)
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] == 'Debian'
+    fail_msg: "sssd_ldap supports Debian-family guests only (got {{ ansible_facts['os_family'] }})"
+
+- name: Install sssd for LDAP, its NSS and PAM modules and sssctl
+  ansible.builtin.apt:
+    name: [sssd-ldap, sssd-tools, libnss-sss, libpam-sss]
+    state: present
+
+- name: Write the checked configuration and restart while owed
+  ansible.builtin.include_tasks: config.yml
+
+- name: Create a directory account's home on first login
+  ansible.builtin.command:
+    argv: [pam-auth-update, --enable, mkhomedir]
+  changed_when: false
+  when: sssd_ldap_mkhomedir | bool
+
+- name: Enable and start sssd
+  ansible.builtin.systemd_service:
+    name: sssd
+    enabled: true
+    state: started

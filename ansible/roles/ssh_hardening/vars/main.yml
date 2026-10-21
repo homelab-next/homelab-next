@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: the effective values the control requires (sshd -T prints them lower-case).
+ssh_hardening_required:
+  permitrootlogin: "no"
+  passwordauthentication: "no"
+  kbdinteractiveauthentication: "no"
+  pubkeyauthentication: "yes"
+# The connection sshd -T evaluates Match blocks for: the kept account from the local host.
+ssh_hardening_match_spec: "user={{ ssh_hardening_keep_user }},host=localhost,addr=127.0.0.1"  # no-raw-endpoint: allow the loopback connection sshd -T evaluates Match blocks for

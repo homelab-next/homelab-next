@@ -7,9 +7,12 @@
     hnx status collect [--registry FILE] [--root DIR] [--state FILE] [--all | --source ID ...]
                        [--notify-topic T] [--secrets-dir DIR]
     hnx status render --out DIR [--state FILE] [--views FILE] [--registry FILE] [--now TIME]
+                      [--guests DIR --guests-site SITE [--guests-registry FILE]] [--maps ROOT]
+                      [--invariants-results FILE]
     hnx status serve [--state FILE] [--views FILE] [--registry FILE] [--bind HOST] [--port N]
                      [--allow-remote --allowed-host NAME ...] [--agents FILE] [--secrets-dir DIR]
-                     [--strategy DIR] [--guests DIR --guests-site SITE]
+                     [--strategy DIR] [--guests DIR --guests-site SITE [--guests-registry FILE]]
+                     [--maps ROOT] [--invariants-results FILE]
     hnx status ingest --agents FILE [--registry FILE] [--bind HOST] [--port N] [--publish-to URL]
                       [--allow-remote --allowed-host NAME ...] [--secrets-dir DIR]
 
@@ -23,6 +26,11 @@ the same front door; the hub's one ``POST``: ``homelabnext.status.approvals``).
 Requirements, Objectives, RFIs; ``docs/strategy.md``); ``--guests`` (``examples/minimal/guests``
 with ``--guests-site examples/minimal/site.yml``) adds the Baselines page, the guest x
 defense-layer coverage matrix (``docs/compute-model.md``).
+The generated maps (ADR-0018, ``homelabnext.status.maps``): ``--guests``/``--guests-site`` also
+give the Topology page; ``--maps ROOT`` (a checkout, e.g. ``.``) the Dataflow, Architecture and
+Roadmap pages, the roadmap reading ``--invariants-results`` (``build/invariants/results.json``
+from ``make invariants``) for each criterion's state.  ``render`` writes each available map as
+``<panel>.html`` beside ``index.html``.
 
 ``collect`` runs one pass over the due sources (``--all``: every polled source) and writes the
 state file; ``render`` and ``serve`` only read it, so they never wait on a source.  Exit codes:
@@ -70,12 +78,12 @@ def _hub(args, reg, specs, clock):
     return StatusHub(specs, StateStore(args.state, clock=clock), clock=clock)
 
 
-def _document(args, reg, specs, views, clock, site=None, *, approvals=False):
+def _document(args, reg, specs, views, clock, site=None, *, approvals=False, maps=None):
     hub = _hub(args, reg, specs, clock)
     now = clock()
     agents = site.summary(now) if site is not None else None
     strategy = bool(getattr(args, "strategy", None))
-    baselines = bool(getattr(args, "guests", None))
+    baselines = getattr(args, "cmd", "serve") == "serve" and bool(getattr(args, "guests", None))
     return build_status(
         hub.snapshot(now),
         views,
@@ -85,6 +93,7 @@ def _document(args, reg, specs, views, clock, site=None, *, approvals=False):
         strategy=strategy,
         baselines=baselines,
         approvals=approvals,
+        maps=maps.available() if maps is not None else (),
     )
 
 
@@ -110,6 +119,22 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
             action="append",
             default=[],
             help="hostname clients use besides loopback (repeatable; required with --allow-remote)",
+        )
+
+    def map_opts(p):
+        p.add_argument("--guests", help="a guest directory: the Baselines and Topology pages")
+        p.add_argument("--guests-site", help="the site model the guest directory's zones come from")
+        p.add_argument(
+            "--guests-registry",
+            metavar="FILE",
+            help="the registry that places services on those guests (Topology, Dataflow; "
+            "default: --registry)",
+        )
+        p.add_argument(
+            "--maps", metavar="ROOT", help="a checkout: the Dataflow, Architecture, Roadmap maps"
+        )
+        p.add_argument(
+            "--invariants-results", metavar="FILE", help="invariants results for the Roadmap"
         )
 
     def common(p, *, views=False, state=False):
@@ -146,14 +171,14 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     p.add_argument("--out", required=True)
     p.add_argument("--now", help="RFC 3339 time to render at (default: now)")
     p.add_argument("--docs-base", default="docs")
+    map_opts(p)
     agents_opt(p)
     p = sub.add_parser("serve", help="serve the page and status.json live (GET only)")
     common(p, views=True, state=True)
     remote_opts(p, 8099)
     p.add_argument("--docs-base", default="docs")
     p.add_argument("--strategy", help="a strategy directory: serve its pages (docs/strategy.md)")
-    p.add_argument("--guests", help="a guest directory: serve its Baselines coverage page")
-    p.add_argument("--guests-site", help="the site model the guest directory's zones come from")
+    map_opts(p)
     agents_opt(p)
     p = sub.add_parser("ingest", help="the agent-activity push listener (POST only)")
     common(p)
@@ -229,6 +254,11 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     except ViewsError as exc:
         print(f"hnx status: {exc}", file=sys.stderr)
         return 2
+    try:
+        maps = _map_site(args, reg)
+    except ValueError as exc:
+        print(f"hnx status {args.cmd}: {exc}", file=sys.stderr)
+        return 2
     if args.cmd == "render":
         from .render import write
 
@@ -236,8 +266,10 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         if args.now:
             fixed = parse_iso(args.now)
             at = lambda: fixed  # noqa: E731
-        doc = _document(args, reg, specs, views, at, site)
+        doc = _document(args, reg, specs, views, at, site, maps=maps)
         paths = write(args.out, doc, docs_base=args.docs_base)
+        if maps is not None:
+            paths += maps.write(args.out, doc)
         print("wrote " + ", ".join(str(p) for p in paths))
         return 0
     from .serve import LOOPBACK, make_server
@@ -246,7 +278,7 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     served = approvals is not None
     try:
         srv = make_server(
-            lambda: _document(args, reg, specs, views, clock, site, approvals=served),
+            lambda: _document(args, reg, specs, views, clock, site, approvals=served, maps=maps),
             host=args.bind or LOOPBACK,
             port=args.port,
             allow_remote=args.allow_remote,
@@ -256,6 +288,7 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
             strategy=_strategy_site(args, clock),
             baselines=_baseline_site(args),
             approvals=approvals,
+            maps=maps,
         )
     except (ValueError, OSError) as exc:
         print(f"hnx status serve: {exc}", file=sys.stderr)
@@ -280,6 +313,38 @@ def _baseline_site(args):
     from homelabnext.compute.pages import BaselineSite
 
     return BaselineSite(args.guests, args.guests_site)
+
+
+def _map_site(args, reg):
+    """The generated maps for ``--guests``/``--guests-site``, ``--maps`` and
+    ``--invariants-results``, or None when none of them is given."""
+    guests, root = getattr(args, "guests", None), getattr(args, "maps", None)
+    results = getattr(args, "invariants_results", None)
+    if guests and not args.guests_site:
+        raise ValueError("--guests needs --guests-site (the site model that defines the zones)")
+    if root and not Path(root).is_dir():
+        raise ValueError(f"--maps {root}: not a directory")
+    if results and not root:
+        raise ValueError("--invariants-results needs --maps (the checkout the roadmap reads)")
+    lab_file = getattr(args, "guests_registry", None)
+    if lab_file and not guests:
+        raise ValueError("--guests-registry needs --guests (the guests its services run on)")
+    if not guests and not root:
+        return None
+    from .maps import MapSite
+
+    try:
+        lab = load(lab_file) if lab_file else None
+    except RegistryError as exc:
+        raise ValueError(f"--guests-registry {lab_file}: {exc}") from None
+    return MapSite(
+        root=root,
+        registry=reg,
+        guests=guests,
+        guests_site=args.guests_site,
+        results=results,
+        lab_registry=lab,
+    )
 
 
 def _strategy_site(args, clock: Callable[[], float]):

@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Read the last run's status
+      ansible.builtin.stat:
+        path: "{{ rkhunter_state_dir }}/last-run"
+      register: rkhunter_last
+    - name: Read its exit status
+      ansible.builtin.slurp:
+        src: "{{ rkhunter_state_dir }}/last-run"
+      register: rkhunter_last_rc
+      when: rkhunter_last.stat.exists
+    - name: Fail unless a run finished recently
+      ansible.builtin.assert:
+        that:
+          - rkhunter_last.stat.exists
+          - (now(utc=true).timestamp() - rkhunter_last.stat.mtime) < rkhunter_max_age_hours | int * 3600
+        fail_msg: "rkhunter: no rkhunter rootkit check in the last {{ rkhunter_max_age_hours }}h ({{ rkhunter_state_dir }}/last-run is missing or older)"
+    - name: Fail unless the last check reported no warning
+      ansible.builtin.assert:
+        that: (rkhunter_last_rc.content | b64decode | trim) == '0'
+        fail_msg: "rkhunter: the last check exited {{ rkhunter_last_rc.content | b64decode | trim }}; review {{ rkhunter_state_dir }}/warnings.txt"
+
+  tags: [health]

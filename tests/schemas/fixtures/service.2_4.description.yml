@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# 2.4-only: a service with its one-line description (documentation addresses only)
+registry_version: 1
+lab: {name: lab, domain: example.internal, svc_label: svc, owner: ops}
+zones:
+  mgmt: {cidr: 192.0.2.0/26}
+hosts:
+  bus-1: {address: 192.0.2.10, zone: mgmt}
+services:
+  events:
+    capability: events
+    host: bus-1
+    protocol: nats
+    port: 4222
+    owner: ops
+    version: "2.10"
+    tls: none
+    description: The event bus every producer publishes to.

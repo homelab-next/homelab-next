@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: needrestart-check
+#   kind: job
+#   purpose: List what needs a restart (needrestart -b, never restarting anything) and alert when that set changes.
+#   owner: platform
+#   trigger: [timer:needrestart/check, role:needrestart]
+#   inputs: needrestart -b batch output; the previous state file
+#   outputs: the state file (owner-only) and, on a change, one alert (ntfy or local mail)
+#   installs_to: /usr/local/libexec/homelabnext/needrestart-check
+#   exit:
+#     "0": checked (and alerted, if the set changed)
+#     "1": needrestart failed; the state file is not rewritten
+#     "2": the alert could not be sent; it stays owed to the next run
+"""Managed by homelabnext (role needrestart, control restart-required); local changes are
+overwritten.  `needrestart -b` lists, it never restarts: NEEDRESTART-KSTA (1 current, 2 or 3 a
+newer kernel waits for a reboot), NEEDRESTART-KCUR, NEEDRESTART-KEXP and one NEEDRESTART-SVC line
+per service.  The state file keeps the last check and the last set an alert was sent for; an alert
+goes out only when the set differs from that one (state-diffed), so an unchanged set is silent and
+a failed alert is retried on the next run."""
+
+import json
+import os
+import subprocess
+import sys
+import urllib.request
+
+STATE_DIR = {{ needrestart_state_dir | to_json }}
+NEEDRESTART = {{ needrestart_cli | to_json }}
+MODE = {{ needrestart_mode | to_json }}
+ALERT_KERNEL = {{ 'True' if needrestart_alert_kernel | bool else 'False' }}
+NOTIFY_URL = {{ needrestart_notify_url | to_json }}
+TOPIC = {{ needrestart_notify_topic | to_json }}
+PRIORITY = {{ needrestart_notify_priority | int }}
+TOKEN_FILE = {{ (needrestart_notify_auth_file if needrestart_notify_auth_ref else '') | to_json }}
+SENDMAIL = {{ needrestart_sendmail_cli | to_json }}
+MAIL_TO = {{ needrestart_mail_to | to_json }}
+STATE = os.path.join(STATE_DIR, "state.json")
+
+
+def parse(text):
+    svcs, k = [], {}
+    for line in text.splitlines():
+        key, _, value = line.partition(":")
+        value = value.strip()
+        if key == "NEEDRESTART-SVC" and value:
+            svcs.append(value)
+        elif key in ("NEEDRESTART-KSTA", "NEEDRESTART-KCUR", "NEEDRESTART-KEXP"):
+            k[key[12:].lower()] = value
+    pending = k.get("ksta") in ("2", "3")
+    kernel = {"status": k.get("ksta", ""), "current": k.get("kcur", ""),
+              "expected": k.get("kexp", ""), "reboot_pending": pending}
+    return sorted(set(svcs)), kernel
+
+
+def alert_set(services, kernel):
+    return {"services": services, "kernel": kernel["expected"] if ALERT_KERNEL and kernel["reboot_pending"] else ""}
+
+
+def message(s):
+    if not s["services"] and not s["kernel"]:
+        return "restart-required: nothing needs a restart now", "No service (or kernel) waits for a restart any more."
+    lines = [f"- {x}" for x in s["services"]]
+    if s["kernel"]:
+        lines.append(f"- reboot into kernel {s['kernel']}")
+    title = f"restart-required: {len(s['services'])} service(s){' and a kernel' if s['kernel'] else ''}"
+    return title, "Restart needed (needrestart lists only; nothing was restarted):\n" + "\n".join(lines)
+
+
+def send(title, body):
+    host = os.uname().nodename
+    if MODE == "notify":
+        headers = {"Title": f"{host}: {title}", "Priority": str(PRIORITY),
+                   "Tags": "homelabnext,restart-required", "Content-Type": "text/plain; charset=utf-8"}
+        if TOKEN_FILE:
+            with open(TOKEN_FILE, encoding="utf-8") as fh:
+                headers["Authorization"] = "Bearer " + fh.read().strip()
+        req = urllib.request.Request(f"{NOTIFY_URL}/{TOPIC}", data=body.encode("utf-8"), headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
+    elif MODE == "mail":
+        mail = f"To: {MAIL_TO}\nSubject: {host}: {title}\n\n{body}\n"
+        subprocess.run([SENDMAIL, "-t"], input=mail, text=True, check=True)
+
+
+def main():
+    run = subprocess.run([NEEDRESTART, "-b"], capture_output=True, text=True)
+    if run.returncode != 0:
+        print(f"needrestart -b exited {run.returncode}: {run.stderr.strip()}", file=sys.stderr)
+        return 1
+    services, kernel = parse(run.stdout)
+    try:
+        with open(STATE, encoding="utf-8") as fh:
+            prev = json.load(fh)
+    except (OSError, ValueError):
+        prev = {}
+    now = alert_set(services, kernel)
+    alerted = prev.get("alerted", {"services": [], "kernel": ""})
+    rc = 0
+    if now != alerted and MODE != "none":
+        try:
+            send(*message(now))
+            alerted = now
+        except Exception as exc:  # the alert stays owed
+            print(f"alert not sent: {exc}", file=sys.stderr)
+            rc = 2
+    elif MODE == "none":
+        alerted = now
+    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+    tmp = STATE + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump({"services": services, "kernel": kernel, "alerted": alerted}, fh, indent=2, sort_keys=True)
+    os.replace(tmp, STATE)
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())

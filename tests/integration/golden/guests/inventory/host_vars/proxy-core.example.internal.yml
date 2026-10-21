@@ -11,5 +11,9 @@ hnx_provisioning: "terraform"
 hnx_vmid: 11
 hnx_zone: "edge"
 hnx_tags: ["prod"]
+hnx_firewall:
+  policy_out: "ACCEPT"
+  inbound_allow: []
+  outbound_allow: []
 hnx_baselines: ["base"]
 hnx_controls: ["ssh-hardening", "log-forward"]

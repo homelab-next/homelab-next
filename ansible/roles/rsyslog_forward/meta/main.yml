@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: Forward system and authentication logs with rsyslog to the log pipeline by logical id, over TLS, checked with rsyslogd -N1 before it goes live.
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

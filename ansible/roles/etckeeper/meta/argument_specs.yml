@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install etckeeper, commit /etc, and push it to the lab's git service.
+    options:
+      etckeeper_remote_id: &remote
+        type: str
+        description: Logical id of the lab's git service in the registry (scheme ssh); /etc is pushed there.
+        required: true
+      etckeeper_remote_path: &path
+        type: str
+        description: Repository path on the git service.
+        default: "etc/{{ inventory_hostname }}.git"
+      etckeeper_dir: &dir
+        type: path
+        description: The directory etckeeper keeps (always /etc outside tests).
+        default: /etc
+      etckeeper_conf_file: &conf
+        type: path
+        description: etckeeper's configuration file.
+        default: /etc/etckeeper/etckeeper.conf
+      etckeeper_cli: &cli
+        type: str
+        description: The etckeeper command.
+        default: etckeeper
+      etckeeper_git_cli: &git
+        type: str
+        description: The git command.
+        default: git
+  config:
+    short_description: Point the repository's origin at the git service, push after each commit, commit what is pending.
+    options:
+      etckeeper_remote_id: *remote
+      etckeeper_remote_path: *path
+      etckeeper_dir: *dir
+      etckeeper_conf_file: *conf
+      etckeeper_cli: *cli
+      etckeeper_git_cli: *git
+  health:
+    short_description: Fail unless /etc is committed and the last commit has reached the git service.
+    options:
+      etckeeper_dir: *dir
+      etckeeper_git_cli: *git
+  readiness:
+    short_description: Fail unless the git service's SSH port answers.
+    options:
+      etckeeper_remote_id: *remote
+  backup:
+    short_description: Nothing more to back up; the git service holds the history.
+    options: {}
+  restore:
+    short_description: Nothing to restore in place; a rebuild clones the repository from the git service.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; etckeeper follows the patching control.
+    options: {}
+  export:
+    short_description: Nothing to export; the history is already a git repository on the git service.
+    options: {}

@@ -91,6 +91,7 @@ def make_server(
     strategy: Any = None,
     baselines: Any = None,
     approvals: Any = None,
+    maps: Any = None,
 ) -> ThreadingHTTPServer:
     """A server for ``document()`` (called once per request).  ``port=0`` picks a free port.
 
@@ -101,7 +102,8 @@ def make_server(
     :class:`homelabnext.strategy.pages.StrategySite` adds the strategy pages; ``baselines``: a
     :class:`homelabnext.compute.pages.BaselineSite` adds the Baselines page; ``approvals``: a
     :class:`homelabnext.status.approvals.ApprovalsSite` adds the Approvals page and its one
-    ``POST`` route."""
+    ``POST`` route; ``maps``: a :class:`homelabnext.status.maps.MapSite` adds the generated maps
+    (topology, dataflow, architecture, roadmap: ADR-0018)."""
     extra = frozenset(h.strip().lower().rstrip(".") for h in allowed_hosts if h.strip())
     if allow_remote and not extra:
         raise ValueError("allow_remote needs allowed_hosts: the hostnames clients will use")
@@ -158,7 +160,13 @@ def make_server(
             """The first page site's response for ``route``, or None; the document is built
             once, and only when some site is configured."""
             # (site, whether its handler also judges the caller), in the order routes resolve
-            sites = [(approvals, True), (strategy, False), (baselines, False), (agents, True)]
+            sites = [
+                (approvals, True),
+                (strategy, False),
+                (baselines, False),
+                (maps, False),
+                (agents, True),
+            ]
             sites = [(s, auth) for s, auth in sites if s is not None]
             if not sites:
                 return None

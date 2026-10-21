@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not a setting: where the scan script is installed (the service's ExecStart names it).
+clamav_script: /usr/local/libexec/homelabnext/clamav-scan

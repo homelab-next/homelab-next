@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Ensure the state directory exists
+      ansible.builtin.file:
+        path: "{{ ssh_hardening_state_dir }}"
+        state: directory
+        mode: "0750"
+    - name: Write the backup manifest (nothing to keep; the configuration is rendered)
+      ansible.builtin.copy:
+        dest: "{{ ssh_hardening_state_dir }}/backup-manifest.json"
+        content: "{{ {'service': 'ssh_hardening', 'paths': [], 'note': 'the drop-in is rendered; host keys belong to the guest image'} | to_nice_json }}\n"
+        mode: "0640"
+  tags: [backup]

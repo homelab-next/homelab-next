@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Kernel settings
+  when: "'sysctl' in os_hardening_items"
+  block:
+    - name: Write the kernel settings
+      ansible.builtin.template:
+        src: sysctl.conf.j2
+        dest: "{{ os_hardening_sysctl_file }}"
+        mode: "0644"
+      register: os_hardening_sysctl_written
+    # sysctl -p stops at nothing: a setting the kernel lacks fails the task (and the run), which
+    # is wanted, since the health hook would otherwise report a setting that never applied.
+    - name: Apply the kernel settings now
+      ansible.builtin.command:
+        argv: ["{{ os_hardening_sysctl_cli }}", -p, "{{ os_hardening_sysctl_file }}"]
+      when: os_hardening_sysctl_written is changed
+      changed_when: true
+
+- name: Refuse the unused filesystem modules
+  ansible.builtin.template:
+    src: modprobe.conf.j2
+    dest: "{{ os_hardening_modprobe_file }}"
+    mode: "0644"
+  when: "'filesystems' in os_hardening_items"
+
+- name: No core dumps for any user
+  ansible.builtin.copy:
+    dest: "{{ os_hardening_limits_file }}"
+    content: "# Managed by homelabnext (role os_hardening); local changes are overwritten.\n*    hard    core    0\n"
+    mode: "0644"
+  when: "'core_dumps' in os_hardening_items"
+
+- name: File modes
+  when: "'file_modes' in os_hardening_items"
+  block:
+    - name: Look up the files
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+      loop: "{{ os_hardening_file_modes }}"
+      register: os_hardening_stats
+    - name: Set the mode of each file that exists
+      ansible.builtin.file:
+        path: "{{ item.item.path }}"
+        mode: "{{ item.item.mode }}"
+      loop: "{{ os_hardening_stats.results | selectattr('stat.exists') | list }}"
+      loop_control:
+        label: "{{ item.item.path }}"

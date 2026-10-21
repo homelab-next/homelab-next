@@ -1,0 +1,81 @@
+{
+ "capabilities": [
+  {
+   "adapters": [],
+   "conformance": "extended",
+   "fakes": [],
+   "id": "dns",
+   "products": [],
+   "services": []
+  },
+  {
+   "adapters": [
+    "pkg.real:make"
+   ],
+   "conformance": "core",
+   "fakes": [
+    "pkg.fakes:FakeBus"
+   ],
+   "id": "events",
+   "products": [
+    "nats"
+   ],
+   "services": [
+    "bus"
+   ]
+  },
+  {
+   "adapters": [],
+   "conformance": null,
+   "fakes": [],
+   "id": "metrics",
+   "products": [
+    "prometheus"
+   ],
+   "services": [
+    "prom"
+   ]
+  }
+ ],
+ "control": {
+  "broker": {
+   "actions": [
+    "memory.write"
+   ],
+   "lanes": [
+    "memory"
+   ],
+   "source": "m.yml"
+  },
+  "bus": {
+   "impl": "nats",
+   "service": "bus"
+  },
+  "decision": {
+   "safety": [
+    "hostile-content"
+   ],
+   "specs": [
+    "page"
+   ]
+  },
+  "status-hub": {
+   "pushed": [],
+   "service": "hub",
+   "sources": [
+    "a",
+    "b"
+   ]
+  },
+  "workflows": {
+   "acts": false,
+   "decides": true,
+   "packs": [
+    "p"
+   ],
+   "triggers": [
+    "homelabnext.alert.created"
+   ]
+  }
+ }
+}

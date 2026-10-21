@@ -1,0 +1,24 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: rkhunter-scan
+#   kind: job
+#   purpose: Run one scheduled rkhunter rootkit check and record its exit status for the role's health hook.
+#   owner: platform
+#   trigger: [timer:rkhunter/scan, role:rkhunter]
+#   inputs: the role's rendered settings (baked into this file)
+#   outputs: the report and last-run (exit status) under the role's state directory
+#   installs_to: /usr/local/libexec/homelabnext/rkhunter-scan
+#   exit:
+#     "0": the run finished (the scanner's own status is in last-run)
+# Managed by homelabnext (role rkhunter, control rootkit-check); local changes are overwritten.
+# One scheduled run: rkhunter rootkit check. The exit status lands in last-run (its mtime is the run's time),
+# which the role's health hook reads beside the report.
+set -u
+STATE={{ rkhunter_state_dir | quote }}
+mkdir -p "$STATE"
+{{ rkhunter_cli | quote }} --check --skip-keypress --report-warnings-only --nocolors \
+  --logfile "$STATE/rkhunter.log" > "$STATE/warnings.txt" 2>&1
+rc=$?
+echo "$rc" > "$STATE/last-run.tmp" && mv "$STATE/last-run.tmp" "$STATE/last-run"
+exit 0

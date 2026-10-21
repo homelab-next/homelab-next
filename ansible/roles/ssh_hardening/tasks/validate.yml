@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Values become sshd_config lines: plain names and numbers only.
+- name: Validate the kept account, groups, key command and limits
+  ansible.builtin.assert:
+    that:
+      - ssh_hardening_keep_user is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - ssh_hardening_keep_user != 'root'
+      - ssh_hardening_allow_groups | length > 0
+      - ssh_hardening_allow_groups | select('match', '^[a-z_][a-z0-9_-]{0,31}\Z') | list | length == ssh_hardening_allow_groups | length
+      - ssh_hardening_authorized_keys_command == '' or ssh_hardening_authorized_keys_command is match('^/[A-Za-z0-9._/-]+\Z')
+      - ssh_hardening_max_auth_tries | int >= 1
+      - ssh_hardening_login_grace_time | int >= 1
+      - ssh_hardening_client_alive_interval | int >= 0
+      - ssh_hardening_client_alive_count_max | int >= 1
+      - ssh_hardening_service is match('^[A-Za-z0-9@._-]+\Z')
+    fail_msg: >-
+      ssh_hardening: the kept account is a plain user name (never root), the allow groups are
+      plain group names (at least one), the key command is an absolute path or empty, and the
+      limits are positive numbers

@@ -1,0 +1,11 @@
+# Managed by homelabnext (role trivy, control package-scan); local changes are overwritten.
+[Unit]
+Description=homelabnext Trivy package scan, scheduled (control package-scan)
+
+[Timer]
+OnCalendar={{ trivy_schedule }}
+Persistent=true
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restart required (control restart-required, applied per guest): the distribution's needrestart in
+# LIST-ONLY mode. It never restarts anything itself (`$nrconf{restart} = 'l'`, a conf.d drop-in
+# checked with perl -c), so its apt hook after a patch run only lists. A timer after the daily
+# patch run calls `needrestart -b` (batch output) and writes the services and the kernel state to
+# an owner-only state file; it alerts only when the SET of services needing a restart changes
+# (state-diffed: never once per run, and once more when the set empties).
+#
+# Who alerts on what (no double alerts): this role owns service restarts. A pending kernel (a
+# reboot) stays with patching: unattended-upgrades already mails its own reboot notice and reboots
+# in its window, so the kernel state is recorded here (and in health) but only alerted with
+# needrestart_alert_kernel.
+#
+# needrestart_notify: none, notify (POST to the notify capability's ntfy endpoint by logical id:
+# <url>/<topic> with Title, Priority and Tags headers, a token by secret reference, never over
+# plain http), mail (the host's local mail to root: sendmail -t), or auto (mail when the host has
+# a local MTA, /usr/sbin/sendmail, and /etc/aliases forwards root; else none). It is required, and
+# the example lab's base baseline sets auto: a lab that already forwards host mail
+# (unattended-upgrades' reboot notices included) to its alerting gets these the same way, with
+# nothing more to configure.
+needrestart_notify_id: notify
+needrestart_notify_topic: homelabnext-restarts
+needrestart_notify_priority: 3
+# Empty: the ntfy topic is open. Else secret:<name> of an access token (sent as a Bearer token).
+needrestart_notify_auth_ref: ""
+needrestart_mail_to: root
+needrestart_alert_kernel: false
+# After the daily patch run (apt-daily-upgrade.timer, 06:00 plus up to an hour by default).
+needrestart_schedule: "*-*-* 07:40:00 UTC"
+needrestart_max_age_hours: 48
+needrestart_cli: needrestart
+needrestart_sendmail_cli: /usr/sbin/sendmail
+needrestart_perl_cli: perl
+needrestart_systemctl_cli: systemctl
+needrestart_dropin: /etc/needrestart/conf.d/50-homelabnext.conf
+needrestart_aliases_file: /etc/aliases
+needrestart_unit_dir: /etc/systemd/system
+needrestart_state_dir: /var/lib/homelabnext/needrestart

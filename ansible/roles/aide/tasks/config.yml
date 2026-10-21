@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: Apache-2.0
+# The drop-in is staged outside aide.conf.d's name pattern and checked with aide --config-check
+# on a test configuration that includes the main file and then the staged one; only a passing
+# drop-in replaces the live file.
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Ensure the state directory exists
+  ansible.builtin.file:
+    path: "{{ aide_state_dir }}"
+    state: directory
+    mode: "0700"
+
+- name: Compare the drop-in with the live file
+  ansible.builtin.template:
+    src: paths.conf.j2
+    dest: "{{ aide_dropin }}"
+    mode: "0644"
+  check_mode: true
+  register: aide_written
+
+- name: Check the new drop-in, then install it
+  when: aide_written is changed
+  block:
+    - name: Stage the new drop-in
+      ansible.builtin.template:
+        src: paths.conf.j2
+        dest: "{{ aide_state_dir }}/staged.conf"
+        mode: "0600"
+    - name: Write a test configuration with the main file and the staged drop-in
+      ansible.builtin.copy:
+        dest: "{{ aide_state_dir }}/test.conf"
+        content: "@@include {{ aide_config_file }}\n@@include {{ aide_state_dir }}/staged.conf\n"
+        mode: "0600"
+    - name: Check it
+      ansible.builtin.command:
+        argv: ["{{ aide_cli }}", --config-check, --config, "{{ aide_state_dir }}/test.conf"]
+      changed_when: false
+    - name: Install the checked drop-in
+      ansible.builtin.copy:
+        src: "{{ aide_state_dir }}/staged.conf"
+        dest: "{{ aide_dropin }}"
+        remote_src: true
+        mode: "0644"
+  always:
+    - name: Remove the staged files
+      ansible.builtin.file:
+        path: "{{ aide_state_dir }}/{{ item }}"
+        state: absent
+      loop: [staged.conf, test.conf]
+
+- name: Ensure the script directory exists
+  ansible.builtin.file:
+    path: "{{ aide_script | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Write the scan script
+  ansible.builtin.template:
+    src: scan.sh.j2
+    dest: "{{ aide_script }}"
+    mode: "0750"
+
+- name: Write the service and timer units
+  ansible.builtin.template:
+    src: "scan.{{ item }}.j2"
+    dest: "{{ aide_unit_dir }}/hnx-aide.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+  register: aide_units
+
+- name: Reload systemd and enable the timer when the units changed
+  ansible.builtin.command:
+    argv: "{{ [aide_systemctl_cli] + item }}"
+  loop: "{{ [['daemon-reload'], ['enable', '--now', 'hnx-aide.timer']] if aide_units is changed else [] }}"
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  changed_when: true

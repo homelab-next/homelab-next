@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# File integrity (control file-integrity, applied per guest): the distribution's AIDE, whose
+# stock rules already watch the system; aide_paths adds the guest's own (a drop-in under
+# aide.conf.d, checked by aide --config-check in a test configuration that includes it before it
+# goes live). main builds the baseline database once (aideinit); a timer runs aide --check, whose
+# exit status is 0 when nothing changed (1 added, 2 removed, 4 changed, combined; 14 and up an
+# error). Health fails on any change until the change is accepted with aide --update, which is
+# the operator's review step after a patch run.
+# AIDE rather than the SIEM agent's own file integrity (Wazuh syscheck): the control then holds
+# when the SIEM product is swapped, and AIDE's reports reach the SIEM anyway through log-forward.
+aide_config_file: /etc/aide/aide.conf
+aide_dropin: /etc/aide/aide.conf.d/90_homelabnext
+aide_cli: aide
+aide_schedule: "*-*-* 05:20:00 UTC"
+aide_max_age_hours: 48
+aide_systemctl_cli: systemctl
+aide_unit_dir: /etc/systemd/system
+aide_state_dir: /var/lib/homelabnext/aide

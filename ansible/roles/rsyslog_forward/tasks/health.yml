@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# Arrival at the lake is the control's end-to-end check (a test line within five minutes), made by
+# the pipeline's own ingest audit; on the guest, health is that the forwarder runs.
+- name: Fail unless rsyslog is running
+  ansible.builtin.command:
+    argv: ["{{ rsyslog_forward_systemctl_cli }}", is-active, rsyslog]
+  changed_when: false
+  tags: [health]

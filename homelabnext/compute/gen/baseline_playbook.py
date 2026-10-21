@@ -6,7 +6,10 @@ control applied per guest (``apply: guest``, the default) targets the ``control_
 group (the ``inventory`` target writes it).  A control applied centrally (``apply: central``,
 ADR-0016 decision 7) targets its ``group``, the central product host, once, and passes the role
 ``<role>_guests``: every guest that needs the control as ``{id, name, fqdn, ip, zone}``, sorted
-by id, which the product enrolls (a sensor's monitored addresses, a scanner's targets).
+by id, which the product enrolls (a sensor's monitored addresses, a scanner's targets); a guest
+whose baselines set inputs of that role (``with:``, baseline set 1.2) carries them as
+``settings: {<role>_<input>: value}`` in its row.  A per-guest control's settings are host
+variables (the ``inventory`` target writes them), so its play names only the role.
 
 A control whose ``role`` is null has no product yet: it is written as a commented block that names
 the guests waiting for it, never dropped.  A control no guest needs is listed as such.  The
@@ -15,7 +18,9 @@ product is chosen in one place, the control's ``role`` in the baseline set (ADR-
 
 from __future__ import annotations
 
-from homelabnext.compute.baselines import APPLY_CENTRAL, LAYERS, coverage
+import json
+
+from homelabnext.compute.baselines import APPLY_CENTRAL, LAYERS, coverage, resolve
 from homelabnext.compute.model import Fleet
 
 from ._text import HEADER, q, qlist
@@ -24,17 +29,32 @@ from .inventory import control_group
 FILE = "baseline.yml"
 
 
-def enrolled(fleet: Fleet, guest_ids: list[str]) -> list[dict[str, str]]:
-    """What a central role receives for each guest: id, name, fqdn, ip and zone, sorted by id."""
+def enrolled(fleet: Fleet, guest_ids: list[str], control: str | None = None) -> list[dict]:
+    """What a central role receives for each guest: id, name, fqdn, ip and zone, sorted by id,
+    plus ``settings`` (the guest's baseline settings of ``control`` as role variables) when its
+    baselines set any."""
     by_id = {g.id: g for g in fleet.guests}
-    return [
-        {"id": g.id, "name": g.name, "fqdn": fleet.fqdn(g), "ip": g.ip, "zone": g.zone}
-        for g in sorted((by_id[i] for i in guest_ids), key=lambda x: x.id)
-    ]
+    out: list[dict] = []
+    for g in sorted((by_id[i] for i in guest_ids), key=lambda x: x.id):
+        row: dict = {"id": g.id, "name": g.name, "fqdn": fleet.fqdn(g), "ip": g.ip, "zone": g.zone}
+        if control and fleet.baselines is not None:
+            role = fleet.baselines.role(control)
+            mine = resolve(g, fleet.baselines).settings.get(control, {})
+            if role and mine:
+                row["settings"] = {f"{role}_{k}": v for k, v in sorted(mine.items())}
+        out.append(row)
+    return out
 
 
-def _flow(row: dict[str, str]) -> str:
-    return "{" + ", ".join(f"{k}: {q(v)}" for k, v in row.items()) + "}"
+def _flow(row: dict) -> str:
+    return (
+        "{"
+        + ", ".join(
+            f"{k}: {json.dumps(v, sort_keys=True) if isinstance(v, dict | list) else q(v)}"
+            for k, v in row.items()
+        )
+        + "}"
+    )
 
 
 def render(fleet: Fleet) -> dict[str, str]:
@@ -93,8 +113,12 @@ def render(fleet: Fleet) -> dict[str, str]:
                     f"    - role: {role}",
                     f"      {role}_guests:",
                 ]
-                L += [f"        - {_flow(row)}" for row in enrolled(fleet, needed)]
+                L += [f"        - {_flow(row)}" for row in enrolled(fleet, needed, c)]
             else:
+                if any(c in resolve(g, bs).settings for g in fleet.guests):
+                    L.append(
+                        "  # baseline settings (with:) are host variables (the inventory target)"
+                    )
                 L += ["  roles:", f"    - role: {role}"]
     if not plays:
         L += ["", "# no control is bound to a role yet", "[]"]

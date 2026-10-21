@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks:
+        file: validate.yml
+        apply:
+          tags: [health]
+    - name: Read the live kernel settings
+      ansible.builtin.command:
+        argv: "{{ [os_hardening_sysctl_cli, '-n'] + (os_hardening_sysctl | sort) }}"
+      register: os_hardening_live
+      changed_when: false
+      when: "'sysctl' in os_hardening_items and os_hardening_sysctl | length > 0"
+    - name: Fail unless every kernel setting is live
+      vars:
+        os_hardening_want: "{{ os_hardening_sysctl | dictsort | map(attribute=1) | map('string') | list }}"
+        os_hardening_got: "{{ os_hardening_live.stdout_lines | map('trim') | list }}"
+      ansible.builtin.assert:
+        that: os_hardening_got == os_hardening_want
+        fail_msg: >-
+          os_hardening: live kernel settings
+          {{ dict(os_hardening_sysctl | sort | zip(os_hardening_got)) | to_json }} differ from
+          {{ os_hardening_sysctl | to_json }}
+      when: "'sysctl' in os_hardening_items and os_hardening_sysctl | length > 0"
+    - name: Look up the files
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+      loop: "{{ os_hardening_file_modes if 'file_modes' in os_hardening_items else [] }}"
+      register: os_hardening_stats
+    - name: Fail unless every existing file has its mode
+      ansible.builtin.assert:
+        that: not item.stat.exists or item.stat.mode == item.item.mode
+        fail_msg: "os_hardening: {{ item.item.path }} has mode {{ item.stat.mode | default('?') }}, not {{ item.item.mode }}"
+      loop: "{{ os_hardening_stats.results }}"
+      loop_control:
+        label: "{{ item.item.path }}"
+  tags: [health]

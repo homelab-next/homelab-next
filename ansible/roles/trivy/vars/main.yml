@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: where the checked vendor signing key is installed for apt (the repository's
+# Signed-By; the vendor serves it ASCII-armoured), and the severities from the threshold up.
+trivy_keyring: /etc/apt/keyrings/hnx-trivy.asc
+trivy_severities: [UNKNOWN, LOW, MEDIUM, HIGH, CRITICAL]
+trivy_severity_list: "{{ trivy_severities[trivy_severities.index(trivy_severity):] }}"
+# Fixed, not a setting: where the scan script is installed (the service's ExecStart names it).
+trivy_script: /usr/local/libexec/homelabnext/trivy-scan

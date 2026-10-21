@@ -1,0 +1,15 @@
+# Managed by homelabnext (role chrony, control time-sync); local changes are overwritten.
+{% for host in chrony_server_hosts %}
+server {{ host }} iburst
+{% endfor %}
+{% for pool in chrony_pools %}
+pool {{ pool }} iburst
+{% endfor %}
+keyfile /etc/chrony/chrony.keys
+driftfile /var/lib/chrony/chrony.drift
+ntsdumpdir /var/lib/chrony
+logdir /var/log/chrony
+maxupdateskew 100.0
+rtcsync
+makestep {{ chrony_makestep_threshold | float }} {{ chrony_makestep_limit | int }}
+leapsectz right/UTC

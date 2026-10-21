@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Fail unless the installed ruleset passes nft -c
+  ansible.builtin.command:
+    argv: ["{{ nftables_host_nft_cli }}", -c, -f, "{{ nftables_host_config_file }}"]
+  changed_when: false
+  tags: [readiness]

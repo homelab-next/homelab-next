@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Control secrets-from-store (ADR-0016 decision 7): verification only (see defaults/main.yml).
+- name: Scan the configuration directories
+  ansible.builtin.include_tasks: scan.yml
+
+- name: Ensure the state directory exists
+  ansible.builtin.file:
+    path: "{{ config_leak_scan_state_dir }}"
+    state: directory
+    mode: "0700"
+
+- name: Write the report (path, line, pattern; never the value)
+  ansible.builtin.copy:
+    dest: "{{ config_leak_scan_state_dir }}/report.json"
+    content: "{{ {'scanned': config_leak_scan_paths, 'hits': config_leak_scan_hits} | to_nice_json }}\n"
+    mode: "0600"
+
+- name: Report the hits (the health hook fails on them)
+  ansible.builtin.debug:
+    msg: "config_leak_scan: {{ config_leak_scan_hits | map(attribute='path') | unique | join(', ') }} hold secret-looking values; fetch them from the secrets store at run time instead"
+  when: config_leak_scan_hits | length > 0

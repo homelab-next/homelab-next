@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Control host-audit (ADR-0016 decision 7).
+- name: Refuse a host that is not Debian-family (the role installs the distribution's auditd)
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] == 'Debian'
+    fail_msg: "auditd supports Debian-family guests only (got {{ ansible_facts['os_family'] }})"
+
+- name: Install auditd
+  ansible.builtin.apt:
+    name: auditd
+    state: present
+
+- name: Enable and start auditd
+  ansible.builtin.systemd_service:
+    name: auditd
+    enabled: true
+    state: started
+
+- name: Write the rules and log rotation, load the rules
+  ansible.builtin.include_tasks: config.yml

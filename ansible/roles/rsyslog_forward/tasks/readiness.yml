@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Wait for the receiver's port
+  ansible.builtin.wait_for:
+    host: "{{ lookup('hnx_registry', rsyslog_forward_collector_id, field='host') }}"
+    port: "{{ lookup('hnx_registry', rsyslog_forward_collector_id, field='port') }}"
+    timeout: 10
+  tags: [readiness]

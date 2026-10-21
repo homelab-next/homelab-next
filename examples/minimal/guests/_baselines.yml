@@ -1,22 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
 # Guest baselines (ADR-0016, docs/compute-model.md "Baselines and defense layers").
 # Controls are generic and product-neutral; `role` binds a control to the Ansible role that
-# implements it and is null until a product is chosen.  `apply: central` runs the role once on the
+# implements it (null until a product is chosen).  `apply: central` runs the role once on the
 # product host's group instead of on each guest, and enrolls the guests there (ADR-0016 decision 7).
 # Every guest names a baseline (or carries a documented baseline.exemption): `hnx guests baselines
-# DIR --site SITE` prints the coverage.  First bindings, to be tuned on the real lab: Wazuh agent,
-# Suricata, Greenbone and Tailscale.
+# DIR --site SITE` prints the coverage.  A baseline lists a control as its id or, with settings
+# (baseline set 1.2), as {id, with}: `with` sets inputs of the bound role (its argument_specs main
+# options without the role prefix), merged parent-first through `extends`, and reaches the role
+# as its prefixed variables.  Every product here is a first binding, to be tuned on the real lab.
 controls:
   # identity: who can get in
   ssh-hardening:
     layer: identity
     description: Key-only SSH, no direct root login, a short list of permitted users.
-    role: null
+    role: ssh_hardening
     verify: sshd -T shows passwordauthentication no and permitrootlogin no
   central-auth:
     layer: identity
     description: Interactive accounts come from the directory; administrators use MFA.
-    role: null
+    role: sssd_ldap
     verify: a local-only interactive account cannot log in; a directory account with MFA can
   remote-access:
     layer: identity
@@ -27,40 +29,61 @@ controls:
   time-sync:
     layer: host
     description: The clock follows the lab's time sources, so logs and tokens line up.
-    role: null
+    role: chrony
     verify: the time daemon reports synchronised with an offset under one second
   patching:
     layer: host
     description: Security updates are applied automatically or on a short, tracked cadence.
-    role: null
+    role: unattended_upgrades
     verify: the package manager lists no security update older than seven days
+  restart-required:
+    layer: host
+    description: Services and kernels left running old code after patching are listed and reported.
+    role: needrestart
+    settings: [notify, notify_id, notify_topic, notify_priority, notify_auth_ref, mail_to, alert_kernel, schedule]
+    verify: the restart check ran in the last two days and nothing it lists has waited unreported
   os-hardening:
     layer: host
     description: A hardened operating-system profile (kernel settings, services, file modes).
-    role: null
-    verify: the hardening audit scores no failed high-severity item
+    role: os_hardening
+    settings: [items, sysctl, filesystems, services, file_modes]
+    verify: the host-assessment audit (Lynis) reports a hardening index of at least 60 and no warning
+  host-assessment:
+    layer: host
+    description: A scheduled audit of the host's configuration reports its hardening and warnings.
+    role: lynis
+    settings: [min_hardening_index, max_warnings, broker_socket]
+    verify: the last host audit is under two days old and meets the hardening-index floor
   # network: what traffic may flow
   host-firewall:
     layer: network
     description: A default-deny inbound firewall on the guest itself, beside the hypervisor one.
-    role: null
+    role: nftables_host
+    settings: [ssh_sources, ssh_port]
     verify: the host firewall ruleset loads with an inbound default policy of drop
   egress-filter:
     layer: network
     description: Outbound traffic only to listed destinations (resolvers, mirrors, peers).
-    role: null
+    role: nftables_host
+    settings: []
     verify: a connection to an unlisted outside address is refused
   # detection: seeing attacks and weaknesses
   log-forward:
     layer: detection
     description: System and authentication logs are forwarded to the central log pipeline.
-    role: null
+    role: rsyslog_forward
     verify: a test log line written on the guest reaches the lake within five minutes
   siem-agent:
     layer: detection
     description: The endpoint agent of the SIEM runs and reports.
     role: wazuh_agent
     verify: the SIEM lists the guest's agent as active with a heartbeat under ten minutes old
+  host-audit:
+    layer: detection
+    description: The kernel audit system records changes to accounts, privilege, sshd, modules and time.
+    role: auditd
+    settings: [rule_groups, max_log_file, num_logs]
+    verify: auditctl -l lists the hnx-identity, hnx-privilege, hnx-sshd, hnx-modules and hnx-time keys
   network-sensor:
     layer: detection
     description: The guest's segment is mirrored to a network sensor that inspects its traffic.
@@ -75,45 +98,115 @@ controls:
     apply: central
     group: cap_scanner
     verify: the scanner's last completed scan of the guest is under seven days old
+  package-scan:
+    layer: detection
+    description: Installed packages (and running container images) are checked for known vulnerabilities.
+    role: trivy
+    settings: [severity, max_findings, scan_containers, sbom, skip_db_update, db_repository]
+    verify: the last package scan is under two days old and reports nothing at or above the severity
+  file-integrity:
+    layer: detection
+    description: Changes to watched system and configuration files are detected and reported.
+    role: aide
+    settings: [paths]
+    verify: the last integrity check is under two days old and found no unreviewed change
+  rootkit-check:
+    layer: detection
+    description: The host is checked for known rootkits and tampered system binaries.
+    role: rkhunter
+    settings: [whitelist]
+    verify: the last rootkit check is under two days old and reported no warning
+  malware-scan:
+    layer: detection
+    description: Stored and downloaded files are scanned for known malware with current signatures.
+    role: clamav
+    settings: [paths, exclude_dirs, private_mirror]
+    verify: the last malware scan is under eight days old, found nothing, and the signatures are current
   # data: protecting what is stored
   disk-encryption:
     layer: data
     description: Data volumes are encrypted at rest with keys held outside the guest.
-    role: null
+    role: disk_encryption_check
+    settings: [accepted]
     verify: every data volume reports an encrypted mapping
   secrets-from-store:
     layer: data
     description: Credentials are fetched from the secrets store at run time, never kept on disk.
-    role: null
+    role: config_leak_scan
+    settings: [paths, accepted]
     verify: a secret scan of the guest's configuration directories finds nothing
   # recovery: getting back after a loss
   backup-verify:
     layer: recovery
     description: The guest's backups are restored in a drill and the restore is checked.
-    role: null
+    role: restore_drill
+    apply: central
+    group: cap_backup
     verify: a restore drill of the guest completed and was verified in the last 90 days
   config-backup:
     layer: recovery
     description: The guest's configuration is in git or exported, so it can be rebuilt.
-    role: null
+    role: etckeeper
     verify: a rebuild from the stored configuration reaches the same state
 
 baselines:
   base:
     description: What every in-scope guest gets, whatever it runs.
-    controls: [time-sync, patching, ssh-hardening, host-firewall, log-forward, siem-agent]
+    controls:
+      - {id: time-sync, with: {server_ids: [time]}}
+      - {id: patching, with: {reboot_time: "04:30"}}
+      - {id: restart-required, with: {notify: auto}}
+      - {id: ssh-hardening, with: {keep_user: ansible}}
+      - {id: host-firewall, with: {ssh_sources: [192.0.2.0/26]}}
+      - {id: log-forward, with: {collector_id: log-collector}}
+      - {id: siem-agent, with: {manager_id: siem}}
+      - {id: host-audit, with: {rule_groups: [identity, privilege, sshd, modules, time]}}
   server:
     description: A long-lived service guest that holds state or serves others.
     extends: [base]
-    controls: [central-auth, vuln-scan, backup-verify, config-backup]
+    controls:
+      - id: central-auth
+        with:
+          ldap_id: idp-ldap
+          bind_dn: "cn=ldapservice,ou=users,dc=ldap,dc=goauthentik,dc=io"
+          break_glass_user: breakglass
+      - vuln-scan
+      - backup-verify
+      - {id: config-backup, with: {remote_id: config-git}}
+      - {id: host-assessment, with: {min_hardening_index: 60}}
+      - {id: rootkit-check, with: {whitelist: {}}}
+      - {id: package-scan, with: {severity: HIGH}}
+  container-host:
+    description: A server that runs containers (Docker, Podman or LXC); their images are scanned too.
+    extends: [server]
+    controls:
+      - {id: package-scan, with: {scan_containers: true}}
   exposed:
     description: A guest reachable from outside the lab (edge-facing).
     extends: [server]
-    controls: [os-hardening, remote-access, egress-filter, network-sensor]
+    controls:
+      - {id: os-hardening, with: {items: [sysctl, filesystems, services, file_modes, core_dumps]}}
+      - remote-access
+      - egress-filter
+      - network-sensor
   sensitive:
     description: A guest that holds secrets, identities or other high-value data.
     extends: [server]
-    controls: [os-hardening, disk-encryption, secrets-from-store, egress-filter]
+    controls:
+      - {id: os-hardening, with: {items: [sysctl, filesystems, services, file_modes, core_dumps]}}
+      - {id: disk-encryption, with: {accepted: {}}}
+      - {id: secrets-from-store, with: {paths: [/etc, /opt, /srv]}}
+      - egress-filter
+      - id: file-integrity
+        with:
+          paths:
+            - {path: /etc, rule: "p+i+n+u+g+s+m+c+sha256"}
+            - {path: /usr/local, rule: "p+i+n+u+g+s+m+c+sha256"}
+            - {path: /opt, rule: "p+i+n+u+g+s+m+c+sha256"}
+      - {id: package-scan, with: {severity: MEDIUM}}
   scratch:
     description: A throwaway lab guest (scope out) that still must not be an easy foothold.
-    controls: [time-sync, ssh-hardening, host-firewall]
+    controls:
+      - {id: time-sync, with: {server_ids: [time]}}
+      - {id: ssh-hardening, with: {keep_user: ansible}}
+      - {id: host-firewall, with: {ssh_sources: [192.0.2.0/26]}}

@@ -268,6 +268,12 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
 
     _firewall(doc, reg, zone_ids, r)
     _dns(doc, reg, r)
+    # 1.1: UPS ids, power declarations of the router, switches and edge (homelabnext/power.py);
+    # the hypervisors and physical hosts are checked with the guests (hnx guests validate)
+    from homelabnext.power import site_problems
+
+    for msg in site_problems(doc):
+        r.error(msg)
 
     adapters = doc.get("adapters", {})
     for key in ("network", "dns"):

@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:query-1
+description: SQL over the lake tables for analysts and agents.
+kind: vm
+status: planned
+provisioning: terraform
+placement: {node: hv-2, vmid: 142}
+resources:
+  cpu: {cores: 4}
+  memory: {size_mb: 8192}
+  disks: [{name: rootfs, size_gb: 40, pool: fast}]
+image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
+network: {zone: data, ip: 192.0.2.142}
+capability: cap:lake-query
+capability_groups: [cap_query]
+tags: [prod]
+owners: {primary: platform-team}

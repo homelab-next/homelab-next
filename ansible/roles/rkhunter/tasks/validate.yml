@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every value reaches a unit file, the scan script or a configuration line.
+- name: Validate the inputs
+  ansible.builtin.assert:
+    that:
+      - rkhunter_schedule is match('^[A-Za-z0-9*:,./~ -]+ UTC\Z')
+      - rkhunter_max_age_hours | int > 0
+      - rkhunter_settings.keys() | select('match', '^[A-Z][A-Z0-9_]*\Z') | list | length == rkhunter_settings | length
+      - rkhunter_settings.values() | map('string') | select('match', '^[^\n\r]*\Z') | list | length == rkhunter_settings | length
+      - rkhunter_whitelist.keys() | select('match', '^(?:ALLOW|SCRIPTWHITELIST|EXCLUDE|RTKT_)[A-Z0-9_]*\Z') | list | length == rkhunter_whitelist | length
+      - rkhunter_whitelist.values() | map('flatten') | flatten | select('match', '^/[^\n\r ]*\Z') | list | length == rkhunter_whitelist.values() | map('flatten') | flatten | length
+    fail_msg: >-
+      rkhunter: an OnCalendar schedule ending in UTC, settings as upper-case names with one-line values, and allow options (ALLOW..., SCRIPTWHITELIST, ...) listing absolute paths

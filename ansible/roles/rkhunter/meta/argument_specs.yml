@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install rkhunter, refresh its properties after every package run, and check on a timer.
+    options:
+      rkhunter_settings: &settings
+        type: dict
+        description: "Settings written to the local configuration (NAME -> value)."
+        default: 
+          PKGMGR: DPKG
+          UPDATE_MIRRORS: "0"
+          MIRRORS_MODE: "1"
+          WEB_CMD: '""'
+          ALLOW_SSH_ROOT_USER: "no"
+      rkhunter_whitelist: &whitelist
+        type: dict
+        description: "rkhunter's allow options for this guest (ALLOWHIDDENDIR, ALLOWDEVFILE, SCRIPTWHITELIST, ... -> list of paths), the usual way its false positives are settled; {} for none."
+        required: true
+      rkhunter_local_config: &local
+        type: path
+        description: "rkhunter's local configuration (read after the main file)."
+        default: /etc/rkhunter.conf.local  # scrub-allow: the rkhunter file name
+      rkhunter_default_file: &default
+        type: path
+        description: "The package's defaults file (APT_AUTOGEN, CRON_DAILY_RUN)."
+        default: /etc/default/rkhunter
+      rkhunter_cli: &cli
+        type: str
+        description: "The rkhunter command."
+        default: rkhunter
+      rkhunter_schedule: &schedule
+        type: str
+        description: "When the scheduled run starts (systemd OnCalendar, ending in UTC)."
+        default: "*-*-* 04:40:00 UTC"
+      rkhunter_max_age_hours: &age
+        type: int
+        description: "The health hook fails when the last run is older than this."
+        default: 48
+      rkhunter_systemctl_cli: &systemctl
+        type: str
+        description: "The systemctl command (daemon-reload, enable the timer)."
+        default: systemctl
+      rkhunter_unit_dir: &units
+        type: path
+        description: "Where the service and timer units are written."
+        default: /etc/systemd/system
+      rkhunter_state_dir: &state
+        type: path
+        description: "Where each run writes its report and its exit status (last-run)."
+        default: /var/lib/homelabnext/rkhunter
+  config:
+    short_description: Write the checked configuration, the scan script and its timer, and enable the timer.
+    options:
+      rkhunter_whitelist: *whitelist
+      rkhunter_settings: *settings
+      rkhunter_local_config: *local
+      rkhunter_default_file: *default
+      rkhunter_cli: *cli
+      rkhunter_schedule: *schedule
+      rkhunter_systemctl_cli: *systemctl
+      rkhunter_unit_dir: *units
+      rkhunter_state_dir: *state
+  health:
+    short_description: Fail unless a recent check reported no warning.
+    options:
+      rkhunter_max_age_hours: *age
+      rkhunter_state_dir: *state
+  readiness:
+    short_description: No dependency; succeeds.
+    options: {}
+  backup:
+    short_description: Nothing to back up; every run rewrites its report.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-running main writes the configuration again.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; the distribution package follows the patching control.
+    options: {}
+  export:
+    short_description: Nothing to export beyond the reports in the state directory.
+    options: {}

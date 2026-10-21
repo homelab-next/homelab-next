@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:nas-1
+display_name: Storage appliance
+description: A physical storage appliance holding the object store and the backups.
+kind: host
+provisioning: host-only
+placement: {node: nas-1}
+network: {zone: data, ip: 192.0.2.150}
+capability: cap:object-store
+power: {ups: ups-b}
+tags: [prod, storage]
+owners: {primary: data-team}

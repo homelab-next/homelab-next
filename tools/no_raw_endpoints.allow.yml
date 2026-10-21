@@ -61,6 +61,8 @@ allow:
     reason: render tests use synthetic example.internal endpoints and a loopback literal as expected values
   - path: "tests/roles/test_product_roles.py"
     reason: central product roles enroll guests by address; the synthetic guests use documentation addresses (the data under test)
+  - path: "tests/roles/test_control_roles.py"
+    reason: the firewall, drill and directory tests use documentation addresses and example.internal registry endpoints as the data under test
   - path: "schemas/platform/negative/service.*.yml"
     reason: negative registry fixtures derived from the synthetic example lab (documentation addresses only)
   - path: "docs/compute-model.md"

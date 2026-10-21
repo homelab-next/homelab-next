@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: lynis-dpkg-verify
+#   kind: job
+#   purpose: Check package-owned files against dpkg's recorded digests and alert when the set of mismatched or missing files changes.
+#   owner: platform
+#   trigger: [timer:lynis/scan, role:lynis]
+#   inputs: dpkg --verify (or debsums -s where dpkg has no --verify); the previous result
+#   outputs: dpkg-verify.json (owner-only) beside the Lynis report and, on a change, one alert
+#   installs_to: /usr/local/libexec/homelabnext/lynis-dpkg-verify
+#   exit:
+#     "0": checked (and alerted, if the set changed)
+#     "1": neither dpkg --verify nor debsums could run; the result is not rewritten
+#     "2": the alert could not be sent; it stays owed to the next run
+"""Managed by homelabnext (role lynis, control host-assessment); local changes are overwritten.
+
+`dpkg --verify` prints one line per file that differs from what dpkg recorded: nine check
+columns in rpm -V style (`5` in the third is a digest mismatch, `?` a check that could not run),
+a space, `c` for a conffile, a space and the path; a missing file reads `missing`.  A digest
+mismatch or a missing file is a finding, unless it is a conffile (left out by default) or an
+accepted path or package.  The sums live on the host itself: a cheap tripwire, not proof."""
+
+import fnmatch
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.request
+
+STATE_DIR = {{ lynis_state_dir | to_json }}
+DPKG = {{ lynis_dpkg_cli | to_json }}
+DEBSUMS = {{ lynis_debsums_cli | to_json }}
+INCLUDE_CONFFILES = {{ 'True' if lynis_dpkg_verify_include_conffiles | bool else 'False' }}
+ALLOW = json.loads({{ lynis_dpkg_verify_allow | to_json | to_json }})
+MODE = {{ lynis_notify_mode | to_json }}
+NOTIFY_URL = {{ lynis_notify_url | to_json }}
+TOPIC = {{ lynis_notify_topic | to_json }}
+PRIORITY = {{ lynis_notify_priority | int }}
+AUTH_FILE = {{ (lynis_notify_auth_file if lynis_notify_auth_ref else '') | to_json }}
+SENDMAIL = {{ lynis_sendmail_cli | to_json }}
+MAIL_TO = {{ lynis_mail_to | to_json }}
+DPKG_CFG = {{ lynis_dpkg_cfg_files | to_json }}
+RESULT = os.path.join(STATE_DIR, "dpkg-verify.json")
+LINE = re.compile(r"^(?P<flags>missing|\S{9})\s+(?:(?P<conf>c)\s+)?(?P<path>/.*)$")
+DEBSUMS_LINE = re.compile(r"^debsums: (?P<what>changed|missing) file (?P<path>/\S+)(?: \(from (?P<pkg>\S+) package\))?")
+
+
+def verify():
+    """[(path, flags, conffile)] from dpkg --verify, else from debsums -s; None when neither ran."""
+    try:
+        run = subprocess.run([DPKG, "--verify"], capture_output=True, text=True)
+    except OSError:
+        run = None
+    if run is not None and "--verify" not in run.stderr:
+        out = []
+        for line in run.stdout.splitlines():
+            m = LINE.match(line)
+            if m:
+                out.append((m["path"], m["flags"], bool(m["conf"])))
+        return out
+    try:
+        run = subprocess.run([DEBSUMS, "-s"], capture_output=True, text=True)
+    except OSError:
+        return None
+    out = []
+    for line in (run.stdout + run.stderr).splitlines():
+        m = DEBSUMS_LINE.match(line)
+        if m:
+            out.append((m["path"], "missing" if m["what"] == "missing" else "??5??????", False))
+    return out
+
+
+def excluded_by_dpkg():
+    """dpkg's own path-exclude / path-include filters (minimal and container images drop docs,
+    man pages and locales at unpack time): a file they exclude is missing by design."""
+    rules = []
+    for name in DPKG_CFG:
+        paths = sorted(os.path.join(name, f) for f in os.listdir(name)) if os.path.isdir(name) else [name]
+        for p in paths:
+            try:
+                lines = open(p, encoding="utf-8").read().splitlines()
+            except OSError:
+                continue
+            for line in lines:
+                key, _, glob = line.strip().partition("=")
+                if key in ("path-exclude", "path-include") and glob:
+                    rules.append((key == "path-include", glob.strip()))
+
+    def dropped(path):
+        out = False
+        for include, glob in rules:  # the last matching rule wins, as in dpkg
+            if fnmatch.fnmatch(path, glob):
+                out = not include
+        return out
+
+    return dropped
+
+
+def package_of(path):
+    run = subprocess.run([DPKG, "-S", path], capture_output=True, text=True)
+    return run.stdout.split(":", 1)[0].split(",")[0].strip() if run.returncode == 0 else ""
+
+
+def accepted(path, pkg):
+    for a in ALLOW:
+        if "path" in a and fnmatch.fnmatch(path, a["path"]):
+            return a.get("reason", "")
+        if "package" in a and pkg and a["package"] == pkg:
+            return a.get("reason", "")
+    return None
+
+
+def send(title, body):
+    host = os.uname().nodename
+    if MODE == "notify":
+        headers = {"Title": f"{host}: {title}", "Priority": str(PRIORITY),
+                   "Tags": "homelabnext,package-integrity", "Content-Type": "text/plain; charset=utf-8"}
+        if AUTH_FILE:
+            with open(AUTH_FILE, encoding="utf-8") as fh:
+                headers["Authorization"] = "Bearer " + fh.read().strip()
+        req = urllib.request.Request(f"{NOTIFY_URL}/{TOPIC}", data=body.encode("utf-8"), headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
+    elif MODE == "mail":
+        mail = f"To: {MAIL_TO}\nSubject: {host}: {title}\n\n{body}\n"
+        subprocess.run([SENDMAIL, "-t"], input=mail, text=True, check=True)
+
+
+def main():
+    rows = verify()
+    if rows is None:
+        print("neither dpkg --verify nor debsums -s could run", file=sys.stderr)
+        return 1
+    findings, allowed, conffiles, dropped = [], [], 0, excluded_by_dpkg()
+    for path, flags, conf in rows:
+        if flags != "missing" and flags[2:3] != "5":
+            continue  # a mode, owner or time difference: not a digest finding
+        if flags == "missing" and dropped(path):
+            continue  # never unpacked (dpkg path-exclude)
+        if conf and not INCLUDE_CONFFILES:
+            conffiles += 1
+            continue
+        pkg = package_of(path)
+        row = {"path": path, "problem": "missing" if flags == "missing" else "digest", "package": pkg}
+        reason = accepted(path, pkg)
+        (allowed if reason is not None else findings).append({**row, **({"reason": reason} if reason is not None else {})})
+    findings.sort(key=lambda r: r["path"])
+    try:
+        with open(RESULT, encoding="utf-8") as fh:
+            prev = json.load(fh)
+    except (OSError, ValueError):
+        prev = {}
+    now = sorted(f"{r['problem']}:{r['path']}" for r in findings)
+    alerted = prev.get("alerted", [])
+    rc = 0
+    if now != alerted and MODE != "none":
+        if now:
+            title = f"package integrity: {len(now)} file(s) differ from their package"
+            body = "dpkg --verify (a tripwire; the sums live on the host):\n" + "\n".join(
+                f"- {r['problem']}: {r['path']} ({r['package'] or 'unknown package'})" for r in findings)
+        else:
+            title, body = "package integrity: clean again", "Every package-owned file matches its recorded digest."
+        try:
+            send(title, body)
+            alerted = now
+        except Exception as exc:  # the alert stays owed
+            print(f"alert not sent: {exc}", file=sys.stderr)
+            rc = 2
+    elif MODE == "none":
+        alerted = now
+    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+    tmp = RESULT + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump({"findings": findings, "accepted": allowed, "conffiles_skipped": conffiles,
+                   "alerted": alerted}, fh, indent=2, sort_keys=True)
+    os.replace(tmp, RESULT)
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# rejected: a control entry's `with` must set at least one input
+controls:
+  package-scan:
+    layer: detection
+    description: Installed packages are scanned for known vulnerabilities.
+    role: trivy
+    verify: the last scan is under a day old
+baselines:
+  server:
+    description: A long-lived service guest.
+    controls: [{id: package-scan, with: {}}]

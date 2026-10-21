@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: The guest's own nftables firewall from the guest model's rules (inbound default drop, optional default-deny egress), checked with nft -c before it loads.
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

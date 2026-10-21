@@ -27,7 +27,8 @@ from homelabnext.generators.safe import checked
 from ._text import HEADER
 
 
-def _address(fleet: Fleet, ref: str) -> str | None:
+def resolve_address(fleet: Fleet, ref: str) -> str | None:
+    """A rule's ``any`` (None), ``zone:<id>`` (the zone's subnet) or CIDR (as written)."""
     if ref == "any":
         return None
     if ref.startswith("zone:"):
@@ -40,7 +41,7 @@ def _rule_line(fleet: Fleet, rule: dict, direction: str) -> str:
     if rule.get("ports"):
         parts.append(f"-dport {rule['ports']}")
     side, ref = ("-source", rule["source"]) if direction == "IN" else ("-dest", rule["dest"])
-    addr = _address(fleet, ref)
+    addr = resolve_address(fleet, ref)
     if addr:
         parts.append(f"{side} {addr}")
     parts.append("-log nolog")

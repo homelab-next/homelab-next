@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# platform/baseline_set 1.2: per-control settings; a child baseline overrides its parent's
+controls:
+  package-scan:
+    layer: detection
+    description: Installed packages are scanned for known vulnerabilities.
+    role: trivy
+    settings: [severity, max_findings]
+    verify: the last scan is under a day old and reports nothing at or above the severity
+  siem-agent:
+    layer: detection
+    description: The endpoint agent of the SIEM runs and reports.
+    role: wazuh_agent
+    verify: the SIEM lists the guest's agent as active
+baselines:
+  server:
+    description: A long-lived service guest.
+    controls: [siem-agent, {id: package-scan, with: {severity: HIGH}}]
+  sensitive:
+    description: A guest that holds secrets.
+    extends: [server]
+    controls: [{id: package-scan, with: {severity: MEDIUM, max_findings: 0}}]

@@ -1,0 +1,13 @@
+{% set host = lookup('hnx_registry', rsyslog_forward_collector_id, field='host') -%}
+# Managed by homelabnext (role rsyslog_forward, control log-forward); local changes are overwritten.
+{{ rsyslog_forward_selector }} action(type="omfwd"
+    target="{{ host }}" port="{{ lookup('hnx_registry', rsyslog_forward_collector_id, field='port') | int }}" protocol="tcp"
+    template="RSYSLOG_SyslogProtocol23Format"
+{% if rsyslog_forward_tls | bool %}
+    StreamDriver="gtls" StreamDriverMode="1" StreamDriverAuthMode="x509/name"
+    StreamDriverPermittedPeers="{{ rsyslog_forward_permitted_peer or host }}"
+    StreamDriver.CAFile="{{ rsyslog_forward_ca_file }}"
+{% endif %}
+    queue.type="LinkedList" queue.filename="homelabnext_forward"
+    queue.maxDiskSpace="{{ rsyslog_forward_queue_max_disk }}" queue.saveOnShutdown="on"
+    action.resumeRetryCount="-1")

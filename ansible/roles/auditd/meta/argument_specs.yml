@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install auditd, write the rule set and log rotation, and load the rules.
+    options:
+      auditd_rule_groups: &groups
+        type: list
+        elements: str
+        description: "The rule groups to load: identity, privilege, sshd, modules, time (all five is the documented set)."
+        required: true
+      auditd_max_log_file: &max
+        type: int
+        description: Rotate the audit log at this size (MB).
+        default: 50
+      auditd_num_logs: &num
+        type: int
+        description: Rotated audit logs kept.
+        default: 5
+      auditd_rules_file: &rules
+        type: path
+        description: The role's rules.d file (augenrules compiles rules.d into audit.rules).
+        default: /etc/audit/rules.d/50-homelabnext.rules
+      auditd_conf_file: &conf
+        type: path
+        description: auditd's configuration.
+        default: /etc/audit/auditd.conf
+      auditd_augenrules_cli: &augenrules
+        type: str
+        description: The augenrules command (--check, --load).
+        default: augenrules
+      auditd_auditctl_cli: &auditctl
+        type: str
+        description: The auditctl command (lists the loaded rules).
+        default: auditctl
+      auditd_systemctl_cli: &systemctl
+        type: str
+        description: The systemctl command (signals auditd to re-read its configuration).
+        default: systemctl
+  config:
+    short_description: Write the rules and log rotation, load the rules when augenrules says they changed.
+    options:
+      auditd_rule_groups: *groups
+      auditd_max_log_file: *max
+      auditd_num_logs: *num
+      auditd_rules_file: *rules
+      auditd_conf_file: *conf
+      auditd_augenrules_cli: *augenrules
+      auditd_systemctl_cli: *systemctl
+  health:
+    short_description: Fail unless auditing is enabled and every chosen group's key is loaded.
+    options:
+      auditd_rule_groups: *groups
+      auditd_auditctl_cli: *auditctl
+  readiness:
+    short_description: No dependency; succeeds.
+    options: {}
+  backup:
+    short_description: Nothing to back up; the audit log reaches the SIEM through its agent.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-running main writes the rules again.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; auditd follows the patching control.
+    options: {}
+  export:
+    short_description: Nothing to export; the SIEM holds the events.
+    options: {}

@@ -28,8 +28,10 @@ Panel payloads:
 Page panels (:data:`PAGE_PANELS`) are pages of their own, served live by ``hnx status serve``:
 the agent pages (with ``--agents``), the strategy pages (with ``--strategy``; Strategy,
 Requirements, Objectives, RFIs: :mod:`homelabnext.strategy.pages`) and the Baselines page (with
-``--guests``: :mod:`homelabnext.compute.pages`) and the Approvals page (when ``agents.yml``
-configures ``approvals:``: :mod:`homelabnext.status.approvals`).  Their menu entries are
+``--guests``: :mod:`homelabnext.compute.pages`), the Approvals page (when ``agents.yml``
+configures ``approvals:``: :mod:`homelabnext.status.approvals`) and the generated maps
+(:data:`MAP_PANELS`: topology with ``--guests``, dataflow, architecture and roadmap with ``--maps``;
+:mod:`homelabnext.status.maps`, ADR-0018).  Their menu entries are
 ``available`` only when that part is configured.  The private pages (:data:`PRIVATE_PANELS`, the
 ``private`` menu group) are never in the public ``status.json`` and render only for a request
 through the trusted front door.
@@ -42,7 +44,7 @@ unavailable, so an optional tool (an agent dashboard) never makes the hub depend
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -73,8 +75,15 @@ PAGE_PANELS = {
     "baselines": "/baselines",
     # the broker Approvals page (homelabnext.status.approvals), with approvals: in agents.yml
     "approvals": "/approvals",
+    # the generated maps (homelabnext.status.maps, ADR-0018): --guests for the topology,
+    # --maps ROOT for the other three; also written as <panel>.html by hnx status render
+    "topology": "/topology",
+    "dataflow": "/dataflow",
+    "architecture": "/architecture",
+    "roadmap": "/roadmap",
 }
 STRATEGY_PANELS = frozenset({"strategy", "requirements", "objectives", "rfis"})
+MAP_PANELS = frozenset({"topology", "dataflow", "architecture", "roadmap"})
 PRIVATE_PANELS = frozenset({"agent-detail", "agent-access-log", "approvals"})
 PRIVATE_GROUP = "private"
 #: at most this many sessions go into status.json (worst state first)
@@ -278,8 +287,16 @@ def _panel(
 
 
 def _page_available(
-    panel: str, *, agents: Any, strategy: bool, baselines: bool, approvals: bool
+    panel: str,
+    *,
+    agents: Any,
+    strategy: bool,
+    baselines: bool,
+    approvals: bool,
+    maps: frozenset[str] = frozenset(),
 ) -> bool:
+    if panel in MAP_PANELS:
+        return panel in maps
     if panel in STRATEGY_PANELS:
         return strategy
     if panel == "baselines":
@@ -300,12 +317,14 @@ def build_status(
     strategy: bool = False,
     baselines: bool = False,
     approvals: bool = False,
+    maps: Iterable[str] = (),
 ) -> dict[str, Any]:
     """The ``status.json`` document (see the module docstring).  ``agents``: the summary tier's
     sessions (``{"sessions", "counts"}``) when an activity store is configured, else None.
     ``strategy``: the strategy pages are served (a strategy directory is configured);
     ``baselines``: the Baselines page is served (a guest directory is configured);
-    ``approvals``: the Approvals page is served (``agents.yml`` configures it)."""
+    ``approvals``: the Approvals page is served (``agents.yml`` configures it);
+    ``maps``: the map panels whose inputs are configured (:mod:`homelabnext.status.maps`)."""
     if capability_pages is None:
         from homelabnext.conform.registry import CAPABILITIES
 
@@ -314,6 +333,7 @@ def build_status(
     sources = [dict(s) for s in snapshot["sources"]]
     modules = _modules(specs, obs, sources, capability_pages)
     menu, panels = [], {}
+    served_maps = frozenset(maps)
     for v in views["menu"]:
         if v.get("panel") in PAGE_PANELS:
             entry = {
@@ -328,6 +348,7 @@ def build_status(
                     strategy=strategy,
                     baselines=baselines,
                     approvals=approvals,
+                    maps=served_maps,
                 ),
             }
             if v.get("group"):

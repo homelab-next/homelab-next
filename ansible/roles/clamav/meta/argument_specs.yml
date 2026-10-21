@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install ClamAV and freshclam, and scan the configured paths on a timer.
+    options:
+      clamav_paths: &paths
+        type: list
+        elements: path
+        description: "Paths the scheduled scan walks (those that exist), for example a file share's or a download area's root."
+        required: true
+      clamav_exclude_dirs: &exclude
+        type: list
+        elements: str
+        description: "Directory regular expressions clamscan skips (--exclude-dir)."
+        default: []
+      clamav_private_mirror: &mirror
+        type: str
+        description: "A lab signature mirror (host name) freshclam uses instead of the public one; empty = public."
+        default: ""
+      clamav_max_signature_age_days: &sigage
+        type: int
+        description: "The health hook fails when the daily signatures are older than this."
+        default: 3
+      clamav_freshclam_config: &freshclam
+        type: path
+        description: "freshclam's configuration."
+        default: /etc/clamav/freshclam.conf
+      clamav_database_dir: &db
+        type: path
+        description: "Where freshclam keeps the signatures."
+        default: /var/lib/clamav
+      clamav_cli: &cli
+        type: str
+        description: "The clamscan command."
+        default: clamscan
+      clamav_schedule: &schedule
+        type: str
+        description: "When the scheduled run starts (systemd OnCalendar, ending in UTC)."
+        default: "Sun *-*-* 02:50:00 UTC"
+      clamav_max_age_hours: &age
+        type: int
+        description: "The health hook fails when the last run is older than this."
+        default: 192
+      clamav_systemctl_cli: &systemctl
+        type: str
+        description: "The systemctl command (daemon-reload, enable the timer)."
+        default: systemctl
+      clamav_unit_dir: &units
+        type: path
+        description: "Where the service and timer units are written."
+        default: /etc/systemd/system
+      clamav_state_dir: &state
+        type: path
+        description: "Where each run writes its report and its exit status (last-run)."
+        default: /var/lib/homelabnext/clamav
+  config:
+    short_description: Write the checked configuration, the scan script and its timer, and enable the timer.
+    options:
+      clamav_paths: *paths
+      clamav_exclude_dirs: *exclude
+      clamav_private_mirror: *mirror
+      clamav_freshclam_config: *freshclam
+      clamav_cli: *cli
+      clamav_schedule: *schedule
+      clamav_systemctl_cli: *systemctl
+      clamav_unit_dir: *units
+      clamav_state_dir: *state
+  health:
+    short_description: Fail unless a recent scan found nothing and the signatures are current.
+    options:
+      clamav_max_signature_age_days: *sigage
+      clamav_database_dir: *db
+      clamav_max_age_hours: *age
+      clamav_state_dir: *state
+  readiness:
+    short_description: No dependency; succeeds.
+    options: {}
+  backup:
+    short_description: Nothing to back up; every run rewrites its report.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-running main writes the configuration again.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; the distribution package follows the patching control.
+    options: {}
+  export:
+    short_description: Nothing to export beyond the reports in the state directory.
+    options: {}

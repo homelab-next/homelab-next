@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# Control ssh-hardening (ADR-0016 decision 7): one drop-in, tested by sshd before it goes live, and
+# never at the cost of the account ansible connects as.
+- name: Refuse a host that is not Debian-family (the role relies on its sshd_config.d include)
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] == 'Debian'
+    fail_msg: "ssh_hardening supports Debian-family guests only (got {{ ansible_facts['os_family'] }})"
+
+- name: Install the OpenSSH server
+  ansible.builtin.apt:
+    name: openssh-server
+    state: present
+
+- name: Guard the kept account, test and install the drop-in, reload while owed
+  ansible.builtin.include_tasks: config.yml

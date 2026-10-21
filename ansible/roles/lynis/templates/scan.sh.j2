@@ -1,0 +1,38 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: lynis-scan
+#   kind: job
+#   purpose: Run one scheduled Lynis host audit (optionally filing it through the broker) and record its exit status.
+#   owner: platform
+#   trigger: [timer:lynis/scan, role:lynis]
+#   inputs: the role's rendered settings (baked into this file)
+#   outputs: the report and last-run (exit status) under the role's state directory
+#   installs_to: /usr/local/libexec/homelabnext/lynis-scan
+#   exit:
+#     "0": the run finished (the scanner's own status is in last-run)
+# Managed by homelabnext (role lynis, control host-assessment); local changes are overwritten.
+# One scheduled run: Lynis host audit. The exit status lands in last-run (its mtime is the run's time),
+# which the role's health hook reads beside the report.
+set -u
+STATE={{ lynis_state_dir | quote }}
+mkdir -p "$STATE"
+{{ lynis_cli | quote }} audit system --cronjob --quiet --no-colors \
+  --report-file "$STATE/report.dat" --log-file "$STATE/lynis.log"
+rc=$?
+{% if lynis_broker_socket %}
+# file the summary through the broker (finding.write); a failure here never fails the audit
+python3 - "$STATE/report.dat" "$STATE/finding.json" "$(hostname)" <<'PY'
+import json, sys
+report, out, host = sys.argv[1:4]
+lines = open(report).read().splitlines()
+index = next((l.split("=", 1)[1] for l in lines if l.startswith("hardening_index=")), "?")
+warnings = [l.split("=", 1)[1] for l in lines if l.startswith("warning[]=")]
+body = f"# Lynis audit of {host}\n\nHardening index: {index}\n\nWarnings ({len(warnings)}):\n"
+body += "".join(f"- {w}\n" for w in warnings)
+json.dump({"name": f"lynis-{host}.md", "content": body}, open(out, "w"))
+PY
+{{ lynis_hnx_cli | quote }} broker call finding.write --socket {{ lynis_broker_socket | quote }} --params-file "$STATE/finding.json" || true
+{% endif %}
+echo "$rc" > "$STATE/last-run.tmp" && mv "$STATE/last-run.tmp" "$STATE/last-run"
+exit 0

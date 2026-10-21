@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+# Host assessment (control host-assessment, applied per guest; it is also the verify of
+# os-hardening): the distribution's Lynis audits the host on a timer and writes its report
+# (report.dat: hardening_index=, warning[]=, suggestion[]=) to the state directory. Health fails
+# when the run is stale, the hardening index is under lynis_min_hardening_index, or there are
+# more than lynis_max_warnings warnings. With lynis_broker_socket set, each run also files the
+# summary as a finding through the broker's finding.write lane (`hnx broker call finding.write`,
+# which needs the hnx command on the guest and a broker identity for it).
+lynis_max_warnings: 0
+lynis_broker_socket: ""
+lynis_hnx_cli: hnx
+lynis_cli: lynis
+lynis_schedule: "*-*-* 04:10:00 UTC"
+lynis_max_age_hours: 48
+lynis_systemctl_cli: systemctl
+lynis_unit_dir: /etc/systemd/system
+lynis_state_dir: /var/lib/homelabnext/lynis
+# Package integrity sweep, on the same timer: `dpkg --verify` (debsums -s only where dpkg has no
+# --verify) compares every package-owned file with the MD5 sum dpkg recorded at install. A digest
+# mismatch (the 5 column) or a missing file is a finding; conffiles (attribute c) are left out by
+# default, since administrators edit them and file-integrity (AIDE) and host-audit watch them.
+# The sums live on the host itself, so this is a cheap tripwire for tampered package binaries and
+# libraries, not proof: whoever can replace a binary can rewrite the sums.
+lynis_dpkg_verify: true
+lynis_dpkg_verify_include_conffiles: false
+# Findings accepted with a reason: {path: <glob>, reason} or {package: <name>, reason}.
+lynis_dpkg_verify_allow: []
+lynis_dpkg_verify_max_findings: 0
+# dpkg's own configuration: a file its path-exclude filters dropped at unpack time (minimal and
+# container images drop docs, man pages, locales) is missing by design, not a finding.
+lynis_dpkg_cfg_files: [/etc/dpkg/dpkg.cfg, /etc/dpkg/dpkg.cfg.d]
+# How a change in the set of findings is alerted (state-diffed), as for needrestart: none, notify
+# (the notify capability's ntfy endpoint by logical id), mail (local sendmail to
+# lynis_mail_to) or auto (mail where a local MTA and a root alias exist, else none).
+lynis_notify: auto
+lynis_notify_id: notify
+lynis_notify_topic: homelabnext-integrity
+lynis_notify_priority: 4
+lynis_notify_auth_ref: ""
+lynis_mail_to: root
+lynis_dpkg_cli: dpkg
+lynis_debsums_cli: debsums
+lynis_sendmail_cli: /usr/sbin/sendmail
+lynis_aliases_file: /etc/aliases
