@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The ADR log: eighteen records, five headings each, a status, sequential numbering."""
+"""The ADR log: five headings each, a status, sequential numbering (gaps only where reserved)."""
 
 from __future__ import annotations
 
@@ -12,10 +12,12 @@ ADR_DIR = Path(__file__).resolve().parents[2] / "docs" / "adr"
 HEADINGS = ["Status", "Context", "Decision", "Consequences", "Alternatives"]
 STATUSES = {"proposed", "accepted", "rejected"}
 ADRS = sorted(p for p in ADR_DIR.glob("[0-9][0-9][0-9][0-9]-*.md"))
+#: numbers taken by an ADR still on another branch (drop the entry when it lands)
+RESERVED = {19: "uid identities with computed display numbers"}
 
 
-def test_eighteen_sequential_adrs():
-    assert [int(p.name[:4]) for p in ADRS] == list(range(1, 19))
+def test_sequential_adrs():
+    assert [int(p.name[:4]) for p in ADRS] == [n for n in range(1, 21) if n not in RESERVED]
 
 
 @pytest.mark.parametrize("path", ADRS, ids=lambda p: p.name[:4])
