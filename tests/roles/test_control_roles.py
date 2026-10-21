@@ -27,13 +27,17 @@ args = sys.argv[1:]
 path = [a for a in args if os.path.isfile(a)][-1]
 open(LOG, "a").write(NAME + " " + " ".join(a if a != path else "<staged>" for a in args) + "\n")
 text = open(path).read()
-text += "".join(open(t).read() for t in text.split() if t.startswith("/") and os.path.isfile(t))  # includes
+text += "".join(open(t).read() for t in text.split() if t.startswith(BASE) and os.path.isfile(t))  # includes (the test's own files only)
 sys.exit(1 if "bogus" in text else 0)
 """
 
 
 def checker(tmp_path, name):
-    body = CHECKER.replace("LOG", repr(str(tmp_path / "calls.log"))).replace("NAME", repr(name))
+    body = (
+        CHECKER.replace("LOG", repr(str(tmp_path / "calls.log")))
+        .replace("NAME", repr(name))
+        .replace("BASE", repr(str(tmp_path)))
+    )
     return fake(tmp_path / name, body)
 
 
@@ -420,15 +424,35 @@ def test_ssh_hardening_refuses_bad_inputs(tmp_path):
 
 
 # ---------------------------------------------------------------- nftables_host
-# nft -c goes to the real nft when it is installed (it checks without touching the kernel's
-# ruleset); everything else is logged, so a test never loads a ruleset on the test machine.
+
+
+def _real_nft_check() -> str | None:
+    """The real nft, when it can check a ruleset unprivileged (in a user and network namespace,
+    as tests/network does); None where it cannot (not installed, or no unprivileged namespaces)."""
+    import subprocess
+    import tempfile
+
+    nft = shutil.which("nft", path="/usr/sbin:/sbin:/usr/bin")
+    if not (nft and shutil.which("unshare")):
+        return None
+    with tempfile.NamedTemporaryFile("w", suffix=".nft") as probe:
+        probe.write("table inet probe {\n}\n")
+        probe.flush()
+        r = subprocess.run(["unshare", "-rn", nft, "-c", "-f", probe.name], capture_output=True)
+    return nft if r.returncode == 0 else None
+
+
+REAL_NFT = _real_nft_check()
+
+# nft -c goes to the real nft when it can check unprivileged (it never touches the kernel's
+# ruleset), else to a stand-in that refuses the word "bogus"; everything else is logged, so a
+# test never loads a ruleset on the test machine.
 NFT = r"""
-import os, shutil, subprocess, sys
+import os, subprocess, sys
 args = sys.argv[1:]
 if args[:1] == ["-c"]:
-    real = shutil.which("nft", path="/usr/sbin:/sbin:/usr/bin")
-    if real:
-        sys.exit(subprocess.run([real, *args]).returncode)
+    if REAL_NFT_PATH:
+        sys.exit(subprocess.run(["unshare", "-rn", REAL_NFT_PATH, *args]).returncode)
     sys.exit(1 if "bogus" in open(args[-1]).read() else 0)
 open(LOG, "a").write("nft " + " ".join(args) + "\n")
 sys.exit(1 if os.path.exists(FAIL) else 0)
@@ -446,8 +470,10 @@ FIREWALL = {
 
 
 def nft_vars(tmp_path, **kw):
-    body = NFT.replace("LOG", repr(str(tmp_path / "calls.log"))).replace(
-        "FAIL", repr(str(tmp_path / "nft.fails"))
+    body = (
+        NFT.replace("LOG", repr(str(tmp_path / "calls.log")))
+        .replace("FAIL", repr(str(tmp_path / "nft.fails")))
+        .replace("REAL_NFT_PATH", repr(REAL_NFT))
     )
     d = {
         "nftables_host_ssh_sources": ["192.0.2.0/26"],
@@ -560,7 +586,7 @@ def test_nftables_host_health_reads_the_hook_policies(tmp_path):
 
 
 @pytest.mark.skipif(
-    shutil.which("nft", path="/usr/sbin:/sbin:/usr/bin") is None, reason="nft not installed"
+    REAL_NFT is None, reason="nft with an unprivileged network namespace is not available"
 )
 def test_nftables_host_never_installs_a_ruleset_nft_rejects(tmp_path):
     v = nft_vars(tmp_path)
