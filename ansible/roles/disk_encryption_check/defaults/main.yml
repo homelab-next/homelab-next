@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# Disk encryption (control disk-encryption, applied per guest) is VERIFIED here, never applied:
+# encrypting a volume that holds data is destructive, so it happens when the guest is provisioned
+# (LUKS in the image, or encryption on the hypervisor's pool). The role lists every mounted
+# filesystem outside the system mounts whose block-device chain has no crypt layer (lsblk
+# --inverse) and fails health while one is left. A volume encrypted below the guest (the
+# hypervisor's ZFS native encryption, say) is invisible from inside it and is listed in the
+# required disk_encryption_check_accepted with the reason.
+disk_encryption_check_system_mounts: [/, /boot, /boot/efi, /efi, "[SWAP]"]
+disk_encryption_check_lsblk_cli: lsblk
+disk_encryption_check_state_dir: /var/lib/homelabnext/disk-encryption-check

@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install rsyslog and forward every message to the log pipeline's receiver.
+    options:
+      rsyslog_forward_collector_id: &collector
+        type: str
+        description: Logical id of the log pipeline's syslog receiver in the registry (host and TCP port).
+        required: true
+      rsyslog_forward_tls: &tls
+        type: bool
+        description: Send over TLS (gtls driver, certificate chain and peer name checked).
+        default: true
+      rsyslog_forward_ca_file: &ca
+        type: path
+        description: CA bundle the receiver's certificate must chain to.
+        default: /etc/ssl/certs/ca-certificates.crt
+      rsyslog_forward_permitted_peer: &peer
+        type: str
+        description: Name the receiver's certificate must carry; empty = its registry host name.
+        default: ""
+      rsyslog_forward_selector: &selector
+        type: str
+        description: The rsyslog selector of what is forwarded (facility.priority).
+        default: "*.*"
+      rsyslog_forward_queue_max_disk: &queue
+        type: str
+        description: Most disk the queue may use while the receiver is down (rsyslog size, e.g. 1g).
+        default: 1g
+      rsyslog_forward_dropin: &dropin
+        type: path
+        description: The role's rsyslog.d file.
+        default: /etc/rsyslog.d/60-homelabnext-forward.conf
+      rsyslog_forward_rsyslogd_cli: &rsyslogd
+        type: str
+        description: The rsyslogd command (-N1 checks a configuration).
+        default: rsyslogd
+      rsyslog_forward_systemctl_cli: &systemctl
+        type: str
+        description: The systemctl command.
+        default: systemctl
+      rsyslog_forward_restart: &restart
+        type: bool
+        description: Restart rsyslog after a change (false leaves the restart owed to a later run).
+        default: true
+      rsyslog_forward_state_dir: &state
+        type: path
+        description: Where the role keeps its restart-pending marker and hook records.
+        default: /var/lib/homelabnext/rsyslog-forward
+  config:
+    short_description: Write the checked forwarding rule and restart rsyslog while owed.
+    options:
+      rsyslog_forward_collector_id: *collector
+      rsyslog_forward_tls: *tls
+      rsyslog_forward_ca_file: *ca
+      rsyslog_forward_permitted_peer: *peer
+      rsyslog_forward_selector: *selector
+      rsyslog_forward_queue_max_disk: *queue
+      rsyslog_forward_dropin: *dropin
+      rsyslog_forward_rsyslogd_cli: *rsyslogd
+      rsyslog_forward_systemctl_cli: *systemctl
+      rsyslog_forward_restart: *restart
+      rsyslog_forward_state_dir: *state
+  health:
+    short_description: Fail unless rsyslog is running.
+    options:
+      rsyslog_forward_systemctl_cli: *systemctl
+  readiness:
+    short_description: Fail unless the receiver's port answers.
+    options:
+      rsyslog_forward_collector_id: *collector
+  backup:
+    short_description: Record that nothing needs keeping (the rule is rendered; queued messages are transient).
+    options:
+      rsyslog_forward_state_dir: *state
+  restore:
+    short_description: Nothing to restore; re-running main renders the rule again.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; rsyslog follows the patching control.
+    options: {}
+  export:
+    short_description: Nothing to export; the logs live in the pipeline.
+    options: {}

@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Ensure the export directory exists
+      ansible.builtin.file:
+        path: "{{ restore_drill_export_dir }}"
+        state: directory
+        mode: "0750"
+    - name: Copy the drill records (JSON)
+      ansible.builtin.copy:
+        src: "{{ restore_drill_state_file }}"
+        dest: "{{ restore_drill_export_dir }}/drills.json"
+        remote_src: true
+        mode: "0640"
+  tags: [export]

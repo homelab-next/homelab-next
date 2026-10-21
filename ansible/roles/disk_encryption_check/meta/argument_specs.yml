@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Report the mounted data volumes without an encrypted mapping (changes nothing on the disks).
+    options:
+      disk_encryption_check_accepted: &accepted
+        type: dict
+        description: "Mount point -> reason, for volumes encrypted where the guest cannot see it (the hypervisor's pool); {} when there are none."
+        required: true
+      disk_encryption_check_system_mounts: &system
+        type: list
+        elements: str
+        description: Mount points that are not data volumes (the root, boot and EFI filesystems, swap).
+        default: [/, /boot, /boot/efi, /efi, "[SWAP]"]
+      disk_encryption_check_lsblk_cli: &lsblk
+        type: str
+        description: The lsblk command (util-linux 2.37 or later, for MOUNTPOINTS).
+        default: lsblk
+      disk_encryption_check_state_dir: &state
+        type: path
+        description: Where the report is written.
+        default: /var/lib/homelabnext/disk-encryption-check
+  health:
+    short_description: Fail while a mounted data volume has no encrypted mapping and is not accepted.
+    options:
+      disk_encryption_check_accepted: *accepted
+      disk_encryption_check_system_mounts: *system
+      disk_encryption_check_lsblk_cli: *lsblk
+  readiness:
+    short_description: No dependency; succeeds.
+    options: {}
+  backup:
+    short_description: Nothing to back up; the report is regenerated on every run.
+    options: {}
+  restore:
+    short_description: Nothing to restore.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; lsblk is part of util-linux.
+    options: {}
+  export:
+    short_description: Nothing to export beyond the report, which main rewrites.
+    options: {}

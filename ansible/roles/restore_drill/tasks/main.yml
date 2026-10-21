@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: Apache-2.0
+# Control backup-verify (ADR-0016 decision 7), central: one play on the backup host. A failed
+# drill is recorded (with the time) and fails the run only after every due guest was tried and
+# the records were written.
+- name: Load the records
+  ansible.builtin.include_tasks: records.yml
+
+- name: Run the drill of each due guest
+  ansible.builtin.command:
+    argv: ["{{ restore_drill_cli }}", "{{ item.id }}", "{{ item.name }}"]
+  loop: "{{ restore_drill_guests | selectattr('id', 'in', restore_drill_ages | dict2items | selectattr('value', 'none') | map(attribute='key') | list
+            + restore_drill_ages | dict2items | rejectattr('value', 'none') | selectattr('value', 'gt', restore_drill_interval_days | int) | map(attribute='key') | list) | list
+            if restore_drill_run | bool else [] }}"
+  loop_control:
+    label: "{{ item.id }}"
+  register: restore_drill_results
+  changed_when: true
+  failed_when: false
+
+- name: Fold the results into the records
+  ansible.builtin.set_fact:
+    restore_drill_known: >-
+      {%- set out = dict(restore_drill_known) -%}
+      {%- for r in restore_drill_results.results | default([]) -%}
+      {%- set row = dict(out[r.item.id] | default({})) -%}
+      {%- set doc = (r.stdout | from_json) if (r.rc == 0 and r.stdout | trim is match('^\{')) else {} -%}
+      {%- if doc.verified | default(false) is sameas true and doc.snapshot | default('') | string | length > 0 -%}
+      {%- set _ = row.update({'last_verified': restore_drill_time, 'snapshot': doc.snapshot | string}) -%}
+      {%- else -%}
+      {%- set _ = row.update({'last_failure': restore_drill_time, 'failure': ('exit ' ~ r.rc) if r.rc != 0 else 'not verified'}) -%}
+      {%- endif -%}
+      {%- set _ = out.update({r.item.id: row}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: List the drills that failed in this run
+  ansible.builtin.set_fact:
+    restore_drill_failed: >-
+      {{ restore_drill_results.results | default([]) | map(attribute='item.id')
+         | select('in', restore_drill_known | dict2items | selectattr('value.last_failure', 'defined')
+                        | selectattr('value.last_failure', 'eq', restore_drill_time) | map(attribute='key') | list)
+         | list }}
+
+- name: Ensure the records directory exists
+  ansible.builtin.file:
+    path: "{{ restore_drill_state_file | dirname }}"
+    state: directory
+    mode: "0750"
+
+- name: Write the records
+  ansible.builtin.copy:
+    dest: "{{ restore_drill_state_file }}"
+    content: "{{ {'guests': restore_drill_known} | to_nice_json(sort_keys=true) }}\n"
+    mode: "0640"
+
+- name: Fail if a drill failed or did not verify
+  ansible.builtin.assert:
+    that: restore_drill_failed | length == 0
+    fail_msg: "restore_drill: the drill of {{ restore_drill_failed | join(', ') }} failed or did not verify (recorded in {{ restore_drill_state_file }})"

@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing pinned (the drill command belongs to the backup product)
+  ansible.builtin.debug:
+    msg: restore_drill installs nothing; the drill command is the backup product's
+  tags: [upgrade]

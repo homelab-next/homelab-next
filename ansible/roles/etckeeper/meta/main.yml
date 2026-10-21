@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: Keep /etc in git with etckeeper and push every commit to the lab's git service by logical id.
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

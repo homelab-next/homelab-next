@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Find the unencrypted data volumes
+      ansible.builtin.include_tasks:
+        file: scan.yml
+        apply:
+          tags: [health]
+    - name: Fail while a data volume has no encrypted mapping
+      ansible.builtin.assert:
+        that: disk_encryption_check_unencrypted | length == 0
+        fail_msg: "disk_encryption_check: no encrypted mapping under {{ disk_encryption_check_unencrypted | map(attribute='mountpoint') | join(', ') }}"
+  tags: [health]

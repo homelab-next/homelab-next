@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Backup verification (control backup-verify, applied centrally on cap_backup): restore drills
+# run on the backup host for each guest that needs the control, as the baseline playbook passes
+# them (restore_drill_guests). The drill itself is the backup product's: restore_drill_cli is run
+# as `<cli> <guest id> <guest name>` and must restore that guest's latest backup to scratch space,
+# check it against the backup's own checksum (the backup capability's restore + verify), and
+# print one JSON object {"snapshot": "<id>", "verified": true|false}. The role keeps, per guest,
+# the last verified drill (time and snapshot) and the last failure, drills a guest again once its
+# last verified drill is older than restore_drill_interval_days, and fails health for any guest
+# whose last verified drill is older than restore_drill_max_age_days (the control's 90 days).
+restore_drill_cli: /usr/local/sbin/hnx-restore-drill
+restore_drill_interval_days: 30
+restore_drill_max_age_days: 90
+restore_drill_run: true
+# The evaluation time (UTC, YYYY-MM-DDTHH:MM:SSZ); empty = now. Set it to replay a past day.
+restore_drill_now: ""
+restore_drill_state_file: /var/lib/homelabnext/restore-drill/drills.json

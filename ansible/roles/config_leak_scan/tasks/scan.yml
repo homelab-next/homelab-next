@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: Apache-2.0
+# The scanner's output can quote part of what it found, so the run and the parsing are no_log; what
+# leaves this file is only {path, line, pattern} per hit outside the accepted globs.
+- name: Validate the paths and accepted globs
+  ansible.builtin.assert:
+    that:
+      - config_leak_scan_paths | length > 0
+      - config_leak_scan_paths | select('match', '^/[^\n]*\Z') | list | length == config_leak_scan_paths | length
+      - config_leak_scan_accepted | select('match', '^/[^\n]*\Z') | list | length == config_leak_scan_accepted | length
+    fail_msg: "config_leak_scan: at least one absolute path to scan, and absolute accepted globs"
+
+- name: Scan with the repository's leak scanner
+  block:
+    - name: Make a scratch directory for the scanner
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .hnx-scan
+      register: config_leak_scan_tmp
+    - name: Lay out the checkout's tools/ and homelabnext/ directories
+      ansible.builtin.file:
+        path: "{{ config_leak_scan_tmp.path }}/{{ item }}"
+        state: directory
+        mode: "0700"
+      loop: [tools, homelabnext]
+    - name: Copy the scanner and the shapes it imports
+      ansible.builtin.copy:
+        src: "{{ config_leak_scan_source_dir }}/{{ item }}"
+        dest: "{{ config_leak_scan_tmp.path }}/{{ item }}"
+        mode: "0600"
+      loop: [tools/leak_scan.py, homelabnext/__init__.py, homelabnext/shapes.py]
+    - name: Run it with the secret patterns only (binaries are skipped, not failures)
+      ansible.builtin.command:
+        argv: "{{ [config_leak_scan_python, config_leak_scan_tmp.path ~ '/tools/leak_scan.py', '--groups', 'secret', '--allow-skip', '*'] + config_leak_scan_paths }}"
+        chdir: "{{ config_leak_scan_tmp.path }}"
+      register: config_leak_scan_run
+      changed_when: false
+      failed_when: config_leak_scan_run.rc not in [0, 1] or (config_leak_scan_run.rc == 1 and 'hit(s)' not in config_leak_scan_run.stderr)
+      no_log: true
+    - name: Keep path, line and pattern of each hit outside the accepted paths
+      ansible.builtin.set_fact:
+        config_leak_scan_hits: >-
+          {%- set out = [] -%}
+          {%- for m in config_leak_scan_run.stdout | regex_findall('(?m)^(.+?):([0-9]+): \[([a-z0-9-]+)\]') -%}
+          {%- set ns = namespace(accepted=false) -%}
+          {%- for glob in config_leak_scan_accepted -%}
+          {%- if m[0] is match('^' ~ (glob | regex_escape | replace('\\*', '[^/]*') | replace('\\?', '[^/]')) ~ '$') -%}
+          {%- set ns.accepted = true -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {%- if not ns.accepted -%}
+          {%- set _ = out.append({'path': m[0], 'line': m[1] | int, 'pattern': m[2]}) -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+      no_log: true
+  always:
+    - name: Remove the scanner
+      ansible.builtin.file:
+        path: "{{ config_leak_scan_tmp.path }}"
+        state: absent
+      when: config_leak_scan_tmp.path is defined

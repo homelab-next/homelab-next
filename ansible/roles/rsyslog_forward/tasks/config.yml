@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# rsyslogd -N1 checks the staged rule before it replaces the live one; rsyslog reads its
+# configuration only at start, and the restart stays owed until it succeeds.
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Ensure the state directory exists
+  ansible.builtin.file:
+    path: "{{ rsyslog_forward_state_dir }}"
+    state: directory
+    mode: "0750"
+
+- name: Write the forwarding rule, checked by rsyslogd -N1 before it goes live
+  ansible.builtin.template:
+    src: forward.conf.j2
+    dest: "{{ rsyslog_forward_dropin }}"
+    mode: "0644"
+    validate: "{{ rsyslog_forward_rsyslogd_cli }} -N1 -f %s"
+  register: rsyslog_forward_written
+
+- name: Mark a restart as owed
+  ansible.builtin.copy:
+    dest: "{{ rsyslog_forward_state_dir }}/restart-pending"
+    content: "the forwarding rule changed; rsyslog has not restarted since\n"
+    mode: "0640"
+  when: rsyslog_forward_written is changed
+
+- name: Look for a restart still owed
+  ansible.builtin.stat:
+    path: "{{ rsyslog_forward_state_dir }}/restart-pending"
+  register: rsyslog_forward_pending
+
+- name: Restart rsyslog while a restart is owed
+  when: rsyslog_forward_pending.stat.exists and rsyslog_forward_restart | bool
+  block:
+    - name: Restart rsyslog
+      ansible.builtin.command:
+        argv: ["{{ rsyslog_forward_systemctl_cli }}", restart, rsyslog]
+      changed_when: true
+    - name: Clear the owed restart
+      ansible.builtin.file:
+        path: "{{ rsyslog_forward_state_dir }}/restart-pending"
+        state: absent

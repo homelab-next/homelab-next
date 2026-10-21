@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# Configuration backup (control config-backup, applied per guest): the distribution's etckeeper
+# keeps /etc in git, commits every package run and daily, and pushes each commit to the lab's git
+# service (found by logical id) so the configuration outlives the guest. The push uses root's SSH
+# key on the guest, which the operator registers as a deploy key with write access to
+# <git service>/<etckeeper_remote_path>; the repository holds /etc as it is, password hashes and
+# service credentials included, so that git service is as sensitive as the guests themselves.
+etckeeper_remote_path: "etc/{{ inventory_hostname }}.git"
+etckeeper_dir: /etc
+etckeeper_conf_file: /etc/etckeeper/etckeeper.conf
+etckeeper_cli: etckeeper
+etckeeper_git_cli: git

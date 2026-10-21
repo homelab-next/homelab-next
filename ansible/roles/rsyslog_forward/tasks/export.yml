@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to export (the logs live in the pipeline)
+  ansible.builtin.debug:
+    msg: rsyslog_forward holds no data of its own to export
+  tags: [export]

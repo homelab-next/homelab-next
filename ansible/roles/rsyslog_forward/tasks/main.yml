@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Control log-forward (ADR-0016 decision 7).
+- name: Refuse a host that is not Debian-family (the role installs the distribution's rsyslog)
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] == 'Debian'
+    fail_msg: "rsyslog_forward supports Debian-family guests only (got {{ ansible_facts['os_family'] }})"
+
+- name: Install rsyslog (and its TLS driver)
+  ansible.builtin.apt:
+    name: "{{ ['rsyslog'] + (['rsyslog-gnutls'] if rsyslog_forward_tls | bool else []) }}"
+    state: present
+
+- name: Write the checked rule and restart while owed
+  ansible.builtin.include_tasks: config.yml
+
+- name: Enable and start rsyslog
+  ansible.builtin.systemd_service:
+    name: rsyslog
+    enabled: true
+    state: started

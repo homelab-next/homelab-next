@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: Restore drills on the backup host, the last verified restore recorded per guest, stale after 90 days.
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

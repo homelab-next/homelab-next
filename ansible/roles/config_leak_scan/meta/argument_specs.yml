@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Scan the configuration directories for secret-looking values and write the report (path, line, pattern; never the value).
+    options:
+      config_leak_scan_paths: &paths
+        type: list
+        elements: path
+        description: Configuration directories (or files) to scan, absolute.
+        required: true
+      config_leak_scan_accepted: &accepted
+        type: list
+        elements: str
+        description: Path globs whose hits are accepted (key material that must live on disk by design).
+        default: [/etc/ssh/ssh_host_*_key, /etc/ssl/private/*, /etc/shadow, /etc/shadow-, /etc/gshadow, /etc/gshadow-]
+      config_leak_scan_python: &python
+        type: str
+        description: The guest's Python 3 interpreter (runs the scanner).
+        default: python3
+      config_leak_scan_source_dir: &source
+        type: path
+        description: The homelabnext checkout on the controller the scanner is copied from.
+        default: "{{ role_path }}/../../.."
+      config_leak_scan_state_dir: &state
+        type: path
+        description: Where the report is written.
+        default: /var/lib/homelabnext/config-leak-scan
+  health:
+    short_description: Fail while a hit outside the accepted paths is found.
+    options:
+      config_leak_scan_paths: *paths
+      config_leak_scan_accepted: *accepted
+      config_leak_scan_python: *python
+      config_leak_scan_source_dir: *source
+  readiness:
+    short_description: Fail unless the guest has a Python 3 to run the scanner.
+    options:
+      config_leak_scan_python: *python
+  backup:
+    short_description: Nothing to back up; the report is regenerated on every run.
+    options: {}
+  restore:
+    short_description: Nothing to restore.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; the scanner travels with the checkout.
+    options: {}
+  export:
+    short_description: Nothing to export beyond the report, which main rewrites.
+    options: {}

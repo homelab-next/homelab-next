@@ -651,3 +651,385 @@ def test_sssd_ldap_health(tmp_path, status, ok):
         tmp_path, sssd_ldap_sssctl_cli=fake(tmp_path / "sssctl-status", f"print({status!r})\n")
     )
     assert (run_role(tmp_path, "sssd_ldap", "health", v).returncode == 0) is ok
+
+
+# ---------------------------------------------------------------- rsyslog_forward
+def rsyslog_vars(tmp_path, **kw):
+    d = {
+        "rsyslog_forward_collector_id": "log-collector",
+        "rsyslog_forward_dropin": str(tmp_path / "60-forward.conf"),
+        "rsyslog_forward_state_dir": str(tmp_path / "state"),
+        "rsyslog_forward_rsyslogd_cli": checker(tmp_path, "rsyslogd"),
+        "rsyslog_forward_systemctl_cli": logging_fake(tmp_path, "systemctl"),
+    }
+    d.update(kw)
+    return d
+
+
+def test_rsyslog_forward_sends_everything_over_tls_to_the_registry_receiver(tmp_path):
+    v = rsyslog_vars(tmp_path)
+    r = run_role(tmp_path, "rsyslog_forward", "config", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = (tmp_path / "60-forward.conf").read_text()
+    assert (
+        '*.* action(type="omfwd"\n    target="logs-01.example.internal" port="6514" protocol="tcp"'
+        in text
+    )
+    assert 'StreamDriver="gtls" StreamDriverMode="1" StreamDriverAuthMode="x509/name"' in text
+    assert 'StreamDriverPermittedPeers="logs-01.example.internal"' in text
+    assert 'queue.saveOnShutdown="on"' in text and 'action.resumeRetryCount="-1"' in text
+    assert calls(tmp_path) == ["rsyslogd -N1 -f <staged>", "systemctl restart rsyslog"]
+    plain = run_role(tmp_path, "rsyslog_forward", "config", {**v, "rsyslog_forward_tls": False})
+    assert (
+        plain.returncode == 0 and "StreamDriver" not in (tmp_path / "60-forward.conf").read_text()
+    )
+
+
+def test_rsyslog_forward_never_installs_a_rule_rsyslogd_rejects(tmp_path):
+    v = rsyslog_vars(tmp_path)
+    assert run_role(tmp_path, "rsyslog_forward", "config", v).returncode == 0
+    good = (tmp_path / "60-forward.conf").read_text()
+    r = run_role(
+        tmp_path, "rsyslog_forward", "config", {**v, "rsyslog_forward_permitted_peer": "bogus"}
+    )
+    assert r.returncode != 0 and (tmp_path / "60-forward.conf").read_text() == good
+    assert calls(tmp_path)[-1] == "rsyslogd -N1 -f <staged>"
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"rsyslog_forward_collector_id": "Logs"},
+        {"rsyslog_forward_permitted_peer": 'logs" StreamDriverMode="0'},
+        {"rsyslog_forward_selector": "*.* /dev/null\n*.*"},
+        {"rsyslog_forward_queue_max_disk": "1 g"},
+    ],
+)
+def test_rsyslog_forward_refuses_bad_inputs(tmp_path, over):
+    r = run_role(tmp_path, "rsyslog_forward", "config", rsyslog_vars(tmp_path, **over))
+    assert r.returncode != 0 and "rsyslog_forward: the receiver is a registry" in r.stdout
+    assert not (tmp_path / "60-forward.conf").exists()
+
+
+# ---------------------------------------------------------------- disk_encryption_check
+LSBLK = {
+    "blockdevices": [
+        {"name": "vda2", "type": "part", "mountpoints": ["/"], "children": [{"name": "vda", "type": "disk"}]},
+        {"name": "data-crypt", "type": "crypt", "mountpoints": ["/srv"],
+         "children": [{"name": "vdb1", "type": "part", "children": [{"name": "vdb", "type": "disk"}]}]},
+        {"name": "vg-lake", "type": "lvm", "mountpoints": ["/var/lib/lake"],
+         "children": [{"name": "pv-crypt", "type": "crypt", "children": [{"name": "vdc", "type": "disk"}]}]},
+        {"name": "vdd", "type": "disk", "mountpoints": ["/var/lib/docker", None]},
+        {"name": "vde", "type": "disk", "mountpoints": ["/mnt/zfs-encrypted"]},
+        {"name": "vdf", "type": "disk", "mountpoints": [None]},
+    ]
+}  # fmt: skip
+
+
+def disk_vars(tmp_path, doc=LSBLK, **kw):
+    d = {
+        "disk_encryption_check_accepted": {
+            "/mnt/zfs-encrypted": "encrypted on the hypervisor's pool"
+        },
+        "disk_encryption_check_lsblk_cli": fake(
+            tmp_path / "lsblk", f"print({json.dumps(doc)!r})\n"
+        ),
+        "disk_encryption_check_state_dir": str(tmp_path / "state"),
+    }
+    d.update(kw)
+    return d
+
+
+def test_disk_encryption_check_reports_the_volumes_without_a_crypt_layer(tmp_path):
+    """Directly on a crypt mapping, or on LVM over one, counts; a bare disk does not; the system
+    mounts, unmounted devices and accepted mounts are not data volumes to report."""
+    r = run_role(tmp_path, "disk_encryption_check", "main", disk_vars(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr  # main reports, never fails or changes a disk
+    report = json.loads((tmp_path / "state" / "report.json").read_text())
+    assert report["unencrypted"] == [{"mountpoint": "/var/lib/docker", "device": "vdd"}]
+    assert "/var/lib/docker has no encrypted" in r.stdout
+    health = run_role(tmp_path, "disk_encryption_check", "health", disk_vars(tmp_path))
+    assert health.returncode != 0 and "no encrypted mapping under /var/lib/docker" in health.stdout
+    ok = disk_vars(tmp_path, disk_encryption_check_accepted={
+        "/mnt/zfs-encrypted": "encrypted on the hypervisor's pool",
+        "/var/lib/docker": "rebuildable cache, nothing at rest worth keeping"})  # fmt: skip
+    assert run_role(tmp_path, "disk_encryption_check", "health", ok).returncode == 0
+
+
+def test_disk_encryption_check_needs_a_reason_for_each_accepted_volume(tmp_path):
+    r = run_role(tmp_path, "disk_encryption_check", "health",
+                 disk_vars(tmp_path, disk_encryption_check_accepted={"/var/lib/docker": " "}))  # fmt: skip
+    assert r.returncode != 0 and "non-empty reason" in r.stdout
+
+
+@pytest.mark.skipif(shutil.which("lsblk") is None, reason="lsblk not installed")
+def test_disk_encryption_check_reads_the_real_lsblk(tmp_path):
+    v = disk_vars(tmp_path)
+    del v["disk_encryption_check_lsblk_cli"]
+    r = run_role(tmp_path, "disk_encryption_check", "main", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert isinstance(
+        json.loads((tmp_path / "state" / "report.json").read_text())["unencrypted"], list
+    )
+
+
+# ---------------------------------------------------------------- config_leak_scan
+PEM = "-----BEGIN OPENSSH " + "PRIVATE KEY-----\nfake\n-----END OPENSSH " + "PRIVATE KEY-----\n"
+
+
+def leak_tree(tmp_path):
+    etc = tmp_path / "etc"
+    (etc / "app").mkdir(parents=True)
+    (etc / "ssh").mkdir()
+    (etc / "app" / "settings.conf").write_text("listen = 8080\nlog_level = info\n")
+    (etc / "ssh" / "ssh_host_ed25519_key").write_text(PEM)
+    (etc / "blob.bin").write_bytes(b"\x00\x01binary")
+    return etc
+
+
+def leak_vars(etc, tmp_path, **kw):
+    d = {
+        "config_leak_scan_paths": [str(etc)],
+        "config_leak_scan_accepted": [f"{etc}/ssh/ssh_host_*_key"],
+        "config_leak_scan_python": __import__("sys").executable,
+        "config_leak_scan_state_dir": str(tmp_path / "state"),
+    }
+    d.update(kw)
+    return d
+
+
+def test_config_leak_scan_uses_the_repositorys_scanner_and_never_shows_the_value(tmp_path):
+    etc = leak_tree(tmp_path)
+    v = leak_vars(etc, tmp_path)
+    clean = run_role(tmp_path, "config_leak_scan", "health", v)
+    assert clean.returncode == 0, clean.stdout + clean.stderr  # host key accepted, binary skipped
+    (etc / "app" / "settings.conf").write_text("listen = 8080\n" + PEM)
+    r = run_role(tmp_path, "config_leak_scan", "main", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    report = json.loads((tmp_path / "state" / "report.json").read_text())
+    assert report["hits"] == [
+        {"path": f"{etc}/app/settings.conf", "line": 2, "pattern": "private-key-block"}
+    ]
+    health = run_role(tmp_path, "config_leak_scan", "health", v)
+    assert (
+        health.returncode != 0 and f"{etc}/app/settings.conf:2:private-key-block" in health.stdout
+    )
+    assert "fake" not in health.stdout + r.stdout  # the matched text never leaves the guest
+    assert "TASK [config_leak_scan : Remove the scanner]" in health.stdout
+
+
+def test_config_leak_scan_refuses_a_relative_path(tmp_path):
+    r = run_role(tmp_path, "config_leak_scan", "health", leak_vars("etc", tmp_path))
+    assert r.returncode != 0 and "at least one absolute path" in r.stdout
+
+
+# ---------------------------------------------------------------- restore_drill
+DRILL = r"""
+import json, os, sys
+gid, name = sys.argv[1:3]
+open(LOG, "a").write("drill " + gid + "\n")
+if os.path.exists(os.path.join(DIR, name + ".fails")):
+    sys.exit(3)
+print(json.dumps({"snapshot": "vm/" + name + "/2026-10-20T02:30:00Z",
+                  "verified": not os.path.exists(os.path.join(DIR, name + ".corrupt"))}))
+"""
+NOW = "2026-10-21T12:00:00Z"
+DRILL_GUESTS = [
+    {"id": "guest:bus-core", "name": "bus-core", "fqdn": "bus-core.example.internal", "ip": "192.0.2.80", "zone": "data"},
+    {"id": "guest:lake-core", "name": "lake-core", "fqdn": "lake-core.example.internal", "ip": "192.0.2.90", "zone": "data"},
+    {"id": "guest:edge-core", "name": "edge-core", "fqdn": "edge-core.example.internal", "ip": "203.0.113.10", "zone": "edge"},
+]  # fmt: skip
+
+
+def drill_vars(tmp_path, records=None, **kw):
+    state = tmp_path / "drills.json"
+    if records is not None:
+        state.write_text(json.dumps({"guests": records}))
+    body = DRILL.replace("LOG", repr(str(tmp_path / "calls.log"))).replace(
+        "DIR", repr(str(tmp_path))
+    )
+    d = {
+        "restore_drill_guests": DRILL_GUESTS,
+        "restore_drill_cli": fake(tmp_path / "drill", body),
+        "restore_drill_now": NOW,
+        "restore_drill_state_file": str(state),
+    }
+    d.update(kw)
+    return d
+
+
+def test_restore_drill_drills_only_the_due_guests_and_records_the_verified_restore(tmp_path):
+    records = {
+        "guest:bus-core": {
+            "last_verified": "2026-10-01T02:00:00Z",
+            "snapshot": "vm/bus-core/old",
+        },  # 20 days: not due
+        "guest:lake-core": {
+            "last_verified": "2026-08-01T02:00:00Z",
+            "snapshot": "vm/lake-core/old",
+        },  # 81 days: due
+    }  # edge-core: never drilled
+    r = run_role(tmp_path, "restore_drill", "main", drill_vars(tmp_path, records))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert calls(tmp_path) == ["drill guest:lake-core", "drill guest:edge-core"]  # in guest order
+    doc = json.loads((tmp_path / "drills.json").read_text())["guests"]
+    assert doc["guest:bus-core"] == records["guest:bus-core"]
+    assert doc["guest:lake-core"] == {
+        "last_verified": NOW,
+        "snapshot": "vm/lake-core/2026-10-20T02:30:00Z",
+    }
+    assert run_role(tmp_path, "restore_drill", "health", drill_vars(tmp_path)).returncode == 0
+
+
+def test_restore_drill_records_a_failed_or_unverified_drill_and_fails_after_trying_all(tmp_path):
+    (tmp_path / "edge-core.fails").touch()
+    (tmp_path / "lake-core.corrupt").touch()
+    r = run_role(tmp_path, "restore_drill", "main", drill_vars(tmp_path, {}))
+    assert r.returncode != 0
+    assert "the drill of guest:lake-core, guest:edge-core failed or did not verify" in r.stdout
+    doc = json.loads((tmp_path / "drills.json").read_text())["guests"]
+    assert doc["guest:bus-core"]["last_verified"] == NOW
+    assert doc["guest:edge-core"] == {"last_failure": NOW, "failure": "exit 3"}
+    assert doc["guest:lake-core"] == {"last_failure": NOW, "failure": "not verified"}
+
+
+@pytest.mark.parametrize(
+    ("now", "ok"), [("2026-12-29T12:00:00Z", True), ("2027-01-21T12:00:00Z", False)]
+)  # 2026-10-01 + 90 days = 2026-12-30
+def test_restore_drill_health_marks_a_drill_older_than_90_days_stale(tmp_path, now, ok):
+    records = {
+        g["id"]: {"last_verified": "2026-10-01T02:00:00Z", "snapshot": "s"} for g in DRILL_GUESTS
+    }
+    r = run_role(
+        tmp_path, "restore_drill", "health", drill_vars(tmp_path, records, restore_drill_now=now)
+    )
+    assert (r.returncode == 0) is ok, r.stdout
+    if not ok:
+        assert (
+            "no verified restore drill within 90 days for guest:bus-core, guest:edge-core"
+            in r.stdout
+        )
+
+
+def test_restore_drill_health_fails_for_a_guest_never_drilled(tmp_path):
+    r = run_role(tmp_path, "restore_drill", "health", drill_vars(tmp_path, {}))
+    assert r.returncode != 0 and "guest:bus-core, guest:edge-core, guest:lake-core" in r.stdout
+
+
+def test_restore_drill_backup_export_and_restore_keep_the_records(tmp_path):
+    records = {"guest:bus-core": {"last_verified": "2026-10-01T02:00:00Z", "snapshot": "s"}}
+    v = drill_vars(tmp_path, records)
+    assert run_role(tmp_path, "restore_drill", "backup", v).returncode == 0
+    assert json.loads((tmp_path / "backup-manifest.json").read_text())["paths"] == [
+        str(tmp_path / "drills.json")
+    ]
+    out = tmp_path / "export"
+    assert (
+        run_role(
+            tmp_path, "restore_drill", "export", {**v, "restore_drill_export_dir": str(out)}
+        ).returncode
+        == 0
+    )
+    (tmp_path / "drills.json").unlink()
+    back = run_role(
+        tmp_path,
+        "restore_drill",
+        "restore",
+        {**v, "restore_drill_restore_source": str(out / "drills.json")},
+    )
+    assert (
+        back.returncode == 0
+        and json.loads((tmp_path / "drills.json").read_text())["guests"] == records
+    )
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"restore_drill_guests": []},
+        {"restore_drill_guests": [{**DRILL_GUESTS[0], "id": "bus-core"}]},
+        {"restore_drill_guests": [{**DRILL_GUESTS[0], "name": "bus core; rm"}]},
+        {"restore_drill_max_age_days": 10},
+        {"restore_drill_now": "yesterday"},
+    ],
+)
+def test_restore_drill_refuses_bad_inputs(tmp_path, over):
+    r = run_role(tmp_path, "restore_drill", "main", drill_vars(tmp_path, **over))
+    assert (
+        r.returncode != 0
+        and "restore_drill: at least one guest" in r.stdout
+        and calls(tmp_path) == []
+    )
+
+
+# ---------------------------------------------------------------- etckeeper
+def git(*args, cwd):
+    import subprocess
+
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout
+
+
+ETCKEEPER = r"""
+import os, subprocess, sys
+args = sys.argv[1:]
+d = args[args.index("-d") + 1]
+open(LOG, "a").write("etckeeper " + args[0] + "\n")
+g = ["git", "-C", d, "-c", "user.name=etckeeper", "-c", "user.email=etckeeper@example.invalid"]
+if args[0] == "unclean":
+    sys.exit(0 if subprocess.run(["git", "-C", d, "status", "--porcelain"], capture_output=True, text=True).stdout else 1)
+if args[0] == "commit":  # as etckeeper does with PUSH_REMOTE: commit, then push
+    subprocess.run(g + ["add", "-A"], check=True)
+    subprocess.run(g + ["commit", "-qm", args[-1]], check=True)
+    subprocess.run(g + ["push", "-q", "origin", "HEAD"], check=True)
+"""
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_etckeeper_points_origin_at_the_git_service_commits_and_health_sees_the_push(tmp_path):
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    git("init", "-q", "-b", "master", cwd=etc)
+    (etc / "etckeeper").mkdir()
+    conf = etc / "etckeeper" / "etckeeper.conf"
+    conf.write_text('VCS="git"\nPUSH_REMOTE=""\n')
+    v = {
+        "etckeeper_remote_id": "config-git",
+        "etckeeper_remote_path": "etc/bus-core.git",
+        "etckeeper_dir": str(etc),
+        "etckeeper_conf_file": str(conf),
+        "etckeeper_cli": fake(
+            tmp_path / "etckeeper", ETCKEEPER.replace("LOG", repr(str(tmp_path / "calls.log")))
+        ),
+    }
+    # the push goes to a local bare repository standing in for the git service
+    remote = tmp_path / "remote.git"
+    git("init", "-q", "--bare", str(remote), cwd=tmp_path)
+    git(
+        "config",
+        f"url.{remote}.insteadOf",
+        "ssh://git-01.example.internal:22/etc/bus-core.git",
+        cwd=etc,
+    )
+    r = run_role(tmp_path, "etckeeper", "config", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (
+        git("config", "--get", "remote.origin.url", cwd=etc).strip()
+        == "ssh://git-01.example.internal:22/etc/bus-core.git"
+    )
+    assert 'PUSH_REMOTE="origin"\n' in conf.read_text()
+    assert calls(tmp_path) == ["etckeeper unclean", "etckeeper commit"]
+    again = run_role(tmp_path, "etckeeper", "config", v)
+    assert again.returncode == 0 and "changed=0" in again.stdout
+    assert git("log", "--format=%s", cwd=remote).strip() == "homelabnext: configuration run"
+    assert run_role(tmp_path, "etckeeper", "health", v).returncode == 0
+    (etc / "hosts").write_text("changed\n")
+    r = run_role(tmp_path, "etckeeper", "health", v)
+    assert r.returncode != 0 and "has uncommitted changes" in r.stdout
+
+
+def test_etckeeper_refuses_a_git_service_not_reached_over_ssh(tmp_path):
+    v = {"etckeeper_remote_id": "log-collector", "etckeeper_dir": str(tmp_path)}
+    r = run_role(tmp_path, "etckeeper", "config", v)
+    assert r.returncode != 0 and "etckeeper: the git service is a registry logical id" in r.stdout

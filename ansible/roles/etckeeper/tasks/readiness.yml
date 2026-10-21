@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Wait for the git service's SSH port
+  ansible.builtin.wait_for:
+    host: "{{ lookup('hnx_registry', etckeeper_remote_id, field='host') }}"
+    port: "{{ lookup('hnx_registry', etckeeper_remote_id, field='port') }}"
+    timeout: 10
+  tags: [readiness]

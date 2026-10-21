@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Control config-backup (ADR-0016 decision 7).
+- name: Refuse a host that is not Debian-family (the role installs the distribution's etckeeper)
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] == 'Debian'
+    fail_msg: "etckeeper supports Debian-family guests only (got {{ ansible_facts['os_family'] }})"
+
+- name: Install etckeeper and git
+  ansible.builtin.apt:
+    name: [etckeeper, git]
+    state: present
+
+- name: Point the repository at the git service and commit
+  ansible.builtin.include_tasks: config.yml

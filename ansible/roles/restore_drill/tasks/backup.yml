@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Ensure the records directory exists
+      ansible.builtin.file:
+        path: "{{ restore_drill_state_file | dirname }}"
+        state: directory
+        mode: "0750"
+    - name: Write the backup manifest (the drill records are the role's data)
+      ansible.builtin.copy:
+        dest: "{{ restore_drill_state_file | dirname }}/backup-manifest.json"
+        content: "{{ {'service': 'restore_drill', 'paths': [restore_drill_state_file]} | to_nice_json }}\n"
+        mode: "0640"
+  tags: [backup]

@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Log forwarding (control log-forward, applied per guest): the distribution's rsyslog forwarding
+# every message (system and authentication logs included; on Debian rsyslog reads the journal's
+# syslog socket) to the log pipeline's receiver, found by logical id, as RFC 5424 over TCP with TLS
+# (certificate and name checked). A disk-assisted queue holds messages while the receiver is down.
+# rsyslog rather than Fluent Bit: it is in every Debian-family release's main archive (no vendor
+# repository or key to pin), speaks syslog-over-TLS natively, and the receiver side already
+# expects syslog.
+rsyslog_forward_tls: true
+rsyslog_forward_ca_file: /etc/ssl/certs/ca-certificates.crt
+# Empty: the receiver's registry host name is the peer name its certificate must carry.
+rsyslog_forward_permitted_peer: ""
+rsyslog_forward_selector: "*.*"
+rsyslog_forward_queue_max_disk: 1g
+rsyslog_forward_dropin: /etc/rsyslog.d/60-homelabnext-forward.conf
+rsyslog_forward_rsyslogd_cli: rsyslogd
+rsyslog_forward_systemctl_cli: systemctl
+rsyslog_forward_restart: true
+rsyslog_forward_state_dir: /var/lib/homelabnext/rsyslog-forward

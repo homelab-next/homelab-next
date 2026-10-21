@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Fail unless the source is drill records
+      ansible.builtin.assert:
+        that: "(lookup('ansible.builtin.file', restore_drill_restore_source) | from_json).guests is mapping"
+        fail_msg: "restore_drill: {{ restore_drill_restore_source }} holds no drill records"
+    - name: Ensure the records directory exists
+      ansible.builtin.file:
+        path: "{{ restore_drill_state_file | dirname }}"
+        state: directory
+        mode: "0750"
+    - name: Put the records back
+      ansible.builtin.copy:
+        src: "{{ restore_drill_restore_source }}"
+        dest: "{{ restore_drill_state_file }}"
+        mode: "0640"
+  tags: [restore]

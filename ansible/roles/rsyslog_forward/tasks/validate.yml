@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Values land inside quoted RainerScript parameters: no quotes, backslashes or line breaks.
+- name: Validate the receiver, TLS peer, selector and queue size
+  ansible.builtin.assert:
+    that:
+      - rsyslog_forward_collector_id is match('^[a-z0-9][a-z0-9-]*\Z')
+      - lookup('hnx_registry', rsyslog_forward_collector_id, field='host') is match('^[A-Za-z0-9][A-Za-z0-9.:-]*\Z')
+      - lookup('hnx_registry', rsyslog_forward_collector_id, field='port') | int > 0
+      - rsyslog_forward_permitted_peer == '' or rsyslog_forward_permitted_peer is match('^[A-Za-z0-9*][A-Za-z0-9.*-]*\Z')
+      - rsyslog_forward_selector is match('^[a-z0-9*,;.!=]+\Z')
+      - rsyslog_forward_queue_max_disk is match('^[0-9]+[kmg]?\Z')
+      - rsyslog_forward_ca_file is match('^/[A-Za-z0-9._/-]+\Z')
+    fail_msg: >-
+      rsyslog_forward: the receiver is a registry logical id with a plain host and a port, the
+      peer name is a host name, the selector is facility.priority syntax, the queue size is a
+      number with k, m or g, and the CA file is a plain absolute path
