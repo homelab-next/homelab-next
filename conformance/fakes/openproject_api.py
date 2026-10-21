@@ -13,7 +13,8 @@ needs the current ``lockVersion``, else 409), the collection filters the adapter
 list by ``involved``, delete).  Times have second precision, like OpenProject; ``tick`` seconds
 pass per write (``tick=0`` keeps every write in one second, for cursor tests).  Requests need
 ``Authorization: Basic apikey:<token>`` (401 otherwise).  ``fail_next(n, status)`` answers the
-next ``n`` requests with ``status`` (retry tests).
+next ``n`` requests with ``status`` (retry tests); ``fail_after_next(n, status)`` applies the next
+``n`` requests and then answers ``status`` (a write that landed before the error).
 """
 
 from __future__ import annotations
@@ -102,6 +103,7 @@ class FakeOpenProject:
         self._rel_ids = itertools.count(500)
         self._seconds = 0
         self._fail: list[int] = []
+        self._fail_after: list[int] = []
         self._lock = threading.Lock()
         self._httpd = ThreadingHTTPServer((LOOPBACK, 0), self._handler())
         self._thread: threading.Thread | None = None
@@ -128,6 +130,9 @@ class FakeOpenProject:
 
     def fail_next(self, n: int, status: int = 503) -> None:
         self._fail += [status] * n
+
+    def fail_after_next(self, n: int, status: int = 503) -> None:
+        self._fail_after += [status] * n
 
     def writes(self) -> int:
         return sum(1 for m, _ in self.log if m in ("POST", "PATCH", "DELETE"))
@@ -337,6 +342,9 @@ class FakeOpenProject:
                         status, doc = fake.handle(method, url.path, q, body)
                     except _Error as e:
                         status, doc = e.status, _err(e.status, e.ident, e.message)
+                    if fake._fail_after:
+                        status = fake._fail_after.pop(0)
+                        doc = _err(status, "ServiceUnavailable", "try again")
                 self._send(status, doc)
 
             def do_GET(self):

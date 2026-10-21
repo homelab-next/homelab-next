@@ -14,8 +14,10 @@
   raised as :class:`~homelabnext.projects.model.Conflict`.
 * **Retries:** a timeout, a refused connection, 429 and 5xx are retried with exponential backoff
   (``retries`` times, ``backoff * 2**n`` seconds, ``sleep`` injectable); other 4xx are not.
-  Only idempotent methods (GET, PATCH with a lockVersion, DELETE) are retried by default; a POST
-  is retried only on a refused connection (nothing reached the server).
+  Only GET and DELETE are retried after the server may have acted; a POST or a PATCH is retried
+  only on a refused connection (nothing reached the server).  A PATCH is not idempotent here: if
+  the first attempt was applied before the 5xx or the timeout, its retry quotes a lockVersion
+  that has moved, gets 409 and would report a write that succeeded as a conflict.
 """
 
 from __future__ import annotations
@@ -40,6 +42,8 @@ __all__ = ["ApiError", "OpenProjectClient", "filters"]
 MAX_BYTES = 16 << 20
 PAGE_SIZE = 1000
 _RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
+#: retried only when nothing reached the server (a refused connection)
+_UNSAFE = frozenset({"POST", "PATCH"})
 
 
 class ApiError(ProjectsError):
@@ -119,7 +123,7 @@ class OpenProjectClient:
                 return json.loads(raw) if raw.strip() else {}
             except urllib.error.HTTPError as exc:
                 status, err = exc.code, _hal_error(exc)
-                if status in _RETRY_STATUS and attempt < self.retries and method != "POST":
+                if status in _RETRY_STATUS and attempt < self.retries and method not in _UNSAFE:
                     attempt += 1
                     self._sleep(self.backoff * 2 ** (attempt - 1))
                     continue
@@ -131,7 +135,7 @@ class OpenProjectClient:
             except (TimeoutError, urllib.error.URLError, ConnectionError) as exc:
                 reason = getattr(exc, "reason", exc)
                 refused = isinstance(reason, ConnectionRefusedError)
-                if attempt < self.retries and (method != "POST" or refused):
+                if attempt < self.retries and (method not in _UNSAFE or refused):
                     attempt += 1
                     self._sleep(self.backoff * 2 ** (attempt - 1))
                     continue

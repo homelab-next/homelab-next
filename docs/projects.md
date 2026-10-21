@@ -137,7 +137,8 @@ the API token is named, never stored (`token: secret:openproject/api-token`, del
 `HNX_SECRET_OPENPROJECT_API_TOKEN`), https with verification (plain http only to loopback or with
 `allow_plaintext`), same-origin redirects, `offset`/`pageSize` paging, a `lockVersion` on every
 `PATCH` (409 is a `Conflict`), retries with exponential backoff on timeouts, 429 and 5xx (a
-`POST` only when nothing reached the server).
+`POST` or a `PATCH` only when nothing reached the server: a retried `PATCH` that had been
+applied would quote a stale `lockVersion` and report the write as a conflict).
 
 ```yaml
 # openproject.yml (every key but base_url optional)
@@ -163,8 +164,10 @@ viewer_roles: [Reader]
 | `blocks`, `precedes` | relations of those types |
 | `supports`, `serves`, `measures`, `answers` | a `relates` relation to the record's work package in the Strategy project, the label in the relation's description (there are no custom relation types) |
 
-The whole conformance suite passes against this mapping on the recorded fake
-(`tests/projects/test_projects_openproject.py`). Each operation reads the work project's work
+The whole conformance suite passes against this mapping on the recorded fake: `hnx conform run
+projects --target projects-openproject` (`conformance/targets/projects-openproject.yml`, the
+adapter `homelabnext.conform.adapters.openproject:make`; copy the target with `config:
+<openproject.yml>` to run it against a real instance). Each operation reads the work project's work
 packages and relations once: right for a lab (tens to hundreds of items), not for a large
 instance. A work package made by hand in the UI has no External key; `adopt()` gives it a fresh
 uid so it becomes an item.
@@ -224,8 +227,11 @@ with an HMAC-SHA1 without a timestamp. So `ChangeFeed.poll(cursor)` reads every 
 OpenProject's times have second precision) and is the completeness guarantee; the webhook
 receiver (`make_webhook_server`, loopback by default) refuses any request without a valid
 `X-OP-Signature` (401) and hands the payload to the same feed. Both build the same event id from
-`wp:<id>:v<lockVersion>`, and the feed emits each id once. A strategy work package changed by
-anyone but the sync user is noted for the next sync to revert.
+`wp:<id>:v<lockVersion>`, and the feed emits each id once (claimed under a lock: the webhook
+server's threads and the poll run at once). Every event is validated against its schema as it
+is built: a work package no valid event describes (an External key typed by hand that is not a
+uid, a status with no contract name) is not emitted but noted in `ChangeFeed.problems`. A
+strategy work package changed by anyone but the sync user is noted for the next sync to revert.
 
 ### Community vs Enterprise
 

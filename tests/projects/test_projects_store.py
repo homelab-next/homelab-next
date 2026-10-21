@@ -234,6 +234,24 @@ def test_events_validate_and_dedupe_by_uid_and_version():
     assert evs[0]["id"] == change_event(cs.changes[0])["id"]  # a pure function of uid + version
 
 
+@pytest.mark.parametrize(
+    "example",
+    sorted((REPO / "schemas/events/examples").glob("project.changed*.json")),
+    ids=lambda p: p.name,
+)
+def test_every_project_changed_example_has_the_subject_change_event_builds(example):
+    """A step's or task's subject is its project (``project:<data.project>``), a project's (or
+    a loose task's) its own uid: the rule of homelabnext.projects.events.change_event."""
+    import json
+
+    ev = json.loads(example.read_text())
+    d = ev["data"]
+    assert event_problems(ev) == []
+    ch = Change(d["uid"], d["kind"], d["version"], d["op"], d["status"], d.get("title", ""), d.get("project"), ev["time"], ref=d.get("ref"))  # fmt: skip
+    built = change_event(ch, origin=d["origin"], lock_version=d["version"] - 1)
+    assert ev["subject"] == built["subject"] == f"project:{d.get('project') or d['uid']}"
+
+
 def test_openproject_events_are_keyed_by_work_package_version():
     ch = Change("01890000-0000-7000-8000-000000000001", "task", 3, "updated", "todo", "t", None, "2026-01-01T00:00:03Z", ref="wp:42")  # fmt: skip
     a = change_event(ch, origin="openproject", lock_version=2)

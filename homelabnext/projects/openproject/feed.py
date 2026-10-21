@@ -16,6 +16,11 @@ reads the secret by name (``secret:openproject/webhook-secret``) at each request
 A work package of a strategy type that someone other than the sync user changed is noted in
 :attr:`ChangeFeed.strategy_edits`: the next ``sync-strategy`` writes the repository's version
 back and reports it (the repository wins).
+
+Every event is validated against ``homelabnext.project.changed``'s schema as it is built.
+A work package the contract cannot describe -- an External key that is not a uid (typed by hand
+in the UI), a status with no contract name -- is not emitted; it is noted in
+:attr:`ChangeFeed.problems` (``wp:<id>: ...``) for an operator to fix in OpenProject.
 """
 
 from __future__ import annotations
@@ -24,14 +29,17 @@ import hashlib
 import hmac
 import json
 import os
+import threading
 from collections.abc import Callable, Mapping, MutableSet
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from homelabnext._http import is_loopback
+from homelabnext.events.envelope import EventError
 from homelabnext.registry.model import secret_env_name
 
 from ..events import change_event
+from ..model import Change
 from .backend import OpenProjectBackend, _link_id, wp_href
 
 __all__ = [
@@ -84,12 +92,31 @@ class ChangeFeed:
         self.backend, self.sink = backend, sink
         self.seen: MutableSet[str] = set() if seen is None else seen
         self.strategy_edits: list[str] = []
+        self.problems: list[str] = []  # work packages not emitted: no valid event describes them
+        # the webhook server's threads and the poll emit concurrently: claiming an id is one step
+        self._claim = threading.Lock()
 
-    def _emit(self, event: dict[str, Any]) -> dict[str, Any] | None:
-        if event["id"] in self.seen:
+    def _event(self, ch: Change) -> dict[str, Any] | None:
+        """The change's event, or None (noted in :attr:`problems`) when it does not validate."""
+        try:
+            return change_event(ch, origin="openproject", lock_version=ch.version - 1)
+        except EventError as ex:  # built and validated in one step (build_event)
+            self.problems.append(f"{ch.ref}: not emitted: {'; '.join(ex.problems or [str(ex)])}")
             return None
-        self.sink(event)
-        self.seen.add(event["id"])
+
+    def _emit(self, event: dict[str, Any] | None) -> dict[str, Any] | None:
+        if event is None:
+            return None
+        with self._claim:
+            if event["id"] in self.seen:
+                return None
+            self.seen.add(event["id"])
+        try:
+            self.sink(event)
+        except BaseException:
+            with self._claim:
+                self.seen.discard(event["id"])  # not delivered: the next poll emits it again
+            raise
         return event
 
     def poll(self, cursor: str | None) -> tuple[list[dict[str, Any]], str]:
@@ -99,7 +126,7 @@ class ChangeFeed:
             changes, nxt = self.backend.changes(cursor)
         out = []
         for ch in changes:
-            ev = change_event(ch, origin="openproject", lock_version=ch.version - 1)
+            ev = self._event(ch)
             if self._emit(ev):
                 out.append(ev)
         return out, nxt
@@ -123,8 +150,7 @@ class ChangeFeed:
             return None  # not adopted yet: the poll adopts and reports it
         with b.lock():
             doc = b.load().get(str(wp[b._ext]))  # the same view the poll has (its project)
-        ch = b.change_of(wp, doc)
-        return self._emit(change_event(ch, origin="openproject", lock_version=ch.version - 1))
+        return self._emit(self._event(b.change_of(wp, doc)))
 
 
 def make_webhook_server(

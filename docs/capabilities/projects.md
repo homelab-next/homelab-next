@@ -374,7 +374,51 @@ Each is a deliberately broken fake (`hnx conform run projects --target broken:<m
 
 ### Real-product adapters
 
-None yet in this repository. See [Integrating a new product](#integrating-a-new-product).
+#### [`homelabnext.conform.adapters.openproject:make`](../../homelabnext/conform/adapters/openproject.py)
+
+The `projects` contract on OpenProject (pinned: 17.9, API v3), stdlib HTTP.
+
+- Target file: [`conformance/targets/projects-openproject.yml`](../../conformance/targets/projects-openproject.yml) (target `projects-openproject`)
+- Factory: `make(*, config: str | None=None, recorded_fake: bool=False, **_: Any) -> ProjectStore`
+- Config in the target: `{recorded_fake: true}`
+
+**Product limits recorded by the adapter:**
+
+OpenProject specifics (limits of the product, not of this adapter):
+
+* Relation-only changes do not move `updatedAt`; the adapter's own link changes do (through
+  the `hnx state` custom field), one made by hand in the UI shows at the next change.
+* Times have second precision, so the change-feed cursor carries the versions already seen at
+  its second.
+* Each operation reads the work project's packages and relations once: right for a lab, not for
+  a large instance.
+
+<details><summary>Full adapter notes</summary>
+
+The `projects` contract on OpenProject (pinned: 17.9, API v3), stdlib HTTP.
+
+`make(config=FILE)` returns the library's own `homelabnext.projects.ProjectStore` over
+`homelabnext.projects.openproject.OpenProjectBackend` -- the store `hnx projects` would
+use against that instance -- configured by an `openproject.yml` (`docs/projects.md`; the API
+token is read by its secret name, `HNX_SECRET_OPENPROJECT_API_TOKEN`).  Every rule is the
+store's, so the suite proves the mapping: work packages of type `Project`/`Step`/`Task`,
+the uid in the `External key` custom field, `lockVersion` as the version, relations as links.
+
+`make(recorded_fake=True)` runs the same adapter against the loopback stand-in for the API
+recorded from OpenProject 17.9 (`conformance/fakes/openproject_api.py`, a source checkout only):
+a fresh instance per subject, seeded with three Strategy work packages to link to, stopped when
+the harness closes the subject.  `conformance/targets/projects-openproject.yml` binds it.
+
+OpenProject specifics (limits of the product, not of this adapter):
+
+* Relation-only changes do not move `updatedAt`; the adapter's own link changes do (through
+  the `hnx state` custom field), one made by hand in the UI shows at the next change.
+* Times have second precision, so the change-feed cursor carries the versions already seen at
+  its second.
+* Each operation reads the work project's packages and relations once: right for a lab, not for
+  a large instance.
+
+</details>
 
 ### Other targets in the repository
 
@@ -405,6 +449,8 @@ No service in `examples/services.yml` declares `capability: projects`.
    ```python
    def make(**config) -> ProjectStore: ...
    ```
+
+   The factory this repository ships: `homelabnext.conform.adapters.openproject:make` is `make(*, config: str | None=None, recorded_fake: bool=False, **_: Any) -> ProjectStore`.
 
 3. **Describe the target** (YAML; `features` lists only what the product really offers; `waive:` takes SHOULD check ids with a reason, never a MUST):
 
