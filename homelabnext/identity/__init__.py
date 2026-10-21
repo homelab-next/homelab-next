@@ -12,7 +12,14 @@ hooks use :mod:`.uid`); :mod:`.aliases` and :mod:`.migrate` read YAML when calle
 """
 
 from .numbers import Node, label_map, node_of, number_map, order_problems
-from .types import LEGACY_CODE_RE, REGISTER_TYPES, STRATEGY_TYPES, TYPE_DIR, label_prefix
+from .types import (
+    LEGACY_CODE_RE,
+    REGISTER_TYPES,
+    STRATEGY_TYPES,
+    TYPE_DIR,
+    TYPE_ORDER,
+    label_prefix,
+)
 from .uid import UID_PATTERN, UID_RE, UidGenerator, is_uid, uid_time, uuid7
 
 __all__ = [
@@ -20,6 +27,7 @@ __all__ = [
     "REGISTER_TYPES",
     "STRATEGY_TYPES",
     "TYPE_DIR",
+    "TYPE_ORDER",
     "UID_PATTERN",
     "UID_RE",
     "Node",

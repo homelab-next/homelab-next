@@ -2,6 +2,7 @@
 
 - **Status:** proposed
 - **Date:** 2026-10-20
+- **Amended:** 2026-10-21 by ADR-0019 (see the amendment at the end of Decision)
 - **Related:** ADR-0010, `docs/registers.md`, `homelabnext/registers/events.py`,
   `homelabnext/registers/transitions.py`, `schemas/registers/register_event.schema.json`
 
@@ -39,6 +40,14 @@ being up.
    CI keep validating.
 5. Scratch output of a run goes to `runs/<run_id>/` (`homelabnext.runs.run_dir`) or `build/`;
    `tools/run_output_lint.py` holds the repository's scripts to it.
+
+### Amendment (2026-10-21): sidecars are named for the record's uid
+
+Since [ADR-0019](0019-record-uids-computed-numbers.md) a record is `<uid>.md` and its sidecar
+`<uid>.events/` (decision 1's example `lessons/LL-005.events/` is now
+`lessons/<uid>.events/`); intents name a record by its uid, and a legacy code resolves through
+the tree's `aliases.yml` with a deprecation warning. The events, derived state, intents and the
+decider are unchanged; the text above is kept as it was decided.
 
 ## Consequences
 

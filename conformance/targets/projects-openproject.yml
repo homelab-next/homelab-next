@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# The OpenProject adapter (homelabnext.conform.adapters.openproject) on the loopback stand-in for
+# the OpenProject 17.9 API (conformance/fakes/openproject_api.py), a fresh instance per check.
+#   hnx conform run projects --target projects-openproject
+# Against a real instance, copy this file and set `config: <openproject.yml>` instead.
+name: projects-openproject
+capabilities:
+  projects:
+    adapter: homelabnext.conform.adapters.openproject:make
+    config: {recorded_fake: true}

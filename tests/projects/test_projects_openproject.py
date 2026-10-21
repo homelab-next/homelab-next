@@ -3,6 +3,7 @@
 (``conformance/fakes/openproject_api.py``, fictional data): the client, ``doctor``, the contract
 (the whole conformance suite), the strategy sync and the change feed."""
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -135,6 +136,24 @@ def test_retries_5xx_with_backoff_but_not_4xx(op):
         c.post("/api/v3/projects/3/work_packages", {"subject": "x"})
 
 
+def test_a_patch_is_not_retried_once_the_server_may_have_applied_it(op):
+    """The first PATCH lands, then the server answers 503: a retry would quote a lockVersion that
+    has moved and report a write that succeeded as a Conflict.  A PATCH is retried only when
+    nothing reached the server, like a POST."""
+    seed_records(op, RECORDS[:1])
+    sleeps = []
+    c = client_for(op, sleep=sleeps.append, retries=3)
+    wp = next(iter(op.wps.values()))
+    op.fail_after_next(1, 503)
+    with pytest.raises(ApiError) as exc:
+        c.patch(f"/api/v3/work_packages/{wp['id']}", {"subject": "landed", "lockVersion": 0})
+    assert exc.value.status == 503 and sleeps == []  # not retried, so never a false Conflict
+    assert c.get(f"/api/v3/work_packages/{wp['id']}")["subject"] == "landed"
+    op.fail_next(1, 503)  # refused before it was applied: still not retried after an answer
+    with pytest.raises(ApiError):
+        c.patch(f"/api/v3/work_packages/{wp['id']}", {"subject": "again", "lockVersion": 1})
+
+
 def test_pagination_reads_every_page(op):
     op.max_page = 2
     seed_records(op, RECORDS)
@@ -223,6 +242,23 @@ def test_the_conformance_suite_passes_on_openproject():
             f.stop()
     failed = [(r.check, r.evidence) for r in results if r.status != "pass"]
     assert not failed and len(results) == len(SUITE.ids())
+
+
+def test_the_openproject_target_runs_the_suite_and_the_page_lists_the_adapter(capsys):
+    """`hnx conform run projects --target projects-openproject` drives the real adapter
+    (homelabnext.conform.adapters.openproject) against the recorded fake, and the generated
+    capability page lists it under the real-product adapters."""
+    from homelabnext.cli import main as hnx
+    from homelabnext.conform.adapters.openproject import make
+
+    assert hnx(["conform", "run", "projects", "--target", "projects-openproject"]) == 0
+    assert "PASS  projects  target=projects-openproject" in capsys.readouterr().out
+    page = (REPO / "docs/capabilities/projects.md").read_text()
+    real = page.split("### Real-product adapters", 1)[1].split("\n### ", 1)[0]
+    assert "homelabnext.conform.adapters.openproject:make" in real
+    assert "projects-openproject.yml" in real
+    with pytest.raises(ValueError, match="config"):
+        make()
 
 
 def test_items_are_work_packages_and_a_concurrent_ui_edit_is_a_conflict(op):
@@ -373,6 +409,30 @@ def test_poll_is_complete_even_within_one_second_and_dedupes():
         assert all(event_problems(e) == [] for e in out) and len(out) == 3
 
 
+def test_concurrent_emits_of_one_version_deliver_it_once(op):
+    """The webhook server's threads and the poll emit at once: claiming an event id is atomic,
+    so two threads holding the same version deliver one event (the check-then-add raced)."""
+    gate = threading.Barrier(2, timeout=0.5)
+
+    class Racy(set):
+        def __contains__(self, key):  # both threads read the set, then go on together
+            found = super().__contains__(key)
+            # broken: the other thread is held off (by the lock), so this one read alone
+            with contextlib.suppress(threading.BrokenBarrierError):
+                gate.wait()
+            return found
+
+    got = []
+    feed = ChangeFeed(store_for(op).backend, got.append, seen=Racy())
+    event = {"id": "fake-event-id", "type": "homelabnext.project.changed"}
+    threads = [threading.Thread(target=feed._emit, args=(event,)) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert got == [event]
+
+
 def test_webhook_and_poll_converge_on_one_event(op):
     s, out = store_for(op), []
     feed = _feed(op, out)
@@ -406,6 +466,32 @@ def test_work_made_by_hand_is_adopted_with_a_fresh_uid(op):
     assert len(adopt(backend, UidGenerator())) == 1
     (item,) = s.list()
     assert item.title == "made in the UI" and item.status == "todo"
+
+
+def test_a_work_package_no_valid_event_describes_is_noted_not_emitted(op):
+    """An External key typed by hand that is not a uid, and a status with no contract name, would
+    put a non-uid and an empty status into homelabnext.project.changed: neither is emitted, each
+    is noted in feed.problems, and every emitted event validates against the schema."""
+    c, cfg = client_for(op), cfg_for(op)
+    st = discover(c, cfg)
+    s, out = store_for(op), []
+    feed = _feed(op, out)
+    _, cur = feed.poll(None)
+    good = s.create("task", "a real item")
+
+    def hand_made(subject, key, status):
+        links = {"type": {"href": f"/api/v3/types/{st.types['Task']}"}, "status": {"href": f"/api/v3/statuses/{st.statuses[status]}"}}  # fmt: skip
+        return c.post(f"/api/v3/projects/{st.work_project}/work_packages", {"subject": subject, EXT_CF: key, "_links": links})["id"]  # fmt: skip
+
+    bad_key = hand_made("typed by hand", "LL-001", "To do")
+    bad_status = hand_made("odd status", "01941f29-7c00-7a3e-8b2c-00000000000a", "Active")
+    evs, _ = feed.poll(cur)
+    assert [e["data"]["uid"] for e in evs] == [good.uid]
+    assert all(event_problems(e) == [] for e in out)
+    noted = "\n".join(feed.problems)
+    assert f"wp:{bad_key}: not emitted" in noted and f"wp:{bad_status}: not emitted" in noted
+    webhook = {"action": "work_package:updated", "work_package": c.get(f"/api/v3/work_packages/{bad_status}")}  # fmt: skip
+    assert feed.on_webhook(webhook) is None and len(out) == 1
 
 
 def _post(url, body, sig):

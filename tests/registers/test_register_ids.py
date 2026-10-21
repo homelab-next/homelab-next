@@ -226,3 +226,11 @@ def test_a_numbered_record_has_no_uid():
         "LL-001.md: no uid (still numbered LL-001)",
         "bad.md: no uid",
     ]
+
+
+def test_the_legacy_code_shape_is_the_identity_packages():
+    """One definition of a legacy record code (homelabnext.identity.types), not a copy."""
+    from homelabnext.identity.types import LEGACY_CODE_RE
+
+    assert ids._LEGACY is LEGACY_CODE_RE
+    assert not hasattr(ids, "_ALIAS_LINE")  # aliases.yml is read by homelabnext.identity

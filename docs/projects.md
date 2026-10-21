@@ -19,8 +19,10 @@ Everything is a **work item** of one of three kinds:
 
 Every item has:
 
-* a **`uid`**: a UUIDv7 (RFC 9562), its identity. Nothing stores a number; the CLI and the page
-  show a computed short form (the uid's last digits) and accept a unique prefix or suffix.
+* a **`uid`**: a UUIDv7 (RFC 9562), its identity. Nothing stores a number. The CLI prints the
+  whole uid and the hub page a short form (its last 8 hex digits); wherever the CLI takes an
+  item (a REF) it accepts the uid or a unique prefix or suffix of it, at least 6 hex digits
+  (dashes ignored).
 * a **`version`** that grows by one on every change. `update` must quote the version it read; a
   stale one is a `Conflict` and nothing is written (optimistic concurrency).
 * optional `assignee` (`profile:<id>`, `human:<id>` or `agent:<id>`), `due` (a date),
@@ -36,12 +38,15 @@ Every item has:
 
 1. **Unique identities.** Every item gets its own UUIDv7; an `external_key` names at most one
    item.
-2. **A step belongs to an open project.** A step names an existing project; it cannot be created
-   in, or reopened in, a closed project. A project with unfinished steps cannot be closed.
-3. **A finished project closes.** When the last unfinished step of a project reaches `done` or
-   `cancelled`, the project closes in the same write (result: `all N steps finished (...)`). A
-   finished project is not reopened; start a new one.
-4. **A finished item says how it finished:** `done`/`cancelled` need a one-line result.
+2. **A step belongs to an open project.** A step names an existing project; it (or a task that
+   names a project) cannot be created in, or reopened in, a closed project. A project with an
+   unfinished step or task cannot be closed.
+3. **A finished project closes.** When the last unfinished step or task of a project with steps
+   reaches `done` or `cancelled`, the project closes in the same write (result: `all N steps
+   finished (...)`); a task in the project holds it open like a step does. A finished project
+   is not reopened; start a new one.
+4. **A finished item says how it finished:** `done`/`cancelled` (and a `closed` project) carry a
+   one-line result and the date.
 5. **Blocks hold.** An item does not finish while an unfinished item `blocks` it.
 6. **Links resolve.** A record link names a uid the strategy seam knows; a dependency names an
    existing step or task; nothing links to itself; `blocks`, `precedes` and `parent` never form
@@ -65,17 +70,23 @@ under an `flock` on the directory (no lock file appears in the tree). Journal na
 per `(uid, version)`, so two clones merge in git without a conflict; a cursor is the last journal
 name read and is complete within one working copy (after a pull, read from a snapshot).
 
+Over `examples/projects` (each line runs as written, in order, in the tests):
+
 ```bash
-hnx projects new project "Move the edge proxy" --key edge-move --due 2026-12-15
-hnx projects new step "Build the new guest" --project 3eaf74e3 --assignee profile:responder
-hnx projects link 3eaf74e3 "OO 1.1" supports      # a display number resolves to the uid
-hnx projects move 62fc01d0 in_progress
-hnx projects close 62fc01d0 "guest built and enrolled"
 hnx projects list --status blocked
-hnx projects show 3eaf74e3
+hnx projects show 53a6402b1c8d                    # the project, by a unique suffix of its uid
+hnx projects new project "Move the edge proxy" --key edge-move   # the key exists: that project
+hnx projects new step "Hand the old guest back" --project 01a15edd-032d --assignee profile:responder
+hnx projects link 62fc01d0e24b "OO 1.1" supports  # a display number resolves to the uid
+hnx projects close 62fc01d0e24b "edge suite green on the new guest"
+hnx projects move 367830786dcb in_progress        # no longer blocked
 hnx projects check                                # the board rules over files edited by hand
-hnx projects feed --cursor C                      # homelabnext.project.changed, JSON lines
+hnx projects feed                                 # homelabnext.project.changed, JSON lines
 ```
+
+`feed --cursor C` continues from the cursor a previous `feed` printed on stderr. `check` ends
+with `N problem(s) in M item(s) of DIR`; every command but `new` refuses a `--dir` that does
+not exist (exit 2) rather than reading an empty board.
 
 `--dir` defaults to `examples/projects` and `--strategy` (the records links may name) to
 `examples/strategy`; a lab keeps both in its private repository (ADR-0011). Exit codes: 0 ok, 1 a
@@ -114,8 +125,10 @@ a legacy code from `aliases.yml` (with a deprecation warning), into the uid. Uid
 
 `homelabnext.projects.measures.completion_reading(items, measure)` turns the share of finished
 work linked to an objective into a reading for a **MOP** of that objective. Completion is
-activity, so it refuses a MOE (doctrine rule `activity_never_moe`), and nothing here ever changes
-an objective's status: achievement is a reviewed transition in the strategy repository.
+activity, so a MOE follows the doctrine rule `activity_never_moe` (passed as `doctrine=`, the
+shipped doctrine by default): `error` refuses it, `warn` reads it with a warning, `off` reads it.
+Nothing here ever changes an objective's status: achievement is a reviewed transition in the
+strategy repository.
 
 ## OpenProject
 
@@ -124,7 +137,8 @@ the API token is named, never stored (`token: secret:openproject/api-token`, del
 `HNX_SECRET_OPENPROJECT_API_TOKEN`), https with verification (plain http only to loopback or with
 `allow_plaintext`), same-origin redirects, `offset`/`pageSize` paging, a `lockVersion` on every
 `PATCH` (409 is a `Conflict`), retries with exponential backoff on timeouts, 429 and 5xx (a
-`POST` only when nothing reached the server).
+`POST` or a `PATCH` only when nothing reached the server: a retried `PATCH` that had been
+applied would quote a stale `lockVersion` and report the write as a conflict).
 
 ```yaml
 # openproject.yml (every key but base_url optional)
@@ -150,8 +164,10 @@ viewer_roles: [Reader]
 | `blocks`, `precedes` | relations of those types |
 | `supports`, `serves`, `measures`, `answers` | a `relates` relation to the record's work package in the Strategy project, the label in the relation's description (there are no custom relation types) |
 
-The whole conformance suite passes against this mapping on the recorded fake
-(`tests/projects/test_projects_openproject.py`). Each operation reads the work project's work
+The whole conformance suite passes against this mapping on the recorded fake: `hnx conform run
+projects --target projects-openproject` (`conformance/targets/projects-openproject.yml`, the
+adapter `homelabnext.conform.adapters.openproject:make`; copy the target with `config:
+<openproject.yml>` to run it against a real instance). Each operation reads the work project's work
 packages and relations once: right for a lab (tens to hundreds of items), not for a large
 instance. A work package made by hand in the UI has no External key; `adopt()` gives it a fresh
 uid so it becomes an item.
@@ -211,8 +227,11 @@ with an HMAC-SHA1 without a timestamp. So `ChangeFeed.poll(cursor)` reads every 
 OpenProject's times have second precision) and is the completeness guarantee; the webhook
 receiver (`make_webhook_server`, loopback by default) refuses any request without a valid
 `X-OP-Signature` (401) and hands the payload to the same feed. Both build the same event id from
-`wp:<id>:v<lockVersion>`, and the feed emits each id once. A strategy work package changed by
-anyone but the sync user is noted for the next sync to revert.
+`wp:<id>:v<lockVersion>`, and the feed emits each id once (claimed under a lock: the webhook
+server's threads and the poll run at once). Every event is validated against its schema as it
+is built: a work package no valid event describes (an External key typed by hand that is not a
+uid, a status with no contract name) is not emitted but noted in `ChangeFeed.problems`. A
+strategy work package changed by anyone but the sync user is noted for the next sync to revert.
 
 ### Community vs Enterprise
 

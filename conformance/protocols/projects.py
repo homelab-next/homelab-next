@@ -8,8 +8,9 @@ the library's own, :mod:`homelabnext.projects.model`, re-exported here.  An item
 ``version`` that grows by one on every change.
 
 The board rules are MUSTs of the suite: uids are unique and an ``external_key`` names at most one
-item (create is idempotent by it); a step belongs to an existing open project; a project with
-unfinished steps cannot close, and the project closes in the same write as its last step
+item (create is idempotent by it); a step belongs to an existing open project and is neither
+created nor reopened in a closed one; a project with an unfinished step or task cannot close,
+and a project with steps closes in the same write as its last unfinished step or task
 finishes, never to be reopened; a finished item carries a one-line result and its date; a
 ``blocks`` link holds back the blocked item's completion.  Links name uids that resolve: an
 external record (``records()``) for ``supports``/``serves``/``measures``/``answers``, a step or

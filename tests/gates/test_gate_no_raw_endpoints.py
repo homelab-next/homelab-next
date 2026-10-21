@@ -72,6 +72,8 @@ CLEAN = {
     + DOT.join("1111")
     + " Read the inbox; MOE "
     + DOT.join("2111")
+    + "; PIR "
+    + DOT.join(["2", "1", "12", "50"])
     + "\n",
     "app/bind.conf": "listen = 0.0.0.0\n",
     "app/time.log": "12:30:45 started at example.internal\n",
@@ -84,6 +86,41 @@ def test_a_dotted_quad_after_a_non_record_word_is_still_an_address(tmp_path):
     plant(tmp_path, {"docs/x.md": "- XX " + DOT.join("1111") + " is not a record number\n"})
     rc, _, err = run(tmp_path)
     assert rc == 1 and "docs/x.md" in err
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "FORWARD TO " + DOT.join(["10", "20", "30", "40"]),  # TO numbers have three components
+        "RB " + DOT.join(["192", "0", "2", "10"]),  # a runbook's number has one
+        "LL " + DOT.join("1111"),  # flat registers never have four
+        "SO " + DOT.join("1111"),
+        "TT " + DOT.join(["10", "0", "0", "5"]),  # 0 is no sibling position
+        "MOE " + DOT.join(["192", "168", "7", "20"]),  # nor is 192
+        "XTT " + DOT.join("1111"),  # not the word TT
+    ],
+)
+def test_an_address_after_a_type_word_is_still_an_address(tmp_path, line):
+    """The record-number exemption is narrow: a four-part display number exists only for the
+    types whose hierarchy reaches four levels, and its components are sibling positions."""
+    plant(tmp_path, {"docs/x.md": f"- {line} is an address here\n"})
+    rc, _, err = run(tmp_path)
+    assert rc == 1 and "docs/x.md" in err, line
+
+
+def test_the_four_part_types_are_the_doctrines():
+    """FOUR_PART_TYPES is what the shipped hierarchy allows: types a chain of parents can put
+    four levels deep (a SIR is one below its PIR)."""
+    from homelabnext.strategy.doctrine import DEFAULT_HIERARCHY
+
+    def at(t, n):  # can a record of type t be n levels deep?
+        h = DEFAULT_HIERARCHY.get(t, {})
+        if n == 1:
+            return not h.get("parent") or bool(h.get("optional"))
+        return any(at(p, n - 1) for p in h.get("parent") or ())
+
+    four = {t for t in DEFAULT_HIERARCHY if at(t, 4)} | {"SIR"}
+    assert four == set(gate.FOUR_PART_TYPES)
 
 
 def test_clean_tree_passes(tmp_path):

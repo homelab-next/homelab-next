@@ -12,7 +12,8 @@ import datetime as dt
 import itertools
 
 from homelabnext.projects import MemoryBackend, ProjectStore
-from homelabnext.projects.model import LINK_RELATIONS, WorkItem
+from homelabnext.projects.model import LINK_RELATIONS, TERMINAL, WorkItem
+from homelabnext.projects.rules import steps_of
 from homelabnext.projects.store import doc_of
 
 #: three fictional external record uids (UUIDv7) the fake can link to
@@ -54,6 +55,24 @@ class NeverClosesStore(FakeProjectStore):
 
     def _auto_close(self, items, project, at, day):
         return []
+
+
+class ReopenInClosedProjectStore(FakeProjectStore):
+    """Reopens a finished step although its project is closed (rule 2)."""
+
+    def _status_change(self, items, item, status, fields, day):
+        p = items.get(item.project or "")
+        if item.terminal and status not in TERMINAL and p is not None:
+            items = {**items, p.uid: dataclasses.replace(p, status="open")}
+        return super()._status_change(items, item, status, fields, day)
+
+
+class StepsOnlyCloseStore(FakeProjectStore):
+    """Counts only steps when closing a project: an open task does not hold it (rule 3)."""
+
+    @staticmethod
+    def _unfinished(items, project):
+        return [i for i in steps_of(items.values(), project) if i.status not in TERMINAL]
 
 
 class DuplicateKeyStore(FakeProjectStore):

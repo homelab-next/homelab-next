@@ -44,8 +44,8 @@ repos:
       # Register keys: every record is identified by a uid (a UUIDv7 created with it, ADR-0019),
       # so nothing is allocated and two authors never collide.  `check-lost` refuses any commit in
       # which a record that the parent commit had has vanished (a merge that kept one side's
-      # directory); `check-dupes` refuses a key that occurs twice, or a record file that carries no
-      # uid or is not named <uid>.md.  Record directories are checked
+      # directory); `check-dupes` refuses a key that occurs twice, or a record file not named
+      # <uid>.md; `check-uids` refuses a record file that carries no uid.  Record directories are checked
       # whole: the hooks take no file names and find every register themselves, so a commit that
       # only deletes a record file is still seen.
       - id: register-ids-check-lost
@@ -55,11 +55,17 @@ repos:
         pass_filenames: false
         always_run: true
       - id: register-ids-check-dupes
-        name: register keys - no key twice, every record carries its uid and is named for it
+        name: register keys - no key twice, every record named for its uid
         entry: python3 tools/register_ids.py check-dupes
         language: system
         pass_filenames: false
         files: '(^|/)(invariants\.ya?ml|(lessons|runbooks|objectives|measures|requirements|rfis)/[^/]+\.md)$'
+      - id: register-ids-check-uids
+        name: register keys - every record carries its uid (no number, no XX-NEW placeholder)
+        entry: python3 tools/register_ids.py check-uids
+        language: system
+        pass_filenames: false
+        files: '(^|/)(lessons|runbooks|objectives|measures|requirements|rfis)/[^/]+\.md$'
       - id: register-links
         name: register records - generated Links blocks current
         entry: python3 -m homelabnext.registers links --check examples/registers/lessons examples/registers/runbooks

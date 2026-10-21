@@ -22,6 +22,13 @@ directory, or a registers directory holding ``lessons/`` and ``runbooks/``) the 
 6. writes ``<tree>/aliases.yml`` (legacy code -> uid; merged with an existing one), through
    which references outside the repository still resolve on read, with a warning.
 
+A tombstone (a file holding only ``id:`` and ``retired: {reason, replaced_by}``: a numbered code
+retired before uids so that it would never be reused) gets no uid: a uid is never reused, so
+there is nothing left to guard.  Its code moves to the ``retired:`` block of ``aliases.yml``
+with its reason and the successor's uid (``replaced_by``), and the file is removed; an old
+citation of the code still resolves to the successor (:mod:`.aliases`), and ``check-lost``
+counts it as accounted for.
+
 Nothing is written until the whole migration has been computed and checked in memory: every
 record still parses, every link it holds resolves to a uid of the trees, every review current
 before is current after, and no record is lost.  Re-running is a no-op (a record with a uid is
@@ -37,19 +44,21 @@ import re
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-from .aliases import ALIASES_FILE, _read, render_aliases
-from .types import LEGACY_CODE_RE
+from .aliases import ALIASES_FILE, read_aliases, render_aliases
+from .types import LEGACY_CODE_RE, TYPE_ORDER
 from .uid import UID_PATTERN, is_uid, uuid7
 
 __all__ = ["MigrationError", "Plan", "assign_uids"]
 
 REGISTER_DIRS = {"lessons": "lesson", "runbooks": "runbook"}
 STRATEGY_DIRS = ("objectives", "measures", "requirements", "rfis")
-_TYPE_ORDER = ("SO", "OO", "TO", "TT", "MOE", "MOP", "CCIR", "FFIR", "PIR", "RFI")
 _FRONT = re.compile(r"\A---\n(?P<fm>.*?\n)---[ \t]*(?:\n|\Z)", re.S)
 _TOP = re.compile(r"^(?P<key>[A-Za-z_][\w-]*):")
 _SIR_NUM = re.compile(r"^(?P<lead>\s*-\s+)(?P<q>['\"]?)\d+(?:\.\d+)*\.?\s+")
 _CODE_SPAN = re.compile(r"(`+)(?:(?!\1).)+?\1", re.S)
+_LINKS_BLOCK = re.compile(
+    r"^## Links[ \t]*\n|<!-- hnx:gen:links -->.*?<!-- /hnx:gen -->", re.S | re.M
+)
 REKEY_REASON = (
     "hnx records assign-uids: numbered references rewritten as uids (ADR-0019); "
     "the content is otherwise unchanged"
@@ -72,6 +81,11 @@ class Record:
     code: str | None  # the legacy id (None for the strategy record)
     uid: str = ""
     new_text: str = ""
+
+    @property
+    def tombstone(self) -> bool:
+        """A numbered code retired before uids (``id`` + a ``retired`` mapping)."""
+        return "retired" in self.fm
 
     @property
     def rtype(self) -> str:
@@ -150,7 +164,7 @@ def _read_tree(tree: pathlib.Path, problems: list[str]) -> list[Record]:
 
 def _sort_key(r: Record) -> tuple:
     prefix, _, num = (r.code or "").rpartition("-")
-    t = _TYPE_ORDER.index(prefix) if prefix in _TYPE_ORDER else -1
+    t = TYPE_ORDER.index(prefix) if prefix in TYPE_ORDER else -1
     return (r.kind != "strategy", t, prefix, num == "NEW", int(num) if num.isdigit() else 0, r.path)
 
 
@@ -160,7 +174,8 @@ def _sort_key(r: Record) -> tuple:
 @dataclasses.dataclass(frozen=True)
 class Codes:
     """The known codes -> uids, and the two patterns that find them: a bare code (a whole
-    word: not inside ``XLL-001`` or ``LL-0011``) and a ``[[CODE]]`` / ``[[CODE|alias]]`` link."""
+    word: not inside ``XLL-001`` or ``LL-0011``) and, in prose, a code or any ``[[...]]`` link
+    (``wiki``: group 1 the link's target, group 2 its ``|alias``; group 3 a bare code)."""
 
     uids: Mapping[str, str]
     bare: re.Pattern
@@ -174,7 +189,7 @@ class Codes:
         return cls(
             dict(uids),
             re.compile(rf"(?<![\w-]){alt}(?![\w-])"),
-            re.compile(rf"\[\[{alt}(\|[^\]]*)?\]\]"),
+            re.compile(rf"\[\[([^\]|]*)(\|[^\]]*)?\]\]|(?<![\w-]){alt}(?![\w-])"),
         )
 
 
@@ -184,14 +199,20 @@ def _sub_codes(text: str, codes: Codes | None) -> str:
 
 
 def _sub_prose(text: str, codes: Codes | None) -> str:
-    """Prose: ``[[CODE]]`` and a bare ``CODE`` become ``[[<uid>]]`` (an alias is kept); a code
-    in a code span is a quotation and stays as it is."""
+    """Prose: ``[[CODE]]`` and a bare ``CODE`` become ``[[<uid>]]`` (an alias is kept, as
+    written: a code inside it is text, not a second link); a code in a code span is a quotation
+    and stays as it is.  One left-to-right pass, so a link is never rewritten inside a link."""
     if codes is None:
         return text
 
+    def one(m: re.Match) -> str:
+        if m[3] is not None:
+            return f"[[{codes.uids[m[3]]}]]"
+        target = codes.uids.get(m[1].strip())
+        return f"[[{target}{m[2] or ''}]]" if target else m[0]
+
     def links(s: str) -> str:
-        s = codes.wiki.sub(lambda m: f"[[{codes.uids[m[1]]}{m[2] or ''}]]", s)
-        return codes.bare.sub(lambda m: f"[[{codes.uids[m[1]]}]]", s)
+        return codes.wiki.sub(one, s)
 
     out, pos = [], 0
     for m in _CODE_SPAN.finditer(text):
@@ -312,13 +333,20 @@ def assign_uids(
     problems: list[str] = []
     records: list[Record] = []
     known: dict[str, str] = {}  # every code -> uid: earlier migrations' and this one's
+    retired: dict[pathlib.Path, dict[str, dict[str, str]]] = {}  # tree -> code -> tombstone
     for t in trees:
         records += _read_tree(t, problems)
+        retired[t] = {}
         if (t / ALIASES_FILE).is_file():
             try:
-                known.update(_read(t / ALIASES_FILE))
+                amap = read_aliases(t / ALIASES_FILE)
             except ValueError as ex:
                 problems.append(str(ex))
+            else:
+                known.update(amap.codes)
+                retired[t].update(amap.retired)
+    tombstones = [r for r in records if r.tombstone]
+    records = [r for r in records if not r.tombstone]
     if problems:
         raise MigrationError(problems)
     plan = Plan()
@@ -339,6 +367,9 @@ def assign_uids(
     for r in records:
         if not r.uid:
             r.uid = str(r.fm.get("uid"))
+    for r in tombstones:
+        retired[r.tree][str(r.code)] = _tombstone(r, known, {**known, **seen_codes}, problems)
+    _targets_free(todo, problems)
     if problems:
         raise MigrationError(problems)
     codes = Codes.of(known)
@@ -381,8 +412,57 @@ def assign_uids(
             problems.append(f"{r.path}: {len(lost)} current review(s) would not survive")
     if problems:
         raise MigrationError(problems)
-    _apply(records, events_after, rekeys, known, trees, also, codes, when, plan, dry_run)
+    _apply(records, events_after, rekeys, known, trees, also, codes, when, plan, dry_run, retired)
+    for r in tombstones:
+        plan.removed.append(r.path)
+        if not dry_run:
+            r.path.unlink()
     return plan
+
+
+def _tombstone(r: Record, known: Mapping[str, str], live: Mapping[str, Any], problems) -> dict:
+    """A pre-uid tombstone as its ``aliases.yml`` ``retired:`` entry (``replaced_by`` mapped to
+    the successor's uid); what it cannot carry losslessly is a problem."""
+    who = f"{r.path}: tombstone {r.code}"
+    ret = r.fm.get("retired")
+    text = r.text.replace("\r\n", "\n")
+    m = _FRONT.match(text)
+    body = _LINKS_BLOCK.sub("", text[m.end() :] if m else text)
+    if not r.code or r.code.endswith("-NEW"):
+        problems.append(f"{r.path}: a tombstone needs the numbered `id` it retires")
+    elif r.code in live:
+        problems.append(f"{who} is also the code of {live[r.code]} (a code retired and live)")
+    if set(r.fm) - {"id", "retired"} or body.strip():
+        problems.append(f"{who}: a tombstone holds only `id` and `retired`")
+    if _events_dir(r.path).exists():
+        problems.append(f"{who}: has an events directory; a tombstone has no history to carry")
+    if not (isinstance(ret, dict) and isinstance(ret.get("reason"), str) and ret["reason"].strip()):
+        problems.append(f"{who}: `retired` needs a `reason`")
+        return {}
+    if set(ret) - {"reason", "replaced_by"}:
+        problems.append(f"{who}: `retired` holds only `reason` and `replaced_by`")
+    out = {"reason": " ".join(ret["reason"].split())}  # history: quoted as it was written
+    rb = ret.get("replaced_by")
+    if rb is not None:
+        uid = str(rb) if is_uid(rb) and str(rb) in known.values() else known.get(str(rb))
+        if uid is None:
+            problems.append(f"{who}: replaced_by {rb} names no record of the trees")
+        else:
+            out["replaced_by"] = uid
+    return out
+
+
+def _targets_free(todo: list[Record], problems: list[str]) -> None:
+    """Pre-flight: no record is renamed onto an existing file or events directory (the rename
+    would otherwise fail half way through a migration that has already written files)."""
+    for r in todo:
+        if r.kind == "strategy":
+            continue
+        target = r.path.with_name(f"{r.uid}.md")
+        if target != r.path and target.exists():
+            problems.append(f"{target} exists; not overwriting it with {r.path.name}")
+        if target != r.path and _events_dir(target).exists():
+            problems.append(f"{_events_dir(target)} exists; not overwriting it")
 
 
 def _keyed(current: list[dict], review: dict) -> list[dict]:
@@ -429,7 +509,7 @@ def _links_resolve(r: Record, entry: Mapping[str, Any], by_uid: Mapping[str, Rec
             problems.append(f"{r.path}: wiki-link [[{ref}]] names no record of the trees")
 
 
-def _apply(records, events_after, rekeys, known, trees, also, codes, when, plan, dry_run):
+def _apply(records, events_after, rekeys, known, trees, also, codes, when, plan, dry_run, retired):
     from homelabnext.registers import events as ev
     from homelabnext.state import atomic_write_text
 
@@ -450,9 +530,7 @@ def _apply(records, events_after, rekeys, known, trees, also, codes, when, plan,
             if not dry_run:
                 r.path.unlink()
                 if old_ev.is_dir():
-                    if new_ev.exists():
-                        raise MigrationError([f"{new_ev} exists; not overwriting it"])
-                    old_ev.rename(new_ev)
+                    old_ev.rename(new_ev)  # free: checked before anything was written
         live_ev = old_ev if dry_run else new_ev
         for fname, text in events_after.get(r.uid, {}).items():
             plan.written.append(new_ev / fname)
@@ -464,10 +542,10 @@ def _apply(records, events_after, rekeys, known, trees, also, codes, when, plan,
                 plan.written.append(ev.create_event(new_ev, rekeys[r.uid], when=when))
     for t in trees:
         mine = {c: u for c, u in known.items() if any(r.uid == u and r.tree == t for r in records)}
-        if not mine:
+        if not mine and not retired.get(t):
             continue
         titles = {c: _title(records, u) for c, u in mine.items()}
-        text = render_aliases(mine, titles)
+        text = render_aliases(mine, titles, retired.get(t))
         p = t / ALIASES_FILE
         if not p.is_file() or p.read_text(encoding="utf-8") != text:
             write(p, text)

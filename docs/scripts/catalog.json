@@ -643,7 +643,8 @@
       "trigger": [
         "make:ids-check",
         "pre-commit:register-ids-check-dupes",
-        "pre-commit:register-ids-check-lost"
+        "pre-commit:register-ids-check-lost",
+        "pre-commit:register-ids-check-uids"
       ]
     },
     {
