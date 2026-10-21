@@ -111,6 +111,10 @@ def test_the_interactive_maps_in_a_browser(tmp_path, capsys):
     assert HOSTILE in t["hostileText"] and t["hostileImgs"] == 0 and t["pwned"] is None
     assert "evil-1" in t["hostileTip"]
     assert t["panelClosed"]
+    # power: the UPS lines toggle; the no-UPS host says why; a VM shows its node's power
+    assert t["powerLines"] == 7 and "Hide Power" in t["powerToggle"] and t["powerLinesOff"] == 0
+    assert "no UPS: A bench machine" in t["benchTip"] and "Power" in t["benchPanel"]
+    assert t["siemPower"] == "inherits hv-1: UPS ups-a"
     # filter (Ctrl+F focuses it, Esc clears), collapse, zoom, theme
     assert t["focused"] == "filter-input" and t["filterHits"] >= 1 and t["filterDimmed"] > 10
     assert t["afterEsc"] == 0

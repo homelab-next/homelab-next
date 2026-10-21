@@ -13,8 +13,10 @@ host-level flows of :mod:`.lab` (the dataflow model's hops, registry upstreams, 
 
 Layout, after the lab's hand-kept topology page it replaces in spirit:
 
-* **top cluster**: the internet, the router, the switches, then the hypervisors and every other
-  physical host (``kind: host``);
+* **top cluster**: the uplink chain (the site's ``edge``, outermost first; without one the
+  internet, the router and the switches), the switches not in it, the UPSes with what they feed
+  (``power.ups``, :mod:`homelabnext.power`), then the hypervisors and every other physical host
+  (``kind: host``);
 * **one lane per zone** (site order; a zone a guest names that the site does not define gets a
   dashed lane), with its VLAN badge, purpose and subnet.  A lane with more than
   :data:`STACK_MIN` guests that use at least two capability groups is split into **stacks**, one
@@ -22,7 +24,8 @@ Layout, after the lab's hand-kept topology page it replaces in spirit:
   by (``docs/role-interface.md``), so a stack is what the deploy layer already treats as one
   functional unit, and no new field is needed;
 * each card: name and address; type, resources, image, capability; badges for its service count,
-  ``vmid``, ``not IaC`` (``manual`` or ``host-only``) and ``planned`` / ``retired``.
+  ``vmid``, ``not IaC`` (``manual`` or ``host-only``), ``planned`` / ``retired`` and, on a powered
+  device, ``UPS: <id>`` or ``no UPS``; a VM's detail shows the power it inherits.
 
 :func:`build` is pure; :func:`render` gives the page body: the toolbar, the canvas of
 server-rendered cards (readable without script), the detail-panel data as an escaped JSON
@@ -36,6 +39,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+from homelabnext import power as pw
 
 from . import assets, svg
 from .lab import INTERNET, Index, guest_name, host_flows, lab_of, status_of
@@ -58,10 +63,11 @@ CORE_KEYS = (
     "capability_groups",
     "tags",
     "baseline",
+    "power",
     "backup",
     "owners",
 )
-KIND_TAG = {"vm": "VM", "lxc": "LXC", "host": "HOST", "hypervisor": "HV", "node": "HV",
+KIND_TAG = {"ups": "UPS", "modem": "MDM", "ont": "ONT", "firewall": "FW", "edge": "DEV", "vm": "VM", "lxc": "LXC", "host": "HOST", "hypervisor": "HV", "node": "HV",
             "router": "GW", "switch": "SW", "internet": "NET"}  # fmt: skip
 
 
@@ -150,9 +156,34 @@ def _guest_row(raw: Mapping[str, Any], services: list[str]) -> dict[str, Any]:
 class _Cards:
     """Builds the cards and the detail-panel entries for one view-model."""
 
-    def __init__(self, idx: Index, zones: Mapping[str, Mapping[str, Any]], flows: list[dict]):
+    def __init__(
+        self,
+        idx: Index,
+        zones: Mapping[str, Mapping[str, Any]],
+        flows: list[dict],
+        power: Mapping[str, Mapping[str, Any]] | None = None,
+    ):
         self.idx, self.zones, self.flows = idx, zones, flows
+        self.power = power or {}
         self.details: dict[str, dict[str, Any]] = {}
+
+    def _power(self, node: str) -> tuple[dict[str, str] | None, str | None, list[str]]:
+        """(badge, tooltip text, detail lines) of a powered device; nothing for the rest."""
+        eff = self.power.get(node)
+        if eff is None:
+            return None, None, []
+        how = {"own": "declared", "default": "the site's power.default"}.get(eff["source"], "")
+        if eff["none"]:
+            reason = eff.get("reason") or ""
+            return (
+                {"cls": "nopower", "text": "no UPS"},
+                f"no UPS: {reason}",
+                [f"no UPS ({how}): {reason}"],
+            )
+        if not eff["ups"]:
+            return {"cls": "nopower", "text": "power unknown"}, "not declared", ["not declared"]
+        ups = ", ".join(eff["ups"])
+        return {"cls": "power", "text": f"UPS: {ups}"}, ups, [f"UPS {ups} ({how})"]
 
     def _services(self, node: str) -> list[dict[str, Any]]:
         return [
@@ -205,8 +236,13 @@ class _Cards:
         core: Mapping[str, Any] | None = None,
         does: str | None = None,
         subtitle: str | None = None,
+        power: Sequence[str] | None = None,
+        badge: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         services = self._services(node)
+        p_badge, p_tip, p_lines = self._power(node)
+        if power is not None:  # given: an inherited power (a guest) or what a UPS feeds
+            p_lines = list(power)
         z = self.zones.get(zone or "") or {}
         vlan = z.get("vlan_id")
         badges = []
@@ -217,6 +253,10 @@ class _Cards:
             badges.append({"cls": "notiac", "text": "not IaC"})
         if status != "live":
             badges.append({"cls": status, "text": status})
+        if p_badge:
+            badges.append(p_badge)
+        if badge:
+            badges.append(dict(badge))
         self.details[node] = {
             "name": name,
             "subtitle": subtitle,
@@ -224,6 +264,7 @@ class _Cards:
             "does": does,
             "services": services,
             "flows": self._flow_lines(node),
+            "power": p_lines,
         }
         return {
             "node": node,
@@ -239,6 +280,7 @@ class _Cards:
             "status": status,
             "badges": badges,
             "services": [s["name"].removeprefix("svc:") for s in services],
+            "power": p_tip,
         }
 
     def guest(self, raw: Mapping[str, Any], *, hypervisor: bool, children: int) -> dict[str, Any]:
@@ -256,6 +298,19 @@ class _Cards:
         does = raw.get("description") or raw.get("display_name")
         if not does:
             does = f"Provides {raw.get('capability')}." if raw.get("capability") else None
+        inherited = None
+        if kind != "host" and self.power:
+            got = pw.of_guest(raw, self.power)
+            if got is None:
+                inherited = ["unknown: its node declares no power"]
+            else:
+                src, eff = got
+                what = (
+                    f"no UPS ({eff.get('reason') or 'no reason'})"
+                    if eff["none"]
+                    else "UPS " + (", ".join(eff["ups"]) or "not declared")
+                )
+                inherited = [f"inherits {src.split(':', 1)[1]}: {what}"]
         return self.card(
             f"guest:{name}",
             name,
@@ -270,6 +325,7 @@ class _Cards:
             core=_core(raw),
             does=does,
             subtitle=raw.get("display_name"),
+            power=inherited,
         )
 
 
@@ -310,19 +366,23 @@ def build(
     flows: Sequence[Any],
     *,
     lab: Mapping[str, Any] | None = None,
-    nodes: Sequence[str] = (),
+    nodes: Sequence[str] | Mapping[str, Mapping[str, Any]] = (),
     dataflow: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The topology view-model.  ``site``: the site document; ``guests``: guest objects (``raw``
     is the guest document); ``flows``: zone flows (``src``, ``dst``, ``protocols``, ``ports``);
-    ``lab``: :func:`.lab.lab_of` of the registry (services per host); ``nodes``: hypervisor
-    names (``_nodes.yml``); ``dataflow``: the dataflow view-model (its hops become flows).
+    ``lab``: :func:`.lab.lab_of` of the registry (services per host); ``nodes``: the hypervisors
+    (``_nodes.yml``: names, or name -> spec with its ``power``); ``dataflow``: the dataflow view-model (its hops become flows).
     Zones keep the site's order; a guest in a zone the site does not define gets its own lane
     (``known: false``), so a mismatch shows instead of vanishing."""
     lab = lab or {"hosts": {}, "services": []}
     raws = [g.raw for g in sorted(guests, key=lambda g: g.raw["id"])]
-    idx = index_for(site, raws, lab, nodes)
+    specs = dict(nodes) if isinstance(nodes, Mapping) else {n: {} for n in nodes}
+    idx = index_for(site, raws, lab, list(specs))
     hyper = idx.hypervisors
+    facts = pw.site_power(site)
+    hosts = {guest_name(r): r for r in raws if r.get("kind") == "host"}
+    resolved = pw.resolve(facts, pw.hypervisors(specs, raws), hosts)
     hflows = host_flows(site, idx, dataflow)
 
     zones = [
@@ -333,77 +393,116 @@ def build(
         zones.append({"id": zid, "known": False})
     site_zones = {z["id"]: z for z in site.get("zones") or [] if isinstance(z, Mapping)}
 
-    cards = _Cards(idx, site_zones, hflows)
+    cards = _Cards(idx, site_zones, hflows, resolved)
     children = {
         n: sum(
             1 for r in raws if (r.get("placement") or {}).get("node") == n and guest_name(r) != n
         )
         for n in hyper
     }
-    # ---- the top cluster
+    # ---- the top cluster: the edge chain (site ``edge``, else internet, router, switches),
+    # the switches not in it, the UPSes, then the hypervisors and other physical hosts
     internet_zones = [z["id"] for z in zones if z.get("internet") == "allow"]
-    top: list[list[dict[str, Any]]] = [
-        [
-            cards.card(
-                INTERNET,
-                "internet",
-                "internet",
-                kind_type="upstream",
-                meta=[
-                    "egress from " + ", ".join(internet_zones)
-                    if internet_zones
-                    else "no zone egresses"
-                ],
-                core={"internet_egress": {z["id"]: z.get("internet") or "not set" for z in zones}},
-                does="Everything outside the lab. Zones reach it only where the site allows egress.",
-            )
-        ]
-    ]
+    devices: dict[str, dict[str, Any]] = {}
+    devices[INTERNET] = cards.card(
+        INTERNET,
+        "internet",
+        "internet",
+        kind_type="upstream",
+        meta=["egress from " + ", ".join(internet_zones) if internet_zones else "no zone egresses"],
+        core={"internet_egress": {z["id"]: z.get("internet") or "not set" for z in zones}},
+        does="Everything outside the lab. Zones reach it only where the site allows egress.",
+    )
     router = site.get("router") or {}
     if isinstance(router, Mapping) and router.get("id"):
         rid = str(router["id"])
         addr = (lab.get("hosts") or {}).get(rid, {}).get("address")
-        top.append(
-            [
-                cards.card(
-                    f"router:{rid}",
-                    rid,
-                    "router",
-                    kind_type=f"router · {router.get('model') or '?'}",
-                    ip=addr,
-                    meta=[f"gateway of {len(known)} zone{'s' if len(known) != 1 else ''}"],
-                    core={k: router[k] for k in ("id", "model", "mgmt_endpoint") if k in router},
-                    does="The edge: routes between the zones and enforces the site firewall.",
-                    not_iac=False,
-                )
-            ]
+        devices[f"router:{rid}"] = cards.card(
+            f"router:{rid}",
+            rid,
+            "router",
+            kind_type=f"router \u00b7 {router.get('model') or '?'}",
+            ip=addr,
+            meta=[f"gateway of {len(known)} zone{'s' if len(known) != 1 else ''}"],
+            core={k: router[k] for k in ("id", "model", "mgmt_endpoint", "power") if k in router},
+            does="The edge: routes between the zones and enforces the site firewall.",
         )
-    sw = []
-    for s in site.get("switches") or []:
-        if not isinstance(s, Mapping) or not s.get("id"):
+    switches = []
+    for sw in site.get("switches") or []:
+        if not isinstance(sw, Mapping) or not sw.get("id"):
             continue
-        ports = s.get("port_assignments") or []
-        sw.append(
-            cards.card(
-                f"switch:{s['id']}",
-                str(s["id"]),
-                "switch",
-                kind_type=f"switch · {s.get('model') or '?'}",
-                meta=[
-                    f"{len(ports)} port group{'s' if len(ports) != 1 else ''}",
-                    f"uplink port {s['uplink_port']}" if s.get("uplink_port") else None,
-                ],
-                core={
-                    "id": s["id"],
-                    "model": s.get("model"),
-                    "uplink_port": s.get("uplink_port"),
-                    "port_assignments": ports,
-                },
-                does="Carries the zones' VLANs between the router and the hypervisors.",
-            )
+        ports = sw.get("port_assignments") or []
+        node = f"switch:{sw['id']}"
+        switches.append(node)
+        devices[node] = cards.card(
+            node,
+            str(sw["id"]),
+            "switch",
+            kind_type=f"switch \u00b7 {sw.get('model') or '?'}",
+            meta=[
+                f"{len(ports)} port group{'s' if len(ports) != 1 else ''}",
+                f"uplink port {sw['uplink_port']}" if sw.get("uplink_port") else None,
+            ],
+            core={
+                k: sw[k]
+                for k in ("id", "model", "uplink_port", "power", "port_assignments")
+                if k in sw
+            },
+            does="Carries the zones' VLANs between the router and the hypervisors.",
         )
-    if sw:
-        top.append(sw)
+    chain = [e for e in site.get("edge") or [] if isinstance(e, Mapping) and e.get("id")]
+    top: list[list[dict[str, Any]]] = []
+    if chain:
+        for e in chain:
+            node = pw.edge_node(site, e)
+            if node not in devices:
+                kind = str(e.get("kind") or "other")
+                category = kind if kind in ("modem", "ont", "firewall") else "edge"
+                devices[node] = cards.card(
+                    node,
+                    str(e["id"]),
+                    category,
+                    kind_type=f"{kind} \u00b7 {e['model']}" if e.get("model") else kind,
+                    meta=["in the uplink chain"],
+                    core={k: e[k] for k in ("id", "kind", "model", "power") if k in e},
+                    does=f"A {kind} in the uplink chain between the internet and the lab.",
+                )
+            top.append([devices[node]])
+        shown = {c["node"] for row in top for c in row}
+        rest = [devices[n] for n in switches if n not in shown]
+        if rest:
+            top.append(rest)
+    else:
+        top.append([devices[INTERNET]])
+        if isinstance(router, Mapping) and router.get("id"):
+            top.append([devices[f"router:{router['id']}"]])
+        if switches:
+            top.append([devices[n] for n in switches])
+    power_lines: list[dict[str, str]] = []
+    if facts is not None:
+        fed = pw.feeds(resolved, facts["ups"])
+        row = []
+        for uid, ups in facts["ups"].items():
+            how = ups.get("monitored_by") or "none"
+            watch = f"monitored by {how}" + (f" ({ups['nut_name']})" if ups.get("nut_name") else "")
+            n = len(fed[uid])
+            row.append(
+                cards.card(
+                    f"ups:{uid}",
+                    uid,
+                    "ups",
+                    kind_type=f"UPS \u00b7 {ups['model']}" if ups.get("model") else "UPS",
+                    meta=[watch],
+                    core=ups,
+                    does="Keeps what it feeds running through a power cut, for as long as its "
+                    "battery lasts.",
+                    power=[f"feeds {x.split(':', 1)[1]}" for x in fed[uid]] or ["feeds nothing"],
+                    badge={"cls": "count" if n else "nopower", "text": f"feeds {n}"},
+                )
+            )
+            power_lines += [{"source": f"ups:{uid}", "dest": x} for x in fed[uid]]
+        if row:
+            top.append(row)
     by_name = {guest_name(r): r for r in raws}
     physical = []
     for n in hyper:
@@ -491,6 +590,7 @@ def build(
         "top": top,
         "lanes": lanes,
         "edges": edges,
+        "power": [p for p in power_lines if p["dest"] in on_page],
         "host_flows": hflows,
         "details": cards.details,
     }
@@ -498,13 +598,13 @@ def build(
 
 def inputs(
     guests_dir: str | Path, site_path: str | Path
-) -> tuple[Mapping[str, Any], list[Any], list[Any], list[str]]:
-    """(site document, guests, zone flows, hypervisor names) read from a guest directory and the
+) -> tuple[Mapping[str, Any], list[Any], list[Any], dict[str, Any]]:
+    """(site document, guests, zone flows, hypervisors: name -> ``_nodes.yml`` spec) read from a guest directory and the
     site model its zones come from (raises :class:`homelabnext.compute.model.ComputeError` on an
     unloadable tree or site)."""
     from homelabnext.compute.loader import NODES_FILE, load_fleet, load_nodes
     from homelabnext.compute.model import ComputeError
-    from homelabnext.compute.zones import flows_from_site, open_site
+    from homelabnext.compute.zones import flows_from_site, open_site, site_power
     from homelabnext.network.loader import SiteError, load_site
 
     try:
@@ -515,11 +615,15 @@ def inputs(
         raise ComputeError(f"{site_path}: expected a mapping")
     zones, domain = open_site(site_path)
     fleet = load_fleet(
-        guests_dir, zones, domain=domain or "example.internal", require_baselines=False
+        guests_dir,
+        zones,
+        domain=domain or "example.internal",
+        require_baselines=False,
+        power=site_power(site_path),
     )
     nodes_file = Path(guests_dir) / NODES_FILE
-    nodes = sorted(load_nodes(nodes_file)) if nodes_file.is_file() else []
-    return doc, fleet.sorted(), list(flows_from_site(doc)), nodes
+    nodes = load_nodes(nodes_file) if nodes_file.is_file() else {}
+    return doc, fleet.sorted(), list(flows_from_site(doc)), dict(sorted(nodes.items()))
 
 
 def load(
@@ -550,6 +654,7 @@ def _card_html(c: Mapping[str, Any]) -> str:
         + _attr("data-vlan", c["vlan"] if c["vlan"] is not None else "—")
         + _attr("data-type", c["type"])
         + _attr("data-services", ", ".join(c["services"]))
+        + (_attr("data-power", c["power"]) if c.get("power") else "")
         + ' tabindex="0" role="button"'
         + _attr("aria-label", f"{c['name']} ({c['type']}): details")
     )
@@ -619,12 +724,20 @@ def _lane_html(ln: Mapping[str, Any], i: int) -> str:
     return "".join(out)
 
 
-def toolbar(count: str, *, flows: bool, placeholder: str, extra: str = "") -> str:
+def toolbar(
+    count: str, *, flows: bool, placeholder: str, extra: str = "", power: bool = False
+) -> str:
     """The shared toolbar (Topology and Dataflow): filter box, a count, buttons."""
     flow_btn = (
         '<button type="button" id="flow-toggle" class="tb-btn js-only" aria-pressed="false">'
         "↔ Show Data Flows</button>"
-        '<button type="button" id="reset-btn" class="tb-btn js-only">⛶ Reset view</button>'
+        + (
+            '<button type="button" id="power-toggle" class="tb-btn js-only" aria-pressed="false">'
+            "⚡ Show Power</button>"
+            if power
+            else ""
+        )
+        + '<button type="button" id="reset-btn" class="tb-btn js-only">⛶ Reset view</button>'
         if flows
         else ""
     )
@@ -761,11 +874,18 @@ def render(vm: Mapping[str, Any]) -> str:
         toolbar(
             f"{len(vm['guests'])} guests · {n_cards} cards · {len(vm['edges'])} flows",
             flows=True,
+            power=bool(vm.get("power")),
             placeholder="Filter: host, IP, service, type",
         ),
         '<p class="legend"><span><i></i>live flow</span><span><i class="planned"></i>'
-        "planned (an end is a planned guest)</span><span>click a card for its descriptor, "
-        "services and flows; drag to pan, wheel to zoom</span></p>",
+        "planned (an end is a planned guest)</span>"
+        + (
+            '<span><i class="power"></i>power (a UPS to what it feeds)</span>'
+            if vm.get("power")
+            else ""
+        )
+        + "<span>click a card for its descriptor, services and flows; drag to pan, wheel to zoom"
+        "</span></p>",
         '<div class="topo-canvas" id="topo-canvas"><div class="topo-inner" id="topo-inner">',
         '<svg id="flow-svg" aria-hidden="true"><defs>'
         '<marker id="arrowhead" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">'
@@ -785,7 +905,12 @@ def render(vm: Mapping[str, Any]) -> str:
         "Click a card to see its descriptor, services and data flow.</p></div></aside>"
         '<div id="tooltip-el" class="tooltip" role="tooltip"></div>'
     )
-    out.append(assets.json_script("topo-data", {"edges": vm["edges"], "details": vm["details"]}))
+    out.append(
+        assets.json_script(
+            "topo-data",
+            {"edges": vm["edges"], "power": vm.get("power", []), "details": vm["details"]},
+        )
+    )
     out.append(tables(vm))
     out.append("</div>")
     return "".join(out)

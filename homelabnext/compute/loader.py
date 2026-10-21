@@ -94,7 +94,9 @@ def load_policies(path: str | Path) -> dict[str, Mapping[str, Any]]:
 
 
 def load_nodes(path: str | Path) -> dict[str, Mapping[str, Any]]:
-    """Read ``{nodes: {name: {firewall: enabled|disabled}}}`` (what each hypervisor enforces)."""
+    """Read ``{nodes: {name: {firewall: enabled|disabled, power: {...}}}}``: what each hypervisor
+    enforces, and what feeds it (``power``, checked against the site by
+    :func:`homelabnext.power.fleet_problems`)."""
     p = Path(path)
     try:
         doc = yaml.load(p.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
@@ -110,6 +112,8 @@ def load_nodes(path: str | Path) -> dict[str, Mapping[str, Any]]:
         if fw not in ("enabled", "disabled"):
             raise ComputeError(f"{p}: node {name!r}: firewall must be 'enabled' or 'disabled'")
         out[str(name)] = {"firewall": fw}
+        if isinstance(spec, dict) and "power" in spec:
+            out[str(name)]["power"] = spec["power"]
     return out
 
 
@@ -137,6 +141,7 @@ def load_fleet(
     baselines_path: str | Path | None = None,
     require_baselines: bool = True,
     flows: tuple[ZoneFlow, ...] = (),
+    power: Mapping[str, Any] | None = None,
 ) -> Fleet:
     """Load, schema- and semantically validate; raise ComputeError listing every problem.
 
@@ -144,7 +149,9 @@ def load_fleet(
     baseline set and no guest needs a baseline.  ``require_baselines=False`` tolerates guests
     that declare none (for the coverage report, which lists them).  ``flows``: the zone-to-zone
     flows the site allows (:func:`homelabnext.compute.zones.site_flows`), for the targets that
-    follow them (``tailscale-acl``)."""
+    follow them (``tailscale-acl``).  ``power``: the site's power facts
+    (:func:`homelabnext.compute.zones.site_power`); with them, every hypervisor and physical
+    host must say what feeds it."""
     from .validate import validate
 
     d = Path(directory)
@@ -167,6 +174,7 @@ def load_fleet(
         nodes=load_nodes(nodes_file) if nodes_file.is_file() else {},
         baselines=baselines,
         flows=tuple(flows),
+        power=power,
     )
     problems += validate(fleet, require_baselines=require_baselines)
     if problems:

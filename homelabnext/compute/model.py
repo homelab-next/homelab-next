@@ -273,6 +273,9 @@ class Fleet:
     baselines: Any = None
     #: the zone-to-zone flows the site model allows (empty: a zones-only site, or none read)
     flows: tuple[ZoneFlow, ...] = ()
+    #: the site's power facts (:func:`homelabnext.power.site_power`); None = the site has no
+    #: ``power`` section, so nothing has to declare what feeds it
+    power: Mapping[str, Any] | None = None
 
     def node_firewall(self, node: str) -> bool:
         """Whether the node (hypervisor) itself enforces a firewall.  Unlisted = yes (safe default)."""

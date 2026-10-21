@@ -5,6 +5,7 @@
 - **Related:** ADR-0013 (status hub), ADR-0016 (guest baselines), `docs/status.md` ("Generated
   maps"), `homelabnext/status/maps/`, `schemas/status/views.schema.json` (1.5),
   `schemas/platform/guest.schema.json` (1.4), `schemas/platform/service.json` (2.4),
+  `schemas/platform/site.schema.json` (1.1), `homelabnext/power.py`,
   `docs/build-order.md`, `docs/checklist.md`
 
 ## Context
@@ -67,6 +68,13 @@ manifest, the knowledge graph's capability readers, the build order and the chec
 8. **What the guest and registry models gained** (additive, frozen): guest 1.4 `status`
    (`planned | live | retired`, default `live`) and a one-line `description`; service 2.4 a
    one-line `description`. Informational only: no generator reads them.
+9. **Power is part of the topology** (added after review). The site model (1.1) lists its UPSes
+   and the uplink chain (`edge`: internet, modem, router, ...); every router, switch, edge device,
+   hypervisor and physical host says which UPS feeds it, or `none` with a reason, or takes the
+   site's default; a VM inherits its hypervisor's. The rules are one module
+   (`homelabnext/power.py`) checked by `hnx site validate` and `hnx guests validate`; the map
+   draws the chain from the data, UPS cards with what they feed, a power badge per device and
+   the inherited power in a guest's detail. A live UPS reading (NUT) is a later status source.
 
 ## Consequences
 

@@ -1,6 +1,17 @@
 {
  "default": "deny",
  "details": {
+  "edge:modem-1": {
+   "does": "A modem in the uplink chain between the internet and the lab.",
+   "flows": [],
+   "name": "modem-1",
+   "power": [
+    "UPS ups-1 (the site's power.default)"
+   ],
+   "services": [],
+   "subtitle": null,
+   "yaml": "id: modem-1\nkind: modem\nmodel: Example DOCSIS"
+  },
   "guest:app-1": {
    "does": "Provides cap:events.",
    "flows": [
@@ -31,6 +42,9 @@
     }
    ],
    "name": "app-1",
+   "power": [
+    "inherits hv-b: UPS ups-1"
+   ],
    "services": [
     {
      "description": "The app.",
@@ -56,6 +70,9 @@
     }
    ],
    "name": "cache-1",
+   "power": [
+    "inherits hv-b: UPS ups-1"
+   ],
    "services": [
     {
      "description": "",
@@ -111,6 +128,9 @@
     }
    ],
    "name": "db-1",
+   "power": [
+    "inherits hv-a: UPS ups-2"
+   ],
    "services": [
     {
      "description": "Stores rows.",
@@ -130,14 +150,20 @@
    "does": "Provides cap:events.",
    "flows": [],
    "name": "hv-a",
+   "power": [
+    "UPS ups-2 (declared)"
+   ],
    "services": [],
    "subtitle": null,
-   "yaml": "id: guest:hv-a\nkind: host\nprovisioning: host-only\nstatus: live\nplacement:\n  node: hv-a\nnetwork:\n  zone: mgmt\n  ip: 192.0.2.10\ncapability: cap:events\nbaseline:\n  names:\n  - server"
+   "yaml": "id: guest:hv-a\nkind: host\nprovisioning: host-only\nstatus: live\nplacement:\n  node: hv-a\nnetwork:\n  zone: mgmt\n  ip: 192.0.2.10\ncapability: cap:events\nbaseline:\n  names:\n  - server\npower:\n  ups: ups-2"
   },
   "guest:job-1": {
    "does": "Batch runner",
    "flows": [],
    "name": "job-1",
+   "power": [
+    "inherits hv-b: UPS ups-1"
+   ],
    "services": [],
    "subtitle": "Batch runner",
    "yaml": "id: guest:job-1\ndisplay_name: Batch runner\nkind: vm\nprovisioning: manual\nstatus: live\nplacement:\n  node: hv-b\n  vmid: 174\nnetwork:\n  zone: data\n  ip: 192.0.2.74\ncapability: cap:events\ncapability_groups:\n- cap_orchestration"
@@ -146,6 +172,9 @@
    "does": "Provides cap:events.",
    "flows": [],
    "name": "odd-1",
+   "power": [
+    "inherits hv-b: UPS ups-1"
+   ],
    "services": [],
    "subtitle": null,
    "yaml": "id: guest:odd-1\nkind: vm\nprovisioning: terraform\nstatus: live\nplacement:\n  node: hv-b\nnetwork:\n  zone: lab\n  ip: 192.0.2.75\ncapability: cap:events"
@@ -160,6 +189,9 @@
     }
    ],
    "name": "old-1",
+   "power": [
+    "inherits hv-b: UPS ups-1"
+   ],
    "services": [
     {
      "description": "Retired scanner.",
@@ -180,6 +212,7 @@
     }
    ],
    "name": "internet",
+   "power": [],
    "services": [],
    "subtitle": null,
    "yaml": "internet_egress:\n  mgmt: deny\n  data: allow\n  lab: not set"
@@ -188,6 +221,9 @@
    "does": "A hypervisor named by the guests' placement; it has no guest file.",
    "flows": [],
    "name": "hv-b",
+   "power": [
+    "UPS ups-1 (the site's power.default)"
+   ],
    "services": [],
    "subtitle": null,
    "yaml": "node: hv-b"
@@ -196,6 +232,9 @@
    "does": "The edge: routes between the zones and enforces the site firewall.",
    "flows": [],
    "name": "gw",
+   "power": [
+    "UPS ups-1 (declared)"
+   ],
    "services": [
     {
      "description": "The router console.",
@@ -204,15 +243,44 @@
     }
    ],
    "subtitle": null,
-   "yaml": "id: gw\nmodel: unifi\nmgmt_endpoint: svc:console"
+   "yaml": "id: gw\nmodel: unifi\nmgmt_endpoint: svc:console\npower:\n  ups: ups-1"
   },
   "switch:sw-1": {
    "does": "Carries the zones' VLANs between the router and the hypervisors.",
    "flows": [],
    "name": "sw-1",
+   "power": [
+    "UPS ups-1, ups-2 (declared)"
+   ],
    "services": [],
    "subtitle": null,
-   "yaml": "id: sw-1\nmodel: unifi\nuplink_port: 1\nport_assignments:\n- ports:\n  - 1\n  kind: trunk\n  vlans:\n  - 10\n  - 20"
+   "yaml": "id: sw-1\nmodel: unifi\nuplink_port: 1\npower:\n  ups:\n  - ups-1\n  - ups-2\nport_assignments:\n- ports:\n  - 1\n  kind: trunk\n  vlans:\n  - 10\n  - 20"
+  },
+  "ups:ups-1": {
+   "does": "Keeps what it feeds running through a power cut, for as long as its battery lasts.",
+   "flows": [],
+   "name": "ups-1",
+   "power": [
+    "feeds modem-1",
+    "feeds hv-b",
+    "feeds gw",
+    "feeds sw-1"
+   ],
+   "services": [],
+   "subtitle": null,
+   "yaml": "id: ups-1\nmodel: Example 1500VA\nmonitored_by: nut\nnut_name: ups-1"
+  },
+  "ups:ups-2": {
+   "does": "Keeps what it feeds running through a power cut, for as long as its battery lasts.",
+   "flows": [],
+   "name": "ups-2",
+   "power": [
+    "feeds hv-a",
+    "feeds sw-1"
+   ],
+   "services": [],
+   "subtitle": null,
+   "yaml": "id: ups-2"
   }
  },
  "edges": [
@@ -541,6 +609,7 @@
        ],
        "name": "cache-1",
        "node": "guest:cache-1",
+       "power": null,
        "services": [
         "cache"
        ],
@@ -569,6 +638,7 @@
        ],
        "name": "db-1",
        "node": "guest:db-1",
+       "power": null,
        "services": [
         "db",
         "events"
@@ -602,6 +672,7 @@
        ],
        "name": "app-1",
        "node": "guest:app-1",
+       "power": null,
        "services": [
         "app"
        ],
@@ -628,6 +699,7 @@
        ],
        "name": "job-1",
        "node": "guest:job-1",
+       "power": null,
        "services": [],
        "status": "live",
        "tag": "VM",
@@ -662,6 +734,7 @@
        ],
        "name": "old-1",
        "node": "guest:old-1",
+       "power": null,
        "services": [
         "scan"
        ],
@@ -699,6 +772,7 @@
        ],
        "name": "odd-1",
        "node": "guest:odd-1",
+       "power": null,
        "services": [],
        "status": "live",
        "tag": "VM",
@@ -714,6 +788,32 @@
    ]
   }
  ],
+ "power": [
+  {
+   "dest": "edge:modem-1",
+   "source": "ups:ups-1"
+  },
+  {
+   "dest": "node:hv-b",
+   "source": "ups:ups-1"
+  },
+  {
+   "dest": "router:gw",
+   "source": "ups:ups-1"
+  },
+  {
+   "dest": "switch:sw-1",
+   "source": "ups:ups-1"
+  },
+  {
+   "dest": "guest:hv-a",
+   "source": "ups:ups-2"
+  },
+  {
+   "dest": "switch:sw-1",
+   "source": "ups:ups-2"
+  }
+ ],
  "site": "lab",
  "top": [
   [
@@ -726,6 +826,7 @@
     ],
     "name": "internet",
     "node": "internet",
+    "power": null,
     "services": [],
     "status": "live",
     "tag": "NET",
@@ -739,8 +840,37 @@
    {
     "badges": [
      {
+      "cls": "power",
+      "text": "UPS: ups-1"
+     }
+    ],
+    "category": "modem",
+    "ip": null,
+    "meta": [
+     "in the uplink chain"
+    ],
+    "name": "modem-1",
+    "node": "edge:modem-1",
+    "power": "ups-1",
+    "services": [],
+    "status": "live",
+    "tag": "MDM",
+    "type": "modem \u00b7 Example DOCSIS",
+    "vlan": null,
+    "vmid": null,
+    "zone": null
+   }
+  ],
+  [
+   {
+    "badges": [
+     {
       "cls": "count",
       "text": "1 service"
+     },
+     {
+      "cls": "power",
+      "text": "UPS: ups-1"
      }
     ],
     "category": "router",
@@ -750,6 +880,7 @@
     ],
     "name": "gw",
     "node": "router:gw",
+    "power": "ups-1",
     "services": [
      "console"
     ],
@@ -763,7 +894,12 @@
   ],
   [
    {
-    "badges": [],
+    "badges": [
+     {
+      "cls": "power",
+      "text": "UPS: ups-1, ups-2"
+     }
+    ],
     "category": "switch",
     "ip": null,
     "meta": [
@@ -772,6 +908,7 @@
     ],
     "name": "sw-1",
     "node": "switch:sw-1",
+    "power": "ups-1, ups-2",
     "services": [],
     "status": "live",
     "tag": "SW",
@@ -785,8 +922,60 @@
    {
     "badges": [
      {
+      "cls": "count",
+      "text": "feeds 4"
+     }
+    ],
+    "category": "ups",
+    "ip": null,
+    "meta": [
+     "monitored by nut (ups-1)"
+    ],
+    "name": "ups-1",
+    "node": "ups:ups-1",
+    "power": null,
+    "services": [],
+    "status": "live",
+    "tag": "UPS",
+    "type": "UPS \u00b7 Example 1500VA",
+    "vlan": null,
+    "vmid": null,
+    "zone": null
+   },
+   {
+    "badges": [
+     {
+      "cls": "count",
+      "text": "feeds 2"
+     }
+    ],
+    "category": "ups",
+    "ip": null,
+    "meta": [
+     "monitored by none"
+    ],
+    "name": "ups-2",
+    "node": "ups:ups-2",
+    "power": null,
+    "services": [],
+    "status": "live",
+    "tag": "UPS",
+    "type": "UPS",
+    "vlan": null,
+    "vmid": null,
+    "zone": null
+   }
+  ],
+  [
+   {
+    "badges": [
+     {
       "cls": "notiac",
       "text": "not IaC"
+     },
+     {
+      "cls": "power",
+      "text": "UPS: ups-2"
      }
     ],
     "category": "hypervisor",
@@ -798,6 +987,7 @@
     ],
     "name": "hv-a",
     "node": "guest:hv-a",
+    "power": "ups-2",
     "services": [],
     "status": "live",
     "tag": "HV",
@@ -811,6 +1001,10 @@
      {
       "cls": "notiac",
       "text": "not IaC"
+     },
+     {
+      "cls": "power",
+      "text": "UPS: ups-1"
      }
     ],
     "category": "node",
@@ -821,6 +1015,7 @@
     ],
     "name": "hv-b",
     "node": "node:hv-b",
+    "power": "ups-1",
     "services": [],
     "status": "live",
     "tag": "HV",

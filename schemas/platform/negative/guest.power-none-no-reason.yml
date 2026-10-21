@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# NEGATIVE (1.4): power.ups none needs a reason
+id: guest:bench-1
+kind: host
+provisioning: host-only
+placement: {node: bench-1}
+network: {zone: mgmt, ip: 192.0.2.20}
+capability: cap:context
+power: {ups: none}
+owners: {primary: platform-team}

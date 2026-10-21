@@ -333,18 +333,21 @@ instead of a half-drawn picture.
 | `/architecture` | `--maps ROOT` | capabilities -> fakes, real adapters, products -> registry services (the knowledge graph's registry, compose and capability readers: the [capabilities](capabilities/README.md) matrix), then the control plane: agents, bus, workflows, decision, broker, status hub, with an edge only where the repository declares one |
 | `/roadmap` | `--maps ROOT [--invariants-results FILE]` | `docs/build-order.md` phases and steps; each phase's `Checklist` cell names its `docs/checklist.md` rows (a section letter for that section's rows of the phase's tag, an id, or a range); per criterion `pass`, `fail`, `error`, `skip` from the results file (`make invariants` writes `build/invariants/results.json`), else `untested`; a progress bar per phase and every row no phase names as unphased |
 
-**Topology.** A canvas of server-rendered cards: on top the internet, the router, the switches,
-then the hypervisors (`_nodes.yml`, or any node another guest is placed on) and every other
+**Topology.** A canvas of server-rendered cards: on top the uplink chain (the site's `edge`:
+internet, modem, router, ...; without one, the internet, the router and the switches), the
+switches not in it, the UPSes (site `power.ups`, each with what it feeds), then the hypervisors (`_nodes.yml`, or any node another guest is placed on) and every other
 physical host; below, one lane per zone (VLAN badge, purpose, subnet, gateway, internet egress;
 a zone the site does not define gets a dashed lane), collapsible. A lane with more than four
 guests in at least two capability groups is split into **stacks**, one per guest's first
 `capability_groups` entry (the grouping the Ansible inventory already deploys by, so no new
 field). Each card shows the name and address; kind and provisioning, resources, image,
 capability and its hypervisor; badges for its service count, `vmid`, `not IaC` (`manual` or
-`host-only`) and `planned` / `retired` (guest schema 1.4 `status`). Click a card for the detail
+`host-only`), `planned` / `retired` (guest schema 1.4 `status`) and, on a powered device,
+`UPS: <id>` or `no UPS` (the reason in its tooltip; [power](network-model.md#power-11)). Click a card for the detail
 panel: the guest descriptor as YAML, "What it does" (`description`, else `display_name`), its
-services with their descriptions (service registry 2.4 `description`), and its data flow as IN
-and OUT lines. "Show Data Flows" draws curved arrows between cards (and zone lanes): the
+services with their descriptions (service registry 2.4 `description`), its power (a VM's is
+inherited from its hypervisor) and its data flow as IN and OUT lines. "Show Power" draws a dotted
+line from each UPS to what it feeds. "Show Data Flows" draws curved arrows between cards (and zone lanes): the
 dataflow model's flows split at their transport's host, the registry's `upstreams`, each guest's
 `firewall_rules` (a /32 that is a guest's address is that guest, `any` is the internet) and the
 site's service exceptions; an arrow with a planned end is dashed, one with a retired end is not
@@ -374,8 +377,9 @@ and transports) are server-rendered, so the page reads without script.
 skipped when it is not installed), with hostile names, and fails on any console error or CSP
 violation.
 
-`examples/lab-topology/` is a fictional lab to look at: two hypervisors, five zones, seventeen
-guests (physical, manual, planned and retired ones among them) and its registry:
+`examples/lab-topology/` is a fictional lab to look at: two hypervisors, five zones, eighteen
+guests (physical, manual, planned and retired ones among them), a modem in the edge chain, two
+UPSes covering everything but one bench machine (`ups: none` with its reason), and its registry:
 
 ```bash
 hnx status render --out build/hub --guests examples/lab-topology/guests \

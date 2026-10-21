@@ -7,5 +7,6 @@ provisioning: host-only
 placement: {node: nas-1}
 network: {zone: data, ip: 192.0.2.150}
 capability: cap:object-store
+power: {ups: ups-b}
 tags: [prod, storage]
 owners: {primary: data-team}

@@ -49,6 +49,10 @@ Rules worth knowing:
   `lifecycle.requires_root_steps`. They are left out of Terraform, libvirt and cloud-init output
   and printed in `MANUAL.md`, but still appear in the inventory, registry hosts and backup jobs.
 * `kind: host` is a physical machine: inventoried, never provisioned (`provisioning: host-only`).
+* `power` (1.4, `kind: host` only) names the UPS that feeds a physical host, or `{ups: none,
+  reason}`; hypervisors declare theirs in `_nodes.yml` (`nodes: {hv-1: {power: {ups: ups-a}}}`),
+  and a VM or container inherits its node's. Checked against the site's `power` section by
+  `hnx guests validate` ([site model](network-model.md#power-11)).
 * `status: planned | live | retired` and `description` (1.4) are informational: no generator reads
   them. The generated Topology and Dataflow maps do ([status hub](status.md#generated-maps-topology-dataflow-architecture-roadmap)):
   a planned guest's card is badged and its flows drawn dashed, a retired guest's flows are not

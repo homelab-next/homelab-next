@@ -33,6 +33,7 @@ GUESTS = ROOT / "examples" / "minimal" / "guests"
 SITE = ROOT / "examples" / "minimal" / "site.yml"
 LAB = ROOT / "examples" / "lab-topology"
 HOSTILE = '<script>alert("x")</script>'
+BOX_IP = "192.0.2.9"  # no-raw-endpoint: allow RFC 5737 documentation address
 
 
 def golden(name: str, text: str) -> None:
@@ -118,9 +119,23 @@ def test_topology_view_model_and_page_match_their_goldens():
     assert [z["id"] for z in vm["zones"]] == ["mgmt", "data", "lab"]  # site order, then unknown
     assert vm["zones"][-1]["known"] is False
     # the top cluster: internet, router, switches, then hypervisors and physical hosts
+    # the edge chain from the site, then the switches not in it, the UPSes, the physical row
     assert [[c["node"] for c in row] for row in vm["top"]] == [
-        ["internet"], ["router:gw"], ["switch:sw-1"], ["guest:hv-a", "node:hv-b"]]  # fmt: skip
-    assert vm["top"][3][0]["category"] == "hypervisor" and vm["top"][3][1]["category"] == "node"
+        ["internet"], ["edge:modem-1"], ["router:gw"], ["switch:sw-1"], ["ups:ups-1", "ups:ups-2"],
+        ["guest:hv-a", "node:hv-b"]]  # fmt: skip
+    assert vm["top"][5][0]["category"] == "hypervisor" and vm["top"][5][1]["category"] == "node"
+    # power: own declarations, the site default, what each UPS feeds, a VM's inherited power
+    top = {c["node"]: c for row in vm["top"] for c in row}
+    assert [b["text"] for b in top["switch:sw-1"]["badges"]] == ["UPS: ups-1, ups-2"]
+    assert top["node:hv-b"]["power"] == "ups-1" and top["internet"]["power"] is None
+    assert vm["details"]["node:hv-b"]["power"] == ["UPS ups-1 (the site's power.default)"]
+    assert vm["details"]["ups:ups-1"]["power"] == [
+        "feeds modem-1", "feeds hv-b", "feeds gw", "feeds sw-1"]  # fmt: skip
+    assert [b["text"] for b in top["ups:ups-2"]["badges"]] == ["feeds 2"]
+    assert {(p["source"], p["dest"]) for p in vm["power"]} >= {
+        ("ups:ups-2", "guest:hv-a"), ("ups:ups-1", "node:hv-b")}  # fmt: skip
+    assert vm["details"]["guest:db-1"]["power"] == ["inherits hv-a: UPS ups-2"]
+    assert vm["details"]["guest:app-1"]["power"] == ["inherits hv-b: UPS ups-1"]
     # lanes: the data lane has more than STACK_MIN guests in several groups, so it is stacked
     lanes = {ln["id"]: ln for ln in vm["lanes"]}
     assert [s["title"] for s in lanes["data"]["stacks"]] == ["lake", "orchestration", "scanner"]
@@ -157,7 +172,8 @@ def test_topology_view_model_and_page_match_their_goldens():
     golden("topology.json", as_json(vm))
     html = topology.render(vm)
     assert_interactive_safe(html, scripts=1)
-    assert _data(html)["edges"] == vm["edges"]
+    assert _data(html)["edges"] == vm["edges"] and _data(html)["power"] == vm["power"]
+    assert 'id="power-toggle"' in html and 'data-power="ups-1, ups-2"' in html
     assert "<caption>Guests</caption>" in html and "not in the site model" in html
     assert 'data-node="guest:db-1"' in html and 'data-collapse="lane-1-content"' in html
     assert 'role="img" aria-labelledby="topology-flows-title topology-flows-desc"' in html
@@ -169,19 +185,24 @@ def test_topology_without_a_registry_or_flows_still_draws_the_lanes():
     assert [(e["source"], e["label"]) for e in vm["edges"]] == [
         ("guest:app-1", "allow app"), ("internet", "allow web")]  # fmt: skip
     assert vm["details"]["guest:db-1"]["services"] == []
-    assert [[c["node"] for c in row] for row in vm["top"]][3] == ["guest:hv-a", "node:hv-b"]
+    assert [[c["node"] for c in row] for row in vm["top"]][-1] == ["guest:hv-a", "node:hv-b"]
 
 
 def test_topology_escapes_hostile_names_and_honours_the_default_action():
     site = {"zones": [{"id": HOSTILE, "purpose": HOSTILE}, {"id": "b"}],
-            "firewall": {"default_action": "allow"}}  # fmt: skip
+            "firewall": {"default_action": "allow"}, "power": {"ups": [{"id": "u", "model": HOSTILE}]},
+            "edge": [{"id": "isp", "kind": "modem", "model": HOSTILE, "power": {"ups": "u"}}]}  # fmt: skip
+    box = _guest("guest:box", "host", "box", "b", BOX_IP,
+                 power={"ups": "none", "reason": HOSTILE})  # fmt: skip
     hostile = _guest("guest:x", HOSTILE, "n<1>", HOSTILE, "&", display_name=HOSTILE,
                      description='</script><script>alert(1)</script><img src=x onerror="y">')  # fmt: skip
     lab = {"hosts": {}, "services": [{"name": "s", "capability": "c", "impl": HOSTILE,
            "host": "x", "protocol": "tcp", "port": 1, "description": HOSTILE, "upstreams": []}]}  # fmt: skip
-    vm = topology.build(site, [hostile], [], lab=lab)
+    vm = topology.build(site, [hostile, box], [], lab=lab)
     html = topology.render(vm)
     assert_interactive_safe(html, scripts=1)
+    assert 'data-power="no UPS: &lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;"' in html
+    assert _data(html)["details"]["guest:box"]["power"] == [f"no UPS (declared): {HOSTILE}"]
     assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in html and "n&lt;1&gt;" in html
     assert "no rule, the default action (allow)" in html and "every other pair: allow" in html
     detail = _data(html)["details"]["guest:x"]  # the JSON round-trips to the hostile text
@@ -202,9 +223,16 @@ def test_topology_of_the_example_lab():
 def test_topology_of_the_lab_topology_example():
     reg = load(LAB / "services.yml")
     vm = topology.load(LAB / "guests", LAB / "site.yml", registry=reg)
-    assert len(vm["guests"]) == 17 and [ln["id"] for ln in vm["lanes"]] == [
+    assert len(vm["guests"]) == 18 and [ln["id"] for ln in vm["lanes"]] == [
         "mgmt", "services", "data", "edge", "lab"]  # fmt: skip
-    assert [c["node"] for c in vm["top"][-1]] == ["guest:hv-1", "guest:hv-2", "guest:nas-1"]
+    assert [c["node"] for c in vm["top"][-1]] == [
+        "guest:hv-1", "guest:hv-2", "guest:bench-1", "guest:nas-1"]  # fmt: skip
+    assert [[c["node"] for c in row] for row in vm["top"][:5]] == [
+        ["internet"], ["edge:cable-modem"], ["router:harbor-gw"], ["switch:core-sw"],
+        ["ups:ups-a", "ups:ups-b"]]  # fmt: skip
+    bench = next(c for c in vm["top"][-1] if c["name"] == "bench-1")
+    assert bench["power"].startswith("no UPS: A bench machine") and {"cls": "nopower",
+           "text": "no UPS"} in bench["badges"]  # fmt: skip
     services = next(ln for ln in vm["lanes"] if ln["id"] == "services")
     assert len(services["stacks"]) >= 3 and services["grid"] == 3
     states = {g["name"]: g["status"] for g in vm["guests"]}

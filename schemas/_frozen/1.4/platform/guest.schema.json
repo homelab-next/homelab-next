@@ -21,6 +21,18 @@
       "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
       "description": "(1.4) What this guest does, in one line (the topology map's \"What it does\"). Informational only; no generator interpolates it."
     },
+    "power": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ups"],
+      "description": "(1.4) kind host only: what feeds this machine, one or more UPS ids of the site's power.ups, or none with a reason (homelabnext/power.py). A vm or lxc inherits its node's power and never declares one.",
+      "properties": {
+        "ups": {"anyOf": [{"const": "none"}, {"type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$", "maxLength": 32}, {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$", "maxLength": 32}}]},
+        "reason": {"type": "string", "minLength": 10, "maxLength": 300, "pattern": "^[^\\u0000-\\u001f\\u007f]*$"}
+      },
+      "if": {"properties": {"ups": {"const": "none"}}},
+      "then": {"required": ["reason"]}
+    },
     "status": {
       "enum": ["planned", "live", "retired"],
       "default": "live",

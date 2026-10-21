@@ -26,6 +26,9 @@ EXPECT = {
     "exception-to-is-endpoint": "service_exceptions",
     "access-port-without-vlan": "vlan",
     "timezone-local": "timezone",
+    "power-none-without-reason": "reason",
+    "edge-kind-unknown": "kind",
+    "ups-mac-malformed": "mac",
 }
 
 
@@ -51,5 +54,5 @@ def test_negative_is_rejected_for_the_intended_reason(label):
 
 def test_schema_id_and_version():
     s = schema()
-    assert s["$id"].endswith("/platform/site/1.0")
+    assert s["$id"].endswith("/platform/site/1.1")
     assert json.dumps(s)  # serialisable

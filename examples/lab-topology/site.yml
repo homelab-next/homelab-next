@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # A fictional lab for the generated Topology and Dataflow maps (docs/status.md, ADR-0018): two
-# hypervisors, five zones, sixteen guests (physical, manual, planned and retired ones among
+# hypervisors, five zones, eighteen guests (physical, manual, planned and retired ones among
 # them), the registry in services.yml beside it. Addresses come from the RFC 5737 documentation
 # ranges and names live under example.internal; nothing here describes a real network.
 site_version: 1
@@ -48,17 +48,34 @@ zones:
     egress: {internet: deny, inter_zone: {default: deny}, one_way: true}
     tags: [untrusted, lab]
 
+# the uplink chain, outermost first: drawn at the top of the Topology page
+edge:
+  - {id: internet, kind: internet}
+  - {id: cable-modem, kind: modem, model: Example DOCSIS 3.1}   # powered by power.default
+  - {id: harbor-gw, kind: router}
+  - {id: core-sw, kind: switch}
+
+# what feeds each machine (homelabnext/power.py): two UPSes; anything that names none gets
+# power.default; the hypervisors (guests/_nodes.yml) and physical hosts declare their own
+power:
+  ups:
+    - {id: ups-a, model: Example 1500VA, monitored_by: nut, nut_name: ups-a, serial: EX-FAKE-0001}
+    - {id: ups-b, model: Example 2200VA, monitored_by: snmp, mac: "00:00:5e:00:53:31"}
+  default: {ups: ups-a}
+
 router:
   id: harbor-gw
   model: unifi
   mgmt_endpoint: svc:router-console
   tls_pin:
     sha256: REPLACE_WITH_CONSOLE_CERT_FINGERPRINT
+  power: {ups: ups-a}
 
 switches:
   - id: core-sw
     model: unifi
     uplink_port: 1
+    power: {ups: [ups-a, ups-b]}   # two power supplies, one on each UPS
     port_assignments:
       - {ports: [1], kind: trunk, vlans: [10, 20, 30, 40, 50]}
       - {ports: ["2-3"], kind: trunk, vlan: 10, vlans: [20, 30, 40, 50]}

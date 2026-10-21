@@ -9,16 +9,25 @@ site:
        egress: {internet: deny}}
     - {id: data, vlan_id: 20, subnet: 192.0.2.64/26, gateway: 192.0.2.65,
        egress: {internet: allow}}
-  router: {id: gw, model: unifi, mgmt_endpoint: "svc:console"}
+  edge:
+    - {id: internet, kind: internet}
+    - {id: modem-1, kind: modem, model: Example DOCSIS}
+    - {id: gw, kind: router}
+  power:
+    ups: [{id: ups-1, model: Example 1500VA, monitored_by: nut, nut_name: ups-1}, {id: ups-2}]
+    default: {ups: ups-1}
+  router: {id: gw, model: unifi, mgmt_endpoint: "svc:console", power: {ups: ups-1}}
   switches:
-    - {id: sw-1, model: unifi, uplink_port: 1, port_assignments: [{ports: [1], kind: trunk, vlans: [10, 20]}]}
+    - {id: sw-1, model: unifi, uplink_port: 1, power: {ups: [ups-1, ups-2]},
+       port_assignments: [{ports: [1], kind: trunk, vlans: [10, 20]}]}
   firewall:
     default_action: deny
     service_exceptions:
       - {from: ["zone:mgmt"], to: "svc:db", action: allow, ports: [5432]}
 guests:
   - {id: "guest:hv-a", kind: host, provisioning: host-only, placement: {node: hv-a},
-     network: {zone: mgmt, ip: 192.0.2.10}, capability: "cap:events", baseline: {names: [server]}}
+     network: {zone: mgmt, ip: 192.0.2.10}, capability: "cap:events", baseline: {names: [server]},
+     power: {ups: ups-2}}
   - {id: "guest:db-1", kind: vm, provisioning: terraform, placement: {node: hv-a, vmid: 170},
      network: {zone: data, ip: 192.0.2.70}, capability: "cap:events", capability_groups: [cap_lake],
      resources: {cpu: {cores: 2}, memory: {size_mb: 3072}, disks: [{name: root, size_gb: 20, pool: fast}]},

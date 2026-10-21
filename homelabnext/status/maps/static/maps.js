@@ -122,10 +122,12 @@
     const inner = document.getElementById("topo-inner");
     const svg = document.getElementById("flow-svg");
     const flowToggle = document.getElementById("flow-toggle");
+    const powerToggle = document.getElementById("power-toggle");
     const resetBtn = document.getElementById("reset-btn");
     const tooltipEl = document.getElementById("tooltip-el");
     const data = readJson("topo-data") || {};
     const edges = Array.isArray(data.edges) ? data.edges : [];
+    const powerLines = Array.isArray(data.power) ? data.power : [];
     const details = data.details && typeof data.details === "object" ? data.details : {};
     const cards = Array.from(inner.querySelectorAll(".net-card[data-node]"));
     // Node elements by id in a Map -- never a [data-node="..."] selector built from data, which
@@ -142,6 +144,7 @@
     let startX = 0;
     let startY = 0;
     let flowsOn = false;
+    let powerOn = false;
     let selected = null;
 
     function applyTransform() {
@@ -169,13 +172,33 @@
     }
 
     function clearArrows() {
-      svg.querySelectorAll(".flow-arrow").forEach((p) => p.remove());
+      svg.querySelectorAll(".flow-arrow, .power-line").forEach((p) => p.remove());
+    }
+
+    // UPS -> what it feeds: straight dotted lines, drawn under the flow arrows
+    function drawPowerLines() {
+      if (!powerOn) return;
+      powerLines.forEach((line) => {
+        const a = center(line.source);
+        const b = center(line.dest);
+        if (!a || !b) return;
+        const path = document.createElementNS(SVG_NS, "path");
+        path.setAttribute("d", "M" + a.x + "," + a.y + " L" + b.x + "," + b.y);
+        path.setAttribute("class", "power-line");
+        path.dataset.source = line.source;
+        path.dataset.dest = line.dest;
+        const title = document.createElementNS(SVG_NS, "title");
+        title.textContent = String(line.source).replace(/^ups:/, "") + " feeds " + String(line.dest).replace(/^[a-z]+:/, "");
+        path.appendChild(title);
+        svg.appendChild(path);
+      });
     }
 
     function drawFlowArrows() {
       clearArrows();
       svg.setAttribute("width", String(inner.scrollWidth));
       svg.setAttribute("height", String(inner.scrollHeight));
+      drawPowerLines();
       if (!flowsOn) return;
       edges.forEach((edge) => {
         const a = center(edge.source);
@@ -246,6 +269,16 @@
       if (!flowsOn) clearFlowHighlight();
     });
 
+    if (powerToggle) {
+      powerToggle.addEventListener("click", () => {
+        powerOn = !powerOn;
+        powerToggle.classList.toggle("active", powerOn);
+        powerToggle.setAttribute("aria-pressed", powerOn ? "true" : "false");
+        powerToggle.textContent = powerOn ? "\u26a1 Hide Power" : "\u26a1 Show Power";
+        drawFlowArrows();
+      });
+    }
+
     // ── pan and zoom ──
     wrap.addEventListener("mousedown", (e) => {
       if (e.button !== 0 || e.target.closest(".net-card, .vlan-header, input, button")) return;
@@ -314,6 +347,10 @@
             detailContent.appendChild(item);
           });
         }
+        if (Array.isArray(d.power) && d.power.length) {
+          section("Power");
+          d.power.forEach((line) => detailContent.appendChild(make("div", "power-item", line)));
+        }
         if (Array.isArray(d.flows) && d.flows.length) {
           section("Data flow (" + d.flows.length + ")");
           d.flows.forEach((f) => {
@@ -352,6 +389,9 @@
         tooltipEl.appendChild(tipRow("IP", card.getAttribute("data-ip")));
         tooltipEl.appendChild(tipRow("VLAN", card.getAttribute("data-vlan")));
         tooltipEl.appendChild(tipRow("Type", card.getAttribute("data-type")));
+        if (card.hasAttribute("data-power")) {
+          tooltipEl.appendChild(tipRow("Power", card.getAttribute("data-power")));
+        }
         const svc = make("div", "t-svc");
         svc.appendChild(tipRow("Services", card.getAttribute("data-services")));
         tooltipEl.appendChild(svc);

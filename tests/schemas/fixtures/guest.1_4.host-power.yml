@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# 1.4-only: a physical host that says it runs without a UPS, and why
+id: guest:bench-1
+kind: host
+provisioning: host-only
+placement: {node: bench-1}
+network: {zone: mgmt, ip: 192.0.2.20}
+capability: cap:context
+power: {ups: none, reason: "A bench machine; it is shut down, not kept up, when the power goes."}
+owners: {primary: platform-team}

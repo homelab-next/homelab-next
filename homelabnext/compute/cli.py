@@ -14,7 +14,7 @@ from .model import ComputeError
 from .plan import plan as make_plan
 from .plan import read_tree, write_tree
 from .render import TARGETS, render
-from .zones import open_site, site_flows
+from .zones import open_site, site_flows, site_power
 
 
 def _common(p: argparse.ArgumentParser) -> None:
@@ -51,6 +51,7 @@ def _fleet(args: argparse.Namespace):
         # the coverage report lists guests without a baseline instead of refusing to load
         require_baselines=args.cmd != "baselines",
         flows=site_flows(args.site),
+        power=site_power(args.site),
     )
 
 

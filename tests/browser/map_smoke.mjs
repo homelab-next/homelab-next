@@ -72,6 +72,20 @@ const out = {};
   t.panelClosed = (await page.locator("#detail-panel.open").count()) === 0;
   await page.locator(`.net-card[data-node="${hostileNode}"]`).hover();
   t.hostileTip = await page.textContent("#tooltip-el");
+  // power: UPS lines on the toggle, the no-UPS bench machine's badge, tooltip and detail
+  await page.click("#power-toggle");
+  t.powerLines = await page.locator("#flow-svg path.power-line").count();
+  t.powerToggle = await page.textContent("#power-toggle");
+  await page.locator('.net-card[data-node="guest:bench-1"]').hover();
+  t.benchTip = await page.textContent("#tooltip-el");
+  await page.locator('.net-card[data-node="guest:bench-1"]').click();
+  t.benchPanel = await page.textContent("#detail-content");
+  await page.click("#detail-close");
+  await page.locator('.net-card[data-node="guest:siem-1"]').click();
+  t.siemPower = await page.textContent("#detail-content .power-item");
+  await page.click("#detail-close");
+  await page.click("#power-toggle");
+  t.powerLinesOff = await page.locator("#flow-svg path.power-line").count();
   // filter, Esc clears; Ctrl+F focuses the box
   await page.keyboard.press("Control+f");
   t.focused = await page.evaluate(() => document.activeElement && document.activeElement.id);

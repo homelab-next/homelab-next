@@ -195,4 +195,15 @@ def validate(fleet: Fleet, *, require_baselines: bool = True) -> list[Problem]:
         out += _check_guest(g, fleet)
         if require_baselines or g.baseline:
             out += guest_problems(g, fleet.baselines)
+    out += _power(fleet)
     return out
+
+
+def _power(fleet: Fleet) -> list[Problem]:
+    """Power declarations (homelabnext/power.py): a VM or container never has its own; with a
+    site ``power`` section, every hypervisor and physical host is fed by a known UPS or says why
+    not, and every UPS feeds something."""
+    from homelabnext.power import fleet_problems
+
+    msgs = fleet_problems(fleet.power, fleet.nodes, [g.raw for g in fleet.sorted()])
+    return [Problem(m.split(": ", 1)[0], m.split(": ", 1)[1]) for m in msgs]

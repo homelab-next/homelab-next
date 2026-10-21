@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-# The hypervisors of the fictional harbor lab and whether each enforces guest firewalls.
+# The hypervisors of the fictional harbor lab: whether each enforces guest firewalls, and which
+# UPS feeds it (its guests inherit that).
 nodes:
-  hv-1: {firewall: enabled}
-  hv-2: {firewall: enabled}
+  hv-1: {firewall: enabled, power: {ups: ups-a}}
+  hv-2: {firewall: enabled, power: {ups: ups-b}}
