@@ -627,7 +627,7 @@ def assert_static_interactive(page: str) -> None:
 
     meta = re.search(r'<meta http-equiv="Content-Security-Policy" content="([^"]*)">', page)
     csp = htmllib.unescape(meta.group(1))
-    scripts = re.findall(r"<script>(.*?)</script>", page, re.S)
+    scripts = re.findall(r"<script>(.*?)</script\s*>", page, re.S | re.I)
     styles = re.findall(r"<style>(.*?)</style>", page, re.S)
     assert scripts == [assets.js()] and len(styles) == 2
     assert f"script-src {assets.sha256_source(scripts[0])};" in csp
