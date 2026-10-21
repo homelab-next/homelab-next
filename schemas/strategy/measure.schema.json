@@ -1,17 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/strategy/measure/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/strategy/measure/2.0",
   "title": "Measure record (MOP or MOE)",
-  "description": "One measure, one Markdown file per record (measures/MOE-001.md), with the seven doctrine fields: id, objective, definition, source, value+time (its readings: value events in the sidecar, never written in the record), target, confidence+thinness. A MOP (measure of performance) asks whether the work is being done, a MOE (measure of effectiveness) whether it is working. source is a typed binding: invariant:<id>, status:<source>[/<item>], records:<lane>[?type=<type>], manual or none (not measurable: a finding, written in the Not measurable section).",
+  "description": "One measure, one Markdown file per record (measures/MOE-001.md), with the seven doctrine fields: id, objective, definition, source, value+time (its readings: value events in the sidecar, never written in the record), target, confidence+thinness. A MOP (measure of performance) asks whether the work is being done, a MOE (measure of effectiveness) whether it is working. source is a typed binding: invariant:<id>, status:<source>[/<item>], records:<lane>[?type=<type>], manual or none (not measurable: a finding, written in the Not measurable section). 2.0 (ADR-0019): a record is identified by its `uid` (a UUIDv7) and names its `type`; every link is a uid; the numbered `id` is gone (the number a record is shown with is computed from type, parent and sibling `order`, never stored). The record-type rules of a link (which types a parent, supports, serves or raised_by may name) are the doctrine's `hierarchy` and `links`, checked by homelabnext.strategy. 1.x records are read only by `hnx records assign-uids`, which migrates them.",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "id",
+    "uid",
+    "type",
     "title",
     "status",
     "date",
     "author",
-    "objective",
+    "parent",
     "kind",
     "definition",
     "source",
@@ -21,9 +22,22 @@
     "definition_version"
   ],
   "properties": {
-    "id": {
-      "type": "string",
-      "pattern": "^MO[PE]-(?:\\d{3,}|NEW)$(?!\\n)"
+    "uid": {
+      "$ref": "#/$defs/uid"
+    },
+    "type": {
+      "enum": [
+        "MOP",
+        "MOE"
+      ]
+    },
+    "parent": {
+      "$ref": "#/$defs/uid",
+      "description": "The uid of the objective it measures (SO, OO, TO or TT, per the doctrine's hierarchy)."
+    },
+    "order": {
+      "type": "number",
+      "description": "Optional: the sort key among its siblings (same type, same parent). Siblings without one follow, in creation (uid) order."
     },
     "title": {
       "type": "string",
@@ -41,10 +55,6 @@
     },
     "author": {
       "$ref": "#/$defs/author"
-    },
-    "objective": {
-      "type": "string",
-      "pattern": "^(?:SO|OO|TO|TT)-\\d{3,}$(?!\\n)"
     },
     "kind": {
       "enum": [
@@ -173,6 +183,11 @@
         "minLength": 1
       },
       "uniqueItems": true
+    },
+    "uid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)",
+      "description": "A record uid: a canonical UUIDv7 (lowercase, version 7), created with the record and never changed (ADR-0019)."
     }
   }
 }

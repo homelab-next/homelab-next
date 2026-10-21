@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# 2.0: the strategy record carries a uid like every record
+type: strategy
+name: northwind
+title: Keep the Northwind lab available and defended
+status: active
+date: '2026-10-20'
+author: human:example-planner
+review_by: '2027-04-20'
+priorities:
+- Keep the core services available
+- Detect hostile activity against the lab
+- Change the lab only through reviewed proposals
+assumptions:
+- Credentials and tokens will be stolen at some point; detection matters as much as prevention.
+- Agents are optional; every decision still has a human owner.
+constraints:
+- rule: No change to a live system without an approved proposal
+  owner: human:example-operator
+- rule: No paid feeds or keys; prefer what the lab already runs
+  owner: role:lab-lead
+mission: Run a small, self-hosted lab that stays available to its users and notices when someone attacks
+  it.
+intent: 'Spend human time on decisions, not on toil: the lab reports what is broken or at risk, and every
+  change goes through a reviewed proposal.'
+end_state: The core services meet their availability target, hostile activity in the lab is detected within
+  a day, and every change can be traced to an approved proposal.
+notes: A fictional example strategy, like everything under examples/. A real lab keeps its own strategy
+  in a private repository and points `hnx strategy` at it with a path.

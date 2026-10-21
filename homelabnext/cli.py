@@ -132,12 +132,16 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "strategy to task: check|links|measure|rollup|rfis|decide|index (docs/strategy.md)",
         lambda a: importlib.import_module("homelabnext.strategy.cli").main(a),
     ),
+    "records": (
+        "record identity (uids, computed numbers): assign-uids (the migration)|numbers|uid",
+        lambda a: importlib.import_module("homelabnext.identity.cli").main(a),
+    ),
     "reviews": (
         "the shared review model (records, system pages): digest",
         lambda a: importlib.import_module("homelabnext.reviews").main(a),
     ),
     "ids": (
-        "register ids: alloc|resolve|check-lost|check-dupes|check-placeholders",
+        "register keys: check-lost|check-dupes|check-uids (records are identified by uids)",
         _ids,
     ),
     "decide": (

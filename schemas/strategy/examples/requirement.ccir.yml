@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-id: CCIR-001
+uid: 01a15e4e-758d-75ec-a231-651e79c1beb7
+type: CCIR
 title: Is any core service down for more than 15 minutes?
 status: active
 date: '2026-10-20'
@@ -8,10 +9,10 @@ consumer: human:example-operator
 cadence: PT15M
 ltiov: standing
 supports:
-- SO-001
+- 01a15e4e-758c-7318-bbc3-04740e2d7038
 sirs:
-- 1.1 Which core service (DNS, proxy, secrets) has failed its health check for 15 minutes or more?
-- 1.2 Did the failure start with a change (a deploy, an approved proposal) in the hour before?
+- Which core service (DNS, proxy, secrets) has failed its health check for 15 minutes or more?
+- Did the failure start with a change (a deploy, an approved proposal) in the hour before?
 indicators:
 - an uptime monitor down for three consecutive checks
 - a firing alert on a core service's own health endpoint

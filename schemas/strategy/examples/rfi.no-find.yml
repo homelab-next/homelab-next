@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-id: RFI-002
+uid: 01a15e4e-758d-75f0-b53b-19ec2c792e88
+type: RFI
 title: Has the status host been scanned in the last month
 status: no-find
 date: '2026-10-06'
 author: profile:example-checker
-raised_by: PIR-001
+raised_by: 01a15e4e-758d-75ee-a451-ea98b7fcd567
 triage: production
 ltiov: '2026-11-03'
 tasked_to:

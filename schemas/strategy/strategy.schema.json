@@ -1,11 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/strategy/strategy/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/strategy/strategy/2.0",
   "title": "Strategy record",
-  "description": "The one strategy record of a lab (examples/strategy/strategy.md, homelabnext.strategy): mission, commander's intent and end state as prose sections; priorities of work (ranked), assumptions and constraints (each with an owner) in the front-matter. The objective cascade (SO -> OO -> TO -> TT) hangs below it. Validated as loaded: front-matter plus sections, reviews derived from its sidecar events.",
+  "description": "The one strategy record of a lab (examples/strategy/strategy.md, homelabnext.strategy): mission, commander's intent and end state as prose sections; priorities of work (ranked), assumptions and constraints (each with an owner) in the front-matter. The objective cascade (SO -> OO -> TO -> TT) hangs below it. Validated as loaded: front-matter plus sections, reviews derived from its sidecar events. 2.0 (ADR-0019): the strategy record carries a `uid` (a UUIDv7) like every record.",
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "uid",
     "type",
     "name",
     "title",
@@ -20,6 +21,9 @@
     "constraints"
   ],
   "properties": {
+    "uid": {
+      "$ref": "#/$defs/uid"
+    },
     "type": {
       "const": "strategy"
     },
@@ -125,6 +129,11 @@
         "minLength": 1
       },
       "uniqueItems": true
+    },
+    "uid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)",
+      "description": "A record uid: a canonical UUIDv7 (lowercase, version 7), created with the record and never changed (ADR-0019)."
     }
   }
 }

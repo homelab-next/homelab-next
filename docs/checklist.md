@@ -174,8 +174,8 @@ Catalogued scripts, controlled agent context, one map of access.
 | M-13 | Access is proven, not assumed | Each grant and denial has a probe as the principal at least daily; a passing denial pages | SERVER |
 | M-14 | Every agent starts knowing its access | Session start injects the access block for where it runs (`homelabnext/agent/access.py`: a reserved stable `access` section) | PUBLIC-NOW |
 | M-15 | The keyring is protected | Served only behind SSO; a new privileged grant is flagged | SERVER |
-| M-16 | No placeholder ids survive a commit | On every push to main, `make ids-placeholders` (`hnx ids check-placeholders` over every register) exits 0: no entry id is an `XX-NEW` placeholder (pull requests may carry them; ids are allocated on main) | PUBLIC-NOW |
-| M-17 | Register ids are never lost | `tools/register_ids.py check-lost` exits 0 for every register | PUBLIC-NOW |
+| M-16 | No placeholder ids survive a commit | `make ids-check` (`hnx ids check-uids` and `check-dupes` over every register, on pull requests and main alike) exits 0: every record carries its canonical uid and is named `<uid>.md`, so none is keyed by a number or an `XX-NEW` placeholder (records are identified by uids, ADR-0019; nothing is allocated) | PUBLIC-NOW |
+| M-17 | Register ids are never lost | `tools/register_ids.py check-lost` exits 0 for every register: no record uid (and no invariant id) of the parent commit has vanished; a parent's numbered code counts through the tree's `aliases.yml` | PUBLIC-NOW |
 
 ## A - AI layer
 

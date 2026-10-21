@@ -32,11 +32,12 @@ def codes(findings):
 # ---- schema ------------------------------------------------------------------------------------
 
 
-def test_schema_id_is_minor_1_and_baselines_exist():
+def test_schema_id_is_minor_2_and_baselines_exist():
+    """1.1 added maintained_upstream; 1.2 lets a link name a record by uid (ADR-0019)."""
     schema = json.loads((REPO_ROOT / "schemas/platform/customization.schema.json").read_text())
-    assert schema["$id"].endswith("/platform/customization/1.1")
-    assert (FROZEN / "1.0/platform/customization.schema.json").is_file()
-    assert (FROZEN / "1.1/platform/customization.schema.json").is_file()
+    assert schema["$id"].endswith("/platform/customization/1.2")
+    for minor in ("1.0", "1.1", "1.2"):
+        assert (FROZEN / f"{minor}/platform/customization.schema.json").is_file()
 
 
 def test_every_1_0_document_still_validates():

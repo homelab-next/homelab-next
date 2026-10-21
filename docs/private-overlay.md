@@ -10,7 +10,8 @@ workstation, how each key is rotated, and what an attacker gets from each piece.
 [ADR-0021](adr/0021-public-and-private-repositories.md) (extending
 [ADR-0011](adr/0011-public-private-split-and-licensing.md)); the skeleton to copy is
 [`examples/private-overlay/`](../examples/private-overlay/README.md); the first deploy is the
-runbook *First deploy from the private repository* in `examples/registers/runbooks/`.
+runbook RB 3, [First deploy from the private repository](../examples/registers/runbooks/01a15f29-ff7e-764c-a17e-d2d50c304e9b.md)
+(uid `01a15f29-ff7e-764c-a17e-d2d50c304e9b`; the number is computed, ADR-0019).
 
 ## The two repositories
 

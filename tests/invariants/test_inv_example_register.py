@@ -131,14 +131,17 @@ def test_a_pytest_row_fails_when_its_tests_fail(tmp_path, monkeypatch):
     assert r["status"] == "fail"
 
 
-def test_m16_fails_on_a_placeholder_id(scratch):
-    reg = scratch / "lessons.yml"
-    reg.write_text("lessons:\n- id: LL-001\n  x: 1\n")
+def test_m16_fails_on_a_record_without_its_uid(scratch):
+    d = scratch / "reg" / "lessons"
+    d.mkdir(parents=True)
+    uid = "01a15e4e-0000-7000-8000-000000000001"
+    (d / f"{uid}.md").write_text(f"---\nuid: {uid}\ntype: lesson\n---\n")
     _git(scratch, "add", "-A")
     assert _run(scratch, ["M-16"])["M-16"]["status"] == "pass"
-    reg.write_text("lessons:\n- id: LL-001\n  x: 1\n- id: LL-NEW\n  x: 2\n")
+    (d / "LL-NEW-x.md").write_text("---\nid: LL-NEW\ntitle: x\n---\n")
+    _git(scratch, "add", "-A")
     r = _run(scratch, ["M-16"])["M-16"]
-    assert r["status"] == "fail" and "LL-NEW" in r["evidence"]
+    assert r["status"] == "fail" and "still numbered LL-NEW" in r["evidence"]
 
 
 def test_fast_gates_pass_on_the_repository():

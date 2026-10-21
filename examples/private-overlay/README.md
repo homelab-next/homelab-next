@@ -32,5 +32,5 @@ lab-private/                       (a new PRIVATE repository; copy this director
 ```
 
 To start one: create an empty private repository, copy these files in, delete `fictional: true`
-from the marker, replace the fake recipients with yours, and follow the runbook "First deploy
-from the private repository" (`examples/registers/runbooks/`).
+from the marker, replace the fake recipients with yours, and follow the runbook RB 3,
+[First deploy from the private repository](../registers/runbooks/01a15f29-ff7e-764c-a17e-d2d50c304e9b.md).

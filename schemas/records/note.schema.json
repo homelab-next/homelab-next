@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/records/note/1.3",
+  "$id": "https://schemas.example.internal/homelabnext/records/note/1.4",
   "title": "Records note frontmatter",
-  "description": "YAML frontmatter of a records note (the generalised vault note). The filename convention is <YYYY-MM-DD>-<requesting-agent>-<slug>.md (checked by tools/schema_check.py, not expressible in JSON Schema). Lanes: inbox/ (writable by agents), decided/{approved,denied,completed}/ (decision-maker only). 1.1 added, additively, type register-transition: an agent's request to change a lesson's or runbook's lifecycle status, applied only by the register decider (hnx registers decide). 1.2 added retired_on, which replaces on: an unquoted on is the YAML 1.1 boolean true, so it never arrived as a key named on (a note with a non-string key is invalid). 1.3 added, additively, type strategy-transition (a request to close or retire a strategy record: an objective, measure, requirement or RFI; applied only by hnx strategy decide) and type strategy-rfi (a request to raise an RFI from a gap: a red or not-measurable measure, or an unmet requirement).",
+  "description": "YAML frontmatter of a records note (the generalised vault note). The filename convention is <YYYY-MM-DD>-<requesting-agent>-<slug>.md (checked by tools/schema_check.py, not expressible in JSON Schema). Lanes: inbox/ (writable by agents), decided/{approved,denied,completed}/ (decision-maker only). 1.1 added, additively, type register-transition: an agent's request to change a lesson's or runbook's lifecycle status, applied only by the register decider (hnx registers decide). 1.2 added retired_on, which replaces on: an unquoted on is the YAML 1.1 boolean true, so it never arrived as a key named on (a note with a non-string key is invalid). 1.3 added, additively, type strategy-transition (a request to close or retire a strategy record: an objective, measure, requirement or RFI; applied only by hnx strategy decide) and type strategy-rfi (a request to raise an RFI from a gap: a red or not-measurable measure, or an unmet requirement). 1.4 widens, additively, every record reference (record, superseded_by, raised_by) to a record uid (a UUIDv7, ADR-0019); the numbered code a record carried before uids is still accepted and resolves through the tree's aliases.yml with a deprecation warning.",
   "type": "object",
   "properties": {
     "type": {
@@ -279,9 +279,17 @@
           ],
           "properties": {
             "record": {
-              "type": "string",
-              "pattern": "^(LL|RB)-\\d{3,}$",
-              "description": "The allocated id of the lesson or runbook."
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(LL|RB)-\\d{3,}$"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)"
+                }
+              ],
+              "description": "The record's uid (1.4); a legacy numbered code still resolves, with a warning."
             },
             "from": {
               "type": "string",
@@ -315,8 +323,17 @@
               "uniqueItems": true
             },
             "superseded_by": {
-              "type": "string",
-              "pattern": "^(LL|RB)-\\d{3,}$"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(LL|RB)-\\d{3,}$"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)"
+                }
+              ],
+              "description": "The replacing record's uid (1.4); a legacy numbered code still resolves, with a warning."
             },
             "on": {
               "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date",
@@ -349,9 +366,17 @@
             ],
             "properties": {
               "record": {
-                "type": "string",
-                "pattern": "^(?:SO|OO|TO|TT|MOP|MOE|CCIR|FFIR|PIR|RFI)-\\d{3,}$",
-                "description": "The allocated id of the objective, measure, requirement or RFI."
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^(?:SO|OO|TO|TT|MOP|MOE|CCIR|FFIR|PIR|RFI)-\\d{3,}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)"
+                  }
+                ],
+                "description": "The record's uid (1.4); a legacy numbered code still resolves, with a warning."
               },
               "from": {
                 "type": "string",
@@ -388,9 +413,17 @@
               ],
               "properties": {
                 "raised_by": {
-                  "type": "string",
-                  "pattern": "^(?:MOP|MOE|CCIR|FFIR|PIR)-\\d{3,}$",
-                  "description": "The measure or requirement whose gap raises the RFI."
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^(?:MOP|MOE|CCIR|FFIR|PIR)-\\d{3,}$"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)"
+                    }
+                  ],
+                  "description": "The uid of the measure or requirement whose gap raises the RFI (1.4); a legacy numbered code still resolves, with a warning."
                 },
                 "question": {
                   "type": "string",

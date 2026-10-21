@@ -7,9 +7,10 @@ and runbooks are **one Markdown file per record**; invariants stay **one YAML fi
 
 ```
 examples/registers/
-  lessons/LL-001.md ...        one lesson per file (pitfalls and practices): prose + stable fields
-  lessons/LL-001.events/       its append-only events, one file each (reviews, recurrences, ...)
-  runbooks/RB-001.md ...       one runbook per file (and RB-001.events/)
+  lessons/<uid>.md ...         one lesson per file (pitfalls and practices): prose + stable fields
+  lessons/<uid>.events/        its append-only events, one file each (reviews, recurrences, ...)
+  runbooks/<uid>.md ...        one runbook per file (and <uid>.events/)
+  aliases.yml                  legacy code -> uid (LL-001 -> ...), written by the uid migration
   invariants.yml               the machine checks `hnx invariants run` executes
 examples/review-policy.yml     which reviews each artefact needs (shared with docs/systems/)
 ```
@@ -19,23 +20,43 @@ hnx registers build examples/registers build/registers   # validate (fatal) and 
 hnx registers links examples/registers/lessons [--check]  # regenerate / check the Links blocks
 hnx registers review examples/registers [--today D] [--strict] [--json]   # what the review owes
 hnx registers split lessons.yml lessons/ | join lessons/ lessons.yml     # convert either way
-hnx reviews digest examples/registers/lessons/LL-002.md   # the digest a review must carry
-hnx registers events add lessons/LL-001.md event.yml   # validate, then append one event
+hnx reviews digest examples/registers/lessons/<uid>.md   # the digest a review must carry
+hnx registers events add lessons/<uid>.md event.yml   # validate, then append one event
 hnx registers events migrate examples/registers/lessons docs/systems   # inline state -> events
 hnx registers decide examples/registers RECORDS_ROOT --as human:operator [--dry-run]
-hnx ids resolve | check-lost | check-dupes | check-placeholders
+hnx ids check-lost | check-dupes | check-uids                          # make ids-check
+hnx records uid | numbers examples/registers | assign-uids TREE...     # identity (ADR-0019)
 ```
 
 The strategy-to-task records (objectives, measures, requirements, RFIs; [strategy](strategy.md),
-[[strategy]]) use this same machinery: one Markdown file per record, sidecar events, `XX-NEW` ids
-and `check-lost`, review tiers, and intents applied by a decider.
+[[strategy]]) use this same machinery: one Markdown file per record named for its uid, sidecar
+events, `check-lost`, review tiers, and intents applied by a decider.
+
+## Identity: uids, and numbers that are computed
+
+Every record is identified by its `uid`, a UUIDv7 created with the record and never changed
+([ADR-0019](adr/0019-record-uids-computed-numbers.md), [[adr/0019-record-uids-computed-numbers|ADR-0019]]).
+Links, `related`, `superseded_by`, `incorporated_into`, `from_lessons`, sidecar directories,
+graph nodes (`lesson:<uid>`) and intents use it. **No number is stored**: the number a record is
+shown with (`LL 3`, `RB 1`) is its position among its siblings -- all lessons, or all runbooks --
+sorted by the optional `order` field (a number) and then by uid (creation order), computed by
+`homelabnext.identity.numbers` wherever a record is shown (the register pages, `hnx registers
+review`, `hnx records numbers`, the MCP server, the graph's node `label`). Adding or reordering a
+record changes what is shown; it never touches another record, a link or a file name, and two
+authors who each add a lesson never collide. `hnx records uid` prints a new uid.
+
+Records written before uids carried a numbered `id` (`LL-001`) and were migrated with
+`hnx records assign-uids examples/registers` (idempotent: a second run changes nothing). The
+migration recorded every old code in `aliases.yml`; a legacy code met outside the repository (an
+intent filed earlier, `hnx graph related lesson:LL-001`, an MCP call) resolves through it on read
+with a `LegacyRecordCode` deprecation warning, while a code inside a record is a validation error.
 
 ## Why one file per record
 
 A single-file register makes concurrent authors collide: both read "the next free id", both
 append, and the merge either renumbers by hand or fuses two entries into one record that silently
-deletes the other. With one file per record two authors never touch the same file, ids are
-allocated at merge time, and `check-lost` catches a deleted record file. What machines append to
+deletes the other. With one file per record named for its uid two authors never touch the same
+file and never claim the same key, and `check-lost` catches a deleted record file. What machines append to
 a record (reviews, recurrences, verification runs, status changes) is not in the record file at
 all but in one file per event beside it (see "Events and derived state"), so an agent adding a
 review and a person editing the prose in Obsidian never touch the same file either.
@@ -43,17 +64,19 @@ review and a person editing the prose in Obsidian never touch the same file eith
 Invariants stay one file on purpose: they are short machine checks (statement, observable,
 expected, remediation) with no prose body, the runner reads them as one document, seventy of them
 run in CI and their ids are cited from the checklist, docs and code. Splitting them would buy
-nothing an editor needs and would move every citation.
+nothing an editor needs and would move every citation. Their ids are the checklist's row ids
+(chosen to match a row, never allocated), so they keep them.
 
 ## A record file
 
 Front-matter holds the structured fields (Obsidian shows them as properties); the long prose
 fields are named `## Heading` sections; the `## Links` block is generated. A complete example,
-`examples/registers/lessons/LL-005.md`:
+`examples/registers/lessons/<uid>.md` (shown as `LL 5`):
 
 ```markdown
 ---
-id: LL-005
+uid: 01a15e4e-758c-7315-892d-68b45030268f
+type: lesson
 title: Measure certificate lifetime from the client side
 kind: practice
 status: active
@@ -65,7 +88,7 @@ review_by: 2027-04-19
 verification:
   observable: openssl s_client -connect proxy.lab.example:443 ... | openssl x509 -noout -checkend 1209600
   expected: exit 0 while the served certificate has 14 days or more left
-related: [LL-001]
+related: [01a15e4e-758c-7311-82ff-6357fd41e8c8]
 ---
 
 ## Method
@@ -82,35 +105,37 @@ A renewal that fails quietly looks exactly like one that worked from the server 
 <!-- hnx:gen:links -->
 - Applies to: `openssl`, `tls`
 - Systems: [[systems/proxy|proxy]], [[systems/tls|tls]]
-- Related: [[LL-001]]
+- Related: [[01a15e4e-758c-7311-82ff-6357fd41e8c8]]
 <!-- /hnx:gen -->
 ```
 
 Rules the parser enforces (fatally, all problems at once):
 
-* the file is named for its id (`LL-005.md`), or `LL-NEW.md` / `LL-NEW-<slug>.md` until a
-  maintainer allocates the number; a name that disagrees with the id fails, and so do two files
-  with one id;
+* the record has a canonical `uid` (lowercase UUIDv7) and `type: lesson` or `type: runbook`;
+  the file is named for its uid (`<uid>.md`); a name that disagrees with the uid fails, and so do
+  two files with one uid, a numbered `id:` (run `hnx records assign-uids`) and two records with
+  one `order`;
 * every line of the body is inside a `## ` section; a section heading must be one the kind knows,
   once; a prose field is never in the front-matter (fenced code may contain `##` lines);
 * prose fields (sections) are compared without surrounding whitespace, the only normalization;
 * a runbook's steps are the `## Steps` section, a numbered list in which each item carries its own
-  `- verify:` line and optionally `- from_lessons: [[LL-004]]` (the lesson the step came from);
+  `- verify:` line and optionally `- from_lessons: [[<uid>]]` (the lesson the step came from);
 * the `## Links` block is a function of the record's own front-matter only (`systems`, `related`,
-  `applies_to`, and an `Archive:` line for an inactive record), so editing one record never makes
-  another stale. `make check` fails while one is stale; `hnx registers links DIR` rewrites it.
+  `applies_to`, and an `Archive:` line for an inactive record), links written `[[<uid>]]` with no
+  number or title, so editing, retitling or renumbering one record never makes another stale. `make check` fails while one is stale; `hnx registers links DIR` rewrites it.
 
 Sections: a pitfall has Symptom, Contributing factor, Root cause, Preventive control, Open reason,
 Notes; a practice has Method, Rationale, Retired reason, Notes; a runbook has Purpose and Steps.
 
 `homelabnext.registers.load_register(path, kind=None, *, active_only=False) -> dict` reads either
 a record directory or a legacy single YAML file and returns the register document the validators
-take (`{"lessons": [...], "retired": {...}}`); everything in the code base reads registers
+take (`{"lessons": [...]}`); everything in the code base reads registers
 through it. `active_only=True` drops retired, incorporated and superseded lessons and superseded
 runbooks: what the graph and context packs read.
 
-Opening `examples/registers/` as an Obsidian vault shows records linked to each other (`[[LL-001]]`,
-`[[RB-002]]`, steps' `from_lessons`) and to their systems (`[[systems/proxy|proxy]]`).
+Opening `examples/registers/` as an Obsidian vault shows records linked to each other (`[[<uid>]]`
+in `related` and steps' `from_lessons`, resolving to `<uid>.md`) and to their systems
+(`[[systems/proxy|proxy]]`).
 
 ## Events and derived state
 
@@ -119,7 +144,7 @@ Beside each record (and each `docs/systems/<service>.md` page) is a sidecar dire
 (`schemas/registers/register_event.schema.json`, `homelabnext/registers/events.py`):
 
 ```
-lessons/LL-005.events/
+lessons/<uid>.events/
   20261019T000000Z-review-agent-example-checker.yml
   20261019T000001Z-review-agent-example-auditor.yml
   20261020T093000Z-verified-agent-example-checker.yml
@@ -200,16 +225,16 @@ standalone lesson, and the regular review drains that backlog:
 `retired_by` names an invariant id of `invariants.yml` (`M-17`), a repository path (a test or a
 lint: `tests/registers/test_register_records.py`) or `make:<target>`, and every name must resolve.
 A controlled pitfall may name a `retired_by` candidate early; the review suggests retiring it as
-soon as that mechanism holds. `incorporated_into` names `RB-002`, `RB-002#1` (step 1) or
+soon as that mechanism holds. `incorporated_into` names a runbook's uid, `<uid>#1` (step 1) or
 `docs/systems/<service>.md[#use|verify|failure]`, which must exist, and the runbook step should
 cite the practice back with `from_lessons` (a missing back-reference is a warning). Runbooks
 carry `review_by` (methods and tools change) and may be replaced with `superseded_by`.
 
-Graduated and replaced records stay as files, because their ids are cited and `check-lost` still
+Graduated and replaced records stay as files, because their uids are cited and `check-lost` still
 guards them; they render under **Archive** on the generated pages and in their own Links block.
-`examples/registers/lessons/LL-002.md` is the worked example of a retired pitfall (two authors
-taking one id, retired by M-17, M-16 and the record tests) and `LL-004.md` of an incorporated
-practice (into `RB-002#1`).
+In `examples/registers/`, `LL 2` ("Two authors took the same lesson number") is the worked example
+of a retired pitfall (retired by M-17, M-16 and the record tests) and `LL 4` of an incorporated
+practice (into step 1 of `RB 2`); `hnx records numbers examples/registers` lists their uids.
 
 ## Reviews
 
@@ -219,7 +244,7 @@ backfilled examples) and reviews, each one a `review` event file in its sidecar 
 `homelabnext/reviews.py`:
 
 ```yaml
-# lessons/LL-005.events/20261019T000000Z-review-agent-j8-lead.yml
+# lessons/<uid>.events/20261019T000000Z-review-agent-j8-lead.yml
 event: review
 by: agent:j8-lead                # issuer:subject
 kind: agent                      # agent | human
@@ -241,9 +266,10 @@ note: optional one line or a link to the evidence
 * a `human` review must be by a `kind: human` reviewer in the policy's allowlist; an agent identity
   (an `agent:` issuer, or an allowlist entry of `kind: agent`) in a human slot fails;
 * a review counts only while its `digest` matches the record's current content (every field but
-  `id`, `reviews` and `last_verified`, with the events applied and the record's own id
-  neutralized, so allocating `LL-NEW` -> `LL-006` keeps reviews current; the Links block is not
-  content), and only with `verdict: pass`. Editing a record
+  `uid`, `order`, `reviews` and `last_verified`, with the events applied; the Links block is not
+  content, and moving a record with `order` is not an edit), and only with `verdict: pass`. A
+  `rekey` event (written only by the uid migration, `by: hnx:migrate`) carries the reviews of the
+  digest before the identity rewrite to the digest after it. Editing a record
   after review makes its reviews stale; there is no date to forget to bump. `last_reviewed` is
   derived (the latest current passing review) and shown on the pages.
 
@@ -263,11 +289,11 @@ broker's approval flow.
 $ hnx registers review examples/registers --today 2027-05-01
 [registers] lesson review as of 2027-05-01: 5 item(s) due
 [registers] incorporate:
-[registers]   LL-005 Measure certificate lifetime from the client side: candidate runbook(s) RB-001; incorporated will need human approve
+[registers]   LL 5 Measure certificate lifetime from the client side: candidate runbook(s) RB 1; incorporated will need human approve
 [registers] update:
 ...
 [registers] keep:
-[registers]   LL-003 Backup job silently skipped a new guest: review_by 2027-01-17; still unsolved: work it, or bump review_by
+[registers]   LL 3 Backup job silently skipped a new guest: review_by 2027-01-17; still unsolved: work it, or bump review_by
 ```
 
 Actions, in this order: **review** (the status needs reviews it lacks, by tier), **retire** (a
@@ -280,18 +306,18 @@ fails on it; `--strict` exits 1 while anything is due, and `--json` is for agent
 
 ## Adding a lesson
 
-1. Create `examples/registers/lessons/LL-NEW-<slug>.md` (copy an existing record of the same
-   kind). Write `id: LL-NEW`, never a number.
+1. Get a uid (`hnx records uid`) and create `examples/registers/lessons/<uid>.md` (copy an
+   existing record of the same kind) with `uid: <uid>` and `type: lesson`. Never write a number:
+   the one it is shown with is computed (`order:` places it among the others, if it matters).
 2. Fill the front-matter and the sections the kind needs; run
    `hnx registers links examples/registers/lessons` to write its Links block.
 3. `hnx registers build examples/registers build/registers` must pass. A new pitfall can be
    committed `open` with no reviews; a status that claims more needs the reviews the policy
    names, stamped with `hnx reviews digest <file>` and written as review events
    (`hnx registers events add`).
-4. Commit and open a pull request. A maintainer runs `make ids-resolve` at merge time, which
-   allocates the number under the per-repository lock, rewrites `LL-NEW` inside the file and
-   renames it to `LL-NNN.md`.
+4. Commit and open a pull request. Nothing is allocated at merge time: the uid is the record's
+   identity for good, so two pull requests adding a lesson each never collide.
 
-A runbook is the same with `runbooks/RB-NEW-<slug>.md`. Never renumber or delete a record: an id
-that was wrong becomes a tombstone (a record file whose front-matter is `id:` plus a
-`retired: {reason:, replaced_by:}` mapping), and a lesson that is solved is retired, not removed.
+A runbook is the same with `runbooks/<uid>.md` and `type: runbook`. Never delete a record: a
+lesson that is solved is retired, not removed, and `check-lost` refuses a commit in which a
+record of the parent commit has vanished.

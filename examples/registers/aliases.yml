@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Legacy record codes -> uids, written by `hnx records assign-uids` (docs/adr/0019).
+# History only: records refer to each other by uid; a legacy code met in an intent, a
+# query or an old note resolves through this map on read, with a deprecation warning.
+aliases_version: 1
+aliases:
+  LL-001: 01a15e4e-758c-7311-82ff-6357fd41e8c8  # Certificate expired on the internal reverse proxy
+  LL-002: 01a15e4e-758c-7312-93c9-0445ca755d10  # Two authors took the same lesson number
+  LL-003: 01a15e4e-758c-7313-9e19-d41a6db86c3d  # Backup job silently skipped a new guest
+  LL-004: 01a15e4e-758c-7314-ba7d-8691599bb269  # Store each register entry in its own file
+  LL-005: 01a15e4e-758c-7315-892d-68b45030268f  # Measure certificate lifetime from the client side
+  RB-001: 01a15e4e-758c-7316-80d6-f77f5bb552dc  # Renew the internal proxy certificate
+  RB-002: 01a15e4e-758c-7317-94cc-2b1d6445bcb2  # Add a lesson to the register
+  RB-003: 01a15f29-ff7e-764c-a17e-d2d50c304e9b  # First deploy from the private repository

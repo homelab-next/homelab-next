@@ -12,11 +12,12 @@ team or a home lab of one. ADR-0015 records the decision; [the generated index](
 ```
 examples/strategy/
   strategy.md                  the one strategy record (mission, intent, end state, ...)
-  doctrine.yml                 the measurement doctrine: which rules apply, how hard
-  objectives/SO-001.md ...     the cascade: SO -> OO -> TO -> TT
-  measures/MOE-001.md ...      MOPs and MOEs (readings: value events in MOE-001.events/)
-  requirements/CCIR-001.md ... CCIR, FFIR, PIR
-  rfis/RFI-001.md ...          requests for information
+  doctrine.yml                 the doctrine: its rules, the record hierarchy, the link table
+  aliases.yml                  legacy code -> uid (SO-001 -> ...), from the uid migration
+  objectives/<uid>.md ...      the cascade: SO -> OO -> TO -> TT
+  measures/<uid>.md ...        MOPs and MOEs (readings: value events in <uid>.events/)
+  requirements/<uid>.md ...    CCIR, FFIR, PIR
+  rfis/<uid>.md ...            requests for information
 ```
 
 ```
@@ -42,7 +43,21 @@ the **end state** as prose sections; **priorities** of work (ranked; a priority 
 effort), **assumptions**, and **constraints**, each a `{rule, owner}` so a hard rule always has
 someone who answers for it.
 
-**Objectives.** The cascade below the strategy, one file per objective:
+**Identity and numbers.** Every record is identified by its `uid`, a UUIDv7 created with it and
+never changed ([ADR-0019](adr/0019-record-uids-computed-numbers.md),
+[[adr/0019-record-uids-computed-numbers|ADR-0019]]), and names its `type` (SO, OO, ..., RFI). It
+stores its `parent` (a uid) where its type has one, optionally an `order` (a number: its sort key
+among its siblings, the records of its type under the same parent) and its links by uid. **No
+number is stored.** The number it is shown with is computed every time it is shown, from its
+parent's number and its place among its siblings (by `order`, then by uid, which is creation
+order): `SO 1`, `OO 1.2` (the second OO under SO 1), `TO 1.2.1`, `MOE 1.2.1` (the first MOE of
+OO 1.2), `PIR 2.1` (a PIR refining PIR 2), `RFI 3`. Inserting, reordering or re-parenting a record
+changes the numbers shown by the hub, the index, the CLI and the graph, and never a record, a
+link or a file name. A legacy code (`SO-001`, from before the migration) resolves on read through
+`aliases.yml` with a deprecation warning (an intent filed earlier still decides); inside a record
+it is an error.
+
+**Objectives.** The cascade below the strategy, one file per objective (its `type` is its level):
 
 | level | is | parent |
 |---|---|---|
@@ -51,7 +66,8 @@ someone who answers for it.
 | **TO** tactical objective | a concrete, assignable piece of work | an OO |
 | **TT** tactical task | a step of a TO | a TO |
 
-Each has an `owner` and `measures`. `supplemental: true` marks an objective proposed beyond the
+Each has an `owner`; its measures are the measures that name it as their `parent`.
+`supplemental: true` marks an objective proposed beyond the
 baseline cascade (it still states its parent; see the doctrine).
 
 **Measures.** A **MOP** (measure of performance) asks *are we doing the work?*; a **MOE**
@@ -59,8 +75,8 @@ baseline cascade (it still states its parent; see the doctrine).
 
 | field | where |
 |---|---|
-| `id` | MOP-NNN / MOE-NNN |
-| `objective` | the objective it measures (which lists it back under `measures`) |
+| `type` | MOP / MOE |
+| `parent` | the uid of the objective it measures |
 | `definition` | the `## Definition` section: what is counted, over what population |
 | `source` | a typed binding (below) |
 | value + time | the readings: `value` events in the sidecar, never in the record |
@@ -82,6 +98,8 @@ A requirement record holds the question (`## Question`), the decision it support
 `on-change`), its LTIOV (`ltiov`: the last time the information is of value, a date or
 `standing`), the specific information requirements (`sirs`), `indicators`, collection `sources`,
 `tasked_to`, the `## Acceptance` criteria and `## Guardrails`, and the objectives it `supports`.
+A PIR may name a PIR as its `parent` (it refines it: `PIR 2.1`); its SIRs are shown numbered
+under it (`SIR 2.1.1`), never numbered by hand.
 
 **RFIs.** A request for information: a question raised by a gap (`raised_by` a measure or a
 requirement), **triaged** into a **collection** requirement (CR: the answer needs data the lab
@@ -91,26 +109,31 @@ is a valid closed outcome, because the search and its window are the answer.
 
 ## Link rules (enforced)
 
+The table is data: `hierarchy` (each type's parent types) and `links` (per link field, which
+types may carry it and name what) in `doctrine.yml`, defaulting to the shipped model
+(`homelabnext.strategy.doctrine.DEFAULT_HIERARCHY`, `DEFAULT_LINKS`). Every link is a uid.
+
 | from | field | may name |
 |---|---|---|
 | CCIR, FFIR, PIR | `supports` (required, one or more) | SO, OO, TO |
 | FFIR | `serves` | CCIR |
 | PIR | `serves` | CCIR, FFIR |
 | CCIR | `serves` | nothing |
-| OO / TO / TT | `parent` | SO / OO / TO |
-| measure | `objective` | the objective whose `measures` lists it |
+| OO / TO / TT | `parent` (required) | SO / OO / TO |
+| MOP / MOE | `parent` (required) | an SO, OO, TO or TT |
+| PIR | `parent` (optional) | a PIR |
 | RFI | `raised_by` | a measure or a requirement |
 
-Nothing else: a CCIR never links to a PIR, a requirement never supports a TT, the `serves` graph
-has no cycle, every name exists (a tombstoned id is reported as retired), and an active record
-never supports or hangs from a closed one. Link targets are allocated ids, never `XX-NEW`.
+Nothing else: a CCIR never links to a PIR, a requirement never supports a TT, neither the
+`parent` nor the `serves` graph has a cycle, every uid names a record that exists, siblings never
+share an `order`, and an active record never supports or hangs from a closed one.
 
 ## Records, reviews and ids: the registers' machinery
 
 Every record is one Markdown file exactly like a lesson ([registers](registers.md),
 [[registers]]): front-matter fields, `## Heading` prose sections, a generated `## Links` block of
-wiki-links (Parent, Objective, Measured by, Supports, Serves, Raised by), and a sidecar
-`<ID>.events/` of append-only events (ADR-0014):
+`[[<uid>]]` wiki-links (Parent, Supports, Serves, Raised by), and a sidecar `<uid>.events/` of
+append-only events (ADR-0014):
 
 * `review` events, the shared review model: `examples/review-policy.yml` has an entry per kind
   and state (`strategy`, `objective`, `measure`, `requirement`, `rfi`). An active objective,
@@ -120,14 +143,14 @@ wiki-links (Parent, Objective, Measured by, Supports, Serves, Raised by), and a 
   makes a review stale.
 * `transition` events, written only by the decider: the status of a record changes by intent.
 
-Ids are `SO-NEW`, `PIR-NEW`, `RFI-NEW` ... until `hnx ids resolve` allocates them at merge time;
-the four directories are registers of `homelabnext.registers.ids`, so `check-dupes`, `check-lost`
-and `check-placeholders` guard them like lessons. `hnx reviews digest FILE` prints the digest a
+A new record takes a new uid (`hnx records uid`), named `<uid>.md`; nothing is allocated at merge
+time. The four directories are registers of `homelabnext.registers.ids`, so `check-dupes`,
+`check-lost` and `check-uids` guard them like lessons. `hnx reviews digest FILE` prints the digest a
 review must carry.
 
 Lifecycles: an objective is `active` -> `achieved` | `retired`; a measure `active` -> `retired`; a
 requirement `active` -> `answered` | `expired` | `retired`; an RFI `open` -> `answered` |
-`expired` | `no-find`. A closed record keeps its file (its id is cited), carries the transition's
+`expired` | `no-find`. A closed record keeps its file (its uid is cited), carries the transition's
 `resolution`, and is inactive to the graph and its queries.
 
 ## The doctrine policy
@@ -140,7 +163,7 @@ defaults follow a nine-rule MOE/MOP doctrine:
 | rule | default | what it does |
 |---|---|---|
 | `trend_same_definition` | error | a trend is drawn only between readings of one definition digest; across a change it is a re-baseline |
-| `no_silent_redefinition` | error | changing `definition`, `source` or `unit` without bumping `definition_version` fails (ids never renumber: `check-lost`) |
+| `no_silent_redefinition` | error | changing `definition`, `source` or `unit` without bumping `definition_version` fails (a record is its uid: nothing renumbers, `check-lost`) |
 | `self_measured_moe_cap` | error, `cap: amber` | a MOE measured manually, not at all, or by its objective's owner is amber at best |
 | `activity_never_moe` | error, `kinds: [activity]` | an activity count is a MOP, never a MOE |
 | `moe_per_objective` | error, `min: 1`, all levels | every objective has a MOE (narrow `levels` to roll MOEs up at OO/SO only) |
@@ -184,7 +207,7 @@ is behind while the effect still says whether it works; a finding rolls up red.
 red / not-measurable measure, unmet requirement      (hnx strategy rfis: the gaps)
         |  --raise: a strategy-rfi note in the records inbox, triage suggested
         v
-hnx strategy decide  -> rfis/RFI-NEW-<slug>.md (open, triage, LTIOV)   [hnx ids resolve numbers it]
+hnx strategy decide  -> rfis/<uid>.md (a new uid; open, triage, LTIOV)
         |  answered / no-find: a strategy-transition note (reason = the answer or the search)
         |  expired: hnx strategy rfis --sweep (an intent per RFI past its LTIOV, decided at once)
         v
@@ -195,7 +218,7 @@ A finding (no data) is suggested as a **collection** requirement, a red grade (d
 as a **production** requirement; an agent may file a different triage. A requirement is unmet when
 an objective it supports rolls up red or its dated LTIOV has passed. A gap already covered by an
 open RFI or a pending intent is not raised twice. `strategy-rfi` and `strategy-transition` notes
-(`schemas/records/note.schema.json` 1.3) are decided by `hnx strategy decide`, the registers'
+(`schemas/records/note.schema.json` 1.4: `record` and `raised_by` are uids) are decided by `hnx strategy decide`, the registers'
 decider over the strategy tree: `from` must be current, `to` reachable in the lifecycle, the
 review tiers of the target met by current reviews of the prospective content (else the note waits
 in the inbox), and an applied transition writes its event before the note moves, so a crash is
@@ -204,8 +227,9 @@ the RFI default LTIOV is `rfi_default_ltiov_days` (30) after the intent.
 
 ## The graph and the hub
 
-The knowledge graph ([[graph]]) has `strategy:`, `objective:`, `measure:`, `req:` and `rfi:`
-nodes and the edges `supports`, `serves`, `child_of`, `measured_by`, `binds` (to `inv:` and
+The knowledge graph ([[graph]]) has `strategy:`, `objective:<uid>`, `measure:<uid>`, `req:<uid>`
+and `rfi:<uid>` nodes (each with its computed `label`) and the edges `supports`, `serves`,
+`child_of`, `measured_by` (from a measure's `parent`), `binds` (to `inv:` and
 `status:` nodes), `raised_by` and `tasked_to` (to a profile or human the keyring defines). Closed
 records are inactive in its queries.
 

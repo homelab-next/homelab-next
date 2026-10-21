@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# a rekey carries reviews across a digest change, so only the uid migration may write one
+event: rekey
+by: agent:example-checker
+date: '2026-10-21'
+from: sha256:1111111111111111111111111111111111111111111111111111111111111111
+to: sha256:2222222222222222222222222222222222222222222222222222222222222222
+reason: an agent may not carry reviews across an edit

@@ -3,18 +3,25 @@
 
 ::
 
-    <root>/strategy.md            the one strategy record (``type: strategy``)
-    <root>/doctrine.yml           the doctrine policy (:mod:`.doctrine`)
-    <root>/objectives/SO-001.md   SO / OO / TO / TT
-    <root>/measures/MOE-001.md    MOP / MOE (readings are ``value`` events in MOE-001.events/)
-    <root>/requirements/PIR-001.md   CCIR / FFIR / PIR
-    <root>/rfis/RFI-001.md
+    <root>/strategy.md             the one strategy record (``type: strategy``)
+    <root>/doctrine.yml            the doctrine policy (:mod:`.doctrine`): rules, hierarchy, links
+    <root>/aliases.yml             legacy code -> uid (written by ``hnx records assign-uids``)
+    <root>/objectives/<uid>.md     SO / OO / TO / TT
+    <root>/measures/<uid>.md       MOP / MOE (readings are ``value`` events in <uid>.events/)
+    <root>/requirements/<uid>.md   CCIR / FFIR / PIR
+    <root>/rfis/<uid>.md           RFI
+
+Every record is identified by its ``uid`` (a UUIDv7, ADR-0019) and names its ``type``; a record
+of a type with a hierarchy names its ``parent`` (a uid) and may carry an ``order`` among its
+siblings.  Every link is a uid.  The number a record is shown with (``OO 1.2``, ``PIR 2.1``) is
+computed from type, parent and order (:meth:`Tree.label`), never stored: inserting, reordering
+or re-parenting a record changes what is shown, never a file name or a link.
 
 Each file is parsed by :func:`homelabnext.registers.records.parse_record` (front-matter fields,
 ``## Heading`` prose sections, the generated ``## Links`` block) and its sidecar events are
 applied by :func:`homelabnext.registers.events.derive` (reviews, values, transitions), exactly
-like a lesson.  Ids are allocated by ``hnx ids`` (``SO-NEW`` until merged) and guarded by
-``check-lost``: the four directories are registers of :data:`homelabnext.registers.ids.SPECS`.
+like a lesson.  The four directories are registers of :data:`homelabnext.registers.ids.SPECS`,
+guarded by ``hnx ids check-lost`` (a record that vanished) and ``check-dupes``.
 
 Writes go through :func:`write_events` and :func:`write_new_record`: the whole tree is validated
 as it will be (:func:`homelabnext.strategy.rules.validate`) before a byte is written.
@@ -30,8 +37,11 @@ from typing import Any
 
 import yaml
 
+from homelabnext.identity import STRATEGY_TYPES, label_map, node_of
+from homelabnext.identity.numbers import sibling_key
+from homelabnext.identity.uid import is_uid
 from homelabnext.registers import events as ev
-from homelabnext.registers.ids import RECORD_SUFFIX, SPECS
+from homelabnext.registers.ids import RECORD_SUFFIX
 from homelabnext.registers.records import parse_record, read_dir
 from homelabnext.registers.schema import RegisterError, record_digest_of
 from homelabnext.reviews import content_digest
@@ -62,46 +72,88 @@ ARTEFACT = {
     "rfis": "rfi",
 }
 DIRS = ("objectives", "measures", "requirements", "rfis")
-_PREFIX_DIR = {p: d for d in DIRS for p in SPECS[d].prefixes}
+#: record type -> the directory that holds it
+TYPE_DIR = dict(STRATEGY_TYPES)
 
 
-def dir_for(ident: str) -> str | None:
-    """``PIR-003`` -> ``requirements`` (None for an id no strategy directory holds)."""
-    return _PREFIX_DIR.get(str(ident).rsplit("-", 1)[0])
+def dir_for(rtype: str) -> str | None:
+    """``PIR`` -> ``requirements`` (None for a type no strategy directory holds)."""
+    return TYPE_DIR.get(str(rtype))
 
 
 @dataclass
 class Tree:
     """A loaded strategy tree: every record as the validators see it (events applied).
 
-    ``records[dir]`` maps a record's key (its id; a placeholder's file stem, since several
-    ``RFI-NEW-<slug>.md`` may coexist) to its entry; ``paths`` maps the key to its file."""
+    ``records[dir]`` maps a record's uid to its entry; ``paths`` maps the uid (and
+    ``"strategy"``) to its file.  Display numbers are computed once per load (:meth:`label`)."""
 
     root: pathlib.Path
     strategy: dict[str, Any] | None = None
     records: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     paths: dict[str, pathlib.Path] = field(default_factory=dict)
-    retired: dict[str, dict[str, Any]] = field(default_factory=dict)  # tombstones by id
+    _labels: dict[str, str] | None = None
 
     def of(self, kind: str) -> dict[str, dict[str, Any]]:
         return self.records.get(kind, {})
 
-    def get(self, ident: str) -> dict[str, Any] | None:
-        kind = dir_for(ident)
-        return self.of(kind).get(str(ident)) if kind else None
+    def get(self, uid: str) -> dict[str, Any] | None:
+        """The record with this uid, in whichever directory holds it."""
+        for kind in DIRS:
+            if (e := self.of(kind).get(str(uid))) is not None:
+                return e
+        return None
+
+    def type_of(self, uid: str) -> str | None:
+        e = self.get(uid)
+        return str(e.get("type")) if e is not None else None
+
+    def kind_of(self, uid: str) -> str | None:
+        """The directory of the record with this uid."""
+        return next((k for k in DIRS if str(uid) in self.of(k)), None)
 
     def items(self) -> Iterator[tuple[str, str, dict[str, Any]]]:
-        """(directory, key, entry) of every record, the strategy first (directory ``strategy``)."""
+        """(directory, key, entry) of every record, the strategy first (directory and key
+        ``strategy``), then each directory in display-number order."""
         if self.strategy is not None:
             yield "strategy", "strategy", self.strategy
         for kind in DIRS:
-            for key, entry in self.of(kind).items():
-                yield kind, key, entry
+            for key in self.ordered(kind):
+                yield kind, key, self.of(kind)[key]
+
+    @property
+    def labels(self) -> dict[str, str]:
+        """uid -> display label (``OO 1.2``), computed from type, parent and sibling order."""
+        if self._labels is None:
+            nodes = [node_of(e) for k in DIRS for e in self.of(k).values() if is_uid(e.get("uid"))]
+            self._labels = label_map(nodes)
+        return self._labels
+
+    def label(self, uid: str) -> str:
+        """``PIR 2.1`` for a record's uid (the uid itself when no record has it)."""
+        return self.labels.get(str(uid), str(uid))
+
+    def ordered(self, kind: str, uids=None) -> list[str]:
+        """The uids of ``kind`` (or just ``uids``) in display-number order."""
+        recs = self.of(kind)
+        keys = [u for u in (recs if uids is None else uids) if u in recs]
+        return sorted(keys, key=lambda u: _number_key(self.label(u), recs[u]))
+
+    def children(self, uid: str | None, types=None) -> list[str]:
+        """The records whose parent is ``uid`` (None: the top level), in number order."""
+        out = []
+        for kind in DIRS:
+            for k, e in self.of(kind).items():
+                if (e.get("parent") or None) == uid and (types is None or e.get("type") in types):
+                    out.append(k)
+        return sorted(out, key=lambda u: _number_key(self.label(u), self.get(u) or {}))
 
 
-def _key(name: str, entry: Mapping[str, Any]) -> str:
-    ident = str(entry.get("id"))
-    return name[: -len(RECORD_SUFFIX)] if ident.endswith("-NEW") else ident
+def _number_key(label: str, entry: Mapping[str, Any]) -> tuple:
+    """Sort by type, then number part by part (``OO 1.10`` after ``OO 1.9``)."""
+    rtype, _, num = label.partition(" ")
+    parts = tuple(int(p) if p.isdigit() else 1 << 30 for p in num.split(".")) if num else ()
+    return (rtype, parts, sibling_key(node_of(entry)))
 
 
 def load_tree(
@@ -112,8 +164,8 @@ def load_tree(
 ) -> Tree:
     """Read the tree at ``root`` (fatal on an unparseable record or event).
 
-    ``texts`` replaces or adds record files (``{"rfis/RFI-NEW-x.md": text}``) and
-    ``new_events`` appends events (``{"rfis/RFI-001.md": [(event, time)]}``), both in memory:
+    ``texts`` replaces or adds record files (``{"rfis/<uid>.md": text}``) and
+    ``new_events`` appends events (``{"rfis/<uid>.md": [(event, time)]}``), both in memory:
     the tree as it would be after a write, which is what the write path validates."""
     root = pathlib.Path(root)
     texts = dict(texts or {})
@@ -154,12 +206,9 @@ def load_tree(
             entry = parse_record(found[name], name, kind, problems)
             if entry is None:
                 continue
-            if "retired" in entry:  # a tombstone: an id that must never be reused
-                tree.retired[str(entry.get("id"))] = entry["retired"]
-                continue
-            key = _key(name, entry)
-            if key in recs:
-                problems.append(f"{rel}: id {key} is also the id of {tree.paths[key].name}")
+            key = str(entry.get("uid"))
+            if key in recs or key in tree.paths:
+                problems.append(f"{rel}: uid {key} is also the uid of {tree.paths[key].name}")
                 continue
             recs[key] = ev.derive(entry, events_of(rel, d / name), kind, problems, rel)
             tree.paths[key] = d / name
@@ -174,8 +223,9 @@ def load_tree(
 
 
 def record_digest(entry: Mapping[str, Any]) -> str:
-    """The content digest a review carries: the registers' digest (no id, reviews or verified
-    stamps) without the readings either, so recording a value never makes a review stale."""
+    """The content digest a review carries: the registers' digest (no identity, order, reviews
+    or verified stamps) without the readings either, so recording a value never makes a review
+    stale."""
     return record_digest_of({k: v for k, v in entry.items() if k != "values"})
 
 
@@ -266,8 +316,8 @@ def write_events(
 
 
 def write_new_record(root, rel: str, text: str) -> pathlib.Path:
-    """Validate the tree with the new record file ``rel`` (``rfis/RFI-NEW-<slug>.md``), then
-    create it exclusively."""
+    """Validate the tree with the new record file ``rel`` (``rfis/<uid>.md``), then create it
+    exclusively."""
     root = pathlib.Path(root)
     if (root / rel).exists():
         raise RegisterError("strategy", [f"{rel} exists; a new record never overwrites one"])

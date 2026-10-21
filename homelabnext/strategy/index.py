@@ -2,10 +2,14 @@
 """The generated Markdown index of a strategy tree (``docs/strategy/README.md``).
 
 Structure only -- the strategy, the objective tree, the requirements by type, the RFIs -- each
-entry a relative link to its record file, so the page reads on GitHub and in Obsidian and the
-knowledge graph links it to the records.  Readings are not in it (they change with every
-``hnx strategy measure``); the status hub pages show them.  ``hnx strategy index --check`` fails
-when the committed page is not what the records generate.
+entry shown by its computed display number and title (``OO 1.2 ...``), linked both ways like
+every generated page of the docs vault: a relative Markdown link to its record file (GitHub,
+the link checker) and an Obsidian alias wiki-link ``[[<uid>|OO 1.2 <title>]]`` (a vault opened
+at the repository root, where the record files are named ``<uid>.md``).  The numbers are
+computed each time the page is generated (:meth:`homelabnext.strategy.records.Tree.label`), so
+inserting or reordering a record changes this page and no record.  Readings are not in it (they
+change with every ``hnx strategy measure``); the status hub pages show them.
+``hnx strategy index --check`` fails when the committed page is not what the records generate.
 """
 
 from __future__ import annotations
@@ -14,9 +18,9 @@ import os
 import pathlib
 
 from .records import Tree
-from .rules import _active
+from .rules import _active, measures_of
 
-__all__ = ["render_index"]
+__all__ = ["render_index", "wiki_link"]
 
 HEADER = (
     "<!-- SPDX-License-Identifier: Apache-2.0 -->\n"
@@ -24,9 +28,31 @@ HEADER = (
 )
 
 
-def _link(tree: Tree, key: str, out_dir: pathlib.Path) -> str:
-    rel = os.path.relpath(tree.paths[key].resolve(), out_dir.resolve())
-    return f"[{key}]({pathlib.PurePath(rel).as_posix()})"
+def wiki_link(uid: str, text: str, *, in_table: bool = False) -> str:
+    """``[[<uid>|<text>]]``, the Obsidian alias form; a table cell escapes the pipe."""
+    text = text.replace("[", "(").replace("]", ")").replace("|", "/").replace("\n", " ")
+    sep = "\\|" if in_table else "|"
+    return f"[[{uid}{sep}{text}]]"
+
+
+def _cell(text) -> str:
+    return str(text).replace("|", "\\|").replace("\n", " ")
+
+
+def _rel(tree: Tree, key: str, out_dir: pathlib.Path) -> str:
+    return pathlib.PurePath(
+        os.path.relpath(tree.paths[key].resolve(), out_dir.resolve())
+    ).as_posix()
+
+
+def _link(tree: Tree, key: str, out_dir: pathlib.Path, *, title: bool, in_table=False) -> str:
+    """``[OO 1.2](<path>) ([[<uid>|OO 1.2 <title>]])``; with ``title`` the visible link text
+    carries the title too."""
+    label = tree.label(key)
+    entry = tree.get(key) or {}
+    full = f"{label} {entry.get('title', '')}".strip()
+    shown = _cell(full) if (title and in_table) else (full if title else label)
+    return f"[{shown}]({_rel(tree, key, out_dir)}) ({wiki_link(key, full, in_table=in_table)})"
 
 
 def render_index(tree: Tree, root, out) -> str:
@@ -36,48 +62,66 @@ def render_index(tree: Tree, root, out) -> str:
     if "strategy" in tree.paths:
         rel = os.path.relpath(tree.paths["strategy"].resolve(), out_dir.resolve())
         lines += [f"The record: [strategy.md]({pathlib.PurePath(rel).as_posix()}).", ""]
-    lines += ["## Priorities of work", ""]
+    lines += [
+        "Each record is identified by its uid, which every link uses; the number it is shown",
+        "with (SO 1, OO 1.2, MOE 1.2.1, PIR 2.1) is computed from its type, its parent and its",
+        "place among its siblings each time this page is generated, so it can change when a",
+        "record is inserted or moved (docs/adr/0019-record-uids-computed-numbers.md).",
+        "",
+        "## Priorities of work",
+        "",
+    ]
     lines += [f"{n}. {p}" for n, p in enumerate(s.get("priorities") or (), 1)] + [""]
     objs = tree.of("objectives")
-    kids: dict[str, list[str]] = {}
-    for k, o in objs.items():
-        kids.setdefault(str(o.get("parent") or ""), []).append(k)
     lines += ["## Objectives (SO -> OO -> TO -> TT)", ""]
 
-    def walk(k: str, depth: int) -> None:
+    def walk(k: str, depth: int, seen: frozenset[str]) -> None:
         o = objs[k]
-        ms = ", ".join(_link(tree, m, out_dir) for m in o.get("measures") or () if m in tree.paths)
+        ms = ", ".join(_link(tree, m, out_dir, title=False) for m in measures_of(tree, k))
         state = "" if _active(o) else f" ({o.get('status')})"
         lines.append(
-            f"{'  ' * depth}- {_link(tree, k, out_dir)} {o.get('title')}{state}"
+            f"{'  ' * depth}- {_link(tree, k, out_dir, title=True)}{state}"
             + (f"; measured by {ms}" if ms else "")
         )
-        for c in sorted(kids.get(k, ())):
-            walk(c, depth + 1)
+        for c in tree.children(k, ("SO", "OO", "TO", "TT")):
+            if c not in seen:  # a parent cycle is the validation's to report
+                walk(c, depth + 1, seen | {c})
 
-    for k in sorted(kids.get("", ())):
-        walk(k, 0)
+    for k in tree.ordered("objectives"):
+        if not objs[k].get("parent"):
+            walk(k, 0, frozenset({k}))
     lines += ["", "## Requirements", ""]
-    lines += ["| Requirement | Type | Question | Supports | Serves | Cadence | LTIOV | Status |"]
-    lines += ["|---|---|---|---|---|---|---|---|"]
-    for k, r in sorted(tree.of("requirements").items(), key=lambda kv: (_order(kv[0]), kv[0])):
-        sup = ", ".join(_link(tree, x, out_dir) for x in r.get("supports") or () if x in tree.paths)
-        srv = ", ".join(_link(tree, x, out_dir) for x in r.get("serves") or () if x in tree.paths)
+    lines += ["| Requirement | Type | Supports | Serves | Cadence | LTIOV | Status |"]
+    lines += ["|---|---|---|---|---|---|---|"]
+    reqs = tree.of("requirements")
+    for k in sorted(tree.ordered("requirements"), key=lambda u: _order(reqs[u])):
+        r = reqs[k]
+        sup = ", ".join(
+            _link(tree, x, out_dir, title=False, in_table=True)
+            for x in r.get("supports") or ()
+            if x in tree.paths
+        )
+        srv = ", ".join(
+            _link(tree, x, out_dir, title=False, in_table=True)
+            for x in r.get("serves") or ()
+            if x in tree.paths
+        )
         lines.append(
-            f"| {_link(tree, k, out_dir)} | {k.split('-')[0]} | {r.get('title')} | {sup} | "
+            f"| {_link(tree, k, out_dir, title=True, in_table=True)} | {r.get('type')} | {sup} | "
             f"{srv or '-'} | {r.get('cadence')} | {r.get('ltiov')} | {r.get('status')} |"
         )
     lines += ["", "## RFIs", ""]
     lines += ["| RFI | Raised by | Triage | LTIOV | Status |", "|---|---|---|---|---|"]
-    for k, r in sorted(tree.of("rfis").items()):
+    for k in tree.ordered("rfis"):
+        r = tree.of("rfis")[k]
         rb = str(r.get("raised_by"))
-        by = _link(tree, rb, out_dir) if rb in tree.paths else rb
+        by = _link(tree, rb, out_dir, title=False, in_table=True) if rb in tree.paths else rb
         lines.append(
-            f"| {_link(tree, k, out_dir)} {r.get('title')} | {by} | {r.get('triage')} | "
+            f"| {_link(tree, k, out_dir, title=True, in_table=True)} | {by} | {r.get('triage')} | "
             f"{r.get('ltiov')} | {r.get('status')} |"
         )
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _order(key: str) -> int:
-    return {"CCIR": 0, "FFIR": 1, "PIR": 2}.get(key.split("-")[0], 3)
+def _order(entry) -> int:
+    return {"CCIR": 0, "FFIR": 1, "PIR": 2}.get(str(entry.get("type")), 3)

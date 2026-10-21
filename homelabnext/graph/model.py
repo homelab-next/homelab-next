@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The graph's data model: :class:`Node`, :class:`Edge` and the loaded :class:`Graph`.
 
-A node is identified by a namespaced id (``svc:secrets``, ``lesson:LL-001``); an edge is typed and
+A node is identified by a namespaced id (``svc:secrets``, ``lesson:<uid>``); an edge is typed and
 names the file and field that asserted it (``source``), so every fact can be traced back to the
 line that states it.  The serialised form (:func:`dumps`) is deterministic: nodes sorted by id,
 edges by ``(src, type, dst, source)``, one record per line, no timestamps.

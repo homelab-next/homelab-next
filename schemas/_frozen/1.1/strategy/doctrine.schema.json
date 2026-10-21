@@ -1,0 +1,444 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/strategy/doctrine/1.1",
+  "title": "Measurement doctrine policy",
+  "description": "The data-driven doctrine homelabnext.strategy applies (examples/strategy/doctrine.yml): which mechanical rules run and how hard (error fails the check, warn prints, off disables; computed rules apply unless off). The defaults follow a MOE/MOP doctrine of nine rules; another discipline tunes or disables them here. Rules that need judgment are listed for reviewers, not enforced. 1.1 adds, additively, `hierarchy` (each record type's parent types, from which a record's computed display number is drawn: OO 1.2 is the second OO under SO 1) and `links` (per typed link field, the record types that may carry it and the types each may name); both default to the shipped model when absent (ADR-0019).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "doctrine_version",
+    "name",
+    "rules"
+  ],
+  "properties": {
+    "doctrine_version": {
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 120
+    },
+    "rfi_default_ltiov_days": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3650
+    },
+    "expiring_soon_days": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 365
+    },
+    "rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "trend_same_definition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enforce"
+          ],
+          "properties": {
+            "enforce": {
+              "enum": [
+                "error",
+                "warn",
+                "off"
+              ]
+            },
+            "why": {
+              "type": "string",
+              "minLength": 8
+            }
+          }
+        },
+        "no_silent_redefinition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enforce"
+          ],
+          "properties": {
+            "enforce": {
+              "enum": [
+                "error",
+                "warn",
+                "off"
+              ]
+            },
+            "why": {
+              "type": "string",
+              "minLength": 8
+            }
+          }
+        },
+        "self_measured_moe_cap": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enforce"
+          ],
+          "properties": {
+            "enforce": {
+              "enum": [
+                "error",
+                "warn",
+                "off"
+              ]
+            },
+            "why": {
+              "type": "string",
+              "minLength": 8
+            },
+            "cap": {
+              "enum": [
+                "amber",
+                "red"
+              ]
+            }
+          }
+        },
+        "activity_never_moe": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enforce"
+          ],
+          "properties": {
+            "enforce": {
+              "enum": [
+                "error",
+                "warn",
+                "off"
+              ]
+            },
+            "why": {
+              "type": "string",
+              "minLength": 8
+            },
+            "kinds": {
+              "$ref": "#/$defs/strings"
+            }
+          }
+        },
+        "moe_per_objective": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enforce"
+          ],
+          "properties": {
+            "enforce": {
+              "enum": [
+                "error",
+                "warn",
+                "off"
+              ]
+            },
+            "why": {
+              "type": "string",
+              "minLength": 8
+            },
+            "min": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "levels": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "SO",
+                  "OO",
+                  "TO",
+                  "TT"
+                ]
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        "measures_per_owner": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enforce"
+          ],
+          "properties": {
+            "enforce": {
+              "enum": [
+                "error",
+                "warn",
+                "off"
+              ]
+            },
+            "why": {
+              "type": "string",
+              "minLength": 8
+            },
+            "max": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "cold_start_baseline": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enforce"
+          ],
+          "properties": {
+            "enforce": {
+              "enum": [
+                "error",
+                "warn",
+                "off"
+              ]
+            },
+            "why": {
+              "type": "string",
+              "minLength": 8
+            },
+            "readings": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "not_measurable_is_finding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enforce"
+          ],
+          "properties": {
+            "enforce": {
+              "enum": [
+                "error",
+                "warn",
+                "off"
+              ]
+            },
+            "why": {
+              "type": "string",
+              "minLength": 8
+            }
+          }
+        },
+        "never_fabricate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enforce"
+          ],
+          "properties": {
+            "enforce": {
+              "enum": [
+                "error",
+                "warn",
+                "off"
+              ]
+            },
+            "why": {
+              "type": "string",
+              "minLength": 8
+            }
+          }
+        },
+        "baseline_so": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enforce"
+          ],
+          "properties": {
+            "enforce": {
+              "enum": [
+                "error",
+                "warn",
+                "off"
+              ]
+            },
+            "why": {
+              "type": "string",
+              "minLength": 8
+            },
+            "types": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "CCIR",
+                  "FFIR",
+                  "PIR"
+                ]
+              },
+              "uniqueItems": true
+            },
+            "exactly": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "so_supported": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enforce"
+          ],
+          "properties": {
+            "enforce": {
+              "enum": [
+                "error",
+                "warn",
+                "off"
+              ]
+            },
+            "why": {
+              "type": "string",
+              "minLength": 8
+            }
+          }
+        }
+      }
+    },
+    "judgment": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "rule",
+          "why"
+        ],
+        "properties": {
+          "rule": {
+            "type": "string",
+            "minLength": 4
+          },
+          "why": {
+            "type": "string",
+            "minLength": 8
+          }
+        }
+      },
+      "description": "Doctrine rules no code can decide; listed so reviewers check them."
+    },
+    "hierarchy": {
+      "type": "object",
+      "description": "Record type -> its parent types ([] for a top-level type) and whether the parent is optional. A type not listed keeps the default (homelabnext.strategy.doctrine.DEFAULT_HIERARCHY).",
+      "propertyNames": {
+        "$ref": "#/$defs/rtype"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "parent"
+        ],
+        "properties": {
+          "parent": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/rtype"
+            },
+            "uniqueItems": true
+          },
+          "optional": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "links": {
+      "type": "object",
+      "description": "Typed link field -> {record type that may carry it: [types it may name]}. A field not listed keeps the default (DEFAULT_LINKS).",
+      "additionalProperties": false,
+      "properties": {
+        "supports": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/rtype"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/rtype"
+            },
+            "uniqueItems": true
+          }
+        },
+        "serves": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/rtype"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/rtype"
+            },
+            "uniqueItems": true
+          }
+        },
+        "raised_by": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/rtype"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/rtype"
+            },
+            "uniqueItems": true
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identity": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9_.@-]+$(?!\\n)",
+      "description": "issuer:subject (human:example-operator, profile:example-checker, role:on-call)."
+    },
+    "author": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "const": "unknown"
+        }
+      ]
+    },
+    "text": {
+      "type": "string",
+      "minLength": 12
+    },
+    "strings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "rtype": {
+      "enum": [
+        "SO",
+        "OO",
+        "TO",
+        "TT",
+        "MOP",
+        "MOE",
+        "CCIR",
+        "FFIR",
+        "PIR",
+        "RFI"
+      ]
+    }
+  }
+}
