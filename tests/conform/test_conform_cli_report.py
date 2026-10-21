@@ -16,16 +16,16 @@ from homelabnext.conform.registry import load_module
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_list_shows_the_fifteen(capsys):
+def test_list_shows_the_sixteen(capsys):
     assert main(["list"]) == 0
     out = capsys.readouterr().out.splitlines()
     assert [ln.split()[0] for ln in out] == list(CAPABILITIES)
-    assert len(out) == 15
+    assert len(out) == 16
 
 
 def test_dash_dash_list_spelling_from_the_docs(capsys):
     assert main(["--list"]) == 0
-    assert len(capsys.readouterr().out.splitlines()) == 15
+    assert len(capsys.readouterr().out.splitlines()) == 16
 
 
 def test_list_json_and_all(capsys):
@@ -101,7 +101,7 @@ def test_could_not_measure_exits_100(tmp_path, capsys):
 def test_mutants_command(capsys):
     assert main(["mutants"]) == 0
     out = capsys.readouterr().out
-    assert out.count("caught") >= 15 and "MISSED" not in out
+    assert out.count("caught") >= 16 and "MISSED" not in out
     assert main(["mutants", "events", "--json"]) == 0
     doc = json.loads(capsys.readouterr().out)
     assert doc["mutants"][0]["detected"] is True

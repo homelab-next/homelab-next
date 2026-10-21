@@ -51,6 +51,10 @@ menu:
   - id: rfis
     title: RFIs
     panel: rfis
+  # project management (docs/projects.md; listed as unavailable without --projects)
+  - id: projects
+    title: Projects
+    panel: projects
   # guest baselines (docs/compute-model.md; listed as unavailable without --guests)
   - id: baselines
     title: Baselines

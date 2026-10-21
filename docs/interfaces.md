@@ -29,6 +29,7 @@ hardware that is not part of the first drop: document the interface and ship a f
 | `tests/integration/ tests/packaging/` | integration | cross-package end-to-end tests |
 | `homelabnext/{swap,parity}/ tools/decommission_check.py tests/swap/` | W11 | |
 | `compose/lab-in-a-box/ .github/workflows/nightly.yml docs/build-order.md docs/architecture.md` | W12 | |
+| `homelabnext/projects/ conformance/{protocols,suites}/projects.py conformance/fakes/{project_store,openproject_api}.py docs/projects.md tests/projects/ examples/projects/` | projects | `hnx projects`; ADR-0020 |
 
 Rules that apply to every task: Python >= 3.11, standard library first; an SPDX header on every
 source file; no network in tests; clocks and randomness injected; no real identifiers (see
@@ -155,7 +156,7 @@ Check = Callable[[Mapping[str, Any]], Result]                           # the pl
 `hnx` sub-commands are rows in `COMMANDS` in `homelabnext/cli.py` (name, one-line help, handler that
 imports its package lazily). Current names: `registry`, `new`, `gen`, `detections`, `registers`,
 `invariants`, `ids`, `decide`, `golden`, `site`, `guests`, `schema-check`, `swap`, `conform`, `custom`,
-`workflows`.
+`workflows`, `projects`.
 `parity` is a library only (the swap runner calls it; no sub-command).
 Exit codes everywhere: `0` ok, `1` a check failed, `2` misconfiguration or bad input, `>=100` the
 check itself could not measure.
@@ -289,10 +290,22 @@ Suite(name, summary, protocol) ; @suite.check(id, summary, *, severity="must", r
 run(capability, binding_mapping, root=None) -> list[CheckResult]           # {"fake": True} or {"adapter": "pkg.mod:factory", ...}
 run_capability(capability, target, root=None, *, only=None) -> CapabilityRun  # target: "fake" | "broken[:M]" | file | name
 build_report(root=None, target="fake", ...) -> dict                          # capabilities_without_passing_test
-CAPABILITIES (fifteen) / EXTENDED (backup, dns, edge) ; ConformError (misconfiguration, exit 2)
+CAPABILITIES (sixteen) / EXTENDED (backup, dns, edge) ; ConformError (misconfiguration, exit 2)
 # the suites, Protocols and fakes live in conformance/ of the source tree (hnx conform --root DIR); an
-# installed wheel lists the fifteen names and says "no suite" until pointed at a checkout.
+# installed wheel lists the sixteen names and says "no suite" until pointed at a checkout.
 # invariant X-10 (plugins/x10_conformance.py) is registered through the homelabnext.invariants.checks entry point.
+
+# homelabnext.projects   (hnx projects; docs/projects.md; ADR-0020; contract conformance/protocols/projects.py)
+ProjectStore(backend, *, records=callable->uids, clock=, new_uid=) ; MemoryBackend() ; MarkdownBackend(dir)
+  .create(kind, title, *, project, parent, external_key, status, assignee, due, description) -> WorkItem
+  .get(uid) / .list(*, kind, status, project, assignee, linked_to) / .update(uid, version, **fields)
+  .close(uid, result, *, version) / .link(uid, target, relation) / .unlink(...) / .changes_since(cursor) -> ChangeSet
+  .records() / .check() -> list[str]          # board rules over hand-edited files
+markdown_store(dir, *, strategy=DIR) ; strategy_records(root) -> {uid, type, title, parent_uid, links}  # the strategy seam (ADR-0019 loader)
+resolve_record(ref, root) (uid, display number or legacy code) ; events.change_event(change, origin=) -> homelabnext.project.changed
+measures.completion_reading(items, mop, now=) (MOP only) ; pages.ProjectsSite (hnx status serve --projects DIR)
+# homelabnext.projects.openproject: OpenProjectClient, load_config, discover, doctor, openproject_store(cfg),
+#   sync_strategy(client, cfg, setup, records, apply=), ChangeFeed(backend, sink).poll/on_webhook, make_webhook_server, adopt
 ```
 
 ### 2.4 Swap, conformance and paths: how they fit
@@ -319,9 +332,9 @@ CAPABILITIES (fifteen) / EXTENDED (backup, dns, edge) ; ConformError (misconfigu
 - Capability alias: `<capability>.svc.example.internal`, for example
   `lake-query.svc.example.internal`. The suffix is a registry setting (`domain:`), `example.internal`
   in everything public. Aliases are generated, never typed.
-- Capability names (fifteen, also the `hnx conform --list` output): `lake-query`, `lake-catalog`,
+- Capability names (sixteen, also the `hnx conform --list` output): `lake-query`, `lake-catalog`,
   `object-store`, `inference`, `fast-classifier`, `notify`, `cases`, `events`, `orchestration`,
-  `broker`, `secrets`, `idp`, `records`, `detections`, `context`.
+  `broker`, `secrets`, `idp`, `records`, `detections`, `context`, `projects`.
 - Addresses in examples: `192.0.2.0/24` services, `198.51.100.0/24` management,
   `203.0.113.0/24` external, `2001:db8::/32` IPv6, MACs `00:00:5e:00:53:xx`.
 - No library or role contains a default endpoint. An unresolvable capability raises the registry's

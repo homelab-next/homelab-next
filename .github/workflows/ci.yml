@@ -145,7 +145,7 @@ jobs:
           python -m homelabnext.registers build examples/registers build/registers
           python -m homelabnext.registers links --check examples/registers/lessons examples/registers/runbooks
           python -m homelabnext.registers review examples/registers
-      - name: conformance coverage (all 15 capabilities have a passing suite)
+      - name: conformance coverage (all 16 capabilities have a passing suite)
         run: python tools/conform_coverage.py
       - name: system pages match the inventory (L-05)
         run: python -m homelabnext.cli docs systems check examples/services.yml docs/systems

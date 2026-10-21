@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The ADR log: five headings each, a status, unique numbers from 0001 with no gap below 0019."""
+"""The ADR log: twenty-one records, five headings each, a status, sequential numbering."""
 
 from __future__ import annotations
 
@@ -14,12 +14,8 @@ STATUSES = {"proposed", "accepted", "rejected"}
 ADRS = sorted(p for p in ADR_DIR.glob("[0-9][0-9][0-9][0-9]-*.md"))
 
 
-def test_adr_numbers_are_unique_and_start_at_one():
-    # the files actually present: ADRs written on parallel branches may land out of order, so a
-    # number above 0019 can exist before the one below it merges; nothing is reserved here
-    nums = [int(p.name[:4]) for p in ADRS]
-    assert len(nums) == len(set(nums))
-    assert nums[:19] == list(range(1, 20))
+def test_twenty_one_sequential_adrs():
+    assert [int(p.name[:4]) for p in ADRS] == list(range(1, 22))
 
 
 @pytest.mark.parametrize("path", ADRS, ids=lambda p: p.name[:4])

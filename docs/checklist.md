@@ -120,6 +120,8 @@ Action broker, approvals, operator-away mode.
 | P-05 | Operator-away mode works | Drill: switch on forces live intents to shadow within 1 min; daily summary arrives | SERVER |
 | P-06 | Broker decisions reach the SIEM | Allow, deny and needs-approval all appear in the SIEM within 5 min | SERVER |
 | P-07 | Broker isolation holds | One caller cannot read or cancel another's request (`access_cases` table test; broker conformance checks `requests-bound-to-caller`, `foreign-request-access-audited`) | PUBLIC-NOW |
+| P-08 | Work follows the board rules and links to strategy by uid | Every project, step and task keeps the board rules (a step belongs to an open project; a project whose steps are all finished is closed; finished items carry a result; links resolve; no cycles): `hnx projects check` exits 0 on the projects directory; the `projects` conformance suite passes on the reference store and on OpenProject (recorded fake) and catches its eight mutants (ADR-0020) | PUBLIC-NOW |
+| P-09 | The project tool mirrors strategy faithfully | `hnx projects doctor --target openproject` all ok and `hnx projects sync-strategy --dry-run` reports 0 writes after an apply (repository unchanged), against the live OpenProject | SERVER |
 
 ## R - Orchestration
 
@@ -284,4 +286,4 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 
 ---
 
-**Totals:** 161 criteria across 16 pillars; 82 PUBLIC-NOW, 79 SERVER.
+**Totals:** 163 criteria across 16 pillars; 83 PUBLIC-NOW, 80 SERVER.
