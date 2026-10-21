@@ -59,7 +59,7 @@ owner: platform-team                   # required
 created: "2026-10-15"
 review_by: "2027-06-30"                # required (unless maintained_upstream); at most 366 days after created
 # maintained_upstream: true            # schema 1.1, shipped profiles only; see "Shipped profiles never expire"
-links: {lesson: LL-900, runbook: RB-900}   # optional
+links: {lesson: <uid>, runbook: <uid>}   # optional: records by uid (a legacy LL-900 still resolves)
 upstream: proposed                     # none | proposed | accepted
 upstream_ref: where the proposal lives # optional
 action: { ... }                        # shape depends on kind; see schemas/platform/customization.schema.json
