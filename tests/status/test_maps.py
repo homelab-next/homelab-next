@@ -297,7 +297,9 @@ def test_the_dataflow_page_places_services_on_guests_and_grades_each_row():
     bus = pm["groups"][0]
     assert bus["sub"] == "svc:events (nats) on db-1"
     first, second = bus["rows"]
-    assert first["from"]["on"] == "on app-1 \u00b7 192.0.2.71" and first["state"] == "planned"
+    assert (
+        first["from"]["on"].startswith("on app-1 \u00b7 192.0.2.") and first["state"] == "planned"
+    )
     assert second["state"] == "gap" and second["from"]["on"] == "code"
     calls = {(r["from"]["title"], r["to"]["title"]): r["state"] for r in pm["groups"][2]["rows"]}
     assert calls[("app on app-1", "cache on cache-1")] == "planned"

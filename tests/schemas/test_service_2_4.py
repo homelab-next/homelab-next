@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import schema_check as sc
+import yaml
 
 from homelabnext.registry.model import build_registry
 
@@ -15,17 +16,9 @@ CURRENT = json.loads((ROOT / "schemas/platform/service.json").read_text())
 FROZEN_23 = json.loads((ROOT / "schemas/_frozen/2.3/platform/service.json").read_text())
 FROZEN_24 = json.loads((ROOT / "schemas/_frozen/2.4/platform/service.json").read_text())
 
-DOC = {
-    "registry_version": 1,
-    "lab": {"name": "lab", "domain": "example.internal", "svc_label": "svc", "owner": "ops"},
-    "zones": {"mgmt": {"cidr": "192.0.2.0/26"}},
-    "hosts": {"bus-1": {"address": "192.0.2.10", "zone": "mgmt"}},
-    "services": {
-        "events": {"capability": "events", "host": "bus-1", "protocol": "nats", "port": 4222,
-                   "owner": "ops", "version": "2.10", "tls": "none",
-                   "description": "The event bus every producer publishes to."},
-    },
-}  # fmt: skip
+DOC = yaml.safe_load(
+    (Path(__file__).parent / "fixtures" / "service.2_4.description.yml").read_text()
+)
 
 
 def test_version_is_2_4_frozen_and_additive():

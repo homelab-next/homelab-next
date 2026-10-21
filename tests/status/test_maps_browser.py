@@ -23,6 +23,8 @@ from homelabnext.status.cli import main
 
 LAB = ROOT / "examples" / "lab-topology"
 SMOKE = Path(__file__).with_name("map_smoke.mjs")
+EVIL_IP = "198.51.100.20"  # no-raw-endpoint: allow RFC 5737 documentation address
+SIEM_IP = "192.0.2.70"  # no-raw-endpoint: allow RFC 5737 documentation address
 HOSTILE = '</script><script>window.__pwned=1</script><img src=x onerror="window.__pwned=2">\'"&'
 HOSTILE_GUEST = f"""id: guest:evil-1
 display_name: '</script><script>window.__pwned=3</script>'
@@ -35,7 +37,7 @@ resources:
   memory: {{size_mb: 512}}
   disks: [{{name: rootfs, size_gb: 4, pool: fast}}]
 image: {{logical: debian-12-standard, kind: tarball, os_type: debian}}
-network: {{zone: edge, ip: 198.51.100.20}}
+network: {{zone: edge, ip: {EVIL_IP}}}
 capability: cap:context
 owners: {{primary: platform-team}}
 """
@@ -59,9 +61,7 @@ def _site(tmp_path: Path) -> Path:
     (lab / "guests" / "evil-1.yml").write_text(HOSTILE_GUEST, encoding="utf-8")
     services = (lab / "services.yml").read_text(encoding="utf-8")
     services = services.replace(
-        "  proxy-1:   {address: 198.51.100.10, zone: edge,     role: edge}\n",
-        "  proxy-1:   {address: 198.51.100.10, zone: edge,     role: edge}\n"
-        "  evil-1:    {address: 198.51.100.20, zone: edge}\n",
+        "\nhosts:\n", f"\nhosts:\n  evil-1: {{address: {EVIL_IP}, zone: edge}}\n"
     )
     services += (
         "  evil:\n    capability: context\n    host: evil-1\n    protocol: http\n    port: 80\n"
@@ -103,7 +103,7 @@ def test_the_interactive_maps_in_a_browser(tmp_path, capsys):
     assert t["arrowsOn"] > 15 and t["plannedArrows"] >= 1 and "Hide" in t["toggleText"]
     assert t["panelOpen"] == 1 and t["panelTitle"] == "siem-1" and t["flowItems"] > 3
     assert "What it does" in t["panelText"] and "svc:detections" in t["panelText"]
-    assert t["highlighted"] > 0 and t["flowDimmed"] > 0 and "192.0.2.70" in t["tooltip"]
+    assert t["highlighted"] > 0 and t["flowDimmed"] > 0 and SIEM_IP in t["tooltip"]
     # hostile names arrive as text and run nothing
     assert HOSTILE in t["hostileText"] and t["hostileImgs"] == 0 and t["pwned"] is None
     assert "evil-1" in t["hostileTip"]
