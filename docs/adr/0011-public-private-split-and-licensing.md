@@ -2,7 +2,8 @@
 
 - **Status:** proposed
 - **Date:** 2026-10-15
-- **Related:** `CONTRIBUTING.md`, `SECURITY.md`, `NOTICE`, `tools/leak_scan.py`
+- **Related:** `CONTRIBUTING.md`, `SECURITY.md`, `NOTICE`, `tools/leak_scan.py`; extended by
+  ADR-0021 (the private overlay, credentials and deploys)
 
 ## Context
 

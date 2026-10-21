@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The ADR log: eighteen records, five headings each, a status, sequential numbering."""
+"""The ADR log: five headings each, a status, sequential numbering (bar reserved numbers)."""
 
 from __future__ import annotations
 
@@ -14,8 +14,12 @@ STATUSES = {"proposed", "accepted", "rejected"}
 ADRS = sorted(p for p in ADR_DIR.glob("[0-9][0-9][0-9][0-9]-*.md"))
 
 
-def test_eighteen_sequential_adrs():
-    assert [int(p.name[:4]) for p in ADRS] == list(range(1, 19))
+# numbers allocated to ADRs on branches that have not merged yet; drop each when its file lands
+RESERVED = {19, 20}
+
+
+def test_sequential_adrs():
+    assert [int(p.name[:4]) for p in ADRS] == [n for n in range(1, 22) if n not in RESERVED]
 
 
 @pytest.mark.parametrize("path", ADRS, ids=lambda p: p.name[:4])

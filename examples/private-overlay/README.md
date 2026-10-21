@@ -28,7 +28,7 @@ lab-private/                       (a new PRIVATE repository; copy this director
 ├── lab/                           the lab, laid out like the public examples/ (HNX_EXAMPLES_DIR)
 │   ├── services.yml  site.yml  guests/  registers/  strategy/  customizations/
 │   └── sealed/*.sops.yaml         sealed per file (.sops.yaml rule)
-└── requirements/deploy.in, deploy.txt   the deploy job's own tools, locked with hashes
+└── locks/deploy.in, deploy.txt     the deploy job's own tools, locked with hashes
 ```
 
 To start one: create an empty private repository, copy these files in, delete `fictional: true`

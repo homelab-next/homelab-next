@@ -79,7 +79,7 @@ jobs:
           python -m pip install --disable-pip-version-check --require-hashes --no-deps -r hnx/constraints/bootstrap.txt
           python -m pip install --disable-pip-version-check -c hnx/constraints/ci.txt PyYAML jsonschema referencing setuptools
           python -m pip install --disable-pip-version-check --no-deps --no-build-isolation ./hnx
-          python -m pip install --disable-pip-version-check --require-hashes --no-deps -r requirements/deploy.txt
+          python -m pip install --disable-pip-version-check --require-hashes --no-deps -r locks/deploy.txt
 
       - name: sops, checksum-verified
         env:

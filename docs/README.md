@@ -40,6 +40,9 @@ relate.
 - [Status hub](status.md) ([[status]]): the read-only primary UI over every registered status
   source; the [source catalog](status/sources.md) ([[status/sources|status sources]]) is the menu.
 - [Architecture decision log](adr/README.md) ([[adr/README|ADRs]]).
+- [Public repository and private overlay](private-overlay.md) ([[private-overlay]]): where a real
+  lab's data, credentials and keys live, how hnx reads the overlay, the bootstrap order, the
+  protected-Environment deploy, rotation and the threat model.
 - [Checklist](checklist.md) ([[checklist]]): what is done, public now, or needs a server.
 - [Strategy to task](strategy.md) ([[strategy]]): a strategy, its objective cascade
   (SO -> OO -> TO -> TT) measured by MOPs and MOEs bound to invariants, status sources and
