@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/events/project.changed/1.0",
+  "title": "Event homelabnext.project.changed",
+  "description": "A project, step or task changed (the projects capability, docs/projects.md). One event per item version: the Markdown store's change journal and the OpenProject change feed (webhook and updatedAt poll) both emit it. The event id derives from the item's identity and version (Markdown: '<uid>:v<version>'; OpenProject: 'wp:<id>:v<lockVersion>'), so the webhook and the poll seeing the same version converge on one id. Identities are uids (UUIDv7), never display numbers.",
+  "allOf": [
+    {
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "homelabnext.project.changed"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "uid": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "description": "The item's uid (UUIDv7)."
+            },
+            "kind": {
+              "enum": [
+                "project",
+                "step",
+                "task"
+              ]
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "The item's version after the change."
+            },
+            "op": {
+              "enum": [
+                "created",
+                "updated",
+                "closed",
+                "linked",
+                "unlinked"
+              ]
+            },
+            "status": {
+              "enum": [
+                "open",
+                "closed",
+                "blocked",
+                "todo",
+                "in_progress",
+                "done",
+                "cancelled"
+              ]
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "project": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The project a step or task belongs to."
+            },
+            "origin": {
+              "enum": [
+                "markdown",
+                "openproject"
+              ],
+              "description": "Which backend saw the change."
+            },
+            "ref": {
+              "type": "string",
+              "pattern": "^wp:[1-9][0-9]{0,11}$",
+              "description": "The backend's own key (OpenProject: wp:<id>)."
+            },
+            "links": {
+              "type": "array",
+              "maxItems": 200,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "relation": {
+                    "enum": [
+                      "supports",
+                      "serves",
+                      "measures",
+                      "answers",
+                      "blocks",
+                      "precedes"
+                    ]
+                  },
+                  "target": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                  }
+                },
+                "required": [
+                  "relation",
+                  "target"
+                ],
+                "additionalProperties": false
+              },
+              "description": "The item's links after the change (targets are uids)."
+            }
+          },
+          "required": [
+            "uid",
+            "kind",
+            "version",
+            "op",
+            "status",
+            "origin"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "data"
+      ]
+    }
+  ]
+}

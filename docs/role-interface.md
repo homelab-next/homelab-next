@@ -94,6 +94,10 @@ cap_nifi cap_sensor cap_scanner cap_backup`
 applied baseline controls (ADR-0016 decision 7): their roles run once there and receive the
 guests to enroll as `<role>_guests`.
 
+Every capability also has a derived group, `cap_<capability>` with `-` as `_`
+(`homelabnext.compute.model.group_for_capability`): for example `cap_context` and `cap_projects`
+(the project-management tool's host, OpenProject in `docs/projects.md`).
+
 `ansible/inventory/example/hosts.yml` shows the layout (hosts under the reserved
 `example.internal` domain). Moving a capability to another guest is a group
 membership change. `role_lint.py --playbook X --inventory Y` fails a playbook whose

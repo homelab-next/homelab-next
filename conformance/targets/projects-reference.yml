@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# The reference project store (homelabnext.projects): Markdown files in a temporary directory,
+# linking to the example strategy records.
+#   hnx conform run projects --target projects-reference
+name: projects-reference
+capabilities:
+  projects:
+    adapter: homelabnext.projects:reference_subject

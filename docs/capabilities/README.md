@@ -27,6 +27,7 @@ Each capability is a seam: a small contract (`conformance/protocols/`), a confor
 | [records](records.md) ([[capabilities/records\|records]]) | validated proposals in one agent lane; operator-only approve/deny/complete moves | 7 | 12 | 0 | none yet | none |
 | [detections](detections.md) ([[capabilities/detections\|detections]]) | detection engine: shipped must-fire fixtures fire, must-not-fire fixtures stay silent | 1 | 9 | 0 | none yet | none |
 | [context](context.md) ([[capabilities/context\|context]]) | scoped retrieval for agents: relation before keywords, no inactive or stale hits, deterministic | 4 | 13 | 3 | none yet | none |
+| [projects](projects.md) ([[capabilities/projects\|projects]]) | projects, steps and one-off tasks under the board rules; uid links, versions, a change feed | 9 | 13 | 1 | none yet | none |
 
 ## Registry services and their capability
 

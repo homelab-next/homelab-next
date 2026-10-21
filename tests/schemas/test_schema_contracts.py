@@ -34,6 +34,7 @@ EXPECTED = {
     "events/deploy.changed.schema.json",
     "events/status.observed.schema.json",
     "events/agent.activity.schema.json",
+    "events/project.changed.schema.json",
     "records/note.schema.json",
     "registers/lesson.schema.json",
     "registers/runbook.schema.json",
@@ -120,6 +121,7 @@ def test_event_schemas_cover_reaction_seam_types():
             "deploy.changed",
             "status.observed",
             "agent.activity",
+            "project.changed",
         )
     }
 

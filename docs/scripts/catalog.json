@@ -170,7 +170,7 @@
       "outputs": "build/conform-report.json and a summary on stdout",
       "owner": "maintainers",
       "path": "tools/conform_coverage.py",
-      "purpose": "Fail unless each of the fifteen capabilities has a passing conformance suite.",
+      "purpose": "Fail unless each of the sixteen capabilities has a passing conformance suite.",
       "status": "active",
       "trigger": [
         "ci:ci/schemas",
