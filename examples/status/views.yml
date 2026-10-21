@@ -61,6 +61,23 @@ menu:
   - id: agentmetry
     title: Agentmetry
     external: {service: agentmetry, optional: true}
+  # generated maps (ADR-0018; topology with --guests, the rest with --maps; unavailable without)
+  - id: topology
+    title: Topology
+    panel: topology
+    group: maps
+  - id: dataflow
+    title: Dataflow
+    panel: dataflow
+    group: maps
+  - id: architecture
+    title: Architecture
+    panel: architecture
+    group: maps
+  - id: roadmap
+    title: Roadmap
+    panel: roadmap
+    group: maps
   # rendered only for a request through the trusted front door (docs/status.md)
   - id: agent-detail
     title: Session detail

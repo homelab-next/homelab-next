@@ -1,0 +1,190 @@
+{
+ "flows": [
+  {
+   "detail": "event type",
+   "from": {
+    "id": "svc:siem",
+    "kind": "sample",
+    "title": "siem"
+   },
+   "label": "homelabnext.alert.created",
+   "sample": true,
+   "to": {
+    "id": "workflow:page-on-alert",
+    "kind": "workflow",
+    "title": "page-on-alert"
+   },
+   "transport": "bus"
+  },
+  {
+   "detail": "push-event status source",
+   "from": {
+    "id": "svc:hub",
+    "kind": "service",
+    "title": "hub"
+   },
+   "label": "homelabnext.status.observed (runs)",
+   "sample": false,
+   "to": {
+    "id": "svc:hub",
+    "kind": "service",
+    "title": "hub"
+   },
+   "transport": "bus"
+  },
+  {
+   "detail": "event type",
+   "from": {
+    "id": "pkg:homelabnext.q",
+    "kind": "code",
+    "title": "q"
+   },
+   "label": "homelabnext.task.queued",
+   "sample": false,
+   "to": {
+    "id": null,
+    "kind": "kind-none",
+    "title": "no consumer declared"
+   },
+   "transport": "bus"
+  },
+  {
+   "detail": "poll-http-json status source",
+   "from": {
+    "id": "svc:cat",
+    "kind": "service",
+    "title": "cat"
+   },
+   "label": "health",
+   "sample": false,
+   "to": {
+    "id": "svc:hub",
+    "kind": "service",
+    "title": "hub"
+   },
+   "transport": "collect"
+  },
+  {
+   "detail": "OCSF lake table",
+   "from": {
+    "id": null,
+    "kind": "kind-none",
+    "title": "no writer declared"
+   },
+   "label": "authentication",
+   "sample": false,
+   "to": {
+    "id": "svc:query",
+    "kind": "service",
+    "title": "query"
+   },
+   "transport": "lake"
+  },
+  {
+   "detail": "workflow lookup",
+   "from": {
+    "id": null,
+    "kind": "kind-none",
+    "title": "no writer declared"
+   },
+   "label": "table:owners",
+   "sample": false,
+   "to": {
+    "id": "workflow:page-on-alert",
+    "kind": "workflow",
+    "title": "page-on-alert"
+   },
+   "transport": "lake"
+  },
+  {
+   "detail": "registry upstream",
+   "from": {
+    "id": "svc:cat",
+    "kind": "service",
+    "title": "cat"
+   },
+   "label": "objects",
+   "sample": false,
+   "to": {
+    "id": null,
+    "kind": "kind-none",
+    "title": "no reader declared"
+   },
+   "transport": "object-store"
+  },
+  {
+   "detail": "files lane",
+   "from": {
+    "id": "profile:*",
+    "kind": "agent",
+    "title": "agent profiles"
+   },
+   "label": "memory.write",
+   "sample": false,
+   "to": {
+    "id": "lane:memory",
+    "kind": "lane",
+    "title": "lane memory"
+   },
+   "transport": "broker"
+  },
+  {
+   "detail": "workflow action",
+   "from": {
+    "id": "workflow:page-on-alert",
+    "kind": "workflow",
+    "title": "page-on-alert"
+   },
+   "label": "notify.page",
+   "sample": false,
+   "to": {
+    "id": "svc:notify",
+    "kind": "service",
+    "title": "notify"
+   },
+   "transport": "broker"
+  }
+ ],
+ "transports": [
+  {
+   "flows": 3,
+   "id": "bus",
+   "impl": "nats",
+   "service": "bus",
+   "source": null,
+   "title": "Event bus"
+  },
+  {
+   "flows": 1,
+   "id": "collect",
+   "impl": "hnx",
+   "service": "hub",
+   "source": null,
+   "title": "Status collection"
+  },
+  {
+   "flows": 2,
+   "id": "lake",
+   "impl": "",
+   "service": "cat",
+   "source": null,
+   "title": "Lake"
+  },
+  {
+   "flows": 1,
+   "id": "object-store",
+   "impl": "minio",
+   "service": "s3",
+   "source": null,
+   "title": "Object store"
+  },
+  {
+   "flows": 2,
+   "id": "broker",
+   "impl": null,
+   "service": null,
+   "source": "examples/broker/manifest.yml",
+   "title": "Broker"
+  }
+ ]
+}

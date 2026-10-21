@@ -1,0 +1,96 @@
+{
+ "default": "deny",
+ "flows": [
+  {
+   "allowed": "any; tcp 22, 443",
+   "from": "mgmt",
+   "to": "data"
+  }
+ ],
+ "nodes": [
+  {
+   "guests": [
+    {
+     "baselines": [
+      "server",
+      "db"
+     ],
+     "capability": "cap:events",
+     "id": "guest:db-1",
+     "ip": "192.0.2.70",
+     "kind": "vm",
+     "name": "db-1",
+     "node": "hv-a",
+     "zone": "data"
+    },
+    {
+     "baselines": [
+      "server"
+     ],
+     "capability": "cap:events",
+     "id": "guest:hv-a",
+     "ip": "192.0.2.10",
+     "kind": "host",
+     "name": "hv-a",
+     "node": "hv-a",
+     "zone": "mgmt"
+    }
+   ],
+   "hypervisor": true,
+   "id": "hv-a"
+  },
+  {
+   "guests": [
+    {
+     "baselines": [
+      "exempt"
+     ],
+     "capability": "cap:events",
+     "id": "guest:app-1",
+     "ip": "192.0.2.71",
+     "kind": "lxc",
+     "name": "app-1",
+     "node": "hv-b",
+     "zone": "data"
+    },
+    {
+     "baselines": [],
+     "capability": "cap:events",
+     "id": "guest:odd-1",
+     "ip": "192.0.2.72",
+     "kind": "vm",
+     "name": "odd-1",
+     "node": "hv-b",
+     "zone": "lab"
+    }
+   ],
+   "hypervisor": false,
+   "id": "hv-b"
+  }
+ ],
+ "site": "lab",
+ "zones": [
+  {
+   "gateway": "192.0.2.1",
+   "id": "mgmt",
+   "internet": "deny",
+   "known": true,
+   "purpose": "management",
+   "subnet": "192.0.2.0/26",
+   "vlan": 10
+  },
+  {
+   "gateway": "192.0.2.65",
+   "id": "data",
+   "internet": null,
+   "known": true,
+   "purpose": null,
+   "subnet": "192.0.2.64/26",
+   "vlan": 20
+  },
+  {
+   "id": "lab",
+   "known": false
+  }
+ ]
+}

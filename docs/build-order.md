@@ -24,18 +24,18 @@ P9 --> S2.6 staging on the real server --> S3.. capability swaps --> S8 cutover
 
 ## PUBLIC-NOW phases
 
-| Phase | Goal | Contract / artefact | How it is proven without hardware | Where |
-|---|---|---|---|---|
-| P0 | CI, skeleton and the leak gate | licence, CI workflow, ADR log, leak scan | CI itself; the scan has positive and negative fixtures | `.github/workflows/`, `tools/`, `docs/adr/` |
-| P1 | Contracts: schemas in git | logical ids, event envelope, pinned OCSF subsets, agent, broker and records schemas | every schema has examples and negatives; additive evolution is checked against frozen baselines | `schemas/`, `tools/schema_check.py` |
-| P2 | Names: registry, aliases, generators | `services.yml`, resolver, generated DNS/hosts/scrape targets, the no-raw-endpoint gate | golden outputs from a synthetic example lab | `homelabnext/registry/`, `examples/` |
-| P3 | One shared client library per seam | lake, notify, state, records, events, decision cascade | each ships an in-memory fake; crash-safety and idempotency tests | `homelabnext/` |
-| P4 | Conformance harness | one swap test per capability, each with a fake | the suites pass against fakes in CI | `conformance/` |
-| P5 | Role interface and IaC conventions | role argument spec and hooks, capability inventory groups, scaffolds | role and playbook linter with passing and failing roles | `ansible/`, `tools/role_lint.py` |
-| P6 | Detections as code, model-role aliases | Sigma plus fixtures, logical-id map, role resolver, golden tasks | fixture runner against an engine adapter; a fake inference server | `detections/`, `homelabnext/golden/` |
-| P7 | Registers and invariants | generated registers, an invariants runner, the modularity-pillar checks | fixture pass and fail for each check | `homelabnext/registers/`, `homelabnext/invariants/` |
-| P8 | Swap procedure kit | the nine-step checklist runner, parity tools, flip and decommission checks | the whole flow against two fake lakes | arrives with the swap kit |
-| P9 | Lab-in-a-box | a compose stack of real containers for the seams, a smoke script, a nightly workflow | `docker compose config` in tests; the smoke script and nightly job bring it up for real | `compose/lab-in-a-box/`, `.github/workflows/nightly.yml` |
+| Phase | Goal | Contract / artefact | How it is proven without hardware | Where | Checklist |
+|---|---|---|---|---|---|
+| P0 | CI, skeleton and the leak gate | licence, CI workflow, ADR log, leak scan | CI itself; the scan has positive and negative fixtures | `.github/workflows/`, `tools/`, `docs/adr/` | F, Q |
+| P1 | Contracts: schemas in git | logical ids, event envelope, pinned OCSF subsets, agent, broker and records schemas | every schema has examples and negatives; additive evolution is checked against frozen baselines | `schemas/`, `tools/schema_check.py` | T, X-03 |
+| P2 | Names: registry, aliases, generators | `services.yml`, resolver, generated DNS/hosts/scrape targets, the no-raw-endpoint gate | golden outputs from a synthetic example lab | `homelabnext/registry/`, `examples/` | X-01 |
+| P3 | One shared client library per seam | lake, notify, state, records, events, decision cascade | each ships an in-memory fake; crash-safety and idempotency tests | `homelabnext/` | S, O, P, R, A, K |
+| P4 | Conformance harness | one swap test per capability, each with a fake | the suites pass against fakes in CI | `conformance/` | X-04, X-10 |
+| P5 | Role interface and IaC conventions | role argument spec and hooks, capability inventory groups, scaffolds | role and playbook linter with passing and failing roles | `ansible/`, `tools/role_lint.py` | X-05, X-09 |
+| P6 | Detections as code, model-role aliases | Sigma plus fixtures, logical-id map, role resolver, golden tasks | fixture runner against an engine adapter; a fake inference server | `detections/`, `homelabnext/golden/` | D, G, X-06 |
+| P7 | Registers and invariants | generated registers, an invariants runner, the modularity-pillar checks | fixture pass and fail for each check | `homelabnext/registers/`, `homelabnext/invariants/` | L, M |
+| P8 | Swap procedure kit | the nine-step checklist runner, parity tools, flip and decommission checks | the whole flow against two fake lakes | arrives with the swap kit | - |
+| P9 | Lab-in-a-box | a compose stack of real containers for the seams, a smoke script, a nightly workflow | `docker compose config` in tests; the smoke script and nightly job bring it up for real | `compose/lab-in-a-box/`, `.github/workflows/nightly.yml` | - |
 
 ### P9 in detail
 
@@ -49,20 +49,27 @@ P9 --> S2.6 staging on the real server --> S3.. capability swaps --> S8 cutover
 These phases are documented, not implemented here. Each lists what it consumes from the public
 phases, so the public work is a prerequisite and not a duplicate.
 
-| Phase | Goal | Consumes |
-|---|---|---|
-| S1 | Hardware bring-up: hypervisor, storage, network zones, sensor feed, recovery basics (escrow, break-glass, dead-man check, backup jobs) before anything runs | P5, checklist rows F-01, F-09-F-11 |
-| S2 | Foundation services in order: secrets, identity, edge, monitoring, DNS aliases pointing at the incumbents, then the staging slice running the P9.1 compose definitions | P2, P4, P9 |
-| S3 | Data platform: object store, catalog, query engine; copy (not in-place swap) the data; first real swap rehearsal of `lake-query` in shadow | P3, P8 |
-| S4 | SIEM and detection: manager and rules compiled from the detection layout; writers consume the raw stream and the OCSF schemas; dual-write during the window | P1, P6 |
-| S5 | Reaction and control plane: event bus and forwarder, the broker with approvals bound to a request digest, the decision service, workflows deployed disabled and in shadow | P1, P3, P4 |
-| S6 | Agent runtime, then the accelerator window: profile compiler live, budgets enforced, model roles resolved by the gateway | P3, P6 |
-| S7 | Outputs: case system, threat intelligence, exposure management, operator console; every stateful product gets an export hook | P2, P5 |
-| S8 | Cutover: capability flips in order, each through the swap procedure | P8 |
-| S9 | Decommission and consolidation (operator-gated), each through the decommission check | P8 |
-| S10 | Assurance loop and publish-back: restore drills, every surprise becomes a lesson plus a checklist step plus (where generic) a fix in this repository | P7 |
+| Phase | Goal | Consumes | Checklist |
+|---|---|---|---|
+| S1 | Hardware bring-up: hypervisor, storage, network zones, sensor feed, recovery basics (escrow, break-glass, dead-man check, backup jobs) before anything runs | P5, checklist rows F-01, F-09-F-11 | F-01, F-02, F-09-F-11, F-13, F-14, C |
+| S2 | Foundation services in order: secrets, identity, edge, monitoring, DNS aliases pointing at the incumbents, then the staging slice running the P9.1 compose definitions | P2, P4, P9 | F-03, F-04, F-06, F-12, F-16 |
+| S3 | Data platform: object store, catalog, query engine; copy (not in-place swap) the data; first real swap rehearsal of `lake-query` in shadow | P3, P8 | S |
+| S4 | SIEM and detection: manager and rules compiled from the detection layout; writers consume the raw stream and the OCSF schemas; dual-write during the window | P1, P6 | D, T |
+| S5 | Reaction and control plane: event bus and forwarder, the broker with approvals bound to a request digest, the decision service, workflows deployed disabled and in shadow | P1, P3, P4 | P, R, K |
+| S6 | Agent runtime, then the accelerator window: profile compiler live, budgets enforced, model roles resolved by the gateway | P3, P6 | A, G, M |
+| S7 | Outputs: case system, threat intelligence, exposure management, operator console; every stateful product gets an export hook | P2, P5 | O |
+| S8 | Cutover: capability flips in order, each through the swap procedure | P8 | E, X |
+| S9 | Decommission and consolidation (operator-gated), each through the decommission check | P8 | - |
+| S10 | Assurance loop and publish-back: restore drills, every surprise becomes a lesson plus a checklist step plus (where generic) a fix in this repository | P7 | L |
 
 ## Reading the status
+
+- Each phase's **Checklist** cell names its criteria in [checklist.md](checklist.md): a section
+  letter (`Q`: that section's rows with the phase's own tag), a row id (`X-03`) or a range
+  (`F-09-F-11`); `-` names none. The status hub's Roadmap page reads these tables (no copy) and
+  shows each criterion's invariant result and a progress bar per phase
+  ([status hub](status.md#generated-maps-topology-dataflow-architecture-roadmap)); a test fails
+  when a cell names no row or a row is named by no phase.
 
 - What is built and tested today is listed in the README status section and in
   [checklist.md](checklist.md) (rows tagged PUBLIC-NOW).
