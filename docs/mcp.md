@@ -17,7 +17,8 @@ hnx mcp call context_for --args '{"task_text": "...", "allowed": ["doc:docs/", "
 A client configuration starts it as a subprocess. Do not write that configuration by hand: the
 server is the `hnx-catalog` record of the [MCP catalog](mcp-catalog.md) ([[mcp-catalog]]), and
 `hnx mcp catalog render --profile build/profile.json --client claude-code` writes the entry, with
-`--scope-from-profile` pointing at the profile.
+`--scope-from-profile` pointing at the profile (render refuses a profile `hnx agent verify` would
+refuse, so the scope it points at is a verified one).
 `hnx mcp call` runs the same handler in-process, without the SDK, for scripts and debugging.
 
 ## Tools

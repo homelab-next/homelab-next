@@ -28,8 +28,8 @@ __all__ = [
     "profile_scope",
 ]
 
-#: the server's slug: what a profile lists under ``grants.mcp`` (and ``tool_classes.yml``
-#: classifies as ``read``)
+#: the server's catalog id: what a profile lists under ``grants.mcp``; its record
+#: (``examples/mcp/hnx-catalog.yml``) classes every tool ``read``
 SERVER_NAME = "hnx-catalog"
 
 

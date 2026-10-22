@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """``hnx broker mcp --socket PATH``: the broker's actions as MCP tools for an agent (stdio).
 
-Registered as ``hnx-broker`` (``homelabnext/agent/tool_classes.yml``: ``record-write`` and
-``exec``, the worst of what a broker action can be; a profile grants it in ``grants.mcp``).  Every
+Registered as ``hnx-broker``, the MCP catalog record ``examples/mcp/hnx-broker.yml`` (ADR-0024):
+each tool is classed there (``read``, ``record-write``, ``exec``: the worst of what a broker action
+can be), the class table derives the server's classes from it, and a profile grants it by that
+id in ``grants.mcp``.  Every
 tool is one request to a running broker (:class:`~.client.BrokerClient`), so the agent's identity
 is this process's uid as the broker's socket sees it: no tool takes an actor, and the agent cannot
 choose one.  What the agent may do is the manifest's grant for that identity, decided by the
@@ -25,7 +27,7 @@ from .client import BrokerClient
 
 __all__ = ["INSTRUCTIONS", "SERVER_NAME", "TOOLS", "build_server", "serve"]
 
-#: the slug a profile lists under ``grants.mcp`` (and ``tool_classes.yml`` classifies)
+#: the catalog id a profile lists under ``grants.mcp`` (its record classes every tool)
 SERVER_NAME = "hnx-broker"
 
 INSTRUCTIONS = (
