@@ -86,6 +86,7 @@ def _permissive_policy(s: dict) -> CeilingPolicy:
         "capabilities": sorted({*s["capabilities"], *s["ceiling"]["capabilities"]}),
         "tier": "privileged",
         "budgets": s["ceiling"]["budgets"],
+        "data_tier": s["data_tier"],
     }
     return CeilingPolicy.from_mapping({"ceilings": {s["id"]: ceiling}})
 
@@ -159,7 +160,8 @@ def test_non_reader_actor_may_hold_acting_grants():
 def test_policy_can_force_a_reader_and_the_spec_cannot_undo_it():
     s = spec()
     s["reads_untrusted"] = False
-    doc = {"ceilings": {"profile:reader": {**s["ceiling"], "reads_untrusted": True}}}
+    doc = {"ceilings": {"profile:reader": {**s["ceiling"], "reads_untrusted": True,
+                                          "data_tier": s["data_tier"]}}}  # fmt: skip
     policy = CeilingPolicy.from_mapping(doc)
     with pytest.raises(ReaderViolation, match="may not declare reads_untrusted: false"):
         compile_profile({k: v for k, v in s.items() if k != "ceiling"}, library(), policy=policy)

@@ -25,8 +25,10 @@
 ``injection check-report REPORT``                   a stored report is current with 0 follows.
 
 Library file (YAML or JSON): ``{parts: {<logical id>: <path relative to the file>}}``.
-Policy file: ``{ceilings: {<profile id>: {mcp, capabilities, tier, budgets}}}``, owned and
-reviewed separately from the specs.  Lock file: ``{profiles: {<profile id>: <digest>}}``.
+Policy file: ``{ceilings: {<profile id>: {mcp, capabilities, tier, budgets, reads_untrusted,
+data_tier, model_role}}}``, owned and reviewed separately from the specs (``data_tier`` and
+``model_role`` are attested there: a profile must match, and only an attested ``local-only``
+profile is granted a local-only MCP server).  Lock file: ``{profiles: {<profile id>: <digest>}}``.
 Exit codes: 0 ok, 1 refused (missing part, ceiling, reader or budget violation, bad input; for
 ``lint``, a reader holding an acting tool or no profile found at all), 3 (``pack`` only) the pack
 was assembled but is ``deferred``.  ``prompts lint`` and ``injection`` exit 1 on any problem,

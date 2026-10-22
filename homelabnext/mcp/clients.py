@@ -746,6 +746,10 @@ def profile_refusals(
         wide = sorted(set(doc.get(key) or ()) - set(ceiling.get(key) or ()))
         if wide:
             problems.append(f"{key} outside the policy's ceiling ({policy.source}): {wide}")
+    problems += policy.attestation_problems(
+        str(doc.get("id")), doc.get("data_tier"), doc.get("model_role"), doc.get("mcp") or (),
+        classes,
+    )  # fmt: skip
     return problems
 
 

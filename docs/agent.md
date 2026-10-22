@@ -71,9 +71,16 @@ servers it wants, a tier and budgets. The **ceiling** is read from a `CeilingPol
 # policy.yml: owned and reviewed by someone other than the spec authors (CODEOWNERS)
 ceilings:
   profile:reader: {mcp: [lake], capabilities: [cap:lake-query], tier: read,
+                   data_tier: local-only, model_role: mdl:main-reasoner,
                    budgets: {max_input_tokens: 64000, max_output_tokens: 4000,
                              max_runtime_s: 900, max_tool_calls: 40}}
 ```
+
+`data_tier` and `model_role` on an entry are **attested** by the policy owner: the spec, the
+compiled profile and a lean profile must say the same (`CeilingViolation` otherwise), and a
+profile may be granted a `local-only` MCP server only when its entry says `data_tier:
+local-only`, so a spec cannot declare itself local-only to receive local-only data. Both are
+optional; without `data_tier` the profile receives no local-only server.
 
 A spec may also carry a `ceiling`; with a policy it may only narrow the policy's entry, and a
 profile id with no entry is refused. Without a policy the compiler falls back to the spec's own

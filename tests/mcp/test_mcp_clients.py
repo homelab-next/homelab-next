@@ -33,7 +33,8 @@ CTX = servers.LaunchContext(npm_prefix=NPM_PREFIX)
 def _policy() -> CeilingPolicy:
     """The example specs' ceiling policy, plus the schema example reader's ceiling."""
     doc = yaml.safe_load((SPECS / "policy" / "ceilings.yml").read_text())
-    doc["ceilings"]["profile:reader"] = json.loads(READER.read_text())["ceiling"]
+    reader = json.loads(READER.read_text())
+    doc["ceilings"]["profile:reader"] = {**reader["ceiling"], "data_tier": reader["data_tier"]}
     return CeilingPolicy.from_mapping(doc, source="the test policy")
 
 
@@ -41,7 +42,8 @@ POLICY = _policy()
 #: a ceiling as wide as the catalog, for tests about something other than the ceiling
 WIDE = CeilingPolicy.from_mapping(
     {"ceilings": {pid: {"mcp": sorted(CATALOG.servers), "capabilities": ["cap:records-propose"],
-                        "tier": "write", "budgets": json.loads(COLLECTOR.read_text())["budgets"]}
+                        "tier": "write", "budgets": json.loads(COLLECTOR.read_text())["budgets"],
+                        "data_tier": "local-only"}
                   for pid in ("profile:collector",)}},
     source="the wide test policy",
 )  # fmt: skip
@@ -614,3 +616,18 @@ def test_yaml_merge_keys_are_read_and_duplicates_still_refused():
             clients.load_strict(dup, "p")
     merged = "a: &a {x: 1}\nb: &b {y: 2}\nc:\n  <<: [*a, *b]\n"
     assert clients.load_strict(merged, "p")["c"] == {"x": 1, "y": 2}
+
+
+def test_a_lean_profile_cannot_declare_itself_local_only_to_render_a_local_only_server():
+    """The policy, not the profile, attests ``data_tier: local-only`` (round 4 design note)."""
+    doc = yaml.safe_load((SPECS / "policy" / "ceilings.yml").read_text())
+    del doc["ceilings"]["profile:collector"]["data_tier"]
+    unattested = CeilingPolicy.from_mapping(doc, source="an unattested policy")
+    with pytest.raises(clients.RenderError, match="does not attest data_tier: local-only"):
+        clients.render_profile(CATALOG, COLLECTOR, "claude-code", policy=unattested)
+    doc["ceilings"]["profile:collector"]["model_role"] = "mdl:main-reasoner"
+    with pytest.raises(clients.RenderError, match="attests model_role mdl:main-reasoner"):
+        clients.render_profile(
+            CATALOG, COLLECTOR, "claude-code", policy=CeilingPolicy.from_mapping(doc)
+        )
+    assert clients.render_profile(CATALOG, COLLECTOR, "claude-code", policy=POLICY)
