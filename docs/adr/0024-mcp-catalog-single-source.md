@@ -64,7 +64,8 @@ because each instance needs its own scope.
    only profiles `hnx agent verify` accepts against the ceiling policy (a compiled profile without
    one is refused: its stored ceiling and digest are whatever last edited the file; the policy
    also attests each profile's `data_tier` and `model_role`, so no profile declares itself
-   local-only to receive local-only servers), and only records that pass check's whole record
+   local-only to receive local-only servers, and grants a local-only profile a server that
+   reaches the internet only by a named `internet_mcp` exception), and only records that pass check's whole record
    check and the reviews of the `review-policy.yml` beside the catalog (refused without one
    unless `--no-review-policy`, for local experiments). A render spec is trusted input.
 7. **The launch is generated, never written.** A stdio record names its origin, the server's
@@ -76,7 +77,8 @@ because each instance needs its own scope.
    -y --prefix=<npm_prefix> --package=<pkg>@<ver> -- <bin>`, pypi `uvx --no-config --from
    <pkg>[<extras>]==<ver> <bin>`, git the same at its commit (pypi: and subdirectory), image
    `docker run -i --rm [-e NAME ...] <image>@<digest>`, a first-party path absolute under the
-   render's `checkout_root`. `npm_prefix` is an absolute, empty directory the render names, so
+   render's `checkout_root`. `npm_prefix` is an absolute, empty directory the render names
+   (refused, where it exists on the render host, when it is the root, a symlink or not empty), so
    npx reads no `node_modules` or `.npmrc` from the client's working directory; `--no-config`
    keeps a `uv.toml` from redirecting uvx's index. A record has no field for a launcher, a
    launcher flag, a mount, a network or another entrypoint, so the pin controls what runs by
@@ -84,7 +86,8 @@ because each instance needs its own scope.
    new way to run something the pin did not name; the parser now only serves the importer.) No
    setting, env or parameter key may configure the process or its launcher (`PATH`, `LD_*`,
    `NODE_*`, `NPM_CONFIG_*`, `UV_*`, `PIP_*`, the docker CLI's `DOCKER_HOST`, `DOCKER_CONFIG`
-   ..., any case).
+   ..., and what loads code or redirects trust inside a launcher: `OPENSSL_*`, `SSL_CERT_*`,
+   `*_PROXY`, glibc's `GCONV_PATH`, `GLIBC_TUNABLES`, `MALLOC_*` ..., any case).
 8. **Import, then pin.** `hnx mcp catalog import` turns an existing lab's client configs into
    draft records in a directory it is given (`--out`, required): credentials become `secret:`
    names, failing closed (every environment value is one unless its key is allowlisted as
@@ -113,7 +116,8 @@ because each instance needs its own scope.
   client's own `npm_config_*`/`UV_*` environment still apply, as the client user's settings.
 - No message of check, render or import carries a value from a record, spec, profile or
   parameter (a value may be a credential pasted by mistake, and messages reach logs): fields and
-  rules are named, URLs shown as scheme and host.
+  rules are named, URLs shown as scheme and host, a record's free-text `reason` pointed at, never
+  repeated, and a grant name the catalog does not hold given by its position.
   The schema (`platform/mcp_server` 1.0) was not released before this change, so it changed in
   place.
 - Rendered files that land in another program's format (Hermes `mcp_servers`, llm-orchestrator's

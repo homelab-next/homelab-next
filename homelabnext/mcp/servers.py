@@ -81,12 +81,26 @@ ORCH_DENIED_ENV = re.compile(
 #: DOCKER_API_VERSION, DOCKER_DEFAULT_PLATFORM, DOCKER_CONTENT_TRUST*, DOCKER_CLI_*,
 #: DOCKER_BUILDKIT, DOCKER_CUSTOM_HEADERS, BUILDKIT*, COMPOSE_*) and podman's through its docker
 #: alias (CONTAINER*) are refused, while another DOCKER_ name (DOCKER_CONTAINER, which an image
-#: reads inside the container) is the server's own setting.  A superset of :data:`ORCH_DENIED_ENV`.
+#: reads inside the container) is the server's own setting.  The variables the C library, the
+#: TLS stack and the shell read to load code or redirect trust inside any of these processes are
+#: refused too: OpenSSL's configuration (OPENSSL_CONF loads an engine's shared object, so npx
+#: dlopens whatever it names) and certificate stores (OPENSSL_*, SSL_CERT_*, REQUESTS_CA_BUNDLE,
+#: CURL_CA_BUNDLE), every proxy (*_PROXY: HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, NO_PROXY, any
+#: case), glibc's module, locale, resolver and allocator knobs (GCONV_PATH, LOCPATH, NLSPATH,
+#: HOSTALIASES, RES_OPTIONS, LOCALDOMAIN, GLIBC_TUNABLES, MALLOC_*, TZDIR), the other
+#: interpreters' option and library variables (JAVA_TOOL_OPTIONS, _JAVA_OPTIONS,
+#: JDK_JAVA_OPTIONS, PERL5OPT, PERL5LIB, PERLLIB, RUBYOPT, RUBYLIB) and the shell's
+#: (BASH_FUNC_* exported functions, SHELLOPTS, BASHOPTS, PS4).  A superset of
+#: :data:`ORCH_DENIED_ENV`.
 DENIED_ENV = re.compile(
     r"(?:LD_|DYLD_|PYTHON|NODE_|NPM_CONFIG_|UV_|PIP_|PIPX_|BUN_|COREPACK_|YARN_|PNPM_|GIT_"
-    r"|CONTAINER|XDG_|BUILDKIT|COMPOSE_|DOCKER_(?:TLS|CONTENT_TRUST|CLI_)).*"
+    r"|CONTAINER|XDG_|BUILDKIT|COMPOSE_|DOCKER_(?:TLS|CONTENT_TRUST|CLI_)"
+    r"|OPENSSL_|SSL_CERT_|MALLOC_|BASH_FUNC_).*"
     r"|DOCKER_(?:HOST|CONFIG|CERT_PATH|CONTEXT|API_VERSION|DEFAULT_PLATFORM|BUILDKIT"
-    r"|CUSTOM_HEADERS)|PATH|HOME|SHELL|BASH_ENV|ENV|HERMES_HOME|NODE|NPM_TOKEN",
+    r"|CUSTOM_HEADERS)|PATH|HOME|SHELL|BASH_ENV|ENV|HERMES_HOME|NODE|NPM_TOKEN"
+    r"|\w*_PROXY|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|GCONV_PATH|LOCPATH|NLSPATH|HOSTALIASES"
+    r"|RES_OPTIONS|LOCALDOMAIN|GLIBC_TUNABLES|TZDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS"
+    r"|JDK_JAVA_OPTIONS|PERL5OPT|PERL5LIB|PERLLIB|RUBYOPT|RUBYLIB|SHELLOPTS|BASHOPTS|PS4",
     re.I,
 )
 
@@ -426,12 +440,17 @@ HNX_ENTRIES: dict[str, tuple[tuple[str, ...], frozenset[str]]] = {
     # hnx broker mcp: the broker's agent-facing tools (homelabnext/broker/cli.py)
     "broker-mcp": (("broker", "mcp"), frozenset({"--socket"})),
 }
+#: the hnx entry flags that name a path the server reads (a checkout, a registry, the broker's
+#: socket): absolute, since a relative one resolves in the client's working directory, where the
+#: agent may write a checkout, registry or socket of its own
+HNX_PATH_FLAGS = frozenset({"--root", "--registry", "--socket"})
 
 
 def hnx_args_problems(entry: Any, args: Iterable[Any]) -> list[str]:
     """Why ``hnx <entry> <args>`` is not an MCP server's launch: an entry outside
     :data:`HNX_ENTRIES`, or an argument that is not one of its flags (``--flag VALUE`` or
-    ``--flag=VALUE``, each flag once, the value never another flag)."""
+    ``--flag=VALUE``, each flag once, the value never another flag, and a path flag's value
+    absolute, :data:`HNX_PATH_FLAGS`)."""
     if entry not in HNX_ENTRIES:
         return [
             f"a first-party hnx server names its entry, one of {sorted(HNX_ENTRIES)} (the hnx "
@@ -456,6 +475,11 @@ def hnx_args_problems(entry: Any, args: Iterable[Any]) -> list[str]:
             value, i = items[i + 1], i + 1
         if not value:
             out.append(f"hnx entry {entry}: {flag} has no value")
+        elif flag in HNX_PATH_FLAGS and anchor_problem(value, flag):
+            out.append(
+                f"hnx entry {entry}: {flag} is not an absolute path without .., $ or secret: (a "
+                "relative one resolves in the client's working directory)"
+            )
         if flag in seen:
             out.append(f"hnx entry {entry}: {flag} is given twice")
         seen.add(flag)
@@ -704,13 +728,29 @@ PRIVATE_SUFFIXES = (
     "localhost", "local", "lan", "home", "internal", "intranet", "corp", "private", "localdomain",
     "home.arpa", "arpa", "test", "invalid", "example", "onion", "lab",
 )  # fmt: skip
+#: a host label that is a number: decimal, octal (a leading 0) or hex (``0x``, digits optional).
+#: A host whose last label is one is an IPv4 address to a WHATWG URL parser ("ends in a
+#: number") and to ``inet_aton``/``getaddrinfo`` (``0x7f.0x1`` and ``2130706433`` are the
+#: loopback address; a hex last label after three decimal ones is the address they spell), never
+#: a DNS name
+_NUMBER_LABEL = re.compile(r"0x[0-9a-f]*|[0-9]+")
+
+
+def numeric_host(host: str) -> bool:
+    """``host`` is an IPv4 address in some notation (its last label, or every label, is a
+    number), not a name a review can attest."""
+    labels = host.lower().removesuffix(".").split(".")
+    return bool(_NUMBER_LABEL.fullmatch(labels[-1])) or all(
+        _NUMBER_LABEL.fullmatch(x) for x in labels
+    )
 
 
 def remote_problems(rec: Mapping[str, Any], where: str, registry: Any = None) -> list[str]:
     """A third party's hosted server (``transport.type: remote``): a ``hosted`` origin and
-    runtime, egress to the internet, and an https URL whose host is a public DNS name (not a
-    private or test suffix, and with a registry, not one of the lab's hosts or its domain).  The
-    URL's shape (https, no userinfo, query or IP literal) is the schema's; its credentials can
+    runtime, egress to the internet, ``data_tier: cloud-allowed``, and an https URL whose host is a public DNS name (not an
+    IPv4 address in any notation, :func:`numeric_host`; not a private or test suffix; with a
+    registry, not one of the lab's hosts or its domain).  The URL's shape (https, a lower-case
+    host, no userinfo, query or fragment) is the schema's; its credentials can
     only be headers' ``secret:`` names (headers are the only place a remote record has)."""
     t, origin = rec.get("transport") or {}, rec.get("origin") or {}
     remote = t.get("type") == "remote"
@@ -724,6 +764,12 @@ def remote_problems(rec: Mapping[str, Any], where: str, registry: Any = None) ->
     egress = rec.get("egress")
     if not (isinstance(egress, list) and "internet" in egress):
         out.append(f"{where}: a remote server is reached over the internet: egress names internet")
+    if rec.get("data_tier") != "cloud-allowed":
+        out.append(
+            f"{where}: a remote server's data_tier is cloud-allowed (what it returns, and what a "
+            "profile sends it, is already at the vendor; local-only would let a local-only "
+            "profile be granted it)"
+        )
     url = urlsplit(str(t.get("url", "")))
     host = (url.hostname or "").lower()
     if url.scheme != "https":
@@ -731,7 +777,7 @@ def remote_problems(rec: Mapping[str, Any], where: str, registry: Any = None) ->
     if (
         not host
         or "." not in host
-        or host.rsplit(".", 1)[-1].isdigit()  # an IP literal: no name a review can attest
+        or numeric_host(host)  # an IP literal in any notation: no name a review can attest
         or any(host == s or host.endswith("." + s) for s in PRIVATE_SUFFIXES)
     ):
         out.append(
@@ -888,7 +934,8 @@ def _template_problems(rec: Mapping[str, Any], where: str) -> list[str]:
             if denied_env(key):
                 out.append(
                     f"{where}: {what} {key} configures the process or its launcher (PATH, LD_*, "
-                    "NODE_*, NPM_CONFIG_*, UV_*, PIP_*, DOCKER_HOST ...), which no record sets"
+                    "NODE_*, NPM_CONFIG_*, UV_*, PIP_*, DOCKER_HOST, OPENSSL_CONF, *_PROXY ...), "
+                    "which no record sets"
                 )
     fixed = set(settings) | set(rec.get("env") or {})
     seen: dict[str, str] = {}

@@ -64,6 +64,7 @@ def test_a_hosted_server_with_an_https_url_is_a_valid_record():
         ({"transport__url": "https://mcp.example/mcp"}, "names a public host"),
         ({"egress": "none"}, "egress names internet"),
         ({"egress": ["svc:notify"]}, "egress names internet"),
+        ({"data_tier": "local-only"}, "data_tier is cloud-allowed"),
         ({"runtime": "agent-local"}, "runtime hosted goes with a remote transport"),
         ({"origin": {"kind": "image", "image": "registry.example/x", "digest": None}},
          "a hosted origin goes with a remote transport"),
@@ -75,6 +76,29 @@ def test_a_hosted_server_with_an_https_url_is_a_valid_record():
 def test_a_hosted_server_is_https_public_internet_and_secret_headers_only(changes, phrase):
     problems = _problems(_edit(**changes), REGISTRY)
     assert any(phrase in p for p in problems), problems
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "0x7f.0x1",  # the loopback address to a WHATWG URL parser and to getaddrinfo
+        "198.51.100.0x1",  # no-raw-endpoint: allow a hex last label the IPv4 check refuses
+        "192.0.2.0xa",  # no-raw-endpoint: allow a hex last label the IPv4 check refuses
+        "0177.0.0.1",  # no-raw-endpoint: allow an octal address the IPv4 check refuses
+        "2130706433",  # one decimal number
+        "a1.0x0",  # a name that ends in a number is an address
+        "0x7f.0x0.0x0.0x1",
+    ],
+)
+def test_a_remote_url_never_names_an_ipv4_address_in_any_notation(host):
+    problems = _problems(_edit(transport__url=f"https://{host}/mcp"), REGISTRY)
+    assert any("names a public host" in p or "does not match" in p for p in problems), problems
+    assert servers.numeric_host(host)
+
+
+@pytest.mark.parametrize("host", ["mcp.tracker.example.com", "x0a.example.com", "0x7f.example.com"])
+def test_a_name_with_a_number_like_label_is_still_a_name(host):
+    assert not servers.numeric_host(host)
 
 
 def test_a_lab_host_is_reached_by_registry_name_not_a_remote_url():
@@ -115,3 +139,48 @@ def test_a_hosted_server_renders_for_the_clients_that_speak_http():
     entry, why = clients.orch_kind("tracker", REMOTE)
     assert entry is None and "remote is skipped" in why[0]
     json.dumps(clients.definition(inst, "claude-code"))  # a plain JSON value
+
+
+def _hosted_classes(tmp_path: Path):
+    from homelabnext.agent.readers import ToolClasses
+
+    d = tmp_path / "mcp"
+    d.mkdir()
+    (d / "tracker.yml").write_text(yaml.safe_dump(REMOTE))
+    (d / "notes.yml").write_text((ROOT / "examples/mcp/notes.yml").read_text())
+    return ToolClasses.from_catalog(servers.load(d))
+
+
+def test_a_local_only_profile_gets_a_hosted_server_only_by_a_named_exception(tmp_path):
+    """Round 5: a cloud-allowed hosted server granted to a local-only profile (one that also
+    holds local-only servers) would carry the local-only context to the vendor."""
+    from homelabnext.agent.compiler import CeilingPolicy
+
+    classes = _hosted_classes(tmp_path)
+    grant = ["notes", "tracker"]
+    entry = {"mcp": grant, "capabilities": [], "tier": "read", "data_tier": "local-only"}
+
+    def problems(e: dict, tier: str = "local-only") -> list[str]:
+        pol = CeilingPolicy.from_mapping({"ceilings": {"profile:x": e}})
+        return pol.attestation_problems("profile:x", tier, None, grant, classes)
+
+    refused = problems(entry)
+    assert any("reach the internet" in p and "'tracker'" in p for p in refused), refused
+    assert not any("'notes'" in p for p in refused)  # notes stays in the lab
+    assert problems({**entry, "internet_mcp": ["tracker"]}) == []
+    # a profile that declares itself local-only (the policy attests no tier) is held to it too
+    declared = problems({k: v for k, v in entry.items() if k != "data_tier"})
+    assert any("reach the internet" in p for p in declared), declared
+    # a cloud-allowed profile may use it (and is refused the local-only server instead)
+    cloud = problems({**entry, "data_tier": "cloud-allowed"}, "cloud-allowed")
+    assert not any("reach the internet" in p for p in cloud), cloud
+
+
+@pytest.mark.parametrize("bad", ["tracker", [1], ["Not A Slug"]])
+def test_the_internet_exception_is_a_list_of_server_ids(bad):
+    from homelabnext.agent.compiler import CeilingPolicy
+    from homelabnext.agent.errors import SpecError
+
+    entry = {"mcp": [], "capabilities": [], "tier": "read", "internet_mcp": bad}
+    with pytest.raises(SpecError, match="internet_mcp is a list of MCP server ids"):
+        CeilingPolicy.from_mapping({"ceilings": {"profile:x": entry}})

@@ -367,6 +367,34 @@ def test_no_setting_env_or_parameter_configures_the_launcher(key):
     assert servers.denied_env(key.lower())  # any case: npm reads npm_config_registry too
 
 
+#: round 5: what the C library, the TLS stack, the shell and other interpreters read to load code
+#: or redirect trust inside the launcher (OPENSSL_CONF's engine makes npx dlopen a shared object)
+RUNTIME_KEYS = ["OPENSSL_CONF", "OPENSSL_ENGINES", "OPENSSL_MODULES", "SSL_CERT_FILE",
+                "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "HTTP_PROXY",
+                "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "FTP_PROXY", "GCONV_PATH", "LOCPATH",
+                "NLSPATH", "HOSTALIASES", "RES_OPTIONS", "LOCALDOMAIN", "GLIBC_TUNABLES",
+                "MALLOC_CHECK_", "MALLOC_ARENA_MAX", "TZDIR", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS",
+                "JDK_JAVA_OPTIONS", "PERL5OPT", "PERL5LIB", "PERLLIB", "RUBYOPT", "RUBYLIB",
+                "BASH_FUNC_x%%", "SHELLOPTS", "BASHOPTS", "PS4"]  # fmt: skip
+
+
+@pytest.mark.parametrize("key", RUNTIME_KEYS)
+def test_no_record_sets_what_loads_code_or_redirects_trust_in_the_launcher(key):
+    for edit in (
+        lambda r: r.setdefault("settings", {}).update({key: "/tmp/evil"}),
+        lambda r: r.setdefault("env", {}).update({key: "secret:mcp/evil"}),
+    ):
+        rec = copy.deepcopy(NOTES)
+        edit(rec)
+        assert any("launcher" in p for p in servers._template_problems(rec, "x"))
+    assert servers.denied_env(key) and servers.denied_env(key.lower())
+
+
+def test_a_name_that_merely_mentions_a_proxy_or_tz_is_a_setting():
+    for key in ("PROXY_URL", "NOTES_PROXY_MODE", "TZ", "OPENSSLX", "MALLOCS", "PS4X"):
+        assert not servers.denied_env(key), key
+
+
 @pytest.mark.parametrize("key", ["DOCKER_CONTAINER", "DOCKER_MCP_MODE", "DOCKER_HOSTNAME_LABEL"])
 def test_a_container_only_docker_variable_is_the_servers_own_setting(key):
     """Round 4, F5: DOCKER_CONTAINER (an image reads it inside the container) is not the docker
@@ -388,3 +416,55 @@ def test_ordinary_settings_are_not_launcher_configuration():
         "HOMEPAGE",
     ):
         assert not servers.denied_env(key), key
+
+
+def test_render_refuses_an_npm_prefix_that_is_root_a_symlink_or_not_empty(tmp_path):
+    """Round 5: npx reads an .npmrc and node_modules from its prefix, so an existing prefix on
+    the render host is an empty directory, never a symlink or the filesystem root; an absent one
+    is noted (it must be created empty).  checkout_root is never a symlink."""
+    from homelabnext.mcp import clients
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    full = tmp_path / "full"
+    full.mkdir()
+    (full / ".npmrc").write_text("registry=https://registry.example.com/\n")
+    link = tmp_path / "link"
+    link.symlink_to(empty)
+    for bad, phrase in (("/", "filesystem root"), (str(full), "not empty"),
+                        (str(link), "symlink"), (str(full / ".npmrc"), "not a directory")):  # fmt: skip
+        with pytest.raises(clients.RenderError, match=phrase) as exc:
+            clients.launch_context(npm_prefix=bad)
+        assert str(tmp_path) not in str(exc.value)  # the anchor is named, never its path
+    ctx = clients.launch_context(npm_prefix=str(empty))
+    assert clients.anchor_host_problems(ctx) == ([], [])
+    absent = clients.launch_context(npm_prefix=str(tmp_path / "absent"))
+    assert any("create it as an empty directory" in n
+               for n in clients.anchor_host_problems(absent)[1])  # fmt: skip
+    with pytest.raises(clients.RenderError, match="checkout_root is a symlink"):
+        clients.launch_context(checkout_root=str(link))
+    assert clients.launch_context(checkout_root=str(empty)).checkout_root == str(empty)
+
+
+@pytest.mark.parametrize(
+    ("entry", "args"),
+    [
+        ("mcp-serve", ["--root", "checkout"]),
+        ("mcp-serve", ["--root=."]),
+        ("mcp-serve", ["--registry", "lab/services.yml"]),
+        ("mcp-serve", ["--root", "/opt/hnx/../tmp"]),
+        ("broker-mcp", ["--socket", "broker.sock"]),
+    ],
+)
+def test_an_hnx_path_flag_is_absolute(entry, args):
+    """Round 5: ``hnx mcp serve --root checkout`` resolves in the client's working directory,
+    where the agent may write a checkout (or a registry, or a broker socket) of its own."""
+    problems = servers.hnx_args_problems(entry, args)
+    assert any("is not an absolute path" in p for p in problems), problems
+
+
+def test_an_absolute_hnx_path_flag_and_a_profile_file_template_pass():
+    assert servers.hnx_args_problems("broker-mcp", ["--socket", "/run/hnx-broker/b.sock"]) == []
+    assert servers.hnx_args_problems("mcp-serve", ["--root=/opt/hnx", "--registry",
+                                                   "/opt/hnx/lab/services.yml",
+                                                   "--scope-from-profile", "{profile_file}"]) == []  # fmt: skip

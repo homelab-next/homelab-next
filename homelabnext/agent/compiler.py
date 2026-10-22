@@ -37,6 +37,7 @@ Rules, all enforced here and tested:
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -66,6 +67,8 @@ from .schemas import schema_errors
 
 TIER_RANK = {"read": 0, "write": 1, "execute": 2, "privileged": 3}
 BUDGET_KEYS = ("max_input_tokens", "max_output_tokens", "max_runtime_s", "max_tool_calls")
+#: an MCP catalog id (``schemas/platform/mcp_server.schema.json`` ``slug``)
+_SLUG = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 
 
 @dataclass(frozen=True)
@@ -141,6 +144,9 @@ class CeilingPolicy:
     profile: a profile (spec, compiled or lean) must say the same, and a profile may be granted
     a ``local-only`` MCP server only when its entry attests ``data_tier: local-only``, so a spec
     cannot declare itself local-only to receive local-only data (:meth:`attestation_problems`).
+    A local-only profile is granted no MCP server that reaches the internet (a hosted server, or
+    ``egress: internet``: its context would leave the lab) unless its entry names that server in
+    ``internet_mcp``, an exception per profile and server that the policy owner makes.
     """
 
     def __init__(self, ceilings: Mapping[str, Mapping[str, Any]], source: str = "policy") -> None:
@@ -149,6 +155,7 @@ class CeilingPolicy:
         self.source = source
         self._readers = set()
         self._attested: dict[str, dict[str, str]] = {}
+        self._internet: dict[str, frozenset[str]] = {}
         for pid, c in ceilings.items():
             flag = c.get("reads_untrusted") if isinstance(c, Mapping) else None
             if flag is not None and not isinstance(flag, bool):
@@ -166,6 +173,13 @@ class CeilingPolicy:
                 att["model_role"] = _ids({"model_role": [c["model_role"]]}, "model_role", "mdl")[0]
             if att:
                 self._attested[_ids({"id": [pid]}, "id", "profile")[0]] = att
+            if c.get("internet_mcp") is not None:
+                names = c["internet_mcp"]
+                if not isinstance(names, list) or not all(
+                    isinstance(n, str) and _SLUG.fullmatch(n) for n in names
+                ):
+                    raise SpecError(f"{source}: {pid}: internet_mcp is a list of MCP server ids")
+                self._internet[_ids({"id": [pid]}, "id", "profile")[0]] = frozenset(names)
         self._ceilings = {
             _ids({"id": [pid]}, "id", "profile")[0]: _normal_ceiling(c, f"{source}: {pid}")
             for pid, c in ceilings.items()
@@ -195,8 +209,10 @@ class CeilingPolicy:
         classes: ToolClasses | None = None,
     ) -> list[str]:
         """Where a profile's ``data_tier``/``model_role`` disagree with what this policy attests
-        for it, and a ``local-only`` MCP server granted without the policy attesting
-        ``data_tier: local-only`` (a profile cannot vouch for itself)."""
+        for it, a ``local-only`` MCP server granted without the policy attesting
+        ``data_tier: local-only`` (a profile cannot vouch for itself), and a local-only profile
+        (attested, or declared when the policy attests no tier) granted a server that reaches
+        the internet which its entry's ``internet_mcp`` does not name."""
         att = self._attested.get(profile_id, {})
         out = []
         for key, value in (("data_tier", data_tier), ("model_role", model_role)):
@@ -205,14 +221,26 @@ class CeilingPolicy:
                     f"{self.source} attests {key} {att[key]} for {profile_id}; the profile says "
                     f"{value}"
                 )
+        meta = (classes if classes is not None else default_classes()).catalog or {}
         if att.get("data_tier") != "local-only":
-            meta = (classes if classes is not None else default_classes()).catalog or {}
             local = sorted(n for n in mcp if (meta.get(n) or {}).get("data_tier") == "local-only")
             if local:
                 out.append(
                     f"{profile_id} is granted local-only MCP server(s) {local}, but "
                     f"{self.source} does not attest data_tier: local-only for it (a profile "
                     "cannot declare itself local-only to receive local-only data)"
+                )
+        if att.get("data_tier", data_tier) == "local-only":
+            allowed = self._internet.get(profile_id, frozenset())
+            out_ = sorted(
+                n for n in mcp if (meta.get(n) or {}).get("internet") and n not in allowed
+            )
+            if out_:
+                out.append(
+                    f"{profile_id} is local-only but is granted MCP server(s) {out_} that "
+                    "reach the internet (a hosted server, or egress: internet), where its "
+                    f"local-only context would go; {self.source} names none of them in its "
+                    "internet_mcp for this profile (a named exception the policy owner makes)"
                 )
         return out
 

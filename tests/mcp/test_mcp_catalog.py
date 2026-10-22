@@ -236,7 +236,9 @@ def test_lint_reports_unknown_and_retired_grants(tmp_path):
     )
     problems, counts = lint_paths([tmp_path])
     assert counts["profile"] == 1
-    assert any("retired" in p for _, p in problems) and any("'nope'" in p for _, p in problems)
+    assert any("retired" in p for _, p in problems) and any(
+        "unknown MCP server (mcp entry 2)" in p for _, p in problems
+    )
     # the repository's own profiles pass: tests/agent test_lint_passes_on_the_repository
 
 

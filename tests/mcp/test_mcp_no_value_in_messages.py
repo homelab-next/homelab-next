@@ -145,3 +145,46 @@ def test_import_reports_never_the_value(tmp_path, capsys, entry):
     bad.write_text(f"mcp_servers:\n  srv: {{command: npx, args: [{FAKE}\n")
     assert cli.main(["mcp", "catalog", "import", str(bad), "--out", str(tmp_path / "o")]) == 2
     _assert_clean(capsys)
+
+
+def _reasons(cat: Path) -> None:
+    """A deprecated and a retired record whose free-text reason carries the fake secret, and
+    notes deprecated too (a server a reader may hold, so render reaches its note)."""
+    why = f"moved; the old key was {FAKE}"
+    _edit(cat, "terminal", lambda r: r.update(reason=why))
+    _edit(cat, "docker", lambda r: r.update(reason=why))
+    _edit(cat, "notes", lambda r: r.update(status="deprecated", reason=why, replaced_by="records",
+                                           reviews=[]))  # fmt: skip
+
+
+def test_check_grants_never_print_a_reason_or_an_unknown_grant_name(tmp_path, capsys):
+    """Round 5: a record's reason and a profile's grant names are values too."""
+    cat = _lab(tmp_path)
+    _reasons(cat)
+    grants = tmp_path / "grants"
+    grants.mkdir()
+    prof = json.loads(COLLECTOR.read_text())
+    prof.update(mcp=["notes", "terminal", "docker", f"ghp_{FAKE}"],
+                capabilities=["cap:records-propose", f"cap:{FAKE}"])  # fmt: skip
+    (grants / "p.json").write_text(json.dumps(prof))
+    (grants / "q.json").write_text(json.dumps({**prof, "id": f"profile:{FAKE}"}))
+    (grants / "r.json").write_text(json.dumps({**prof, "data_tier": FAKE, "mcp": ["records"]}))
+    assert (
+        cli.main(["mcp", "catalog", "check", "--catalog", str(cat), "--grants", str(grants)]) == 1
+    )
+    text = _assert_clean(capsys)
+    for phrase in ("names an unknown MCP server (mcp entry 4)", "unknown capability (capabilities "
+                   "entry 2)", "'docker', which is retired", "'terminal', which is deprecated",
+                   "a profile whose id is not an id", "its data_tier is not local-only"):  # fmt: skip
+        assert phrase in text, phrase
+
+
+def test_render_never_prints_a_reason(tmp_path, capsys):
+    cat = _lab(tmp_path)
+    _reasons(cat)
+    pol = tmp_path / "pol.yml"
+    pol.write_text((ROOT / "examples/mcp/clients/policy/ceilings.yml").read_text())
+    assert cli.main(["mcp", "catalog", "render", "--catalog", str(cat), "--profile",
+                     str(COLLECTOR), "--client", "claude-code", "--policy", str(pol)]) == 0  # fmt: skip
+    text = _assert_clean(capsys)
+    assert "'notes' is deprecated (see the reason in mcp/notes.yml)" in text, text

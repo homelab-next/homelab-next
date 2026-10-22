@@ -40,7 +40,7 @@ import os
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
@@ -183,15 +183,16 @@ def granted(profile: Mapping[str, Any]) -> list[str]:
 
 
 def deprecation_notes(cat: servers.Catalog, profile: Mapping[str, Any]) -> list[str]:
-    """A note per granted server that is deprecated (still rendered), naming its replacement."""
+    """A note per granted server that is deprecated (still rendered), naming its replacement
+    (never its free-text ``reason``: a value, and a note reaches logs)."""
     out = []
     for sid in granted(profile):
         rec = cat.get(sid) or {}
         if rec.get("status") == "deprecated":
             instead = rec.get("replaced_by")
             out.append(
-                f"{profile.get('id')}: MCP server {sid!r} is deprecated: {rec.get('reason')}"
-                + (f"; grant {instead!r} instead" if instead else "")
+                f"{profile.get('id')}: MCP server {sid!r} is deprecated (see the reason in "
+                f"{cat.rel(sid)})" + (f"; grant {instead!r} instead" if instead else "")
             )
     return out
 
@@ -231,7 +232,7 @@ def instances(
     for sid in names:
         rec = cat.get(sid)
         if rec is None:
-            problems.append(f"{pid}: MCP server {sid!r} is not in the catalog {cat.root}")
+            problems.append(f"{pid}: MCP server {_name(sid)} is not in the catalog {cat.root}")
             continue
         if rec.get("status") not in servers.GRANTABLE:
             problems.append(f"{pid}: MCP server {sid!r} is {rec.get('status')} (not grantable)")
@@ -835,7 +836,7 @@ def render_profile(
     insts = instances(
         cat, prof, lanes=lanes, params=params, profile_file=profile_file or str(profile_path)
     )
-    notes = deprecation_notes(cat, prof)
+    notes = deprecation_notes(cat, prof) + anchor_host_problems(ctx)[1]
     if client == "llm-orchestrator":
         block = orch_grants(insts, lanes)
         catalog_text, _ = orch_catalog(cat, {i.server for i in insts}, ctx)
@@ -928,6 +929,8 @@ def render_spec(
         raise RenderError([f"{sp}: {p}" for p in exc.problems]) from None
     base = sp.parent
     out_root = Path(root) if root is not None else base
+    res = Rendered()
+    res.notes += anchor_host_problems(ctx)[1]
     cat = servers.load((base / str(spec.get("catalog", ".."))).resolve())
     registry = None
     if spec.get("registry"):
@@ -939,7 +942,6 @@ def render_spec(
     lock = load_lock(base / str(spec["lock"])) if spec.get("lock") else None
     client = spec["client"]
     lanes = [str(x) for x in spec.get("lanes") or ["real"]]
-    res = Rendered()
     every: list[Instance] = []
     blocks: dict[str, tuple[Path, str]] = {}
     loaded: list[tuple[Mapping[str, Any], dict[str, Any], Path]] = []
@@ -1024,7 +1026,8 @@ def render_spec(
 
 def launch_context(npm_prefix: Any = None, checkout_root: Any = None) -> servers.LaunchContext:
     """The anchors a render gives every launch; a value given must be an absolute path (a
-    missing one is refused only by a launch that needs it)."""
+    missing one is refused only by a launch that needs it), and where it already exists on the
+    host the render runs on, a safe one (:func:`anchor_host_problems`)."""
     problems = [
         bad
         for value, what in ((npm_prefix, "npm_prefix"), (checkout_root, "checkout_root"))
@@ -1032,7 +1035,44 @@ def launch_context(npm_prefix: Any = None, checkout_root: Any = None) -> servers
     ]
     if problems:
         raise RenderError(problems)
-    return servers.LaunchContext(npm_prefix, checkout_root)
+    ctx = servers.LaunchContext(npm_prefix, checkout_root)
+    problems, _ = anchor_host_problems(ctx)
+    if problems:
+        raise RenderError(problems)
+    return ctx
+
+
+def anchor_host_problems(ctx: servers.LaunchContext) -> tuple[list[str], list[str]]:
+    """``(problems, notes)`` for the anchors as this host has them.  ``npm_prefix`` is never the
+    filesystem root and, where it exists, is an empty directory and not a symlink: npx reads its
+    project config (``.npmrc``) and ``node_modules`` from there, so a file in it would replace
+    the pinned package or its registry.  Where it does not exist, a note says it must be created
+    empty.  ``checkout_root`` is not a symlink (the client would run whatever it points at).
+    Messages name the anchor, never its path."""
+    problems: list[str] = []
+    notes: list[str] = []
+    if ctx.npm_prefix:
+        prefix = Path(ctx.npm_prefix)
+        if not str(PurePosixPath(ctx.npm_prefix)).strip("/"):
+            problems.append("npm_prefix is the filesystem root (give it an empty directory)")
+        elif prefix.is_symlink():
+            problems.append("npm_prefix is a symlink (npx would read what it points at)")
+        elif prefix.exists():
+            if not prefix.is_dir():
+                problems.append("npm_prefix is not a directory")
+            elif any(prefix.iterdir()):
+                problems.append(
+                    "npm_prefix is not empty (npx reads an .npmrc or node_modules there, which "
+                    "would replace the pinned package or its registry)"
+                )
+        else:
+            notes.append(
+                "npm_prefix does not exist on this host: create it as an empty directory on the "
+                "client's host before the client starts"
+            )
+    if ctx.checkout_root and Path(ctx.checkout_root).is_symlink():
+        problems.append("checkout_root is a symlink (the client would run what it points at)")
+    return problems, notes
 
 
 def _rendered_ids(
