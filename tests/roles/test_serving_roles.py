@@ -363,6 +363,16 @@ def test_vllm_server_writes_one_unit_per_served_model_from_the_plan(tmp_path):
     assert f"ReadOnlyPaths={tmp_path / 'srv'}\n" in unit
     assert "NCCL_P2P_DISABLE" not in unit and "EnvironmentFile" not in unit
     assert "User=root" not in unit and "CapabilityBoundingSet=\n" in unit
+    # this instance's GPUs and nothing else: a char-nvidia-frontend rule would open every card
+    allowed = [x for x in unit.splitlines() if x.startswith("DeviceAllow=")]
+    assert allowed == [
+        "DeviceAllow=/dev/nvidia0 rw", "DeviceAllow=/dev/nvidia1 rw",
+        "DeviceAllow=/dev/nvidiactl rw", "DeviceAllow=/dev/nvidia-uvm rw",
+        "DeviceAllow=/dev/nvidia-uvm-tools rw",
+    ]  # fmt: skip
+    assert "DevicePolicy=closed\n" in unit
+    triage = (tmp_path / "units" / "hnx-vllm-inference-triage.service").read_text()
+    assert "DeviceAllow=/dev/nvidia2 rw\n" in triage and "/dev/nvidia0 " not in triage
     log = calls(tmp_path)
     assert log[0] == "vllm --version"
     assert "systemctl daemon-reload" in log

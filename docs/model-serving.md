@@ -186,7 +186,8 @@ writable export. That share is the file server's role, not this one.
 - `CUDA_DEVICE_ORDER=PCI_BUS_ID`, `CUDA_VISIBLE_DEVICES=<gpus>`, `HF_HUB_OFFLINE=1`, telemetry off,
   and `NCCL_P2P_DISABLE=1` when `vllm_server_nccl_p2p_disable` is set;
 - the `example_service` sandbox, loosened only for the GPU: `PrivateDevices=no` with
-  `DevicePolicy=closed` and the NVIDIA device majors, and no `MemoryDenyWriteExecute` (the CUDA
+  `DevicePolicy=closed` and only the instance's own `/dev/nvidiaN` plus the control and UVM
+  nodes, and no `MemoryDenyWriteExecute` (the CUDA
   and Triton JIT need writable, executable memory). The store is read-only, and only the
   instance's cache directory is writable;
 - `ExecStartPre=hnx-model-verify <listing> <digest> <model dir>` (`files/hnx-model-verify`,
@@ -284,9 +285,13 @@ without the hardware. Each item is a test to run before promising capacity:
   adopting a model.
 - [ ] **Unlocks under VFIO.** The patched driver and `cmpunlocker` are unproven in a guest. Check
   that the guest sees 64 GB per card, then set `gpu_memory_utilization` from what it really sees.
-- [ ] **Device nodes.** Check that `DeviceAllow=char-nvidia-frontend`, `char-nvidia-uvm`,
-  `char-nvidiactl` and `char-nvidia-caps` match this driver's `/proc/devices` names, and that the
-  unit starts under `DevicePolicy=closed`. Loosen one line at a time if it does not.
+- [ ] **Device nodes.** Each unit allows, by path, only its GPUs' `/dev/nvidiaN` plus
+  `/dev/nvidiactl`, `/dev/nvidia-uvm` and `/dev/nvidia-uvm-tools`, under `DevicePolicy=closed` (a
+  `char-nvidia-frontend` rule would open every card, and `char-nvidiactl` is not a
+  `/proc/devices` group, so systemd ignored it). Check that the unit starts; that `/dev/nvidiaN`
+  is the card the plan's PCI-bus-order index names (`nvidia-smi -q` bus id against
+  `/proc/driver/nvidia/gpus/*/information` minor numbers); that `nvidia-smi` inside the unit
+  sees only its own cards; and whether this driver needs `/dev/nvidia-caps/*` (MIG only).
 - [ ] **Training on these cards.** Unsloth/bitsandbytes optimizer paths may hit the disabled FP32
   units. Train on the workstation GPU first. A small LoRA here is an experiment, not a plan.
 - [ ] **Open WebUI with `cap_drop: ALL`.** Check that the image starts with every capability

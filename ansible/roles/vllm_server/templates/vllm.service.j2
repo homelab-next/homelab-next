@@ -36,8 +36,9 @@ TimeoutStartSec=1800
 UMask=0077
 
 # The sandbox of example_service, loosened only where a GPU engine needs it: the NVIDIA device
-# nodes (PrivateDevices off, DevicePolicy closed plus the nvidia majors), and writable+executable
-# memory for the CUDA/Triton JIT (no MemoryDenyWriteExecute). The model store is read-only.
+# nodes (PrivateDevices off, DevicePolicy closed plus this instance's GPUs and the control and
+# UVM nodes, by path: a char-<group> rule would open every card), and writable+executable memory
+# for the CUDA/Triton JIT (no MemoryDenyWriteExecute). The model store is read-only.
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
@@ -48,10 +49,12 @@ ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=no
 DevicePolicy=closed
-DeviceAllow=char-nvidiactl rw
-DeviceAllow=char-nvidia-frontend rw
-DeviceAllow=char-nvidia-uvm rw
-DeviceAllow=char-nvidia-caps rw
+{% for g in item.gpus %}
+DeviceAllow=/dev/nvidia{{ g | int }} rw
+{% endfor %}
+DeviceAllow=/dev/nvidiactl rw
+DeviceAllow=/dev/nvidia-uvm rw
+DeviceAllow=/dev/nvidia-uvm-tools rw
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
