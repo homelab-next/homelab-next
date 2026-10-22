@@ -60,7 +60,10 @@ Rules (``<path>: <rule>: <detail>``, exit 1 on any):
 ``st2-bound``    a pack that reacts to ``homelabnext.agent.job.failed`` by dispatching agent work
                  bounds it: its trigger pins ``$event.data.resubmits`` to integers below
                  :data:`MAX_RESUBMITS`, and the dispatch carries ``retry_of_run_id`` from
-                 ``$event.data.run_id`` (so the next failure counts one more resubmit).
+                 ``$event.data.run_id`` (so the next failure counts one more resubmit), and its
+                 trigger pins ``$event.source`` to :data:`ORCHESTRATOR_SOURCE`.  Every dispatch
+                 step sends only what the controller takes: no ``input`` or ``resubmits``, no
+                 ``task_description`` on a resubmit, ``reason`` only with ``retry_of_run_id``.
 ``st2-secret``   a config key that names a secret (key, token, password, secret, credential) is a
                  datastore reference, not a value.
 ``st2-shape``    every rendered document has the fields StackStorm requires (:data:`SHAPES`, encoded
@@ -101,7 +104,13 @@ from .validate import Problem, Universe, load_universe, validate_repo
 DEFAULT_BINDING = Path("workflows") / "stackstorm.yml"
 DEFAULT_OUT = Path("workflows") / "stackstorm"
 JOB_FAILED_EVENT = "homelabnext.agent.job.failed"
+#: the orchestration controller's event source (its default ``events.source``): the one producer
+#: a pack reacting to ``agent.job.failed`` may pin
+ORCHESTRATOR_SOURCE = "svc:llm-orchestrator"
 DISPATCH_ACTIONS = ("agent.job.submit",)
+#: params ``agent.job.submit`` never carries: the controller refuses ``input`` (400) and ignores
+#: ``resubmits`` (it counts a run's lineage itself)
+DISPATCH_REFUSED = ("input", "resubmits")
 MAX_RESUBMITS = 3
 MIN_SHADOW_DAYS = 7
 SHIMS = ("admit", "step")
@@ -883,6 +892,21 @@ def _check_rule(rule, pack, binding, tracked, bad) -> None:
         for s in dispatch:
             if s["params"].get("retry_of_run_id") != "$event.data.run_id":
                 bad("st2-bound", f"{name}: step {s['id']} must carry retry_of_run_id")
+        if pinned_sources(pack["trigger"]) != [ORCHESTRATOR_SOURCE]:
+            bad(
+                "st2-bound",
+                f"{name}: retries of failed jobs pin $event.source to the controller's "
+                f"{ORCHESTRATOR_SOURCE}",
+            )
+    for s in dispatch:
+        params = s.get("params") or {}
+        refused = [k for k in DISPATCH_REFUSED if k in params]
+        if "retry_of_run_id" in params and "task_description" in params:
+            refused.append("task_description (a resubmit replays the parent's payload)")
+        if "reason" in params and "retry_of_run_id" not in params:
+            refused.append("reason (only with retry_of_run_id)")
+        for k in refused:
+            bad("st2-bound", f"{name}: step {s['id']}: the controller refuses {k}")
 
 
 def tree_problems(files: Mapping[str, str], ref: str) -> list[Problem]:

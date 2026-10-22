@@ -5,16 +5,19 @@
 # (resubmits 0) is retried, so a resubmitted job that fails again stops here.  Failures the
 # controller decided on purpose (deadline, cancel, turn cap, budget) are never retried.  On
 # StackStorm this is rule A02, which also coalesces a burst of failures of one agent into one
-# resubmit (workflows/stackstorm.yml, docs/stackstorm.md).
+# resubmit (workflows/stackstorm.yml, docs/stackstorm.md).  `reason` is the controller's failure
+# class.  A resubmit sends no payload of its own (the controller replays the parent's, and refuses
+# an override) and no `resubmits` (the controller counts the lineage itself).
 pack: agent-job-retry
 version: 1
 description: Resubmit an agent job once, at lower priority, when it failed for an environment reason.
 trigger:
   event: homelabnext.agent.job.failed
   where:
-    - {ref: $event.source, equals: "svc:orchestration"}  # the producer: the controller
+    - {ref: $event.source, equals: "svc:llm-orchestrator"}  # the producer: the controller (its default events.source)
     - {ref: $event.data.reason, in: [capacity, stall, timeout, backend-down]}
     - {ref: $event.data.resubmits, in: [0]}
+    - {ref: $event.data.retried_by_run_id, exists: false}  # the controller already took a resubmit
 actor: profile:workflow-agents
 broker_manifest: workflows/broker.manifest.json
 steps:
@@ -33,11 +36,11 @@ fixtures:
     event:
       specversion: "1.0"
       id: evt-job-0001
-      source: svc:orchestration
+      source: svc:llm-orchestrator
       type: homelabnext.agent.job.failed
       time: "2026-01-01T00:00:00Z"
       subject: run-0001
-      data: {run_id: run-0001, agent_key: triage, state: failed, reason: capacity, attempts: 2, resubmits: 0}
+      data: {run_id: run-0001, agent_key: triage, state: failed, reason: capacity, failure_class: capacity, attempts: 2, resubmits: 0}
     expect:
       calls:
         - action: agent.job.submit
@@ -48,11 +51,11 @@ fixtures:
     event:
       specversion: "1.0"
       id: evt-job-0002
-      source: svc:orchestration
+      source: svc:llm-orchestrator
       type: homelabnext.agent.job.failed
       time: "2026-01-01T00:20:00Z"
       subject: run-0002
-      data: {run_id: run-0002, agent_key: triage, state: failed, reason: capacity, attempts: 2, resubmits: 1, retry_of_run_id: run-0001}
+      data: {run_id: run-0002, agent_key: triage, state: failed, reason: capacity, failure_class: capacity, attempts: 2, resubmits: 1, retry_of_run_id: run-0001}
     expect:
       triggered: false
       calls: []
@@ -60,11 +63,23 @@ fixtures:
     event:
       specversion: "1.0"
       id: evt-job-0003
-      source: svc:orchestration
+      source: svc:llm-orchestrator
       type: homelabnext.agent.job.failed
       time: "2026-01-01T00:30:00Z"
       subject: run-0003
-      data: {run_id: run-0003, agent_key: triage, state: failed, reason: deadline, attempts: 1, resubmits: 0}
+      data: {run_id: run-0003, agent_key: triage, state: failed, reason: deadline, failure_class: deadline, attempts: 1, resubmits: 0}
+    expect:
+      triggered: false
+      calls: []
+  - name: already-resubmitted-not-retried-again
+    event:
+      specversion: "1.0"
+      id: evt-job-0004
+      source: svc:llm-orchestrator
+      type: homelabnext.agent.job.failed
+      time: "2026-01-01T00:40:00Z"
+      subject: run-0004
+      data: {run_id: run-0004, agent_key: triage, state: failed, reason: stall, failure_class: stall, attempts: 1, resubmits: 0, retried_by_run_id: run-0005}
     expect:
       triggered: false
       calls: []

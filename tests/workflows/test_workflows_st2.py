@@ -627,7 +627,7 @@ def test_every_event_triggered_pack_pins_its_producer():
     a01 = rules["homelabnext/rules/on_proposal_validate.yaml"]
     a02 = rules["homelabnext/rules/on_agent_job_retry.yaml"]
     assert a01["criteria"]["trigger.body.source"] == {"type": "equals", "pattern": "svc:broker"}
-    assert a02["criteria"]["trigger.body.source"]["pattern"] == "svc:orchestration"
+    assert a02["criteria"]["trigger.body.source"]["pattern"] == st2.ORCHESTRATOR_SOURCE
     ev = pack("proposal-validate")["fixtures"][0]["event"]
     assert st2_matches(a01, ev)
     assert not st2_matches(a01, ev | {"source": "profile:triage"})
@@ -753,7 +753,7 @@ def test_proposal_lane_to_a01_end_to_end_through_a_real_broker(tmp_path):
     )
     [(action, params, target)] = fb.calls
     assert (action, target) == ("agent.job.submit", "svc:orchestration")
-    assert params["input"]["note"] == event["data"]["note"]
+    assert params["task_description"] == event["data"]["note"]  # the controller takes no input
     assert params["idempotency_key"] == event["id"]
 
 
@@ -985,7 +985,7 @@ RESTART = {
     "actor": "profile:triage",
     "trigger": {
         "event": "homelabnext.agent.job.failed",
-        "where": [{"ref": "$event.source", "equals": "svc:orchestration"}],
+        "where": [{"ref": "$event.source", "equals": st2.ORCHESTRATOR_SOURCE}],
     },
     "steps": [
         {
@@ -1247,3 +1247,106 @@ def test_the_tree_check_refuses_a_rule_that_lost_its_producer_or_its_accept():
     rule["criteria"]["trigger.body.source"]["type"] = "exists"
     bad = dict(res.files) | {"homelabnext/rules/on_agent_job_retry.yaml": yaml.safe_dump(rule)}
     assert {p.rule for p in st2.tree_problems(bad, "homelabnext")} >= {"st2-source"}
+
+
+# ---------------------------------------------------------------- the controller's job contract
+HANDLER = ROOT / "workflows" / "handlers" / "agent-job-submit.sh"
+
+
+def _bound_problems(mutate) -> set[tuple[str, str]]:
+    packs = all_packs()
+    mutate(packs)
+    return {p for p in _problems(binding(), packs) if p[0] == "st2-bound"}
+
+
+def test_dispatch_sends_only_what_the_controller_takes():
+    a01, a02 = ("st2-bound", "proposal-validate"), ("st2-bound", "agent-job-retry")
+    assert _bound_problems(lambda p: None) == set()
+
+    def a02_source(p):
+        p["agent-job-retry"]["trigger"]["where"][0]["equals"] = "svc:orchestration"
+
+    def a01_input(p):
+        p["proposal-validate"]["steps"][0]["params"]["input"] = {"note": "$event.data.note"}
+
+    def a02_payload(p):
+        p["agent-job-retry"]["steps"][0]["params"]["task_description"] = "$event.data.run_id"
+
+    def a02_resubmits(p):
+        p["agent-job-retry"]["steps"][0]["params"]["resubmits"] = 1
+
+    def a01_reason(p):
+        p["proposal-validate"]["steps"][0]["params"]["reason"] = "capacity"
+
+    assert _bound_problems(a02_source) == {a02}  # not the controller's own source id
+    assert _bound_problems(a01_input) == {a01}  # 400 input_unsupported
+    assert _bound_problems(a02_payload) == {a02}  # 422 payload_override
+    assert _bound_problems(a02_resubmits) == {a02}  # the controller counts the lineage
+    assert _bound_problems(a01_reason) == {a01}  # reason only with retry_of_run_id
+
+
+def test_every_fixture_request_is_one_the_handler_schema_accepts():
+    from homelabnext.broker.validation import inline_errors
+
+    schema = json.loads(HANDLER.with_name("agent-job-submit.handler.json").read_text())
+    schema = schema["params_schema"]
+    seen = 0
+    for doc in all_packs().values():
+        for fx in doc["fixtures"]:
+            for call in fx.get("expect", {}).get("calls", []):
+                if call["action"] == "agent.job.submit":
+                    assert inline_errors(schema, call["params"]) == [], (doc["pack"], fx["name"])
+                    seen += 1
+    assert seen >= 2
+    base = {"agent_key": "triage", "idempotency_key": "k", "priority": 40}
+    for bad in (
+        base | {"input": {"note": "x"}},
+        base | {"resubmits": 0},
+        base | {"reason": "capacity"},
+        base | {"retry_of_run_id": "run-1", "task_description": "x"},
+        base | {"task_description": "{{ st2kv.system.leak }}"},
+    ):
+        assert inline_errors(schema, bad), bad
+
+
+@pytest.mark.parametrize(
+    ("code", "body", "exit_code", "refused"),
+    [
+        (202, '{"run_id": "run-9"}', 0, None),
+        (200, '{"run_id": "run-1", "replayed": true}', 0, None),  # an idempotent replay
+        (409, '{"reason": "already_retried", "retried_by_run_id": "run-2"}', 0, None),
+        (409, '{"reason": "retry_chain_spent"}', 0, "retry_chain_spent"),
+        (422, '{"reason": "not_retryable", "failure_class": "deadline"}', 0, "not_retryable"),
+        (404, '{"reason": "unknown_run"}', 0, "unknown_run"),
+        (400, '{"reason": "input_unsupported"}', 1, None),
+        (503, "", 1, None),
+        (None, "", 1, None),  # no answer
+    ],
+)
+def test_the_submit_handler_maps_the_controllers_answers(tmp_path, code, body, exit_code, refused):
+    import os
+    import subprocess
+
+    fake = tmp_path / "bin" / "curl"
+    fake.parent.mkdir()
+    if code is None:
+        script = "#!/bin/sh\ncat >/dev/null\necho 'curl: (7) refused' >&2\nexit 7\n"
+    else:
+        script = f"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n%s' '{body}' '{code}'\n"
+    fake.write_text(script)
+    fake.chmod(0o755)
+    env = {
+        "PATH": f"{fake.parent}{os.pathsep}/usr/bin{os.pathsep}/bin",
+        "ORCHESTRATOR_JOBS_URL": "https://controller.example.invalid/jobs",
+    }
+    got = subprocess.run(
+        ["/bin/sh", str(HANDLER)], input=b'{"agent_key": "triage"}', env=env, capture_output=True
+    )
+    assert got.returncode == exit_code, got.stderr
+    if exit_code == 0:
+        out = json.loads(got.stdout)
+        if refused:
+            assert out == {"refused": True, "status": code, "reason": refused}
+            assert b"refused by the controller" in got.stderr
+        else:
+            assert out == json.loads(body)

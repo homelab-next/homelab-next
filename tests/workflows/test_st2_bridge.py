@@ -20,6 +20,7 @@ from conformance.fakes.event_bus import FakeEventBus
 from conformance.fakes.jetstream_wire import FakeJetStreamWire
 from homelabnext.conform.adapters import nats_jetstream as nj
 from homelabnext.events.envelope import canonical_body
+from homelabnext.workflows import st2
 from homelabnext.workflows import st2_bridge as sb
 
 BRIDGE = ROOT / "workflows" / "stackstorm" / "bridge.json"
@@ -114,7 +115,7 @@ def test_the_committed_bridge_file_loads_and_pins_each_subjects_producers():
     assert cfg.api_key == "secret:stackstorm/webhook-key"
     by = {s.subject: s for s in cfg.subscriptions}
     assert by["homelabnext.proposal.created"].sources == {"svc:broker"}
-    assert by["homelabnext.agent.job.failed"].sources == {"svc:orchestration"}
+    assert by["homelabnext.agent.job.failed"].sources == {st2.ORCHESTRATOR_SOURCE}
 
 
 @pytest.mark.parametrize(
@@ -233,7 +234,7 @@ def test_an_unreachable_webhook_retries_until_the_bus_dead_letters_it():
         (b"not json {", None, "not-json"),
         (proposal(2, data={"note": "x"}), None, "invalid-event"),  # schema-invalid data
         (proposal(3, source="profile:triage"), None, "wrong-source"),  # not the pinned producer
-        (proposal(4, source="svc:orchestration"), None, "wrong-source"),  # another subject's
+        (proposal(4, source=st2.ORCHESTRATOR_SOURCE), None, "wrong-source"),  # another subject's
         (
             json.loads((ROOT / "schemas/events/examples/agent.job.failed.valid.json").read_text()),
             "homelabnext.proposal.created",

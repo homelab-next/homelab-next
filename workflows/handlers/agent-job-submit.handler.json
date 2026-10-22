@@ -3,24 +3,72 @@
   "audit": true,
   "description": "Put one agent job on the orchestration controller's queue (POST /jobs); the controller admits it against live load.",
   "handler": "handlers/agent-job-submit.sh",
-  "handler_digest": "sha256:05eb976e36ccb85f306fe34c536ca15e9201cbb91defb1bf9510144bf0eb2303",
+  "handler_digest": "sha256:4ac53314344895e8811cb76f916590fd62e12d9db6d3227d7967552287448804",
   "idempotent": true,
   "max_output_bytes": 65536,
   "params_schema": {
     "additionalProperties": false,
     "properties": {
-      "agent_key": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$", "type": "string"},
-      "idempotency_key": {"maxLength": 200, "minLength": 1, "type": "string"},
-      "input": {"type": "object"},
-      "priority": {"maximum": 100, "minimum": 1, "type": "integer"},
-      "reason": {"maxLength": 64, "type": "string"},
-      "retry_of_run_id": {"maxLength": 200, "minLength": 1, "type": "string"}
+      "agent_key": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$",
+        "type": "string"
+      },
+      "idempotency_key": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "priority": {
+        "maximum": 100,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "reason": {
+        "maxLength": 64,
+        "type": "string",
+        "description": "only with retry_of_run_id: the failure class the controller recorded for that run"
+      },
+      "retry_of_run_id": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string",
+        "description": "a resubmit: the controller replays that run's payload, so it carries no task_description"
+      },
+      "task_description": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4000,
+        "not": {
+          "pattern": "\\{\\{|\\{%|<%|%>"
+        },
+        "description": "the job's task (the controller takes no input object); never a template marker"
+      }
     },
-    "required": ["agent_key", "idempotency_key", "priority"],
-    "type": "object"
+    "required": [
+      "agent_key",
+      "idempotency_key",
+      "priority"
+    ],
+    "type": "object",
+    "dependentRequired": {
+      "reason": [
+        "retry_of_run_id"
+      ]
+    },
+    "dependentSchemas": {
+      "retry_of_run_id": {
+        "not": {
+          "required": [
+            "task_description"
+          ]
+        }
+      }
+    }
   },
   "requires_approval": false,
-  "secrets": ["ORCHESTRATOR_JOBS_URL"],
+  "secrets": [
+    "ORCHESTRATOR_JOBS_URL"
+  ],
   "tier": "write",
   "timeout_s": 30
 }

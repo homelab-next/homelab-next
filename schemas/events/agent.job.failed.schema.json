@@ -43,7 +43,8 @@
                 "turn-cap",
                 "budget",
                 "unknown"
-              ]
+              ],
+              "description": "the failure class the controller recorded (the same value as failure_class): stall, backend-down, capacity and timeout are resubmittable, the rest never"
             },
             "attempts": {
               "type": "integer",
@@ -68,6 +69,26 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 128
+            },
+            "failure_class": {
+              "enum": [
+                "capacity",
+                "stall",
+                "timeout",
+                "backend-down",
+                "handler-error",
+                "deadline",
+                "cancelled",
+                "turn-cap",
+                "budget",
+                "unknown"
+              ],
+              "description": "the controller's failure class; equal to reason (kept for consumers that read the controller's own field name)"
+            },
+            "retried_by_run_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+              "description": "set once the controller accepted a resubmit of this run: it will not take another"
             }
           },
           "required": [

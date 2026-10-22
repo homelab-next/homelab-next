@@ -55,7 +55,7 @@ criteria are the pack trigger:
 
 Every event-triggered pack pins its producer: its `where` has `{ref: $event.source, equals: <id>}`
 (`st2-source`), so the rule fires, and `admit` admits, only events that name that source. A01 takes
-`svc:broker`, A02 `svc:orchestration`. The source is what the producer writes, not proof of who
+`svc:broker`, A02 `svc:llm-orchestrator` (the controller's default `events.source`; `ORCHESTRATOR_SOURCE` in `homelabnext.workflows.st2`, and `st2-bound` requires it). The source is what the producer writes, not proof of who
 sent it: who may post to the webhook (the bridge's API key) and publish the subject on the bus are
 the bounds that make it mean something.
 
@@ -113,22 +113,33 @@ binding are the broker's ([ADR-0017](adr/0017-broker-service.md)). StackStorm in
 
 | Id | Pack | Trigger | Does | Replaces |
 |---|---|---|---|---|
-| A01 | `proposal-validate` | `homelabnext.proposal.created`, which the broker emits when a note is filed through the records-inbox lane (`proposal.file`) | `agent.job.submit` of one `proposal-validator` job, the event id as idempotency key | the proposal-validator dispatch timer |
-| A02 | `agent-job-retry` | `homelabnext.agent.job.failed` with `reason` in capacity, stall, timeout, backend-down and `resubmits` = 0 | `agent.job.submit` again, at priority 90, with `retry_of_run_id` | ad-hoc reruns of failed jobs |
+| A01 | `proposal-validate` | `homelabnext.proposal.created`, which the broker emits when a note is filed through the records-inbox lane (`proposal.file`) | `agent.job.submit` of one `proposal-validator` job whose `task_description` is the note's path in the records inbox, the event id as idempotency key | the proposal-validator dispatch timer |
+| A02 | `agent-job-retry` | `homelabnext.agent.job.failed` from `svc:llm-orchestrator` with `reason` (the failure class) in capacity, stall, timeout, backend-down, `resubmits` = 0 and no `retried_by_run_id` | `agent.job.submit` again, at priority 90, with `retry_of_run_id` and `reason`, and no payload: the controller replays the parent's | ad-hoc reruns of failed jobs |
 | A03 | `approved-run` (built in) | `homelabnext.decision.returned` from the broker: a person approved a request | `run` of that request, only one a live step here submitted ([below](#running-an-approved-request-a03)) | running held requests by hand as the StackStorm user |
 
-`homelabnext.agent.job.failed` (`schemas/events/agent.job.failed.schema.json`) is the contract
-proposed for the controller's `agent.job.*` events. `resubmits` counts the whole-job resubmits in a
-run's `retry_of_run_id` lineage. The controller sets it from the parent run, so A02's trigger bounds
+`homelabnext.agent.job.failed` (`schemas/events/agent.job.failed.schema.json`) is what the
+controller emits: `state`, `reason` (its failure class, also as `failure_class`),
+`retry_of_run_id`, `retried_by_run_id` and `resubmits`, the whole-job resubmits in the run's
+`retry_of_run_id` lineage. The controller sets it from the parent run, so A02's trigger bounds
 the chain: a resubmitted job that fails again has `resubmits: 1`, and A02 does not fire. Retries
-inside one run stay the controller's (`max_attempts`). Failures the controller decided on purpose
-(deadline, cancel, turn cap, budget) never match.
+inside one run stay the controller's (`max_attempts`). The resubmittable classes are stall,
+backend-down, capacity and timeout; the others (deadline, turn-cap, budget, handler-error,
+cancelled, unknown) never match.
+
+The controller holds the bound itself as well: a `POST /jobs` with `retry_of_run_id` is refused
+with 404 `unknown_run`, 422 `agent_key_mismatch`, `not_failed`, `not_retryable`,
+`reason_mismatch` or `payload_override`, or 409 `already_retried` or `retry_chain_spent`, and
+`reason` must be the class it recorded. It ignores a `resubmits` in the request and refuses
+`input` (400 `input_unsupported`), so a dispatch step never sends either, and a resubmit sends no
+`task_description` (`st2-bound`).
 
 **Bounds the renderer enforces:**
 
 - `st2-coalesce`: a rule whose pack dispatches agent work has a coalesce window.
 - `st2-bound`: a pack that reacts to `agent.job.failed` by dispatching pins `$event.data.resubmits` to
-  integers below 3, and carries `retry_of_run_id: $event.data.run_id`.
+  integers below 3 and `$event.source` to `svc:llm-orchestrator`, and carries
+  `retry_of_run_id: $event.data.run_id`; no dispatch step sends `input` or `resubmits`, a
+  resubmit sends no `task_description`, and `reason` goes only with `retry_of_run_id`.
 
 ## Running an approved request (A03)
 
@@ -173,7 +184,7 @@ sequenceDiagram
     participant KV as st2 datastore
     participant Broker
     participant Hub as Approvals page
-    Bus->>Bridge: homelabnext.agent.job.failed (svc:orchestration)
+    Bus->>Bridge: homelabnext.agent.job.failed (svc:llm-orchestrator)
     Bridge->>St2: POST webhook (St2-Api-Key, Idempotency-Key)
     St2->>St2: rule on_<pack>, admit (schema, trigger, dedupe, coalesce)
     St2->>Broker: submit (risky step, live)
@@ -217,9 +228,8 @@ A forged event that names the right source can still open a window and fold the 
 it (an A02 resubmit lost for ten minutes). StackStorm cannot tell the two apart: it does not ask
 the controller whether `run_id` failed. The bounds are outside it, and the controller must hold
 them: the bridge's webhook-only API key and the bus's publish permissions decide who can inject an
-event, and the controller must refuse a submit whose `retry_of_run_id` is not one of its own runs
-that failed with `resubmits` 0, whatever the event said. Until it does, A02's cap is the trigger's
-and is only as good as the event.
+event, and the controller refuses a submit whose `retry_of_run_id` is not one of its own runs that failed
+for a resubmittable class and was not resubmitted yet, whatever the event said (above).
 
 The StackStorm datastore has no compare-and-set, so two events in the same instant can both pass
 the window. Two things still hold in that case:
@@ -275,7 +285,11 @@ mode, and the broker still decides, but the event is theirs.
 (`st2-handler`): `agent.job.submit` is `workflows/handlers/agent-job-submit.sh`, with
 `agent-job-submit.handler.json` beside it naming its digest. It posts the validated params to the
 controller's `POST /jobs`, whose URL the broker resolves by name like a secret
-(`ORCHESTRATOR_JOBS_URL`), so no endpoint is in the tree.
+(`ORCHESTRATOR_JOBS_URL`), so no endpoint is in the tree. A 2xx (queued, or the idempotency key's
+original run) and 409 `already_retried` (an earlier delivery resubmitted it) are success. 404, 422
+and any other 409 are the controller refusing this resubmit for good: the handler logs it on
+stderr and exits 0 with `{"refused": true, "status", "reason"}`, so nothing retries it. Anything
+else (400, 5xx, no answer) exits 1 (`handler-failed`).
 
 No literal in a bound pack may contain `{{`, `{%` or `<%` (`st2-template`). StackStorm renders
 those in criteria, parameters and Orquesta inputs, so a literal would become an expression. Event
