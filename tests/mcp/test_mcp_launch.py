@@ -315,7 +315,12 @@ def test_every_example_record_renders_its_generated_launch():
 LAUNCHER_KEYS = ["NPM_CONFIG_REGISTRY", "NPM_CONFIG_USERCONFIG", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL",
                  "UV_PYTHON", "UV_CONFIG_FILE", "PIP_INDEX_URL", "PIPX_DEFAULT_PYTHON", "NODE_OPTIONS",
                  "LD_PRELOAD", "PATH", "DOCKER_HOST", "BUN_CONFIG_REGISTRY", "PYTHONSTARTUP",
-                 "CONTAINERS_CONF", "GIT_SSH_COMMAND", "XDG_CONFIG_HOME", "HOME"]  # fmt: skip
+                 "CONTAINERS_CONF", "GIT_SSH_COMMAND", "XDG_CONFIG_HOME", "HOME",
+                 # the docker CLI's own configuration (an image record's env reaches it)
+                 "DOCKER_CONFIG", "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY", "DOCKER_TLS",
+                 "DOCKER_CONTEXT", "DOCKER_API_VERSION", "DOCKER_DEFAULT_PLATFORM",
+                 "DOCKER_CONTENT_TRUST_SERVER", "DOCKER_CLI_PLUGIN_EXTRA_DIRS", "DOCKER_BUILDKIT",
+                 "BUILDKIT_HOST", "COMPOSE_FILE", "CONTAINER_HOST"]  # fmt: skip
 
 
 @pytest.mark.parametrize("key", LAUNCHER_KEYS)
@@ -337,6 +342,17 @@ def test_no_setting_env_or_parameter_configures_the_launcher(key):
             problems
         )
     assert servers.denied_env(key.lower())  # any case: npm reads npm_config_registry too
+
+
+@pytest.mark.parametrize("key", ["DOCKER_CONTAINER", "DOCKER_MCP_MODE", "DOCKER_HOSTNAME_LABEL"])
+def test_a_container_only_docker_variable_is_the_servers_own_setting(key):
+    """Round 4, F5: DOCKER_CONTAINER (an image reads it inside the container) is not the docker
+    CLI's configuration, so an image record may set it; DOCKER_HOST and friends stay refused."""
+    rec = copy.deepcopy(DOCKER)
+    rec["settings"] = {key: "true"}
+    assert not servers.denied_env(key)
+    assert servers._template_problems(rec, "x") == []
+    assert servers.launch(rec, CTX)[1][-3:-1] == ["-e", key]  # forwarded to the container
 
 
 def test_ordinary_settings_are_not_launcher_configuration():

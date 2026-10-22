@@ -67,11 +67,20 @@ ORCH_DENIED_ENV = re.compile(
 #: environment of the launcher too (npx, uvx, docker), so its configuration is here as well: the
 #: loader (LD_*, DYLD_*), the search path and home, the interpreters (PYTHON*, NODE_*), the
 #: package launchers (NPM_CONFIG_*, UV_*, PIP_*, PIPX_*, BUN_*, COREPACK_*, YARN_*, PNPM_*), git
-#: (a git origin is fetched with it), the container runner (DOCKER_*, CONTAINER*) and the config
-#: directories they read (XDG_*).  A superset of :data:`ORCH_DENIED_ENV`.
+#: (a git origin is fetched with it), the config directories they read (XDG_*), and the container
+#: runner's own configuration: an image record's settings and env reach the ``docker`` CLI's
+#: environment too (and the container's, by ``-e NAME``), so the variables the docker CLI reads
+#: to pick its daemon, credentials, TLS, context, API, platform, plugins and builder
+#: (DOCKER_HOST, DOCKER_CONFIG, DOCKER_CERT_PATH, DOCKER_TLS*, DOCKER_CONTEXT,
+#: DOCKER_API_VERSION, DOCKER_DEFAULT_PLATFORM, DOCKER_CONTENT_TRUST*, DOCKER_CLI_*,
+#: DOCKER_BUILDKIT, DOCKER_CUSTOM_HEADERS, BUILDKIT*, COMPOSE_*) and podman's through its docker
+#: alias (CONTAINER*) are refused, while another DOCKER_ name (DOCKER_CONTAINER, which an image
+#: reads inside the container) is the server's own setting.  A superset of :data:`ORCH_DENIED_ENV`.
 DENIED_ENV = re.compile(
     r"(?:LD_|DYLD_|PYTHON|NODE_|NPM_CONFIG_|UV_|PIP_|PIPX_|BUN_|COREPACK_|YARN_|PNPM_|GIT_"
-    r"|DOCKER_|CONTAINER|XDG_).*|PATH|HOME|SHELL|BASH_ENV|ENV|HERMES_HOME|NODE|NPM_TOKEN",
+    r"|CONTAINER|XDG_|BUILDKIT|COMPOSE_|DOCKER_(?:TLS|CONTENT_TRUST|CLI_)).*"
+    r"|DOCKER_(?:HOST|CONFIG|CERT_PATH|CONTEXT|API_VERSION|DEFAULT_PLATFORM|BUILDKIT"
+    r"|CUSTOM_HEADERS)|PATH|HOME|SHELL|BASH_ENV|ENV|HERMES_HOME|NODE|NPM_TOKEN",
     re.I,
 )
 
@@ -775,7 +784,7 @@ def _template_problems(rec: Mapping[str, Any], where: str) -> list[str]:
             if denied_env(key):
                 out.append(
                     f"{where}: {what} {key} configures the process or its launcher (PATH, LD_*, "
-                    "NODE_*, NPM_CONFIG_*, UV_*, PIP_*, DOCKER_* ...), which no record sets"
+                    "NODE_*, NPM_CONFIG_*, UV_*, PIP_*, DOCKER_HOST ...), which no record sets"
                 )
     fixed = set(settings) | set(rec.get("env") or {})
     seen: dict[str, str] = {}

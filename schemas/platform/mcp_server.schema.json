@@ -131,7 +131,7 @@
     },
     "settings": {
       "type": "object",
-      "description": "Non-secret environment of a stdio server (paths, modes), the same for every instance; a value may use {profile}, {lane} and parameter templates. A key that names a credential (TOKEN, SECRET, PASSWORD, API_KEY, ...) belongs in env as a secret reference. A key that configures the process or its launcher (PATH, LD_*, PYTHON*, NODE_*, NPM_CONFIG_*, UV_*, PIP_*, DOCKER_* ...) is refused by check.",
+      "description": "Non-secret environment of a stdio server (paths, modes), the same for every instance; a value may use {profile}, {lane} and parameter templates. A key that names a credential (TOKEN, SECRET, PASSWORD, API_KEY, ...) belongs in env as a secret reference. A key that configures the process or its launcher (PATH, LD_*, PYTHON*, NODE_*, NPM_CONFIG_*, UV_*, PIP_*, the docker CLI's DOCKER_HOST, DOCKER_CONFIG ...) is refused by check.",
       "propertyNames": {
         "pattern": "^[A-Z][A-Z0-9_]*$(?!\\n)"
       },
