@@ -277,6 +277,9 @@ class Fleet:
     #: the site's power facts (:func:`homelabnext.power.site_power`); None = the site has no
     #: ``power`` section, so nothing has to declare what feeds it
     power: Mapping[str, Any] | None = None
+    #: the deploy's tailnet access (:func:`homelabnext.tailnet.site_deploy`: tag, owners, zones,
+    #: exceptions); None = the site declares none, so the policy gives the deploy tag nothing
+    deploy: Mapping[str, Any] | None = None
 
     def node_firewall(self, node: str) -> bool:
         """Whether the node (hypervisor) itself enforces a firewall.  Unlisted = yes (safe default)."""

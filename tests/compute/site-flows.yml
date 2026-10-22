@@ -16,3 +16,11 @@ firewall:
     - {from: edge, to: mgmt, action: deny, notes: "matches first: the allow below never applies"}
     - {from: edge, to: mgmt, action: allow, ports: [53]}
     - {from: mgmt, to: any, action: allow, protocols: [icmp]}
+# the deploy's access (1.2): SSH to mgmt and data (data has no tailnet node yet), one more port
+# on mgmt; edge is a tailnet zone the deploy must not reach
+tailnet:
+  deploy:
+    owners: [autogroup:admin]
+    zones: [mgmt, data]
+    exceptions:
+      - {zones: [mgmt], ports: [9443], reason: "fictional: the identity provider's admin API"}

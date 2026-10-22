@@ -93,6 +93,15 @@ firewall:
     - {from: zone:compute, to: svc:events, action: allow}
     - {from: zone:sandbox, to: svc:events, action: allow, ports: [4222], notes: "the one-way telemetry pipe"}
 
+# The CI deploy's tailnet access (1.2): its ephemeral key, tagged tag:ci-deploy, reaches SSH on the
+# tailnet nodes of these zones and nothing else; hnx guests render --target tailscale-acl writes
+# the rule and the policy tests. Another port needs an exception with its reason.
+tailnet:
+  deploy:
+    tag: tag:ci-deploy
+    owners: [autogroup:admin]
+    zones: [mgmt, data]
+
 dns:
   resolvers:
     - {id: dns-primary, model: technitium, host: svc:dns, authoritative_for: [example.internal], bind_mode: all}

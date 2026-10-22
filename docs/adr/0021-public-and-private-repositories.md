@@ -54,8 +54,9 @@ workstation was both a single point of failure (F-16) and the place where every 
   runner host), and the rotation routine in `docs/private-overlay.md`.
 - The deploy pins a homelab-next commit, so a public change reaches the lab only when the overlay
   moves `HNX_REF`, through its own reviewed pull request.
-- The Tailscale policy generator does not emit `tag:ci-deploy` yet; the guide gives the stanza to
-  add by hand.
+- The deploy tag's tailnet access is site data (`tailnet.deploy`, site 1.2): the Tailscale policy
+  generator emits `tag:ci-deploy`, its SSH rule and policy tests, and refuses a wildcard
+  destination or a port beyond SSH without a stated reason.
 
 ## Alternatives
 

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/site/1.1",
+  "$id": "https://schemas.example.internal/homelabnext/platform/site/1.2",
   "title": "HomelabNext site / network model (site.yml)",
-  "description": "Vendor-neutral description of one site: zones (VLANs and subnets), the router and switches, the zone-to-zone and service-level firewall intent, DNS policy and the adapters that realise it. Zones and services are referenced by id (zone:<id>, svc:<id>); no endpoint literal and no secret value appears here. Schema version 1; evolve additively. 1.1 adds power (the site's UPSes and a default) and the edge chain, and a power declaration on the router, the switches and the edge devices.",
+  "description": "Vendor-neutral description of one site: zones (VLANs and subnets), the router and switches, the zone-to-zone and service-level firewall intent, DNS policy and the adapters that realise it. Zones and services are referenced by id (zone:<id>, svc:<id>); no endpoint literal and no secret value appears here. Schema version 1; evolve additively. 1.1 adds power (the site's UPSes and a default) and the edge chain, and a power declaration on the router, the switches and the edge devices. 1.2 adds tailnet.deploy (the CI deploy tag's tailnet access: SSH to listed zones, other ports only as exceptions with a reason).",
   "type": "object",
   "additionalProperties": false,
   "required": ["site_version", "site", "zones", "router", "firewall"],
@@ -93,6 +93,14 @@
       "properties": {
         "ups": {"type": "array", "items": {"$ref": "#/$defs/ups"}},
         "default": {"$ref": "#/$defs/power_ref"}
+      }
+    },
+    "tailnet": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "(1.2) The site's tailnet facts beyond the per-zone node tags (homelabnext/tailnet.py).",
+      "properties": {
+        "deploy": {"$ref": "#/$defs/deploy_access"}
       }
     },
     "dhcp_reservations": {
@@ -229,6 +237,44 @@
     }
   },
   "$defs": {
+    "deploy_access": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owners", "zones"],
+      "description": "(1.2) What the CI deploy's ephemeral tailnet key may reach: TCP 22 on the tailnet nodes of the listed zones (tag:zone-<zone>), and each exception's ports with its reason. No wildcard destination; the tailscale-acl target renders it with policy tests.",
+      "properties": {
+        "tag": {"type": "string", "pattern": "^tag:[a-z0-9][a-z0-9-]{0,62}$", "default": "tag:ci-deploy", "description": "The tag the deploy's key carries; never a zone tag (tag:zone-...)."},
+        "owners": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Who may mint keys for the tag (its tagOwners entry).",
+          "items": {"type": "string", "pattern": "^(autogroup:(admin|owner|it-admin|network-admin)|group:[a-z0-9][a-z0-9-]*|tag:[a-z0-9][a-z0-9-]{0,62})$"}
+        },
+        "zones": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Site zones the deploy reaches on SSH, by id (no '*', no 'any').",
+          "items": {"$ref": "#/$defs/slug"}
+        },
+        "exceptions": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/deploy_exception"}
+        }
+      }
+    },
+    "deploy_exception": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["zones", "ports", "reason"],
+      "description": "(1.2) A port beyond SSH the deploy needs on some of its zones, and why.",
+      "properties": {
+        "zones": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/slug"}},
+        "ports": {"anyOf": [{"const": "*"}, {"$ref": "#/$defs/ports"}]},
+        "reason": {"type": "string", "minLength": 10, "maxLength": 300, "pattern": "^[^\\u0000-\\u001f\\u007f]*$"}
+      }
+    },
     "power_ref": {
       "type": "object",
       "additionalProperties": false,

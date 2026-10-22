@@ -106,7 +106,7 @@ have a zones file. Tests can also pass a stub.
 | `registry-hosts` | a `zones:`/`hosts:` fragment for `services.yml` |
 | `backup-jobs` | members, retention and export hooks per policy |
 | `baseline-playbook` | `baseline.yml`: one play per bound control, applying its `role` to `control_<id>`, or, for an `apply: central` control, once to its product host's `group` with `<role>_guests`; unbound controls as commented blocks |
-| `tailscale-acl` | `tailscale-policy.hujson`: the tailnet policy for the guests bound to `tailscale_node` (a tag per zone, admins on SSH, the site's zone-to-zone allows); see [Bound products](#bound-products) |
+| `tailscale-acl` | `tailscale-policy.hujson`: the tailnet policy for the guests bound to `tailscale_node` (a tag per zone, admins on SSH, the site's zone-to-zone allows, the deploy tag's declared access with policy tests); see [Bound products](#bound-products) |
 | `firewall-rules` | `firewall/<vmid>.fw` per guest (inbound drop, the outbound policy, the guest's allow rules), `firewall/verify-datacenter.sh` and `firewall/EXEMPTIONS.md` |
 
 Output is a pure function of the files: no clock, no randomness, no environment.  The `terraform-proxmox` target was validated against the real `bpg/proxmox` provider **version 0.116.1** (`terraform init && terraform validate` plus a one-guest live `plan` / `apply` / `destroy` cycle on a scoped scratch pool).  A trimmed snapshot of the provider's resource schemas is committed at `tests/compute/fixtures/bpg_proxmox_schema.json` and used by `tests/compute/test_terraform_proxmox_schema.py` as a CI-safe shape check.  Note that the real provider enforces `vm_id >= 100`, so the example fleet uses vmids in the `110-230` range; the `octet` scheme is still available but requires IPs whose last octet is `>= 100`. SSH keys are
@@ -431,6 +431,13 @@ the AIDE exit codes and `@@include`, rkhunter's `APT_AUTOGEN` and `--config-chec
   file. A zones-only site file has no flows: the policy is the minimal default. An allow of a
   whole protocol after a port-level deny of it (the site validator refuses such a deny) is an
   error, since Tailscale rules only allow.
+* the deploy, when the site declares `tailnet.deploy` (site 1.2,
+  [network model](network-model.md#deploy-access-12)): the deploy tag in `tagOwners` with its
+  declared owners (each zone it reaches is owned too, even before a node joins), one rule from
+  the tag to those zones on TCP 22, one per listed exception, and a `tests` block: the tag
+  reaches each declared zone on 22 (and each exception port), is refused on other ports (23, 80,
+  443, 3389, 8080) and on every other tag of the policy, and no zone tag reaches the tag. A site
+  without the declaration gives the deploy tag nothing, and the policy has no `tests`.
 
 Not translated: `service_exceptions` (they name a service), traffic inside one
 zone, exit nodes and subnet routes. Push the file with Tailscale's own tooling; the generator only

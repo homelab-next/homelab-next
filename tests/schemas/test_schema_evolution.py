@@ -44,6 +44,7 @@ NEWER_THAN_1_0 = {
     "register_event.review-audit.yml": "registers/register_event 1.2: review role audit",
     "register_event.rekey.yml": "registers/register_event 1.3: event rekey",
     "note.register-transition-legacy-code.md": "records/note 1.1: type register-transition",
+    "site.tailnet-deploy.yml": "platform/site 1.2: tailnet.deploy",
 }
 
 
