@@ -234,10 +234,34 @@ SESSION_TRAILER_RE = re.compile(
 )
 
 
+# A go.sum line: ``<module> <version>[/go.mod] h1:<base64 SHA-256>=``.  The hash is a digest of
+# public module content, not a credential.  Only the whole-line shape counts, so the same value
+# anywhere else (or a go.sum-looking line with anything appended) is still scanned.
+GO_SUM_LINE_RE = re.compile(r"^\S+ v\S+ h1:(?P<hash>[A-Za-z0-9+/]{43}=)$")
+# A Go test, benchmark, fuzz or example function name (``TestSubmit_ReplayIs422``): CamelCase
+# words, so long and mixed-case enough to read as random.  A name is told from a token by its
+# lowercase runs (``ubmit``, ``eplay``): at least three letters on average, which random base64
+# of this length essentially never has; see GO_TEST_NAME_MIN_RUN.
+GO_TEST_NAME_RE = re.compile(r"^(?:Test|Benchmark|Fuzz|Example)[A-Z0-9_][A-Za-z0-9_]*$")
+GO_TEST_NAME_MIN_RUN = 3.0
+
+
+def _is_go_test_name(token: str) -> bool:
+    if not GO_TEST_NAME_RE.match(token):
+        return False
+    runs = re.findall(r"[a-z]+", token)
+    return bool(runs) and sum(map(len, runs)) / len(runs) >= GO_TEST_NAME_MIN_RUN
+
+
 def _is_hit_entropy(m: re.Match[str], line: str) -> bool:
     if SESSION_TRAILER_RE.match(line):
         return False
+    go_sum = GO_SUM_LINE_RE.match(line)
+    if go_sum and go_sum.start("hash") == m.start("tok") and go_sum.end("hash") == m.end("tok"):
+        return False
     token = m.group("tok")
+    if _is_go_test_name(token):
+        return False
     if re.fullmatch(r"[0-9a-fA-F]+", token):  # hex digests: see hex-secret
         return False
     if token.startswith(("http", "www.")) or token.count("/") > 2:
@@ -305,7 +329,22 @@ def _is_store_ref(text: str) -> bool:
     return True
 
 
+# A numeric conversion (Go ``float64(435783``, the closing parenthesis ends the match) of a short
+# number, and Go's integer and float limit constants, are numbers too.
+NUMBER_CAST_RE = re.compile(r"^(?:u?int|float|complex)(?:8|16|32|64|128)?\((?P<num>[^()]*)$")
+GO_MATH_LIMIT_RE = re.compile(
+    r"^math\.(?:Max|Min|SmallestNonzero)(?:Int|Uint|Float)(?:8|16|32|64)?$"
+)
+# An escape sequence ends a value written inside a string literal (``"key: v\nnext: w"``).
+ESCAPE_END_RE = re.compile(r"\\[nrt]")
+
+
 def _is_short_number(value: str) -> bool:
+    cast = NUMBER_CAST_RE.match(value)
+    if cast:
+        value = cast.group("num")
+    elif GO_MATH_LIMIT_RE.match(value):
+        return True
     m = NUMBER_RE.match(value)
     if not m:
         return False
@@ -318,7 +357,9 @@ KEYED_PLACEHOLDER_RE = re.compile(r"(?i)secret|passw|token|hunter2|abc123|letmei
 
 
 def _is_hit_keyed_value(m: re.Match[str], _line: str) -> bool:
-    value = m.group("val")
+    value = ESCAPE_END_RE.split(m.group("val"), maxsplit=1)[0]
+    if len(value) < 6:  # the pattern's own minimum, once an escape has ended the value
+        return False
     quoted = bool(m.group("q"))
     if _is_store_ref(m.group(0)) or _is_short_number(value):
         return False
@@ -343,6 +384,11 @@ PRODUCT_SECRET_NAMES = frozenset(
     {
         "VLLM_API_KEY",  # vLLM's server key, written by the vllm_server role
         "IMAGES_OPENAI_API_KEY",  # an Open WebUI setting the open_webui role reserves
+        # the orchestration controller's config keys and notes-tool names (orchestrator/): its
+        # markdown notes store is called a vault; the values these keys carry are still scanned
+        "vault_root",  # where the notes store lives
+        "vault_scope",  # a profile's readable part of the notes store
+        "vault_write",  # a profile's writable lanes, and the tool that writes a note
     }
 )
 

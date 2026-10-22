@@ -557,3 +557,115 @@ def test_product_defined_secret_names_are_not_findings():
         assert "secret-name" not in {h.pattern for h in leak_scan.scan_text(f"env: {name}", "t")}
     for name in ("LAB_ROUTER_API" + "_KEY", "MY_API" + "_KEY", "vau" + "lt_router_password"):
         assert "secret-name" in {h.pattern for h in leak_scan.scan_text(f"env: {name}", "t")}
+
+
+# --- Go sources and modules (orchestrator/) --------------------------------------------------------
+
+# A base64 SHA-256 shaped like go.sum's ``h1:`` hashes (43 characters and ``=``), built at run time.
+H1 = "Gz9kY7T5VNhEkwH0PVJ" + "gjzfXq1rhBrR7pRT3mDkpeCY="
+assert len(H1) == 44
+
+
+def _secret_hits(text: str) -> set[str]:
+    return {h.pattern for h in leak_scan.scan_text(text, "t") if h.pattern in SECRET_PATTERNS}
+
+
+SECRET_PATTERNS = {p.name for p in leak_scan.PATTERNS if p.group == "secret"}
+RANDOM = "Zx9Qw3Rt7Yp2" + "Lk8Vb5Nm1Cd4Fg6Hj0sA"  # a credential-shaped token
+AUTH = '"auth_tok' + 'en": '
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"github.com/example/mod v1.0.1 h1:{H1}",
+        f"github.com/example/mod v1.0.1/go.mod h1:{H1}",
+        f"golang.org/x/sys v0.0.0-20240101000000-abcdef123456 h1:{H1}",
+    ],
+)
+def test_go_sum_lines_are_digests(text: str):
+    assert _secret_hits(text) == set()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"h1:{H1}",  # the hash alone, not a go.sum line
+        f"token {H1}",  # the same value without the go.sum shape
+        f"github.com/example/mod v1.0.1 h1:{H1} " + RANDOM,
+        f"github.com/example/mod v1.0.1 h1:{H1}\nkey " + RANDOM,
+        "github.com/example/mod v1.0.1 h2:" + H1,  # not the h1 scheme
+    ],
+)
+def test_go_sum_allowance_is_only_the_hash_of_a_go_sum_line(text: str):
+    assert "high-entropy-string" in _secret_hits(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "func TestSubmit_IdempotencyKeyReplayForADifferentRunIs422(t *testing.T) {",
+        "// TestInvoke_Exit2WithEmptyStderrIsATurnFailure pins the exit-code mapping",
+        "func TestMatchRunbooks_RealKeywordHitFindsRB001(t *testing.T) {",
+        "go test ./internal/api -run '^BenchmarkQueueAdmissionUnderHeavyLoad4096$'",
+    ],
+)
+def test_go_test_function_names_are_not_secrets(text: str):
+    assert _secret_hits(text) == set()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # random base64 after a Test prefix: short lowercase runs
+        "func Test" + RANDOM + "(t *testing.T) {",
+        # a real-looking value next to a Go test name is still found
+        f'func TestSubmit_IdempotencyKeyReplayIs422(t *testing.T) {{ k := "{RANDOM}" }}',
+        # a lowercase prefix is not a Go test function
+        "test" + RANDOM,
+    ],
+)
+def test_go_test_name_allowance_stays_narrow(text: str):
+    assert "high-entropy-string" in _secret_hits(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '"input_tokens": float64(435783), "cache_read_tokens": float64(0),',
+        '"last_prompt_tokens": float64(61234), "max_tokens": float64(16384)',
+        'map[string]any{"path": "docs/w.md", "max_tokens": math.MaxInt64 / 2}',
+        '[]byte("db_path: /x.db\\ntoken_weighted_admission: true\\nkv_budget_fraction: 0.7\\n")',
+    ],
+)
+def test_go_numeric_values_and_escaped_newlines_are_not_keyed_secrets(text: str):
+    assert "keyed-secret" not in _secret_hits(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # a long number is as good as a numeric secret, cast or not
+        AUTH + "float64(" + "84726193" + "50213)",
+        AUTH + "int64(" + "84726193" + "50213)",
+        # a cast of something that is not a number
+        AUTH + "float64(" + "Zq81kXw" + "Lm2pV9a)",
+        # only the limit constants: any other dotted value with digits stays a finding
+        AUTH + "math." + "Zq81kXw" + "Lm2pV9a",
+        # an escape ends the value, but what precedes it is still scanned
+        '"db_pass' + "word: " + "Tr0ub4dor" + '&3\\nuser: admin"',
+    ],
+)
+def test_go_numeric_and_escape_exemptions_stay_narrow(text: str):
+    assert "keyed-secret" in _secret_hits(text)
+
+
+def test_orchestrator_config_key_names_are_product_names_but_values_are_scanned():
+    for line in ("vault_root: /srv/notes", "vault_scope: [findings]", "tools: [vault_write]"):
+        assert _secret_hits(line) == set(), line
+    # a longer name that only starts like one is still a finding
+    for name in ("vault_root" + "_password", "vault_scope" + "_token", "vau" + "lt_recent_index"):
+        assert "secret-name" in _secret_hits(f"key: {name}"), name
+    # the value next to an allowed name is still scanned
+    assert "high-entropy-string" in _secret_hits("vault_root: " + RANDOM)
+    assert "secret-name" in _secret_hits("vault_write: {{ vault" + "_db_password }}")
