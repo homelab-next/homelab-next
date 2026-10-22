@@ -1251,6 +1251,7 @@ def test_the_tree_check_refuses_a_rule_that_lost_its_producer_or_its_accept():
 
 # ---------------------------------------------------------------- the controller's job contract
 HANDLER = ROOT / "workflows" / "handlers" / "agent-job-submit.sh"
+TOKEN = "fake-controller-jobs-token-0001"  # scrub-allow: fake placeholder
 
 
 def _bound_problems(mutate) -> set[tuple[str, str]]:
@@ -1320,6 +1321,8 @@ def test_every_fixture_request_is_one_the_handler_schema_accepts():
         (422, '{"reason": "idempotency_key_mismatch"}', 0, "idempotency_key_mismatch"),
         (404, '{"reason": "unknown_run"}', 0, "unknown_run"),
         (400, '{"reason": "input_unsupported"}', 1, None),
+        (401, '{"reason": "unauthorized"}', 1, None),  # the token is missing or wrong
+        (403, '{"reason": "forbidden"}', 1, None),  # the token lacks the jobs scope
         (503, "", 1, None),
         (None, "", 1, None),  # no answer
     ],
@@ -1335,13 +1338,19 @@ def test_the_submit_handler_maps_the_controllers_answers(tmp_path, code, body, e
     else:
         script = (
             f'#!/bin/sh\nprintf "%s\\n" "$@" > "{tmp_path}/args"\ncat > "{tmp_path}/stdin"\n'
+            f'for a in "$@"; do case $a in @-) ;; @*) cat "${{a#@}}" >> "{tmp_path}/hdrs"; '
+            f'stat -c %a "${{a#@}}" > "{tmp_path}/mode";; esac; done\n'
             f"printf '%s\\n%s' '{body}' '{code}'\n"
         )
     fake.write_text(script)
     fake.chmod(0o755)
+    run_tmp = tmp_path / "run-tmp"
+    run_tmp.mkdir()
     env = {
         "PATH": f"{fake.parent}{os.pathsep}/usr/bin{os.pathsep}/bin",
         "ORCHESTRATOR_JOBS_URL": "https://controller.example.invalid/jobs",
+        "ORCHESTRATOR_JOBS_TOKEN": TOKEN,
+        "TMPDIR": str(run_tmp),
     }
     params = (
         b'{"agent_key": "triage", "idempotency_key": "run-0001", "retry_of_run_id": "run-0001"}'
@@ -1349,8 +1358,16 @@ def test_the_submit_handler_maps_the_controllers_answers(tmp_path, code, body, e
     got = subprocess.run(["/bin/sh", str(HANDLER)], input=params, env=env, capture_output=True)
     assert got.returncode == exit_code, got.stderr
     if code is not None:
-        assert "Idempotency-Key: run-0001" in (tmp_path / "args").read_text().splitlines()
+        args = (tmp_path / "args").read_text()
+        assert "Idempotency-Key: run-0001" in args.splitlines()
         assert (tmp_path / "stdin").read_bytes() == params  # the body goes on unchanged
+        # the token travels in a private header file: never in argv, never on stderr
+        assert (tmp_path / "hdrs").read_text() == f"Authorization: Bearer {TOKEN}\n"
+        assert (tmp_path / "mode").read_text().strip() == "600"
+        assert TOKEN not in args and TOKEN.encode() not in got.stderr + got.stdout
+        assert list(run_tmp.iterdir()) == []  # removed after the POST
+    if code in (401, 403):
+        assert b"refused the token" in got.stderr
     if exit_code == 0:
         out = json.loads(got.stdout)
         if refused:
@@ -1363,11 +1380,29 @@ def test_the_submit_handler_maps_the_controllers_answers(tmp_path, code, body, e
 def test_the_submit_handler_refuses_params_without_a_key(tmp_path):
     import subprocess
 
-    env = {"PATH": "/usr/bin:/bin", "ORCHESTRATOR_JOBS_URL": "https://controller.example.invalid/j"}
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "ORCHESTRATOR_JOBS_URL": "https://controller.example.invalid/j",
+        "ORCHESTRATOR_JOBS_TOKEN": TOKEN,
+    }
     got = subprocess.run(
         ["/bin/sh", str(HANDLER)], input=b'{"agent_key": "x"}', env=env, capture_output=True
     )
     assert got.returncode == 1 and b"no idempotency_key" in got.stderr
+
+
+@pytest.mark.parametrize("token", [None, "", "fake-token\r\nX-Injected: 1"])
+def test_the_submit_handler_needs_one_token_and_declares_it(token):
+    import subprocess
+
+    env = {"PATH": "/usr/bin:/bin", "ORCHESTRATOR_JOBS_URL": "https://controller.example.invalid/j"}
+    if token is not None:
+        env["ORCHESTRATOR_JOBS_TOKEN"] = token
+    params = b'{"agent_key": "x", "idempotency_key": "k-1", "priority": 40}'
+    got = subprocess.run(["/bin/sh", str(HANDLER)], input=params, env=env, capture_output=True)
+    assert got.returncode == 1 and b"ORCHESTRATOR_JOBS_TOKEN" in got.stderr
+    doc = json.loads(HANDLER.with_name("agent-job-submit.handler.json").read_text())
+    assert "ORCHESTRATOR_JOBS_TOKEN" in doc["secrets"]  # so the broker hands it over
 
 
 def test_a02_skips_a_run_already_retried_and_keys_on_the_run():

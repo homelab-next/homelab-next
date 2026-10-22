@@ -291,11 +291,21 @@ mode, and the broker still decides, but the event is theirs.
 `agent-job-submit.handler.json` beside it naming its digest. It posts the validated params to the
 controller's `POST /jobs` (the params' `idempotency_key` also as the `Idempotency-Key` header),
 whose URL the broker resolves by name like a secret
-(`ORCHESTRATOR_JOBS_URL`), so no endpoint is in the tree. A 2xx (queued, or the idempotency key's
+(`ORCHESTRATOR_JOBS_URL`), so no endpoint is in the tree. The controller authenticates `POST /jobs`
+with a bearer token when its opt-in auth is on (scopes `jobs`, `read`, `metrics`, `admin`; the token
+is read only from the `Authorization` header): the handler sends `Authorization: Bearer` with the second secret it declares,
+`ORCHESTRATOR_JOBS_TOKEN`, resolved by the broker the same way (with the default resolver, the
+broker's `HNX_BROKER_SECRET_ORCHESTRATOR_JOBS_TOKEN`). Issue it with the `jobs` scope and nothing
+else. The handler writes the header to a 0600 file in the run's private `TMPDIR` and passes it as
+`--header @file`, so the token is never in curl's argv (which every local user can read in `ps`)
+or in a log line, and removes the file after the POST. Without the token (or with one that is not
+a single line) the handler exits 1 before any request; set it even while the controller's auth is
+off, so turning auth on breaks nothing. A 2xx (queued, or the idempotency key's
 original run) and 409 `already_retried` (an earlier delivery resubmitted it) are success. 404, 422
 and any other 409 are the controller refusing this resubmit for good: the handler logs it on
-stderr and exits 0 with `{"refused": true, "status", "reason"}`, so nothing retries it. Anything
-else (400, 5xx, no answer) exits 1 (`handler-failed`).
+stderr and exits 0 with `{"refused": true, "status", "reason"}`, so nothing retries it. 401 and 403
+are the controller refusing the token (missing, wrong, or without the `jobs` scope): logged as such
+on stderr, exit 1. Anything else (400, 5xx, no answer) exits 1 too (`handler-failed`).
 
 No literal in a bound pack may contain `{{`, `{%` or `<%` (`st2-template`). StackStorm renders
 those in criteria, parameters and Orquesta inputs, so a literal would become an expression. Event

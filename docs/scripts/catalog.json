@@ -901,10 +901,10 @@
     {
       "exit": {
         "0": "queued, already queued (an idempotent replay), already retried, or refused for good (logged on stderr)",
-        "1": "no idempotency key, the controller could not be reached, or it failed (400, 5xx)"
+        "1": "no idempotency key or token, the controller could not be reached, refused the token (401, 403), or failed (400, 5xx)"
       },
       "id": "workflow-broker-agent-job-submit",
-      "inputs": "the validated params as JSON on stdin; the ORCHESTRATOR_JOBS_URL secret (the controller's POST /jobs URL)",
+      "inputs": "the validated params as JSON on stdin; the ORCHESTRATOR_JOBS_URL secret (the controller's POST /jobs URL); the ORCHESTRATOR_JOBS_TOKEN secret (a bearer token with the controller's jobs scope)",
       "kind": "tool",
       "language": "shell",
       "outputs": "the controller's answer as JSON on stdout, or a refused object (status, reason) for a final refusal",
