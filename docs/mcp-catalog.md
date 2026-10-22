@@ -318,8 +318,10 @@ It reads `mcpServers` (Claude Code, Claude Desktop, also under `projects` in `~/
   becomes `secret:mcp/notes-token` again; `${VAR:-default}` names `VAR`). In the
   server's own arguments, everything check would refuse as a literal credential (the same rules,
   above) becomes a reference, and more, failing closed: any argument carrying a credential
-  marker (`Authorization:`, `password`) becomes a reference, and a URL keeps only its scheme,
-  host, port and a plain MCP path (userinfo, query and any other path are removed, in arguments
+  marker (`Authorization:`, `password`) becomes a reference (an argument that already is one,
+  `Authorization: Bearer secret:<name>` included, is kept), and a URL (or each URL of a
+  comma-separated list; a URL inside other text, such as a user agent, is left alone unless it
+  carries a credential) keeps only its scheme, host, port and a plain MCP path (userinfo, query and any other path are removed, in arguments
   and in `*_URL` settings alike). A path is kept as a setting whatever its key (it says where a
   credential is, never what it is). The report lists each reference by server and key with the
   name to store it under and never prints a value; a config that does not parse is reported by

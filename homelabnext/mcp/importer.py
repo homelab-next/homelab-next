@@ -109,6 +109,16 @@ def _plain_url(url: str) -> str:
     return f"{parts.scheme}://{host}{port}{path}"
 
 
+_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s,]+")
+
+
+def _urls(text: str) -> bool:
+    """``text`` is a URL or a comma-separated list of them (``--allowed-origins a,b``); a URL
+    inside other text (a user agent ``Bot/1.0 (+https://...)``) is not, and is kept unless check's
+    rules find a credential in it."""
+    return all(_URL.fullmatch(u) for u in text.split(","))
+
+
 def _ref_for_var(var: str, fallback: str) -> str:
     """The secret reference a ``${VAR}`` stands for: a rendered ``${HNX_SECRET_MCP_X_Y}`` maps
     back to the name ``mcp/x-y`` (any name the renderer delivers as that same variable, so a
@@ -229,6 +239,9 @@ def _clean_args(sid: str, args: list[str], notes: list[str]) -> list[str]:
     for i, a in enumerate(args):
         n, f = i + 1, found.get(i)
         flag, eq, val = a.partition("=")
+        if credentials.arg_secret(a):
+            clean.append(a)  # already a reference (secret:x, --x=secret:x, Bearer secret:x)
+            continue
         if credentials.expands(a):
             var = _var(a) or (_var(val) if eq and flag.startswith("-") else None)
             if var and _var(a):
@@ -252,9 +265,9 @@ def _clean_args(sid: str, args: list[str], notes: list[str]) -> list[str]:
             secret(n, ref, ref)
         elif not eq and _BARE_FLAG.fullmatch(a):
             clean.append(a)  # a flag's own name
-        elif "://" in a:
+        elif _urls(val if eq and flag.startswith("-") else a):
             url = val if eq and flag.startswith("-") else a
-            plain = _plain_url(url)
+            plain = ",".join(_plain_url(u) for u in url.split(","))
             if plain != url:
                 notes.append(
                     f"{sid}: argument {n}: a URL's userinfo, query or path was removed (they may "

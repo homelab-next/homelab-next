@@ -126,6 +126,11 @@ ACCEPTED = [
     (["--include", "^src/.*\\.(ts|tsx)$"], {}),
     (["--model", "qwen2.5-coder:32b-instruct-q4_K_M"], {}),
     (["-port", "8080"], {}),
+    # round 3 (9): import keeps a reference, a URL list and a user agent as they are
+    (["--header", "Authorization: Bearer secret:mcp/srv-token"], {}),
+    (["--header=Authorization: Bearer secret:mcp/srv-token"], {}),
+    (["--allowed-origins", "https://app.example.com,https://admin.example.com"], {}),
+    (["--user-agent", "MyBot/1.0 (+https://example.com)"], {}),
 ]  # fmt: skip
 
 #: settings check accepts that import, failing closed, stores as a secret reference anyway (an
@@ -230,6 +235,12 @@ def test_a_url_setting_keeps_its_host_and_an_env_default_names_its_variable():
                     {"API_URL": "https://api.example/v1/data"})  # fmt: skip
     assert rec["settings"] == {"API_URL": "https://api.example"}
     assert rec["transport"]["args"] == ["secret:mcp/gh-token"]
+
+
+def test_import_still_strips_each_url_of_a_list():
+    rec = _imported("npx", ["-y", "--", "@x/srv@1.0.0", "--origins",
+                            "https://a.example/app/x?page=2,https://b.example/v1/data"], {})  # fmt: skip
+    assert rec["transport"]["args"][1] == "https://a.example,https://b.example"
 
 
 def test_dsn_users_and_digests_in_urls_are_not_credentials():
