@@ -11,3 +11,4 @@ aliases:
   LL-005: 01a15e4e-758c-7315-892d-68b45030268f  # Measure certificate lifetime from the client side
   RB-001: 01a15e4e-758c-7316-80d6-f77f5bb552dc  # Renew the internal proxy certificate
   RB-002: 01a15e4e-758c-7317-94cc-2b1d6445bcb2  # Add a lesson to the register
+  RB-003: 01a15f29-ff7e-764c-a17e-d2d50c304e9b  # First deploy from the private repository

@@ -490,7 +490,8 @@
         "make:leak-scan-history",
         "make:secret-scan",
         "pre-commit:leak-scan",
-        "pre-commit:secret-scan"
+        "pre-commit:secret-scan",
+        "script:private-leak-check"
       ]
     },
     {
@@ -580,6 +581,48 @@
     },
     {
       "exit": {
+        "0": "password printed",
+        "1": "OpenBao refused or returned no value",
+        "2": "not configured"
+      },
+      "id": "overlay-vault-pass-client",
+      "inputs": "--vault-id ID (passed by Ansible); env HNX_VAULT_PASSWORD, or HNX_VAULT_PASSWORD_REF plus BAO_ADDR and a token or AppRole",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the password on stdout, nothing else",
+      "owner": "maintainers",
+      "path": "examples/private-overlay/bin/vault-pass-client.py",
+      "purpose": "Print the ansible-vault password of a private overlay from the environment or OpenBao, never from a file.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "clean",
+        "1": "at least one finding",
+        "2": "misconfiguration (not an overlay, unreadable .sops.yaml or marker)"
+      },
+      "id": "private-leak-check",
+      "inputs": "mode: private (the private overlay's CI) or public (this repository); a checkout root",
+      "invariant": [
+        "F-21"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per finding",
+      "owner": "maintainers",
+      "path": "tools/private_leak_check.py",
+      "purpose": "Fail when a private overlay holds a plaintext secret or an unencrypted sealed file, or when this public tree holds any part of a private overlay.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:private-overlay-check"
+      ]
+    },
+    {
+      "exit": {
         "0": "nothing lost, duplicated or without a uid",
         "1": "a record vanished, a key occurs twice, or a record has no uid",
         "2": "usage error"
@@ -600,7 +643,8 @@
       "trigger": [
         "make:ids-check",
         "pre-commit:register-ids-check-dupes",
-        "pre-commit:register-ids-check-lost"
+        "pre-commit:register-ids-check-lost",
+        "pre-commit:register-ids-check-uids"
       ]
     },
     {

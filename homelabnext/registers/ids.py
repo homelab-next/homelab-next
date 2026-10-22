@@ -9,10 +9,16 @@ vanished in a merge -- and two files claiming one uid.  This module detects both
 
     check_lost    fail if a key a parent commit had is absent now (a lost record)
     duplicates    a key that occurs twice in a single-file register
-    dir_problems  a record file that is not named ``<uid>.md``, has no uid, or shares one
+    dir_problems  a record file that is not named for its uid, or shares one
     missing_uids  record files that carry no canonical uid (a legacy ``id:`` or a placeholder)
 
-Nothing here rewrites a file, and the module stays standard library only, for hooks.
+Each defect is reported by one of them only: a file without a uid is :func:`missing_uids`'
+(``check-uids``), not also a naming problem of :func:`dir_problems` (``check-dupes``).
+
+Nothing here rewrites a file, and the module imports only the standard library (and
+:mod:`homelabnext.identity`, which does too), for hooks; reading a tree's ``aliases.yml`` (only
+``check_lost`` does, for a parent commit that still has numbered files) needs PyYAML, as
+:mod:`homelabnext.identity.aliases` does.
 
 A register is a directory of record files (``lessons/<uid>.md``, the strategy's
 ``objectives/<uid>.md`` ...; see :mod:`homelabnext.registers.records`) or a single YAML file
@@ -44,6 +50,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 
+from homelabnext.identity.types import LEGACY_CODE_RE as _LEGACY
 from homelabnext.identity.uid import UID_PATTERN
 
 __all__ = [
@@ -91,10 +98,6 @@ SPECS: dict[str, RegisterSpec] = {
     # criteria ids are docs/checklist.md row ids: chosen to match a row, never allocated
     "invariants": RegisterSpec("invariants", "id", r"[A-Z]-\d{2,}"),
 }
-#: a numbered code the records carried before uids (read only to check the migration commit)
-_LEGACY = re.compile(r"(?:LL|RB|SO|OO|TO|TT|MOP|MOE|CCIR|FFIR|PIR|RFI)-(?:\d{3,}|NEW)")
-_ALIAS_LINE = re.compile(rf"(?m)^[ \t]+({_LEGACY.pattern})[ \t]*:[ \t]*({UID_PATTERN})\b")
-ALIASES_FILE = "aliases.yml"
 
 
 def spec_for(path: str | os.PathLike) -> RegisterSpec | None:
@@ -162,15 +165,16 @@ def _dir_keys(texts: dict[str, str], spec: RegisterSpec) -> list[tuple[str, str]
 
 
 def dir_problems(texts: dict[str, str], spec: RegisterSpec) -> list[str]:
-    """Name/uid disagreements, files without a uid and uids held by more than one file."""
+    """Name/uid disagreements and uids held by more than one file (a file with no uid at all is
+    :func:`missing_uids`' to report)."""
     problems, seen = [], {}
     for name in sorted(texts):
         ident = record_id(texts[name], spec)
+        if ident is None:
+            continue
         bad = record_name_problem(name, ident, spec)
         if bad:
             problems.append(bad)
-        if ident is None:
-            continue
         if ident in seen:
             problems.append(f"{name}: uid {ident} is also the uid of {seen[ident]}")
         else:
@@ -261,14 +265,16 @@ def _known_at(root, relpath: str, spec: RegisterSpec, rev: str | None = None) ->
     return None
 
 
-def _aliases(root, relpath: str) -> dict[str, str]:
-    """``code -> uid`` from the ``aliases.yml`` in or above a register (the working tree's)."""
-    out: dict[str, str] = {}
-    d = (pathlib.Path(root) / relpath).parent
-    for p in (d / ALIASES_FILE, d.parent / ALIASES_FILE):
-        if p.is_file():
-            out.update(dict(_ALIAS_LINE.findall(p.read_text(encoding="utf-8"))))
-    return out
+def _accounted(root, relpath: str, now: set[str]) -> set[str]:
+    """Legacy codes the ``aliases.yml`` in or above a register (the working tree's) accounts
+    for: a code whose uid is present now, and a code retired before uids (a tombstone)."""
+    from homelabnext.identity.aliases import load_aliases
+
+    try:
+        amap = load_aliases((pathlib.Path(root) / relpath).parent)
+    except ValueError as ex:
+        raise IdError(str(ex)) from ex
+    return {code for code, uid in amap.codes.items() if uid in now} | set(amap.retired)
 
 
 def entry_ids(root, relpath: str, spec: RegisterSpec) -> list[str]:
@@ -391,7 +397,7 @@ def check_lost(
     variable ``REGISTER_IDS_ALLOW_DROP=KEY,KEY`` waives a deliberate removal.  An invariant id
     moved into the ``retired:`` mapping is still accounted for; removing that tombstone is not.
     A parent's legacy code (``LL-001``, before the uid migration) is accounted for when the
-    tree's ``aliases.yml`` maps it to a uid that is present now.
+    tree's ``aliases.yml`` maps it to a uid that is present now, or retires it (a tombstone).
     """
     root = pathlib.Path(root)
     spec = spec_for(relpath)
@@ -410,8 +416,7 @@ def check_lost(
         if _rev_exists(root, rev):
             parents |= _known_at(root, relpath, spec, rev) or set()
     if spec.key == "uid":
-        aliases = _aliases(root, relpath)
-        now |= {code for code, uid in aliases.items() if uid in now}
+        now |= _accounted(root, relpath, now)
         parents = {k for k in parents if not k.endswith("-NEW")}  # never a record's identity
     waived = set(allow or ()) | {
         s.strip() for s in os.environ.get("REGISTER_IDS_ALLOW_DROP", "").split(",") if s.strip()

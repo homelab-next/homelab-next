@@ -122,6 +122,8 @@ suite_budgets = [
   "tests/roles = 900",
   "tools/tests = 240",  # the gate tools run pytest, git and builds in subprocesses
   "tests/packaging = 120",  # builds and installs the wheel and the sdist
+  # each test builds the whole repository graph (about 2s a build), so the suite grows with the docs
+  "tests/graph = 90",
 ]
 skip_reasons = [
   "^could not import '[A-Za-z0-9_.]+'",  # pytest.importorskip: an optional extra is not installed

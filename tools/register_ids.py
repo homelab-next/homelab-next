@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when a record vanished, a key occurs twice, or a record carries no uid.
 #   owner: maintainers
-#   trigger: [make:ids-check, pre-commit:register-ids-check-dupes, pre-commit:register-ids-check-lost]
+#   trigger: [make:ids-check, pre-commit:register-ids-check-dupes, pre-commit:register-ids-check-lost, pre-commit:register-ids-check-uids]
 #   invariant: [M-16, M-17]
 #   inputs: record directories (lessons, runbooks, the strategy records), invariants.yml and git history
 #   outputs: one line per lost, duplicate or uid-less record

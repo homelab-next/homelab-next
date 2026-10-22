@@ -6,7 +6,8 @@
   hnx ids check-dupes [PATH...]  fail if a key occurs twice, an invariant id is live and retired,
                                  or a record file is not named for its uid (exit 1)
   hnx ids check-uids [PATH...]   fail if a record file carries no canonical uid: a legacy
-                                 numbered id or an XX-NEW placeholder (exit 1)
+                                 numbered id or an XX-NEW placeholder (exit 1); check-dupes
+                                 leaves such a file to it, so each defect is reported once
 
 A PATH is a register file (invariants.yml), a record directory (lessons/, objectives/) or a
 record file inside one (lessons/<uid>.md, which stands for its directory).  Without PATHs every
@@ -14,9 +15,9 @@ register git tracks or HEAD (and --base) has is checked, so a commit that only d
 file is still seen.
 
 Records are identified by uids (ADR-0019): nothing is allocated, so there is no placeholder to
-resolve and no merge-time step.  `check-lost`, `check-dupes` and `check-uids` run in the
-pre-commit hook and in CI against the pull request's base.  tools/register_ids.py is a thin
-wrapper.
+resolve and no merge-time step.  `check-lost`, `check-dupes` and `check-uids` each run as a
+pre-commit hook (.pre-commit-config.yaml) and in `make ids-check` (CI, with check-lost against
+the pull request's base).  tools/register_ids.py is a thin wrapper.
 """
 
 import argparse

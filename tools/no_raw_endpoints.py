@@ -19,7 +19,7 @@ Endpoints are looked up through the service registry (capability alias), never
 written as literals. This scans a tree for:
 
   ipv4        any IPv4 address literal (0.0.0.0 bind-all, a version and a record's display
-              number such as ``TT 1.1.1.1`` are exempt)
+              number such as ``TT 1.1.1.1`` are exempt; see RECORD_NUMBER for what counts)
   localhost   ``localhost:<port>`` / ``localhost`` inside a URL with a port
   url-port    ``scheme://host:port`` with a literal host and explicit port
   host-port   ``name.<internal-ish tld>:<port>`` outside a URL
@@ -66,8 +66,26 @@ _OCT = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
 IPV4 = re.compile(rf"(?<![\w.]){_OCT}(?:\.{_OCT}){{3}}(?![\w]|\.\d)")
 # a version-ish context: "==1.2.3.4", "version 1.2.3.4", "v1.2.3.4"
 VERSIONISH = re.compile(r"(?:==|>=|<=|~=|!=|\bversion\b\W{0,3}|\bv)\s*$", re.IGNORECASE)
-# a record's computed display number, "TT 1.1.1.1" (ADR-0019): its type, a space, the number
-RECORD_NUMBER = re.compile(r"\b(?:SO|OO|TO|TT|MOP|MOE|CCIR|FFIR|PIR|SIR|RFI|LL|RB) $")
+# A record's computed display number (ADR-0019) looks like an address only with four components:
+# "TT 1.1.1.1".  It is exempt only when (a) the word before it is the display prefix of a record
+# type whose number can have four components -- TT (SO > OO > TO > TT), a MOE or MOP under a TO,
+# a PIR three sub-PIRs deep and its SIRs; SO, OO, TO, CCIR, FFIR and RFI numbers have at most
+# three, a lesson's (LL) and a runbook's (RB) one, so a dotted quad after RB, or after the word
+# TO ("FORWARD TO <address>"), is an address -- and (b) every component is a sibling position,
+# 1..50 (a number starts at 1; an address's 0 or 192 is no position).  tests/gates keeps FOUR_PART_TYPES equal to what the
+# strategy doctrine's hierarchy allows.
+FOUR_PART_TYPES = ("TT", "MOE", "MOP", "PIR", "SIR")
+RECORD_NUMBER = re.compile(rf"(?<![\w-])(?:{'|'.join(FOUR_PART_TYPES)}) $")
+_POSITION = re.compile(r"(?:[1-9]|[1-4]\d|50)")
+
+
+def _record_number(line: str, m: re.Match) -> bool:
+    """The IPv4-shaped match ``m`` is a record's display number (see RECORD_NUMBER)."""
+    return bool(RECORD_NUMBER.search(line[: m.start()])) and all(
+        _POSITION.fullmatch(p) for p in m.group(0).split(".")
+    )
+
+
 URL_PORT = re.compile(
     r"\b[a-z][a-z0-9+.-]*://(?:[^\s/@:'\"<>]+@)?(\[[0-9a-f:]+\]|[A-Za-z0-9_.-]+):(\d{1,5})\b"
 )
@@ -143,7 +161,7 @@ def scan_text(rel: str, text: str) -> list[Finding]:
         for m in IPV4.finditer(line):
             if m.group(0) == "0.0.0.0":
                 continue
-            if VERSIONISH.search(line[: m.start()]) or RECORD_NUMBER.search(line[: m.start()]):
+            if VERSIONISH.search(line[: m.start()]) or _record_number(line, m):
                 continue
             if any(s <= m.start() < e for s, e in spans):
                 # already reported as part of a URL; still an ipv4 literal, report once under url-port

@@ -458,3 +458,86 @@ def test_without_warnings_a_migrated_tree_loads(strategy):
     with warnings.catch_warnings():
         warnings.simplefilter("error")  # no legacy code is left to resolve
         load_tree(strategy)
+
+
+def tombstone(registers, code="LL-009", replaced_by="LL-001"):
+    p = registers / "lessons" / f"{code}.md"
+    rb = f"\n  replaced_by: {replaced_by}" if replaced_by else ""
+    p.write_text(f"---\nid: {code}\nretired:\n  reason: filed twice for the same outage{rb}\n---\n")
+    return p
+
+
+def test_a_tombstone_moves_to_the_alias_map_with_its_successors_uid(registers):
+    """A code retired before uids (a tombstone) gets no uid: it lands in aliases.yml under
+    `retired:` with the successor's uid, the register still validates, an old citation of it
+    resolves to the successor, and a second run changes nothing."""
+    from homelabnext.identity.aliases import resolve
+    from homelabnext.registers.records import load_register
+    from homelabnext.registers.schema import validate_lessons
+
+    t = tombstone(registers)
+    tombstone(registers, "LL-010", replaced_by=None)
+    plan = migrate(registers)
+    assert t in plan.removed and not t.exists() and "LL-009" not in plan.assigned
+    validate_lessons(load_register(registers / "lessons"))  # no record fails validation
+    amap = load_aliases(registers)
+    assert amap.retired == {
+        "LL-009": {
+            "reason": "filed twice for the same outage",
+            "replaced_by": amap.codes["LL-001"],
+        },
+        "LL-010": {"reason": "filed twice for the same outage"},
+    }
+    with pytest.warns(LegacyRecordCode, match="LL-009 is a retired legacy record code"):
+        assert resolve("LL-009", amap) == amap.codes["LL-001"]
+    assert resolve("LL-010", amap) == "LL-010"  # no successor: unresolved, for the caller
+    before = snapshot(registers)
+    assert not migrate(registers).changed
+    assert snapshot(registers) == before
+
+
+@pytest.mark.parametrize(
+    ("code", "replaced_by", "match"),
+    [
+        ("LL-009", "LL-099", "replaced_by LL-099 names no record"),
+        ("LL-001", "LL-002", "retired and live"),
+    ],
+)
+def test_a_tombstone_that_cannot_be_carried_stops_the_migration(
+    registers, code, replaced_by, match
+):
+    if code == "LL-001":
+        (registers / "lessons" / "LL-001-retired.md").write_text(
+            f"---\nid: {code}\nretired:\n  reason: a reused number\n  replaced_by: {replaced_by}\n---\n"
+        )
+    else:
+        tombstone(registers, code, replaced_by)
+    before = snapshot(registers)
+    with pytest.raises(MigrationError, match=match):
+        migrate(registers)
+    assert snapshot(registers) == before
+
+
+def test_an_occupied_events_directory_stops_the_migration_before_any_write(registers):
+    """The rename target of a record's sidecar exists: refused in the pre-flight, with nothing
+    written (it used to be found mid-write, after earlier records had been moved)."""
+    gen = new_uid()
+    uids = [gen() for _ in range(3)]  # LL-001, LL-002, LL-NEW in code order
+    (registers / "lessons" / f"{uids[1]}.events").mkdir()
+    before = snapshot(registers)
+    with pytest.raises(MigrationError, match=rf"{uids[1]}\.events exists"):
+        migrate(registers)
+    assert snapshot(registers) == before
+    assert (registers / "lessons" / "LL-001.md").exists()
+
+
+def test_a_code_inside_a_links_alias_is_not_linked_again(registers):
+    p = registers / "lessons" / "LL-002.md"
+    p.write_text(
+        p.read_text().replace("([[LL-001]])", "([[LL-001|the LL-001 outage]], [[ext|see LL-001]])")
+    )
+    migrate(registers)
+    u = load_aliases(registers).codes
+    text = (registers / "lessons" / f"{u['LL-002']}.md").read_text()
+    assert f"([[{u['LL-001']}|the LL-001 outage]], [[ext|see LL-001]])" in text
+    assert "[[" + u["LL-001"] + "|the [[" not in text

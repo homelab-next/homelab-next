@@ -42,7 +42,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -102,6 +102,8 @@ jobs:
         run: python tools/tls_verify_lint.py .
       - name: nothing at runtime points at the workstation (F-17)
         run: python tools/workstation_refs.py .
+      - name: no private overlay, SOPS ciphertext or decryption key in the public tree (ADR-0021)
+        run: python tools/private_leak_check.py public .
       - name: scripts write scratch output only under their run directory or build/
         run: python tools/run_output_lint.py .
       - name: role and playbook lint

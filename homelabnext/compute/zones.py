@@ -11,6 +11,8 @@ from typing import Any
 
 import yaml
 
+from homelabnext import sops
+
 from .model import ComputeError, ZoneFlow, ZoneInfo, ZoneLookup
 
 
@@ -40,8 +42,8 @@ def zone_from_mapping(z: Mapping[str, Any]) -> ZoneInfo:
 def load_zones_file(path: str | Path) -> tuple[ZoneLookup, str | None]:
     """Read the ``zones:`` list (and ``site.domain``) of a site.yml-shaped file."""
     try:
-        doc = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
+        doc = yaml.safe_load(sops.read_text(path))
+    except (OSError, yaml.YAMLError, sops.SopsError) as exc:
         raise ComputeError(f"cannot read site file {path}: {exc}") from exc
     if not isinstance(doc, dict) or not isinstance(doc.get("zones"), list):
         raise ComputeError(f"{path}: expected a mapping with a 'zones' list")

@@ -2,6 +2,7 @@
 
 - **Status:** proposed
 - **Date:** 2026-10-20
+- **Amended:** 2026-10-21 by ADR-0019 (see the amendment at the end of Decision)
 - **Related:** ADR-0010, ADR-0011, ADR-0013, ADR-0014, `docs/strategy.md`, `homelabnext/strategy/`,
   `schemas/strategy/`
 
@@ -43,6 +44,16 @@ objective has no measure of effect, and a question nobody can answer stays open 
 7. The public repository ships the model, the schemas, the doctrine defaults and a fictional
    example; a lab's real strategy lives in a private repository and loads through the same code
    with a path (ADR-0011).
+
+### Amendment (2026-10-21): ADR-0019 supersedes the numbering
+
+Decision 1's "`XX-NEW` ids allocated at merge" and the consequence "link targets must be
+allocated ids" are superseded by [ADR-0019](0019-record-uids-computed-numbers.md): every
+strategy record is identified by a UUIDv7 created with it and lives in `<type-dir>/<uid>.md`;
+nothing is allocated at merge, a new objective and a record citing it arrive in one pull
+request, and the number a record is shown with (`OO 1.2`) is computed from its type, parent and
+order. `check-lost` still guards the directories, keyed by uid. The rest of this ADR stands; the
+text above is kept as it was decided.
 
 ## Consequences
 

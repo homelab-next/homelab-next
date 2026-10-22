@@ -42,6 +42,7 @@ PLANTED = {
     "secret-name": "pw: {{ vault" + "_db_password }}",
     "keyed-secret": "db_pass" + "word: " + "Tr0ub4dor" + "&3",
     "vault-blob": "$ANSIBLE" + "_VAULT;1.1;AES256",
+    "age-secret-key": "AGE-SECRET-" + "KEY-1" + ("QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L" * 2)[:58],
     "high-entropy-string": "api_key_value " + "Zx9Qw3Rt7Yp2" + "Lk8Vb5Nm1Cd4Fg6Hj0sA",
     "lowercase-entropy-string": "key " + "k7x2m9q4w8" + "z3n6b1v5c0",
     "hex-secret": "auth key " + "9f86d081884c7d65" + "9a2feaa0c55ad015",

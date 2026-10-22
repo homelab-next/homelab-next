@@ -163,7 +163,7 @@ def test_every_source_contributes_and_counts(graph):
     for kind in ("svc", "cap", "adapter", "check", "schema", "lesson", "runbook", "inv"):
         assert kinds.get(kind), kind
     assert kinds["svc"] == 19
-    assert kinds["lesson"] == 5 and kinds["runbook"] == 2
+    assert kinds["lesson"] == 5 and kinds["runbook"] == 3
     # one script node per catalogued script (the catalog is the source of truth for the count)
     catalog = json.loads((ROOT / "docs/scripts/catalog.json").read_text(encoding="utf-8"))
     assert len(graph.of_kind("script")) == len(catalog["scripts"])
@@ -483,7 +483,7 @@ def test_register_entries_is_the_one_seam():
     assert all(e["_key"] == e["uid"] for e in lessons)
     assert [e["_label"] for e in lessons] == [f"LL {n}" for n in range(1, 6)]
     runbooks = sources._register_entries(ROOT / RUNBOOKS)
-    assert [e["uid"] for e in runbooks] == [U["RB-001"], U["RB-002"]]
+    assert [e["uid"] for e in runbooks] == [U["RB-001"], U["RB-002"], U["RB-003"]]
     assert sources._register_entries(ROOT / "examples/registers/invariants.yml")[0]["id"] == "F-05"
 
 

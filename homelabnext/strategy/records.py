@@ -37,7 +37,7 @@ from typing import Any
 
 import yaml
 
-from homelabnext.identity import STRATEGY_TYPES, label_map, node_of
+from homelabnext.identity import STRATEGY_TYPES, TYPE_ORDER, label_map, node_of
 from homelabnext.identity.numbers import sibling_key
 from homelabnext.identity.uid import is_uid
 from homelabnext.registers import events as ev
@@ -150,10 +150,13 @@ class Tree:
 
 
 def _number_key(label: str, entry: Mapping[str, Any]) -> tuple:
-    """Sort by type, then number part by part (``OO 1.10`` after ``OO 1.9``)."""
+    """Sort by type in the doctrine's order (:data:`~homelabnext.identity.TYPE_ORDER`: SO before
+    OO, MOE before MOP, so a parent's type precedes its children's), then number part by part
+    (``OO 1.10`` after ``OO 1.9``)."""
     rtype, _, num = label.partition(" ")
+    rank = TYPE_ORDER.index(rtype) if rtype in TYPE_ORDER else len(TYPE_ORDER)
     parts = tuple(int(p) if p.isdigit() else 1 << 30 for p in num.split(".")) if num else ()
-    return (rtype, parts, sibling_key(node_of(entry)))
+    return (rank, rtype, parts, sibling_key(node_of(entry)))
 
 
 def load_tree(

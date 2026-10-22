@@ -35,6 +35,7 @@ Platform-wide properties. Most need a running platform; the repository-level one
 | F-18 | The public tree contains no private identifiers | `tools/leak_scan.py` over the tree exits 0 (no private IPs, domains, emails, MACs, keys) | PUBLIC-NOW |
 | F-19 | Every guest has a defense baseline | With a baseline set (`_baselines.yml`), every guest (vm, lxc, host) names one or more baselines or carries a documented exemption (`hnx guests baselines DIR --site SITE --check`; `--require-bound` also fails while a needed control has no role) | PUBLIC-NOW |
 | F-20 | Every machine says what powers it | With a site `power` section, the router, every switch and edge device, every hypervisor and physical host names a known UPS or `none` with a reason (or takes `power.default`), and every UPS feeds something (`hnx guests validate DIR --site SITE`; `homelabnext/power.py`) | PUBLIC-NOW |
+| F-21 | The public tree carries no part of a private overlay | `tools/private_leak_check.py public .` exits 0: no overlay marker outside the fictional skeleton, no file under the skeleton's private layout paths, no `.sops.yaml`, no SOPS ciphertext, no key file; a private overlay's CI runs the same tool as `private ROOT` (no plaintext credential value, every file `.sops.yaml` covers sealed, every vault file vault-encrypted; ADR-0021) | PUBLIC-NOW |
 
 ## C - Collection
 
@@ -120,7 +121,7 @@ Action broker, approvals, operator-away mode.
 | P-05 | Operator-away mode works | Drill: switch on forces live intents to shadow within 1 min; daily summary arrives | SERVER |
 | P-06 | Broker decisions reach the SIEM | Allow, deny and needs-approval all appear in the SIEM within 5 min | SERVER |
 | P-07 | Broker isolation holds | One caller cannot read or cancel another's request (`access_cases` table test; broker conformance checks `requests-bound-to-caller`, `foreign-request-access-audited`) | PUBLIC-NOW |
-| P-08 | Work follows the board rules and links to strategy by uid | Every project, step and task keeps the board rules (a step belongs to an open project; a project whose steps are all finished is closed; finished items carry a result; links resolve; no cycles): `hnx projects check` exits 0 on the projects directory; the `projects` conformance suite passes on the reference store and on OpenProject (recorded fake) and catches its eight mutants (ADR-0020) | PUBLIC-NOW |
+| P-08 | Work follows the board rules and links to strategy by uid | Every project, step and task keeps the board rules (a step belongs to an open project; a project whose steps and tasks are all finished is closed; finished items, closed projects included, carry a result; links resolve; no cycles): `hnx projects check` exits 0 on a non-empty projects directory; the `projects` conformance suite passes on the reference store and on OpenProject (recorded fake, `--target projects-openproject`) and catches its ten mutants (ADR-0020) | PUBLIC-NOW |
 | P-09 | The project tool mirrors strategy faithfully | `hnx projects doctor --target openproject` all ok and `hnx projects sync-strategy --dry-run` reports 0 writes after an apply (repository unchanged), against the live OpenProject | SERVER |
 
 ## R - Orchestration
@@ -286,4 +287,4 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 
 ---
 
-**Totals:** 163 criteria across 16 pillars; 83 PUBLIC-NOW, 80 SERVER.
+**Totals:** 164 criteria across 16 pillars; 84 PUBLIC-NOW, 80 SERVER.

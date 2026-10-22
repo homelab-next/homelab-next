@@ -111,6 +111,20 @@ criteria:
     Give the device `power: {ups: <id>}` (or `{ups: none, reason: ...}`), fix the UPS id, or
     remove a UPS that feeds nothing; a machine whose power nobody wrote down is the one that
     surprises you in a power cut (docs/network-model.md, Power).
+- id: F-21
+  statement: The public tree carries no part of a private overlay.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml' 2>/dev/null || exit 100;
+    python3 tools/private_leak_check.py public . && echo no private overlay
+  expected: >-
+    exit 0 (no overlay marker outside the fictional skeleton, nothing under its private layout
+    paths, no .sops.yaml, no SOPS ciphertext, no key file)
+  expect_regex: no private overlay
+  remediation: >-
+    Move the file to the private overlay repository and rotate anything it could open (ADR-0021);
+    a marker, ciphertext or key in public git hands the lab's layout or its keys to every reader,
+    and the history keeps it after the file is deleted.
 - id: D-02
   statement: Every rule is tested.
   evidence: auto
@@ -136,8 +150,8 @@ criteria:
   statement: Work follows the board rules and links to strategy by uid.
   evidence: auto
   observable: python3 -m homelabnext.cli projects check --dir examples/projects --strategy examples/strategy
-  expected: exit 0
-  expect_regex: '0 problem\(s\) in'
+  expected: exit 0, with no problem in a non-empty directory (a missing one is exit 2)
+  expect_regex: ' 0 problem\(s\) in [1-9][0-9]* item\(s\) of '
   remediation: >-
     Run `hnx projects check` and fix what it names: close a project whose steps are all
     finished, give a finished item its one-line result, re-point a link at an existing record or
@@ -651,11 +665,13 @@ criteria:
     IFS=$'\n'; f=$(git ls-files -- '*invariants.yml' '*/lessons/*.md' '*/runbooks/*.md'
     '*/objectives/*.md' '*/measures/*.md' '*/requirements/*.md' '*/rfis/*.md') || exit 100;
     [ -n "$f" ] || { echo no registers tracked; exit 100; };
-    python3 tools/register_ids.py check-uids && echo no placeholder ids
+    python3 tools/register_ids.py check-dupes; d=$?;
+    python3 tools/register_ids.py check-uids && [ "$d" -eq 0 ] && echo no placeholder ids
   expected: >-
-    exit 0: every record carries its canonical uid and is named for it, so no record is keyed by a
-    placeholder or a number (records are identified by uids, ADR-0019; exit 100 outside a git
-    checkout)
+    exit 0 from what `make ids-check` runs (check-dupes, then check-uids, over every register):
+    every record carries its canonical uid, no uid is held twice and every record file is named
+    `<uid>.md`, so no record is keyed by a placeholder or a number (records are identified by
+    uids, ADR-0019; exit 100 outside a git checkout)
   expect_regex: no placeholder ids
   remediation: >-
     Run `hnx records assign-uids <tree>` on the tree that holds the record (it gives every record

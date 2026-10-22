@@ -154,9 +154,10 @@ Check = Callable[[Mapping[str, Any]], Result]                           # the pl
 ### 2.2 Command line
 
 `hnx` sub-commands are rows in `COMMANDS` in `homelabnext/cli.py` (name, one-line help, handler that
-imports its package lazily). Current names: `registry`, `new`, `gen`, `detections`, `registers`,
-`invariants`, `ids`, `decide`, `golden`, `site`, `guests`, `schema-check`, `swap`, `conform`, `custom`,
-`workflows`, `projects`.
+imports its package lazily). Current names, in that order: `registry`, `new`, `gen`, `detections`,
+`registers`, `invariants`, `strategy`, `projects`, `records`, `reviews`, `ids`, `decide`, `golden`,
+`site`, `guests`, `schema-check`, `swap`, `conform`, `decommission`, `docs`, `agent`, `workflows`,
+`scripts`, `events`, `status`, `graph`, `mcp`, `broker`, `custom`.
 `parity` is a library only (the swap runner calls it; no sub-command).
 Exit codes everywhere: `0` ok, `1` a check failed, `2` misconfiguration or bad input, `>=100` the
 check itself could not measure.

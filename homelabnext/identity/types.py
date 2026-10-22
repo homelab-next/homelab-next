@@ -18,6 +18,7 @@ __all__ = [
     "REGISTER_TYPES",
     "STRATEGY_TYPES",
     "TYPE_DIR",
+    "TYPE_ORDER",
     "label_prefix",
     "legacy_type",
 ]
@@ -37,6 +38,9 @@ STRATEGY_TYPES: dict[str, str] = {
 }
 #: register record type -> its directory (homelabnext.registers)
 REGISTER_TYPES: dict[str, str] = {"lesson": "lessons", "runbook": "runbooks"}
+#: the doctrine's order of the strategy types: the objective cascade from the top (so a parent's
+#: type precedes its children's), then measures, requirements and RFIs.  Lists sort by it.
+TYPE_ORDER: tuple[str, ...] = ("SO", "OO", "TO", "TT", "MOE", "MOP", "CCIR", "FFIR", "PIR", "RFI")
 TYPE_DIR: dict[str, str] = {"strategy": ".", **STRATEGY_TYPES, **REGISTER_TYPES}
 _PREFIX = {"lesson": "LL", "runbook": "RB", "strategy": "Strategy"}
 

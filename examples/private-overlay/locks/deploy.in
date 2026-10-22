@@ -1,0 +1,4 @@
+# The deploy job's own tools, beyond hnx (whose dependencies come from hnx/constraints/ci.txt).
+# Lock with hashes and commit the lock:
+#   uv pip compile locks/deploy.in --generate-hashes --universal -o locks/deploy.txt
+ansible-core

@@ -193,17 +193,22 @@ class ProjectStore:
     def _auto_close(
         self, items: dict[str, WorkItem], project: str | None, at: str, day: str
     ) -> list[tuple[WorkItem, int | None, str, str | None]]:
-        """Rule 3: the project closes when its last unfinished step finishes."""
+        """Rule 3: a project with steps closes when its last unfinished step or task finishes."""
         p = items.get(project or "")
         if p is None or p.kind != "project" or p.status != "open":
             return []
         steps = rules.steps_of(items.values(), p.uid)
-        if not steps or not all(s.status in TERMINAL for s in steps):
+        if not steps or self._unfinished(items, p.uid):
             return []
         done = sum(1 for s in steps if s.status == "done")
         result = f"all {len(steps)} steps finished ({done} done, {len(steps) - done} cancelled)"
         closed = self._bump(p, at, status="closed", result=result, closed_on=day)
         return [(closed, p.version, "closed", RULE_ACTOR)]
+
+    @staticmethod
+    def _unfinished(items: Mapping[str, WorkItem], project: str) -> list[WorkItem]:
+        """The project's steps and tasks that have not finished: they hold it open."""
+        return rules.unfinished_of(items.values(), project)
 
     def records(self) -> tuple[str, ...]:
         """The external record uids links may name."""
@@ -331,7 +336,7 @@ class ProjectStore:
             op = "closed" if updated.terminal and not item.terminal else "updated"
             changed = [(updated, item.version, op, None)]
             items[uid] = updated
-            if updated.kind == "step" and updated.terminal:
+            if updated.kind != "project" and updated.terminal:
                 changed += self._auto_close(items, updated.project, at, day)
             return self._commit(items, changed, at)[uid]
 
@@ -360,9 +365,12 @@ class ProjectStore:
         return {"status": status}
 
     def _closable_project(self, items: Mapping[str, WorkItem], project: WorkItem) -> None:
-        left = [s for s in rules.steps_of(items.values(), project.uid) if not s.terminal]
+        left = self._unfinished(items, project.uid)
         if left:
-            raise InvalidTransition(f"{len(left)} unfinished step(s): finish or cancel them first")
+            what = sorted({i.kind for i in left})
+            raise InvalidTransition(
+                f"{len(left)} unfinished {' or '.join(what)}(s): finish or cancel them first"
+            )
 
     def _unblocked(self, items: Mapping[str, WorkItem], item: WorkItem) -> None:
         blockers = [

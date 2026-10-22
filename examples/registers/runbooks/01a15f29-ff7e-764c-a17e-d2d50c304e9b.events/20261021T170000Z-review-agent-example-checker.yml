@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+event: review
+by: agent:example-checker
+kind: agent
+role: check
+date: '2026-10-21'
+verdict: pass
+digest: sha256:0f8643242be568da3e05d3068436c2940396b9449ea568ce22f111345d4072f2
+note: fictional example review (steps 6 and 8 now dispatch the deploy by hand)

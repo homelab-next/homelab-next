@@ -52,6 +52,7 @@ def test_retired_ids_are_checklist_conflicts_with_a_live_replacement():
 # rows whose gate already runs in `make check`; each must be runnable from a checkout
 GATED = ["F-05", "F-18", "D-02", "D-07", "Q-04", "Q-07", "Q-09", "Q-10", "Q-11"]
 GATED += ["M-01", "M-02", "M-03", "M-04", "M-17", "L-06", "L-07", "F-07", "F-17", "Q-05", "Q-08"]
+GATED += ["F-21"]
 # the CLI gates of `make check` and CI (fast: they run in `make invariants`)
 FAST_GATES = ["D-04", "T-07", "R-01", "R-03", "R-04", "R-07", "M-12", "G-01", "G-02", "G-03"]
 FAST_GATES += ["G-11", "K-02", "K-03", "K-04", "K-12", "K-15", "L-05", "F-19"]
@@ -142,6 +143,21 @@ def test_m16_fails_on_a_record_without_its_uid(scratch):
     _git(scratch, "add", "-A")
     r = _run(scratch, ["M-16"])["M-16"]
     assert r["status"] == "fail" and "still numbered LL-NEW" in r["evidence"]
+
+
+def test_m16_fails_on_a_misnamed_or_shared_uid_as_make_ids_check_does(scratch):
+    """M-16 runs what its checklist row names (`make ids-check`: check-dupes and check-uids), so
+    a record named for another uid, or two files holding one uid, fail it too."""
+    d = scratch / "reg" / "lessons"
+    d.mkdir(parents=True)
+    u1, u2 = "01a15e4e-0000-7000-8000-000000000001", "01a15e4e-0000-7000-8000-000000000002"
+    (d / f"{u1}.md").write_text(f"---\nuid: {u1}\ntype: lesson\n---\n")
+    _git(scratch, "add", "-A")
+    assert _run(scratch, ["M-16"])["M-16"]["status"] == "pass"
+    (d / f"{u2}.md").write_text(f"---\nuid: {u1}\ntype: lesson\n---\n")  # u1 twice, misnamed
+    _git(scratch, "add", "-A")
+    r = _run(scratch, ["M-16"])["M-16"]
+    assert r["status"] == "fail" and f"uid {u1} is also the uid of" in r["evidence"]
 
 
 def test_fast_gates_pass_on_the_repository():

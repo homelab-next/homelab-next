@@ -18,7 +18,7 @@ from typing import Any
 
 import yaml
 
-from homelabnext import paths
+from homelabnext import paths, sops
 from homelabnext._yaml import UniqueKeyLoader
 
 
@@ -491,7 +491,9 @@ def loads(text: str) -> Registry:
 def load(path: str | Path) -> Registry:
     p = Path(path)
     try:
-        text = p.read_text(encoding="utf-8")
+        text = sops.read_text(p)
     except OSError as exc:
         raise RegistryError(f"cannot read registry {p}: {exc}") from exc
+    except sops.SopsError as exc:
+        raise RegistryError(str(exc)) from exc
     return loads(text)

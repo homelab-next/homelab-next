@@ -225,6 +225,14 @@ leak-scan:
 secret-scan:
 	$(PY) tools/leak_scan.py --groups secret .
 
+# the reverse guard of the public/private split (ADR-0021): nothing of a private overlay (its
+# marker, its layout paths, a .sops.yaml, SOPS ciphertext, a decryption key) is committed here.
+# The private overlay's own CI runs the same tool as `private_leak_check.py private .`.
+.PHONY: private-overlay-check
+check: private-overlay-check
+private-overlay-check:
+	$(PY) tools/private_leak_check.py public .
+
 # lines added by the commits in RANGE (default: everything not yet on origin/main)
 leak-scan-history:
 	$(PY) tools/leak_scan.py --history $(or $(RANGE),origin/main..HEAD)

@@ -23,7 +23,7 @@ checked: a stale one is a conflict, exit 1).  OpenProject's API token is read by
 from the environment (``HNX_SECRET_OPENPROJECT_API_TOKEN`` for ``secret:openproject/api-token``).
 
 Exit codes: 0 ok, 1 a rule refused the change or ``check``/``doctor`` found problems, 2 usage or
-input error.
+input error (a ``--dir`` that does not exist, for any command but ``new``).
 """
 
 from __future__ import annotations
@@ -97,9 +97,12 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _store(a):
+    """The store over ``--dir``; only ``new`` creates a missing directory (every other command
+    needs items to act on, and a read must not pass vacuously over a directory that is not
+    there: exit 2)."""
     from . import markdown_store
 
-    return markdown_store(a.dir, strategy=a.strategy)
+    return markdown_store(a.dir, strategy=a.strategy, create=a.cmd == "new")
 
 
 def _resolve(store, ref: str, items: Sequence[WorkItem] | None = None) -> str:
@@ -244,7 +247,11 @@ def _run(a) -> int:
         else:
             for p in problems:
                 print(p)
-        print(f"hnx projects check: {len(problems)} problem(s) in {a.dir}", file=sys.stderr)
+        n = len(store.list())
+        print(
+            f"hnx projects check: {len(problems)} problem(s) in {n} item(s) of {a.dir}",
+            file=sys.stderr,
+        )
         return 1 if problems else 0
     elif a.cmd == "feed":
         from .events import change_events

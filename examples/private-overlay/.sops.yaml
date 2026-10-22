@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# SOPS creation rules for the private overlay (docs/private-overlay.md "Encrypting a file").
+#
+# FICTIONAL RECIPIENTS: every age1fake... value below is a FAKE placeholder, not a real or valid
+# age public key.  Replace them with your own public recipients (`age-keygen -y <identity>`):
+# the operator's offline key and the deploy key whose identity lives only in the protected
+# Actions Environment (secret SOPS_AGE_KEY).  Never commit an identity (AGE-SECRET-KEY-1...).
+#
+# `tools/private_leak_check.py private` fails on a file one of these path_regex rules covers that
+# is not SOPS-encrypted, so a rule here is a promise CI keeps.
+creation_rules:
+  # sensitive lab data that is not a credential (WAN addresses, peer details): sealed per file
+  - path_regex: (^|/)lab/sealed/.*\.sops\.ya?ml$
+    age: >-
+      age1fakefakefakefakefakefakefakefakefakefakefakefakefakefakefakeaa,
+      age1fakefakefakefakefakefakefakefakefakefakefakefakefakefakefakeee
+  # to seal a whole data file instead of keeping it plain under repository access control, add a
+  # rule for it, for example:
+  # - path_regex: (^|/)lab/site\.yml$
+  #   age: >-
+  #     age1fake...operator, age1fake...deploy

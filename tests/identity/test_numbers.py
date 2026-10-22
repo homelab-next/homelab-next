@@ -114,3 +114,22 @@ def test_node_of_reads_a_record_entry():
     entry = {"uid": SO1, "type": "OO", "parent": SO2, "order": 3, "title": "x"}
     assert node_of(entry) == Node(SO1, "OO", SO2, 3)
     assert node_of({"uid": SO1, "type": "SO", "order": True}).order is None  # not a number
+
+
+def test_records_numbers_lists_the_example_strategy_in_doctrine_order(capsys):
+    """Golden: `hnx records numbers examples/strategy` lists types in the doctrine's order (SO
+    before OO before TO before TT, MOE before MOP, then requirements and RFIs), so a parent
+    precedes its children; it used to sort by the type string (OO before SO, MOE before MOP
+    only by accident)."""
+    from pathlib import Path
+
+    from homelabnext.identity.cli import main
+
+    root = Path(__file__).resolve().parents[2]
+    assert main(["numbers", str(root / "examples/strategy")]) == 0
+    labels = [" ".join(ln.split()[:2]) for ln in capsys.readouterr().out.splitlines()]
+    assert labels == [
+        "SO 1", "SO 2", "OO 1.1", "OO 2.1", "TO 1.1.1", "TT 1.1.1.1",
+        "MOE 1.1", "MOE 1.1.1", "MOE 1.1.1.1", "MOE 1.1.1.1.1", "MOE 2.1", "MOE 2.1.1",
+        "MOP 1.1.1", "MOP 1.1.1.1", "CCIR 1", "FFIR 1", "PIR 1", "RFI 1", "RFI 2",
+    ]  # fmt: skip

@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-from homelabnext import paths
+from homelabnext import paths, sops
 from homelabnext._yaml import UniqueKeyStrDateLoader
 from homelabnext.generators.safe import control_char_paths
 
@@ -61,8 +61,8 @@ def load_guests(directory: str | Path) -> tuple[list[Guest], list[Problem]]:
     for path in guest_files(d):
         where = path.name
         try:
-            doc = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
-        except (OSError, yaml.YAMLError) as exc:
+            doc = yaml.load(sops.read_text(path), Loader=_UniqueKeyLoader)
+        except (OSError, yaml.YAMLError, sops.SopsError) as exc:
             problems.append(Problem(where, f"unreadable YAML: {exc}"))
             continue
         # Python's re lets a schema pattern's "$" match before a trailing newline, and every
@@ -84,8 +84,8 @@ def load_policies(path: str | Path) -> dict[str, Mapping[str, Any]]:
     """Read ``{policies: {name: {...}}}``; ``none`` is always implicitly defined."""
     p = Path(path)
     try:
-        doc = yaml.load(p.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
-    except (OSError, yaml.YAMLError) as exc:
+        doc = yaml.load(sops.read_text(p), Loader=_UniqueKeyLoader)
+    except (OSError, yaml.YAMLError, sops.SopsError) as exc:
         raise ComputeError(f"cannot read backup policies {p}: {exc}") from exc
     pol = (doc or {}).get("policies") if isinstance(doc, dict) else None
     if not isinstance(pol, dict):
@@ -99,8 +99,8 @@ def load_nodes(path: str | Path) -> dict[str, Mapping[str, Any]]:
     :func:`homelabnext.power.fleet_problems`)."""
     p = Path(path)
     try:
-        doc = yaml.load(p.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
-    except (OSError, yaml.YAMLError) as exc:
+        doc = yaml.load(sops.read_text(p), Loader=_UniqueKeyLoader)
+    except (OSError, yaml.YAMLError, sops.SopsError) as exc:
         raise ComputeError(f"cannot read nodes {p}: {exc}") from exc
     nodes = (doc or {}).get("nodes") if isinstance(doc, dict) else None
     if not isinstance(nodes, dict):
@@ -121,8 +121,8 @@ def load_keys(path: str | Path) -> dict[str, str]:
     """Read ``{keys: {name: public-key-line}}`` (public keys only; never private material)."""
     p = Path(path)
     try:
-        doc = yaml.safe_load(p.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
+        doc = yaml.safe_load(sops.read_text(p))
+    except (OSError, yaml.YAMLError, sops.SopsError) as exc:
         raise ComputeError(f"cannot read keys {p}: {exc}") from exc
     keys = (doc or {}).get("keys") if isinstance(doc, dict) else None
     if not isinstance(keys, dict):
