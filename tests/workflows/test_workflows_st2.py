@@ -1317,6 +1317,7 @@ def test_every_fixture_request_is_one_the_handler_schema_accepts():
         (409, '{"reason": "already_retried", "retried_by_run_id": "run-2"}', 0, None),
         (409, '{"reason": "retry_chain_spent"}', 0, "retry_chain_spent"),
         (422, '{"reason": "not_retryable", "failure_class": "deadline"}', 0, "not_retryable"),
+        (422, '{"reason": "idempotency_key_mismatch"}', 0, "idempotency_key_mismatch"),
         (404, '{"reason": "unknown_run"}', 0, "unknown_run"),
         (400, '{"reason": "input_unsupported"}', 1, None),
         (503, "", 1, None),
@@ -1332,17 +1333,24 @@ def test_the_submit_handler_maps_the_controllers_answers(tmp_path, code, body, e
     if code is None:
         script = "#!/bin/sh\ncat >/dev/null\necho 'curl: (7) refused' >&2\nexit 7\n"
     else:
-        script = f"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n%s' '{body}' '{code}'\n"
+        script = (
+            f'#!/bin/sh\nprintf "%s\\n" "$@" > "{tmp_path}/args"\ncat > "{tmp_path}/stdin"\n'
+            f"printf '%s\\n%s' '{body}' '{code}'\n"
+        )
     fake.write_text(script)
     fake.chmod(0o755)
     env = {
         "PATH": f"{fake.parent}{os.pathsep}/usr/bin{os.pathsep}/bin",
         "ORCHESTRATOR_JOBS_URL": "https://controller.example.invalid/jobs",
     }
-    got = subprocess.run(
-        ["/bin/sh", str(HANDLER)], input=b'{"agent_key": "triage"}', env=env, capture_output=True
+    params = (
+        b'{"agent_key": "triage", "idempotency_key": "run-0001", "retry_of_run_id": "run-0001"}'
     )
+    got = subprocess.run(["/bin/sh", str(HANDLER)], input=params, env=env, capture_output=True)
     assert got.returncode == exit_code, got.stderr
+    if code is not None:
+        assert "Idempotency-Key: run-0001" in (tmp_path / "args").read_text().splitlines()
+        assert (tmp_path / "stdin").read_bytes() == params  # the body goes on unchanged
     if exit_code == 0:
         out = json.loads(got.stdout)
         if refused:
@@ -1350,3 +1358,35 @@ def test_the_submit_handler_maps_the_controllers_answers(tmp_path, code, body, e
             assert b"refused by the controller" in got.stderr
         else:
             assert out == json.loads(body)
+
+
+def test_the_submit_handler_refuses_params_without_a_key(tmp_path):
+    import subprocess
+
+    env = {"PATH": "/usr/bin:/bin", "ORCHESTRATOR_JOBS_URL": "https://controller.example.invalid/j"}
+    got = subprocess.run(
+        ["/bin/sh", str(HANDLER)], input=b'{"agent_key": "x"}', env=env, capture_output=True
+    )
+    assert got.returncode == 1 and b"no idempotency_key" in got.stderr
+
+
+def test_a02_skips_a_run_already_retried_and_keys_on_the_run():
+    a02 = ("st2-bound", "agent-job-retry")
+
+    def no_auto_skip(p):
+        where = p["agent-job-retry"]["trigger"]["where"]
+        where[:] = [c for c in where if c["ref"] != "$event.data.auto_retry_scheduled"]
+
+    def event_key(p):
+        p["agent-job-retry"]["steps"][0]["params"]["idempotency_key"] = "$event.id"
+
+    assert _bound_problems(no_auto_skip) == {a02}
+    assert _bound_problems(event_key) == {a02}  # 422 idempotency_key_mismatch territory
+    doc = pack("agent-job-retry")
+    ev = _job_failed(9)
+    ev["data"] |= {"auto_retry_scheduled": True}
+    assert not triggered(doc, ev)
+    rule = rules_of()["homelabnext/rules/on_agent_job_retry.yaml"]
+    assert not st2_matches(rule, ev)
+    got = st2_runtime.admit_event(pack=doc["pack"], trigger=doc["trigger"], event=ev, kv=KV())
+    assert got["reason"] == "not-triggered"

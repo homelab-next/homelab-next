@@ -2,7 +2,7 @@
   "binding": "sha256:ab9565377324af28aaf3455f5810c612e56bd6aaee3fbec390f55e37b4012ea8",
   "packs": {
     "agent-job-retry": {
-      "digest": "sha256:c62c6e720a67efe6f06966063c7b610e978c73f3d3a0d21e46b76a2aa43982ce",
+      "digest": "sha256:1e096a19756e73ec1fdf28401641fe5a6d3d26acdbc1d5222b52509820eb229d",
       "mode": "shadow"
     },
     "approved-run": {

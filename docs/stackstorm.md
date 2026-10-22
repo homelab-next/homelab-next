@@ -114,12 +114,14 @@ binding are the broker's ([ADR-0017](adr/0017-broker-service.md)). StackStorm in
 | Id | Pack | Trigger | Does | Replaces |
 |---|---|---|---|---|
 | A01 | `proposal-validate` | `homelabnext.proposal.created`, which the broker emits when a note is filed through the records-inbox lane (`proposal.file`) | `agent.job.submit` of one `proposal-validator` job whose `task_description` is the note's path in the records inbox, the event id as idempotency key | the proposal-validator dispatch timer |
-| A02 | `agent-job-retry` | `homelabnext.agent.job.failed` from `svc:llm-orchestrator` with `reason` (the failure class) in capacity, stall, timeout, backend-down, `resubmits` = 0 and no `retried_by_run_id` | `agent.job.submit` again, at priority 90, with `retry_of_run_id` and `reason`, and no payload: the controller replays the parent's | ad-hoc reruns of failed jobs |
+| A02 | `agent-job-retry` | `homelabnext.agent.job.failed` from `svc:llm-orchestrator` with `reason` (the failure class) in capacity, stall, timeout, backend-down, `resubmits` = 0, and neither `auto_retry_scheduled` (the scheduler retried it itself) nor `retried_by_run_id` | `agent.job.submit` again, at priority 90, with `retry_of_run_id`, `reason` and the failed run's id as idempotency key, and no payload: the controller replays the parent's | ad-hoc reruns of failed jobs |
 | A03 | `approved-run` (built in) | `homelabnext.decision.returned` from the broker: a person approved a request | `run` of that request, only one a live step here submitted ([below](#running-an-approved-request-a03)) | running held requests by hand as the StackStorm user |
 
 `homelabnext.agent.job.failed` (`schemas/events/agent.job.failed.schema.json`) is what the
 controller emits: `state`, `reason` (its failure class, also as `failure_class`),
-`retry_of_run_id`, `retried_by_run_id` and `resubmits`, the whole-job resubmits in the run's
+`retry_of_run_id`, `retried_by_run_id` (set when the run was retried, by a resubmit or by the
+scheduler), `auto_retry_scheduled` and `profile_revision_drift` (each present only when true) and
+`resubmits`, the whole-job resubmits in the run's
 `retry_of_run_id` lineage. The controller sets it from the parent run, so A02's trigger bounds
 the chain: a resubmitted job that fails again has `resubmits: 1`, and A02 does not fire. Retries
 inside one run stay the controller's (`max_attempts`). The resubmittable classes are stall,
@@ -128,7 +130,8 @@ cancelled, unknown) never match.
 
 The controller holds the bound itself as well: a `POST /jobs` with `retry_of_run_id` is refused
 with 404 `unknown_run`, 422 `agent_key_mismatch`, `not_failed`, `not_retryable`,
-`reason_mismatch` or `payload_override`, or 409 `already_retried` or `retry_chain_spent`, and
+`reason_mismatch`, `payload_override` or `idempotency_key_mismatch` (a key reused for another
+run), or 409 `already_retried` or `retry_chain_spent`, and
 `reason` must be the class it recorded. It ignores a `resubmits` in the request and refuses
 `input` (400 `input_unsupported`), so a dispatch step never sends either, and a resubmit sends no
 `task_description` (`st2-bound`).
@@ -137,8 +140,9 @@ with 404 `unknown_run`, 422 `agent_key_mismatch`, `not_failed`, `not_retryable`,
 
 - `st2-coalesce`: a rule whose pack dispatches agent work has a coalesce window.
 - `st2-bound`: a pack that reacts to `agent.job.failed` by dispatching pins `$event.data.resubmits` to
-  integers below 3 and `$event.source` to `svc:llm-orchestrator`, and carries
-  `retry_of_run_id: $event.data.run_id`; no dispatch step sends `input` or `resubmits`, a
+  integers below 3 and `$event.source` to `svc:llm-orchestrator`, requires `auto_retry_scheduled`
+  and `retried_by_run_id` to be absent, and carries `retry_of_run_id: $event.data.run_id` and the
+  same run id as `idempotency_key`; no dispatch step sends `input` or `resubmits`, a
   resubmit sends no `task_description`, and `reason` goes only with `retry_of_run_id`.
 
 ## Running an approved request (A03)
@@ -234,7 +238,8 @@ for a resubmittable class and was not resubmitted yet, whatever the event said (
 The StackStorm datastore has no compare-and-set, so two events in the same instant can both pass
 the window. Two things still hold in that case:
 
-- the controller's idempotency key (the event id), so a redelivered event cannot queue twice;
+- the controller's idempotency key (A01: the event id; A02: the failed run's id), so a redelivered
+  event, or a second report of the same failure, cannot queue twice;
 - the trigger's `resubmits` cap, so a race costs at most one extra queued job and never a loop.
 
 This is leading-edge debounce. Batching (one job that carries every event of the window) needs the
@@ -284,7 +289,8 @@ mode, and the broker still decides, but the event is theirs.
 **Handlers.** Every broker action a bound pack calls has its handler in the tree, pinned
 (`st2-handler`): `agent.job.submit` is `workflows/handlers/agent-job-submit.sh`, with
 `agent-job-submit.handler.json` beside it naming its digest. It posts the validated params to the
-controller's `POST /jobs`, whose URL the broker resolves by name like a secret
+controller's `POST /jobs` (the params' `idempotency_key` also as the `Idempotency-Key` header),
+whose URL the broker resolves by name like a secret
 (`ORCHESTRATOR_JOBS_URL`), so no endpoint is in the tree. A 2xx (queued, or the idempotency key's
 original run) and 409 `already_retried` (an earlier delivery resubmitted it) are success. 404, 422
 and any other 409 are the controller refusing this resubmit for good: the handler logs it on

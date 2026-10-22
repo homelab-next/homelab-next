@@ -3,7 +3,7 @@
     "key": "$event.data.agent_key",
     "window_s": 600
   },
-  "digest": "sha256:c62c6e720a67efe6f06966063c7b610e978c73f3d3a0d21e46b76a2aa43982ce",
+  "digest": "sha256:1e096a19756e73ec1fdf28401641fe5a6d3d26acdbc1d5222b52509820eb229d",
   "mode": "shadow",
   "pack": {
     "actor": "profile:workflow-agents",
@@ -34,7 +34,7 @@
               "action": "agent.job.submit",
               "params": {
                 "agent_key": "triage",
-                "idempotency_key": "evt-job-0001",
+                "idempotency_key": "run-0001",
                 "priority": 90,
                 "reason": "capacity",
                 "retry_of_run_id": "run-0001"
@@ -119,6 +119,31 @@
           "triggered": false
         },
         "name": "already-resubmitted-not-retried-again"
+      },
+      {
+        "event": {
+          "data": {
+            "agent_key": "triage",
+            "attempts": 1,
+            "auto_retry_scheduled": true,
+            "failure_class": "timeout",
+            "reason": "timeout",
+            "resubmits": 0,
+            "run_id": "run-0006",
+            "state": "failed"
+          },
+          "id": "evt-job-0006",
+          "source": "svc:llm-orchestrator",
+          "specversion": "1.0",
+          "subject": "run-0006",
+          "time": "2026-01-01T00:50:00Z",
+          "type": "homelabnext.agent.job.failed"
+        },
+        "expect": {
+          "calls": [],
+          "triggered": false
+        },
+        "name": "auto-retried-by-the-scheduler-not-resubmitted"
       }
     ],
     "pack": "agent-job-retry",
@@ -129,7 +154,7 @@
         "kind": "action",
         "params": {
           "agent_key": "$event.data.agent_key",
-          "idempotency_key": "$event.id",
+          "idempotency_key": "$event.data.run_id",
           "priority": 90,
           "reason": "$event.data.reason",
           "retry_of_run_id": "$event.data.run_id"
@@ -162,6 +187,10 @@
         {
           "exists": false,
           "ref": "$event.data.retried_by_run_id"
+        },
+        {
+          "exists": false,
+          "ref": "$event.data.auto_retry_scheduled"
         }
       ]
     },

@@ -3,7 +3,7 @@
   "audit": true,
   "description": "Put one agent job on the orchestration controller's queue (POST /jobs); the controller admits it against live load.",
   "handler": "handlers/agent-job-submit.sh",
-  "handler_digest": "sha256:4ac53314344895e8811cb76f916590fd62e12d9db6d3227d7967552287448804",
+  "handler_digest": "sha256:62a9a5c7ffcddfd2a09e3956d4f562c80e8ceb02bfb83486b9573919f9ed7c5b",
   "idempotent": true,
   "max_output_bytes": 65536,
   "params_schema": {
@@ -14,9 +14,9 @@
         "type": "string"
       },
       "idempotency_key": {
-        "maxLength": 200,
-        "minLength": 1,
-        "type": "string"
+        "type": "string",
+        "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+        "description": "also sent as the Idempotency-Key header; for a resubmit, the failed run's id"
       },
       "priority": {
         "maximum": 100,
@@ -29,10 +29,9 @@
         "description": "only with retry_of_run_id: the failure class the controller recorded for that run"
       },
       "retry_of_run_id": {
-        "maxLength": 200,
-        "minLength": 1,
         "type": "string",
-        "description": "a resubmit: the controller replays that run's payload, so it carries no task_description"
+        "description": "a resubmit: the controller replays that run's payload, so it carries no task_description",
+        "pattern": "^[A-Za-z0-9._:-]{1,128}$"
       },
       "task_description": {
         "type": "string",

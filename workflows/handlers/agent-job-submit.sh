@@ -10,18 +10,20 @@
 #   outputs: the controller's answer as JSON on stdout, or a refused object (status, reason) for a final refusal
 #   exit:
 #     "0": queued, already queued (an idempotent replay), already retried, or refused for good (logged on stderr)
-#     "1": the controller could not be reached, or failed in a way a later attempt may not
+#     "1": no idempotency key, the controller could not be reached, or it failed (400, 5xx)
 #
 # The workflow broker's handler for agent.job.submit (workflows/broker.manifest.json).  The broker
 # validated the params against agent-job-submit.handler.json; they go to the controller as the
 # request body, unchanged.  The controller's address is resolved by the broker like a secret, so no
 # endpoint is in the tree; the controller admits the job against live load (docs/stackstorm.md).
+# The params' idempotency_key also goes as the Idempotency-Key header (for a resubmit it is the
+# failed run's id, so a retried POST is the same request).
 #
 # What the controller answers, and what this handler makes of it:
 #   2xx                    queued, or the idempotency key's original run (a replay): success
 #   409 already_retried    this run was resubmitted already (by an earlier delivery): success
 #   409 retry_chain_spent, 422 (agent_key_mismatch, not_failed, not_retryable, reason_mismatch,
-#   payload_override), 404 unknown_run
+#   payload_override, idempotency_key_mismatch), 404 unknown_run
 #                          the controller refuses this resubmit for good: a refusal, logged, exit 0
 #                          so nothing retries it
 #   anything else (400 input_unsupported is a defect in the pack; 5xx; no answer): failure, exit 1
@@ -29,8 +31,12 @@ set -eu
 url=${ORCHESTRATOR_JOBS_URL:?the broker did not hand over ORCHESTRATOR_JOBS_URL}
 nl='
 '
-out=$(curl --silent --show-error --max-time 20 --proto '=https' \
-  --header 'Content-Type: application/json' --data-binary @- \
+params=$(cat)
+# the schema restricts the key to [A-Za-z0-9._:-], so it is safe in a header as it stands
+key=$(printf '%s' "$params" | sed -n 's/.*"idempotency_key"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9._:-]*\)".*/\1/p')
+[ -n "$key" ] || { echo "agent.job.submit: no idempotency_key in the params" >&2; exit 1; }
+out=$(printf '%s' "$params" | curl --silent --show-error --max-time 20 --proto '=https' \
+  --header 'Content-Type: application/json' --header "Idempotency-Key: $key" --data-binary @- \
   --write-out "${nl}%{http_code}" -- "$url") || {
   echo "agent.job.submit: the controller could not be reached" >&2
   exit 1

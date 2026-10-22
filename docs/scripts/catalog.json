@@ -901,7 +901,7 @@
     {
       "exit": {
         "0": "queued, already queued (an idempotent replay), already retried, or refused for good (logged on stderr)",
-        "1": "the controller could not be reached, or failed in a way a later attempt may not"
+        "1": "no idempotency key, the controller could not be reached, or it failed (400, 5xx)"
       },
       "id": "workflow-broker-agent-job-submit",
       "inputs": "the validated params as JSON on stdin; the ORCHESTRATOR_JOBS_URL secret (the controller's POST /jobs URL)",

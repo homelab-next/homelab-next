@@ -88,7 +88,15 @@
             "retried_by_run_id": {
               "type": "string",
               "pattern": "^[A-Za-z0-9._:-]{1,128}$",
-              "description": "set once the controller accepted a resubmit of this run: it will not take another"
+              "description": "set once the run was retried: by the scheduler itself (auto_retry_scheduled) or by an accepted resubmit; it will not take another"
+            },
+            "auto_retry_scheduled": {
+              "const": true,
+              "description": "present (and true) only when the scheduler auto-retried this run in the same transaction; omitted otherwise"
+            },
+            "profile_revision_drift": {
+              "const": true,
+              "description": "present (and true) only when the agent profile's revision changed while the run was queued or running; omitted otherwise"
             }
           },
           "required": [
