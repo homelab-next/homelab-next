@@ -82,6 +82,8 @@ class Catalog:
     files: dict[str, Path] = field(default_factory=dict)
     #: problems found while loading (duplicate ids, a record that is not a mapping)
     problems: list[str] = field(default_factory=list)
+    #: :func:`integrity_problems`, computed once
+    _integrity: list[str] | None = field(default=None, repr=False, compare=False)
 
     def __iter__(self):
         return iter(sorted(self.servers.items()))
@@ -445,6 +447,21 @@ def _review_problems(cat: Catalog, policy: Any) -> list[str]:
         if ev.missing:
             out.append(missing_message(where, str(rec.get("status")), ev, digest))
     return out
+
+
+def integrity_problems(cat: Catalog) -> list[str]:
+    """What makes a catalog unfit to judge a grant against: a load problem (two records with one
+    id, a record that is not a mapping), an id that is not its file name, a record that fails the
+    schema (an unknown status or data tier).  A subset of :func:`check`, computed once per load."""
+    if cat._integrity is None:
+        out = list(cat.problems)
+        for sid, rec in cat:
+            where = cat.rel(sid)
+            if cat.files[sid].stem != sid:
+                out.append(f"{where}: id {sid!r} is not the file name ({cat.files[sid].stem}.yml)")
+            out += _schema_problems(rec, where)
+        cat._integrity = out
+    return list(cat._integrity)
 
 
 def check(

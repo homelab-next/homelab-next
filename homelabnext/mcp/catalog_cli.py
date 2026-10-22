@@ -60,10 +60,15 @@ def _check(args) -> int:
     problems = servers.check(cat, registry=_registry(reg_path), policy=policy, source_root=root)
     grants = args.grants or ([str(root)] if root else [])
     classes = ToolClasses.load(catalog=cat_dir)
-    gp, counts = lint_paths(grants, classes) if grants else ([], {"profile": 0, "manifest": 0})
+    notes: list[tuple[str, str]] = []
+    gp, counts = (
+        lint_paths(grants, classes, notes) if grants else ([], {"profile": 0, "manifest": 0})
+    )
     problems += [f"{f}: {p}" for f, p in gp]
     for p in problems:
         print(p)
+    for f, n in notes:
+        print(f"note: {f}: {n}", file=sys.stderr)
     print(
         f"hnx mcp catalog: {len(cat.servers)} server(s), {counts['profile']} profile(s), "
         f"{counts['manifest']} manifest(s), {len(problems)} problem(s)",

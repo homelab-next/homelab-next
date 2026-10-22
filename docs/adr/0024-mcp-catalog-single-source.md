@@ -48,8 +48,10 @@ because each instance needs its own scope.
    server, `implements` naming a homelab-next contract, and the review policy's
    `mcp-server.active` tier (agent check, agent audit, human approve).
 5. **Grants name catalog ids.** The compiler, `verify` and `hnx agent lint` refuse a profile or
-   manifest naming a server the catalog does not hold, a retired or draft one, and a local-only
-   server for a profile whose data may go to the cloud; the reader rule (no exec, file-write,
+   manifest naming a server the catalog does not hold, one that is not active or deprecated (an
+   allowlist; deprecated with a note), and a local-only server for a profile whose data may go to
+   the cloud, and judge nothing against a catalog that fails its own schema or id rules; the
+   reader rule (no exec, file-write,
    egress or credential grant for a profile that reads untrusted content) judges the derived
    classes.
 6. **Instances, not copies.** A server is declared once; the renderer instantiates it per granted

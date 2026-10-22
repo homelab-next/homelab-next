@@ -36,6 +36,11 @@ from .errors import SpecError
 
 DEFAULT_CLASSES = Path(__file__).with_name("tool_classes.yml")
 KINDS = ("mcp", "capabilities", "tiers")
+#: catalog statuses a profile may be granted (an allowlist; ``deprecated`` with a note): the same
+#: as :data:`homelabnext.mcp.servers.GRANTABLE`
+GRANTABLE = ("active", "deprecated")
+#: the data tiers a catalog server may declare (``schemas/platform/mcp_server.schema.json``)
+DATA_TIERS = ("local-only", "cloud-allowed")
 
 
 class ToolClasses:
@@ -95,17 +100,44 @@ class ToolClasses:
             cat = servers.load_cached(catalog)
         except servers.CatalogError as exc:
             raise SpecError(f"{p}: its mcp section comes from the MCP catalog: {exc}") from None
+        return cls.from_catalog(cat, doc, str(p))
+
+    @classmethod
+    def from_catalog(
+        cls, cat: Any, doc: Mapping[str, Any] | None = None, source: str | None = None
+    ) -> ToolClasses:
+        """The table ``doc`` (default: the packaged one) with its ``mcp`` section derived from the
+        loaded catalog ``cat`` (:class:`homelabnext.mcp.servers.Catalog`).  A catalog that is not
+        sound (a record that fails its schema, an id that is not its file name, two records with
+        one id) is refused: a grant judged against it could be judged against a shadow record."""
+        import yaml
+
+        from homelabnext.mcp import servers
+
+        if doc is None:
+            source = source or str(DEFAULT_CLASSES)
+            doc = yaml.safe_load(DEFAULT_CLASSES.read_text(encoding="utf-8")) or {}
+        bad = servers.integrity_problems(cat)
+        if bad:
+            more = f" (+{len(bad) - 5} more)" if len(bad) > 5 else ""
+            raise SpecError(
+                f"the MCP catalog {cat.root} is not valid, so no grant can be judged against it: "
+                + "; ".join(bad[:5])
+                + more
+                + " (hnx mcp catalog check)"
+            )
         meta = {
             sid: {
                 "status": rec.get("status"),
                 "reason": rec.get("reason"),
                 "data_tier": rec.get("data_tier"),
+                "replaced_by": rec.get("replaced_by"),
             }
             for sid, rec in cat
         }
         return cls(
             {**doc, "mcp": cat.classes()},
-            source=f"{p} + the MCP catalog {cat.root}",
+            source=f"{source or 'tool classes'} + the MCP catalog {cat.root}",
             catalog=meta,
             catalog_source=f"the MCP catalog {cat.root}",
         )
@@ -164,12 +196,41 @@ def grant_problems(
                 f"{who} is granted MCP server {name!r}, which is a draft (not reviewed; "
                 "make it active first)"
             )
-        if data_tier == "cloud-allowed" and meta.get("data_tier") == "local-only":
+        elif status not in GRANTABLE:  # an allowlist: an unknown status is never grantable
             problems.append(
-                f"{who} may send its context to the cloud (data_tier cloud-allowed) but is "
+                f"{who} is granted MCP server {name!r}, whose status {status!r} is not "
+                f"grantable (only {', '.join(GRANTABLE)})"
+            )
+        server_tier = meta.get("data_tier")
+        if server_tier not in DATA_TIERS:
+            problems.append(
+                f"{who} is granted MCP server {name!r}, which declares no known data_tier "
+                f"({server_tier!r}): what it returns could reach any model"
+            )
+        elif data_tier is not None and data_tier != "local-only" and server_tier == "local-only":
+            problems.append(
+                f"{who} may send its context to the cloud (data_tier {data_tier}) but is "
                 f"granted MCP server {name!r}, whose data is local-only"
             )
     return problems
+
+
+def grant_notes(
+    grants: Mapping[str, Any], classes: ToolClasses | None = None, who: str = "profile"
+) -> list[str]:
+    """Warnings, not refusals: every granted MCP server that is ``deprecated``, with its reason
+    and the server to grant instead (``replaced_by``)."""
+    classes = classes or default_classes()
+    out: list[str] = []
+    for name in _names(grants.get("mcp")):
+        meta = (classes.catalog or {}).get(name) or {}
+        if meta.get("status") == "deprecated":
+            instead = meta.get("replaced_by")
+            out.append(
+                f"{who} is granted MCP server {name!r}, which is deprecated: {meta.get('reason')}"
+                + (f"; grant {instead!r} instead" if instead else "")
+            )
+    return out
 
 
 def reader_problems(
@@ -237,6 +298,14 @@ def manifest_problems(doc: Mapping[str, Any], classes: ToolClasses | None = None
     return problems + reader_problems({"mcp": doc.get("tools") or []}, classes, who)
 
 
+def doc_notes(doc: Mapping[str, Any], classes: ToolClasses | None = None) -> list[str]:
+    """:func:`grant_notes` for a profile (any shape) or a context manifest (its ``tools``)."""
+    if _kind(doc) == "manifest":
+        return grant_notes({"mcp": doc.get("tools") or []}, classes, f"manifest {doc.get('id')}")
+    grants = doc.get("grants") if isinstance(doc.get("grants"), Mapping) else doc
+    return grant_notes(grants, classes, str(doc.get("id", "profile")))
+
+
 def _names(raw: Any) -> list[str]:
     if raw is None:
         return []
@@ -296,12 +365,15 @@ def _kind(doc: Any) -> str | None:
 
 
 def lint_paths(
-    paths: Iterable[str | Path], classes: ToolClasses | None = None
+    paths: Iterable[str | Path],
+    classes: ToolClasses | None = None,
+    notes: list[tuple[str, str]] | None = None,
 ) -> tuple[list[tuple[str, str]], dict[str, int]]:
     """Apply the reader rule to every agent profile (spec, compiled or lean runtime view) and
     every context manifest found under ``paths`` (files, or directories searched through git).
 
-    Returns ``([(file, problem)], {"profile": n, "manifest": m})``.  Schema negatives and frozen
+    Returns ``([(file, problem)], {"profile": n, "manifest": m})``; ``notes``, when given, receives
+    ``(file, warning)`` for every deprecated grant (:func:`grant_notes`).  Schema negatives and frozen
     baselines are skipped; a named file that cannot be parsed is a problem, a discovered one is
     not (it is not an agent document).
     """
@@ -331,4 +403,6 @@ def lint_paths(
                 counts[kind] += 1
                 check = profile_problems if kind == "profile" else manifest_problems
                 problems += [(str(f), p) for p in check(doc, classes)]
+                if notes is not None:
+                    notes += [(str(f), n) for n in doc_notes(doc, classes)]
     return problems, counts

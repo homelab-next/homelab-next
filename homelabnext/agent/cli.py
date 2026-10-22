@@ -198,9 +198,12 @@ def main(argv: list[str]) -> int:
             return run_injection(args)
         classes = ToolClasses.load(args.classes) if getattr(args, "classes", None) else None
         if args.cmd == "lint":
-            problems, counts = lint_paths(args.paths, classes)
+            notes: list[tuple[str, str]] = []
+            problems, counts = lint_paths(args.paths, classes, notes)
             for where, prob in problems:
                 print(f"hnx agent lint: {where}: {prob}", file=sys.stderr)
+            for where, note in notes:
+                print(f"hnx agent lint: note: {where}: {note}", file=sys.stderr)
             print(
                 f"hnx agent lint: {counts['profile']} profile(s), {counts['manifest']} "
                 f"manifest(s), {len(problems)} problem(s)",

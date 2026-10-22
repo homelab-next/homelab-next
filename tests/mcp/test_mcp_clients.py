@@ -209,3 +209,13 @@ def test_the_grants_block_is_spliced_in_place():
     once = clients.splice_grants(head, clients.ORCH_GRANTS_HEAD + "grants: {}\n")
     assert clients.splice_grants(once, clients.ORCH_GRANTS_HEAD + "grants: {}\n") == once
     assert once.startswith(head) and once.count(clients.GRANTS_MARKER) == 1
+
+
+def test_a_deprecated_grant_renders_with_a_note(tmp_path):
+    prof = tmp_path / "p.json"
+    doc = json.loads(COLLECTOR.read_text())
+    doc["mcp"] = doc["mcp_ceiling"] = ["bash"]
+    prof.write_text(json.dumps(doc))
+    text, notes = clients.render_profile(CATALOG, prof, "claude-code")
+    assert "bash" in json.loads(text)["mcpServers"]
+    assert any("deprecated" in n and "grant 'shell' instead" in n for n in notes)

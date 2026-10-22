@@ -105,6 +105,20 @@ def granted(profile: Mapping[str, Any]) -> list[str]:
     return sorted({str(x) for x in g.get("mcp") or ()})
 
 
+def deprecation_notes(cat: servers.Catalog, profile: Mapping[str, Any]) -> list[str]:
+    """A note per granted server that is deprecated (still rendered), naming its replacement."""
+    out = []
+    for sid in granted(profile):
+        rec = cat.get(sid) or {}
+        if rec.get("status") == "deprecated":
+            instead = rec.get("replaced_by")
+            out.append(
+                f"{profile.get('id')}: MCP server {sid!r} is deprecated: {rec.get('reason')}"
+                + (f"; grant {instead!r} instead" if instead else "")
+            )
+    return out
+
+
 def instances(
     cat: servers.Catalog,
     profile: Mapping[str, Any],
@@ -475,10 +489,11 @@ def render_profile(
     insts = instances(
         cat, prof, lanes=lanes, params=params, profile_file=profile_file or str(profile_path)
     )
+    notes = deprecation_notes(cat, prof)
     if client == "llm-orchestrator":
-        return orch_grants(insts, lanes), []
+        return orch_grants(insts, lanes), notes
     text, skipped = render_home(insts, client, cat, registry, prof["id"])
-    return text, [f"{client} cannot hold {n} (not a stdio server)" for n in skipped]
+    return text, notes + [f"{client} cannot hold {n} (not a stdio server)" for n in skipped]
 
 
 def _spec_problems(spec: Any) -> list[str]:
@@ -533,6 +548,7 @@ def render_spec(spec_path: str | Path) -> Rendered:
             profile_file=str(entry.get("profile_file") or pf),
         )
         every += insts
+        res.notes += deprecation_notes(cat, prof)
         if client == "llm-orchestrator":
             if not entry.get("grants_file"):
                 raise RenderError([f"{sp}: {prof['id']}: llm-orchestrator needs grants_file"])

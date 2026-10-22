@@ -84,9 +84,14 @@ The classes are `tool_classes.yml`'s: `read`, `record-write`, `exec`, `file-writ
   approve reviews (`mcp-server.active` in `examples/review-policy.yml`; `hnx reviews digest
   examples/mcp/<id>.yml` gives the digest to stamp);
 - every agent profile and context manifest in the checkout (or `--grants PATH...`) grants only
-  catalog ids, never a retired or draft server, never a `local-only` server to a profile whose
-  `data_tier` is `cloud-allowed`, and a reader holds no exec, file-write, egress or credential
-  server. The compiler, `hnx agent verify` and `hnx agent lint` apply the same rules.
+  catalog ids whose status is `active` or `deprecated` (an allowlist: `draft`, `retired` and
+  anything else are refused), of a server with a known `data_tier`, never a `local-only` server to
+  a profile whose `data_tier` is not `local-only`, and a reader holds no exec, file-write, egress
+  or credential server. A `deprecated` grant passes with a note naming the reason and its
+  `replaced_by`. The compiler, `hnx agent verify`, `hnx agent lint` and `render` apply the same
+  rules, and they judge grants only against a sound catalog: a record that fails the schema, an
+  id that is not its file name or two records with one id refuse every judgement (so a stray
+  record cannot reclassify a server).
 
 ## Adding a server
 
@@ -205,5 +210,6 @@ config by its render.
 
 A record's review digest is the record without its `reviews` (`hnx reviews digest FILE`), so any
 change to what the server is drops it back to needing review. `draft` and `retired` servers cannot
-be granted; a `deprecated` one can while profiles move to its `replaced_by`. The MCP servers page
+be granted; a `deprecated` one can while profiles move to its `replaced_by`, and `hnx agent lint`,
+`hnx mcp catalog check` and `render` print a note for every such grant. The MCP servers page
 shows each server's current reviews and state.

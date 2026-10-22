@@ -387,3 +387,60 @@ def test_the_compiler_refuses_an_actor_granted_a_retired_server():
         compile_profile(s, library())
     s["mcp"] = s["ceiling"]["mcp"] = ["playwright"]
     assert compile_profile(s, library())["grants"]["mcp"] == ["playwright"]
+
+
+# ------------------------------------------------- grants are judged against a sound catalog
+def _catalog_copy(tmp_path: Path) -> Path:
+    import shutil
+
+    d = tmp_path / "mcp"
+    shutil.copytree(ROOT / "examples" / "mcp", d, ignore=shutil.ignore_patterns("clients"))
+    return d
+
+
+def test_a_shadow_record_cannot_reclassify_a_server(tmp_path):
+    """A record whose id is not its file name, sorted before the real one, used to win the id
+    (first file wins) with a status the schema does not allow: shell became ``read``."""
+    d = _catalog_copy(tmp_path)
+    shadow = yaml.safe_load((d / "lake.yml").read_text())
+    shadow.update(id="shell", status="Active")
+    (d / "aa-shadow.yml").write_text(yaml.safe_dump(shadow))
+    with pytest.raises(SpecError, match="is not valid, so no grant can be judged"):
+        ToolClasses.load(catalog=d)
+
+
+def test_grantable_is_an_allowlist_and_a_data_tier_is_required():
+    from homelabnext.agent.readers import grant_problems
+
+    doc = yaml.safe_load(DEFAULT_CLASSES.read_text())
+    meta = {
+        "odd": {"status": "Active", "data_tier": "local-only"},
+        "untiered": {"status": "active", "data_tier": None},
+        "ok": {"status": "active", "data_tier": "cloud-allowed"},
+    }
+    table = ToolClasses({**doc, "mcp": {k: ["read"] for k in meta}}, catalog=meta)
+    odd = grant_problems({"mcp": ["odd"]}, table)
+    assert odd and "whose status 'Active' is not grantable" in odd[0]
+    assert "declares no known data_tier" in grant_problems({"mcp": ["untiered"]}, table)[0]
+    assert grant_problems({"mcp": ["ok"]}, table, "p", "cloud-allowed") == []
+    # an unknown profile tier is treated as one that may reach the cloud
+    local = {**meta, "ok": {"status": "active", "data_tier": "local-only"}}
+    table = ToolClasses({**doc, "mcp": {k: ["read"] for k in local}}, catalog=local)
+    assert "whose data is local-only" in grant_problems({"mcp": ["ok"]}, table, "p", "public")[0]
+
+
+def test_a_deprecated_grant_is_reported_with_its_replacement(tmp_path, capsys):
+    from homelabnext.agent.readers import grant_notes
+
+    notes = grant_notes({"mcp": ["bash", "shell"]})
+    assert len(notes) == 1 and "'bash', which is deprecated" in notes[0]
+    assert "grant 'shell' instead" in notes[0]
+    p = tmp_path / "p.yml"
+    p.write_text(yaml.safe_dump({"id": "profile:x", "persona": "persona:a", "mcp": ["bash"],
+                                 "capabilities": [], "reads_untrusted": False}))  # fmt: skip
+    assert cli.main(["agent", "lint", str(p)]) == 0  # a warning, not a refusal
+    err = capsys.readouterr().err
+    assert "note:" in err and "grant 'shell' instead" in err
+    found: list[tuple[str, str]] = []
+    lint_paths([p], None, found)
+    assert found and "deprecated" in found[0][1]

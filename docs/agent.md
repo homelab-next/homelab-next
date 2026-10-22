@@ -134,8 +134,11 @@ through allowlisted broker actions (G-04).
   table (its own `mcp:` section, if it has one, is used as written).
 - **Grants name catalog ids.** For every profile and manifest, reader or not, the compiler
   (`CatalogViolation`), `verify_profile` and `hnx agent lint` refuse an MCP server the catalog
-  does not hold, a `retired` or `draft` one, and a `local-only` server granted to a profile whose
-  `data_tier` is `cloud-allowed` (`grant_problems`).
+  does not hold, one whose status is not `active` or `deprecated` (an allowlist), one without a
+  known data tier, and a `local-only` server granted to a profile whose `data_tier` is not
+  `local-only` (`grant_problems`); a `deprecated` grant is a note naming its `replaced_by`
+  (`grant_notes`). A catalog with a record that fails its schema, an id that is not its file
+  name or a duplicate id is refused outright: no grant is judged against it.
 - **Enforced three times.** `compile_profile` raises `ReaderViolation` naming every offending grant
   and its class, after the ceiling check and whatever the ceiling allows; `verify_profile` (and
   `hnx agent verify`) refuses a compiled profile edited into that state, digest recomputed or not;
