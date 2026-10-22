@@ -367,6 +367,34 @@ def test_no_setting_env_or_parameter_configures_the_launcher(key):
     assert servers.denied_env(key.lower())  # any case: npm reads npm_config_registry too
 
 
+#: round 5: what the C library, the TLS stack, the shell and other interpreters read to load code
+#: or redirect trust inside the launcher (OPENSSL_CONF's engine makes npx dlopen a shared object)
+RUNTIME_KEYS = ["OPENSSL_CONF", "OPENSSL_ENGINES", "OPENSSL_MODULES", "SSL_CERT_FILE",
+                "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "HTTP_PROXY",
+                "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "FTP_PROXY", "GCONV_PATH", "LOCPATH",
+                "NLSPATH", "HOSTALIASES", "RES_OPTIONS", "LOCALDOMAIN", "GLIBC_TUNABLES",
+                "MALLOC_CHECK_", "MALLOC_ARENA_MAX", "TZDIR", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS",
+                "JDK_JAVA_OPTIONS", "PERL5OPT", "PERL5LIB", "PERLLIB", "RUBYOPT", "RUBYLIB",
+                "BASH_FUNC_x%%", "SHELLOPTS", "BASHOPTS", "PS4"]  # fmt: skip
+
+
+@pytest.mark.parametrize("key", RUNTIME_KEYS)
+def test_no_record_sets_what_loads_code_or_redirects_trust_in_the_launcher(key):
+    for edit in (
+        lambda r: r.setdefault("settings", {}).update({key: "/tmp/evil"}),
+        lambda r: r.setdefault("env", {}).update({key: "secret:mcp/evil"}),
+    ):
+        rec = copy.deepcopy(NOTES)
+        edit(rec)
+        assert any("launcher" in p for p in servers._template_problems(rec, "x"))
+    assert servers.denied_env(key) and servers.denied_env(key.lower())
+
+
+def test_a_name_that_merely_mentions_a_proxy_or_tz_is_a_setting():
+    for key in ("PROXY_URL", "NOTES_PROXY_MODE", "TZ", "OPENSSLX", "MALLOCS", "PS4X"):
+        assert not servers.denied_env(key), key
+
+
 @pytest.mark.parametrize("key", ["DOCKER_CONTAINER", "DOCKER_MCP_MODE", "DOCKER_HOSTNAME_LABEL"])
 def test_a_container_only_docker_variable_is_the_servers_own_setting(key):
     """Round 4, F5: DOCKER_CONTAINER (an image reads it inside the container) is not the docker

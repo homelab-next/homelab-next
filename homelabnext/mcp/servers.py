@@ -81,12 +81,26 @@ ORCH_DENIED_ENV = re.compile(
 #: DOCKER_API_VERSION, DOCKER_DEFAULT_PLATFORM, DOCKER_CONTENT_TRUST*, DOCKER_CLI_*,
 #: DOCKER_BUILDKIT, DOCKER_CUSTOM_HEADERS, BUILDKIT*, COMPOSE_*) and podman's through its docker
 #: alias (CONTAINER*) are refused, while another DOCKER_ name (DOCKER_CONTAINER, which an image
-#: reads inside the container) is the server's own setting.  A superset of :data:`ORCH_DENIED_ENV`.
+#: reads inside the container) is the server's own setting.  The variables the C library, the
+#: TLS stack and the shell read to load code or redirect trust inside any of these processes are
+#: refused too: OpenSSL's configuration (OPENSSL_CONF loads an engine's shared object, so npx
+#: dlopens whatever it names) and certificate stores (OPENSSL_*, SSL_CERT_*, REQUESTS_CA_BUNDLE,
+#: CURL_CA_BUNDLE), every proxy (*_PROXY: HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, NO_PROXY, any
+#: case), glibc's module, locale, resolver and allocator knobs (GCONV_PATH, LOCPATH, NLSPATH,
+#: HOSTALIASES, RES_OPTIONS, LOCALDOMAIN, GLIBC_TUNABLES, MALLOC_*, TZDIR), the other
+#: interpreters' option and library variables (JAVA_TOOL_OPTIONS, _JAVA_OPTIONS,
+#: JDK_JAVA_OPTIONS, PERL5OPT, PERL5LIB, PERLLIB, RUBYOPT, RUBYLIB) and the shell's
+#: (BASH_FUNC_* exported functions, SHELLOPTS, BASHOPTS, PS4).  A superset of
+#: :data:`ORCH_DENIED_ENV`.
 DENIED_ENV = re.compile(
     r"(?:LD_|DYLD_|PYTHON|NODE_|NPM_CONFIG_|UV_|PIP_|PIPX_|BUN_|COREPACK_|YARN_|PNPM_|GIT_"
-    r"|CONTAINER|XDG_|BUILDKIT|COMPOSE_|DOCKER_(?:TLS|CONTENT_TRUST|CLI_)).*"
+    r"|CONTAINER|XDG_|BUILDKIT|COMPOSE_|DOCKER_(?:TLS|CONTENT_TRUST|CLI_)"
+    r"|OPENSSL_|SSL_CERT_|MALLOC_|BASH_FUNC_).*"
     r"|DOCKER_(?:HOST|CONFIG|CERT_PATH|CONTEXT|API_VERSION|DEFAULT_PLATFORM|BUILDKIT"
-    r"|CUSTOM_HEADERS)|PATH|HOME|SHELL|BASH_ENV|ENV|HERMES_HOME|NODE|NPM_TOKEN",
+    r"|CUSTOM_HEADERS)|PATH|HOME|SHELL|BASH_ENV|ENV|HERMES_HOME|NODE|NPM_TOKEN"
+    r"|\w*_PROXY|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|GCONV_PATH|LOCPATH|NLSPATH|HOSTALIASES"
+    r"|RES_OPTIONS|LOCALDOMAIN|GLIBC_TUNABLES|TZDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS"
+    r"|JDK_JAVA_OPTIONS|PERL5OPT|PERL5LIB|PERLLIB|RUBYOPT|RUBYLIB|SHELLOPTS|BASHOPTS|PS4",
     re.I,
 )
 
@@ -910,7 +924,8 @@ def _template_problems(rec: Mapping[str, Any], where: str) -> list[str]:
             if denied_env(key):
                 out.append(
                     f"{where}: {what} {key} configures the process or its launcher (PATH, LD_*, "
-                    "NODE_*, NPM_CONFIG_*, UV_*, PIP_*, DOCKER_HOST ...), which no record sets"
+                    "NODE_*, NPM_CONFIG_*, UV_*, PIP_*, DOCKER_HOST, OPENSSL_CONF, *_PROXY ...), "
+                    "which no record sets"
                 )
     fixed = set(settings) | set(rec.get("env") or {})
     seen: dict[str, str] = {}

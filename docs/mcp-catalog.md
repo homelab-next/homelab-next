@@ -183,8 +183,14 @@ deprecated record's `reason` is prose meant to be shown and is printed with its 
   `DOCKER_DEFAULT_PLATFORM`, `DOCKER_CONTENT_TRUST*`, `DOCKER_CLI_*`, `DOCKER_BUILDKIT`,
   `DOCKER_CUSTOM_HEADERS`, `BUILDKIT*`, `COMPOSE_*` (an image record's env reaches the docker CLI as
   well as the container). Another `DOCKER_` name, such as `DOCKER_CONTAINER` that an image reads
-  inside the container, is the server's own setting. A superset of llm-orchestrator's
-  hard-denied list;
+  inside the container, is the server's own setting. Also refused, because they load code or
+  redirect trust inside the launcher (an `OPENSSL_CONF` engine makes `npx` load a shared object):
+  `OPENSSL_*`, `SSL_CERT_*`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, every `*_PROXY`
+  (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`), `GCONV_PATH`, `LOCPATH`, `NLSPATH`,
+  `HOSTALIASES`, `RES_OPTIONS`, `LOCALDOMAIN`, `GLIBC_TUNABLES`, `MALLOC_*`, `TZDIR`,
+  `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS`, `PERL5OPT`, `PERL5LIB`, `PERLLIB`,
+  `RUBYOPT`, `RUBYLIB`, `BASH_FUNC_*`, `SHELLOPTS`, `BASHOPTS` and `PS4` (`TZ` stays a setting).
+  A superset of llm-orchestrator's hard-denied list;
 - parameters: every parameter has an `enum` or a `pattern`; its env key never names a credential, never also a fixed setting or secret, never shared by
   two parameters; a default fits its enum and pattern and holds no `$` or `secret:`; templates
   name only `{id}`, `{profile}`, `{lane}`, `{home}`, the parameters, and in arguments
