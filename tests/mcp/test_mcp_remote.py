@@ -56,7 +56,7 @@ def test_a_hosted_server_with_an_https_url_is_a_valid_record():
         ({"transport__url": "https://fakeuser:fakepw@mcp.tracker.example.com/mcp"}, "does not match"),
         ({"transport__url": "https://mcp.tracker.example.com/mcp?api_key=fake1"}, "does not match"),
         ({"transport__url": "https://mcp.tracker.example.com/mcp#x"}, "does not match"),
-        ({"transport__url": "https://192.0.2.10/mcp"}, "names a public host"),
+        ({"transport__url": "https://192.0.2.10/mcp"}, "names a public host"),  # no-raw-endpoint: allow the IP literal check refuses
         ({"transport__url": "https://localhost/mcp"}, "does not match"),
         # private suffixes, assembled so the repository holds no private host name
         ({"transport__url": "https://mcp.tracker." + "internal/mcp"}, "names a public host"),
