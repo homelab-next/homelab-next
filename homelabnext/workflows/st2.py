@@ -17,8 +17,9 @@ stays in the broker.  Inputs: the binding (``workflows/stackstorm.yml``,
   event type, plus each ``where`` condition), or a ``core.st2.CronTimer`` rule for a scheduled pack;
 * ``configs/<st2_pack>.yaml``: the pack config (secrets as ``{{ st2kv.system.<key> | decrypt_kv }}``
   references, never values);
-* ``bridge.json``: which bus subjects the event bridge relays to the webhook, and the secret-store
-  name of its API key;
+* ``bridge.json``: which bus subjects the event bridge relays to the webhook, the producers each
+  subject's rules pin (anything else is poison to the bridge), and the secret-store name of its
+  API key (:mod:`homelabnext.workflows.st2_bridge`);
 * ``provenance.json``: the binding and pack digests the tree was rendered from.
 
 Rules (``<path>: <rule>: <detail>``, exit 1 on any):
@@ -712,7 +713,7 @@ def render(
     for shim in SHIMS:
         files[f"{base}/actions/{shim}.yaml"] = _yaml(_shim_meta(ref, shim))
         files[f"{base}/actions/{shim}.py"] = _shim(ref, shim)
-    subjects: dict[str, list[str]] = {}
+    subjects: dict[str, dict[str, set[str]]] = {}
     provenance: dict[str, Any] = {"binding": digest_of(dict(binding)), "packs": {}}
     for rule, pack, digest, manifest in bound:
         n = st2_name(pack["pack"])
@@ -722,7 +723,9 @@ def render(
         files[f"{base}/rules/on_{n}.yaml"] = _yaml(_rule(ref, binding, pack, rule))
         provenance["packs"][pack["pack"]] = {"digest": digest, "mode": rule["mode"]}
         if "schedule" not in rule:
-            subjects.setdefault(pack["trigger"]["event"], []).append(f"{ref}.on_{n}")
+            sub = subjects.setdefault(pack["trigger"]["event"], {"rules": set(), "sources": set()})
+            sub["rules"].add(f"{ref}.on_{n}")
+            sub["sources"].update(pinned_sources(pack["trigger"]))
     files["bridge.json"] = _json(
         {
             "webhook": f"/api/v1/webhooks/{binding['webhook']}",
@@ -732,15 +735,25 @@ def render(
                 {
                     "subject": s,
                     "durable": "st2-" + s.removeprefix("homelabnext.").replace(".", "-"),
-                    "rules": sorted(rules),
+                    "rules": sorted(sub["rules"]),
+                    "sources": sorted(sub["sources"]),
                 }
-                for s, rules in sorted(subjects.items())
+                for s, sub in sorted(subjects.items())
             ],
         }
     )
     files["provenance.json"] = _json(provenance)
     out.problems += tree_problems(out.files, ref)
     return out
+
+
+def pinned_sources(trigger: Mapping[str, Any]) -> list[str]:
+    """The producers a trigger pins (``$event.source`` ``equals``): what the bridge forwards."""
+    return [
+        c["equals"]
+        for c in trigger.get("where", [])
+        if c["ref"] == "$event.source" and isinstance(c.get("equals"), str)
+    ]
 
 
 def _check_rule(rule, pack, binding, tracked, bad) -> None:

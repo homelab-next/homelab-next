@@ -194,7 +194,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
     "workflows": (
         (
             "workflow packs as code: validate (offline, every pack in git)|run|digest"
-            "|st2 (render the pinned packs as a StackStorm pack)"
+            "|st2 (render the pinned packs as a StackStorm pack; run its event bridge)"
         ),
         lambda a: importlib.import_module("homelabnext.workflows.cli").main(a),
     ),

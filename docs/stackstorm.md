@@ -6,8 +6,9 @@ decides *when*: it takes events from the bus and ticks from its own clock, filte
 criteria, holds a burst back, and starts one run per admitted event. Everything a run changes goes
 through the [broker](broker.md) ([[broker]]). StackStorm holds no credential for any target.
 
-Command: `hnx workflows st2 render | check`. Library: `homelabnext.workflows.st2` (the renderer
-and its checks) and `homelabnext.workflows.st2_runtime` (what a run executes). Binding:
+Command: `hnx workflows st2 render | check | bridge`. Library: `homelabnext.workflows.st2` (the renderer
+and its checks), `homelabnext.workflows.st2_runtime` (what a run executes) and
+`homelabnext.workflows.st2_bridge` (the event bridge). Binding:
 `workflows/stackstorm.yml` (`schemas/workflows/stackstorm`). Rendered pack, committed:
 `workflows/stackstorm/`. `make workflows` fails when that tree drifts from its inputs.
 
@@ -38,7 +39,7 @@ risk), never a burst of agent processes.
 | `homelabnext/pinned/<pack>.json` | each bound rule | what the actions run: the pack document and its digest, the rule's `mode`, each step's risk, the coalesce window and the schedule |
 | `homelabnext/rules/on_<pack>.yaml` | each bound rule | the trigger and criteria below; the one parameter is the encoded body |
 | `configs/homelabnext.yaml` | the binding | the pack config: `broker_socket`, plus any `config` entries |
-| `bridge.json` | the bound event types | the bus subjects the event bridge relays to the webhook |
+| `bridge.json` | the bound event types | the bus subjects the [event bridge](#the-event-bridge) relays to the webhook, and the producers (`source`) each subject's rules pin |
 | `provenance.json` | everything | the binding digest and, per pack, the pinned digest and mode |
 
 **Triggers.** An event-triggered pack becomes a `core.st2.webhook` rule on `url: <webhook>`. Its
@@ -232,10 +233,86 @@ st2 key set homelabnext.<name> <value> --encrypt         # only for config entri
 
 Install `homelabnext` into the pack's virtualenv from the same checkout, so the runtime and the
 rendered steps come from one commit (`provenance.json` names the digests). Then run the event
-bridge. It is a durable bus consumer per entry of `bridge.json` (subject `homelabnext.<type>` under
-the stream prefix). It POSTs each envelope as `application/json` to the webhook with the
-`St2-Api-Key` header, acks on 2xx, and naks on 5xx or 429. StackStorm's webhook does not take
-`application/cloudevents+json`.
+bridge (below).
+
+## The event bridge
+
+`hnx workflows st2 bridge` (`homelabnext.workflows.st2_bridge`) carries events from the bus to the
+webhook. Per entry of `bridge.json` it is one durable JetStream consumer on the subject
+`homelabnext.<type>` (under the stream's subject prefix), and it POSTs each event to
+`/api/v1/webhooks/<webhook>` as `application/json` (StackStorm's webhook does not take
+`application/cloudevents+json`). It runs until SIGTERM, then stops fetching, lets the POSTs in
+flight finish and settles them; an unsettled delivery is redelivered by the bus anyway.
+
+| What arrives | What the bridge does |
+|---|---|
+| a valid event of the subject's type, from a producer the subject's rules pin (`sources` in `bridge.json`) | POST it with `St2-Api-Key` and `Idempotency-Key: <event id>`; **ack only after a 2xx** |
+| no answer (refused, timeout, TLS), a redirect, 401, 403, 404, 408, 429, 5xx | **nack** (redelivered) and back off exponentially (1 s doubling to 60 s) before fetching again; after `--max-deliver` attempts (default 100) the bus dead-letters it |
+| 400, 413, 415, 422 (StackStorm refuses the body) | poison |
+| a body that is not JSON, fails the envelope or its type's schema, has another type than the subject, names a producer the rules do not pin, or a `Nats-Msg-Id` that is not its id | poison |
+
+Poison is **terminated** (`term`): JetStream's dead-letter stream is the quarantine. It is never
+retried and never forwarded, and it is counted by reason and logged with the event id (never the
+event's content). StackStorm's webhook ignores `Idempotency-Key` and starts one run per POST, so a
+POST that timed out after StackStorm took it runs twice unless `admit` drops it: it does, by event
+id ([Redeliveries](#redeliveries)).
+
+At most `--max-in-flight` POSTs run at once (default 8; one fetch takes at most that many
+deliveries). `--stats-file` writes, atomically and at most every 30 s, the counters per subject
+(`forwarded`, `retried`, `dead_lettered`, `quarantined` by reason), the consecutive failures and
+`state` (`ok`, `warn` while retrying, `fail` once anything was dead-lettered).
+
+**The key and TLS.** The API key is the secret-store name in `bridge.json`
+(`secret:stackstorm/webhook-key`), read at every POST from `HNX_SECRET_STACKSTORM_WEBHOOK_KEY` and
+never logged. Create it for a StackStorm user whose only RBAC grant is `webhook_send` on the
+`homelabnext` webhook (`st2 apikey create -u <that user>`). The StackStorm URL is https with
+certificate verification (`--ca-file` for a private CA); plain http is accepted only to loopback,
+or with `--allow-plaintext`. No redirect is followed, so the key never reaches another URL.
+
+```ini
+# /etc/systemd/system/hnx-st2-bridge.service
+[Unit]
+Description=homelab-next event bridge (bus -> StackStorm webhook)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=hnx-st2-bridge
+Environment=HNX_ENDPOINT_EVENTS=tls://events.lab.example
+EnvironmentFile=/etc/hnx-st2-bridge/secrets.env   # HNX_SECRET_STACKSTORM_WEBHOOK_KEY=...
+ExecStart=/opt/hnx/bin/hnx workflows st2 bridge \
+  --bridge-file /opt/hnx/workflows/stackstorm/bridge.json \
+  --st2-url https://st2.lab.example --ca-file /etc/hnx-st2-bridge/ca.pem \
+  --stream HOMELABNEXT --subject-prefix lab \
+  --stats-file /var/lib/hnx-st2-bridge/stats.json
+StateDirectory=hnx-st2-bridge
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+It needs the `nats` extra (`pip install 'homelabnext[nats]'`). Exit 2 is a configuration error
+(the bridge file, the URL, the endpoint variable, the first connection). The bus account it uses
+needs to read the stream and manage its own durables, nothing else; who may *publish* each
+subject is the bound that makes a pinned `source` mean something.
+
+The stats file is a status source with the existing `poll-file` kind:
+
+```yaml
+- id: st2-bridge
+  kind: poll-file
+  target: {file: st2-bridge/stats.json}   # copied under the status root
+  interval_s: 60
+  timeout_s: 10
+  mapping: {state: state, summary: last_error}
+  what: The StackStorm event bridge; warn while it retries, fail once an event was dead-lettered.
+```
 
 ## Checks
 

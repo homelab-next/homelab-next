@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """``hnx workflows``: validate (every pack in git, offline), run (one pack's fixtures), digest,
-st2 render|check (the pinned packs as a StackStorm pack, docs/stackstorm.md)."""
+st2 render|check (the pinned packs as a StackStorm pack, docs/stackstorm.md), st2 bridge (the event
+bridge from the bus to StackStorm's webhook)."""
 
 from __future__ import annotations
 
@@ -28,12 +29,28 @@ def main(argv: list[str]) -> int:
     ru.add_argument("--root", type=Path, default=None, help="git tree (default: cwd)")
     di = sub.add_parser("digest", help="print '<pack> <digest>' for the deploy manifest's pins")
     di.add_argument("paths", nargs="+", type=Path)
-    st = sub.add_parser("st2", help="render or check the StackStorm pack of the bound packs")
-    st.add_argument("action", choices=("render", "check"))
+    st = sub.add_parser(
+        "st2", help="render or check the StackStorm pack of the bound packs; run the event bridge"
+    )
+    st.add_argument("action", choices=("render", "check", "bridge"))
     st.add_argument("--root", type=Path, default=None, help="git tree (default: cwd)")
     st.add_argument("--binding", type=Path, default=None, help="default: workflows/stackstorm.yml")
     st.add_argument("--out", type=Path, default=None, help="default: workflows/stackstorm")
     st.add_argument("--check", action="store_true", help="render: fail on drift, write nothing")
+    br = st.add_argument_group("bridge (docs/stackstorm.md, the event bridge)")
+    br.add_argument("--bridge-file", type=Path, default=None, help="the rendered bridge.json")
+    br.add_argument("--st2-url", default=None, help="StackStorm's base URL (https)")
+    br.add_argument("--ca-file", type=Path, default=None, help="CA bundle for StackStorm's TLS")
+    br.add_argument(
+        "--allow-plaintext",
+        action="store_true",
+        help="allow http to a host that is not loopback (the key would cross in clear)",
+    )
+    br.add_argument("--stream", default=None, help="the JetStream stream the events are in")
+    br.add_argument("--subject-prefix", default=None, help="the stream's subject prefix")
+    br.add_argument("--max-in-flight", type=int, default=8)
+    br.add_argument("--max-deliver", type=int, default=100)
+    br.add_argument("--stats-file", type=Path, default=None, help="JSON counters, for status")
     args = ap.parse_args(argv)
     try:
         if args.cmd == "st2":
@@ -62,6 +79,9 @@ def _validate(args) -> int:
 def _st2(args) -> int:
     from . import st2
 
+    if args.action == "bridge":
+        return _st2_bridge(args)
+
     root = (args.root or Path.cwd()).resolve()
     res, _binding = st2.render_repo(root, args.binding)
     out = args.out if args.out is not None else st2.DEFAULT_OUT
@@ -79,6 +99,58 @@ def _st2(args) -> int:
         print(p)
     print(f"workflows st2: {len(res.files)} file(s), {len(problems)} problem(s)")
     return 1 if problems else 0
+
+
+def _st2_bridge(args) -> int:
+    """The event bridge: the bus (``HNX_ENDPOINT_EVENTS``, nats:// or tls://) to the webhook,
+    until SIGTERM.  Exit 2 on a configuration error."""
+    import logging
+    import signal
+    import threading
+
+    from homelabnext.conform.adapters import nats_jetstream
+
+    from . import st2_bridge as sb
+
+    if not (args.bridge_file and args.st2_url and args.stream and args.subject_prefix):
+        print(
+            "hnx workflows st2 bridge: --bridge-file, --st2-url, --stream and --subject-prefix "
+            "are required",
+            file=sys.stderr,
+        )
+        return 2
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    try:
+        config = sb.load_bridge(args.bridge_file)
+        hook = sb.Webhook(
+            args.st2_url,
+            config.webhook,
+            config.api_key,
+            ca_file=args.ca_file,
+            allow_plaintext=args.allow_plaintext,
+        )
+        bus = nats_jetstream.make(
+            scratch=False, stream=args.stream, subject_prefix=args.subject_prefix
+        )
+    except Exception as exc:  # configuration, the endpoint variable, the first connect
+        print(f"hnx workflows st2 bridge: {exc}", file=sys.stderr)
+        return 2
+    stop = threading.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda *_a: stop.set())
+    bridge = sb.Bridge(
+        bus,
+        config,
+        hook,
+        max_in_flight=args.max_in_flight,
+        max_deliver=args.max_deliver,
+        stats_file=args.stats_file,
+    )
+    try:
+        bridge.run(stop)
+    finally:
+        bus.close()
+    return 0
 
 
 def _run(args) -> int:
