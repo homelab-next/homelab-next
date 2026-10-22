@@ -20,6 +20,8 @@ it writes lives in ``<state>/relay/`` (:class:`RelayStore`), so it can run as it
   (:meth:`~homelabnext.broker.state.StateDir.prune_outbox`): ``outbox/`` holds what is pending,
   and a pass costs O(pending), not O(history).  Delivered markers older than ``retain_s`` are
   removed once the broker has pruned their outbox file.
+* **Only the broker's events.**  Each event must pass its envelope and type schema and carry the
+  source :data:`BROKER_SOURCE` before it is published; anything else is quarantined.
 * **Poison does not stall it.**  A file that is not an event (not JSON, no id, no type, a bad
   ``queued``) is *quarantined*: a record in ``relay/quarantine/`` (file name, reason, time), then
   skipped.  A publish the bus refuses for the event itself (``permanent`` on the exception: an
@@ -76,6 +78,8 @@ __all__ = ["BROKER_SOURCE", "OutboxRelay", "RelayBusy", "RelayFirstStart", "Rela
 
 #: the ``source`` of every event the broker emits; the StackStorm bridge's and A03's pin
 BROKER_SOURCE = "svc:broker"
+#: the event types the broker emits (and the subjects its bus user may publish)
+BROKER_TYPES = ("homelabnext.decision.", "homelabnext.proposal.")
 LOCK_NAME = "relay.lock"
 INITIALIZED = "initialized"
 #: how long delivered markers are kept once the broker pruned their outbox file (30 days)
@@ -368,7 +372,18 @@ class OutboxRelay:
         )
 
     def _check(self, event: dict[str, Any]) -> str | None:
-        """Why ``event`` must not be published (a quarantine reason), or None."""
+        """Why ``event`` must not be published (a quarantine reason), or None.  The relay
+        publishes the broker's events only: the envelope and the type's schema must hold and the
+        source must be :data:`BROKER_SOURCE`, so whoever can write a file into ``outbox/`` (and
+        is not the broker) cannot make the broker's bus user publish it."""
+        from homelabnext.events.envelope import event_problems
+
+        if event.get("source") != BROKER_SOURCE:
+            return "not-the-broker"
+        if not str(event.get("type", "")).startswith(BROKER_TYPES):
+            return "not-a-broker-type"  # the bus ACL grants the broker these subjects only
+        if event_problems(event):
+            return "invalid-event"
         return None
 
     def pass_once(self) -> int:

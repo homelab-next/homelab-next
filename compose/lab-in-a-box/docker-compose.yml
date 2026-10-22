@@ -48,6 +48,8 @@ volumes:
   broker-run:
   broker-data:
   broker-state:
+  broker-outbox:   # <state>/outbox: the broker writes it, the relay only reads it
+  broker-relay:    # <state>/relay: the relay's markers; the broker only reads them
   llm-gateway-bifrost-data:
 
 services:
@@ -401,9 +403,10 @@ services:
   # user, created in broker/Dockerfile); the hub relays approvals to it; broker-edge plays the
   # edge in front of the hub (its address is the hub's one trusted proxy) and starts every other
   # peer of the socket as its own uid: the agent's `hnx broker mcp`, an unmapped uid and the
-  # relay's audit read, and the broker's outbox relay (as the broker's uid, on the broker's state
-# volume: `hnx broker relay --once` publishes to the events service while the broker itself keeps
-# no network).  smoke_checks.py runs broker_e2e.py in it.  Nothing here is published.
+  # relay's audit read, and the broker's outbox relay (as its own uid, hnx-broker-relay, which
+  # sees only <state>/outbox read-only and its own <state>/relay: `hnx broker relay --once`
+  # publishes to the events service while the broker itself keeps no network).  smoke_checks.py
+  # runs broker_e2e.py in it.  Nothing here is published.
   broker:
     <<: [*restart, *hardened]
     image: hnx-lab-broker:local
@@ -423,6 +426,8 @@ services:
       - broker-run:/run/hnx-broker
       - broker-data:/srv/agents
       - broker-state:/var/lib/hnx-broker
+      - broker-outbox:/var/lib/hnx-broker/state/outbox
+      - broker-relay:/var/lib/hnx-broker/state/relay:ro  # read to prune the outbox
     network_mode: none  # the broker has no network listener; its socket is its only door
     healthcheck:
       test: ["CMD", "test", "-S", "/run/hnx-broker/broker.sock"]
@@ -476,7 +481,10 @@ services:
     volumes:
       - broker-run:/run/hnx-broker
       - broker-data:/srv/agents:ro
-      - broker-state:/var/lib/hnx-broker  # the relay (as the broker's uid) marks what it sent
+      # the relay's view of the broker's state, nothing more: approvals/, claims/, the audit
+      # trail and the digest key are not mounted here
+      - broker-outbox:/var/lib/hnx-broker/state/outbox:ro
+      - broker-relay:/var/lib/hnx-broker/state/relay
     depends_on:
       broker:
         condition: service_healthy

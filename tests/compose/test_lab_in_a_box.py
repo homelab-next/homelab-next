@@ -646,17 +646,27 @@ def test_broker_services_are_three_users_on_one_socket(compose, env_vars):
     assert {"user": users["relay"], "issuer": "sso"} in manifest["approval_relays"]
 
 
-def test_the_broker_relay_publishes_from_the_edge_as_the_broker(compose):
+def test_the_broker_relay_publishes_from_the_edge_as_its_own_user(compose):
     """The bus-relay step: the broker keeps no network; the edge runs ``hnx broker relay`` as the
-    broker's uid on the broker's state volume, against the events service, with nats-py."""
+    relay's own uid, which sees the broker's outbox read-only and its own relay directory, never
+    the rest of the broker's state, against the events service, with nats-py."""
     e2e = load_module("broker_e2e", LAB / "broker_e2e.py")
     from homelabnext.broker.relay import BROKER_SOURCE
 
     svc = compose["services"]
     broker, edge = svc["broker"], svc["broker-edge"]
     state_mount = f"broker-state:{Path(e2e.LAB_STATE).parent}"
+    outbox, relay_dir = f"{e2e.LAB_STATE}/outbox", f"{e2e.LAB_STATE}/relay"
     assert broker["network_mode"] == "none" and state_mount in broker["volumes"]
-    assert state_mount in edge["volumes"] and "broker-state" in compose["volumes"]
+    assert f"broker-outbox:{outbox}" in broker["volumes"]
+    assert any(v.startswith(f"broker-relay:{relay_dir}:ro") for v in broker["volumes"])
+    # the edge (root, SETUID) holds no handle on approvals/, claims/, audit/ or the digest key
+    assert not any(v.startswith("broker-state:") for v in edge["volumes"])
+    assert f"broker-outbox:{outbox}:ro" in edge["volumes"]
+    assert f"broker-relay:{relay_dir}" in edge["volumes"]
+    assert {"broker-state", "broker-outbox", "broker-relay"} <= set(compose["volumes"])
+    assert e2e.LAB_RELAY_UID != e2e.LAB_BROKER_UID
+    assert e2e.relay_launch()[-3:] == ["as", f"{e2e.LAB_RELAY_UID}:{e2e.LAB_RELAY_UID}", "--"]
     env = edge["environment"]
     assert env["HNX_ENDPOINT_EVENTS"].startswith("nats://events.svc.example.internal:")
     assert "events.svc.example.internal" in svc["events"]["networks"]["lab"]["aliases"]
@@ -890,3 +900,22 @@ def test_make_lab_up_runs_the_guard_first(tmp_path):
     assert r.returncode != 0
     assert "refusing LAB_BIND=0.0.0.0" in r.stderr
     assert "docker" not in r.stderr.replace("docker's", "")  # never reached docker compose
+
+
+def test_the_relays_user_and_directories_keep_the_broker_state_private():
+    """The image's modes: the relay may traverse the state directory and read outbox/ through its
+    group, owns relay/; nothing else of the broker's state is open to it."""
+    e2e = load_module("broker_e2e", LAB / "broker_e2e.py")
+    dockerfile = (LAB / "broker" / "Dockerfile").read_text()
+    uid = e2e.LAB_RELAY_UID
+    assert f"--uid {uid} --gid {uid} --no-create-home hnx-broker-relay" in dockerfile
+    state = e2e.LAB_STATE
+    want = {
+        "/var/lib/hnx-broker": "-o hnx-broker -g hnx-broker-relay -m 0710",
+        state: "-o hnx-broker -g hnx-broker-relay -m 0710",
+        f"{state}/outbox": "-o hnx-broker -g hnx-broker-relay -m 2750",
+        f"{state}/relay": "-o hnx-broker-relay -g hnx-broker -m 2750",
+    }
+    for path, flags in want.items():
+        assert f"install -d {flags} {path} " in dockerfile, path
+    assert dockerfile.count("hnx-broker-relay -m") == 3  # nothing else is the relay's group's

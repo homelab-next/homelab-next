@@ -497,16 +497,11 @@ def test_a_poison_event_becomes_undeliverable_and_the_rest_go_on(tmp_path):
     assert doc["state"] == "fail" and doc["undeliverable"] == 1 and doc["pending"] == 0
 
 
-def test_an_invalid_subject_is_permanent_too(tmp_path):
-    state, bus, clock = StateDir(tmp_path / "state"), Bus(), Clock()
-    bad = event(1)
-    bad["type"] = "homelabnext.bad subject"
-    state.put_outbox(event(0))
-    state.put_outbox(bad)
-    state.put_outbox(event(2, "homelabnext.decision.returned"))
-    r = relay(state, bus, clock, max_attempts=2)
-    run_until_idle(r, clock)
-    assert len(bus.stored()) == 2 and r.undeliverable == 1
+def test_an_invalid_subject_is_permanent_too():
+    bus = Bus()()
+    with pytest.raises(nj.PublishRefused) as err:
+        bus.publish("homelabnext.bad subject", b"{}", msg_id="x")
+    assert err.value.permanent
 
 
 def test_an_outage_never_makes_an_event_undeliverable(tmp_path):
@@ -641,3 +636,68 @@ def test_an_idle_pass_reads_only_what_is_pending(tmp_path, monkeypatch):
     # retention: old markers go once their outbox file is gone, the fresh one's file is still there
     assert store.sweep(retain_s=100.0, now=10**10) == 30
     assert store.get("delivered", f"{fresh}.json") is not None
+
+
+# ---------------------------------------------------------------- the relay's own user
+def _forge(state: StateDir, ev: dict, queued: int) -> None:
+    """A file someone other than the broker put into outbox/ (bypassing put_outbox)."""
+    doc = {"queued": queued, "event": ev}
+    (state.root / "outbox" / f"{ev['id']}.json").write_text(json.dumps(doc))
+
+
+def test_the_relay_publishes_only_the_brokers_valid_events(tmp_path):
+    """Whoever can drop a file into outbox/ must not get it published under the broker's bus
+    user: the envelope and type schema must hold, the source must be the broker's and the type
+    one the broker emits; anything else is quarantined and later events go on."""
+    state, bus = StateDir(tmp_path / "state"), Bus()
+    [first] = emit(state, 1)
+    foreign = build_event("homelabnext.decision.returned", "svc:someone-else",
+                          {"decision_id": "req-0009", "verdict": "accept", "confidence": 1.0,
+                           "tier_used": "human"}, dedupe_key="f", subject="req-0009")  # fmt: skip
+    broken = event(8, "homelabnext.decision.returned")
+    broken["data"] = {"verdict": "maybe"}  # fails the type's schema
+    example = ROOT / "schemas" / "events" / "examples" / "agent.job.failed.valid.json"
+    other_type = {**json.loads(example.read_text()), "source": BROKER_SOURCE}
+    other_type["id"] = "evt-other-type"
+    for n, ev in enumerate((foreign, broken, other_type), start=100):
+        _forge(state, ev, n)
+    last = event(7, "homelabnext.decision.returned")
+    state.put_outbox(last)
+    assert relay(state, bus).drain() == 2
+    assert [ev["id"] for _, ev, _ in bus.stored()] == [first, last["id"]]
+    store = RelayStore(state.root)
+    reasons = {e["id"]: store.get("quarantine", f"{e['id']}.json")["reason"]
+               for e in (foreign, broken, other_type)}  # fmt: skip
+    assert reasons == {foreign["id"]: "not-the-broker", broken["id"]: "invalid-event",
+                       other_type["id"]: "not-a-broker-type"}  # fmt: skip
+
+
+def test_the_relay_only_reads_the_outbox_and_needs_nothing_else(tmp_path, monkeypatch):
+    """The relay runs as its own user that may read outbox/ and write relay/ only: a full pass
+    changes nothing outside relay/ and opens nothing of the broker's other state."""
+    state, bus = StateDir(tmp_path / "state"), Bus()
+    emit(state, 3)
+    root = state.root
+
+    def snapshot():
+        return {
+            str(p.relative_to(root)): (p.stat().st_mtime_ns, p.stat().st_mode)
+            for p in root.rglob("*")
+            if not str(p.relative_to(root)).startswith("relay")
+        }
+
+    before = snapshot()
+    opened = []
+    real_open = Path.open
+
+    def spy(self, *a, **kw):
+        opened.append(self)
+        return real_open(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "open", spy)
+    r = OutboxRelay(root, bus)  # a path: no StateDir (which would read audit/ and more)
+    assert r.drain() == 3
+    r.close()
+    assert snapshot() == before
+    outside = [p for p in opened if p.parent.name != "outbox" and "relay" not in p.parts]
+    assert outside == []

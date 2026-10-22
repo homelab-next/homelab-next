@@ -35,7 +35,7 @@ an unmapped uid is refused (``unknown-caller``); the agent cannot approve its ow
 (``not-an-approval-relay``); the hub refuses a request without the front-door secret; the
 approver reads the page (token and digest from the form) and approves through
 ``POST /approvals/decide``; the agent runs the request once; a second run is refused
-(``not-pending``); with an events bus configured, the broker's outbox relay (as the broker's
+(``not-pending``); with an events bus configured, the broker's outbox relay (as its own
 uid) publishes the request's ``decision.requested`` and ``decision.returned`` to the bus, in order,
 as ``svc:broker`` with the event id as the message id, and a second relay pass publishes nothing;
 the audit trail holds every step, each with the peer's ``via``.
@@ -70,8 +70,10 @@ LAB_DATA_ROOT = "/srv/agents"
 LAB_HUB = "http://status-hub.svc.example.internal:8099"  # no-raw-endpoint: allow the lab hub alias
 LAB_UIDS = {"agent": 10011, "relay": 10012, "stranger": 10013}
 LAB_CLIENTS_GID = 10020
-#: the broker's own uid (the image's hnx-broker): the outbox relay runs as it, on its state
+#: the broker's own uid (the image's hnx-broker), and its outbox relay's (hnx-broker-relay): the
+#: relay sees only <state>/outbox (read-only) and its own <state>/relay
 LAB_BROKER_UID = 10010
+LAB_RELAY_UID = 10015
 LAB_STATE = "/var/lib/hnx-broker/state"
 LAB_EVENTS_TARGET = "/src/compose/lab-in-a-box/targets/events.yml"
 LAB_EVENTS_STREAM, LAB_EVENTS_PREFIX = "HNXLAB_BROKER", "hnxlab"
@@ -95,7 +97,7 @@ class StepFailed(Exception):
 @dataclass
 class Relay:
     """The broker's outbox relay and the bus it publishes to.  ``launch`` is the argv prefix
-    running a command as the broker's uid; ``open_bus()`` returns the JetStream adapter on the
+    running a command as the relay's own uid; ``open_bus()`` returns the JetStream adapter on the
     same stream (the scenario reads what the relay published through it)."""
 
     state: str
@@ -104,8 +106,16 @@ class Relay:
     prefix: str
     launch: Sequence[str] = ()
     open_bus: Callable[[], Any] | None = None
-    #: runs one ``--once`` pass and returns (exit status, stdout); default: the CLI, as the broker
+    #: runs one ``--once`` pass and returns (exit status, stdout); default: the CLI, as the relay's uid
     run_once: Callable[[], tuple[int, str]] | None = None
+    #: the only ``HNX_SECRET_*`` variables the relay's process gets (its bus password)
+    secrets: Sequence[str] = ()
+
+    def env(self, base: Mapping[str, str]) -> dict[str, str]:
+        """``base`` without any secret the relay does not need (the edge holds the hub's)."""
+        return {
+            k: v for k, v in base.items() if not k.startswith("HNX_SECRET_") or k in self.secrets
+        }
 
     def argv(self, hnx: Sequence[str]) -> list[str]:
         return [*self.launch, *hnx, "broker", "relay", "--state", self.state, "--events-target",
@@ -421,7 +431,7 @@ def steps(setup: Setup) -> tuple[str, ...]:
 
 
 def check_relay(setup: Setup, rid: str) -> str:
-    """``hnx broker relay --once`` as the broker publishes the request's decision events, in
+    """``hnx broker relay --once`` as the relay's uid publishes the request's decision events, in
     order, as the broker's source with the event id as the message id; a second pass publishes
     nothing (delivered markers on the broker's state)."""
     from homelabnext.conform.adapters.nats_jetstream import parse_headers
@@ -435,7 +445,7 @@ def check_relay(setup: Setup, rid: str) -> str:
             rc, out, err = (*relay.run_once(), "")
         else:
             proc = subprocess.run(
-                argv, env=setup.env, capture_output=True, text=True, timeout=TIMEOUT
+                argv, env=relay.env(setup.env), capture_output=True, text=True, timeout=TIMEOUT
             )
             rc, out, err = proc.returncode, proc.stdout, proc.stderr
         if rc != 0:
@@ -605,9 +615,9 @@ def lab_launch(role: str) -> list[str]:
     return [sys.executable, os.path.abspath(__file__), "as", f"{uid}:{uid}:{LAB_CLIENTS_GID}", "--"]
 
 
-def broker_launch() -> list[str]:
-    """Inside the broker-edge container: run as the broker's own uid (the outbox relay)."""
-    uid = LAB_BROKER_UID
+def relay_launch() -> list[str]:
+    """Inside the broker-edge container: run as the outbox relay's own uid."""
+    uid = LAB_RELAY_UID
     return [sys.executable, os.path.abspath(__file__), "as", f"{uid}:{uid}", "--"]
 
 
@@ -681,7 +691,7 @@ def main(argv: list[str] | None = None) -> int:
             args.events_target,
             args.stream,
             args.subject_prefix,
-            launch=broker_launch(),
+            launch=relay_launch(),
         )
     rows = run_scenario(setup)
     ok = [r["step"] for r in rows] == list(steps(setup)) and all(r["ok"] for r in rows)

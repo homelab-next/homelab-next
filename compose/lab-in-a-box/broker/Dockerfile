@@ -20,6 +20,10 @@ RUN python -m pip install --no-cache-dir --require-hashes --no-deps -r constrain
 # one system user per peer of the socket: the broker, the triage and reader agents (callers), the
 # hub (the approval relay); 10013 is deliberately nobody's.  The clients' group may reach the
 # socket; the broker's own group may only traverse its data root (the edge stats a lane file).
+# The broker's outbox relay is its own user, hnx-broker-relay: through its group it may traverse
+# the state directory (0710) and read outbox/ (2750: new files inherit the group, 0640), and it
+# owns relay/ (2750: the broker's group reads the markers, to prune the outbox).  Everything else in
+# the state directory (approvals/, claims/, the digest key, ...) stays 0700 the broker's.
 RUN groupadd --system --gid 10020 hnx-broker-clients \
  && groupadd --system --gid 10010 hnx-broker \
  && useradd --system --uid 10010 --gid 10010 --no-create-home hnx-broker \
@@ -29,8 +33,13 @@ RUN groupadd --system --gid 10020 hnx-broker-clients \
  && useradd --system --uid 10012 --gid 10012 -G hnx-broker-clients --no-create-home hnx-hub \
  && groupadd --system --gid 10014 hnx-agent-reader \
  && useradd --system --uid 10014 --gid 10014 -G hnx-broker-clients --no-create-home hnx-agent-reader \
+ && groupadd --system --gid 10015 hnx-broker-relay \
+ && useradd --system --uid 10015 --gid 10015 --no-create-home hnx-broker-relay \
  && install -d -o hnx-broker -g hnx-broker-clients -m 0750 /run/hnx-broker \
- && install -d -o hnx-broker -g hnx-broker -m 0700 /var/lib/hnx-broker \
+ && install -d -o hnx-broker -g hnx-broker-relay -m 0710 /var/lib/hnx-broker \
+ && install -d -o hnx-broker -g hnx-broker-relay -m 0710 /var/lib/hnx-broker/state \
+ && install -d -o hnx-broker -g hnx-broker-relay -m 2750 /var/lib/hnx-broker/state/outbox \
+ && install -d -o hnx-broker-relay -g hnx-broker -m 2750 /var/lib/hnx-broker/state/relay \
  && install -d -o hnx-broker -g hnx-broker -m 0750 /srv/agents \
  && install -d -o hnx-hub -g hnx-hub -m 0700 /var/lib/hnx-hub
 COPY homelabnext /src/homelabnext
