@@ -70,6 +70,7 @@ from homelabnext.agent.schemas import schema_errors
 
 from . import (
     DEFAULT_APPROVAL_TTL_S,
+    approver_kind,
     check_manifest_handlers,
     decide,
     decide_access,
@@ -1121,13 +1122,16 @@ class BrokerService:
             raise _reasoned(f"request {request_id!r} is no longer pending", "not-pending")
         self.state.put_approval(doc)
         self._audit(who, req["action"], op, "ok", approval_id=doc["approval_id"], **extra)
+        # who decided: a person (``human``), or an approver of kind agent the manifest admits
+        # (``allow_agent_approvers``): StackStorm's A03 acts on ``human`` only
+        tier = "agent" if approver_kind(self._view(), doc["approver"]) == "agent" else "human"
         self._emit(
             "homelabnext.decision.returned",
             {
                 "decision_id": request_id,
                 "verdict": "accept" if decision == "approved" else "reject",
                 "confidence": 1.0,
-                "tier_used": "human",
+                "tier_used": tier,
             },
             request_id,
             key=f"returned:{doc['approval_id']}",

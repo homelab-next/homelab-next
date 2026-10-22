@@ -157,8 +157,9 @@ approved_run: {id: A03, mode: shadow}     # source: svc:broker by default; promo
 ```
 
 It triggers on `homelabnext.decision.returned` from the broker with `verdict: accept` and
-`tier_used: human` (what the broker emits when a person approves; a denial is `reject` and never
-matches). Its one step, `run`, asks the broker to run `data.decision_id`, and only when all of
+`tier_used: human` (what the broker emits when a person approves; an approver of kind agent,
+admitted by the manifest's `allow_agent_approvers`, emits `tier_used: agent` and never matches,
+and a denial is `reject` and never matches either). Its one step, `run`, asks the broker to run `data.decision_id`, and only when all of
 this holds, else the run ends `refused` with the reason, logged:
 
 | Check | Refusal |

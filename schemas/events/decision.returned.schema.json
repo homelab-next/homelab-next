@@ -37,8 +37,10 @@
                 "small",
                 "large",
                 "llm",
-                "human"
-              ]
+                "human",
+                "agent"
+              ],
+              "description": "who decided: a decision tier (floor, small, large, llm), a person (human: the broker emits it when an approval relay carried a human approver's decision) or an allowlisted approver of kind agent (agent: only under the broker manifest's allow_agent_approvers). Consumers that act on a person's approval test human, never just accept."
             },
             "latency_ms": {
               "type": "integer",

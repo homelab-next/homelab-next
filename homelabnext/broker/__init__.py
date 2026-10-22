@@ -251,17 +251,10 @@ def _evaluate(manifest, request, approval, actual, now):
     # folded: refusing a spelling variant of the actor is the cautious direction
     if folded == _profile_name(request["actor"]):
         return "deny", "approval-self-approved", aid
-    # exact: an allowlist entry names one account, never its spelling variants
-    exact = (who["issuer"], who["subject"])
-    allowed = next(
-        (a for a in manifest.get("approvers", []) if (a["issuer"], a["subject"]) == exact),
-        None,
-    )
-    if allowed is None:
+    kind = approver_kind(manifest, who)
+    if kind is None:
         return "deny", "approval-approver-not-allowed", aid
-    agents = {_profile_name(g["profile"]) for g in manifest.get("grants", [])}
-    is_agent = allowed.get("kind", "human") == "agent" or folded in agents
-    if is_agent and manifest.get("allow_agent_approvers") is not True:
+    if kind == "agent" and manifest.get("allow_agent_approvers") is not True:
         return "deny", "approval-agent-approver", aid
     t_now, t_appr = _ts(now), _ts(approval["approved_at"])
     if t_appr > t_now or ("created" in request and t_appr < _ts(request["created"])):
@@ -273,6 +266,23 @@ def _evaluate(manifest, request, approval, actual, now):
     if t_now > expiry:
         return "deny", "approval-expired", aid
     return "allow", "approved", aid
+
+
+def approver_kind(manifest: Mapping[str, Any], who: Mapping[str, Any]) -> str | None:
+    """``"human"`` or ``"agent"`` for an approver the manifest allowlists, else None.  The
+    allowlist entry is matched exactly (it names one account, never its spelling variants); an
+    entry of kind ``agent``, or one whose subject names a granted profile (compared normalized),
+    is an agent."""
+    exact = (who.get("issuer"), who.get("subject"))
+    allowed = next(
+        (a for a in manifest.get("approvers", []) if (a["issuer"], a["subject"]) == exact),
+        None,
+    )
+    if allowed is None:
+        return None
+    agents = {_profile_name(g["profile"]) for g in manifest.get("grants", [])}
+    folded = normalize_identity(str(who.get("subject", "")))
+    return "agent" if allowed.get("kind", "human") == "agent" or folded in agents else "human"
 
 
 def check_manifest_handlers(

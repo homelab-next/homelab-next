@@ -121,7 +121,10 @@ hnx broker validate examples/broker/manifest.yml
    (`schemas/broker/approval`) names the request digest and expires after `approval_ttl_s`
    (default 900 s). Self-approval, an unlisted approver and an agent approver (unless
    `allow_agent_approvers`) are refused by the same rules for a denial as for an approval.
-   `decision.returned` records the verdict.
+   `decision.returned` records the verdict and who decided: `tier_used: human` for a person,
+   `agent` for an approver of kind agent (or one naming a granted profile) under
+   `allow_agent_approvers`, so a consumer that acts on a person's approval (StackStorm's A03) can
+   tell them apart.
 
    The allowlist is matched **exactly** on `(issuer, subject)`: write each entry as the approver's
    canonical subject (lower-case, the approval schema's `^[a-z][a-z0-9._-]{0,63}$`), exactly as
