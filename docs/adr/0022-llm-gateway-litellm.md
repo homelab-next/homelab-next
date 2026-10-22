@@ -54,7 +54,8 @@ launcher downloads the binary without verifying a checksum.
 ## Decision
 
 1. The LLM gateway is **LiteLLM, run the supported way**:
-   - Postgres (the lab's own, schema `litellm`) and `LITELLM_SALT_KEY`;
+   - Postgres (the lab's own, as a role that owns only schema `litellm`, never the lab superuser)
+     and `LITELLM_SALT_KEY`;
    - the `litellm-database` image pinned by digest, following one stable patch line;
    - no custom callbacks and no admission logic in the gateway;
    - every upgrade must first pass the `inference` suite with the `gateway` feature.

@@ -156,6 +156,56 @@ def test_negative_an_unprofiled_service_counts_against_the_default_budget(compos
     assert mem_total(broken) > RAM_BUDGET_MB
 
 
+PG_INIT = LAB / "config" / "postgres" / "init" / "10-litellm.sh"
+
+
+def gateway_db_problems(compose, init_sql: str) -> list[str]:
+    """LiteLLM must reach postgres as its own role, owning only its own schema, never as ``lab``
+    (the superuser that owns the lake catalog's tables)."""
+    problems = []
+    url = compose["services"]["llm-gateway"]["environment"]["HNX_SECRET_LLM_GATEWAY_DATABASE_URL"]
+    m = re.match(r"postgresql://([^:]+):\$\{([A-Z_]+)[:?].*@[^/]+/catalog\?schema=(\w+)$", url)
+    if not m:
+        return [f"unexpected database URL shape: {url}"]
+    user, var, schema = m.groups()
+    if user != "litellm" or schema != "litellm":
+        problems.append(f"LiteLLM connects as {user!r} to schema {schema!r}, not litellm/litellm")
+    if var == "LAB_POSTGRES_PASSWORD":
+        problems.append("LiteLLM uses the lab superuser's password")
+    pg = compose["services"]["postgres"]
+    if var not in pg.get("environment", {}):
+        problems.append(f"postgres does not get {var}, so the init script cannot set it")
+    if "./config/postgres/init:/docker-entrypoint-initdb.d:ro" not in pg.get("volumes", []):
+        problems.append("postgres does not mount the init scripts")
+    for words in (
+        "CREATE ROLE litellm LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE",
+        "CREATE SCHEMA litellm AUTHORIZATION litellm",
+        "REVOKE CREATE ON SCHEMA public FROM litellm",
+        f'"${var}"',
+    ):
+        if words not in init_sql:
+            problems.append(f"the init script lacks {words!r}")
+    return problems
+
+
+def test_the_gateway_has_its_own_database_role(compose):
+    assert gateway_db_problems(compose, PG_INIT.read_text()) == []
+    assert PG_INIT.stat().st_mode & 0o111, "the postgres entrypoint runs only executable .sh files"
+
+
+def test_negative_the_gateway_on_the_lab_superuser_is_caught(compose):
+    broken = json.loads(json.dumps(compose))
+    env = broken["services"]["llm-gateway"]["environment"]
+    env["HNX_SECRET_LLM_GATEWAY_DATABASE_URL"] = (
+        "postgresql://lab:${LAB_POSTGRES_PASSWORD:?x}@postgres.svc.example.internal:5432"
+        "/catalog?schema=litellm"
+    )
+    problems = gateway_db_problems(broken, PG_INIT.read_text())
+    assert "LiteLLM connects as 'lab' to schema 'litellm', not litellm/litellm" in problems
+    assert "LiteLLM uses the lab superuser's password" in problems
+    assert gateway_db_problems(compose, "") != []  # an init script that creates nothing
+
+
 def test_trino_heap_is_tiny():
     heap = re.search(r"^-Xmx(\d+)M$", (LAB / "config/trino/jvm.config").read_text(), re.M)
     assert heap and int(heap[1]) <= 1024
@@ -616,6 +666,7 @@ CREDENTIALS = (
     "LAB_HUB_FRONT_DOOR_SECRET",
     "LAB_BROKER_DEMO_TOKEN",
     "LAB_GATEWAY_MASTER_KEY",
+    "LAB_GATEWAY_DB_PASSWORD",
     "LAB_GATEWAY_SALT_KEY",
     "LAB_GATEWAY_KEY_READER",
     "LAB_GATEWAY_KEY_RESPONDER",
