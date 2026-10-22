@@ -132,6 +132,29 @@ def test_malformed_entries_are_refused(mutate, needle):
     assert any(needle in p for p in problems_of(d)), problems_of(d)
 
 
+@pytest.mark.parametrize(
+    ("mutate", "needle"),
+    [
+        # `$` matches before a trailing newline: every pattern is anchored with \Z instead
+        (lambda e: e["files"][0].__setitem__("path", "config.json\n"), "path must be relative"),
+        (lambda e: e["source"].__setitem__("revision", e["source"]["revision"] + "\n"), "40-hex"),
+        (lambda e: e["source"].__setitem__("repo", e["source"]["repo"] + "\n"), "<org>/<name>"),
+        (lambda e: e.__setitem__("served_model_name", "x\n"), "served_model_name"),
+        (lambda e: e.__setitem__("quant", "fp8\n"), "quant"),
+        (lambda e: e.__setitem__("license", "apache-2.0\n"), "license"),
+        (
+            lambda e: e["files"].append(dict(e["files"][0], path=e["files"][0]["path"].upper())),
+            "differ only by case",
+        ),
+    ],
+)
+def test_a_trailing_newline_or_a_case_twin_is_refused(mutate, needle):
+    d = doc()
+    mutate(d["models"]["example-27b-fp8"])
+    found = problems_of(d)
+    assert any(needle in p for p in found), found
+
+
 def test_the_schema_and_the_library_agree_on_the_schema_examples_and_negatives():
     """Every schema negative is also refused by the library, and the example accepted."""
     sm.Store.from_dict(json.loads((SCHEMAS / "examples" / "model_store.valid.json").read_text()))

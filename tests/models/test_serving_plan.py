@@ -341,3 +341,9 @@ def test_a_registry_service_port_that_is_not_the_plans_is_refused(tmp_path):
     lt = yaml.safe_load(files["litellm/config.yaml"])
     bases = {d["model_name"]: d["litellm_params"].get("api_base") for d in lt["model_list"]}
     assert bases["main-reasoner"].endswith(":8000/v1")
+
+
+def test_a_backend_id_with_a_trailing_newline_is_refused(tmp_path):
+    s = spec()
+    s["backends"]["svc:inference-triage\n"] = s["backends"].pop("svc:inference-triage")
+    assert any("the key is a svc: id" in p for p in problems_of(tmp_path, s))

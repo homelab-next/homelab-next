@@ -43,15 +43,15 @@ __all__ = [
     "resolve_binding",
 ]
 
-ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:[-.][a-z0-9]+)*$")
-REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
-REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
-RUN_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
-QUANT_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,31}$")
-LICENSE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]{0,63}$")
-SHA_RE = re.compile(r"^[0-9a-f]{64}$")
-FILE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9_][A-Za-z0-9._-]*)*$")
-MODEL_ID_RE = re.compile(r"^[A-Za-z0-9._:/-]{1,128}$")
+ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:[-.][a-z0-9]+)*\Z")
+REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}\Z")
+REVISION_RE = re.compile(r"^[0-9a-f]{40}\Z")
+RUN_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}\Z")
+QUANT_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,31}\Z")
+LICENSE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]{0,63}\Z")
+SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
+FILE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9_][A-Za-z0-9._-]*)*\Z")
+MODEL_ID_RE = re.compile(r"^[A-Za-z0-9._:/-]{1,128}\Z")
 FORMATS = ("hf", "gguf", "export")
 LAYOUTS = ("safetensors", "gguf")
 #: engine -> the (format, layout) pairs it may serve.  vLLM serves safetensors only: its GGUF
@@ -308,6 +308,14 @@ def _files(where: str, raw: Any, problems: list[str]) -> list[File]:
     paths = [f.path for f in out]
     for dup in sorted({p for p in paths if paths.count(p) > 1}):
         problems.append(f"{where}: file {dup} is listed twice")
+    folded: dict[str, set[str]] = {}
+    for p in paths:
+        folded.setdefault(p.casefold(), set()).add(p)
+    for same in sorted(sorted(v) for v in folded.values() if len(v) > 1):
+        problems.append(
+            f"{where}: files {', '.join(same)} differ only by case (one file on a case-insensitive "
+            "file system or share, two listings)"
+        )
     return out
 
 

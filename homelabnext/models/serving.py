@@ -67,7 +67,7 @@ __all__ = [
     "role_vars_text",
 ]
 
-SVC_RE = re.compile(r"^svc:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)$")
+SVC_RE = re.compile(r"^svc:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\Z")
 FLAG_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 #: engines a serving spec may run a backend on.  Unsloth Studio may *load* store entries, but it
 #: is the interactive GUI and trainer, not a backend the gateway routes agents to (ADR-0023).
