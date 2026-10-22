@@ -244,6 +244,12 @@ def test_model_store_health_is_by_size_and_verify_by_sha256(tmp_path):
 
 def test_model_store_backup_and_export_hooks(tmp_path):
     store = manifest()
+    # codepoint order (sha256sum's, and Entry.listing's): LICENSE, README.md, config.json; a
+    # case-insensitive sort would put config.json first and the listing would not hash to the digest
+    store["models"]["example-4b-bf16"]["files"] += [
+        {"path": "README.md", "sha256": "a" * 64, "size": 1},
+        {"path": "LICENSE", "sha256": "b" * 64, "size": 1},
+    ]
     v = store_vars(tmp_path, store, model_store_fetch=False)
     assert run_role(tmp_path, "model_store", "main", v).returncode == 0
     assert run_role(tmp_path, "model_store", "backup", v).returncode == 0

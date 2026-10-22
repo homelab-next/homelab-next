@@ -15,7 +15,7 @@
     - name: Write each entry's sha256sum listing
       ansible.builtin.copy:
         dest: "{{ model_store_export_dir }}/{{ item.key }}.sha256"
-        content: "{% for f in item.value.files | sort(attribute='path') %}{{ f.sha256 }}  {{ f.path }}\n{% endfor %}"
+        content: "{% for f in item.value.files | sort(attribute='path', case_sensitive=true) %}{{ f.sha256 }}  {{ f.path }}\n{% endfor %}"
         mode: "0640"
       loop: "{{ model_store_manifest.models | dict2items }}"
       loop_control:
