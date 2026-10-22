@@ -127,9 +127,14 @@ subject must implement `GatewayClient` (`conformance/protocols/inference.py`).
 
 | Check | Fails when |
 |---|---|
-| `gateway-rejects-bad-key` | a wrong key or a missing key gets anything but a 401, or gets a 401 whose reason points at a store or database (`No connected db`) |
-| `gateway-limit-throttles` | `n + 1` calls on the throttled key all succeed, or a call fails with something other than 429 |
+| `gateway-rejects-bad-key` | a chat call (`/v1/chat/completions`, with the model taken from the admin key) with a wrong key or no key gets anything but a 401, or gets a 401 whose reason points at a store or database (`No connected db`) |
+| `gateway-limit-throttles` | on the throttled key (limit `n`), any of the first `n` calls is not served, call `n + 1` is not a 429, or a call fails with something other than 429 |
 | `gateway-models-match-roles` | `/v1/models` differs from the role table's aliases (backend ids, provider prefixes, extra names) |
+
+`gateway-limit-throttles` uses up the throttled key's window (60 s for the lab's
+`conformance-throttle` key). A rerun inside that window starts on a key that is already used up,
+so its first call is a 429 and the check fails. Wait out the window before running the suite
+again against the same gateway.
 
 The product adapter is `homelabnext.conform.adapters.llm_gateway:make`. It is stdlib-only, keeps
 no state between calls, and is not tied to any product. It reads the endpoint from

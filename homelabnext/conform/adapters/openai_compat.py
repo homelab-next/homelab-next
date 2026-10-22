@@ -34,13 +34,15 @@ class InferenceError(Exception):
 
     ``status`` is the HTTP status of an error reply; ``detail`` the server's own error message
     (``error.message`` of an OpenAI-shaped error body, else the start of the body), so a check can
-    tell an authentication error from, say, a database one.
+    tell an authentication error from, say, a database one; ``path`` the request path that failed
+    (``/v1/chat/completions``), so a check can tell which call was refused.
     """
 
-    def __init__(self, message: str, status: int | None = None, detail: str = ""):
+    def __init__(self, message: str, status: int | None = None, detail: str = "", path: str = ""):
         super().__init__(message)
         self.status = status
         self.detail = detail
+        self.path = path
 
 
 def _error_detail(exc: urllib.error.HTTPError, limit: int = 4096) -> str:
@@ -121,9 +123,10 @@ class OpenAICompat:
                 f"HTTP {exc.code} from {path}" + (f": {detail[:200]}" if detail else ""),
                 exc.code,
                 detail,
+                path,
             ) from exc
         except (urllib.error.URLError, OSError) as exc:
-            raise InferenceError(f"transport error: {type(exc).__name__}") from exc
+            raise InferenceError(f"transport error: {type(exc).__name__}", path=path) from exc
 
     def _json(self, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
         with self._request(path, body) as resp:

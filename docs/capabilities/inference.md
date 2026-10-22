@@ -256,8 +256,8 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `stream-matches-completion` | SHOULD | streamed pieces add up to the non-streamed text | `streaming` |
 | `embeddings-fixed-dimension` | MUST | every embedding has the same length | `embeddings` |
 | `embeddings-deterministic-and-distinct` | MUST | same text same vector; different text different vector | `embeddings` |
-| `gateway-rejects-bad-key` | MUST | a wrong key and a missing key are each a 401 that says so, never a 5xx or a store error | `gateway` |
-| `gateway-limit-throttles` | MUST | a configured request limit answers 429 once it is used up, and nothing else fails | `gateway` |
+| `gateway-rejects-bad-key` | MUST | a chat call with a wrong key and with no key is each a 401 that says so, never a 5xx or a store error | `gateway` |
+| `gateway-limit-throttles` | MUST | on a key limited to n requests, the first n chat calls are served and call n+1 is a 429 | `gateway` |
 | `gateway-models-match-roles` | MUST | /v1/models lists exactly the declared role aliases (no backend ids, no extras) | `gateway` |
 
 ### Features an adapter may declare

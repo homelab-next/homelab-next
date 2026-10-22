@@ -36,8 +36,8 @@ GATEWAY_CHECKS = [
 class NoDatabaseGateway(FakeOpenAIServer):
     """LiteLLM with a master key and no Postgres, as recorded: a wrong key is 400 No connected db."""
 
-    def admit(self, authorization):
-        verdict = super().admit(authorization)
+    def admit(self, authorization, path=""):
+        verdict = super().admit(authorization, path)
         if verdict and verdict[0] == 401:
             return 400, "No connected db."
         return verdict
@@ -46,9 +46,36 @@ class NoDatabaseGateway(FakeOpenAIServer):
 class UnlimitedGateway(FakeOpenAIServer):
     """A gateway whose configured limit is not enforced."""
 
-    def admit(self, authorization):
-        verdict = super().admit(authorization)
+    def admit(self, authorization, path=""):
+        verdict = super().admit(authorization, path)
         return None if verdict and verdict[0] == 429 else verdict
+
+
+class OpenChatGateway(FakeOpenAIServer):
+    """Guards /v1/models but serves chat to any key or none: the defect the bad-key check exists for."""
+
+    def admit(self, authorization, path=""):
+        return None if path.startswith("/v1/chat") else super().admit(authorization, path)
+
+
+class DeadKeyGateway(FakeOpenAIServer):
+    """The throttled key answers 429 from its first call: nothing is ever served on it."""
+
+    def admit(self, authorization, path=""):
+        if (authorization or "").endswith(THROTTLE):
+            return 429, "rate limit exceeded"
+        return super().admit(authorization, path)
+
+
+class EarlyThrottleGateway(FakeOpenAIServer):
+    """Throttles the key one call before its configured limit."""
+
+    def admit(self, authorization, path=""):
+        verdict = super().admit(authorization, path)
+        throttled = (authorization or "").endswith(THROTTLE)
+        if verdict is None and throttled and self._key_calls.get(THROTTLE, 0) >= 3:
+            return 429, "rate limit exceeded"
+        return verdict
 
 
 def gateway(monkeypatch, cls=FakeOpenAIServer, models=ROLES, var="HNX_ENDPOINT_LLM_GATEWAY"):
@@ -108,8 +135,8 @@ def test_no_database_gateway_fails_the_bad_key_check(monkeypatch):
 
 def test_a_401_that_blames_the_database_still_fails(monkeypatch):
     class DbBlame(FakeOpenAIServer):
-        def admit(self, authorization):
-            verdict = super().admit(authorization)
+        def admit(self, authorization, path=""):
+            verdict = super().admit(authorization, path)
             return (401, "database unavailable") if verdict and verdict[0] == 401 else verdict
 
     srv = gateway(monkeypatch, cls=DbBlame)
@@ -129,6 +156,47 @@ def test_unenforced_limit_fails_the_throttle_check(monkeypatch):
             "inference", str(TARGETS / "inference-gateway.yml"), only=GATEWAY_CHECKS
         )
         assert failing(run) == ["gateway-limit-throttles"]
+    finally:
+        srv.stop()
+
+
+def test_a_gateway_that_serves_chat_to_any_key_fails_the_bad_key_check(monkeypatch):
+    srv = gateway(monkeypatch, cls=OpenChatGateway)
+    try:
+        run = run_capability(
+            "inference", str(TARGETS / "inference-gateway.yml"), only=["gateway-rejects-bad-key"]
+        )
+        assert failing(run) == ["gateway-rejects-bad-key"]
+        ev = run.results[0].evidence
+        assert "wrong key: expected an error" in ev
+        chats = [r for r in srv.requests if r["path"] == "/v1/chat/completions"]
+        assert chats, "the check never sent a chat call with the bad key"
+    finally:
+        srv.stop()
+
+
+def test_the_bad_key_401_must_come_from_the_chat_call(monkeypatch):
+    srv = gateway(monkeypatch)
+    try:
+        run = run_capability(
+            "inference", str(TARGETS / "inference-gateway.yml"), only=["gateway-rejects-bad-key"]
+        )
+        assert failing(run) == []
+        bad = [r for r in srv.requests if r["path"] == "/v1/chat/completions"]
+        assert len(bad) == 2  # one wrong-key and one no-key chat call, both refused
+    finally:
+        srv.stop()
+
+
+@pytest.mark.parametrize("cls", [DeadKeyGateway, EarlyThrottleGateway])
+def test_a_limit_that_serves_fewer_than_n_fails_the_throttle_check(monkeypatch, cls):
+    srv = gateway(monkeypatch, cls=cls)
+    try:
+        run = run_capability(
+            "inference", str(TARGETS / "inference-gateway.yml"), only=["gateway-limit-throttles"]
+        )
+        assert failing(run) == ["gateway-limit-throttles"]
+        assert "were not all served" in run.results[0].evidence
     finally:
         srv.stop()
 

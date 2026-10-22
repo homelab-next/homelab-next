@@ -182,8 +182,9 @@ class FakeOpenAIServer:
                 return body, rule.logprob if rule.logprob is not None else self.logprob
         return self.default_reply, self.logprob
 
-    def admit(self, authorization: str | None) -> tuple[int, str] | None:
-        """``None`` when the call may proceed, else ``(status, message)`` (gateway mode only)."""
+    def admit(self, authorization: str | None, path: str = "") -> tuple[int, str] | None:
+        """``None`` when the call to ``path`` may proceed, else ``(status, message)`` (gateway
+        mode only).  ``path`` lets a test subclass model a gateway that guards some routes only."""
         if not self.api_keys:
             return None
         token = (authorization or "").removeprefix("Bearer ").strip()
@@ -251,7 +252,7 @@ class FakeOpenAIServer:
                     self._error(404, f"no route {path}", "not_found")
 
             def _refused(self) -> bool:
-                verdict = server.admit(self.headers.get("Authorization"))
+                verdict = server.admit(self.headers.get("Authorization"), self.path.split("?")[0])
                 if verdict is None:
                     return False
                 status, message = verdict
