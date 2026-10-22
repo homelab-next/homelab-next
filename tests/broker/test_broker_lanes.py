@@ -222,6 +222,25 @@ def test_records_inbox_dates_the_note_itself(tmp_path):
     assert fm["created"] == NOW and out["path"].startswith("records/inbox/2026-01-15-")
 
 
+@pytest.mark.parametrize(
+    "note",
+    [
+        {"title": "{{ st2kv.system.leak | decrypt_kv }}"},
+        {"title": "x{% for c in ''.__class__.__mro__ %}{% endfor %}"},
+        {"title": "<% ctx(event) %>"},
+        {"title": "tail %>"},
+        {"affects": ["svc:queue", "{{ 7 * 7 }}"]},
+    ],
+)
+def test_records_inbox_refuses_template_markers_in_the_front_matter(tmp_path, note):
+    """A proposal's title is the ``proposal.created`` summary StackStorm receives; a marker in it
+    would be rendered there (the first one reads a datastore secret)."""
+    _refused(_inbox(), tmp_path, {"note": dict(NOTE) | note}, "lane-content-invalid")
+    assert _files(tmp_path) == []
+    out = write(_inbox(), tmp_path, ACTOR, {"note": dict(NOTE, title="5 % of {x}")}, NOW, key=KEY)
+    assert out["path"].startswith("records/inbox/")  # a lone brace or percent is fine
+
+
 def test_an_agent_whose_slug_prefixes_another_cannot_claim_its_file_name(tmp_path):
     """``triage`` filing slug ``lead-weekly-report`` used to take
     ``<date>-triage-lead-weekly-report.md``: exactly the name ``triage-lead``'s own

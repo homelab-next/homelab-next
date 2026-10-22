@@ -36,7 +36,10 @@ Enforced on every write, each refusal with a machine reason (:class:`LaneError`)
   failing the records schema or a note type the lane does not take;
 * ``lane-identity-mismatch`` - a note naming another ``requesting_agent`` than the actor;
 * ``lane-created-set`` - a note naming its own ``created`` (the broker's clock dates every note,
-  so no agent can file one back- or forward-dated, or claim a future day's name).
+  so no agent can file one back- or forward-dated, or claim a future day's name);
+* ``lane-content-invalid`` also for a note whose front matter holds a template marker
+  (:data:`TEMPLATE_MARKERS`): its title becomes the ``homelabnext.proposal.created`` summary, and
+  an event consumer that renders templates (StackStorm renders Jinja, Orquesta YAQL) would run it.
 
 Content is validated and sized *before* any byte is written, and the write itself is atomic: a
 temp file in the target directory, fsynced, then linked (or, for an ``overwrite`` lane, renamed)
@@ -70,6 +73,7 @@ __all__ = [
     "LaneError",
     "check_params",
     "name_tag",
+    "template_marker",
     "write",
 ]
 
@@ -82,6 +86,21 @@ _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 TAG_CHARS = 8
 #: the longest slug a caller may give: the records convention's 60, less the tag and its hyphen
 MAX_CALLER_SLUG = 60 - TAG_CHARS - 1
+#: Jinja and YAQL delimiters: never in a note's front matter, which events carry (``docs/stackstorm.md``)
+TEMPLATE_MARKERS = ("{{", "{%", "<%", "%>")
+
+
+def template_marker(value: Any) -> str | None:
+    """The first template marker in any string of ``value`` (keys included), else ``None``."""
+    if isinstance(value, str):
+        return next((m for m in TEMPLATE_MARKERS if m in value), None)
+    if isinstance(value, Mapping):
+        items = [x for kv in value.items() for x in kv]
+    elif isinstance(value, (list, tuple)):
+        items = list(value)
+    else:
+        return None
+    return next((m for m in map(template_marker, items) if m is not None), None)
 
 
 class LaneError(Exception):
@@ -233,6 +252,13 @@ def _encode_note(
         raise LaneError(
             "lane-content-invalid",
             f"lane {lane.name} takes notes of {list(lane.note_types)}",
+            "invalid",
+        )
+    marker = template_marker(fm)
+    if marker is not None:
+        raise LaneError(
+            "lane-content-invalid",
+            f"note front matter holds the template marker {marker!r}",
             "invalid",
         )
     fm["created"] = now
