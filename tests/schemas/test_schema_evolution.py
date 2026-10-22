@@ -46,6 +46,7 @@ NEWER_THAN_1_0 = {
     "note.register-transition-legacy-code.md": "records/note 1.1: type register-transition",
     "site.tailnet-deploy.yml": "platform/site 1.2: tailnet.deploy",
     "decision.returned.agent-approved.json": "events/decision.returned 1.1: tier_used agent",
+    "agent.job.failed.auto-retried.json": "events/agent.job.failed 1.1: auto_retry_scheduled",
 }
 
 
@@ -61,6 +62,56 @@ def test_an_example_newer_than_1_0_names_a_version_its_schema_really_has(name):
     _, cur_major, cur_minor = sc.parse_id(json.loads(path.read_text()))
     assert (cur_major, cur_minor) >= (major, minor), f"{path.name} is {cur_major}.{cur_minor}"
     assert sc.frozen_path(ROOT, path, major, minor).is_file(), f"no frozen {ver} of {path.name}"
+
+
+def _validation_only(doc):
+    """``doc`` without its annotations (a description may be reworded without a new version)."""
+    if isinstance(doc, dict):
+        skip = ("description", "title", "$comment", "examples")
+        return {k: _validation_only(v) for k, v in doc.items() if k not in skip}
+    if isinstance(doc, list):
+        return [_validation_only(v) for v in doc]
+    return doc
+
+
+# changed after their version was frozen, before this test existed: the next change to one of
+# these bumps its id (and the entry goes); nothing may join the list
+UNBUMPED = {
+    "events/envelope.schema.json": "assetid, assetowner, assetcriticality added at 1.0",
+    "status/observation.schema.json": "patterns changed at 1.0",
+    "status/agent_activity.schema.json": "changed at 1.0",
+    "status/agent_activity_detail.schema.json": "changed at 1.0",
+}
+FROZEN_AT_CURRENT = [
+    p
+    for p in sc.schema_files(ROOT)
+    if (pid := sc.parse_id(json.loads(p.read_text())))
+    and sc.frozen_path(ROOT, p, pid[1], pid[2]).is_file()
+]
+
+
+@pytest.mark.parametrize(
+    "path", FROZEN_AT_CURRENT, ids=lambda p: p.relative_to(ROOT / "schemas").as_posix()
+)
+def test_a_change_after_the_freeze_bumps_the_id(path):
+    """A schema whose $id names a frozen version validates exactly what that frozen copy does:
+    an additive change (agent.job.failed's four fields, the stackstorm binding's approved_run)
+    is a new minor with its own frozen copy, never an edit under the old $id."""
+    rel = path.relative_to(ROOT / "schemas").as_posix()
+    _, major, minor = sc.parse_id(json.loads(path.read_text()))
+    frozen = json.loads(sc.frozen_path(ROOT, path, major, minor).read_text())
+    same = _validation_only(frozen) == _validation_only(json.loads(path.read_text()))
+    assert same or rel in UNBUMPED, f"{rel} changed since {major}.{minor} was frozen: bump $id"
+    assert not (same and rel in UNBUMPED), f"{rel} is no longer drifted: drop it from UNBUMPED"
+
+
+def test_the_agent_job_failed_1_1_negative_is_what_1_1_added():
+    """The new negative (auto_retry_scheduled false) is refused by 1.1 and, as the open 1.0 data
+    shows, was accepted by 1.0: it tests the 1.1 field, not something 1.0 already refused."""
+    path = ROOT / "schemas/events/agent.job.failed.schema.json"
+    neg = sc.load_instance(ROOT / "schemas/events/negative/agent.job.failed.auto-retry-false.json")
+    assert sc.errors_for(json.loads(path.read_text()), neg, REG)
+    assert sc.errors_for(json.loads(sc.frozen_path(ROOT, path, 1, 0).read_text()), neg, REG) == []
 
 
 @pytest.mark.parametrize("path", SCHEMAS, ids=lambda p: p.relative_to(ROOT / "schemas").as_posix())

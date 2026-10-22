@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/workflows/stackstorm/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/workflows/stackstorm/1.1",
   "title": "StackStorm binding of workflow packs",
   "description": "When pinned workflow packs run on StackStorm: the rendered pack's name and version, the webhook the event bridge posts to, the broker socket its actions call, and one rule per pack - shadow or live, an optional coalesce window, an optional cron schedule for a pack triggered by homelabnext.schedule.fired, and the built-in approved-run rule. `hnx workflows st2 render` turns this file, the deploy pins and the packs into a StackStorm pack; rules JSON Schema cannot express (the pack is pinned, its steps run on StackStorm, a live rule carries shadow evidence, agent dispatch is coalesced and bounded, secrets are datastore references) are enforced by `hnx workflows st2 check` (docs/stackstorm.md).",
   "type": "object",

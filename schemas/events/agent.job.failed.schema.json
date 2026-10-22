@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/events/agent.job.failed/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/events/agent.job.failed/1.1",
   "title": "Event homelabnext.agent.job.failed",
   "description": "An agent job (one run in the orchestration controller's queue) reached a terminal failure. Published by the controller through the forwarder; StackStorm's job-failed rule (A02, docs/stackstorm.md) reacts by resubmitting through the controller queue, bounded by resubmits. The id derives from the run id, so a re-sent failure is a duplicate. reason is the controller's failure class: capacity, stall, timeout and backend-down are faults of the environment; deadline, cancelled, turn-cap and budget are decisions that must not be retried; handler-error and unknown are the job's own failure.",
   "allOf": [
