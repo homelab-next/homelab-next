@@ -79,7 +79,7 @@ def _slug(text: str) -> str:
     return s[:64].rstrip("-")
 
 
-def _secret_name(first: str, *rest: str) -> str:
+def _reference_name(first: str, *rest: str) -> str:
     tail = [re.sub(r"[^a-z0-9]+", "-", p.lower()).strip("-") for p in rest if p]
     return "secret:mcp/" + "-".join([_slug(first), *[t for t in tail if t]])
 
@@ -222,7 +222,7 @@ def _clean_args(sid: str, args: list[str], notes: list[str]) -> list[str]:
     found = {f.index: f for f in credentials.scan_args(args)}
     clean: list[str] = []
 
-    def secret(n: int, ref: str, text: str) -> None:
+    def put_reference(n: int, ref: str, text: str) -> None:
         clean.append(text)
         notes.append(
             f"{sid}: argument {n} carried or may carry a credential; replaced by {ref} (store the "
@@ -238,24 +238,24 @@ def _clean_args(sid: str, args: list[str], notes: list[str]) -> list[str]:
         if credentials.expands(a):
             var = _var(a) or (_var(val) if eq and flag.startswith("-") else None)
             if var and _var(a):
-                clean.append(_ref_for_var(var, _secret_name(var)))
+                clean.append(_ref_for_var(var, _reference_name(var)))
             elif var:
-                clean.append(f"{flag}={_ref_for_var(var, _secret_name(sid, flag))}")
+                clean.append(f"{flag}={_ref_for_var(var, _reference_name(sid, flag))}")
             else:
-                ref = _secret_name(sid, "arg", str(n))
-                secret(n, ref, ref)
+                ref = _reference_name(sid, "arg", str(n))
+                put_reference(n, ref, ref)
             continue
         if f is not None and f.kind == "header":
             name, colon, value = a.partition(":")
             scheme = next((sc + " " for sc in _SCHEMES if value.strip().startswith(sc + " ")), "")
-            ref = _secret_name(sid, "header", name if colon else str(n))
-            secret(n, ref, f"{name}: {scheme}{ref}" if colon and name.strip() else ref)
+            ref = _reference_name(sid, "header", name if colon else str(n))
+            put_reference(n, ref, f"{name}: {scheme}{ref}" if colon and name.strip() else ref)
         elif f is not None and a.startswith("-") and eq:
-            ref = _secret_name(sid, flag.lstrip("-"))
-            secret(n, ref, f"{flag}={ref}")
+            ref = _reference_name(sid, flag.lstrip("-"))
+            put_reference(n, ref, f"{flag}={ref}")
         elif f is not None:
-            ref = _secret_name(sid, "arg", str(n))
-            secret(n, ref, ref)
+            ref = _reference_name(sid, "arg", str(n))
+            put_reference(n, ref, ref)
         elif not eq and _BARE_FLAG.fullmatch(a):
             clean.append(a)  # a flag's own name
         elif _urls(val if eq and flag.startswith("-") else a):
@@ -270,11 +270,11 @@ def _clean_args(sid: str, args: list[str], notes: list[str]) -> list[str]:
         elif credentials.is_path(val if eq else a):
             clean.append(a)  # a path names where a credential is, never one
         elif eq and flag.startswith("-") and _CRED_TEXT.search(val):
-            ref = _secret_name(sid, flag.lstrip("-"))
-            secret(n, ref, f"{flag}={ref}")
+            ref = _reference_name(sid, flag.lstrip("-"))
+            put_reference(n, ref, f"{flag}={ref}")
         elif _CRED_TEXT.search(a):
-            ref = _secret_name(sid, "arg", str(n))
-            secret(n, ref, ref)
+            ref = _reference_name(sid, "arg", str(n))
+            put_reference(n, ref, ref)
         else:
             clean.append(a)
     return clean
@@ -322,7 +322,7 @@ def draft(
                 if value.startswith(sc + " "):
                     scheme, value = sc + " ", value[len(sc) + 1 :]
             var = _var(value)
-            fallback = _secret_name(var) if var else _secret_name(sid, k)
+            fallback = _reference_name(var) if var else _reference_name(sid, k)
             ref = _ref_for_var(var, fallback) if var else fallback
             headers[str(k)] = scheme + ref
             notes.append(
@@ -388,7 +388,7 @@ def draft(
                 settings[key] = value
                 notes.append(f"{sid}: -e {key} kept as a setting: confirm it is not a credential")
             elif key not in (entry.get("env") or {}):
-                env[key] = _secret_name(sid, key)
+                env[key] = _reference_name(sid, key)
                 notes.append(
                     f"{sid}: -e {key} moved to env as {env[key]} (store the value under that name)"
                 )
@@ -396,7 +396,7 @@ def draft(
             key = str(k)
             var = _var(v) if isinstance(v, str) else None
             if var:
-                env[key] = _ref_for_var(var, _secret_name(var))
+                env[key] = _ref_for_var(var, _reference_name(var))
                 notes.append(f"{sid}: env {key}: reference replaced by {env[key]}")
             elif _is_setting(key, v):
                 settings[key] = str(v)
@@ -408,7 +408,7 @@ def draft(
                     )
                 notes.append(f"{sid}: env {key} kept as a setting: confirm it is not a credential")
             else:
-                env[key] = _secret_name(sid, key)
+                env[key] = _reference_name(sid, key)
                 notes.append(
                     f"{sid}: env {key}: value replaced by {env[key]} (every environment value is "
                     "a secret unless its key names a path, mode or level; store the value under "

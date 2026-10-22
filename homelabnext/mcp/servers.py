@@ -788,27 +788,32 @@ def _egress_problems(rec: Mapping[str, Any], where: str) -> list[str]:
     return out
 
 
-def _secret_problems(rec: Mapping[str, Any], where: str) -> list[str]:
-    refs: list[str] = []
-    for v in (rec.get("env") or {}).values():
-        refs.append(str(v))
-    for v in (rec.get("headers") or {}).values():
-        refs.append(str(v).split(" ")[-1])
-    transport = rec.get("transport") or {}
-    for a in transport.get("args") or ():
+def _env_collision_problems(rec: Mapping[str, Any], where: str) -> list[str]:
+    """Two different ``secret:`` references in one record delivered in the same environment
+    variable (``secret_env_name`` maps every non-alphanumeric to ``_``).  The finding names where
+    each reference sits (env key, header, argument number), not the references themselves."""
+    out: list[str] = []
+    first_ref: dict[str, str] = {}
+    first_at: dict[str, str] = {}
+
+    def add(at: str, ref: str) -> None:
+        var = secret_env_name(ref)
+        if var not in first_ref:
+            first_ref[var], first_at[var] = ref, at
+        elif first_ref[var] != ref:
+            out.append(
+                f"{where}: {first_at[var]} and {at} name different secrets that are both "
+                "delivered as one environment variable; name them so they stay distinct"
+            )
+
+    for k, v in (rec.get("env") or {}).items():
+        add(f"env {k}", str(v))
+    for k, v in (rec.get("headers") or {}).items():
+        add(f"header {k}", str(v).split(" ")[-1])
+    for i, a in enumerate((rec.get("transport") or {}).get("args") or ()):
         ref = arg_secret(str(a))
         if ref:
-            refs.append(ref)
-    out: list[str] = []
-    by_var: dict[str, str] = {}
-    for ref in sorted(set(refs)):
-        var = secret_env_name(ref)
-        if var in by_var:
-            out.append(
-                f"{where}: {by_var[var]} and {ref} are both delivered as {var}; name them so "
-                "they stay distinct"
-            )
-        by_var[var] = ref
+            add(f"argument {i + 1}", ref)
     return out
 
 
@@ -1146,7 +1151,7 @@ def check(
         out += _tool_problems(rec, where, vocabulary)
         out += _egress_problems(rec, where)
         out += remote_problems(rec, where, registry)
-        out += _secret_problems(rec, where)
+        out += _env_collision_problems(rec, where)
         out += _literal_problems(rec, where)
         out += _template_problems(rec, where)
         out += _implements_problems(rec, where)
