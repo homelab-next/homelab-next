@@ -308,17 +308,32 @@ def test_approve_files_the_front_door_identity_and_re_submits_are_idempotent(
     served, broker, tmp_path
 ):
     base, site = served()
-    headers = {**APPROVER, "X-Authentik-Username": "Operator"}
-    form = _form(site, user="Operator", note="ok to restart")
+    headers = {**APPROVER, "X-Authentik-Username": "operator.one"}
+    form = _form(site, user="operator.one", note="ok to restart")
     status, _, body = _post(base, form, headers)
     assert status == 200 and "approved" in body.decode()
-    assert broker.calls == [("approve", RID, "sso", "operator", "ok to restart")]
+    # the username unchanged: never folded to operator-one, which may be another account
+    assert broker.calls == [("approve", RID, "sso", "operator.one", "ok to restart")]
     status, _, body = _post(base, form, headers)  # the same form again
     assert status == 200 and "already approved" in body.decode()
     assert len(broker.calls) == 1, "a re-submit files nothing"
     log = _log(tmp_path)
     assert [e["outcome"] for e in log] == ["ok", "unchanged"]
     assert all(e["request"] == RID and e["view"] == "approve" for e in log)
+
+
+@pytest.mark.parametrize("user", ["Operator", "OPERATOR", "operator+ops"])
+def test_a_non_canonical_username_is_not_folded_and_cannot_decide(served, broker, tmp_path, user):
+    """The IdP's usernames are case-sensitive: ``Operator`` is not ``operator``, so the hub never
+    lower-cases one into the other's allowlist entry; it refuses to decide for it."""
+    base, site = served()
+    headers = {**APPROVER, "X-Authentik-Username": user}
+    status, _, body = _post(base, _form(site, user=user), headers)
+    assert status == 403 and "canonical" in body.decode() and broker.calls == []
+    assert _log(tmp_path)[-1]["reason"] == "username is not a canonical approver subject"
+    status, _, page = request(base, "/approvals", headers=headers)
+    html = page.decode()
+    assert status == 200 and "not a canonical approver subject" in html and "<form" not in html
 
 
 def test_deny_then_resubmit_and_a_request_no_longer_pending(served, broker):

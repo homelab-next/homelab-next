@@ -19,9 +19,13 @@ approve / deny (``POST``)  the **approver group** only, distinct from the viewer
 =========================  ==================================================================
 
 The approver sent to the broker is ``issuer`` = the configured SSO issuer and ``subject`` = the
-forward-auth username (lower-cased; the broker compares identities case-folded) -- **never
-anything from the form body**, which may carry only ``request_id``, ``digest``, ``decision``,
-``token`` and ``note``.
+forward-auth username **unchanged** -- **never anything from the form body**, which may carry
+only ``request_id``, ``digest``, ``decision``, ``token`` and ``note``.  The broker matches its
+approver allowlist exactly, and an IdP's usernames are case-sensitive (Authentik's are: ``Bob``
+and ``bob`` can be two accounts), so the hub never folds one into another: a username that is not
+already a canonical approver subject (:data:`SUBJECT_RE`, the approval schema's: lower-case, a
+letter first, then letters, digits, ``.``, ``_`` or ``-``) cannot decide (``403``) and the page
+says why.
 
 This is the hub's only state-changing endpoint, so a decision passes, in order (first failure
 answers): the front door and the approver group (``403``); a same-origin ``Origin`` (or, without
@@ -76,6 +80,8 @@ RECENT = 20
 FORM_FIELDS = frozenset({"request_id", "digest", "decision", "token", "note"})
 _REQUIRED = FORM_FIELDS - {"note"}
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+#: an approver subject as ``schemas/broker/approval`` takes it, and as the allowlist names it
+SUBJECT_RE = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
 _TOKEN_RE = re.compile(r"^[0-9]{1,12}\.[0-9a-f]{64}$")
 _DECISIONS = {"approve": "approved", "deny": "denied"}
 #: the hub's CSP with forms allowed to post back to the hub (and nowhere else)
@@ -185,8 +191,10 @@ class ApprovalsSite:
     def _approver(self, client: str | None, headers: Any) -> Decision:
         return authorize(self.front_door, client, headers, group=self.settings.approver_group)
 
-    def subject(self, user: str) -> str:
-        return user.lower()
+    def subject(self, user: str) -> str | None:
+        """The approver subject for the front door's ``user``: the username unchanged when it is
+        canonical, else None (never folded: two spellings may be two accounts)."""
+        return user if SUBJECT_RE.match(user) else None
 
     # ---------------------------------------------------------------- the CSRF token
     def token(self, request_id: str, digest: str, user: str, *, at: float | None = None) -> str:
@@ -194,7 +202,7 @@ class ApprovalsSite:
         return f"{issued}.{self._mac(issued, request_id, digest, user)}"
 
     def _mac(self, issued: int, request_id: str, digest: str, user: str) -> str:
-        msg = "\n".join((str(issued), request_id, digest, self.settings.issuer, self.subject(user)))
+        msg = "\n".join((str(issued), request_id, digest, self.settings.issuer, user))
         return hmac.new(self._key, msg.encode("utf-8"), hashlib.sha256).hexdigest()
 
     def token_ok(self, token: str, request_id: str, digest: str, user: str) -> bool:
@@ -242,12 +250,20 @@ class ApprovalsSite:
             return self._shell(doc, private, main, code=502)
         rows = [r for r in pending if only is None or r.get("request_id") == only]
         now = self.clock()
-        who = f"{self.settings.issuer}:{self.subject(user)}"
+        subject = self.subject(user)
+        if subject is None:
+            can_decide = False
         role = "approver" if can_decide else "viewer (read only)"
+        filed = (
+            f"decisions are filed as <code>{_e(f'{self.settings.issuer}:{subject}')}</code>"
+            if subject is not None
+            else "this username is not a canonical approver subject (lower-case), so it cannot "
+            "decide"
+        )
         parts = [
             "<h2>Approvals</h2>",
             f'<p class="muted">signed in as <code>{_e(user)}</code> &middot; {_e(role)} &middot; '
-            f"decisions are filed as <code>{_e(who)}</code></p>",
+            f"{filed}</p>",
         ]
         if only:
             parts.append(
@@ -354,6 +370,9 @@ class ApprovalsSite:
 
         if not d.allowed:
             return refuse(403, "decide", "not an approver through the front door")
+        subject = self.subject(user)
+        if subject is None:
+            return refuse(403, "decide", "username is not a canonical approver subject")
         ok, why = same_origin(headers)
         if not ok:
             return refuse(403, "decide", why)
@@ -389,7 +408,6 @@ class ApprovalsSite:
         if not self.token_ok(f["token"], rid, digest, user):
             return refuse(403, op, "bad or expired form token")
 
-        subject = self.subject(user)
         private = authorize(self.front_door, client, headers).allowed
         try:
             pending = {r.get("request_id"): r for r in self.client.pending()}

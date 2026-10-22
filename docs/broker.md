@@ -108,6 +108,14 @@ hnx broker validate examples/broker/manifest.yml
    (default 900 s). Self-approval, an unlisted approver and an agent approver (unless
    `allow_agent_approvers`) are refused by the same rules for a denial as for an approval.
    `decision.returned` records the verdict.
+
+   The allowlist is matched **exactly** on `(issuer, subject)`: write each entry as the approver's
+   canonical subject (lower-case, the approval schema's `^[a-z][a-z0-9._-]{0,63}$`), exactly as
+   the relay sends it. `operator_one`, `operator.one` and `operator-one` are three different
+   accounts at an IdP, and only the one named is accepted. Spellings are folded (case, `.`, `_`
+   and whitespace to `-`) only where that refuses more: an approver whose folded subject is the
+   requesting profile's name is self-approval, and one whose folded subject names a granted
+   profile is an agent.
 3. The owner runs it. The broker re-decides with the approval, takes the request's claim, and
    only then consumes the approval (an exclusive-create marker, so single use across processes and
    restarts) and runs once: a run refused on the way (arguments that no longer validate, a lost
@@ -275,8 +283,8 @@ approval can no longer be used: show the form again, a fresh approval is accepte
 (the approval no longer matches: show the form). `approved` is `true` exactly when the state is
 `valid`; a relay written against the older field keeps working and stops hiding an expired one.
 
-`approver.issuer` must be the relay's own `issuer` (else `relay-issuer-mismatch`); `subject` is the
-person's SSO subject. The broker then applies the manifest's rules to that person:
+`approver.issuer` must be the relay's own `issuer`, exactly (else `relay-issuer-mismatch`);
+`subject` is the person's SSO subject. The broker then applies the manifest's rules to that person:
 `approval-approver-not-allowed`, `approval-self-approved`, `approval-agent-approver`. A relay
 never runs, submits or reads a request for itself (`not-a-caller`).
 
@@ -293,7 +301,13 @@ short:
 - the page reuses the private tier's front door (trusted proxy, shared secret header, identity
   header), then requires the approver group (distinct from the viewer group) to decide;
 - the approver sent to the broker is `{issuer: <configured>, subject: <the front door's
-  username>}`, never a form field;
+  username>}`, never a form field. The username is sent **unchanged**: Authentik's usernames are
+  case-sensitive (`Bob` and `bob` may be two accounts), so the hub does not lower-case them, and a
+  username that is not already canonical (lower-case, as the approver allowlist names it) cannot
+  decide. Name approvers in Authentik in lower case. A username can be renamed by an IdP admin;
+  pinning the approver to the IdP's immutable id (Authentik's `X-Authentik-Uid`, passed by the
+  front door next to the username) is a recommended follow-up: the hub does not receive that
+  header today;
 - the form carries the request id **and the digest shown**; the hub refuses (`409`) when the
   broker's current digest differs, so a person approves exactly what they read, and the broker
   binds the approval to that digest again;

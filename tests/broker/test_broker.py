@@ -72,6 +72,12 @@ def _approval(kind, req):
         appr["approver"]["issuer"] = "self-hosted"
     elif kind == "agent":
         appr["approver"] = {"subject": "writer", "issuer": "agents"}
+    elif kind == "listed-underscore":
+        appr["approver"]["subject"] = "approver_one"
+    elif kind == "listed-dot":
+        appr["approver"]["subject"] = "approver.one"
+    elif kind == "agent-spelling":
+        appr["approver"] = {"subject": "ops_bot", "issuer": "sso"}
     return appr
 
 

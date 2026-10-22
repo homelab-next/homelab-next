@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Table-driven broker fixtures: manifest x tier x handler x approval -> decision.
 # `approval` is built by the test: none | valid | wrong-digest | denied | self | self-spelling |
-# expired | expires-at-past | future | before-request | unlisted | other-issuer | agent | altered
-# (altered = a valid approval, then the request params change; the digest no longer matches).
+# expired | expires-at-past | future | before-request | unlisted | other-issuer | agent | altered |
+# listed-underscore | listed-dot | agent-spelling
+# (altered = a valid approval, then the request params change; the digest no longer matches;
+# listed-* = a spelling variant of the allowlisted approver-one: a distinct account, never it;
+# agent-spelling = an allowlisted human entry whose subject folds to a granted profile).
 manifests:
   enforce:
     manifest_id: table-enforce
@@ -19,8 +22,10 @@ manifests:
       - {profile: "profile:reader", actions: [service.status], max_tier: read}
       - {profile: "profile:writer", actions: [service.status, records.annotate, records.purge], max_tier: write}
       - {profile: "profile:operator", actions: [service.status, service.restart, host.reboot], max_tier: execute}
+      - {profile: "profile:ops-bot", actions: [service.status], max_tier: read}
     approvers:
       - {issuer: sso, subject: approver-one, kind: human}
+      - {issuer: sso, subject: ops_bot, kind: human}
       - {issuer: sso, subject: operator, kind: human}
       - {issuer: agents, subject: writer}
   shadow:
@@ -68,6 +73,11 @@ cases:
   - {name: approver-not-listed, manifest: enforce, actor: "profile:operator", action: service.restart, approval: unlisted, verdict: deny, reason: approval-approver-not-allowed}
   - {name: approver-wrong-issuer, manifest: enforce, actor: "profile:operator", action: service.restart, approval: other-issuer, verdict: deny, reason: approval-approver-not-allowed}
   - {name: agent-approves-agent, manifest: enforce, actor: "profile:operator", action: service.restart, approval: agent, verdict: deny, reason: approval-agent-approver}
+  # the allowlist is exact: a spelling variant of a listed approver is another account
+  - {name: approver-variant-underscore, manifest: enforce, actor: "profile:operator", action: service.restart, approval: listed-underscore, verdict: deny, reason: approval-approver-not-allowed}
+  - {name: approver-variant-dot, manifest: enforce, actor: "profile:operator", action: service.restart, approval: listed-dot, verdict: deny, reason: approval-approver-not-allowed}
+  # folding still refuses: an allowlisted subject that folds to a granted profile is an agent
+  - {name: agent-approver-other-spelling, manifest: enforce, actor: "profile:operator", action: service.restart, approval: agent-spelling, verdict: deny, reason: approval-agent-approver}
   # ---- mode
   - {name: shadow-records-but-does-not-enforce, manifest: shadow, actor: "profile:reader", action: service.status, approval: none, verdict: allow, reason: allowed, enforced: false}
   - {name: shadow-deny-not-enforced, manifest: shadow, actor: "profile:reader", action: host.format, approval: none, verdict: deny, reason: default-deny, enforced: false}

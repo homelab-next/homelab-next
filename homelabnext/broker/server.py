@@ -79,7 +79,6 @@ from typing import Any
 
 from conformance.protocols.broker import BrokerError, Denied, InvalidArguments
 
-from . import normalize_identity
 from .service import TRANSPORT_PEER, BrokerService, ManifestError
 
 __all__ = [
@@ -403,7 +402,7 @@ def _relay_op(svc: BrokerService, who: Identity, op: str, body: Mapping[str, Any
     issuer, subject = _name(approver["issuer"]), _name(approver["subject"])
     if issuer is None or subject is None or ":" in issuer:
         raise _BadField("approver issuer and subject are short printable strings")
-    if normalize_identity(issuer) != normalize_identity(str(who.issuer)):
+    if issuer != who.issuer:  # exact, like the approver allowlist the issuer qualifies
         raise _IssuerMismatch
     note = body.get("note")
     if note is not None and not (isinstance(note, str) and len(note) <= _MAX_NOTE):

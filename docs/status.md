@@ -555,9 +555,12 @@ params are as sensitive as the private tier's details, and people who already re
 commands can see what agents ask to do. **Deciding** needs the **approver group** (create it in
 Authentik next to the viewer group; a person in only the approver group may also see the page).
 The approver the hub sends to the broker is `issuer` from the config and `subject` = the
-`X-Authentik-Username` the front door passed (lower-cased: the broker compares identities
-case-folded), never a form field. The broker then applies its own approver rules (allowlist, no
-self-approval, no agent approver).
+`X-Authentik-Username` the front door passed, unchanged, never a form field. The broker matches
+its approver allowlist exactly and Authentik's usernames are case-sensitive, so the hub never
+folds one username into another: a username that is not already a canonical approver subject
+(lower-case: a letter, then letters, digits, `.`, `_` or `-`) is read only on this page and its
+decisions are refused (`403`). Give approvers lower-case usernames. The broker then applies its
+own approver rules (allowlist, no self-approval, no agent approver).
 
 **The hub's only write.** `POST /approvals/decide` (every other `POST` is still `405`) answers, in
 order: `403` the front door or the approver group fails; `403` a foreign `Host`/`Origin` (the
