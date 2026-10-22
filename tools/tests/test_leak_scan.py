@@ -437,10 +437,26 @@ def test_compressed_ipv6_negatives(text: str):
         "password = os.environ['DB_PASSWORD']",
         "secret: required-option",
         '{"password": "ALL=(ALL) ALL", "nopasswd": "ALL=(ALL) NOPASSWD:ALL"}',
+        "master_key: secret:llm-gateway/master-key",
+        'make(throttle_key="secret:llm-gateway/key-conformance-throttle")',
+        "input_cost_per_token: 2.0e-06",
+        "a key in `secret:llm-gateway/key-reader` (Markdown)",
     ],
 )
 def test_keyed_secret_negatives(text: str):
     assert "keyed-secret" not in {h.pattern for h in leak_scan.scan_text(text, "t")}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "master_key: secret:" + "Zq8vLx2mPw4tKr",  # no store path: a value, not a reference
+        "master_key: secret:" + "zq8v/Lx2mPw4tKr",  # upper case: not a store name
+        "tok" + "en: 2.0e-06xKq9",  # starts like a number, is not one
+    ],
+)
+def test_keyed_secret_reference_and_number_exemptions_stay_narrow(text: str):
+    assert "keyed-secret" in {h.pattern for h in leak_scan.scan_text(text, "t")}
 
 
 def test_hex_only_flagged_next_to_a_credential_word():

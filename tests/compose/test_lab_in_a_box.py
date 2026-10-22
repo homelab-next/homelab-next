@@ -25,7 +25,7 @@ LAB = ROOT / "compose" / "lab-in-a-box"
 COMPOSE = LAB / "docker-compose.yml"
 ENV_EXAMPLE = LAB / ".env.example"
 WORKFLOW = ROOT / ".github" / "workflows" / "nightly.yml"
-ONE_SHOT = {"catalog-migrate", "lab-init"}  # run to completion; health is their exit code
+ONE_SHOT = {"catalog-migrate", "lab-init", "llm-gateway-keys"}  # health is their exit code
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow test servers bind loopback only
 RAM_BUDGET_MB = 3584  # 4 GB runner minus headroom for the OS and the docker daemon
 STATUS_FIXTURES = ROOT / "tests" / "status" / "fixtures"
@@ -100,11 +100,16 @@ def test_dockerfile_base_is_pinned_by_digest():
             assert re.search(r"@sha256:[0-9a-f]{64}$", line), (dockerfile, line)
 
 
-def mem_total(compose) -> int:
+def mem_total(compose, profiled: bool = False) -> int:
+    """The mem_limit sum of the default stack, or (``profiled``) of the optional profiles.
+
+    A service under ``profiles:`` is not started by ``docker compose up`` (or smoke.sh, or the
+    nightly), so it does not count against the 4 GB default budget; it has its own total."""
     total = 0
     for name, svc in compose["services"].items():
         assert "mem_limit" in svc, f"{name} has no mem_limit"
-        total += mem_mb(svc["mem_limit"])
+        if bool(svc.get("profiles")) == profiled:
+            total += mem_mb(svc["mem_limit"])
     return total
 
 
@@ -121,6 +126,34 @@ def test_the_documented_memory_total_is_the_real_one(compose):
     broken = json.loads(json.dumps(compose))
     broken["services"]["metrics"]["mem_limit"] = "1g"  # what a silent bump would look like
     assert mem_total(broken) != int(stated[1])
+
+
+GATEWAY_PROFILES = {"gateway", "gateway-bifrost"}
+
+
+def test_only_the_gateway_services_are_optional(compose):
+    # a profile is how a service leaves the default budget: only the documented ones may
+    profiled = {n: set(s["profiles"]) for n, s in compose["services"].items() if s.get("profiles")}
+    assert profiled, "the gateway profiles are gone"
+    for name, profiles in profiled.items():
+        assert profiles <= GATEWAY_PROFILES, f"{name}: undocumented profile(s) {profiles}"
+        assert name.startswith("llm-gateway"), f"{name} left the default budget via a profile"
+
+
+def test_the_documented_gateway_memory_total_is_the_real_one(compose):
+    stated = re.search(r"gateway profiles' mem_limit values sum to (\d+) MB", COMPOSE.read_text())
+    assert stated, "docker-compose.yml no longer states the gateway profiles' memory total"
+    assert int(stated[1]) == mem_total(compose, profiled=True)
+
+
+def test_negative_an_unprofiled_service_counts_against_the_default_budget(compose):
+    # moving a gateway service out of its profile must show up in the 4 GB budget
+    broken = json.loads(json.dumps(compose))
+    del broken["services"]["llm-gateway"]["profiles"]
+    assert mem_total(broken) == mem_total(compose) + mem_mb(
+        compose["services"]["llm-gateway"]["mem_limit"]
+    )
+    assert mem_total(broken) > RAM_BUDGET_MB
 
 
 def test_trino_heap_is_tiny():
@@ -582,6 +615,11 @@ CREDENTIALS = (
     "LAB_UPTIME_PASSWORD",
     "LAB_HUB_FRONT_DOOR_SECRET",
     "LAB_BROKER_DEMO_TOKEN",
+    "LAB_GATEWAY_MASTER_KEY",
+    "LAB_GATEWAY_SALT_KEY",
+    "LAB_GATEWAY_KEY_READER",
+    "LAB_GATEWAY_KEY_RESPONDER",
+    "LAB_GATEWAY_KEY_THROTTLE",
 )
 
 

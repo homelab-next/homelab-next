@@ -82,11 +82,13 @@ def _schema_check(argv: list[str]) -> int:
     return mod.main(argv)
 
 
-GEN_USAGE = """usage: hnx gen {registry,check,fleet-units,list} ...
+GEN_USAGE = """usage: hnx gen {registry,check,fleet-units,gateway,list} ...
 
   registry REGISTRY OUT_DIR [--only NAME]   render every generator from a service registry
   check REGISTRY OUT_DIR [--only NAME]      fail on drift between the registry and OUT_DIR
   fleet-units SPEC OUT_DIR                  render systemd units from a fleet_units spec
+  gateway render SPEC OUT_DIR [--check]     LiteLLM + Bifrost config from the model-role table
+  gateway provision KEYS_JSON               create LiteLLM virtual keys on a running proxy
   list                                      list generator names
 """
 
@@ -106,6 +108,10 @@ def _gen(argv: list[str]) -> int:
         from homelabnext.generators.fleet_units import main
 
         return main(rest)
+    if sub == "gateway":
+        from homelabnext.generators.llm_gateway import main as gateway_main
+
+        return gateway_main(rest)
     print(f"hnx gen: unknown generator command {sub!r}\n{GEN_USAGE}", file=sys.stderr, end="")
     return 2
 
@@ -117,7 +123,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         _registry,
     ),
     "new": ("scaffold a component: hnx new role|capability|detection|schema NAME", _new),
-    "gen": ("run generators: registry|check|fleet-units|list", _gen),
+    "gen": ("run generators: registry|check|fleet-units|gateway|list", _gen),
     "detections": (
         "detections-as-code: lint|run|map|coverage|lint-ids|compile|validate-techniques",
         _detections,

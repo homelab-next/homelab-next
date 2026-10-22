@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# The lab's LLM gateway, as data (docs/llm-gateway.md).  litellm/ and bifrost/ next to this file
+# are generated from it and never edited by hand:
+#   hnx gen gateway render compose/lab-in-a-box/config/llm-gateway/gateway.yml \
+#     compose/lab-in-a-box/config/llm-gateway
+# and `make gateway-check` fails on drift or on a local-only role that could reach a cloud model.
+# Roles, bindings and limits come from the role table; keys from the agent profiles (one per
+# profile, named after it); this file adds only where each backend is and which secret holds what.
+roles: ../../../../schemas/platform/examples/model_roles.valid.json
+profiles:
+  - ../../../../schemas/agent/examples/profile.*.json
+domain: example.internal
+master_key: secret:llm-gateway/master-key
+database_url: secret:llm-gateway/database-url
+backends:
+  # both are the lab's fake inference server, reachable under these registry-style aliases
+  svc:inference-large: {locality: local, port: 8000}
+  svc:inference-small: {locality: local, port: 8000}
+keys:
+  # a deliberately tight key for the conformance check gateway-limit-throttles (429 after 3)
+  - name: conformance-throttle
+    key: secret:llm-gateway/key-conformance-throttle
+    roles: [mdl:fast-classifier]
+    data_tier: local-only
+    limits: {window_s: 60, max_requests: 3}
+bifrost:
+  data_dir: /app/data

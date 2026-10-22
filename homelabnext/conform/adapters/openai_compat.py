@@ -30,11 +30,37 @@ __all__ = ["ChatResult", "InferenceError", "OpenAICompat"]
 
 
 class InferenceError(Exception):
-    """The server answered with an error or something that is not an OpenAI-shaped reply."""
+    """The server answered with an error or something that is not an OpenAI-shaped reply.
 
-    def __init__(self, message: str, status: int | None = None):
+    ``status`` is the HTTP status of an error reply; ``detail`` the server's own error message
+    (``error.message`` of an OpenAI-shaped error body, else the start of the body), so a check can
+    tell an authentication error from, say, a database one.
+    """
+
+    def __init__(self, message: str, status: int | None = None, detail: str = ""):
         super().__init__(message)
         self.status = status
+        self.detail = detail
+
+
+def _error_detail(exc: urllib.error.HTTPError, limit: int = 4096) -> str:
+    """The server's error message from an error reply (at most ``limit`` bytes are read)."""
+    try:
+        raw = exc.read(limit)
+    except OSError:
+        return ""
+    text = raw.decode("utf-8", "replace")
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return text[:300]
+    err = doc.get("error") if isinstance(doc, dict) else None
+    if isinstance(err, dict) and err.get("message"):
+        kind = err.get("type") or err.get("code") or ""
+        return f"{err['message']}" + (f" [{kind}]" if kind else "")
+    if isinstance(err, str):
+        return err[:300]
+    return text[:300]
 
 
 @dataclass(frozen=True)
@@ -90,7 +116,12 @@ class OpenAICompat:
         try:
             return safe_urlopen(req, timeout=self._timeout)
         except urllib.error.HTTPError as exc:
-            raise InferenceError(f"HTTP {exc.code} from {path}", exc.code) from exc
+            detail = _error_detail(exc)
+            raise InferenceError(
+                f"HTTP {exc.code} from {path}" + (f": {detail[:200]}" if detail else ""),
+                exc.code,
+                detail,
+            ) from exc
         except (urllib.error.URLError, OSError) as exc:
             raise InferenceError(f"transport error: {type(exc).__name__}") from exc
 

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# inference through the alternate LLM gateway, Bifrost (`docker compose --profile gateway-bifrost
+# up`; export HNX_ENDPOINT_LLM_GATEWAY_BIFROST as smoke.sh writes it and the
+# HNX_SECRET_LLM_GATEWAY_* keys from .env.example, see docs/llm-gateway.md).  Same checks as
+# inference-gateway.yml.  Expected today: FAIL on three MUST checks (ADR-0022's evidence run):
+# /v1/models lists provider-prefixed ids, and replies name the backend model, not the role asked.
+name: lab-inference-gateway-bifrost
+capabilities:
+  inference:
+    adapter: homelabnext.conform.adapters.llm_gateway:make
+    features: [streaming, embeddings, gateway]
+    config:
+      roles: schemas/platform/examples/model_roles.valid.json
+      model: fast-classifier
+      capability: llm-gateway-bifrost
+      throttle_key: secret:llm-gateway/key-conformance-throttle
+      throttle_model: fast-classifier
+      throttle_requests: 3

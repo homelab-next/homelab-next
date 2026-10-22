@@ -277,6 +277,13 @@ REFERENCE_RE = re.compile(
     r"^(?:\$|\{|\[|\(|<|%\(|\*{3}|\.{3}|!vault|lookup\(|/|\./|~/|[a-z][a-z0-9+.-]*:)"
     r"|^[A-Z][A-Z0-9_]+$|^[\d.]+$"
 )
+# A secret-store reference written bare after a key that is no credential word (an api key field
+# holding the reference itself): the keyed pattern then takes the reference's own scheme word as the
+# key.  A lower-case store name with an area path is a name to look up, never the value; anything
+# without the path stays a finding.
+SECRET_STORE_REF_RE = re.compile(r"^secret:[a-z0-9][a-z0-9_.-]*(?:/[a-z0-9][a-z0-9_.-]*)+`?$")
+# A number, scientific notation included (a per-token cost such as 2e-6), is not a credential.
+NUMBER_RE = re.compile(r"^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$")
 # Classic stand-in values (and values that name their own key) read as placeholders.
 KEYED_PLACEHOLDER_RE = re.compile(r"(?i)secret|passw|token|hunter2|abc123|letmein|qwerty|123456")
 
@@ -284,6 +291,8 @@ KEYED_PLACEHOLDER_RE = re.compile(r"(?i)secret|passw|token|hunter2|abc123|letmei
 def _is_hit_keyed_value(m: re.Match[str], _line: str) -> bool:
     value = m.group("val")
     quoted = bool(m.group("q"))
+    if SECRET_STORE_REF_RE.match(m.group(0)) or NUMBER_RE.match(value):
+        return False
     if REFERENCE_RE.match(value) or PLACEHOLDER_RE.search(value):
         return False
     if KEYED_PLACEHOLDER_RE.search(value):

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# inference through the lab's LLM gateway, LiteLLM (`docker compose --profile gateway up`; export
+# HNX_ENDPOINT_LLM_GATEWAY as smoke.sh writes it and the HNX_SECRET_LLM_GATEWAY_* keys from
+# .env.example, see docs/llm-gateway.md).  Not in smoke.sh's default list: the profile is optional.
+# The gateway checks: a bad or missing key is a clean 401, the conformance-throttle key (3/min in
+# config/llm-gateway/gateway.yml) answers 429, and /v1/models is exactly the role table's aliases.
+name: lab-inference-gateway
+capabilities:
+  inference:
+    adapter: homelabnext.conform.adapters.llm_gateway:make
+    features: [streaming, embeddings, gateway]
+    config:
+      roles: schemas/platform/examples/model_roles.valid.json
+      model: fast-classifier
+      capability: llm-gateway
+      throttle_key: secret:llm-gateway/key-conformance-throttle
+      throttle_model: fast-classifier
+      throttle_requests: 3

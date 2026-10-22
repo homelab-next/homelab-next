@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import re
+
 from conformance.fakes.inference_target import FakeInferenceClient, WrongModelClient
 from conformance.protocols.inference import InferenceError
 from homelabnext.conform.core import Mutant, Suite
@@ -94,6 +96,61 @@ def _(c):
     a1, a2, b = c.embed(_model(c), ["alpha", "alpha", "beta"])
     assert a1 == a2, "same input gave different vectors"
     assert a1 != b, "different inputs gave the same vector"
+
+
+# --- feature ``gateway``: what a model gateway in front of the backends is for -----------------
+BAD_KEY = "sk-bf-fake-not-a-key-0000"  # sk-bf- so a gateway that wants that prefix still parses it
+#: an auth failure must read as one: these are the words of a gateway whose key store is missing
+#: (LiteLLM without Postgres answers "No connected db." with HTTP 400 to a wrong key)
+NOT_AUTH = re.compile(r"no connected db|database|prisma|\bdb\b|internal server error", re.I)
+
+
+def _auth_rejection(client, label):
+    exc = raises(lambda: client.chat(_model(client), PROMPT), label, InferenceError)
+    assert exc.status == 401, f"{label}: HTTP {exc.status} ({exc.detail[:120]!r}), expected 401"
+    assert not NOT_AUTH.search(exc.detail), f"{label}: 401 but the reason is {exc.detail[:120]!r}"
+
+
+@SUITE.check(
+    "gateway-rejects-bad-key",
+    "a wrong key and a missing key are each a 401 that says so, never a 5xx or a store error",
+    requires=["gateway"],
+)
+def _(c):
+    _auth_rejection(c.with_key(BAD_KEY), "wrong key")
+    _auth_rejection(c.with_key(None), "no key")
+
+
+@SUITE.check(
+    "gateway-limit-throttles",
+    "a configured request limit answers 429 once it is used up, and nothing else fails",
+    requires=["gateway"],
+)
+def _(c):
+    client, model, n = c.throttled()
+    statuses, other = [], []
+    for _ in range(n + 1):
+        try:
+            client.chat(model, PROMPT)
+            statuses.append(200)
+        except InferenceError as exc:
+            statuses.append(exc.status)
+            if exc.status != 429:
+                other.append(f"HTTP {exc.status} ({exc.detail[:120]!r})")
+    assert not other, f"{other[0]} while throttling"
+    assert 429 in statuses, f"{n + 1} calls against a limit of {n} were all served: {statuses}"
+    assert statuses.count(200) <= n, f"more than {n} calls served: {statuses}"
+
+
+@SUITE.check(
+    "gateway-models-match-roles",
+    "/v1/models lists exactly the declared role aliases (no backend ids, no extras)",
+    requires=["gateway"],
+)
+def _(c):
+    served, declared = sorted(c.models()), sorted(c.declared_models())
+    assert declared, "the target declares no models"
+    assert served == declared, f"/v1/models {served} != declared {declared}"
 
 
 def make_fake():

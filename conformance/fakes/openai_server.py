@@ -17,6 +17,10 @@ rule-based: the first rule whose regex matches the last user message wins, other
 reply is used.  Latency and faults are configurable and can change while the server runs, so a
 test can make a backend slow, erroring, malformed or hung.
 
+With ``api_keys`` it behaves like a small model gateway: every ``/v1`` call needs
+``Authorization: Bearer <one of the keys>`` (else 401 ``auth_error``), and a key listed in
+``key_limits`` is served that many calls, then answered 429 ``rate_limit_exceeded``.
+
 Conformance use: this is the fake for the ``inference`` capability.  It speaks only the
 protocol; nothing here is product specific.
 
@@ -113,6 +117,8 @@ class FakeOpenAIServer:
         logprob: float | None = None,
         embed_dim: int = 8,
         context_length: int | dict[str, int] | None = None,
+        api_keys: list[str] | None = None,
+        key_limits: dict[str, int] | None = None,
         host: str = LOOPBACK,
         port: int = 0,
     ):
@@ -126,6 +132,9 @@ class FakeOpenAIServer:
         # loaded context length reported per model in /v1/models (``max_model_len``, as vLLM
         # does); an int applies to every model, a dict per model id, None reports nothing
         self.context_length = context_length
+        self.api_keys = set(api_keys or ())
+        self.key_limits = dict(key_limits or {})
+        self._key_calls: dict[str, int] = {}
         self.requests: list[dict] = []
         self._lock = threading.Lock()
         self._httpd = ThreadingHTTPServer((host, port), self._handler())
@@ -173,6 +182,19 @@ class FakeOpenAIServer:
                 return body, rule.logprob if rule.logprob is not None else self.logprob
         return self.default_reply, self.logprob
 
+    def admit(self, authorization: str | None) -> tuple[int, str] | None:
+        """``None`` when the call may proceed, else ``(status, message)`` (gateway mode only)."""
+        if not self.api_keys:
+            return None
+        token = (authorization or "").removeprefix("Bearer ").strip()
+        if token not in self.api_keys:
+            return 401, "invalid or missing api key"
+        with self._lock:
+            n = self._key_calls[token] = self._key_calls.get(token, 0) + 1
+        if token in self.key_limits and n > self.key_limits[token]:
+            return 429, f"rate limit exceeded: {self.key_limits[token]} requests per window"
+        return None
+
     def _find_fault(self, path: str, model: str | None) -> Fault | None:
         with self._lock:
             for f in self.faults:
@@ -208,6 +230,8 @@ class FakeOpenAIServer:
                 fault = server._find_fault(path, None)
                 if fault and self._apply_fault(fault):
                     return
+                if path.startswith("/v1/") and self._refused():
+                    return
                 if path == "/v1/models":
                     data = []
                     for m in server.models:
@@ -225,6 +249,15 @@ class FakeOpenAIServer:
                     self._send(200, {"status": "ok"})
                 else:
                     self._error(404, f"no route {path}", "not_found")
+
+            def _refused(self) -> bool:
+                verdict = server.admit(self.headers.get("Authorization"))
+                if verdict is None:
+                    return False
+                status, message = verdict
+                etype = {401: "auth_error", 429: "rate_limit_exceeded"}.get(status, "gateway_error")
+                self._error(status, message, etype)
+                return True
 
             def _apply_fault(self, fault: Fault) -> bool:
                 if fault.kind == "http_error":
@@ -259,6 +292,8 @@ class FakeOpenAIServer:
                     time.sleep(server.latency_ms / 1000)
                 fault = server._find_fault(path, model)
                 if fault and self._apply_fault(fault):
+                    return
+                if self._refused():
                     return
                 if path not in (
                     "/v1/chat/completions",

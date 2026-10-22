@@ -30,6 +30,7 @@ relate.
   ([[role-interface]]).
 - [Events](events.md) ([[events]]), [detections](detections.md) ([[detections]]),
   [workflows](workflows.md) ([[workflows]]), [decisions and models](decide.md) ([[decide]]),
+  [LLM gateway](llm-gateway.md) ([[llm-gateway]]),
   [agent profiles](agent.md) ([[agent]]), [broker service](broker.md) ([[broker]]),
   [scope guard](scope.md) ([[scope]]),
   [customization](customization.md) ([[customization]]),
