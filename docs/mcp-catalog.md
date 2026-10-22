@@ -87,11 +87,20 @@ problems the grants are not judged (a note says so), since they would be judged 
 - egress agrees with the classes: a tool classed `egress` needs an egress other than `none`, and
   `internet` needs an egress tool;
 - credentials are `secret:` names (env, headers, arguments), two of them never map to the same
-  `HNX_SECRET_*` variable, and a setting whose key names a credential is refused; no argument or
-  setting holds a literal credential: a credential flag's value (`--token X`, `--api-key=X`, a
-  header after `--header`) is a `secret:` reference, nothing looks like a token, `secret:` appears
-  only as a whole argument, `--flag=secret:<name>` or `Header: [Scheme ]secret:<name>`, and `$`
-  (`${VAR}`, `$(cmd)`, which a client would expand) appears in neither;
+  `HNX_SECRET_*` variable, and a setting whose key names a credential is refused unless its value
+  is a path (`TOKEN_FILE=/run/secrets/x`, `GOOGLE_APPLICATION_CREDENTIALS=/etc/gcp/sa.json`); no
+  argument or setting holds a literal credential, by the rules `homelabnext/mcp/credentials.py`
+  holds for check and import alike: a credential flag's value (`--token X`, `--githubToken X`,
+  `--api-key=X`, `-p X` unless a port, `-u user:pw`, a header after `--header`) is a `secret:`
+  reference, nothing looks like a token (a token prefix such as `ghp_`, or a long, mixed,
+  high-entropy value, `/`-separated base64 included), no URL carries one (userinfo, a
+  credential-named query parameter, a token-like path segment such as a webhook's), no JSON
+  argument, shell line (`sh -c`) or container `-e KEY=VALUE` carries one, `secret:` appears only
+  as a whole argument, `--flag=secret:<name>` or `Header: [Scheme ]secret:<name>`, and `$`
+  (`${VAR}`, `$(cmd)`, which a client would expand) appears in neither. Not credentials: a switch
+  (`--no-auth`), a flag about one (`--token-file`, `--secret-name`, `--session-timeout`), a path
+  after a flag (`--key /etc/ssl/k.pem`), an auth method (`--auth oauth`), and identifiers made of
+  plain words and numbers (`claude-3-5-sonnet-20241022`), a ULID or UUID, an image digest;
 - parameters: every parameter has an `enum` or a `pattern`; its env key is never one
   llm-orchestrator hard-denies (`PATH`, `LD_*`, `DYLD_*`, `PYTHONPATH`, `PYTHONHOME`,
   `PYTHONSTARTUP`, `PYTHONINSPECT`, `HOME`, `SHELL`, `BASH_ENV`, `ENV`, `NODE_OPTIONS`,
@@ -261,12 +270,16 @@ It reads `mcpServers` (Claude Code, Claude Desktop, also under `projects` in `~/
   named `mcp/<name>-<key>` unless its key names a path, mode, level and the like and nothing in
   the value looks like a credential (those are kept as `settings`, and the report asks you to
   confirm each); a `${VAR}` becomes a `secret:` name (a rendered `${HNX_SECRET_MCP_NOTES_TOKEN}`
-  becomes `secret:mcp/notes-token` again). In the arguments, the value after a credential flag
-  (`--token`, `--github-token`, `--client-secret`, ...) or in `--flag=VALUE`, a header after
-  `--header` (its name kept), a container runner's `-e KEY=VALUE` (moved to `env`), anything that
-  looks like a token and any argument carrying a credential marker (`Authorization:`, a
-  `KEY=VALUE` in a shell line) become references; URL userinfo and query strings are removed. A
-  launcher's package spec (`name==1.2.0`, `@scope/name@1.2.0`) is never mistaken for one. The
+  becomes `secret:mcp/notes-token` again; `${VAR:-default}` names `VAR`). In the arguments,
+  everything check would refuse as a literal credential (the same rules, above) becomes a
+  reference, and more, failing closed: a container runner's `-e KEY=VALUE` is moved to `env`
+  unless it is an allowlisted setting, any argument carrying a credential marker
+  (`Authorization:`, `password`, a `KEY=VALUE` in a shell line) becomes a reference, and a URL
+  keeps only its scheme, host, port and a plain MCP path (userinfo, query and any other path are
+  removed, in arguments and in `*_URL` settings alike). A launcher's package spec (`name==1.2.0`,
+  `@scope/name@1.2.0`), read at its launch position, is never mistaken for one, and the value of a
+  flag before it (`npx --token X pkg@1.0.0`) is never taken for the package. A path is kept as a
+  setting whatever its key (it says where a credential is, never what it is). The
   report lists each reference by server and key with the name to store it under and never prints
   a value; a config that does not parse is reported by file, line and column only. The entry's
   own description is not copied;

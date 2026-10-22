@@ -7,15 +7,15 @@ Desktop (``claude_desktop_config.json``), VS Code (``servers``) and Hermes Agent
 in YAML).  Each entry becomes a **draft** record (``status: draft``, never grantable):
 
 * **secrets are stripped, failing closed.**  Every environment value is a ``secret:`` reference
-  unless its key is allowlisted as a path, mode, level and the like and nothing in the value marks
-  a credential; a ``${VAR}`` reference maps to a ``secret:`` name (a rendered
-  ``${HNX_SECRET_MCP_X}`` back to the ``mcp/x`` name it was rendered from).  In the arguments: the value after a
-  credential flag (``--token``, ``--github-token``, ``--client-secret`` ...) or in
-  ``--flag=VALUE``, a header after ``--header``/``-H`` (its name kept), a container runner's
-  ``-e KEY=VALUE`` (moved to ``env``), a token-like value and an argument carrying a credential
-  marker (``Authorization:``, ``KEY=VALUE`` in a shell line ...) become references, and URL
-  userinfo and query strings are removed.  A launcher's package spec (``name==1.2.0``,
-  ``@scope/name@1.2.0``) is never a secret.  The entry's own description is not copied.  The
+  unless it is a path or its key is allowlisted as a mode, level and the like, and nothing in the
+  value marks a credential; a ``${VAR}`` (or ``${VAR:-default}``) reference maps to a ``secret:``
+  name (a rendered ``${HNX_SECRET_MCP_X}`` back to the ``mcp/x`` name it was rendered from).  In
+  the arguments, everything check refuses (:mod:`.credentials`, the one rule set both use)
+  becomes a reference, and more: a container runner's ``-e KEY=VALUE`` that is not an allowlisted
+  setting (moved to ``env``), an argument carrying a credential marker (``Authorization:``,
+  ``password``, ``KEY=VALUE`` in a shell line ...), and a URL's userinfo, query and any path that
+  is not a plain MCP path (in ``*_URL`` settings too).  A launcher's package spec, read at its
+  launch position, is never a secret.  The entry's own description is not copied.  The
   report names each reference (server, key, the name to store the value under); it never prints
   a value, and a config that does not parse is named by file, line and column only.
 * **origins are guessed, never pinned.**  The launch position (:mod:`.launch`, as check reads it)
@@ -39,7 +39,7 @@ import json
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -47,19 +47,12 @@ import yaml
 
 from homelabnext.registry.model import secret_env_name
 
-from . import launch, servers
+from . import credentials, launch
 
 _VERSION = re.compile(
     r"^v?[0-9]+\.[0-9]+(\.[0-9]+)*(?:[-+][0-9A-Za-z.]+|(?:a|b|rc|\.post|\.dev)[0-9]+)?$"
 )
-_VAR = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
-#: a flag whose value is a credential (the value follows as ``=VALUE`` or as the next argument)
-_SECRET_FLAG = servers.CREDENTIAL_FLAG
 _BARE_FLAG = re.compile(r"^--?[A-Za-z0-9][A-Za-z0-9_-]*$")
-#: a flag whose next argument is an HTTP header (``Name: value``)
-_HEADER_FLAG = ("--header", "-H")
-#: docker/podman flags whose next argument is ``KEY=VALUE`` (or ``KEY``)
-_ENV_FLAG = ("-e", "--env")
 #: text inside an argument or a value that marks it as carrying a credential, whatever its length
 _CRED_TEXT = re.compile(
     r"(?i:authorization\s*:|bearer\s|password|passwd|passphrase|pwd=|secret|token|api[-_]?key"
@@ -95,25 +88,28 @@ def _secret_name(first: str, *rest: str) -> str:
 
 
 def looks_secret(value: str) -> bool:
-    """A value that is probably a credential: a URL with a password, or a long token-like
-    string (mixed letters and digits, high entropy, no spaces or path separators).  A package
-    spec (``name==1.2.0``, ``@scope/name@1.2.0``) never is."""
-    return servers.looks_secret(value)
+    """A value that is probably a credential (:func:`.credentials.looks_secret`, the rule check
+    applies)."""
+    return credentials.looks_secret(value)
 
 
-def _credential(value: str) -> bool:
-    """A value that is or carries a credential (a package spec never does)."""
-    if _PACKAGE_SPEC.match(value):
-        return False
-    return looks_secret(value) or bool(_CRED_TEXT.search(value))
+def _var(value: str) -> str | None:
+    """The variable a whole ``$VAR``, ``${VAR}`` or ``${VAR:-default}`` names, else None."""
+    m = credentials.VAR.match(value)
+    return (m.group("b") or m.group("n")) if m else None
 
 
-def _url_carries(value: str) -> bool:
-    """A URL with credentials in it: userinfo, or a query string (``?key=...``)."""
-    if "://" not in value:
-        return False
-    parts = urlsplit(value)
-    return bool(parts.username or parts.password or parts.query)
+def _plain_url(url: str) -> str:
+    """A URL as the importer keeps it: scheme, host and port, and the path only when it is a
+    plain MCP path; never userinfo, a query or a fragment."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        port = f":{parts.port}" if parts.port else ""
+    except ValueError:
+        return ""
+    path = parts.path if _PLAIN_PATHS.match(parts.path or "/") else ""
+    return f"{parts.scheme}://{host}{port}{path}"
 
 
 def _ref_for_var(var: str, fallback: str) -> str:
@@ -128,13 +124,20 @@ def _ref_for_var(var: str, fallback: str) -> str:
 
 
 def _is_setting(key: str, value: Any) -> bool:
-    """An environment value kept as a non-secret setting: only an allowlisted key (a path, a
-    mode, a level ...) whose scalar value nothing marks as a credential."""
+    """An environment value kept as a non-secret setting: a path (where a credential is, never
+    one), or an allowlisted key (a mode, a level ...) whose scalar value nothing marks as a
+    credential; and never what check would refuse as a setting (:mod:`.credentials`)."""
     if isinstance(value, bool | int | float):
         value = str(value)
-    if not isinstance(value, str) or not _SETTING_KEY.search(key) or servers.SECRET_KEY.search(key):
+    if not isinstance(value, str) or credentials.setting_problem(key, value):
         return False
-    return not (looks_secret(value) or _CRED_TEXT.search(value) or _url_carries(value))
+    if credentials.is_path(value):
+        return True
+    if not _SETTING_KEY.search(key) or credentials.credential_name(key):
+        return False
+    if "://" in value and urlsplit(value).query:
+        return False
+    return not _CRED_TEXT.search(value)
 
 
 def _package_positions(command: str, args: list[str]) -> set[int]:
@@ -147,7 +150,9 @@ def _package_positions(command: str, args: list[str]) -> set[int]:
     spec = args[got.spec_index]
     if got.ecosystem == "image":
         return {got.spec_index} if launch.split_image(spec) else set()
-    ok = launch.split_spec(got.ecosystem, spec) is not None or spec.startswith("git+")
+    if spec.startswith("git+"):
+        return {got.spec_index}
+    ok = launch.split_spec(got.ecosystem, spec) is not None
     return {got.spec_index} if ok and _PACKAGE_SPEC.match(spec.split("[", 1)[0]) else set()
 
 
@@ -249,74 +254,88 @@ def _clean_args(
     sid: str, command: str, args: list[str], env: dict[str, str], notes: list[str]
 ) -> list[str]:
     """The arguments with every credential replaced by a ``secret:`` reference (fail closed):
-    a value after a credential flag or in ``--flag=VALUE``, a header after ``--header``, a
-    ``-e KEY=VALUE`` of a container runner (moved to ``env``), a token-like value, an argument
-    carrying a credential marker (``Authorization:``, ``KEY=VALUE`` in a shell line ...), and URL
-    userinfo and query strings.  A launcher's package spec is never a secret."""
+    everything check refuses (:func:`.credentials.scan_args`: a credential flag's value, a header
+    after ``--header``, a container runner's ``-e KEY=VALUE`` (moved to ``env``), a token, a URL,
+    JSON or shell line carrying one, ``$VAR``), and more: every runner ``-e`` value that is not an
+    allowlisted setting, every argument carrying a credential marker (``Authorization:``,
+    ``password``, ``KEY=VALUE`` ...), and a URL's userinfo, query and any path that is not a plain
+    MCP path.  A launcher's package spec is never a secret (its URL userinfo is removed)."""
     packages = _package_positions(command, args)
-    runner = PurePosixPath(command).name in ("docker", "podman")
+    found = {f.index: f for f in credentials.scan_args(command, args)}
+    got = launch.parse(command, args)
     clean: list[str] = []
+
+    def secret(n: int, ref: str, text: str) -> None:
+        clean.append(text)
+        notes.append(
+            f"{sid}: argument {n} carried or may carry a credential; replaced by {ref} (store the "
+            "value under that name)"
+        )
+
     for i, a in enumerate(args):
-        prev = args[i - 1] if i else ""
-        n = i + 1
-        stripped = _URL_USERINFO.sub(r"\1", a)
-        if stripped != a:
-            notes.append(
-                f"{sid}: argument {n}: credentials in a URL were removed (store them in the "
-                "secret store and pass them another way)"
-            )
-            a = stripped
-        if "://" in a and urlsplit(a.split("=", 1)[-1]).query:
-            a = a.split("?", 1)[0]
-            notes.append(
-                f"{sid}: argument {n}: a URL's query string was removed (it may hold a key)"
-            )
-        m = _VAR.match(a)
+        n, f = i + 1, found.get(i)
         flag, eq, val = a.partition("=")
-        if m:
-            clean.append(_ref_for_var(m.group(1), _secret_name(m.group(1))))
+        if i in packages:
+            stripped = _URL_USERINFO.sub(r"\1", a)
+            if stripped != a:
+                notes.append(f"{sid}: argument {n}: credentials in a URL were removed")
+            clean.append(stripped)
             continue
-        if eq and flag.startswith("-") and _VAR.match(val):
-            clean.append(
-                f"{flag}={_ref_for_var(_VAR.match(val).group(1), _secret_name(sid, flag))}"
-            )
+        if "$" in a:
+            var = _var(a) or (_var(val) if eq and flag.startswith("-") else None)
+            if var and _var(a):
+                clean.append(_ref_for_var(var, _secret_name(var)))
+            elif var:
+                clean.append(f"{flag}={_ref_for_var(var, _secret_name(sid, flag))}")
+            else:
+                ref = _secret_name(sid, "arg", str(n))
+                secret(n, ref, ref)
             continue
-        if i in packages or (not eq and _BARE_FLAG.match(a)):
-            clean.append(a)  # a launcher's package spec, or a flag's own name
-            continue
-        if runner and prev in _ENV_FLAG and "=" not in a:
-            clean.append(a)  # -e KEY: the value comes from the environment (env)
-            continue
-        if runner and prev in _ENV_FLAG:
-            key, _, value = a.partition("=")
-            if _is_setting(key, value):
-                clean.append(a)
+        if got.ecosystem == "image" and got.flag_names.get(i) in credentials.RUNNER_ENV_FLAGS:
+            value = got.flag_values[i]
+            key, has_value, raw = value.partition("=")
+            if not has_value or (f is None and _is_setting(key, raw)):
+                clean.append(a)  # -e KEY (the value comes from the environment), or a setting
                 continue
             env[key] = _secret_name(sid, key)
-            clean.append(key)
+            clean.append(a[: len(a) - len(value)] + key)
             notes.append(
                 f"{sid}: argument {n}: -e {key}=... moved to env as {env[key]} (store the value "
                 "under that name)"
             )
             continue
-        if prev in _HEADER_FLAG:
+        if f is not None and f.kind == "header":
             name, colon, value = a.partition(":")
             scheme = next((sc + " " for sc in _SCHEMES if value.strip().startswith(sc + " ")), "")
             ref = _secret_name(sid, "header", name if colon else str(n))
-            clean.append(f"{name}: {scheme}{ref}" if colon and name.strip() else ref)
-        elif flag.startswith("-") and eq and (_SECRET_FLAG.match(flag) or _credential(val)):
+            secret(n, ref, f"{name}: {scheme}{ref}" if colon and name.strip() else ref)
+        elif f is not None and a.startswith("-") and eq:
             ref = _secret_name(sid, flag.lstrip("-"))
-            clean.append(f"{flag}={ref}")
-        elif _SECRET_FLAG.match(prev) or _credential(a):
+            secret(n, ref, f"{flag}={ref}")
+        elif f is not None:
             ref = _secret_name(sid, "arg", str(n))
-            clean.append(ref)
+            secret(n, ref, ref)
+        elif not eq and _BARE_FLAG.match(a):
+            clean.append(a)  # a flag's own name
+        elif "://" in a:
+            url = val if eq and flag.startswith("-") else a
+            plain = _plain_url(url)
+            if plain != url:
+                notes.append(
+                    f"{sid}: argument {n}: a URL's userinfo, query or path was removed (they may "
+                    "hold a credential; keep only what the server needs)"
+                )
+            clean.append(f"{flag}={plain}" if url is val else plain)
+        elif credentials.is_path(val if eq else a):
+            clean.append(a)  # a path names where a credential is, never one
+        elif eq and flag.startswith("-") and _CRED_TEXT.search(val):
+            ref = _secret_name(sid, flag.lstrip("-"))
+            secret(n, ref, f"{flag}={ref}")
+        elif _CRED_TEXT.search(a):
+            ref = _secret_name(sid, "arg", str(n))
+            secret(n, ref, ref)
         else:
             clean.append(a)
-            continue
-        notes.append(
-            f"{sid}: argument {n} carried or may carry a credential; replaced by {ref} (store the "
-            "value under that name)"
-        )
     return clean
 
 
@@ -361,12 +380,12 @@ def draft(
             for sc in _SCHEMES:
                 if value.startswith(sc + " "):
                     scheme, value = sc + " ", value[len(sc) + 1 :]
-            m = _VAR.match(value)
-            fallback = _secret_name(m.group(1)) if m else _secret_name(sid, k)
-            ref = _ref_for_var(m.group(1), fallback) if m else fallback
+            var = _var(value)
+            fallback = _secret_name(var) if var else _secret_name(sid, k)
+            ref = _ref_for_var(var, fallback) if var else fallback
             headers[str(k)] = scheme + ref
             notes.append(
-                f"{sid}: header {k}: {'reference' if m else 'literal value'} replaced by {ref} "
+                f"{sid}: header {k}: {'reference' if var else 'literal value'} replaced by {ref} "
                 "(store the value under that name)"
             )
         if headers:
@@ -381,12 +400,18 @@ def draft(
         rec["runtime"] = "agent-local"
         for k, v in (entry.get("env") or {}).items():
             key = str(k)
-            m = _VAR.match(v) if isinstance(v, str) else None
-            if m:
-                env[key] = _ref_for_var(m.group(1), _secret_name(m.group(1)))
+            var = _var(v) if isinstance(v, str) else None
+            if var:
+                env[key] = _ref_for_var(var, _secret_name(var))
                 notes.append(f"{sid}: env {key}: reference replaced by {env[key]}")
             elif _is_setting(key, v):
                 settings[key] = str(v)
+                if "://" in settings[key] and _plain_url(settings[key]) != settings[key]:
+                    settings[key] = _plain_url(settings[key])
+                    notes.append(
+                        f"{sid}: env {key}: the URL's path was removed (it may carry a token); "
+                        "put back only a path that holds no credential"
+                    )
                 notes.append(f"{sid}: env {key} kept as a setting: confirm it is not a credential")
             else:
                 env[key] = _secret_name(sid, key)

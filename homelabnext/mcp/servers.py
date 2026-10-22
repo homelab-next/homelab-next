@@ -29,7 +29,6 @@ reviews the review policy asks of ``mcp-server.active``.
 from __future__ import annotations
 
 import json
-import math
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -41,7 +40,7 @@ import yaml
 
 from homelabnext.registry.model import secret_env_name
 
-from . import launch
+from . import credentials, launch
 
 #: the schema every record validates against
 SCHEMA = ("platform", "mcp_server")
@@ -70,7 +69,7 @@ TEMPLATE = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 BUILTINS = ("id", "profile", "lane", "home")
 PROFILE_FILE = "profile_file"
 #: a setting key that names a credential: its value belongs in the secret store (``env``)
-SECRET_KEY = re.compile(r"TOKEN|SECRET|PASSW|API_?KEY|PRIVATE|CREDENTIAL|COOKIE|SESSION", re.I)
+SECRET_KEY = credentials.SECRET_KEY
 
 
 class CatalogError(ValueError):
@@ -446,93 +445,46 @@ def _secret_problems(rec: Mapping[str, Any], where: str) -> list[str]:
     return out
 
 
-#: a package spec as a launcher takes it (``name==1.2.0``, ``@scope/name@1.2.0``): never a secret
-PACKAGE_SPEC = re.compile(
-    r"^(@[a-z0-9][a-z0-9._-]*/)?[A-Za-z0-9][A-Za-z0-9._-]*(==|@)v?[0-9][A-Za-z0-9._+-]*$"
-)
+#: the shared credential rules (:mod:`.credentials`), named here for the importer and the tests
+PACKAGE_SPEC = credentials.PACKAGE_SPEC
+looks_secret = credentials.looks_secret
+arg_secret = credentials.arg_secret
 
-
-def looks_secret(value: str) -> bool:
-    """A value that is probably a credential: a URL with a password, or a long token-like string
-    (mixed letters and digits, high entropy, no spaces or path separators).  A package spec with
-    its version (``example-notes-mcp==1.2.0``) is not one."""
-    if re.search(r"://[^/@\s:]+:[^/@\s]+@", value):
-        return True
-    v = value.strip()
-    if len(v) < 20 or " " in v or "/" in v or v.startswith("$") or PACKAGE_SPEC.match(v):
-        return False
-    if not (re.search(r"[0-9]", v) and re.search(r"[A-Za-z]", v)):
-        return False
-    counts = {c: v.count(c) for c in set(v)}
-    entropy = -sum(n / len(v) * math.log2(n / len(v)) for n in counts.values())
-    return entropy >= 3.5
-
-
-_SECRET_REF_FULL = re.compile(r"secret:[a-z][a-z0-9_-]*(?:/[a-z][a-z0-9_-]*)*")
-#: ``Header-Name: [Scheme ]secret:<name>``, the argument after ``--header`` (mcp-remote and kin)
-_HEADER_ARG = re.compile(r"^[A-Za-z][A-Za-z0-9-]*:\s*(?:[A-Za-z]+ )?(secret:\S+)$")
-#: a flag whose value is a credential (``--token``, ``--github-token``, ``--client-secret`` ...)
-CREDENTIAL_FLAG = re.compile(
-    r"^--?(?:[a-z0-9]+[-_])*(token|api[-_]?key|apikey|key|password|passwd|pass|pwd|passphrase"
-    r"|secret|auth|bearer|credentials?|pat)$",
-    re.I,
-)
-
-
-def arg_secret(arg: str) -> str | None:
-    """The secret ref an argument carries (``secret:x``, ``--flag=secret:x`` or
-    ``Header: [Scheme ]secret:x``), else None."""
-    m = _HEADER_ARG.match(arg)
-    value = m.group(1) if m else arg.split("=", 1)[1] if arg.startswith("-") and "=" in arg else arg
-    if _SECRET_REF_FULL.fullmatch(value):
-        return value
-    return None
-
-
-def _credential_flag(flag: str) -> bool:
-    return bool(CREDENTIAL_FLAG.match(flag) or SECRET_KEY.search(flag.lstrip("-")))
+_FINDING = {
+    "dollar": "contains $ (a client would expand it from its environment): use a secret: "
+    "reference or a parameter",
+    "inline": "carries secret: inside a value; write secret:<name>, --flag=secret:<name> or "
+    "Header: [Scheme ]secret:<name>",
+    "flag-value": "{flag} takes a credential; give it secret:<name>",
+    "after-flag": "follows {flag}; give it secret:<name>",
+    "header": "is a header after {flag}; its value is secret:<name>",
+    "env": "{flag} sets a credential (or a value that looks like one): put it in env as a "
+    "secret reference",
+    "shell": "is a shell line that carries a credential",
+    "value": "looks like a literal credential",
+}
 
 
 def _literal_problems(rec: Mapping[str, Any], where: str) -> list[str]:
-    """No literal credential and nothing a client would expand: an argument or a setting never
-    holds ``$`` (``${VAR}``, ``$(cmd)``), a ``secret:`` reference only as a whole argument, a
-    ``--flag=`` value or a header value, a credential flag's value is a ``secret:`` reference, and
-    nothing looks like a token."""
-    out: list[str] = []
-    args = [str(a) for a in (rec.get("transport") or {}).get("args") or ()]
-    for i, a in enumerate(args):
-        n, ref = i + 1, arg_secret(a)
-        flag, eq, val = a.partition("=")
-        prev = args[i - 1] if i else ""
-        if "$" in a:
-            out.append(
-                f"{where}: argument {n} contains $ (a client would expand it from its "
-                "environment): use a secret: reference or a parameter"
-            )
-        elif "secret:" in a and not ref:
-            out.append(
-                f"{where}: argument {n} carries secret: inside a value; write secret:<name>, "
-                "--flag=secret:<name> or Header: [Scheme ]secret:<name>"
-            )
-        elif not ref and a.startswith("-") and eq and _credential_flag(flag):
-            out.append(f"{where}: argument {n}: {flag} takes a credential; give it secret:<name>")
-        elif not ref and prev.startswith("-") and "=" not in prev and _credential_flag(prev):
-            out.append(f"{where}: argument {n} follows {prev}; give it secret:<name>")
-        elif not ref and prev in ("--header", "-H"):
-            out.append(
-                f"{where}: argument {n} is a header after {prev}; its value is secret:<name>"
-            )
-        elif not ref and (looks_secret(val if eq else a) or re.search(r"(?i)authorization:", a)):
-            out.append(f"{where}: argument {n} looks like a literal credential")
+    """No literal credential and nothing a client would expand (:mod:`.credentials`, the rules
+    the importer strips by): an argument or a setting never holds ``$`` (``${VAR}``,
+    ``$(cmd)``), a ``secret:`` reference only as a whole argument, a ``--flag=`` value or a header
+    value, a credential flag's value is a ``secret:`` reference, and nothing looks like a token or
+    carries one (a URL, JSON, a shell line, a container's ``-e``)."""
+    t = rec.get("transport") or {}
+    out = [
+        f"{where}: argument {f.index + 1} " + _FINDING[f.kind].format(flag=f.flag)
+        for f in credentials.scan_args(str(t.get("command", "")), t.get("args") or ())
+    ]
     for k, v in (rec.get("settings") or {}).items():
-        v = str(v)
-        if "$" in v or "secret:" in v:
+        why = credentials.setting_problem(str(k), str(v))
+        if why == "holds $ or secret:":
             out.append(
                 f"{where}: setting {k} holds $ or secret: (a setting is a literal; a credential "
                 "goes in env as a secret reference)"
             )
-        elif looks_secret(v):
-            out.append(f"{where}: setting {k} looks like a literal credential")
+        elif why and why != "names a credential":  # that one: _template_problems
+            out.append(f"{where}: setting {k} {why}")
     return out
 
 
@@ -555,7 +507,7 @@ def _template_problems(rec: Mapping[str, Any], where: str) -> list[str]:
     settings = rec.get("settings") or {}
     for k, v in settings.items():
         refs(str(v), f"setting {k}")
-        if SECRET_KEY.search(k) or CREDENTIAL_FLAG.match("--" + k.lower()):
+        if credentials.setting_problem(str(k), str(v)) == "names a credential":
             out.append(
                 f"{where}: setting {k} names a credential; put it in env as a secret reference"
             )

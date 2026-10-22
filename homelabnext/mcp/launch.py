@@ -141,11 +141,14 @@ class Launch:
     server_args: int = 0
     #: indexes of the launcher's own flag values (``--from X``, ``-e K=V``, ``--python 3.12``)
     flag_values: dict[int, str] = field(default_factory=dict)
+    #: the flag each of those values belongs to (``-e``, ``--env``, ``--from`` ...)
+    flag_names: dict[int, str] = field(default_factory=dict)
     #: why the launch position cannot be trusted (a refused or unknown flag, a missing subcommand)
     problems: list[str] = field(default_factory=list)
 
 
-def _flag_name(arg: str) -> str:
+def flag_name(arg: str) -> str:
+    """``--flag`` of ``--flag=value``, ``-e`` of ``-eVALUE``."""
     return arg.split("=", 1)[0] if arg.startswith("--") else arg[:2] if arg.startswith("-") else arg
 
 
@@ -160,7 +163,7 @@ def _read(launch: Launch, args: list[str], start: int, flags: Flags) -> None:
             break
         if not a.startswith("-") or a == "-":
             break
-        name = _flag_name(a)
+        name = flag_name(a)
         long_eq = a.startswith("--") and "=" in a
         attached = not a.startswith("--") and len(a) > 2
         if name in flags.refused:
@@ -176,6 +179,7 @@ def _read(launch: Launch, args: list[str], start: int, flags: Flags) -> None:
                 launch.problems.append(f"{launch.launcher} {name}: no value")
                 return
             launch.flag_values[at] = value
+            launch.flag_names[at] = name
             if name in flags.spec:
                 spec_from_flag.append((at, value))
             continue
