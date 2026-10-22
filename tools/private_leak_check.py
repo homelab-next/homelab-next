@@ -27,7 +27,10 @@ can never run on the public tree by accident.  Findings:
                  ``vault-blob`` (vault ciphertext is expected; see ``vault-unencrypted``).
                  Well-formed SOPS ``ENC[...]`` tokens, the ``sops`` metadata and ansible-vault
                  header and hex lines are masked first: ciphertext is not a leak.  A token that
-                 only looks like ciphertext (``ENC[AES256_GCM,data:<a token>]``) is not masked.
+                 only looks like ciphertext (``ENC[AES256_GCM,data:<a token>]``) is not masked,
+                 and a well-formed one is masked only in a SOPS file and only where sops writes
+                 one: as a whole value (or a whole comment).  Anywhere else its ``data:`` is just
+                 text, and a credential that happens to be valid base64 would hide in it.
   sops-unencrypted
                  a SEALED file that carries no SOPS metadata, i.e. what should be sealed was
                  committed in the clear.  Sealed means: every file under :data:`SEALED_PATHS`
@@ -37,10 +40,14 @@ can never run on the public tree by accident.  Findings:
   sops-malformed
                  a sealed file whose metadata is not real (no well-formed ``mac``, no recipient,
                  an unknown key) or a value or comment that is not a well-formed ``ENC[...]``
-                 token.  Only a key ending in the file's ``unencrypted_suffix`` may stay plain.
+                 token, or a mapping that sets one key twice (a parser keeps the last value, so the
+                 first would never be checked).  Only a key ending in the file's
+                 ``unencrypted_suffix`` may stay plain.
   sops-partial   a sealed file encrypted only in part (``encrypted_regex``,
                  ``unencrypted_regex``, ``encrypted_suffix``, the comment regexes,
-                 ``mac_only_encrypted``).
+                 ``mac_only_encrypted``), or one that picks its own ``unencrypted_suffix``: only
+                 the SOPS default ``_unencrypted``, or the one the marker pins
+                 (``unencrypted_suffix``), may leave keys plain; the file cannot choose.
   sops-policy    a ``.sops.yaml`` that narrows the pinned sealed paths: no root ``.sops.yaml``
                  while sealed files exist, a sealed path no creation rule covers, a rule over a
                  sealed path that encrypts only in part, or a nested ``.sops.yaml`` (sops uses
@@ -230,6 +237,9 @@ def read_marker(path: Path) -> dict:
         v = doc.get(key, [])
         if not isinstance(v, list) or not all(isinstance(x, str) and x for x in v):
             raise ConfigError(f"{path}: {key} must be a list of non-empty strings")
+    suffix = doc.get("unencrypted_suffix", DEFAULT_UNENCRYPTED_SUFFIX)
+    if not isinstance(suffix, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,32}", suffix):
+        raise ConfigError(f"{path}: unencrypted_suffix must be a short plain suffix")
     return doc
 
 
@@ -309,8 +319,62 @@ def well_formed_enc(value: str) -> bool:
     return len(iv) == 32 and len(tag) == 16
 
 
-def _mask_enc(text: str) -> str:
-    return _ENC_ANY.sub(lambda m: "ENC[]" if well_formed_enc(m[0]) else m[0], text)
+class DuplicateKey(ValueError):
+    """A mapping sets one key twice."""
+
+
+def _unique_pairs(pairs: list[tuple[str, object]]) -> dict:
+    out: dict = {}
+    for k, v in pairs:
+        if k in out:
+            raise DuplicateKey(f"duplicate key {k!r}")
+        out[k] = v
+    return out
+
+
+def load_unique(text: str, fmt: str) -> object:
+    """A JSON or YAML document, refusing a mapping that sets a key twice (:class:`DuplicateKey`)."""
+    if fmt == "json":
+        return json.loads(text, object_pairs_hook=_unique_pairs)
+    import yaml
+
+    from homelabnext._yaml import UniqueKeyLoader
+
+    try:
+        return yaml.load(text, Loader=UniqueKeyLoader)
+    except yaml.constructor.ConstructorError as exc:
+        if "duplicate key" in str(exc.problem):
+            raise DuplicateKey(str(exc.problem)) from None
+        raise
+
+
+#: where sops writes a token: a whole value (``key: ENC[..]``, ``- ENC[..]``, ``key=ENC[..]``,
+#: ``"key": "ENC[..]"``) or a whole comment (``#ENC[..]``), alone on its line but for a JSON comma
+_ENC_VALUE = {
+    "yaml": re.compile(
+        r"^(?P<pre>\s*(?:-\s+)*(?:[^\s#][^#\n]*?:\s+)?|\s*#\s*)(?P<tok>ENC\[[^\]\n]*\])\s*$"
+    ),
+    "json": re.compile(
+        r'^(?P<pre>\s*(?:"(?:[^"\\]|\\.)*"\s*:\s*)?")(?P<tok>ENC\[[^\]\n]*\])"\s*,?\s*$'
+    ),
+    "dotenv": re.compile(r"^(?P<pre>[^=#\n]+=|#\s*)(?P<tok>ENC\[[^\]\n]*\])\s*$"),
+    "ini": re.compile(r"^(?P<pre>\s*[^=#;\[\n]+=\s*|\s*[#;]\s*)(?P<tok>ENC\[[^\]\n]*\])\s*$"),
+}
+
+
+def _mask_enc(text: str, fmt: str | None) -> str:
+    """Blank well-formed tokens where sops writes them, in a SOPS file only (else unchanged)."""
+    rx = _ENC_VALUE.get(fmt or "")
+    if rx is None:
+        return text
+
+    def one(line: str) -> str:
+        m = rx.match(line)
+        if not m or not well_formed_enc(m["tok"]):
+            return line
+        return line[: m.start("tok")] + "ENC[]" + line[m.end("tok") :]
+
+    return "\n".join(one(ln) for ln in text.split("\n"))
 
 
 def masked(text: str) -> str:
@@ -321,9 +385,13 @@ def masked(text: str) -> str:
     are kept for YAML, dotenv, ini and vault; a SOPS JSON file is re-serialised."""
     fmt = sops_format(text)
     if fmt == "json":
-        doc = json.loads(text)
-        doc.pop("sops", None)
-        text = json.dumps(doc, indent=2)
+        try:
+            doc = load_unique(text, "json")
+        except DuplicateKey:
+            doc = None  # re-serialising would drop the first value: scan the text as it is
+        if isinstance(doc, dict):
+            doc.pop("sops", None)
+            text = json.dumps(doc, indent=2)
     elif fmt in ("yaml", "ini"):
         start = re.compile(r"^sops:[ \t]*$") if fmt == "yaml" else re.compile(r"^\[sops\]\s*$")
         lines, inside = [], False
@@ -336,7 +404,7 @@ def masked(text: str) -> str:
         text = "\n".join(lines)
     elif fmt == "dotenv":
         text = "\n".join("" if ln.startswith("sops_") else ln for ln in text.splitlines())
-    text = _mask_enc(text)
+    text = _mask_enc(text, fmt)
     if VAULT_HEADER in text:
         text = "\n".join(
             "" if _VAULT_HEADER_LINE.match(ln.strip()) or _HEX_LINE.match(ln) else ln
@@ -408,8 +476,12 @@ def _tree_leaves(node: object, suffix: str, path: str = "") -> Iterable[tuple[st
         yield path or "<root>", node
 
 
-def sealed_problems(text: str, rel: str) -> list[Finding]:
-    """Findings for a file that must be SOPS-encrypted throughout (empty when it is)."""
+def sealed_problems(
+    text: str, rel: str, suffixes: Iterable[str] = (DEFAULT_UNENCRYPTED_SUFFIX,)
+) -> list[Finding]:
+    """Findings for a file that must be SOPS-encrypted throughout (empty when it is).
+    ``suffixes``: the ``unencrypted_suffix`` values a sealed file may carry (the SOPS default and
+    the one the overlay marker pins)."""
     fmt = sops_format(text)
     if fmt is None:
         return [
@@ -422,9 +494,10 @@ def sealed_problems(text: str, rel: str) -> list[Finding]:
         has_recipient = any(k.startswith(f"{r}__list_") for k in meta for r in RECIPIENT_KEYS)
         unknown = sorted({k.split("__", 1)[0] for k in meta} - META_KEYS)
     else:
-        import yaml
-
-        doc = json.loads(text) if fmt == "json" else yaml.safe_load(text)
+        try:
+            doc = load_unique(text, fmt)
+        except DuplicateKey as exc:
+            return [Finding(rel, "sops-malformed", f"{exc}: the first value would go unchecked")]
         meta = doc.pop("sops")
         has_recipient = any(meta.get(r) for r in RECIPIENT_KEYS)
         unknown = sorted(str(k) for k in meta if k not in META_KEYS)
@@ -443,7 +516,17 @@ def sealed_problems(text: str, rel: str) -> list[Finding]:
     if partial:
         out.append(Finding(rel, "sops-partial", f"encrypted only in part ({', '.join(partial)})"))
     suffix = meta.get("unencrypted_suffix", DEFAULT_UNENCRYPTED_SUFFIX)
-    suffix = suffix if isinstance(suffix, str) else DEFAULT_UNENCRYPTED_SUFFIX
+    allowed = (*suffixes, "")  # an empty suffix leaves nothing plain
+    if not isinstance(suffix, str) or suffix not in allowed:
+        out.append(
+            Finding(
+                rel,
+                "sops-partial",
+                "the file picks its own unencrypted_suffix (only the SOPS default or the one "
+                "the overlay marker pins may stay plain)",
+            )
+        )
+        suffix = ""  # check every key, as if nothing were plain
     if fmt in ("dotenv", "ini"):
         plain = [
             k
@@ -534,6 +617,7 @@ def check_private(root: Path) -> list[Finding]:
     vaulted = [*DEFAULT_VAULT_GLOBS, *doc.get("ansible_vault_files", [])]
     sealed_paths = [*SEALED_PATHS, *doc.get("sealed_paths", [])]
     allow_unscanned = doc.get("allow_unscanned", [])
+    suffixes = tuple({DEFAULT_UNENCRYPTED_SUFFIX, doc.get("unencrypted_suffix") or ""} - {""})
     rules = sops_rules(root)
     patterns = [
         p for p in leak_scan.PATTERNS if p.group == "secret" and p.name not in NAME_ONLY_PATTERNS
@@ -560,7 +644,7 @@ def check_private(root: Path) -> list[Finding]:
                 )
             continue
         if sealed:
-            problems = sealed_problems(text, rel)
+            problems = sealed_problems(text, rel, suffixes)
             if problems:
                 out += problems
                 continue  # its content is the leak; do not echo it line by line

@@ -114,9 +114,13 @@ overlay's own configuration to say what must be sealed:
 * **SOPS.** Every file under `lab/sealed/` (pinned in the tool, so one commit cannot drop it), under
   the marker's `sealed_paths`, or covered by a root `.sops.yaml` rule must be SOPS-encrypted
   *throughout*: real metadata (a well-formed `mac`, at least one recipient, no unknown key), every
-  value and comment a well-formed `ENC[AES256_GCM,data:…,iv:…,tag:…,type:…]` token, except keys
-  ending in the file's `unencrypted_suffix`. A file sealed only in part (`encrypted_regex`,
+  value and comment a well-formed `ENC[AES256_GCM,data:…,iv:…,tag:…,type:…]` token, no key set
+  twice in one mapping, except keys ending in the `unencrypted_suffix`. That suffix is the SOPS
+  default `_unencrypted` or the one the marker pins (`unencrypted_suffix: _plain`); a file that
+  names any other one is sealed only in part. A file sealed only in part (`encrypted_regex`,
   `unencrypted_regex`, `encrypted_suffix`, the comment regexes, `mac_only_encrypted`) fails. A
+  token is masked from the secret scan only in a SOPS file and only as a whole value or comment:
+  its `data:` is any base64, so anywhere else it is scanned as text. A
   `.sops.yaml` that narrows the pinned paths (no rule covers `lab/sealed/`, a rule there that
   encrypts only in part, a nested `.sops.yaml` that shadows the root one, or no `.sops.yaml` while
   sealed files exist) is itself a finding. A `README.md` is the one plain file name.

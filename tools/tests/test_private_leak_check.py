@@ -221,11 +221,49 @@ def test_partial_encryption_is_refused_on_a_sealed_path(tmp_path):
 
 def test_only_the_configured_unencrypted_suffix_stays_plain(tmp_path):
     custom = SOPS_META.replace("_unencrypted", "_plain")
+    pinned = {".hnx-private-overlay.yml": MARKER + "unencrypted_suffix: _plain\n"}
     ok = f"wan:\n    address: {enc()}\n    port_plain: 51820\n" + custom
-    assert plc.check_private(overlay(tmp_path / "a", {"lab/sealed/a.sops.yaml": ok})) == []
+    root = overlay(tmp_path / "a", {"lab/sealed/a.sops.yaml": ok, **pinned})
+    assert plc.check_private(root) == []
     bad = f"wan:\n    address: {enc()}\n    port_unencrypted: 51820\n" + custom
-    found = plc.check_private(overlay(tmp_path / "b", {"lab/sealed/a.sops.yaml": bad}))
+    found = plc.check_private(overlay(tmp_path / "b", {"lab/sealed/a.sops.yaml": bad, **pinned}))
     assert [f.detail for f in found] == ["wan/port_unencrypted: not a well-formed ENC[...] value"]
+
+
+def test_a_sealed_file_cannot_choose_its_own_unencrypted_suffix(tmp_path):
+    """``unencrypted_suffix: s`` in the file's own metadata used to make every key ending in ``s``
+    plain: any key at all, with a one-letter suffix."""
+    text = f"wan:\n    address: {WAN}\n    peer: {enc()}\n" + SOPS_META.replace("_unencrypted", "s")
+    found = plc.check_private(overlay(tmp_path, {"lab/sealed/wan.sops.yaml": text}))
+    assert ("lab/sealed/wan.sops.yaml", "sops-partial") in found_at(found)
+    assert any("wan/address" in f.detail for f in found)  # and the value is checked anyway
+    assert WAN not in "\n".join(map(str, found))
+    with pytest.raises(plc.ConfigError):
+        plc.read_marker(
+            overlay(
+                tmp_path / "m", {".hnx-private-overlay.yml": MARKER + "unencrypted_suffix: ''\n"}
+            )
+            / ".hnx-private-overlay.yml"
+        )
+
+
+@pytest.mark.parametrize("fmt", ["yaml", "json"])
+def test_a_key_set_twice_in_a_sealed_file_is_a_finding(tmp_path, fmt):
+    """PyYAML and json keep the last of two equal keys: a plain first value went unchecked."""
+    if fmt == "yaml":
+        text = f"wan:\n    address: {AWS_KEY}\n    address: {enc()}\n" + SOPS_META
+    else:
+        meta = {"age": [{"recipient": "age1fake"}], "mac": enc(b"fake-mac"), "version": "3.9.0"}
+        text = f'{{"address": "{AWS_KEY}", "address": "{enc()}", "sops": {json.dumps(meta)}}}'
+    rel = f"lab/sealed/wan.sops.{fmt}"
+    found = plc.check_private(overlay(tmp_path, {rel: text}))
+    assert (rel, "sops-malformed") in found_at(found)
+    assert any("duplicate key 'address'" in f.detail for f in found)
+    assert AWS_KEY not in "\n".join(map(str, found))
+    # outside a sealed path the plain first value is scanned, not dropped by re-serialising
+    other = "lab/other.json"
+    if fmt == "json":
+        assert "secret" in rules(plc.check_private(overlay(tmp_path / "o", {other: text})))
 
 
 def test_sealed_dotenv_and_ini_are_checked_too(tmp_path):
@@ -321,7 +359,7 @@ def test_only_well_formed_ciphertext_is_masked(tmp_path):
         overlay(tmp_path, {"lab/enc.yml": f"x: ENC[AES256_GCM,data:{GH_TOKEN}]\n"})
     )
     assert rules(found) == {"secret"}
-    assert plc.masked(f"x: {enc()}\n").strip() == "x: ENC[]"
+    assert plc.masked(SOPS_FILE).splitlines()[1].strip() == "address: ENC[]"
     for bad in (
         f"ENC[AES256_GCM,data:{b64(b'x')},iv:abc,tag:def,type:str]",  # short IV and tag
         enc().replace("type:str", "type:secret"),
@@ -329,6 +367,22 @@ def test_only_well_formed_ciphertext_is_masked(tmp_path):
     ):
         assert not plc.well_formed_enc(bad), bad
         assert plc.masked(bad) == bad
+
+
+@pytest.mark.parametrize(
+    "rel", ["lab/notes.md", "lab/hosts.yml", "lab/plain.env", "lab/wan.sops.yaml"]
+)
+def test_a_well_formed_token_hides_nothing_outside_a_sops_value(tmp_path, rel):
+    """An access key id is valid base64, so ``ENC[AES256_GCM,data:<key>,iv:..,tag:..]`` was a
+    well-formed token and was masked in ANY file: the key vanished from the scan."""
+    wrapped = enc().replace(f"data:{b64(b'fake-sealed-value')}", f"data:{AWS_KEY}")
+    assert plc.well_formed_enc(wrapped)  # the shape alone cannot tell
+    if rel.endswith(".sops.yaml"):  # a SOPS file (not sealed), the token inside a value
+        text = f"wan:\n    address: id {wrapped}\n" + SOPS_META
+    else:
+        text = f"token: {wrapped}\n"
+    assert "secret" in rules(plc.check_private(overlay(tmp_path, {rel: text}))), rel
+    assert plc.masked(f"x: {wrapped}\n") == f"x: {wrapped}\n"  # not a SOPS file: unchanged
 
 
 def test_files_that_cannot_be_scanned_fail_unless_allowed(tmp_path):
