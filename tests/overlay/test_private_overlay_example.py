@@ -557,10 +557,10 @@ def test_sops_config_recipients_are_marked_fake():
 
 
 @pytest.mark.parametrize(
-    "env", [{"BAO_REF": "secret:ansible/vault-password\n"}, {"BAO_KV_MOUNT": "kv\n"}]
+    "env", [{"BAO_REF": "secret:ansible/fake-vault-password\n"}, {"BAO_KV_MOUNT": "kv\n"}]
 )
 def test_a_name_or_mount_with_a_trailing_newline_is_refused(client, env):
-    """``^...$`` matches before a final newline, so ``secret:x\\n`` read as the name ``x\\n``."""
+    """``^...$`` matches before a final newline, so a reference ending in one read as a name ending in one."""
     bao = FakeOpenBao()
     with pytest.raises(client.ClientError) as exc:
         client.from_openbao(
