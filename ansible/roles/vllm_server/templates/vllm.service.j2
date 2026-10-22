@@ -25,6 +25,9 @@ Environment=NCCL_P2P_DISABLE=1
 {% if vllm_server_api_key_ref %}
 EnvironmentFile={{ vllm_server_env_dir }}/{{ item.name }}.env
 {% endif %}
+# Never serve unverified bytes, also after Restart=on-failure: the store's listing must hash to the
+# pinned digest and every file must match it (minutes per hundred GB; within TimeoutStartSec).
+ExecStartPre={{ vllm_server_verify_bin }} {{ vllm_server_store_root }}/manifests/listings/{{ item.store_id }}.sha256 {{ item.digest }} {{ item.model_path }}
 ExecStart={{ vllm_server_bin }} serve {{ item.model_path }} --served-model-name {{ item.served_model_name }} --host {{ vllm_server_listen_address }} --port {{ item.port | int }} --max-model-len {{ item.max_model_len | int }} --scheduling-policy priority --tensor-parallel-size {{ item.tensor_parallel_size | int }} --pipeline-parallel-size {{ item.pipeline_parallel_size | int }} --gpu-memory-utilization {{ item.gpu_memory_utilization | float }}{% for a in item.args %} {{ a }}{% endfor %}
 
 Restart=on-failure

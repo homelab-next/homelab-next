@@ -53,6 +53,10 @@ argument_specs:
         type: bool
         description: "Set NCCL_P2P_DISABLE=1 (cards without peer-to-peer, such as the CMP 170HX)."
         default: false
+      vllm_server_verify_bin: &verify
+        type: path
+        description: "Where the pre-start byte check (sha256 of the store's listing = the pinned digest, then sha256sum --check) is installed."
+        default: /usr/local/libexec/hnx-model-verify
       vllm_server_unit_dir: &units
         type: path
         description: "Where the units are written."

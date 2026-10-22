@@ -43,6 +43,12 @@
   loop_control:
     label: "{{ item.name }}"
 
+- name: Install the pre-start byte check
+  ansible.builtin.copy:
+    src: hnx-model-verify
+    dest: "{{ vllm_server_verify_bin }}"
+    mode: "0755"
+
 - name: Write the API key environment files
   ansible.builtin.include_tasks: api_key.yml
   when: vllm_server_api_key_ref | length > 0

@@ -13,6 +13,7 @@
       - vllm_server_listen_address is match('^[A-Za-z0-9.:-]+\Z')
       - vllm_server_api_key_ref == '' or vllm_server_api_key_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
       - vllm_server_unit_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - vllm_server_verify_bin is match('^/[A-Za-z0-9._/-]+\Z')
       - vllm_server_env_dir is match('^/[A-Za-z0-9._/-]+\Z')
       - vllm_server_cache_dir is match('^/[A-Za-z0-9._/-]+\Z')
       - vllm_server_instances | length > 0
@@ -48,6 +49,7 @@
       - item.model_path is match('^/[A-Za-z0-9._/-]+\Z') and '..' not in item.model_path.split('/')
       - item.model_path.startswith(vllm_server_store_root ~ '/')
       - item.digest is match('^sha256:[0-9a-f]{64}\Z')
+      - item.store_id is match('^[a-z][a-z0-9]*([-.][a-z0-9]+)*\Z')
       - item.max_model_len | int > 0
       - item.port | int >= 1024 and item.port | int <= 65535
       - item.gpus | length > 0

@@ -18,6 +18,7 @@ import json
 import os
 import pwd
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -138,16 +139,18 @@ def test_model_store_fetches_at_the_pinned_revision_and_the_store_check_passes(t
         rev = argv[argv.index("--revision") + 1]
         assert len(rev) == 40 and rev != "main"  # never the CLI's default branch
     hf_line = next(x for x in log if "example-27b-fp8" in x)
-    assert "--cache-dir " + str(tmp_path / "srv" / "hf" / "hub") in hf_line
+    # into staging under the store root (one filesystem: the promotion is a rename), never live
+    assert "--cache-dir " + str(tmp_path / "srv" / ".staging" / "example-27b-fp8") in hf_line
     gguf_line = next(x for x in log if "Q4_K_M" in x)
-    assert (
-        "--local-dir " + str(tmp_path / "srv" / "gguf" / "example-org" / "example-4b-gguf")
-        in gguf_line
-    )
+    assert "--local-dir " + str(tmp_path / "srv" / ".staging" / "example-4b-q4km") in gguf_line
     snap = tmp_path / "srv" / store_mod.Store.from_dict(store).entries["example-27b-fp8"].directory
     assert (snap / "config.json").is_symlink()  # the hub cache layout: blob + snapshot link
     assert (tmp_path / "srv" / "manifests" / "model_store.json").is_file()
-    assert oct((tmp_path / "srv" / "exports").stat().st_mode & 0o7777) == "0o2770"
+    # sticky: a trainer may add a run to exports/, never rename or remove a promoted one
+    assert oct((tmp_path / "srv" / "exports").stat().st_mode & 0o7777) == "0o3770"
+    assert not (tmp_path / "srv" / ".staging").exists() or not any(
+        (tmp_path / "srv" / ".staging").iterdir()
+    )  # fetched into staging, verified, renamed into place
     write_export(tmp_path / "srv", store)
     st = store_mod.Store.from_dict(store)
     assert store_mod.check_disk(st, tmp_path / "srv") == []
@@ -156,6 +159,14 @@ def test_model_store_fetches_at_the_pinned_revision_and_the_store_check_passes(t
     again = run_role(tmp_path, "model_store", "main", v)
     assert again.returncode == 0, again.stdout
     assert calls(tmp_path) == []
+    # the promoted export left the trainers' write: store-owned, group read-only
+    export = tmp_path / "srv" / st.entries["example-4b-triage"].directory
+    for f in [export, *export.rglob("*")]:
+        assert f.stat().st_mode & 0o027 == 0, (f, oct(f.stat().st_mode))
+    # every entry's listing, for the engines' pre-start check, hashes to its digest
+    for eid, e in st.entries.items():
+        listing = (tmp_path / "srv" / "manifests" / "listings" / f"{eid}.sha256").read_bytes()
+        assert "sha256:" + hashlib.sha256(listing).hexdigest() == e.digest
     assert run_role(tmp_path, "model_store", "health", v).returncode == 0
     assert run_role(tmp_path, "model_store", "verify", v).returncode == 0
 
@@ -165,8 +176,10 @@ def test_model_store_refuses_a_download_whose_sha256_is_not_the_manifests(tmp_pa
     remote_tree(tmp_path, store, tamper="model-00002-of-00002.safetensors")
     r = run_role(tmp_path, "model_store", "main", store_vars(tmp_path, store))
     assert r.returncode != 0
-    assert "example-27b-fp8 does not match its manifest" in r.stdout
-    assert "model-00002-of-00002.safetensors (sha256 differs)" in r.stdout
+    assert "model-00002-of-00002.safetensors: sha256 differs from the manifest" in r.stdout
+    # verified in staging: no byte of the bad download, nor of its good siblings, reached the store
+    snap = tmp_path / "srv" / store_mod.Store.from_dict(store).entries["example-27b-fp8"].directory
+    assert not snap.exists() or not any(snap.iterdir())
 
 
 @pytest.mark.parametrize("revision", ["main", "refs/pr/1", "174d4518", "v1.0"])
@@ -309,6 +322,7 @@ def vllm_vars(tmp_path: Path, **kw) -> dict:
         "vllm_server_bin": logging_fake(tmp_path, "vllm", "0.31.0\n"),
         "vllm_server_systemctl_cli": logging_fake(tmp_path, "systemctl"),
         "vllm_server_unit_dir": str(tmp_path / "units"),
+        "vllm_server_verify_bin": str(tmp_path / "hnx-model-verify"),
         "vllm_server_env_dir": str(tmp_path / "env"),
         "vllm_server_cache_dir": str(tmp_path / "cache"),
         "vllm_server_state_dir": str(tmp_path / "state"),
@@ -360,6 +374,37 @@ def test_vllm_server_writes_one_unit_per_served_model_from_the_plan(tmp_path):
         "systemctl enable --now hnx-vllm-inference-large.service",
         "systemctl enable --now hnx-vllm-inference-triage.service",
     ]
+
+
+def test_vllm_server_units_verify_the_bytes_before_every_start(tmp_path):
+    """ExecStartPre runs the installed check: the store's listing must hash to the pinned digest
+    and the model directory must match it, so Restart=on-failure never serves unverified bytes."""
+    v = vllm_vars(tmp_path, vllm_server_verify_bin=str(tmp_path / "bin" / "hnx-model-verify"))
+    (tmp_path / "bin").mkdir()
+    assert run_role(tmp_path, "vllm_server", "main", v).returncode == 0
+    unit = (tmp_path / "units" / "hnx-vllm-inference-triage.service").read_text()
+    inst = v["vllm_server_instances"][1]
+    (pre,) = [x for x in unit.splitlines() if x.startswith("ExecStartPre=")]
+    argv = pre.removeprefix("ExecStartPre=").split()
+    listing = tmp_path / "srv" / "manifests" / "listings" / "example-4b-triage.sha256"
+    assert argv == [v["vllm_server_verify_bin"], str(listing), inst["digest"], inst["model_path"]]
+    assert unit.index("ExecStartPre=") < unit.index("ExecStart=")
+    # run it as systemd would, against a store built from the manifest
+    e = store_mod.Store.from_dict(manifest()).entries["example-4b-triage"]
+    for f in e.files:
+        (Path(inst["model_path"]) / f.path).write_bytes(content(e.id, f.path))
+    listing.parent.mkdir(parents=True, exist_ok=True)
+    listing.write_text(e.listing)
+
+    def check(digest=inst["digest"]):
+        return subprocess.run([*argv[:2], digest, argv[3]], capture_output=True, text=True)
+
+    assert check().returncode == 0, check().stderr
+    assert check("sha256:" + "0" * 64).returncode == 1  # the listing is not the pinned one
+    target = Path(inst["model_path"]) / e.files[0].path
+    target.write_bytes(target.read_bytes().upper())  # same size, other bytes
+    bad = check()
+    assert bad.returncode == 1 and "refusing to serve" in bad.stderr
 
 
 def test_vllm_server_retires_a_unit_the_plan_no_longer_has(tmp_path):

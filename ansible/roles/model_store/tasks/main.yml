@@ -9,15 +9,16 @@
     owner: "{{ model_store_owner }}"
     group: "{{ model_store_group }}"
     mode: "2750"
-  loop: ["", hf, hf/hub, gguf, manifests]
+  loop: ["", hf, hf/hub, gguf, manifests, manifests/listings]
 
+# Sticky: a trainer may add a run, never rename or remove a promoted one (owned by the store).
 - name: Create exports/, the trainers' one writable directory
   ansible.builtin.file:
     path: "{{ model_store_root }}/exports"
     state: directory
     owner: "{{ model_store_owner }}"
     group: "{{ model_store_exports_group }}"
-    mode: "2770"
+    mode: "3770"
 
 - name: Keep a copy of the manifest beside the models
   ansible.builtin.copy:
@@ -38,3 +39,23 @@
     loop_var: model_store_entry
     label: "{{ model_store_entry.key }}"
   when: model_store_fetch | bool
+
+- name: Verify each promoted export by sha256 and take it out of the trainers' hands
+  ansible.builtin.include_tasks: promote_export.yml
+  loop: "{{ model_store_manifest.models | dict2items | selectattr('value.format', 'eq', 'export') | list }}"
+  loop_control:
+    loop_var: model_store_entry
+    label: "{{ model_store_entry.key }}"
+
+# What a vLLM unit checks before it starts (ExecStartPre): sha256 of this file is the entry's
+# digest, and `sha256sum --check` of it in the entry's directory is its bytes.
+- name: Write each entry's sha256sum listing for the engines' pre-start check
+  ansible.builtin.copy:
+    dest: "{{ model_store_root }}/manifests/listings/{{ item.key }}.sha256"
+    content: "{% for f in item.value.files | sort(attribute='path', case_sensitive=true) %}{{ f.sha256 }}  {{ f.path }}\n{% endfor %}"
+    owner: "{{ model_store_owner }}"
+    group: "{{ model_store_group }}"
+    mode: "0640"
+  loop: "{{ model_store_manifest.models | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"

@@ -146,15 +146,25 @@ against fakes.
 
 1. validates it again (every hub entry pinned by a 40-hex commit, paths that stay in their entry),
    before anything runs;
-2. creates the layout. Directories are `2750` `models:models`; `exports/` is `2770`
-   `models:model-trainers`;
+2. creates the layout. Directories are `2750` `models:models`; `exports/` is `3770`
+   `models:model-trainers` (sticky: a trainer may add a run, never rename or remove a promoted
+   one);
 3. fetches each `hf`/`gguf` entry whose files are missing or wrong, with
-   `hf download <repo> <files...> --revision <commit>` (`--cache-dir <root>/hf/hub` for `hf`,
-   `--local-dir <root>/gguf/<org>/<name>` for `gguf`). It always passes `--revision`, because the
-   CLI's default is `main`. The hub token, if any, is `model_store_hf_token_ref` (`secret:<name>`,
-   `no_log`), and a mirror is `model_store_hf_endpoint`;
-4. checks every file against its sha256, and fails without serving a mismatch. Exports are not
-   fetched (Studio writes them); they are checked like the rest.
+   `hf download <repo> <files...> --revision <commit>` into a staging directory,
+   `<root>/.staging/<entry id>` (`--cache-dir` for `hf`, `--local-dir` for `gguf`), never into the
+   live store. It always passes `--revision`, because the CLI's default is `main`. The hub token,
+   if any, is `model_store_hf_token_ref` (`secret:<name>`, `no_log`), and a mirror is
+   `model_store_hf_endpoint`;
+4. checks every staged file against its sha256 and only then renames it into place
+   (`files/promote_entry.py`: an `hf` blob into the repository's `blobs/`, its snapshot link
+   replaced by a rename; a `gguf` file over its path). One bad file and nothing moves, so an
+   interrupted or tampered download never reaches the store. The live entry is then verified by
+   sha256 again, and a snapshot file that links out of its repository's `blobs/` fails;
+5. verifies each promoted export (in the manifest, on disk) by sha256 and takes it out of the
+   trainers' hands: owned `models:models`, `u=rwX,g=rX,o=`. Studio writes exports into a
+   trainer-writable directory, so an export becomes served bytes only once it is store-owned;
+6. writes each entry's `sha256sum` listing to `manifests/listings/<id>.sha256`, the file every vLLM
+   unit checks before it starts.
 
 Hooks: `health` checks the layout and every file's size (fast). `tasks_from: verify` is the sha256
 pass. `backup` names `exports/` and `manifests/` only, because hub entries can be re-fetched byte
@@ -179,6 +189,11 @@ writable export. That share is the file server's role, not this one.
   `DevicePolicy=closed` and the NVIDIA device majors, and no `MemoryDenyWriteExecute` (the CUDA
   and Triton JIT need writable, executable memory). The store is read-only, and only the
   instance's cache directory is writable;
+- `ExecStartPre=hnx-model-verify <listing> <digest> <model dir>` (`files/hnx-model-verify`,
+  installed at `vllm_server_verify_bin`): the store's listing must hash to the instance's pinned
+  digest and every file must match it (`sha256sum --check --strict`). It runs before every start,
+  `Restart=on-failure` included, so a unit never serves bytes that changed after `model_store`
+  verified them. It reads every byte: minutes per hundred GB, inside `TimeoutStartSec=1800`;
 - with `vllm_server_api_key_ref`, a `0600` environment file holding `VLLM_API_KEY`, so vLLM refuses
   callers without the gateway's backend key. In the gateway spec, declare that backend with the
   same `api_key` and port.

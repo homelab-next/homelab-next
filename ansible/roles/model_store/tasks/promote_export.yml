@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# A promoted export (model_store_entry, format export): Unsloth Studio wrote it into exports/, a
+# directory the trainers' group may write. Once it is in the manifest it is served, so it must
+# match its hashes and leave that group: owned by the store, readable by the engines' group only.
+# An export not on disk yet (written later, or restored from backup) is skipped; vllm_server
+# refuses an instance whose model is missing.
+- name: Locate the entry
+  ansible.builtin.include_tasks: entry_paths.yml
+
+- name: Look for {{ model_store_entry.key }}
+  ansible.builtin.stat:
+    path: "{{ model_store_entry_dir }}"
+  register: model_store_export_dir_stat
+
+- name: Verify and lock {{ model_store_entry.key }}
+  when: model_store_export_dir_stat.stat.exists
+  block:
+    - name: Verify every file by sha256
+      ansible.builtin.include_tasks: verify_entry.yml
+      vars:
+        model_store_sizes_only: false
+    - name: Give the export to the store owner, read-only for the engines' group
+      ansible.builtin.file:
+        path: "{{ model_store_entry_dir }}"
+        state: directory
+        recurse: true
+        owner: "{{ model_store_owner }}"
+        group: "{{ model_store_group }}"
+        mode: "u=rwX,g=rX,o="
