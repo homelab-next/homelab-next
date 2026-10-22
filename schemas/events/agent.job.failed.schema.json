@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/events/agent.job.failed/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/events/agent.job.failed/1.1",
   "title": "Event homelabnext.agent.job.failed",
   "description": "An agent job (one run in the orchestration controller's queue) reached a terminal failure. Published by the controller through the forwarder; StackStorm's job-failed rule (A02, docs/stackstorm.md) reacts by resubmitting through the controller queue, bounded by resubmits. The id derives from the run id, so a re-sent failure is a duplicate. reason is the controller's failure class: capacity, stall, timeout and backend-down are faults of the environment; deadline, cancelled, turn-cap and budget are decisions that must not be retried; handler-error and unknown are the job's own failure.",
   "allOf": [
@@ -43,7 +43,8 @@
                 "turn-cap",
                 "budget",
                 "unknown"
-              ]
+              ],
+              "description": "the failure class the controller recorded (the same value as failure_class): stall, backend-down, capacity and timeout are resubmittable, the rest never"
             },
             "attempts": {
               "type": "integer",
@@ -68,6 +69,34 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 128
+            },
+            "failure_class": {
+              "enum": [
+                "capacity",
+                "stall",
+                "timeout",
+                "backend-down",
+                "handler-error",
+                "deadline",
+                "cancelled",
+                "turn-cap",
+                "budget",
+                "unknown"
+              ],
+              "description": "the controller's failure class; equal to reason (kept for consumers that read the controller's own field name)"
+            },
+            "retried_by_run_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+              "description": "set once the run was retried: by the scheduler itself (auto_retry_scheduled) or by an accepted resubmit; it will not take another"
+            },
+            "auto_retry_scheduled": {
+              "const": true,
+              "description": "present (and true) only when the scheduler auto-retried this run in the same transaction; omitted otherwise"
+            },
+            "profile_revision_drift": {
+              "const": true,
+              "description": "present (and true) only when the agent profile's revision changed while the run was queued or running; omitted otherwise"
             }
           },
           "required": [

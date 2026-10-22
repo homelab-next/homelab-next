@@ -194,7 +194,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
     "workflows": (
         (
             "workflow packs as code: validate (offline, every pack in git)|run|digest"
-            "|st2 (render the pinned packs as a StackStorm pack)"
+            "|st2 (render the pinned packs as a StackStorm pack; run its event bridge)"
         ),
         lambda a: importlib.import_module("homelabnext.workflows.cli").main(a),
     ),
@@ -219,7 +219,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.mcp.cli").main(a),
     ),
     "broker": (
-        "the broker: validate|serve|mcp|actions|call|submit|status|run|cancel|approve|deny|"
+        "the broker: validate|serve|relay|mcp|actions|call|submit|status|run|cancel|approve|deny|"
         "pending|audit|import-proposals",
         lambda a: importlib.import_module("homelabnext.broker.cli").main(a),
     ),

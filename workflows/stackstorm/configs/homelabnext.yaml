@@ -3,3 +3,4 @@
 # Copy to /opt/stackstorm/configs/; secrets are datastore references, never values.
 ---
 broker_socket: /run/hnx-broker/broker.sock
+kv_key: '{{ st2kv.system.homelabnext.kv_key | decrypt_kv }}'

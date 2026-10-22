@@ -1,0 +1,13 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0003",
+  "source": "svc:broker",
+  "type": "homelabnext.decision.returned",
+  "time": "2026-01-01T00:00:00Z",
+  "data": {
+    "decision_id": "req-0001",
+    "verdict": "accept",
+    "confidence": 1.0,
+    "tier_used": "robot"
+  }
+}

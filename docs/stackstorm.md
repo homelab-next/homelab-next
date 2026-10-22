@@ -6,8 +6,9 @@ decides *when*: it takes events from the bus and ticks from its own clock, filte
 criteria, holds a burst back, and starts one run per admitted event. Everything a run changes goes
 through the [broker](broker.md) ([[broker]]). StackStorm holds no credential for any target.
 
-Command: `hnx workflows st2 render | check`. Library: `homelabnext.workflows.st2` (the renderer
-and its checks) and `homelabnext.workflows.st2_runtime` (what a run executes). Binding:
+Command: `hnx workflows st2 render | check | bridge`. Library: `homelabnext.workflows.st2` (the renderer
+and its checks), `homelabnext.workflows.st2_runtime` (what a run executes) and
+`homelabnext.workflows.st2_bridge` (the event bridge). Binding:
 `workflows/stackstorm.yml` (`schemas/workflows/stackstorm`). Rendered pack, committed:
 `workflows/stackstorm/`. `make workflows` fails when that tree drifts from its inputs.
 
@@ -38,7 +39,7 @@ risk), never a burst of agent processes.
 | `homelabnext/pinned/<pack>.json` | each bound rule | what the actions run: the pack document and its digest, the rule's `mode`, each step's risk, the coalesce window and the schedule |
 | `homelabnext/rules/on_<pack>.yaml` | each bound rule | the trigger and criteria below; the one parameter is the encoded body |
 | `configs/homelabnext.yaml` | the binding | the pack config: `broker_socket`, plus any `config` entries |
-| `bridge.json` | the bound event types | the bus subjects the event bridge relays to the webhook |
+| `bridge.json` | the bound event types | the bus subjects the [event bridge](#the-event-bridge) relays to the webhook, and the producers (`source`) each subject's rules pin |
 | `provenance.json` | everything | the binding digest and, per pack, the pinned digest and mode |
 
 **Triggers.** An event-triggered pack becomes a `core.st2.webhook` rule on `url: <webhook>`. Its
@@ -54,7 +55,7 @@ criteria are the pack trigger:
 
 Every event-triggered pack pins its producer: its `where` has `{ref: $event.source, equals: <id>}`
 (`st2-source`), so the rule fires, and `admit` admits, only events that name that source. A01 takes
-`svc:broker`, A02 `svc:orchestration`. The source is what the producer writes, not proof of who
+`svc:broker`, A02 `svc:llm-orchestrator` (the controller's default `events.source`; `ORCHESTRATOR_SOURCE` in `homelabnext.workflows.st2`, and `st2-bound` requires it). The source is what the producer writes, not proof of who
 sent it: who may post to the webhook (the bridge's API key) and publish the subject on the bus are
 the bounds that make it mean something.
 
@@ -100,35 +101,152 @@ table and decision services.
 
 **Actions and approvals.** In `live` mode a risky action goes to the broker as `submit`. Risky means
 the manifest gives it tier `execute` or `privileged`, or sets `requires_approval`. The broker holds
-the request and emits `homelabnext.decision.requested`, and the run ends `held`. Any other action is
+the request and emits `homelabnext.decision.requested`, and the run ends `held`. The step records
+the held request in the datastore (`homelabnext.submitted.<keyed hash of the broker's request id>`, kept
+7 days): its pack, step, action and a fingerprint of what it asks for. Once a person approves it,
+the [approved-run rule](#running-an-approved-request-a03) runs it. Any other action is
 a `call`, and the broker decides it as usual (`executed` or `denied`). The approval and its digest
 binding are the broker's ([ADR-0017](adr/0017-broker-service.md)). StackStorm inquiries
 (`core.ask`) are not used.
 
-## The first two automations
+## The automations
 
 | Id | Pack | Trigger | Does | Replaces |
 |---|---|---|---|---|
-| A01 | `proposal-validate` | `homelabnext.proposal.created`, which the broker emits when a note is filed through the records-inbox lane (`proposal.file`) | `agent.job.submit` of one `proposal-validator` job, the event id as idempotency key | the proposal-validator dispatch timer |
-| A02 | `agent-job-retry` | `homelabnext.agent.job.failed` with `reason` in capacity, stall, timeout, backend-down and `resubmits` = 0 | `agent.job.submit` again, at priority 90, with `retry_of_run_id` | ad-hoc reruns of failed jobs |
+| A01 | `proposal-validate` | `homelabnext.proposal.created`, which the broker emits when a note is filed through the records-inbox lane (`proposal.file`) | `agent.job.submit` of one `proposal-validator` job whose `task_description` is the note's path in the records inbox, the event id as idempotency key | the proposal-validator dispatch timer |
+| A02 | `agent-job-retry` | `homelabnext.agent.job.failed` from `svc:llm-orchestrator` with `reason` (the failure class) in capacity, stall, timeout, backend-down, `resubmits` = 0, and neither `auto_retry_scheduled` (the scheduler retried it itself) nor `retried_by_run_id` | `agent.job.submit` again, at priority 90, with `retry_of_run_id`, `reason` and the failed run's id as idempotency key, and no payload: the controller replays the parent's | ad-hoc reruns of failed jobs |
+| A03 | `approved-run` (built in) | `homelabnext.decision.returned` from the broker: a person approved a request | `run` of that request, only one a live step here submitted ([below](#running-an-approved-request-a03)) | running held requests by hand as the StackStorm user |
 
-`homelabnext.agent.job.failed` (`schemas/events/agent.job.failed.schema.json`) is the contract
-proposed for the controller's `agent.job.*` events. `resubmits` counts the whole-job resubmits in a
-run's `retry_of_run_id` lineage. The controller sets it from the parent run, so A02's trigger bounds
+`homelabnext.agent.job.failed` (`schemas/events/agent.job.failed.schema.json`) is what the
+controller emits: `state`, `reason` (its failure class, also as `failure_class`),
+`retry_of_run_id`, `retried_by_run_id` (set when the run was retried, by a resubmit or by the
+scheduler), `auto_retry_scheduled` and `profile_revision_drift` (each present only when true) and
+`resubmits`, the whole-job resubmits in the run's
+`retry_of_run_id` lineage. The controller sets it from the parent run, so A02's trigger bounds
 the chain: a resubmitted job that fails again has `resubmits: 1`, and A02 does not fire. Retries
-inside one run stay the controller's (`max_attempts`). Failures the controller decided on purpose
-(deadline, cancel, turn cap, budget) never match.
+inside one run stay the controller's (`max_attempts`). The resubmittable classes are stall,
+backend-down, capacity and timeout; the others (deadline, turn-cap, budget, handler-error,
+cancelled, unknown) never match.
+
+The controller holds the bound itself as well: a `POST /jobs` with `retry_of_run_id` is refused
+with 404 `unknown_run`, 422 `agent_key_mismatch`, `not_failed`, `not_retryable`,
+`reason_mismatch`, `payload_override` or `idempotency_key_mismatch` (a key reused for another
+run), or 409 `already_retried` or `retry_chain_spent`, and
+`reason` must be the class it recorded. It ignores a `resubmits` in the request and refuses
+`input` (400 `input_unsupported`), so a dispatch step never sends either, and a resubmit sends no
+`task_description` (`st2-bound`).
 
 **Bounds the renderer enforces:**
 
 - `st2-coalesce`: a rule whose pack dispatches agent work has a coalesce window.
 - `st2-bound`: a pack that reacts to `agent.job.failed` by dispatching pins `$event.data.resubmits` to
-  integers below 3, and carries `retry_of_run_id: $event.data.run_id`.
+  integers below 3 and `$event.source` to `svc:llm-orchestrator`, requires `auto_retry_scheduled`
+  and `retried_by_run_id` to be absent, and carries `retry_of_run_id: $event.data.run_id` and the
+  same run id as `idempotency_key`; no dispatch step sends `input` or `resubmits`, a
+  resubmit sends no `task_description`, and `reason` goes only with `retry_of_run_id`.
+
+## Running an approved request (A03)
+
+A held request belongs to StackStorm's broker identity (the binding's `actor`), and only its owner
+may run it, so something on StackStorm has to. That is the built-in rule `approved_run` of the
+binding (`on_approved_run`, pack `approved-run`, rendered by the renderer, not a workflow pack in
+`workflows/packs/`):
+
+```yaml
+approved_run: {id: A03, mode: shadow}     # source: svc:broker by default; promotion when live
+```
+
+It triggers on `homelabnext.decision.returned` from the broker with `verdict: accept` and
+`tier_used: human` (what the broker emits when a person approves; an approver of kind agent,
+admitted by the manifest's `allow_agent_approvers`, emits `tier_used: agent` and never matches,
+and a denial is `reject` and never matches either). That match is a filter, not the guard: an
+event's `tier_used` is whatever its publisher wrote. Its one step, `run`, asks the broker to run
+`data.decision_id`, and only when all of this holds, else the run ends `refused` with the reason,
+logged:
+
+| Check | Refusal |
+|---|---|
+| the id is a broker request id | `invalid-request-id` |
+| a live step of this StackStorm recorded it at submit (an agent's own request, or any other id, is not) | `not-st2-submitted` |
+| the recorded pack is bound here, its step is a risky action step for the same action | `pack-not-bound`, `step-not-bound` |
+| that pack's rule is live | `pack-not-live` |
+| the broker shows the request to this caller (the owner) | `not-request-owner` |
+| its actor is this actor, and it still asks for what was submitted (the fingerprint) | `other-caller`, `request-mismatch` |
+| it is still pending, and its latest decision is an approval | `not-pending`, `not-approved` |
+| the broker says that approver is a person: `approver_kind: human` on the approval in its `status`, judged against the manifest when asked, whatever the event's `tier_used` says | `not-human-approved` |
+
+The broker then re-decides anyway: the approval's digest binding, expiry and single use, the
+owner. A run happens at most once (the broker claims the request first), so a redelivered or
+forged `accept` costs a refusal, never a second run or a run of anything not approved. A broker
+refusal at run time ends the step `denied` with the broker's reason (`approval-expired`: approve
+again, which emits a new event and a new run). In `shadow` mode the step makes every check that
+needs no broker and stops before the socket (`shadow`, `st2-shadow`). Like any rule it ships in
+shadow, and `live` needs `promotion` (`st2-live`). A request approved more than 7 days after it was
+held is no longer recorded and is refused; cancel it or file it again.
+
+What A03 does not do, or cannot do yet:
+
+- **A request with a secret parameter never passes.** The broker holds a secret argument apart and
+  does not show it in `status`, so the fingerprint of what the broker shows never matches the one
+  the step recorded: `request-mismatch`, and nothing runs. This fails closed on purpose; a pack
+  whose risky step takes a secret runs only by hand.
+- **It cannot fire with today's manifest.** The broker identity of the binding
+  (`profile:workflow-agents`) has one action, `agent.job.submit`, at tier `write` without
+  `requires_approval`, so every live step is a `call` and nothing is ever held. A pack that needs
+  A03 needs, in the broker manifest that identity uses, an action of tier `execute` or
+  `privileged` (or `requires_approval: true`) with its handler pinned in the tree (`st2-handler`),
+  a risky `action` step that calls it, the pack's rule live, and `approved_run: {mode: live}` with
+  its own `promotion`.
+- **`tier_used` is advisory.** The broker emits `tier_used: agent` for an approval by an agent
+  approver the manifest admits (`allow_agent_approvers`) and `human` otherwise, and the rule
+  filters on it, but a forged event (published by anyone the bus ACL lets publish
+  `decision.returned`, or POSTed with the webhook key) can say `human`. The step therefore asks the
+  broker: each approval in `status` carries `approver_kind` (`human`, `agent`, or null for an
+  approver no longer in the manifest), and anything but `human` on the latest one is refused
+  (`not-human-approved`). An agent approval of a request StackStorm submitted is therefore never
+  run by A03; run it by hand if that is what you want.
+
+```mermaid
+sequenceDiagram
+    participant Bus as Event bus
+    participant Bridge as Event bridge
+    participant St2 as StackStorm
+    participant KV as st2 datastore
+    participant Broker
+    participant Hub as Approvals page
+    Bus->>Bridge: homelabnext.agent.job.failed (svc:llm-orchestrator)
+    Bridge->>St2: POST webhook (St2-Api-Key, Idempotency-Key)
+    St2->>St2: rule on_<pack>, admit (schema, trigger, dedupe, coalesce)
+    St2->>Broker: submit (risky step, live)
+    Broker-->>St2: request_id, awaiting approval
+    St2->>KV: homelabnext.submitted.<id> = pack, step, fingerprint
+    Broker->>Bus: homelabnext.decision.requested
+    Hub->>Broker: approve (a person, via the relay)
+    Broker->>Bus: homelabnext.decision.returned (accept, human)
+    Bus->>Bridge: decision.returned (svc:broker)
+    Bridge->>St2: POST webhook
+    St2->>St2: rule on_approved_run, admit
+    St2->>KV: read the submit record
+    St2->>Broker: status (owner, state, approvals, fingerprint)
+    St2->>Broker: run request_id
+    Broker->>Broker: re-decide, claim, consume the approval, run the handler once
+```
+
+## Redeliveries
+
+A StackStorm webhook starts one run for every POST and ignores an `Idempotency-Key` header, and the
+event bridge delivers at least once (a POST that timed out after StackStorm took it is sent
+again). So `admit` drops an event id it has already taken for the same pack: it remembers the id
+in the datastore (`homelabnext.seen.<keyed hash of pack and id>`) for a day, or for the coalesce window
+when that is longer, and a second delivery ends its run `duplicate` before any step runs. A
+CronTimer that fires twice for the same time builds the same event id, so it is one run too. The
+bound that holds when two deliveries race inside the same instant is the same as for coalescing
+(below): the controller's idempotency key.
 
 ## Coalescing bursts
 
 `coalesce: {key, window_s}` on a rule. The first event of a key opens a window. That is a datastore
-key `homelabnext.coalesce.<hash of pack and key>` with TTL `window_s`. Every later event of the key
+key `homelabnext.coalesce.<keyed hash of pack and key>` with TTL `window_s`. Every later event of the key
 inside the window ends its run `coalesced`, before any step runs, and records which event it was
 folded into. A02 keys on `$event.data.agent_key` with a ten-minute window. When a backend goes down
 and fails every running job of an agent at once, A02 makes one resubmit, not one per failure. A01
@@ -140,14 +258,14 @@ A forged event that names the right source can still open a window and fold the 
 it (an A02 resubmit lost for ten minutes). StackStorm cannot tell the two apart: it does not ask
 the controller whether `run_id` failed. The bounds are outside it, and the controller must hold
 them: the bridge's webhook-only API key and the bus's publish permissions decide who can inject an
-event, and the controller must refuse a submit whose `retry_of_run_id` is not one of its own runs
-that failed with `resubmits` 0, whatever the event said. Until it does, A02's cap is the trigger's
-and is only as good as the event.
+event, and the controller refuses a submit whose `retry_of_run_id` is not one of its own runs that failed
+for a resubmittable class and was not resubmitted yet, whatever the event said (above).
 
 The StackStorm datastore has no compare-and-set, so two events in the same instant can both pass
 the window. Two things still hold in that case:
 
-- the controller's idempotency key (the event id), so a redelivered event cannot queue twice;
+- the controller's idempotency key (A01: the event id; A02: the failed run's id), so a redelivered
+  event, or a second report of the same failure, cannot queue twice;
 - the trigger's `resubmits` cap, so a race costs at most one extra queued job and never a loop.
 
 This is leading-edge debounce. Batching (one job that carries every event of the window) needs the
@@ -194,11 +312,50 @@ only it, `action_execute` on the `homelabnext` pack's actions (a role with
 homelabnext.step` with an event of their own. The step still runs only pinned steps in their pinned
 mode, and the broker still decides, but the event is theirs.
 
+**Who may write the datastore, or run a runner action.** The runtime keeps its state in the
+datastore's system scope: `homelabnext.seen.*` (an event id already taken), `homelabnext.coalesce.*`
+(an open window) and `homelabnext.submitted.*` (what a live step submitted, which A03 trusts). Its
+inputs are predictable (a schedule's event id is built from the schedule and the time; a broker
+request id is in the `decision.requested` event), so with a plain hash anyone who can write the
+datastore could pre-seed a `seen` or `coalesce` key and suppress an event, or write a `submitted`
+record that makes A03 run a request StackStorm never submitted. The actions therefore key every one
+of those names with an HMAC under the pack config's `kv_key`, an encrypted datastore value
+(`homelabnext.kv_key`, at least 32 characters; the actions refuse to run without it). Someone who
+cannot decrypt it cannot compute a name. That is a bound only while RBAC holds:
+
+- grant `key_value_pair_set` and `key_value_pair_delete` on the system scope to nobody but
+  StackStorm's own service and an administrator, and keep decrypting system-scope values to
+  administrators (`st2.kv.set` is an action too: deny `action_execute` on it);
+- deny `action_execute` on the `core` pack's `local`, `local_sudo`, `remote` and `remote_sudo`
+  actions and every other runner action (all of `core`, `linux`, any pack that runs a command or
+  a script) to everyone. They run as the runner user (`stanley`), which can read the datastore's encryption key
+  and the pack config, so it holds `kv_key`, and which is the peer the broker maps to the binding's
+  `actor`: a shell as that user reaches the broker socket directly, as StackStorm.
+
+The broker still bounds the damage of a forgery: it shows and runs a request only to its owner,
+only while it is pending, only with a matching approval, and at most once. What a forger gains is
+the choice of *which* pending, approved request of the actor runs, or suppressing an event.
+
 **Handlers.** Every broker action a bound pack calls has its handler in the tree, pinned
 (`st2-handler`): `agent.job.submit` is `workflows/handlers/agent-job-submit.sh`, with
 `agent-job-submit.handler.json` beside it naming its digest. It posts the validated params to the
-controller's `POST /jobs`, whose URL the broker resolves by name like a secret
-(`ORCHESTRATOR_JOBS_URL`), so no endpoint is in the tree.
+controller's `POST /jobs` (the params' `idempotency_key` also as the `Idempotency-Key` header),
+whose URL the broker resolves by name like a secret
+(`ORCHESTRATOR_JOBS_URL`), so no endpoint is in the tree. The controller authenticates `POST /jobs`
+with a bearer token when its opt-in auth is on (scopes `jobs`, `read`, `metrics`, `admin`; the token
+is read only from the `Authorization` header): the handler sends `Authorization: Bearer` with the second secret it declares,
+`ORCHESTRATOR_JOBS_TOKEN`, resolved by the broker the same way (with the default resolver, the
+broker's `HNX_BROKER_SECRET_ORCHESTRATOR_JOBS_TOKEN`). Issue it with the `jobs` scope and nothing
+else. The handler writes the header to a 0600 file in the run's private `TMPDIR` and passes it as
+`--header @file`, so the token is never in curl's argv (which every local user can read in `ps`)
+or in a log line, and removes the file after the POST. Without the token (or with one that is not
+a single line) the handler exits 1 before any request; set it even while the controller's auth is
+off, so turning auth on breaks nothing. A 2xx (queued, or the idempotency key's
+original run) and 409 `already_retried` (an earlier delivery resubmitted it) are success. 404, 422
+and any other 409 are the controller refusing this resubmit for good: the handler logs it on
+stderr and exits 0 with `{"refused": true, "status", "reason"}`, so nothing retries it. 401 and 403
+are the controller refusing the token (missing, wrong, or without the `jobs` scope): logged as such
+on stderr, exit 1. Anything else (400, 5xx, no answer) exits 1 too (`handler-failed`).
 
 No literal in a bound pack may contain `{{`, `{%` or `<%` (`st2-template`). StackStorm renders
 those in criteria, parameters and Orquesta inputs, so a literal would become an expression. Event
@@ -216,15 +373,211 @@ sudo cp workflows/stackstorm/configs/homelabnext.yaml /opt/stackstorm/configs/
 sudo st2 run packs.setup_virtualenv packs=homelabnext   # creates the pack's virtualenv
 sudo /opt/stackstorm/virtualenvs/homelabnext/bin/pip install '.[core]'   # this checkout, not PyPI
 sudo st2ctl reload --register-all
+st2 key set homelabnext.kv_key "$(openssl rand -hex 32)" --encrypt   # keys the runtime's names
 st2 key set homelabnext.<name> <value> --encrypt         # only for config entries with st2kv
 ```
 
 Install `homelabnext` into the pack's virtualenv from the same checkout, so the runtime and the
 rendered steps come from one commit (`provenance.json` names the digests). Then run the event
-bridge. It is a durable bus consumer per entry of `bridge.json` (subject `homelabnext.<type>` under
-the stream prefix). It POSTs each envelope as `application/json` to the webhook with the
-`St2-Api-Key` header, acks on 2xx, and naks on 5xx or 429. StackStorm's webhook does not take
-`application/cloudevents+json`.
+bridge (below).
+
+## The event bridge
+
+`hnx workflows st2 bridge` (`homelabnext.workflows.st2_bridge`) carries events from the bus to the
+webhook. Per entry of `bridge.json` it is one durable JetStream consumer on the subject
+`homelabnext.<type>` (under the stream's subject prefix), and it POSTs each event to
+`/api/v1/webhooks/<webhook>` as `application/json` (StackStorm's webhook does not take
+`application/cloudevents+json`). It runs until SIGTERM, then stops fetching (no further subject is
+fetched in the pass it lands in), lets the POSTs in flight finish and settles them; an unsettled
+delivery is redelivered by the bus anyway. A fetch the bus fails backs that subject off like a
+failed POST; a transport failure also drops the connection, and the next pass reconnects (backing
+off, 1 s doubling to 60 s, while it cannot) and reopens the durables, so a bus restart costs
+retries, not the process.
+
+| What arrives | What the bridge does |
+|---|---|
+| a valid event of the subject's type, from a producer the subject's rules pin (`sources` in `bridge.json`) | POST it with `St2-Api-Key` and `Idempotency-Key: <event id>`; **ack only after a 2xx** |
+| no answer (refused, timeout, TLS), a redirect, 401, 403, 404, 408, 429, 5xx | **nack** (redelivered) and back off exponentially (1 s doubling to 60 s) before fetching that subject again (every other subject goes on); after `--max-deliver` attempts (default 100; a durable that already exists keeps the limit it was created with, and the bridge counts by that one) the bus dead-letters it |
+| 400, 413, 415, 422 (StackStorm refuses the body) | poison |
+| a body that is not JSON, fails the envelope or its type's schema, has another type than the subject, names a producer the rules do not pin, or a `Nats-Msg-Id` that is not its id | poison |
+| a body over 256 KiB (`too-large`, refused before it is parsed), or nested too deeply to parse (`not-json`) | poison |
+| anything else that raises while a delivery is checked (`unprocessable`) | poison: that one delivery, never the bridge |
+
+A settlement (ack, nack, term) the bus fails is logged and left to the bus, which redelivers the
+delivery once its lease lapses; one bad delivery or one failed settlement never stops the bridge,
+so a hostile body cannot crash-loop it on every redelivery.
+
+Poison is **terminated** (`term`): JetStream's dead-letter stream is the quarantine. It is never
+retried and never forwarded, and it is counted by reason and logged with the event id (never the
+event's content). StackStorm's webhook ignores `Idempotency-Key` and starts one run per POST, so a
+POST that timed out after StackStorm took it runs twice unless `admit` drops it: it does, by event
+id ([Redeliveries](#redeliveries)).
+
+At most `--max-in-flight` POSTs run at once (default 8; one fetch takes at most that many
+deliveries). `--stats-file` writes, atomically and at most every 30 s, the counters per subject
+(`forwarded`, `retried`, `dead_lettered`, `quarantined` by reason, `consecutive_failures`), the
+longest run of consecutive failures and
+`state` (`ok`, `warn` while retrying (a dead letter is final, and a fetch that finds nothing
+pending ends the run), `fail` for 24 hours after an event was dead-lettered; the `dead_lettered`
+counters and `last_dead_letter` keep the history, so it clears without a restart).
+
+**The key and TLS.** The API key is the secret-store name in `bridge.json`
+(`secret:stackstorm/webhook-key`), read at every POST from `HNX_SECRET_STACKSTORM_WEBHOOK_KEY` and
+never logged. Create it for a StackStorm user whose only RBAC grant is `webhook_send` on the
+`homelabnext` webhook (`st2 apikey create -u <that user>`). The StackStorm URL is https with
+certificate verification (`--ca-file` for a private CA); plain http is accepted only to loopback,
+or with `--allow-plaintext`. No redirect is followed, so the key never reaches another URL, and no
+proxy is used (`HTTP_PROXY`/`HTTPS_PROXY` are ignored), so the key never reaches a proxy either.
+
+```ini
+# /etc/systemd/system/hnx-st2-bridge.service
+[Unit]
+Description=homelab-next event bridge (bus -> StackStorm webhook)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=hnx-st2-bridge
+Environment=HNX_ENDPOINT_EVENTS=tls://events.lab.example
+EnvironmentFile=/etc/hnx-st2-bridge/secrets.env   # HNX_SECRET_STACKSTORM_WEBHOOK_KEY=...
+ExecStart=/opt/hnx/bin/hnx workflows st2 bridge \
+  --bridge-file /opt/hnx/workflows/stackstorm/bridge.json \
+  --st2-url https://st2.lab.example --ca-file /etc/hnx-st2-bridge/ca.pem \
+  --stream HOMELABNEXT --subject-prefix lab \
+  --events-user hnx-st2-bridge --events-password-secret secret:events/st2-bridge-password \
+  --events-ca-file /etc/hnx-st2-bridge/nats-ca.pem \
+  --stats-file /var/lib/hnx-st2-bridge/stats.json
+StateDirectory=hnx-st2-bridge
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+It needs the `nats` extra (`pip install 'homelabnext[nats]'`). Over `tls://` it does the TLS
+handshake first, so the bus's `tls` block needs `handshake_first: true` (nats-server 2.10.3 or
+later; broker.md has the line): a client that waits for the server to ask for TLS would send its
+password in clear to a server, or a man in the middle, that never asks. Exit 2 is a configuration error
+(the bridge file, the URL, the endpoint variable, the first connection, a stream that is missing
+or unbounded, a durable whose lease is too short). The bus user it uses
+needs to look up the stream and its DLQ and read through its own durables (one per subject in
+`bridge.json`), nothing else: no publish on any event subject, no `STREAM.CREATE`, `PURGE`,
+`UPDATE`, `DELETE` or `MSG.DELETE`, no other durable, and replies on its own inbox prefix. It
+creates a missing durable through the filtered form
+`$JS.API.CONSUMER.CREATE.<stream>.<durable>.<prefix>.homelabnext.<type>` (nats-server 2.9 and
+later), whose subject the server holds the request's filter to; grant that subject, never the bare
+`...CREATE.<stream>.<durable>`, which takes any filter. A NATS ACL cannot forbid a push
+`deliver_subject` in that request; the bridge only ever creates pull durables, and where even that
+is too much, create the durables once as the admin and grant the bridge no `CREATE` at all. The
+lab-in-a-box enforces exactly this (stream `HNXLAB_BROKER`; `tests/compose` fails when this
+excerpt drifts from it):
+
+```text
+# compose/lab-in-a-box/config/nats/nats.conf (excerpt: account HNX, the bridge)
+[
+{"user": "hnx-st2-bridge", "password": $LAB_EVENTS_ST2_BRIDGE_PASSWORD,
+ "permissions": {
+   "publish": {"allow": ["$JS.API.STREAM.INFO.HNXLAB_BROKER",
+                         "$JS.API.STREAM.INFO.HNXLAB_BROKER_DLQ",
+                         "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-agent-job-failed",
+                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-agent-job-failed.hnxlab.homelabnext.agent.job.failed",
+                         "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-agent-job-failed",
+                         "$JS.ACK.HNXLAB_BROKER.st2-agent-job-failed.>",
+                         "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-decision-returned",
+                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-decision-returned.hnxlab.homelabnext.decision.returned",
+                         "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-decision-returned",
+                         "$JS.ACK.HNXLAB_BROKER.st2-decision-returned.>",
+                         "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-proposal-created",
+                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-proposal-created.hnxlab.homelabnext.proposal.created",
+                         "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-proposal-created",
+                         "$JS.ACK.HNXLAB_BROKER.st2-proposal-created.>"]},
+   "subscribe": {"allow": ["_INBOX.hnx-st2-bridge.>"]}}}
+]
+```
+
+Who may *publish* each subject is the bound that makes a pinned `source` mean something.
+`<prefix>.homelabnext.agent.job.>` (`agent.job.failed`, pinned to `svc:llm-orchestrator`, which A02
+resubmits on) belongs to the orchestration controller's NATS user: grant it publish there and
+deny it to every other user, the bridge's and the broker's included, or anyone on the bus can make
+A02 resubmit a job of their choosing (bounded by `resubmits` and the controller's idempotency key,
+but theirs to trigger). The lab-in-a-box runs no controller, so nobody there may publish it.
+
+**The streams are provisioned, never created by the bridge.** It refuses to start unless the event
+stream and its dead-letter stream (`<stream>_DLQ`, which captures JetStream's max-deliveries and
+terminated advisories for the stream) both exist and each has a `max_bytes` limit: every poison
+body is terminated into the DLQ, so an unbounded DLQ lets a flood fill the server's disk. Create
+both once, with limits sized for the lab (`discard: old` drops the oldest, never refuses a
+publish):
+
+```json
+{"name": "HOMELABNEXT", "subjects": ["lab.>"], "retention": "limits", "discard": "old",
+ "storage": "file", "num_replicas": 1, "duplicate_window": 86400000000000,
+ "max_age": 2592000000000000, "max_bytes": 1073741824, "max_msgs": 1000000, "max_msg_size": 262144}
+```
+
+```json
+{"name": "HOMELABNEXT_DLQ", "retention": "limits", "discard": "old", "storage": "file",
+ "num_replicas": 1,
+ "subjects": ["$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.HOMELABNEXT.*",
+              "$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED.HOMELABNEXT.*"],
+ "max_age": 2592000000000000, "max_bytes": 268435456, "max_msgs": 100000}
+```
+
+(`nats stream add --config <file>`; durations are nanoseconds: 30 days, one day.) The duplicate
+window is the stream's: the broker's relay (docs/broker.md) dedupes a republish after a crash only
+inside it, and refuses to start on a stream whose window is shorter than its target's
+`duplicate_window` (one day), so a setting that would do nothing is a configuration error.
+
+A dead letter is an advisory that names the original's stream sequence, so the original must
+still be in the event stream to be read back: keep the DLQ's `max_age` no longer than the event
+stream's.
+
+**Where a new durable starts.** A durable the bridge creates starts one day back
+(`deliver_policy: by_start_time`, `opt_start_time` = now minus 24 h), not at what is new: on the
+first start, or after a durable was lost, the events the relay published meanwhile are forwarded
+instead of skipped for good. One day is `admit`'s memory ([Redeliveries](#redeliveries)): an
+event an earlier durable already forwarded inside that day ends `duplicate`, and the stream's 30
+days of history are never replayed. An event older than a day that no durable ever forwarded is
+not forwarded either; replay it by hand if it still matters. A durable that already exists keeps
+its position, so a restart neither skips nor replays anything.
+
+**The lease.** The bridge creates each durable with `ack_wait` 30 s, longer than a POST (10 s
+timeout) plus 15 s to settle it, so the bus never hands a delivery out again while it is being
+posted. A durable keeps the `ack_wait` it was created with; the bridge refuses to start on one
+whose lease is shorter. Raise it in place, `nats consumer edit <stream> <durable> --wait 30s`
+(JetStream updates `ack_wait` on an existing consumer), never by deleting the durable: a deleted
+durable takes its pending and unacknowledged deliveries with it. A restart after a crash waits one
+lease (in all, not one per durable) before the unsettled deliveries come back.
+
+**The broker's subjects belong to the broker.** The broker's events reach the bus through its
+outbox relay (`hnx broker relay`, [broker.md](broker.md#publishing-events-the-outbox-relay)), as
+the broker's own NATS user, with source `svc:broker` (`BROKER_SOURCE` in
+`homelabnext.broker.relay`, the value A01 and A03 pin). Grant publish on
+`<prefix>.homelabnext.decision.>` and `<prefix>.homelabnext.proposal.>` to that user only, and deny
+it to every other account, the bridge's included: otherwise any client of the bus can publish a
+`decision.returned` with `source: svc:broker`, `verdict: accept`, `tier_used: human`, and A03 asks
+the broker to run it. The broker still re-decides with the approval it holds (digest, expiry,
+single use), so a forged event cannot run an unapproved request, but it can trigger runs and fill
+the refusal log; the ACL keeps the pin honest. broker.md has the broker's half of the lab's
+`nats.conf`, and the lab's broker scenario proves a forged `decision.returned` from the bridge's
+user is refused (`bus-acl`).
+
+The stats file is a status source with the existing `poll-file` kind:
+
+```yaml
+- id: st2-bridge
+  kind: poll-file
+  target: {file: st2-bridge/stats.json}   # copied under the status root
+  interval_s: 60
+  timeout_s: 10
+  mapping: {state: state, summary: last_error}
+  what: The StackStorm event bridge; warn while it retries, fail for a day after an event was dead-lettered.
+```
 
 ## Checks
 
@@ -234,18 +587,18 @@ the stream prefix). It POSTs each envelope as `application/json` to the webhook 
 |---|---|
 | `st2-binding` | the binding is not schema-valid |
 | `st2-pin` | a bound pack is not pinned at the digest of the pack in the tree, or does not validate |
-| `st2-duplicate` | a pack or a schedule id is bound twice |
+| `st2-duplicate` | a pack or a schedule id is bound twice, or a bound pack is named `approved-run` |
 | `st2-actor` | a bound pack's `actor` is not the binding's `actor` |
 | `st2-step` | a step does not run on StackStorm (`lookup`, `decide`, `prompt`) |
 | `st2-template` | a literal holds `{{`, `{%` or `<%`; a rendered rule passes anything but the encoded body (or `fired_at`); a task input is an expression other than the encoded `event`, `state` or `fired_at` |
-| `st2-source` | an event-triggered pack does not pin `$event.source` to one producer |
+| `st2-source` | an event-triggered pack does not pin `$event.source` to one producer, or a rendered webhook rule does not test `trigger.body.source` for equality |
 | `st2-handler` | an action a bound pack calls has no handler file in the tree, or none whose `handler.json` digest matches |
 | `st2-trigger`, `st2-cron` | a schedule does not match its pack's trigger, is not five valid fields, or sets both day of month and day of week |
 | `st2-live` | a live rule has no promotion, too short a shadow window, or untracked evidence |
 | `st2-coalesce`, `st2-bound` | agent dispatch without a window, or job-failed retries without a cap |
 | `st2-secret` | a secret-like config key holds a literal |
 | `st2-shape` | a rendered document lacks a field StackStorm requires, uses a task action that is not a shim, or a runner other than `python-script` or `orquesta` |
-| `st2-criteria` | a webhook rule does not test `trigger.body.type` for one event type (it would match everything) |
+| `st2-criteria` | a webhook rule does not test `trigger.body.type` for one event type (it would match everything), or the approved-run rule does not test `verdict` = `accept` and `tier_used` = `human` |
 | `st2-drift` | the committed tree differs from the rendered one |
 
 The required fields are encoded from st2 3.8.1's `st2common` API models (pack, action, rule), its

@@ -39,18 +39,20 @@ def is_loopback(host: str | None) -> bool:
         return False
 
 
+#: plaintext schemes and their TLS counterparts (``nats://`` is NATS without TLS, ``tls://`` with;
+#: the NATS adapter makes ``tls://`` handshake first, so it never waits for the server to ask)
+PLAINTEXT_SCHEMES = {"http": "https", "nats": "tls"}
+
+
 def check_plaintext(url: str, *, credentials: bool, allow_plaintext: bool) -> None:
-    """ValueError when ``url`` is plain http to a non-loopback host and credentials would go."""
+    """ValueError when ``url`` is plaintext (``http://``, ``nats://``) to a non-loopback host and
+    credentials would go."""
     parts = urllib.parse.urlsplit(url)
-    if (
-        credentials
-        and parts.scheme == "http"
-        and not allow_plaintext
-        and not is_loopback(parts.hostname)
-    ):
+    secure = PLAINTEXT_SCHEMES.get(parts.scheme)
+    if credentials and secure and not allow_plaintext and not is_loopback(parts.hostname):
         raise ValueError(
-            f"refusing to send credentials over plaintext http to {parts.hostname}: "
-            "use https or pass allow_plaintext=True explicitly"
+            f"refusing to send credentials over plaintext {parts.scheme} to {parts.hostname}: "
+            f"use {secure} or pass allow_plaintext=True explicitly"
         )
 
 

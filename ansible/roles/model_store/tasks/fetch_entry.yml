@@ -5,15 +5,12 @@
 - name: Locate the entry
   ansible.builtin.include_tasks: entry_paths.yml
 
+# One call for every file of the entry (library/model_store_files.py), not a stat round trip each.
 - name: Read what is already on disk
-  ansible.builtin.stat:
-    path: "{{ model_store_entry_dir }}/{{ item.path }}"
-    follow: true
-    get_checksum: true
-    checksum_algorithm: sha256
-  loop: "{{ model_store_entry.value.files }}"
-  loop_control:
-    label: "{{ item.path }}"
+  model_store_files:
+    dir: "{{ model_store_entry_dir }}"
+    files: "{{ model_store_entry.value.files }}"
+    checksum: true
   register: model_store_present
 
 - name: List what is missing or wrong

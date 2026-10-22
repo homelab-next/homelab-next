@@ -7,12 +7,28 @@
       "rules": [
         "homelabnext.on_agent_job_retry"
       ],
+      "sources": [
+        "svc:llm-orchestrator"
+      ],
       "subject": "homelabnext.agent.job.failed"
+    },
+    {
+      "durable": "st2-decision-returned",
+      "rules": [
+        "homelabnext.on_approved_run"
+      ],
+      "sources": [
+        "svc:broker"
+      ],
+      "subject": "homelabnext.decision.returned"
     },
     {
       "durable": "st2-proposal-created",
       "rules": [
         "homelabnext.on_proposal_validate"
+      ],
+      "sources": [
+        "svc:broker"
       ],
       "subject": "homelabnext.proposal.created"
     }

@@ -199,8 +199,8 @@ Each is a deliberately broken fake (`hnx conform run events --target broken:<mut
 The `events` contract on NATS JetStream (pinned: nats 2.10 with `-js`).
 
 - Target file: [`compose/lab-in-a-box/targets/events.yml`](../../compose/lab-in-a-box/targets/events.yml) (target `lab-events`)
-- Factory: `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float=3600.0, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', wire: Wire | None=None) -> JetStreamBus`
-- Config in the target: `{ack_wait: 3.0, duplicate_window: 3600.0, dlq_wait: 3.0}`
+- Factory: `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float | None=None, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', provision: bool=True, wire: Wire | None=None, user: str | None=None, password_secret: str | None=None, client_name: str='hnx-conform', allow_plaintext: bool=False, ca_file: str | None=None, inbox_prefix: str | None=None, replay_s: float | None=None) -> JetStreamBus`
+- Config in the target: `{user: hnx-conformance, password_secret: 'secret:events/conformance', allow_plaintext: true, ack_wait: 3.0, duplicate_window: 3600.0, dlq_wait: 3.0}`
 
 **Product limits recorded by the adapter:**
 
@@ -222,19 +222,38 @@ The `events` contract on NATS JetStream (pinned: nats 2.10 with `-js`).
 (`nats://host:port`).  The bus speaks the JetStream wire API (`$JS.API.*` JSON requests,
 `$JS.ACK.*` replies) through a small `Wire` interface; `NatsPyWire` is that
 interface over nats-py (`pip install 'homelabnext[nats]'`), and the unit tests drive the same
-mapping with an in-process fake of the server, so no server is needed offline.
+mapping with an in-process fake of the server, so no server is needed offline.  A server with
+accounts takes `user` and `password_secret`, the secret-store *name* of the password (its
+value is delivered as `HNX_SECRET_<NAME>`, read when the connection is made, and never logged
+or held by the bus).  A password goes only over `tls://` (`ca_file` for a private CA) or to a
+loopback `nats://` endpoint, unless `allow_plaintext=True` says otherwise explicitly (the lab).
+A `tls://` connection does the TLS handshake *first*, before the server's `INFO` (nats-py's
+`tls_handshake_first`): a client that upgrades only when `INFO` asks for TLS sends its
+`CONNECT`, password included, in clear to anything that answers without asking.  The server
+needs `tls { handshake_first: true }` (nats-server 2.10.3 or later).
 
 How the contract maps onto JetStream:
 
 * **Stream.**  One limits-retention stream captures `<prefix>.>`; a contract subject `a.b` is
   the NATS subject `<prefix>.a.b`.  (A stream may not capture `>` itself unless it is no-ack,
-  and a no-ack publish returns no sequence, so a prefix is required.)
+  and a no-ack publish returns no sequence, so a prefix is required.)  With `provision=False`
+  the bus creates no stream: both (the stream and its DLQ) must exist already, each with a
+  `max_bytes` limit, or the bus refuses to open (a long-running consumer that creates unbounded
+  streams lets a flood fill the server's disk); and when `duplicate_window` is given, the
+  stream's own window must be at least that long, or the bus refuses to open too (the window is
+  the stream's, set when it was provisioned: a client's setting it asks for is otherwise a no-op).
 * **publish** is a request to the subject; the PubAck carries the stream sequence.  `msg_id` is
   the `Nats-Msg-Id` header; a repeat inside the stream's `duplicate_window` gets the PubAck of
   the original (`"duplicate": true`) with the original sequence.
-* **consumer** is a durable pull consumer: `deliver_policy=new` (it sees what is published after
-  it was created), `ack_policy=explicit`, `max_deliver`, `ack_wait` and a filter of
-  `<prefix>.<pattern>` (`*` and `>` are native NATS wildcards).
+* **consumer** is a durable pull consumer (never a push one: no `deliver_subject`):
+  `deliver_policy=new` (it sees what is published after it was created), `ack_policy=explicit`,
+  `max_deliver`, `ack_wait` and a filter of `<prefix>.<pattern>` (`*` and `>` are native
+  NATS wildcards).  With `replay_s` a durable this bus creates starts `replay_s` seconds back
+  instead (`deliver_policy=by_start_time`), so what was published before it existed (the first
+  start of a consumer, or one recreated) is not skipped, while a long-retention stream still does
+  not replay its whole history.  A literal filter is created with the 2.9+ form
+  `CONSUMER.CREATE.<stream>.<durable>.<filter>`: the server holds the request to the filter in
+  its subject, so a user granted exactly that subject can create that durable and no other shape.
 * **fetch** is one `CONSUMER.MSG.NEXT` pull with `no_wait`: the server answers with what is
   deliverable now and a `404`/`408` status, so an empty consumer returns at once.  The attempt
   number is the delivery count from the ack reply subject.
@@ -249,6 +268,8 @@ How the contract maps onto JetStream:
   its `ack_wait` lapses; the server does not know a client restarted.  So when the durable still
   has unacknowledged deliveries, reopening waits one `ack_wait` (plus a margin) for the previous
   incarnation's leases to lapse, after which every one of them is redelivered with attempt + 1.
+  A durable this bus has not opened before was leased before the bus existed, so a new bus that
+  reopens several durables waits one lease from its own start, not one per durable.
   Deliveries handed out before the reopen are detached: settling them is a no-op.
 
 Findings (where the product's semantics are narrower than the contract's words):
@@ -290,7 +311,7 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
    def make(**config) -> EventBus: ...
    ```
 
-   The factory this repository ships: `homelabnext.conform.adapters.nats_jetstream:make` is `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float=3600.0, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', wire: Wire | None=None) -> JetStreamBus`.
+   The factory this repository ships: `homelabnext.conform.adapters.nats_jetstream:make` is `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float | None=None, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', provision: bool=True, wire: Wire | None=None, user: str | None=None, password_secret: str | None=None, client_name: str='hnx-conform', allow_plaintext: bool=False, ca_file: str | None=None, inbox_prefix: str | None=None, replay_s: float | None=None) -> JetStreamBus`.
 
 3. **Describe the target** (YAML; `features` lists only what the product really offers; `waive:` takes SHOULD check ids with a reason, never a MUST):
 

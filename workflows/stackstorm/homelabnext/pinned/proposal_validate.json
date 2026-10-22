@@ -3,7 +3,7 @@
     "key": "$event.data.proposal_id",
     "window_s": 3600
   },
-  "digest": "sha256:86f4bb37eba88fb2ada8a30537d93b11f4081b5e4d1690e411bafe432d5a7ee3",
+  "digest": "sha256:38f5f7f2c0b32fefeaa6d94531c626351680151e31528cf9291b72a9d8e93dab",
   "mode": "shadow",
   "pack": {
     "actor": "profile:workflow-agents",
@@ -33,13 +33,8 @@
               "params": {
                 "agent_key": "proposal-validator",
                 "idempotency_key": "evt-prop-0001",
-                "input": {
-                  "note": "records/inbox/2026-01-01-triage-tune-auth-rule.md",
-                  "proposal_id": "2026-01-01-triage-tune-auth-rule",
-                  "requesting_agent": "profile:triage",
-                  "risk": "low"
-                },
-                "priority": 40
+                "priority": 40,
+                "task_description": "records/inbox/2026-01-01-triage-tune-auth-rule.md"
               },
               "result": "executed",
               "target": "svc:orchestration"
@@ -78,13 +73,8 @@
         "params": {
           "agent_key": "proposal-validator",
           "idempotency_key": "$event.id",
-          "input": {
-            "note": "$event.data.note",
-            "proposal_id": "$event.data.proposal_id",
-            "requesting_agent": "$event.data.requesting_agent",
-            "risk": "$event.data.risk"
-          },
-          "priority": 40
+          "priority": 40,
+          "task_description": "$event.data.note"
         },
         "target": "svc:orchestration"
       }

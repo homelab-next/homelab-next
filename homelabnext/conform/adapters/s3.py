@@ -45,8 +45,8 @@ __all__ = ["S3ObjectStore", "make_object_store"]
 
 
 def _proto() -> Any:
-    """The protocol's types.  ``conformance/`` is a checkout directory, not part of the wheel, so
-    it is imported on first use (the conformance harness puts the checkout on ``sys.path``)."""
+    """The protocol's types, imported on first use (``conformance.protocols`` ships in the wheel;
+    the rest of ``conformance/`` is a checkout directory)."""
     from conformance.protocols import object_store
 
     return object_store

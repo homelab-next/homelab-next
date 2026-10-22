@@ -3,7 +3,10 @@
 # once instead of on the next timer tick.  The pack never runs an agent: it asks the broker to put
 # one proposal-validator job on the orchestration controller's queue, which admits it by priority
 # against live load.  The event id is the idempotency key, so a redelivered event cannot
-# queue a second job.  On StackStorm this pack is rule A01 (workflows/stackstorm.yml).
+# queue a second job.  On StackStorm this pack is rule A01 (workflows/stackstorm.yml).  The job's
+# task is the note's path in the records inbox (the controller takes no `input`): the broker
+# names that file itself (date, agent, slug, keyed tag), so it carries no text an agent chose
+# beyond a slug and never a template marker; the validator reads the note from there.
 pack: proposal-validate
 version: 1
 description: Queue one proposal-validator job for every proposal filed in the records inbox.
@@ -22,11 +25,7 @@ steps:
       agent_key: proposal-validator
       idempotency_key: $event.id
       priority: 40
-      input:
-        proposal_id: $event.data.proposal_id
-        note: $event.data.note
-        risk: $event.data.risk
-        requesting_agent: $event.data.requesting_agent
+      task_description: $event.data.note
 fixtures:
   - name: proposal-queued-for-validation
     event:
@@ -50,11 +49,7 @@ fixtures:
             agent_key: proposal-validator
             idempotency_key: evt-prop-0001
             priority: 40
-            input:
-              proposal_id: 2026-01-01-triage-tune-auth-rule
-              note: records/inbox/2026-01-01-triage-tune-auth-rule.md
-              risk: low
-              requesting_agent: profile:triage
+            task_description: records/inbox/2026-01-01-triage-tune-auth-rule.md
           result: executed
   - name: other-event-type-ignored
     event:

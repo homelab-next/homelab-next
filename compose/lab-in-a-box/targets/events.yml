@@ -7,6 +7,11 @@ capabilities:
   events:
     adapter: homelabnext.conform.adapters.nats_jetstream:make
     config:
+      # its own account on the lab's server (config/nats/nats.conf), password from
+      # HNX_SECRET_EVENTS_CONFORMANCE (smoke.sh exports it from LAB_EVENTS_CONFORMANCE_PASSWORD)
+      user: hnx-conformance
+      password_secret: secret:events/conformance
+      allow_plaintext: true  # the lab binds loopback; any other LAB_BIND is the guard's call
       ack_wait: 3.0          # seconds; a reopen with unsettled deliveries waits this long
       duplicate_window: 3600.0
       dlq_wait: 3.0
