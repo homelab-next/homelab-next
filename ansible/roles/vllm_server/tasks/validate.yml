@@ -38,15 +38,31 @@
       - item.gpus | select('integer') | select('ge', 0) | list | length == item.gpus | length
       - item.tensor_parallel_size | int * item.pipeline_parallel_size | int == item.gpus | length
       - item.gpu_memory_utilization | float > 0 and item.gpu_memory_utilization | float <= 1
-      - item.args | select('match', '^[A-Za-z0-9._:/=,+-]{1,128}\Z') | list | length == item.args | length
-      - >-
-        item.args | select('match', '^--(model|served-model-name|max-model-len|scheduling-policy|host|port|tensor-parallel-size|pipeline-parallel-size|gpu-memory-utilization|api-key)(=|\Z)')
-        | list | length == 0
+      - vllm_server_bad_args | from_json | length == 0
     fail_msg: >-
       vllm_server: instance {{ item.name | default('?') }} must be what `hnx models serving render`
       writes: a slug name, a model id, a model path under {{ vllm_server_store_root }}, a digest,
       a context length, an unprivileged port, GPUs matching tensor x pipeline parallelism, and
-      one-token args that do not override the plan's flags
+      args the plan allows (vars/main.yml vllm_server_arg_rules: exact --flag names, each value
+      matching its rule; bad: {{ vllm_server_bad_args }})
+  vars:
+    # walk the argv: an allowed --flag, then its value when its rule has one; anything else
+    # (a single-dash flag, an abbreviation, a value that starts with '-') is bad
+    vllm_server_bad_args: >-
+      {%- set bad = [] -%}
+      {%- set ns = namespace(want=none, flag='') -%}
+      {%- for a in (item.args if item.args is sequence and item.args is not string else ['(not a list)']) -%}
+      {%- if ns.want is not none -%}
+      {%- if a is not string or a.startswith('-') or a is not match(ns.want) -%}{{ bad.append(ns.flag ~ ' ' ~ a) or '' }}{%- endif -%}
+      {%- set ns.want = none -%}
+      {%- elif a is string and a.startswith('--') and a[2:] in vllm_server_arg_rules -%}
+      {%- set ns.want = vllm_server_arg_rules[a[2:]] -%}
+      {%- set ns.flag = a -%}
+      {%- else -%}{{ bad.append(a | string) or '' }}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- if ns.want is not none -%}{{ bad.append(ns.flag ~ ' (no value)') or '' }}{%- endif -%}
+      {{ bad | to_json }}
   loop: "{{ vllm_server_instances }}"
   loop_control:
     label: "{{ item.name | default('?') }}"

@@ -109,7 +109,20 @@ What the plan sets on every vLLM instance, never `args`:
 
 Refused: two backends on one port or one GPU; a vLLM backend whose bindings name two model ids (one
 vLLM process serves one model); a backend no role binds; `engine: unsloth-studio` (Studio is the GUI,
-not a gateway backend); any `args` value that is more than one token.
+not a gateway backend); any `args` flag outside the allowlist.
+
+`args` is an allowlist (`homelabnext.models.serving.ALLOWED_ARGS`), not a denylist: exact vLLM flag
+names (so no argparse abbreviation such as `hos` for `host`), each with a typed value (a whole
+number or a fraction in range, one of a few choices, a short parser or quantization name, or a
+boolean: `true` renders the bare flag, `false` nothing). No value may begin with `-`, so
+`{enforce-eager: "--trust-remote-code"}` cannot become two flags. Flags that load a file, a URL,
+a module or JSON (`config`, `chat-template`, `tokenizer`, `allowed-local-media-path`,
+`middleware`, `tool-parser-plugin`, `worker-extension-cls`, `hf-overrides`,
+`speculative-config`, `lora-modules`, ...) are never on it. The `vllm_server` role re-checks the
+rendered argv against the same list: its `vars/main.yml` is generated from it
+(`role_vars_text()`, held equal by a test), so a hand-edited instances file with `-tp=4` or an
+unlisted flag fails before a unit is written. Moving `vllm_server_version` means checking every
+allowlisted name still exists exactly in `vllm serve --help=all`.
 
 ## The roles
 

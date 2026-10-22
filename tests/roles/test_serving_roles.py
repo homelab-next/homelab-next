@@ -374,6 +374,20 @@ def _bad(tmp_path, field, value):
         ("gpus", [0]),  # tp 2 x pp 1 is two GPUs
         ("args", ["--served-model-name", "other"]),
         ("args", ["--x", "a\nExecStartPre=/bin/evil"]),
+        ("args", ["-tp=4"]),  # a single-dash option
+        ("args", ["--tensor-parallel-size=4"]),  # an owned flag, = form
+        ("args", ["--hos", "0.0.0.0"]),  # an argparse abbreviation of --host
+        ("args", ["--trust-remote"]),  # an abbreviation of --trust-remote-code
+        ("args", ["--trust-remote-code"]),
+        ("args", ["--load-format", "dummy"]),
+        ("args", ["--config", "/tmp/x.yaml"]),
+        ("args", ["--allowed-local-media-path", "/"]),
+        ("args", ["--middleware", "evil.mod"]),
+        ("args", ["--enforce-eager", "--trust-remote-code"]),  # a value smuggled as a flag
+        ("args", ["--tool-call-parser", "--trust-remote-code"]),
+        ("args", ["--max-num-seqs"]),  # a value the rule needs is missing
+        ("args", ["--max-num-seqs", "24\n"]),
+        ("args", ["--enforce-eager", "1"]),  # a bare flag given a value
         ("digest", "sha256:abc"),
     ],
 )

@@ -137,13 +137,16 @@ def test_the_roles_on_a_vllm_backend_must_agree_on_the_context_length(tmp_path):
         ),
         (
             lambda b: b["svc:inference-large"]["args"].__setitem__("chat-template", "a b"),
-            "one token",
+            "not an allowed vLLM flag",
         ),
-        (lambda b: b["svc:inference-large"]["args"].__setitem__("x", "a\nb"), "one token"),
+        (
+            lambda b: b["svc:inference-large"]["args"].__setitem__("x", "a\nb"),
+            "not an allowed vLLM flag",
+        ),
         (lambda b: b["svc:inference-large"]["args"].__setitem__("Bad_Flag", 1), "not a flag name"),
         (lambda b: b["svc:inference-small"].__setitem__("engine", "unsloth-studio"), "GUI"),
         (lambda b: b["svc:inference-small"].__setitem__("engine", "ollama"), "engine must be"),
-        (lambda b: b["svc:inference-small"].__setitem__("args", {"x": 1}), "vLLM flags"),
+        (lambda b: b["svc:inference-small"].__setitem__("args", {"seed": 1}), "vLLM flags"),
         (
             lambda b: b.__setitem__(
                 "svc:nobody-binds", {"engine": "vllm", "port": 9000, "gpus": [5]}
@@ -158,6 +161,67 @@ def test_bad_backends_are_refused(tmp_path, edit, needle):
     edit(s["backends"])
     found = problems_of(tmp_path, s)
     assert any(needle in p for p in found), found
+
+
+@pytest.mark.parametrize(
+    ("args", "needle"),
+    [
+        # a value that is itself a flag: one mapping entry would render as two flags
+        ({"enforce-eager": "--trust-remote-code"}, "true (a bare flag) or false"),
+        ({"enforce-eager": "--host=0.0.0.0"}, "true (a bare flag) or false"),
+        ({"tool-call-parser": "--trust-remote-code"}, "is not a short name"),
+        ({"tool-call-parser": "-x"}, "is not a short name"),
+        # argparse prefix matching and short options: exact allowlisted names only
+        ({"trust-remote": True}, "--trust-remote is not an allowed vLLM flag"),
+        ({"hos": "0.0.0.0"}, "--hos is not an allowed vLLM flag"),
+        ({"tp": 1}, "--tp is not an allowed vLLM flag"),
+        # flags the plan does not own but that load files, code or remote config
+        ({"config": "/tmp/x.yaml"}, "--config is not an allowed vLLM flag"),
+        ({"allowed-local-media-path": "/"}, "--allowed-local-media-path is not an allowed"),
+        ({"middleware": "evil.mod"}, "--middleware is not an allowed"),
+        ({"tokenizer": "org/remote"}, "--tokenizer is not an allowed"),
+        ({"tool-parser-plugin": "/tmp/p.py"}, "--tool-parser-plugin is not an allowed"),
+        ({"worker-extension-cls": "evil.Cls"}, "--worker-extension-cls is not an allowed"),
+        ({"hf-overrides": "x"}, "--hf-overrides is not an allowed"),
+        # typed values
+        ({"seed": "1\n"}, "is not a whole number"),
+        ({"max-num-seqs": 0}, "is not a whole number in [1, 65536]"),
+        ({"max-num-seqs": 2.5}, "is not a whole number"),
+        ({"max-num-seqs": True}, "is not a whole number"),
+        ({"dtype": "float64"}, "is not one of auto"),
+        ({"swap-space": -1}, "is not a number in [0, 1024]"),
+        ({"enable-prefix-caching": "yes"}, "true (a bare flag) or false"),
+    ],
+)
+def test_args_are_an_allowlist_with_typed_values(tmp_path, args, needle):
+    s = spec()
+    s["backends"]["svc:inference-large"]["args"] = args
+    found = problems_of(tmp_path, s)
+    assert any(needle in p for p in found), found
+
+
+def test_allowed_args_render_typed_and_false_booleans_are_omitted(tmp_path):
+    s = spec()
+    s["backends"]["svc:inference-large"]["args"] = {
+        "enforce-eager": False, "enable-prefix-caching": True, "block-size": 16,
+        "swap-space": 4.5, "kv-cache-dtype": "fp8", "quantization": "compressed-tensors",
+    }  # fmt: skip
+    plan = sv.load_plan(workdir(tmp_path, s))
+    assert plan.backends["inference-large"].args == (
+        "--block-size", "16", "--enable-prefix-caching", "--kv-cache-dtype", "fp8",
+        "--quantization", "compressed-tensors", "--swap-space", "4.5",
+    )  # fmt: skip
+    assert not set(sv.ALLOWED_ARGS) & sv.OWNED_FLAGS
+
+
+def test_the_schema_and_the_role_share_the_plans_allowlist():
+    schema = json.loads((ROOT / "schemas/platform/model_serving.schema.json").read_text())
+    args = schema["properties"]["backends"]["additionalProperties"]["properties"]["args"]
+    assert args["propertyNames"]["enum"] == sorted(sv.ALLOWED_ARGS)
+    role_vars = ROOT / sv.ROLE_VARS
+    assert role_vars.read_text() == sv.role_vars_text(), (
+        f"regenerate {sv.ROLE_VARS} from homelabnext.models.serving.role_vars_text()"
+    )
 
 
 def test_a_plan_with_bad_inputs_says_which(tmp_path):

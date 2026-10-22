@@ -79,39 +79,61 @@
           },
           "args": {
             "type": "object",
-            "description": "Extra vLLM flags (name without --) and one-token values; true is a bare flag. Flags the plan sets (model, served-model-name, max-model-len, scheduling-policy, host, port, parallelism, ...) are refused.",
+            "description": "Extra vLLM flags (exact name without --) from an allowlist (homelabnext.models.serving.ALLOWED_ARGS), each with a typed value: a number in range, a choice, a short name, or a boolean (true renders the bare flag, false nothing). No value starts with '-'. Flags the plan sets (model, served-model-name, max-model-len, scheduling-policy, host, port, parallelism, ...) and flags that load files, code or JSON are refused.",
             "propertyNames": {
-              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
-              "not": {
-                "enum": [
-                  "model",
-                  "served-model-name",
-                  "max-model-len",
-                  "scheduling-policy",
-                  "host",
-                  "port",
-                  "tensor-parallel-size",
-                  "pipeline-parallel-size",
-                  "gpu-memory-utilization",
-                  "revision",
-                  "download-dir",
-                  "trust-remote-code",
-                  "api-key",
-                  "load-format"
-                ]
-              }
+              "enum": [
+                "async-scheduling",
+                "block-size",
+                "calculate-kv-scales",
+                "cpu-offload-gb",
+                "disable-custom-all-reduce",
+                "disable-fastapi-docs",
+                "disable-log-stats",
+                "disable-sliding-window",
+                "disable-uvicorn-access-log",
+                "dtype",
+                "enable-auto-tool-choice",
+                "enable-chunked-prefill",
+                "enable-expert-parallel",
+                "enable-force-include-usage",
+                "enable-log-requests",
+                "enable-prefix-caching",
+                "enable-prompt-tokens-details",
+                "enable-request-id-headers",
+                "enforce-eager",
+                "generation-config",
+                "kv-cache-dtype",
+                "long-prefill-token-threshold",
+                "max-log-len",
+                "max-logprobs",
+                "max-num-batched-tokens",
+                "max-num-partial-prefills",
+                "max-num-seqs",
+                "no-enable-prefix-caching",
+                "num-gpu-blocks-override",
+                "quantization",
+                "reasoning-parser",
+                "response-role",
+                "return-tokens-as-token-ids",
+                "seed",
+                "swap-space",
+                "tokenizer-mode",
+                "tool-call-parser",
+                "uvicorn-log-level"
+              ]
             },
             "additionalProperties": {
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[A-Za-z0-9._:/=,+-]{1,128}$"
+                  "pattern": "^[a-z0-9][a-z0-9_.-]{0,31}$"
                 },
                 {
-                  "type": "number"
+                  "type": "number",
+                  "minimum": 0
                 },
                 {
-                  "const": true
+                  "type": "boolean"
                 }
               ]
             }
