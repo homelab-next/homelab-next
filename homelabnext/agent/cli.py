@@ -32,7 +32,7 @@ Exit codes: 0 ok, 1 refused (missing part, ceiling, reader or budget violation, 
 was assembled but is ``deferred``.  ``prompts lint`` and ``injection`` exit 1 on any problem,
 instruction-follow, error or stale report.  ``--classes FILE`` replaces the packaged
 capability-class table (``homelabnext/agent/tool_classes.yml``) for ``compile``, ``verify`` and
-``lint``.
+``lint``; its ``mcp`` section is always the MCP catalog's (a table with its own is refused).
 """
 
 from __future__ import annotations

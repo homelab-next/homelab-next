@@ -131,7 +131,9 @@ through allowlisted broker actions (G-04).
   table does not know is refused for a reader (unknown is never assumed harmless); adding an MCP
   server means adding a reviewed catalog record (the repository's own read-only server,
   `hnx-catalog`, is `read`: [MCP server](mcp.md), [[mcp]]). `--classes FILE` substitutes another
-  table (its own `mcp:` section, if it has one, is used as written).
+  table, whose `mcp` section is still derived from the catalog: a table with an `mcp:` section of
+  its own is refused (it would class servers by hand and skip the catalog's status and data-tier
+  rules).
 - **Grants name catalog ids.** For every profile and manifest, reader or not, the compiler
   (`CatalogViolation`), `verify_profile` and `hnx agent lint` refuse an MCP server the catalog
   does not hold, one whose status is not `active` or `deprecated` (an allowlist), one without a

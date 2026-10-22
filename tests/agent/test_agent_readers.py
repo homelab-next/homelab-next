@@ -64,7 +64,7 @@ def _lib():
 
 def _table_doc() -> dict:
     """The packaged table with its mcp section written out (derived from the MCP catalog), the
-    shape of a table passed with --classes."""
+    shape ToolClasses takes."""
     doc = yaml.safe_load(DEFAULT_CLASSES.read_text())
     doc["mcp"] = {k: list(v) for k, v in default_classes().table["mcp"].items()}
     return doc
@@ -289,10 +289,27 @@ def test_a_custom_table_changes_the_verdict(tmp_path):
     custom = ToolClasses(doc)
     assert reader_problems({"mcp": ["lake"]}) == []
     assert reader_problems({"mcp": ["lake"]}, custom)
+    # a --classes file changes the non-MCP classes; its mcp section is the catalog's
+    table = yaml.safe_load(DEFAULT_CLASSES.read_text())
+    table["capabilities"]["cap:lake-query"] = ["egress"]
     path = tmp_path / "classes.yml"
-    path.write_text(yaml.safe_dump(doc))
+    path.write_text(yaml.safe_dump(table))
     with pytest.raises(ReaderViolation):
         compile_profile(spec(), library(), classes=ToolClasses.load(path))
+
+
+def test_a_classes_file_cannot_reclass_an_mcp_server(tmp_path, capsys):
+    """A --classes table with its own mcp section used to replace the catalog's: shell classed
+    read passed the reader rule, and the catalog's status and data-tier rules were skipped."""
+    doc = _table_doc()
+    doc["mcp"]["shell"] = ["read"]
+    _write(tmp_path / "classes.yml", doc)
+    with pytest.raises(SpecError, match="classed only by the MCP catalog"):
+        ToolClasses.load(tmp_path / "classes.yml")
+    _write(tmp_path / "spec.yml", {**spec(), "mcp": ["shell"]})
+    args = ["agent", "lint", str(tmp_path / "spec.yml"), "--classes", str(tmp_path / "classes.yml")]
+    assert cli.main(args) == 1
+    assert "classed only by the MCP catalog" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------- lint
@@ -360,10 +377,10 @@ def test_cli_lint_exit_codes(tmp_path, capsys):
 
 
 def test_cli_lint_accepts_a_custom_table(tmp_path, capsys):
-    doc = _table_doc()
-    doc["mcp"]["shell"] = ["read"]
+    doc = yaml.safe_load(DEFAULT_CLASSES.read_text())
+    doc["capabilities"]["cap:notify"] = ["read"]
     _write(tmp_path / "classes.yml", doc)
-    _write(tmp_path / "spec.yml", {**spec(), "mcp": ["shell"]})
+    _write(tmp_path / "spec.yml", {**spec(), "capabilities": ["cap:notify"]})
     assert (
         cli.main(
             [

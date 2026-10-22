@@ -84,16 +84,22 @@ class ToolClasses:
 
     @classmethod
     def load(cls, path: str | Path | None = None, catalog: str | Path | None = None) -> ToolClasses:
-        """The table at ``path`` (default: the packaged ``tool_classes.yml``).  Without an ``mcp``
-        section of its own, the section is derived from the MCP catalog at ``catalog`` (default:
+        """The table at ``path`` (default: the packaged ``tool_classes.yml``), its ``mcp`` section
+        always derived from the MCP catalog at ``catalog`` (default:
         :func:`homelabnext.mcp.servers.default_dir`, so a private overlay's catalog is used where
-        its examples directory is)."""
+        its examples directory is).  A table with an ``mcp`` section of its own is refused: it
+        would class servers, and skip the catalog's status and data-tier rules, by hand."""
         import yaml
 
         p = Path(path) if path else DEFAULT_CLASSES
         doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-        if not isinstance(doc, Mapping) or "mcp" in doc:
+        if not isinstance(doc, Mapping):
             return cls(doc, source=str(p))
+        if "mcp" in doc:
+            raise SpecError(
+                f"{p}: has an mcp section; MCP servers are classed only by the MCP catalog "
+                "(its records' tools), so remove it (hnx mcp catalog classes shows the derived one)"
+            )
         from homelabnext.mcp import servers
 
         try:
