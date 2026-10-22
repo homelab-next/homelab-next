@@ -183,15 +183,16 @@ def granted(profile: Mapping[str, Any]) -> list[str]:
 
 
 def deprecation_notes(cat: servers.Catalog, profile: Mapping[str, Any]) -> list[str]:
-    """A note per granted server that is deprecated (still rendered), naming its replacement."""
+    """A note per granted server that is deprecated (still rendered), naming its replacement
+    (never its free-text ``reason``: a value, and a note reaches logs)."""
     out = []
     for sid in granted(profile):
         rec = cat.get(sid) or {}
         if rec.get("status") == "deprecated":
             instead = rec.get("replaced_by")
             out.append(
-                f"{profile.get('id')}: MCP server {sid!r} is deprecated: {rec.get('reason')}"
-                + (f"; grant {instead!r} instead" if instead else "")
+                f"{profile.get('id')}: MCP server {sid!r} is deprecated (see the reason in "
+                f"{cat.rel(sid)})" + (f"; grant {instead!r} instead" if instead else "")
             )
     return out
 
@@ -231,7 +232,7 @@ def instances(
     for sid in names:
         rec = cat.get(sid)
         if rec is None:
-            problems.append(f"{pid}: MCP server {sid!r} is not in the catalog {cat.root}")
+            problems.append(f"{pid}: MCP server {_name(sid)} is not in the catalog {cat.root}")
             continue
         if rec.get("status") not in servers.GRANTABLE:
             problems.append(f"{pid}: MCP server {sid!r} is {rec.get('status')} (not grantable)")

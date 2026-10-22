@@ -114,7 +114,9 @@ def test_unclassified_grant_is_refused_for_a_reader():
         compile_profile(s, _lib())
     s = _with(spec(), "mcp", "mystery-server")
     s["ceiling"]["mcp"].append("mystery-server")
-    with pytest.raises(ReaderViolation, match="'mystery-server', which is not classified"):
+    with pytest.raises(
+        ReaderViolation, match=r"unknown mcp server \(mcp entry \d+\), which is not classified"
+    ):
         compile_profile(s, _lib())
 
 

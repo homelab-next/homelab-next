@@ -27,6 +27,7 @@ profile whose data may go to the cloud.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from functools import cache
 from pathlib import Path
@@ -41,6 +42,10 @@ KINDS = ("mcp", "capabilities", "tiers")
 GRANTABLE = ("active", "deprecated")
 #: the data tiers a catalog server may declare (``schemas/platform/mcp_server.schema.json``)
 DATA_TIERS = ("local-only", "cloud-allowed")
+#: an id a message may quote: a profile or manifest id (``profile:<slug>``) as the schemas spell
+#: it.  Messages reach stdout, stderr and CI logs, and a document under ``--grants`` is not
+#: schema-checked first, so any other value (a token pasted into a grant list) is never quoted.
+_ID = re.compile(r"(?:[a-z]+:)?[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 
 
 class ToolClasses:
@@ -205,26 +210,28 @@ def grant_problems(
     catalog does not hold, a retired or draft one, and a ``local-only`` server granted to a
     profile whose ``data_tier`` is ``cloud-allowed`` (its context may go to a cloud model)."""
     classes = classes or default_classes()
+    who = _shown(who)
     problems: list[str] = []
-    for name in _names(grants.get("mcp")):
+    for at, name in _entries(grants.get("mcp")):
         if classes.catalog is None:
             if classes.classify("mcp", name) is None:
                 problems.append(
-                    f"{who} names MCP server {name!r}, which is not in {classes.source} "
-                    "(grant a catalog id)"
+                    f"{who} names an unknown MCP server (mcp entry {at}), which is not in "
+                    f"{classes.source} (grant a catalog id)"
                 )
             continue
         meta = classes.catalog.get(name)
         if meta is None:
             problems.append(
-                f"{who} names MCP server {name!r}, which is not in {classes.catalog_source} "
-                "(add a record, or grant a catalog id)"
+                f"{who} names an unknown MCP server (mcp entry {at}), which is not in "
+                f"{classes.catalog_source} (add a record, or grant a catalog id)"
             )
             continue
         status = meta.get("status")
         if status == "retired":
             problems.append(
-                f"{who} is granted MCP server {name!r}, which is retired: {meta.get('reason')}"
+                f"{who} is granted MCP server {name!r}, which is retired (its record's reason "
+                "says why)"
             )
         elif status == "draft":
             problems.append(
@@ -244,8 +251,8 @@ def grant_problems(
             )
         elif data_tier is not None and data_tier != "local-only" and server_tier == "local-only":
             problems.append(
-                f"{who} may send its context to the cloud (data_tier {data_tier}) but is "
-                f"granted MCP server {name!r}, whose data is local-only"
+                f"{who} may send its context to the cloud (its data_tier is not local-only) "
+                f"but is granted MCP server {name!r}, whose data is local-only"
             )
     return problems
 
@@ -253,17 +260,19 @@ def grant_problems(
 def grant_notes(
     grants: Mapping[str, Any], classes: ToolClasses | None = None, who: str = "profile"
 ) -> list[str]:
-    """Warnings, not refusals: every granted MCP server that is ``deprecated``, with its reason
-    and the server to grant instead (``replaced_by``)."""
+    """Warnings, not refusals: every granted MCP server that is ``deprecated``, and the server to
+    grant instead (``replaced_by``).  The record's free-text ``reason`` is not repeated: it is
+    a value, and a message reaches logs."""
     classes = classes or default_classes()
+    who = _shown(who)
     out: list[str] = []
     for name in _names(grants.get("mcp")):
         meta = (classes.catalog or {}).get(name) or {}
         if meta.get("status") == "deprecated":
             instead = meta.get("replaced_by")
             out.append(
-                f"{who} is granted MCP server {name!r}, which is deprecated: {meta.get('reason')}"
-                + (f"; grant {instead!r} instead" if instead else "")
+                f"{who} is granted MCP server {name!r}, which is deprecated (its record's reason "
+                "says why)" + (f"; grant {instead!r} instead" if instead else "")
             )
     return out
 
@@ -276,19 +285,21 @@ def reader_problems(
     ``grants`` has ``mcp``, ``capabilities`` and optionally ``tier``.
     """
     classes = classes or default_classes()
+    who = _shown(who)
     problems: list[str] = []
-    wanted: list[tuple[str, str, str]] = [
-        *(("mcp", "mcp server", n) for n in _names(grants.get("mcp"))),
-        *(("capabilities", "capability", n) for n in _names(grants.get("capabilities"))),
-    ]
+    wanted: list[tuple[str, str, str, str]] = [
+        *(("mcp", "mcp server", n, f"mcp entry {at}") for at, n in _entries(grants.get("mcp"))),
+        *(("capabilities", "capability", n, f"capabilities entry {at}")
+          for at, n in _entries(grants.get("capabilities"))),
+    ]  # fmt: skip
     if grants.get("tier") is not None:
-        wanted.append(("tiers", "tier", str(grants["tier"])))
-    for kind, label, name in wanted:
+        wanted.append(("tiers", "tier", str(grants["tier"]), "its tier"))
+    for kind, label, name, at in wanted:
         got = classes.classify(kind, name)
         if got is None:
             problems.append(
-                f"{who} reads untrusted content but holds {label} {name!r}, which is not "
-                f"classified in {classes.source} (unknown is refused for a reader)"
+                f"{who} reads untrusted content but holds an unknown {label} ({at}), which is "
+                f"not classified in {classes.source} (unknown is refused for a reader)"
             )
             continue
         bad = sorted(set(got) & classes.reader_forbidden)
@@ -342,11 +353,31 @@ def doc_notes(doc: Mapping[str, Any], classes: ToolClasses | None = None) -> lis
 
 
 def _names(raw: Any) -> list[str]:
+    return [n for _, n in _entries(raw)]
+
+
+def _entries(raw: Any) -> list[tuple[int, str]]:
+    """``(position, name)`` of each distinct name of a grant list, by name; the position (from
+    1, the first occurrence) is how a message points at a name it may not quote."""
     if raw is None:
         return []
     if isinstance(raw, str) or not isinstance(raw, Iterable):
-        return [str(raw)]
-    return sorted({str(x) for x in raw})
+        return [(1, str(raw))]
+    first: dict[str, int] = {}
+    for i, x in enumerate(raw, 1):
+        first.setdefault(str(x), i)
+    return sorted(((i, n) for n, i in first.items()), key=lambda e: e[1])
+
+
+def _shown(who: str) -> str:
+    """A profile or manifest label as a message may print it: ``profile``/``manifest`` with an id
+    that is an id (:data:`_ID`), else the kind alone (the id is not a name, so not quoted)."""
+    from homelabnext.mcp.credentials import looks_secret
+
+    kind, _, ident = who.rpartition(" ")
+    if _ID.fullmatch(ident) and len(ident) <= 80 and not looks_secret(ident.split(":")[-1]):
+        return who
+    return f"{kind or 'a profile'} whose id is not an id"
 
 
 # ---------------------------------------------------------------- repository lint
@@ -429,7 +460,9 @@ def lint_paths(
                 docs = [json.loads(text)] if f.suffix == ".json" else list(yaml.safe_load_all(text))
             except (OSError, ValueError, yaml.YAMLError) as exc:
                 if root.is_file():
-                    problems.append((str(f), f"cannot parse: {exc}"))
+                    from homelabnext.mcp.credentials import reason
+
+                    problems.append((str(f), f"cannot parse: {reason(exc)}"))
                 continue
             for doc in docs:
                 kind = _kind(doc)
