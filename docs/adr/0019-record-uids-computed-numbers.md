@@ -56,8 +56,8 @@ allocated, and allocation is the problem:
    mark, the `register-ids-resolve` hook, `make ids-resolve` and `make ids-placeholders` are
    gone. `check-lost` stays, keyed by uid (a uid that disappears between commits is a lost
    record), and `check-dupes` refuses a uid twice or a record not named for it; `check-uids`
-   refuses a record without one. The invariants register keeps its keys: they are the
-   checklist's row ids, chosen to match a row, never allocated.
+   refuses a record without one. The invariants register and the generated docs pages keep
+   their own keys; see Scope.
 7. Migration is one idempotent command, `hnx records assign-uids TREE... [--also PATH...]`: it
    gives each numbered record a uid (in code order, so an unchanged register shows the numbers it
    had), rewrites every reference, renames the files and sidecars, appends a `rekey` event where
@@ -74,6 +74,49 @@ allocated, and allocation is the problem:
 8. Schemas: requiring `uid` is breaking, so the strategy record schemas, `lesson` and `runbook`
    are major-bumped to 2.0 (frozen baselines of 1.0 stay, and the migration reads 1.x records);
    the records note (1.4), the register event (1.3) and the doctrine (1.1) widen additively.
+
+### Scope
+
+The decision covers the families whose key was an **allocated number**: the two problems it
+solves (merge races at allocation, renumbering on insert or re-parent) exist only where a key is
+handed out by position. Three other families have stable keys that are not numbers in that
+sense, and keep them deliberately. `tests/identity/test_uid_scope.py` holds this table to the code:
+a register keyed by anything but `uid` must be listed here, and every listed key must stay
+outside the legacy-code pattern the migration rewrites.
+
+| Family | Key | Moves to uids |
+|---|---|---|
+| lessons, runbooks (`lesson`, `runbook`) | `uid` | yes (migrated) |
+| strategy records (SO OO TO TT MOP MOE CCIR FFIR PIR RFI) | `uid` | yes (migrated) |
+| invariant criteria (`examples/registers/invariants.yml`) | checklist row id (`F-21`) | no |
+| system pages (`docs/systems/<service>.md`) | registry service name | no |
+| capability pages (`docs/capabilities/<capability>.md`) | capability name | no |
+
+**Invariant criteria keep their checklist row ids.** A criterion is not a record with an
+identity of its own: it is the executable form of one `docs/checklist.md` row, and its id *is*
+that row's id, so that "F-21 holds" means the same thing on the checklist, in the register, in
+`invariants.results.json`, in a script header's `invariant: [F-21]`, in a measure's
+`source: invariant:F-21`, in the changelog and in CI output. The id is written by the person
+who writes the row, in the row's pillar (`F` foundation, `Q` quality gates ...); it is never
+allocated by the tooling, never derived from a position, and there is no hierarchy to re-parent.
+A retired id is tombstoned (`retired:` with `replaced_by`), never reused or renumbered, so the
+id is as stable as a uid, and unlike a uid a reader can act on it. Moving criteria to uids would
+make every one of those citations an alias lookup, or leave the checklist and the register keyed
+differently, which is the drift the shared key exists to prevent. The cost accepted: two
+branches that each add a checklist row can pick the same id; `check-dupes` fails on it (fatal,
+like a uid twice), and the checklist is maintainer-edited, so the clash is resolved where the
+row is written.
+
+**System and capability pages keep their names.** A page is the operator view of one registry
+row (`examples/services.yml`) or one conformance capability, generated and checked 1:1 against
+it (`hnx docs systems check` and `hnx docs capabilities check` fail on a
+missing or orphan page). Its key is the registry's key,
+which inventory, network policy, secret-store names and the graph (`svc:<name>`) already use;
+nothing is numbered or allocated. A page uid would be a second identity for the same thing, to
+be kept in step with the row it mirrors. Renaming a service renames it everywhere, page
+included, and a page's reviews survive because they bind a content digest, not a file name.
+
+`hnx records assign-uids` refuses these families by name rather than reporting "no records".
 
 ## Consequences
 

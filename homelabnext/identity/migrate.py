@@ -29,6 +29,10 @@ with its reason and the successor's uid (``replaced_by``), and the file is remov
 citation of the code still resolves to the successor (:mod:`.aliases`), and ``check-lost``
 counts it as accounted for.
 
+The invariants register and the system and capability pages keep their own keys (checklist
+row ids; registry and capability names: ADR-0019, Scope): given one of them, the migration
+refuses it by name.
+
 Nothing is written until the whole migration has been computed and checked in memory: every
 record still parses, every link it holds resolves to a uid of the trees, every review current
 before is current after, and no record is lost.  Re-running is a no-op (a record with a uid is
@@ -132,9 +136,36 @@ def _record_dirs(tree: pathlib.Path) -> list[tuple[str, pathlib.Path]]:
     return [(k, tree / k) for k in (*REGISTER_DIRS, *STRATEGY_DIRS) if (tree / k).is_dir()]
 
 
+#: families that keep their own key (ADR-0019 "Scope"): what each is keyed by
+KEPT_KEYS = {
+    "invariants": "checklist row ids (docs/checklist.md)",
+    "system": "registry service names",
+    "capability": "capability names",
+}
+
+
+def _kept(tree: pathlib.Path) -> str | None:
+    """The family ``tree`` holds if ADR-0019 keeps its own key for it (the invariants register,
+    a directory of system or capability pages), else None."""
+    if tree.is_file():
+        return "invariants" if tree.stem.split(".")[0] == "invariants" else None
+    for p in sorted(tree.glob("*.md")) if tree.is_dir() else ():
+        fm = _front(p.read_text(encoding="utf-8")) or {}
+        if fm.get("type") in KEPT_KEYS:
+            return str(fm["type"])
+    return None
+
+
 def _read_tree(tree: pathlib.Path, problems: list[str]) -> list[Record]:
     if tree.name in (*REGISTER_DIRS, *STRATEGY_DIRS):
         problems.append(f"{tree}: pass the tree (its parent), not one record directory")
+        return []
+    kept = _kept(tree)
+    if kept:
+        problems.append(
+            f"{tree}: {kept} entries keep their own keys ({KEPT_KEYS[kept]}), not uids "
+            "(ADR-0019, Scope); there is nothing to migrate"
+        )
         return []
     out: list[Record] = []
     s = tree / "strategy.md"
