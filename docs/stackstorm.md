@@ -501,6 +501,11 @@ excerpt drifts from it):
 ```
 
 Who may *publish* each subject is the bound that makes a pinned `source` mean something.
+`<prefix>.homelabnext.agent.job.>` (`agent.job.failed`, pinned to `svc:llm-orchestrator`, which A02
+resubmits on) belongs to the orchestration controller's NATS user: grant it publish there and
+deny it to every other user, the bridge's and the broker's included, or anyone on the bus can make
+A02 resubmit a job of their choosing (bounded by `resubmits` and the controller's idempotency key,
+but theirs to trigger). The lab-in-a-box runs no controller, so nobody there may publish it.
 
 **The streams are provisioned, never created by the bridge.** It refuses to start unless the event
 stream and its dead-letter stream (`<stream>_DLQ`, which captures JetStream's max-deliveries and

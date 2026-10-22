@@ -1009,6 +1009,29 @@ def test_only_the_broker_may_publish_the_brokers_subjects(kind):
     assert not nats_allowed(broker, "publish", other)
 
 
+def test_nobody_but_the_controller_may_publish_agent_job_events():
+    """SEC6: agent.job.failed is what A02 resubmits on; only the orchestration controller's user
+    may publish it, and the lab runs no controller, so no lab user may."""
+    e2e = load_module("broker_e2e", LAB / "broker_e2e.py")
+    for kind in ("failed", "other"):
+        subject = f"{e2e.LAB_EVENTS_PREFIX}.homelabnext.agent.job.{kind}"
+        allowed = [n for n, u in nats_users().items()
+                   if u["account"] == "HNX" and nats_allowed(u, "publish", subject)]  # fmt: skip
+        assert allowed == [], subject
+
+
+def test_the_conformance_account_has_its_own_jetstream_limits():
+    """SEC7: CONFORM's scratch streams are bounded by account limits, below the server's store,
+    so leftovers of failed conformance runs cannot starve the HNX account."""
+    conf = parse_nats_conf(NATS_CONF.read_text())
+    server = conf["jetstream"]
+    limits = conf["accounts"]["CONFORM"]["jetstream"]
+    assert isinstance(limits, dict), "CONFORM's jetstream is 'enabled' with no limits"
+    assert 0 < limits["max_mem"] < server["max_memory_store"]
+    assert 0 < limits["max_file"] < server["max_file_store"]
+    assert limits["max_streams"] > 0 and limits["max_consumers"] > 0
+
+
 def test_no_user_may_purge_rewrite_or_read_another_users_inbox():
     e2e = load_module("broker_e2e", LAB / "broker_e2e.py")
     stream = e2e.LAB_EVENTS_STREAM
