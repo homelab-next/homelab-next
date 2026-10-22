@@ -32,7 +32,8 @@ GIT_PYPI = {"kind": "git", "ecosystem": "pypi", "repo": "https://code.example/or
 GIT_NPM = {**GIT_PYPI, "ecosystem": "npm"}
 FIRST = {"kind": "first-party", "path": "homelabnext/mcp/"}
 PREFIX = "/var/lib/hnx/npm-prefix"
-CTX = servers.LaunchContext(npm_prefix=PREFIX)
+CHECKOUT = "/opt/hnx/checkout"
+CTX = servers.LaunchContext(npm_prefix=PREFIX, checkout_root=CHECKOUT)
 
 
 def _rec(base: dict, origin: dict | None = None, **transport) -> dict:
@@ -71,7 +72,7 @@ GENERATED = [
      ["hnx", "mcp", "serve", "--scope-from-profile", "/p.json"]),
     (_rec(BROKER, FIRST, bin="hnx", entry="broker-mcp", args=["--socket=/run/b.sock"]),
      ["hnx", "broker", "mcp", "--socket=/run/b.sock"]),
-    (_rec(BROKER, FIRST, bin="homelabnext/mcp/run.py"), ["homelabnext/mcp/run.py"]),
+    (_rec(BROKER, FIRST, bin="homelabnext/mcp/run.py"), [f"{CHECKOUT}/homelabnext/mcp/run.py"]),
 ]  # fmt: skip
 
 
@@ -180,6 +181,31 @@ def test_every_hnx_entry_is_a_subcommand_that_serves_mcp_with_those_flags(capsys
     help_text = capsys.readouterr().out
     assert words == ("mcp", "serve") and "serve" in help_text
     assert all(f in help_text for f in flags)
+
+
+def test_a_first_party_path_bin_is_absolute_under_the_checkout_and_a_file_in_it(tmp_path):
+    """Round 4, F4: a relative path bin was resolved in the client's working directory and never
+    checked.  Render writes it absolute under ``checkout_root`` (required, absolute) and refuses
+    a path that is not a file there or is a symlink; check holds it to the checkout it runs in."""
+    from homelabnext.mcp import clients
+
+    rec = _rec(BROKER, FIRST, bin="homelabnext/mcp/run.py")
+    for ctx in (servers.LaunchContext(), servers.LaunchContext(checkout_root="checkout")):
+        with pytest.raises(ValueError, match="checkout_root"):
+            servers.launch(rec, ctx)
+    ctx = servers.LaunchContext(checkout_root=str(tmp_path))
+    with pytest.raises(clients.RenderError, match="not a file in the checkout"):
+        clients._launch(rec, "x", ctx)
+    (tmp_path / "homelabnext" / "mcp").mkdir(parents=True)
+    (tmp_path / "elsewhere.py").write_text("print('x')\n")
+    (tmp_path / "homelabnext" / "mcp" / "run.py").symlink_to(tmp_path / "elsewhere.py")
+    with pytest.raises(clients.RenderError, match="is a symlink"):
+        clients._launch(rec, "x", ctx)
+    (tmp_path / "homelabnext" / "mcp" / "run.py").unlink()
+    (tmp_path / "homelabnext" / "mcp" / "run.py").write_text("print('x')\n")
+    assert clients._launch(rec, "x", ctx) == (f"{tmp_path}/homelabnext/mcp/run.py", [])
+    assert servers.path_bin_problems(rec, "x", ROOT)  # not in this checkout: check says so
+    assert servers.path_bin_problems(_rec(BROKER, FIRST, bin="hnx"), "x", ROOT) == []
 
 
 def test_the_default_bin_is_the_single_declared_one_or_the_base_name_when_listed():

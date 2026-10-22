@@ -272,7 +272,7 @@ def _launch(
     """The generated launch (:func:`homelabnext.mcp.servers.launch`), anchored by ``ctx`` (the
     spec's ``npm_prefix`` and ``checkout_root``): never the record's."""
     try:
-        return servers.launch(record, ctx)
+        got = servers.launch(record, ctx)
     except ValueError as exc:
         raise RenderError(
             [
@@ -280,6 +280,12 @@ def _launch(
                 "--checkout-root)"
             ]
         ) from None
+    if ctx is not None and ctx.checkout_root:
+        # the absolute path the client runs: a file in the checkout, never through a symlink
+        bad = servers.path_bin_problems(record, sid, Path(ctx.checkout_root))
+        if bad:
+            raise RenderError([f"{b} (under checkout_root)" for b in bad])
+    return got
 
 
 def _env(inst: Instance, *, fixed_only: bool = False) -> dict[str, str]:

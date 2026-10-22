@@ -560,7 +560,8 @@ def launch(rec: Mapping[str, Any], ctx: LaunchContext | None = None) -> tuple[st
     * image: ``docker run -i --rm [-e NAME ...] <repository>@<digest>``, one ``-e`` per
       ``env``, ``settings`` and parameter ``env`` key, so the container gets exactly those;
     * first-party: ``hnx <entry's subcommand>`` (:data:`HNX_ENTRIES`), or a path under
-      ``origin.path``.
+      ``origin.path``, written absolute under ``ctx.checkout_root`` (a relative command would be
+      resolved in the client's working directory).
 
     ``ctx`` anchors the launch (:class:`LaunchContext`); an npm launch needs its ``npm_prefix``.
     Raises ValueError for a record :func:`launch_problems` (or the origin rules) refuse, or a
@@ -600,12 +601,37 @@ def launch(rec: Mapping[str, Any], ctx: LaunchContext | None = None) -> tuple[st
             raise ValueError("an hnx launch names an MCP-serving entry and only its flags")
         return HNX, list(HNX_ENTRIES[t["entry"]][0])
     if kind == "first-party" and bin_:
-        return str(bin_), []
+        bad = anchor_problem(ctx.checkout_root, "checkout_root")
+        if bad:
+            raise ValueError(f"a first-party path bin needs checkout_root: {bad}")
+        return f"{str(ctx.checkout_root).rstrip('/')}/{bin_}", []
     raise ValueError(f"{rec.get('id')}: a {kind} origin has no generated launch")
 
 
 #: a context any launch accepts, for naming the command alone (:func:`launch_command`)
 _ANY = LaunchContext(npm_prefix="/", checkout_root="/")
+
+
+def path_bin(rec: Mapping[str, Any]) -> str | None:
+    """A first-party record's path bin (relative to the checkout), or None (hnx, or not one)."""
+    origin, t = rec.get("origin") or {}, rec.get("transport") or {}
+    if origin.get("kind") == "first-party" and t.get("bin") not in (None, HNX):
+        return str(t["bin"])
+    return None
+
+
+def path_bin_problems(rec: Mapping[str, Any], where: str, root: Path | None) -> list[str]:
+    """A first-party path bin is a file in the checkout ``root`` (when there is one), not a
+    symlink and not outside it once resolved."""
+    rel = path_bin(rec)
+    if rel is None or root is None:
+        return []
+    f = Path(root) / rel
+    if f.is_symlink():
+        return [f"{where}: first-party bin {rel} is a symlink (it runs what the link names)"]
+    if not f.is_file() or not f.resolve().is_relative_to(Path(root).resolve()):
+        return [f"{where}: first-party bin {rel} is not a file in the checkout"]
+    return []
 
 
 def launch_command(rec: Mapping[str, Any]) -> str | None:
@@ -1010,6 +1036,7 @@ def check(
             continue  # the semantic rules assume the shape
         out += origin_problems(rec.get("origin"), where, source_root, cat.root)
         out += launch_problems(rec, where)
+        out += path_bin_problems(rec, where, source_root)
         out += _tool_problems(rec, where, vocabulary)
         out += _egress_problems(rec, where)
         out += _secret_problems(rec, where)
