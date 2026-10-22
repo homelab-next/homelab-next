@@ -460,7 +460,9 @@ is the page's error, never read. Grants are never restated there (the schema ref
 and the broker manifests, so the page cannot disagree with what is enforced. A profile some file
 names without a roster entry, or a roster entry with no compiled profile, is listed with that
 gap. A session belongs to a profile when its `agent` is the profile id, its bare name or one of
-its `activity_names`.
+its `activity_names`. The page is public like the Agents page: its last session, state and
+runtimes come from `status.json`'s `agents.sessions`, the summary tier
+([section 6](#6-agent-activity-stage-1b)), never the detail tier the private pages show.
 
 ### Pages
 
