@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Q-08: the fix_has_test gate -- a fix commit without a test file fails, waivers are listed,
-and --prove catches a regression test that passes without the fix."""
+and --prove catches a regression test that passes without the fix (pytest modules and Go
+packages, the latter on a fixture module when a Go toolchain is installed)."""
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +40,9 @@ def test_test_files():
     assert gate.test_files(files) == files[1:]
     assert gate.test_files(["conformance/dns/test_dns.py"]) == ["conformance/dns/test_dns.py"]
     assert gate.test_files(["docs/testing.md", "src/latest.py"]) == []
+    go = ["orchestrator/internal/queue/queue_test.go", "orchestrator/internal/queue/queue.go"]
+    assert gate.test_files(go) == go[:1]
+    assert gate.test_files(["orchestrator/go.mod", "orchestrator/testing.go"]) == []
 
 
 def test_check_classifies_commits():
@@ -113,3 +118,95 @@ def test_end_to_end_on_a_scratch_repository(tmp_path):
 
 def test_this_repository_passes():
     assert gate.main(["--range", "HEAD", "--allow-missing-base"]) == 0
+
+
+# --- Go: a fixture module in orchestrator/ --------------------------------------------------------
+
+GO_MOD = "module example.com/fixture\n\ngo 1.21\n"
+CALC = "package calc\n\nfunc Add(a, b int) int {{\n\treturn a {op} b\n}}\n"
+CALC_TEST = (
+    'package calc\n\nimport "testing"\n\n'
+    "func TestOther(t *testing.T) {{\n\tif Add(0, 0) != 0 {{\n\t\tt.Fatal(0)\n\t}}\n}}\n"
+    "{extra}"
+)
+TEST_ADD = "\nfunc TestAdd(t *testing.T) {\n\tif Add(2, 2) != 4 {\n\t\tt.Fatal(Add(2, 2))\n\t}\n}\n"
+TEST_TRUE = "\nfunc TestTrue(t *testing.T) {}\n"
+GO = "orchestrator/internal/calc/"
+
+
+def _go_repo(tmp_path):
+    r, commit = _repo(tmp_path)
+    base = commit(
+        "feat: calc",
+        **{
+            "orchestrator/go.mod": GO_MOD,
+            GO + "calc.go": CALC.format(op="-"),
+            GO + "calc_test.go": CALC_TEST.format(extra=""),
+        },
+    )
+    return r, commit, base
+
+
+needs_go = pytest.mark.skipif(shutil.which("go") is None, reason="go is not installed")
+
+
+@needs_go
+def test_go_fix_is_proved_by_its_changed_test_functions(tmp_path):
+    r, commit, base = _go_repo(tmp_path)
+    fix = commit(
+        "fix: add adds",
+        **{GO + "calc.go": CALC.format(op="+"), GO + "calc_test.go": CALC_TEST.format(extra=TEST_ADD)},
+    )  # fmt: skip
+    (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
+    assert gate.changed_go_tests(c, GO + "calc_test.go", cwd=r) == ["TestAdd"]
+    assert gate.prove(c, cwd=r) is None  # TestAdd fails on the parent: proven
+    assert gate.main(["--repo", str(r), "--range", f"{base}..{fix}", "--prove"]) == 0
+
+    # only TestTrue is new, and it passes without the fix (TestAdd is not re-run)
+    vacuous = commit(
+        "fix: comment only",
+        **{
+            GO + "calc.go": "// Package calc adds.\n" + CALC.format(op="+"),
+            GO + "calc_test.go": CALC_TEST.format(extra=TEST_ADD + TEST_TRUE),
+        },
+    )
+    (c,) = gate.commits_in(f"{fix}..{vacuous}", cwd=r)
+    assert gate.changed_go_tests(c, GO + "calc_test.go", cwd=r) == ["TestTrue"]
+    problem = gate.prove(c, cwd=r)
+    assert "passes WITHOUT the fix" in problem and "-run ^(TestTrue)$" in problem
+    assert gate.main(["--repo", str(r), "--range", f"{fix}..{vacuous}", "--prove"]) == 1
+
+
+@needs_go
+def test_go_test_that_does_not_build_without_the_fix_counts_as_failing(tmp_path):
+    r, commit, base = _go_repo(tmp_path)
+    test_sub = "\nfunc TestSub(t *testing.T) {\n\tif Sub(3, 1) != 2 {\n\t\tt.Fatal(1)\n\t}\n}\n"
+    fix = commit(
+        "fix: calc subtracts too",
+        **{
+            GO + "calc.go": CALC.format(op="-") + "\nfunc Sub(a, b int) int { return a - b }\n",
+            GO + "sub_test.go": 'package calc\n\nimport "testing"\n' + test_sub,
+        },
+    )
+    (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
+    assert gate.prove(c, cwd=r) is None
+
+
+def test_go_fix_without_a_go_toolchain_cannot_be_proved(tmp_path):
+    r, commit, base = _go_repo(tmp_path)
+    fix = commit(
+        "fix: add adds",
+        **{GO + "calc.go": CALC.format(op="+"), GO + "calc_test.go": CALC_TEST.format(extra=TEST_ADD)},
+    )  # fmt: skip
+    (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
+    problem = gate.prove(c, cwd=r, go="go-toolchain-that-is-not-there")
+    assert problem is not None and "cannot prove its Go tests: no Go toolchain" in problem
+
+
+@needs_go
+def test_go_test_outside_a_module_cannot_be_proved(tmp_path):
+    r, commit = _repo(tmp_path)
+    base = commit("feat: loose", **{"loose/x.go": "package loose\n"})
+    fix = commit("fix: loose", **{"loose/x_test.go": "package loose\n"})
+    (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
+    assert "is in no Go module on the parent" in gate.prove(c, cwd=r)
