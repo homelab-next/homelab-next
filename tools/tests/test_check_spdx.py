@@ -53,3 +53,19 @@ def test_repo_tracked_files_all_have_header(monkeypatch):
     root = Path(__file__).resolve().parents[2]
     monkeypatch.chdir(root)
     assert check_spdx.main([]) == 0
+
+
+def test_go_sources_need_the_header_but_go_mod_and_go_sum_do_not(tmp_path: Path, monkeypatch):
+    src = tmp_path / "orchestrator" / "internal" / "queue" / "queue.go"
+    src.parent.mkdir(parents=True)
+    src.write_text("//go:build linux\n\npackage queue\n")
+    assert check_spdx.main([str(src)]) == 1
+    # line 1 above the build constraint: legal Go, and within the first five lines
+    src.write_text("// SPDX-License-Identifier: Apache-2.0\n//go:build linux\n\npackage queue\n")
+    assert check_spdx.main([str(src)]) == 0
+    for name in ("go.mod", "go.sum"):
+        (tmp_path / "orchestrator" / name).write_text("module example.com/x\n")
+    (src.parent / "queue_test.go").write_text("package queue\n")
+    monkeypatch.chdir(tmp_path)  # not a git work tree: the directory walk is the file list
+    assert [p.as_posix() for p in check_spdx.collect([]) if p.suffix != ".go"] == []
+    assert check_spdx.main([]) == 1  # the test file has no header

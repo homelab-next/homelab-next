@@ -14,7 +14,9 @@
 #     "1": some file does not
 """Fail if a source or config file lacks an SPDX-License-Identifier header in its first 5 lines.
 
-Checked: ``*.py``, ``*.sh``, ``*.yml``, ``*.yaml``, ``*.toml``.  With no arguments the file list is
+Checked: ``*.py``, ``*.sh``, ``*.yml``, ``*.yaml``, ``*.toml`` and ``*.go`` (a Go file puts
+``// SPDX-License-Identifier: Apache-2.0`` on line 1, above any ``//go:build`` line; ``go.mod`` and
+``go.sum`` are tool-written and not checked).  With no arguments the file list is
 ``git ls-files`` (falling back to a directory walk outside a work tree).  Two escape hatches,
 both reviewed in this file rather than spread through the tree:
 
@@ -34,7 +36,7 @@ from pathlib import Path
 
 HEADER = "SPDX-License-Identifier: Apache-2.0"
 ANY_HEADER = re.compile(r"SPDX-License-Identifier:\s*\S")
-SUFFIXES = {".py", ".sh", ".yml", ".yaml", ".toml"}
+SUFFIXES = {".py", ".sh", ".yml", ".yaml", ".toml", ".go"}
 SKIP_DIRS = {".git", ".venv", "venv", "build", "dist", "__pycache__", "node_modules"}
 GENERATED = (
     "*/golden/*",
