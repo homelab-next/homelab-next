@@ -33,6 +33,10 @@ uncalled:
     a template for the private overlay repository (examples/private-overlay/): Ansible runs it
     there as the vault password client its ansible.cfg names; nothing in this repository runs a
     deploy
+  lab-postgres-litellm-role: >-
+    the postgres image's own entrypoint runs every *.sh in /docker-entrypoint-initdb.d, which the
+    lab's postgres service mounts from compose/lab-in-a-box/config/postgres/init, once on a fresh
+    volume; the scanner reads only a service's command and entrypoint, not a mounted init dir
 
 # checks that no invariants criterion runs
 not_in_runner:

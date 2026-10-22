@@ -437,10 +437,39 @@ def test_compressed_ipv6_negatives(text: str):
         "password = os.environ['DB_PASSWORD']",
         "secret: required-option",
         '{"password": "ALL=(ALL) ALL", "nopasswd": "ALL=(ALL) NOPASSWD:ALL"}',
+        "master_key: secret:llm-gateway/master-key",
+        'make(throttle_key="secret:llm-gateway/key-conformance-throttle")',
+        "input_cost_per_token: 2.0e-06",
+        "a key in `secret:llm-gateway/key-reader` (Markdown)",
+        "key: secret:llm-gateway/key.private",
+        "front_door: secret:status/front-door-secret2",
+        "cost_per_token: 0.000002",
+        "rate: 1.5e-3",
+        '{secret: "secret:<name>", header?: <name>}',
     ],
 )
 def test_keyed_secret_negatives(text: str):
     assert "keyed-secret" not in {h.pattern for h in leak_scan.scan_text(text, "t")}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "master_key: secret:" + "Zq8vLx2mPw4tKr",  # no store path: a value, not a reference
+        "master_key: secret:" + "zq8v/Lx2mPw4tKr",  # upper case: not a store name
+        "tok" + "en: 2.0e-06xKq9",  # starts like a number, is not one
+        # a store path whose segments are random or hex: a value wearing the secret: prefix
+        "secret:" + "hx7k2mq9wz4p/r8tv3n6yb1cd",
+        "sec" + "ret:llm-gateway/9f86d081884c7d65" + "9a2feaa0c55ad015",
+        "master_key: secret:" + "hx7k2mq9wz4p/r8tv3n6yb1cd",
+        'key = "sec' + "ret:llm-gateway/9f86d081884c7d65" + '9a2feaa0c55ad015"',
+        # a long mantissa carries as many digits as a numeric secret
+        "tok" + "en: 1.23456789e+99",
+        "tok" + "en: -4.2424242e-7",
+    ],
+)
+def test_keyed_secret_reference_and_number_exemptions_stay_narrow(text: str):
+    assert "keyed-secret" in {h.pattern for h in leak_scan.scan_text(text, "t")}
 
 
 def test_hex_only_flagged_next_to_a_credential_word():

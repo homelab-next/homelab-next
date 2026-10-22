@@ -13,7 +13,7 @@ generated_by: hnx docs capabilities generate
 **OpenAI-compatible /v1 chat, streaming and embeddings behind a role alias.**
 
 - Contract: [`conformance.protocols.inference`](../../conformance/protocols/inference.py) (`conformance.protocols.inference:InferenceClient`)
-- Conformance suite: [`conformance.suites.inference`](../../conformance/suites/inference.py) (9 checks: 7 MUST, 2 SHOULD)
+- Conformance suite: [`conformance.suites.inference`](../../conformance/suites/inference.py) (12 checks: 10 MUST, 2 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -27,7 +27,13 @@ Subject = `homelabnext.conform.adapters.openai_compat.OpenAICompat`-shaped clien
     chat_stream(model, messages, *, max_tokens) -> Iterator[str]     feature `streaming`
     embed(model, texts) -> list[list[float]]                         feature `embeddings`
 
-Errors are `InferenceError` with `.status` set for HTTP errors.  The target config says
+A model *gateway* in front of the backends (LiteLLM, Bifrost; docs/llm-gateway.md) declares the
+feature `gateway` and adds `GatewayClient`'s three methods, so the suite can prove what
+the gateway is for: a bad key is a clean 401, a configured limit is a 429, and `/v1/models` is
+exactly the declared role aliases.
+
+Errors are `InferenceError` with `.status` set for HTTP errors (and `.detail`, the
+server's own message).  The target config says
 which model to probe (`model`); by default the first model `models()` lists.
 
 ## How to use it
@@ -99,6 +105,115 @@ def embed(model: str, texts: Sequence[str]) -> list[list[float]]
 
 **Returns:** `list[list[float]]`
 
+### `GatewayClient` (Protocol)
+
+Defined in [`conformance.protocols.inference`](../../conformance/protocols/inference.py).
+
+Feature `gateway`: an inference endpoint that is a gateway with keys and limits.
+
+#### `GatewayClient.declared_models`
+
+```python
+def declared_models() -> list[str]
+```
+
+**Returns:** `list[str]`
+
+The model names the gateway is configured to serve (the role aliases).
+
+#### `GatewayClient.with_key`
+
+```python
+def with_key(token: str | None) -> InferenceClient
+```
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `token` | `str \| None` | required | positional or keyword |
+
+**Returns:** `InferenceClient`
+
+The same endpoint called with `token` as the bearer key (`None`: no key at all).
+
+#### `GatewayClient.throttled`
+
+```python
+def throttled() -> tuple[InferenceClient, str, int]
+```
+
+**Returns:** `tuple[InferenceClient, str, int]`
+
+`(client, model, n)`: calls by `client` to `model` are limited to `n` per window.
+
+#### `GatewayClient.models`
+
+```python
+def models() -> list[str]
+```
+
+Inherited from `InferenceClient`.
+
+**Returns:** `list[str]`
+
+#### `GatewayClient.chat`
+
+```python
+def chat(
+    model: str,
+    messages: Sequence[dict[str, str]],
+    *,
+    max_tokens: int = 64,
+    temperature: float = 0.0,
+) -> ChatResult
+```
+
+Inherited from `InferenceClient`.
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `model` | `str` | required | positional or keyword |
+| `messages` | `Sequence[dict[str, str]]` | required | positional or keyword |
+| `max_tokens` | `int` | `64` | keyword-only |
+| `temperature` | `float` | `0.0` | keyword-only |
+
+**Returns:** `ChatResult`
+
+#### `GatewayClient.chat_stream`
+
+```python
+def chat_stream(
+    model: str,
+    messages: Sequence[dict[str, str]],
+    *,
+    max_tokens: int = 64,
+) -> Iterator[str]
+```
+
+Inherited from `InferenceClient`.
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `model` | `str` | required | positional or keyword |
+| `messages` | `Sequence[dict[str, str]]` | required | positional or keyword |
+| `max_tokens` | `int` | `64` | keyword-only |
+
+**Returns:** `Iterator[str]`
+
+#### `GatewayClient.embed`
+
+```python
+def embed(model: str, texts: Sequence[str]) -> list[list[float]]
+```
+
+Inherited from `InferenceClient`.
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `model` | `str` | required | positional or keyword |
+| `texts` | `Sequence[str]` | required | positional or keyword |
+
+**Returns:** `list[list[float]]`
+
 ## Data shapes in and out
 
 ### `ChatResult` (dataclass, frozen)
@@ -141,12 +256,16 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `stream-matches-completion` | SHOULD | streamed pieces add up to the non-streamed text | `streaming` |
 | `embeddings-fixed-dimension` | MUST | every embedding has the same length | `embeddings` |
 | `embeddings-deterministic-and-distinct` | MUST | same text same vector; different text different vector | `embeddings` |
+| `gateway-rejects-bad-key` | MUST | a chat call with a wrong key and with no key is each a 401 that says so, never a 5xx or a store error | `gateway` |
+| `gateway-limit-throttles` | MUST | on a key limited to n requests, the first n chat calls are served and call n+1 is a 429 | `gateway` |
+| `gateway-models-match-roles` | MUST | /v1/models lists exactly the declared role aliases (no backend ids, no extras) | `gateway` |
 
 ### Features an adapter may declare
 
 | Feature | Kind | Checks that need it |
 |---|---|---|
 | `embeddings` | product feature (checks skip without it) | `embeddings-fixed-dimension`, `embeddings-deterministic-and-distinct` |
+| `gateway` | product feature (checks skip without it) | `gateway-rejects-bad-key`, `gateway-limit-throttles`, `gateway-models-match-roles` |
 | `streaming` | product feature (checks skip without it) | `stream-matches-completion` |
 
 ### Defects the suite is proven to catch
@@ -163,9 +282,73 @@ Each is a deliberately broken fake (`hnx conform run inference --target broken:<
 
 `FakeInferenceClient` in [`conformance.fakes.inference_target`](../../conformance/fakes/inference_target.py): `hnx conform run inference` (the default target `fake`) runs the suite against it.
 
-> An `OpenAICompat` wired to a private fake server (stopped by `close`).
+> An `OpenAICompat` wired to a private fake server in gateway mode (keys and a throttled key), so the `gateway` checks run against it too; stopped by `close`.
 
 ### Real-product adapters
+
+#### [`homelabnext.conform.adapters.llm_gateway:make`](../../homelabnext/conform/adapters/llm_gateway.py)
+
+The `inference` contract through an LLM gateway (LiteLLM proxy or Bifrost), stdlib HTTP.
+
+- Target file: [`compose/lab-in-a-box/targets/inference-gateway-bifrost.yml`](../../compose/lab-in-a-box/targets/inference-gateway-bifrost.yml) (target `lab-inference-gateway-bifrost`)
+- Factory: `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False) -> GatewayTarget`
+- Config in the target: `{roles: schemas/platform/examples/model_roles.valid.json, model: fast-classifier, capability: llm-gateway-bifrost, throttle_key: 'secret:llm-gateway/key-conformance-throttle', throttle_model: fast-classifier, throttle_requests: 3}`
+- Features declared: `streaming`, `embeddings`, `gateway`
+
+<details><summary>Full adapter notes</summary>
+
+The `inference` contract through an LLM gateway (LiteLLM proxy or Bifrost), stdlib HTTP.
+
+`make(**config)` returns a `GatewayTarget`: the library's own
+`~homelabnext.conform.adapters.openai_compat.OpenAICompat` client on the gateway endpoint
+(`HNX_ENDPOINT_<CAPABILITY>`, default `HNX_ENDPOINT_LLM_GATEWAY`), calling with the gateway's
+admin key, plus the three methods of feature `gateway`
+(`conformance.protocols.inference.GatewayClient`):
+
+* `declared_models()` - the role aliases of the role table the gateway config was generated from
+  (`roles`, a path relative to the checkout), so `/v1/models` is compared with the source of
+  truth rather than with itself;
+* `with_key(token)` - the same endpoint with another bearer key, or none;
+* `throttled()` - a client on the key that the generated config limits (`throttle_key`,
+  `throttle_model`, `throttle_requests`: the lab's `conformance-throttle` key).
+
+Keys are `secret:` references, read from `HNX_SECRET_<NAME>` at every call (never held).
+Nothing here is product specific: the same target file shape serves LiteLLM and Bifrost, so a
+gateway swap is a target file plus this suite (docs/llm-gateway.md).
+
+</details>
+
+#### [`homelabnext.conform.adapters.llm_gateway:make`](../../homelabnext/conform/adapters/llm_gateway.py)
+
+The `inference` contract through an LLM gateway (LiteLLM proxy or Bifrost), stdlib HTTP.
+
+- Target file: [`compose/lab-in-a-box/targets/inference-gateway.yml`](../../compose/lab-in-a-box/targets/inference-gateway.yml) (target `lab-inference-gateway`)
+- Factory: `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False) -> GatewayTarget`
+- Config in the target: `{roles: schemas/platform/examples/model_roles.valid.json, model: fast-classifier, capability: llm-gateway, throttle_key: 'secret:llm-gateway/key-conformance-throttle', throttle_model: fast-classifier, throttle_requests: 3}`
+- Features declared: `streaming`, `embeddings`, `gateway`
+
+<details><summary>Full adapter notes</summary>
+
+The `inference` contract through an LLM gateway (LiteLLM proxy or Bifrost), stdlib HTTP.
+
+`make(**config)` returns a `GatewayTarget`: the library's own
+`~homelabnext.conform.adapters.openai_compat.OpenAICompat` client on the gateway endpoint
+(`HNX_ENDPOINT_<CAPABILITY>`, default `HNX_ENDPOINT_LLM_GATEWAY`), calling with the gateway's
+admin key, plus the three methods of feature `gateway`
+(`conformance.protocols.inference.GatewayClient`):
+
+* `declared_models()` - the role aliases of the role table the gateway config was generated from
+  (`roles`, a path relative to the checkout), so `/v1/models` is compared with the source of
+  truth rather than with itself;
+* `with_key(token)` - the same endpoint with another bearer key, or none;
+* `throttled()` - a client on the key that the generated config limits (`throttle_key`,
+  `throttle_model`, `throttle_requests`: the lab's `conformance-throttle` key).
+
+Keys are `secret:` references, read from `HNX_SECRET_<NAME>` at every call (never held).
+Nothing here is product specific: the same target file shape serves LiteLLM and Bifrost, so a
+gateway swap is a target file plus this suite (docs/llm-gateway.md).
+
+</details>
 
 #### [`homelabnext.conform.adapters.openai_compat:OpenAICompat`](../../homelabnext/conform/adapters/openai_compat.py)
 
@@ -214,7 +397,7 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
    def make(**config) -> InferenceClient: ...
    ```
 
-   The factory this repository ships: `homelabnext.conform.adapters.openai_compat:OpenAICompat` is `OpenAICompat(base_url: str, *, auth: Callable[[], str | None] | None=None, timeout: float=10.0, features: Sequence[str]=('embeddings', 'streaming'), allow_plaintext: bool=False, max_bytes: int=16 * DEFAULT_MAX_BYTES)`.
+   The factory this repository ships: `homelabnext.conform.adapters.llm_gateway:make` is `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False) -> GatewayTarget`.
 
 3. **Describe the target** (YAML; `features` lists only what the product really offers; `waive:` takes SHOULD check ids with a reason, never a MUST):
 
@@ -226,6 +409,7 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
        config: {}
        features:
        - embeddings
+       - gateway
        - streaming
    ```
 
@@ -236,4 +420,4 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
    hnx conform run inference --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (7) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (10) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.

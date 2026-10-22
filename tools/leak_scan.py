@@ -277,6 +277,42 @@ REFERENCE_RE = re.compile(
     r"^(?:\$|\{|\[|\(|<|%\(|\*{3}|\.{3}|!vault|lookup\(|/|\./|~/|[a-z][a-z0-9+.-]*:)"
     r"|^[A-Z][A-Z0-9_]+$|^[\d.]+$"
 )
+# A secret-store reference (``secret:<area>/<name>``), written bare or as a keyed value.  The
+# keyed pattern takes the reference's own scheme word as the key when it is bare.  A lower-case
+# store name with an area path is a name to look up, never the value - but only when every
+# segment reads as words: a random-looking or hex segment after the prefix is a value wearing a
+# ``secret:`` prefix, and stays a finding (tools/tests/test_leak_scan.py has the examples).
+SECRET_STORE_REF_RE = re.compile(r"^secret:[a-z0-9][a-z0-9_.-]*(?:/[a-z0-9][a-z0-9_.-]*)+`?$")
+# one word of a store-reference segment: letters with at most a 2-digit suffix (key2, v1, s3)
+STORE_WORD_RE = re.compile(r"[a-z]+\d{0,2}|\d{1,2}")
+# A number, scientific notation included (a per-token cost such as 2e-6), is not a credential -
+# when its mantissa is short: ``1.23456789e+99`` carries as many digits as a PIN-sized secret.
+NUMBER_RE = re.compile(r"^[+-]?(?P<int>\d+)(?:\.(?P<frac>\d+))?(?:[eE][+-]?\d{1,3})?$")
+NUMBER_MAX_DIGITS = 6
+# a keyed value that is a concrete store reference (not a ``secret:<name>`` template or a path)
+SECRET_VALUE_RE = re.compile(r"^secret:[A-Za-z0-9][A-Za-z0-9/_.-]*`?$")
+
+
+def _is_store_ref(text: str) -> bool:
+    """A word-like ``secret:<area>/<name>`` reference (see SECRET_STORE_REF_RE)."""
+    if not SECRET_STORE_REF_RE.match(text):
+        return False
+    for part in re.split(r"[/_.-]", text.removeprefix("secret:").rstrip("`")):
+        if not part:
+            continue
+        if not STORE_WORD_RE.fullmatch(part) or (len(part) >= 8 and _entropy(part) >= 3.5):
+            return False
+    return True
+
+
+def _is_short_number(value: str) -> bool:
+    m = NUMBER_RE.match(value)
+    if not m:
+        return False
+    digits = (m.group("int") + (m.group("frac") or "")).lstrip("0").rstrip("0")
+    return len(digits) <= NUMBER_MAX_DIGITS
+
+
 # Classic stand-in values (and values that name their own key) read as placeholders.
 KEYED_PLACEHOLDER_RE = re.compile(r"(?i)secret|passw|token|hunter2|abc123|letmein|qwerty|123456")
 
@@ -284,6 +320,10 @@ KEYED_PLACEHOLDER_RE = re.compile(r"(?i)secret|passw|token|hunter2|abc123|letmei
 def _is_hit_keyed_value(m: re.Match[str], _line: str) -> bool:
     value = m.group("val")
     quoted = bool(m.group("q"))
+    if _is_store_ref(m.group(0)) or _is_short_number(value):
+        return False
+    if SECRET_VALUE_RE.match(value):  # a store reference as the value: word-like, or a finding
+        return not _is_store_ref(value)
     if REFERENCE_RE.match(value) or PLACEHOLDER_RE.search(value):
         return False
     if KEYED_PLACEHOLDER_RE.search(value):

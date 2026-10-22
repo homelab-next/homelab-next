@@ -25,7 +25,7 @@ LAB = ROOT / "compose" / "lab-in-a-box"
 COMPOSE = LAB / "docker-compose.yml"
 ENV_EXAMPLE = LAB / ".env.example"
 WORKFLOW = ROOT / ".github" / "workflows" / "nightly.yml"
-ONE_SHOT = {"catalog-migrate", "lab-init"}  # run to completion; health is their exit code
+ONE_SHOT = {"catalog-migrate", "lab-init", "llm-gateway-keys"}  # health is their exit code
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow test servers bind loopback only
 RAM_BUDGET_MB = 3584  # 4 GB runner minus headroom for the OS and the docker daemon
 STATUS_FIXTURES = ROOT / "tests" / "status" / "fixtures"
@@ -100,11 +100,16 @@ def test_dockerfile_base_is_pinned_by_digest():
             assert re.search(r"@sha256:[0-9a-f]{64}$", line), (dockerfile, line)
 
 
-def mem_total(compose) -> int:
+def mem_total(compose, profiled: bool = False) -> int:
+    """The mem_limit sum of the default stack, or (``profiled``) of the optional profiles.
+
+    A service under ``profiles:`` is not started by ``docker compose up`` (or smoke.sh, or the
+    nightly), so it does not count against the 4 GB default budget; it has its own total."""
     total = 0
     for name, svc in compose["services"].items():
         assert "mem_limit" in svc, f"{name} has no mem_limit"
-        total += mem_mb(svc["mem_limit"])
+        if bool(svc.get("profiles")) == profiled:
+            total += mem_mb(svc["mem_limit"])
     return total
 
 
@@ -121,6 +126,128 @@ def test_the_documented_memory_total_is_the_real_one(compose):
     broken = json.loads(json.dumps(compose))
     broken["services"]["metrics"]["mem_limit"] = "1g"  # what a silent bump would look like
     assert mem_total(broken) != int(stated[1])
+
+
+GATEWAY_PROFILES = {"gateway", "gateway-bifrost"}
+
+
+def test_only_the_gateway_services_are_optional(compose):
+    # a profile is how a service leaves the default budget: only the documented ones may
+    profiled = {n: set(s["profiles"]) for n, s in compose["services"].items() if s.get("profiles")}
+    assert profiled, "the gateway profiles are gone"
+    for name, profiles in profiled.items():
+        assert profiles <= GATEWAY_PROFILES, f"{name}: undocumented profile(s) {profiles}"
+        assert name.startswith("llm-gateway"), f"{name} left the default budget via a profile"
+
+
+def test_the_documented_gateway_memory_total_is_the_real_one(compose):
+    stated = re.search(r"gateway profiles' mem_limit values sum to (\d+) MB", COMPOSE.read_text())
+    assert stated, "docker-compose.yml no longer states the gateway profiles' memory total"
+    assert int(stated[1]) == mem_total(compose, profiled=True)
+
+
+GATEWAY_DOC = ROOT / "docs" / "llm-gateway.md"
+RUNNER_MB = 4096  # the 4 GB runner the gateway-only path is documented to fit
+
+
+def started(compose, names) -> set[str]:
+    """What `docker compose up NAMES` starts: the named services and their depends_on closure."""
+    todo, seen = list(names), set()
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        deps = compose["services"][name].get("depends_on") or {}
+        todo += list(deps if isinstance(deps, dict | list) else [])
+    return seen
+
+
+def documented_gateway_path() -> tuple[list[str], int]:
+    text = GATEWAY_DOC.read_text()
+    up = re.search(r"--profile gateway up -d --build --wait ([\w -]+)\n", text)
+    total = re.search(r"what it depends on \(postgres, the fake inference\): (\d+) MB", text)
+    assert up and total, "docs/llm-gateway.md no longer shows the gateway-only command and total"
+    return up[1].split(), int(total[1])
+
+
+def test_the_documented_gateway_only_path_fits_the_runner(compose):
+    names, stated = documented_gateway_path()
+    assert names == ["llm-gateway", "llm-gateway-keys"]
+    closure = started(compose, names)
+    assert closure == {"llm-gateway", "llm-gateway-keys", "postgres", "inference"}
+    total = sum(mem_mb(compose["services"][n]["mem_limit"]) for n in closure)
+    assert total == stated, f"docs say {stated} MB, the closure's mem_limit sum is {total} MB"
+    assert total <= RUNNER_MB
+
+
+def test_negative_a_new_gateway_dependency_is_counted(compose):
+    broken = json.loads(json.dumps(compose))
+    broken["services"]["llm-gateway"]["depends_on"]["lake-query"] = {"condition": "service_healthy"}
+    closure = started(broken, ["llm-gateway", "llm-gateway-keys"])
+    assert {"lake-query", "lab-init", "object-store"} <= closure  # pulled in transitively
+    _, stated = documented_gateway_path()
+    assert sum(mem_mb(broken["services"][n]["mem_limit"]) for n in closure) != stated
+
+
+def test_negative_an_unprofiled_service_counts_against_the_default_budget(compose):
+    # moving a gateway service out of its profile must show up in the 4 GB budget
+    broken = json.loads(json.dumps(compose))
+    del broken["services"]["llm-gateway"]["profiles"]
+    assert mem_total(broken) == mem_total(compose) + mem_mb(
+        compose["services"]["llm-gateway"]["mem_limit"]
+    )
+    assert mem_total(broken) > RAM_BUDGET_MB
+
+
+PG_INIT = LAB / "config" / "postgres" / "init" / "10-litellm.sh"
+
+
+def gateway_db_problems(compose, init_sql: str) -> list[str]:
+    """LiteLLM must reach postgres as its own role, owning only its own schema, never as ``lab``
+    (the superuser that owns the lake catalog's tables)."""
+    problems = []
+    url = compose["services"]["llm-gateway"]["environment"]["HNX_SECRET_LLM_GATEWAY_DATABASE_URL"]
+    m = re.match(r"postgresql://([^:]+):\$\{([A-Z_]+)[:?].*@[^/]+/catalog\?schema=(\w+)$", url)
+    if not m:
+        return [f"unexpected database URL shape: {url}"]
+    user, var, schema = m.groups()
+    if user != "litellm" or schema != "litellm":
+        problems.append(f"LiteLLM connects as {user!r} to schema {schema!r}, not litellm/litellm")
+    if var == "LAB_POSTGRES_PASSWORD":
+        problems.append("LiteLLM uses the lab superuser's password")
+    pg = compose["services"]["postgres"]
+    if var not in pg.get("environment", {}):
+        problems.append(f"postgres does not get {var}, so the init script cannot set it")
+    if "./config/postgres/init:/docker-entrypoint-initdb.d:ro" not in pg.get("volumes", []):
+        problems.append("postgres does not mount the init scripts")
+    for words in (
+        "CREATE ROLE litellm LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE",
+        "CREATE SCHEMA litellm AUTHORIZATION litellm",
+        "REVOKE CREATE ON SCHEMA public FROM litellm",
+        f'"${var}"',
+    ):
+        if words not in init_sql:
+            problems.append(f"the init script lacks {words!r}")
+    return problems
+
+
+def test_the_gateway_has_its_own_database_role(compose):
+    assert gateway_db_problems(compose, PG_INIT.read_text()) == []
+    assert PG_INIT.stat().st_mode & 0o111, "the postgres entrypoint runs only executable .sh files"
+
+
+def test_negative_the_gateway_on_the_lab_superuser_is_caught(compose):
+    broken = json.loads(json.dumps(compose))
+    env = broken["services"]["llm-gateway"]["environment"]
+    env["HNX_SECRET_LLM_GATEWAY_DATABASE_URL"] = (
+        "postgresql://lab:${LAB_POSTGRES_PASSWORD:?x}@postgres.svc.example.internal:5432"
+        "/catalog?schema=litellm"
+    )
+    problems = gateway_db_problems(broken, PG_INIT.read_text())
+    assert "LiteLLM connects as 'lab' to schema 'litellm', not litellm/litellm" in problems
+    assert "LiteLLM uses the lab superuser's password" in problems
+    assert gateway_db_problems(compose, "") != []  # an init script that creates nothing
 
 
 def test_trino_heap_is_tiny():
@@ -582,6 +709,13 @@ CREDENTIALS = (
     "LAB_UPTIME_PASSWORD",
     "LAB_HUB_FRONT_DOOR_SECRET",
     "LAB_BROKER_DEMO_TOKEN",
+    "LAB_GATEWAY_MASTER_KEY",
+    "LAB_GATEWAY_DB_PASSWORD",
+    "LAB_GATEWAY_SALT_KEY",
+    "LAB_GATEWAY_KEY_READER",
+    "LAB_GATEWAY_KEY_RESPONDER",
+    "LAB_GATEWAY_KEY_THROTTLE",
+    "LAB_GATEWAY_BIFROST_ADMIN_PASSWORD",
 )
 
 

@@ -11,6 +11,9 @@ from homelabnext.conform.adapters.openai_classifier import OpenAIClassifier
 from homelabnext.conform.adapters.openai_compat import ChatResult, OpenAICompat
 
 MODEL = "example-chat-4b"
+GATEWAY_KEY = "sk-fake-gateway-key-0000"
+THROTTLE_KEY = "sk-fake-throttle-key-0000"
+THROTTLE_N = 2
 
 
 def start_server(**kw) -> FakeOpenAIServer:
@@ -18,13 +21,29 @@ def start_server(**kw) -> FakeOpenAIServer:
 
 
 class FakeInferenceClient(OpenAICompat):
-    """An :class:`OpenAICompat` wired to a private fake server (stopped by ``close``)."""
+    """An :class:`OpenAICompat` wired to a private fake server in gateway mode (keys and a
+    throttled key), so the ``gateway`` checks run against it too; stopped by ``close``."""
 
     def __init__(self) -> None:
-        self.server = start_server()
-        super().__init__(self.server.url)
+        self.server = start_server(
+            api_keys=[GATEWAY_KEY, THROTTLE_KEY], key_limits={THROTTLE_KEY: THROTTLE_N}
+        )
+        super().__init__(
+            self.server.url,
+            auth=lambda: f"Bearer {GATEWAY_KEY}",
+            features=("embeddings", "streaming", "gateway"),
+        )
         self.model = MODEL
         self.closers.append(self.server.stop)
+
+    def declared_models(self) -> list[str]:
+        return [MODEL]
+
+    def with_key(self, token: str | None) -> OpenAICompat:
+        return OpenAICompat(self.server.url, auth=lambda: f"Bearer {token}" if token else None)
+
+    def throttled(self) -> tuple[OpenAICompat, str, int]:
+        return self.with_key(THROTTLE_KEY), MODEL, THROTTLE_N
 
 
 class WrongModelClient(FakeInferenceClient):

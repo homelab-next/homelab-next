@@ -1260,9 +1260,11 @@ def render_index(caps: list[Capability], registry: Registry | None) -> str:
     for c in caps:
         adapters = (
             ", ".join(
-                f"`{b.adapter.partition(':')[0].rsplit('.', 1)[-1]}`"
-                + (" (client)" if b.client_only else "")
-                for b in c.real_bindings
+                dict.fromkeys(  # one adapter behind several target files is listed once
+                    f"`{b.adapter.partition(':')[0].rsplit('.', 1)[-1]}`"
+                    + (" (client)" if b.client_only else "")
+                    for b in c.real_bindings
+                )
             )
             or "none yet"
         )

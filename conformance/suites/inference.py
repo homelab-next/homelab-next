@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import re
+
 from conformance.fakes.inference_target import FakeInferenceClient, WrongModelClient
 from conformance.protocols.inference import InferenceError
 from homelabnext.conform.core import Mutant, Suite
@@ -94,6 +96,75 @@ def _(c):
     a1, a2, b = c.embed(_model(c), ["alpha", "alpha", "beta"])
     assert a1 == a2, "same input gave different vectors"
     assert a1 != b, "different inputs gave the same vector"
+
+
+# --- feature ``gateway``: what a model gateway in front of the backends is for -----------------
+BAD_KEY = "sk-bf-fake-not-a-key-0000"  # sk-bf- so a gateway that wants that prefix still parses it
+#: an auth failure must read as one: these are the words of a gateway whose key store is missing
+#: (LiteLLM without Postgres answers "No connected db." with HTTP 400 to a wrong key)
+NOT_AUTH = re.compile(r"no connected db|database|prisma|\bdb\b|internal server error", re.I)
+
+
+CHAT = "/v1/chat/completions"
+
+
+def _auth_rejection(client, model, label):
+    """``client`` (another key, or none) asks for ``model`` - taken from the admin client, so the
+    refused call is the chat itself, not a ``/v1/models`` lookup that a gateway may guard while
+    serving chat to anyone."""
+    exc = raises(lambda: client.chat(model, PROMPT), label, InferenceError)
+    assert exc.status == 401, f"{label}: HTTP {exc.status} ({exc.detail[:120]!r}), expected 401"
+    assert exc.path == CHAT, f"{label}: the 401 came from {exc.path or '?'}, not {CHAT}"
+    assert not NOT_AUTH.search(exc.detail), f"{label}: 401 but the reason is {exc.detail[:120]!r}"
+
+
+@SUITE.check(
+    "gateway-rejects-bad-key",
+    "a chat call with a wrong key and with no key is each a 401 that says so, never a 5xx or a "
+    "store error",
+    requires=["gateway"],
+)
+def _(c):
+    model = _model(c)
+    _auth_rejection(c.with_key(BAD_KEY), model, "wrong key")
+    _auth_rejection(c.with_key(None), model, "no key")
+
+
+@SUITE.check(
+    "gateway-limit-throttles",
+    "on a key limited to n requests, the first n chat calls are served and call n+1 is a 429",
+    requires=["gateway"],
+)
+def _(c):
+    # The limit is per window (60 s on the lab's key): a rerun inside the window starts on a key
+    # that is already used up and fails on its first call.  Wait out the window before a rerun.
+    client, model, n = c.throttled()
+    statuses, other = [], []
+    for _ in range(n + 1):
+        try:
+            client.chat(model, PROMPT)
+            statuses.append(200)
+        except InferenceError as exc:
+            statuses.append(exc.status)
+            if exc.status != 429:
+                other.append(f"HTTP {exc.status} ({exc.detail[:120]!r})")
+    assert not other, f"{other[0]} while throttling: {statuses}"
+    assert statuses[:n] == [200] * n, (
+        f"calls 1..{n} on a key limited to {n} were not all served: {statuses} "
+        "(a rerun within the limit's window starts on a used-up key)"
+    )
+    assert statuses[n] == 429, f"call {n + 1} against a limit of {n} was served: {statuses}"
+
+
+@SUITE.check(
+    "gateway-models-match-roles",
+    "/v1/models lists exactly the declared role aliases (no backend ids, no extras)",
+    requires=["gateway"],
+)
+def _(c):
+    served, declared = sorted(c.models()), sorted(c.declared_models())
+    assert declared, "the target declares no models"
+    assert served == declared, f"/v1/models {served} != declared {declared}"
 
 
 def make_fake():

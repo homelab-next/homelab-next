@@ -5,7 +5,7 @@
 Every script in the tree, read from its `# hnx-script:` header. What counts as a script,
 the header fields and the checks that keep this page honest: [docs/scripts.md](../scripts.md).
 
-39 scripts: 19 check, 8 job, 2 service, 10 tool.
+40 scripts: 19 check, 9 job, 2 service, 10 tool.
 
 | id | path | kind | owner | purpose | triggers | invariant | exit codes |
 |---|---|---|---|---|---|---|---|
@@ -29,6 +29,7 @@ the header fields and the checks that keep this page honest: [docs/scripts.md](.
 | `lab-broker-e2e` | [`compose/lab-in-a-box/broker_e2e.py`](../../compose/lab-in-a-box/broker_e2e.py) | tool | lab-in-a-box | The broker end to end on real processes - socket peers, MCP agent, hub approval, audit. | `script:lab-smoke`; `compose:lab-in-a-box/status-hub` | - | 0 every step passed; 1 some step failed; 2 usage |
 | `lab-fake-cases` | [`compose/lab-in-a-box/fakes/fake_cases.py`](../../compose/lab-in-a-box/fakes/fake_cases.py) | service | lab-in-a-box | Serve an in-memory fake case system for the cases capability. | `compose:lab-in-a-box/cases` | - | 0 stopped cleanly |
 | `lab-init` | [`compose/lab-in-a-box/fakes/lab_init.py`](../../compose/lab-in-a-box/fakes/lab_init.py) | job | lab-in-a-box | Initialise the lab object store and Iceberg catalog once (idempotent). | `compose:lab-in-a-box/lab-init` | - | 0 ready; 1 a step failed or a variable is missing |
+| `lab-postgres-litellm-role` | [`compose/lab-in-a-box/config/postgres/init/10-litellm.sh`](../../compose/lab-in-a-box/config/postgres/init/10-litellm.sh) | job | lab-in-a-box | Create the LLM gateway's own postgres role, owning only schema litellm, on a fresh lab volume. | `manual` | - | 0 created; 1 the password is unset or the SQL failed (postgres initialisation stops) |
 | `lab-rehearsal-swap-lake-query` | [`compose/lab-in-a-box/rehearsals/swap-lake-query.sh`](../../compose/lab-in-a-box/rehearsals/swap-lake-query.sh) | tool | lab-in-a-box | Rehearse the lake-query swap on the lab-in-a-box (fake lake to Trino) and roll it back. | `manual` | - | 0 the swap ran to cutover, rolled back, and the record validates; 1 a step, the rollback or the record check failed; 2 usage, or the candidate lake could not be reached |
 | `lab-smoke` | [`compose/lab-in-a-box/smoke.sh`](../../compose/lab-in-a-box/smoke.sh) | tool | lab-in-a-box | Bring the lab-in-a-box up, check every service, run conformance where present, tear down. | `ci:nightly/lab-in-a-box`; `make:lab-smoke` | - | 0 all good; 1 a service or check failed; 2 usage; 3 docker or compose missing; 4 refused a non-loopback LAB_BIND |
 | `lab-smoke-checks` | [`compose/lab-in-a-box/smoke_checks.py`](../../compose/lab-in-a-box/smoke_checks.py) | tool | lab-in-a-box | One real round trip against every lab-in-a-box service, as a JSON report. | `script:lab-smoke` | - | 0 every check passed; 1 some check failed |

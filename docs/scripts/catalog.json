@@ -406,6 +406,24 @@
     },
     {
       "exit": {
+        "0": "created",
+        "1": "the password is unset or the SQL failed (postgres initialisation stops)"
+      },
+      "id": "lab-postgres-litellm-role",
+      "inputs": "POSTGRES_USER, POSTGRES_DB, LAB_GATEWAY_DB_PASSWORD (the postgres service environment)",
+      "kind": "job",
+      "language": "shell",
+      "outputs": "role litellm and schema litellm in the catalog database",
+      "owner": "lab-in-a-box",
+      "path": "compose/lab-in-a-box/config/postgres/init/10-litellm.sh",
+      "purpose": "Create the LLM gateway's own postgres role, owning only schema litellm, on a fresh lab volume.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
         "0": "the swap ran to cutover, rolled back, and the record validates",
         "1": "a step, the rollback or the record check failed",
         "2": "usage, or the candidate lake could not be reached"

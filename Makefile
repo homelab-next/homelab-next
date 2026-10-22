@@ -89,6 +89,18 @@ MODEL_EVAL := examples/model_roles.eval.json
 models-check:
 	$(PY) -m homelabnext.cli golden pins check --roles $(MODEL_ROLES) --report $(MODEL_EVAL)
 
+# the LLM gateway config (LiteLLM + Bifrost) is generated from the role table and the agent
+# profiles: no drift, and no local-only or agent role can reach a cloud model (docs/llm-gateway.md)
+GATEWAY_SPEC := compose/lab-in-a-box/config/llm-gateway/gateway.yml
+.PHONY: gateway-check gateway-render
+check: gateway-check
+gateway-check:
+	$(PY) -m homelabnext.cli gen gateway render $(GATEWAY_SPEC) $(dir $(GATEWAY_SPEC)) --check
+
+# after changing the role table, a profile or the gateway spec: regenerate and commit
+gateway-render:
+	$(PY) -m homelabnext.cli gen gateway render $(GATEWAY_SPEC) $(dir $(GATEWAY_SPEC))
+
 # after changing a pin, a golden suite or the replay inputs: regenerate the report and commit it
 models-report:
 	$(PY) -m homelabnext.cli golden pins report --roles $(MODEL_ROLES) --report $(MODEL_EVAL)

@@ -1,0 +1,39 @@
+{
+  "keys": [
+    {
+      "key_alias": "agent-reader",
+      "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_READER",
+      "models": [
+        "fast-classifier"
+      ],
+      "metadata": {
+        "owner": "profile:reader",
+        "data_tier": "local-only"
+      }
+    },
+    {
+      "key_alias": "agent-responder",
+      "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_RESPONDER",
+      "models": [
+        "fast-classifier",
+        "main-reasoner"
+      ],
+      "metadata": {
+        "owner": "profile:responder",
+        "data_tier": "local-only"
+      }
+    },
+    {
+      "key_alias": "conformance-throttle",
+      "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_CONFORMANCE_THROTTLE",
+      "models": [
+        "fast-classifier"
+      ],
+      "metadata": {
+        "owner": "conformance-throttle",
+        "data_tier": "local-only"
+      },
+      "rpm_limit": 3
+    }
+  ]
+}
