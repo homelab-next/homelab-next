@@ -234,6 +234,42 @@ def test_store_check_follows_the_hub_cache_symlinks(tmp_path):
     assert sm.check_disk(st, tmp_path, only=[e.id]) == []
 
 
+def test_store_check_refuses_a_listed_file_or_directory_that_resolves_out_of_place(tmp_path):
+    """A snapshot link may point at its repository's blobs/, nowhere else: a link out of the
+    store keeps the verified digest while the bytes behind it are nobody's to manage."""
+    build(tmp_path / "srv", doc())
+    st = sm.Store.from_dict(doc())
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    e = st.entries["example-27b-fp8"]
+    snap = tmp_path / "srv" / e.directory
+    f0 = sorted(e.files, key=lambda f: f.path)[0]
+    (outside / "blob").write_bytes((snap / f0.path).read_bytes())  # the right bytes, elsewhere
+    (snap / f0.path).unlink()
+    (snap / f0.path).symlink_to(outside / "blob")
+    found = sm.check_disk(st, tmp_path / "srv", only=[e.id])
+    assert len(found) == 1 and "/" + f0.path + ": resolves to " in found[0], found
+    assert "outside the entry and its repository's blobs/" in found[0]
+    # an export (no blobs/) may not link out of its own directory either
+    x = st.entries["example-4b-triage"]
+    xdir = tmp_path / "srv" / x.directory
+    x0 = x.files[0]
+    (outside / "x").write_bytes((xdir / x0.path).read_bytes())
+    (xdir / x0.path).unlink()
+    (xdir / x0.path).symlink_to(outside / "x")
+    assert "outside the entry" in sm.check_disk(st, tmp_path / "srv", only=[x.id])[0]
+    # a symlinked entry directory is refused whole
+    g = st.entries["example-4b-q4km"]
+    gdir = tmp_path / "srv" / g.directory
+    gdir.rename(outside / "gguf")
+    gdir.symlink_to(outside / "gguf")
+    (found,) = sm.check_disk(st, tmp_path / "srv", only=[g.id])
+    assert "not itself" in found
+    # a dotfile is a file an engine may read: reported, unlike the hub client's metadata
+    (snap / ".evil.py").write_text("fake")
+    assert any(".evil.py: not in the manifest" in p for p in sm.check_disk(st, tmp_path / "srv"))
+
+
 def test_the_cli_validates_lists_and_resolves(tmp_path, capsys):
     store = str(EXAMPLE / "model_store.json")
     assert (

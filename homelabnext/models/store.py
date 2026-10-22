@@ -429,23 +429,41 @@ def check_disk(
     """Problems with the store's files under ``root`` (default: the manifest's root).
 
     Every listed file must exist (a hub-cache symlink is followed), have its size and, unless
-    ``sizes_only``, its sha256.  A regular file in an entry's directory that no entry lists is
-    reported too: an engine would load it, and nothing pins it (dot-directories, where the hub
-    client keeps its download metadata, are skipped)."""
+    ``sizes_only``, its sha256.  A file may not resolve out of its place: the entry's directory
+    must be itself (no symlinked directory on the way), and each listed file must resolve inside
+    it or, for an ``hf`` entry, inside its repository's ``blobs/``, where the hub client keeps the
+    bytes its snapshot links point at.  A link out of the store would let bytes nothing manages
+    change behind a verified digest.  A regular file in an entry's directory that no entry lists is
+    reported too, dotfiles included: an engine would load it, and nothing pins it (only
+    ``.cache/huggingface/``, where the hub client keeps its download metadata, is skipped)."""
     base = Path(root if root is not None else store.root)
     wanted = set(only) if only is not None else set(store.entries)
     problems = [f"{u}: not a store entry" for u in sorted(wanted - set(store.entries))]
     listed: dict[str, set[str]] = {}
     for e in store.entries.values():
         listed.setdefault(e.directory, set()).update(f.path for f in e.files)
+    real_base = base.resolve()
     for eid in sorted(wanted & set(store.entries)):
         e = store.entries[eid]
         d = base / e.directory
+        inside = [real_base / e.directory]
+        if e.format == "hf":
+            inside.append((real_base / e.directory).parent.parent / "blobs")
+        if d.exists() and d.resolve() != inside[0]:
+            problems.append(f"{eid}: {e.directory}: resolves to {d.resolve()}, not itself")
+            continue
         for f in sorted(e.files, key=lambda f: f.path):
             p = d / f.path
             where = f"{eid}: {e.directory}/{f.path}"
             if not p.is_file():
                 problems.append(f"{where}: missing")
+                continue
+            real = p.resolve()
+            if not any(real.is_relative_to(i) for i in inside):
+                problems.append(
+                    f"{where}: resolves to {real}, outside "
+                    + ("the entry and its repository's blobs/" if e.format == "hf" else "the entry")
+                )
                 continue
             size = p.stat().st_size
             if size != f.size:
@@ -456,8 +474,8 @@ def check_disk(
         if d.is_dir():
             for p in sorted(d.rglob("*")):
                 rel = p.relative_to(d).as_posix()
-                if any(part.startswith(".") for part in rel.split("/")):
-                    continue  # the hub client's own metadata (.cache/huggingface/), never loaded
+                if rel.split("/")[:2] == [".cache", "huggingface"]:
+                    continue  # the hub client's own metadata, never loaded
                 if (p.is_file() or p.is_symlink()) and rel not in listed[e.directory]:
                     problems.append(f"{eid}: {e.directory}/{rel}: not in the manifest")
     return problems

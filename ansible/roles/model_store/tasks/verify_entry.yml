@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Fail unless every file of model_store_entry is on disk with its size and (unless
-# model_store_sizes_only) its sha256.  A hub-cache snapshot file is a symlink to its blob: followed.
+# model_store_sizes_only) its sha256.  A hub-cache snapshot file is a symlink to its blob: followed,
+# but only into its repository's blobs/ (an hf entry) or its own directory; a link anywhere else
+# would keep the digest while bytes nothing manages change behind it.
 - name: Locate the entry
   ansible.builtin.include_tasks: entry_paths.yml
   tags: [health, verify]
@@ -17,18 +19,37 @@
   register: model_store_stats
   tags: [health, verify]
 
+- name: Read where {{ model_store_entry.key }}'s files resolve
+  ansible.builtin.stat:
+    path: "{{ model_store_entry_dir }}/{{ item.path }}"
+    follow: false
+    get_checksum: false
+  loop: "{{ model_store_entry.value.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: model_store_links
+  tags: [health, verify]
+
 - name: Fail unless every file matches the manifest
   ansible.builtin.assert:
     that: model_store_bad | from_json | length == 0
     fail_msg: >-
       model_store: {{ model_store_entry.key }} does not match its manifest in
       {{ model_store_entry_dir }}: {{ model_store_bad | from_json | join(', ') }}
-      (missing, wrong size or sha256 differs; never serve it: delete the files and fetch again)
+      (missing, a link out of place, wrong size or sha256 differs; never serve it: delete the
+      files and fetch again)
   vars:
+    model_store_inside: >-
+      {{ [model_store_entry_dir ~ '/']
+         + ([model_store_entry_top ~ '/blobs/'] if model_store_entry.value.format == 'hf' else []) }}
     model_store_bad: >-
       {%- set bad = [] -%}
       {%- for r in model_store_stats.results -%}
+      {%- set link = model_store_links.results[loop.index0].stat -%}
+      {%- set ns = namespace(inside=not (link.islnk | default(false))) -%}
+      {%- for i in model_store_inside if link.islnk | default(false) and link.lnk_source.startswith(i) -%}{%- set ns.inside = true -%}{%- endfor -%}
       {%- if not r.stat.exists -%}{{ bad.append(r.item.path ~ ' (missing)') or '' }}
+      {%- elif not ns.inside -%}{{ bad.append(r.item.path ~ ' (links to ' ~ link.lnk_source ~ ')') or '' }}
       {%- elif r.stat.size != r.item.size -%}{{ bad.append(r.item.path ~ ' (size ' ~ r.stat.size ~ ', manifest ' ~ r.item.size ~ ')') or '' }}
       {%- elif not (model_store_sizes_only | default(false) | bool) and r.stat.checksum != r.item.sha256 -%}{{ bad.append(r.item.path ~ ' (sha256 differs)') or '' }}
       {%- endif -%}

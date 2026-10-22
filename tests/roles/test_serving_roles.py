@@ -242,6 +242,24 @@ def test_model_store_health_is_by_size_and_verify_by_sha256(tmp_path):
     assert gone.returncode != 0 and "model.safetensors (missing)" in gone.stdout
 
 
+def test_model_store_refuses_a_snapshot_link_out_of_its_blobs(tmp_path):
+    """The right bytes behind a link out of the store still fail: nothing manages them."""
+    store = manifest()
+    remote_tree(tmp_path, store)
+    v = store_vars(tmp_path, store)
+    assert run_role(tmp_path, "model_store", "main", v).returncode == 0
+    write_export(tmp_path / "srv", store)
+    assert run_role(tmp_path, "model_store", "verify", v).returncode == 0
+    snap = tmp_path / "srv" / store_mod.Store.from_dict(store).entries["example-27b-fp8"].directory
+    outside = tmp_path / "outside.json"
+    outside.write_bytes((snap / "config.json").read_bytes())
+    (snap / "config.json").unlink()
+    (snap / "config.json").symlink_to(outside)
+    bad = run_role(tmp_path, "model_store", "verify", v)
+    assert bad.returncode != 0 and f"config.json (links to {outside})" in bad.stdout
+    assert run_role(tmp_path, "model_store", "health", v).returncode != 0
+
+
 def test_model_store_backup_and_export_hooks(tmp_path):
     store = manifest()
     # codepoint order (sha256sum's, and Entry.listing's): LICENSE, README.md, config.json; a
