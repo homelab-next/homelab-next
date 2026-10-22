@@ -56,6 +56,10 @@ It writes:
 Secrets are always `secret:<name>` and are delivered in `HNX_SECRET_<NAME>` (the registry's
 mapping). The renderer refuses a literal value.
 
+Two more shapes are refused because Bifrost cannot render them faithfully: two cloud backends of
+the same provider (Bifrost has one provider per name, so one key would serve both), and a role
+with two bindings on the same backend (a provider keeps one model id per role).
+
 ## The locality rule
 
 A per-request fallback from a local model to a cloud one has two effects. It bypasses `local_only`

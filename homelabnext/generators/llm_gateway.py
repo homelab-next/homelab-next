@@ -366,6 +366,8 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
                     f"mdl:{rname}: binds svc:{b.backend}, which backends does not declare"
                 )
 
+    problems += _provider_collisions(table, backends)
+
     local_only: dict[str, str] = {}
     agent_roles: dict[str, str] = {}
     keys: list[Key] = []
@@ -468,6 +470,37 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
     if problems:
         raise GatewaySpecError(f"{source}: invalid gateway spec", problems)
     return spec
+
+
+def _provider_collisions(table: RoleTable, backends: Mapping[str, Backend]) -> list[str]:
+    """Bifrost has one provider per name and one alias per role on it: two cloud backends of the
+    same provider would collapse into one provider (serving one backend's key for both), and two
+    bindings of a role on one provider would keep only one model id.  Refused, not rendered."""
+    problems: list[str] = []
+    used = {b.backend for role in table.roles.values() for b in role.bindings}
+    by_prov: dict[str, list[str]] = {}
+    for name in sorted(used & set(backends)):
+        by_prov.setdefault(backends[name].bifrost_provider, []).append(name)
+    for prov, names in sorted(by_prov.items()):
+        if len(names) > 1:
+            problems.append(
+                f"backends {', '.join('svc:' + n for n in names)} are all provider {prov}: Bifrost "
+                "has one provider per name, so one key would serve them all; bind one per provider"
+            )
+    for rname, role in sorted(table.roles.items()):
+        seen: dict[str, str] = {}
+        for b in role.bindings:
+            be = backends.get(b.backend)
+            if be is None:
+                continue
+            if be.bifrost_provider in seen:
+                problems.append(
+                    f"mdl:{rname}: two bindings on provider {be.bifrost_provider} "
+                    f"({seen[be.bifrost_provider]}, {b.model_id}): Bifrost keeps one model per role "
+                    "and provider"
+                )
+            seen.setdefault(be.bifrost_provider, b.model_id)
+    return problems
 
 
 def _secret_collisions(

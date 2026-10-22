@@ -289,6 +289,35 @@ def test_audit_refuses_a_self_declared_local_backend():
     )
 
 
+# --- one Bifrost provider per backend, one model per role and provider ---------------------------
+
+
+def test_two_cloud_backends_of_one_provider_are_refused(tmp_path):
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["second-cloud"] = {
+        "tier": "large",
+        "bindings": [{"backend": "svc:cloud-b", "model_id": "example-cloud-2"}],
+    }
+    backends = spec_doc()["backends"] | {
+        "svc:cloud-b": {
+            "locality": "cloud",
+            "provider": "anthropic",
+            "api_key": "secret:llm-gateway/anthropic-team-b",
+        }
+    }
+    with pytest.raises(gw.GatewaySpecError, match="svc:cloud, svc:cloud-b are all provider"):
+        gw.render_file(make_spec(tmp_path, roles, backends=backends))
+
+
+def test_a_role_bound_twice_on_one_provider_is_refused(tmp_path):
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["small-local"]["bindings"].append(
+        {"backend": "svc:infer-b", "model_id": "example-4b-alt"}
+    )
+    with pytest.raises(gw.GatewaySpecError, match="mdl:small-local: two bindings on provider"):
+        gw.render_file(make_spec(tmp_path, roles))
+
+
 # --- one secret, one credential ------------------------------------------------------------------
 
 
