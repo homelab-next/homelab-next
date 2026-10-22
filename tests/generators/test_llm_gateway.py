@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import hashlib
 import json
 import shutil
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import yaml
@@ -482,50 +484,115 @@ def test_bad_spec_exits_1(tmp_path, capsys):
     assert "must be a secret" in capsys.readouterr().err
 
 
-# --- provisioning LiteLLM keys (stdlib fake of /key/generate and /key/update) --------------------
+# --- provisioning LiteLLM keys (a stdlib fake of LiteLLM's key API) -----------------------------
+
+
+def sha(value):
+    return hashlib.sha256(value.encode()).hexdigest()
 
 
 class FakeKeyAPI:
+    """LiteLLM's key store as it behaves: keys are kept by token (sha256 of an sk- value), aliases
+    are unique, ``/key/update``'s ``key`` names the key to change (a value or its token), and a
+    deleted key stops authenticating."""
+
     def __init__(self):
-        self.keys: dict[str, dict] = {}
+        self.keys: dict[str, dict] = {}  # token -> stored body (without the value)
         self.calls: list[tuple[str, str]] = []
         api = self
+
+        def token(k):
+            return sha(k) if k.startswith("sk-") else k
 
         class H(BaseHTTPRequestHandler):
             def log_message(self, *a):
                 pass
 
-            def do_POST(self):
-                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-                api.calls.append((self.path, self.headers.get("Authorization", "")))
-                if self.path == "/key/generate" and body["key"] in api.keys:
-                    status, out = 400, {"error": {"message": "Key already exists"}}
-                else:
-                    api.keys[body["key"]] = body
-                    status, out = 200, {"key": "sk-...", "key_alias": body["key_alias"]}
+            def reply(self, status, out):
                 data = json.dumps(out).encode()
                 self.send_response(status)
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
 
+            def do_GET(self):
+                url = urlsplit(self.path)
+                api.calls.append((url.path, self.headers.get("Authorization", "")))
+                alias = parse_qs(url.query).get("key_alias", [None])[0]
+                rows = [
+                    {"token": t, "key_alias": b["key_alias"]}
+                    for t, b in api.keys.items()
+                    if alias is None or b["key_alias"] == alias
+                ]
+                self.reply(200, {"keys": rows, "total_count": len(rows)})
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                api.calls.append((self.path, self.headers.get("Authorization", "")))
+                if self.path == "/key/generate":
+                    t = token(body["key"])
+                    if t in api.keys or any(
+                        b["key_alias"] == body["key_alias"] for b in api.keys.values()
+                    ):
+                        return self.reply(400, {"error": {"message": "Key already exists"}})
+                    api.keys[t] = {k: v for k, v in body.items() if k != "key"}
+                    return self.reply(200, {"key": "sk-...", "key_alias": body["key_alias"]})
+                if self.path == "/key/update":
+                    t = token(body["key"])
+                    if t not in api.keys:
+                        return self.reply(404, {"error": {"message": "Key not found"}})
+                    api.keys[t] |= {k: v for k, v in body.items() if k != "key"}
+                    return self.reply(200, {"key_alias": api.keys[t]["key_alias"]})
+                if self.path == "/key/delete":
+                    gone = [token(k) for k in body["keys"] if api.keys.pop(token(k), None)]
+                    return self.reply(200, {"deleted_keys": gone})
+                self.reply(404, {"error": {"message": "no route"}})
+
         self.httpd = ThreadingHTTPServer((LOOPBACK, 0), H)
         self.url = f"http://{LOOPBACK}:{self.httpd.server_address[1]}"
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def valid(self, value):
+        return sha(value) in self.keys
+
+
+def lab_keys():
+    doc = json.loads((LAB / "litellm" / "keys.json").read_text())
+    return doc, {k["key_env"]: f"sk-fake-{k['key_alias']}" for k in doc["keys"]}
 
 
 def test_provision_creates_then_updates_keys_from_the_environment():
     api = FakeKeyAPI()
     try:
-        doc = json.loads((LAB / "litellm" / "keys.json").read_text())
-        env = {k["key_env"]: f"sk-fake-{k['key_alias']}" for k in doc["keys"]}
+        doc, env = lab_keys()
         lines = gw.provision_litellm(doc, api.url, "sk-fake-master", environ=env)
-        assert len(lines) == 3 and all(": ok (" in ln for ln in lines)
-        gw.provision_litellm(doc, api.url, "sk-fake-master", environ=env)  # idempotent
+        assert len(lines) == 3 and all(": created (" in ln for ln in lines)
+        lines = gw.provision_litellm(doc, api.url, "sk-fake-master", environ=env)  # idempotent
+        assert all(": updated (" in ln for ln in lines)
         assert [p for p, _ in api.calls].count("/key/update") == 3
         assert {a for _, a in api.calls} == {"Bearer sk-fake-master"}
-        assert api.keys["sk-fake-conformance-throttle"]["rpm_limit"] == 3
-        assert "key_env" not in api.keys["sk-fake-agent-reader"]
+        assert api.keys[sha("sk-fake-conformance-throttle")]["rpm_limit"] == 3
+        assert "key_env" not in api.keys[sha("sk-fake-agent-reader")]
+        assert len(api.keys) == 3
+    finally:
+        api.httpd.shutdown()
+
+
+def test_provision_rotates_a_changed_key_and_the_old_value_stops_working():
+    api = FakeKeyAPI()
+    try:
+        doc, env = lab_keys()
+        gw.provision_litellm(doc, api.url, "sk-fake-master", environ=env)
+        reader_env = next(k["key_env"] for k in doc["keys"] if k["key_alias"] == "agent-reader")
+        old, new = env[reader_env], "sk-fake-agent-reader-rotated"
+        lines = gw.provision_litellm(
+            doc, api.url, "sk-fake-master", environ=env | {reader_env: new}
+        )
+        assert "key agent-reader: rotated (fast-classifier)" in lines
+        assert api.valid(new) and not api.valid(old)
+        stored = api.keys[sha(new)]
+        assert stored["key_alias"] == "agent-reader" and stored["models"] == ["fast-classifier"]
+        assert len(api.keys) == 3  # nothing left behind under the alias
     finally:
         api.httpd.shutdown()
 

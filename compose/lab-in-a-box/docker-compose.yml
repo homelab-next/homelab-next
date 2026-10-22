@@ -520,7 +520,7 @@ services:
         aliases: [llm-gateway.svc.example.internal]
 
   # one-shot: LiteLLM keeps virtual keys in postgres, not in its config file, so the generated
-  # keys.json is applied through the admin API (idempotent: an existing key is updated)
+  # keys.json is applied through the admin API (idempotent; a rotated value replaces the old key)
   llm-gateway-keys:
     <<: [*restart, *hardened]
     profiles: [gateway]

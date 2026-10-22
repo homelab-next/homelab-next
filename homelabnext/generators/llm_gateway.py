@@ -1013,44 +1013,83 @@ def provision_litellm(
     environ: Mapping[str, str],
     allow_plaintext: bool = False,
 ) -> list[str]:
-    """Create (or update) every key of ``litellm/keys.json`` on a running LiteLLM proxy.
+    """Create, update or rotate every key of ``litellm/keys.json`` on a running LiteLLM proxy.
 
     LiteLLM keeps virtual keys in Postgres, so they cannot be in ``config.yaml``; this is the
     deploy step that puts them there.  Each key value comes from the environment variable the
-    file names.  Idempotent: an existing key is updated in place.  Returns one line per key.
+    file names.  Keys are found by ``key_alias`` (``/key/list``), because LiteLLM's ``key`` field
+    on ``/key/update`` names the *existing* key, not a new value:
+
+    * the alias holds this value (LiteLLM stores the sha256 of an ``sk-`` key as its ``token``):
+      the key is updated in place by its token;
+    * the alias holds another value (the secret was rotated): the old key is deleted by token,
+      so it stops working, and the new value is created;
+    * the alias is unknown: the key is created.
+
+    Idempotent.  Returns one line per key.
     """
     import urllib.error
+    import urllib.parse
     import urllib.request
 
     from homelabnext._http import check_plaintext, safe_urlopen
 
     check_plaintext(base_url, credentials=True, allow_plaintext=allow_plaintext)
 
-    def call(path: str, body: dict) -> tuple[int, str]:
+    def call(path: str, body: dict | None = None) -> tuple[int, str]:
         req = urllib.request.Request(
             base_url.rstrip("/") + path,
-            data=json.dumps(body).encode(),
-            method="POST",
+            data=None if body is None else json.dumps(body).encode(),
+            method="GET" if body is None else "POST",
             headers={"Authorization": f"Bearer {master_key}", "Content-Type": "application/json"},
         )
         try:
             with safe_urlopen(req, timeout=30) as resp:
-                return resp.status, resp.read(4096).decode("utf-8", "replace")
+                return resp.status, resp.read(1 << 20).decode("utf-8", "replace")
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read(4096).decode("utf-8", "replace")
 
+    def ok(alias: str, what: str, status: int, text: str) -> None:
+        if status != 200:
+            raise GatewaySpecError(f"key {alias}: {what}: HTTP {status}: {text[:200]}")
+
+    def tokens_of(alias: str) -> list[str]:
+        q = urllib.parse.urlencode({"key_alias": alias, "return_full_object": "true"})
+        status, text = call(f"/key/list?{q}")
+        ok(alias, "/key/list", status, text)
+        try:
+            listed = json.loads(text).get("keys") or []
+        except (ValueError, AttributeError):
+            raise GatewaySpecError(f"key {alias}: /key/list: not a key list") from None
+        out = []
+        for item in listed:  # tokens, or full objects with return_full_object
+            if isinstance(item, Mapping):
+                if item.get("key_alias") not in (None, alias):
+                    continue  # a substring match from an older proxy: not this key
+                item = item.get("token")
+            if isinstance(item, str) and item:
+                out.append(item)
+        return out
+
     out = []
     for k in keys_doc.get("keys") or []:
+        alias = k["key_alias"]
         value = environ.get(k["key_env"], "")
         if not value:
-            raise GatewaySpecError(f"key {k['key_alias']}: {k['key_env']} is not set")
-        body = {kk: v for kk, v in k.items() if kk != "key_env"} | {"key": value}
-        status, text = call("/key/generate", body)
-        if status != 200 and "already exists" in text.lower():
-            status, text = call("/key/update", body)
-        if status != 200:
-            raise GatewaySpecError(f"key {k['key_alias']}: HTTP {status}: {text[:200]}")
-        out.append(f"key {k['key_alias']}: ok ({', '.join(k['models'])})")
+            raise GatewaySpecError(f"key {alias}: {k['key_env']} is not set")
+        params = {kk: v for kk, v in k.items() if kk != "key_env"}
+        token = hashlib.sha256(value.encode()).hexdigest()
+        existing = tokens_of(alias)
+        stale = [t for t in existing if t != token]
+        if stale:  # rotated (or duplicated): the old value must stop working before the new one
+            ok(alias, "/key/delete", *call("/key/delete", {"keys": stale}))
+        if token in existing:
+            ok(alias, "/key/update", *call("/key/update", params | {"key": token}))
+            verb = "rotated" if stale else "updated"
+        else:
+            ok(alias, "/key/generate", *call("/key/generate", params | {"key": value}))
+            verb = "rotated" if stale else "created"
+        out.append(f"key {alias}: {verb} ({', '.join(k['models'])})")
     return out
 
 

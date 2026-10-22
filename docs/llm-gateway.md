@@ -40,8 +40,10 @@ It writes:
   `enable_pre_call_checks: true` so the limits are enforced. `general_settings` holds the master
   key and the database only as `os.environ/HNX_SECRET_*` references.
 - **`litellm/keys.json`**. These are the virtual keys. LiteLLM stores keys in Postgres, not in its
-  config file, so `provision` posts each one to `/key/generate` (and to `/key/update` when it
-  already exists). Each key names the environment variable that holds its value, never the value.
+  config file, so `provision` finds each one by `key_alias` (`/key/list`) and creates it
+  (`/key/generate`), updates it in place by its token when the value is unchanged (`/key/update`),
+  or, when the secret was rotated, deletes the old key by its token first, so the old value stops
+  working, and creates the new one. Each key names the environment variable that holds its value, never the value.
 - **`bifrost/config.json`**. There is one custom OpenAI-compatible provider per local backend
   (`hnx-<svc>`). Role → model id mappings are key `aliases`. The file also holds virtual keys
   (`env.HNX_SECRET_*`), per-role `model_configs` with rate limits and budgets, and routing rules
