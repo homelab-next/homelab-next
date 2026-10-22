@@ -6,6 +6,7 @@
 kinds:
   ansible:
     args:
+    - --no-config
     - --from
     - example-ansible-mcp==0.4.0
     - ansible-mcp
@@ -13,17 +14,20 @@ kinds:
   bash:
     args:
     - -y
+    - --prefix=/var/lib/hnx/npm-prefix
     - --
     - '@example/mcp-bash@0.9.0'
     command: npx
   browser:
     args:
     - -y
+    - --prefix=/var/lib/hnx/npm-prefix
     - --
     - '@example/mcp-browser@1.1.0'
     command: npx
   cases:
     args:
+    - --no-config
     - --from
     - example-cases-mcp==1.0.4
     - cases-mcp
@@ -40,6 +44,7 @@ kinds:
   email:
     args:
     - -y
+    - --prefix=/var/lib/hnx/npm-prefix
     - --
     - '@example/mcp-email@1.0.0'
     command: npx
@@ -48,23 +53,27 @@ kinds:
   exec:
     args:
     - -y
+    - --prefix=/var/lib/hnx/npm-prefix
     - --
     - '@example/mcp-exec@0.9.0'
     command: npx
   fetch:
     args:
     - -y
+    - --prefix=/var/lib/hnx/npm-prefix
     - --
     - '@example/mcp-fetch@1.1.0'
     command: npx
   filesystem:
     args:
     - -y
+    - --prefix=/var/lib/hnx/npm-prefix
     - --
     - '@example/mcp-filesystem@2.1.0'
     command: npx
   git:
     args:
+    - --no-config
     - --from
     - example-git-mcp==1.3.2
     - git-mcp
@@ -72,6 +81,7 @@ kinds:
   github:
     args:
     - -y
+    - --prefix=/var/lib/hnx/npm-prefix
     - --
     - '@example/mcp-github@3.2.0'
     command: npx
@@ -80,6 +90,7 @@ kinds:
   gitlab:
     args:
     - -y
+    - --prefix=/var/lib/hnx/npm-prefix
     - --
     - '@example/mcp-gitlab@3.2.0'
     command: npx
@@ -95,12 +106,14 @@ kinds:
   http:
     args:
     - -y
+    - --prefix=/var/lib/hnx/npm-prefix
     - --
     - '@example/mcp-http@1.1.0'
     command: npx
   kubernetes:
     args:
     - -y
+    - --prefix=/var/lib/hnx/npm-prefix
     - --
     - '@example/mcp-kubernetes@1.8.0'
     command: npx
@@ -111,6 +124,7 @@ kinds:
     - NOTES_MODE
     - NOTES_WRITABLE_PREFIX
     args:
+    - --no-config
     - --from
     - example-notes-mcp==1.2.0
     - notes-mcp
@@ -122,6 +136,7 @@ kinds:
   ntfy:
     args:
     - -y
+    - --prefix=/var/lib/hnx/npm-prefix
     - --
     - '@example/mcp-ntfy@1.0.2'
     command: npx
@@ -130,11 +145,13 @@ kinds:
   playwright:
     args:
     - -y
+    - --prefix=/var/lib/hnx/npm-prefix
     - --
     - '@example/mcp-playwright@1.1.0'
     command: npx
   records:
     args:
+    - --no-config
     - --from
     - example-records-mcp==2.3.1
     - records-mcp
@@ -144,12 +161,14 @@ kinds:
   shell:
     args:
     - -y
+    - --prefix=/var/lib/hnx/npm-prefix
     - --
     - '@example/mcp-shell@1.4.2'
     command: npx
   slack:
     args:
     - -y
+    - --prefix=/var/lib/hnx/npm-prefix
     - --
     - '@example/mcp-slack@2.2.0'
     command: npx
@@ -158,6 +177,7 @@ kinds:
   smtp:
     args:
     - -y
+    - --prefix=/var/lib/hnx/npm-prefix
     - --
     - '@example/mcp-smtp@1.0.0'
     command: npx
@@ -166,6 +186,7 @@ kinds:
   ssh:
     args:
     - -y
+    - --prefix=/var/lib/hnx/npm-prefix
     - --
     - '@example/mcp-ssh@2.0.1'
     command: npx
@@ -174,11 +195,13 @@ kinds:
   terminal:
     args:
     - -y
+    - --prefix=/var/lib/hnx/npm-prefix
     - --
     - '@example/mcp-terminal@0.9.0'
     command: npx
   vault:
     args:
+    - --no-config
     - --from
     - example-vault-mcp==0.5.1
     - vault-mcp
@@ -188,6 +211,7 @@ kinds:
   web:
     args:
     - -y
+    - --prefix=/var/lib/hnx/npm-prefix
     - --
     - '@example/mcp-web@1.1.0'
     command: npx

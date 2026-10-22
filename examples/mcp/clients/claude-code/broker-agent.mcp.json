@@ -23,6 +23,7 @@
     },
     "notes-broker-agent-real": {
       "args": [
+        "--no-config",
         "--from",
         "example-notes-mcp==1.2.0",
         "notes-mcp"

@@ -266,12 +266,20 @@ def _args(inst: Instance) -> list[str]:
     return [_fill(_secret_text(str(a)), values) for a in inst.record["transport"].get("args") or ()]
 
 
-def _launch(record: Mapping[str, Any], sid: str) -> tuple[str, list[str]]:
-    """The generated launch (:func:`homelabnext.mcp.servers.launch`): never the record's."""
+def _launch(
+    record: Mapping[str, Any], sid: str, ctx: servers.LaunchContext | None = None
+) -> tuple[str, list[str]]:
+    """The generated launch (:func:`homelabnext.mcp.servers.launch`), anchored by ``ctx`` (the
+    spec's ``npm_prefix`` and ``checkout_root``): never the record's."""
     try:
-        return servers.launch(record)
+        return servers.launch(record, ctx)
     except ValueError as exc:
-        raise RenderError([f"{sid}: {exc}"]) from None
+        raise RenderError(
+            [
+                f"{sid}: {exc} (the render spec's npm_prefix/checkout_root, or --npm-prefix/"
+                "--checkout-root)"
+            ]
+        ) from None
 
 
 def _env(inst: Instance, *, fixed_only: bool = False) -> dict[str, str]:
@@ -305,7 +313,9 @@ def _headers(inst: Instance) -> dict[str, str]:
     return {k: _secret_text(str(v)) for k, v in sorted((inst.record.get("headers") or {}).items())}
 
 
-def definition(inst: Instance, client: str, registry: Any = None) -> dict[str, Any] | None:
+def definition(
+    inst: Instance, client: str, registry: Any = None, ctx: servers.LaunchContext | None = None
+) -> dict[str, Any] | None:
     """One instance's entry in ``client``'s format (``None``: the client cannot take it)."""
     t = inst.record["transport"]
     stdio = t["type"] == "stdio"
@@ -334,7 +344,7 @@ def definition(inst: Instance, client: str, registry: Any = None) -> dict[str, A
             "http" if t["type"] == "streamable-http" and client == "claude-code" else t["type"]
         )
     if stdio:
-        command, launcher_args = _launch(inst.record, inst.server)
+        command, launcher_args = _launch(inst.record, inst.server, ctx)
         d["command"] = command
         d["args"] = [*launcher_args, *_args(inst)]
         env = _env(inst)
@@ -351,7 +361,10 @@ def definition(inst: Instance, client: str, registry: Any = None) -> dict[str, A
 
 
 def home_servers(
-    insts: Iterable[Instance], client: str, registry: Any = None
+    insts: Iterable[Instance],
+    client: str,
+    registry: Any = None,
+    ctx: servers.LaunchContext | None = None,
 ) -> tuple[dict[str, dict[str, Any]], list[str]]:
     """``{name: definition}`` for one home, and the names a client could not take.  The same
     name twice is fine when the definitions are equal (a shared server), refused otherwise."""
@@ -359,7 +372,7 @@ def home_servers(
     skipped: list[str] = []
     problems: list[str] = []
     for inst in insts:
-        d = definition(inst, client, registry)
+        d = definition(inst, client, registry, ctx)
         if d is None:
             skipped.append(inst.name)
             continue
@@ -389,10 +402,15 @@ def generated_note(
 
 
 def render_home(
-    insts: list[Instance], client: str, cat: servers.Catalog, registry: Any, what: str
+    insts: list[Instance],
+    client: str,
+    cat: servers.Catalog,
+    registry: Any,
+    what: str,
+    ctx: servers.LaunchContext | None = None,
 ) -> tuple[str, list[str]]:
     """The text of one client file (and the instance names it could not hold)."""
-    servers_, skipped = home_servers(insts, client, registry)
+    servers_, skipped = home_servers(insts, client, registry, ctx)
     held = {i.server: i.record for i in insts if i.name in servers_}
     note = generated_note(cat, what, held)
     if client == "hermes":
@@ -419,7 +437,9 @@ ORCH_GRANTS_HEAD = (
 )
 
 
-def orch_kind(sid: str, rec: Mapping[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
+def orch_kind(
+    sid: str, rec: Mapping[str, Any], ctx: servers.LaunchContext | None = None
+) -> tuple[dict[str, Any] | None, list[str]]:
     """A record as an llm-orchestrator catalog kind, or None (not a stdio server) and why not."""
     t = rec.get("transport") or {}
     if t.get("type") != "stdio":
@@ -434,7 +454,7 @@ def orch_kind(sid: str, rec: Mapping[str, Any]) -> tuple[dict[str, Any] | None, 
     settings = rec.get("settings") or {}
     if any(servers.TEMPLATE.search(str(v)) for v in settings.values()):
         problems.append(f"{sid}: a setting is per instance; make it a parameter with env")
-    command, launcher_args = _launch(rec, sid)
+    command, launcher_args = _launch(rec, sid, ctx)
     entry: dict[str, Any] = {
         "command": command,
         "args": [*launcher_args, *(_secret_text(a) for a in args)],
@@ -451,7 +471,9 @@ def orch_kind(sid: str, rec: Mapping[str, Any]) -> tuple[dict[str, Any] | None, 
     return entry, problems
 
 
-def orch_catalog(cat: servers.Catalog, granted_ids: Iterable[str] = ()) -> tuple[str, list[str]]:
+def orch_catalog(
+    cat: servers.Catalog, granted_ids: Iterable[str] = (), ctx: servers.LaunchContext | None = None
+) -> tuple[str, list[str]]:
     """``configs/mcp_catalog.yaml``: every grantable stdio server as a kind.  A server that
     cannot be a kind is skipped with a note, or refused when a rendered profile is granted it."""
     granted_ids = set(granted_ids)
@@ -461,7 +483,7 @@ def orch_catalog(cat: servers.Catalog, granted_ids: Iterable[str] = ()) -> tuple
     for sid, rec in cat:
         if rec.get("status") not in servers.GRANTABLE:
             continue
-        entry, why = orch_kind(sid, rec)
+        entry, why = orch_kind(sid, rec, ctx)
         if entry is None or (why and sid not in granted_ids):
             notes += why
             continue
@@ -742,8 +764,12 @@ def render_profile(
     profile_file: str | None = None,
     policy: Any = None,
     lock: Mapping[str, str] | None = None,
+    npm_prefix: str | None = None,
+    checkout_root: str | None = None,
 ) -> tuple[str, list[str]]:
-    """One profile's client file (``--profile``); ``policy``/``lock``: :func:`profile_refusals`."""
+    """One profile's client file (``--profile``); ``policy``/``lock``: :func:`profile_refusals`;
+    ``npm_prefix``/``checkout_root``: :class:`homelabnext.mcp.servers.LaunchContext`."""
+    ctx = launch_context(npm_prefix, checkout_root)
     p = Path(profile_path)
     prof = _load_profile(p, cat, policy, lock)
     lanes = list(lanes)
@@ -754,12 +780,12 @@ def render_profile(
     notes = deprecation_notes(cat, prof)
     if client == "llm-orchestrator":
         block = orch_grants(insts, lanes)
-        catalog_text, _ = orch_catalog(cat, {i.server for i in insts})
+        catalog_text, _ = orch_catalog(cat, {i.server for i in insts}, ctx)
         bad = orch_accepts(catalog_text, {prof["id"]: block})
         if bad:
             raise RenderError(bad)
         return block, notes
-    text, skipped = render_home(insts, client, cat, registry, prof["id"])
+    text, skipped = render_home(insts, client, cat, registry, prof["id"], ctx)
     return text, notes + [f"{client} cannot hold {n} (not a stdio server)" for n in skipped]
 
 
@@ -769,7 +795,7 @@ def _spec_problems(spec: Any) -> list[str]:
     out = []
     extra = set(spec) - {
         "client", "catalog", "registry", "lanes", "profiles", "outputs", "owns", "check_profiles",
-        "policy", "lock",
+        "policy", "lock", "npm_prefix", "checkout_root",
     }  # fmt: skip
     if extra:
         out.append(f"unknown key(s) {sorted(extra)}")
@@ -833,6 +859,10 @@ def render_spec(spec_path: str | Path, root: str | Path | None = None) -> Render
     problems = _spec_problems(spec)
     if problems:
         raise RenderError([f"{sp}: {p}" for p in problems])
+    try:
+        ctx = launch_context(spec.get("npm_prefix"), spec.get("checkout_root"))
+    except RenderError as exc:
+        raise RenderError([f"{sp}: {p}" for p in exc.problems]) from None
     base = sp.parent
     out_root = Path(root) if root is not None else base
     cat = servers.load((base / str(spec.get("catalog", ".."))).resolve())
@@ -872,7 +902,7 @@ def render_spec(spec_path: str | Path, root: str | Path | None = None) -> Render
             gf = _inside(out_root, entry["grants_file"], "grants_file")
             blocks[prof["id"]] = (gf, orch_grants(insts, lanes))
     if client == "llm-orchestrator":
-        text, notes = orch_catalog(cat, {i.server for i in every})
+        text, notes = orch_catalog(cat, {i.server for i in every}, ctx)
         res.notes += notes
         for out in spec["outputs"]:
             res.outputs.append(Output(_inside(out_root, out["path"], "output"), text))
@@ -915,13 +945,26 @@ def render_spec(spec_path: str | Path, root: str | Path | None = None) -> Render
                     profile_file=str(entry.get("profile_file") or pf),
                     home=str(out.get("home") or ""),
                 )
-            text, skipped = render_home(home_insts, client, cat, registry, what)
+            text, skipped = render_home(home_insts, client, cat, registry, what, ctx)
             res.notes += [f"{what}: {client} cannot hold {n}" for n in skipped]
             res.outputs.append(Output(_inside(out_root, out["path"], "output"), text))
     mine = {o.path.resolve() for o in res.outputs}
     res.unlisted = [f for f in _owned(out_root, spec.get("owns")) if f.resolve() not in mine]
     res.notes += [f"{f}: owned by the spec but not rendered (stale?)" for f in res.unlisted]
     return res
+
+
+def launch_context(npm_prefix: Any = None, checkout_root: Any = None) -> servers.LaunchContext:
+    """The anchors a render gives every launch; a value given must be an absolute path (a
+    missing one is refused only by a launch that needs it)."""
+    problems = [
+        bad
+        for value, what in ((npm_prefix, "npm_prefix"), (checkout_root, "checkout_root"))
+        if value is not None and (bad := servers.anchor_problem(value, what))
+    ]
+    if problems:
+        raise RenderError(problems)
+    return servers.LaunchContext(npm_prefix, checkout_root)
 
 
 def _rendered_ids(

@@ -7,7 +7,8 @@
   checkout) judged against the catalog (unknown, retired, draft, reader, data tier);
 * ``list [--json]``: one line per server; ``classes``: the derived ``mcp`` class table;
 * ``render --profile FILE --client CLIENT [--policy FILE [--lock FILE]] [--param
-  SERVER.NAME=VALUE ...] [--lanes L,L] [--out FILE] [--check]`` or ``render --spec FILE [--root DIR] [--check]``: client
+  SERVER.NAME=VALUE ...] [--lanes L,L] [--npm-prefix DIR] [--checkout-root DIR] [--out FILE]
+  [--check]`` or ``render --spec FILE [--root DIR] [--check]``: client
   configurations (:mod:`.clients`) of profiles ``hnx agent verify`` would accept; ``--check``
   fails on drift in any output;
 * ``import CONFIG ... --out DIR [--force]``: draft records from existing client configs
@@ -136,10 +137,10 @@ def _render(args) -> int:
         )
         return 2
     if args.spec:
-        if args.policy or args.lock:
+        if args.policy or args.lock or args.npm_prefix or args.checkout_root:
             print(
-                "hnx mcp catalog render: with --spec, name the policy and lock in the spec "
-                "(policy:, lock:)",
+                "hnx mcp catalog render: with --spec, name the policy, lock, npm prefix and "
+                "checkout root in the spec (policy:, lock:, npm_prefix:, checkout_root:)",
                 file=sys.stderr,
             )
             return 2
@@ -159,6 +160,8 @@ def _render(args) -> int:
             profile_file=args.profile_path,
             policy=clients.load_policy(args.policy) if args.policy else None,
             lock=clients.load_lock(args.lock) if args.lock else None,
+            npm_prefix=args.npm_prefix,
+            checkout_root=args.checkout_root,
         )
         if not args.out:
             if args.check:
@@ -245,6 +248,15 @@ def main(argv: list[str] | None = None) -> int:
         "or lean, is refused without one",
     )
     r.add_argument("--lock", help="with --profile: reviewed digests (hnx agent verify --lock)")
+    r.add_argument(
+        "--npm-prefix",
+        help="with --profile: an absolute, empty directory every npx launch is anchored at "
+        "(--prefix), so the client's working directory cannot replace the pinned package",
+    )
+    r.add_argument(
+        "--checkout-root",
+        help="with --profile: the absolute checkout a first-party path bin is resolved under",
+    )
     r.add_argument("--out", help="write here instead of stdout")
     r.add_argument(
         "--root",

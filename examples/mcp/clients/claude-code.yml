@@ -4,6 +4,7 @@
 client: claude-code
 catalog: ..
 policy: policy/ceilings.yml          # the ceilings its profiles are judged against
+npm_prefix: /var/lib/hnx/npm-prefix # an empty directory every npx launch reads its config from
 registry: ../../services.yml
 profiles:
   - file: profile.broker-agent.json

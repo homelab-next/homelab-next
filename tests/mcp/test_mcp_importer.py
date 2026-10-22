@@ -229,7 +229,9 @@ def test_a_rendered_record_imports_back_to_the_same_server(tmp_path):
         {"ceilings": {"profile:collector": {"mcp": ["github"], "capabilities": doc["capabilities"],
                                             "tier": "write", "budgets": doc["budgets"]}}}
     )  # fmt: skip
-    text, _ = clients.render_profile(servers.load(d), prof, "hermes", policy=policy)
+    text, _ = clients.render_profile(
+        servers.load(d), prof, "hermes", policy=policy, npm_prefix="/var/lib/hnx/npm-prefix"
+    )
     rendered = tmp_path / "config.yaml"
     rendered.write_text(text)
     back = importer.import_configs([rendered]).records["github"]

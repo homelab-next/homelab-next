@@ -31,6 +31,8 @@ GIT_PYPI = {"kind": "git", "ecosystem": "pypi", "repo": "https://code.example/or
             "commit": COMMIT}  # fmt: skip
 GIT_NPM = {**GIT_PYPI, "ecosystem": "npm"}
 FIRST = {"kind": "first-party", "path": "homelabnext/mcp/"}
+PREFIX = "/var/lib/hnx/npm-prefix"
+CTX = servers.LaunchContext(npm_prefix=PREFIX)
 
 
 def _rec(base: dict, origin: dict | None = None, **transport) -> dict:
@@ -49,20 +51,21 @@ GH_PIN = "@example/mcp-github@3.2.0"
 NOTES_PIN = "example-notes-mcp==1.2.0"
 #: (record, the generated command line)
 GENERATED = [
-    (_rec(GH), ["npx", "-y", "--", GH_PIN]),
+    (_rec(GH), ["npx", "-y", f"--prefix={PREFIX}", "--", GH_PIN]),
     (_rec(GH, bin="mcp-github", args=["--read-only"]),
-     ["npx", "-y", f"--package={GH_PIN}", "--", "mcp-github", "--read-only"]),
-    (_rec(NOTES, bin="notes-mcp"), ["uvx", "--from", NOTES_PIN, "notes-mcp"]),
-    (_rec(NOTES), ["uvx", "--from", NOTES_PIN, "example-notes-mcp"]),
+     ["npx", "-y", f"--prefix={PREFIX}", f"--package={GH_PIN}", "--", "mcp-github", "--read-only"]),
+    (_rec(NOTES, bin="notes-mcp"), ["uvx", "--no-config", "--from", NOTES_PIN, "notes-mcp"]),
+    (_rec(NOTES), ["uvx", "--no-config", "--from", NOTES_PIN, "example-notes-mcp"]),
     (_rec(NOTES, {**NOTES["origin"], "version": "v1.2.0"}, bin="notes-mcp"),
-     ["uvx", "--from", NOTES_PIN, "notes-mcp"]),  # a leading v is not a difference
+     ["uvx", "--no-config", "--from", NOTES_PIN, "notes-mcp"]),  # a leading v is no difference
     (_rec(DOCKER, args=["--read-only"]), ["docker", "run", "-i", "--rm", IMG, "--read-only"]),
     (_rec({**DOCKER, "env": {"DOCKER_TOKEN": "secret:mcp/docker-token"},
            "settings": {"LOG_LEVEL": "debug"}}),
      ["docker", "run", "-i", "--rm", "-e", "DOCKER_TOKEN", "-e", "LOG_LEVEL", IMG]),
-    (_rec(NOTES, GIT_PYPI, bin="srv"), ["uvx", "--from", f"git+{GIT_PYPI['repo']}@{COMMIT}", "srv"]),
+    (_rec(NOTES, GIT_PYPI, bin="srv"),
+     ["uvx", "--no-config", "--from", f"git+{GIT_PYPI['repo']}@{COMMIT}", "srv"]),
     (_rec(GH, GIT_NPM, bin="srv"),
-     ["npx", "-y", f"--package=git+{GIT_NPM['repo']}#{COMMIT}", "--", "srv"]),
+     ["npx", "-y", f"--prefix={PREFIX}", f"--package=git+{GIT_NPM['repo']}#{COMMIT}", "--", "srv"]),
     (_rec(BROKER, FIRST, bin="hnx", args=["mcp", "serve"]), ["hnx", "mcp", "serve"]),
     (_rec(BROKER, FIRST, bin="homelabnext/mcp/run.py"), ["homelabnext/mcp/run.py"]),
 ]  # fmt: skip
@@ -71,7 +74,7 @@ GENERATED = [
 @pytest.mark.parametrize(("rec", "argv"), GENERATED, ids=[" ".join(g[1])[:60] for g in GENERATED])
 def test_the_launch_is_generated_from_the_origin(rec, argv):
     assert _problems(rec) == []
-    command, launcher_args = servers.launch(rec)
+    command, launcher_args = servers.launch(rec, CTX)
     assert [command, *launcher_args, *rec["transport"].get("args", ())] == argv
 
 
@@ -127,10 +130,33 @@ def test_a_launcher_flag_in_args_reaches_the_server_never_the_launcher():
     """``args`` follow the bin (npx: after ``--``; uvx: after the command, which takes the rest),
     so ``--python /tmp/evil`` or ``--registry`` is the server's own argument."""
     rec = _rec(NOTES, bin="notes-mcp", args=["--python", "/tmp/evil/python"])
-    command, prefix = servers.launch(rec)
-    assert (command, prefix) == ("uvx", ["--from", NOTES_PIN, "notes-mcp"])
+    command, prefix = servers.launch(rec, CTX)
+    assert (command, prefix) == ("uvx", ["--no-config", "--from", NOTES_PIN, "notes-mcp"])
     rec = _rec(GH, args=["--registry", "https://npm.example"])
-    assert servers.launch(rec) == ("npx", ["-y", "--", GH_PIN])
+    assert servers.launch(rec, CTX) == ("npx", ["-y", f"--prefix={PREFIX}", "--", GH_PIN])
+
+
+def test_an_npm_launch_is_anchored_at_an_absolute_prefix_never_the_clients_cwd():
+    """npx resolves ``node_modules/<package>`` and reads ``.npmrc`` in the client's working
+    directory before the pinned package (round 4, F1): a shadow copy ran with the exact generated
+    argv.  ``--prefix=<an absolute empty dir>`` moves both lookups there (verified with npx 10:
+    the shadow and a project ``.npmrc`` registry are ignored).  Without a prefix, or with a
+    relative one, there is no launch."""
+    for ctx in (None, servers.LaunchContext(), servers.LaunchContext(npm_prefix="npm-prefix"),
+                servers.LaunchContext(npm_prefix="/srv/../tmp"),
+                servers.LaunchContext(npm_prefix="/srv/$HOME")):  # fmt: skip
+        with pytest.raises(ValueError, match="npm_prefix"):
+            servers.launch(_rec(GH), ctx)
+    _, argv = servers.launch(_rec(GH, bin="mcp-github"), CTX)
+    assert argv.index(f"--prefix={PREFIX}") < argv.index("--")
+
+
+def test_a_uvx_launch_reads_no_uv_config():
+    """``uvx --no-config``: a ``uv.toml`` (user-level, which the agent's own user can write) or
+    ``[tool.uv]`` cannot redirect the index for the pin (verified with uv 0.11)."""
+    for origin in (NOTES["origin"], GIT_PYPI):
+        command, argv = servers.launch(_rec(NOTES, origin, bin="srv"), CTX)
+        assert (command, argv[:2]) == ("uvx", ["--no-config", "--from"])
 
 
 #: (command, args, what the importer keeps): a foreign command line it maps, or refuses to
@@ -195,7 +221,7 @@ def test_every_example_record_renders_its_generated_launch():
     for sid, rec in cat:
         if rec["transport"]["type"] == "stdio":
             assert servers.launch_problems(rec, sid) == []
-            command, _ = servers.launch(rec)
+            command, _ = servers.launch(rec, CTX)
             assert command in ("npx", "uvx", "docker", "hnx"), sid
 
 

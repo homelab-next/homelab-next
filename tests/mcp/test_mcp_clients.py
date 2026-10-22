@@ -26,6 +26,8 @@ SPECS = ROOT / "examples" / "mcp" / "clients"
 READER = ROOT / "schemas" / "agent" / "examples" / "profile.reader.json"
 BROKER_AGENT = SPECS / "profile.broker-agent.json"
 COLLECTOR = SPECS / "profile.collector.json"
+NPM_PREFIX = "/var/lib/hnx/npm-prefix"
+CTX = servers.LaunchContext(npm_prefix=NPM_PREFIX)
 
 
 def _policy() -> CeilingPolicy:
@@ -185,7 +187,7 @@ def test_llm_orchestrator_catalog_and_grants_are_its_format():
     kinds = yaml.safe_load(catalog.text)["kinds"]
     assert kinds["notes"] == {
         "allowed_env": ["NOTES_MODE", "NOTES_WRITABLE_PREFIX"],
-        "args": ["--from", "example-notes-mcp==1.2.0", "notes-mcp"],
+        "args": ["--no-config", "--from", "example-notes-mcp==1.2.0", "notes-mcp"],
         "command": "uvx",
         "env": {"NOTES_ROOT": "/srv/notes", "NOTES_TOKEN": "${HNX_SECRET_MCP_NOTES_TOKEN}"},
         "timeout": 120,
@@ -224,8 +226,8 @@ def test_orch_accepts_encodes_the_orchestrators_rules(catalog, grants, phrase):
 
 def test_a_per_instance_argument_cannot_be_an_orchestrator_kind():
     with pytest.raises(clients.RenderError, match="per instance"):
-        clients.orch_catalog(CATALOG, {"hnx-catalog"})
-    text, notes = clients.orch_catalog(CATALOG)
+        clients.orch_catalog(CATALOG, {"hnx-catalog"}, CTX)
+    text, notes = clients.orch_catalog(CATALOG, ctx=CTX)
     assert any(n.startswith("hnx-catalog:") for n in notes) and "hnx-catalog" not in text
 
 
@@ -242,9 +244,38 @@ def test_a_deprecated_grant_renders_with_a_note(tmp_path):
     doc["mcp"] = doc["mcp_ceiling"] = ["bash"]
     doc["reads_untrusted"] = False
     prof.write_text(json.dumps(doc))
-    text, notes = clients.render_profile(CATALOG, prof, "claude-code", policy=WIDE)
+    text, notes = clients.render_profile(
+        CATALOG, prof, "claude-code", policy=WIDE, npm_prefix=NPM_PREFIX
+    )
     assert "bash" in json.loads(text)["mcpServers"]
     assert any("deprecated" in n and "grant 'shell' instead" in n for n in notes)
+
+
+def test_render_anchors_npx_at_an_absolute_npm_prefix(tmp_path):
+    """Round 4, F1: an npm server renders only with an absolute ``npm_prefix`` (spec key or
+    ``--npm-prefix``): missing or relative, the render is refused, never anchored in the
+    client's working directory."""
+    prof = tmp_path / "p.json"
+    doc = json.loads(COLLECTOR.read_text())
+    doc["mcp"] = doc["mcp_ceiling"] = ["bash"]
+    doc["reads_untrusted"] = False
+    prof.write_text(json.dumps(doc))
+    with pytest.raises(clients.RenderError, match="npm_prefix is not given"):
+        clients.render_profile(CATALOG, prof, "claude-code", policy=WIDE)
+    with pytest.raises(clients.RenderError, match="npm_prefix is not an absolute path"):
+        clients.render_profile(CATALOG, prof, "claude-code", policy=WIDE, npm_prefix="prefix")
+    text, _ = clients.render_profile(
+        CATALOG, prof, "claude-code", policy=WIDE, npm_prefix=NPM_PREFIX
+    )
+    assert json.loads(text)["mcpServers"]["bash"]["args"][:2] == ["-y", f"--prefix={NPM_PREFIX}"]
+    spec = tmp_path / "spec.yml"
+    spec.write_text(yaml.safe_dump({
+        "client": "claude-code", "catalog": str(ROOT / "examples" / "mcp"), "policy": "pol.yml",
+        "npm_prefix": "relative/prefix", "profiles": [{"file": str(prof)}],
+        "outputs": [{"path": "out.json"}]}))  # fmt: skip
+    (tmp_path / "pol.yml").write_text(yaml.safe_dump({"ceilings": {}}))
+    with pytest.raises(clients.RenderError, match="npm_prefix is not an absolute path"):
+        clients.render_spec(spec)
 
 
 # ------------------------------------------------------------------ what render will trust
@@ -412,9 +443,11 @@ def test_llm_orchestrator_refuses_a_granted_remote_server_and_one_empty_lane(tmp
         )
     # a real lane without a shadow lane: llm-orchestrator fails every shadow job
     with pytest.raises(clients.RenderError, match="fails every shadow job"):
-        clients.render_profile(CATALOG, COLLECTOR, "llm-orchestrator", lanes=["real"], policy=WIDE)
+        clients.render_profile(CATALOG, COLLECTOR, "llm-orchestrator", lanes=["real"], policy=WIDE,
+                               npm_prefix=NPM_PREFIX)  # fmt: skip
     block, _ = clients.render_profile(CATALOG, COLLECTOR, "llm-orchestrator",
-                                      lanes=["real", "shadow"], policy=WIDE)  # fmt: skip
+                                      lanes=["real", "shadow"], policy=WIDE,
+                                      npm_prefix=NPM_PREFIX)  # fmt: skip
     assert block.startswith("\n" + clients.GRANTS_MARKER)
 
 

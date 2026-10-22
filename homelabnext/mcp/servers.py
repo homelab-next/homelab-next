@@ -35,7 +35,7 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from functools import cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
@@ -430,19 +430,56 @@ def launch_problems(rec: Mapping[str, Any], where: str) -> list[str]:
     return out
 
 
-def launch(rec: Mapping[str, Any]) -> tuple[str, list[str]]:
+@dataclass(frozen=True)
+class LaunchContext:
+    """Where a generated launch is anchored on the host the client runs on (the render spec's
+    ``npm_prefix`` and ``checkout_root``, or ``--npm-prefix``/``--checkout-root``): absolute
+    paths, never the client's working directory."""
+
+    #: an empty directory npx is started with (``--prefix``): its project config and
+    #: ``node_modules`` are read from there, never from the client's working directory
+    npm_prefix: str | None = None
+    #: the checkout a first-party path bin is resolved under
+    checkout_root: str | None = None
+
+
+#: what an anchor path may not hold: a client would expand ``$``, and a control character splits
+#: an argument
+_UNSAFE_PATH = re.compile(r"[$\x00-\x1f\x7f]|secret:")
+
+
+def anchor_problem(value: Any, what: str) -> str | None:
+    """Why ``value`` cannot anchor a launch (``npm_prefix``, ``checkout_root``), or None: it is
+    an absolute path with no ``..``, ``$``, ``secret:`` or control character."""
+    if value is None or value == "":
+        return f"{what} is not given (an absolute directory on the client's host)"
+    if not isinstance(value, str) or not value.startswith("/"):
+        return f"{what} is not an absolute path (a relative one resolves in the client's cwd)"
+    if ".." in PurePosixPath(value).parts or _UNSAFE_PATH.search(value):
+        return f"{what} holds .., $, secret: or a control character"
+    return None
+
+
+def launch(rec: Mapping[str, Any], ctx: LaunchContext | None = None) -> tuple[str, list[str]]:
     """The launch a stdio record's origin generates: ``(command, launcher arguments)``; the
     server's own ``args`` follow.  Fixed flags only, never one from the record:
 
-    * npm: ``npx -y -- <package>@<version>``, or with a bin
-      ``npx -y --package=<package>@<version> -- <bin>`` (``--`` ends npx's options);
-    * pypi: ``uvx --from <package>==<version> <bin>`` (bin defaults to the package name);
+    * npm: ``npx -y --prefix=<npm_prefix> -- <package>@<version>``, or with a bin
+      ``npx -y --prefix=<npm_prefix> --package=<package>@<version> -- <bin>`` (``--`` ends npx's
+      options; ``--prefix`` makes npx read its project config and ``node_modules`` from that
+      empty directory, so neither a ``node_modules/<package>`` nor an ``.npmrc`` in the client's
+      working directory replaces the pinned package);
+    * pypi: ``uvx --no-config --from <package>==<version> <bin>`` (bin defaults to the package
+      name; ``--no-config`` reads no ``uv.toml`` or ``[tool.uv]``, so none can redirect the index);
     * git: the same with ``git+<repo>#<commit>`` (npm) or ``git+<repo>@<commit>`` (pypi);
     * image: ``docker run -i --rm [-e NAME ...] <repository>@<digest>``, one ``-e`` per
       ``env``, ``settings`` and parameter ``env`` key, so the container gets exactly those;
     * first-party: the bin (``hnx``, or a path under ``origin.path``).
 
-    Raises ValueError for a record :func:`launch_problems` (or the origin rules) refuse."""
+    ``ctx`` anchors the launch (:class:`LaunchContext`); an npm launch needs its ``npm_prefix``.
+    Raises ValueError for a record :func:`launch_problems` (or the origin rules) refuse, or a
+    launch ``ctx`` cannot anchor."""
+    ctx = ctx or LaunchContext()
     origin, t = rec.get("origin") or {}, rec.get("transport") or {}
     kind, bin_ = origin.get("kind"), t.get("bin")
     if kind in ("package", "git") and origin.get("ecosystem") in ("npm", "pypi"):
@@ -456,9 +493,13 @@ def launch(rec: Mapping[str, Any]) -> tuple[str, list[str]]:
             spec = f"{repo}{'#' if eco == 'npm' else '@'}{origin.get('commit')}"
             default = str(bin_)
         if eco == "npm":
-            return (NPX, ["-y", f"--package={spec}", "--", str(bin_)]) if bin_ else (
-                NPX, ["-y", "--", spec])  # fmt: skip
-        return UVX, ["--from", spec, str(bin_ or default)]
+            bad = anchor_problem(ctx.npm_prefix, "npm_prefix")
+            if bad:
+                raise ValueError(f"an npm launch needs npm_prefix: {bad}")
+            prefix = f"--prefix={ctx.npm_prefix}"
+            return (NPX, ["-y", prefix, f"--package={spec}", "--", str(bin_)]) if bin_ else (
+                NPX, ["-y", prefix, "--", spec])  # fmt: skip
+        return UVX, ["--no-config", "--from", spec, str(bin_ or default)]
     if kind == "image" and origin.get("digest"):
         image = str(origin["image"])
         repo = image.rsplit(":", 1)[0] if ":" in image.rsplit("/", 1)[-1] else image
@@ -474,11 +515,15 @@ def launch(rec: Mapping[str, Any]) -> tuple[str, list[str]]:
     raise ValueError(f"{rec.get('id')}: a {kind} origin has no generated launch")
 
 
+#: a context any launch accepts, for naming the command alone (:func:`launch_command`)
+_ANY = LaunchContext(npm_prefix="/", checkout_root="/")
+
+
 def launch_command(rec: Mapping[str, Any]) -> str | None:
     """The command a stdio record is started with (``npx``, ``uvx``, ``docker``, ``hnx`` ...), or
     None when it has none (a remote server, an origin with no generated launch)."""
     try:
-        return launch(rec)[0] if (rec.get("transport") or {}).get("type") == "stdio" else None
+        return launch(rec, _ANY)[0] if (rec.get("transport") or {}).get("type") == "stdio" else None
     except (ValueError, KeyError, TypeError):
         return None
 

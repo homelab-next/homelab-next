@@ -16,6 +16,7 @@ mcp_servers:
     command: hnx
   notes-broker-agent-real:
     args:
+    - --no-config
     - --from
     - example-notes-mcp==1.2.0
     - notes-mcp
@@ -28,6 +29,7 @@ mcp_servers:
     timeout: 120
   notes-broker-agent-shadow:
     args:
+    - --no-config
     - --from
     - example-notes-mcp==1.2.0
     - notes-mcp
@@ -40,6 +42,7 @@ mcp_servers:
     timeout: 120
   notes-collector-real:
     args:
+    - --no-config
     - --from
     - example-notes-mcp==1.2.0
     - notes-mcp
@@ -52,6 +55,7 @@ mcp_servers:
     timeout: 120
   notes-collector-shadow:
     args:
+    - --no-config
     - --from
     - example-notes-mcp==1.2.0
     - notes-mcp
@@ -64,6 +68,7 @@ mcp_servers:
     timeout: 120
   records:
     args:
+    - --no-config
     - --from
     - example-records-mcp==2.3.1
     - records-mcp

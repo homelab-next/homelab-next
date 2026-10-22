@@ -190,7 +190,9 @@ def _imported(command, args, settings) -> dict:
 
 def _client_entry(args, settings) -> tuple[str, list[str], dict[str, str]]:
     """The record as a client config holds it: the generated launch, then its arguments."""
-    command, prefix = servers.launch(_record(args, settings))
+    command, prefix = servers.launch(
+        _record(args, settings), servers.LaunchContext(npm_prefix="/var/lib/hnx/npm-prefix")
+    )
     return command, [*prefix, *args], settings
 
 
