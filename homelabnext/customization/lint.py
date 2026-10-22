@@ -19,6 +19,8 @@ CU012  error    file unreadable or not parseable
 CU013  error    enablement names an unknown customization, a non-optional one, or unknown hosts
 CU014  warning  upstream is accepted: retire this after upgrading
 CU015  error    maintained_upstream: true outside the project's own shipped profiles directory
+CU016  error    a link does not resolve: an unknown or retired legacy code, or no such record
+CU017  warning  a link names a legacy code (LL-003): write the record's uid instead
 ====== ======== =============================================================================
 """
 
@@ -31,6 +33,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from .links import resolve_links
 from .model import (
     EXPIRY_WARN_DAYS,
     MAX_HORIZON_DAYS,
@@ -59,6 +62,8 @@ RULES = {
     "CU013": "bad enablement",
     "CU014": "upstream accepted, retire",
     "CU015": "maintained_upstream outside shipped profiles",
+    "CU016": "unresolved link",
+    "CU017": "legacy link code",
 }
 
 _scan_text = None
@@ -246,6 +251,26 @@ def _check_contract(c: Customization, u: Universe, out: list[Finding]) -> None:
         )
 
 
+def _check_links(c: Customization, u: Universe, out: list[Finding]) -> None:
+    if u.aliases is None and u.records is None:
+        return  # no registers in this tree: nothing to resolve against
+    for lk in resolve_links(c.doc, u.aliases, u.records):
+        if lk.uid is None:
+            out.append(Finding("CU016", "error", c.id, f"links.{lk.key}: {lk.problem}"))
+        elif lk.legacy:
+            label = (u.records or {}).get(lk.uid, ("", ""))[1]
+            shown = f" ({label})" if label else ""
+            out.append(
+                Finding(
+                    "CU017",
+                    "warning",
+                    c.id,
+                    f"links.{lk.key}: {lk.ref} is a legacy record code; write the {lk.key}'s "
+                    f"uid {lk.uid}{shown} (hnx records assign-uids rewrites it)",
+                )
+            )
+
+
 def lint(
     items: list[Customization],
     universe: Universe,
@@ -285,6 +310,7 @@ def lint(
                 out.append(Finding("CU003", "error", c.id, f"raw endpoint {hit!r}"))
         _check_files(c, universe, out)
         _check_contract(c, universe, out)
+        _check_links(c, universe, out)
         _check_extension_point(c, universe, out)
         if c.id in live or not c.optional:
             _check_scope(c, universe, out)

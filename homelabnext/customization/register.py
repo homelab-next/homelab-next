@@ -3,7 +3,10 @@
 
 Same style as the other registers: output is a pure function of the inputs plus the supplied
 date, no scripts, no external assets. Expired entries are marked loudly; the page summary
-counts them.
+counts them. Given the deployment's :class:`~.universe.Universe`, each ``links`` entry is shown
+by the record's computed display number (``lesson LL 3``) and resolved to its uid (``linked``
+in the JSON; a legacy code through the registers' ``aliases.yml``, see :mod:`.links`); without
+one, as written.
 """
 
 from __future__ import annotations
@@ -15,7 +18,9 @@ from typing import Any
 
 from homelabnext.registers.render import e, page
 
+from .links import resolve_links
 from .model import Customization, days_left, extension_points, sort_key
+from .universe import Universe
 
 __all__ = ["build_register", "render_register", "state_of"]
 
@@ -31,8 +36,38 @@ def state_of(c: Customization, today: date, enabled: dict[str, list[str]]) -> st
     return "active"
 
 
+def _linked(c: Customization, u: Universe | None) -> list[dict[str, Any]]:
+    """Each link resolved: ``key``, ``ref`` as written, ``uid`` and ``label`` (the record's
+    display number) or the ``problem``; empty without a universe holding the registers."""
+    if u is None or (u.aliases is None and u.records is None) or c.schema_errors:
+        return []
+    out = []
+    for lk in resolve_links(c.doc, u.aliases, u.records):
+        row: dict[str, Any] = {"key": lk.key, "ref": lk.ref, "uid": lk.uid}
+        if lk.uid:
+            row["label"] = (u.records or {}).get(lk.uid, ("", lk.uid))[1]
+        else:
+            row["problem"] = lk.problem
+        out.append(row)
+    return out
+
+
+def _links_text(r: dict[str, Any]) -> str:
+    if not r["linked"]:
+        return ", ".join(f"{k} {v}" for k, v in sorted(r["links"].items()))
+    return ", ".join(
+        f"{x['key']} {x['label']} ({x['uid']})"
+        if x["uid"]
+        else f"{x['key']} {x['ref']} (unresolved: {x['problem']})"
+        for x in r["linked"]
+    )
+
+
 def render_register(
-    items: list[Customization], today: date, enabled: dict[str, list[str]] | None = None
+    items: list[Customization],
+    today: date,
+    enabled: dict[str, list[str]] | None = None,
+    universe: Universe | None = None,
 ) -> tuple[str, dict[str, Any]]:
     enabled = enabled or {}
     rows: list[dict[str, Any]] = []
@@ -54,6 +89,7 @@ def render_register(
                 "contract": d.get("contract", ""),
                 "reason": d.get("reason", ""),
                 "links": d.get("links", {}),
+                "linked": _linked(c, universe),
                 "extension_points": extension_points(c) if not c.schema_errors else [],
             }
         )
@@ -68,7 +104,7 @@ def render_register(
     cards = []
     for r in rows:
         cls = {"expired": "fail", "invalid": "fail", "inactive": "skip"}.get(r["state"], "pass")
-        links = ", ".join(f"{k} {v}" for k, v in sorted(r["links"].items()))
+        links = _links_text(r)
         cards.append(
             f'<article id="{e(r["id"])}"><h2>{e(r["id"])} '
             f'<span class="pill {cls}">{e(r["state"])}</span>'
@@ -102,8 +138,9 @@ def build_register(
     out_dir: Path,
     today: date,
     enabled: dict[str, list[str]] | None = None,
+    universe: Universe | None = None,
 ) -> list[Path]:
-    html, data = render_register(items, today, enabled)
+    html, data = render_register(items, today, enabled, universe)
     out_dir.mkdir(parents=True, exist_ok=True)
     h, j = out_dir / "customizations.html", out_dir / "customizations.json"
     h.write_text(html, encoding="utf-8")

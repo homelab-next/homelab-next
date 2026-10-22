@@ -50,6 +50,8 @@ Records written before uids carried a numbered `id` (`LL-001`) and were migrated
 migration recorded every old code in `aliases.yml`; a legacy code met outside the repository (an
 intent filed earlier, `hnx graph related lesson:LL-001`, an MCP call) resolves through it on read
 with a `LegacyRecordCode` deprecation warning, while a code inside a record is a validation error.
+A customization's `links` are stricter: the migration rewrites them, and a code `aliases.yml` does
+not hold or has retired is an error there ([customizations](customization.md#links)).
 A tombstone of the numbered era (a file holding only `id:` and `retired: {reason, replaced_by}`)
 did not become a record: its code is in the `retired:` block of `aliases.yml` with the
 successor's uid, so an old citation of it still lands on the successor.

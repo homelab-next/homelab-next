@@ -522,10 +522,35 @@ def test_a_customization_naming_a_legacy_code_resolves_with_a_warning(tmp_path, 
     root = _fresh(tmp_path, repo_copy)
     g = root / "profiles/board-sensor-driver/customization.yml"
     g.write_text(g.read_text(encoding="utf-8") + "links: {lesson: LL-003}\n", encoding="utf-8")
-    with pytest.warns(LegacyRecordCode, match="LL-003"):
+    with pytest.warns(LegacyRecordCode, match="LL-003") as got:
         graph, rep = build(root)
     assert rep.dangling == []
     assert has(graph, "custom:board-sensor-driver", "links", f"lesson:{U['LL-003']}")
+    # one warning, naming the uid to write instead; the edge reaches the record, its number
+    legacy = [w for w in got if issubclass(w.category, LegacyRecordCode)]
+    assert len(legacy) == 1 and U["LL-003"] in str(legacy[0].message)
+    assert graph.nodes[f"lesson:{U['LL-003']}"].attrs["label"] == "LL 3"
+
+
+@pytest.mark.parametrize("retired", [False, True])
+def test_a_customization_naming_an_unknown_or_retired_code_fails_the_check(
+    tmp_path, repo_copy, capsys, retired
+):
+    root = _fresh(tmp_path, repo_copy)
+    if retired:  # retired before uids, with a successor: still not a link a customization may hold
+        a = root / "examples/registers/aliases.yml"
+        a.write_text(
+            a.read_text(encoding="utf-8")
+            + f"retired:\n  LL-006:\n    reason: a duplicate\n    replaced_by: {U['LL-003']}\n",
+            encoding="utf-8",
+        )
+    code = "LL-006" if retired else "LL-900"
+    g = root / "profiles/board-sensor-driver/customization.yml"
+    g.write_text(g.read_text(encoding="utf-8") + f"links: {{lesson: {code}}}\n", encoding="utf-8")
+    assert main(["check", "--root", str(root)]) == 1
+    assert f"dangling edge: custom:board-sensor-driver -links-> lesson:{code}" in (
+        capsys.readouterr().out
+    )
 
 
 def test_related_resolves_a_uid_or_a_legacy_code(capsys):

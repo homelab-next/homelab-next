@@ -78,7 +78,7 @@
             { "type": "string", "pattern": "^LL-[0-9]{3,}$" },
             { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)" }
           ],
-          "description": "1.2: the lesson's uid (ADR-0019); a legacy numbered code still validates and resolves through examples/registers/aliases.yml with a deprecation warning."
+          "description": "1.2: the lesson's uid (ADR-0019); a legacy numbered code still validates and resolves through examples/registers/aliases.yml to that uid, with one deprecation warning naming it (hnx custom check CU017, hnx graph build); a code aliases.yml does not hold, or lists as retired, is an error (CU016; a dangling graph edge). hnx records assign-uids rewrites it as the uid."
         },
         "runbook": {
           "anyOf": [

@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """``hnx records``: record identity (ADR-0019).
 
-    hnx records assign-uids TREE... [--also PATH...] [--dry-run]
+    hnx records assign-uids TREE... [--also PATH...] [--customizations DIR...] [--dry-run]
         give every record without a uid its UUIDv7, rename it <uid>.md, rewrite every reference
-        to its numbered code (records, sidecar events, the --also files) and record the code in
-        TREE/aliases.yml; idempotent (exit 0; 1 on a problem, nothing written)
+        to its numbered code (records, sidecar events, the --also files, the ``links`` of every
+        customization) and record the code in TREE/aliases.yml; idempotent (exit 0; 1 on a
+        problem, nothing written).  The customizations are the ones ``hnx custom`` loads (the
+        shipped profiles, HNX_CUSTOMIZATIONS_CONFIG and HNX_CUSTOMIZATIONS_DIR) unless
+        --customizations names the directories (none: ``--customizations`` alone)
     hnx records numbers TREE [--json]
         every record of a strategy or registers tree with its computed display number
     hnx records uid [-n N]
@@ -63,6 +66,12 @@ def main(argv: list[str] | None = None) -> int:
     a = sub.add_parser("assign-uids", help="migrate numbered records to uids (idempotent)")
     a.add_argument("trees", nargs="+", help="strategy or registers directories")
     a.add_argument("--also", nargs="*", default=[], help="other files whose codes to rewrite")
+    a.add_argument(
+        "--customizations",
+        nargs="*",
+        default=None,
+        help="customization directories whose links to rewrite (default: those hnx custom loads)",
+    )
     a.add_argument("--dry-run", action="store_true", help="report, write nothing")
     n = sub.add_parser("numbers", help="the computed display number of every record")
     n.add_argument("tree")
@@ -94,8 +103,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     from .migrate import MigrationError, assign_uids
 
+    custom = ns.customizations
+    if custom is None:
+        from homelabnext.customization.loader import resolve_settings
+
+        settings = resolve_settings()
+        custom = [settings.public_dir, *settings.local_dirs]
     try:
-        plan = assign_uids(ns.trees, also=ns.also, dry_run=ns.dry_run)
+        plan = assign_uids(ns.trees, also=ns.also, customizations=custom, dry_run=ns.dry_run)
     except MigrationError as ex:
         print(f"[records] FATAL: {ex}", file=sys.stderr)
         return 1

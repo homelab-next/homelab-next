@@ -395,6 +395,57 @@ def test_the_also_files_are_rewritten(registers, tmp_path):
     assert note.read_text() == f"record: {u}\nsuperseded_by: LL-0011\nalso LL-001-old\n"
 
 
+def test_customization_links_are_rewritten_idempotently(registers, tmp_path):
+    custom = tmp_path / "custom"
+    (custom / "a").mkdir(parents=True)
+    (custom / "b").mkdir()
+    yml = custom / "a" / "customization.yml"
+    yml.write_text("id: custom:a\nreason: learned in LL-001\nlinks: {lesson: LL-001}\n")
+    js = custom / "b" / "customization.json"
+    js.write_text('{"id": "custom:b", "links": {"lesson": "LL-001", "runbook": "RB-001"}}\n')
+    plan = migrate(registers, customizations=[custom])
+    codes = load_aliases(registers).codes
+    u, r = codes["LL-001"], codes["RB-001"]
+    assert yml.read_text() == f"id: custom:a\nreason: learned in LL-001\nlinks: {{lesson: {u}}}\n"
+    assert (
+        js.read_text() == f'{{"id": "custom:b", "links": {{"lesson": "{u}", "runbook": "{r}"}}}}\n'
+    )
+    assert {yml, js} <= set(plan.written)
+    again = migrate(registers, customizations=[custom])
+    assert not again.changed  # the second run finds no code left to rewrite
+
+
+def test_the_cli_rewrites_the_customizations_hnx_custom_loads(registers, tmp_path, monkeypatch):
+    from homelabnext.identity.cli import main
+
+    custom = tmp_path / "overlay" / "a"
+    custom.mkdir(parents=True)
+    f = custom / "customization.yml"
+    f.write_text("id: custom:a\nlinks: {runbook: RB-001}\n")
+    monkeypatch.delenv("HNX_CUSTOMIZATIONS_CONFIG", raising=False)
+    monkeypatch.setenv("HNX_CUSTOMIZATIONS_DIR", str(tmp_path / "overlay"))
+    assert main(["assign-uids", str(registers), "--dry-run"]) == 0
+    assert "RB-001" in f.read_text()  # a dry run writes nothing
+    assert main(["assign-uids", str(registers), "--customizations"]) == 0  # none named
+    assert "RB-001" in f.read_text()
+    assert main(["assign-uids", str(registers)]) == 0
+    assert (
+        f.read_text()
+        == f"id: custom:a\nlinks: {{runbook: {load_aliases(registers).codes['RB-001']}}}\n"
+    )
+
+
+def test_a_customization_whose_rewrite_would_change_more_stops_the_migration(registers, tmp_path):
+    custom = tmp_path / "custom" / "a"
+    custom.mkdir(parents=True)
+    f = custom / "customization.yml"
+    f.write_text("id: custom:a\nreason: 'lesson: LL-001'\n")  # a link-shaped quotation in prose
+    before = snapshot(registers)
+    with pytest.raises(MigrationError, match="would change more than links"):
+        migrate(registers, customizations=[tmp_path / "custom"])
+    assert snapshot(registers) == before and "LL-001" in f.read_text()
+
+
 def test_two_records_claiming_one_code_stop_the_migration(registers):
     dup = registers / "lessons" / "LL-001-copy.md"
     dup.write_text((registers / "lessons" / "LL-001.md").read_text())
