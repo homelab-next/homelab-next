@@ -169,7 +169,7 @@ def _read(path: Path) -> Any:
     try:
         return yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
-        raise CatalogError(f"{path}: cannot read: {exc}") from exc
+        raise CatalogError(f"{path}: cannot read: {credentials.reason(exc)}") from None
 
 
 def load(path: str | Path | None = None) -> Catalog:
@@ -256,12 +256,14 @@ def _validator() -> Any:
 
 
 def _message(e: Any) -> str:
-    """One readable message for a schema error: for a ``oneOf`` (a version that is null or exact,
-    a digest that is null or sha256), the alternative that is not a type mismatch."""
+    """One readable message for a schema error, never naming the value it is about
+    (:func:`homelabnext.mcp.credentials.schema_message`): for a ``oneOf`` (a version that is
+    null or exact, a digest that is null or sha256), the alternative that is not a type
+    mismatch."""
     if e.validator == "oneOf" and e.context:
         useful = [c for c in e.context if c.validator != "type"] or list(e.context)
-        return useful[0].message
-    return e.message
+        return credentials.schema_message(useful[0])
+    return credentials.schema_message(e)
 
 
 def _schema_problems(rec: Mapping[str, Any], where: str) -> list[str]:
@@ -274,7 +276,7 @@ def _schema_problems(rec: Mapping[str, Any], where: str) -> list[str]:
             key, branches = _BRANCHES[path]
             got = e.instance.get(key)
             if got not in branches:
-                out.append(f"{where}: {path}.{key} must be one of {sorted(branches)}, not {got!r}")
+                out.append(f"{where}: {path}.{key} must be one of {sorted(branches)}")
                 continue
             sub = v.evolve(schema={"$ref": f"#/$defs/{branches[got]}", "$defs": v.schema["$defs"]})
             for se in sorted(sub.iter_errors(e.instance), key=lambda x: list(map(str, x.path))):
@@ -301,33 +303,33 @@ def origin_problems(
     out: list[str] = []
     if kind == "unknown":
         out.append(
-            f"{where}: origin is unknown ({origin.get('hint') or 'no hint'}): name the "
+            f"{where}: origin is unknown: name the "
             "first-party path, or the package with its exact version and sha256, the image "
             "digest or the git commit"
         )
     elif kind == "package":
         if not origin.get("version"):
-            out.append(f"{where}: package {origin.get('package')} has no exact version (unpinned)")
+            out.append(f"{where}: the package has no exact version (unpinned)")
         if not origin.get("sha256") and not origin.get("lock"):
             out.append(
-                f"{where}: package {origin.get('package')} has no sha256 and no lock file "
+                f"{where}: the package has no sha256 and no lock file "
                 "(unpinned: record the release artifact's hash)"
             )
         lock = origin.get("lock")
         if lock and catalog_root is not None:
             f = catalog_root / str(lock)
             if not f.is_file():
-                out.append(f"{where}: lock file {lock} does not exist (relative to the catalog)")
+                out.append(f"{where}: its lock file does not exist (relative to the catalog)")
             elif str(origin.get("package")) not in f.read_text(encoding="utf-8", errors="replace"):
-                out.append(f"{where}: lock file {lock} does not mention {origin.get('package')}")
+                out.append(f"{where}: its lock file does not mention the package")
     elif kind == "image" and not origin.get("digest"):
-        out.append(f"{where}: image {origin.get('image')} has no digest (unpinned)")
+        out.append(f"{where}: the image has no digest (unpinned)")
     elif kind == "git" and not origin.get("commit"):
-        out.append(f"{where}: git origin {origin.get('repo')} has no commit (unpinned)")
+        out.append(f"{where}: the git origin has no commit (unpinned)")
     elif kind == "first-party" and source_root is not None:
         p = source_root / str(origin.get("path", ""))
         if not p.exists():
-            out.append(f"{where}: first-party path {origin.get('path')} is not in the source tree")
+            out.append(f"{where}: the first-party path is not in the source tree")
     return out
 
 
@@ -367,10 +369,10 @@ def bin_problem(bin_: str) -> str | None:
     bare name (a path runs only for a first-party server), never an interpreter, shell, wrapper
     or launcher (:data:`NOT_A_BIN`)."""
     if not BIN.fullmatch(bin_):
-        return f"bin {bin_} is not a bare command name (a path runs only for a first-party server)"
+        return "bin is not a bare command name (a path runs only for a first-party server)"
     if bin_.lower() in NOT_A_BIN or _NOT_A_BIN.fullmatch(bin_):
         return (
-            f"bin {bin_} is an interpreter, shell, wrapper or launcher, not the package's own "
+            f"bin {bin_.lower()} is an interpreter, shell, wrapper or launcher, not the package's own "
             "command (it would run whatever its arguments say, not the pinned code)"
         )
     return None
@@ -398,7 +400,7 @@ def resolve_bin(origin: Mapping[str, Any], bin_: Any) -> tuple[str | None, str |
     if bin_ is not None:
         if str(bin_) not in bins:
             return None, (
-                f"bin {bin_} is not one of the package's reviewed bins {bins} (npx and uvx run "
+                "bin is not one of the package's reviewed bins (npx and uvx run "
                 "any command on PATH under that name)"
             )
         return str(bin_), None
@@ -406,7 +408,7 @@ def resolve_bin(origin: Mapping[str, Any], bin_: Any) -> tuple[str | None, str |
         return bins[0], None
     if base_name(origin) in bins:
         return base_name(origin), None
-    return None, f"declares several bins {bins}: name the one it runs (transport.bin)"
+    return None, "declares several bins: name the one it runs (transport.bin)"
 
 
 #: the first-party ``hnx`` subcommands that serve MCP on stdio (``transport.entry`` names one),
@@ -495,9 +497,9 @@ def launch_problems(rec: Mapping[str, Any], where: str) -> list[str]:
                 "control what runs): run it from an image pinned by digest"
             ]
         if eco == "npm" and ver and not _NPM_EXACT.fullmatch(str(ver)):
-            out.append(f"{where}: npm version {ver} is not a full x.y.z (npm reads it as a range)")
+            out.append(f"{where}: the npm version is not a full x.y.z (npm reads it as a range)")
         if not (_NPM_NAME if eco == "npm" else _PYPI_NAME).fullmatch(pkg):
-            out.append(f"{where}: {pkg} is not an {eco} package name")
+            out.append(f"{where}: the package is not an {eco} package name")
         if origin.get("extras") and eco != "pypi":
             out.append(f"{where}: extras are a pypi package's; npm has none")
         out += _bins_problems(origin, bin_, where)
@@ -509,7 +511,10 @@ def launch_problems(rec: Mapping[str, Any], where: str) -> list[str]:
                 "uvx), which says how it is installed"
             )
         if not _GIT_REPO.fullmatch(repo):
-            out.append(f"{where}: git repo {repo} is not an https URL without credentials")
+            out.append(
+                f"{where}: git repo {credentials.redact_url(repo)} is not an https URL without "
+                "credentials"
+            )
         if origin.get("subdirectory") and origin.get("ecosystem") != "pypi":
             out.append(
                 f"{where}: a git subdirectory is installed only by uvx (pypi); npm installs no "
@@ -525,13 +530,15 @@ def launch_problems(rec: Mapping[str, Any], where: str) -> list[str]:
     elif kind == "first-party":
         path = str(origin.get("path", "")).rstrip("/")
         if bin_ is None:
-            out.append(f"{where}: a first-party server names its bin: hnx, or a path under {path}")
+            out.append(
+                f"{where}: a first-party server names its bin: hnx, or a path under origin.path"
+            )
         elif bin_ == HNX:
             out += [f"{where}: {p}" for p in hnx_args_problems(t.get("entry"), t.get("args") or ())]
         elif bin_ != HNX and not (bin_ == path or str(bin_).startswith(path + "/")):
             out.append(
-                f"{where}: first-party bin {bin_} is neither hnx nor a path under origin.path "
-                f"({path}/): a first-party server runs this checkout's code"
+                f"{where}: first-party bin is neither hnx nor a path under origin.path: a "
+                "first-party server runs this checkout's code"
             )
     return out
 
@@ -655,9 +662,9 @@ def path_bin_problems(rec: Mapping[str, Any], where: str, root: Path | None) -> 
         return []
     f = Path(root) / rel
     if f.is_symlink():
-        return [f"{where}: first-party bin {rel} is a symlink (it runs what the link names)"]
+        return [f"{where}: the first-party bin is a symlink (it runs what the link names)"]
     if not f.is_file() or not f.resolve().is_relative_to(Path(root).resolve()):
-        return [f"{where}: first-party bin {rel} is not a file in the checkout"]
+        return [f"{where}: the first-party bin is not a file in the checkout"]
     return []
 
 
@@ -912,8 +919,8 @@ def _template_problems(rec: Mapping[str, Any], where: str) -> list[str]:
         if pat is not None:
             try:
                 re.compile(pat)
-            except re.error as exc:
-                out.append(f"{where}: parameter {name}: pattern does not compile ({exc})")
+            except re.error:
+                out.append(f"{where}: parameter {name}: its pattern does not compile")
                 continue
         if default is not None and not TEMPLATE.search(default):
             bad = value_problem(p, default)
@@ -923,12 +930,13 @@ def _template_problems(rec: Mapping[str, Any], where: str) -> list[str]:
 
 
 def value_problem(param: Mapping[str, Any], value: str) -> str | None:
-    """Why ``value`` does not fit a parameter's type (enum, pattern), or None."""
+    """Why ``value`` does not fit a parameter's type (enum, pattern), or None; the reason names
+    the rule, never the value (a pasted token must not reach a log)."""
     if param.get("enum") is not None and value not in param["enum"]:
-        return f"{value!r} is not one of {param['enum']}"
+        return "the value is not one of the parameter's enum"
     pat = param.get("pattern")
     if pat is not None and not re.fullmatch(pat, value):
-        return f"{value!r} does not match {pat}"
+        return "the value does not match the parameter's pattern"
     return None
 
 
@@ -998,8 +1006,7 @@ def _registry_problems(cat: Catalog, registry: Any, skip: Iterable[str] = ()) ->
                     )
                 if svc.mcp.get("path", "/mcp") != t.get("path", "/mcp"):
                     out.append(
-                        f"{where}: path {t.get('path', '/mcp')} but the registry says "
-                        f"{svc.mcp.get('path')} for svc:{svc_name}"
+                        f"{where}: its path is not the one the registry gives svc:{svc_name}"
                     )
         rt = rec.get("runtime")
         if isinstance(rt, Mapping) and rt.get("host") not in registry.hosts:

@@ -113,7 +113,7 @@ RULES = [
     ("notes", lambda r: r.update(origin={"kind": "unknown", "hint": "launcher x"}), "origin is unknown"),
     ("notes", lambda r: r.update(origin={"kind": "git", "repo": "code.example/x", "commit": None}), "has no commit"),
     ("hnx-catalog", lambda r: r["origin"].update(path="homelabnext/nothing-here/"), "not in the source tree"),
-    ("notes", lambda r: r["origin"].update(version="^1.2.0"), "origin/version: '^1.2.0' does not match"),  # schema: a range
+    ("notes", lambda r: r["origin"].update(version="^1.2.0"), "origin/version: does not match"),  # schema: a range
     ("notes", lambda r: r.update(tools=[]), "lists no tools"),
     ("notes", lambda r: r["tools"].append(dict(r["tools"][0])), "is listed twice"),
     ("notes", lambda r: r.update(id="other-id"), "is not the file name"),
@@ -133,7 +133,7 @@ RULES = [
     ("bash", lambda r: r.update(replaced_by="puppeteer"), "is not an active catalog server"),
     ("lake", lambda r: r["transport"].update(endpoint="svc:nothing"), "is not a registry service"),
     ("lake", lambda r: r["transport"].update(endpoint="svc:records-db"), "speaks postgres"),
-    ("lake", lambda r: r["transport"].update(path="/other"), "but the registry says"),
+    ("lake", lambda r: r["transport"].update(path="/other"), "its path is not the one the registry gives"),
     ("lake", lambda r: r["transport"].update(type="sse"), "but the registry says"),
     ("lake", lambda r: r["runtime"].update(host="nowhere"), "is not a registry host"),
     ("ssh", lambda r: r.update(egress=["host:nowhere"]), "is not a registry host"),
@@ -147,7 +147,7 @@ RULES = [
     ("github", lambda r: r["origin"].update(version="3.2"), "not a full x.y.z"),
     ("docker", lambda r: r["transport"].update(bin="docker-mcp"), "runs its own reviewed entrypoint"),
     ("github", lambda r: r["transport"].update(command="npx"), "('command' was unexpected)"),
-    ("notes", lambda r: (r["origin"].pop("sha256"), r["origin"].update(lock="locks/none.lock")), "lock file locks/none.lock does not exist"),
+    ("notes", lambda r: (r["origin"].pop("sha256"), r["origin"].update(lock="locks/none.lock")), "its lock file does not exist"),
     # no literal credential, nothing a client would expand (S4)
     ("filesystem", lambda r: r["transport"].setdefault("args", []).extend(["--github-token", "fakeGhTokenAbCdEf0123456789xyz"]), "follows --github-token"),
     ("filesystem", lambda r: r["transport"].setdefault("args", []).append("--api-key=fakeshort"), "--api-key takes a credential"),
@@ -167,7 +167,7 @@ RULES = [
     ("lake", lambda r: r.update(capabilities=["cap:telepathy"]), "capabilities names cap:telepathy"),
     ("notes", lambda r: r.update(headers={"X": "secret:mcp/x"}), "headers are for a remote (http/sse) server"),
     ("lake", lambda r: r.update(env={"X": "secret:mcp/x"}), "env is for a stdio server"),
-    ("lake", lambda r: r["origin"].update(digest="sha256:zz"), "origin/digest: 'sha256:zz' does not match"),
+    ("lake", lambda r: r["origin"].update(digest="sha256:zz"), "origin/digest: does not match"),
     ("lake", lambda r: r.update(origin={"kind": "tarball"}), "origin.kind must be one of"),
 ]  # fmt: skip
 
@@ -283,7 +283,7 @@ def test_a_lock_file_must_name_the_package(tmp_catalog):
     (tmp_catalog / "locks" / "notes.lock").write_text("other-package==1.0.0 --hash=sha256:00\n")
     cat = _edit(tmp_catalog, "notes", lambda r: (r["origin"].pop("sha256"),
                                                   r["origin"].update(lock="locks/notes.lock")))  # fmt: skip
-    assert any("does not mention example-notes-mcp" in p for p in servers.check(cat))
+    assert any("lock file does not mention the package" in p for p in servers.check(cat))
     (tmp_catalog / "locks" / "notes.lock").write_text("example-notes-mcp==1.2.0 --hash=sha256:00\n")
     assert not [p for p in servers.check(servers.load(tmp_catalog)) if "lock" in p]
 

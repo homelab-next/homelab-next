@@ -190,8 +190,8 @@ def _read(launch: Launch, args: list[str], start: int, flags: Flags) -> None:
             i += 1
             continue
         launch.problems.append(
-            f"{launch.launcher} {a.split('=', 1)[0]}: an unknown flag before the launch position "
-            "(it may take a value, so what runs cannot be read)"
+            f"{launch.launcher}: an unknown flag before the launch position (it may take a value, "
+            "so what runs cannot be read)"
         )
         # never take the next argument as the launch position: it may be this flag's value
         i += 1 if long_eq or attached else 2
@@ -355,10 +355,11 @@ def map_launch(command: str, args: list[str]) -> Mapped:
     credentials from them."""
     args = [str(a) for a in args]
     got = parse(command, args)
-    unknown = {"kind": "unknown", "hint": f"launcher {got.launcher or 'none'}"}
+    known = got.launcher in (*NPM, *PYPI, *IMAGE, *FIRST_PARTY)
+    unknown = {"kind": "unknown", "hint": f"launcher {got.launcher if known else 'not read'}"}
     if got.ecosystem is None:
-        return Mapped(unknown, why=f"{got.launcher or 'no command'} is not a launcher a record "
-                      "generates (a record names its origin; the renderer writes the launch)")  # fmt: skip
+        return Mapped(unknown, why="its command is not a launcher a record generates (a record "
+                      "names its origin; the renderer writes the launch)")  # fmt: skip
     if got.ecosystem == "first-party":
         from .servers import HNX_ENTRIES, hnx_args_problems
 
@@ -383,7 +384,7 @@ def map_launch(command: str, args: list[str]) -> Mapped:
     if got.ecosystem == "image":
         parts = split_image(spec)
         if parts is None:
-            return Mapped(unknown, why=f"{got.launcher}: {spec!r} is not an image reference")
+            return Mapped(unknown, why=f"{got.launcher}: its image is not an image reference")
         repo, tag, digest = parts
         origin = {"kind": "image", "image": repo + (f":{tag}" if tag else ""), "digest": digest}
         for i, name in got.flag_names.items():
@@ -394,7 +395,7 @@ def map_launch(command: str, args: list[str]) -> Mapped:
         return Mapped(origin, None, args[got.server_args :], env, dropped)
     origin = _origin(got.ecosystem, spec)
     if origin is None:
-        return Mapped(unknown, why=f"{got.launcher}: {spec!r} is not a package it can pin")
+        return Mapped(unknown, why=f"{got.launcher}: what it launches is not a package it can pin")
     bin_ = args[got.bin_index] if got.bin_index is not None else None
     named = (_NPM if got.ecosystem == "npm" else _UV if got.launcher != "pipx" else _PIPX).spec
     dropped = [f for f in flags if f not in named]

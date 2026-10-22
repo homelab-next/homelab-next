@@ -458,3 +458,101 @@ def scan_args(args: Iterable[str]) -> list[Finding]:
         elif carries(a) or re.search(r"(?i)authorization:", a):
             out.append(Finding(i, "value"))
     return out
+
+
+# ------------------------------------------------------------------------- safe messages
+# A problem, note or exception message of the MCP catalog never carries a value taken from a
+# record, a render spec, a profile or a parameter: those values reach stdout, stderr and CI logs,
+# and a value can be a credential pasted by mistake (which check exists to catch).  A message
+# names the field and the rule it broke; a name or id validated against its own pattern may
+# appear; a URL appears only as its scheme and host, its userinfo as ``***``.
+
+#: a key named in a schema message (an unexpected property): a plain identifier, else not named
+_KEY_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,63}")
+
+
+def redact_url(url: str) -> str:
+    """A URL as a message may show it: its scheme and host (and port), userinfo as ``***``, no
+    path, query or fragment."""
+    text = str(url)
+    try:
+        parts = urlsplit(text.removeprefix("git+"))
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return "a URL that does not parse"
+    if not parts.scheme or not host:
+        return "a value that is not a URL"
+    user = "***@" if parts.username is not None or parts.password is not None else ""
+    return f"{parts.scheme}://{user}{host}{f':{port}' if port else ''}"
+
+
+def reason(exc: BaseException) -> str:
+    """Why a file could not be read, without its content: a YAML or JSON error's problem and
+    position (never the line it quotes), an OS error's description, else the error's type."""
+    mark = getattr(exc, "problem_mark", None)
+    if mark is not None:  # yaml.MarkedYAMLError: its str() quotes the offending line
+        return f"{getattr(exc, 'problem', None) or 'not YAML'} (line {mark.line + 1}, column {mark.column + 1})"
+    if isinstance(exc, json.JSONDecodeError):
+        return f"{exc.msg} (line {exc.lineno}, column {exc.colno})"
+    if isinstance(exc, OSError):
+        return exc.strerror or type(exc).__name__
+    return type(exc).__name__
+
+
+def schema_message(e: object) -> str:
+    """A jsonschema error's message without the value it is about (jsonschema's own messages
+    quote the instance: ``'https://user:pw@...' does not match ...``)."""
+    validator = getattr(e, "validator", None)
+    expected = getattr(e, "validator_value", None)
+    instance = getattr(e, "instance", None)
+    if validator == "pattern":
+        return f"does not match {expected!r}"
+    if validator == "enum":
+        return f"is not one of {expected!r}"
+    if validator == "const":
+        return f"is not {expected!r}"
+    if validator == "type":
+        return f"is not of type {expected!r}"
+    if validator == "required":
+        return str(getattr(e, "message", "a required property is missing"))  # a schema name
+    if validator == "additionalProperties" and isinstance(instance, dict):
+        known = set((getattr(e, "schema", None) or {}).get("properties") or {})
+        extra = sorted(str(k) for k in instance if k not in known)
+        if extra and all(_KEY_NAME.fullmatch(k) for k in extra):
+            return f"Additional properties are not allowed ({', '.join(map(repr, extra))} was unexpected)"
+        return "Additional properties are not allowed (an unexpected key)"
+    if validator in ("oneOf", "anyOf"):
+        return "is not valid under any of the given schemas"
+    if validator == "not":
+        return "is not allowed here"
+    if validator in ("maxLength", "minLength", "maxItems", "minItems", "maximum", "minimum",
+                     "uniqueItems", "maxProperties", "minProperties"):  # fmt: skip
+        return f"fails {validator} {expected!r}"
+    return f"fails {validator}"
+
+
+def safe_schema_errors(directory: str, name: str, doc: object) -> list[str]:
+    """``schemas/<directory>/<name>.schema.json`` errors as :func:`schema_message` words them
+    (``homelabnext.agent.schemas.schema_errors`` quotes the values)."""
+    from jsonschema import Draft202012Validator
+
+    from homelabnext import paths
+    from homelabnext.agent.schemas import _registry
+
+    schema = json.loads(paths.schema_file(directory, f"{name}.schema.json").read_text("utf-8"))
+    v = Draft202012Validator(schema, registry=_registry())
+    return [
+        f"{'/'.join(map(str, e.absolute_path)) or '$'}: {schema_message(e)}"
+        for e in sorted(v.iter_errors(doc), key=lambda e: list(map(str, e.absolute_path)))
+    ]
+
+
+#: a name a message may quote (a server, parameter, lane or kind name as a spec writes it)
+_SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@-]{0,63}")
+
+
+def name(value: object) -> str:
+    """``value`` quoted when it is a plain name, else a placeholder (it is not one, and it may be
+    anything, a credential included)."""
+    text = str(value)
+    return repr(text) if _SAFE_NAME.fullmatch(text) and not looks_secret(text) else "(not a name)"

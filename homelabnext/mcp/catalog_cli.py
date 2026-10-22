@@ -31,7 +31,7 @@ import yaml
 
 from homelabnext.registry.model import RegistryError
 
-from . import clients, importer, servers
+from . import clients, credentials, importer, servers
 
 
 def _paths(args) -> tuple[Path, Path | None]:
@@ -122,9 +122,7 @@ def _params(items: list[str]) -> dict[str, dict[str, str]]:
         key, eq, value = item.partition("=")
         server, dot, name = key.rpartition(".")
         if not eq or not dot or not server or not name:
-            raise ValueError(
-                f"--param {item!r}: write SERVER.NAME=VALUE (SERVER@LANE for one lane)"
-            )
+            raise ValueError("a --param: write SERVER.NAME=VALUE (SERVER@LANE for one lane)")
         out.setdefault(server, {})[name] = value
     return out
 
@@ -302,7 +300,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"hnx mcp catalog render: refused ({len(exc.problems)} problem(s))", file=sys.stderr)
         return 1
     except (servers.CatalogError, ValueError, OSError, RegistryError, yaml.YAMLError) as exc:
-        print(f"hnx mcp catalog: {exc}", file=sys.stderr)
+        why = credentials.reason(exc) if isinstance(exc, yaml.YAMLError) else exc
+        print(f"hnx mcp catalog: {why}", file=sys.stderr)
         return 2
 
 

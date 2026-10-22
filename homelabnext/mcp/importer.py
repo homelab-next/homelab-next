@@ -375,7 +375,7 @@ def draft(
             )  # fmt: skip
             rec["origin"]["bins"] = [seen]
             notes.append(
-                f"{sid}: origin.bins {[seen]} is what the config ran, not what the package "
+                f"{sid}: origin.bins holds the bin the config ran, not what the package "
                 "declares: review the released artifact's bin names (package.json bin, the "
                 "wheel's console_scripts) and list them (check cannot fetch the package)"
             )

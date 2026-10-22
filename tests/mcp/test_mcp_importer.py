@@ -87,7 +87,7 @@ def test_drafts_carry_no_secret_and_the_report_names_each_one(tmp_path, capsys):
     assert notes["origin"] == {"kind": "package", "ecosystem": "npm", "package": "@example/notes-mcp",
                                "version": "1.4.0", "sha256": None,
                                "bins": ["notes-mcp"]}  # fmt: skip
-    assert "origin.bins ['notes-mcp'] is what the config ran" in report.out  # for review
+    assert "origin.bins holds the bin the config ran" in report.out  # for review
     assert written["search"]["env"] == {"SEARCH_KEY": "secret:mcp/search-key"}
     assert written["search"]["transport"] == {
         "type": "stdio",
@@ -117,7 +117,7 @@ def test_drafts_fail_the_check_until_pinned_and_classified(tmp_path):
     importer.write_records(res.records, out)
     problems = servers.check(servers.load(out), registry=load(ROOT / "examples" / "services.yml"))
     text = "\n".join(problems)
-    assert "notes-store.yml: package @example/notes-mcp has no sha256" in text
+    assert "notes-store.yml: the package has no sha256" in text
     assert "local-tool.yml: origin is unknown" in text
     assert "lists no tools" in text
     assert "remote-lake.yml: endpoint svc:lake-query speaks" not in text  # a real http service

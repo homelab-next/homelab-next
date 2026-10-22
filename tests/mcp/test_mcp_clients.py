@@ -387,8 +387,8 @@ def test_a_parameter_value_never_routes_a_secret_or_a_variable(tmp_path):
         ("${VAULT_ROOT_TOKEN}", "carries $, secret:"),
         ("$(id)", "carries $, secret:"),
         ("a\nb", "control character"),
-        (True, "True is not a string"),
-        (493, "493 is not a string"),
+        (True, "is not a string"),
+        (493, "is not a string"),
     ):
         with pytest.raises(clients.RenderError, match=re.escape(phrase)):
             clients.instances(cat, prof, params={"notes": {"writable": value}})
@@ -579,11 +579,11 @@ def test_a_spec_lane_or_home_is_a_plain_name_and_params_name_a_real_lane(tmp_pat
         (lambda d: d.update(lanes=["real\n", "shadow"]), "lanes must list plain names"),
         # a typo in a server or lane name is refused, never silently ignored
         (lambda d: d["profiles"][1]["params"].update({"notes@shadwo": {"mode": "read"}}),
-         "'shadwo' is not a lane"),
+         "'notes@shadwo': not a rendered lane"),
         (lambda d: d["outputs"][0].update(params={"nots": {"mode": "read"}}),
          "no profile of the spec is granted nots"),
         (lambda d: d["outputs"][0].update(params={"notes@rael": {"mode": "read"}}),
-         "'rael' is not a lane"),
+         "'notes@rael': not a rendered lane"),
     ):  # fmt: skip
         doc = yaml.safe_load(yaml.safe_dump(base))
         edit(doc)

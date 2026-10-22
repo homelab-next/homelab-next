@@ -47,7 +47,9 @@ import yaml
 from homelabnext._yaml import UniqueKeyLoader
 from homelabnext.registry.model import secret_env_name
 
-from . import servers
+from . import credentials, servers
+
+_name = credentials.name
 
 CLIENTS = ("claude-code", "claude-desktop", "generic", "hermes", "llm-orchestrator")
 #: llm-orchestrator's server-name rule (internal/grants/grants.go:68, nameRe)
@@ -160,10 +162,10 @@ def unsafe_value(value: Any) -> str | None:
     ``true`` or ``0755`` would arrive as ``True`` and ``493``) and is passed through verbatim,
     so it may not carry a variable reference, a secret reference or a control character."""
     if not isinstance(value, str):
-        return f"{value!r} is not a string (quote it: YAML reads true and 0755 as other types)"
+        return "is not a string (quote it: YAML reads true and 0755 as other types)"
     if _UNSAFE_VALUE.search(value):
         return (
-            f"{value!r} carries $, secret: or a control character (a value is never expanded; "
+            "carries $, secret: or a control character (a value is never expanded; "
             "secrets come only from the record's own env, headers and arguments)"
         )
     return None
@@ -218,13 +220,13 @@ def instances(
         problems.append(f"{pid}: profile_file {bad_file}")
     for what, value in [*(("lane", lane) for lane in lanes), *([("home", home)] if home else [])]:
         if not isinstance(value, str) or not NAME.fullmatch(value):
-            problems.append(f"{pid}: {what} {value!r} is not a plain name ({NAME.pattern})")
+            problems.append(f"{pid}: a {what} is not a plain name ({NAME.pattern})")
     for key in params:
         sid, at, lane = str(key).partition("@")
         if sid not in names:
-            problems.append(f"{pid}: parameters for {key}, which the profile is not granted")
+            problems.append(f"{pid}: parameters for {_name(key)}, which the profile is not granted")
         elif at and lane not in lanes:
-            problems.append(f"{pid}: parameters for {key}: {lane!r} is not a lane ({lanes})")
+            problems.append(f"{pid}: parameters for {_name(key)}: not a rendered lane ({lanes})")
     for sid in names:
         rec = cat.get(sid)
         if rec is None:
@@ -238,7 +240,9 @@ def instances(
             given = {**(params.get(sid) or {}), **(params.get(f"{sid}@{lane}") or {})}
             unknown = sorted(set(given) - set(declared))
             if unknown:
-                problems.append(f"{pid}: {sid} has no parameter(s) {unknown}")
+                problems.append(
+                    f"{pid}: {sid} has no parameter(s) [{', '.join(map(_name, unknown))}]"
+                )
                 continue
             base = {"id": sid, "profile": who, "lane": lane, "home": home}
             choices: list[list[tuple[str, str]]] = []
@@ -275,7 +279,8 @@ def instances(
                 inst.name = _fill(str(rec.get("instance") or "{id}"), inst.vars())
                 if not ORCH_NAME.fullmatch(inst.name):
                     problems.append(
-                        f"{pid}: {sid}: instance name {inst.name!r} is not a valid name"
+                        f"{pid}: {sid}: an instance name is not a valid name (its template "
+                        "and parameter values)"
                     )
                 out.append(inst)
     if problems:
@@ -415,7 +420,7 @@ def home_servers(
             continue
         if inst.name in out and out[inst.name] != d:
             problems.append(
-                f"instance name {inst.name!r} renders two different servers (add {{profile}} "
+                f"an instance name of {inst.server} renders two different servers (add {{profile}} "
                 f"or {{lane}} to {inst.server}'s instance template)"
             )
         out[inst.name] = d
@@ -621,7 +626,7 @@ def orch_accepts(catalog_text: str, grant_blocks: Mapping[str, str]) -> list[str
     kinds = doc.get("kinds") or {}
     for name, k in kinds.items():
         if not ORCH_NAME.fullmatch(name):
-            problems.append(f"kind {name!r}: bad name")
+            problems.append(f"kind {_name(name)}: bad name")
         extra = set(k) - set(ORCH_KIND_KEYS)
         if extra:
             problems.append(f"kind {name}: unknown field(s) {sorted(extra)}")
@@ -650,13 +655,15 @@ def orch_accepts(catalog_text: str, grant_blocks: Mapping[str, str]) -> list[str
                     )
                 name = str(g.get("name"))
                 if not ORCH_NAME.fullmatch(name):
-                    problems.append(f"{who}/{lane}: server name {name!r}")
+                    problems.append(f"{who}/{lane}: server name {_name(name)} is not a valid name")
                 if name in seen:
                     problems.append(f"{who}/{lane}: server {name} granted twice")
                 seen.add(name)
                 k = kinds.get(g.get("kind"))
                 if k is None:
-                    problems.append(f"{who}/{lane}: server {name}: unknown kind {g.get('kind')!r}")
+                    problems.append(
+                        f"{who}/{lane}: server {_name(name)}: unknown kind {_name(g.get('kind'))}"
+                    )
                     continue
                 for key in g.get("env") or {}:
                     if servers.denied_env(key) or key not in (k.get("allowed_env") or ()):
@@ -702,7 +709,8 @@ def load_policy(path: str | Path) -> Any:
         doc = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
         return CeilingPolicy.from_mapping(doc or {}, source=str(path))
     except (OSError, yaml.YAMLError, AgentError) as exc:
-        raise RenderError([f"{path}: not a ceiling policy: {exc}"]) from None
+        why = str(exc) if isinstance(exc, AgentError) else credentials.reason(exc)
+        raise RenderError([f"{path}: not a ceiling policy: {why}"]) from None
 
 
 def load_lock(path: str | Path) -> dict[str, str]:
@@ -710,7 +718,7 @@ def load_lock(path: str | Path) -> dict[str, str]:
     try:
         doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError) as exc:
-        raise RenderError([f"{path}: cannot read the lock: {exc}"]) from None
+        raise RenderError([f"{path}: cannot read the lock: {credentials.reason(exc)}"]) from None
     lock = doc.get("profiles") if isinstance(doc, Mapping) else None
     if not isinstance(lock, Mapping):
         raise RenderError([f"{path}: expected a 'profiles' mapping of profile id -> digest"])
@@ -735,7 +743,6 @@ def profile_refusals(
     from homelabnext.agent.compiler import verify_profile
     from homelabnext.agent.errors import AgentError, CeilingViolation
     from homelabnext.agent.readers import ToolClasses, profile_problems
-    from homelabnext.agent.schemas import schema_errors
 
     try:
         classes = ToolClasses.from_catalog(cat)
@@ -744,13 +751,18 @@ def profile_refusals(
     if "grants" in doc:
         if not doc.get("digest"):
             return ["a compiled profile carries its digest (hnx agent compile)"]
+        safe = credentials.safe_schema_errors("agent", "profile", json.loads(json.dumps(doc)))
+        if safe:  # verify_profile's own schema messages quote the values
+            return safe
         if policy is None:
             return [
                 "a compiled profile is rendered against the ceiling policy (spec policy:, "
                 "--policy): its stored ceiling and digest are whatever last edited the file"
             ]
         return verify_profile(doc, policy=policy, lock=lock, classes=classes)
-    problems = schema_errors("platform", "agent_profile", json.loads(json.dumps(doc)))
+    problems = credentials.safe_schema_errors(
+        "platform", "agent_profile", json.loads(json.dumps(doc))
+    )
     if problems:
         return [f"not a compiled or lean agent profile: {p}" for p in problems]
     problems = profile_problems(doc, classes)
@@ -785,7 +797,7 @@ def _load_profile(
         text = path.read_text(encoding="utf-8")
         doc = json.loads(text) if path.suffix == ".json" else yaml.safe_load(text)
     except (OSError, ValueError, yaml.YAMLError) as exc:
-        raise RenderError([f"{path}: cannot read the profile: {exc}"]) from None
+        raise RenderError([f"{path}: cannot read the profile: {credentials.reason(exc)}"]) from None
     if not isinstance(doc, Mapping) or not str(doc.get("id", "")).startswith("profile:"):
         raise RenderError([f"{path}: not an agent profile (no profile: id)"])
     refused = profile_refusals(doc, cat, policy, lock)
@@ -882,12 +894,12 @@ def _inside(root: Path, rel: Any, what: str) -> Path:
     still under ``root`` once resolved."""
     raw = Path(str(rel))
     if raw.is_absolute():
-        raise RenderError([f"{what} {rel}: an absolute path (write it relative to {root})"])
+        raise RenderError([f"{what}: an absolute path (write it relative to {root})"])
     p = root / raw
     if p.is_symlink():
-        raise RenderError([f"{what} {rel}: a symlink (the render never writes through one)"])
+        raise RenderError([f"{what}: a symlink (the render never writes through one)"])
     if not p.resolve().is_relative_to(root.resolve()):
-        raise RenderError([f"{what} {rel}: outside {root}"])
+        raise RenderError([f"{what}: outside {root}"])
     return p
 
 
@@ -905,7 +917,7 @@ def render_spec(
     try:
         spec = yaml.safe_load(sp.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
-        raise RenderError([f"{sp}: cannot read: {exc}"]) from None
+        raise RenderError([f"{sp}: cannot read: {credentials.reason(exc)}"]) from None
     problems = _spec_problems(spec)
     if problems:
         raise RenderError([f"{sp}: {p}" for p in problems])
@@ -984,10 +996,10 @@ def render_spec(
                 if sid not in every_granted:
                     why = f"no profile of the spec is granted {sid}"
                 elif at and lane not in lanes:
-                    why = f"{lane!r} is not a lane ({lanes})"
+                    why = f"not a rendered lane ({lanes})"
                 else:
                     continue
-                raise RenderError([f"{sp}: outputs[{i}].params {key}: {why}"])
+                raise RenderError([f"{sp}: outputs[{i}].params {_name(key)}: {why}"])
         for out in spec["outputs"]:
             what = f"home {out['home']}" if out.get("home") else f"{sp.name}"
             home_insts: list[Instance] = []
@@ -1053,7 +1065,7 @@ def _owned(root: Path, globs: Any) -> list[Path]:
     out: set[Path] = set()
     for g in globs or ():
         if Path(str(g)).is_absolute() or ".." in Path(str(g)).parts:
-            raise RenderError([f"glob {g}: write it relative to {root}, inside it"])
+            raise RenderError([f"a glob: write it relative to {root}, inside it"])
         out |= {f for f in root.glob(str(g)) if f.is_file()}
     return sorted(out)
 
