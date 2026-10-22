@@ -1159,13 +1159,13 @@ def provision_litellm(
         if not value:
             raise GatewaySpecError(f"key {alias}: {k['key_env']} is not set")
         params = {kk: v for kk, v in k.items() if kk != "key_env"}
-        token = hashlib.sha256(value.encode()).hexdigest()
+        digest = hashlib.sha256(value.encode()).hexdigest()  # LiteLLM's token for this value
         existing = tokens_of(alias)
-        stale = [t for t in existing if t != token]
+        stale = [t for t in existing if t != digest]
         if stale:  # rotated (or duplicated): the old value must stop working before the new one
             ok(alias, "/key/delete", *call("/key/delete", {"keys": stale}))
-        if token in existing:
-            ok(alias, "/key/update", *call("/key/update", params | {"key": token}))
+        if digest in existing:
+            ok(alias, "/key/update", *call("/key/update", params | {"key": digest}))
             verb = "rotated" if stale else "updated"
         else:
             ok(alias, "/key/generate", *call("/key/generate", params | {"key": value}))
