@@ -49,7 +49,9 @@ def now():
 
 
 def record_path(directory, job):
-    return os.path.join(directory, re.sub(r"[^A-Za-z0-9_.-]+", "-", job) + ".json")
+    # injective: JOB allows only [A-Za-z0-9_.-:/] and no '%', so percent-encoding ':' and '/'
+    # keeps `timer:lynis/scan` and `timer:lynis-scan` apart (a '-' for both made them one file)
+    return os.path.join(directory, job.replace(":", "%3A").replace("/", "%2F") + ".json")
 
 
 def env(name, pattern):

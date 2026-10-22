@@ -94,7 +94,7 @@ def test_the_rendered_unit_writes_its_record_on_start_and_on_a_failed_stop(tmp_p
     lines = _writer_lines(
         (tmp_path / "units" / "hnx-lynis.service").read_text(), "hnx-lynis.service"
     )
-    record = tmp_path / "last-run" / "timer-lynis-scan.json"
+    record = tmp_path / "last-run" / "timer%3Alynis%2Fscan.json"
 
     assert _run(tmp_path, lines["ExecStartPre"]).returncode == 0
     started = json.loads(record.read_text())
@@ -128,3 +128,18 @@ def test_the_rendered_unit_writes_its_record_on_start_and_on_a_failed_stop(tmp_p
     # bad arguments are refused before anything is written
     bad = _run(tmp_path, [*lines["ExecStopPost"][:-4], "--calendar", "daily\nX=1", "--delay", "1"])
     assert bad.returncode == 2 and json.loads(record.read_text()) == odd
+
+
+def test_record_file_names_are_injective_in_the_job_id(tmp_path):
+    """``timer:lynis/scan`` and ``timer:lynis-scan`` used to share ``timer-lynis-scan.json``."""
+    import importlib.util
+
+    path = ROOT / "ansible" / "roles" / "last_run" / "files" / "hnx-last-run.py"
+    spec = importlib.util.spec_from_file_location("hnx_last_run", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    jobs = ["timer:lynis/scan", "timer:lynis-scan", "timer:lynis.scan", "fleet-unit:lynis/scan"]
+    assert all(mod.JOB.match(j) for j in jobs)
+    names = [os.path.basename(mod.record_path(str(tmp_path), j)) for j in jobs]
+    assert len(set(names)) == len(jobs) and all("/" not in n for n in names)
+    assert names[0] == "timer%3Alynis%2Fscan.json"

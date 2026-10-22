@@ -143,3 +143,31 @@ def test_through_the_hub_the_schedule_dates_the_run_and_names_the_late_host(tmp_
     (late,) = row["attention"]
     assert late["host"] == "web-2" and late["last_run"] == "2026-10-18T04:12:00Z"
     assert "overdue since 2026-10-19T04:26:00Z" in schedule.render(vm)
+
+
+def test_a_host_directory_speaks_only_for_its_own_host(tmp_path):
+    """web-1 shipping a newer passing record that names web-2 used to hide web-2's failure."""
+    d = tmp_path / "last-run"
+    write(d / "web-2" / "a.json", rec(host="web-2", result="exit-code"))
+    write(d / "web-1" / "mask.json", rec(host="web-2", started_at="2026-10-20T23:59:00Z"))
+    s = spec("job-runs", kind="poll-file", file="last-run", path=None, mapping=MAPPING)
+    got = {
+        x.item: x
+        for x in COLLECTORS["poll-file"].collect(
+            s, CollectContext(clock=lambda: NOW, root=tmp_path)
+        )
+    }
+    assert got["timer:lynis/scan@web-2"].state == "fail"
+    (bad,) = [x for k, x in got.items() if k.startswith("invalid/")]
+    assert bad.state == "unknown" and "directory it was shipped to" in bad.summary
+
+
+def test_a_record_from_the_future_is_unknown_and_masks_nothing():
+    future = rec(started_at="2026-10-22T00:00:00Z", finished_at="2026-10-22T00:01:00Z")
+    (d,) = apply_mapping(future, MAPPING, now=NOW, fallback_item="x")
+    assert d.state == "unknown" and "future" in d.summary
+    failed = rec(result="exit-code")
+    (d,) = apply_mapping([future, failed], MAPPING, now=NOW, fallback_item="x")
+    assert d.state == "fail"  # the real record wins over one dated ahead
+    skewed = rec(started_at="2026-10-21T00:04:00Z", finished_at="2026-10-21T00:04:30Z")
+    assert apply_mapping(skewed, MAPPING, now=NOW, fallback_item="x")[0].state == "ok"

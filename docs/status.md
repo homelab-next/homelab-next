@@ -93,6 +93,7 @@ Every role timer reports its runs the same way ([role interface section 8](role-
 its service runs the shared writer of role `last_run` on start (`ExecStartPre=-`) and on stop
 (`ExecStopPost=-`, which systemd runs after a success, a failure, a timeout or a kill alike), and
 the writer leaves one JSON record per job on the host, `/var/lib/homelabnext/last-run/<job>.json`
+(the job id with `:` and `/` percent-encoded, `timer%3Alynis%2Fscan.json`, so two ids never share a file)
 (mode 0640, directory 0750, group `<role>_last_run_group`;
 [`schemas/status/last_run.schema.json`](../schemas/status/last_run.schema.json)): the job id
 (`timer:lynis/scan`), unit, host, the `on_calendar` and `randomized_delay_s` the host actually
@@ -111,8 +112,11 @@ runs, `started_at`, `finished_at`, `running`, and systemd's own `result` (`SERVI
 
 The directory is read at its top level and one level down (one subdirectory per host), at most
 4096 records of 64 KiB each; a file that is not JSON is an `unknown` item `unreadable/<file>`, a
-record the schema refuses an `unknown` item `invalid/<job>`, never dropped and never `ok`. The
-same job and host twice: the newest start wins. Each record is one item `<job>@<host>`:
+record the schema refuses an `unknown` item `invalid/<job>`, never dropped and never `ok`. A
+record under `<file>/<host>/` belongs to that host: one that names another host is `invalid` (a
+host cannot write a newer, passing record over another host's failure). A record that starts more
+than 300 s in the future is `unknown` and never counts as the newest. The same job and host twice:
+the newest start wins. Each record is one item `<job>@<host>`:
 
 | Record | State | Summary |
 |---|---|---|

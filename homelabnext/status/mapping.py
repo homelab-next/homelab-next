@@ -380,28 +380,47 @@ def _ago(seconds: float) -> str:
     return f"{age_text(seconds)} ago"
 
 
+#: how far in the future a record's ``started_at`` may be (clock skew) before it is not believed
+LAST_RUN_SKEW_S = 300
+
+
 def job_last_run(payload: Any, mapping: Mapping[str, Any], now: float) -> list[Draft]:
     """Last-run records (a list, one record, or what :class:`~.collectors.FileCollector` reads
-    from a record directory: ``{"records": [...], "unreadable": [...]}``)."""
+    from a record directory: ``{"records": [...], "unreadable": [...], "hosts": [...]}``).
+
+    A record read from ``<dir>/<host>/`` belongs to that host: one naming another host is invalid
+    (else host A could write a newer, passing record for host B and mask B's failure).  A record
+    that starts more than :data:`LAST_RUN_SKEW_S` in the future is ``unknown`` and never the
+    newest of its job and host (else it would mask every real record until that time)."""
     from .model import iso
 
     if isinstance(payload, Mapping) and "records" in payload:
         records, unreadable = payload.get("records") or [], payload.get("unreadable") or []
+        dirs = list(payload.get("hosts") or [])
     else:
         records, unreadable = (payload if isinstance(payload, list) else [payload]), []
+        dirs = []
+    dirs += [None] * (len(records) - len(dirs))
     best: dict[str, tuple[float, Draft]] = {}
     out: list[Draft] = []
     for name, why in unreadable:
         out.append(Draft(clean_item(f"unreadable/{name}", "unreadable"), "unknown",
                          clean_summary(f"{name}: {why}")))  # fmt: skip
-    for rec in records:
+    for rec, where in zip(records, dirs, strict=True):
         problems = _last_run_problems(rec)
+        if not problems and where is not None and rec["host"] != where:
+            problems = [f"its host is not {where}, the directory it was shipped to"]
         if problems:
             label = rec.get("job") if isinstance(rec, Mapping) else None
             out.append(Draft(clean_item(f"invalid/{label or 'record'}", "invalid"), "unknown",
                              clean_summary(f"not a last-run record: {problems[0]}")))  # fmt: skip
             continue
         start = parse_iso(rec["started_at"])
+        item = clean_item(f"{rec['job']}@{rec['host']}", "job")
+        if start > now + LAST_RUN_SKEW_S:
+            future = Draft(item, "unknown", clean_summary(f"started in the future ({iso(start)})"))
+            best.setdefault(item, (float("-inf"), future))
+            continue
         due, judged = _late(rec, start, now, mapping)
         late = due is not None and now > due
         if rec["running"]:
@@ -421,7 +440,6 @@ def job_last_run(payload: Any, mapping: Mapping[str, Any], now: float) -> list[D
             summary = f"overdue since {iso(due)}: " + summary
         elif due is not None:
             summary += f"; next due by {iso(due)}"
-        item = clean_item(f"{rec['job']}@{rec['host']}", "job")
         draft = Draft(item, state, clean_summary(summary + judged), value=max(0, int(now - start)))
         if item not in best or start > best[item][0]:  # the same job and host twice: the newest
             best[item] = (start, draft)

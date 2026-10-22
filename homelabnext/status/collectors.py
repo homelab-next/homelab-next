@@ -196,8 +196,12 @@ MAX_RECORD = 64 << 10
 def _load_last_runs(path: Path) -> dict[str, list[Any]]:
     """Every ``*.json`` of a last-run record directory, at its top level and one level down
     (``<dir>/<host>/<job>.json``, one subdirectory per shipped host).  A file that cannot be read
-    is listed by name under ``unreadable``, never dropped: it is a job that cannot be seen."""
+    is listed by name under ``unreadable``, never dropped: it is a job that cannot be seen.
+    ``hosts`` names, per record, the host subdirectory it was read from (``None`` at the top
+    level): the mapping takes the host from there, so one host's records cannot speak for
+    another's."""
     records: list[Any] = []
+    hosts: list[str | None] = []
     unreadable: list[tuple[str, str]] = []
     files = sorted([*path.glob("*.json"), *path.glob("*/*.json")])
     if len(files) > MAX_RECORDS:
@@ -209,11 +213,12 @@ def _load_last_runs(path: Path) -> dict[str, list[Any]]:
                 unreadable.append((name, f"larger than {MAX_RECORD} bytes"))
                 continue
             records.append(json.loads(f.read_text(encoding="utf-8")))
+            hosts.append(f.parent.name if f.parent != path else None)
         except OSError as exc:
             unreadable.append((name, str(exc.strerror or exc)))
         except (UnicodeDecodeError, ValueError):
             unreadable.append((name, "not JSON"))
-    return {"records": records, "unreadable": unreadable}
+    return {"records": records, "unreadable": unreadable, "hosts": hosts}
 
 
 class FileCollector:
