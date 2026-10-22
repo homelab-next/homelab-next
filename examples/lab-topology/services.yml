@@ -202,3 +202,24 @@ services:
     version: "2024.9"
     tls: internal
     description: S3-compatible object storage on the storage appliance.
+  ups-monitor:
+    capability: ups-monitor
+    impl: nut
+    host: nas-1
+    protocol: tcp
+    port: 3493
+    health: {kind: tcp}
+    owner: platform-team
+    version: "2.8.1"
+    tls: internal
+    description: The NUT data server (upsd) for the UPS cabled to the storage appliance.
+    status_sources:
+      # a template: no mapping.ups, so `hnx status ... --site site.yml` makes one source per
+      # site UPS with monitored_by nut (power-ups-a); without a site it reads every UPS upsd lists
+      - id: power
+        kind: poll-nut
+        interval_s: 30
+        timeout_s: 5
+        auth: {secret: "secret:nut/monitor-password", username: hub-monitor}
+        mapping: {tls: starttls, ca_file: config/nut/upsd-ca.pem}
+        what: UPS state from the NUT server; on battery is warn, low battery or replace battery is fail.

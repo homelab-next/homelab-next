@@ -31,7 +31,16 @@ HTTP_KINDS = (
     "poll-stackstorm",
     "poll-nifi",
 )
-KINDS = (*HTTP_KINDS[:1], "poll-file", "push-event", *HTTP_KINDS[1:], "agent-activity")
+#: kinds that speak a product's own protocol to a registry service (target.service only)
+SOCKET_KINDS = ("poll-nut",)
+KINDS = (
+    *HTTP_KINDS[:1],
+    "poll-file",
+    "push-event",
+    *HTTP_KINDS[1:],
+    "agent-activity",
+    *SOCKET_KINDS,
+)
 #: kinds registered before their collector shipped (none since stage 2; kept for the contract)
 RESERVED_KINDS: tuple[str, ...] = ()
 OBSERVED_EVENT = "homelabnext.status.observed"
@@ -71,6 +80,8 @@ class SourceSpec:
     mapping: Mapping[str, Any] = field(default_factory=dict)
     #: ``{secret: "secret:<name>", header?: <name>}``: the credential, by secret-store name only
     auth: Mapping[str, Any] | None = None
+    #: a source generated from the site model (:mod:`.power`): ``{ups, model, feeds, guests}``
+    power: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in KINDS:
@@ -120,6 +131,9 @@ class SourceSpec:
             return f"instant query `{self.mapping.get('query', '')}`"
         if self.kind in HTTP_KINDS[2:]:
             return f"built in ({self.kind})"
+        if self.kind == "poll-nut":
+            ups = self.mapping.get("ups")
+            return f"built in (poll-nut: {'UPS ' + str(ups) if ups else 'every UPS upsd lists'})"
         return "selectors"
 
     def describe(self) -> dict[str, Any]:
@@ -127,9 +141,11 @@ class SourceSpec:
         target: dict[str, Any] = {}
         if self.kind in HTTP_KINDS:
             target = {"service": self.polled_service, "path": self.path}
+        elif self.kind in SOCKET_KINDS:
+            target = {"service": self.polled_service}
         elif self.kind == "poll-file" or (self.kind == "agent-activity" and self.file):
             target = {"file": self.file}
-        return {
+        out = {
             "id": self.id,
             "kind": self.kind,
             "service": self.service,
@@ -144,6 +160,9 @@ class SourceSpec:
             "reserved": self.kind in RESERVED_KINDS,
             "what": self.what,
         }
+        if self.power is not None:
+            out["ups"] = self.power["ups"]
+        return out
 
 
 def sources_from_registry(registry: Registry) -> list[SourceSpec]:

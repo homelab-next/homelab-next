@@ -339,6 +339,16 @@ def status_source_problems(services: dict) -> list[str]:
                     from homelabnext.status.products import source_problems
 
                     problems += source_problems(src, where)
+            elif kind == "poll-nut":
+                tname = target.get("service", sname)
+                tsvc = services.get(tname)
+                if tsvc is None:
+                    problems.append(f"{where}: target service {tname!r} is not registered")
+                elif tsvc["protocol"] != "tcp":
+                    problems.append(f"{where}: target service {tname!r} is not tcp (upsd)")
+                from homelabnext.status.nut import source_problems as nut_problems
+
+                problems += nut_problems(src, where)
             elif kind == "poll-file":
                 if "file" not in target:
                     problems.append(f"{where}: poll-file needs target.file")
@@ -360,8 +370,10 @@ def status_source_problems(services: dict) -> list[str]:
                     problems.append(f"{where}: {builtin} needs target.file")
             elif target.get("path") or target.get("file"):
                 problems.append(f"{where}: push-event sources are not polled (no path or file)")
-            if src.get("auth") and kind not in _HTTP_STATUS_KINDS:
-                problems.append(f"{where}: auth is for the HTTP kinds only")
+            if src.get("auth") and kind not in (*_HTTP_STATUS_KINDS, "poll-nut"):
+                problems.append(f"{where}: auth is for the HTTP kinds and poll-nut only")
+            if src.get("auth", {}).get("username") and kind != "poll-nut":
+                problems.append(f"{where}: auth.username is for poll-nut only")
             mapping = src.get("mapping")
             builtin = (mapping or {}).get("builtin")
             if builtin in _AGENT_BUILTINS and kind != "agent-activity":
@@ -374,7 +386,7 @@ def status_source_problems(services: dict) -> list[str]:
                 not mapping
             ):
                 problems.append(f"{where}: {kind} needs a mapping")
-            if kind in _PRODUCT_STATUS_KINDS:
+            if kind in (*_PRODUCT_STATUS_KINDS, "poll-nut"):
                 pass  # the product's own mapping keys: checked by source_problems above
             elif mapping and builtin is not None:
                 allowed = _KIND_BUILTINS.get(builtin, (None, {"module", "warn_after_s"}))[1]

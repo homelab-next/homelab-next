@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/service/2.4",
+  "$id": "https://schemas.example.internal/homelabnext/platform/service/2.5",
   "title": "HomelabNext service registry (services.yml)",
-  "description": "Single source of truth for what runs where. Every endpoint, scrape target, proxy site, firewall rule, DNS record and environment file is generated from this document. Schema version 1; evolve additively. 2.0 closes every free-text field that generators interpolate: owners and identifiers are slugs, paths are URL path characters, descriptions are single lines, and every pattern rejects a trailing newline (Python re lets $ match before one; ECMA-262 does not). 2.1 adds status_sources: what the status hub may poll or receive for a service, by registry name only (docs/status.md, ADR-0013). 2.2 adds the agent-activity status-source kind with its built-in mappers, and front_door: the shared-secret header the edge adds in front of a service that trusts its forward-auth identity headers (the status hub's private tier). 2.3 adds the product status kinds (poll-uptime-kuma, poll-stackstorm, poll-nifi; poll-prometheus is no longer reserved), a source's auth (a credential by secret-store name) and the product mapping keys (query, thresholds, empty, window_s, limit) with the built-ins prometheus-alerts, orchestrator-queue and agentmetry-audit. 2.4 adds a service's one-line description, shown by the generated maps (ADR-0018).",
+  "description": "Single source of truth for what runs where. Every endpoint, scrape target, proxy site, firewall rule, DNS record and environment file is generated from this document. Schema version 1; evolve additively. 2.0 closes every free-text field that generators interpolate: owners and identifiers are slugs, paths are URL path characters, descriptions are single lines, and every pattern rejects a trailing newline (Python re lets $ match before one; ECMA-262 does not). 2.1 adds status_sources: what the status hub may poll or receive for a service, by registry name only (docs/status.md, ADR-0013). 2.2 adds the agent-activity status-source kind with its built-in mappers, and front_door: the shared-secret header the edge adds in front of a service that trusts its forward-auth identity headers (the status hub's private tier). 2.3 adds the product status kinds (poll-uptime-kuma, poll-stackstorm, poll-nifi; poll-prometheus is no longer reserved), a source's auth (a credential by secret-store name) and the product mapping keys (query, thresholds, empty, window_s, limit) with the built-ins prometheus-alerts, orchestrator-queue and agentmetry-audit. 2.4 adds a service's one-line description, shown by the generated maps (ADR-0018). 2.5 adds the poll-nut status kind (a UPS read from Network UPS Tools' upsd over its TCP protocol), auth.username (the NUT USERNAME; the secret is its PASSWORD) and the poll-nut mapping keys (ups, tls, allow_plaintext, ca_file, limits).",
   "type": "object",
   "additionalProperties": false,
   "required": ["registry_version", "lab", "zones", "hosts", "services"],
@@ -152,7 +152,7 @@
       "required": ["id", "kind", "interval_s", "what"],
       "properties": {
         "id": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)", "maxLength": 63, "description": "Unique across the registry; the graph node is status:<id>."},
-        "kind": {"enum": ["poll-http-json", "poll-file", "push-event", "poll-prometheus", "agent-activity", "poll-uptime-kuma", "poll-stackstorm", "poll-nifi"], "description": "agent-activity (2.2) drains agent activity into the hub's activity store and reports stuck and errored sessions. The product kinds (2.3; poll-prometheus was reserved before) read a product's own API: a Prometheus instant query or its alerts, an Uptime Kuma public status page, StackStorm executions, NiFi controller status and bulletins (docs/status.md)."},
+        "kind": {"enum": ["poll-http-json", "poll-file", "push-event", "poll-prometheus", "agent-activity", "poll-uptime-kuma", "poll-stackstorm", "poll-nifi", "poll-nut"], "description": "agent-activity (2.2) drains agent activity into the hub's activity store and reports stuck and errored sessions. The product kinds (2.3; poll-prometheus was reserved before) read a product's own API: a Prometheus instant query or its alerts, an Uptime Kuma public status page, StackStorm executions, NiFi controller status and bulletins (docs/status.md). poll-nut (2.5) reads UPSes from a NUT upsd (a tcp service) with LIST VAR; the hub also generates one per site power.ups entry monitored by nut."},
         "auth": {
           "type": "object",
           "additionalProperties": false,
@@ -160,7 +160,8 @@
           "description": "2.3: the credential an HTTP kind sends, by secret-store name (the value is never in the registry): the header named here, else Authorization: Bearer. A reference that does not resolve is that source's error; it is never polled without it.",
           "properties": {
             "secret": {"type": "string", "pattern": "^secret:[a-z][a-z0-9_-]*(/[a-z][a-z0-9_-]*)*$(?!\\n)"},
-            "header": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,62}$(?!\\n)", "description": "e.g. St2-Api-Key or X-API-Key; absent = Authorization: Bearer <value>."}
+            "header": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,62}$(?!\\n)", "description": "e.g. St2-Api-Key or X-API-Key; absent = Authorization: Bearer <value>."},
+            "username": {"type": "string", "pattern": "^[A-Za-z0-9_.@-]{1,64}$(?!\\n)", "description": "2.5, poll-nut only: the NUT USERNAME (upsd.users); the secret is its PASSWORD."}
           }
         },
         "target": {
@@ -213,8 +214,28 @@
           "description": "Raw state (as lower-cased text) -> state; an unmapped raw value is unknown."
         },
         "summary": {"$ref": "#/$defs/status_selector", "description": "A one-line summary, relative to the item."},
-        "module": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$(?!\\n)", "description": "Module name (default: the declaring service)."}
+        "module": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$(?!\\n)", "description": "Module name (default: the declaring service)."},
+        "ups": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$(?!\\n)", "description": "2.5, poll-nut: the NUT upsname to read; absent = every UPS upsd lists, and the template the hub expands into one source per site UPS monitored by nut."},
+        "tls": {"enum": ["starttls", "none"], "default": "starttls", "description": "2.5, poll-nut: STARTTLS with a verified certificate (default), or none."},
+        "allow_plaintext": {"type": "boolean", "default": false, "description": "2.5, poll-nut: with tls none, send the NUT password to a non-loopback upsd anyway."},
+        "ca_file": {"type": "string", "pattern": "^(?!/)(?!.*\\.\\.)[A-Za-z0-9._/-]+$(?!\\n)", "maxLength": 256, "description": "2.5, poll-nut: the CA bundle upsd's certificate is verified with, relative to the status root (default: the system's)."},
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "2.5, poll-nut: battery charge (%) and runtime (s) are judged at or below, load (%) at or above (defaults charge 50/20 or the UPS's battery.charge.low, runtime 600/120 or battery.runtime.low, load 80/95).",
+          "properties": {
+            "charge": {"$ref": "#/$defs/status_limit"},
+            "runtime_s": {"$ref": "#/$defs/status_limit"},
+            "load": {"$ref": "#/$defs/status_limit"}
+          }
+        }
       }
+    },
+    "status_limit": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {"warn": {"type": "number", "minimum": 0}, "fail": {"type": "number", "minimum": 0}}
     }
   }
 }

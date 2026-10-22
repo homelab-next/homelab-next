@@ -10,7 +10,8 @@ value through, and an optional broker store -- so every one runs offline in test
 
 Stage 2's product collectors (Prometheus, Uptime Kuma, StackStorm, NiFi) are more entries of
 :data:`COLLECTORS` (:mod:`.products`); the orchestrator and Agentmetry are built-in mappings over
-``poll-http-json`` (:mod:`.mapping`).
+``poll-http-json`` (:mod:`.mapping`).  ``poll-nut`` (:mod:`.nut`) is the one kind that is not
+HTTP: it speaks the NUT network protocol to upsd over a socket.
 """
 
 from __future__ import annotations
@@ -244,9 +245,11 @@ COLLECTORS: dict[str, Collector] = {
 
 def _register_products() -> None:
     # the product collectors build on the helpers above, so they register once those exist
+    from .nut import NutCollector
     from .products import PRODUCT_COLLECTORS
 
     COLLECTORS.update(PRODUCT_COLLECTORS)
+    COLLECTORS["poll-nut"] = NutCollector()
 
 
 _register_products()

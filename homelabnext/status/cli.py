@@ -5,7 +5,7 @@
     hnx status catalog generate|check [--registry FILE] [--out FILE]   docs/status/sources.md
     hnx status views check [VIEWS] [--registry FILE]        views.yml against schema + registry
     hnx status collect [--registry FILE] [--root DIR] [--state FILE] [--all | --source ID ...]
-                       [--notify-topic T] [--secrets-dir DIR]
+                       [--notify-topic T] [--secrets-dir DIR] [--site SITE [--site-guests DIR]]
     hnx status render --out DIR [--state FILE] [--views FILE] [--registry FILE] [--now TIME]
                       [--guests DIR --guests-site SITE [--guests-registry FILE]] [--maps ROOT]
                       [--invariants-results FILE] [--roster FILE]
@@ -37,6 +37,12 @@ Links (the registry's services), Schedule (every timer, CI schedule, workflow pa
 with its cadence and last/next run) and Agent roster (``--roster FILE``, default
 ``ROOT/examples/status/roster.yml``).  ``render`` writes each available page as ``<panel>.html``
 beside ``index.html``.
+
+``--site`` (every subcommand but ``catalog``) adds one ``poll-nut`` source per UPS the site
+monitors by nut, from the registry's upsd template (``homelabnext.status.power``), with what
+each UPS feeds from ``--site-guests``; ``render`` and ``serve`` default them to ``--guests-site``
+and ``--guests``.  Give ``collect`` and ``render``/``serve`` the same site, or the generated
+sources' readings are not shown.
 
 ``collect`` runs one pass over the due sources (``--all``: every polled source) and writes the
 state file; ``render`` and ``serve`` only read it, so they never wait on a source.  Exit codes:
@@ -152,10 +158,21 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
             help="roster.yml for the Agent roster (default: ROOT/examples/status/roster.yml)",
         )
 
-    def common(p, *, views=False, state=False):
+    def common(p, *, views=False, state=False, site=True):
         p.add_argument(
             "--registry", default=DEFAULT_REGISTRY, help="service registry (services.yml)"
         )
+        if site:
+            p.add_argument(
+                "--site",
+                help="site model: one poll-nut source per UPS it monitors by nut "
+                "(render/serve default: --guests-site)",
+            )
+            p.add_argument(
+                "--site-guests",
+                metavar="DIR",
+                help="guest directory: what each UPS feeds (render/serve default: --guests)",
+            )
         if views:
             p.add_argument("--views", default=DEFAULT_VIEWS, help="views.yml (shell and menu)")
         if state:
@@ -167,7 +184,14 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     p = sub.add_parser("catalog", help="generate or check docs/status/sources.md")
     p.add_argument("action", choices=["generate", "check"])
     p.add_argument("--out", default=str(catalog.PAGE))
-    common(p)
+    p.add_argument(
+        "--power-lab",
+        default=catalog.POWER_LAB,
+        metavar="DIR",
+        help="a lab (services.yml, site.yml, guests/) whose generated UPS sources the page "
+        "also lists ('' for none)",
+    )
+    common(p, site=False)
     p = sub.add_parser("views", help="check a views.yml against its schema and the registry")
     p.add_argument("action", choices=["check"])
     p.add_argument("file", nargs="?", default=DEFAULT_VIEWS)
@@ -221,6 +245,11 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         print(f"hnx status: {exc}", file=sys.stderr)
         return 2
     specs = sources_from_registry(reg)
+    try:
+        specs = _power_specs(args, specs)
+    except ValueError as exc:
+        print(f"hnx status: {exc}", file=sys.stderr)
+        return 2
     if args.cmd == "sources":
         rows = [s.describe() for s in specs]
         if args.json:
@@ -235,10 +264,15 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
             print(f"{len(rows)} status source(s)")
         return 0
     if args.cmd == "catalog":
+        try:
+            ups = catalog.power_lab(args.power_lab) if args.power_lab else []
+        except (ValueError, RegistryError) as exc:
+            print(f"hnx status catalog: --power-lab {args.power_lab}: {exc}", file=sys.stderr)
+            return 2
         if args.action == "generate":
-            print(f"wrote {catalog.generate(args.out, specs)}")
+            print(f"wrote {catalog.generate(args.out, specs, ups)}")
             return 0
-        problems = catalog.check(args.out, specs)
+        problems = catalog.check(args.out, specs, ups)
         for line in problems:
             print(line)
         print(f"status catalog: {'FAIL' if problems else 'ok'} ({args.out})")
@@ -321,6 +355,24 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     finally:
         srv.server_close()
     return 0
+
+
+def _power_specs(args, specs):
+    """The registry's sources plus one per site UPS monitored by nut (``--site``, else on
+    render/serve ``--guests-site``), with what each feeds from ``--site-guests`` (``--guests``)."""
+    site = getattr(args, "site", None) or getattr(args, "guests_site", None)
+    if site and not any(s.kind == "poll-nut" for s in specs):
+        return specs  # no upsd registered: nothing to generate
+    if not site:
+        if getattr(args, "site_guests", None):
+            raise ValueError("--site-guests needs --site")
+        return specs
+    guests = getattr(args, "site_guests", None)
+    if guests is None and not getattr(args, "site", None):
+        guests = getattr(args, "guests", None)
+    from .power import load as load_power
+
+    return load_power(specs, site, guests)
 
 
 def _baseline_site(args):

@@ -1,0 +1,17 @@
+# Recorded from a real NUT upsd 2.8.1 (Ubuntu 24.04 package, NSS build) with the dummy-ups
+# driver on loopback; each reply below was recorded, assembled from several sessions (no certificate
+# configured, ups-a's driver stopped). C: is what the client sent, S: what upsd answered.
+C: LIST VAR nosuch
+S: ERR UNKNOWN-UPS
+C: GET VAR ups-a no.such
+S: ERR VAR-NOT-SUPPORTED
+C: LIST VAR ups-a
+S: ERR DRIVER-NOT-CONNECTED
+C: STARTTLS
+S: ERR FEATURE-NOT-CONFIGURED
+C: USERNAME hub-monitor
+S: OK
+C: PASSWORD wrong
+S: OK
+C: LOGOUT
+S: OK Goodbye

@@ -1,0 +1,13 @@
+# Recorded from a real NUT upsd 2.8.1 (Ubuntu 24.04 package, NSS build) with the dummy-ups
+# driver on loopback, TLS (CERTPATH + CERTIDENT configured; a Python ssl client verified upsd's certificate). Values are fictional; the driver port path is replaced
+# with /etc/nut/<ups>.dev. C: is what the client sent, S: what upsd answered.
+C: STARTTLS
+S: OK STARTTLS
+C: USERNAME hub-monitor
+S: OK
+C: PASSWORD fake-nut-password
+S: OK
+C: STARTTLS
+S: ERR ALREADY-SSL-MODE
+C: LOGOUT
+S: OK Goodbye

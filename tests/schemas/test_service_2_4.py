@@ -21,10 +21,10 @@ DOC = yaml.safe_load(
 )
 
 
-def test_version_is_2_4_frozen_and_additive():
-    assert CURRENT["$id"].endswith("/platform/service/2.4")
-    assert CURRENT == FROZEN_24
-    assert sc.is_additive(FROZEN_23, CURRENT) == []
+def test_version_2_4_is_frozen_and_additive():
+    assert FROZEN_24["$id"].endswith("/platform/service/2.4")
+    assert sc.is_additive(FROZEN_23, FROZEN_24) == []
+    assert sc.is_additive(FROZEN_24, CURRENT) == []
 
 
 def test_description_validates_in_2_4_only_and_reaches_the_model():

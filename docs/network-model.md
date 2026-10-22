@@ -92,8 +92,10 @@ asks none of this, so sites written before 1.1 stay valid.
 The Topology map draws the edge chain at the top, the UPSes with what they feed (dotted lines on
 "Show Power"), a `UPS: <id>` or `no UPS` badge on every powered card (the reason in its tooltip
 and detail panel), and each guest's inherited power in its detail panel
-([status hub](status.md#generated-maps-topology-dataflow-architecture-roadmap)). Reading a UPS's
-live state (a NUT status source) is a later step.
+([status hub](status.md#generated-maps-topology-dataflow-architecture-roadmap)). A UPS with
+`monitored_by: nut` and a `nut_name` becomes a live status source of the hub (`poll-nut`, generated
+from this section; [status hub](status.md#8-ups-power-network-ups-tools)): its state shows on its
+Topology card, and going on battery sends one message listing the guests on it.
 
 ### Deploy access (1.2)
 

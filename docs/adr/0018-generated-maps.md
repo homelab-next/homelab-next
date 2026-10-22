@@ -74,7 +74,9 @@ manifest, the knowledge graph's capability readers, the build order and the chec
    site's default; a VM inherits its hypervisor's. The rules are one module
    (`homelabnext/power.py`) checked by `hnx site validate` and `hnx guests validate`; the map
    draws the chain from the data, UPS cards with what they feed, a power badge per device and
-   the inherited power in a guest's detail. A live UPS reading (NUT) is a later status source.
+   the inherited power in a guest's detail. A live UPS reading (NUT) is a later status source;
+   it is now `poll-nut` ([status hub](../status.md#8-ups-power-network-ups-tools)), and a UPS
+   card shows the hub's reading as a state badge, read from `status.json` like any page.
 
 ## Consequences
 

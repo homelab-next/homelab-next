@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# 2.5-only: a NUT data server (upsd) and its poll-nut status source (documentation addresses only)
+registry_version: 1
+lab: {name: lab, domain: example.internal, svc_label: svc, owner: ops}
+zones:
+  mgmt: {cidr: 192.0.2.0/26}
+hosts:
+  nas-1: {address: 192.0.2.10, zone: mgmt}
+services:
+  ups-monitor:
+    capability: ups-monitor
+    impl: nut
+    host: nas-1
+    protocol: tcp
+    port: 3493
+    health: {kind: tcp}
+    owner: ops
+    version: "2.8.1"
+    tls: internal
+    status_sources:
+      - id: power
+        kind: poll-nut
+        interval_s: 60
+        timeout_s: 10
+        auth: {secret: "secret:nut/monitor-password", username: hub-monitor}
+        mapping:
+          tls: starttls
+          ca_file: config/nut/ca.pem
+          limits: {charge: {warn: 60}, load: {warn: 70, fail: 90}}
+          states: {bypass: fail}
+        what: Every UPS the NUT server reports; on battery is warn, low or replace battery is fail.

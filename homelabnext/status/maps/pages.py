@@ -193,8 +193,14 @@ class MapSite:
             from homelabnext.compute.model import ComputeError
 
             try:
+                from ..power import states
+
                 vm = topology.load(
-                    self.guests, self.guests_site, registry=self.lab, dataflow=self._dataflow_vm()
+                    self.guests,
+                    self.guests_site,
+                    registry=self.lab,
+                    dataflow=self._dataflow_vm(),
+                    ups_state=states(doc),  # the UPS badges: the hub's live NUT readings
                 )
             except ComputeError as exc:
                 raise ValueError(str(exc)) from None

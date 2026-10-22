@@ -238,6 +238,7 @@ class _Cards:
         subtitle: str | None = None,
         power: Sequence[str] | None = None,
         badge: Mapping[str, str] | None = None,
+        badge2: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         services = self._services(node)
         p_badge, p_tip, p_lines = self._power(node)
@@ -257,6 +258,8 @@ class _Cards:
             badges.append(p_badge)
         if badge:
             badges.append(dict(badge))
+        if badge2:
+            badges.append(dict(badge2))
         self.details[node] = {
             "name": name,
             "subtitle": subtitle,
@@ -329,6 +332,30 @@ class _Cards:
         )
 
 
+#: a UPS's live power state (from its status summary) -> the badge text
+_UPS_WORDS = {"on-battery": "on battery", "low-battery": "on battery, low"}
+
+
+def _ups_live(live: Mapping[str, Any] | None) -> tuple[dict[str, str] | None, list[str]]:
+    """(the state badge, the detail line) of a UPS with a NUT reading; nothing without one."""
+    if not live:
+        return None, []
+    from homelabnext.status.power import power_state
+
+    state = str(live.get("state") or "unknown")
+    summary = str(live.get("summary") or "")
+    word = _UPS_WORDS.get(power_state(summary) or "", "")
+    if not word:
+        word = "on line" if state == "ok" else state
+    if state == "stale":
+        word = "stale"
+    at = f" at {live['observed_at']}" if live.get("observed_at") else ""
+    return (
+        {"cls": f"ups-{state}", "text": word},
+        [f"live ({state}{at}, {live.get('source')}): {summary}"],
+    )
+
+
 def index_for(
     site: Mapping[str, Any],
     raws: Sequence[Mapping[str, Any]],
@@ -368,11 +395,14 @@ def build(
     lab: Mapping[str, Any] | None = None,
     nodes: Sequence[str] | Mapping[str, Mapping[str, Any]] = (),
     dataflow: Mapping[str, Any] | None = None,
+    ups_state: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The topology view-model.  ``site``: the site document; ``guests``: guest objects (``raw``
     is the guest document); ``flows``: zone flows (``src``, ``dst``, ``protocols``, ``ports``);
     ``lab``: :func:`.lab.lab_of` of the registry (services per host); ``nodes``: the hypervisors
-    (``_nodes.yml``: names, or name -> spec with its ``power``); ``dataflow``: the dataflow view-model (its hops become flows).
+    (``_nodes.yml``: names, or name -> spec with its ``power``); ``dataflow``: the dataflow view-model (its hops become flows);
+    ``ups_state``: site UPS id -> its live NUT reading (:func:`homelabnext.status.power.states`),
+    shown as a state badge on that UPS's card.
     Zones keep the site's order; a guest in a zone the site does not define gets its own lane
     (``known: false``), so a mismatch shows instead of vanishing."""
     lab = lab or {"hosts": {}, "services": []}
@@ -486,6 +516,7 @@ def build(
             how = ups.get("monitored_by") or "none"
             watch = f"monitored by {how}" + (f" ({ups['nut_name']})" if ups.get("nut_name") else "")
             n = len(fed[uid])
+            live, live_lines = _ups_live((ups_state or {}).get(uid))
             row.append(
                 cards.card(
                     f"ups:{uid}",
@@ -496,8 +527,10 @@ def build(
                     core=ups,
                     does="Keeps what it feeds running through a power cut, for as long as its "
                     "battery lasts.",
-                    power=[f"feeds {x.split(':', 1)[1]}" for x in fed[uid]] or ["feeds nothing"],
+                    power=live_lines
+                    + ([f"feeds {x.split(':', 1)[1]}" for x in fed[uid]] or ["feeds nothing"]),
                     badge={"cls": "count" if n else "nopower", "text": f"feeds {n}"},
+                    badge2=live,
                 )
             )
             power_lines += [{"source": f"ups:{uid}", "dest": x} for x in fed[uid]]
@@ -632,11 +665,20 @@ def load(
     *,
     registry: Any = None,
     dataflow: Mapping[str, Any] | None = None,
+    ups_state: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """:func:`build` over :func:`inputs`, with the registry (services per guest) and the
-    dataflow view-model (its hops become flows) when given."""
+    """:func:`build` over :func:`inputs`, with the registry (services per guest), the
+    dataflow view-model (its hops become flows) and the UPSes' live states when given."""
     doc, guests, flows, nodes = inputs(guests_dir, site_path)
-    return build(doc, guests, flows, lab=lab_of(registry), nodes=nodes, dataflow=dataflow)
+    return build(
+        doc,
+        guests,
+        flows,
+        lab=lab_of(registry),
+        nodes=nodes,
+        dataflow=dataflow,
+        ups_state=ups_state,
+    )
 
 
 # ------------------------------------------------------------------------------------ render

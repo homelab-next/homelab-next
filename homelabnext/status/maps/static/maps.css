@@ -90,6 +90,10 @@ background:var(--chip);color:var(--mute);border:1px solid var(--line)}
 .badge.power{color:var(--pwr);border-color:color-mix(in srgb,var(--pwr) 45%,transparent);background:color-mix(in srgb,var(--pwr) 10%,transparent)}
 .badge.nopower{color:var(--gap);border-color:color-mix(in srgb,var(--gap) 45%,transparent);border-style:dashed}
 .badge.vmid{border-radius:4px;margin-left:auto}
+.badge.ups-ok{color:#3fb950;border-color:rgba(63,185,80,.45);background:rgba(63,185,80,.12)}
+.badge.ups-warn{color:#d6a000;border-color:rgba(234,179,8,.45);background:rgba(234,179,8,.13)}
+.badge.ups-fail{color:#f85149;border-color:rgba(248,81,73,.5);background:rgba(248,81,73,.13)}
+.badge.ups-unknown,.badge.ups-stale{color:var(--mute);border-style:dashed}
 .cat-vm{--cc:var(--c0)}.cat-lxc{--cc:var(--c4)}.cat-hypervisor{--cc:var(--c1)}.cat-host{--cc:var(--c2)}
 .cat-router,.cat-switch,.cat-internet,.cat-modem,.cat-ont,.cat-firewall,.cat-edge{--cc:var(--accent)}
 .cat-ups{--cc:var(--pwr)}.cat-node{--cc:var(--c1)}
