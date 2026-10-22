@@ -823,7 +823,10 @@ def test_the_rendered_shims_delegate_to_the_runtime(monkeypatch):
 
     a02 = pack("agent-job-retry")
     co = _a02(binding())["coalesce"]
-    admit = _load_shim("admit", monkeypatch)(action_service=Service())
+    service = Service()
+    with pytest.raises(ValueError, match="kv_key"):  # no key, no datastore
+        _load_shim("admit", monkeypatch)(config={}, action_service=service).run(pack="x", event="")
+    admit = _load_shim("admit", monkeypatch)(config=KV_CONFIG, action_service=service)
     ev = a02["fixtures"][0]["event"]
     assert co["window_s"] == 600
     enc = st2_runtime.encode(ev)
@@ -835,7 +838,10 @@ def test_the_rendered_shims_delegate_to_the_runtime(monkeypatch):
         "duplicate",
         "coalesced",
     )
-    step = _load_shim("step", monkeypatch)(config={"broker_socket": "/nonexistent"})
+    assert st2_runtime.seen_name(a02["pack"], ev["id"]) not in service.kv  # keyed, not plain
+    step = _load_shim("step", monkeypatch)(
+        config=KV_CONFIG | {"broker_socket": "/nonexistent"}, action_service=Service()
+    )
     out = step.run(pack=a02["pack"], step="resubmit", event=first["event"], state="")
     assert calls_of(out)[0]["result"] == "shadow"
     with pytest.raises(TypeError):  # the mode is the pinned rule's, never a parameter
@@ -1184,6 +1190,86 @@ def test_a_forged_accept_runs_nothing_and_is_refused_with_a_reason(tmp_path, cap
     assert (rec["result"], rec["reason"]) == ("refused", "request-mismatch")
     kv.set(rec_name, st2_runtime.encode(sub), 60)
     assert _run(pdir, kv, _returned(pending), client)["result"] == "executed"
+
+
+class ActionService:
+    """StackStorm's ``action_service`` datastore surface (system scope), over :class:`KV`."""
+
+    def __init__(self):
+        self.kv = KV()
+
+    def get_value(self, name, local=True):
+        assert local is False
+        return self.kv.get(name)
+
+    def set_value(self, name, value, ttl=None, local=True):
+        assert local is False
+        self.kv.set(name, value, ttl)
+
+
+KV_CONFIG = {"broker_socket": "/s", "kv_key": "fake-kv-key-" + "0" * 32}
+
+
+def test_the_datastore_names_are_keyed_so_a_writer_cannot_forge_or_pre_seed_them(tmp_path):
+    """Anyone with datastore write can compute a plain-hash name from a predictable input (a
+    broker request id, a schedule's event id).  The actions key every runtime name with the pack
+    config's kv_key: a forged submit record and a pre-seeded seen key are never read."""
+    for config in (None, {}, {"kv_key": "short"}):
+        with pytest.raises(ValueError, match="kv_key"):
+            st2_runtime.ActionServiceKV(ActionService(), config)
+    svc, store = broker_service(tmp_path), ActionService()
+    kv = st2_runtime.ActionServiceKV(store, KV_CONFIG)
+    pdir = approved_run_dir(tmp_path)
+    rid = _held(svc, pdir, kv, 1)
+    plain = st2_runtime.submitted_name(rid)
+    assert plain not in store.kv.items and kv.stored_name(plain) in store.kv.items
+    other = st2_runtime.ActionServiceKV(store, {"kv_key": "fake-other-key-" + "1" * 32})
+    assert other.stored_name(plain) != kv.stored_name(plain)
+    # the reviewer's forge: a record for another request, written where a plain hash points
+    forged = svc.submit("profile:triage", "service.restart", {"grace_s": 5}, target="svc:queue")
+    client = ServiceAsClient(svc, "profile:triage")
+    record = {
+        "pack": "restart-queue",
+        "step": "restart",
+        "action": "service.restart",
+        "fingerprint": st2_runtime.fingerprint(client.status(forged)["request"]),
+    }
+    store.set_value(st2_runtime.submitted_name(forged), st2_runtime.encode(record), 60, False)
+    svc.approve(forged, "sso:operator-one")
+    rec = _run(pdir, kv, _returned(forged), client)
+    assert (rec["result"], rec["reason"]) == ("refused", "not-st2-submitted")
+    assert svc.state.state_of(forged) == "pending"
+    # a pre-seeded seen key does not suppress the event
+    ev = _job_failed(2)
+    store.set_value(st2_runtime.seen_name("restart-queue", ev["id"]), "x", 60, False)
+    got = st2_runtime.admit_event(pack="restart-queue", trigger=RESTART["trigger"], event=ev, kv=kv)
+    assert got["admitted"]
+    # the genuine record still runs once approved
+    svc.approve(rid, "sso:operator-one")
+    assert _run(pdir, kv, _returned(rid), client)["result"] == "executed"
+
+
+def test_the_rendered_config_carries_the_kv_key_as_a_datastore_secret():
+    res = go(binding())
+    schema = yaml.safe_load(res.files["homelabnext/config.schema.yaml"])
+    assert schema["kv_key"] | {"description": ""} == {
+        "type": "string",
+        "secret": True,
+        "required": True,
+        "description": "",
+    }
+    values = yaml.safe_load(res.files["configs/homelabnext.yaml"])
+    assert values["kv_key"] == "{{ st2kv.system.homelabnext.kv_key | decrypt_kv }}"
+    for shim in ("admit", "step"):
+        assert (
+            "ActionServiceKV(self.action_service, self.config)"
+            in (res.files[f"homelabnext/actions/{shim}.py"])
+        )
+    b = binding()
+    b["config"] = {"kv_key": {"st2kv": "elsewhere"}}
+    assert ("st2-binding", "config: kv_key is the runtime's own datastore secret") in {
+        (p.rule, p.detail) for p in go(b).problems
+    }
 
 
 def test_the_approved_run_needs_a_live_bound_pack_and_shadow_never_opens_the_socket(tmp_path):

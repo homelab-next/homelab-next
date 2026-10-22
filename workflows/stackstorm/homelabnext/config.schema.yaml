@@ -5,3 +5,9 @@ broker_socket:
   type: string
   description: the broker's Unix socket; the only endpoint the pack's actions use
   required: true
+kv_key:
+  type: string
+  secret: true
+  required: true
+  description: keys the runtime's datastore names (seen, coalesce, submitted) so nobody without it can
+    forge or pre-seed one; at least 32 random characters

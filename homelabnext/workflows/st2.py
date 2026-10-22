@@ -96,6 +96,9 @@ from .runner import MODEL_KINDS, is_risky
 from .st2_runtime import (
     APPROVED_RUN,
     BROKER_SOURCE,
+    KV_KEY,
+    KV_KEY_DATASTORE,
+    KV_KEY_MIN,
     SCHEDULE_EVENT,
     ST2_ENRICH_OPS,
     approved_run_pack,
@@ -486,12 +489,12 @@ class {cls}(Action):
 def _shim(ref: str, name: str) -> str:
     call = {
         "admit": (
-            "admit(\n            kv=st2_runtime.ActionServiceKV(self.action_service), "
-            "pinned_dir=PINNED, **params\n        )"
+            "admit(\n            kv=st2_runtime.ActionServiceKV(self.action_service, self.config),\n"
+            "            pinned_dir=PINNED,\n            **params,\n        )"
         ),
         "step": (
             "step(\n            self.config,\n            "
-            "kv=st2_runtime.ActionServiceKV(self.action_service),\n            "
+            "kv=st2_runtime.ActionServiceKV(self.action_service, self.config),\n            "
             "pinned_dir=PINNED,\n            **params,\n        )"
         ),
     }[name]
@@ -660,6 +663,16 @@ def _config(binding: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]
         }
     }
     values: dict[str, Any] = {"broker_socket": binding["broker_socket"]}
+    schema[KV_KEY] = {
+        "type": "string",
+        "secret": True,
+        "required": True,
+        "description": (
+            "keys the runtime's datastore names (seen, coalesce, submitted) so nobody without it "
+            f"can forge or pre-seed one; at least {KV_KEY_MIN} random characters"
+        ),
+    }
+    values[KV_KEY] = "{{ st2kv.system." + KV_KEY_DATASTORE + " | decrypt_kv }}"
     for key, entry in sorted(binding.get("config", {}).items()):
         item: dict[str, Any] = {"description": entry.get("description", key)}
         if "st2kv" in entry:
@@ -753,6 +766,8 @@ def render(
     for key, entry in sorted(binding.get("config", {}).items()):
         if key == "broker_socket":
             bad("st2-binding", "config: broker_socket is set by the binding's own field")
+        if key == KV_KEY:
+            bad("st2-binding", f"config: {key} is the runtime's own datastore secret")
         if _SECRETISH.search(key) and "st2kv" not in entry:
             bad("st2-secret", f"config {key}: a secret is a datastore key (st2kv), never a value")
     if out.problems:

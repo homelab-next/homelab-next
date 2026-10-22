@@ -102,7 +102,7 @@ table and decision services.
 **Actions and approvals.** In `live` mode a risky action goes to the broker as `submit`. Risky means
 the manifest gives it tier `execute` or `privileged`, or sets `requires_approval`. The broker holds
 the request and emits `homelabnext.decision.requested`, and the run ends `held`. The step records
-the held request in the datastore (`homelabnext.submitted.<hash of the broker's request id>`, kept
+the held request in the datastore (`homelabnext.submitted.<keyed hash of the broker's request id>`, kept
 7 days): its pack, step, action and a fingerprint of what it asks for. Once a person approves it,
 the [approved-run rule](#running-an-approved-request-a03) runs it. Any other action is
 a `call`, and the broker decides it as usual (`executed` or `denied`). The approval and its digest
@@ -180,6 +180,23 @@ needs no broker and stops before the socket (`shadow`, `st2-shadow`). Like any r
 shadow, and `live` needs `promotion` (`st2-live`). A request approved more than 7 days after it was
 held is no longer recorded and is refused; cancel it or file it again.
 
+What A03 does not do, or cannot do yet:
+
+- **A request with a secret parameter never passes.** The broker holds a secret argument apart and
+  does not show it in `status`, so the fingerprint of what the broker shows never matches the one
+  the step recorded: `request-mismatch`, and nothing runs. This fails closed on purpose; a pack
+  whose risky step takes a secret runs only by hand.
+- **It cannot fire with today's manifest.** The broker identity of the binding
+  (`profile:workflow-agents`) has one action, `agent.job.submit`, at tier `write` without
+  `requires_approval`, so every live step is a `call` and nothing is ever held. A pack that needs
+  A03 needs, in the broker manifest that identity uses, an action of tier `execute` or
+  `privileged` (or `requires_approval: true`) with its handler pinned in the tree (`st2-handler`),
+  a risky `action` step that calls it, the pack's rule live, and `approved_run: {mode: live}` with
+  its own `promotion`.
+- **`tier_used: human` does not prove a person approved.** The broker emits `tier_used: human` for
+  every approval, including one by an agent approver a manifest allows (`allow_agent_approvers`).
+  Until it tells the two apart, do not allow agent approvers on any action a bound pack submits.
+
 ```mermaid
 sequenceDiagram
     participant Bus as Event bus
@@ -211,7 +228,7 @@ sequenceDiagram
 A StackStorm webhook starts one run for every POST and ignores an `Idempotency-Key` header, and the
 event bridge delivers at least once (a POST that timed out after StackStorm took it is sent
 again). So `admit` drops an event id it has already taken for the same pack: it remembers the id
-in the datastore (`homelabnext.seen.<hash of pack and id>`) for a day, or for the coalesce window
+in the datastore (`homelabnext.seen.<keyed hash of pack and id>`) for a day, or for the coalesce window
 when that is longer, and a second delivery ends its run `duplicate` before any step runs. A
 CronTimer that fires twice for the same time builds the same event id, so it is one run too. The
 bound that holds when two deliveries race inside the same instant is the same as for coalescing
@@ -220,7 +237,7 @@ bound that holds when two deliveries race inside the same instant is the same as
 ## Coalescing bursts
 
 `coalesce: {key, window_s}` on a rule. The first event of a key opens a window. That is a datastore
-key `homelabnext.coalesce.<hash of pack and key>` with TTL `window_s`. Every later event of the key
+key `homelabnext.coalesce.<keyed hash of pack and key>` with TTL `window_s`. Every later event of the key
 inside the window ends its run `coalesced`, before any step runs, and records which event it was
 folded into. A02 keys on `$event.data.agent_key` with a ten-minute window. When a backend goes down
 and fails every running job of an agent at once, A02 makes one resubmit, not one per failure. A01
@@ -286,6 +303,30 @@ only it, `action_execute` on the `homelabnext` pack's actions (a role with
 homelabnext.step` with an event of their own. The step still runs only pinned steps in their pinned
 mode, and the broker still decides, but the event is theirs.
 
+**Who may write the datastore, or run a runner action.** The runtime keeps its state in the
+datastore's system scope: `homelabnext.seen.*` (an event id already taken), `homelabnext.coalesce.*`
+(an open window) and `homelabnext.submitted.*` (what a live step submitted, which A03 trusts). Its
+inputs are predictable (a schedule's event id is built from the schedule and the time; a broker
+request id is in the `decision.requested` event), so with a plain hash anyone who can write the
+datastore could pre-seed a `seen` or `coalesce` key and suppress an event, or write a `submitted`
+record that makes A03 run a request StackStorm never submitted. The actions therefore key every one
+of those names with an HMAC under the pack config's `kv_key`, an encrypted datastore value
+(`homelabnext.kv_key`, at least 32 characters; the actions refuse to run without it). Someone who
+cannot decrypt it cannot compute a name. That is a bound only while RBAC holds:
+
+- grant `key_value_pair_set` and `key_value_pair_delete` on the system scope to nobody but
+  StackStorm's own service and an administrator, and keep decrypting system-scope values to
+  administrators (`st2.kv.set` is an action too: deny `action_execute` on it);
+- deny `action_execute` on the `core` pack's `local`, `local_sudo`, `remote` and `remote_sudo`
+  actions and every other runner action (all of `core`, `linux`, any pack that runs a command or
+  a script) to everyone. They run as the runner user (`stanley`), which can read the datastore's encryption key
+  and the pack config, so it holds `kv_key`, and which is the peer the broker maps to the binding's
+  `actor`: a shell as that user reaches the broker socket directly, as StackStorm.
+
+The broker still bounds the damage of a forgery: it shows and runs a request only to its owner,
+only while it is pending, only with a matching approval, and at most once. What a forger gains is
+the choice of *which* pending, approved request of the actor runs, or suppressing an event.
+
 **Handlers.** Every broker action a bound pack calls has its handler in the tree, pinned
 (`st2-handler`): `agent.job.submit` is `workflows/handlers/agent-job-submit.sh`, with
 `agent-job-submit.handler.json` beside it naming its digest. It posts the validated params to the
@@ -323,6 +364,7 @@ sudo cp workflows/stackstorm/configs/homelabnext.yaml /opt/stackstorm/configs/
 sudo st2 run packs.setup_virtualenv packs=homelabnext   # creates the pack's virtualenv
 sudo /opt/stackstorm/virtualenvs/homelabnext/bin/pip install '.[core]'   # this checkout, not PyPI
 sudo st2ctl reload --register-all
+st2 key set homelabnext.kv_key "$(openssl rand -hex 32)" --encrypt   # keys the runtime's names
 st2 key set homelabnext.<name> <value> --encrypt         # only for config entries with st2kv
 ```
 

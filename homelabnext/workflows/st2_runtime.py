@@ -59,6 +59,7 @@ may run the pack's actions at all is StackStorm RBAC's (``docs/stackstorm.md``).
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -99,6 +100,12 @@ BROKER_SOURCE = "svc:broker"
 #: which pack and step, so the approved-run rule runs only those (and only for this long)
 SUBMITTED_PREFIX = "homelabnext.submitted."
 SUBMITTED_TTL_S = 7 * 86400
+#: the pack config key (a datastore secret, ``st2kv.system.homelabnext.kv_key``) that keys the
+#: datastore names above, so nobody without it can compute one to forge or pre-seed
+KV_KEY = "kv_key"
+KV_KEY_DATASTORE = "homelabnext.kv_key"
+KV_KEY_MIN = 32
+_KEYED_PREFIXES = (SEEN_PREFIX, COALESCE_PREFIX, SUBMITTED_PREFIX)
 
 log = logging.getLogger("homelabnext.st2_runtime")
 
@@ -165,16 +172,37 @@ class Broker(Protocol):
 
 
 class ActionServiceKV:
-    """:class:`KeyValue` over a StackStorm Python action's ``action_service`` (system scope)."""
+    """:class:`KeyValue` over a StackStorm Python action's ``action_service`` (system scope).
 
-    def __init__(self, action_service: Any) -> None:
+    The runtime's own names (``homelabnext.seen.*``, ``.coalesce.*``, ``.submitted.*``) are
+    stored under an HMAC of the name keyed with the pack config's ``kv_key`` (a datastore secret):
+    their inputs (a schedule's event id, a broker request id) are predictable, so with a plain hash
+    anyone allowed to write the datastore could compute a name and pre-seed it (suppress an event)
+    or forge a submit record.  Without a key of at least ``KV_KEY_MIN`` characters nothing is read
+    or written."""
+
+    def __init__(self, action_service: Any, config: Mapping[str, Any] | None = None) -> None:
+        key = (config or {}).get(KV_KEY)
+        if not isinstance(key, str) or len(key) < KV_KEY_MIN:
+            raise ValueError(
+                f"the pack config's {KV_KEY} (st2kv.system.{KV_KEY_DATASTORE}, encrypted) is not "
+                f"set to a secret of at least {KV_KEY_MIN} characters"
+            )
         self.svc = action_service
+        self._key = key.encode("utf-8")
+
+    def stored_name(self, name: str) -> str:
+        for prefix in _KEYED_PREFIXES:
+            if name.startswith(prefix):
+                mac = hmac.new(self._key, name.encode("utf-8"), hashlib.sha256)
+                return prefix + mac.hexdigest()[:32]
+        return name
 
     def get(self, name: str) -> str | None:
-        return self.svc.get_value(name, local=False)
+        return self.svc.get_value(self.stored_name(name), local=False)
 
     def set(self, name: str, value: str, ttl: int) -> None:
-        self.svc.set_value(name, value, ttl=ttl, local=False)
+        self.svc.set_value(self.stored_name(name), value, ttl=ttl, local=False)
 
 
 # ---------------------------------------------------------------- admit
