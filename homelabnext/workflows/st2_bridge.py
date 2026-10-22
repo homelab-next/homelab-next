@@ -35,7 +35,9 @@ prefix, :mod:`homelabnext.conform.adapters.nats_jetstream`) and POSTs each event
   deliveries); SIGTERM stops fetching, lets the POSTs in flight finish and settles them.
 
 ``stats()`` (and ``--stats-file``, written atomically) reports per subject what was forwarded,
-retried, quarantined (by reason) and dead-lettered, for a ``poll-file`` status source.
+retried, quarantined (by reason) and dead-lettered, for a ``poll-file`` status source; its
+``state`` is ``fail`` for ``dead_letter_window_s`` (a day) after the latest dead letter, then
+recovers.
 """
 
 from __future__ import annotations
@@ -279,6 +281,7 @@ class Bridge:
         clock: Callable[[], float] = time.monotonic,
         stats_file: str | os.PathLike[str] | None = None,
         stats_interval_s: float = 30.0,
+        dead_letter_window_s: float = 86400.0,
         now: Callable[[], str] | None = None,
     ) -> None:
         if max_in_flight < 1 or max_deliver < 1:
@@ -293,6 +296,9 @@ class Bridge:
         self.per_subject = {s.subject: SubjectStats() for s in config.subscriptions}
         self.last_forward: str | None = None
         self.last_error: str | None = None
+        self.dead_letter_window_s = dead_letter_window_s
+        self.last_dead_letter: str | None = None
+        self._dead_at: float | None = None  # clock() of the latest dead letter
         self._consumers: list[tuple[Subscription, Any]] = []
         self._pool = ThreadPoolExecutor(self.max_in_flight, thread_name_prefix="st2-bridge")
         self._stats_written = float("-inf")
@@ -401,7 +407,11 @@ class Bridge:
         except Exception as exc:  # a defect in a poster must cost a retry, never the event
             return type(exc).__name__
 
-    def _settle(self, sub: Subscription, d: Any, event: Mapping[str, Any], got: int | str) -> bool:
+    def _settle(
+        self, sub: Subscription, d: Any, event: Mapping[str, Any], got: int | str, max_deliver: int
+    ) -> bool:
+        """Settle one POSTed delivery.  ``max_deliver`` is the durable's own (an existing durable
+        keeps the one it was created with, whatever ``--max-deliver`` says now)."""
         st = self.per_subject[sub.subject]
         if isinstance(got, int) and 200 <= got < 300:
             if not self._settle_or_log(sub, d, "ack"):
@@ -414,8 +424,9 @@ class Bridge:
             return True
         why = f"HTTP {got}" if isinstance(got, int) else got
         self.last_error = f"{self.now()} {sub.subject}: {why}"
-        if d.attempt >= self.max_deliver:
+        if d.attempt >= max_deliver:
             st.dead_lettered += 1
+            self._dead_at, self.last_dead_letter = self.clock(), self.now()
             log.error(
                 "st2 bridge: %s event %r dead-lettered after %d attempts (%s)",
                 sub.subject,
@@ -458,8 +469,9 @@ class Bridge:
                     todo.append((d, event))
             results = list(self._pool.map(lambda pair: self._post(pair[1]), todo))
             ok = True
+            limit = int(getattr(cons, "max_deliver", self.max_deliver))
             for (d, event), got in zip(todo, results, strict=True):
-                ok = self._settle(sub, d, event, got) and ok
+                ok = self._settle(sub, d, event, got, limit) and ok
             handled += len(batch)
             if ok:
                 st.failures = 0
@@ -487,8 +499,8 @@ class Bridge:
         state = "ok"
         if self.failures:
             state = "warn"
-        if dead:
-            state = "fail"
+        if self._dead_at is not None and self.clock() - self._dead_at < self.dead_letter_window_s:
+            state = "fail"  # an event was lost recently; the counters keep the history
         return {
             "bridge": "st2",
             "updated_at": self.now(),
@@ -496,6 +508,8 @@ class Bridge:
             "consecutive_failures": self.failures,
             "last_forward": self.last_forward,
             "last_error": self.last_error,
+            "last_dead_letter": self.last_dead_letter,
+            "dead_lettered": dead,
             "quarantined": quarantined,
             "subjects": {k: v.to_dict() for k, v in sorted(self.per_subject.items())},
         }

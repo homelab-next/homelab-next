@@ -332,7 +332,7 @@ flight finish and settles them; an unsettled delivery is redelivered by the bus 
 | What arrives | What the bridge does |
 |---|---|
 | a valid event of the subject's type, from a producer the subject's rules pin (`sources` in `bridge.json`) | POST it with `St2-Api-Key` and `Idempotency-Key: <event id>`; **ack only after a 2xx** |
-| no answer (refused, timeout, TLS), a redirect, 401, 403, 404, 408, 429, 5xx | **nack** (redelivered) and back off exponentially (1 s doubling to 60 s) before fetching that subject again (every other subject goes on); after `--max-deliver` attempts (default 100) the bus dead-letters it |
+| no answer (refused, timeout, TLS), a redirect, 401, 403, 404, 408, 429, 5xx | **nack** (redelivered) and back off exponentially (1 s doubling to 60 s) before fetching that subject again (every other subject goes on); after `--max-deliver` attempts (default 100; a durable that already exists keeps the limit it was created with, and the bridge counts by that one) the bus dead-letters it |
 | 400, 413, 415, 422 (StackStorm refuses the body) | poison |
 | a body that is not JSON, fails the envelope or its type's schema, has another type than the subject, names a producer the rules do not pin, or a `Nats-Msg-Id` that is not its id | poison |
 | a body over 256 KiB (`too-large`, refused before it is parsed), or nested too deeply to parse (`not-json`) | poison |
@@ -352,7 +352,8 @@ At most `--max-in-flight` POSTs run at once (default 8; one fetch takes at most 
 deliveries). `--stats-file` writes, atomically and at most every 30 s, the counters per subject
 (`forwarded`, `retried`, `dead_lettered`, `quarantined` by reason, `consecutive_failures`), the
 longest run of consecutive failures and
-`state` (`ok`, `warn` while retrying, `fail` once anything was dead-lettered).
+`state` (`ok`, `warn` while retrying, `fail` for 24 hours after an event was dead-lettered; the
+`dead_lettered` counters and `last_dead_letter` keep the history, so it clears without a restart).
 
 **The key and TLS.** The API key is the secret-store name in `bridge.json`
 (`secret:stackstorm/webhook-key`), read at every POST from `HNX_SECRET_STACKSTORM_WEBHOOK_KEY` and
@@ -437,7 +438,7 @@ The stats file is a status source with the existing `poll-file` kind:
   interval_s: 60
   timeout_s: 10
   mapping: {state: state, summary: last_error}
-  what: The StackStorm event bridge; warn while it retries, fail once an event was dead-lettered.
+  what: The StackStorm event bridge; warn while it retries, fail for a day after an event was dead-lettered.
 ```
 
 ## Checks

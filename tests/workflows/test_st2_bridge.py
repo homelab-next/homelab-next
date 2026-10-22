@@ -259,6 +259,39 @@ def test_an_unreachable_webhook_retries_until_the_bus_dead_letters_it():
     assert st["state"] == "fail"
 
 
+def test_dead_letters_count_by_the_durables_limit_and_fail_clears_after_a_window():
+    """An existing durable keeps the max_deliver it was created with: a dead letter is counted at
+    that limit.  ``fail`` holds for the window after the latest one, then the state recovers (the
+    counter keeps the history)."""
+
+    class Switch:
+        up = False
+
+        def post(self, _ev):
+            if not self.up:
+                raise sb.WebhookUnavailable("ConnectionRefusedError")
+            return 202
+
+    bus, clock, hook = FakeEventBus(), Clock(), Switch()
+    b = bridge(bus, hook, clock=clock, max_deliver=100, dead_letter_window_s=3600.0)
+    [cons] = [c for s, c in b._consumers if s.subject == "homelabnext.proposal.created"]
+    cons.max_deliver = 2  # what the server reports for a durable created with a lower limit
+    publish(bus, proposal(1))
+    for _ in range(2):
+        b.poll()
+        clock.t += 120
+    assert [d.msg_id for d in cons.dead_letters()] == ["evt-bridge-1"]
+    st = b.stats()
+    assert st["subjects"]["homelabnext.proposal.created"]["dead_lettered"] == 1
+    assert st["state"] == "fail" and st["dead_lettered"] == 1 and st["last_dead_letter"]
+    hook.up = True
+    clock.t += 3600
+    publish(bus, proposal(2))
+    assert b.poll() == 1
+    st = b.stats()
+    assert st["state"] == "ok" and st["dead_lettered"] == 1
+
+
 @pytest.mark.parametrize(
     ("body", "subject", "reason"),
     [
