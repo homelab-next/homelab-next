@@ -512,3 +512,42 @@ def test_the_bridge_over_the_jetstream_adapter(hook):
     assert b.poll() == 2
     assert [r["headers"]["Idempotency-Key"] for r in hook.requests] == ["evt-bridge-7"]
     assert b.poll() == 0
+
+
+def test_the_bridge_command_passes_its_bus_credentials(monkeypatch):
+    """On an authenticated bus the bridge connects as its own user, with the password by name."""
+    from homelabnext.workflows import cli
+
+    seen = {}
+
+    def fake_make(**kw):
+        seen.update(kw)
+        raise EventsError("stop here")
+
+    monkeypatch.setattr(nj, "make", fake_make)
+    rc = cli.main(
+        [
+            "st2",
+            "bridge",
+            "--bridge-file",
+            str(ROOT / "workflows" / "stackstorm" / "bridge.json"),
+            "--st2-url",
+            "https://st2.example.internal",
+            "--stream",
+            "HOMELABNEXT",
+            "--subject-prefix",
+            "lab",
+            "--events-user",
+            "hnx-st2-bridge",
+            "--events-password-secret",
+            "secret:events/st2-bridge-password",
+            "--events-ca-file",
+            "/etc/fake/nats-ca.pem",
+        ]
+    )
+    assert rc == 2  # the fake connect refused, as a configuration error
+    assert seen["user"] == "hnx-st2-bridge"
+    assert seen["password_secret"] == "secret:events/st2-bridge-password"
+    assert seen["ca_file"] == "/etc/fake/nats-ca.pem"
+    assert seen["allow_plaintext"] is False
+    assert seen["provision"] is False

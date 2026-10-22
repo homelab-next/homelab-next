@@ -430,6 +430,8 @@ ExecStart=/opt/hnx/bin/hnx workflows st2 bridge \
   --bridge-file /opt/hnx/workflows/stackstorm/bridge.json \
   --st2-url https://st2.lab.example --ca-file /etc/hnx-st2-bridge/ca.pem \
   --stream HOMELABNEXT --subject-prefix lab \
+  --events-user hnx-st2-bridge --events-password-secret secret:events/st2-bridge-password \
+  --events-ca-file /etc/hnx-st2-bridge/nats-ca.pem \
   --stats-file /var/lib/hnx-st2-bridge/stats.json
 StateDirectory=hnx-st2-bridge
 Restart=on-failure

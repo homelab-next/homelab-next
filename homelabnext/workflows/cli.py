@@ -51,6 +51,18 @@ def main(argv: list[str]) -> int:
     br.add_argument("--max-in-flight", type=int, default=8)
     br.add_argument("--max-deliver", type=int, default=100)
     br.add_argument("--stats-file", type=Path, default=None, help="JSON counters, for status")
+    br.add_argument("--events-user", default=None, help="the bridge's NATS user")
+    br.add_argument(
+        "--events-password-secret",
+        default=None,
+        help="the NATS password by secret name (secret:<name>), never a value",
+    )
+    br.add_argument("--events-ca-file", default=None, help="CA bundle for a tls:// events endpoint")
+    br.add_argument(
+        "--events-allow-plaintext",
+        action="store_true",
+        help="allow the NATS password over nats:// to a host that is not loopback (the lab only)",
+    )
     args = ap.parse_args(argv)
     try:
         if args.cmd == "st2":
@@ -135,6 +147,11 @@ def _st2_bridge(args) -> int:
             stream=args.stream,
             subject_prefix=args.subject_prefix,
             ack_wait=sb.ACK_WAIT_S,
+            user=args.events_user,
+            password_secret=args.events_password_secret,
+            ca_file=args.events_ca_file,
+            allow_plaintext=args.events_allow_plaintext,
+            client_name="hnx-st2-bridge",
         )
     except Exception as exc:  # configuration, the endpoint variable, the first connect
         print(f"hnx workflows st2 bridge: {exc}", file=sys.stderr)
