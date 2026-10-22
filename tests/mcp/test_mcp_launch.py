@@ -197,3 +197,43 @@ def test_every_example_record_renders_its_generated_launch():
             assert servers.launch_problems(rec, sid) == []
             command, _ = servers.launch(rec)
             assert command in ("npx", "uvx", "docker", "hnx"), sid
+
+
+#: keys the round-3 review set through settings to redirect or replace what the launch runs
+LAUNCHER_KEYS = ["NPM_CONFIG_REGISTRY", "NPM_CONFIG_USERCONFIG", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL",
+                 "UV_PYTHON", "UV_CONFIG_FILE", "PIP_INDEX_URL", "PIPX_DEFAULT_PYTHON", "NODE_OPTIONS",
+                 "LD_PRELOAD", "PATH", "DOCKER_HOST", "BUN_CONFIG_REGISTRY", "PYTHONSTARTUP",
+                 "CONTAINERS_CONF", "GIT_SSH_COMMAND", "XDG_CONFIG_HOME", "HOME"]  # fmt: skip
+
+
+@pytest.mark.parametrize("key", LAUNCHER_KEYS)
+def test_no_setting_env_or_parameter_configures_the_launcher(key):
+    """A record's settings and env are the launcher's environment too (npx, uvx, docker read
+    them), so NPM_CONFIG_REGISTRY or UV_INDEX_URL would fetch another package for the pin."""
+    base = DOCKER if key.startswith(("DOCKER", "CONTAINER")) else NOTES
+    for edit in (
+        lambda r: r.setdefault("settings", {}).update({key: "/tmp/evil"}),
+        lambda r: r.setdefault("env", {}).update({key: "secret:mcp/evil"}),
+        lambda r: r.setdefault("parameters", {}).update(
+            {"evil": {"env": key, "enum": ["x"], "default": "x"}}
+        ),
+    ):
+        rec = copy.deepcopy(base)
+        edit(rec)
+        problems = servers._template_problems(rec, "x")
+        assert any(key in p and ("launcher" in p or "never be set" in p) for p in problems), (
+            problems
+        )
+    assert servers.denied_env(key.lower())  # any case: npm reads npm_config_registry too
+
+
+def test_ordinary_settings_are_not_launcher_configuration():
+    for key in (
+        "NOTES_ROOT",
+        "LOG_LEVEL",
+        "NODEJS_MCP_MODE",
+        "DOCKERFILE_DIR",
+        "PATHS",
+        "HOMEPAGE",
+    ):
+        assert not servers.denied_env(key), key

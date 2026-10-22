@@ -131,7 +131,7 @@
     },
     "settings": {
       "type": "object",
-      "description": "Non-secret environment of a stdio server (paths, modes), the same for every instance; a value may use {profile}, {lane} and parameter templates. A key that names a credential (TOKEN, SECRET, PASSWORD, API_KEY, ...) belongs in env as a secret reference.",
+      "description": "Non-secret environment of a stdio server (paths, modes), the same for every instance; a value may use {profile}, {lane} and parameter templates. A key that names a credential (TOKEN, SECRET, PASSWORD, API_KEY, ...) belongs in env as a secret reference. A key that configures the process or its launcher (PATH, LD_*, PYTHON*, NODE_*, NPM_CONFIG_*, UV_*, PIP_*, DOCKER_* ...) is refused by check.",
       "propertyNames": {
         "pattern": "^[A-Z][A-Z0-9_]*$(?!\\n)"
       },
@@ -148,7 +148,7 @@
     },
     "parameters": {
       "type": "object",
-      "description": "Typed per-instance parameters: the server is declared once and instantiated per granted profile (and lane); each value comes from the render spec's grant, else the default (which may template {profile}, {lane}, {id}). A parameter with env is delivered in that environment variable (the llm-orchestrator kind's allowed_env); the hard-denied keys (PATH, LD_*, PYTHON*, HOME, HERMES_HOME, ...) are refused.",
+      "description": "Typed per-instance parameters: the server is declared once and instantiated per granted profile (and lane); each value comes from the render spec's grant, else the default (which may template {profile}, {lane}, {id}). A parameter with env is delivered in that environment variable (the llm-orchestrator kind's allowed_env); keys that configure the process or its launcher (PATH, LD_*, PYTHON*, NODE_*, NPM_CONFIG_*, UV_*, HOME, HERMES_HOME, ...) are refused.",
       "propertyNames": {
         "pattern": "^[a-z][a-z0-9_]{0,31}$(?!\\n)"
       },

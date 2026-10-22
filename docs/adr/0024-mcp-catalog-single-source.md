@@ -71,7 +71,9 @@ because each instance needs its own scope.
    NAME ...] <image>@<digest>`. A record has no field for a launcher, a launcher flag, a mount, a
    network or another entrypoint, so the pin controls what runs by construction. (Three review
    rounds of reading arbitrary launcher command lines each found a new way to run something the
-   pin did not name; the parser now only serves the importer.)
+   pin did not name; the parser now only serves the importer.) No setting, env or parameter key
+   may configure the process or its launcher (`PATH`, `LD_*`, `NODE_*`, `NPM_CONFIG_*`, `UV_*`,
+   `PIP_*`, `DOCKER_*` ..., any case).
 8. **Import, then pin.** `hnx mcp catalog import` turns an existing lab's client configs into
    draft records in a directory it is given (`--out`, required): credentials become `secret:`
    names, failing closed (every environment value is one unless its key is allowlisted as

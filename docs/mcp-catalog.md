@@ -114,10 +114,13 @@ the registry cross-references were not checked.
   (`--no-auth`), a flag about one (`--token-file`, `--secret-name`, `--session-timeout`), a path
   after a flag (`--key /etc/ssl/k.pem`), an auth method (`--auth oauth`), and identifiers made of
   plain words and numbers (`claude-3-5-sonnet-20241022`), a ULID or UUID, an image digest;
-- parameters: every parameter has an `enum` or a `pattern`; its env key is never one
-  llm-orchestrator hard-denies (`PATH`, `LD_*`, `DYLD_*`, `PYTHONPATH`, `PYTHONHOME`,
-  `PYTHONSTARTUP`, `PYTHONINSPECT`, `HOME`, `SHELL`, `BASH_ENV`, `ENV`, `NODE_OPTIONS`,
-  `HERMES_HOME`), never names a credential, never also a fixed setting or secret, never shared by
+- no setting, `env` secret or parameter env key configures the process or its launcher (any
+  case): a record's environment is the launcher's too (`npx`, `uvx`, `docker` read it), so
+  `NPM_CONFIG_REGISTRY` or `UV_INDEX_URL` would fetch another package for the pin. Refused:
+  `PATH`, `HOME`, `SHELL`, `BASH_ENV`, `ENV`, `HERMES_HOME`, `LD_*`, `DYLD_*`, `PYTHON*`,
+  `NODE_*`, `NPM_CONFIG_*`, `UV_*`, `PIP_*`, `PIPX_*`, `BUN_*`, `COREPACK_*`, `YARN_*`, `PNPM_*`,
+  `GIT_*`, `DOCKER_*`, `CONTAINER*`, `XDG_*` (a superset of llm-orchestrator's hard-denied list);
+- parameters: every parameter has an `enum` or a `pattern`; its env key never names a credential, never also a fixed setting or secret, never shared by
   two parameters; a default fits its enum and pattern and holds no `$` or `secret:`; templates
   name only `{id}`, `{profile}`, `{lane}`, `{home}`, the parameters, and in arguments
   `{profile_file}`;

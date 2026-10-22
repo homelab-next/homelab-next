@@ -569,7 +569,7 @@ def orch_accepts(catalog_text: str, grant_blocks: Mapping[str, str]) -> list[str
         if not k.get("command"):
             problems.append(f"kind {name}: command is required")
         for key in k.get("allowed_env") or ():
-            if servers.DENIED_ENV.match(key):
+            if servers.ORCH_DENIED_ENV.match(key) or servers.denied_env(key):
                 problems.append(f"kind {name}: env key {key} may never be grant-settable")
     for who, doc in docs.items():
         lanes = (doc.get("grants") if isinstance(doc, Mapping) else None) or {}
@@ -600,7 +600,7 @@ def orch_accepts(catalog_text: str, grant_blocks: Mapping[str, str]) -> list[str
                     problems.append(f"{who}/{lane}: server {name}: unknown kind {g.get('kind')!r}")
                     continue
                 for key in g.get("env") or {}:
-                    if servers.DENIED_ENV.match(key) or key not in (k.get("allowed_env") or ()):
+                    if servers.denied_env(key) or key not in (k.get("allowed_env") or ()):
                         problems.append(f"{who}/{lane}: server {name} may not set env {key}")
     return problems
 

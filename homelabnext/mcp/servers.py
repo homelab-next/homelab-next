@@ -20,7 +20,8 @@ unique), a third-party origin is pinned (an exact version with a hash or lock, a
 40-hex commit) and a stdio record's launch can be generated from it (:func:`launch`: a record
 names its origin, ``bin`` and the server's own arguments, never a launcher), every tool is classed with the table's vocabulary, egress agrees with the tools'
 classes, credentials are secret names that stay distinct and no setting names one, parameters are
-typed with env keys that are never hard-denied (:data:`DENIED_ENV`) or shared, templates name only
+typed, no setting, secret or parameter env key configures the process or its launcher
+(:data:`DENIED_ENV`) and no parameter env key is shared, templates name only
 builtins and parameters, endpoints and hosts resolve in the registry and every registry ``mcp``
 entry resolves to a catalog server, a retired or deprecated server says why, ``replaced_by`` names
 an active server, ``implements`` names a capability contract, and an active server carries the
@@ -55,13 +56,29 @@ HTTP_TRANSPORTS = ("streamable-http", "sse")
 REGISTRY_TRANSPORT = {"http": "streamable-http", "sse": "sse", "stdio": "stdio"}
 #: the directory name of a catalog beside a registry file or under an examples tree
 CATALOG_DIR = "mcp"
-#: environment keys no grant may ever set, whatever a record says: they change what code runs
-#: or how, not what a server is scoped to.  The same list as llm-orchestrator's
-#: internal/grants/grants.go:71 (deniedEnvRe), so a rendered catalog it would refuse fails here.
-DENIED_ENV = re.compile(
+#: llm-orchestrator's own hard-denied grant keys (internal/grants/grants.go:71, deniedEnvRe),
+#: which :func:`homelabnext.mcp.clients.orch_accepts` mirrors
+ORCH_DENIED_ENV = re.compile(
     r"^(LD_.*|DYLD_.*|PATH|PYTHONPATH|PYTHONHOME|PYTHONSTARTUP|PYTHONINSPECT|HOME|SHELL|BASH_ENV"
     r"|ENV|NODE_OPTIONS|HERMES_HOME)$"
 )
+#: environment keys no setting, env secret or parameter may ever set (any case): they change what
+#: code runs or how, not what a server is scoped to.  A record's settings and env become the
+#: environment of the launcher too (npx, uvx, docker), so its configuration is here as well: the
+#: loader (LD_*, DYLD_*), the search path and home, the interpreters (PYTHON*, NODE_*), the
+#: package launchers (NPM_CONFIG_*, UV_*, PIP_*, PIPX_*, BUN_*, COREPACK_*, YARN_*, PNPM_*), git
+#: (a git origin is fetched with it), the container runner (DOCKER_*, CONTAINER*) and the config
+#: directories they read (XDG_*).  A superset of :data:`ORCH_DENIED_ENV`.
+DENIED_ENV = re.compile(
+    r"(?:LD_|DYLD_|PYTHON|NODE_|NPM_CONFIG_|UV_|PIP_|PIPX_|BUN_|COREPACK_|YARN_|PNPM_|GIT_"
+    r"|DOCKER_|CONTAINER|XDG_).*|PATH|HOME|SHELL|BASH_ENV|ENV|HERMES_HOME|NODE|NPM_TOKEN",
+    re.I,
+)
+
+
+def denied_env(key: str) -> bool:
+    """``key`` may never be set by a record or a grant (:data:`DENIED_ENV`, any case)."""
+    return bool(DENIED_ENV.fullmatch(str(key).strip()))
 #: ``{name}`` in an instance name, an argument, a setting or a parameter default
 TEMPLATE = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 #: template names every instance has: the record id, the profile's bare name, the lane, the
@@ -591,6 +608,13 @@ def _template_problems(rec: Mapping[str, Any], where: str) -> list[str]:
             out.append(
                 f"{where}: setting {k} names a credential; put it in env as a secret reference"
             )
+    for what, keys in (("setting", settings), ("env", rec.get("env") or {})):
+        for key in keys:
+            if denied_env(key):
+                out.append(
+                    f"{where}: {what} {key} configures the process or its launcher (PATH, LD_*, "
+                    "NODE_*, NPM_CONFIG_*, UV_*, PIP_*, DOCKER_* ...), which no record sets"
+                )
     fixed = set(settings) | set(rec.get("env") or {})
     seen: dict[str, str] = {}
     for name, p in params.items():
@@ -601,7 +625,7 @@ def _template_problems(rec: Mapping[str, Any], where: str) -> list[str]:
                 "is typed)"
             )
         if key:
-            if DENIED_ENV.match(key):
+            if denied_env(key):
                 out.append(f"{where}: parameter {name}: env {key} may never be set by a grant")
             if SECRET_KEY.search(key):
                 out.append(
