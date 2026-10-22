@@ -5,6 +5,7 @@ hand-written table had; grants name catalog ids; first-party records match their
 
 from __future__ import annotations
 
+import copy
 import shutil
 from pathlib import Path
 
@@ -85,6 +86,21 @@ def _edit(d: Path, sid: str, fn) -> servers.Catalog:
     return servers.load(d)
 
 
+_BASE = servers.load(CATALOG)
+
+
+def _edited(sid: str, fn) -> servers.Catalog:
+    """The repository catalog with one record edited in memory (as :func:`servers.load` would
+    have read the edited file: keyed by its in-file id)."""
+    cat = copy.deepcopy(_BASE)
+    cat._integrity = None
+    fn(cat.servers[sid])
+    new = str(cat.servers[sid].get("id") or sid)
+    if new != sid:
+        cat.servers[new], cat.files[new] = cat.servers.pop(sid), cat.files.pop(sid)
+    return cat
+
+
 def _without_reviews(rec):
     rec.pop("reviews", None)
 
@@ -156,9 +172,9 @@ RULES = [
 
 
 @pytest.mark.parametrize(("sid", "edit", "phrase"), RULES, ids=[r[2][:40] for r in RULES])
-def test_each_rule_fails_on_a_bad_record(tmp_catalog, sid, edit, phrase):
-    assert _check(servers.load(tmp_catalog)) == []  # passes before the edit
-    problems = _check(_edit(tmp_catalog, sid, edit))
+def test_each_rule_fails_on_a_bad_record(sid, edit, phrase):
+    # the unedited catalog passes: test_the_repository_catalog_passes_every_rule
+    problems = _check(_edited(sid, edit))
     assert any(phrase in p for p in problems), problems
 
 
@@ -220,7 +236,7 @@ def test_lint_reports_unknown_and_retired_grants(tmp_path):
     problems, counts = lint_paths([tmp_path])
     assert counts["profile"] == 1
     assert any("retired" in p for _, p in problems) and any("'nope'" in p for _, p in problems)
-    assert lint_paths([ROOT])[0] == []  # the repository's profiles all pass
+    # the repository's own profiles pass: tests/agent test_lint_passes_on_the_repository
 
 
 def test_the_table_comes_from_the_catalog_directory_given(tmp_catalog):
@@ -242,7 +258,8 @@ def test_the_review_digest_is_the_record_without_its_reviews():
 def test_cli_check(capsys, tmp_catalog):
     from homelabnext import cli
 
-    assert cli.main(["mcp", "catalog", "check"]) == 0
+    # the default run (the whole checkout's grants) is make mcp-check's; here, the examples'
+    assert cli.main(["mcp", "catalog", "check", "--grants", str(CATALOG / "clients")]) == 0
     _edit(tmp_catalog, "notes", lambda r: r.update(tools=[]))
     shutil.copy(ROOT / "examples" / "services.yml", tmp_catalog.parent / "services.yml")
     args = ["mcp", "catalog", "check", "--catalog", str(tmp_catalog), "--policy", "none"]
