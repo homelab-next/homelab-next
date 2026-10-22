@@ -79,6 +79,8 @@ DENIED_ENV = re.compile(
 def denied_env(key: str) -> bool:
     """``key`` may never be set by a record or a grant (:data:`DENIED_ENV`, any case)."""
     return bool(DENIED_ENV.fullmatch(str(key).strip()))
+
+
 #: ``{name}`` in an instance name, an argument, a setting or a parameter default
 TEMPLATE = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 #: template names every instance has: the record id, the profile's bare name, the lane, the
