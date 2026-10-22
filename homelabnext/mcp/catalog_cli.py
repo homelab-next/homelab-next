@@ -241,8 +241,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     r.add_argument(
         "--policy",
-        help="with --profile: the ceiling policy (hnx agent verify --policy); a compiled profile "
-        "is refused without one",
+        help="with --profile: the ceiling policy (hnx agent verify --policy); a profile, compiled "
+        "or lean, is refused without one",
     )
     r.add_argument("--lock", help="with --profile: reviewed digests (hnx agent verify --lock)")
     r.add_argument("--out", help="write here instead of stdout")

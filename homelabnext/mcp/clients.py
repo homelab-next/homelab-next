@@ -657,8 +657,9 @@ def profile_refusals(
     present and matches, and with ``lock`` the reviewed digest); it is refused without a
     ``policy``, since its stored ceiling and digest are whatever edited it.  A lean one
     (``platform/agent_profile``): its schema, the same grant rules, ``mcp`` within
-    ``mcp_ceiling`` and, with a policy, ``mcp`` and ``capabilities`` within the policy's ceiling.
-    Rendering never trusts a profile the compiler would not have produced."""
+    ``mcp_ceiling``, and ``mcp`` and ``capabilities`` within the policy's ceiling; it is refused
+    without a ``policy`` too (its own ``mcp_ceiling`` is whatever edited the file).  Rendering
+    never trusts a profile the compiler would not have produced."""
     from homelabnext.agent.compiler import verify_profile
     from homelabnext.agent.errors import AgentError, CeilingViolation
     from homelabnext.agent.readers import ToolClasses, profile_problems
@@ -684,15 +685,20 @@ def profile_refusals(
     over = sorted(set(doc.get("mcp") or ()) - set(doc.get("mcp_ceiling") or ()))
     if over:
         problems.append(f"mcp outside mcp_ceiling: {over}")
-    if policy is not None:
-        try:
-            ceiling = policy.ceiling(str(doc.get("id")))
-        except CeilingViolation as exc:
-            return problems + list(exc.problems)
-        for key in ("mcp", "capabilities"):
-            wide = sorted(set(doc.get(key) or ()) - set(ceiling.get(key) or ()))
-            if wide:
-                problems.append(f"{key} outside the policy's ceiling ({policy.source}): {wide}")
+    if policy is None:
+        return [
+            *problems,
+            "a lean profile is rendered against the ceiling policy too (spec policy:, --policy): "
+            "its own mcp_ceiling is whatever last edited the file",
+        ]
+    try:
+        ceiling = policy.ceiling(str(doc.get("id")))
+    except CeilingViolation as exc:
+        return problems + list(exc.problems)
+    for key in ("mcp", "capabilities"):
+        wide = sorted(set(doc.get(key) or ()) - set(ceiling.get(key) or ()))
+        if wide:
+            problems.append(f"{key} outside the policy's ceiling ({policy.source}): {wide}")
     return problems
 
 

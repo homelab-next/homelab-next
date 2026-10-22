@@ -36,6 +36,13 @@ def _policy() -> CeilingPolicy:
 
 
 POLICY = _policy()
+#: a ceiling as wide as the catalog, for tests about something other than the ceiling
+WIDE = CeilingPolicy.from_mapping(
+    {"ceilings": {pid: {"mcp": sorted(CATALOG.servers), "capabilities": ["cap:records-propose"],
+                        "tier": "write", "budgets": json.loads(COLLECTOR.read_text())["budgets"]}
+                  for pid in ("profile:collector",)}},
+    source="the wide test policy",
+)  # fmt: skip
 
 
 def test_only_granted_servers_with_secret_placeholders_and_registry_urls():
@@ -147,7 +154,8 @@ def test_check_finds_a_hand_edit_and_a_lost_entry_in_any_home(tmp_path, capsys):
 
 def test_render_one_profile_from_the_command_line(tmp_path, capsys):
     out = tmp_path / ".mcp.json"
-    base = ["mcp", "catalog", "render", "--profile", str(COLLECTOR), "--client", "claude-code"]
+    base = ["mcp", "catalog", "render", "--profile", str(COLLECTOR), "--client", "claude-code",
+            "--policy", str(SPECS / "policy" / "ceilings.yml")]  # fmt: skip
     assert cli.main([*base, "--param", "notes.mode=read", "--out", str(out)]) == 0
     assert (
         json.loads(out.read_text())["mcpServers"]["notes-collector-real"]["env"]["NOTES_MODE"]
@@ -234,7 +242,7 @@ def test_a_deprecated_grant_renders_with_a_note(tmp_path):
     doc["mcp"] = doc["mcp_ceiling"] = ["bash"]
     doc["reads_untrusted"] = False
     prof.write_text(json.dumps(doc))
-    text, notes = clients.render_profile(CATALOG, prof, "claude-code")
+    text, notes = clients.render_profile(CATALOG, prof, "claude-code", policy=WIDE)
     assert "bash" in json.loads(text)["mcpServers"]
     assert any("deprecated" in n and "grant 'shell' instead" in n for n in notes)
 
@@ -250,11 +258,13 @@ def _lean(tmp_path: Path, **changes) -> Path:
 def test_render_refuses_a_profile_verify_would_refuse(tmp_path):
     reader = _lean(tmp_path, mcp=["shell", "vault"], mcp_ceiling=[], data_tier="cloud-allowed")
     with pytest.raises(clients.RenderError) as exc:
-        clients.render_profile(CATALOG, reader, "claude-code")
+        clients.render_profile(CATALOG, reader, "claude-code", policy=WIDE)
     text = "\n".join(exc.value.problems)
     assert "readers cannot act" in text and "outside mcp_ceiling" in text
     with pytest.raises(clients.RenderError, match="not a compiled or lean agent profile"):
-        clients.render_profile(CATALOG, _lean(tmp_path, digest="sha256:00"), "claude-code")
+        clients.render_profile(
+            CATALOG, _lean(tmp_path, digest="sha256:00"), "claude-code", policy=WIDE
+        )
     compiled = json.loads(BROKER_AGENT.read_text())
     for edit, phrase in (
         (lambda d: d.pop("digest"), "carries its digest"),
@@ -297,6 +307,10 @@ def test_a_compiled_profile_is_judged_against_the_policy_and_the_lock(tmp_path):
     )
     with pytest.raises(clients.RenderError, match="outside the policy's ceiling"):
         clients.render_profile(CATALOG, lean, "claude-code", registry=REGISTRY, policy=POLICY)
+    # and refused without one: its own mcp_ceiling is whatever edited the file
+    for f in (lean, COLLECTOR):
+        with pytest.raises(clients.RenderError, match="lean profile is rendered against the"):
+            clients.render_profile(CATALOG, f, "claude-code", registry=REGISTRY)
     # the CLI and a spec carry the policy too
     pol = SPECS / "policy" / "ceilings.yml"
     base = ["mcp", "catalog", "render", "--profile", str(BROKER_AGENT), "--client", "claude-code"]
@@ -393,12 +407,14 @@ def test_llm_orchestrator_refuses_a_granted_remote_server_and_one_empty_lane(tmp
     lake = _lean(tmp_path, mcp=["notes", "records", "lake"],
                  mcp_ceiling=["notes", "records", "lake"])  # fmt: skip
     with pytest.raises(clients.RenderError, match="a streamable-http server; llm-orchestrator"):
-        clients.render_profile(CATALOG, lake, "llm-orchestrator", lanes=["real", "shadow"])
+        clients.render_profile(
+            CATALOG, lake, "llm-orchestrator", lanes=["real", "shadow"], policy=WIDE
+        )
     # a real lane without a shadow lane: llm-orchestrator fails every shadow job
     with pytest.raises(clients.RenderError, match="fails every shadow job"):
-        clients.render_profile(CATALOG, COLLECTOR, "llm-orchestrator", lanes=["real"])
+        clients.render_profile(CATALOG, COLLECTOR, "llm-orchestrator", lanes=["real"], policy=WIDE)
     block, _ = clients.render_profile(CATALOG, COLLECTOR, "llm-orchestrator",
-                                      lanes=["real", "shadow"])  # fmt: skip
+                                      lanes=["real", "shadow"], policy=WIDE)  # fmt: skip
     assert block.startswith("\n" + clients.GRANTS_MARKER)
 
 
@@ -520,7 +536,7 @@ def test_a_spec_lane_or_home_is_a_plain_name_and_params_name_a_real_lane(tmp_pat
         with pytest.raises(clients.RenderError, match=re.escape(phrase)):
             clients.render_spec(spec)
     with pytest.raises(clients.RenderError, match="is not a plain name"):
-        clients.render_profile(CATALOG, COLLECTOR, "claude-code", lanes=["$(id)"])
+        clients.render_profile(CATALOG, COLLECTOR, "claude-code", lanes=["$(id)"], policy=WIDE)
 
 
 def test_render_refuses_a_record_check_would_refuse(tmp_path):
@@ -542,14 +558,14 @@ def test_render_refuses_a_record_check_would_refuse(tmp_path):
         edit(rec)
         (d / "notes.yml").write_text(yaml.safe_dump(rec))
         with pytest.raises(clients.RenderError, match=re.escape(phrase)):
-            clients.render_profile(servers.load(d), COLLECTOR, "claude-code")
+            clients.render_profile(servers.load(d), COLLECTOR, "claude-code", policy=WIDE)
     # llm-orchestrator's catalog holds every grantable stdio server, granted or not
     (d / "notes.yml").write_text(pristine)
     rec = yaml.safe_load((d / "shell.yml").read_text())
     rec["transport"]["args"].append("--api-key=fakeshort")
     (d / "shell.yml").write_text(yaml.safe_dump(rec))
-    kw = {"lanes": ["real", "shadow"]}
-    assert clients.render_profile(servers.load(d), COLLECTOR, "claude-code")  # not granted
+    kw = {"lanes": ["real", "shadow"], "policy": WIDE}
+    assert clients.render_profile(servers.load(d), COLLECTOR, "claude-code", policy=WIDE)
     with pytest.raises(clients.RenderError, match="--api-key takes a credential"):
         clients.render_profile(servers.load(d), COLLECTOR, "llm-orchestrator", **kw)
 

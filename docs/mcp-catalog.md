@@ -217,8 +217,9 @@ digest), and it is refused without a ceiling policy (a spec's `policy:` and opti
 relative to the spec, or `--policy`/`--lock` with `--profile`): the ceiling and digest stored in
 the file are whatever last edited it, so a hand edit with a recomputed digest would otherwise
 render. A lean one (`platform/agent_profile`) must pass its schema, the same grant rules, `mcp`
-within `mcp_ceiling` and, with a policy, `mcp` and `capabilities` within the policy's ceiling
-(without one it proves only that it agrees with itself); anything else is refused. The example
+within `mcp_ceiling`, and `mcp` and `capabilities` within the policy's ceiling; it is refused
+without a policy too (its own `mcp_ceiling` proves only that it agrees with itself); anything
+else is refused. The example
 specs share `examples/mcp/clients/policy/ceilings.yml`. Nor does render write a record check
 would refuse: every record it writes (the granted ones; for llm-orchestrator every grantable one,
 since its catalog holds them all) must pass check's per-record rules (pinned and launched as

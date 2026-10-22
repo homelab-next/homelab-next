@@ -211,6 +211,7 @@ def test_a_config_that_does_not_parse_is_named_by_line_never_quoted(tmp_path, ca
 def test_a_rendered_record_imports_back_to_the_same_server(tmp_path):
     import shutil
 
+    from homelabnext.agent.compiler import CeilingPolicy
     from homelabnext.mcp import clients
 
     d = tmp_path / "mcp"
@@ -222,7 +223,11 @@ def test_a_rendered_record_imports_back_to_the_same_server(tmp_path):
     doc = json.loads((ROOT / "examples/mcp/clients/profile.collector.json").read_text())
     prof.write_text(json.dumps({**doc, "mcp": ["github"], "mcp_ceiling": ["github"],
                                 "reads_untrusted": False}))  # fmt: skip
-    text, _ = clients.render_profile(servers.load(d), prof, "hermes")
+    policy = CeilingPolicy.from_mapping(
+        {"ceilings": {"profile:collector": {"mcp": ["github"], "capabilities": doc["capabilities"],
+                                            "tier": "write", "budgets": doc["budgets"]}}}
+    )  # fmt: skip
+    text, _ = clients.render_profile(servers.load(d), prof, "hermes", policy=policy)
     rendered = tmp_path / "config.yaml"
     rendered.write_text(text)
     back = importer.import_configs([rendered]).records["github"]
