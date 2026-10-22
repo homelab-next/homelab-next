@@ -1,4 +1,4 @@
-# ADR-0024: Record each agent job's usage on the bus and read per-turn records from the gateway
+# ADR-0025: Record each agent job's usage on the bus and read per-turn records from the gateway
 
 - **Status:** proposed
 - **Date:** 2026-10-22

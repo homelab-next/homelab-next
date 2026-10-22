@@ -14,8 +14,9 @@ STATUSES = {"proposed", "accepted", "rejected"}
 ADRS = sorted(p for p in ADR_DIR.glob("[0-9][0-9][0-9][0-9]-*.md"))
 
 
-def test_twenty_four_sequential_adrs():
-    assert [int(p.name[:4]) for p in ADRS] == list(range(1, 25))
+def test_adrs_are_numbered_in_sequence():
+    # 0024 is taken by the MCP catalog ADR (on its own branch); this branch adds 0025
+    assert [int(p.name[:4]) for p in ADRS] == [*range(1, 24), 25]
 
 
 @pytest.mark.parametrize("path", ADRS, ids=lambda p: p.name[:4])

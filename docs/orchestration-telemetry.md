@@ -4,7 +4,7 @@
 What each agent job of the [LLM orchestrator](orchestration-controller.md)
 ([[orchestration-controller]]) cost and how it went, so orchestration can be tuned from real data:
 token and turn budgets, prompt ordering for cache hits, model routing, admission. The decision is
-[ADR-0024](adr/0024-orchestration-telemetry.md).
+[ADR-0025](adr/0025-orchestration-telemetry.md).
 
 Two sources, joined by a tag:
 
