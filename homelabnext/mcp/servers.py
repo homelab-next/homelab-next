@@ -440,12 +440,17 @@ HNX_ENTRIES: dict[str, tuple[tuple[str, ...], frozenset[str]]] = {
     # hnx broker mcp: the broker's agent-facing tools (homelabnext/broker/cli.py)
     "broker-mcp": (("broker", "mcp"), frozenset({"--socket"})),
 }
+#: the hnx entry flags that name a path the server reads (a checkout, a registry, the broker's
+#: socket): absolute, since a relative one resolves in the client's working directory, where the
+#: agent may write a checkout, registry or socket of its own
+HNX_PATH_FLAGS = frozenset({"--root", "--registry", "--socket"})
 
 
 def hnx_args_problems(entry: Any, args: Iterable[Any]) -> list[str]:
     """Why ``hnx <entry> <args>`` is not an MCP server's launch: an entry outside
     :data:`HNX_ENTRIES`, or an argument that is not one of its flags (``--flag VALUE`` or
-    ``--flag=VALUE``, each flag once, the value never another flag)."""
+    ``--flag=VALUE``, each flag once, the value never another flag, and a path flag's value
+    absolute, :data:`HNX_PATH_FLAGS`)."""
     if entry not in HNX_ENTRIES:
         return [
             f"a first-party hnx server names its entry, one of {sorted(HNX_ENTRIES)} (the hnx "
@@ -470,6 +475,11 @@ def hnx_args_problems(entry: Any, args: Iterable[Any]) -> list[str]:
             value, i = items[i + 1], i + 1
         if not value:
             out.append(f"hnx entry {entry}: {flag} has no value")
+        elif flag in HNX_PATH_FLAGS and anchor_problem(value, flag):
+            out.append(
+                f"hnx entry {entry}: {flag} is not an absolute path without .., $ or secret: (a "
+                "relative one resolves in the client's working directory)"
+            )
         if flag in seen:
             out.append(f"hnx entry {entry}: {flag} is given twice")
         seen.add(flag)

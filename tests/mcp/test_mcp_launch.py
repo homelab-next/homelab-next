@@ -444,3 +444,27 @@ def test_render_refuses_an_npm_prefix_that_is_root_a_symlink_or_not_empty(tmp_pa
     with pytest.raises(clients.RenderError, match="checkout_root is a symlink"):
         clients.launch_context(checkout_root=str(link))
     assert clients.launch_context(checkout_root=str(empty)).checkout_root == str(empty)
+
+
+@pytest.mark.parametrize(
+    ("entry", "args"),
+    [
+        ("mcp-serve", ["--root", "checkout"]),
+        ("mcp-serve", ["--root=."]),
+        ("mcp-serve", ["--registry", "lab/services.yml"]),
+        ("mcp-serve", ["--root", "/opt/hnx/../tmp"]),
+        ("broker-mcp", ["--socket", "broker.sock"]),
+    ],
+)
+def test_an_hnx_path_flag_is_absolute(entry, args):
+    """Round 5: ``hnx mcp serve --root checkout`` resolves in the client's working directory,
+    where the agent may write a checkout (or a registry, or a broker socket) of its own."""
+    problems = servers.hnx_args_problems(entry, args)
+    assert any("is not an absolute path" in p for p in problems), problems
+
+
+def test_an_absolute_hnx_path_flag_and_a_profile_file_template_pass():
+    assert servers.hnx_args_problems("broker-mcp", ["--socket", "/run/hnx-broker/b.sock"]) == []
+    assert servers.hnx_args_problems("mcp-serve", ["--root=/opt/hnx", "--registry",
+                                                   "/opt/hnx/lab/services.yml",
+                                                   "--scope-from-profile", "{profile_file}"]) == []  # fmt: skip
