@@ -40,8 +40,10 @@ workstation was both a single point of failure (F-16) and the place where every 
    registered to the private repository alone. Action pins are full commit SHAs; no
    `pull_request_target`; no expression expands a secret inside a `run:` script.
 6. **Both halves are checked.** `tools/private_leak_check.py private` (the overlay's CI) fails on
-   a credential value in plain text, a file `.sops.yaml` says is sealed but is not, an unencrypted
-   vault file, or a committed key; `tools/private_leak_check.py public` (this repository's
+   a credential value in plain text, a sealed file (everything under `lab/sealed/`, pinned in the
+   tool rather than read from the overlay's own `.sops.yaml`, plus what the marker or a rule adds)
+   that is not SOPS-encrypted throughout, a `.sops.yaml` that narrows that set, a vault file that is
+   not the bare envelope, a file it could not scan, or a committed key; `tools/private_leak_check.py public` (this repository's
    `make check` and CI) fails if any part of an overlay, any SOPS ciphertext or any key is
    committed here. `tools/leak_scan.py` also flags an age identity.
 

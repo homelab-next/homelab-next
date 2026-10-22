@@ -16,6 +16,14 @@ ansible_vault_files:
   - ansible/inventory/*/group_vars/*/vault.yml
   - ansible/inventory/*/host_vars/*/vault.yml
 
+# Further directories (or globs) whose every file must be SOPS-encrypted, on top of lab/sealed/,
+# which the check always seals.
+sealed_paths: []
+
+# Files the check may leave unscanned (binary, larger than 5 MB), as globs.  Anything else it
+# cannot read is a finding; a sealed or vault file is never let through.
+allow_unscanned: []
+
 # Paths that exist only in a private overlay: the public repository must never contain them.
 private_paths:
   - lab/

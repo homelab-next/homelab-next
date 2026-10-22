@@ -17,7 +17,7 @@ runbook RB 3, [First deploy from the private repository](../examples/registers/r
 
 ```text
 homelab-next/  (PUBLIC)                       lab-private/  (PRIVATE, the operator's)
-├── homelabnext/  schemas/  profiles/         ├── .hnx-private-overlay.yml   marker + vault globs
+├── homelabnext/  schemas/  profiles/         ├── .hnx-private-overlay.yml   marker, vault globs, sealed paths
 ├── ansible/roles/  ansible/plugins/          ├── .sops.yaml                 sealed paths, age recipients
 ├── tools/  (leak_scan, private_leak_check)   ├── .github/workflows/
 ├── examples/                fictional lab    │   ├── checks.yml             every PR, no secrets
@@ -95,9 +95,26 @@ or for inventory variables no role accepts as a reference yet.
 | Key material | a password (Environment secret, or OpenBao by name) | an age identity (offline for the operator; Environment secret for the deploy) |
 | Fits | `group_vars/*/vault.yml` next to a plain `main.yml` | `lab/sealed/*.sops.yaml`, or a whole `lab/site.yml` if you choose |
 
-Both are checked in CI: `tools/private_leak_check.py private .` fails on a file a `.sops.yaml`
-rule covers that has no SOPS metadata, and on a `vault.yml` (or a file named by the marker's
-`ansible_vault_files` globs) that does not start with the ansible-vault header.
+Both are checked in CI by `tools/private_leak_check.py private .`, and neither check trusts the
+overlay's own configuration to say what must be sealed:
+
+* **SOPS.** Every file under `lab/sealed/` (pinned in the tool, so one commit cannot drop it), under
+  the marker's `sealed_paths`, or covered by a root `.sops.yaml` rule must be SOPS-encrypted
+  *throughout*: real metadata (a well-formed `mac`, at least one recipient, no unknown key), every
+  value and comment a well-formed `ENC[AES256_GCM,data:…,iv:…,tag:…,type:…]` token, except keys
+  ending in the file's `unencrypted_suffix`. A file sealed only in part (`encrypted_regex`,
+  `unencrypted_regex`, `encrypted_suffix`, the comment regexes, `mac_only_encrypted`) fails. A
+  `.sops.yaml` that narrows the pinned paths (no rule covers `lab/sealed/`, a rule there that
+  encrypts only in part, a nested `.sops.yaml` that shadows the root one, or no `.sops.yaml` while
+  sealed files exist) is itself a finding. A `README.md` is the one plain file name.
+* **ansible-vault.** A `vault.yml` (or a file the marker's `ansible_vault_files` globs name) must be
+  the envelope and nothing else: the `ANSIBLE_VAULT` header line (format 1.1, or 1.2 with a
+  vault id label, AES256), then
+  hex lines only, whose payload is the salt, HMAC and ciphertext. Plain text after a valid header
+  fails, and a header no longer hides the rest of any other file from the secret scan.
+* **Unscanned files.** A file the check cannot read as text (binary, larger than 5 MB, unreadable)
+  is a finding unless the marker's `allow_unscanned` globs name it; a sealed or vault file is
+  never let through. UTF-16 without a byte-order mark is decoded and scanned.
 
 ## Bootstrapping a new server
 
@@ -241,7 +258,7 @@ private leak check, so a pull request's code never sees a credential.
 
 | Where | Command | Fails on |
 |---|---|---|
-| private overlay CI | `python hnx/tools/private_leak_check.py private .` | a credential value in plain text (the `secret` patterns of `tools/leak_scan.py`, after masking ciphertext); a file a `.sops.yaml` rule covers without SOPS metadata; a vault file without the ansible-vault header; a committed decryption key (an age identity file, a vault password file) |
+| private overlay CI | `python hnx/tools/private_leak_check.py private .` | a credential value in plain text (the `secret` patterns of `tools/leak_scan.py`, after masking well-formed ciphertext only); a sealed file (under `lab/sealed/`, the marker's `sealed_paths` or a `.sops.yaml` rule) not encrypted throughout; a `.sops.yaml` that narrows the sealed paths; a vault file that is not header plus hex; a file it could not scan and no `allow_unscanned` glob names; a committed decryption key (an age identity file, a vault password file) |
 | public repository, `make check` and CI | `python tools/private_leak_check.py public .` | an overlay marker outside the fictional skeleton (or a skeleton marker that stops saying `fictional: true`); a file under the skeleton's `private_paths` (`lab/`, `ansible/inventory/production/`); a `.sops.yaml`; any SOPS-encrypted file; a key file |
 | public repository | `tools/leak_scan.py` (F-18, F-05) | private addresses, names, e-mails, keys and tokens, including an age identity |
 
