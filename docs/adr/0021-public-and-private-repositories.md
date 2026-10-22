@@ -34,10 +34,16 @@ workstation was both a single point of failure (F-16) and the place where every 
 5. **Deploys run without the workstation**: a GitHub Actions workflow in the private repository,
    started by hand (`workflow_dispatch` is the approval step: required reviewers on a private
    repository need GitHub Enterprise) on `main` only, through an Environment whose
-   deployment-branch policy admits `main` alone and which holds the vault password, the deploy's age identity, its SSH key and the Tailscale OAuth
-   client. It reaches the lab either by joining the tailnet with an ephemeral key tagged
-   `tag:ci-deploy` (SSH to the deploy zones only) or through a self-hosted runner inside the lab
-   registered to the private repository alone. Action pins are full commit SHAs; no
+   deployment-branch policy admits `main` alone and which holds the deploy's AppRole `secret_id`,
+   age identity and SSH key; role credentials and the vault password are read from OpenBao by
+   name, one revoked token per read. It reaches the lab either by joining the tailnet as an
+   ephemeral `tag:ci-deploy` node through workload identity federation (no Tailscale secret; SSH
+   to the deploy zones and the declared OpenBao port only) or through an ephemeral, just-in-time
+   self-hosted runner inside the lab, registered to the private repository alone, whose
+   job-started hook refuses every job but `deploy.yml` dispatched on `main` (runner labels do not
+   restrict which workflow a runner accepts). CODEOWNERS plus a required approving review on
+   `main` gate what a dispatch deploys, because a writer can dispatch and a pull request runs its
+   own `checks.yml`. Action pins are full commit SHAs; no
    `pull_request_target`; no expression expands a secret inside a `run:` script.
 6. **Both halves are checked.** `tools/private_leak_check.py private` (the overlay's CI) fails on
    a credential value in plain text, a sealed file (everything under `lab/sealed/`, pinned in the
@@ -50,10 +56,16 @@ workstation was both a single point of failure (F-16) and the place where every 
 ## Consequences
 
 - A leaked private clone exposes the lab's layout but no credential, sealed value or deploy
-  right; a leaked log exposes nothing secret; a runner holds secrets only while a deploy the operator dispatched runs.
+  right; a leaked log exposes nothing secret. A writer's account, by contrast, can dispatch a
+  deploy of `main`, which is why review on `main` matters once there is more than one writer.
+- The deploy still holds standing credentials (its SSH key, its age identity, the AppRole
+  `secret_id`): a runner compromised during a deploy can keep using them until they are rotated.
+  Short-lived SSH certificates from an OpenBao SSH CA are the target that removes the SSH key;
+  `docs/private-overlay.md` "Threat model" lists what remains.
 - The workstation is no longer needed to deploy, and no longer holds the keys a deploy uses.
-- The operator maintains an Environment, an OpenBao AppRole, a Tailscale tag and its ACL (or a
-  runner host), and the rotation routine in `docs/private-overlay.md`.
+- The operator maintains an Environment, an OpenBao AppRole, a Tailscale tag, its ACL and a
+  federated identity (or a runner provisioner and template), and the rotation routine in
+  `docs/private-overlay.md`.
 - The deploy pins a homelab-next commit, so a public change reaches the lab only when the overlay
   moves `HNX_REF`, through its own reviewed pull request.
 - The deploy tag's tailnet access is site data (`tailnet.deploy`, site 1.2): the Tailscale policy

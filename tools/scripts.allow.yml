@@ -33,6 +33,10 @@ uncalled:
     a template for the private overlay repository (examples/private-overlay/): Ansible runs it
     there as the vault password client its ansible.cfg names; nothing in this repository runs a
     deploy
+  overlay-runner-job-started: >-
+    a template for the private overlay's self-hosted deploy runner: the GitHub Actions runner
+    service runs it as ACTIONS_RUNNER_HOOK_JOB_STARTED before every job (docs/private-overlay.md
+    "The self-hosted runner"); tests/overlay run it with fake job environments
   lab-postgres-litellm-role: >-
     the postgres image's own entrypoint runs every *.sh in /docker-entrypoint-initdb.d, which the
     lab's postgres service mounts from compose/lab-in-a-box/config/postgres/init, once on a fresh

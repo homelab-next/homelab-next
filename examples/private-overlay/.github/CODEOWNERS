@@ -1,0 +1,19 @@
+# TEMPLATE for the PRIVATE overlay repository (fictional; docs/private-overlay.md "Branch
+# protection").  Replace @lab-owner-fake with your GitHub user (or a team).  With "Require review
+# from Code Owners" on main's branch protection, a pull request that changes how the lab is
+# checked or deployed needs the owner's approval: the required `checks` job runs the workflow
+# from the pull request itself, so without this a pull request could rewrite checks.yml to pass.
+# While you are the only writer, GitHub cannot let you approve your own pull request: merge as
+# admin (the rule binds everyone else) and turn the bypass off when a second writer joins.
+
+# the workflows, and this file
+/.github/                     @lab-owner-fake
+# what the deploy runs, with what tools, and the runner's job-started hook
+/bin/                         @lab-owner-fake
+/runner/                      @lab-owner-fake
+/ansible.cfg                  @lab-owner-fake
+/ansible/playbooks/           @lab-owner-fake
+/locks/                       @lab-owner-fake
+# what must be sealed, and to whom
+/.sops.yaml                   @lab-owner-fake
+/.hnx-private-overlay.yml     @lab-owner-fake

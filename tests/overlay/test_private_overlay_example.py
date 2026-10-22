@@ -50,6 +50,10 @@ PINNED = re.compile(r"^[\w.-]+/[\w.-]+(?:/[\w./-]+)?@[0-9a-f]{40}$")
 RELEASE_COMMENT = re.compile(r"^\s+#\s+v\d+(?:\.\d+)*\b")
 EXPR = re.compile(r"\$\{\{")
 READ = {"read", "none"}
+#: the self-hosted deploy runner's label: only the deploy workflow may name it (or any
+#: self-hosted runner), because a label does not restrict which workflow a runner accepts
+DEPLOY_LABEL = "hnx-deploy"
+HOOK = SKELETON / "runner" / "job-started.sh"
 
 
 def _on(doc: dict) -> object:
@@ -82,6 +86,11 @@ def lint_workflow(path: Path) -> list[str]:
     if "pull_request_target" in _triggers(doc):
         out.append("pull_request_target runs untrusted code with secrets")
     jobs = (doc.get("jobs") or {}).values()
+    if path.name != "deploy.yml":
+        for name, job in (doc.get("jobs") or {}).items():
+            blob = json.dumps(job)  # runs-on, and a matrix or expression that could feed it
+            if DEPLOY_LABEL in blob or "self-hosted" in blob:
+                out.append(f"job {name}: names the self-hosted deploy runner; only deploy.yml may")
     if "pull_request" in _triggers(doc) and any("environment" in j for j in jobs):
         out.append("a job with an Environment runs on pull_request (its secrets reach PR code)")
     perms = doc.get("permissions")
@@ -124,6 +133,7 @@ def test_the_lint_catches_what_it_claims(tmp_path):
         "  d:\n    runs-on: ubuntu-latest\n    environment: production\n    steps: []\n"
     )
     problems = "\n".join(lint_workflow(bad))
+    assert "self-hosted deploy runner" not in problems
     for needle in (
         "actions/checkout@v7 is not pinned",
         "has no trailing",
@@ -135,6 +145,29 @@ def test_the_lint_catches_what_it_claims(tmp_path):
         "runs on pull_request",
     ):
         assert needle in problems, needle
+
+
+@pytest.mark.parametrize(
+    "runs_on",
+    [
+        "[self-hosted, hnx-deploy]",
+        "${{ matrix.r }}\n    strategy:\n      matrix:\n        r: [hnx-deploy]",
+        "[self-hosted, linux]",
+    ],
+)
+def test_only_the_deploy_workflow_may_name_the_deploy_runner(tmp_path, runs_on):
+    """A branch or pull request that edits checks.yml to run on the management runner."""
+    body = (
+        "on: [pull_request]\npermissions: {}\njobs:\n  j:\n"
+        f"    runs-on: {runs_on}\n    timeout-minutes: 5\n    steps:\n      - run: id\n"
+    )
+    checks = tmp_path / "checks.yml"
+    checks.write_text(body)
+    assert any("only deploy.yml may" in p for p in lint_workflow(checks))
+    (tmp_path / "deploy").mkdir()
+    deploy = tmp_path / "deploy" / "deploy.yml"
+    deploy.write_text(body.replace("[pull_request]", "workflow_dispatch"))
+    assert not any("only deploy.yml may" in p for p in lint_workflow(deploy))
 
 
 @pytest.mark.skipif(shutil.which("actionlint") is None, reason="actionlint is not installed")
@@ -167,7 +200,8 @@ def test_deploy_is_dispatched_by_hand_from_main_through_the_environment(deploy):
     (job,) = deploy["jobs"].values()
     assert job["environment"] == "production"
     assert job["if"] == "github.ref == 'refs/heads/main'"
-    assert job["permissions"] == {"contents": "read"}
+    # id-token: the Tailscale action's workload identity federation; nothing can write
+    assert job["permissions"] == {"contents": "read", "id-token": "write"}
 
 
 def test_deploy_offers_both_paths(deploy):
@@ -177,7 +211,9 @@ def test_deploy_offers_both_paths(deploy):
     assert len(ts) == 1
     assert ts[0]["if"] == "vars.HNX_DEPLOY_PATH != 'self-hosted'"
     assert ts[0]["with"]["tags"] == "tag:ci-deploy"
-    assert set(ts[0]["with"]) >= {"oauth-client-id", "oauth-secret"}
+    # workload identity federation: an OIDC exchange, no long-lived OAuth secret to steal
+    assert set(ts[0]["with"]) >= {"oauth-client-id", "audience"}
+    assert "oauth-secret" not in ts[0]["with"] and "authkey" not in ts[0]["with"]
 
 
 def test_tailscale_action_is_pinned_not_left_as_a_placeholder():
@@ -198,15 +234,116 @@ def test_secrets_reach_only_the_steps_that_use_them(deploy):
         blob = json.dumps({k: step.get(k) for k in ("env", "with")})
         for name in re.findall(r"secrets\.([A-Z0-9_]+)", blob):
             users.setdefault(name, []).append(step.get("name", step.get("uses")))
+    # role credentials come from OpenBao by name, not one Actions secret each
     assert set(users) == {
         "SOPS_AGE_KEY",
         "ANSIBLE_VAULT_PASSWORD",
         "DEPLOY_SSH_KEY",
-        "TS_OAUTH_CLIENT_ID",
-        "TS_OAUTH_SECRET",
+        "BAO_SECRET_ID",
     }
+    assert not any(n.startswith(("HNX_SECRET_", "TS_")) for n in users)
     text = (SKELETON / ".github" / "workflows" / "deploy.yml").read_text()
     assert "set -x" not in text and "ACTIONS_STEP_DEBUG" not in text
+
+
+def test_deploy_reads_role_credentials_from_openbao(deploy):
+    (job,) = deploy["jobs"].values()
+    (step,) = [s for s in job["steps"] if s.get("name") == "deploy"]
+    env = step["env"]
+    assert env["BAO_ADDR"] == "${{ vars.BAO_ADDR }}"
+    assert env["BAO_ROLE_ID"] == "${{ vars.BAO_ROLE_ID }}"
+    assert env["BAO_SECRET_ID"] == "${{ secrets.BAO_SECRET_ID }}"
+    assert env["HNX_VAULT_PASSWORD_REF"] == "${{ vars.HNX_VAULT_PASSWORD_REF }}"
+    pins = job["steps"][0]
+    assert "BAO_ADDR" in pins["env"] and "https://" in pins["run"]
+    ca = [s for s in job["steps"] if "BAO_CACERT_PEM" in (s.get("env") or {})]
+    assert len(ca) == 1 and "BAO_CACERT=" in ca[0]["run"]
+
+
+@pytest.mark.skipif(shutil.which("zizmor") is None, reason="zizmor is not installed")
+def test_zizmor_accepts_the_templates():
+    """docs/private-overlay.md says the templates pass zizmor (checked with 1.31.1, offline)."""
+    r = subprocess.run(
+        ["zizmor", "--offline", "--no-progress", *map(str, TEMPLATES)],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+# ---- the self-hosted runner's job-started hook -------------------------------------------------
+
+REPO = "lab-owner-fake/lab-private"
+DEPLOY_JOB = {
+    "HNX_DEPLOY_REPOSITORY": REPO,
+    "GITHUB_REPOSITORY": REPO,
+    "GITHUB_EVENT_NAME": "workflow_dispatch",
+    "GITHUB_REF": "refs/heads/main",
+    "GITHUB_WORKFLOW_REF": f"{REPO}/.github/workflows/deploy.yml@refs/heads/main",
+}
+
+
+def hook(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is not installed")
+    return subprocess.run(
+        [bash, str(HOOK)], capture_output=True, text=True, env={"PATH": os.environ["PATH"], **env}
+    )
+
+
+def test_the_hook_accepts_only_the_manual_deploy_from_main():
+    r = hook(DEPLOY_JOB)
+    assert r.returncode == 0 and "accepted" in r.stdout, r.stderr
+
+
+@pytest.mark.parametrize(
+    ("change", "why"),
+    [
+        # a branch or pull request that edits checks.yml to run on the deploy runner
+        ({"GITHUB_WORKFLOW_REF": f"{REPO}/.github/workflows/checks.yml@refs/heads/main"}, "is not"),
+        ({"GITHUB_EVENT_NAME": "pull_request", "GITHUB_REF": "refs/pull/7/merge"}, "event"),
+        ({"GITHUB_EVENT_NAME": "push"}, "event"),
+        # deploy.yml, edited on a branch and dispatched from it
+        (
+            {
+                "GITHUB_REF": "refs/heads/evil",
+                "GITHUB_WORKFLOW_REF": f"{REPO}/.github/workflows/deploy.yml@refs/heads/evil",
+            },
+            "ref",
+        ),
+        # main's ref, but the workflow file comes from elsewhere (a reusable or another repo)
+        (
+            {"GITHUB_WORKFLOW_REF": "other-fake/repo/.github/workflows/deploy.yml@refs/heads/main"},
+            "is not",
+        ),
+        ({"GITHUB_REPOSITORY": "other-fake/repo"}, "repository"),
+        ({"HNX_DEPLOY_REPOSITORY": ""}, "not set on the runner host"),
+    ],
+)
+def test_the_hook_refuses_every_other_job(change, why):
+    r = hook({**DEPLOY_JOB, **change})
+    assert r.returncode == 1 and r.stdout == ""
+    assert "refusing this job" in r.stderr and why in r.stderr
+
+
+def test_the_hook_is_executable_and_documented():
+    assert os.access(HOOK, os.X_OK)
+    doc = (ROOT / "docs" / "private-overlay.md").read_text()
+    assert "ACTIONS_RUNNER_HOOK_JOB_STARTED" in doc and "runner/job-started.sh" in doc
+    assert "generate-jitconfig" in doc  # ephemeral, just-in-time registration is the setup
+
+
+def test_codeowners_guards_the_workflows_and_the_deploy_tools():
+    owners = (SKELETON / ".github" / "CODEOWNERS").read_text()
+    rules = {
+        line.split()[0]: line.split()[1:]
+        for line in owners.splitlines()
+        if line.strip() and not line.startswith("#")
+    }
+    for path in ("/.github/", "/bin/", "/runner/", "/ansible.cfg", "/.sops.yaml", "/locks/"):
+        assert rules.get(path), path
+    assert "/.hnx-private-overlay.yml" in rules
 
 
 # ---- the vault password client -----------------------------------------------------------------
