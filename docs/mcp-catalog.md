@@ -70,9 +70,19 @@ problems the grants are not judged (a note says so), since they would be judged 
   npm a full `x.y.z`) with a sha256 or a lock file (relative to the catalog, existing, naming the
   package), an image digest, or a 40-hex commit; `kind: unknown` fails; a first-party path exists
   in the checkout;
-- the pin is what runs: `npx`/`bunx` arguments name `package@version`, `uvx`/`pipx`/`uv`
-  `package==version`, `docker`/`podman` `image@digest`. The `sha256` itself is **declarative**:
-  it records the reviewed artifact, but no launcher verifies it when it fetches the package;
+- the pin is what runs, read the way each launcher reads its arguments (`homelabnext/mcp/launch.py`):
+  the **launch position** (the first positional after the launcher's own flags, or the value of
+  `--package`/`--from`/`--spec`) is `package@version` for `npx`/`bunx`, `package==version` (or
+  `@version`) for `uvx`/`uv tool run`/`pipx run`, `image@digest` for `docker run`/`podman run`
+  and `git+<repo>@<commit>` (npm: `#<commit>`) for a git origin; a first-party server starts with
+  `hnx` or a path in the checkout. The pinned spec merely appearing somewhere is not enough
+  (`npx -y other@latest pinned@1.0.0` runs `other`). Refused: any other launcher for the origin's
+  kind (`npm exec`, `pnpm dlx`, `env`, `sh -c`, `node`, `python -m`, `nerdctl`; a `cargo` or `go`
+  package, which no launcher here pins: run it from an image), an unknown flag before the launch
+  position (it may take a value), and the flags that add or redirect what runs (`--with*`, every
+  index flag, `--registry`, `--call`, `--pip-args`, `--entrypoint`). A leading `v` in a version is
+  not a difference. The `sha256` itself is **declarative**: it records the reviewed artifact, but
+  no launcher verifies it when it fetches the package;
 - every tool is classed with a declared class, and the server lists at least one;
 - egress agrees with the classes: a tool classed `egress` needs an egress other than `none`, and
   `internet` needs an egress tool;
@@ -260,8 +270,8 @@ It reads `mcpServers` (Claude Code, Claude Desktop, also under `projects` in `~/
   report lists each reference by server and key with the name to store it under and never prints
   a value; a config that does not parse is reported by file, line and column only. The entry's
   own description is not copied;
-- the origin is guessed from the launcher (`npx`, `uvx`, `pipx`, `docker run`; `git+https://` as
-  a git origin) and never pinned: no hash is invented, so check fails until you add the version
+- the origin is guessed from the launcher's launch position, read as check reads it (`npx`,
+  `uvx`, `uv tool run`, `pipx run`, `docker run`; `git+https://` as a git origin) and never pinned: no hash is invented, so check fails until you add the version
   and sha256, the image digest or the commit; anything else is `kind: unknown`;
 - a remote server's URL is not copied: its endpoint becomes `svc:<first label of the host>` for
   you to correct to the registry name, and its path is kept only when it is a plain MCP path

@@ -41,6 +41,8 @@ import yaml
 
 from homelabnext.registry.model import secret_env_name
 
+from . import launch
+
 #: the schema every record validates against
 SCHEMA = ("platform", "mcp_server")
 #: the review policy's artefact kind (``homelabnext.reviews.ARTEFACT_STATES``)
@@ -297,46 +299,89 @@ def origin_problems(
     return out
 
 
-#: launchers whose arguments name the package or image they run
-NPM_LAUNCHERS = ("npx", "bunx")
-PYPI_LAUNCHERS = ("uvx", "pipx", "uv")
-IMAGE_LAUNCHERS = ("docker", "podman")
 #: an exact npm release: npm resolves 1.2 or 1 as a range
 _NPM_EXACT = re.compile(r"^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
+#: origin kind (package: its ecosystem) -> the launchers that can run it pinned (:mod:`.launch`)
+LAUNCHERS = {
+    "npm": launch.NPM,
+    "pypi": launch.PYPI,
+    "image": launch.IMAGE,
+    "git": launch.NPM + launch.PYPI,
+    "first-party": ("hnx", "a path in the checkout"),
+}
 
 
 def launch_problems(rec: Mapping[str, Any], where: str) -> list[str]:
-    """The pinned origin is what the launcher runs: ``npx``/``bunx`` name ``package@version``,
-    ``uvx``/``pipx``/``uv`` ``package==version`` (or ``@version``), ``docker``/``podman``
-    ``image@digest``; an npm version is a full ``x.y.z``.  (The sha256 itself is declarative: no
-    launcher verifies it.)"""
+    """The pinned origin is what the launcher runs, read the way the launcher reads its argv
+    (:mod:`.launch`): the launch position (the first positional after the launcher's own flags, or
+    the value of ``--from``/``--spec``/``--package``) is ``package@version`` for ``npx``/``bunx``,
+    ``package==version`` (or ``@version``) for ``uvx``/``uv tool run``/``pipx run``,
+    ``image@digest`` for ``docker``/``podman run``, ``git+repo@commit`` (npm: ``#commit``) for a
+    git origin; a first-party server starts with ``hnx`` or a path.  Any other launcher, an
+    unknown flag before the launch position, and the flags that add or redirect what runs
+    (``--with``, an index, ``--registry``, ``--entrypoint`` ...) are refused.  A leading ``v`` in a
+    version is not a difference; an npm version is a full ``x.y.z``.  (The sha256 itself is
+    declarative: no launcher verifies it.)"""
     origin, t = rec.get("origin") or {}, rec.get("transport") or {}
-    if t.get("type") != "stdio":
+    if t.get("type") != "stdio" or not isinstance(origin, Mapping):
         return []
-    launcher = Path(str(t.get("command", ""))).name
     args = [str(a) for a in t.get("args") or ()]
+    got = launch.parse(str(t.get("command", "")), args)
     kind = origin.get("kind")
+    eco = origin.get("ecosystem") if kind == "package" else kind
     out: list[str] = []
-    if kind == "package" and origin.get("version"):
-        pkg, ver = origin.get("package"), origin.get("version")
-        if origin.get("ecosystem") == "npm" and not _NPM_EXACT.match(str(ver)):
-            out.append(f"{where}: npm version {ver} is not a full x.y.z (npm reads it as a range)")
-        want: tuple[str, ...] = ()
-        if launcher in NPM_LAUNCHERS:
-            want = (f"{pkg}@{ver}",)
-        elif launcher in PYPI_LAUNCHERS:
-            want = (f"{pkg}=={ver}", f"{pkg}@{ver}")
-        if want and not set(want) & set(args):
+    ver = origin.get("version")
+    if kind == "package" and eco == "npm" and ver and not _NPM_EXACT.match(str(ver)):
+        out.append(f"{where}: npm version {ver} is not a full x.y.z (npm reads it as a range)")
+    if eco not in LAUNCHERS:
+        if kind == "package":
             out.append(
-                f"{where}: {launcher} does not launch the pinned {want[0]} (its arguments name "
-                "another version, or none: the pin would not control what runs)"
+                f"{where}: no launcher this check reads runs a pinned {eco} package (the pin "
+                "would not control what runs): run it from an image pinned by digest"
             )
-    if kind == "image" and origin.get("digest") and launcher in IMAGE_LAUNCHERS:
+        return out
+    if got.ecosystem is None or (
+        got.ecosystem != eco and not (kind == "git" and got.ecosystem in ("npm", "pypi"))
+    ):
+        what = {"npm": "an npm package", "pypi": "a pypi package", "image": "an image",
+                "git": "a git", "first-party": "a first-party"}[eco]  # fmt: skip
+        out.append(
+            f"{where}: {what} origin is launched by {' / '.join(LAUNCHERS[eco])}, not "
+            f"{got.launcher} (the pin would not control what runs)"
+        )
+        return out
+    out += [f"{where}: {p}" for p in got.problems]
+    spec = got.spec or ""
+    if kind == "package" and ver:
+        pkg = str(origin.get("package"))
+        want = f"{pkg}@{ver}" if eco == "npm" else f"{pkg}=={ver}"
+        parts = launch.split_spec(eco, spec)
+        same = parts is not None and (
+            parts[0] == pkg if eco == "npm" else launch.pypi_name(parts[0]) == launch.pypi_name(pkg)
+        )
+        if not (same and launch.plain_version(parts[1]) == launch.plain_version(ver)):
+            out.append(
+                f"{where}: {got.launcher} does not launch the pinned {want} (its launch position "
+                f"is {spec or 'empty'}: the pin would not control what runs)"
+            )
+    elif kind == "image" and origin.get("digest"):
         image = str(origin.get("image"))
         repo = image.rsplit(":", 1)[0] if ":" in image.rsplit("/", 1)[-1] else image
-        want = (f"{repo}@{origin['digest']}", f"{image}@{origin['digest']}")
-        if not set(want) & set(args):
-            out.append(f"{where}: {launcher} does not run the pinned {want[0]} (pull by digest)")
+        parts = launch.split_image(spec)
+        if parts is None or parts[0] != repo or parts[2] != origin["digest"]:
+            out.append(
+                f"{where}: {got.launcher} does not run the pinned {repo}@{origin['digest']} "
+                f"(its image is {spec or 'missing'}: pull by digest)"
+            )
+    elif kind == "git" and origin.get("commit"):
+        sep = "#" if got.ecosystem == "npm" else "@"
+        repo = str(origin.get("repo")).removeprefix("git+")
+        want = f"git+{repo}{sep}{origin['commit']}"
+        if spec != want:
+            out.append(
+                f"{where}: {got.launcher} does not launch the pinned {want} (its launch position "
+                f"is {spec or 'empty'}: a branch or tag moves)"
+            )
     return out
 
 

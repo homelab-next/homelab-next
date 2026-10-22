@@ -18,7 +18,7 @@ in YAML).  Each entry becomes a **draft** record (``status: draft``, never grant
   ``@scope/name@1.2.0``) is never a secret.  The entry's own description is not copied.  The
   report names each reference (server, key, the name to store the value under); it never prints
   a value, and a config that does not parse is named by file, line and column only.
-* **origins are guessed, never pinned.**  ``npx``/``uvx``/``pipx``/``docker run`` launchers
+* **origins are guessed, never pinned.**  The launch position (:mod:`.launch`, as check reads it)
   give a package or image (``git+https://...`` a git origin, without userinfo); a version is kept
   only when it is exact, and no hash is invented, so :func:`homelabnext.mcp.servers.check` fails
   until the maintainer pins it.  Anything else is ``origin: {kind: unknown}``.
@@ -47,7 +47,7 @@ import yaml
 
 from homelabnext.registry.model import secret_env_name
 
-from . import servers
+from . import launch, servers
 
 _VERSION = re.compile(
     r"^v?[0-9]+\.[0-9]+(\.[0-9]+)*(?:[-+][0-9A-Za-z.]+|(?:a|b|rc|\.post|\.dev)[0-9]+)?$"
@@ -80,9 +80,6 @@ _PACKAGE_SPEC = re.compile(
 _PLAIN_PATHS = re.compile(r"^/(?:mcp|sse|messages|v[0-9]+/mcp|api/mcp)?/?$")
 _URL_USERINFO = re.compile(r"(://)[^/@\s]*@")
 _SCHEMES = ("Bearer", "Basic", "Token")
-_RUNNER_FLAGS_WITH_VALUE = {"-e", "--env", "-v", "--volume", "--name", "-p", "--publish",
-                            "--network", "-u", "--user", "-w", "--workdir", "--env-file",
-                            "--mount", "--entrypoint", "--platform"}  # fmt: skip
 
 
 def _slug(text: str) -> str:
@@ -141,22 +138,17 @@ def _is_setting(key: str, value: Any) -> bool:
 
 
 def _package_positions(command: str, args: list[str]) -> set[int]:
-    """Indexes of the arguments that name the package a launcher runs (never secrets)."""
-    base = PurePosixPath(command).name
-    out: set[int] = set()
-    for i in range(1, len(args)):
-        if args[i - 1] == "--from":
-            out.add(i)
-    if base in ("npx", "bunx", "uvx", "pipx", "uv"):
-        for i, a in enumerate(args):
-            if (
-                not a.startswith("-")
-                and a not in ("run", "tool")
-                and (not i or args[i - 1] != "--from")
-            ):
-                out.add(i)
-                break
-    return {i for i in out if _PACKAGE_SPEC.match(args[i])}
+    """The index of the argument that names the package a launcher runs (never a secret): its
+    launch position, read the way the launcher reads it (:mod:`.launch`), so the value of a flag
+    before it (``npx --token X pkg@1.0.0``) is never taken for it."""
+    got = launch.parse(command, args)
+    if got.spec_index is None or got.ecosystem not in ("npm", "pypi", "image"):
+        return set()
+    spec = args[got.spec_index]
+    if got.ecosystem == "image":
+        return {got.spec_index} if launch.split_image(spec) else set()
+    ok = launch.split_spec(got.ecosystem, spec) is not None or spec.startswith("git+")
+    return {got.spec_index} if ok and _PACKAGE_SPEC.match(spec.split("[", 1)[0]) else set()
 
 
 def _parse_error(p: Path, exc: Exception) -> ValueError:
@@ -222,37 +214,28 @@ def _git_origin(spec: str) -> dict[str, Any]:
 
 
 def guess_origin(command: str, args: list[str]) -> dict[str, Any]:
-    """The origin a launcher implies (unpinned: no hash is ever invented).  ``args`` are the
-    cleaned arguments: no credential, no URL userinfo."""
-    base = PurePosixPath(command).name
-    positional = [a for a in args if not a.startswith("-")]
-    if base in ("npx", "bunx") and positional:
-        spec = positional[0]
-        scoped = spec.startswith("@")
-        name, _, ver = spec[1:].partition("@") if scoped else spec.partition("@")
-        name = "@" + name if scoped else name
-        return {"kind": "package", "ecosystem": "npm", "package": name,
-                "version": ver if _VERSION.match(ver or "") else None, "sha256": None}  # fmt: skip
-    if base in ("uvx", "pipx", "uv"):
-        spec = args[args.index("--from") + 1] if "--from" in args[:-1] else (
-            [a for a in positional if a not in ("run", "tool")] or [""])[0]  # fmt: skip
-        if spec.startswith("git+"):
-            return _git_origin(spec)
-        name, ver = [*re.split(r"==|@", spec, maxsplit=1), ""][:2]
-        if name and _PACKAGE_SPEC.match(spec):
-            return {"kind": "package", "ecosystem": "pypi", "package": name,
-                    "version": ver if _VERSION.match(ver) else None, "sha256": None}  # fmt: skip
-    if base in ("docker", "podman") and "run" in args:
-        rest, i = args[args.index("run") + 1 :], 0
-        while i < len(rest) and rest[i].startswith("-"):
-            i += 2 if rest[i] in _RUNNER_FLAGS_WITH_VALUE else 1
-        if i < len(rest):
-            image, _, digest = rest[i].partition("@")
-            return {"kind": "image", "image": image.lower(),
-                    "digest": digest if digest.startswith("sha256:") else None}  # fmt: skip
-    if base == "hnx":
+    """The origin a launcher implies (unpinned: no hash is ever invented), from the same launch
+    position check verifies (:mod:`.launch`).  ``args`` are the cleaned arguments: no
+    credential, no URL userinfo."""
+    got = launch.parse(command, args)
+    spec = got.spec or ""
+    if got.ecosystem in ("npm", "pypi") and spec.startswith("git+"):
+        return _git_origin(spec)
+    if got.ecosystem in ("npm", "pypi"):
+        parts = launch.split_spec(got.ecosystem, spec)
+        if parts and not spec.startswith("secret:"):
+            name, ver = parts
+            return {"kind": "package", "ecosystem": got.ecosystem, "package": name,
+                    "version": ver if _VERSION.match(ver or "") else None, "sha256": None}  # fmt: skip
+    if got.ecosystem == "image":
+        parts = launch.split_image(spec)
+        if parts:
+            repo, tag, digest = parts
+            return {"kind": "image", "image": repo + (f":{tag}" if tag else ""),
+                    "digest": digest}  # fmt: skip
+    if got.launcher == "hnx":
         return {"kind": "first-party", "path": "homelabnext/"}
-    return {"kind": "unknown", "hint": f"launcher {base}"}
+    return {"kind": "unknown", "hint": f"launcher {got.launcher}"}
 
 
 @dataclass
