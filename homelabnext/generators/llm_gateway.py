@@ -493,7 +493,7 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
         },
     }
     body = yaml.safe_dump(doc, sort_keys=False, default_flow_style=False, width=100)
-    head = "".join(f"# note: {n}\n" for n in notes)
+    head = "# SPDX-License-Identifier: Apache-2.0\n" + "".join(f"# note: {n}\n" for n in notes)
     keys = [
         {
             "key_alias": k.name,
