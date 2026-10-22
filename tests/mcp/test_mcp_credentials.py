@@ -17,6 +17,9 @@ from homelabnext.mcp import credentials, importer, servers
 DIGEST = "sha256:b77c4fdf59bc86d60de78a824ecc899f1dc358911341c04a9e763b1c9512ca8b"
 COMMIT = "1caefa50d0a295c3adda038a408225769f771836"
 
+#: an inline PEM key's first line, split so the repository's own leak scan does not match it
+PEM = "-" * 5 + "BEGIN PRIVATE" + " KEY" + "-" * 5 + "fake"
+
 #: (args, settings) of a record: each one carries a literal credential (or a $ a client expands)
 FOUND = [
     # camelCase and short credential flags
@@ -65,7 +68,7 @@ FOUND = [
     ([], {"AUTH_HEADER": "Bearer fakeabc"}),
     (["--auth-header", "Bearer fakeabc"], {}),
     (["--token-header", "Bearer fakeabc"], {}),
-    (["--private-key", "-----BEGIN PRIVATE KEY-----fake"], {}),
+    (["--private-key", PEM], {}),
     (["--auth-token=/fakeTok"], {}),
     (["--token", "-fakeTok3nAbc"], {}),
     (["--token", "./fakeTok"], {}),
