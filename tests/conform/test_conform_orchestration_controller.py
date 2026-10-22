@@ -103,7 +103,7 @@ def test_handler_host_rejects_a_wrong_secret(tmp_path):
 
 
 def test_hermes_stand_in_answers_like_hermes(tmp_path):
-    job = {"callback": "http://handler.invalid", "secret": "fake-s", "token": "t", "job": "j"}
+    job = {"callback": "http://127.0.0.1:8123", "secret": "fake-s", "token": "t", "job": "j"}
     prompt = "task\n" + lo.encode_job({**job, "params": {"a": [1, None]}}) + "\n\ncontracts"
     assert hermes.decode(prompt)["params"] == {"a": [1, None]}
     usage = tmp_path / "usage.json"
@@ -115,7 +115,7 @@ def test_hermes_stand_in_answers_like_hermes(tmp_path):
 
     code, out, err = hermes.run(["-z", prompt, "--usage-file", str(usage)], post=ok)
     assert (code, json.loads(out), err) == (0, {"hnx_result": {"n": 2}}, "")
-    assert seen[0][0] == "http://handler.invalid/run" and seen[0][1]["params"] == {"a": [1, None]}
+    assert seen[0][0] == "http://127.0.0.1:8123/run" and seen[0][1]["params"] == {"a": [1, None]}
     assert json.loads(usage.read_text())["completed"] is True
     code, out, err = hermes.run(
         ["-z", prompt], post=lambda u, b: {"ok": False, "error": "RuntimeError: boom"}
@@ -125,6 +125,34 @@ def test_hermes_stand_in_answers_like_hermes(tmp_path):
     assert hermes.run(["--toolsets", "x"])[0] == 2
     bad = hermes.JOB_MARKER + base64.urlsafe_b64encode(b"[1]").decode()
     assert hermes.decode(bad) is None
+
+
+@pytest.mark.parametrize(
+    "callback",
+    [
+        "file:///etc/passwd",
+        "https://203.0.113.7:8443",
+        "http://203.0.113.7:8123",
+        "http://handler.invalid:8123",
+        "http://localhost:8123",
+        "http://fake-user@127.0.0.1:8123",
+        "http://127.0.0.1@203.0.113.7:8123",
+        "http://127.0.0.1",
+        "http://127.0.0.1:8123/elsewhere",
+        "http://127.0.0.1:8123?x=1",
+        "https://127.0.0.1:8123",
+        "gopher://127.0.0.1:8123",
+    ],
+)
+def test_hermes_stand_in_follows_only_a_loopback_callback(callback):
+    """The job line is controller data anyone can read and write: the stand-in only ever posts to
+    the handler host on 127.0.0.1, never a file, another host or a URL with userinfo."""
+    job = {"callback": callback, "token": "t", "job": "j", "params": {}}
+    seen = []
+    code, out, err = hermes.run(
+        ["-z", lo.encode_job(job)], post=lambda u, b: seen.append(u) or {"ok": True}
+    )
+    assert (code, out, seen) == (1, "", []) and "callback" in err
 
 
 def test_unknown_controller_state_is_an_orchestration_error(tmp_path):

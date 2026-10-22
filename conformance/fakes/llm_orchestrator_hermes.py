@@ -8,7 +8,9 @@ The controller runs every profiled job as ``hermes -z PROMPT [--toolsets T] [--u
 (``homelabnext.conform.adapters.llm_orchestrator``) puts one job line into that description:
 ``hnx-conform-job:<base64url JSON>`` naming its loopback handler host, the job and its parameters.
 This script finds the line, asks the handler host to run the job's handler, and answers the way
-hermes does:
+hermes does.  The job line is controller data (any client of its API can read or write a task
+description), so the only URL it ever posts to is ``http://127.0.0.1:<port>/run``: a callback
+with another scheme (``file://`` included), host, userinfo, path or query is refused.
 
 * success: the answer on stdout (``{"hnx_result": ...}``) and exit 0 -- the controller stores
   stdout as ``response_body`` (``internal/queue/scheduler.go:744``);
@@ -30,10 +32,35 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
 from typing import Any
+from urllib.parse import urlsplit
 
 #: the job line prefix; homelabnext.conform.adapters.llm_orchestrator.JOB_MARKER is the same
 JOB_MARKER = "hnx-conform-job:"
 CALL_TIMEOUT_S = 120.0
+#: the handler host is always on IPv4 loopback (homelabnext.conform.adapters.llm_orchestrator)
+LOOPBACK = "127.0.0.1"
+
+
+def run_url(callback: Any) -> str | None:
+    """``http://127.0.0.1:<port>/run`` for a callback that is exactly the loopback handler host
+    (``http://127.0.0.1:<port>``, an optional trailing ``/``), else ``None``."""
+    if not isinstance(callback, str):
+        return None
+    try:
+        parts = urlsplit(callback)
+        port = parts.port
+    except ValueError:
+        return None
+    if (
+        parts.scheme != "http"
+        or port is None
+        or parts.netloc != f"{LOOPBACK}:{port}"  # no userinfo, no other host
+        or parts.path not in ("", "/")
+        or parts.query
+        or parts.fragment
+    ):
+        return None
+    return f"http://{LOOPBACK}:{port}/run"
 
 
 def decode(prompt: str) -> dict[str, Any] | None:
@@ -80,11 +107,14 @@ def run(
     if prompt is None:
         return 2, "", "usage: hermes -z PROMPT [--toolsets T] [--usage-file F]"
     job = decode(prompt)
-    if job is None or not isinstance(job.get("callback"), str):
+    if job is None:
         return 1, "", f"no {JOB_MARKER} line in the prompt: not a conformance job"
+    url = run_url(job.get("callback"))
+    if url is None:
+        return 1, "", f"job callback is not http://{LOOPBACK}:<port>: refused"
     body = {k: job.get(k) for k in ("secret", "token", "job", "params")}
     try:
-        answer = _call(post, job["callback"].rstrip("/") + "/run", body)
+        answer = _call(post, url, body)
     except (OSError, ValueError) as exc:
         return 1, "", f"conformance handler host did not answer: {type(exc).__name__}: {exc}"
     if usage_file:
