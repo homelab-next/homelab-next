@@ -548,3 +548,14 @@ def test_render_refuses_a_record_check_would_refuse(tmp_path):
     assert clients.render_profile(servers.load(d), COLLECTOR, "claude-code")  # not granted
     with pytest.raises(clients.RenderError, match="--api-key takes a credential"):
         clients.render_profile(servers.load(d), COLLECTOR, "llm-orchestrator", **kw)
+
+
+def test_yaml_merge_keys_are_read_and_duplicates_still_refused():
+    """yaml.v3 (llm-orchestrator) reads merge keys; the strict loader used to fail on them."""
+    head = "defaults: &d {model: m, budget: 5}\nname: x\nlimits:\n  <<: *d\n  budget: 9\n"
+    assert clients.load_strict(head, "p")["limits"] == {"model": "m", "budget": 9}
+    text = clients.splice_grants(head, clients.ORCH_GRANTS_HEAD + "grants: {}\n")
+    assert text.startswith(head)
+    for dup in ("a: 1\na: 2\n", "d: &d {x: 1}\nc:\n  <<: *d\n  y: 1\n  y: 2\n"):
+        with pytest.raises(clients.RenderError, match="duplicate key"):
+            clients.load_strict(dup, "p")

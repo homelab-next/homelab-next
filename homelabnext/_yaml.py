@@ -21,9 +21,16 @@ import yaml
 __all__ = ["UniqueKeyLoader", "UniqueKeyStrDateLoader"]
 
 
+_MERGE = "tag:yaml.org,2002:merge"
+
+
 def _construct_mapping(loader: yaml.SafeLoader, node: yaml.MappingNode, deep: bool = False):
+    """A mapping whose explicit keys are unique; a merge key (``<<: *anchor``) is not one of them
+    (its keys may be overridden, as YAML intends) and is left to ``SafeLoader`` to expand."""
     seen: set[Any] = set()
     for key_node, _ in node.value:
+        if key_node.tag == _MERGE:
+            continue
         key = loader.construct_object(key_node, deep=deep)
         if key in seen:
             raise yaml.constructor.ConstructorError(
