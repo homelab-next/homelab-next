@@ -599,8 +599,26 @@
     },
     {
       "exit": {
+        "0": "the job is the manual deploy from main; it may run",
+        "1": "any other job; the runner fails it before its first step"
+      },
+      "id": "overlay-runner-job-started",
+      "inputs": "env HNX_DEPLOY_REPOSITORY (owner/repo, set by the runner host) and the job's GITHUB_REPOSITORY, GITHUB_EVENT_NAME, GITHUB_REF, GITHUB_WORKFLOW_REF",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "one line on stderr naming why a job was refused, or one line on stdout naming the accepted workflow",
+      "owner": "maintainers",
+      "path": "examples/private-overlay/runner/job-started.sh",
+      "purpose": "Refuse every job on the self-hosted deploy runner except deploy.yml dispatched by hand on main of the one private repository.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
         "0": "password printed",
-        "1": "OpenBao refused or returned no value",
+        "1": "OpenBao refused, redirected or returned no value",
         "2": "not configured"
       },
       "id": "overlay-vault-pass-client",
