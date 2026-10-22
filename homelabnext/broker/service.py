@@ -513,7 +513,7 @@ class BrokerService:
             if act.handler is None:
                 raise _Refused("denied", "handler-missing", f"{act.name}: lane not declared")
             try:
-                _lanes.check_params(act.handler, caller, args, now)
+                _lanes.check_params(act.handler, caller, args, now, key=self._name_key())
             except _lanes.LaneError as exc:
                 raise _Refused(exc.outcome, exc.reason, str(exc)) from None
         else:
@@ -585,6 +585,10 @@ class BrokerService:
         mac = hmac.new(self.state.digest_key(), raw, hashlib.sha256).hexdigest()
         return f"hmac-sha256:{mac}"
 
+    def _name_key(self) -> bytes:
+        """The key of a records-inbox name's tag, derived from the broker-held key."""
+        return hmac.new(self.state.digest_key(), b"lane-name-tag", hashlib.sha256).digest()
+
     # ---------------------------------------------------------------- execution
     def _execute(self, act: _Action, request: Mapping[str, Any], args: Mapping[str, Any]) -> Any:
         """Run one admitted action; raises :class:`_Refused` on a refusal or failure."""
@@ -600,7 +604,12 @@ class BrokerService:
         if act.kind == "lane":
             try:
                 written = _lanes.write(
-                    act.handler, self.data_root, request["actor"], args, request["created"]
+                    act.handler,
+                    self.data_root,
+                    request["actor"],
+                    args,
+                    request["created"],
+                    key=self._name_key(),
                 )
             except _lanes.LaneError as exc:
                 raise _Refused(exc.outcome, exc.reason, str(exc)) from None

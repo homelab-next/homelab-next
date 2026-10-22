@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import re
 import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -201,13 +202,19 @@ def test_findings_and_proposals_lanes(tmp_path):
     assert f["path"] == "findings/triage/2026-01-15-queue.md"
     note = {"title": "Raise the drain timeout", "risk": "low", "rollback": "set it back"}
     p = svc.call(AGENT, "proposal.file", {"note": note, "body": "Seen twice."})
-    assert p["path"] == "records/inbox/2026-01-15-triage-raise-the-drain-timeout.md"
+    assert re.fullmatch(
+        r"records/inbox/2026-01-15-triage-raise-the-drain-timeout-[0-9a-f]{8}\.md", p["path"]
+    )
     events = svc.state.outbox()
     assert [e["type"] for e in events] == ["homelabnext.proposal.created"]
     assert event_problems(events[0]) == [] and events[0]["data"]["risk"] == "low"
     with pytest.raises(Denied) as info:
         svc.call(AGENT, "proposal.file", {"note": dict(note, requesting_agent="profile:reader")})
     assert info.value.reason == "lane-identity-mismatch"
+    # a future-dated note (to pre-claim a later day's name) is refused: the broker dates it
+    with pytest.raises(InvalidArguments) as info:
+        svc.call(AGENT, "proposal.file", {"note": dict(note, created="2026-12-01T00:00:00Z")})
+    assert info.value.reason == "lane-created-set"
 
 
 def test_read_only_exec_action(tmp_path):

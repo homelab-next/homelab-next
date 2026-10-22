@@ -39,7 +39,7 @@ lanes:
     filename_pattern: '^[a-z0-9][a-z0-9-]{0,62}\.md$'
     max_bytes: 65536
     format: text                 # or json, with an optional content_schema: <dir>/<name>
-  - name: proposals              # proposal.file -> <data-root>/records/inbox/<date>-<agent>-<slug>.md
+  - name: proposals              # proposal.file -> <data-root>/records/inbox/<date>-<agent>-<slug>-<tag>.md
     kind: records-inbox
     root: records
     per_actor: false
@@ -49,16 +49,24 @@ lanes:
 
 Params: a `files` lane takes `{name, content}`; a `records-inbox` lane takes
 `{note, body?, slug?}` where `note` is the records frontmatter. The broker binds
-`requesting_agent` to the caller, fills `created`, validates the note against
-`schemas/records/note` and names the file by the records convention, so an agent cannot file a
-note as someone else or under someone else's name. A filed proposal emits `proposal.created`.
+`requesting_agent` to the caller, sets `created` from its own clock (a note that names its own
+`created` is refused: `lane-created-set`), validates the note against `schemas/records/note` and
+names the file by the records convention, so an agent cannot file a note as someone else or under
+someone else's name. The name is `<date>-<agent>-<slug>-<tag>.md`: `tag` is 8 hex characters of a
+keyed hash (under the broker-held key in the state directory) of the caller, the date and the
+slug. Profile slugs can prefix each other (`triage`, `triage-lead`), so without it `triage` could
+file `<date>-triage-lead-weekly-report.md` first and leave `triage-lead`'s own proposal
+`lane-exists`; with it, every agent's names are its own, and the same caller filing the same slug
+the same day gets the same name again (`lane-exists`), so a retry files nothing twice. A caller's
+`slug` is at most 51 characters (the tag takes the rest of the records convention's 60). A filed
+proposal emits `proposal.created`.
 
 What a lane refuses, each with its audit reason: a name that is not one plain segment or does not
 match the pattern (`lane-name-invalid`), a symlinked or non-directory component on the way
 (`lane-path-escape`), a target that is a symlink (`lane-symlink`), an existing file when the lane
 does not say `overwrite: true` (`lane-exists`), content over `max_bytes` (`lane-too-large`),
 content of the wrong shape or failing its schema (`lane-content-invalid`), a note naming another
-agent (`lane-identity-mismatch`) and a per-actor lane with a caller that is not `profile:<slug>`
+agent (`lane-identity-mismatch`) or its own `created` (`lane-created-set`) and a per-actor lane with a caller that is not `profile:<slug>`
 (`lane-actor-invalid`). Lane roots live under the broker's **data root** (`--data-root`, default
 `<state>/lanes`); point it at the directory the agents' memory, findings and records live in.
 
@@ -400,7 +408,7 @@ hnx broker import-proposals /path/to/old-vault/proposed --apply --socket /run/hn
 | `title` | `title`, `summary`, `subject`; else the body's first `# heading` | not imported |
 | `risk` | `risk`, `risk_level`, `severity` (`low`, `medium`, `high`; `med`/`moderate` -> `medium`, `critical` -> `high`) | `--default-risk`, else not imported |
 | `rollback` | `rollback`, `rollback_plan`, `backout` | `--default-rollback`, else not imported |
-| `created` | `created`, `date` (a bare date is midnight UTC) | the filename's leading date, else the file's mtime |
+| original date | `created`, `date` (a bare date is midnight UTC): kept as provenance `created:<timestamp>`; the filed note's `created` is the broker's clock | the filename's leading date, else the file's mtime |
 | `affects`, `related` | the same keys, when valid | dropped and reported |
 | `provenance` | `inputs`: `imported-from:<file>`, `requested-by:<original agent>`; `source`: the importing caller | - |
 | slug | the original agent's name, then the filename after its date (and that name) | the agent's name, then the title |
@@ -410,10 +418,11 @@ hnx broker import-proposals /path/to/old-vault/proposed --apply --socket /run/hn
 import cannot file a note as another agent; the original requester survives as provenance.
 `status` is dropped (the broker keeps state). A `completion-request` or any other non-proposal
 `type` is skipped and reported (close those with the records lifecycle). Every other key is listed
-as unmapped. Filenames come from `created` and the slug, so a second `--apply` reports
-`lane-exists` and adds nothing; the slug keeps the original agent's name, so two agents' proposals
-with the same date and title get two files, and two source files that would still share one name
-are a `conflict` (the second is not filed). Exit status 1 when any file could not be mapped or
+as unmapped. Filenames come from the day of the import and the slug, so a second `--apply` the
+same day reports `lane-exists` and adds nothing (a re-run on a later day files the queue again:
+run `--apply` once, after a clean dry run); the slug keeps the original agent's name, so two
+agents' proposals with the same title get two files, and two source files that would still share
+one name are a `conflict` (the second is not filed). Exit status 1 when any file could not be mapped or
 filed, or conflicts. A
 suggested order: run the broker in `shadow` beside the guard hook, import the queue, point the
 agents at the MCP tools, then remove the agents' write access to the old directory.
@@ -433,7 +442,7 @@ The scenario's steps, each a line of the report (`broker_e2e.py run --json`, and
    peer's uid maps to;
 2. `memory-write`: `memory_write` lands in `<data-root>/memory/<profile>/`, mode `600`, owned by
    the broker, not the agent;
-3. `proposal-file`: `proposal_file` files `records/inbox/<date>-<agent>-<slug>.md`, named after the
+3. `proposal-file`: `proposal_file` files `records/inbox/<date>-<agent>-<slug>-<tag>.md`, named after the
    peer's profile;
 4. `submit`, `run-before-approval`: an approval-gated `service.restart` is pending and
    `broker_run` is refused (`approval-required`);
