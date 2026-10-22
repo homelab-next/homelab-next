@@ -52,7 +52,7 @@ POLICY = _policy()
 WIDE = CeilingPolicy.from_mapping(
     {"ceilings": {pid: {"mcp": sorted(CATALOG.servers), "capabilities": ["cap:records-propose"],
                         "tier": "write", "budgets": json.loads(COLLECTOR.read_text())["budgets"],
-                        "data_tier": "local-only"}
+                        "data_tier": "local-only", "internet_mcp": sorted(CATALOG.servers)}
                   for pid in ("profile:collector",)}},
     source="the wide test policy",
 )  # fmt: skip

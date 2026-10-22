@@ -53,7 +53,8 @@ class ToolClasses:
         catalog: Mapping[str, Mapping[str, Any]] | None = None,
         catalog_source: str | None = None,
     ) -> None:
-        #: per MCP server of the catalog the table was derived from: status, reason, data_tier
+        #: per MCP server of the catalog the table was derived from: status, reason, data_tier,
+        #: replaced_by and whether it reaches the internet (:func:`reaches_internet`)
         #: (``None`` when the table states its own ``mcp`` section: then its keys are the catalog)
         self.catalog = dict(catalog) if catalog is not None else None
         self.catalog_source = catalog_source or source
@@ -149,6 +150,7 @@ class ToolClasses:
                 "reason": rec.get("reason"),
                 "data_tier": rec.get("data_tier"),
                 "replaced_by": rec.get("replaced_by"),
+                "internet": reaches_internet(rec),
             }
             for sid, rec in cat
         }
@@ -162,6 +164,13 @@ class ToolClasses:
     def classify(self, kind: str, name: str) -> tuple[str, ...] | None:
         """Classes of one grant, or ``None`` if the table does not know it."""
         return self.table[kind].get(name)
+
+
+def reaches_internet(rec: Mapping[str, Any]) -> bool:
+    """A catalog record sends what it is given out of the lab: a hosted server (the vendor's), or
+    one whose ``egress`` names ``internet``."""
+    egress = rec.get("egress")
+    return rec.get("runtime") == "hosted" or (isinstance(egress, list) and "internet" in egress)
 
 
 @cache

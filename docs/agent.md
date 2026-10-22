@@ -82,6 +82,11 @@ profile may be granted a `local-only` MCP server only when its entry says `data_
 local-only`, so a spec cannot declare itself local-only to receive local-only data. Both are
 optional; without `data_tier` the profile receives no local-only server.
 
+A local-only profile (attested, or declared when the entry attests no tier) is granted no MCP
+server that reaches the internet, a vendor's hosted server or one whose `egress` names
+`internet`, since its local-only context would leave the lab through that server's tools. The
+policy owner makes an exception per profile and server: `internet_mcp: [slack]` on the entry.
+
 A spec may also carry a `ceiling`; with a policy it may only narrow the policy's entry, and a
 profile id with no entry is refused. Without a policy the compiler falls back to the spec's own
 `ceiling` (and `hnx agent compile` says so): that output is self-consistent but bounded by

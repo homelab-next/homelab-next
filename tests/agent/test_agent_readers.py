@@ -87,6 +87,7 @@ def _permissive_policy(s: dict) -> CeilingPolicy:
         "tier": "privileged",
         "budgets": s["ceiling"]["budgets"],
         "data_tier": s["data_tier"],
+        "internet_mcp": sorted(s["mcp"]),  # every internet exception too
     }
     return CeilingPolicy.from_mapping({"ceilings": {s["id"]: ceiling}})
 

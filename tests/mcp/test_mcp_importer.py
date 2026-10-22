@@ -235,7 +235,7 @@ def test_a_rendered_record_imports_back_to_the_same_server(tmp_path):
     prof = tmp_path / "p.json"
     doc = json.loads((ROOT / "examples/mcp/clients/profile.collector.json").read_text())
     prof.write_text(json.dumps({**doc, "mcp": ["github"], "mcp_ceiling": ["github"],
-                                "reads_untrusted": False}))  # fmt: skip
+                                "reads_untrusted": False, "data_tier": "cloud-allowed"}))  # fmt: skip
     policy = CeilingPolicy.from_mapping(
         {"ceilings": {"profile:collector": {"mcp": ["github"], "capabilities": doc["capabilities"],
                                             "tier": "write", "budgets": doc["budgets"]}}}
