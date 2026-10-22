@@ -46,8 +46,13 @@ BAD = [
     ("twice", {"zones": ["mgmt", "mgmt"]}, "'mgmt' listed twice"),
     ("no zones", {"zones": []}, "list the zones the deploy reaches"),
     ("no owners", {"owners": []}, "name who may mint keys"),
-    ("bad owner", {"owners": ["*"]}, "is not an autogroup:, group: or tag: owner"),
-    ("owns itself", {"owners": ["tag:ci-deploy"]}, "cannot own itself"),
+    ("bad owner", {"owners": ["*"]}, "is not a user, group: or admin autogroup: owner"),
+    ("owns itself", {"owners": ["tag:ci-deploy"]}, "is a tag"),
+    # a tag owner lets that tag's nodes mint the deploy key: a zone tag would let a zone's
+    # nodes tag themselves tag:ci-deploy, any other tag hands it to whatever carries that one
+    ("zone tag owner", {"owners": ["autogroup:admin", "tag:zone-mgmt"]}, "is a tag"),
+    ("tag owner", {"owners": ["tag:anything"]}, "is a tag"),
+    ("member autogroup", {"owners": ["autogroup:member"]}, "is not a user, group: or admin"),
     ("zone tag", {"tag": "tag:zone-mgmt"}, "is a zone tag"),
     ("bad tag", {"tag": "ci-deploy"}, "is not a tag"),
     (
@@ -93,6 +98,23 @@ def test_the_repositorys_sites_pass(path):
     doc = yaml.safe_load(path.read_text())
     assert doc["tailnet"]["deploy"]["zones"]
     assert deploy_problems(doc) == []
+
+
+def test_owners_may_be_users_groups_and_admin_autogroups():
+    owners = ["autogroup:admin", "autogroup:owner", "group:deployers", "ops@example.com"]
+    assert deploy_problems(site(owners=owners)) == []
+
+
+@pytest.mark.parametrize("owner", ["tag:zone-mgmt", "tag:anything", "tag:ci-deploy"])
+def test_the_site_schema_refuses_a_tag_owner(owner):
+    import json
+
+    import jsonschema
+
+    schema = json.loads((REPO / "schemas" / "platform" / "site.schema.json").read_text())
+    item = schema["$defs"]["deploy_access"]["properties"]["owners"]["items"]
+    assert not jsonschema.Draft202012Validator(item).is_valid(owner)
+    assert jsonschema.Draft202012Validator(item).is_valid("group:deployers")
 
 
 def test_hnx_site_validate_reports_it():

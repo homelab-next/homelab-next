@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# NEGATIVE (1.2): tailnet.deploy.owners are people or groups, never a tag (a zone's nodes would mint the deploy key)
+site_version: 1
+site:
+  id: northwind
+  domain: example.internal
+  timezone: UTC
+router:
+  id: edge-router
+  model: unifi
+  mgmt_endpoint: svc:router-console
+  tls_pin:
+    sha256: REPLACE_WITH_CONSOLE_CERT_FINGERPRINT
+  auth:
+    reads:
+      mode: api_key
+      secret_ref: secret:network/router/api-key
+    writes:
+      mode: local_admin
+      secret_ref: secret:network/router/local-admin
+firewall:
+  default_action: deny
+zones:
+- id: mgmt
+  purpose: management
+  vlan_id: 10
+  subnet: 192.0.2.0/26  # no-raw-endpoint: allow negative fixture, documentation address
+  gateway: 192.0.2.1  # no-raw-endpoint: allow negative fixture, documentation address
+  dhcp:
+    range:
+    - 192.0.2.32  # no-raw-endpoint: allow negative fixture, documentation address
+    - 192.0.2.62  # no-raw-endpoint: allow negative fixture, documentation address
+  dns:
+    resolvers:
+    - svc:dns
+  egress:
+    internet: deny
+    inter_zone:
+      default: deny
+  tags:
+  - infra
+tailnet:
+  deploy:
+    owners: [tag:zone-mgmt]
+    zones: [mgmt]

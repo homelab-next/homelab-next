@@ -107,7 +107,7 @@ reach is site data, so the tailnet policy is generated rather than hand-edited:
 tailnet:
   deploy:
     tag: tag:ci-deploy           # the default
-    owners: [autogroup:admin]    # who may mint keys for the tag (tagOwners)
+    owners: [autogroup:admin]    # who may mint keys for the tag (tagOwners); never a tag
     zones: [mgmt, data]          # TCP 22 on these zones' tailnet nodes, nothing else
     exceptions:                  # optional: another port, on some deploy zones, with its reason
       - {zones: [mgmt], ports: [9443], reason: "the identity provider's admin API"}
@@ -116,8 +116,10 @@ tailnet:
 The rules live in `homelabnext/tailnet.py` and run in `hnx site validate` and when `hnx guests`
 reads the site: zones by id only (`*`, `any` or a tag is refused, so there is no wildcard
 destination); a zone of the site, listed once; an exception names deploy zones, ports other than
-22 (or `"*"`, every port) and a reason of at least ten characters; the tag is not a zone tag and
-does not own itself. `hnx guests render ... --target tailscale-acl` renders it
+22 (or `"*"`, every port) and a reason of at least ten characters; the tag is not a zone tag; the
+owners are people, never a tag (a user login, a `group:`, or `autogroup:admin`, `owner`,
+`it-admin` or `network-admin`): a tag owner lets every node carrying that tag apply the deploy tag
+to itself, so a zone tag owner would make any node of the zone the deploy. `hnx guests render ... --target tailscale-acl` renders it
 ([compute model](compute-model.md#bound-products)), with policy `tests` Tailscale runs on every
 change.
 

@@ -11,7 +11,7 @@ The site declares (1.2)::
     tailnet:
       deploy:
         tag: tag:ci-deploy              # optional; the tag the deploy's ephemeral key carries
-        owners: [autogroup:admin]       # who may mint keys for the tag (tagOwners)
+        owners: [autogroup:admin]       # who may mint keys for the tag (tagOwners): never a tag
         zones: [mgmt, data]             # site zones whose tailnet nodes it reaches on SSH (22)
         exceptions:                     # anything beyond SSH, each with its reason
           - {zones: [mgmt], ports: [9443], reason: "..."}
@@ -20,7 +20,11 @@ SSH (TCP 22) to the listed zones is the whole default.  These are errors: a dest
 not a zone of the site (``*``, ``any``, ``autogroup:...`` included: there is no wildcard
 destination); a zone listed twice; an exception without a reason, for a zone the deploy does not
 reach, or for port 22 (already allowed); a tag that is a zone tag (``tag:zone-...``, which the
-nodes advertise) or that owns itself; no owner.
+nodes advertise); no owner; an owner that is a tag.  Tailscale's ``tagOwners`` accepts users,
+``group:``, ``autogroup:`` and tags, but a tag owner lets every node carrying that tag apply the
+deploy tag to itself (a zone tag owner: any node of that zone becomes the deploy), so the owners
+are people only: a user login (``name@domain``), a ``group:`` or an admin autogroup
+(``autogroup:admin``, ``owner``, ``it-admin``, ``network-admin``; not ``autogroup:member``).
 """
 
 from __future__ import annotations
@@ -35,8 +39,11 @@ SSH = 22
 ZONE_TAG_PREFIX = "tag:zone-"
 ANY_PORT = "*"
 TAG_RE = re.compile(r"^tag:[a-z0-9][a-z0-9-]{0,62}\Z")
+#: the ``tagOwners`` principals the deploy tag may have: never a tag (keep in step with the site
+#: schema's ``deploy_access.owners`` pattern)
 OWNER_RE = re.compile(
-    r"^(autogroup:(admin|owner|it-admin|network-admin)|group:[a-z0-9][a-z0-9-]*|tag:[a-z0-9][a-z0-9-]{0,62})\Z"
+    r"^(autogroup:(admin|owner|it-admin|network-admin)|group:[a-z0-9][a-z0-9-]*"
+    r"|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+)\Z"
 )
 WILDCARDS = frozenset({"*", "any"})
 MIN_REASON = 10
@@ -71,10 +78,13 @@ def deploy_problems(doc: Mapping[str, Any]) -> list[str]:
         out.append(f"{w}.owners: name who may mint keys for the tag (e.g. [autogroup:admin])")
     else:
         for o in owners:
-            if not isinstance(o, str) or not OWNER_RE.match(o):
-                out.append(f"{w}.owners: {o!r} is not an autogroup:, group: or tag: owner")
-            elif o == tag:
-                out.append(f"{w}.owners: the tag {tag!r} cannot own itself")
+            if isinstance(o, str) and o.startswith("tag:"):
+                out.append(
+                    f"{w}.owners: {o!r} is a tag: every node carrying it could tag itself "
+                    f"{tag!r}; name a user, group: or admin autogroup:"
+                )
+            elif not isinstance(o, str) or not OWNER_RE.match(o):
+                out.append(f"{w}.owners: {o!r} is not a user, group: or admin autogroup: owner")
     zones = dep.get("zones")
     if not isinstance(zones, list) or not zones:
         out.append(f"{w}.zones: list the zones the deploy reaches (no wildcard)")

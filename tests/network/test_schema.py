@@ -31,6 +31,7 @@ EXPECT = {
     "ups-mac-malformed": "mac",
     "deploy-wildcard-zone": "tailnet/deploy/zones",
     "deploy-exception-without-reason": "reason",
+    "deploy-tag-owner": "tailnet/deploy/owners",
 }
 
 
