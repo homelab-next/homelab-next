@@ -609,14 +609,46 @@ class Rendered:
     unlisted: list[Path] = field(default_factory=list)
 
 
-def profile_refusals(doc: Mapping[str, Any], cat: servers.Catalog) -> list[str]:
-    """Why a profile may not be rendered: everything ``hnx agent verify`` refuses for a compiled
-    profile (schema, the reader rule and catalog grants judged against *this* catalog, the stored
-    ceiling, budgets, a digest that is present and matches), and for a lean one
-    (``platform/agent_profile``) its schema, the same grant rules and ``mcp`` within
-    ``mcp_ceiling``.  Rendering never trusts a profile the compiler would not have produced."""
-    from homelabnext.agent.compiler import verify_profile
+def load_policy(path: str | Path) -> Any:
+    """A ceiling policy file (``hnx agent verify --policy``'s shape: ``ceilings:``)."""
+    from homelabnext.agent.compiler import CeilingPolicy
     from homelabnext.agent.errors import AgentError
+
+    try:
+        doc = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+        return CeilingPolicy.from_mapping(doc or {}, source=str(path))
+    except (OSError, yaml.YAMLError, AgentError) as exc:
+        raise RenderError([f"{path}: not a ceiling policy: {exc}"]) from None
+
+
+def load_lock(path: str | Path) -> dict[str, str]:
+    """Reviewed digests (``hnx agent verify --lock``'s shape: ``profiles: {id: digest}``)."""
+    try:
+        doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise RenderError([f"{path}: cannot read the lock: {exc}"]) from None
+    lock = doc.get("profiles") if isinstance(doc, Mapping) else None
+    if not isinstance(lock, Mapping):
+        raise RenderError([f"{path}: expected a 'profiles' mapping of profile id -> digest"])
+    return {str(k): str(v) for k, v in lock.items()}
+
+
+def profile_refusals(
+    doc: Mapping[str, Any],
+    cat: servers.Catalog,
+    policy: Any = None,
+    lock: Mapping[str, str] | None = None,
+) -> list[str]:
+    """Why a profile may not be rendered.  A compiled profile: everything ``hnx agent verify
+    --policy [--lock]`` refuses (schema, the reader rule and catalog grants judged against *this*
+    catalog, the policy's ceiling (the stored one may not be wider), budgets, a digest that is
+    present and matches, and with ``lock`` the reviewed digest); it is refused without a
+    ``policy``, since its stored ceiling and digest are whatever edited it.  A lean one
+    (``platform/agent_profile``): its schema, the same grant rules, ``mcp`` within
+    ``mcp_ceiling`` and, with a policy, ``mcp`` and ``capabilities`` within the policy's ceiling.
+    Rendering never trusts a profile the compiler would not have produced."""
+    from homelabnext.agent.compiler import verify_profile
+    from homelabnext.agent.errors import AgentError, CeilingViolation
     from homelabnext.agent.readers import ToolClasses, profile_problems
     from homelabnext.agent.schemas import schema_errors
 
@@ -627,7 +659,12 @@ def profile_refusals(doc: Mapping[str, Any], cat: servers.Catalog) -> list[str]:
     if "grants" in doc:
         if not doc.get("digest"):
             return ["a compiled profile carries its digest (hnx agent compile)"]
-        return verify_profile(doc, classes=classes)
+        if policy is None:
+            return [
+                "a compiled profile is rendered against the ceiling policy (spec policy:, "
+                "--policy): its stored ceiling and digest are whatever last edited the file"
+            ]
+        return verify_profile(doc, policy=policy, lock=lock, classes=classes)
     problems = schema_errors("platform", "agent_profile", json.loads(json.dumps(doc)))
     if problems:
         return [f"not a compiled or lean agent profile: {p}" for p in problems]
@@ -635,10 +672,21 @@ def profile_refusals(doc: Mapping[str, Any], cat: servers.Catalog) -> list[str]:
     over = sorted(set(doc.get("mcp") or ()) - set(doc.get("mcp_ceiling") or ()))
     if over:
         problems.append(f"mcp outside mcp_ceiling: {over}")
+    if policy is not None:
+        try:
+            ceiling = policy.ceiling(str(doc.get("id")))
+        except CeilingViolation as exc:
+            return problems + list(exc.problems)
+        for key in ("mcp", "capabilities"):
+            wide = sorted(set(doc.get(key) or ()) - set(ceiling.get(key) or ()))
+            if wide:
+                problems.append(f"{key} outside the policy's ceiling ({policy.source}): {wide}")
     return problems
 
 
-def _load_profile(path: Path, cat: servers.Catalog) -> dict[str, Any]:
+def _load_profile(
+    path: Path, cat: servers.Catalog, policy: Any = None, lock: Mapping[str, str] | None = None
+) -> dict[str, Any]:
     try:
         text = path.read_text(encoding="utf-8")
         doc = json.loads(text) if path.suffix == ".json" else yaml.safe_load(text)
@@ -646,7 +694,7 @@ def _load_profile(path: Path, cat: servers.Catalog) -> dict[str, Any]:
         raise RenderError([f"{path}: cannot read the profile: {exc}"]) from None
     if not isinstance(doc, Mapping) or not str(doc.get("id", "")).startswith("profile:"):
         raise RenderError([f"{path}: not an agent profile (no profile: id)"])
-    refused = profile_refusals(doc, cat)
+    refused = profile_refusals(doc, cat, policy, lock)
     if refused:
         raise RenderError([f"{path}: refused: {p}" for p in refused])
     return dict(doc)
@@ -661,10 +709,12 @@ def render_profile(
     params: Mapping[str, Mapping[str, Any]] | None = None,
     lanes: Iterable[str] = ("real",),
     profile_file: str | None = None,
+    policy: Any = None,
+    lock: Mapping[str, str] | None = None,
 ) -> tuple[str, list[str]]:
-    """One profile's client file (``--profile``)."""
+    """One profile's client file (``--profile``); ``policy``/``lock``: :func:`profile_refusals`."""
     p = Path(profile_path)
-    prof = _load_profile(p, cat)
+    prof = _load_profile(p, cat, policy, lock)
     lanes = list(lanes)
     insts = instances(
         cat, prof, lanes=lanes, params=params, profile_file=profile_file or str(profile_path)
@@ -686,7 +736,8 @@ def _spec_problems(spec: Any) -> list[str]:
         return ["the spec must be a mapping"]
     out = []
     extra = set(spec) - {
-        "client", "catalog", "registry", "lanes", "profiles", "outputs", "owns", "check_profiles"
+        "client", "catalog", "registry", "lanes", "profiles", "outputs", "owns", "check_profiles",
+        "policy", "lock",
     }  # fmt: skip
     if extra:
         out.append(f"unknown key(s) {sorted(extra)}")
@@ -757,6 +808,8 @@ def render_spec(spec_path: str | Path, root: str | Path | None = None) -> Render
             registry = load(base / str(spec["registry"]))
         except RegistryError as exc:
             raise RenderError([str(exc)]) from None
+    policy = load_policy(base / str(spec["policy"])) if spec.get("policy") else None
+    lock = load_lock(base / str(spec["lock"])) if spec.get("lock") else None
     client = spec["client"]
     lanes = [str(x) for x in spec.get("lanes") or ["real"]]
     res = Rendered()
@@ -765,7 +818,7 @@ def render_spec(spec_path: str | Path, root: str | Path | None = None) -> Render
     loaded: list[tuple[Mapping[str, Any], dict[str, Any], Path]] = []
     for entry in spec["profiles"]:
         pf = base / str(entry["file"])
-        prof = _load_profile(pf, cat)
+        prof = _load_profile(pf, cat, policy, lock)
         loaded.append((entry, prof, pf))
         res.notes += deprecation_notes(cat, prof)
         if client != "llm-orchestrator":

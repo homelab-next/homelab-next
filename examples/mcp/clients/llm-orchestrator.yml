@@ -4,6 +4,7 @@
 # comment to the end of the file).  Fictional, like every example.
 client: llm-orchestrator
 catalog: ..
+policy: policy/ceilings.yml          # the ceilings its profiles are judged against
 lanes: [real, shadow]
 profiles:
   - file: profile.collector.json

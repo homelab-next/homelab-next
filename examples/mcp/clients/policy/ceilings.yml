@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# The ceiling policy the render specs judge their profiles against (`policy:` in each spec, the
+# shape `hnx agent verify --policy` reads). Owned and reviewed apart from the profiles: a compiled
+# profile's stored ceiling and digest are whatever last edited the file, so render refuses one
+# without a policy. Fictional, like every example.
+ceilings:
+  profile:broker-agent:
+    mcp: [hnx-broker, hnx-catalog, notes]
+    capabilities: [cap:broker, cap:records-propose]
+    tier: execute
+    budgets: {max_input_tokens: 16000, max_output_tokens: 2000, max_runtime_s: 600, max_tool_calls: 20}
+  profile:collector:
+    mcp: [notes, records]
+    capabilities: [cap:records-propose]
+    tier: write
+    budgets: {max_input_tokens: 32000, max_output_tokens: 2000, max_runtime_s: 600, max_tool_calls: 20}

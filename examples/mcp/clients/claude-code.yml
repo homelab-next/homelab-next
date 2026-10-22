@@ -3,6 +3,7 @@
 # shows.  Fictional, like every example.
 client: claude-code
 catalog: ..
+policy: policy/ceilings.yml          # the ceilings its profiles are judged against
 registry: ../../services.yml
 profiles:
   - file: profile.broker-agent.json

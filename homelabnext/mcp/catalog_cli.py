@@ -6,8 +6,8 @@
   policy, and every agent profile and context manifest under ``--grants`` (default: this
   checkout) judged against the catalog (unknown, retired, draft, reader, data tier);
 * ``list [--json]``: one line per server; ``classes``: the derived ``mcp`` class table;
-* ``render --profile FILE --client CLIENT [--param SERVER.NAME=VALUE ...] [--lanes L,L]
-  [--out FILE] [--check]`` or ``render --spec FILE [--root DIR] [--check]``: client
+* ``render --profile FILE --client CLIENT [--policy FILE [--lock FILE]] [--param
+  SERVER.NAME=VALUE ...] [--lanes L,L] [--out FILE] [--check]`` or ``render --spec FILE [--root DIR] [--check]``: client
   configurations (:mod:`.clients`) of profiles ``hnx agent verify`` would accept; ``--check``
   fails on drift in any output;
 * ``import CONFIG ... --out DIR [--force]``: draft records from existing client configs
@@ -131,6 +131,13 @@ def _render(args) -> int:
         )
         return 2
     if args.spec:
+        if args.policy or args.lock:
+            print(
+                "hnx mcp catalog render: with --spec, name the policy and lock in the spec "
+                "(policy:, lock:)",
+                file=sys.stderr,
+            )
+            return 2
         rendered = clients.render_spec(args.spec, args.root)
     else:
         if not args.client:
@@ -145,6 +152,8 @@ def _render(args) -> int:
             params=_params(args.param),
             lanes=[x for x in args.lanes.split(",") if x],
             profile_file=args.profile_path,
+            policy=clients.load_policy(args.policy) if args.policy else None,
+            lock=clients.load_lock(args.lock) if args.lock else None,
         )
         if not args.out:
             if args.check:
@@ -225,6 +234,12 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument(
         "--profile-path", help="the profile's path as the client sees it ({profile_file})"
     )
+    r.add_argument(
+        "--policy",
+        help="with --profile: the ceiling policy (hnx agent verify --policy); a compiled profile "
+        "is refused without one",
+    )
+    r.add_argument("--lock", help="with --profile: reviewed digests (hnx agent verify --lock)")
     r.add_argument("--out", help="write here instead of stdout")
     r.add_argument(
         "--root",

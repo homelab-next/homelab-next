@@ -146,6 +146,7 @@ profiles, lanes and homes:
 ```yaml
 client: hermes
 catalog: ..                     # relative to the spec
+policy: policy/ceilings.yml     # the ceiling policy (and optionally lock:) profiles are judged by
 registry: ../../services.yml
 lanes: [real, shadow]
 profiles:
@@ -192,7 +193,8 @@ fallback home can never hold fewer servers than the primary.
 ```
 hnx mcp catalog render --spec examples/mcp/clients/hermes.yml [--check]
 hnx mcp catalog render --profile build/profile.json --client claude-code \
-    [--param notes.mode=read] [--lanes real] [--out .mcp.json] [--check]
+    --policy policy.yml [--lock lock.yml] [--param notes.mode=read] [--lanes real] \
+    [--out .mcp.json] [--check]
 ```
 
 | `--client` | Writes |
@@ -204,10 +206,16 @@ hnx mcp catalog render --profile build/profile.json --client claude-code \
 | `llm-orchestrator` | its `configs/mcp_catalog.yaml` (`kinds:` with `command`, `args`, `timeout`, fixed `env`, `allowed_env` = the parameters' env keys) and each profile's `grants:` block (`real`/`shadow` lists of `name`, `kind`, `env`), spliced into the profile file |
 
 Render trusts no profile the compiler would not have produced: a compiled profile must pass
-everything `hnx agent verify` checks (schema, a digest that is present and matches, the stored
-ceiling and budgets, the reader rule and the catalog grant rules judged against the catalog being
-rendered), a lean one (`platform/agent_profile`) its schema, the same grant rules and `mcp` within
-`mcp_ceiling`; anything else is refused. A spec's output and `grants_file` paths are relative to
+everything `hnx agent verify --policy [--lock]` checks (schema, a digest that is present and
+matches, the policy's ceiling (the stored one may not be wider) and budgets, the reader rule and
+the catalog grant rules judged against the catalog being rendered, and with a lock the reviewed
+digest), and it is refused without a ceiling policy (a spec's `policy:` and optional `lock:`,
+relative to the spec, or `--policy`/`--lock` with `--profile`): the ceiling and digest stored in
+the file are whatever last edited it, so a hand edit with a recomputed digest would otherwise
+render. A lean one (`platform/agent_profile`) must pass its schema, the same grant rules, `mcp`
+within `mcp_ceiling` and, with a policy, `mcp` and `capabilities` within the policy's ceiling
+(without one it proves only that it agrees with itself); anything else is refused. The example
+specs share `examples/mcp/clients/policy/ceilings.yml`. A spec's output and `grants_file` paths are relative to
 the spec's directory (or `--root DIR`) and must stay under it: an absolute path, a `..` that
 escapes it or a symlink is refused, and each file is written to a temporary file and renamed into
 place.

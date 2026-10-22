@@ -5,6 +5,7 @@
 # and `--check` (make mcp-check) fails on any drift in any home.  Fictional, like every example.
 client: hermes
 catalog: ..
+policy: policy/ceilings.yml          # the ceilings its profiles are judged against
 registry: ../../services.yml
 lanes: [real, shadow]
 profiles:

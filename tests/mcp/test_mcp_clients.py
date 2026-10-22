@@ -15,6 +15,7 @@ import pytest
 import yaml
 
 from homelabnext import cli
+from homelabnext.agent.compiler import CeilingPolicy, profile_digest
 from homelabnext.mcp import clients, servers
 from homelabnext.registry.model import load
 
@@ -27,8 +28,20 @@ BROKER_AGENT = SPECS / "profile.broker-agent.json"
 COLLECTOR = SPECS / "profile.collector.json"
 
 
+def _policy() -> CeilingPolicy:
+    """The example specs' ceiling policy, plus the schema example reader's ceiling."""
+    doc = yaml.safe_load((SPECS / "policy" / "ceilings.yml").read_text())
+    doc["ceilings"]["profile:reader"] = json.loads(READER.read_text())["ceiling"]
+    return CeilingPolicy.from_mapping(doc, source="the test policy")
+
+
+POLICY = _policy()
+
+
 def test_only_granted_servers_with_secret_placeholders_and_registry_urls():
-    text, notes = clients.render_profile(CATALOG, READER, "claude-code", registry=REGISTRY)
+    text, notes = clients.render_profile(
+        CATALOG, READER, "claude-code", registry=REGISTRY, policy=POLICY
+    )
     doc = json.loads(text)
     assert list(doc["mcpServers"]) == ["lake"] and notes == []
     lake = doc["mcpServers"]["lake"]
@@ -40,7 +53,9 @@ def test_only_granted_servers_with_secret_placeholders_and_registry_urls():
 
 @pytest.mark.parametrize("client", ["claude-code", "generic", "hermes"])
 def test_every_client_renders_the_broker_agent(client):
-    text, _ = clients.render_profile(CATALOG, BROKER_AGENT, client, registry=REGISTRY)
+    text, _ = clients.render_profile(
+        CATALOG, BROKER_AGENT, client, registry=REGISTRY, policy=POLICY
+    )
     doc = yaml.safe_load(text)
     block = doc["mcp_servers"] if client == "hermes" else doc["mcpServers"]
     assert set(block) == {"hnx-broker", "hnx-catalog", "notes-broker-agent-real"}
@@ -51,7 +66,9 @@ def test_every_client_renders_the_broker_agent(client):
 
 
 def test_claude_desktop_leaves_remote_servers_out_and_says_so():
-    text, notes = clients.render_profile(CATALOG, READER, "claude-desktop", registry=REGISTRY)
+    text, notes = clients.render_profile(
+        CATALOG, READER, "claude-desktop", registry=REGISTRY, policy=POLICY
+    )
     assert json.loads(text)["mcpServers"] == {} and "cannot hold lake" in notes[0]
 
 
@@ -249,7 +266,48 @@ def test_render_refuses_a_profile_verify_would_refuse(tmp_path):
         f = tmp_path / "compiled.json"
         f.write_text(json.dumps(doc))
         with pytest.raises(clients.RenderError, match=phrase):
-            clients.render_profile(CATALOG, f, "claude-code")
+            clients.render_profile(CATALOG, f, "claude-code", policy=POLICY)
+
+
+def test_a_compiled_profile_is_judged_against_the_policy_and_the_lock(tmp_path):
+    """A hand-edited compiled profile with a recomputed digest passes every check that reads only
+    the file (its stored ceiling was edited with it): render needs the policy, and the lock."""
+    forged = json.loads(BROKER_AGENT.read_text())
+    forged["grants"]["mcp"].append("vault")
+    forged["ceiling"]["mcp"].append("vault")
+    forged["digest"] = profile_digest(forged)
+    f = tmp_path / "forged.json"
+    f.write_text(json.dumps(forged))
+    with pytest.raises(clients.RenderError, match="rendered against the ceiling policy"):
+        clients.render_profile(CATALOG, f, "claude-code", registry=REGISTRY)
+    with pytest.raises(clients.RenderError, match="wider than the policy"):
+        clients.render_profile(CATALOG, f, "claude-code", registry=REGISTRY, policy=POLICY)
+    honest = json.loads(BROKER_AGENT.read_text())
+    honest["budget_mode"] = "warn"  # within the policy, but not what was reviewed
+    honest["digest"] = profile_digest(honest)
+    f.write_text(json.dumps(honest))
+    reviewed = {"profile:broker-agent": json.loads(BROKER_AGENT.read_text())["digest"]}
+    kw = {"registry": REGISTRY, "policy": POLICY}
+    assert clients.render_profile(CATALOG, f, "claude-code", **kw)
+    with pytest.raises(clients.RenderError, match="is not the reviewed"):
+        clients.render_profile(CATALOG, f, "claude-code", lock=reviewed, **kw)
+    # a lean profile is held to the policy's ceiling when there is one
+    lean = _lean(
+        tmp_path, mcp=["notes", "records", "lake"], mcp_ceiling=["notes", "records", "lake"]
+    )
+    with pytest.raises(clients.RenderError, match="outside the policy's ceiling"):
+        clients.render_profile(CATALOG, lean, "claude-code", registry=REGISTRY, policy=POLICY)
+    # the CLI and a spec carry the policy too
+    pol = SPECS / "policy" / "ceilings.yml"
+    base = ["mcp", "catalog", "render", "--profile", str(BROKER_AGENT), "--client", "claude-code"]
+    assert cli.main(base) == 1
+    assert cli.main([*base, "--policy", str(pol)]) == 0
+    spec = _hermes_copy(tmp_path)
+    doc = yaml.safe_load(spec.read_text())
+    doc.pop("policy")
+    spec.write_text(yaml.safe_dump(doc))
+    with pytest.raises(clients.RenderError, match="rendered against the ceiling policy"):
+        clients.render_spec(spec)
 
 
 def _open_param_catalog(tmp_path: Path) -> servers.Catalog:
@@ -380,7 +438,9 @@ def test_check_reports_a_file_the_spec_owns_but_does_not_render(tmp_path, capsys
 # ------------------------------------------------- homes, Claude Desktop, Hermes, digests
 def test_claude_desktop_refuses_a_server_that_needs_a_secret():
     with pytest.raises(clients.RenderError, match=r"does not expand \$\{VAR\}.*notes-token"):
-        clients.render_profile(CATALOG, BROKER_AGENT, "claude-desktop", registry=REGISTRY)
+        clients.render_profile(
+            CATALOG, BROKER_AGENT, "claude-desktop", registry=REGISTRY, policy=POLICY
+        )
 
 
 def test_hermes_refuses_an_sse_server(tmp_path):
@@ -390,7 +450,7 @@ def test_hermes_refuses_an_sse_server(tmp_path):
     rec["transport"]["type"] = "sse"
     (d / "lake.yml").write_text(yaml.safe_dump(rec))
     with pytest.raises(clients.RenderError, match="legacy sse transport"):
-        clients.render_profile(servers.load(d), READER, "hermes", registry=REGISTRY)
+        clients.render_profile(servers.load(d), READER, "hermes", registry=REGISTRY, policy=POLICY)
 
 
 def _hermes_copy(tmp_path: Path) -> Path:
