@@ -303,4 +303,4 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 
 ---
 
-**Totals:** 179 criteria across 16 pillars; 97 PUBLIC-NOW, 82 SERVER.
+**Totals:** 180 criteria across 16 pillars; 98 PUBLIC-NOW, 82 SERVER.
