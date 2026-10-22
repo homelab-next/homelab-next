@@ -62,9 +62,10 @@ DENIED_ENV = re.compile(
 )
 #: ``{name}`` in an instance name, an argument, a setting or a parameter default
 TEMPLATE = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
-#: template names every instance has: the record id, the profile's bare name, the lane, and (in
-#: arguments only) the rendered profile's file
-BUILTINS = ("id", "profile", "lane")
+#: template names every instance has: the record id, the profile's bare name, the lane, the
+#: render spec output's ``home`` (empty outside one), and (in arguments only) the rendered
+#: profile's file
+BUILTINS = ("id", "profile", "lane", "home")
 PROFILE_FILE = "profile_file"
 #: a setting key that names a credential: its value belongs in the secret store (``env``)
 SECRET_KEY = re.compile(r"TOKEN|SECRET|PASSW|API_?KEY|PRIVATE|CREDENTIAL|COOKIE|SESSION", re.I)

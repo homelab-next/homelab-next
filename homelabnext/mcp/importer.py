@@ -9,7 +9,7 @@ in YAML).  Each entry becomes a **draft** record (``status: draft``, never grant
 * **secrets are stripped, failing closed.**  Every environment value is a ``secret:`` reference
   unless its key is allowlisted as a path, mode, level and the like and nothing in the value marks
   a credential; a ``${VAR}`` reference maps to a ``secret:`` name (a rendered
-  ``${HNX_SECRET_MCP_X}`` back to ``secret:mcp/x``).  In the arguments: the value after a
+  ``${HNX_SECRET_MCP_X}`` back to the ``mcp/x`` name it was rendered from).  In the arguments: the value after a
   credential flag (``--token``, ``--github-token``, ``--client-secret`` ...) or in
   ``--flag=VALUE``, a header after ``--header``/``-H`` (its name kept), a container runner's
   ``-e KEY=VALUE`` (moved to ``env``), a token-like value and an argument carrying a credential
@@ -121,7 +121,7 @@ def _url_carries(value: str) -> bool:
 
 def _ref_for_var(var: str, fallback: str) -> str:
     """The secret reference a ``${VAR}`` stands for: a rendered ``${HNX_SECRET_MCP_X_Y}`` maps
-    back to ``secret:mcp/x-y`` (any name the renderer delivers as that same variable, so a
+    back to the name ``mcp/x-y`` (any name the renderer delivers as that same variable, so a
     re-render is identical), any other variable to the name the importer gives it."""
     if not var.startswith("HNX_SECRET_") or len(var) == len("HNX_SECRET_"):
         return fallback

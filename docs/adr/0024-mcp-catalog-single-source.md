@@ -78,8 +78,10 @@ because each instance needs its own scope.
 - Rendered files that land in another program's format (Hermes `mcp_servers`, llm-orchestrator's
   `configs/mcp_catalog.yaml` and `grants:` blocks) are byte-stable; that program's own loader stays
   the last word, and its rules are encoded as a test (`clients.orch_accepts`).
-- Secret placeholders (`${HNX_SECRET_<NAME>}`) are expanded by Claude Code itself; every other
-  client needs its deploy to substitute them from the secret store when it installs the file.
+- Secret placeholders (`${HNX_SECRET_<NAME>}`) are expanded by Claude Code itself; Hermes and
+  llm-orchestrator need their deploy to substitute them from the secret store when it installs the
+  file. Claude Desktop expands nothing in its config, so render refuses a server that needs a
+  secret for it, and its output is a fragment to merge, never the whole config file.
 
 ## Alternatives
 

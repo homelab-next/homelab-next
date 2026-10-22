@@ -38,7 +38,7 @@ def test_only_granted_servers_with_secret_placeholders_and_registry_urls():
     assert "secret:" not in text and "do not edit" in doc["_generated"]
 
 
-@pytest.mark.parametrize("client", ["claude-code", "claude-desktop", "generic", "hermes"])
+@pytest.mark.parametrize("client", ["claude-code", "generic", "hermes"])
 def test_every_client_renders_the_broker_agent(client):
     text, _ = clients.render_profile(CATALOG, BROKER_AGENT, client, registry=REGISTRY)
     doc = yaml.safe_load(text)
@@ -365,3 +365,58 @@ def test_check_reports_a_file_the_spec_owns_but_does_not_render(tmp_path, capsys
     (spec.parent / "hermes" / "old-home.yaml").write_text("mcp_servers: {}\n")
     assert cli.main(["mcp", "catalog", "render", "--spec", str(spec), "--check"]) == 1
     assert "old-home.yaml: owned by the spec (owns:) but not rendered" in capsys.readouterr().out
+
+
+# ------------------------------------------------- homes, Claude Desktop, Hermes, digests
+def test_claude_desktop_refuses_a_server_that_needs_a_secret():
+    with pytest.raises(clients.RenderError, match=r"does not expand \$\{VAR\}.*notes-token"):
+        clients.render_profile(CATALOG, BROKER_AGENT, "claude-desktop", registry=REGISTRY)
+
+
+def test_hermes_refuses_an_sse_server(tmp_path):
+    d = tmp_path / "mcp"
+    shutil.copytree(ROOT / "examples" / "mcp", d, ignore=shutil.ignore_patterns("clients"))
+    rec = yaml.safe_load((d / "lake.yml").read_text())
+    rec["transport"]["type"] = "sse"
+    (d / "lake.yml").write_text(yaml.safe_dump(rec))
+    with pytest.raises(clients.RenderError, match="legacy sse transport"):
+        clients.render_profile(servers.load(d), READER, "hermes", registry=REGISTRY)
+
+
+def _hermes_copy(tmp_path: Path) -> Path:
+    dst = tmp_path / "mcp"
+    shutil.copytree(ROOT / "examples" / "mcp", dst)
+    shutil.copy(ROOT / "examples" / "services.yml", tmp_path / "services.yml")
+    return dst / "clients" / "hermes.yml"
+
+
+def test_each_home_can_differ_by_its_params_and_name(tmp_path):
+    spec = _hermes_copy(tmp_path)
+    notes = spec.parent.parent / "notes.yml"
+    rec = yaml.safe_load(notes.read_text())
+    rec["parameters"]["tier"] = {"env": "NOTES_TIER", "enum": ["primary", "fallback", "cloud"],
+                                 "default": "{home}"}  # fmt: skip
+    notes.write_text(yaml.safe_dump(rec))
+    doc = yaml.safe_load(spec.read_text())
+    doc["outputs"] = [
+        {"home": "primary", "path": "a.yaml"},
+        {"home": "fallback", "path": "b.yaml", "params": {"notes": {"tier": "cloud"}}},
+    ]
+    spec.write_text(yaml.safe_dump(doc))
+    a, b = (yaml.safe_load(o.text)["mcp_servers"] for o in clients.render_spec(spec).outputs)
+    assert a["notes-collector-real"]["env"]["NOTES_TIER"] == "primary"  # {home}
+    assert b["notes-collector-real"]["env"]["NOTES_TIER"] == "cloud"  # the home's own value
+    assert set(a) == set(b)
+
+
+def test_a_file_drifts_only_when_a_record_it_holds_changes(tmp_path):
+    spec = _hermes_copy(tmp_path)
+    assert clients.drift(clients.render_spec(spec)) == []
+    for o in clients.render_spec(spec).outputs:  # an editor's trailing newline is not drift
+        o.path.write_text(o.path.read_text() + "\n")
+    email = spec.parent.parent / "email.yml"  # no hermes home holds email
+    email.write_text(email.read_text().replace("description: ", "description: Changed. ", 1))
+    assert clients.drift(clients.render_spec(spec)) == []
+    notes = spec.parent.parent / "notes.yml"
+    notes.write_text(notes.read_text().replace("timeout: 120", "timeout: 90"))
+    assert len(clients.drift(clients.render_spec(spec))) == 2

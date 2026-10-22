@@ -5,19 +5,21 @@
 
 * **instances.**  A record declares a server once; an *instance* is that server for one granted
   profile in one lane (``real``, ``shadow``, ...), with its ``parameters`` resolved (the grant's
-  value from the render spec, else the default, templated over ``{id}``, ``{profile}`` and
-  ``{lane}``) and checked against their type.  Its name is the record's ``instance`` template
+  value from the render spec, overridden per home by an output's ``params``, else the default,
+  templated over ``{id}``, ``{profile}``, ``{lane}`` and ``{home}``) and checked against their
+  type.  Its name is the record's ``instance`` template
   (default ``{id}``).  An unparameterized server granted twice in one home renders once; two
   different definitions under one name are refused.
-* **clients.**  ``claude-code`` (``.mcp.json``), ``claude-desktop`` (stdio servers only),
+* **clients.**  ``claude-code`` (``.mcp.json``), ``claude-desktop`` (a fragment of stdio
+  servers that need no secret: Desktop does not expand ``${VAR}``),
   ``generic`` (``mcpServers`` with an explicit transport), ``hermes`` (a ``mcp_servers:`` YAML
-  block, Hermes Agent's ``config.yaml`` shape) and ``llm-orchestrator`` (its
+  block, Hermes Agent's ``config.yaml`` shape; no sse, which it has no field for) and ``llm-orchestrator`` (its
   ``configs/mcp_catalog.yaml`` kinds and each profile's ``grants:`` block, byte for byte the shape
   its ``internal/grants`` package reads).
 * **secrets** are never values: an ``env`` secret, a ``secret:`` argument or header becomes
   ``${HNX_SECRET_<NAME>}`` (:func:`homelabnext.registry.model.secret_env_name`), which Claude Code
-  expands from the environment at start and every other client gets from the deploy that installs
-  the file.  **Endpoints** are built from the registry (scheme, capability alias, port, path),
+  expands from the environment at start and Hermes and llm-orchestrator get from the deploy that
+  installs the file.  **Endpoints** are built from the registry (scheme, capability alias, port, path),
   never written in a record.
 
 A render *spec* (YAML) names the client, the catalog, the registry, the lanes, the profiles with
@@ -81,9 +83,17 @@ class Instance:
     #: the values of parameters delivered in the environment (``{ENV: value}``)
     param_env: dict[str, str] = field(default_factory=dict)
     profile_file: str = ""
+    #: the render spec output (runtime home) this instance is rendered for (``{home}``)
+    runtime_home: str = ""
 
     def vars(self) -> dict[str, str]:
-        return {"id": self.server, "profile": self.profile, "lane": self.lane, **self.params}
+        return {
+            "id": self.server,
+            "profile": self.profile,
+            "lane": self.lane,
+            "home": self.runtime_home,
+            **self.params,
+        }
 
 
 def _fill(text: str, values: Mapping[str, str]) -> str:
@@ -102,7 +112,7 @@ def _secret_text(text: str) -> str:
 #: what a parameter value may never contain: a client would expand ``$VAR``/``${VAR}``/``$(...)``
 #: from its own environment, and ``secret:`` would become a secret placeholder, so a value could
 #: route any secret to any server; control characters split a line or an argument
-_UNSAFE_VALUE = re.compile(r"\$|secret:|[\x00-\x1f\x7f]")
+_UNSAFE_VALUE = re.compile(r"\$|secret[:]|[\x00-\x1f\x7f]")
 
 
 def unsafe_value(value: Any) -> str | None:
@@ -150,6 +160,7 @@ def instances(
     lanes: Iterable[str] = ("real",),
     params: Mapping[str, Mapping[str, Any]] | None = None,
     profile_file: str = "",
+    home: str = "",
 ) -> list[Instance]:
     """Every instance of every server ``profile`` is granted, per lane.  ``params``:
     ``{server: {parameter: value}}`` (the grant's values; ``server@lane`` overrides one lane; a
@@ -183,7 +194,7 @@ def instances(
             if unknown:
                 problems.append(f"{pid}: {sid} has no parameter(s) {unknown}")
                 continue
-            base = {"id": sid, "profile": who, "lane": lane}
+            base = {"id": sid, "profile": who, "lane": lane, "home": home}
             choices: list[list[tuple[str, str]]] = []
             for pname, p in declared.items():
                 if pname in given:
@@ -213,6 +224,7 @@ def instances(
                         declared[n]["env"]: v for n, v in values.items() if declared[n].get("env")
                     },
                     profile_file=profile_file,
+                    runtime_home=home,
                 )
                 inst.name = _fill(str(rec.get("instance") or "{id}"), inst.vars())
                 if not ORCH_NAME.match(inst.name):
@@ -252,6 +264,14 @@ def _url(inst: Instance, registry: Any) -> str:
     return f"{svc.scheme}://{registry.alias(svc.capability)}:{svc.port}{t.get('path', '/mcp')}"
 
 
+def secret_refs(rec: Mapping[str, Any]) -> list[str]:
+    """Every ``secret:`` reference a record delivers (env, headers, arguments)."""
+    text = [str(v) for v in (rec.get("env") or {}).values()]
+    text += [str(v) for v in (rec.get("headers") or {}).values()]
+    text += [str(a) for a in (rec.get("transport") or {}).get("args") or ()]
+    return sorted({m for t in text for m in _SECRET_REF.findall(t)})
+
+
 def _headers(inst: Instance) -> dict[str, str]:
     return {k: _secret_text(str(v)) for k, v in sorted((inst.record.get("headers") or {}).items())}
 
@@ -262,6 +282,23 @@ def definition(inst: Instance, client: str, registry: Any = None) -> dict[str, A
     stdio = t["type"] == "stdio"
     if client == "claude-desktop" and not stdio:
         return None
+    if client == "claude-desktop" and secret_refs(inst.record):
+        raise RenderError(
+            [
+                f"{inst.name}: claude-desktop does not expand ${{VAR}} in "
+                f"claude_desktop_config.json, and {inst.server} needs {secret_refs(inst.record)}: "
+                "start it through a wrapper that reads them from the secret store, or use a "
+                "client that expands them (claude-code)"
+            ]
+        )
+    if client == "hermes" and t["type"] == "sse":
+        raise RenderError(
+            [
+                f"{inst.name}: {inst.server} speaks the legacy sse transport; a Hermes "
+                "mcp_servers entry has no transport field, so it would be reached as "
+                "streamable HTTP (serve it over streamable-http, or use another client)"
+            ]
+        )
     d: dict[str, Any] = {}
     if client in ("claude-code", "generic"):
         d["type" if client == "claude-code" else "transport"] = (
@@ -307,10 +344,17 @@ def home_servers(
     return dict(sorted(out.items())), sorted(set(skipped))
 
 
-def generated_note(cat: servers.Catalog, what: str) -> str:
+def generated_note(
+    cat: servers.Catalog, what: str, records: Mapping[str, Mapping[str, Any]] | None = None
+) -> str:
+    """The header of a rendered file, with the digest of the records it was built from (only
+    those: editing a record a file does not hold never makes that file drift)."""
+    from homelabnext.agent.digest import digest_of
+
+    digest = cat.digest() if records is None else digest_of(dict(sorted(records.items())))
     return (
         f"generated by hnx mcp catalog render from the MCP catalog ({cat.root.name}/, "
-        f"{cat.digest()[:19]}) for {what}; do not edit, render again"
+        f"{digest[:19]}) for {what}; do not edit, render again"
     )
 
 
@@ -319,7 +363,8 @@ def render_home(
 ) -> tuple[str, list[str]]:
     """The text of one client file (and the instance names it could not hold)."""
     servers_, skipped = home_servers(insts, client, registry)
-    note = generated_note(cat, what)
+    held = {i.server: i.record for i in insts if i.name in servers_}
+    note = generated_note(cat, what, held)
     if client == "hermes":
         text = f"# {note}\n" + yaml.safe_dump({"mcp_servers": servers_}, sort_keys=True, width=100)
     else:
@@ -390,7 +435,9 @@ def orch_catalog(cat: servers.Catalog, granted_ids: Iterable[str] = ()) -> tuple
         kinds[sid] = entry
     if problems:
         raise RenderError(problems)
-    return ORCH_CATALOG_HEAD + yaml.safe_dump({"kinds": kinds}, sort_keys=True, width=100), notes
+    note = generated_note(cat, "llm-orchestrator", {k: cat.servers[k] for k in kinds})
+    head = ORCH_CATALOG_HEAD + f"# {note}\n"
+    return head + yaml.safe_dump({"kinds": kinds}, sort_keys=True, width=100), notes
 
 
 def orch_grants(insts: list[Instance], lanes: Iterable[str]) -> str:
@@ -638,8 +685,23 @@ def _spec_problems(spec: Any) -> list[str]:
         out.append(f"client must be one of {list(CLIENTS)}")
     if not isinstance(spec.get("profiles"), list) or not spec.get("profiles"):
         out.append("profiles must list at least one profile")
-    if not isinstance(spec.get("outputs"), list) or not spec.get("outputs"):
+    outputs = spec.get("outputs")
+    if not isinstance(outputs, list) or not outputs:
         out.append("outputs must list at least one file")
+        return out
+    for i, o in enumerate(outputs):
+        if not isinstance(o, Mapping) or not o.get("path"):
+            out.append(f"outputs[{i}] needs a path")
+            continue
+        extra = set(o) - {"path", "home", "params"}
+        if extra:
+            out.append(f"outputs[{i}]: unknown key(s) {sorted(extra)}")
+        if spec.get("client") == "llm-orchestrator" and ({"home", "params"} & set(o)):
+            out.append(f"outputs[{i}]: llm-orchestrator's catalog has no home or params")
+        if o.get("home") is not None and (unsafe_value(o["home"]) or not str(o["home"]).strip()):
+            out.append(f"outputs[{i}]: home must be a plain non-empty string")
+        if o.get("params") is not None and not isinstance(o["params"], Mapping):
+            out.append(f"outputs[{i}]: params must map SERVER (or SERVER@LANE) to values")
     return out
 
 
@@ -684,9 +746,14 @@ def render_spec(spec_path: str | Path, root: str | Path | None = None) -> Render
     res = Rendered()
     every: list[Instance] = []
     blocks: dict[str, tuple[Path, str]] = {}
+    loaded: list[tuple[Mapping[str, Any], dict[str, Any], Path]] = []
     for entry in spec["profiles"]:
         pf = base / str(entry["file"])
         prof = _load_profile(pf, cat)
+        loaded.append((entry, prof, pf))
+        res.notes += deprecation_notes(cat, prof)
+        if client != "llm-orchestrator":
+            continue
         insts = instances(
             cat,
             prof,
@@ -695,7 +762,6 @@ def render_spec(spec_path: str | Path, root: str | Path | None = None) -> Render
             profile_file=str(entry.get("profile_file") or pf),
         )
         every += insts
-        res.notes += deprecation_notes(cat, prof)
         if client == "llm-orchestrator":
             if not entry.get("grants_file"):
                 raise RenderError([f"{sp}: {prof['id']}: llm-orchestrator needs grants_file"])
@@ -724,13 +790,36 @@ def render_spec(spec_path: str | Path, root: str | Path | None = None) -> Render
     else:
         for out in spec["outputs"]:
             what = f"home {out['home']}" if out.get("home") else f"{sp.name}"
-            text, skipped = render_home(every, client, cat, registry, what)
+            home_insts: list[Instance] = []
+            for entry, prof, pf in loaded:
+                home_insts += instances(
+                    cat,
+                    prof,
+                    lanes=lanes,
+                    params=_home_params(entry.get("params") or {}, out.get("params"), prof),
+                    profile_file=str(entry.get("profile_file") or pf),
+                    home=str(out.get("home") or ""),
+                )
+            text, skipped = render_home(home_insts, client, cat, registry, what)
             res.notes += [f"{what}: {client} cannot hold {n}" for n in skipped]
             res.outputs.append(Output(_inside(out_root, out["path"], "output"), text))
     mine = {o.path.resolve() for o in res.outputs}
     res.unlisted = [f for f in _owned(out_root, spec.get("owns")) if f.resolve() not in mine]
     res.notes += [f"{f}: owned by the spec but not rendered (stale?)" for f in res.unlisted]
     return res
+
+
+def _home_params(
+    given: Mapping[str, Mapping[str, Any]], home: Any, profile: Mapping[str, Any]
+) -> dict[str, dict[str, Any]]:
+    """A profile's parameter values for one home: the profile entry's, overridden by the
+    output's ``params`` for every server the profile is granted (``SERVER`` or ``SERVER@LANE``)."""
+    out = {k: dict(v or {}) for k, v in given.items()}
+    names = set(granted(profile))
+    for key, values in (home or {}).items():
+        if str(key).split("@", 1)[0] in names:
+            out[str(key)] = {**out.get(str(key), {}), **dict(values or {})}
+    return out
 
 
 def _owned(root: Path, globs: Any) -> list[Path]:
@@ -763,6 +852,11 @@ def write(rendered: Rendered) -> list[Path]:
     return paths
 
 
+def _same(text: str) -> str:
+    """Text compared for drift: line endings and trailing newlines are an editor's, not drift."""
+    return text.replace("\r\n", "\n").rstrip("\n")
+
+
 def drift(rendered: Rendered) -> list[str]:
     """The outputs whose file differs from the render (missing, hand-edited, stale), and every
     file the spec owns that no output renders."""
@@ -770,7 +864,7 @@ def drift(rendered: Rendered) -> list[str]:
     for o in rendered.outputs:
         if not o.path.is_file():
             out.append(f"{o.path}: missing")
-        elif o.path.read_text(encoding="utf-8") != o.expected():
+        elif _same(o.path.read_text(encoding="utf-8")) != _same(o.expected()):
             out.append(f"{o.path}: differs from the render (hand-edited or stale)")
     out += [f"{f}: owned by the spec (owns:) but not rendered by it" for f in rendered.unlisted]
     return out

@@ -86,8 +86,9 @@ problems the grants are not judged (a note says so), since they would be judged 
   llm-orchestrator hard-denies (`PATH`, `LD_*`, `DYLD_*`, `PYTHONPATH`, `PYTHONHOME`,
   `PYTHONSTARTUP`, `PYTHONINSPECT`, `HOME`, `SHELL`, `BASH_ENV`, `ENV`, `NODE_OPTIONS`,
   `HERMES_HOME`), never names a credential, never also a fixed setting or secret, never shared by
-  two parameters; a default fits its enum and pattern and holds no `$` or `secret:`; templates name only `{id}`,
-  `{profile}`, `{lane}`, the parameters, and in arguments `{profile_file}`;
+  two parameters; a default fits its enum and pattern and holds no `$` or `secret:`; templates
+  name only `{id}`, `{profile}`, `{lane}`, `{home}`, the parameters, and in arguments
+  `{profile_file}`;
 - with the registry: an HTTP endpoint is a registry http(s) service, and a registry service's
   `mcp` block names this catalog id with the same transport and path; every registry `mcp` entry
   resolves to a catalog server; runtime hosts and egress services and hosts exist; every
@@ -145,7 +146,17 @@ A spec may also name `owns:`, globs (relative to the spec) of the files it is th
 of: `--check` reports any file there that no output renders (a stale home, a hand-written
 config).
 
-Each parameter's value is the grant's (`params`), else its default; a list value expands into one
+Homes may differ where the deployment needs them to: an output's `params` (`SERVER` or
+`SERVER@LANE` to values) override the profiles' values in that home for every profile granted the
+server, and `{home}` (the output's `home`, empty outside a spec) is a template like `{profile}`:
+
+```yaml
+outputs:
+  - {home: local, path: hermes/local.yaml}
+  - {home: cloud, path: hermes/cloud.yaml, params: {vault: {producer_tier: cloud}}}
+```
+
+Each parameter's value is the grant's (`params`, then the home's), else its default; a list value expands into one
 instance per element. A value is a string (quote YAML's `true` or `0755`), passed through
 verbatim: it may not contain `$`, `secret:` or a control character, so a grant can never route a
 secret or an environment variable to a server (secrets come only from the record's own `env`,
@@ -165,9 +176,9 @@ hnx mcp catalog render --profile build/profile.json --client claude-code \
 | `--client` | Writes |
 |---|---|
 | `claude-code` | `.mcp.json`: `{"mcpServers": {name: {"type": "stdio", "command", "args", "env"}}}`, remote servers as `{"type": "http"/"sse", "url", "headers"}` |
-| `claude-desktop` | `claude_desktop_config.json`'s `mcpServers` (stdio only; a remote server is reported and left out) |
+| `claude-desktop` | a **fragment**: the `mcpServers` to merge into `claude_desktop_config.json` (stdio only; a remote server is reported and left out). Claude Desktop does not expand `${VAR}` in that file, so a server that needs a secret is refused (start it through a wrapper that reads the secret store). Never point an output at the live file: it holds other settings the render would replace |
 | `generic` | `mcpServers` with an explicit `transport` and `timeout` |
-| `hermes` | Hermes Agent's `mcp_servers:` YAML block (`command`, `args`, `env`, `timeout`; remote: `url`, `headers`) |
+| `hermes` | Hermes Agent's `mcp_servers:` YAML block (`command`, `args`, `env`, `timeout`; remote: `url`, `headers`). An entry has no transport field, so a legacy `sse` server is refused rather than reached as streamable HTTP |
 | `llm-orchestrator` | its `configs/mcp_catalog.yaml` (`kinds:` with `command`, `args`, `timeout`, fixed `env`, `allowed_env` = the parameters' env keys) and each profile's `grants:` block (`real`/`shadow` lists of `name`, `kind`, `env`), spliced into the profile file |
 
 Render trusts no profile the compiler would not have produced: a compiled profile must pass
@@ -181,11 +192,13 @@ place.
 
 Only the profile's granted servers are rendered. A credential is never a value: it is
 `${HNX_SECRET_<NAME>}` (the registry's `secret_env_name`), which Claude Code expands from its
-environment and every other client's deploy substitutes when it installs the file. An HTTP
-server's URL is built from the registry (scheme, capability alias, port, path). Every rendered
-file carries a generated note (a JSON `_generated` key or a YAML comment) naming the catalog
-digest. `--check` compares every output of the spec and fails on any drift: a hand edit, a stale
-render, or a home that lost an entry.
+environment and the Hermes and llm-orchestrator deploys substitute when they install the file
+(Claude Desktop expands nothing: see above). An HTTP server's URL is built from the registry
+(scheme, capability alias, port, path). Every rendered file carries a generated note (a JSON
+`_generated` key or a YAML comment) naming the digest of the records **it** holds, so editing a
+record another file holds never makes this one drift. `--check` compares every output of the spec
+(line endings and trailing newlines aside) and fails on any drift: a hand edit, a stale render,
+or a home that lost an entry.
 
 The generated example that [broker](broker.md) shows is
 `examples/mcp/clients/claude-code/broker-agent.mcp.json`.
