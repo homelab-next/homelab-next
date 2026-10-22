@@ -67,6 +67,14 @@ GENERATED = [
      ["uvx", "--no-config", "--from", f"git+{GIT_PYPI['repo']}@{COMMIT}", "srv"]),
     (_rec(GH, GIT_NPM, bin="srv"),
      ["npx", "-y", f"--prefix={PREFIX}", f"--package=git+{GIT_NPM['repo']}#{COMMIT}", "--", "srv"]),
+    # round 4, F5: a registry with a port, pypi extras, a git subdirectory
+    (_rec(DOCKER, {**DOCKER["origin"], "image": "registry.example:5000/mcp/docker:0.6.3"}),
+     ["docker", "run", "-i", "--rm", f"registry.example:5000/mcp/docker@{D}"]),
+    (_rec(NOTES, {**NOTES["origin"], "extras": ["cli", "db"]}),
+     ["uvx", "--no-config", "--from", "example-notes-mcp[cli,db]==1.2.0", "notes-mcp"]),
+    (_rec(NOTES, {**GIT_PYPI, "subdirectory": "packages/srv"}),
+     ["uvx", "--no-config", "--from",
+      f"git+{GIT_PYPI['repo']}@{COMMIT}#subdirectory=packages/srv", "srv"]),
     (_rec(BROKER, FIRST, bin="hnx", entry="mcp-serve"), ["hnx", "mcp", "serve"]),
     (_rec(BROKER, FIRST, bin="hnx", entry="mcp-serve", args=["--scope-from-profile", "/p.json"]),
      ["hnx", "mcp", "serve", "--scope-from-profile", "/p.json"]),
@@ -144,6 +152,12 @@ REFUSED = [
      "not an https URL without credentials"),
     (_rec(NOTES, {**GIT_PYPI, "repo": "http://code.example/org/srv"}, bin="srv"), "not an https URL"),
     (_rec(NOTES, {k: v for k, v in GIT_PYPI.items() if k != "bins"}, bin="srv"), "names no bins"),
+    (_rec(GH, {**GH["origin"], "extras": ["cli"]}), "extras are a pypi package's"),
+    (_rec(NOTES, {**NOTES["origin"], "extras": ["cli,db"]}), "does not match"),
+    (_rec(GH, {**GIT_NPM, "subdirectory": "packages/srv"}), "installed only by uvx"),
+    (_rec(NOTES, {**GIT_PYPI, "subdirectory": "../srv"}), "does not match"),
+    (_rec(NOTES, {**GIT_PYPI, "subdirectory": "packages/../../srv"}), "does not match"),
+    (_rec(DOCKER, {**DOCKER["origin"], "image": "registry.example:port/x"}), "does not match"),
 ]  # fmt: skip
 
 
@@ -253,6 +267,11 @@ IMPORTED = [
     ("docker", ["run", "-i", "--rm", "--privileged", "-v", "/:/host", "--pid", "host", IMG],
      {"bin": None, "args": [], "dropped": ["--pid", "-v"]}),
     ("/tmp/evil/npx", ["-y", GH_PIN], {"bin": None}),  # the rendered launch is a bare npx
+    ("uvx", ["--from", "example-notes-mcp[cli]==1.2.0", "notes-mcp"], {"bin": "notes-mcp"}),
+    ("uvx", ["--from", f"git+https://code.example/org/srv@{COMMIT}#subdirectory=pkgs/srv", "srv"],
+     {"bin": "srv"}),
+    ("docker", ["run", "-i", f"registry.example:5000/mcp/docker@{D}"], {"bin": None}),
+    ("uvx", ["--from", f"git+https://code.example/org/srv@{COMMIT}#subdirectory=../x", "srv"], None),
     ("hnx", ["mcp", "serve", "--scope-from-profile", "/p.json"],
      {"bin": "hnx", "args": ["--scope-from-profile", "/p.json"]}),
     ("hnx", ["invariants", "run", "--plugins-dir", "/tmp/x"], None),
@@ -290,6 +309,10 @@ def test_the_importer_maps_a_launch_or_refuses_it(command, args, kept):
 def test_the_importer_reads_the_origin_from_the_launch_position():
     assert importer.guess_origin("npx", ["-y", "evil@1.0.0", GH_PIN])["package"] == "evil"
     assert importer.guess_origin("docker", ["run", "-i", "--name", "n", IMG])["digest"] == D
+    assert importer.guess_origin("uvx", ["example-x[cli]==1.0.0"])["extras"] == ["cli"]
+    assert importer.guess_origin("docker", ["run", f"registry.example:5000/x@{D}"])["image"] == (
+        "registry.example:5000/x"
+    )
     assert (
         importer.guess_origin("pipx", ["run", "--spec", "pkg==1.0.0", "app"])["version"] == "1.0.0"
     )

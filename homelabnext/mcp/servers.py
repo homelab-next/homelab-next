@@ -494,6 +494,8 @@ def launch_problems(rec: Mapping[str, Any], where: str) -> list[str]:
             out.append(f"{where}: npm version {ver} is not a full x.y.z (npm reads it as a range)")
         if not (_NPM_NAME if eco == "npm" else _PYPI_NAME).fullmatch(pkg):
             out.append(f"{where}: {pkg} is not an {eco} package name")
+        if origin.get("extras") and eco != "pypi":
+            out.append(f"{where}: extras are a pypi package's; npm has none")
         out += _bins_problems(origin, bin_, where)
     elif kind == "git":
         repo = str(origin.get("repo"))
@@ -504,6 +506,11 @@ def launch_problems(rec: Mapping[str, Any], where: str) -> list[str]:
             )
         if not _GIT_REPO.fullmatch(repo):
             out.append(f"{where}: git repo {repo} is not an https URL without credentials")
+        if origin.get("subdirectory") and origin.get("ecosystem") != "pypi":
+            out.append(
+                f"{where}: a git subdirectory is installed only by uvx (pypi); npm installs no "
+                "subdirectory of a git repo"
+            )
         out += _bins_problems(origin, bin_, where)
     elif kind == "image":
         if bin_ is not None:
@@ -564,8 +571,9 @@ def launch(rec: Mapping[str, Any], ctx: LaunchContext | None = None) -> tuple[st
       ``--prefix`` makes npx read its project config and ``node_modules`` from that
       empty directory, so neither a ``node_modules/<package>`` nor an ``.npmrc`` in the client's
       working directory replaces the pinned package);
-    * pypi: ``uvx --no-config --from <package>==<version> <bin>`` (``--no-config`` reads no ``uv.toml`` or ``[tool.uv]``, so none can redirect the index);
-    * git: the same with ``git+<repo>#<commit>`` (npm) or ``git+<repo>@<commit>`` (pypi);
+    * pypi: ``uvx --no-config --from <package>[<extras>]==<version> <bin>`` (``--no-config`` reads no ``uv.toml`` or ``[tool.uv]``, so none can redirect the index);
+    * git: the same with ``git+<repo>#<commit>`` (npm) or
+      ``git+<repo>@<commit>[#subdirectory=<dir>]`` (pypi);
     * image: ``docker run -i --rm [-e NAME ...] <repository>@<digest>``, one ``-e`` per
       ``env``, ``settings`` and parameter ``env`` key, so the container gets exactly those;
     * first-party: ``hnx <entry's subcommand>`` (:data:`HNX_ENTRIES`), or a path under
@@ -582,10 +590,16 @@ def launch(rec: Mapping[str, Any], ctx: LaunchContext | None = None) -> tuple[st
         eco = origin["ecosystem"]
         if kind == "package":
             ver = str(origin.get("version") or "").removeprefix("v")
-            spec = f"{origin['package']}@{ver}" if eco == "npm" else f"{origin['package']}=={ver}"
+            extras = f"[{','.join(origin['extras'])}]" if origin.get("extras") else ""
+            spec = (
+                f"{origin['package']}@{ver}" if eco == "npm"
+                else f"{origin['package']}{extras}=={ver}"
+            )  # fmt: skip
         else:
             repo = "git+" + str(origin["repo"]).removeprefix("git+")
             spec = f"{repo}{'#' if eco == 'npm' else '@'}{origin.get('commit')}"
+            if origin.get("subdirectory"):
+                spec += f"#subdirectory={origin['subdirectory']}"
         run, why = resolve_bin(origin, bin_)
         if run is None:
             raise ValueError(f"{why}")

@@ -353,6 +353,17 @@
             }
           ]
         },
+        "extras": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$(?!\\n)"
+          },
+          "description": "pypi only: the package's extras the server is installed with (uvx --from <pkg>[<extra>,...]==<ver>)."
+        },
         "sha256": {
           "oneOf": [
             {
@@ -397,9 +408,9 @@
         },
         "image": {
           "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?$(?!\\n)",
+          "pattern": "^(?:[a-z0-9][a-z0-9.-]*(?::[0-9]{1,5})?/)?[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?$(?!\\n)",
           "maxLength": 200,
-          "description": "Repository (and optional tag, informational only)."
+          "description": "Repository, with its registry host and port when it has one (registry.example:5000/team/server), and an optional tag (informational only)."
         },
         "digest": {
           "oneOf": [
@@ -442,6 +453,12 @@
               "pattern": "^[0-9a-f]{40}$(?!\\n)"
             }
           ]
+        },
+        "subdirectory": {
+          "type": "string",
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*$(?!\\n)",
+          "description": "pypi only: the package's directory in the repo (git+<repo>@<commit>#subdirectory=<dir>), relative, never .. (npm installs no subdirectory of a git repo)."
         },
         "ecosystem": {
           "enum": [

@@ -311,6 +311,8 @@ class Mapped:
     entry: str | None = None
 
 
+_SUBDIR = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9_][A-Za-z0-9._-]*)*")
+_EXTRA = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
 _VERSION = re.compile(
     r"v?[0-9]+\.[0-9]+(\.[0-9]+)*(?:[-+][0-9A-Za-z.]+|(?:a|b|rc|\.post|\.dev)[0-9]+)?"
 )
@@ -321,19 +323,30 @@ def _origin(eco: str, spec: str) -> dict[str, Any] | None:
     if spec.startswith("git+"):
         url = spec.removeprefix("git+")
         url = re.sub(r"(://)[^/@\s]*@", r"\1", url)
+        url, _, sub = url.partition("#subdirectory=") if eco == "pypi" else (url, "", "")
         sep = "#" if eco == "npm" and "#" in url else "@"
         head, _, ref = url.rpartition(sep) if sep in url.split("://", 1)[-1] else (url, "", "")
         repo = head if ref else url
         commit = ref if re.fullmatch(r"[0-9a-f]{40}", ref or "") else None
-        return {"kind": "git", "ecosystem": eco, "repo": repo, "commit": commit}
+        out: dict[str, Any] = {"kind": "git", "ecosystem": eco, "repo": repo, "commit": commit}
+        if sub:
+            if not _SUBDIR.fullmatch(sub):
+                return None
+            out["subdirectory"] = sub
+        return out
     parts = split_spec(eco, spec)
     if parts is None or spec.startswith("secret:"):
         return None
     name, ver = parts
+    out = {"kind": "package", "ecosystem": eco, "package": name,
+           "version": ver if ver and _VERSION.fullmatch(ver) else None, "sha256": None}  # fmt: skip
     if eco == "pypi" and "[" in spec.split("==", 1)[0]:
-        return None  # extras: a record names one package, nothing beside it
-    return {"kind": "package", "ecosystem": eco, "package": name,
-            "version": ver if ver and _VERSION.fullmatch(ver) else None, "sha256": None}  # fmt: skip
+        extras = spec.split("[", 1)[1].split("]", 1)[0]
+        names = [e.strip() for e in extras.split(",") if e.strip()]
+        if not names or not all(_EXTRA.fullmatch(e) for e in names):
+            return None
+        out["extras"] = names
+    return out
 
 
 def map_launch(command: str, args: list[str]) -> Mapped:
