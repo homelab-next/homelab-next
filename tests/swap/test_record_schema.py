@@ -65,10 +65,14 @@ def test_every_negative_has_an_expectation():
 def test_examples_contain_only_documentation_data():
     """No address, MAC or identity shape outside the documentation ranges (tools/leak_scan.py)."""
     import importlib.util
+    import sys
 
     spec = importlib.util.spec_from_file_location("leak_scan", ROOT / "tools" / "leak_scan.py")
     leak_scan = importlib.util.module_from_spec(spec)
+    # registered before it runs: its @dataclass looks its module up in sys.modules (Python 3.13)
+    sys.modules.setdefault("leak_scan", leak_scan)
     spec.loader.exec_module(leak_scan)
+
     groups = {"network", "identity"}
     patterns = [pat for pat in leak_scan.PATTERNS if pat.group in groups]
     for p in EX + NEG:
