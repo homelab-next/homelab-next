@@ -121,7 +121,10 @@ deprecated record's `reason` is prose meant to be shown and is printed with its 
   directory before the pinned package, so every npm launch carries `--prefix=<npm_prefix>`: an
   absolute, empty directory on the client's host that the agent cannot write (the render spec's
   `npm_prefix:`, or `--npm-prefix`; render refuses a missing or relative one for any npm server it
-  writes, and npx itself fails when it does not exist). npm then reads its project config and
+  writes, and npx itself fails when it does not exist). Where the directory exists on the host
+  render runs on, render also refuses it when it is the filesystem root, a symlink, or not empty;
+  where it does not, render notes that it must be created empty (the render host may not be the
+  client's, so this is a check where it can be one, not a guarantee). npm then reads its project config and
   `node_modules` from there. uvx launches carry `--no-config`: no `uv.toml` (the user-level one
   is writable by the agent's own user) or `[tool.uv]` can redirect the index (uv already ignores
   a project's config for `uv tool run`). Both were verified against npx 10 and uv 0.11 with local
@@ -135,8 +138,8 @@ deprecated record's `reason` is prose meant to be shown and is printed with its 
   flags, each once and with a value (`--root`, `--registry`, `--scope-from-profile`; `--socket`),
   so no record reaches `invariants run --plugins-dir`, `--notify-cmd`, `broker run`, `workflows
   run`, `conform run` or `--out`; or a path bin under `origin.path`, which render writes absolute
-  under the spec's `checkout_root:` (or `--checkout-root`; required, absolute) after checking it
-  is a file there and not a symlink, and which check holds to the repository when it runs from a
+  under the spec's `checkout_root:` (or `--checkout-root`; required, absolute, not a symlink)
+  after checking it is a file there and not a symlink, and which check holds to the repository when it runs from a
   checkout;
 - the `sha256` itself is **declarative**: it records the reviewed artifact, but no launcher
   verifies it when it fetches the package;

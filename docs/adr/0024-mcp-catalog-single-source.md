@@ -76,7 +76,8 @@ because each instance needs its own scope.
    -y --prefix=<npm_prefix> --package=<pkg>@<ver> -- <bin>`, pypi `uvx --no-config --from
    <pkg>[<extras>]==<ver> <bin>`, git the same at its commit (pypi: and subdirectory), image
    `docker run -i --rm [-e NAME ...] <image>@<digest>`, a first-party path absolute under the
-   render's `checkout_root`. `npm_prefix` is an absolute, empty directory the render names, so
+   render's `checkout_root`. `npm_prefix` is an absolute, empty directory the render names
+   (refused, where it exists on the render host, when it is the root, a symlink or not empty), so
    npx reads no `node_modules` or `.npmrc` from the client's working directory; `--no-config`
    keeps a `uv.toml` from redirecting uvx's index. A record has no field for a launcher, a
    launcher flag, a mount, a network or another entrypoint, so the pin controls what runs by

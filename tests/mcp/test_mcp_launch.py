@@ -416,3 +416,31 @@ def test_ordinary_settings_are_not_launcher_configuration():
         "HOMEPAGE",
     ):
         assert not servers.denied_env(key), key
+
+
+def test_render_refuses_an_npm_prefix_that_is_root_a_symlink_or_not_empty(tmp_path):
+    """Round 5: npx reads an .npmrc and node_modules from its prefix, so an existing prefix on
+    the render host is an empty directory, never a symlink or the filesystem root; an absent one
+    is noted (it must be created empty).  checkout_root is never a symlink."""
+    from homelabnext.mcp import clients
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    full = tmp_path / "full"
+    full.mkdir()
+    (full / ".npmrc").write_text("registry=https://registry.example.com/\n")
+    link = tmp_path / "link"
+    link.symlink_to(empty)
+    for bad, phrase in (("/", "filesystem root"), (str(full), "not empty"),
+                        (str(link), "symlink"), (str(full / ".npmrc"), "not a directory")):  # fmt: skip
+        with pytest.raises(clients.RenderError, match=phrase) as exc:
+            clients.launch_context(npm_prefix=bad)
+        assert str(tmp_path) not in str(exc.value)  # the anchor is named, never its path
+    ctx = clients.launch_context(npm_prefix=str(empty))
+    assert clients.anchor_host_problems(ctx) == ([], [])
+    absent = clients.launch_context(npm_prefix=str(tmp_path / "absent"))
+    assert any("create it as an empty directory" in n
+               for n in clients.anchor_host_problems(absent)[1])  # fmt: skip
+    with pytest.raises(clients.RenderError, match="checkout_root is a symlink"):
+        clients.launch_context(checkout_root=str(link))
+    assert clients.launch_context(checkout_root=str(empty)).checkout_root == str(empty)
