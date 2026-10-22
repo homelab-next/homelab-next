@@ -65,6 +65,18 @@ GRANTS_MARKER = "# Per-job MCP grants (ADR-022)."
 _SECRET_REF = re.compile(r"secret:[a-z][a-z0-9_-]*(?:/[a-z][a-z0-9_-]*)*")
 
 
+def refuse_unsound_records(cat: servers.Catalog, sids: Iterable[str]) -> None:
+    """Refuse to render records that ``hnx mcp catalog check`` would refuse: unpinned or not
+    launched as pinned, a literal credential, an untyped parameter, missing reviews (with the
+    review policy beside the catalog, as check finds it).  Render never writes what check would
+    have stopped."""
+    problems = servers.record_problems(cat, sids, policy=servers.default_policy(cat))
+    if problems:
+        raise RenderError(
+            [*problems, "(the catalog fails hnx mcp catalog check for what this render writes)"]
+        )
+
+
 class RenderError(ValueError):
     """The spec, a profile or a grant cannot be rendered; ``problems`` lists every reason."""
 
@@ -716,6 +728,7 @@ def render_profile(
     p = Path(profile_path)
     prof = _load_profile(p, cat, policy, lock)
     lanes = list(lanes)
+    refuse_unsound_records(cat, _rendered_ids(cat, client, [prof]))
     insts = instances(
         cat, prof, lanes=lanes, params=params, profile_file=profile_file or str(profile_path)
     )
@@ -818,8 +831,9 @@ def render_spec(spec_path: str | Path, root: str | Path | None = None) -> Render
     loaded: list[tuple[Mapping[str, Any], dict[str, Any], Path]] = []
     for entry in spec["profiles"]:
         pf = base / str(entry["file"])
-        prof = _load_profile(pf, cat, policy, lock)
-        loaded.append((entry, prof, pf))
+        loaded.append((entry, _load_profile(pf, cat, policy, lock), pf))
+    refuse_unsound_records(cat, _rendered_ids(cat, client, [prof for _, prof, _ in loaded]))
+    for entry, prof, pf in loaded:
         res.notes += deprecation_notes(cat, prof)
         if client != "llm-orchestrator":
             continue
@@ -887,6 +901,17 @@ def render_spec(spec_path: str | Path, root: str | Path | None = None) -> Render
     res.unlisted = [f for f in _owned(out_root, spec.get("owns")) if f.resolve() not in mine]
     res.notes += [f"{f}: owned by the spec but not rendered (stale?)" for f in res.unlisted]
     return res
+
+
+def _rendered_ids(
+    cat: servers.Catalog, client: str, profiles: Iterable[Mapping[str, Any]]
+) -> set[str]:
+    """The records a render writes: the profiles' grants, and for llm-orchestrator every
+    grantable record (its catalog holds a kind per grantable stdio server)."""
+    out = {sid for prof in profiles for sid in granted(prof)}
+    if client == "llm-orchestrator":
+        out |= {sid for sid, rec in cat if rec.get("status") in servers.GRANTABLE}
+    return out
 
 
 def _home_params(

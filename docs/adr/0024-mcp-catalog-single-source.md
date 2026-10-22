@@ -60,7 +60,8 @@ because each instance needs its own scope.
    profile and lane with that grant's parameter values, and writes every runtime home a render
    spec names from that one source, so no home can hold fewer servers than another. It renders
    only profiles `hnx agent verify` accepts against the ceiling policy (a compiled profile without
-   one is refused: its stored ceiling and digest are whatever last edited the file).
+   one is refused: its stored ceiling and digest are whatever last edited the file), and only
+   records that pass check's per-record rules and reviews.
 7. **Import, then pin.** `hnx mcp catalog import` turns an existing lab's client configs into
    draft records in a directory it is given (`--out`, required): credentials become `secret:`
    names, failing closed (every environment value is one unless its key is allowlisted as

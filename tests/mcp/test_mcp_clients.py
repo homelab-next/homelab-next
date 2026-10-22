@@ -517,3 +517,34 @@ def test_a_spec_lane_or_home_is_a_plain_name_and_params_name_a_real_lane(tmp_pat
             clients.render_spec(spec)
     with pytest.raises(clients.RenderError, match="is not a plain name"):
         clients.render_profile(CATALOG, COLLECTOR, "claude-code", lanes=["$(id)"])
+
+
+def test_render_refuses_a_record_check_would_refuse(tmp_path):
+    """Render used to judge profiles but never the records it writes: a literal credential, an
+    unpinned launch or a record edited after its review rendered."""
+    d = tmp_path / "mcp"
+    shutil.copytree(ROOT / "examples" / "mcp", d, ignore=shutil.ignore_patterns("clients"))
+    shutil.copy(ROOT / "examples" / "review-policy.yml", tmp_path / "review-policy.yml")
+    pristine = (d / "notes.yml").read_text()
+    for edit, phrase in (
+        (lambda r: r["transport"]["args"].extend(["--token", "fakeLiteralT0kenValue9Zq7"]),
+         "follows --token"),
+        (lambda r: r["transport"].update(args=["--from", "example-notes-mcp", "notes-mcp"]),
+         "does not launch the pinned"),
+        (lambda r: r["origin"].update(sha256=None), "has no sha256"),
+        (lambda r: r.update(description="changed after its review"), "of the current content"),
+    ):  # fmt: skip
+        rec = yaml.safe_load(pristine)
+        edit(rec)
+        (d / "notes.yml").write_text(yaml.safe_dump(rec))
+        with pytest.raises(clients.RenderError, match=re.escape(phrase)):
+            clients.render_profile(servers.load(d), COLLECTOR, "claude-code")
+    # llm-orchestrator's catalog holds every grantable stdio server, granted or not
+    (d / "notes.yml").write_text(pristine)
+    rec = yaml.safe_load((d / "shell.yml").read_text())
+    rec["transport"]["args"].append("--api-key=fakeshort")
+    (d / "shell.yml").write_text(yaml.safe_dump(rec))
+    kw = {"lanes": ["real", "shadow"]}
+    assert clients.render_profile(servers.load(d), COLLECTOR, "claude-code")  # not granted
+    with pytest.raises(clients.RenderError, match="--api-key takes a credential"):
+        clients.render_profile(servers.load(d), COLLECTOR, "llm-orchestrator", **kw)

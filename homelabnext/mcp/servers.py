@@ -670,11 +670,14 @@ def _registry_problems(cat: Catalog, registry: Any, skip: Iterable[str] = ()) ->
     return out
 
 
-def _review_problems(cat: Catalog, policy: Any) -> list[str]:
+def _review_problems(cat: Catalog, policy: Any, only: Iterable[str] | None = None) -> list[str]:
     from homelabnext.reviews import evaluate, missing_message
 
     out: list[str] = []
+    keep = None if only is None else set(only)
     for sid, rec in cat:
+        if keep is not None and sid not in keep:
+            continue
         where = cat.rel(sid)
         digest = record_digest(rec)
         ev = evaluate(
@@ -705,6 +708,39 @@ def integrity_problems(cat: Catalog) -> list[str]:
             out += _schema_problems(rec, where)
         cat._integrity = out
     return list(cat._integrity)
+
+
+def default_policy(cat: Catalog) -> Any:
+    """The review policy ``check`` uses by default: ``review-policy.yml`` beside the catalog
+    directory, or None."""
+    from homelabnext.reviews import load_policy
+
+    f = cat.root.resolve().parent / "review-policy.yml"
+    return load_policy(f) if f.is_file() else None
+
+
+def record_problems(
+    cat: Catalog, sids: Iterable[str], policy: Any = None, source_root: Path | None = None
+) -> list[str]:
+    """The per-record rules of :func:`check` for the records ``sids`` (what a render is about to
+    write into a client file): pinned and launched as pinned, credentials only as secret names
+    and no literal one, typed parameters and known templates, and with ``policy`` the reviews
+    the record's status needs.  (The schema and id rules: :func:`integrity_problems`.)"""
+    out: list[str] = []
+    sids = sorted(set(sids))
+    for sid in sids:
+        rec = cat.get(sid)
+        if rec is None:
+            continue
+        where = cat.rel(sid)
+        out += origin_problems(rec.get("origin"), where, source_root, cat.root)
+        out += launch_problems(rec, where)
+        out += _secret_problems(rec, where)
+        out += _literal_problems(rec, where)
+        out += _template_problems(rec, where)
+    if policy is not None:
+        out += _review_problems(cat, policy, sids)
+    return out
 
 
 def check(

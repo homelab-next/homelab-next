@@ -215,7 +215,12 @@ the file are whatever last edited it, so a hand edit with a recomputed digest wo
 render. A lean one (`platform/agent_profile`) must pass its schema, the same grant rules, `mcp`
 within `mcp_ceiling` and, with a policy, `mcp` and `capabilities` within the policy's ceiling
 (without one it proves only that it agrees with itself); anything else is refused. The example
-specs share `examples/mcp/clients/policy/ceilings.yml`. A spec's output and `grants_file` paths are relative to
+specs share `examples/mcp/clients/policy/ceilings.yml`. Nor does render write a record check
+would refuse: every record it writes (the granted ones; for llm-orchestrator every grantable one,
+since its catalog holds them all) must pass check's per-record rules (pinned and launched as
+pinned, credentials only as secret names and no literal one, typed parameters and known
+templates) and, with `review-policy.yml` beside the catalog directory as check finds it, carry
+the reviews its status needs. A spec's output and `grants_file` paths are relative to
 the spec's directory (or `--root DIR`) and must stay under it: an absolute path, a `..` that
 escapes it or a symlink is refused, and each file is written to a temporary file and renamed into
 place.
