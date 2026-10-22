@@ -130,7 +130,11 @@ def _st2_bridge(args) -> int:
             allow_plaintext=args.allow_plaintext,
         )
         bus = nats_jetstream.make(
-            scratch=False, stream=args.stream, subject_prefix=args.subject_prefix
+            scratch=False,
+            provision=False,  # read the stream, manage durables, nothing else
+            stream=args.stream,
+            subject_prefix=args.subject_prefix,
+            ack_wait=sb.ACK_WAIT_S,
         )
     except Exception as exc:  # configuration, the endpoint variable, the first connect
         print(f"hnx workflows st2 bridge: {exc}", file=sys.stderr)
@@ -148,6 +152,9 @@ def _st2_bridge(args) -> int:
     )
     try:
         bridge.run(stop)
+    except sb.BridgeError as exc:  # a durable the bridge cannot use as it stands
+        print(f"hnx workflows st2 bridge: {exc}", file=sys.stderr)
+        return 2
     finally:
         bus.close()
     return 0

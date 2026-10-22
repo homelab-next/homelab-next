@@ -389,9 +389,43 @@ WantedBy=multi-user.target
 ```
 
 It needs the `nats` extra (`pip install 'homelabnext[nats]'`). Exit 2 is a configuration error
-(the bridge file, the URL, the endpoint variable, the first connection). The bus account it uses
-needs to read the stream and manage its own durables, nothing else; who may *publish* each
-subject is the bound that makes a pinned `source` mean something.
+(the bridge file, the URL, the endpoint variable, the first connection, a stream that is missing
+or unbounded, a durable whose lease is too short). The bus account it uses needs to read the stream
+and manage its own durables, nothing else; who may *publish* each subject is the bound that makes
+a pinned `source` mean something.
+
+**The streams are provisioned, never created by the bridge.** It refuses to start unless the event
+stream and its dead-letter stream (`<stream>_DLQ`, which captures JetStream's max-deliveries and
+terminated advisories for the stream) both exist and each has a `max_bytes` limit: every poison
+body is terminated into the DLQ, so an unbounded DLQ lets a flood fill the server's disk. Create
+both once, with limits sized for the lab (`discard: old` drops the oldest, never refuses a
+publish):
+
+```json
+{"name": "HOMELABNEXT", "subjects": ["lab.>"], "retention": "limits", "discard": "old",
+ "storage": "file", "num_replicas": 1, "duplicate_window": 3600000000000,
+ "max_age": 2592000000000000, "max_bytes": 1073741824, "max_msgs": 1000000, "max_msg_size": 262144}
+```
+
+```json
+{"name": "HOMELABNEXT_DLQ", "retention": "limits", "discard": "old", "storage": "file",
+ "num_replicas": 1,
+ "subjects": ["$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.HOMELABNEXT.*",
+              "$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED.HOMELABNEXT.*"],
+ "max_age": 2592000000000000, "max_bytes": 268435456, "max_msgs": 100000}
+```
+
+(`nats stream add --config <file>`; durations are nanoseconds: 30 days, one hour.)
+
+A dead letter is an advisory that names the original's stream sequence, so the original must
+still be in the event stream to be read back: keep the DLQ's `max_age` no longer than the event
+stream's.
+
+**The lease.** The bridge creates each durable with `ack_wait` 30 s, longer than a POST (10 s
+timeout) plus 15 s to settle it, so the bus never hands a delivery out again while it is being
+posted. A durable keeps the `ack_wait` it was created with; the bridge refuses to start on one
+whose lease is shorter (delete the durable, `nats consumer rm <stream> <durable>`, and it is
+recreated). A restart after a crash waits one lease before the unsettled deliveries come back.
 
 The stats file is a status source with the existing `poll-file` kind:
 

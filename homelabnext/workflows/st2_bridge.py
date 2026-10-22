@@ -81,6 +81,11 @@ MAX_REPLY_BYTES = 64 << 10
 #: an event body larger than this is poison before it is parsed (the envelope is small; a body this
 #: size is a flood or a parser bomb, never an event a rule takes)
 MAX_EVENT_BYTES = 256 << 10
+#: the bus's lease on a delivery (JetStream ``ack_wait``) the bridge asks for when it creates a
+#: durable; it must outlast a POST (the webhook's timeout) plus :data:`LEASE_MARGIN_S` to settle,
+#: or the bus hands the delivery out again while it is still being posted
+ACK_WAIT_S = 30.0
+LEASE_MARGIN_S = 15.0
 _WEBHOOK_PATH = re.compile(r"/api/v1/webhooks/[a-z][a-z0-9_-]*")
 _SECRET_REF = re.compile(r"secret:[a-z][a-z0-9_-]*(/[a-z][a-z0-9_-]*)*")
 _SUBJECT = re.compile(r"homelabnext(\.[a-z][a-z0-9-]*)+")
@@ -291,11 +296,22 @@ class Bridge:
         self._stats_written = float("-inf")
 
     def open(self) -> None:
-        """Create (or reopen) one durable consumer per subscription."""
-        self._consumers = [
+        """Create (or reopen) one durable consumer per subscription; refuse one whose lease
+        (``ack_wait``, when the bus reports it) a POST could outlast."""
+        consumers = [
             (s, self.bus.consumer(s.durable, s.subject, max_deliver=self.max_deliver))
             for s in self.config.subscriptions
         ]
+        need = float(getattr(self.webhook, "timeout", 0.0)) + LEASE_MARGIN_S
+        for s, cons in consumers:
+            lease = getattr(cons, "ack_wait", None)
+            if lease is not None and float(lease) < need:
+                raise BridgeError(
+                    f"durable {s.durable}: ack_wait {float(lease):g}s is shorter than the POST "
+                    f"timeout plus {LEASE_MARGIN_S:g}s ({need:g}s), so a delivery would be handed "
+                    "out again mid-POST; delete the durable and the bridge recreates it"
+                )
+        self._consumers = consumers
 
     def close(self) -> None:
         self._pool.shutdown(wait=True)

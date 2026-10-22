@@ -18,6 +18,7 @@ from wf_support import ROOT
 
 from conformance.fakes.event_bus import FakeEventBus
 from conformance.fakes.jetstream_wire import FakeJetStreamWire
+from conformance.protocols.events import EventsError
 from homelabnext.conform.adapters import nats_jetstream as nj
 from homelabnext.events.envelope import canonical_body
 from homelabnext.workflows import st2
@@ -388,11 +389,60 @@ def test_sigterm_stops_fetching_and_settles_what_is_in_flight(tmp_path, hook):
     assert rest == ["evt-bridge-2", "evt-bridge-3"]  # posted concurrently: in any order
 
 
+def provisioned(limits: bool = True) -> FakeJetStreamWire:
+    """A server where the operator created the stream and its DLQ (docs/stackstorm.md)."""
+    wire = FakeJetStreamWire()
+    cap = {"max_bytes": 1 << 30, "max_age": 30 * 86400 * 10**9} if limits else {}
+    adv = "$JS.EVENT.ADVISORY.CONSUMER"
+    for name, subjects in (
+        ("HNX", ["hnx.>"]),
+        ("HNX_DLQ", [f"{adv}.MAX_DELIVERIES.HNX.*", f"{adv}.MSG_TERMINATED.HNX.*"]),
+    ):
+        body = {"name": name, "subjects": subjects, "retention": "limits", **cap}
+        wire.request(f"$JS.API.STREAM.CREATE.{name}", json.dumps(body).encode(), timeout=1)
+    return wire
+
+
+def standing(wire: FakeJetStreamWire, ack_wait: float = sb.ACK_WAIT_S):
+    return nj.make(
+        wire=wire,
+        scratch=False,
+        provision=False,
+        stream="HNX",
+        subject_prefix="hnx",
+        ack_wait=ack_wait,
+    )
+
+
+def test_the_bridge_creates_no_stream_and_refuses_an_unbounded_one():
+    """It reads the stream and manages its durables, nothing else: a missing stream, or one a
+    poison flood could grow without bound, is a configuration error, never created."""
+    with pytest.raises(EventsError, match="does not exist"):
+        standing(FakeJetStreamWire())
+    with pytest.raises(EventsError, match="max_bytes"):
+        standing(provisioned(limits=False))
+    wire = provisioned()
+    before = len(wire.log)
+    standing(wire)
+    assert not [s for s, _p, _h in wire.log[before:] if ".STREAM.CREATE." in s]
+
+
+def test_the_lease_outlasts_a_post(hook):
+    """A delivery leased for less than the POST timeout would be handed out again mid-POST."""
+    hook = webhook(hook)
+    assert hook.timeout + sb.LEASE_MARGIN_S <= sb.ACK_WAIT_S
+    wire = provisioned()
+    with pytest.raises(sb.BridgeError, match="ack_wait 3s"):
+        bridge(standing(wire, ack_wait=3.0), hook)
+    # the durable keeps the lease it was created with: a reopen with a longer one still refuses
+    with pytest.raises(sb.BridgeError, match="delete the durable"):
+        bridge(standing(wire), hook)
+    bridge(standing(provisioned()), hook)
+
+
 def test_the_bridge_over_the_jetstream_adapter(hook):
     """The subject the broker publishes (the event type) is the subject the bridge consumes."""
-    bus = nj.make(
-        wire=FakeJetStreamWire(), scratch=False, stream="HNX", subject_prefix="hnx", ack_wait=0.2
-    )
+    bus = standing(provisioned())
     b = bridge(bus, webhook(hook))
     publish(bus, proposal(7))
     publish(bus, proposal(8, source="profile:triage"))

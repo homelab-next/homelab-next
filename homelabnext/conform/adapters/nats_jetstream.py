@@ -11,7 +11,10 @@ How the contract maps onto JetStream:
 
 * **Stream.**  One limits-retention stream captures ``<prefix>.>``; a contract subject ``a.b`` is
   the NATS subject ``<prefix>.a.b``.  (A stream may not capture ``>`` itself unless it is no-ack,
-  and a no-ack publish returns no sequence, so a prefix is required.)
+  and a no-ack publish returns no sequence, so a prefix is required.)  With ``provision=False``
+  the bus creates no stream: both (the stream and its DLQ) must exist already, each with a
+  ``max_bytes`` limit, or the bus refuses to open (a long-running consumer that creates unbounded
+  streams lets a flood fill the server's disk).
 * **publish** is a request to the subject; the PubAck carries the stream sequence.  ``msg_id`` is
   the ``Nats-Msg-Id`` header; a repeat inside the stream's ``duplicate_window`` gets the PubAck of
   the original (``"duplicate": true``) with the original sequence.
@@ -197,6 +200,7 @@ class JetStreamBus:
         fetch_timeout: float = 1.0,
         dlq_wait: float = 3.0,
         delete_on_close: bool = False,
+        provision: bool = True,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ):
@@ -226,6 +230,10 @@ class JetStreamBus:
             "discard": "old",
             "num_replicas": 1,
         }
+        if not provision:
+            self._require_stream(stream)
+            self._require_stream(self.dlq_stream)
+            return
         self._ensure_stream(
             {
                 "name": stream,
@@ -269,6 +277,16 @@ class JetStreamBus:
         name = config["name"]
         if self.api(f"STREAM.INFO.{name}", missing="stream") is None:
             self.api(f"STREAM.CREATE.{name}", config)
+
+    def _require_stream(self, name: str) -> None:
+        info = self.api(f"STREAM.INFO.{name}", missing="stream")
+        if info is None:
+            raise EventsError(f"stream {name!r} does not exist; provision it (with limits) first")
+        if int(info.get("config", {}).get("max_bytes", -1)) <= 0:
+            raise EventsError(
+                f"stream {name!r} has no max_bytes limit; a flood would fill the disk, so this "
+                "client refuses it"
+            )
 
     # ---------------------------------------------------------------- contract
     def publish(self, subject: str, data: bytes, *, msg_id: str | None = None) -> int:
@@ -324,7 +342,10 @@ class JetStreamBus:
                 self._sleep(self.ack_wait + min(1.0, 0.25 + self.ack_wait / 4))
         gen = self._generation[durable] = self._generation.get(durable, 0) + 1
         max_dc = int(info.get("config", {}).get("max_deliver", max_deliver))
-        return JetStreamConsumer(self, name, durable, max_dc, gen)
+        c = JetStreamConsumer(self, name, durable, max_dc, gen)
+        # the lease the server holds (an existing durable keeps the one it was created with)
+        c.ack_wait = int(info.get("config", {}).get("ack_wait", self.ack_wait * _NS)) / _NS
+        return c
 
     def close(self) -> None:
         if self._closed:
@@ -352,6 +373,7 @@ class JetStreamConsumer:
     def __init__(self, bus: JetStreamBus, name: str, durable: str, max_deliver: int, gen: int):
         self.bus, self.name, self.durable = bus, name, durable
         self.max_deliver, self._gen = max_deliver, gen
+        self.ack_wait = bus.ack_wait
         self._expect_dead: set[int] = set()
 
     def __repr__(self) -> str:
@@ -572,11 +594,13 @@ def make(
     fetch_timeout: float = 1.0,
     dlq_wait: float = 3.0,
     capability: str = "events",
+    provision: bool = True,
     wire: Wire | None = None,
 ) -> JetStreamBus:
     """A bus on the ``events`` endpoint.  ``scratch`` (the conformance default) gives every
     subject its own stream and subject prefix, deleted on ``close()``, so checks never see each
-    other or an earlier run; otherwise ``stream`` and ``subject_prefix`` name a standing stream."""
+    other or an earlier run; otherwise ``stream`` and ``subject_prefix`` name a standing stream.
+    ``provision=False`` creates no stream: both must exist, each with a ``max_bytes`` limit."""
     if scratch:
         token = secrets.token_hex(6)
         stream = stream or f"HNXCONF_{token}"
@@ -599,6 +623,7 @@ def make(
             fetch_timeout=fetch_timeout,
             dlq_wait=dlq_wait,
             delete_on_close=scratch,
+            provision=provision or scratch,
         )
     except Exception:
         if own:
