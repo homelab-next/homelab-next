@@ -193,6 +193,96 @@ jobs:
       - name: invariants register, fast criteria
         run: make invariants PY=python
 
+  # orchestrator/: the Go module of the orchestration controller.  Until orchestrator/go.mod exists
+  # the first step says so and every later step is skipped, so the job passes as a no-op.  Tests
+  # run as the runner user in a network namespace with only loopback (no network), race-enabled
+  # and shuffled; tests that need root run first, under sudo, and tools/go_test_policy.py judges
+  # both event streams: no failure, no build failure, no skip without a registered reason
+  # (skip_reasons in pyproject.toml), quarantines in skips.yml bounded to 90 days.
+  orchestrator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: orchestrator
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: is there a Go module yet
+        id: module
+        working-directory: .
+        run: |
+          if [ -f orchestrator/go.mod ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::orchestrator/go.mod does not exist yet: nothing to build or test"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        if: steps.module.outputs.present == 'true'
+        with:
+          go-version-file: orchestrator/go.mod
+          cache-dependency-path: orchestrator/go.sum
+      - uses: ./.github/actions/python-deps
+        if: steps.module.outputs.present == 'true'
+        with:
+          python-version: "3.12"
+          extras: yaml  # go_test_policy.py reads skips.yml
+          install-project: "false"
+      - name: modules downloaded and verified against go.sum
+        if: steps.module.outputs.present == 'true'
+        run: go mod download && go mod verify
+      - name: gofmt
+        if: steps.module.outputs.present == 'true'
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::not gofmt-formatted:"; echo "$unformatted"; exit 1
+          fi
+      - name: go vet
+        if: steps.module.outputs.present == 'true'
+        run: go vet ./...
+      - name: build every package and binary
+        if: steps.module.outputs.present == 'true'
+        run: go build ./...
+      # Linters as Go tool dependencies: version and checksum pinned by tools/go.mod and go.sum.
+      - name: staticcheck and govulncheck (pinned in tools/go.mod)
+        if: steps.module.outputs.present == 'true' && hashFiles('orchestrator/tools/go.mod') != ''
+        run: |
+          go tool -modfile=tools/go.mod staticcheck ./...
+          go tool -modfile=tools/go.mod govulncheck ./...
+      - name: root-only tests (skips.yml privileged) under sudo, no network
+        if: steps.module.outputs.present == 'true'
+        run: |
+          out="$RUNNER_TEMP/go-test-root.json"
+          : > "$out"
+          policy=()
+          if [ -f skips.yml ]; then policy=(--policy skips.yml); fi
+          python ../tools/go_test_policy.py "${policy[@]}" --list-privileged > "$RUNNER_TEMP/privileged.txt"
+          while read -r pkg rx; do
+            [ -n "$pkg" ] || continue
+            bin="$RUNNER_TEMP/privileged-$(echo "$pkg" | tr '/.' '__').test"
+            go test -c -race -o "$bin" "$pkg"
+            imp=$(go list "$pkg")
+            # the verdict is go_test_policy.py's (next step), not this exit code
+            (cd "$pkg" && sudo unshare --net -- sh -c 'ip link set lo up && exec "$@"' sh \
+              "$bin" -test.run "$rx" -test.count=1 -test.v=test2json 2>&1 || true) \
+              | go tool test2json -t -p "$imp" >> "$out"
+          done < "$RUNNER_TEMP/privileged.txt"
+      - name: tests (race, shuffled, no network) judged by go_test_policy.py
+        if: steps.module.outputs.present == 'true'
+        run: |
+          set +o pipefail  # go test exits 1 on a quarantined failure; the policy tool decides
+          policy=()
+          if [ -f skips.yml ]; then policy=(--policy skips.yml); fi
+          sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" unshare --net -- \
+            sh -c 'ip link set lo up && exec setpriv --reuid="$1" --regid="$2" --clear-groups -- \
+              go test -race -shuffle=on -count=1 -json ./...' sh "$(id -u)" "$(id -g)" \
+            | python ../tools/go_test_policy.py "${policy[@]}" \
+                --privileged "$RUNNER_TEMP/go-test-root.json" \
+                --forbid 'python3 not available' -
+
   # Build the sdist and wheel exactly as a release would and leak-scan what they contain (the
   # path allowlist for both artefacts is tests/packaging/test_artifacts.py, run by `test`).
   packaging:

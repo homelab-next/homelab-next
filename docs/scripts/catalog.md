@@ -5,7 +5,7 @@
 Every script in the tree, read from its `# hnx-script:` header. What counts as a script,
 the header fields and the checks that keep this page honest: [docs/scripts.md](../scripts.md).
 
-46 scripts: 19 check, 11 job, 2 service, 14 tool.
+47 scripts: 20 check, 11 job, 2 service, 14 tool.
 
 | id | path | kind | owner | purpose | triggers | invariant | exit codes |
 |---|---|---|---|---|---|---|---|
@@ -24,6 +24,7 @@ the header fields and the checks that keep this page honest: [docs/scripts.md](.
 | `dup-check` | [`tools/dup_check.py`](../../tools/dup_check.py) | check | maintainers | Fail when copy-pasted Python appears that the committed duplication baseline does not hold; the baseline only shrinks. | `ci:ci/schemas`; `make:dup-baseline`; `make:dup-check` | M-03 | 0 no clone beyond the baseline and no stale entry; 1 a new or grown clone, or a stale baseline entry; 2 usage error, a bad baseline, or an update that would raise the total |
 | `fake-openai-server` | [`conformance/fakes/openai_server.py`](../../conformance/fakes/openai_server.py) | service | conformance | Serve the deterministic fake OpenAI-compatible inference API. | `compose:lab-in-a-box/inference` | - | 0 stopped cleanly |
 | `fix-has-test` | [`tools/fix_has_test.py`](../../tools/fix_has_test.py) | check | maintainers | Fail when a bugfix commit (a fix subject or a Fixes trailer) ships no regression test; with --prove, also when that test passes on the parent commit. | `ci:ci/regression-tests`; `make:fix-check` | Q-08 | 0 clean; 1 a fix lacks a regression test; 2 usage error or an unresolvable range |
+| `go-test-policy` | [`tools/go_test_policy.py`](../../tools/go_test_policy.py) | check | maintainers | Fail when a go test -json run has a failing test, a package that did not build, a skip without a registered reason or an invalid quarantine. | `ci:ci/orchestrator` | - | 0 the run is trustworthy; 1 a failure, a silent skip, a missing privileged run or an invalid quarantine; 2 usage error, an unreadable file or a malformed policy |
 | `hermetic-lint` | [`tools/hermetic_lint.py`](../../tools/hermetic_lint.py) | check | maintainers | Fail when test code reads the wall clock or unseeded randomness directly, or library code reads the clock other than as an injectable default. | `ci:ci/lint`; `make:hermetic-lint` | Q-11 | 0 clean; 1 findings |
 | `lab-bind-guard` | [`compose/lab-in-a-box/bind_guard.sh`](../../compose/lab-in-a-box/bind_guard.sh) | tool | lab-in-a-box | Refuse to publish the lab beyond loopback unless asked and every credential is changed. | `make:lab-up`; `make:lab-broker`; `script:lab-smoke` | - | 0 safe to start; 4 refused |
 | `lab-broker-e2e` | [`compose/lab-in-a-box/broker_e2e.py`](../../compose/lab-in-a-box/broker_e2e.py) | tool | lab-in-a-box | The broker end to end on real processes - socket peers, MCP agent, hub approval, audit. | `script:lab-smoke`; `compose:lab-in-a-box/status-hub` | - | 0 every step passed; 1 some step failed; 2 usage |

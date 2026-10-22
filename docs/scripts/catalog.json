@@ -309,6 +309,25 @@
     },
     {
       "exit": {
+        "0": "the run is trustworthy",
+        "1": "a failure, a silent skip, a missing privileged run or an invalid quarantine",
+        "2": "usage error, an unreadable file or a malformed policy"
+      },
+      "id": "go-test-policy",
+      "inputs": "go test -json output files (or - for stdin); orchestrator/skips.yml; skip_reasons and quarantine_max_days in pyproject.toml",
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per problem, notes for tolerated skips and quarantined failures, a summary",
+      "owner": "maintainers",
+      "path": "tools/go_test_policy.py",
+      "purpose": "Fail when a go test -json run has a failing test, a package that did not build, a skip without a registered reason or an invalid quarantine.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/orchestrator"
+      ]
+    },
+    {
+      "exit": {
         "0": "clean",
         "1": "findings"
       },
