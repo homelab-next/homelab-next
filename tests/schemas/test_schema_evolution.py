@@ -45,7 +45,22 @@ NEWER_THAN_1_0 = {
     "register_event.rekey.yml": "registers/register_event 1.3: event rekey",
     "note.register-transition-legacy-code.md": "records/note 1.1: type register-transition",
     "site.tailnet-deploy.yml": "platform/site 1.2: tailnet.deploy",
+    "decision.returned.agent-approved.json": "events/decision.returned 1.1: tier_used agent",
 }
+
+
+@pytest.mark.parametrize("name", sorted(NEWER_THAN_1_0))
+def test_an_example_newer_than_1_0_names_a_version_its_schema_really_has(name):
+    """Excusing an example from the 1.0 check claims a later minor added its feature: the schema
+    must carry that version (its $id at or past it) and a frozen copy of it, or the excuse hides an
+    additive change that never bumped the id."""
+    ref, _, _ = NEWER_THAN_1_0[name].partition(":")
+    schema_ref, ver = ref.split()
+    major, minor = (int(x) for x in ver.split("."))
+    path = ROOT / "schemas" / f"{schema_ref}.schema.json"
+    _, cur_major, cur_minor = sc.parse_id(json.loads(path.read_text()))
+    assert (cur_major, cur_minor) >= (major, minor), f"{path.name} is {cur_major}.{cur_minor}"
+    assert sc.frozen_path(ROOT, path, major, minor).is_file(), f"no frozen {ver} of {path.name}"
 
 
 @pytest.mark.parametrize("path", SCHEMAS, ids=lambda p: p.relative_to(ROOT / "schemas").as_posix())
