@@ -229,7 +229,7 @@ def _clean_args(sid: str, args: list[str], notes: list[str]) -> list[str]:
     for i, a in enumerate(args):
         n, f = i + 1, found.get(i)
         flag, eq, val = a.partition("=")
-        if "$" in a:
+        if credentials.expands(a):
             var = _var(a) or (_var(val) if eq and flag.startswith("-") else None)
             if var and _var(a):
                 clean.append(_ref_for_var(var, _secret_name(var)))

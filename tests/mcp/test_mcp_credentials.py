@@ -49,9 +49,37 @@ FOUND = [
     # settings: a token in a URL, a credential key, a credential path key without a path
     ([], {"API_URL": "https://api.example/v1/fakeK3yInPath9Zq7Xw2Lp5"}),
     ([], {"SLACK_WEBHOOK_URL": "https://hooks.chat.example/services/T0/B0/fakeW3bh00kS3cr3tPathXy9"}),
-    ([], {"NOTES_SESSION": "fakex"}),
+    ([], {"NOTES_SESSION": "fake-s3ss10n-9f8e"}),
     ([], {"KEY_PATH": "fakeabcd"}),
     ([], {"AUTH": "fake-literal-auth"}),
+    # round 3 (6/7): key=value DSNs, --header=, JSON Authorization and numbers, AUTHORIZATION and
+    # *_HEADER names, an inline PEM after a flag, a credential value that starts with / or -,
+    # --pw, an attached -pPASS, dash-grouped random parts, user:pw@host without a scheme
+    (["host=db user=app password=fakepw dbname=x"], {}),
+    (["--connection-string", "Server=db;User Id=sa;Password=fakepw;"], {}),
+    (["--header=Authorization: Bearer fakeTok3n"], {}),
+    (["--headers", '{"Authorization": "Bearer fakeTok"}'], {}),
+    (['{"Authorization": "Bearer fakeabc"}'], {}),
+    (['{"password": 12345, "note": "fake"}'], {}),
+    ([], {"AUTHORIZATION": "Basic fakeabc"}),
+    ([], {"AUTH_HEADER": "Bearer fakeabc"}),
+    (["--auth-header", "Bearer fakeabc"], {}),
+    (["--token-header", "Bearer fakeabc"], {}),
+    (["--private-key", "-----BEGIN PRIVATE KEY-----fake"], {}),
+    (["--auth-token=/fakeTok"], {}),
+    (["--token", "-fakeTok3nAbc"], {}),
+    (["--token", "./fakeTok"], {}),
+    (["--api-key", "/fakeabc123"], {}),
+    ([], {"SLACK_BOT_TOKEN": "/fakeabc"}),
+    ([], {"API_KEY_FILE": "/run/x; fakepw"}),
+    ([], {"CONN": "Server=db;Password=fakepw"}),
+    ([], {"DB_HOST": "u:fakepw@db"}),
+    (["--pw", "fakepw"], {}),
+    (["-pfakepw", "db"], {}),
+    (["fake-a8f3k2-m9x7q1-p4z6w0-r2t5y8"], {}),
+    (["\u2014token", "fakeabc"], {}),
+    (["--key", "fake-k3y-0a1b"], {}),
+    (["--auth", "Bearer fakeTokenAbc"], {}),
 ]  # fmt: skip
 
 #: (args, settings) of a record: none of these is a credential
@@ -76,6 +104,38 @@ ACCEPTED = [
     ([], {"TOKEN_FILE": "/run/secrets/x"}),
     ([], {"SESSION_DIR": "/var/lib/srv/sessions"}),
     ([], {"LOG_LEVEL": "debug", "NOTES_ROOT": "/srv/notes"}),
+    # round 3 (8): counts and tokenizers, a key or session that is a name, an auth switch or
+    # method, DSN users, digests, emails, Windows and module paths, a regex's trailing $
+    (["--max-tokens", "4096"], {}),
+    (["--tokens", "4096"], {}),
+    (["--tokenizer", "o200k_base"], {}),
+    (["--key", "id"], {}),
+    (["--sort-key", "created_at"], {}),
+    (["--primary-key", "id"], {}),
+    (["--keys", "name,email"], {}),
+    (["--session", "default"], {}),
+    ([], {"AUTH_ENABLED": "false"}),
+    (["--auth", "azure-cli"], {}),
+    (["--pass-through", "--verbose"], {}),
+    (["--private", "/srv/x"], {}),
+    (["--rev", "1caefa50d0a295c3adda038a408225769f771836"], {}),
+    (["--checksum", "b77c4fdf59bc86d60de78a824ecc899f1dc358911341c04a9e763b1c9512ca8b"], {}),
+    (["--from", "alerts-2024@example.com"], {}),
+    (["--root", "C:\\Users\\me\\Documents2024"], {}),
+    (["--plugin", "mypkg.plugins.v2:AuthPlugin2024"], {}),
+    (["--include", "^src/.*\\.(ts|tsx)$"], {}),
+    (["--model", "qwen2.5-coder:32b-instruct-q4_K_M"], {}),
+    (["-port", "8080"], {}),
+]  # fmt: skip
+
+#: settings check accepts that import, failing closed, stores as a secret reference anyway (an
+#: environment value is a setting only when its key is allowlisted or it is a path)
+ACCEPTED_BY_CHECK = [
+    ([], {"MAX_TOKENS": "4096", "TOKENIZER": "cl100k_base"}),
+    ([], {"CACHE_KEY": "notes"}),
+    ([], {"SESSION_BACKEND": "redis"}),
+    ([], {"AUTH": "oauth"}),
+    ([], {"PRIVATE": "true"}),
 ]  # fmt: skip
 
 #: a foreign command line whose launch carries a credential: import maps it (or refuses to) and
@@ -146,6 +206,14 @@ def test_check_accepts_and_import_keeps_what_is_not_a_credential(args, settings)
     assert rec.get("settings", {}) == settings and not rec.get("env")
 
 
+@pytest.mark.parametrize(("args", "settings"), ACCEPTED_BY_CHECK, ids=_ids(ACCEPTED_BY_CHECK))
+def test_check_accepts_and_import_keeps_or_secures_a_setting(args, settings):
+    assert _check(args, settings) == []
+    rec = _imported(*_client_entry(args, settings))
+    for key, value in settings.items():
+        assert rec.get("settings", {}).get(key) == value or rec["env"][key].startswith("secret:")
+
+
 @pytest.mark.parametrize(("command", "args", "settings"), FOREIGN, ids=_ids(FOREIGN))
 def test_import_keeps_no_credential_from_a_launch_it_maps_or_refuses(command, args, settings):
     rec = _imported(command, args, settings)
@@ -162,6 +230,14 @@ def test_a_url_setting_keeps_its_host_and_an_env_default_names_its_variable():
                     {"API_URL": "https://api.example/v1/data"})  # fmt: skip
     assert rec["settings"] == {"API_URL": "https://api.example"}
     assert rec["transport"]["args"] == ["secret:mcp/gh-token"]
+
+
+def test_dsn_users_and_digests_in_urls_are_not_credentials():
+    # (an import drops a URL's path, so these are check-side only)
+    for arg in ("postgresql://app1@db.example/x", "postgresql://Admin@db.example/x",
+                f"https://code.example/org/repo/blob/{COMMIT}/README.md"):  # fmt: skip
+        assert _check([arg], {}) == [], arg
+    assert _check(["redis://fakeTok3nAbC9xYz12345@cache.example:6379"], {})  # a token as the user
 
 
 def test_looks_secret_both_ways():

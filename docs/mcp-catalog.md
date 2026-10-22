@@ -100,20 +100,30 @@ the registry cross-references were not checked.
 - egress agrees with the classes: a tool classed `egress` needs an egress other than `none`, and
   `internet` needs an egress tool;
 - credentials are `secret:` names (env, headers, arguments), two of them never map to the same
-  `HNX_SECRET_*` variable, and a setting whose key names a credential is refused unless its value
-  is a path (`TOKEN_FILE=/run/secrets/x`, `GOOGLE_APPLICATION_CREDENTIALS=/etc/gcp/sa.json`); no
-  argument or setting holds a literal credential, by the rules `homelabnext/mcp/credentials.py`
-  holds for check and import alike: a credential flag's value (`--token X`, `--githubToken X`,
-  `--api-key=X`, `-p X` unless a port, `-u user:pw`, a header after `--header`) is a `secret:`
-  reference, nothing looks like a token (a token prefix such as `ghp_`, or a long, mixed,
-  high-entropy value, `/`-separated base64 included), no URL carries one (userinfo, a
-  credential-named query parameter, a token-like path segment such as a webhook's), no JSON
-  argument or `KEY=VALUE` carries one, `secret:` appears only
-  as a whole argument, `--flag=secret:<name>` or `Header: [Scheme ]secret:<name>`, and `$`
-  (`${VAR}`, `$(cmd)`, which a client would expand) appears in neither. Not credentials: a switch
-  (`--no-auth`), a flag about one (`--token-file`, `--secret-name`, `--session-timeout`), a path
-  after a flag (`--key /etc/ssl/k.pem`), an auth method (`--auth oauth`), and identifiers made of
-  plain words and numbers (`claude-3-5-sonnet-20241022`), a ULID or UUID, an image digest;
+  `HNX_SECRET_*` variable, and no argument or setting holds a literal credential, by the rules
+  `homelabnext/mcp/credentials.py` holds for check and import alike. A name is read by its last
+  word: a credential word (`--token`, `--githubToken`, `--pw`, `PGPASSWORD`, `--api-key`,
+  `AUTHORIZATION`, `--auth-header`, `--token-value`) always takes a credential, path or not
+  (only a `*_FILE`/`*_PATH`/`*_DIR` name takes a path: `TOKEN_FILE=/run/secrets/x`); a weak word
+  (`key`, `auth`, `session`, `credentials`) takes one unless the value is a plain name, a path or
+  an auth method (`--key id`, `--sort-key created_at`, `--session default`, `--auth oauth`,
+  `GOOGLE_APPLICATION_CREDENTIALS=/etc/gcp/sa.json`). So a credential flag's value (`--token X`,
+  `--token ./x`, `--token=-x`, `-p X` or `-pX` unless a port, `-u user:pw`, a header after
+  `--header` or in `--header=`) is a `secret:` reference, nothing looks like a token (a token
+  prefix such as `ghp_`, or a long, mixed, high-entropy value, `/`-separated base64 and
+  dash-grouped random parts included), no URL carries one (userinfo, a credential-named query
+  parameter, a token-like path segment such as a webhook's), no JSON (a string or a number under
+  a credential key), `KEY=VALUE`, DSN (`password=x`, `Password=x;`), `user:pw@host` or inline
+  PEM key carries one, `secret:` appears only as a whole argument, `--flag=secret:<name>` or
+  `[--header=]Header: [Scheme ]secret:<name>`, and nothing a client would expand appears
+  (`$NAME`, `${VAR}`, `$(cmd)`; a regex's trailing `$` is fine). Not credentials: a switch
+  (`--no-auth`), a name whose last word is about one (`--token-file`, `--secret-name`,
+  `--session-timeout`, `--max-tokens`, `TOKENIZER`, `AUTH_ENABLED`, `SESSION_BACKEND`), and
+  identifiers made of plain words and numbers (`claude-3-5-sonnet-20241022`), a ULID or UUID, an
+  image digest, a 40- or 64-hex commit or digest, an email, a Windows or module path. This is
+  **defense in depth**, not the control: the control is that credentials live in `env` as
+  `secret:` names, and `leak_scan` and gitleaks guard the repository; a heuristic can be tuned
+  (both directions are tested) but never made complete;
 - no setting, `env` secret or parameter env key configures the process or its launcher (any
   case): a record's environment is the launcher's too (`npx`, `uvx`, `docker` read it), so
   `NPM_CONFIG_REGISTRY` or `UV_INDEX_URL` would fetch another package for the pin. Refused:
