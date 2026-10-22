@@ -38,3 +38,4 @@ services:
     host: gateway-01.example.internal
     port: 4000
     scheme: https
+    capability: llm-gateway

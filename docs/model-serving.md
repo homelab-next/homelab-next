@@ -213,15 +213,26 @@ answers: a matching model passes; another context, an unreported context, or ano
 `ghcr.io/open-webui/open-webui:v0.11.4@sha256:9591b13f…`:
 
 - `OPENAI_API_BASE_URLS` is the gateway's registry URL plus `/v1` (`open_webui_gateway_id`,
-  required). A backend id (`inference-*`, `vllm*`, `llama*`, `ollama*`) is refused. There is no
-  way to point it at an engine.
+  required). A backend id (`inference-*`, `vllm*`, `llama*`, `ollama*`) is refused, and the id is
+  resolved through the registry: its service's `capability` must be `llm-gateway`
+  (`open_webui_gateway_capability`), so an id such as `gpu-01` that points at a vLLM is refused
+  whatever it is called. There is no way to point it at an engine.
 - The key is this app's own gateway key, by secret name (`open_webui_gateway_key_ref`, default
   `secret:llm-gateway/key-chat-ui`, the `chat-ui` key in `examples/model-serving/gateway.yml`).
   The gateway scopes it to the roles chat may use and limits it. The key goes only into compose's
   `0600` env file, never into `docker-compose.yml`.
 - Ollama, direct connections, sign-up, community sharing and the update check are off (fixed in
-  `vars/`). Extra settings that would turn any of them back on, or re-point the backends, are
-  refused.
+  `vars/`), and `ENABLE_PERSISTENT_CONFIG=false`: the environment is the configuration on every
+  start, so a connection added in the admin UI does not outlive a restart. `open_webui_extra_env`
+  may not name any `*_BASE_URL*`, `*API_BASE*`, `*API_KEY*` or `*ENDPOINT*` variable,
+  `TOOL_SERVER_CONNECTIONS`, the web-search, RAG, image, audio and code-execution settings (each
+  calls an endpoint of its own), or any fixed setting; names are upper-case only.
+- Egress: the role cannot restrict the container's network (`compose_app` has no networks
+  setting, and the gateway runs on another host, so an internal-only compose network would cut it
+  off too). Restrict it on the host firewall instead: in nftables' `DOCKER-USER` path, let the
+  Open WebUI bridge reach only the gateway's address and port (and the resolver), and drop the
+  rest. `OFFLINE_MODE=true` keeps it from fetching models and updates; the firewall is what makes
+  "only the gateway" hold if a setting slips. This is on the verify-on-hardware list.
 - It is published on loopback. The front door, with the lab's sign-in, is the way in.
 
 ### Unsloth Studio: documented, not a role (yet)
@@ -281,6 +292,8 @@ without the hardware. Each item is a test to run before promising capacity:
 - [ ] **Open WebUI with `cap_drop: ALL`.** Check that the image starts with every capability
   dropped and the data directory owned by root. If it needs one (for example `CHOWN`), add only
   that one.
+- [ ] **Open WebUI egress.** With the host firewall rule in place, check from inside the container
+  that the gateway answers and that any other address (another lab host, a public one) does not.
 
 ## Not covered here
 

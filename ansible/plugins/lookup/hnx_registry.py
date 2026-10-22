@@ -10,7 +10,10 @@ This stub understands only the minimal shape below and is meant to be replaced
 by the full registry resolver behind the same lookup name and arguments.
 
     services:
-      <logical-id>: {host: <fqdn>, port: <int>, scheme: <http|https|tcp>}
+      <logical-id>: {host: <fqdn>, port: <int>, scheme: <http|https|tcp>, capability: <name>}
+
+``field='capability'`` is what the service provides (empty when the row does not say), so a role
+can refuse an id that resolves to the wrong kind of service.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ options:
     description: Logical service ids.
     required: true
   field:
-    description: One of host, port, url.
+    description: One of host, port, url, capability.
     default: url
 """
 
@@ -36,7 +39,7 @@ options:
 class LookupModule(LookupBase):
     def run(self, terms, variables=None, **kwargs):
         field = kwargs.get("field", "url")
-        if field not in ("host", "port", "url"):
+        if field not in ("host", "port", "url", "capability"):
             raise AnsibleLookupError(f"hnx_registry: unknown field '{field}'")
         path = (variables or {}).get("hnx_registry_file")
         if not path:
@@ -55,6 +58,8 @@ class LookupModule(LookupBase):
                 raise AnsibleLookupError(f"hnx_registry: unknown service id '{term}'")
             if field == "url":
                 out.append(f"{row.get('scheme', 'https')}://{row['host']}:{row['port']}")
+            elif field == "capability":
+                out.append(str(row.get("capability", "")))
             else:
                 out.append(row[field])
         return out

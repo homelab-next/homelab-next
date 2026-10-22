@@ -10,10 +10,20 @@
       - open_webui_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
       - open_webui_port | int >= 1 and open_webui_port | int <= 65535
       - open_webui_extra_env is mapping
-      - open_webui_extra_env | list | select('match', open_webui_reserved_env_pattern) | list | length == 0
+      - open_webui_extra_env | list | select('search', open_webui_reserved_env_pattern) | list | length == 0
+      - open_webui_extra_env | list | reject('match', '^[A-Z][A-Z0-9_]*\Z') | list | length == 0
       - open_webui_extra_env.values() | reject('string') | list | length == 0
     fail_msg: >-
       open_webui: the gateway's registry id (not a model backend: Open WebUI talks to the LLM
       gateway only), two distinct secret: references (this app's gateway key, the session key),
       an image pinned by tag and digest, a port, and extra settings (strings) that do not
       re-point the backends or turn Ollama or direct connections back on
+
+- name: Resolve the gateway id through the registry
+  ansible.builtin.assert:
+    that: lookup('hnx_registry', open_webui_gateway_id, field='capability') == open_webui_gateway_capability
+    fail_msg: >-
+      open_webui: {{ open_webui_gateway_id }} is registry service with capability
+      '{{ lookup('hnx_registry', open_webui_gateway_id, field='capability') }}', not
+      {{ open_webui_gateway_capability }}: Open WebUI talks to the LLM gateway only, never to an
+      engine or another service, whatever the id is called

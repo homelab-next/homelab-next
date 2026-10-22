@@ -627,6 +627,7 @@ def test_open_webui_points_at_the_gateway_with_its_own_key(tmp_path):
     assert env["OPENAI_API_BASE_URLS"] == gateway + "/v1"
     assert env["ENABLE_OLLAMA_API"] == "false" and env["ENABLE_DIRECT_CONNECTIONS"] == "false"
     assert env["ENABLE_SIGNUP"] == "false" and env["OFFLINE_MODE"] == "true"
+    assert env["ENABLE_PERSISTENT_CONFIG"] == "false"  # the environment wins on every start
     assert not any("KEY" in k for k in env)  # the keys are only in the env_file
     published = "127.0.0.1:3000:8080"  # no-raw-endpoint: allow the published loopback port
     assert svc["ports"] == [published]
@@ -654,12 +655,53 @@ def test_open_webui_points_at_the_gateway_with_its_own_key(tmp_path):
             }
         },
         {"open_webui_extra_env": {"ENABLE_DIRECT_CONNECTIONS": "true"}},
+        # tool servers, web search, RAG, images and audio each call out to an endpoint of their own
+        {"open_webui_extra_env": {"TOOL_SERVER_CONNECTIONS": "[]"}},
+        {"open_webui_extra_env": {"RAG_OPENAI_API_BASE_URL": "http://gpu-01.example.internal"}},
+        {"open_webui_extra_env": {"RAG_EMBEDDING_ENGINE": "openai"}},
+        {"open_webui_extra_env": {"ENABLE_WEB_SEARCH": "true"}},
+        {"open_webui_extra_env": {"WEB_SEARCH_ENGINE": "searxng"}},
+        {"open_webui_extra_env": {"IMAGES_OPENAI_API_KEY": "key-fake"}},
+        {"open_webui_extra_env": {"AUDIO_STT_ENGINE": "openai"}},
+        {"open_webui_extra_env": {"ENABLE_PERSISTENT_CONFIG": "true"}},
+        {"open_webui_extra_env": {"openai_api_base_url": "http://gpu-01.example.internal"}},
     ],
 )
 def test_open_webui_refuses_anything_but_the_gateway(tmp_path, over):
     r = run_role(tmp_path, "open_webui", "main", webui_vars(tmp_path, **over), env=SECRETS)
     assert r.returncode != 0 and "Open WebUI talks to the LLM" in r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+@pytest.mark.parametrize(
+    ("row", "ok"),
+    [
+        ({"host": "gpu-01.example.internal", "port": 8000, "scheme": "http"}, False),
+        (
+            {"host": "gpu-01.example.internal", "port": 8000, "scheme": "http",
+             "capability": "inference-large"},
+            False,
+        ),
+        (
+            {"host": "gw-02.example.internal", "port": 4000, "scheme": "https",
+             "capability": "llm-gateway"},
+            True,
+        ),
+    ],
+)  # fmt: skip
+def test_open_webui_resolves_its_target_through_the_registry(tmp_path, row, ok):
+    """A name is not a check: gpu-01 passes the backend-name pattern, so the id is resolved and
+    its registry service must be the gateway."""
+    reg = yaml.safe_load((ROOT / "ansible/inventory/example/registry.yml").read_text())
+    reg["services"]["gpu-01"] = row
+    (tmp_path / "registry.yml").write_text(yaml.safe_dump(reg))
+    v = webui_vars(tmp_path, open_webui_gateway_id="gpu-01",
+                   hnx_registry_file=str(tmp_path / "registry.yml"))  # fmt: skip
+    r = run_role(tmp_path, "open_webui", "main", v, env=SECRETS)
+    assert (r.returncode == 0) is ok, r.stdout
+    if not ok:
+        assert "Open WebUI talks to the LLM gateway only" in r.stdout
+        assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
 def test_open_webui_keeps_extra_settings_that_do_not_re_point_it(tmp_path):
