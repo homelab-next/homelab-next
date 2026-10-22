@@ -61,7 +61,9 @@ The classes are `tool_classes.yml`'s: `read`, `record-write`, `exec`, `file-writ
 
 `make mcp-check` (part of `make check` and CI) runs the check and every render spec's `--check`.
 Every problem is printed with its file and the exit code is 1; while the catalog itself has
-problems the grants are not judged (a note says so), since they would be judged against it.
+problems the grants are not judged (a note and the summary line say so), since they would be
+judged against it. Without a registry (none beside the catalog and no `--registry`) a note says
+the registry cross-references were not checked.
 
 - the record fits the schema (a mismatch is reported against the origin kind or transport type
   the record names), its id is its file name (so ids are unique), and every record file is
@@ -110,9 +112,11 @@ problems the grants are not judged (a note says so), since they would be judged 
   `{profile_file}`;
 - with the registry: an HTTP endpoint is a registry http(s) service, and a registry service's
   `mcp` block names this catalog id with the same transport and path; every registry `mcp` entry
-  resolves to a catalog server; runtime hosts and egress services and hosts exist; every
-  `capabilities` entry is a registry service's capability, a class-table capability or a
-  conformance contract (a record that fails the schema gets no follow-on registry errors);
+  resolves to a catalog server; runtime hosts and egress services and hosts exist (a record that
+  fails the schema gets no follow-on registry errors);
+- every `capabilities` entry is a registry service's capability, a class-table capability or a
+  conformance contract, checked with or without a registry (without one, a service's capability
+  cannot be resolved and is reported, with a hint to pass `--registry`);
 - `reason` and `replaced_by` appear only on a deprecated or retired record, and `replaced_by`
   names an active server; `implements` names a homelab-next capability contract
   (a conformance capability), so the graph ties the server to that contract's suite;

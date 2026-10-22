@@ -64,9 +64,14 @@ def _check(args) -> int:
     problems = servers.check(cat, registry=_registry(reg_path), policy=policy, source_root=root)
     grants = args.grants or ([str(root)] if root else [])
     notes: list[tuple[str, str]] = []
+    if reg_path is None:
+        notes.append(("registry", "none beside the catalog and no --registry: endpoints, hosts "
+                                  "and egress not cross-checked"))  # fmt: skip
     counts = {"profile": 0, "manifest": 0}
+    judged = ""
     if problems and grants:
         notes.append(("grants", "not judged: fix the catalog's problems first"))
+        judged = " (profiles and manifests NOT judged: the catalog has problems)"
     elif grants:
         try:
             classes = ToolClasses.from_catalog(cat)
@@ -81,7 +86,7 @@ def _check(args) -> int:
         print(f"note: {f}: {n}", file=sys.stderr)
     print(
         f"hnx mcp catalog: {len(cat.servers)} server(s), {counts['profile']} profile(s), "
-        f"{counts['manifest']} manifest(s), {len(problems)} problem(s)",
+        f"{counts['manifest']} manifest(s), {len(problems)} problem(s){judged}",
         file=sys.stderr,
     )
     return 1 if problems else 0

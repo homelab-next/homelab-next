@@ -315,3 +315,18 @@ def test_cli_check_reports_a_bad_record_by_file_and_keeps_the_others(tmp_catalog
     out = capsys.readouterr()
     assert "mcp/notes.yml: tools/0/classes/0" in out.out and "fetch.yml: lists no tools" in out.out
     assert "grants: not judged" in out.err
+    assert "profiles and manifests NOT judged" in out.err  # the summary says so, not "0 profiles"
+
+
+def test_capabilities_are_checked_without_a_registry(tmp_catalog, capsys):
+    from homelabnext import cli
+
+    cat = _edit(tmp_catalog, "notes", lambda r: r.update(capabilities=["cap:telepathy"]))
+    assert any("capabilities names cap:telepathy" in p for p in servers.check(cat))
+    (tmp_catalog / "agent-runtime.yml").unlink()  # its capability is a registry service's
+    assert not (tmp_catalog.parent / "services.yml").exists()
+    args = ["mcp", "catalog", "check", "--catalog", str(tmp_catalog), "--policy", "none"]
+    assert cli.main([*args, "--grants", str(ROOT / "schemas" / "agent" / "examples")]) == 1
+    out = capsys.readouterr()
+    assert "capabilities names cap:telepathy" in out.out
+    assert "note: registry: none beside the catalog" in out.err

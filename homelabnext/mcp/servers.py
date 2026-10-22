@@ -607,15 +607,10 @@ def _registry_problems(cat: Catalog, registry: Any, skip: Iterable[str] = ()) ->
     out: list[str] = []
     skip = set(skip)
     endpoints: dict[str, list[str]] = {}
-    known = known_capabilities(registry)
     for sid, rec in cat:
         if sid in skip:
             continue
         where = cat.rel(sid)
-        for c in rec.get("capabilities") or ():
-            if c not in known:
-                out.append(f"{where}: capabilities names {c}, which no registry service, class "
-                           "table entry or conformance contract defines")  # fmt: skip
         t = rec.get("transport") or {}
         if t.get("type") in HTTP_TRANSPORTS:
             svc_name = str(t.get("endpoint", "")).removeprefix("svc:")
@@ -762,6 +757,7 @@ def check(
     vocabulary = list(vocabulary)
     out = list(cat.problems)
     invalid: set[str] = set()
+    known = known_capabilities(registry)
     for sid, rec in cat:
         f = cat.files[sid]
         where = cat.rel(sid)
@@ -780,6 +776,14 @@ def check(
         out += _literal_problems(rec, where)
         out += _template_problems(rec, where)
         out += _implements_problems(rec, where)
+        out += [
+            f"{where}: capabilities names {c}, which no registry service, class table entry or "
+            "conformance contract defines"
+            + ("" if registry is not None else " (no registry given: --registry resolves a "
+               "service's capability)")
+            for c in rec.get("capabilities") or ()
+            if c not in known
+        ]  # fmt: skip
         out += _lifecycle_problems(rec, where)
         repl = rec.get("replaced_by")
         if repl is not None:
