@@ -30,8 +30,10 @@ def decode_event(
     if isinstance(body, bytes | str):
         try:
             event = json.loads(body)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except ValueError as exc:
             raise EventError("event body is not JSON", [str(exc)]) from None
+        except RecursionError:  # nested deeper than the parser's stack: never a valid envelope
+            raise EventError("event body is not JSON", ["nested too deeply"]) from None
     else:
         event = dict(body)
     if not isinstance(event, dict):

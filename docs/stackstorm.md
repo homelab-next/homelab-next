@@ -335,6 +335,12 @@ flight finish and settles them; an unsettled delivery is redelivered by the bus 
 | no answer (refused, timeout, TLS), a redirect, 401, 403, 404, 408, 429, 5xx | **nack** (redelivered) and back off exponentially (1 s doubling to 60 s) before fetching again; after `--max-deliver` attempts (default 100) the bus dead-letters it |
 | 400, 413, 415, 422 (StackStorm refuses the body) | poison |
 | a body that is not JSON, fails the envelope or its type's schema, has another type than the subject, names a producer the rules do not pin, or a `Nats-Msg-Id` that is not its id | poison |
+| a body over 256 KiB (`too-large`, refused before it is parsed), or nested too deeply to parse (`not-json`) | poison |
+| anything else that raises while a delivery is checked (`unprocessable`) | poison: that one delivery, never the bridge |
+
+A settlement (ack, nack, term) the bus fails is logged and left to the bus, which redelivers the
+delivery once its lease lapses; one bad delivery or one failed settlement never stops the bridge,
+so a hostile body cannot crash-loop it on every redelivery.
 
 Poison is **terminated** (`term`): JetStream's dead-letter stream is the quarantine. It is never
 retried and never forwarded, and it is counted by reason and logged with the event id (never the

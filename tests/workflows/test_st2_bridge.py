@@ -240,7 +240,11 @@ def test_an_unreachable_webhook_retries_until_the_bus_dead_letters_it():
             "homelabnext.proposal.created",
             "wrong-type",
         ),
+        (b"[" * 100_000, None, "not-json"),  # nested past the parser's stack
+        (b'{"a":' * 20_000 + b"1" + b"}" * 20_000, None, "not-json"),
+        (b'{"pad": "' + b"x" * (256 << 10) + b'"}', None, "too-large"),
     ],
+    ids=lambda v: v if isinstance(v, str) else type(v).__name__,
 )
 def test_poison_is_quarantined_counted_and_never_forwarded(hook, body, subject, reason):
     bus = FakeEventBus()
@@ -253,6 +257,56 @@ def test_poison_is_quarantined_counted_and_never_forwarded(hook, body, subject, 
     assert b.stats()["subjects"][subj]["quarantined"] == {reason: 1}
     [cons] = [c for s, c in b._consumers if s.subject == subj]
     assert len(cons.dead_letters()) == 1  # terminated: the DLQ is the quarantine
+
+
+def test_the_size_cap_is_the_one_the_poison_case_exceeds():
+    assert sb.MAX_EVENT_BYTES == 256 << 10
+
+
+def test_a_defect_in_a_check_or_the_bus_costs_one_delivery_not_the_bridge(hook):
+    """Any exception while checking a delivery quarantines that delivery; a settlement the bus
+    fails is logged and left to redelivery; the bridge keeps forwarding the rest."""
+    bus = FakeEventBus()
+    b = bridge(bus, webhook(hook))
+    real = b.classify
+
+    def flaky(sub, d):
+        if d.msg_id == "evt-bridge-1":
+            raise RuntimeError("a defect in a check")
+        return real(sub, d)
+
+    b.classify = flaky
+    publish(bus, proposal(1))
+    publish(bus, proposal(2))
+    assert b.poll() == 2
+    assert [r["headers"]["Idempotency-Key"] for r in hook.requests] == ["evt-bridge-2"]
+    q = b.stats()["subjects"]["homelabnext.proposal.created"]["quarantined"]
+    assert q == {"unprocessable": 1}
+
+    class BrokenAck:
+        def __init__(self, d):
+            self.d, self.subject, self.data = d, d.subject, d.data
+            self.msg_id, self.seq, self.attempt = d.msg_id, d.seq, d.attempt
+
+        def ack(self):
+            raise ConnectionError("the bus went away")
+
+        def nack(self):
+            self.d.nack()
+
+        def term(self):
+            self.d.term()
+
+    [(sub, cons)] = [(s, c) for s, c in b._consumers if s.subject == "homelabnext.proposal.created"]
+
+    class Wrapped:
+        def fetch(self, n):
+            return [BrokenAck(d) for d in cons.fetch(n)]
+
+    b._consumers = [(sub, Wrapped())]
+    publish(bus, proposal(3))
+    assert b.poll() == 1  # posted, the ack failed: logged, not raised
+    assert "ack failed" in b.stats()["last_error"]
 
 
 def test_a_msg_id_that_is_not_the_event_id_is_poison(hook):

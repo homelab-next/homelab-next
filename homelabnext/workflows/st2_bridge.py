@@ -11,7 +11,11 @@ prefix, :mod:`homelabnext.conform.adapters.nats_jetstream`) and POSTs each event
   type's schema (:func:`homelabnext.events.consumer.decode_event`), its type must be the subject's
   and its ``source`` one the subject's rules pin.  Anything else is *poison*: it is terminated
   (``term``: JetStream's dead-letter stream is the quarantine, never redelivered, never
-  forwarded), counted by reason and logged with the event id, never its content.
+  forwarded), counted by reason and logged with the event id, never its content.  A body over
+  :data:`MAX_EVENT_BYTES` is poison before it is parsed, one nested past the parser's stack is
+  ``not-json``, and any other exception while checking a delivery quarantines that delivery
+  (``unprocessable``): one hostile body never takes the bridge down (or, redelivered, keeps it
+  down).
 * **At least once, and a duplicate is harmless.**  A delivery is acked only after the webhook
   answered 2xx.  A refused connection, a timeout, a redirect, 401/403/404, 408, 429 and 5xx are
   *nacked* (redelivered) and the bridge backs off exponentially before fetching again, so an
@@ -74,6 +78,9 @@ log = logging.getLogger("homelabnext.st2_bridge")
 #: StackStorm refused the body itself: retrying the same bytes cannot succeed
 PERMANENT_STATUS = frozenset({400, 413, 415, 422})
 MAX_REPLY_BYTES = 64 << 10
+#: an event body larger than this is poison before it is parsed (the envelope is small; a body this
+#: size is a flood or a parser bomb, never an event a rule takes)
+MAX_EVENT_BYTES = 256 << 10
 _WEBHOOK_PATH = re.compile(r"/api/v1/webhooks/[a-z][a-z0-9_-]*")
 _SECRET_REF = re.compile(r"secret:[a-z][a-z0-9_-]*(/[a-z][a-z0-9_-]*)*")
 _SUBJECT = re.compile(r"homelabnext(\.[a-z][a-z0-9-]*)+")
@@ -299,6 +306,8 @@ class Bridge:
         """``(event, "")`` to forward, or ``(None, reason)`` for poison."""
         if delivery.subject != sub.subject:
             return None, "wrong-subject"
+        if len(delivery.data) > MAX_EVENT_BYTES:
+            return None, "too-large"
         try:
             event = decode_event(delivery.data)
         except EventError as exc:
@@ -320,7 +329,37 @@ class Bridge:
             reason,
             str(event_id)[:80] if event_id is not None else None,
         )
-        d.term()
+        self._settle_or_log(sub, d, "term")
+
+    def _settle_or_log(self, sub: Subscription, d: Any, how: str) -> bool:
+        """Settle ``d``; a bus that fails the settlement costs this delivery a redelivery (the
+        lease lapses), never the bridge."""
+        try:
+            getattr(d, how)()
+        except Exception as exc:
+            self.last_error = f"{self.now()} {sub.subject}: {how} failed: {type(exc).__name__}"
+            log.error(
+                "st2 bridge: %s seq %s: %s failed (%s); the bus redelivers it",
+                sub.subject,
+                d.seq,
+                how,
+                type(exc).__name__,
+            )
+            return False
+        return True
+
+    def _classify(self, sub: Subscription, d: Any) -> tuple[dict[str, Any] | None, str]:
+        """:meth:`classify`, where a defect in a check is poison for this one delivery."""
+        try:
+            return self.classify(sub, d)
+        except Exception as exc:  # e.g. a validator recursing on a hostile body
+            log.error(
+                "st2 bridge: %s seq %s could not be checked (%s)",
+                sub.subject,
+                d.seq,
+                type(exc).__name__,
+            )
+            return None, "unprocessable"
 
     def _post(self, event: Mapping[str, Any]) -> int | str:
         try:
@@ -333,7 +372,8 @@ class Bridge:
     def _settle(self, sub: Subscription, d: Any, event: Mapping[str, Any], got: int | str) -> bool:
         st = self.per_subject[sub.subject]
         if isinstance(got, int) and 200 <= got < 300:
-            d.ack()
+            if not self._settle_or_log(sub, d, "ack"):
+                return False
             st.forwarded += 1
             self.last_forward = self.now()
             return True
@@ -360,7 +400,7 @@ class Bridge:
                 why,
                 d.attempt,
             )
-        d.nack()
+        self._settle_or_log(sub, d, "nack")
         return False
 
     # ------------------------------------------------------------ the loop
@@ -377,7 +417,7 @@ class Bridge:
                 continue
             todo: list[tuple[Any, dict[str, Any]]] = []
             for d in batch:
-                event, why = self.classify(sub, d)
+                event, why = self._classify(sub, d)
                 if event is None:
                     self._quarantine(sub, d, why)
                 else:
