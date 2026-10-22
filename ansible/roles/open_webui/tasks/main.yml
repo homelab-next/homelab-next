@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+# the key is this app's own (the gateway scopes and limits it); only the env_file holds it
+- name: Read this app's gateway key and the session key
+  ansible.builtin.set_fact:
+    open_webui_secret_env:
+      open-webui:
+        OPENAI_API_KEYS: "{{ lookup('hnx_secret', open_webui_gateway_key_ref) }}"
+        WEBUI_SECRET_KEY: "{{ lookup('hnx_secret', open_webui_session_key_ref) }}"
+  no_log: true
+
+- name: Render and start Open WebUI
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ open_webui_app.compose_app_name }}"
+    compose_app_dir: "{{ open_webui_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ open_webui_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ open_webui_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ open_webui_app.compose_app_owner }}"
+    compose_app_group: "{{ open_webui_app.compose_app_group }}"
+    compose_app_start: "{{ open_webui_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ open_webui_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ open_webui_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ open_webui_secret_env }}"
+    compose_app_dependencies: ["{{ open_webui_gateway_id }}"]
+  no_log: true

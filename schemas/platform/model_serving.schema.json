@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/model_serving/1.0",
+  "title": "Model serving spec",
+  "description": "Joins the model store and the role table (ADR-0023): per svc: backend the role table binds, the engine that serves it (vllm or llama-server; Unsloth Studio is the GUI, not a backend), its port, GPUs and engine settings. homelabnext.models.serving derives the one store entry each backend serves and renders the vllm_server role's instances (--served-model-name = the binding's model id, --max-model-len = the roles' max_context_tokens, --scheduling-policy priority); the LLM gateway generator reads the same file (serving: in a gateway spec) for its local backends. Semantic rules (bindings resolve, one model per vLLM backend, tp x pp = number of GPUs, unique ports and GPUs) are checked there (`hnx models serving check`).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "store",
+    "roles",
+    "backends"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "store": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Path of the model store manifest, relative to this file."
+    },
+    "roles": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Path of the model-role table, relative to this file."
+    },
+    "backends": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/svc_id"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "engine",
+          "port"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "engine": {
+            "enum": [
+              "vllm",
+              "llama-server"
+            ]
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1024,
+            "maximum": 65535
+          },
+          "gpus": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 63
+            },
+            "description": "GPU indexes in PCI bus order (CUDA_DEVICE_ORDER=PCI_BUS_ID); a GPU belongs to one backend."
+          },
+          "tensor_parallel_size": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "pipeline_parallel_size": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "gpu_memory_utilization": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 1
+          },
+          "args": {
+            "type": "object",
+            "description": "Extra vLLM flags (name without --) and one-token values; true is a bare flag. Flags the plan sets (model, served-model-name, max-model-len, scheduling-policy, host, port, parallelism, ...) are refused.",
+            "propertyNames": {
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+              "not": {
+                "enum": [
+                  "model",
+                  "served-model-name",
+                  "max-model-len",
+                  "scheduling-policy",
+                  "host",
+                  "port",
+                  "tensor-parallel-size",
+                  "pipeline-parallel-size",
+                  "gpu-memory-utilization",
+                  "revision",
+                  "download-dir",
+                  "trust-remote-code",
+                  "api-key",
+                  "load-format"
+                ]
+              }
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9._:/=,+-]{1,128}$"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "const": true
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

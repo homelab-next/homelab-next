@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# The sha256 pass over every entry (hf, gguf and promoted exports): what `hnx models store check`
+# does from a checkout, run on the store host.
+- name: Verify every entry by sha256
+  ansible.builtin.include_tasks: verify_entry.yml
+  loop: "{{ model_store_manifest.models | dict2items }}"
+  loop_control:
+    loop_var: model_store_entry
+    label: "{{ model_store_entry.key }}"
+  vars:
+    model_store_sizes_only: false
+  tags: [verify]

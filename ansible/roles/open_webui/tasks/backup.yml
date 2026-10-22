@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Delegate to compose_app (backup)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: backup
+      vars:
+        compose_app_name: open-webui
+        compose_app_dir: "{{ open_webui_app.compose_app_dir }}"
+        compose_app_data_dir: "{{ open_webui_app.compose_app_data_dir }}"
+        compose_app_export_dir: "{{ open_webui_app.compose_app_export_dir }}"
+        compose_app_owner: "{{ open_webui_app.compose_app_owner }}"
+        compose_app_group: "{{ open_webui_app.compose_app_group }}"
+        compose_app_spec: "{{ open_webui_app.compose_app_spec }}"
+  tags: [backup]

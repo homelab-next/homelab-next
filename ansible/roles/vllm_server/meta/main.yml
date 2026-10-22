@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "One vLLM systemd unit per served model from the rendered serving plan: the role table's model id and context length, priority scheduling, pinned GPUs, the model store read-only."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

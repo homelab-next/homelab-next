@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Ask vLLM for its version
+  ansible.builtin.command:
+    argv: ["{{ vllm_server_bin }}", --version]
+  register: vllm_server_found
+  changed_when: false
+
+- name: Refuse any vLLM but the pinned one
+  ansible.builtin.assert:
+    that: (vllm_server_found.stdout | trim).split() | last == vllm_server_version
+    fail_msg: >-
+      vllm_server: {{ vllm_server_bin }} is vLLM {{ vllm_server_found.stdout | trim }}, the pin is
+      {{ vllm_server_version }} (install the pinned version in the virtualenv, or move the pin
+      with tasks_from: upgrade)
+
+- name: Read each model's directory in the store
+  ansible.builtin.stat:
+    path: "{{ item.model_path }}/config.json"
+    follow: true
+  loop: "{{ vllm_server_instances }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: vllm_server_models
+
+- name: Refuse an instance whose model is not in the store (run model_store first)
+  ansible.builtin.assert:
+    that: vllm_server_models.results | rejectattr('stat.exists') | list | length == 0
+    fail_msg: >-
+      vllm_server: no model at {{ vllm_server_models.results | rejectattr('stat.exists')
+      | map(attribute='item.model_path') | join(', ') }} (model_store fetches and verifies it)
+
+- name: Create each instance's cache directory
+  ansible.builtin.file:
+    path: "{{ vllm_server_cache_dir }}/{{ item.name }}"
+    state: directory
+    owner: "{{ vllm_server_user }}"
+    group: "{{ vllm_server_group }}"
+    mode: "0750"
+  loop: "{{ vllm_server_instances }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Write the API key environment files
+  ansible.builtin.include_tasks: api_key.yml
+  when: vllm_server_api_key_ref | length > 0
+
+- name: Write one unit per instance
+  ansible.builtin.template:
+    src: vllm.service.j2
+    dest: "{{ vllm_server_unit_dir }}/hnx-vllm-{{ item.name }}.service"
+    mode: "0644"
+  loop: "{{ vllm_server_instances }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: vllm_server_units
+
+- name: Find units of instances the plan no longer has
+  ansible.builtin.find:
+    paths: "{{ vllm_server_unit_dir }}"
+    patterns: ["hnx-vllm-*.service"]
+  register: vllm_server_present
+
+- name: Stop and remove them (a retired per-GPU unit, a model moved to another backend)
+  ansible.builtin.include_tasks: retire.yml
+  loop: >-
+    {{ vllm_server_present.files | map(attribute='path') | map('basename')
+       | difference(vllm_server_instances | map(attribute='name') | map('regex_replace', '^(.*)$', 'hnx-vllm-\1.service') | list)
+       | list }}
+  loop_control:
+    loop_var: vllm_server_stale
+
+- name: Reload systemd when a unit changed
+  ansible.builtin.command:
+    argv: ["{{ vllm_server_systemctl_cli }}", daemon-reload]
+  when: vllm_server_units is changed
+  changed_when: true
+
+- name: Enable and start each instance, restarting the ones whose unit changed
+  ansible.builtin.command:
+    argv: >-
+      {{ [vllm_server_systemctl_cli]
+         + (['restart'] if item.changed else ['enable', '--now'])
+         + ['hnx-vllm-' ~ item.item.name ~ '.service'] }}
+  loop: "{{ vllm_server_units.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: vllm_server_start | bool
+  changed_when: item.changed

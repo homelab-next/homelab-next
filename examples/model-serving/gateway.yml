@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# The gateway in front of the serving example: no backend is declared by hand, every one comes
+# from serving.yml (port, and locality local), and every binding resolves to a store entry its
+# engine may serve.
+#   hnx gen gateway render examples/model-serving/gateway.yml examples/model-serving/gateway
+roles: model_roles.json
+serving: serving.yml
+domain: example.internal
+master_key: secret:llm-gateway/master-key
+database_url: secret:llm-gateway/database-url
+keys:
+  - name: chat-ui
+    key: secret:llm-gateway/key-chat-ui
+    roles: [mdl:main-reasoner, mdl:fast-classifier]
+    data_tier: local-only

@@ -68,8 +68,10 @@ SHIPPED = [
     "greenbone_target",
     "last_run",
     "lynis",
+    "model_store",
     "needrestart",
     "nftables_host",
+    "open_webui",
     "os_hardening",
     "restore_drill",
     "rkhunter",
@@ -80,6 +82,7 @@ SHIPPED = [
     "tailscale_node",
     "trivy",
     "unattended_upgrades",
+    "vllm_server",
     "wazuh_agent",
 ]
 

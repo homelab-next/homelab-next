@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# A vLLM bump changes kernels, schedulers and parsers: record it as pending; install it in the
+# virtualenv, move vllm_server_version, re-run main, then the K-14 health hook and the inference
+# conformance suite through the gateway before the old version is removed.
+- block:
+    - name: Refuse a downgrade or a no-op
+      ansible.builtin.assert:
+        that:
+          - vllm_server_target_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+          - vllm_server_target_version is version(vllm_server_version, '>')
+        fail_msg: "vllm_server: target {{ vllm_server_target_version }} is not a release newer than {{ vllm_server_version }}"
+    - name: Ensure the state directory exists
+      ansible.builtin.file:
+        path: "{{ vllm_server_state_dir }}"
+        state: directory
+        mode: "0750"
+    - name: Record the pending version
+      ansible.builtin.copy:
+        dest: "{{ vllm_server_state_dir }}/pending-version"
+        content: "{{ vllm_server_target_version }}\n"
+        mode: "0640"
+  tags: [upgrade]

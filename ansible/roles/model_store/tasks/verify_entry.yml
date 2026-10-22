@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fail unless every file of model_store_entry is on disk with its size and (unless
+# model_store_sizes_only) its sha256.  A hub-cache snapshot file is a symlink to its blob: followed.
+- name: Locate the entry
+  ansible.builtin.include_tasks: entry_paths.yml
+  tags: [health, verify]
+
+- name: Read {{ model_store_entry.key }}'s files
+  ansible.builtin.stat:
+    path: "{{ model_store_entry_dir }}/{{ item.path }}"
+    follow: true
+    get_checksum: "{{ not (model_store_sizes_only | default(false) | bool) }}"
+    checksum_algorithm: sha256
+  loop: "{{ model_store_entry.value.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: model_store_stats
+  tags: [health, verify]
+
+- name: Fail unless every file matches the manifest
+  ansible.builtin.assert:
+    that: model_store_bad | from_json | length == 0
+    fail_msg: >-
+      model_store: {{ model_store_entry.key }} does not match its manifest in
+      {{ model_store_entry_dir }}: {{ model_store_bad | from_json | join(', ') }}
+      (missing, wrong size or sha256 differs; never serve it: delete the files and fetch again)
+  vars:
+    model_store_bad: >-
+      {%- set bad = [] -%}
+      {%- for r in model_store_stats.results -%}
+      {%- if not r.stat.exists -%}{{ bad.append(r.item.path ~ ' (missing)') or '' }}
+      {%- elif r.stat.size != r.item.size -%}{{ bad.append(r.item.path ~ ' (size ' ~ r.stat.size ~ ', manifest ' ~ r.item.size ~ ')') or '' }}
+      {%- elif not (model_store_sizes_only | default(false) | bool) and r.stat.checksum != r.item.sha256 -%}{{ bad.append(r.item.path ~ ' (sha256 differs)') or '' }}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ bad | to_json }}
+  tags: [health, verify]

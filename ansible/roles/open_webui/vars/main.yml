@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: what makes Open WebUI a gateway client and nothing else.
+open_webui_fixed_env:
+  ENABLE_OPENAI_API: "true"
+  ENABLE_OLLAMA_API: "false"
+  ENABLE_DIRECT_CONNECTIONS: "false"
+  ENABLE_SIGNUP: "false"
+  ENABLE_COMMUNITY_SHARING: "false"
+  ENABLE_VERSION_UPDATE_CHECK: "false"
+  OFFLINE_MODE: "true"
+  ANONYMIZED_TELEMETRY: "false"
+  DO_NOT_TRACK: "true"
+  SCARF_NO_ANALYTICS: "true"
+# Names of model backends: the gateway id may not be one (Open WebUI never calls an engine).
+open_webui_backend_id_pattern: '^(inference|vllm|llama|ollama|lmstudio|unsloth)([-.]|\Z)'
+open_webui_reserved_env_pattern: '(?i)^(OPENAI_API_|OLLAMA_|ENABLE_OPENAI_API|ENABLE_OLLAMA_API|ENABLE_DIRECT_CONNECTIONS|WEBUI_SECRET_KEY)'
+open_webui_repository: "{{ open_webui_image.split('@')[0].rsplit(':', 1)[0] }}"
+open_webui_tag: "{{ open_webui_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+open_webui_digest: "{{ open_webui_image.split('@')[1] | default('') }}"

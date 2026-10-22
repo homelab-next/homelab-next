@@ -1,0 +1,66 @@
+# Managed by Ansible (role vllm_server) from the serving plan. Do not edit.
+# {{ item.backend | default('svc:' ~ item.name) }} serves {{ item.served_model_name }} from store entry
+# {{ item.store_id | default('?') }} ({{ item.digest }}) for {{ item.roles | default([]) | join(', ') }}.
+[Unit]
+Description=vLLM {{ item.name }} ({{ item.served_model_name }})
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User={{ vllm_server_user }}
+Group={{ vllm_server_group }}
+Environment=CUDA_DEVICE_ORDER=PCI_BUS_ID
+Environment=CUDA_VISIBLE_DEVICES={{ item.gpus | join(',') }}
+Environment=HF_HUB_OFFLINE=1
+Environment=TRANSFORMERS_OFFLINE=1
+Environment=VLLM_NO_USAGE_STATS=1
+Environment=DO_NOT_TRACK=1
+Environment=VLLM_CACHE_ROOT={{ vllm_server_cache_dir }}/{{ item.name }}
+Environment=XDG_CACHE_HOME={{ vllm_server_cache_dir }}/{{ item.name }}
+Environment=HOME={{ vllm_server_cache_dir }}/{{ item.name }}
+{% if vllm_server_nccl_p2p_disable | bool %}
+Environment=NCCL_P2P_DISABLE=1
+{% endif %}
+{% if vllm_server_api_key_ref %}
+EnvironmentFile={{ vllm_server_env_dir }}/{{ item.name }}.env
+{% endif %}
+ExecStart={{ vllm_server_bin }} serve {{ item.model_path }} --served-model-name {{ item.served_model_name }} --host {{ vllm_server_listen_address }} --port {{ item.port | int }} --max-model-len {{ item.max_model_len | int }} --scheduling-policy priority --tensor-parallel-size {{ item.tensor_parallel_size | int }} --pipeline-parallel-size {{ item.pipeline_parallel_size | int }} --gpu-memory-utilization {{ item.gpu_memory_utilization | float }}{% for a in item.args %} {{ a }}{% endfor %}
+
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=1800
+UMask=0077
+
+# The sandbox of example_service, loosened only where a GPU engine needs it: the NVIDIA device
+# nodes (PrivateDevices off, DevicePolicy closed plus the nvidia majors), and writable+executable
+# memory for the CUDA/Triton JIT (no MemoryDenyWriteExecute). The model store is read-only.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ReadOnlyPaths={{ vllm_server_store_root }}
+ReadWritePaths={{ vllm_server_cache_dir }}/{{ item.name }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=char-nvidiactl rw
+DeviceAllow=char-nvidia-frontend rw
+DeviceAllow=char-nvidia-uvm rw
+DeviceAllow=char-nvidia-caps rw
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

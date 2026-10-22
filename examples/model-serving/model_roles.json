@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "roles": {
+    "main-reasoner": {
+      "description": "Synthetic serving example: the reasoner on vLLM from the store.",
+      "tier": "large",
+      "bindings": [
+        {
+          "backend": "svc:inference-large",
+          "model_id": "example-27b",
+          "version": "174d4518adc353b21f63bbd7186645da35935aeb",
+          "digest": "sha256:ad1c2c2775310e992148852cbdc9cbf0912333835f8fe82bf7d8204249fe8aac"
+        }
+      ],
+      "fallback": "mdl:fast-classifier",
+      "max_context_tokens": 131072
+    },
+    "triage": {
+      "tier": "fast",
+      "bindings": [
+        {
+          "backend": "svc:inference-triage",
+          "model_id": "example-4b-triage",
+          "version": "2026-10-01-triage",
+          "digest": "sha256:ae94b6d3da17915baccdd705924ba253b2290ca3b639dd82df7458af1c0ef0f1"
+        }
+      ],
+      "fallback": "mdl:fast-classifier",
+      "max_context_tokens": 32768
+    },
+    "fast-classifier": {
+      "tier": "fast",
+      "logprobs": true,
+      "bindings": [
+        {
+          "backend": "svc:inference-small",
+          "model_id": "example-4b",
+          "version": "1e2d2accc43e90ab713fd09cf7b9c31a6c2dbfe3",
+          "digest": "sha256:5039dbaaee6769e85f0525aac23e59773e7fab0137fb7897daa4788754ac3d73"
+        }
+      ],
+      "max_context_tokens": 8192,
+      "params": {
+        "temperature": 0,
+        "max_tokens": 256
+      }
+    }
+  }
+}

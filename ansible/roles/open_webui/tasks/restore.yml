@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Restore the data directory (chats, users, settings) from the backup source
+  ansible.builtin.include_role:
+    name: compose_app
+    tasks_from: restore
+  vars:
+    compose_app_name: open-webui
+    compose_app_data_dir: "{{ open_webui_dir }}/data"
+    compose_app_restore_source: "{{ open_webui_restore_source }}"
+  tags: [restore]

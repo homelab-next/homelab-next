@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+# One hub entry (model_store_entry): download what is missing or wrong at the pinned revision, then
+# verify every file by sha256.  Always --revision <commit>: the hf CLI's default is main.
+- name: Locate the entry
+  ansible.builtin.include_tasks: entry_paths.yml
+
+- name: Read what is already on disk
+  ansible.builtin.stat:
+    path: "{{ model_store_entry_dir }}/{{ item.path }}"
+    follow: true
+    get_checksum: true
+    checksum_algorithm: sha256
+  loop: "{{ model_store_entry.value.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: model_store_present
+
+- name: Download the missing files of {{ model_store_entry.key }} at {{ model_store_entry.value.source.revision[:12] }}
+  ansible.builtin.command:
+    argv: >-
+      {{ [model_store_hf_cli, 'download', model_store_entry.value.source.repo]
+         + (model_store_missing | from_json)
+         + ['--revision', model_store_entry.value.source.revision]
+         + (['--cache-dir', model_store_root ~ '/hf/hub'] if model_store_entry.value.format == 'hf'
+            else ['--local-dir', model_store_entry_dir]) }}
+  environment: >-
+    {{ {'HF_HUB_DISABLE_TELEMETRY': '1', 'HF_HUB_DISABLE_PROGRESS_BARS': '1'}
+       | combine({'HF_ENDPOINT': model_store_hf_endpoint} if model_store_hf_endpoint else {})
+       | combine({'HF_TOKEN': lookup('hnx_secret', model_store_hf_token_ref)} if model_store_hf_token_ref else {}) }}
+  vars:
+    model_store_missing: >-
+      {%- set m = [] -%}
+      {%- for r in model_store_present.results -%}
+      {%- if not r.stat.exists or (r.stat.checksum | default('')) != r.item.sha256 -%}{{ m.append(r.item.path) or '' }}{%- endif -%}
+      {%- endfor -%}
+      {{ m | to_json }}
+  when: model_store_missing | from_json | length > 0
+  changed_when: true
+  no_log: "{{ model_store_hf_token_ref != '' }}"
+
+- name: Verify every file by sha256
+  ansible.builtin.include_tasks: verify_entry.yml
+  vars:
+    model_store_sizes_only: false
+
+- name: Give the entry to the store owner, readable by the engines' group only
+  ansible.builtin.file:
+    path: "{{ model_store_entry_top }}"
+    state: directory
+    recurse: true
+    owner: "{{ model_store_owner }}"
+    group: "{{ model_store_group }}"
+    mode: "u=rwX,g=rX,o="

@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Read each model's directory in the store (the one dependency)
+      ansible.builtin.stat:
+        path: "{{ item.model_path }}/config.json"
+        follow: true
+      loop: "{{ vllm_server_instances }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: vllm_server_ready
+    - name: Fail unless every model is in the store
+      ansible.builtin.assert:
+        that: vllm_server_ready.results | rejectattr('stat.exists') | list | length == 0
+        fail_msg: "vllm_server: the store lacks {{ vllm_server_ready.results | rejectattr('stat.exists') | map(attribute='item.store_id', default='?') | join(', ') }} (run model_store)"
+  tags: [readiness]

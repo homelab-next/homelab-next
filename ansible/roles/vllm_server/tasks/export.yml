@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to export (the serving plan in git is the open-format copy)
+  ansible.builtin.debug:
+    msg: vllm_server keeps no data; the plan and the store manifest are in the repository
+  tags: [export]

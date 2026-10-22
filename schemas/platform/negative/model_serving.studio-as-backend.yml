@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+version: 1
+store: model_store.valid.json
+roles: model_roles.valid.json
+backends:
+  svc:inference-small:
+    engine: unsloth-studio
+    port: 8001

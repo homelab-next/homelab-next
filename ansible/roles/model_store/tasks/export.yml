@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# The open-format exit copy: the manifest and, per entry, its sha256sum listing (the entry's digest
+# is sha256 of that file), enough to rebuild the store anywhere with the hf CLI and sha256sum.
+- block:
+    - name: Ensure the export directory exists
+      ansible.builtin.file:
+        path: "{{ model_store_export_dir }}"
+        state: directory
+        mode: "0750"
+    - name: Write the manifest
+      ansible.builtin.copy:
+        dest: "{{ model_store_export_dir }}/model_store.json"
+        content: "{{ model_store_manifest | to_nice_json(sort_keys=true) }}\n"
+        mode: "0640"
+    - name: Write each entry's sha256sum listing
+      ansible.builtin.copy:
+        dest: "{{ model_store_export_dir }}/{{ item.key }}.sha256"
+        content: "{% for f in item.value.files | sort(attribute='path') %}{{ f.sha256 }}  {{ f.path }}\n{% endfor %}"
+        mode: "0640"
+      loop: "{{ model_store_manifest.models | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+  tags: [export]

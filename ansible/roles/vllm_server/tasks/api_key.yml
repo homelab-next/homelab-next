@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Create the environment directory
+  ansible.builtin.file:
+    path: "{{ vllm_server_env_dir }}"
+    state: directory
+    mode: "0750"
+
+- name: Write VLLM_API_KEY for each instance (the gateway's backend key)
+  ansible.builtin.copy:
+    dest: "{{ vllm_server_env_dir }}/{{ item.name }}.env"
+    content: "VLLM_API_KEY={{ lookup('hnx_secret', vllm_server_api_key_ref) }}\n"
+    owner: "{{ vllm_server_user }}"
+    group: "{{ vllm_server_group }}"
+    mode: "0600"
+  loop: "{{ vllm_server_instances }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+  diff: false

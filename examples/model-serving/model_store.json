@@ -1,0 +1,165 @@
+{
+  "version": 1,
+  "root": "/srv/models",
+  "models": {
+    "example-27b-fp8": {
+      "description": "The production reasoner, FP8 weights (W8A16 Marlin on sm_80).",
+      "format": "hf",
+      "quant": "fp8",
+      "source": {
+        "repo": "example-org/example-27b-fp8",
+        "revision": "174d4518adc353b21f63bbd7186645da35935aeb"
+      },
+      "license": "apache-2.0",
+      "served_model_name": "example-27b",
+      "engines": [
+        "vllm",
+        "unsloth-studio"
+      ],
+      "files": [
+        {
+          "path": "config.json",
+          "sha256": "926afffa5c2e3dc94b583199357bf14e3ea174ddca950a9e035287366af2e295",
+          "size": 36
+        },
+        {
+          "path": "generation_config.json",
+          "sha256": "154479ec532abd8f5b6d4ba791ebad90f73711c9fd37e65da2d6fffdf03aa7de",
+          "size": 47
+        },
+        {
+          "path": "model-00001-of-00002.safetensors",
+          "sha256": "2bc0cf4d592dbdd156f9e5bf39fc2f080d97bfcdc4fdedb913d42fd006c30d6a",
+          "size": 57
+        },
+        {
+          "path": "model-00002-of-00002.safetensors",
+          "sha256": "7f7af11126263588921dc99b49935deb846dbe326b8cfbcc52159c4528010167",
+          "size": 57
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "sha256": "4d2ff7b82514340e95f69de7a353e519f55bab542650f6f5cede8716c54ec789",
+          "size": 53
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "1812d15c005ba7968f09f77d3cd16072bda924f022ddcdf039f6017ce40d6c8a",
+          "size": 39
+        },
+        {
+          "path": "tokenizer_config.json",
+          "sha256": "ef278c9947e6307298c4db7217b9ba896fa1edaab26c867a1c947bb2c65a25ca",
+          "size": 46
+        }
+      ]
+    },
+    "example-4b-bf16": {
+      "description": "The small model in 16-bit: the base for fine-tunes.",
+      "format": "hf",
+      "quant": "bf16",
+      "source": {
+        "repo": "example-org/example-4b",
+        "revision": "4736a1e9825e822c1bda5a0411a72d7fee1d6e7c"
+      },
+      "license": "apache-2.0",
+      "served_model_name": "example-4b-bf16",
+      "engines": [
+        "unsloth-studio"
+      ],
+      "files": [
+        {
+          "path": "config.json",
+          "sha256": "f7e0b0d9fd0aaa453d065549a21cae99df4f35d1281c7d2d8da7782264f5d6b4",
+          "size": 36
+        },
+        {
+          "path": "model.safetensors",
+          "sha256": "efffead67b8e19a2beec8a9e3163c7024e21a699dd07b79df6d5b1de5b090a70",
+          "size": 42
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "0c758d1083e792c45b5c7d8ff0842599839c8937e405ee4d7990c67560039ceb",
+          "size": 39
+        }
+      ]
+    },
+    "example-4b-q4km": {
+      "description": "The classifier as a single-file GGUF for llama-server.",
+      "format": "gguf",
+      "quant": "q4_k_m",
+      "source": {
+        "repo": "example-org/example-4b-gguf",
+        "revision": "1e2d2accc43e90ab713fd09cf7b9c31a6c2dbfe3"
+      },
+      "license": "apache-2.0",
+      "served_model_name": "example-4b",
+      "engines": [
+        "llama-server",
+        "unsloth-studio"
+      ],
+      "files": [
+        {
+          "path": "example-4b-Q4_K_M.gguf",
+          "sha256": "e8dbaf5f713a61e10a4d5ac3c7a73654f878b5168e493a86cc8a5b2d13e1d8b4",
+          "size": 47
+        }
+      ]
+    },
+    "example-4b-q8": {
+      "description": "A second quant of the same GGUF repository, for interactive comparison only.",
+      "format": "gguf",
+      "quant": "q8_0",
+      "source": {
+        "repo": "example-org/example-4b-gguf",
+        "revision": "1e2d2accc43e90ab713fd09cf7b9c31a6c2dbfe3"
+      },
+      "license": "apache-2.0",
+      "served_model_name": "example-4b-q8",
+      "engines": [
+        "unsloth-studio"
+      ],
+      "files": [
+        {
+          "path": "example-4b-Q8_0.gguf",
+          "sha256": "db0a03f6d96715b0da8390d52d153574ec29ee4f51159a2397dceedfa1955625",
+          "size": 43
+        }
+      ]
+    },
+    "example-4b-triage": {
+      "description": "A LoRA fine-tune of example-4b-bf16 merged to 16-bit by Unsloth Studio, promoted from exports/.",
+      "format": "export",
+      "layout": "safetensors",
+      "quant": "bf16",
+      "source": {
+        "run": "2026-10-01-triage"
+      },
+      "base": "example-4b-bf16",
+      "license": "apache-2.0",
+      "served_model_name": "example-4b-triage",
+      "engines": [
+        "vllm",
+        "unsloth-studio"
+      ],
+      "files": [
+        {
+          "path": "config.json",
+          "sha256": "478361c143499703c71555cbbd4dfbed10591e2440f1867ebe80e3c2f0e2216e",
+          "size": 38
+        },
+        {
+          "path": "model.safetensors",
+          "sha256": "f52598c36fc424d7fa4d30df26b9fb74b83c8d1d508bd9838503644e311a5567",
+          "size": 44
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "860c5059ddccb42cffd6847a3c503836c7202cf3485632f6dcb5d75b51bd7290",
+          "size": 41
+        }
+      ]
+    }
+  }
+}

@@ -23,6 +23,7 @@ inputs:
 | the role table (`schemas/platform/model_roles.json`) | roles, bindings in priority order, `fallback`, `limits`, context length, cost per 1k tokens |
 | the agent profiles (`schemas/agent/profile.schema.json`) | one key per profile (`profile:reader` gets `agent-reader`, secret `secret:llm-gateway/key-reader`), the role it calls and its `data_tier` |
 | a small gateway spec (YAML) | where each `svc:` backend is (`local`, or `cloud` with a provider), the secrets for the master key and the database, and any extra non-agent keys |
+| optionally, a serving spec (`serving:`, [model-serving.md](model-serving.md)) | the store-served backends: each becomes `{locality: local, port}` from the serving plan, and every binding on it must resolve to a store entry its engine may serve |
 
 ```bash
 hnx gen gateway render SPEC OUT_DIR            # writes litellm/ and bifrost/ under OUT_DIR
@@ -187,8 +188,8 @@ recommended:
 
 - Concurrency, latency and streaming under load. The evidence run used the deterministic fake, not
   a GPU-backed engine.
-- The model-serving stack behind the gateway (one model store, one serving engine). This is
-  context for later work, not built here.
+- The model-serving stack behind the gateway (one model store, vLLM units generated from it) is in
+  [model-serving.md](model-serving.md) ([[model-serving]]), ADR-0023.
 - SSO for either product's admin UI (Bifrost's gets a password login, LiteLLM's the master key).
 - Postgres high availability.
 - Spend reporting.

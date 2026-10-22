@@ -33,3 +33,8 @@ services:
     host: git-01.example.internal
     port: 22
     scheme: ssh
+  # the LLM gateway (docs/llm-gateway.md): the chat front end's only backend (role open_webui)
+  llm-gateway:
+    host: gateway-01.example.internal
+    port: 4000
+    scheme: https

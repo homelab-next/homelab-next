@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - open_webui_gateway_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - open_webui_gateway_id is not match(open_webui_backend_id_pattern)
+      - open_webui_gateway_key_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+      - open_webui_session_key_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+      - open_webui_gateway_key_ref != open_webui_session_key_ref
+      - open_webui_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+      - open_webui_port | int >= 1 and open_webui_port | int <= 65535
+      - open_webui_extra_env is mapping
+      - open_webui_extra_env | list | select('match', open_webui_reserved_env_pattern) | list | length == 0
+      - open_webui_extra_env.values() | reject('string') | list | length == 0
+    fail_msg: >-
+      open_webui: the gateway's registry id (not a model backend: Open WebUI talks to the LLM
+      gateway only), two distinct secret: references (this app's gateway key, the session key),
+      an image pinned by tag and digest, a port, and extra settings (strings) that do not
+      re-point the backends or turn Ollama or direct connections back on

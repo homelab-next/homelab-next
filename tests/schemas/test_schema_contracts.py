@@ -55,6 +55,8 @@ EXPECTED = {
     "platform/customization.schema.json",
     "platform/swap_record.schema.json",
     "platform/script_header.schema.json",
+    "platform/model_store.schema.json",
+    "platform/model_serving.schema.json",
     "ocsf/authentication.v1.json",
     "ocsf/detection_finding.v1.json",
     "ocsf/dns_activity.v1.json",

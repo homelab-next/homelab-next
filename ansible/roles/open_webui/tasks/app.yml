@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app).
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    open_webui_app:
+      compose_app_name: open-webui
+      compose_app_dir: "{{ open_webui_dir }}"
+      compose_app_data_dir: "{{ open_webui_dir }}/data"
+      compose_app_export_dir: "{{ open_webui_export_dir }}"
+      compose_app_owner: "{{ open_webui_owner }}"
+      compose_app_group: "{{ open_webui_group }}"
+      compose_app_start: "{{ open_webui_start }}"
+      compose_app_validate_with_docker: "{{ open_webui_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          open-webui:
+            image: "{{ open_webui_repository }}"
+            tag: "{{ open_webui_tag }}"
+            digest: "{{ open_webui_digest }}"
+            environment: >-
+              {{ open_webui_extra_env | combine(open_webui_fixed_env)
+                 | combine({'OPENAI_API_BASE_URLS': lookup('hnx_registry', open_webui_gateway_id, field='url') ~ '/v1'}) }}
+            ports: ["{{ open_webui_bind }}:{{ open_webui_port | int }}:8080"]
+            volumes: ["{{ open_webui_dir }}/data:/app/backend/data"]
+            mem_limit: "{{ open_webui_mem_limit }}"
+            healthcheck:
+              test: [CMD, curl, -fsS, "http://127.0.0.1:8080/health"]  # no-raw-endpoint: allow the container probes itself
+              interval: 30s
+              timeout: 5s
+              retries: 5
+              start_period: 60s
+  tags: [health, backup, restore, export, upgrade]

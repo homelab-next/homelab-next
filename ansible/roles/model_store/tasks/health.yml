@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fast: every file of every entry is present with its size (`tasks_from: verify` is the sha256
+# pass, minutes per hundred GB; run it after a fetch, a restore or a disk event).
+- block:
+    - name: Read the store directories
+      ansible.builtin.stat:
+        path: "{{ model_store_root }}/{{ item }}"
+      loop: [hf/hub, gguf, exports, manifests]
+      register: model_store_dirs
+    - name: Fail unless the store layout exists
+      ansible.builtin.assert:
+        that: model_store_dirs.results | rejectattr('stat.exists') | list | length == 0
+        fail_msg: "model_store: {{ model_store_root }} lacks {{ model_store_dirs.results | rejectattr('stat.exists') | map(attribute='item') | join(', ') }} (run main)"
+    - name: Check every entry by size
+      ansible.builtin.include_tasks: verify_entry.yml
+      loop: "{{ model_store_manifest.models | dict2items }}"
+      loop_control:
+        loop_var: model_store_entry
+        label: "{{ model_store_entry.key }}"
+      vars:
+        model_store_sizes_only: true
+  tags: [health]

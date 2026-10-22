@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Create the store directories (engines read through the group, never write)
+  ansible.builtin.file:
+    path: "{{ model_store_root }}/{{ item }}"
+    state: directory
+    owner: "{{ model_store_owner }}"
+    group: "{{ model_store_group }}"
+    mode: "2750"
+  loop: ["", hf, hf/hub, gguf, manifests]
+
+- name: Create exports/, the trainers' one writable directory
+  ansible.builtin.file:
+    path: "{{ model_store_root }}/exports"
+    state: directory
+    owner: "{{ model_store_owner }}"
+    group: "{{ model_store_exports_group }}"
+    mode: "2770"
+
+- name: Keep a copy of the manifest beside the models
+  ansible.builtin.copy:
+    dest: "{{ model_store_root }}/manifests/model_store.json"
+    content: "{{ model_store_manifest | to_nice_json(sort_keys=true) }}\n"
+    owner: "{{ model_store_owner }}"
+    group: "{{ model_store_group }}"
+    mode: "0640"
+
+- name: Fetch every hub entry at its pinned revision and verify it
+  ansible.builtin.include_tasks: fetch_entry.yml
+  loop: >-
+    {{ model_store_manifest.models | dict2items
+       | selectattr('value.format', 'in', model_store_hub_formats)
+       | selectattr('key', 'in', model_store_fetch_ids or (model_store_manifest.models.keys() | list))
+       | list }}
+  loop_control:
+    loop_var: model_store_entry
+    label: "{{ model_store_entry.key }}"
+  when: model_store_fetch | bool

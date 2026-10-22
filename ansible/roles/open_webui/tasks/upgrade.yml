@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Refuse a target that is not pinned by tag and digest
+      ansible.builtin.assert:
+        that: open_webui_target_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+        fail_msg: "open_webui: the target must be repository:tag@sha256:<64 hex>"
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Validate and record the bump (compose_app upgrade)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        compose_app_name: open-webui
+        compose_app_dir: "{{ open_webui_app.compose_app_dir }}"
+        compose_app_owner: "{{ open_webui_app.compose_app_owner }}"
+        compose_app_group: "{{ open_webui_app.compose_app_group }}"
+        compose_app_spec: "{{ open_webui_app.compose_app_spec }}"
+        compose_app_upgrade_service: open-webui
+        compose_app_upgrade_tag: "{{ open_webui_target_image.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ open_webui_target_image.split('@')[1] }}"
+  tags: [upgrade]

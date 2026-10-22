@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# Exports come back from the backup; hub entries are fetched again by main.  Run tasks_from:
+# verify afterwards: a restored export is served only if it still matches its hashes.
+- name: Restore exports/ from the backup source
+  ansible.builtin.copy:
+    src: "{{ model_store_restore_source }}/"
+    dest: "{{ model_store_root }}/exports/"
+    remote_src: true
+    mode: preserve
+  tags: [restore]

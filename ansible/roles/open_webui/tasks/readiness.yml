@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: The LLM gateway accepts connections (Open WebUI's only backend)
+  ansible.builtin.include_role:
+    name: compose_app
+    tasks_from: readiness
+  vars:
+    compose_app_name: open-webui
+    compose_app_dependencies: ["{{ open_webui_gateway_id }}"]
+  tags: [readiness]

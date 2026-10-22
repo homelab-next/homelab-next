@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+version: 1
+store: model_store.valid.json
+roles: model_roles.valid.json
+backends:
+  svc:inference-large:
+    engine: vllm
+    port: 80
+    gpus: [0]

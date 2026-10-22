@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: The container is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: open-webui
+        compose_app_dir: "{{ open_webui_dir }}"
+    - name: Open WebUI answers on its published port
+      ansible.builtin.uri:
+        url: "http://{{ open_webui_bind }}:{{ open_webui_port | int }}/health"
+        status_code: 200
+        timeout: "{{ open_webui_health_timeout | int }}"
+      changed_when: false
+  tags: [health]

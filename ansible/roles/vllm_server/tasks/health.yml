@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# K-14 on the host: each instance answers /health, and /v1/models serves exactly the role table's
+# model id with the role's context length loaded (homelabnext.registry.models.probe asks the same
+# question through the gateway; tests/roles/test_serving_roles.py holds the two to one verdict).
+- block:
+    - name: Ask each instance for /health
+      ansible.builtin.uri:
+        url: "http://{{ vllm_server_health_host }}:{{ item.port | int }}/health"
+        status_code: 200
+        timeout: "{{ vllm_server_health_timeout | int }}"
+      loop: "{{ vllm_server_instances }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+    - name: Ask each instance what it serves
+      ansible.builtin.uri:
+        url: "http://{{ vllm_server_health_host }}:{{ item.port | int }}/v1/models"
+        headers: "{{ {'Authorization': 'Bearer ' ~ lookup('hnx_secret', vllm_server_api_key_ref)} if vllm_server_api_key_ref else {} }}"
+        return_content: true
+        status_code: 200
+        timeout: "{{ vllm_server_health_timeout | int }}"
+      loop: "{{ vllm_server_instances }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: vllm_server_served
+      changed_when: false
+      no_log: "{{ vllm_server_api_key_ref != '' }}"
+    - name: Fail unless each serves its role's model id with its context length
+      ansible.builtin.assert:
+        that:
+          - item.json is mapping and item.json.data is defined
+          - item.item.served_model_name in (item.json.data | map(attribute='id') | list)
+          - >-
+            (item.json.data | selectattr('id', 'equalto', item.item.served_model_name)
+             | map(attribute='max_model_len') | first | default(none)) == item.item.max_model_len | int
+        fail_msg: >-
+          vllm_server: {{ item.item.name }} should serve {{ item.item.served_model_name }} with context
+          {{ item.item.max_model_len }} (the role table) but serves
+          {{ (item.json.data | default([])) | map(attribute='id') | list }} with context
+          {{ (item.json.data | default([])) | selectattr('id', 'equalto', item.item.served_model_name)
+             | map(attribute='max_model_len') | first | default('unreported') }}
+      loop: "{{ vllm_server_served.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+  tags: [health]
