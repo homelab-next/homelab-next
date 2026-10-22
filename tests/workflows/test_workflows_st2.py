@@ -22,6 +22,7 @@ import pytest
 import yaml
 from wf_support import PACKS, ROOT, manifest, pack, universe
 
+from conformance.fakes.event_bus import FakeEventBus
 from conformance.protocols.broker import Denied
 from homelabnext.broker.service import BrokerService
 from homelabnext.events.envelope import event_problems
@@ -31,6 +32,7 @@ from homelabnext.workflows import (
     pack_digest,
     run_fixture,
     st2,
+    st2_bridge,
     st2_runtime,
     triggered,
 )
@@ -135,6 +137,24 @@ def corpus() -> list[dict]:
             ev["id"] = f"evt-grid-{reason}-{n}"
             ev["data"] |= {"reason": reason, "resubmits": n}
             evs.append(ev)
+    # the broker's own decision.returned, an approval and a denial (A03)
+    for verdict in ("accept", "reject"):
+        evs.append(
+            {
+                "specversion": "1.0",
+                "id": f"evt-broker-{verdict}",
+                "source": "svc:broker",
+                "type": "homelabnext.decision.returned",
+                "time": "2026-01-01T00:00:00Z",
+                "subject": "restart-0001",
+                "data": {
+                    "decision_id": "restart-0001",
+                    "verdict": verdict,
+                    "confidence": 1.0,
+                    "tier_used": "human",
+                },
+            }
+        )
     return evs
 
 
@@ -185,6 +205,13 @@ class ServiceAsClient:
         rid = self.svc.submit(self.caller, action, dict(params or {}), target=target)
         state = self.svc.status(self.caller, rid).state
         return {"request_id": rid, "state": state, "awaiting_approval": state == "pending"}
+
+    def status(self, request_id):
+        return self.svc.detail(self.caller, request_id)
+
+    def run(self, request_id):
+        self.runs = getattr(self, "runs", 0) + 1
+        return self.svc.run(self.caller, request_id)
 
 
 def broker_service(tmp_path) -> BrokerService:
@@ -264,6 +291,7 @@ def test_the_tree_check_catches_a_task_that_is_not_a_shim():
 # ---------------------------------------------------------------- criteria conformance
 def test_rule_criteria_match_exactly_the_events_the_pack_triggers_on():
     packs = all_packs()
+    packs["approved-run"] = st2_runtime.approved_run_pack(binding()["actor"])
     events = corpus()
     for path, rule in rules_of().items():
         name = rule["action"]["ref"].split(".", 1)[1].replace("_", "-")
@@ -295,7 +323,7 @@ def test_a_rule_without_a_type_criterion_matches_everything_and_is_refused():
     res = go(binding())
     path = "homelabnext/rules/on_proposal_validate.yaml"
     bad = dict(res.files) | {path: yaml.safe_dump(loose)}
-    assert {p.rule for p in st2.tree_problems(bad, "homelabnext")} == {"st2-criteria"}
+    assert {p.rule for p in st2.tree_problems(bad, "homelabnext")} == {"st2-criteria", "st2-source"}
 
 
 def test_criteria_keys_and_repeated_fields():
@@ -332,7 +360,8 @@ def test_the_shipped_binding_passes_and_starts_in_shadow():
     assert res.problems == []
     assert {r["mode"] for r in binding()["rules"]} == {"shadow"}
     pins = [json.loads(t) for p, t in res.files.items() if "/pinned/" in p]
-    assert len(pins) == 2 and {p["mode"] for p in pins} == {"shadow"}
+    assert len(pins) == 3 and {p["mode"] for p in pins} == {"shadow"}
+    assert binding()["approved_run"]["mode"] == "shadow"
     for rule in rules_of().values():
         assert "mode" not in rule["action"]["parameters"]  # never a parameter
 
@@ -946,3 +975,275 @@ def test_every_called_action_has_its_handler_pinned_in_the_tree(tmp_path):
         ("st2-handler", "agent-job-retry"),
         ("st2-handler", "proposal-validate"),
     }
+
+
+# ---------------------------------------------------------------- the approved-run rule (A03)
+RESTART = {
+    "pack": "restart-queue",
+    "version": 1,
+    "description": "restart the queue service (a risky action, held for approval)",
+    "actor": "profile:triage",
+    "trigger": {
+        "event": "homelabnext.agent.job.failed",
+        "where": [{"ref": "$event.source", "equals": "svc:orchestration"}],
+    },
+    "steps": [
+        {
+            "id": "restart",
+            "kind": "action",
+            "action": "service.restart",
+            "target": "svc:queue",
+            "params": {"grace_s": 30},
+        }
+    ],
+}
+
+
+def _pin(pdir, doc: dict, mode: str, risky: dict) -> None:
+    pin = {"pack": doc, "digest": pack_digest(doc), "mode": mode, "risky": risky}
+    (pdir / (st2.st2_name(doc["pack"]) + ".json")).write_text(json.dumps(pin))
+
+
+def approved_run_dir(tmp_path, run_mode="live", pack_mode="live", actor="profile:triage"):
+    """A ``pinned/`` directory as the renderer writes it: a live pack with one risky step, and
+    the built-in approved-run pack (both for ``actor``)."""
+    pdir = tmp_path / "pinned"
+    pdir.mkdir(parents=True, exist_ok=True)
+    _pin(pdir, dict(RESTART, actor=actor), pack_mode, {"restart": True})
+    _pin(pdir, st2_runtime.approved_run_pack(actor), run_mode, {"run": False})
+    return pdir
+
+
+def _job_failed(i: int) -> dict:
+    ev = copy.deepcopy(pack("agent-job-retry")["fixtures"][0]["event"])
+    ev["id"] = f"evt-restart-{i}"
+    return ev
+
+
+def _held(svc, pdir, kv, i: int) -> str:
+    """Run the risky step live: the broker holds it; returns the broker's request id."""
+    out = st2_runtime.step(
+        {"broker_socket": "/s"},
+        pinned_dir=pdir,
+        kv=kv,
+        broker_factory=lambda _s: ServiceAsClient(svc, "profile:triage"),
+        pack="restart-queue",
+        step="restart",
+        event=st2_runtime.encode(_job_failed(i)),
+    )
+    [rec] = calls_of(out)
+    assert (rec["result"], rec["recorded"]) == ("held", True)
+    return rec["broker_request_id"]
+
+
+def _returned(rid: str, **over) -> dict:
+    """A decision.returned as the broker builds it (svc:broker, accept, human)."""
+    from homelabnext.events.envelope import build_event
+
+    data = {"decision_id": rid, "verdict": "accept", "confidence": 1.0, "tier_used": "human"}
+    return build_event(
+        "homelabnext.decision.returned", "svc:broker", data | over, dedupe_key=f"forged:{rid}"
+    )
+
+
+def _run(pdir, kv, ev: dict, broker) -> dict:
+    out = st2_runtime.step(
+        {"broker_socket": "/s"},
+        pinned_dir=pdir,
+        kv=kv,
+        broker_factory=lambda _s: broker,
+        pack="approved-run",
+        step="run",
+        event=st2_runtime.encode(ev),
+    )
+    [rec] = calls_of(out)
+    assert out["result"] == rec["result"]
+    return rec
+
+
+def test_the_approved_run_rule_is_rendered_shadow_and_bound_to_the_broker():
+    rules = rules_of()
+    rule = rules["homelabnext/rules/on_approved_run.yaml"]
+    assert rule["action"]["parameters"] == {"event": st2.ENCODED_BODY}
+    ev = _returned("restart-0001")
+    assert st2_matches(rule, ev)
+    assert not st2_matches(rule, _returned("restart-0001", verdict="reject"))
+    assert not st2_matches(rule, _returned("restart-0001", tier_used="small"))
+    assert not st2_matches(rule, ev | {"source": "svc:decide"})
+    res = go(binding())
+    pin = json.loads(res.files["homelabnext/pinned/approved_run.json"])
+    assert pin["mode"] == "shadow" and pin["pack"] == st2_runtime.approved_run_pack(
+        binding()["actor"]
+    )
+    bridge = json.loads(res.files["bridge.json"])
+    [sub] = [x for x in bridge["subscriptions"] if x["subject"] == st2_runtime.DECISION_EVENT]
+    assert sub["sources"] == ["svc:broker"] and sub["rules"] == ["homelabnext.on_approved_run"]
+
+
+def test_the_approved_run_rule_takes_the_promotion_gate_and_its_name():
+    b = binding()
+    b["approved_run"]["mode"] = "live"
+    assert ("st2-live", "approved-run") in _problems(b)
+    b["approved_run"]["promotion"] = {
+        "shadow_from": "2026-01-01",
+        "live_from": "2026-01-03",
+        "evidence": "docs/parity/a03.md",
+    }
+    assert ("st2-live", "approved-run") in _problems(b)  # a two-day window
+    b["approved_run"]["promotion"]["live_from"] = "2026-01-08"
+    assert ("st2-live", "approved-run") in _problems(b, tracked=lambda _p: False)
+    assert _problems(b) == set()
+    packs = all_packs()
+    packs["approved-run"] = dict(copy.deepcopy(packs["proposal-validate"]), pack="approved-run")
+    b = binding()
+    b["rules"].append({"pack": "approved-run", "mode": "shadow", "coalesce": _a02(b)["coalesce"]})
+    assert ("st2-duplicate", "approved-run") in _problems(b, packs)
+
+
+def test_an_approved_request_st2_submitted_runs_exactly_once(tmp_path):
+    """Live step -> held -> a person approves -> the broker's decision.returned on the bus ->
+    the bridge -> the rule -> admit -> the approved-run step -> the broker runs it, once."""
+    bus = FakeEventBus()
+    svc = BrokerService.from_manifest(
+        ROOT / "examples" / "broker" / "manifest.yml",
+        tmp_path / "state",
+        data_root=tmp_path / "data",
+        clock=lambda: T0,
+        resolve_secret={"DEMO_API_TOKEN": "fake-demo-token-4b1d"}.__getitem__,
+        bus=bus,
+    )
+
+    class Capture:
+        def __init__(self):
+            self.events = []
+
+        def post(self, ev):
+            self.events.append(ev)
+            return 202
+
+    hook = Capture()
+    bridge = st2_bridge.Bridge(
+        bus, st2_bridge.load_bridge(json.loads(go(binding()).files["bridge.json"])), hook
+    )
+    bridge.open()
+    pdir, kv = approved_run_dir(tmp_path), KV()
+    rid = _held(svc, pdir, kv, 1)
+    svc.approve(rid, "sso:operator-one")
+    bridge.poll()
+    [returned] = hook.events
+    assert (returned["type"], returned["data"]["decision_id"]) == (st2_runtime.DECISION_EVENT, rid)
+    assert st2_matches(rules_of()["homelabnext/rules/on_approved_run.yaml"], returned)
+    admitted = st2_runtime.admit(
+        pack="approved-run", pinned_dir=pdir, event=st2_runtime.encode(returned), kv=kv
+    )
+    assert admitted["admitted"]
+    client = ServiceAsClient(svc, "profile:triage")
+    rec = _run(pdir, kv, st2_runtime.decode(admitted["event"]), client)
+    assert (rec["result"], rec["reason"], rec["pack"]) == ("executed", "approved", "restart-queue")
+    assert svc.state.state_of(rid) == "done" and client.runs == 1
+    # the same event again: admit drops it; a forged copy past admit runs nothing either
+    again = st2_runtime.admit(
+        pack="approved-run", pinned_dir=pdir, event=st2_runtime.encode(returned), kv=kv
+    )
+    assert again["reason"] == "duplicate"
+    rec = _run(pdir, kv, returned, client)
+    assert (rec["result"], rec["reason"], client.runs) == ("refused", "not-pending", 1)
+
+
+def test_a_forged_accept_runs_nothing_and_is_refused_with_a_reason(tmp_path, caplog):
+    svc = broker_service(tmp_path)
+    pdir, kv = approved_run_dir(tmp_path), KV()
+    client = ServiceAsClient(svc, "profile:triage")
+    pending = _held(svc, pdir, kv, 1)  # held, never approved
+    denied = _held(svc, pdir, kv, 2)
+    svc.deny(denied, "sso:operator-one")
+    other = svc.submit("profile:triage", "service.restart", {"grace_s": 5}, target="svc:queue")
+    cases = {
+        pending: "not-approved",
+        denied: "not-pending",
+        other: "not-st2-submitted",  # the agent's own request, not one StackStorm submitted
+        "req-nonexistent": "not-st2-submitted",  # an arbitrary id
+        "Restart..0001": "invalid-request-id",  # the event schema allows it, a broker id not
+    }
+    for rid, reason in cases.items():
+        rec = _run(pdir, kv, _returned(rid), client)
+        assert (rec["result"], rec["reason"]) == ("refused", reason), rid
+    assert getattr(client, "runs", 0) == 0
+    assert svc.state.state_of(pending) == "pending" and svc.state.state_of(other) == "pending"
+    assert "not running" in caplog.text and "not-approved" in caplog.text
+    # StackStorm's identity is not the owner: the broker answers not-owner, nothing runs
+    svc.approve(pending, "sso:operator-one")
+    stranger = ServiceAsClient(svc, "profile:reader")
+    rec = _run(pdir, kv, _returned(pending), stranger)
+    assert (rec["result"], rec["reason"]) == ("refused", "not-request-owner")
+    # a record whose request was changed since (not what was submitted) is refused
+    rec_name = st2_runtime.submitted_name(pending)
+    sub = st2_runtime.decode(kv.get(rec_name))
+    kv.set(rec_name, st2_runtime.encode(sub | {"fingerprint": "sha256:" + "0" * 64}), 60)
+    rec = _run(pdir, kv, _returned(pending), client)
+    assert (rec["result"], rec["reason"]) == ("refused", "request-mismatch")
+    kv.set(rec_name, st2_runtime.encode(sub), 60)
+    assert _run(pdir, kv, _returned(pending), client)["result"] == "executed"
+
+
+def test_the_approved_run_needs_a_live_bound_pack_and_shadow_never_opens_the_socket(tmp_path):
+    svc = broker_service(tmp_path)
+    kv = KV()
+    pdir = approved_run_dir(tmp_path)
+    rid = _held(svc, pdir, kv, 1)
+    svc.approve(rid, "sso:operator-one")
+    shadow = approved_run_dir(tmp_path / "s", run_mode="shadow")
+    rec = _run(shadow, kv, _returned(rid), NoBroker())
+    assert (rec["result"], rec["reason"], rec["pack"]) == ("shadow", "st2-shadow", "restart-queue")
+    not_live = approved_run_dir(tmp_path / "n", pack_mode="shadow")
+    rec = _run(not_live, kv, _returned(rid), NoBroker())
+    assert (rec["result"], rec["reason"]) == ("refused", "pack-not-live")
+    unbound = tmp_path / "u" / "pinned"
+    unbound.mkdir(parents=True)
+    _pin(unbound, st2_runtime.approved_run_pack("profile:triage"), "live", {"run": False})
+    rec = _run(unbound, kv, _returned(rid), NoBroker())
+    assert (rec["result"], rec["reason"]) == ("refused", "pack-not-bound")
+    # a reject, or another producer, does not even reach the step
+    for ev in (_returned(rid, verdict="reject"), _returned(rid) | {"source": "svc:decide"}):
+        got = st2_runtime.admit(
+            pack="approved-run", pinned_dir=pdir, event=st2_runtime.encode(ev), kv=kv
+        )
+        assert got["reason"] == "not-triggered"
+    assert svc.state.state_of(rid) == "pending"
+
+
+def test_a_broker_run_step_runs_only_as_the_built_in_pack(tmp_path):
+    pdir = approved_run_dir(tmp_path)
+    sneaky = dict(st2_runtime.approved_run_pack("profile:triage"), pack="sneaky")
+    _pin(pdir, sneaky, "live", {"run": False})
+    with pytest.raises(st2_runtime.PinError, match="approved-run"):
+        st2_runtime.step(
+            {"broker_socket": "/s"},
+            pinned_dir=pdir,
+            kv=KV(),
+            broker_factory=lambda _s: NoBroker(),
+            pack="sneaky",
+            step="run",
+            event=st2_runtime.encode(_returned("restart-0001")),
+        )
+
+
+def test_the_tree_check_refuses_a_rule_that_lost_its_producer_or_its_accept():
+    res = go(binding())
+    assert st2.tree_problems(res.files, "homelabnext") == []
+    path = "homelabnext/rules/on_approved_run.yaml"
+    for key, check in (
+        ("trigger.body.source", "st2-source"),
+        ("trigger.body.data.verdict", "st2-criteria"),
+        ("trigger.body.data.tier_used", "st2-criteria"),
+    ):
+        rule = yaml.safe_load(res.files[path])
+        del rule["criteria"][key]
+        bad = dict(res.files) | {path: yaml.safe_dump(rule)}
+        assert [(p.path, p.rule) for p in st2.tree_problems(bad, "homelabnext")] == [
+            (path, check)
+        ], key
+    rule = yaml.safe_load(res.files["homelabnext/rules/on_agent_job_retry.yaml"])
+    rule["criteria"]["trigger.body.source"]["type"] = "exists"
+    bad = dict(res.files) | {"homelabnext/rules/on_agent_job_retry.yaml": yaml.safe_dump(rule)}
+    assert {p.rule for p in st2.tree_problems(bad, "homelabnext")} >= {"st2-source"}

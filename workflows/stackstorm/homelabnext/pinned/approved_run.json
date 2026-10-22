@@ -1,0 +1,37 @@
+{
+  "digest": "sha256:fc77d92bbf1f28a546b66c8a44de3acb5b99aa4c2612611917bb0550e1be4641",
+  "mode": "shadow",
+  "pack": {
+    "actor": "profile:workflow-agents",
+    "description": "Run a request StackStorm submitted for a bound pack once the broker records its approval",
+    "pack": "approved-run",
+    "steps": [
+      {
+        "id": "run",
+        "kind": "broker-run",
+        "request": "$event.data.decision_id"
+      }
+    ],
+    "trigger": {
+      "event": "homelabnext.decision.returned",
+      "where": [
+        {
+          "equals": "svc:broker",
+          "ref": "$event.source"
+        },
+        {
+          "equals": "accept",
+          "ref": "$event.data.verdict"
+        },
+        {
+          "equals": "human",
+          "ref": "$event.data.tier_used"
+        }
+      ]
+    },
+    "version": 1
+  },
+  "risky": {
+    "run": false
+  }
+}

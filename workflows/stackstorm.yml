@@ -24,3 +24,9 @@ rules:
     id: A02
     mode: shadow
     coalesce: {key: $event.data.agent_key, window_s: 600}
+# A03: runs a request a live step above submitted and the broker held, once a person approved it
+# (homelabnext.decision.returned from the broker).  Only requests StackStorm recorded at submit,
+# for a bound live pack, still pending and approved; the broker re-decides and runs it once.
+approved_run:
+  id: A03
+  mode: shadow

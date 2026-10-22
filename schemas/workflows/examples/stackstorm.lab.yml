@@ -17,3 +17,4 @@ rules:
     coalesce: {key: $event.data.agent_key, window_s: 600}
     promotion: {shadow_from: "2026-01-01", live_from: "2026-01-08", evidence: docs/parity/a02.md}
   - {pack: nightly-digest, mode: shadow, schedule: {id: nightly-digest, cron: "5 6 * * *"}}
+approved_run: {id: A03, mode: shadow, source: svc:broker}

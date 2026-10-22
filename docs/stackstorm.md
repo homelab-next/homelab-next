@@ -101,17 +101,21 @@ table and decision services.
 
 **Actions and approvals.** In `live` mode a risky action goes to the broker as `submit`. Risky means
 the manifest gives it tier `execute` or `privileged`, or sets `requires_approval`. The broker holds
-the request and emits `homelabnext.decision.requested`, and the run ends `held`. Any other action is
+the request and emits `homelabnext.decision.requested`, and the run ends `held`. The step records
+the held request in the datastore (`homelabnext.submitted.<hash of the broker's request id>`, kept
+7 days): its pack, step, action and a fingerprint of what it asks for. Once a person approves it,
+the [approved-run rule](#running-an-approved-request-a03) runs it. Any other action is
 a `call`, and the broker decides it as usual (`executed` or `denied`). The approval and its digest
 binding are the broker's ([ADR-0017](adr/0017-broker-service.md)). StackStorm inquiries
 (`core.ask`) are not used.
 
-## The first two automations
+## The automations
 
 | Id | Pack | Trigger | Does | Replaces |
 |---|---|---|---|---|
 | A01 | `proposal-validate` | `homelabnext.proposal.created`, which the broker emits when a note is filed through the records-inbox lane (`proposal.file`) | `agent.job.submit` of one `proposal-validator` job, the event id as idempotency key | the proposal-validator dispatch timer |
 | A02 | `agent-job-retry` | `homelabnext.agent.job.failed` with `reason` in capacity, stall, timeout, backend-down and `resubmits` = 0 | `agent.job.submit` again, at priority 90, with `retry_of_run_id` | ad-hoc reruns of failed jobs |
+| A03 | `approved-run` (built in) | `homelabnext.decision.returned` from the broker: a person approved a request | `run` of that request, only one a live step here submitted ([below](#running-an-approved-request-a03)) | running held requests by hand as the StackStorm user |
 
 `homelabnext.agent.job.failed` (`schemas/events/agent.job.failed.schema.json`) is the contract
 proposed for the controller's `agent.job.*` events. `resubmits` counts the whole-job resubmits in a
@@ -125,6 +129,67 @@ inside one run stay the controller's (`max_attempts`). Failures the controller d
 - `st2-coalesce`: a rule whose pack dispatches agent work has a coalesce window.
 - `st2-bound`: a pack that reacts to `agent.job.failed` by dispatching pins `$event.data.resubmits` to
   integers below 3, and carries `retry_of_run_id: $event.data.run_id`.
+
+## Running an approved request (A03)
+
+A held request belongs to StackStorm's broker identity (the binding's `actor`), and only its owner
+may run it, so something on StackStorm has to. That is the built-in rule `approved_run` of the
+binding (`on_approved_run`, pack `approved-run`, rendered by the renderer, not a workflow pack in
+`workflows/packs/`):
+
+```yaml
+approved_run: {id: A03, mode: shadow}     # source: svc:broker by default; promotion when live
+```
+
+It triggers on `homelabnext.decision.returned` from the broker with `verdict: accept` and
+`tier_used: human` (what the broker emits when a person approves; a denial is `reject` and never
+matches). Its one step, `run`, asks the broker to run `data.decision_id`, and only when all of
+this holds, else the run ends `refused` with the reason, logged:
+
+| Check | Refusal |
+|---|---|
+| the id is a broker request id | `invalid-request-id` |
+| a live step of this StackStorm recorded it at submit (an agent's own request, or any other id, is not) | `not-st2-submitted` |
+| the recorded pack is bound here, its step is a risky action step for the same action | `pack-not-bound`, `step-not-bound` |
+| that pack's rule is live | `pack-not-live` |
+| the broker shows the request to this caller (the owner) | `not-request-owner` |
+| its actor is this actor, and it still asks for what was submitted (the fingerprint) | `other-caller`, `request-mismatch` |
+| it is still pending, and its latest decision is an approval | `not-pending`, `not-approved` |
+
+The broker then re-decides anyway: the approval's digest binding, expiry and single use, the
+owner. A run happens at most once (the broker claims the request first), so a redelivered or
+forged `accept` costs a refusal, never a second run or a run of anything not approved. A broker
+refusal at run time ends the step `denied` with the broker's reason (`approval-expired`: approve
+again, which emits a new event and a new run). In `shadow` mode the step makes every check that
+needs no broker and stops before the socket (`shadow`, `st2-shadow`). Like any rule it ships in
+shadow, and `live` needs `promotion` (`st2-live`). A request approved more than 7 days after it was
+held is no longer recorded and is refused; cancel it or file it again.
+
+```mermaid
+sequenceDiagram
+    participant Bus as Event bus
+    participant Bridge as Event bridge
+    participant St2 as StackStorm
+    participant KV as st2 datastore
+    participant Broker
+    participant Hub as Approvals page
+    Bus->>Bridge: homelabnext.agent.job.failed (svc:orchestration)
+    Bridge->>St2: POST webhook (St2-Api-Key, Idempotency-Key)
+    St2->>St2: rule on_<pack>, admit (schema, trigger, dedupe, coalesce)
+    St2->>Broker: submit (risky step, live)
+    Broker-->>St2: request_id, awaiting approval
+    St2->>KV: homelabnext.submitted.<id> = pack, step, fingerprint
+    Broker->>Bus: homelabnext.decision.requested
+    Hub->>Broker: approve (a person, via the relay)
+    Broker->>Bus: homelabnext.decision.returned (accept, human)
+    Bus->>Bridge: decision.returned (svc:broker)
+    Bridge->>St2: POST webhook
+    St2->>St2: rule on_approved_run, admit
+    St2->>KV: read the submit record
+    St2->>Broker: status (owner, state, approvals, fingerprint)
+    St2->>Broker: run request_id
+    Broker->>Broker: re-decide, claim, consume the approval, run the handler once
+```
 
 ## Redeliveries
 
@@ -322,18 +387,18 @@ The stats file is a status source with the existing `poll-file` kind:
 |---|---|
 | `st2-binding` | the binding is not schema-valid |
 | `st2-pin` | a bound pack is not pinned at the digest of the pack in the tree, or does not validate |
-| `st2-duplicate` | a pack or a schedule id is bound twice |
+| `st2-duplicate` | a pack or a schedule id is bound twice, or a bound pack is named `approved-run` |
 | `st2-actor` | a bound pack's `actor` is not the binding's `actor` |
 | `st2-step` | a step does not run on StackStorm (`lookup`, `decide`, `prompt`) |
 | `st2-template` | a literal holds `{{`, `{%` or `<%`; a rendered rule passes anything but the encoded body (or `fired_at`); a task input is an expression other than the encoded `event`, `state` or `fired_at` |
-| `st2-source` | an event-triggered pack does not pin `$event.source` to one producer |
+| `st2-source` | an event-triggered pack does not pin `$event.source` to one producer, or a rendered webhook rule does not test `trigger.body.source` for equality |
 | `st2-handler` | an action a bound pack calls has no handler file in the tree, or none whose `handler.json` digest matches |
 | `st2-trigger`, `st2-cron` | a schedule does not match its pack's trigger, is not five valid fields, or sets both day of month and day of week |
 | `st2-live` | a live rule has no promotion, too short a shadow window, or untracked evidence |
 | `st2-coalesce`, `st2-bound` | agent dispatch without a window, or job-failed retries without a cap |
 | `st2-secret` | a secret-like config key holds a literal |
 | `st2-shape` | a rendered document lacks a field StackStorm requires, uses a task action that is not a shim, or a runner other than `python-script` or `orquesta` |
-| `st2-criteria` | a webhook rule does not test `trigger.body.type` for one event type (it would match everything) |
+| `st2-criteria` | a webhook rule does not test `trigger.body.type` for one event type (it would match everything), or the approved-run rule does not test `verdict` = `accept` and `tier_used` = `human` |
 | `st2-drift` | the committed tree differs from the rendered one |
 
 The required fields are encoded from st2 3.8.1's `st2common` API models (pack, action, rule), its

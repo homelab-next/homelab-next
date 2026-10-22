@@ -22,12 +22,18 @@ stays in the broker.  Inputs: the binding (``workflows/stackstorm.yml``,
   API key (:mod:`homelabnext.workflows.st2_bridge`);
 * ``provenance.json``: the binding and pack digests the tree was rendered from.
 
+With ``approved_run`` in the binding, the same files are rendered for the built-in pack
+``approved-run`` (:func:`homelabnext.workflows.st2_runtime.approved_run_pack`): a webhook rule on
+``homelabnext.decision.returned`` from the broker with a person's ``accept``, whose one step asks
+the broker to run the approved request, if and only if a live step of a bound pack submitted it.
+Every check below applies to it as to a bound pack (``st2-live`` included).
+
 Rules (``<path>: <rule>: <detail>``, exit 1 on any):
 
 ``st2-binding``  the binding is schema-valid.
 ``st2-pin``      every bound pack is pinned in the deploy manifest, with the digest of the pack in
                  the tree, and validates (``hnx workflows validate``).
-``st2-duplicate`` a pack or a schedule id is bound once.
+``st2-duplicate`` a pack or a schedule id is bound once; no bound pack is named ``approved-run``.
 ``st2-actor``    every bound pack's ``actor`` is the binding's ``actor`` (the one broker identity
                  StackStorm's actions authenticate as).
 ``st2-step``     every step runs on StackStorm: ``action``, or ``enrich`` ``pick``/``extract-iocs``.
@@ -61,7 +67,10 @@ Rules (``<path>: <rule>: <detail>``, exit 1 on any):
                  from st2 3.8 ``st2common`` API models and the Orquesta spec), uses only the shim
                  actions, and no runner but ``python-script``/``orquesta``.
 ``st2-criteria`` every webhook rule's criteria test ``trigger.body.type`` for equality with one
-                 ``homelabnext.`` event type (a rule without one would match every event).
+                 ``homelabnext.`` event type (a rule without one would match every event); the
+                 approved-run rule also tests ``verdict`` = ``accept`` and ``tier_used`` =
+                 ``human``.  In the rendered tree, ``st2-source`` also requires every webhook
+                 rule to test ``trigger.body.source`` for equality.
 ``st2-drift``    (``--check``) the committed tree equals the rendered one, file for file.
 """
 
@@ -79,7 +88,14 @@ from homelabnext.agent.digest import digest_of
 
 from .pack import WorkflowError, git_files, load_doc, schema_errors
 from .runner import MODEL_KINDS, is_risky
-from .st2_runtime import SCHEDULE_EVENT, ST2_ENRICH_OPS
+from .st2_runtime import (
+    APPROVED_RUN,
+    BROKER_SOURCE,
+    SCHEDULE_EVENT,
+    ST2_ENRICH_OPS,
+    approved_run_pack,
+    pinned_sources,
+)
 from .validate import Problem, Universe, load_universe, validate_repo
 
 DEFAULT_BINDING = Path("workflows") / "stackstorm.yml"
@@ -321,6 +337,36 @@ def criteria_problems(rule: Mapping[str, Any]) -> list[str]:
     return []
 
 
+#: what the approved-run rule must test besides its type: a person's accept, nothing else
+APPROVED_RUN_CRITERIA = {
+    "trigger.body.data.verdict": {"type": "equals", "pattern": "accept"},
+    "trigger.body.data.tier_used": {"type": "equals", "pattern": "human"},
+}
+
+
+def pin_problems(rule: Mapping[str, Any], ref: str) -> list[tuple[str, str]]:
+    """``(check, detail)`` for a rendered webhook rule that lost a pin: its producer
+    (``st2-source``: ``trigger.body.source`` equals one id) or, for the approved-run rule, a
+    person's ``accept`` (``st2-criteria``)."""
+    if rule.get("trigger", {}).get("type") != WEBHOOK_TRIGGER:
+        return []
+    crit = rule.get("criteria") or {}
+    out = []
+    src = crit.get("trigger.body.source")
+    if not (
+        isinstance(src, Mapping)
+        and src.get("type") == "equals"
+        and isinstance(src.get("pattern"), str)
+        and src["pattern"]
+    ):
+        out.append(("st2-source", "no equality criterion on trigger.body.source: any producer"))
+    if rule.get("action", {}).get("ref") == f"{ref}.{st2_name(APPROVED_RUN)}":
+        for key, want in APPROVED_RUN_CRITERIA.items():
+            if crit.get(key) != want:
+                out.append(("st2-criteria", f"{key}: the approved-run rule must test {want}"))
+    return out
+
+
 def cron_params(cron: str) -> dict[str, Any]:
     """Five cron fields (UTC) -> CronTimer parameters.  Day of week becomes names (``mon-fri``):
     cron counts 0 = Sunday, the CronTimer's scheduler counts 0 = Monday, and names cannot be
@@ -432,7 +478,11 @@ def _shim(ref: str, name: str) -> str:
             "admit(\n            kv=st2_runtime.ActionServiceKV(self.action_service), "
             "pinned_dir=PINNED, **params\n        )"
         ),
-        "step": "step(self.config, pinned_dir=PINNED, **params)",
+        "step": (
+            "step(\n            self.config,\n            "
+            "kv=st2_runtime.ActionServiceKV(self.action_service),\n            "
+            "pinned_dir=PINNED,\n            **params,\n        )"
+        ),
     }[name]
     func = "admit" if name == "admit" else "step"
     return _SHIM.format(header=HEADER, ref=ref, name=name, func=func, cls=name.title(), call=call)
@@ -535,7 +585,9 @@ def _pinned(pack: Mapping[str, Any], digest: str, rule: Mapping[str, Any], manif
         "digest": digest,
         "mode": rule["mode"],
         "risky": {
-            s["id"]: s["kind"] == "action" and is_risky(manifest, s["action"])
+            s["id"]: s["kind"] == "action"
+            and manifest is not None
+            and is_risky(manifest, s["action"])
             for s in pack["steps"]
         },
     }
@@ -676,6 +728,17 @@ def render(
                     bad("st2-handler", f"{name}: step {s['id']} ({act['action']}): {why}")
         if len(out.problems) == n0:
             bound.append((rule, pack, digest, manifest))
+    ar = binding.get("approved_run")
+    if ar is not None:
+        pack = approved_run_pack(binding["actor"], ar.get("source", BROKER_SOURCE))
+        rule = {"pack": APPROVED_RUN, **{k: v for k, v in ar.items() if k != "source"}}
+        if APPROVED_RUN in seen:
+            bad("st2-duplicate", f"{APPROVED_RUN}: the built-in approved-run rule's name")
+        else:
+            n0 = len(out.problems)
+            _check_rule(rule, pack, binding, tracked, bad)
+            if len(out.problems) == n0:
+                bound.append((rule, pack, digest_of(pack), None))
     for key, entry in sorted(binding.get("config", {}).items()):
         if key == "broker_socket":
             bad("st2-binding", "config: broker_socket is set by the binding's own field")
@@ -745,15 +808,6 @@ def render(
     files["provenance.json"] = _json(provenance)
     out.problems += tree_problems(out.files, ref)
     return out
-
-
-def pinned_sources(trigger: Mapping[str, Any]) -> list[str]:
-    """The producers a trigger pins (``$event.source`` ``equals``): what the bridge forwards."""
-    return [
-        c["equals"]
-        for c in trigger.get("where", [])
-        if c["ref"] == "$event.source" and isinstance(c.get("equals"), str)
-    ]
 
 
 def _check_rule(rule, pack, binding, tracked, bad) -> None:
@@ -860,6 +914,7 @@ def tree_problems(files: Mapping[str, str], ref: str) -> list[Problem]:
                 f"trigger/parameters: {e}" for e in shape_errors(pk, doc["trigger"]["parameters"])
             ]
             errs += criteria_problems(doc)
+            out += [Problem(path, rule, d) for rule, d in pin_problems(doc, ref)]
             errs += [
                 f"criteria: {k}: pattern is a template"
                 for k, v in (doc.get("criteria") or {}).items()
