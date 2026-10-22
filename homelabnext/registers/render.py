@@ -242,6 +242,7 @@ def render_runbooks(data, lessons=None, policy=None) -> tuple[str, dict]:
                 [
                     ("Purpose", _p(r["purpose"])),
                     ("Systems", e(", ".join(r["systems"]))),
+                    ("Lessons", _related_html(r.get("lessons"), index)),
                     ("Checklist", f"<ol>{steps}</ol>"),
                     ("Lessons sharing these systems", f"<ul>{lessons_html}</ul>" if rel else ""),
                     (
@@ -413,7 +414,8 @@ def build_all(src_dir, out_dir, results_path=None, policy_path=None) -> list[pat
     :func:`homelabnext.registers.records.load_register`.
 
     Fatal: any invalid register, a reference that does not resolve (``related``,
-    ``superseded_by``, ``incorporated_into``, ``retired_by``, step ``from_lessons``), or a record
+    ``superseded_by``, ``incorporated_into``, ``retired_by``, a runbook's ``lessons``, step
+    ``from_lessons``), or a record
     whose status lacks the reviews the review policy (``review-policy.yml`` in or beside
     ``src_dir``) requires raises RegisterError before ANY file is written, so a broken entry can
     never leave a half-updated site behind.

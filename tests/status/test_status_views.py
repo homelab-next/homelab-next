@@ -265,7 +265,11 @@ def test_a_blackholed_source_cannot_stall_the_console(served, make_hub):
 
 
 def test_source_catalog_page_is_current_and_detects_drift(specs, tmp_path):
-    assert catalog_check(ROOT / "docs/status/sources.md", specs) == []
+    from homelabnext.status.catalog import POWER_LAB, power_lab
+
+    ups = power_lab(ROOT / POWER_LAB)
+    assert catalog_check(ROOT / "docs/status/sources.md", specs, ups) == []
+    assert catalog_check(ROOT / "docs/status/sources.md", specs) != []  # the UPS part is in it
     page = render_catalog(specs)
     for s in specs:
         assert f"### {s.id}\n\n{s.what}" in page

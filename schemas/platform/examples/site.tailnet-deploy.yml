@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+# EXAMPLE (1.2): the CI deploy's tailnet access, SSH to mgmt plus one port with its reason
+site_version: 1
+site:
+  id: northwind
+  domain: example.internal
+  timezone: UTC
+router:
+  id: edge-router
+  model: unifi
+  mgmt_endpoint: svc:router-console
+  tls_pin:
+    sha256: REPLACE_WITH_CONSOLE_CERT_FINGERPRINT
+  auth:
+    reads:
+      mode: api_key
+      secret_ref: secret:network/router/api-key
+    writes:
+      mode: local_admin
+      secret_ref: secret:network/router/local-admin
+firewall:
+  default_action: deny
+zones:
+- id: mgmt
+  purpose: management
+  vlan_id: 10
+  subnet: 192.0.2.0/26
+  gateway: 192.0.2.1
+  dhcp:
+    range:
+    - 192.0.2.32
+    - 192.0.2.62
+  dns:
+    resolvers:
+    - svc:dns
+  egress:
+    internet: deny
+    inter_zone:
+      default: deny
+  tags:
+  - infra
+tailnet:
+  deploy:
+    tag: tag:ci-deploy
+    owners: [autogroup:admin]
+    zones: [mgmt]
+    exceptions:
+    - {zones: [mgmt], ports: [9443], reason: "the identity provider's admin API, reloaded by the deploy"}

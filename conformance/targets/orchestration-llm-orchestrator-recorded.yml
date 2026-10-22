@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# The orchestration adapter on the loopback stand-in for the controller's job API as of a52a1c4
+# (conformance/fakes/llm_orchestrator_api.py), a fresh instance per check.  It fails the same three
+# MUST checks the live controller fails (unknown-job-raises, retries-until-success,
+# retries-are-bounded); tests/conform/test_conform_orchestration_controller.py pins that set and
+# shows the proposed controller fixes clear it.
+#   hnx conform run orchestration --target orchestration-llm-orchestrator-recorded
+name: orchestration-llm-orchestrator-recorded
+capabilities:
+  orchestration:
+    adapter: homelabnext.conform.adapters.llm_orchestrator:make
+    config: {recorded_fake: true}

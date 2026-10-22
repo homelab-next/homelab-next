@@ -10,7 +10,8 @@ and is therefore on the menu (``hnx status sources``, ``docs/status/sources.md``
 * :mod:`.collectors` -- one :class:`Collector` per kind (``poll-http-json``, ``poll-file``,
   ``push-event``, ``agent-activity``), all through an injected context; :mod:`.products` the
   product kinds of stage 2 (``poll-prometheus``, ``poll-uptime-kuma``, ``poll-stackstorm``,
-  ``poll-nifi``);
+  ``poll-nifi``); :mod:`.nut` the NUT upsd kind (``poll-nut``) and :mod:`.power` the UPS sources
+  generated from the site's ``power.ups`` and the "UPS on battery" notification;
 * :mod:`.scheduler` -- each due source in its own thread under its own timeout (O-07);
 * :mod:`.hub` -- latest + bounded history, staleness from expiry (O-06), state-diffed
   notifications through ``homelabnext.notify`` (O-08), ``status.observed`` events on the bus;

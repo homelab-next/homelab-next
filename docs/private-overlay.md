@@ -120,8 +120,10 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
    Generate a second age identity for the deploy and add its recipient to `.sops.yaml`
    (`sops updatekeys` on existing files).
 5. **A path into the lab.** Either
-   * **Tailscale** (no inbound exposure): add `tag:ci-deploy` to the tailnet policy with the least
-     access below, and create an OAuth client with the `auth_keys` scope restricted to that tag; or
+   * **Tailscale** (no inbound exposure): declare the deploy's access in `lab/site.yml`
+     (`tailnet.deploy`, [below](#tailscale-the-deploy-tag-least-access)), render the tailnet policy
+     and push it (its `tests` must pass), and create an OAuth client with the `auth_keys` scope
+     restricted to `tag:ci-deploy`; or
    * **a self-hosted runner inside the lab**: a dedicated VM in the management zone, registered to
      the private repository only, with labels `self-hosted, linux, hnx-deploy`, running as an
      unprivileged user, ideally ephemeral (`--ephemeral`, re-registered per job).
@@ -141,17 +143,27 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
 ### Tailscale: the deploy tag, least access
 
 `hnx guests render ... --target tailscale-acl` generates the tailnet policy from the site model
-(one `tag:zone-<zone>` per zone, admins on SSH, the site's zone-to-zone allows). The deploy tag
-is not generated yet; add it beside the generated rules when you push the policy:
+(one `tag:zone-<zone>` per zone, admins on SSH, the site's zone-to-zone allows) and, since site
+1.2, the deploy tag from the site's own declaration
+([network model](network-model.md#deploy-access-12)); nothing is added by hand:
 
-```json
-{
-  "tagOwners": {"tag:ci-deploy": ["autogroup:admin"]},
-  "acls": [
-    {"action": "accept", "src": ["tag:ci-deploy"], "proto": "tcp",
-     "dst": ["tag:zone-mgmt:22", "tag:zone-data:22"]}
-  ]
-}
+```yaml
+# lab/site.yml
+tailnet:
+  deploy:
+    owners: [autogroup:admin]   # tagOwners of tag:ci-deploy
+    zones: [mgmt, data]         # the zones the deploy configures
+```
+
+renders `tag:ci-deploy` in `tagOwners`, one rule `tag:ci-deploy -> tag:zone-mgmt:22,
+tag:zone-data:22` (TCP) and a `tests` block that Tailscale runs whenever the policy changes: the
+tag reaches those zones on 22, is refused on other ports and on every other tag, and no zone tag
+reaches it. A `*` or `any` destination is refused, and a port other than 22 needs an
+`exceptions` entry with its reason. Render and push:
+
+```sh
+hnx guests render lab/guests --site lab/site.yml --target tailscale-acl --out build/tailnet
+# then apply build/tailnet/tailscale-policy.hujson with Tailscale's own tooling
 ```
 
 SSH (22) to the zones the deploy configures, nothing else: no subnet routes, no exit node, no

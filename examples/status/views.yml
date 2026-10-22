@@ -82,6 +82,19 @@ menu:
     title: Roadmap
     panel: roadmap
     group: maps
+  # directory pages generated from the repository (--maps; unavailable without)
+  - id: links
+    title: Links
+    panel: links
+    group: directory
+  - id: schedule
+    title: Schedule
+    panel: schedule
+    group: directory
+  - id: roster
+    title: Agent roster
+    panel: roster
+    group: directory
   # rendered only for a request through the trusted front door (docs/status.md)
   - id: agent-detail
     title: Session detail

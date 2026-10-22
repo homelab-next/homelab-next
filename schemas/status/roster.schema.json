@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/status/roster/1.0",
+  "title": "Status hub agent roster (roster.yml)",
+  "description": "What the status hub's Agent roster page reads (docs/status.md): where the compiled agent profiles, the broker manifests, the workflow packs and the model role table are (paths or globs relative to this file), and, per agent profile, what none of those holds: its owner, the runtime that runs it and one line on what it does. Grants, MCP servers, budgets, broker actions and the lanes a profile may write are read from those files, never restated here. Nothing here grants anything.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["roster_version", "profiles", "agents"],
+  "properties": {
+    "roster_version": {"const": 1},
+    "profiles": {"$ref": "#/$defs/paths", "description": "Compiled agent profiles (schemas/agent/profile, hnx agent compile output), JSON."},
+    "brokers": {"$ref": "#/$defs/paths", "description": "Broker manifests (schemas/broker/manifest), YAML or JSON: each grant's actions and the lanes those actions write."},
+    "packs": {"$ref": "#/$defs/paths", "description": "Workflow packs (schemas/workflows/pack): the profile each pack acts as."},
+    "model_roles": {"$ref": "#/$defs/path", "description": "The model role table: the backends each model role is bound to."},
+    "agents": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["profile", "owner", "runtime"],
+        "properties": {
+          "profile": {"type": "string", "maxLength": 128, "pattern": "^profile:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"},
+          "owner": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)", "maxLength": 63, "description": "The owning team as a slug, never a person."},
+          "runtime": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$(?!\\n)", "description": "What runs it, in the agent-activity tier's words: claude-code, codex, orchestrator, workflow-runner, ..."},
+          "what": {"type": "string", "maxLength": 200, "pattern": "^[^\\u0000-\\u001f\\u007f<>]*$(?!\\n)"},
+          "activity_names": {"type": "array", "uniqueItems": true, "maxItems": 10, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$(?!\\n)"}, "description": "Other names its sessions report as agent (besides the profile id and its bare name)."}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "path": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^(?!/)[A-Za-z0-9._*/-]+$(?!\\n)"},
+    "paths": {"type": "array", "uniqueItems": true, "maxItems": 50, "items": {"$ref": "#/$defs/path"}}
+  }
+}

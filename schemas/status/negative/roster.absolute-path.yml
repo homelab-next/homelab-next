@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+roster_version: 1
+profiles: [/etc/profiles/*.json]
+agents: []

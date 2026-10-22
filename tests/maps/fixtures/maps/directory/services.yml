@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: Apache-2.0
+# A tiny synthetic registry for the Links page goldens (documentation addresses only).
+registry_version: 1
+lab: {name: harbor, domain: example.internal, svc_label: svc, owner: ops-team}
+zones:
+  mgmt: {cidr: 192.0.2.0/24, description: shared tools}
+  data: {cidr: 198.51.100.0/24, description: storage and query}
+  quiet: {cidr: 203.0.113.0/24, description: a zone with no services}
+hosts:
+  tools-1: {address: 192.0.2.10, zone: mgmt}
+  store-1: {address: 198.51.100.20, zone: data}
+services:
+  login:
+    capability: idp
+    impl: authentik
+    host: tools-1
+    protocol: https
+    port: 9443
+    health: {kind: http, path: /-/health/live/, expect_status: 204}
+    owner: ops-team
+    version: "1.0"
+    tls: internal
+    auth: own
+    public_hostname: login.lab.example
+  board:
+    capability: status-hub
+    impl: homelabnext
+    host: tools-1
+    protocol: http
+    port: 8099
+    health: {kind: http, path: /status.json, expect_status: 200}
+    owner: ops-team
+    version: "0.1.0"
+    tls: none
+    auth: idp
+    public_hostname: board.lab.example
+    front_door: {header: X-Hnx-Front-Door, secret: "secret:board/front-door"}
+    description: '<script>alert("x")</script> the board'
+  query:
+    capability: lake-query
+    impl: trino
+    host: store-1
+    protocol: https
+    port: 8443
+    health: {kind: tcp}
+    owner: data-team
+    version: "450.0"
+    tls: internal
+    auth: idp
+    mcp: {name: lake_query, transport: http, path: /mcp}
+    description: SQL over the lake.
+  db:
+    capability: records-db
+    impl: postgresql
+    host: store-1
+    protocol: postgres
+    port: 5432
+    health: {kind: tcp}
+    owner: data-team
+    version: "16.4"
+    tls: internal

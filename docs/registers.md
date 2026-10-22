@@ -36,7 +36,7 @@ events, `check-lost`, review tiers, and intents applied by a decider.
 
 Every record is identified by its `uid`, a UUIDv7 created with the record and never changed
 ([ADR-0019](adr/0019-record-uids-computed-numbers.md), [[adr/0019-record-uids-computed-numbers|ADR-0019]]).
-Links, `related`, `superseded_by`, `incorporated_into`, `from_lessons`, sidecar directories,
+Links, `related`, `superseded_by`, `incorporated_into`, a runbook's `lessons`, `from_lessons`, sidecar directories,
 graph nodes (`lesson:<uid>`) and intents use it. **No number is stored**: the number a record is
 shown with (`LL 3`, `RB 1`) is its position among its siblings -- all lessons, or all runbooks --
 sorted by the optional `order` field (a number) and then by uid (creation order), computed by
@@ -50,6 +50,8 @@ Records written before uids carried a numbered `id` (`LL-001`) and were migrated
 migration recorded every old code in `aliases.yml`; a legacy code met outside the repository (an
 intent filed earlier, `hnx graph related lesson:LL-001`, an MCP call) resolves through it on read
 with a `LegacyRecordCode` deprecation warning, while a code inside a record is a validation error.
+A customization's `links` are stricter: the migration rewrites them, and a code `aliases.yml` does
+not hold or has retired is an error there ([customizations](customization.md#links)).
 A tombstone of the numbered era (a file holding only `id:` and `retired: {reason, replaced_by}`)
 did not become a record: its code is in the `retired:` block of `aliases.yml` with the
 successor's uid, so an old citation of it still lands on the successor.
@@ -122,9 +124,12 @@ Rules the parser enforces (fatally, all problems at once):
   once; a prose field is never in the front-matter (fenced code may contain `##` lines);
 * prose fields (sections) are compared without surrounding whitespace, the only normalization;
 * a runbook's steps are the `## Steps` section, a numbered list in which each item carries its own
-  `- verify:` line and optionally `- from_lessons: [[<uid>]]` (the lesson the step came from);
+  `- verify:` line and optionally `- from_lessons: [[<uid>]]` (the lesson the step came from); a
+  runbook may also name the lessons it was written from as a whole in its front-matter,
+  `lessons: [<uid>, ...]` (lesson uids only: a legacy `LL-NNN` code is refused, and every uid must
+  name a lesson of the register);
 * the `## Links` block is a function of the record's own front-matter only (`systems`, `related`,
-  `applies_to`, and an `Archive:` line for an inactive record), links written `[[<uid>]]` with no
+  a runbook's `lessons`, `applies_to`, and an `Archive:` line for an inactive record), links written `[[<uid>]]` with no
   number or title, so editing, retitling or renumbering one record never makes another stale. `make check` fails while one is stale; `hnx registers links DIR` rewrites it.
 
 Sections: a pitfall has Symptom, Contributing factor, Root cause, Preventive control, Open reason,
@@ -137,7 +142,7 @@ through it. `active_only=True` drops retired, incorporated and superseded lesson
 runbooks: what the graph and context packs read.
 
 Opening `examples/registers/` as an Obsidian vault shows records linked to each other (`[[<uid>]]`
-in `related` and steps' `from_lessons`, resolving to `<uid>.md`) and to their systems
+in `related`, a runbook's `lessons` and steps' `from_lessons`, resolving to `<uid>.md`) and to their systems
 (`[[systems/proxy|proxy]]`).
 
 ## Events and derived state

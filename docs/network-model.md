@@ -37,6 +37,7 @@ authentication is a `secret:<name>` reference to an entry in the secret store.
 | `switches[]` | `id`, `model`, `device_mac`, `uplink_port`, `port_assignments` (access or trunk, ports and ranges), `power` (1.1) |
 | `edge[]` (1.1) | the uplink chain, outermost first: `{id, kind: internet \| modem \| ont \| router \| firewall \| switch \| other, model, power}`; an entry whose `id` is the router's or a switch's is that device |
 | `power` (1.1) | `ups[]` (`id`, the logical id everything names; `model`, `monitored_by: nut \| snmp \| usb \| none`, `nut_name` (what the power monitor queries), `serial`, `mac` only for a UPS with a network card) and `default` (the power of a device that declares none) |
+| `tailnet` (1.2) | `deploy`: the CI deploy tag's tailnet access, `{tag, owners, zones, exceptions}` (see [Deploy access](#deploy-access-12)) |
 | `dhcp_reservations[]` | pin a registry host to a hardware address |
 | `firewall` | `default_action` (always `deny`), `zone_to_zone[]`, `service_exceptions[]` |
 | `dns` | `resolvers[]`, `records.static[]`, `policy` (`split_horizon`, `ttl_default`) |
@@ -91,8 +92,36 @@ asks none of this, so sites written before 1.1 stay valid.
 The Topology map draws the edge chain at the top, the UPSes with what they feed (dotted lines on
 "Show Power"), a `UPS: <id>` or `no UPS` badge on every powered card (the reason in its tooltip
 and detail panel), and each guest's inherited power in its detail panel
-([status hub](status.md#generated-maps-topology-dataflow-architecture-roadmap)). Reading a UPS's
-live state (a NUT status source) is a later step.
+([status hub](status.md#generated-maps-topology-dataflow-architecture-roadmap)). A UPS with
+`monitored_by: nut` and a `nut_name` becomes a live status source of the hub (`poll-nut`, generated
+from this section; [status hub](status.md#8-ups-power-network-ups-tools)): its state shows on its
+Topology card, and going on battery sends one message listing the guests on it.
+
+### Deploy access (1.2)
+
+The private overlay's deploy joins the tailnet with an ephemeral key tagged `tag:ci-deploy`
+([private overlay](private-overlay.md#tailscale-the-deploy-tag-least-access)). What that tag may
+reach is site data, so the tailnet policy is generated rather than hand-edited:
+
+```yaml
+tailnet:
+  deploy:
+    tag: tag:ci-deploy           # the default
+    owners: [autogroup:admin]    # who may mint keys for the tag (tagOwners); never a tag
+    zones: [mgmt, data]          # TCP 22 on these zones' tailnet nodes, nothing else
+    exceptions:                  # optional: another port, on some deploy zones, with its reason
+      - {zones: [mgmt], ports: [9443], reason: "the identity provider's admin API"}
+```
+
+The rules live in `homelabnext/tailnet.py` and run in `hnx site validate` and when `hnx guests`
+reads the site: zones by id only (`*`, `any` or a tag is refused, so there is no wildcard
+destination); a zone of the site, listed once; an exception names deploy zones, ports other than
+22 (or `"*"`, every port) and a reason of at least ten characters; the tag is not a zone tag; the
+owners are people, never a tag (a user login, a `group:`, or `autogroup:admin`, `owner`,
+`it-admin` or `network-admin`): a tag owner lets every node carrying that tag apply the deploy tag
+to itself, so a zone tag owner would make any node of the zone the deploy. `hnx guests render ... --target tailscale-acl` renders it
+([compute model](compute-model.md#bound-products)), with policy `tests` Tailscale runs on every
+change.
 
 ### One-way zones
 

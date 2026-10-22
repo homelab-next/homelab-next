@@ -1,0 +1,30 @@
+# Recorded from a real NUT upsd 2.8.1 (Ubuntu 24.04 package, NSS build) with the dummy-ups
+# driver on loopback, on-battery. Values are fictional; the driver port path is replaced
+# with /etc/nut/<ups>.dev. C: is what the client sent, S: what upsd answered.
+# The driver's internal-version line is left out (the leak scanner reads its name as a host).
+C: LIST VAR ups-a
+S: BEGIN LIST VAR ups-a
+S: VAR ups-a battery.charge "87"
+S: VAR ups-a battery.charge.low "20"
+S: VAR ups-a battery.runtime "1500"
+S: VAR ups-a battery.runtime.low "300"
+S: VAR ups-a device.mfr "Dummy Manufacturer"
+S: VAR ups-a device.model "Dummy UPS"
+S: VAR ups-a device.type "ups"
+S: VAR ups-a driver.debug "0"
+S: VAR ups-a driver.flag.allow_killpower "0"
+S: VAR ups-a driver.name "dummy-ups"
+S: VAR ups-a driver.parameter.mode "dummy-once"
+S: VAR ups-a driver.parameter.pollinterval "2"
+S: VAR ups-a driver.parameter.port "/etc/nut/ups-a.dev"
+S: VAR ups-a driver.parameter.synchronous "auto"
+S: VAR ups-a driver.state "updateinfo"
+S: VAR ups-a driver.version "2.8.1"
+S: VAR ups-a input.voltage "230.0"
+S: VAR ups-a ups.load "33"
+S: VAR ups-a ups.mfr "Dummy Manufacturer"
+S: VAR ups-a ups.model "Dummy UPS"
+S: VAR ups-a ups.status "OB DISCHRG"
+S: END LIST VAR ups-a
+C: LOGOUT
+S: OK Goodbye

@@ -1,0 +1,2 @@
+{"version": 1, "roles": {"small": {"tier": "fast", "bindings": [{"backend": "svc:infer-small"}]},
+ "large": {"tier": "large", "bindings": [{"backend": "svc:infer-large"}, {"backend": "svc:infer-small"}]}}}

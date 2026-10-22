@@ -780,9 +780,10 @@ def read_registers(b: Builder) -> None:
         for ref in _id_refs(str(e.get("purpose") or ""), inv_ids, records):
             if ref != nid:
                 b.edge(nid, ref, "mentions", f"{at}.purpose")
-        for ll in _listed(e.get("from_lessons")):
-            t = ll if ll.startswith("lesson:") else f"lesson:{ll}"
-            b.edge(nid, t, "from_lesson", f"{at}.from_lessons")
+        for key in ("lessons", "from_lessons"):  # its own lessons (runbook schema 2.1), by uid
+            for ll in _listed(e.get(key)):
+                t = ll if ll.startswith("lesson:") else f"lesson:{ll}"
+                b.edge(nid, t, "from_lesson", f"{at}.{key}")
         for i, st in enumerate(e.get("steps") or (), 1):
             for ll in _listed(st.get("from_lessons")) if isinstance(st, dict) else ():
                 t = ll if ll.startswith("lesson:") else f"lesson:{ll}"
@@ -1109,9 +1110,12 @@ def read_agent(b: Builder) -> None:
 def read_customizations(b: Builder) -> None:
     """``profiles/*/customization.yml``: custom -applies_to-> cap/svc/host (``scope``),
     custom -governed_by-> adr (``contract``), custom -links-> lesson/runbook (``links``: a
-    record's uid; a legacy code resolves through ``examples/registers/aliases.yml``, with a
-    deprecation warning)."""
-    from homelabnext.identity.aliases import load_aliases, resolve
+    record's uid; a legacy code resolves through ``examples/registers/aliases.yml`` to the
+    record, with one deprecation warning naming the uid; a code the map does not hold, or one
+    it retired, stays as written: a dangling edge, which ``hnx graph check`` fails on --
+    :mod:`homelabnext.customization.links`)."""
+    from homelabnext.customization.links import resolve_links, warn_legacy
+    from homelabnext.identity.aliases import load_aliases
 
     aliases = load_aliases(b.root / REGISTERS)
     for f in sorted(b.root.glob("profiles/*/customization.yml")):
@@ -1141,13 +1145,9 @@ def read_customizations(b: Builder) -> None:
                 )
         if doc.get("contract"):
             b.edge(cid, str(doc["contract"]), "governed_by", f"{rel}#contract")
-        links = doc.get("links") or {}
-        for key, prefix in (("lesson", "lesson:"), ("runbook", "runbook:")):
-            vals = links.get(key)
-            for v in [vals] if isinstance(vals, str) else vals or ():
-                # a uid; a legacy code (LL-001) resolves through the registers' alias map
-                uid = resolve(str(v), aliases, f"{rel}#links.{key}")
-                b.edge(cid, f"{prefix}{uid}", "links", f"{rel}#links.{key}")
+        for lk in resolve_links(doc, aliases):
+            warn_legacy(lk, f"{rel}#links.{lk.key}")
+            b.edge(cid, f"{lk.key}:{lk.uid or lk.ref}", "links", f"{rel}#links.{lk.key}")
 
 
 # --------------------------------------------------------------------------- ansible

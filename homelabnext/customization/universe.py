@@ -2,7 +2,8 @@
 """What scope selectors, roles and contracts are checked against.
 
 A :class:`Universe` is a read-only snapshot of the deployment's names: registry hosts and
-services, capabilities, role defaults, schema ids and ADR slugs. Any member left ``None`` means
+services, capabilities, role defaults, schema ids, ADR slugs, and the lessons and runbooks a
+``links`` entry may name (with the registers' ``aliases.yml``). Any member left ``None`` means
 "not provided" and the matching checks are skipped rather than guessed.
 """
 
@@ -15,6 +16,8 @@ from typing import Any
 
 import yaml
 
+from homelabnext.identity.aliases import AliasMap
+
 __all__ = ["Universe", "discover"]
 
 
@@ -26,6 +29,10 @@ class Universe:
     role_templates: dict[str, set[str]] = field(default_factory=dict)
     schema_ids: set[str] | None = None
     adr_slugs: set[str] | None = None
+    #: the registers' legacy code -> uid map (``aliases.yml``), for a link written as a code
+    aliases: AliasMap | None = None
+    #: register record uid -> (kind, display label), for ``links`` (``lesson``/``runbook``)
+    records: dict[str, tuple[str, str]] | None = None
     #: directories core files live in; a customization may never point into them
     core_roots: list[Path] = field(default_factory=list)
 
@@ -64,6 +71,29 @@ def _role_info(roles_dir: Path) -> tuple[dict[str, set[str]], dict[str, set[str]
         t = r / "templates"
         templates[r.name] = {f.name for f in t.iterdir() if f.is_file()} if t.is_dir() else set()
     return roles, templates
+
+
+#: where a repository-shaped tree keeps its lessons and runbooks
+REGISTERS = Path("examples") / "registers"
+
+
+def _records(registers: Path) -> dict[str, tuple[str, str]] | None:
+    """uid -> (kind, display label) of the lessons and runbooks under ``registers``; None when
+    there are none, or they do not load (the link checks are then skipped, not guessed)."""
+    from homelabnext.registers.records import load_register, register_source
+    from homelabnext.registers.schema import RegisterError, labels_of
+
+    out: dict[str, tuple[str, str]] = {}
+    try:
+        for kind, rtype in (("lessons", "lesson"), ("runbooks", "runbook")):
+            src = register_source(registers, kind)
+            if src is None:
+                continue
+            entries = [e for e in load_register(src, kind)[kind] if isinstance(e, dict)]
+            out.update({u: (rtype, lab) for u, lab in labels_of(entries).items()})
+    except (RegisterError, OSError, ValueError):
+        return None
+    return out or None
 
 
 def discover(
@@ -114,4 +144,10 @@ def discover(
         u.adr_slugs = {
             p.stem.split("-", 1)[1] for p in ad.glob("[0-9][0-9][0-9][0-9]-*.md") if "-" in p.stem
         }
+    rg = root / REGISTERS
+    if rg.is_dir():
+        from homelabnext.identity.aliases import load_aliases
+
+        u.aliases = load_aliases(rg)
+        u.records = _records(rg)
     return u

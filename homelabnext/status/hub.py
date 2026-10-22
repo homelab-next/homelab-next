@@ -16,7 +16,9 @@ collector that died cannot leave its last green on the console.
 
 **Notifications** go through the shared :class:`homelabnext.notify.Notifier` -- the O-08 path, not
 a new one: one key per item, ``fail`` and ``stale`` page by default (``notify_on``), anything else
-reports ``ok`` so the Notifier sends exactly one recovery when a paged item clears.
+reports ``ok`` so the Notifier sends exactly one recovery when a paged item clears.  A UPS
+going on battery (a ``poll-nut`` status item, warn) is one more state-diffed message under its
+own key, listing what that UPS feeds (:func:`.power.notify`).
 """
 
 from __future__ import annotations
@@ -95,6 +97,7 @@ class StatusHub:
             link=draft.link or f"status:{spec.id}",
             value=draft.value,
             work=draft.work,
+            flags=draft.flags,
         )
         self._put(obs, now)
         return obs
@@ -105,7 +108,10 @@ class StatusHub:
         hist = list(rec.get("history", []))
         if not hist or hist[-1][1] != obs.state:  # history keeps transitions, bounded
             hist.append([iso(now), obs.state])
-        self.store.put(k, {"latest": obs.to_dict(), "history": hist[-self.history :]})
+        new = {"latest": obs.to_dict(), "history": hist[-self.history :]}
+        if obs.flags is not None:
+            new["flags"] = list(obs.flags)
+        self.store.put(k, new)
 
     def record(self, result: SourceResult) -> list[Observation]:
         """Store one scheduler result; returns the observations it produced."""
@@ -218,6 +224,8 @@ class StatusHub:
             row["reported_state"] = latest["state"]
             row["state"] = effective_state(latest, now)
             row["history"] = [list(h) for h in rec.get("history", [])]
+            if rec.get("flags") is not None:
+                row["flags"] = [str(f) for f in rec["flags"]]
             out.append(row)
         return out
 
@@ -310,6 +318,10 @@ class StatusHub:
                 msg = Message(key=key, title=PROBLEM_TITLE, body=body, tags=("status",))
                 if notifier.report(key, "ok", msg):
                     sent.append(key)
+        from . import power
+
+        # a UPS on battery pages even though its status item is only warn (degraded)
+        sent += power.notify(notifier, self.specs, self.observations(now), dead)
         return sent
 
     def publish(self, publisher: Any, observations: Iterable[Observation], source: str) -> list:

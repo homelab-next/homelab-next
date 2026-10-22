@@ -16,6 +16,9 @@ directory, or a registers directory holding ``lessons/`` and ``runbooks/``) the 
    bare mentions in the prose (as ``[[<uid>]]``; a code in a code span is a quotation and stays),
    the values of the record's sidecar events, and every ``--also`` file (records-lane notes,
    customizations, an operator's notes); then regenerates the record's ``## Links`` block;
+   and the ``links: {lesson, runbook}`` value of every customization under ``customizations``
+   (only that value: :func:`homelabnext.customization.links.rewrite_links`), so a customization
+   that cited ``LL-003`` cites the lesson's uid;
 4. renames ``<CODE>.md`` to ``<uid>.md`` and ``<CODE>.events/`` to ``<uid>.events/``;
 5. appends a ``rekey`` event (``by: hnx:migrate``) to every record whose content digest moved
    while one of its reviews was current, so the identity rewrite does not void the reviews;
@@ -28,6 +31,10 @@ there is nothing left to guard.  Its code moves to the ``retired:`` block of ``a
 with its reason and the successor's uid (``replaced_by``), and the file is removed; an old
 citation of the code still resolves to the successor (:mod:`.aliases`), and ``check-lost``
 counts it as accounted for.
+
+The invariants register and the system and capability pages keep their own keys (checklist
+row ids; registry and capability names: ADR-0019, Scope): given one of them, the migration
+refuses it by name.
 
 Nothing is written until the whole migration has been computed and checked in memory: every
 record still parses, every link it holds resolves to a uid of the trees, every review current
@@ -132,9 +139,36 @@ def _record_dirs(tree: pathlib.Path) -> list[tuple[str, pathlib.Path]]:
     return [(k, tree / k) for k in (*REGISTER_DIRS, *STRATEGY_DIRS) if (tree / k).is_dir()]
 
 
+#: families that keep their own key (ADR-0019 "Scope"): what each is keyed by
+KEPT_KEYS = {
+    "invariants": "checklist row ids (docs/checklist.md)",
+    "system": "registry service names",
+    "capability": "capability names",
+}
+
+
+def _kept(tree: pathlib.Path) -> str | None:
+    """The family ``tree`` holds if ADR-0019 keeps its own key for it (the invariants register,
+    a directory of system or capability pages), else None."""
+    if tree.is_file():
+        return "invariants" if tree.stem.split(".")[0] == "invariants" else None
+    for p in sorted(tree.glob("*.md")) if tree.is_dir() else ():
+        fm = _front(p.read_text(encoding="utf-8")) or {}
+        if fm.get("type") in KEPT_KEYS:
+            return str(fm["type"])
+    return None
+
+
 def _read_tree(tree: pathlib.Path, problems: list[str]) -> list[Record]:
     if tree.name in (*REGISTER_DIRS, *STRATEGY_DIRS):
         problems.append(f"{tree}: pass the tree (its parent), not one record directory")
+        return []
+    kept = _kept(tree)
+    if kept:
+        problems.append(
+            f"{tree}: {kept} entries keep their own keys ({KEPT_KEYS[kept]}), not uids "
+            "(ADR-0019, Scope); there is nothing to migrate"
+        )
         return []
     out: list[Record] = []
     s = tree / "strategy.md"
@@ -319,6 +353,7 @@ def assign_uids(
     trees: Iterable,
     *,
     also: Iterable = (),
+    customizations: Iterable = (),
     new_uid: Callable[[], str] = uuid7,
     now: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.UTC),
     dry_run: bool = False,
@@ -410,14 +445,63 @@ def assign_uids(
         lost = [x for x in _current(before, old) if x not in _keyed(_current(after, new), x)]
         if lost:
             problems.append(f"{r.path}: {len(lost)} current review(s) would not survive")
+    custom_after = _rewrite_customizations(customizations, known, problems)
     if problems:
         raise MigrationError(problems)
     _apply(records, events_after, rekeys, known, trees, also, codes, when, plan, dry_run, retired)
+    for path, text in custom_after.items():
+        plan.written.append(path)
+        if not dry_run:
+            from homelabnext.state import atomic_write_text
+
+            atomic_write_text(path, text, mode=path.stat().st_mode & 0o777)
     for r in tombstones:
         plan.removed.append(r.path)
         if not dry_run:
             r.path.unlink()
     return plan
+
+
+def _rewrite_customizations(
+    dirs: Iterable, known: Mapping[str, str], problems: list[str]
+) -> dict[pathlib.Path, str]:
+    """{customization file: its text with each legacy ``links`` code as its uid}, checked in
+    memory: the document parses after, and only those values changed."""
+    import json
+
+    import yaml
+
+    from homelabnext.customization.links import LINK_KEYS, rewrite_links
+    from homelabnext.customization.loader import is_customization_file
+
+    def parse(text: str, f: pathlib.Path):
+        return json.loads(text) if f.suffix == ".json" else yaml.safe_load(text)
+
+    out: dict[pathlib.Path, str] = {}
+    files: set[pathlib.Path] = set()
+    for d in map(pathlib.Path, dirs):
+        found = d.rglob("*") if d.is_dir() else [d]
+        files |= {f for f in found if f.is_file() and not f.is_symlink()}
+    for f in sorted(x for x in files if is_customization_file(x)):
+        try:
+            text = f.read_text(encoding="utf-8")
+            new = rewrite_links(text, known)
+            if new == text:
+                continue
+            before, after = parse(text, f), parse(new, f)
+        except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError) as ex:
+            problems.append(f"{f}: customization not rewritten: {ex}")
+            continue
+        want = json.loads(json.dumps(before, default=str))
+        links = want.get("links") if isinstance(want, dict) else None
+        for key in LINK_KEYS:
+            if isinstance(links, dict) and isinstance(links.get(key), str):
+                links[key] = known.get(links[key], links[key])
+        if json.loads(json.dumps(after, default=str)) != want:
+            problems.append(f"{f}: rewriting its links would change more than links.lesson/runbook")
+            continue
+        out[f] = new
+    return out
 
 
 def _tombstone(r: Record, known: Mapping[str, str], live: Mapping[str, Any], problems) -> dict:
@@ -485,7 +569,7 @@ def _sub_prose_record(r: Record, codes: Codes | None) -> str:
     return "---\n" + _sub_codes(m["fm"], codes) + "---\n" + _sub_prose(body, codes)
 
 
-_LINK_FIELDS = ("parent", "supports", "serves", "raised_by", "related", "superseded_by")
+_LINK_FIELDS = ("parent", "supports", "serves", "raised_by", "related", "superseded_by", "lessons")
 
 
 def _links_resolve(r: Record, entry: Mapping[str, Any], by_uid: Mapping[str, Record], problems):

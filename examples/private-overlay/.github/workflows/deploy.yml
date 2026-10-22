@@ -114,7 +114,8 @@ jobs:
 
       # Tailscale path: join the tailnet for this run only.  The OAuth client mints an ephemeral,
       # pre-authorized key tagged tag:ci-deploy; the node disappears when the job ends.  The tag's
-      # ACL (docs/private-overlay.md "Tailscale") allows SSH to the deploy targets and nothing else.
+      # ACL is generated from lab/site.yml tailnet.deploy (docs/private-overlay.md "Tailscale"):
+      # SSH to the declared deploy zones and nothing else, with policy tests that assert it.
       - name: join the tailnet as tag:ci-deploy
         if: vars.HNX_DEPLOY_PATH != 'self-hosted'
         uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd  # v4.2.0

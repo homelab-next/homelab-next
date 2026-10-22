@@ -34,8 +34,9 @@ Platform-wide properties. Most need a running platform; the repository-level one
 | F-17 | Nothing at runtime points at the workstation | 0 runtime configs reference the admin workstation (runs as part of X-01) (`tools/workstation_refs.py`) | PUBLIC-NOW |
 | F-18 | The public tree contains no private identifiers | `tools/leak_scan.py` over the tree exits 0 (no private IPs, domains, emails, MACs, keys) | PUBLIC-NOW |
 | F-19 | Every guest has a defense baseline | With a baseline set (`_baselines.yml`), every guest (vm, lxc, host) names one or more baselines or carries a documented exemption (`hnx guests baselines DIR --site SITE --check`; `--require-bound` also fails while a needed control has no role) | PUBLIC-NOW |
-| F-20 | Every machine says what powers it | With a site `power` section, the router, every switch and edge device, every hypervisor and physical host names a known UPS or `none` with a reason (or takes `power.default`), and every UPS feeds something (`hnx guests validate DIR --site SITE`; `homelabnext/power.py`) | PUBLIC-NOW |
+| F-20 | Every machine says what powers it | With a site `power` section, the router, every switch and edge device, every hypervisor and physical host names a known UPS or `none` with a reason (or takes `power.default`), and every UPS feeds something (`hnx guests validate DIR --site SITE`; `homelabnext/power.py`); each UPS with `monitored_by: nut` and a `nut_name` is a live `poll-nut` status source generated from the site, on battery is warn and pages once naming the guests on it, low or replace battery is fail (`pytest tests/status/test_status_nut.py`, replaying recorded upsd 2.8.1 transcripts) | PUBLIC-NOW |
 | F-21 | The public tree carries no part of a private overlay | `tools/private_leak_check.py public .` exits 0: no overlay marker outside the fictional skeleton, no file under the skeleton's private layout paths, no `.sops.yaml`, no SOPS ciphertext, no key file; a private overlay's CI runs the same tool as `private ROOT` (no plaintext credential value, every file `.sops.yaml` covers sealed, every vault file vault-encrypted; ADR-0021) | PUBLIC-NOW |
+| F-22 | The CI deploy reaches only what the site declares | With a site `tailnet.deploy`, `hnx site validate` refuses a wildcard (`*`, `any`) or unknown destination zone and a port beyond SSH without an `exceptions` entry and reason; `hnx guests render DIR --site SITE --target tailscale-acl` emits `tag:ci-deploy` in `tagOwners`, its TCP 22 rule to the declared zones only, and a policy `tests` block (accept the declared zones on 22, deny other ports, every other tag, and any zone tag back to the deploy tag) that holds against the rendered rules (`homelabnext/tailnet.py`, `tests/compute/test_tailnet_deploy.py`; ADR-0021) | PUBLIC-NOW |
 
 ## C - Collection
 
@@ -107,6 +108,7 @@ Cases, status, notifications and reports reach people.
 | O-06 | A dead adapter reads as stale | Stopping an adapter marks its module stale within its SLA (`stale_after_s` per status source; tested with an injected clock in `tests/status`; live SLA measured on the server) | PUBLIC-NOW |
 | O-07 | A hung source cannot stall the console | With one source blackholed, the view renders in < 2 s with that module stale (per-source timeouts in the collector scheduler; `tests/status`) | PUBLIC-NOW |
 | O-08 | Notifications are state-diffed | Same state twice sends once; recovery sends one message (fake sender test) | PUBLIC-NOW |
+| O-09 | The hub lists every service link, scheduled job and agent from repository data | The Links, Schedule and Agent roster pages are generated from the registry, role timers / fleet units / CI schedules / workflow packs / status sources, and the roster with compiled profiles and broker manifests; every catalogued `timer:` trigger, scheduled workflow and status source is a Schedule row with a computed next run, every profile named anywhere has a roster owner and runtime, and no page writes an address (`tests/maps/test_directory.py`) | PUBLIC-NOW |
 
 ## P - Control plane
 
@@ -137,6 +139,7 @@ Workflows are code, event-driven, bounded.
 | R-05 | Actions use scoped service accounts | Off-list command as an action account fails | SERVER |
 | R-06 | Every run is recorded | Executions with inputs, outputs, approver, result retained >= 1 year | SERVER |
 | R-07 | Workflow fixtures round-trip | Fixture events produce the expected action calls in the offline validator (`hnx workflows validate` runs every pack's fixtures offline) | PUBLIC-NOW |
+| R-08 | The agent-session controller honours the orchestration contract | `hnx conform run orchestration --target orchestration-llm-orchestrator` passes against the running controller with the conformance `hermes` stand-in (docs/orchestration-controller.md); offline, `tests/conform/test_conform_orchestration_controller.py` pins the recorded API's known MUST gaps (`unknown-job-raises`, `retries-until-success`, `retries-are-bounded` at `a52a1c4`) and shows the proposed controller fixes clear them | SERVER |
 
 ## Q - Quality gates
 
@@ -177,7 +180,7 @@ Catalogued scripts, controlled agent context, one map of access.
 | M-13 | Access is proven, not assumed | Each grant and denial has a probe as the principal at least daily; a passing denial pages | SERVER |
 | M-14 | Every agent starts knowing its access | Session start injects the access block for where it runs (`homelabnext/agent/access.py`: a reserved stable `access` section) | PUBLIC-NOW |
 | M-15 | The keyring is protected | Served only behind SSO; a new privileged grant is flagged | SERVER |
-| M-16 | No placeholder ids survive a commit | `make ids-check` (`hnx ids check-uids` and `check-dupes` over every register, on pull requests and main alike) exits 0: every record carries its canonical uid and is named `<uid>.md`, so none is keyed by a number or an `XX-NEW` placeholder (records are identified by uids, ADR-0019; nothing is allocated) | PUBLIC-NOW |
+| M-16 | No placeholder ids survive a commit | `make ids-check` (`hnx ids check-uids` and `check-dupes` over every register, on pull requests and main alike) exits 0: every record carries its canonical uid and is named `<uid>.md`, so none is keyed by a number or an `XX-NEW` placeholder (records are identified by uids, ADR-0019; nothing is allocated); the families that keep their own key (invariant criteria: checklist row ids; system and capability pages: registry and capability names) are named in ADR-0019's Scope, which `tests/identity/test_uid_scope.py` holds to the register specs, and `hnx records assign-uids` refuses them by name | PUBLIC-NOW |
 | M-17 | Register ids are never lost | `tools/register_ids.py check-lost` exits 0 for every register: no record uid (and no invariant id) of the parent commit has vanished; a parent's numbered code counts through the tree's `aliases.yml` | PUBLIC-NOW |
 
 ## A - AI layer
@@ -287,4 +290,4 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 
 ---
 
-**Totals:** 164 criteria across 16 pillars; 84 PUBLIC-NOW, 80 SERVER.
+**Totals:** 167 criteria across 16 pillars; 86 PUBLIC-NOW, 81 SERVER.

@@ -21,7 +21,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from .views import MAP_PANELS, dumps
+from .views import GENERATED_PANELS, dumps
 
 _CSS = """
 :root{--bg:#f6f7f9;--panel:#fff;--ink:#1d2330;--mute:#5b6475;--line:#d9dde4;
@@ -216,7 +216,7 @@ def nav_html(
         elif m["kind"] == "page":
             if live and m["available"]:
                 nav.append(f'<a href="{_e(m["href"])}">{_e(m["title"])}</a>')
-            elif m["available"] and m.get("panel") in MAP_PANELS:  # written beside index.html
+            elif m["available"] and m.get("panel") in GENERATED_PANELS:  # written beside index.html
                 nav.append(f'<a href="{_e(m["panel"])}.html">{_e(m["title"])}</a>')
             else:
                 why = "served live by hnx status serve" if not live else "no activity store"

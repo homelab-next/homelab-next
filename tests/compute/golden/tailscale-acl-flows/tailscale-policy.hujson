@@ -3,12 +3,21 @@
 // admins on SSH, and the site's zone-to-zone allows between zones with tailnet nodes.
 //   tag:zone-edge: edge-core
 //   tag:zone-mgmt: idp-core
+// tag:ci-deploy (the deploy, tailnet.deploy): SSH to tag:zone-mgmt, tag:zone-data
+//   and tcp 9443 to tag:zone-mgmt: fictional: the identity provider's admin API
+//   no tailnet node yet in: data
 {
   "tagOwners": {
     "tag:zone-edge": [
       "autogroup:admin"
     ],
     "tag:zone-mgmt": [
+      "autogroup:admin"
+    ],
+    "tag:zone-data": [
+      "autogroup:admin"
+    ],
+    "tag:ci-deploy": [
       "autogroup:admin"
     ]
   },
@@ -42,6 +51,92 @@
       "proto": "tcp",
       "dst": [
         "tag:zone-edge:22,443"
+      ]
+    },
+    {
+      "action": "accept",
+      "src": [
+        "tag:ci-deploy"
+      ],
+      "proto": "tcp",
+      "dst": [
+        "tag:zone-mgmt:22",
+        "tag:zone-data:22"
+      ]
+    },
+    {
+      "action": "accept",
+      "src": [
+        "tag:ci-deploy"
+      ],
+      "proto": "tcp",
+      "dst": [
+        "tag:zone-mgmt:9443"
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "src": "tag:ci-deploy",
+      "proto": "tcp",
+      "accept": [
+        "tag:zone-mgmt:22",
+        "tag:zone-mgmt:9443",
+        "tag:zone-data:22"
+      ],
+      "deny": [
+        "tag:zone-mgmt:23",
+        "tag:zone-mgmt:80",
+        "tag:zone-mgmt:443",
+        "tag:zone-mgmt:3389",
+        "tag:zone-mgmt:8080",
+        "tag:zone-data:23",
+        "tag:zone-data:80",
+        "tag:zone-data:443",
+        "tag:zone-data:3389",
+        "tag:zone-data:8080",
+        "tag:zone-edge:22",
+        "tag:zone-edge:23",
+        "tag:zone-edge:80",
+        "tag:zone-edge:443",
+        "tag:zone-edge:3389",
+        "tag:zone-edge:8080"
+      ]
+    },
+    {
+      "src": "tag:zone-data",
+      "proto": "tcp",
+      "deny": [
+        "tag:ci-deploy:22",
+        "tag:ci-deploy:23",
+        "tag:ci-deploy:80",
+        "tag:ci-deploy:443",
+        "tag:ci-deploy:3389",
+        "tag:ci-deploy:8080"
+      ]
+    },
+    {
+      "src": "tag:zone-edge",
+      "proto": "tcp",
+      "deny": [
+        "tag:ci-deploy:22",
+        "tag:ci-deploy:23",
+        "tag:ci-deploy:80",
+        "tag:ci-deploy:443",
+        "tag:ci-deploy:3389",
+        "tag:ci-deploy:8080"
+      ]
+    },
+    {
+      "src": "tag:zone-mgmt",
+      "proto": "tcp",
+      "deny": [
+        "tag:ci-deploy:22",
+        "tag:ci-deploy:23",
+        "tag:ci-deploy:80",
+        "tag:ci-deploy:443",
+        "tag:ci-deploy:3389",
+        "tag:ci-deploy:8080"
       ]
     }
   ]

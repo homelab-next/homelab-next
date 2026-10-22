@@ -57,6 +57,7 @@ generated from it (`hnx status catalog generate`, checked by `hnx status catalog
 | `poll-uptime-kuma` | an Uptime Kuma public status page and its heartbeats, no login (section 7) | `service`, `path` `.../api/status-page/<slug>` |
 | `poll-stackstorm` | StackStorm executions: failures in a window, the running count (section 7) | `service`, `path` `.../executions` |
 | `poll-nifi` | NiFi controller status and bulletin board (section 7) | `service`, `path` `.../flow/status` |
+| `poll-nut` | UPSes from a Network UPS Tools data server (upsd) over its TCP protocol, not HTTP (section 8) | `service` (a `tcp` service) |
 
 Every HTTP kind (`poll-http-json` and the product kinds) takes an optional **`auth`**: the
 credential by secret-store name, `{secret: "secret:<name>", header: St2-Api-Key}` (no `header`:
@@ -144,6 +145,10 @@ alias. Panels:
   ok, and links to its service page and, where one exists, its capability contract page.
 - **sources**: the source table: state, kind, module, interval and staleness, last good read,
   error, what it reports.
+
+Every other `panel:` is a page of its own (section 6): the agent pages, strategy, projects,
+baselines, approvals, the generated maps (`group: maps`) and the directory pages Links, Schedule
+and Agent roster (`group: directory`, views 1.7).
 
 ## 4. The page and `status.json` (the contract)
 
@@ -350,7 +355,9 @@ guests in at least two capability groups is split into **stacks**, one per guest
 field). Each card shows the name and address; kind and provisioning, resources, image,
 capability and its hypervisor; badges for its service count, `vmid`, `not IaC` (`manual` or
 `host-only`), `planned` / `retired` (guest schema 1.4 `status`) and, on a powered device,
-`UPS: <id>` or `no UPS` (the reason in its tooltip; [power](network-model.md#power-11)). Click a card for the detail
+`UPS: <id>` or `no UPS` (the reason in its tooltip; [power](network-model.md#power-11)); a UPS
+with a NUT reading in the hub also gets its live state (`on line`, `on battery`, `on battery, low`,
+or the state word), with the reading in its detail panel ([section 8](#8-ups-power-network-ups-tools)). Click a card for the detail
 panel: the guest descriptor as YAML, "What it does" (`description`, else `display_name`), its
 services with their descriptions (service registry 2.4 `description`), its power (a VM's is
 inherited from its hypervisor) and its data flow as IN and OUT lines. "Show Power" draws a dotted
@@ -400,6 +407,62 @@ live; `hnx status render --out DIR` with the same options writes each available 
 dataflow model are built once per process (they change only with the code); the topology, the
 dataflow's placement on guests and the roadmap are read on each request. A test keeps
 `docs/build-order.md` naming every checklist row and only real ones.
+
+### Directory pages: links, schedule, agent roster
+
+Three more generated pages in the `directory` menu group (views 1.7, `panel: links | schedule |
+roster`), served with `--maps ROOT` and written by `hnx status render` as `<panel>.html`. Like the
+maps they are built only from the repository's data (`homelabnext/status/maps/links.py`,
+`schedule.py`, `roster.py`; goldens in `tests/maps/golden/maps/`, tests in
+`tests/maps/test_directory.py`), script-free under the hub's usual CSP, every value escaped. A
+page whose inputs are missing is listed as unavailable; one that cannot be read gives an error
+line.
+
+| Page | Input | Shows |
+|---|---|---|
+| `/links` | the hub's `--registry` | every service, one table per registry zone, by registry name (`svc:`, `cap:`): an http(s) service links to its public hostname, else its capability alias (as the external menu entries do), with its `http` health check and its MCP endpoint; any other protocol is listed by alias and port, not linked. Access: `public` (a public hostname) or `lab only`, the sign-in (`auth`), and **private tier** for a service with a `front_door` (its private pages open only through the trusted front door). No address is ever written (`tools/no_raw_endpoints.py`) |
+| `/schedule` | `--maps ROOT`, the registry and the hub's state | every scheduled job: each `.timer` a role or profile ships (`OnCalendar=`, a `{{ var }}` resolved from the role's defaults and vars, `RandomizedDelaySec=`) with the catalogued scripts whose header names `timer:<role>/<unit>`; each fleet_units entry (a retired one says what replaced it); each `.github/workflows` `on: schedule` cron with its jobs and scripts; each workflow pack (event-driven: `on each <event> event`); each status source (`every 5 minutes`, or a pushed one's staleness window) |
+| `/roster` | `roster.yml` (`--roster FILE`, default `ROOT/examples/status/roster.yml`; `schemas/status/roster.schema.json`) and, with `--agents`, the activity store | every agent profile a compiled profile, a broker grant, a workflow pack or the roster names: owner and runtime (the roster's own fields), model role and its backends, data tier, granted tier, capabilities and MCP servers, broker actions (approval-gated ones marked), the lanes its actions write (its own or shared), the packs that act as it, and its last session (time, state, runtimes) |
+
+**Cadence and last/next run.** A calendar is described in plain words (`daily at 05:20 UTC`,
+`weekly on Sunday at 02:50 UTC, up to 15 minutes later (randomized)`, `every 15 minutes`) and its
+next run computed after the page's time (`status.json` `generated_at`, or `render --now`) only
+when the expression is read exactly: systemd `OnCalendar=` values ending in `UTC` and five-field
+cron (GitHub's, UTC) with values, lists, ranges, steps and weekdays. A shorthand (`daily`), a
+calendar in the host's local zone or anything else keeps its raw text and reads `not computed`:
+a wrong next run is worse than none. Last runs are never guessed either. A collector's last run
+is its last poll (`sources[].last_attempt`; a pushed source's last good read) and its next one
+that plus its interval. Any other job's last run is the newest observation whose **`item` is the
+job's id** (`timer:aide/scan`, `fleet-unit:lake-compact`, `ci:nightly`), so a status source that
+reports its jobs under those ids lights them up; without one the page says `not reported`. A
+test keeps every catalogued `timer:` trigger, every scheduled workflow and every status source
+of the example registry on the page, each with a computed next run.
+
+**The roster file** names where the facts are and adds only what none of them holds:
+
+```yaml
+roster_version: 1
+profiles: ["../../schemas/agent/examples/profile.*.json"]   # compiled profiles (relative paths, globs)
+brokers: [../broker/manifest.yml, ../../workflows/broker.manifest.json]
+packs: ["../../workflows/packs/*.yml"]
+model_roles: ../model_roles.json
+agents:
+  - profile: profile:triage
+    owner: platform-team                 # a team slug, never a person
+    runtime: claude-code                 # in the activity tier's words
+    what: Triages the alert queue, keeps findings and memory, files proposals.
+    activity_names: [triage-agent]       # other names its sessions report as `agent`
+```
+
+Paths are relative to the roster file and may climb, but every file they name (by `..`, a glob
+or a symlink) must resolve inside the checkout the hub reads (`--maps ROOT`); one that does not
+is the page's error, never read. Grants are never restated there (the schema refuses them): they come from the compiled profile
+and the broker manifests, so the page cannot disagree with what is enforced. A profile some file
+names without a roster entry, or a roster entry with no compiled profile, is listed with that
+gap. A session belongs to a profile when its `agent` is the profile id, its bare name or one of
+its `activity_names`. The page is public like the Agents page: its last session, state and
+runtimes come from `status.json`'s `agents.sessions`, the summary tier
+([section 6](#6-agent-activity-stage-1b)), never the detail tier the private pages show.
 
 ### Pages
 
@@ -695,6 +758,105 @@ dashboard badge, which tells whether that trail is being written at all:
 than `warn_after_s` (a silent hook failure), else `ok` with the per-source counts of the last 500
 events. The export path the endpoint also returns is never shown. (`GET /api/v1/health`, no key,
 is a declarative `{state: status, states: {up: ok}}` if only liveness is wanted.)
+
+## 8. UPS power (Network UPS Tools)
+
+The site model lists the UPSes (`power.ups`: `id`, `model`, `monitored_by`, `nut_name`, `serial`,
+`mac`) and what each feeds ([power](network-model.md#power-11)); the kind `poll-nut` (registry
+2.5, `homelabnext.status.nut`, standard library only) reads their live state from the NUT data
+server, `upsd`, the program every NUT install runs next to the UPS's driver. Register upsd as a
+`tcp` service (port 3493) and give it one source:
+
+```yaml
+ups-monitor:
+  capability: ups-monitor
+  impl: nut
+  host: nas-1
+  protocol: tcp
+  port: 3493
+  # ...
+  status_sources:
+    - id: power                    # a template: no mapping.ups
+      kind: poll-nut
+      interval_s: 30
+      timeout_s: 5
+      auth: {secret: "secret:nut/monitor-password", username: hub-monitor}   # optional
+      mapping:
+        tls: starttls              # the default; or none
+        ca_file: config/nut/upsd-ca.pem   # under the status root; default: the system's CAs
+        # ups: ups-a               # one UPS by its NUT name; absent: every UPS upsd lists
+        # limits: {charge: {warn: 50, fail: 20}, runtime_s: {warn: 600, fail: 120}, load: {warn: 80, fail: 95}}
+        # states: {bypass: fail}   # ups.status flag -> state, over the table below
+      what: UPS state from the NUT server; on battery is warn, low battery or replace battery is fail.
+```
+
+**Generated from the site.** With `--site SITE` (`render` and `serve` default to `--guests-site`),
+a `poll-nut` source without `mapping.ups` is a template: the hub replaces it with one source per
+site UPS that has `monitored_by: nut` and a `nut_name`, id `<template id>-<ups id>`
+(`power-ups-a`), the template's timing, credential and TLS settings and `mapping.ups:
+<nut_name>`. `--site-guests DIR` (default `--guests`) adds the power inheritance: each generated
+source knows the devices that UPS feeds (router, switches, edge, hypervisors) and every guest on
+it, its own power or its hypervisor's. A `poll-nut` source that already names a UPS's `nut_name`
+is kept and gains the same facts; two templates with UPSes left to expand are refused, as is a
+generated id that is already a source. Give `collect` the same `--site` as `render`/`serve`.
+[`docs/status/sources.md`](status/sources.md) lists the harbor example's generated source.
+
+**The protocol** ([`docs/net-protocol.txt`](https://github.com/networkupstools/nut/blob/master/docs/net-protocol.txt)),
+one connection per poll under `timeout_s`: `STARTTLS` (answer `OK STARTTLS`, then a TLS 1.2+
+handshake with `ssl`, verifying upsd's certificate and its name), `USERNAME` and `PASSWORD` (only
+with `auth`; the password is read by secret name at run time like every source's credential),
+`LIST UPS` (only without `mapping.ups`), `LIST VAR <ups>` and `LOGOUT`. Elements are parsed and
+quoted by NUT's parseconf rules, a reply line is capped at 4 KiB and a list at 2000 entries.
+`STARTTLS` is the default: upsd without a certificate answers `ERR FEATURE-NOT-CONFIGURED`, which
+is the source's error ("give upsd a certificate, or set tls: none"). With `tls: none` and a
+credential, the password is **refused** to any non-loopback upsd unless the source also sets
+`allow_plaintext: true`, the same rule as the HTTP clients' `allow_plaintext`. A credential
+holding a control character is the source's error and is never sent (nor shown), and a reply
+that is not the protocol (an `ERR` without its code, an overlong line) is the source's error. Two facts from the
+real server: upsd answers `OK` to `PASSWORD` whatever it is (it checks the pair only for a command
+that needs it, such as `LOGIN`; reads follow upsd's own access rules), so a wrong password is not
+an error here; and anonymous reads are what most installs allow today, so `auth` is optional.
+
+**Items** (per UPS; prefixed `<upsname>:` when the source reads every UPS):
+
+| Item | From | State |
+|---|---|---|
+| `status` | `ups.status` (and `ups.alarm`) | the worst of its flags, below; no line flag (`OL`, `OB`, `OFF`, `BYPASS`) is `unknown` |
+| `battery-charge` | `battery.charge` (%) | at or below `limits.charge` (default warn 50, fail the UPS's own `battery.charge.low`, else 20) |
+| `battery-runtime` | `battery.runtime` (s) | at or below `limits.runtime_s` (default warn 600, fail `battery.runtime.low`, else 120) |
+| `load` | `ups.load` (%) | at or above `limits.load` (default warn 80, fail 95) |
+
+| `ups.status` flag | Meaning (NUT `docs/new-drivers.txt`) | State |
+|---|---|---|
+| `OL`, `CHRG`, `TRIM`, `BOOST` | on line power; charging; correcting the input voltage | ok |
+| `OB`, `DISCHRG` | on battery; discharging | warn (degraded) |
+| `BYPASS`, `CAL`, `HB`, `ALARM` | on bypass (no battery protection); calibrating; high battery; an alarm (`ups.alarm` says which) | warn |
+| `LB`, `RB`, `OVER`, `OFF`, `FSD` | low battery; replace battery; overloaded; not powering its load; forced shutdown | fail (critical) |
+| `WAIT` | upsd has not heard from the driver yet | unknown |
+| anything else | a newer or vendor flag: shown, otherwise ignored (clients must accept any token) | -- |
+
+A UPS whose driver is gone (`ERR DRIVER-NOT-CONNECTED`) or whose data is stale (`ERR
+DATA-STALE`) is a `status` item `unknown`; an unknown UPS name, `ERR ACCESS-DENIED` or any other
+error is the source's error. A `status` summary always starts with the raw flags (`OB DISCHRG:
+on battery, discharging; 87% charge, 25m runtime, load 33%`).
+
+**On battery is an event.** A UPS on battery is only `warn`, which does not page, but losing
+mains power is exactly what someone should hear about: `hnx status collect --notify-topic T`
+also sends **"UPS on battery"** through the same state-diffed Notifier, one key per UPS
+(`status-power/<source>/<ups>`): `on-battery` (warn) and `low-battery` (crit, `OB` with `LB`)
+page, line power (`OL` or `BYPASS`, without `OB`) is `ok` and sends the one **"UPS back on line
+power"** recovery. The state is read from the flags the mapper records beside the observation,
+never re-parsed from its summary. The message lists what the UPS feeds and every guest on it, from
+the power inheritance (without a site: says that it is not known). No reading is held, never a
+false recovery: a source gone stale during the outage, an `unknown` status (`DATA-STALE`,
+`DRIVER-NOT-CONNECTED`, `WAIT`, no `ups.status`) and a status with no line or battery flag.
+
+**Tested against** a real upsd 2.8.1 (the Ubuntu 24.04 package, NSS build, `dummy-ups` driver,
+STARTTLS with a certificate database): the replies are recorded in `tests/status/fixtures/nut/`
+and replayed by a fake upsd on loopback (`tests/status/fake_upsd.py`), which also does STARTTLS
+with a certificate minted by `openssl` at test time (that test is skipped without it). upsd is
+not added to the lab-in-a-box: it needs a driver, and a dummy UPS proves nothing the recorded
+transcripts do not.
 
 ## What needs a server
 

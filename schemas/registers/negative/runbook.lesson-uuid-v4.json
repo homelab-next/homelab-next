@@ -1,0 +1,25 @@
+{
+  "uid": "01a15e4e-0000-7000-8000-000000000003",
+  "type": "runbook",
+  "title": "Deploy a web service",
+  "systems": [
+    "web-proxy"
+  ],
+  "when": "Before changing any web service",
+  "steps": [
+    {
+      "n": 1,
+      "text": "Run the role in check mode",
+      "verify": "Exit code 0 and no unexpected 'changed' tasks"
+    },
+    {
+      "n": 2,
+      "text": "Apply the role",
+      "verify": "Canary path returns the new value",
+      "rollback": "Re-run with the previous tag"
+    }
+  ],
+  "lessons": [
+    "01a15e4e-758c-4314-ba7d-8691599bb269"
+  ]
+}

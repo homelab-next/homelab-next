@@ -130,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if plan["ok"] else 1
 
     if ns.cmd == "register":
-        for p in build_register(items, Path(ns.out_dir), today, enabled):
+        for p in build_register(items, Path(ns.out_dir), today, enabled, uni):
             print(p)
         return 0
     return 2

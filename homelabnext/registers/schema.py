@@ -82,7 +82,7 @@ PRACTICE_FIELDS = frozenset(
 )
 RUNBOOK_FIELDS = frozenset(
     {"uid", "type", "order", "title", "purpose", "systems", "steps", "author", "reviews"}
-    | {"review_by", "superseded_by", "related", "last_verified"}
+    | {"review_by", "superseded_by", "related", "lessons", "last_verified"}
 )
 #: the record type each register holds (its entries' ``type``)
 RECORD_TYPE = {"lessons": "lesson", "runbooks": "runbook"}
@@ -209,6 +209,22 @@ def _related(e, who, problems):
         problems.append(f"{who}: `related` repeats a uid")
 
 
+def _lessons(e, who, problems):
+    """A runbook's optional ``lessons:``: the lessons it was written from, by uid (runbook
+    schema 2.1; resolved to live lessons by check_links)."""
+    v = e.get("lessons")
+    if v is None:
+        return
+    if not (isinstance(v, list) and v and all(isinstance(x, str) for x in v)):
+        problems.append(f"{who}: `lessons` must be a non-empty list of lesson uids")
+        return
+    for x in v:
+        if bad := _uid_ref(x, "lessons"):
+            problems.append(f"{who}: {bad}")
+    if len(set(v)) != len(v):
+        problems.append(f"{who}: `lessons` repeats a uid")
+
+
 def _ref_list(e, key, who, problems, rx: re.Pattern, what: str) -> list[str]:
     v = e.get(key)
     if not (isinstance(v, list) and v and all(isinstance(x, str) and x for x in v)):
@@ -324,7 +340,8 @@ def _repo_targets(root: pathlib.Path) -> set[str]:
 def check_links(lessons, runbooks, criteria=None, root=None) -> None:
     """Every cross-record and outward reference resolves (fatal; validated lists in).
 
-    ``related``, ``superseded_by`` and step ``from_lessons`` name live records (by uid);
+    ``related``, ``superseded_by``, a runbook's ``lessons`` and step ``from_lessons`` name live
+    records (by uid);
     ``incorporated_into`` names a runbook (and step) or a ``docs/systems/`` page that exists;
     ``retired_by`` names a live invariant of ``criteria`` (ids), a file under ``root`` or a
     ``make:<target>`` of root's Makefile.
@@ -377,6 +394,9 @@ def check_links(lessons, runbooks, criteria=None, root=None) -> None:
             problems.append(
                 f"{_who(e, labels)}: superseded_by {sb} is not a runbook in this register"
             )
+        for x in e.get("lessons") or ():
+            if x not in ll:
+                problems.append(f"{_who(e, labels)}: lessons {x} is not a lesson")
         for n, st in enumerate(e.get("steps") or (), 1):
             for x in st.get("from_lessons") or ():
                 if x not in ll:
@@ -600,6 +620,7 @@ def validate_runbooks(data, policy=None, *, require_reviews: bool = True) -> lis
             problems.append(f"{who}: unknown field(s) {sorted(extra)}")
         _text(e, "title", problems, who, 4)
         _related(e, who, problems)
+        _lessons(e, who, problems)
         _text(e, "purpose", problems, who)
         _lifecycle_dates(e, who, problems, review_required=not e.get("superseded_by"))
         _reviews(

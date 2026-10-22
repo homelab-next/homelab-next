@@ -1,0 +1,56 @@
+# Recorded from a real NUT upsd 2.8.1 (Ubuntu 24.04 package, NSS build) with the dummy-ups
+# driver on loopback, online. Values are fictional; the driver port path is replaced
+# with /etc/nut/<ups>.dev. C: is what the client sent, S: what upsd answered.
+# The driver's internal-version line is left out (the leak scanner reads its name as a host).
+C: LIST UPS
+S: BEGIN LIST UPS
+S: UPS ups-a "Example 1500VA"
+S: UPS ups-b "Example 2200VA"
+S: END LIST UPS
+C: LIST VAR ups-a
+S: BEGIN LIST VAR ups-a
+S: VAR ups-a battery.charge "92"
+S: VAR ups-a battery.charge.low "20"
+S: VAR ups-a battery.runtime "2460"
+S: VAR ups-a battery.runtime.low "300"
+S: VAR ups-a device.mfr "Dummy Manufacturer"
+S: VAR ups-a device.model "Dummy UPS"
+S: VAR ups-a device.type "ups"
+S: VAR ups-a driver.debug "0"
+S: VAR ups-a driver.flag.allow_killpower "0"
+S: VAR ups-a driver.name "dummy-ups"
+S: VAR ups-a driver.parameter.mode "dummy-once"
+S: VAR ups-a driver.parameter.pollinterval "2"
+S: VAR ups-a driver.parameter.port "/etc/nut/ups-a.dev"
+S: VAR ups-a driver.parameter.synchronous "auto"
+S: VAR ups-a driver.state "updateinfo"
+S: VAR ups-a driver.version "2.8.1"
+S: VAR ups-a input.voltage "230.0"
+S: VAR ups-a ups.load "31"
+S: VAR ups-a ups.mfr "Dummy Manufacturer"
+S: VAR ups-a ups.model "Dummy UPS"
+S: VAR ups-a ups.status "OL CHRG"
+S: END LIST VAR ups-a
+C: LIST VAR ups-b
+S: BEGIN LIST VAR ups-b
+S: VAR ups-b battery.charge "14"
+S: VAR ups-b battery.runtime "180"
+S: VAR ups-b device.mfr "Dummy Manufacturer"
+S: VAR ups-b device.model "Dummy UPS"
+S: VAR ups-b device.type "ups"
+S: VAR ups-b driver.debug "0"
+S: VAR ups-b driver.flag.allow_killpower "0"
+S: VAR ups-b driver.name "dummy-ups"
+S: VAR ups-b driver.parameter.mode "dummy-once"
+S: VAR ups-b driver.parameter.pollinterval "2"
+S: VAR ups-b driver.parameter.port "/etc/nut/ups-b.dev"
+S: VAR ups-b driver.parameter.synchronous "auto"
+S: VAR ups-b driver.state "updateinfo"
+S: VAR ups-b driver.version "2.8.1"
+S: VAR ups-b ups.load "47"
+S: VAR ups-b ups.mfr "Dummy Manufacturer"
+S: VAR ups-b ups.model "Dummy UPS"
+S: VAR ups-b ups.status "OB DISCHRG LB"
+S: END LIST VAR ups-b
+C: LOGOUT
+S: OK Goodbye

@@ -21,6 +21,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from homelabnext._http import send_json
+
 from .cascade import Cascade
 from .spec import IMPACTS
 from .tiers import Item
@@ -103,12 +105,7 @@ class SystemOneServer:
                 pass
 
             def _send(self, status: int, doc: dict) -> None:
-                data = json.dumps(doc).encode()
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
+                send_json(self, status, doc)
 
             def do_GET(self) -> None:
                 if self.path == "/v1/systemone/health":

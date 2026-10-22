@@ -9,7 +9,9 @@ backend. The decision on which product does this is [ADR-0022](adr/0022-llm-gate
 
 The gateway handles single requests. It does not schedule agent sessions, admit work against GPU
 capacity, or choose cloud for an agent. Those belong to the orchestrator, and the gateway config
-must not take them over (see the locality rule below).
+must not take them over (see the locality rule below). How the orchestrator's backends become
+role aliases is in [orchestration-controller.md](orchestration-controller.md)
+([[orchestration-controller]]).
 
 ## One source of truth, generated config
 

@@ -31,7 +31,8 @@ Requirements, Objectives, RFIs: :mod:`homelabnext.strategy.pages`) and the Basel
 ``--guests``: :mod:`homelabnext.compute.pages`), the Approvals page (when ``agents.yml``
 configures ``approvals:``: :mod:`homelabnext.status.approvals`) and the generated maps
 (:data:`MAP_PANELS`: topology with ``--guests``, dataflow, architecture and roadmap with ``--maps``;
-:mod:`homelabnext.status.maps`, ADR-0018) and the Projects page (with ``--projects``:
+:mod:`homelabnext.status.maps`, ADR-0018), the directory pages (:data:`DIRECTORY_PANELS`: Links,
+Schedule and Agent roster with ``--maps``) and the Projects page (with ``--projects``:
 :mod:`homelabnext.projects.pages`).  Their menu entries are
 ``available`` only when that part is configured.  The private pages (:data:`PRIVATE_PANELS`, the
 ``private`` menu group) are never in the public ``status.json`` and render only for a request
@@ -82,11 +83,18 @@ PAGE_PANELS = {
     "dataflow": "/dataflow",
     "architecture": "/architecture",
     "roadmap": "/roadmap",
+    # the directory pages (homelabnext.status.maps): --maps ROOT; written as <panel>.html too
+    "links": "/links",
+    "schedule": "/schedule",
+    "roster": "/roster",
     # the Projects page (homelabnext.projects.pages), served with ``--projects DIR``
     "projects": "/projects",
 }
 STRATEGY_PANELS = frozenset({"strategy", "requirements", "objectives", "rfis"})
 MAP_PANELS = frozenset({"topology", "dataflow", "architecture", "roadmap"})
+DIRECTORY_PANELS = frozenset({"links", "schedule", "roster"})
+#: the pages :class:`homelabnext.status.maps.MapSite` serves and ``hnx status render`` writes
+GENERATED_PANELS = MAP_PANELS | DIRECTORY_PANELS
 PRIVATE_PANELS = frozenset({"agent-detail", "agent-access-log", "approvals"})
 PRIVATE_GROUP = "private"
 #: at most this many sessions go into status.json (worst state first)
@@ -299,7 +307,7 @@ def _page_available(
     maps: frozenset[str] = frozenset(),
     projects: bool = False,
 ) -> bool:
-    if panel in MAP_PANELS:
+    if panel in GENERATED_PANELS:
         return panel in maps
     if panel in STRATEGY_PANELS:
         return strategy
@@ -331,7 +339,7 @@ def build_status(
     ``strategy``: the strategy pages are served (a strategy directory is configured);
     ``baselines``: the Baselines page is served (a guest directory is configured);
     ``approvals``: the Approvals page is served (``agents.yml`` configures it);
-    ``maps``: the map panels whose inputs are configured (:mod:`homelabnext.status.maps`);
+    ``maps``: the map and directory panels whose inputs are configured (:mod:`homelabnext.status.maps`);
     ``projects``: the Projects page is served (a projects directory is configured)."""
     if capability_pages is None:
         from homelabnext.conform.registry import CAPABILITIES

@@ -227,3 +227,23 @@ def site_flows(path: str | Path) -> tuple[ZoneFlow, ...]:
     except SiteError as exc:
         raise ComputeError(str(exc)) from exc
     return flows_from_site(doc) if isinstance(doc, Mapping) else ()
+
+
+def site_deploy(path: str | Path) -> dict[str, Any] | None:
+    """The deploy's tailnet access (:func:`homelabnext.tailnet.site_deploy`) for a site file, or
+    None when it declares none; an invalid declaration is an error (the same rules as
+    ``hnx site validate``), never read as "no deploy access"."""
+    from homelabnext.network.loader import SiteError, load_site
+    from homelabnext.tailnet import deploy_problems
+    from homelabnext.tailnet import site_deploy as access
+
+    try:
+        doc = load_site(path)
+    except SiteError as exc:
+        raise ComputeError(str(exc)) from exc
+    if not isinstance(doc, Mapping):
+        return None
+    problems = deploy_problems(doc)
+    if problems:
+        raise ComputeError(f"{path}: invalid tailnet.deploy", problems)
+    return access(doc)

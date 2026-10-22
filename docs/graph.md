@@ -157,7 +157,7 @@ The registers are read through one function, `_register_entries(path)` in
 | `retired_by` | lesson | inv, test | retired_by |
 | `superseded_by` | lesson | lesson | superseded_by |
 | `incorporated_into` | lesson | runbook, doc | incorporated_into |
-| `from_lesson` | runbook | lesson | from_lessons (runbook or step) |
+| `from_lesson` | runbook | lesson | lessons, or a step's from_lessons (uids) |
 | `uses` | profile, manifest | skill, persona, cap, mcp | parts, persona, skills, tools |
 | `uses_model` | profile | mdl | model_role |
 | `backed_by` | mdl | svc | model role bindings[].backend |

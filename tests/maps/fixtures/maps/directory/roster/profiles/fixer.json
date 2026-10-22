@@ -1,0 +1,4 @@
+{"id": "profile:fixer", "persona": "persona:responder", "model_role": "mdl:large",
+ "data_tier": "local-only", "reads_untrusted": false, "memory_scopes": ["fixer"],
+ "grants": {"tier": "execute", "capabilities": ["cap:broker"], "mcp": ["records"]},
+ "budgets": {"max_input_tokens": 2000, "max_output_tokens": 200, "max_runtime_s": 120, "max_tool_calls": 9}}

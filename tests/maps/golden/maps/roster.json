@@ -1,0 +1,202 @@
+{
+ "activity": true,
+ "agents": [
+  {
+   "actions": [
+    {
+     "action": "note.write",
+     "approval": false,
+     "broker": "harbor-broker",
+     "tier": "write"
+    },
+    {
+     "action": "proposal.file",
+     "approval": false,
+     "broker": "harbor-broker",
+     "tier": "write"
+    },
+    {
+     "action": "service.restart",
+     "approval": true,
+     "broker": "harbor-broker",
+     "tier": "execute"
+    }
+   ],
+   "activity": {
+    "last_seen": "2026-10-20T10:00:00Z",
+    "runtimes": [
+     "claude-code"
+    ],
+    "sessions": 2,
+    "state": "waiting"
+   },
+   "budgets": {
+    "max_input_tokens": 2000,
+    "max_output_tokens": 200,
+    "max_runtime_s": 120,
+    "max_tool_calls": 9
+   },
+   "capabilities": [
+    "cap:broker"
+   ],
+   "data_tier": "local-only",
+   "id": "profile:fixer",
+   "lanes": [
+    {
+     "broker": "harbor-broker",
+     "kind": "records-inbox",
+     "lane": "inbox",
+     "per_actor": false,
+     "via": "proposal.file"
+    },
+    {
+     "broker": "harbor-broker",
+     "kind": "files",
+     "lane": "notes",
+     "per_actor": true,
+     "via": "note.write"
+    }
+   ],
+   "mcp": [
+    "records"
+   ],
+   "memory_scopes": [
+    "fixer"
+   ],
+   "model_backends": [
+    "svc:infer-large",
+    "svc:infer-small"
+   ],
+   "model_role": "mdl:large",
+   "owner": "ops-team",
+   "packs": [
+    "<img src=x onerror=\"y\">"
+   ],
+   "persona": "persona:responder",
+   "profile_file": "profiles/fixer.json",
+   "reads_untrusted": false,
+   "runtime": "claude-code",
+   "tier": "execute",
+   "what": "acts via the broker & nothing else"
+  },
+  {
+   "actions": [],
+   "activity": {
+    "last_seen": null,
+    "runtimes": [],
+    "sessions": 0,
+    "state": null
+   },
+   "budgets": {},
+   "capabilities": [],
+   "data_tier": null,
+   "id": "profile:ghost",
+   "lanes": [],
+   "mcp": [],
+   "memory_scopes": [],
+   "model_backends": [],
+   "model_role": null,
+   "owner": "ops-team",
+   "packs": [],
+   "persona": null,
+   "profile_file": null,
+   "reads_untrusted": null,
+   "runtime": "codex",
+   "tier": null,
+   "what": ""
+  },
+  {
+   "actions": [
+    {
+     "action": "note.write",
+     "approval": false,
+     "broker": "harbor-broker",
+     "tier": "write"
+    }
+   ],
+   "activity": {
+    "last_seen": null,
+    "runtimes": [],
+    "sessions": 0,
+    "state": null
+   },
+   "budgets": {},
+   "capabilities": [],
+   "data_tier": null,
+   "id": "profile:orphan",
+   "lanes": [
+    {
+     "broker": "harbor-broker",
+     "kind": "files",
+     "lane": "notes",
+     "per_actor": true,
+     "via": "note.write"
+    }
+   ],
+   "mcp": [],
+   "memory_scopes": [],
+   "model_backends": [],
+   "model_role": null,
+   "owner": null,
+   "packs": [],
+   "persona": null,
+   "profile_file": null,
+   "reads_untrusted": null,
+   "runtime": null,
+   "tier": null,
+   "what": ""
+  },
+  {
+   "actions": [],
+   "activity": {
+    "last_seen": "2026-10-20T11:00:00Z",
+    "runtimes": [
+     "orchestrator"
+    ],
+    "sessions": 1,
+    "state": "errored"
+   },
+   "budgets": {
+    "max_input_tokens": 1000,
+    "max_output_tokens": 100,
+    "max_runtime_s": 60,
+    "max_tool_calls": 5
+   },
+   "capabilities": [
+    "cap:lake-query"
+   ],
+   "data_tier": "local-only",
+   "id": "profile:watcher",
+   "lanes": [],
+   "mcp": [
+    "lake"
+   ],
+   "memory_scopes": [
+    "watcher"
+   ],
+   "model_backends": [
+    "svc:infer-small"
+   ],
+   "model_role": "mdl:small",
+   "owner": "data-team",
+   "packs": [],
+   "persona": "persona:analyst",
+   "profile_file": "profiles/watcher.json",
+   "reads_untrusted": true,
+   "runtime": "orchestrator",
+   "tier": "read",
+   "what": "Reads and reports."
+  }
+ ],
+ "counts": {
+  "active": 2,
+  "agents": 4,
+  "compiled": 2,
+  "writers": 2
+ },
+ "problems": [
+  "profile:ghost: no compiled profile (grants and MCP servers unknown)",
+  "profile:orphan: no roster entry (owner and runtime unknown)",
+  "profile:orphan: no compiled profile (grants and MCP servers unknown)"
+ ]
+}

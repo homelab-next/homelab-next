@@ -522,10 +522,35 @@ def test_a_customization_naming_a_legacy_code_resolves_with_a_warning(tmp_path, 
     root = _fresh(tmp_path, repo_copy)
     g = root / "profiles/board-sensor-driver/customization.yml"
     g.write_text(g.read_text(encoding="utf-8") + "links: {lesson: LL-003}\n", encoding="utf-8")
-    with pytest.warns(LegacyRecordCode, match="LL-003"):
+    with pytest.warns(LegacyRecordCode, match="LL-003") as got:
         graph, rep = build(root)
     assert rep.dangling == []
     assert has(graph, "custom:board-sensor-driver", "links", f"lesson:{U['LL-003']}")
+    # one warning, naming the uid to write instead; the edge reaches the record, its number
+    legacy = [w for w in got if issubclass(w.category, LegacyRecordCode)]
+    assert len(legacy) == 1 and U["LL-003"] in str(legacy[0].message)
+    assert graph.nodes[f"lesson:{U['LL-003']}"].attrs["label"] == "LL 3"
+
+
+@pytest.mark.parametrize("retired", [False, True])
+def test_a_customization_naming_an_unknown_or_retired_code_fails_the_check(
+    tmp_path, repo_copy, capsys, retired
+):
+    root = _fresh(tmp_path, repo_copy)
+    if retired:  # retired before uids, with a successor: still not a link a customization may hold
+        a = root / "examples/registers/aliases.yml"
+        a.write_text(
+            a.read_text(encoding="utf-8")
+            + f"retired:\n  LL-006:\n    reason: a duplicate\n    replaced_by: {U['LL-003']}\n",
+            encoding="utf-8",
+        )
+    code = "LL-006" if retired else "LL-900"
+    g = root / "profiles/board-sensor-driver/customization.yml"
+    g.write_text(g.read_text(encoding="utf-8") + f"links: {{lesson: {code}}}\n", encoding="utf-8")
+    assert main(["check", "--root", str(root)]) == 1
+    assert f"dangling edge: custom:board-sensor-driver -links-> lesson:{code}" in (
+        capsys.readouterr().out
+    )
 
 
 def test_related_resolves_a_uid_or_a_legacy_code(capsys):
@@ -594,6 +619,22 @@ def test_incorporated_lessons_give_way_to_their_runbook(tmp_path, repo_copy):
     assert f"lesson:{U['LL-005']}" in render_views(g)["lesson.md"].split("## Archive")[1]
     # a record without reviews or author gets no summary attrs
     assert "reviewed" not in g.nodes[f"lesson:{U['LL-003']}"].attrs
+
+
+def test_a_runbooks_own_lessons_are_from_lesson_edges(tmp_path, repo_copy):
+    """``lessons:`` on a runbook (runbook schema 2.1) names lesson uids: each is an edge, and
+    one naming no lesson is dangling."""
+    root = _fresh(tmp_path, repo_copy)
+    front(root / RUNBOOKS / F("RB-001"), lessons=[U["LL-001"]])
+    g, rep = build(root)
+    assert rep.dangling == []
+    assert has(g, f"runbook:{U['RB-001']}", "from_lesson", f"lesson:{U['LL-001']}")
+    (e,) = [x for x in g.out_edges(f"runbook:{U['RB-001']}") if x.dst == f"lesson:{U['LL-001']}"]
+    assert e.source.endswith(".lessons")
+    nobody = "01a15e4e-0000-7000-8000-00000000000f"  # a valid uid no record has
+    front(root / RUNBOOKS / F("RB-001"), lessons=[nobody])
+    _, rep = build(root)
+    assert any(nobody in str(d) for d in rep.dangling)
 
 
 def test_reviewed_counts_only_current_valid_passing_reviews(tmp_path, repo_copy):

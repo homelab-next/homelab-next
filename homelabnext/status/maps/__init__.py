@@ -13,6 +13,12 @@ Four pages, each GENERATED from models already in the repository, never drawn by
 * :mod:`.roadmap` -- the build-order phases with their checklist criteria and live invariant
   state (``docs/build-order.md``, ``docs/checklist.md``, an invariants results file).
 
+Three directory pages are generated the same way: :mod:`.links` (every registry service by
+name, grouped by zone, private-tier services marked), :mod:`.schedule` (every timer, fleet unit,
+CI schedule, workflow pack and status collector with its cadence in words, :mod:`.cadence`, and
+its last/next run) and :mod:`.roster` (every agent profile: owner, runtime, grants, MCP servers,
+writable lanes and last activity).
+
 Each is ``build(inputs) -> view-model`` (pure, JSON-able) and ``render(view-model) -> HTML``
 (inline SVG plus the same facts as tables; no script, no ``style`` attribute, every value
 escaped).  :class:`.pages.MapSite` serves them (``hnx status serve``) and writes them as static

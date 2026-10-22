@@ -274,6 +274,12 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
 
     for msg in site_problems(doc):
         r.error(msg)
+    # 1.2: the deploy's tailnet access (homelabnext/tailnet.py): zones by id, SSH unless a listed
+    # exception gives its reason; the tailscale-acl target renders it
+    from homelabnext.tailnet import deploy_problems
+
+    for msg in deploy_problems(doc):
+        r.error(msg)
 
     adapters = doc.get("adapters", {})
     for key in ("network", "dns"):

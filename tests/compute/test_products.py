@@ -18,7 +18,7 @@ from homelabnext import cli as hnx
 from homelabnext.compute import ComputeError, ZoneFlow, load_fleet, open_site, render, site_flows
 from homelabnext.compute.baselines import coverage, set_problems
 from homelabnext.compute.gen.tailscale_acl import policy
-from homelabnext.compute.zones import flows_from_site
+from homelabnext.compute.zones import flows_from_site, site_deploy
 
 HERE = Path(__file__).resolve().parent
 FLEET = HERE / "fleet"
@@ -32,7 +32,9 @@ EXAMPLE_SITE = REPO / "examples" / "minimal" / "site.yml"
 
 def fleet_at(d: Path, site: Path = SITE, **kw):
     zones, domain = open_site(site)
-    return load_fleet(d, zones, domain=domain, flows=site_flows(site), **kw)
+    return load_fleet(
+        d, zones, domain=domain, flows=site_flows(site), deploy=site_deploy(site), **kw
+    )
 
 
 @pytest.fixture(scope="module")
@@ -403,7 +405,10 @@ def test_policy_follows_the_site_flows_golden():
     assert {"action": "accept", "src": ["tag:zone-mgmt"], "proto": "icmp",
             "dst": ["tag:zone-edge:*"]} in acls  # fmt: skip
     assert not [a for a in acls if a["src"] == ["tag:zone-edge"]]  # the deny matched first
-    assert not [a for a in acls if any("zone-data" in d for d in a["dst"])]  # no node in data
+    # no node in data: only the deploy's declared access names it
+    assert [a["src"] for a in acls if any("zone-data" in d for d in a["dst"])] == [
+        ["tag:ci-deploy"]
+    ]
 
 
 def test_cli_renders_the_policy_with_the_sites_flows(tmp_path):
@@ -415,7 +420,7 @@ def test_cli_renders_the_policy_with_the_sites_flows(tmp_path):
 
 def test_no_tailscale_binding_means_an_empty_policy(tmp_path):
     d = copy_fleet(tmp_path, baselines=lambda x: x["controls"]["remote-access"].update(role=None))
-    f = fleet_at(d, SITE_FLOWS)
+    f = replace(fleet_at(d, SITE_FLOWS), deploy=None)
     assert policy(f) == {"tagOwners": {}, "acls": []}
     assert "nothing is reachable" in render(f, "tailscale-acl")["tailscale-policy.hujson"]
     assert policy(replace(f, baselines=None)) == {"tagOwners": {}, "acls": []}

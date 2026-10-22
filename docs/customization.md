@@ -59,7 +59,7 @@ owner: platform-team                   # required
 created: "2026-10-15"
 review_by: "2027-06-30"                # required (unless maintained_upstream); at most 366 days after created
 # maintained_upstream: true            # schema 1.1, shipped profiles only; see "Shipped profiles never expire"
-links: {lesson: <uid>, runbook: <uid>}   # optional: records by uid (a legacy LL-900 still resolves)
+links: {lesson: <uid>, runbook: <uid>}   # optional: records by uid; see "Links" below
 upstream: proposed                     # none | proposed | accepted
 upstream_ref: where the proposal lives # optional
 action: { ... }                        # shape depends on kind; see schemas/platform/customization.schema.json
@@ -97,10 +97,28 @@ hnx custom register OUT_DIR           # customizations.html + customizations.jso
 Useful flags: `--dir`, `--config`, `--enable ID[=HOST,HOST]`, `--root` (the tree supplying the
 registry, roles, schemas and ADRs), `--today YYYY-MM-DD` (for reproducible runs), `--json`.
 
-Lint rules `CU001`..`CU015` are listed at the top of `homelabnext/customization/lint.py`. The
+Lint rules `CU001`..`CU017` are listed at the top of `homelabnext/customization/lint.py`. The
 ones people hit: `CU001` missing reason, owner or review date; `CU005` a scope selector that does
 not resolve; `CU008` expired; `CU011` two customizations claim one extension point on overlapping
-scope; `CU015` `maintained_upstream: true` outside the project's own shipped profiles.
+scope; `CU015` `maintained_upstream: true` outside the project's own shipped profiles; `CU016` /
+`CU017` a link (below).
+
+## Links
+
+`links: {lesson: <uid>, runbook: <uid>}` names the register records a customization relies on, by
+uid (ADR-0019). A file written before uids may still hold a legacy code (`LL-003`, `RB-001`): it
+resolves through `examples/registers/aliases.yml` to the record's uid, and each one costs one
+warning naming the uid to write instead (`CU017` in `hnx custom check`, a `LegacyRecordCode`
+warning in `hnx graph build`). A code `aliases.yml` does not hold is an error, and so is one it
+lists under `retired:`, even with a successor: a retired code still resolves to its successor in
+an old note or a query, but a customization is a maintained file, and silently linking the
+successor would change what it claims to rely on (`CU016`; the graph keeps the code as written,
+a dangling edge `hnx graph check` fails on). A uid that names no lesson or runbook, or the wrong
+kind of record, is `CU016` too. The graph's `custom -links->` edge goes to the record itself, and
+the register (`hnx custom register`) shows each link by its computed display number
+(`lesson LL 3`), with the uid. `hnx records assign-uids` rewrites legacy link codes as uids in
+every customization `hnx custom` loads (or the `--customizations DIR...` it is given), and only
+the `links` values: a code in the `reason` is prose and stays. A second run changes nothing.
 
 ## Conflicts and ordering
 

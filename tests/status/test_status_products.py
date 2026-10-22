@@ -485,7 +485,7 @@ def test_bad_product_sources_are_refused(doc, service, change, needle):
         ({"kind": "poll-file", "target": {"file": "a.json"}, "mapping": {"builtin": "orchestrator-queue"}},
          "is for poll-http-json only"),
         ({"kind": "poll-file", "target": {"file": "a.json"}, "mapping": {"state": "s"},
-          "auth": {"secret": "secret:a/b"}}, "auth is for the HTTP kinds only"),
+          "auth": {"secret": "secret:a/b"}}, "auth is for the HTTP kinds and poll-nut only"),
         ({"kind": "poll-http-json", "target": {"path": "/x"}, "mapping": {"state": "s", "window_s": 60}},
          "for the product kinds only"),
         ({"kind": "poll-http-json", "target": {"path": "/x"}, "mapping": {"state": "s"},

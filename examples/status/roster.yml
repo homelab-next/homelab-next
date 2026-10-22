@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The status hub's Agent roster page (docs/status.md): where the agent profiles, broker manifests,
+# workflow packs and model roles are (relative to this file), and per profile only what none of
+# them holds - its owner, what runs it and one line on what it does. Grants, MCP servers, budgets,
+# broker actions and writable lanes are read from those files, never restated here. Schema:
+# schemas/status/roster.schema.json. Fictional, like every example.
+roster_version: 1
+profiles: ["../../schemas/agent/examples/profile.*.json"]
+brokers: [../broker/manifest.yml, ../../workflows/broker.manifest.json]
+packs: ["../../workflows/packs/*.yml"]
+model_roles: ../model_roles.json
+agents:
+  - profile: profile:reader
+    owner: data-team
+    runtime: orchestrator
+    what: Reads alerts and feed items and reports what it finds; holds no acting grant.
+  - profile: profile:responder
+    owner: platform-team
+    runtime: orchestrator
+    what: Acts on a reader's validated output through allowlisted broker actions only.
+  - profile: profile:triage
+    owner: platform-team
+    runtime: claude-code
+    what: Triages the alert queue, keeps findings and memory, files proposals.
+    activity_names: [triage-agent]
+  - profile: profile:workflow-soc
+    owner: platform-team
+    runtime: workflow-runner
+    what: The identity the SOC workflow packs act as.
