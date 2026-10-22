@@ -318,7 +318,7 @@ def test_a_classes_file_cannot_narrow_the_reader_ban(tmp_path, capsys):
     table = yaml.safe_load(DEFAULT_CLASSES.read_text())
     table["reader_forbidden"] = ["credential"]
     _write(tmp_path / "classes.yml", table)
-    with pytest.raises(SpecError, match="leaves out .*'egress'.*'exec'"):
+    with pytest.raises(SpecError, match=r"leaves out .*'egress'.*'exec'"):
         ToolClasses.load(tmp_path / "classes.yml")
     _write(tmp_path / "spec.yml", {**spec(), "mcp": ["shell"]})
     args = ["agent", "lint", str(tmp_path / "spec.yml"), "--classes", str(tmp_path / "classes.yml")]
