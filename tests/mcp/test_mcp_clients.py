@@ -277,6 +277,16 @@ def test_a_parameter_value_never_routes_a_secret_or_a_variable(tmp_path):
             clients.instances(cat, prof, params={"notes": {"writable": value}})
     with pytest.raises(clients.RenderError, match="profile_file"):
         clients.instances(cat, prof, profile_file="${HOME}/p.json")
+    # a lane and a home are templated ({lane}, {home}) like a value: plain names only
+    for kw in (
+        {"lanes": ["${HNX_SECRET_MCP_VAULT_TOKEN}"]},
+        {"lanes": ["$(id)"]},
+        {"lanes": ["secret:mcp/vault-token"]},
+        {"home": "secret:mcp/vault-token"},
+        {"home": "${HOME}"},
+    ):
+        with pytest.raises(clients.RenderError, match="is not a plain name"):
+            clients.instances(cat, prof, params={"notes": {"writable": "x/"}}, **kw)
     (inst,) = clients.instances(cat, prof, params={"notes": {"writable": "x/"}})
     args = clients.definition(inst, "claude-code")["args"]
     # the record's own secret reference becomes a placeholder; a filled value stays verbatim
@@ -420,3 +430,30 @@ def test_a_file_drifts_only_when_a_record_it_holds_changes(tmp_path):
     notes = spec.parent.parent / "notes.yml"
     notes.write_text(notes.read_text().replace("timeout: 120", "timeout: 90"))
     assert len(clients.drift(clients.render_spec(spec))) == 2
+
+
+def test_a_spec_lane_or_home_is_a_plain_name_and_params_name_a_real_lane(tmp_path):
+    dst = tmp_path / "mcp"
+    shutil.copytree(ROOT / "examples" / "mcp", dst)
+    shutil.copy(ROOT / "examples" / "services.yml", tmp_path / "services.yml")
+    spec = dst / "clients" / "hermes.yml"
+    base = yaml.safe_load(spec.read_text())
+    for edit, phrase in (
+        (lambda d: d.update(lanes=["${HNX_SECRET_MCP_VAULT_TOKEN}"]), "lanes must list plain names"),
+        (lambda d: d.update(lanes="real"), "lanes must list plain names"),
+        (lambda d: d["outputs"][0].update(home="$(id)"), "home must be a plain name"),
+        # a typo in a server or lane name is refused, never silently ignored
+        (lambda d: d["profiles"][1]["params"].update({"notes@shadwo": {"mode": "read"}}),
+         "'shadwo' is not a lane"),
+        (lambda d: d["outputs"][0].update(params={"nots": {"mode": "read"}}),
+         "no profile of the spec is granted nots"),
+        (lambda d: d["outputs"][0].update(params={"notes@rael": {"mode": "read"}}),
+         "'rael' is not a lane"),
+    ):  # fmt: skip
+        doc = yaml.safe_load(yaml.safe_dump(base))
+        edit(doc)
+        spec.write_text(yaml.safe_dump(doc))
+        with pytest.raises(clients.RenderError, match=re.escape(phrase)):
+            clients.render_spec(spec)
+    with pytest.raises(clients.RenderError, match="is not a plain name"):
+        clients.render_profile(CATALOG, COLLECTOR, "claude-code", lanes=["$(id)"])

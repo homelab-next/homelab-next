@@ -57,6 +57,9 @@ ORCH_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 ORCH_KIND_KEYS = ("command", "args", "timeout", "env", "allowed_env")
 ORCH_GRANT_KEYS = ("name", "kind", "env", "timeout")
 ORCH_LANES = ("real", "shadow")
+#: a lane or a runtime home: both are templated into names, arguments and settings ({lane},
+#: {home}), so they are plain names, never a value a client would expand or resolve
+NAME = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 #: the marker line a profile's spliced ``grants:`` block starts at (everything after it is ours)
 GRANTS_MARKER = "# Per-job MCP grants (ADR-022)."
 _SECRET_REF = re.compile(r"secret:[a-z][a-z0-9_-]*(?:/[a-z][a-z0-9_-]*)*")
@@ -172,13 +175,19 @@ def instances(
     problems: list[str] = []
     out: list[Instance] = []
     names = granted(profile)
+    lanes = list(lanes)
     bad_file = unsafe_value(profile_file)
     if bad_file:
         problems.append(f"{pid}: profile_file {bad_file}")
+    for what, value in [*(("lane", lane) for lane in lanes), *([("home", home)] if home else [])]:
+        if not isinstance(value, str) or not NAME.match(value):
+            problems.append(f"{pid}: {what} {value!r} is not a plain name ({NAME.pattern})")
     for key in params:
-        sid = key.split("@", 1)[0]
+        sid, at, lane = str(key).partition("@")
         if sid not in names:
             problems.append(f"{pid}: parameters for {key}, which the profile is not granted")
+        elif at and lane not in lanes:
+            problems.append(f"{pid}: parameters for {key}: {lane!r} is not a lane ({lanes})")
     for sid in names:
         rec = cat.get(sid)
         if rec is None:
@@ -698,10 +707,17 @@ def _spec_problems(spec: Any) -> list[str]:
             out.append(f"outputs[{i}]: unknown key(s) {sorted(extra)}")
         if spec.get("client") == "llm-orchestrator" and ({"home", "params"} & set(o)):
             out.append(f"outputs[{i}]: llm-orchestrator's catalog has no home or params")
-        if o.get("home") is not None and (unsafe_value(o["home"]) or not str(o["home"]).strip()):
-            out.append(f"outputs[{i}]: home must be a plain non-empty string")
+        if o.get("home") is not None and not (isinstance(o["home"], str) and NAME.match(o["home"])):
+            out.append(f"outputs[{i}]: home must be a plain name ({NAME.pattern})")
         if o.get("params") is not None and not isinstance(o["params"], Mapping):
             out.append(f"outputs[{i}]: params must map SERVER (or SERVER@LANE) to values")
+    lanes = spec.get("lanes")
+    if lanes is not None and (
+        not isinstance(lanes, list)
+        or not lanes
+        or not all(isinstance(x, str) and NAME.match(x) for x in lanes)
+    ):
+        out.append(f"lanes must list plain names ({NAME.pattern})")
     return out
 
 
@@ -788,6 +804,17 @@ def render_spec(spec_path: str | Path, root: str | Path | None = None) -> Render
         if bad:
             raise RenderError(bad)
     else:
+        every_granted = {sid for _, prof, _ in loaded for sid in granted(prof)}
+        for i, out in enumerate(spec["outputs"]):
+            for key in out.get("params") or {}:
+                sid, at, lane = str(key).partition("@")
+                if sid not in every_granted:
+                    why = f"no profile of the spec is granted {sid}"
+                elif at and lane not in lanes:
+                    why = f"{lane!r} is not a lane ({lanes})"
+                else:
+                    continue
+                raise RenderError([f"{sp}: outputs[{i}].params {key}: {why}"])
         for out in spec["outputs"]:
             what = f"home {out['home']}" if out.get("home") else f"{sp.name}"
             home_insts: list[Instance] = []

@@ -179,9 +179,12 @@ Each parameter's value is the grant's (`params`, then the home's), else its defa
 instance per element. A value is a string (quote YAML's `true` or `0755`), passed through
 verbatim: it may not contain `$`, `secret:` or a control character, so a grant can never route a
 secret or an environment variable to a server (secrets come only from the record's own `env`,
-`headers` and arguments). Values are checked against the parameter's enum and pattern; an unknown
-parameter, a missing required value, a parameter for a server the profile is not granted, or two
-different definitions under one instance name are refused. Every home gets every instance, so a
+`headers` and arguments). Lanes and homes are templated too (`{lane}`, `{home}`), so each is a
+plain name (`^[a-z][a-z0-9-]{0,31}$`), in a spec and in `--lanes` alike. Values are checked
+against the parameter's enum and pattern; an unknown parameter, a missing required value, a
+parameter for a server the profile is not granted (or, in an output's `params`, that no profile of
+the spec is granted), a `SERVER@LANE` whose lane is not rendered, or two different definitions
+under one instance name are refused: a typo is never silently ignored. Every home gets every instance, so a
 fallback home can never hold fewer servers than the primary.
 
 ## Rendering client configs
