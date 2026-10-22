@@ -10,7 +10,7 @@
 #   outputs: the password on stdout, nothing else
 #   exit:
 #     "0": password printed
-#     "1": OpenBao refused or returned no value
+#     "1": OpenBao refused, redirected or returned no value
 #     "2": not configured
 """Ansible vault password client for a private overlay (template; docs/private-overlay.md).
 
@@ -25,8 +25,12 @@ password file.  In order:
    ``https://``; ``BAO_CACERT`` names the internal CA (verification is never turned off).  The
    token is ``BAO_TOKEN``, else an AppRole login with ``BAO_ROLE_ID`` and ``BAO_SECRET_ID``.
    ``BAO_KV_MOUNT`` (default ``secret``) and ``BAO_FIELD`` (default ``value``) locate the value.
+   A token this client minted through AppRole is revoked (``auth/token/revoke-self``) as soon as
+   the value is read; a failed revoke is one stderr line and the token lapses at its TTL.
 
-Nothing secret is ever written to stderr: errors name variables and HTTP statuses only.
+Redirects are never followed: an answer in the 3xx range is an error.  urllib would otherwise
+replay ``X-Vault-Token`` to whatever ``Location`` names, ``http://`` included.  Nothing secret is
+ever written to stderr: errors name variables and HTTP statuses only.
 """
 
 from __future__ import annotations
@@ -49,6 +53,7 @@ NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*$")  # as the
 MOUNT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 Opener = Callable[..., object]
+Warn = Callable[[str], None]
 
 
 class ClientError(Exception):
@@ -57,7 +62,24 @@ class ClientError(Exception):
         self.code = code
 
 
-def _request(opener: Opener, url: str, *, token: str | None, body: dict | None, ctx) -> dict:
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: the token must reach the configured address and nothing else."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        return None  # urllib then raises HTTPError for the 3xx itself
+
+
+def urlopen_no_redirect(req: urllib.request.Request, timeout: float, context: ssl.SSLContext):
+    """``urlopen`` with certificate verification from ``context`` and no redirect handling."""
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=context), _NoRedirect()
+    )
+    return opener.open(req, timeout=timeout)
+
+
+def _request(
+    opener: Opener, url: str, *, token: str | None, body: dict | None, ctx, empty_ok: bool = False
+) -> dict:
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method="POST" if data else "GET")
     req.add_header("Accept", "application/json")
@@ -68,16 +90,25 @@ def _request(opener: Opener, url: str, *, token: str | None, body: dict | None, 
     path = urllib.parse.urlsplit(url).path
     try:
         with opener(req, timeout=TIMEOUT, context=ctx) as resp:  # type: ignore[attr-defined]
-            return json.loads(resp.read().decode("utf-8"))
+            raw = resp.read()
     except urllib.error.HTTPError as exc:
-        raise ClientError(f"OpenBao answered HTTP {exc.code} for {path}") from None
+        moved = " (redirects are refused)" if 300 <= exc.code < 400 else ""
+        raise ClientError(f"OpenBao answered HTTP {exc.code} for {path}{moved}") from None
     except (urllib.error.URLError, OSError) as exc:
         raise ClientError(f"OpenBao unreachable for {path}: {exc.__class__.__name__}") from None
+    if empty_ok and not raw.strip():
+        return {}
+    try:
+        return json.loads(raw.decode("utf-8"))
     except ValueError:
         raise ClientError(f"OpenBao returned no JSON for {path}") from None
 
 
-def from_openbao(ref: str, env: Mapping[str, str], opener: Opener) -> str:
+def _stderr(message: str) -> None:
+    print(f"vault-pass-client: {message}", file=sys.stderr)
+
+
+def from_openbao(ref: str, env: Mapping[str, str], opener: Opener, warn: Warn = _stderr) -> str:
     name = ref.removeprefix("secret:")
     if not ref.startswith("secret:") or not NAME.match(name):
         raise ClientError(f"{ENV_REF} is not a secret reference (secret:<name>)", 2)
@@ -89,7 +120,8 @@ def from_openbao(ref: str, env: Mapping[str, str], opener: Opener) -> str:
         raise ClientError("BAO_KV_MOUNT is not a mount name", 2)
     ctx = ssl.create_default_context(cafile=env.get("BAO_CACERT") or None)
     token = env.get("BAO_TOKEN")
-    if not token:
+    minted = not token
+    if minted:
         role, secret_id = env.get("BAO_ROLE_ID"), env.get("BAO_SECRET_ID")
         if not (role and secret_id):
             raise ClientError("set BAO_TOKEN, or BAO_ROLE_ID and BAO_SECRET_ID (AppRole)", 2)
@@ -103,8 +135,12 @@ def from_openbao(ref: str, env: Mapping[str, str], opener: Opener) -> str:
         token = ((got.get("auth") or {}) if isinstance(got, dict) else {}).get("client_token")
         if not token:
             raise ClientError("the AppRole login returned no token")
-    quoted = "/".join(urllib.parse.quote(part, safe="") for part in name.split("/"))
-    got = _request(opener, f"{addr}/v1/{mount}/data/{quoted}", token=token, body=None, ctx=ctx)
+    try:
+        quoted = "/".join(urllib.parse.quote(part, safe="") for part in name.split("/"))
+        got = _request(opener, f"{addr}/v1/{mount}/data/{quoted}", token=token, body=None, ctx=ctx)
+    finally:
+        if minted:
+            _revoke(opener, addr, token, ctx, warn)
     field = env.get("BAO_FIELD") or "value"
     data = ((got.get("data") or {}).get("data") or {}) if isinstance(got, dict) else {}
     value = data.get(field) if isinstance(data, dict) else None
@@ -113,7 +149,16 @@ def from_openbao(ref: str, env: Mapping[str, str], opener: Opener) -> str:
     return value
 
 
-def password(env: Mapping[str, str], opener: Opener = urllib.request.urlopen) -> str:
+def _revoke(opener: Opener, addr: str, token: str, ctx, warn: Warn) -> None:
+    """Best effort: revoke the token this client minted.  A failure is a warning, never fatal."""
+    try:
+        url = f"{addr}/v1/auth/token/revoke-self"
+        _request(opener, url, token=token, body={}, ctx=ctx, empty_ok=True)
+    except ClientError as exc:
+        warn(f"warning: could not revoke the AppRole token ({exc}); it lapses at its TTL")
+
+
+def password(env: Mapping[str, str], opener: Opener = urlopen_no_redirect) -> str:
     value = env.get(ENV_PASSWORD, "")
     if value:
         return value
