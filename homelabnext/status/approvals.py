@@ -317,7 +317,7 @@ class ApprovalsSite:
 
     def _recent(self) -> list[Mapping[str, Any]]:
         # two bounded reads (``tail``): the hub never pulls more than RECENT rows of each; the
-        # broker filters its audit trail server-side (it has no index, so it reads its trail)
+        # broker answers both from its decisions index, not by walking its whole audit trail
         rows = [
             *self.client.audit(operation="approve", outcome="ok", tail=RECENT),
             *self.client.audit(operation="deny", outcome="ok", tail=RECENT),

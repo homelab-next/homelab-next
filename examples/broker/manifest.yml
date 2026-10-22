@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Example broker manifest (schemas/broker/manifest 1.3): one agent profile with three write lanes,
+# Example broker manifest (schemas/broker/manifest 1.4): one agent profile with three write lanes,
 # a read-only status action and an approval-gated restart.  Walkthrough: docs/broker.md.
 #   hnx broker validate examples/broker/manifest.yml
 # dev_identity: true lets the CLI's asserted --as identity drive it, for the walkthrough only; a

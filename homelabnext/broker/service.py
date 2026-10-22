@@ -3,7 +3,7 @@
 handlers, every outcome audited to disk.
 
 It implements the ``broker`` capability contract (``conformance.protocols.broker``) on top of
-:func:`homelabnext.broker.decide` and a manifest (``schemas/broker/manifest`` 1.3).  An action is
+:func:`homelabnext.broker.decide` and a manifest (``schemas/broker/manifest`` 1.4).  An action is
 one of three kinds:
 
 * a **lane** write (``handler: builtin/lane``, ``lane: <name>``): ``memory.write``,
@@ -78,7 +78,7 @@ from . import (
 )
 from . import execute as _exec
 from . import lanes as _lanes
-from .state import FileApprovalStore, StateDir, is_id, new_id
+from .state import DECISION_KINDS, FileApprovalStore, StateDir, is_id, new_id
 
 __all__ = [
     "NOT_OWNER",
@@ -484,17 +484,22 @@ class BrokerService:
     def audit_documents(self, *, limit: int | None = None, **match: Any) -> list[dict[str, Any]]:
         """Raw audit records whose fields equal every ``match`` value (None = any), oldest first;
         with ``limit``, only the newest ``limit`` of them, read newest first (a tail reads the
-        tail, not the whole trail)."""
+        tail, not the whole trail).  A match on filed decisions (operation ``approve`` or
+        ``deny``, outcome ``ok``: the hub's recent decisions and its "already decided" check)
+        reads the ``decisions/`` index instead of the trail, so no volume of refusals an agent
+        provokes makes it slow."""
         want = {k: v for k, v in match.items() if v is not None}
 
         def hit(r: Mapping[str, Any]) -> bool:
             return all(r.get(k) == v for k, v in want.items())
 
+        indexed = (want.get("operation"), want.get("outcome")) in DECISION_KINDS
+        source = self.state.decision_records if indexed else self.state.audit_records
         if limit is None:
-            return [r for r in self.state.audit_records() if hit(r)]
+            return [r for r in source() if hit(r)]
         out: list[dict[str, Any]] = []
         if limit > 0:
-            for r in self.state.audit_records(newest_first=True):
+            for r in source(newest_first=True):
                 if hit(r):
                     out.append(r)
                     if len(out) >= limit:

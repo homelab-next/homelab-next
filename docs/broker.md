@@ -149,6 +149,8 @@ processes share it without locks: `requests/`, `open/` (an index of the requests
 so listing them reads only those; rebuilt once for an older state directory), `claims/` (the one
 transition out of `pending`: run, cancel or deny), `results/`, `approvals/<request>/`,
 `consumed/`, `audit/` (one record per file, `schemas/broker/audit`; a tail is read newest first),
+`decisions/` (an index of the trail's filed approvals and denials, so the hub's recent-decisions
+read never walks the refusals; rebuilt once for an older state directory),
 `outbox/`, `runs/<request>/` and `digest.key`. Keep it `0700` and owned by the
 broker's user; agents get no access to it.
 
@@ -156,7 +158,7 @@ broker's user; agents get no access to it.
 
 `hnx broker serve` runs the broker on a Unix-domain socket. Who is calling is the **peer's uid**,
 read from the kernel (`SO_PEERCRED`, Linux), and mapped through the manifest
-(`schemas/broker/manifest` 1.3; example: `examples/broker/manifest.production.yml`):
+(`schemas/broker/manifest` 1.4; example: `examples/broker/manifest.production.yml`):
 
 ```yaml
 dev_identity: false                       # the CLI's asserted --as is refused (absent = false)
@@ -165,6 +167,7 @@ callers:                                  # an agent's system user -> the one pr
   - {uid: 2002, profile: profile:reader}
 approval_relays:                          # a process that authenticated a person, for one issuer
   - {user: hnx-hub, issuer: sso}
+refusal_limit: {max: 60, window_s: 60}    # refused requests per peer per window (the default)
 ```
 
 A peer is listed once, as a caller *or* a relay (`hnx broker validate` refuses a peer in both);
@@ -196,6 +199,15 @@ group-writable or open to others, and a file at the socket path that is not a st
 Bounds: one request per connection, at most 1 MiB (`--max-request-bytes`) read within 10 s
 (`--timeout`, for the whole request, not each read); 32 connections at once for callers, plus 4
 kept for approval relays so agents cannot crowd out the hub; more get `busy`.
+
+Refusals are rate limited per peer: a caller or an unknown peer with more than
+`refusal_limit.max` refused requests (`Denied` or `InvalidArguments`: an unknown action, a
+malformed request, `unknown-caller`, ...) within `refusal_limit.window_s` seconds (manifest 1.4;
+default 60 per 60 s) is answered `rate-limited` for the rest of the window, without its request
+being parsed. The limit is audited **once per peer and window** (`operation: connect`,
+`reason: rate-limited`) and the number of requests it suppressed is logged when the window ends,
+so a looping or hostile agent can fill neither the audit trail nor the disk. Approval relays are
+exempt, as they are from the connection cap.
 
 ### A systemd unit
 

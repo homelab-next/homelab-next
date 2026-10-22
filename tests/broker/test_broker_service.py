@@ -623,3 +623,31 @@ def test_request_documents_validate(tmp_path):
     req = svc.state.get_request(rid)["request"]
     assert schema_errors("broker", "request", req) == []
     assert req["digest"] == request_digest(req)
+
+
+def test_recent_decisions_read_the_decisions_index_not_the_trail(tmp_path, monkeypatch):
+    """The hub's recent approve/deny query walked the whole audit trail newest first until it
+    found its rows, so a trail an agent filled with refusals made the Approvals page time out."""
+    svc = _svc(tmp_path)
+    rids = [svc.submit(AGENT, "service.restart", {"grace_s": 5}) for _ in range(3)]
+    svc.approve(rids[0], "sso:operator-one")
+    svc.deny(rids[1], "sso:operator-one")
+    for i in range(30):  # the noise: refusals far outnumber decisions
+        with pytest.raises(Denied):
+            svc.call(AGENT, f"nope.{i}", {})
+
+    def no_trail(**kw):
+        raise AssertionError("the decisions query read the whole audit trail")
+
+    monkeypatch.setattr(svc.state, "audit_records", no_trail)
+    [appr] = svc.audit_documents(operation="approve", outcome="ok", limit=20)
+    [deny] = svc.audit_documents(operation="deny", outcome="ok", limit=20)
+    assert (appr["request_id"], deny["request_id"]) == (rids[0], rids[1])
+    assert svc.audit_documents(request_id=rids[0], operation="approve", outcome="ok", limit=50)
+    monkeypatch.undo()
+    # a state directory from before the index gets it built once, from the trail
+    shutil.rmtree(tmp_path / "state" / "decisions")
+    again = BrokerService.from_manifest(EXAMPLE, tmp_path / "state")
+    assert [r["request_id"] for r in again.state.decision_records()] == rids[:2]
+    refused = again.audit_documents(operation="approve", outcome="denied")
+    assert refused == [], "only filed decisions are indexed; other queries read the trail"

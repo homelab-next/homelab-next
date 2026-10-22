@@ -1,0 +1,60 @@
+{
+  "actions": [
+    {
+      "action": "memory.write",
+      "handler": "builtin/lane",
+      "lane": "memory",
+      "requires_approval": false,
+      "tier": "write"
+    }
+  ],
+  "approval_relays": [
+    {
+      "issuer": "sso",
+      "user": "hnx-hub"
+    }
+  ],
+  "approvers": [
+    {
+      "issuer": "sso",
+      "kind": "human",
+      "subject": "operator-one"
+    }
+  ],
+  "callers": [
+    {
+      "profile": "profile:triage",
+      "user": "hnx-agent-triage"
+    },
+    {
+      "profile": "profile:triage",
+      "uid": 2001
+    }
+  ],
+  "default": "deny",
+  "dev_identity": false,
+  "grants": [
+    {
+      "actions": [
+        "memory.write"
+      ],
+      "max_tier": "write",
+      "profile": "profile:triage"
+    }
+  ],
+  "lanes": [
+    {
+      "format": "text",
+      "kind": "files",
+      "max_bytes": 65536,
+      "name": "memory",
+      "root": "memory"
+    }
+  ],
+  "manifest_id": "lab-broker-socket",
+  "mode": "enforce",
+  "refusal_limit": {
+    "max": 0,
+    "window_s": 60
+  }
+}

@@ -3,7 +3,7 @@
 
 ``hnx broker serve`` (ADR-0017, stage 2a).  Identity is authenticated by the kernel: the server
 reads the connecting process's credentials (``SO_PEERCRED``; Linux only, see below) and maps its
-uid through the manifest (``schemas/broker/manifest`` 1.3):
+uid through the manifest (``schemas/broker/manifest`` 1.4):
 
 * ``callers: [{uid | user, profile}]`` - an agent's process; it acts as exactly that profile;
 * ``approval_relays: [{uid | user, issuer}]`` - a process that authenticated a human (the hub
@@ -53,6 +53,16 @@ so agents holding every slot cannot keep the hub from approving or denying (more
 ``busy``); the state directory already makes runs, cancels, denials and approval consumption
 exactly-once across threads and processes.
 
+Refusals are rate limited per peer (:class:`RefusalLimiter`): a caller or an unknown peer that
+collects more than ``refusal_limit.max`` refusals (``Denied`` or ``InvalidArguments``: default
+deny, a malformed request, ``unknown-caller``, ...) within ``refusal_limit.window_s`` seconds
+(manifest 1.4; default :data:`DEFAULT_REFUSAL_LIMIT` per :data:`DEFAULT_REFUSAL_WINDOW_S` s) is
+answered ``rate-limited`` for the rest of that window without its request being looked at.  The
+limit is audited once per peer and window (operation ``connect``, reason ``rate-limited``), not
+once per request, so an agent probing the broker can fill neither the audit trail nor the disk;
+how many requests the window suppressed is logged when it ends.  Approval relays are exempt (a
+person's refused decisions must never lock the hub out), as they are from the connection cap.
+
 Platforms: peer credentials are read with ``SO_PEERCRED``, which Linux provides.  macOS and the
 BSDs have ``getpeereid``/``LOCAL_PEERCRED`` instead, which Python does not expose portably; the
 server refuses to start there rather than fall back to an unauthenticated mode.
@@ -91,6 +101,7 @@ __all__ = [
     "BrokerServer",
     "Identity",
     "PeerMap",
+    "RefusalLimiter",
     "handle_request",
     "peer_credentials",
     "supported",
@@ -102,6 +113,9 @@ DEFAULT_TIMEOUT_S = 10.0
 DEFAULT_MAX_CONNECTIONS = 32
 DEFAULT_RELAY_CONNECTIONS = 4
 MAX_AUDIT_TAIL = 500
+DEFAULT_REFUSAL_LIMIT = 60
+DEFAULT_REFUSAL_WINDOW_S = 60.0
+RATE_LIMITED = "rate-limited"
 #: what an agent's process may ask, and the fields each operation takes (beyond ``v``, ``op``)
 CALLER_OPS: dict[str, frozenset[str]] = {
     "actions": frozenset(),
@@ -197,6 +211,68 @@ class PeerMap:
         return len(self._by_uid)
 
 
+# ---------------------------------------------------------------- refusal rate limit
+class RefusalLimiter:
+    """Per-peer count of refusals in a fixed window (see the module doc).  Thread-safe."""
+
+    def __init__(
+        self,
+        max_refusals: int = DEFAULT_REFUSAL_LIMIT,
+        window_s: float = DEFAULT_REFUSAL_WINDOW_S,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if max_refusals < 1 or window_s <= 0:
+            raise ValueError("refusal limit: max is at least 1 and window_s is positive")
+        self.max_refusals = max_refusals
+        self.window_s = window_s
+        self.clock = clock
+        self._lock = threading.Lock()
+        #: uid -> [window start, refusals, suppressed requests]
+        self._peers: dict[int, list[float]] = {}
+
+    @classmethod
+    def from_manifest(cls, manifest: Mapping[str, Any], **kw: Any) -> RefusalLimiter:
+        cfg = manifest.get("refusal_limit") or {}
+        return cls(
+            int(cfg.get("max", DEFAULT_REFUSAL_LIMIT)),
+            float(cfg.get("window_s", DEFAULT_REFUSAL_WINDOW_S)),
+            **kw,
+        )
+
+    def _current(self, uid: int, now: float) -> list[float] | None:
+        st = self._peers.get(uid)
+        if st is not None and now - st[0] >= self.window_s:
+            if st[2]:
+                log.warning(
+                    "uid %d: %d request(s) answered rate-limited in the last window",
+                    uid,
+                    int(st[2]),
+                )
+            del self._peers[uid]
+            st = None
+        return st
+
+    def check(self, uid: int) -> tuple[bool, bool]:
+        """(limited, first): whether ``uid`` is over its limit now, and whether this is the first
+        request of the window to be refused for it (the one that is audited)."""
+        with self._lock:
+            st = self._current(uid, self.clock())
+            if st is None or st[1] < self.max_refusals:
+                return False, False
+            st[2] += 1
+            return True, st[2] == 1
+
+    def refused(self, uid: int) -> None:
+        """Count one refusal for ``uid``."""
+        with self._lock:
+            now = self.clock()
+            st = self._current(uid, now)
+            if st is None:
+                st = self._peers[uid] = [now, 0, 0]
+            st[1] += 1
+
+
 # ---------------------------------------------------------------- the protocol
 def _error(reason: str, message: str, kind: str = "Denied") -> dict[str, Any]:
     return {"ok": False, "error": reason, "kind": kind, "message": message}
@@ -252,22 +328,41 @@ def _name(value: Any) -> str | None:
 
 
 def handle_request(
-    svc: BrokerService, peers: PeerMap, uid: int, raw: bytes | None, *, problem: str = ""
+    svc: BrokerService,
+    peers: PeerMap,
+    uid: int,
+    raw: bytes | None,
+    *,
+    problem: str = "",
+    limiter: RefusalLimiter | None = None,
 ) -> dict[str, Any]:
     """The response to one request from the peer ``uid``.
 
     ``raw`` is the request's bytes, or None with ``problem`` set (``request-too-large``,
-    ``request-timeout``) when the transport could not read it.  Pure apart from the service:
-    the socket server and the tests call it alike.
+    ``request-timeout``) when the transport could not read it.  ``limiter`` rate-limits the
+    peer's refusals (none: unlimited).  Pure apart from the service and the limiter: the socket
+    server and the tests call it alike.
     """
     token = TRANSPORT_PEER.set(f"uid:{uid}")
     try:
         who = peers.lookup(uid)
+        limited = limiter if who is None or who.role != "relay" else None
+        if limited is not None:
+            over, first = limited.check(uid)
+            if over:
+                message = "too many refused requests from this peer; try again later"
+                if first:  # coalesced: one audit record per peer and window
+                    return _refuse(svc, who, uid, None, "denied", RATE_LIMITED, message)
+                return _error(RATE_LIMITED, message)
         if who is None:
-            return _refuse(
+            response = _refuse(
                 svc, None, uid, None, "denied", "unknown-caller", "this peer is not a broker caller"
             )
-        return _handle(svc, who, raw, problem)
+        else:
+            response = _handle(svc, who, raw, problem)
+        if limited is not None and response.get("kind") in ("Denied", "InvalidArguments"):
+            limited.refused(uid)
+        return response
     finally:
         TRANSPORT_PEER.reset(token)
 
@@ -482,7 +577,7 @@ class _Handler(socketserver.BaseRequestHandler):
             return  # the peer is gone; nothing to answer
         conn.settimeout(srv.timeout_s)
         if srv.peers.lookup(uid) is None:  # refuse before reading a byte from a stranger
-            response = handle_request(srv.service, srv.peers, uid, b"")
+            response = handle_request(srv.service, srv.peers, uid, b"", limiter=srv.limiter)
             with contextlib.suppress(OSError):
                 conn.sendall(json.dumps(response, sort_keys=True).encode("utf-8") + b"\n")
                 conn.shutdown(socket.SHUT_WR)
@@ -494,7 +589,9 @@ class _Handler(socketserver.BaseRequestHandler):
         else:
             raw, problem = _read_request(conn, srv.max_request_bytes, srv.timeout_s)
             try:
-                response = handle_request(srv.service, srv.peers, uid, raw, problem=problem)
+                response = handle_request(
+                    srv.service, srv.peers, uid, raw, problem=problem, limiter=srv.limiter
+                )
             except Exception:  # a broker bug: the service audited what it could; say so
                 log.exception("broker request from uid %d failed", uid)
                 response = _error("internal-error", "the broker failed; see its log", "BrokerError")
@@ -584,6 +681,7 @@ class BrokerServer:
         max_connections: int = DEFAULT_MAX_CONNECTIONS,
         relay_connections: int = DEFAULT_RELAY_CONNECTIONS,
         peers: PeerMap | None = None,
+        limiter: RefusalLimiter | None = None,
     ) -> None:
         if not supported():
             raise BrokerError(
@@ -611,6 +709,9 @@ class BrokerServer:
         self.slots = threading.BoundedSemaphore(max_connections)
         self.relay_slots = threading.BoundedSemaphore(relay_connections)
         self.peers = peers if peers is not None else PeerMap(service.manifest)
+        self.limiter = (
+            limiter if limiter is not None else RefusalLimiter.from_manifest(service.manifest)
+        )
         self.credentials = peer_credentials
         self._server: _UnixServer | None = None
         self._thread: threading.Thread | None = None

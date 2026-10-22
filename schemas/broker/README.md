@@ -18,7 +18,9 @@ Manifest 1.2 adds `lanes` (write lanes for the built-in lane handler), an action
 `uid` or `user`, and the one profile it acts as), `approval_relays` (a peer that files approvals
 for the humans of one `issuer`) and `dev_identity` (whether the CLI's asserted `--as` is accepted;
 absent means false). Audit 1.1 adds the operation `connect` (a transport refusal) and `via` (the
-socket peer, `uid:<n>`). Reference service and walkthrough: `docs/broker.md`, ADR-0017.
+socket peer, `uid:<n>`). Manifest 1.4 adds `refusal_limit` (`max` refused requests per
+`window_s` per transport peer before the socket answers it `rate-limited`; default 60 per 60 s).
+Reference service and walkthrough: `docs/broker.md`, ADR-0017.
 
 Table-driven fixtures: `tests/broker/fixtures/decision_table.yml` (manifest x tier x handler x
 approval -> decision), including every default-deny case and the digest-mismatch negatives, and `access_cases` for
