@@ -79,6 +79,20 @@ def test_scope_is_runtime_config_only():
     assert not lint.in_scope("docs/architecture.md")
     assert not lint.in_scope("homelabnext/agent/pack.py")
     assert not lint.in_scope("examples/README.md")
+    assert lint.in_scope("orchestrator/examples/controller.yaml")
+    assert lint.in_scope("orchestrator/examples/profiles/collector.yaml")
+    assert not lint.in_scope("orchestrator/internal/config/config.go")  # source, not config
+
+
+def test_orchestrator_examples_are_runtime_config(tmp_path, capsys):
+    _write(tmp_path, "orchestrator/examples/controller.yaml", "vault_root: /home/fake-user/notes\n")
+    _write(tmp_path, "orchestrator/internal/config/config_test.go", "// see /home/fake-user\n")
+    assert lint.main([str(tmp_path)]) == 1
+    err = capsys.readouterr().err
+    assert "orchestrator/examples/controller.yaml:1: [home-path]" in err
+    assert "config_test.go" not in err
+    _write(tmp_path, "orchestrator/examples/controller.yaml", "vault_root: /srv/notes\n")
+    assert lint.main([str(tmp_path)]) == 0
 
 
 def _write(root, rel, text):

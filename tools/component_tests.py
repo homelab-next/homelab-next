@@ -20,7 +20,10 @@ A component, and what counts as its tests (a test file is ``test_*.py`` under ``
 * ``homelabnext/<pkg>/`` (a directory with ``__init__.py``) -> ``tests/<pkg>/`` holds a test file;
 * ``conformance/<capability>/``                       -> the directory itself holds a test file;
 * ``ansible/roles/<role>/``, ``ansible/plugins/<type>/<plugin>.py``, ``compose/<stack>/`` and
-  ``tools/<tool>.py``                                 -> some test file names it (as a whole word).
+  ``tools/<tool>.py``                                 -> some test file names it (as a whole word);
+* a Go package under ``orchestrator/{internal,pkg,cmd}/`` (a directory holding a non-test ``.go``
+  file, at any depth; ``testdata``, ``_*`` and ``.*`` directories are not packages, as for the go
+  tool)                                               -> the directory itself holds a ``*_test.go``.
 
 Genuine exceptions go in ``ALLOW`` below, each with the reason, so they are reviewed in one place.
 An entry that names nothing, or a component that has since gained tests, is reported as stale.
@@ -38,6 +41,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEST_ROOTS = ("tests", "tools/tests", "conformance")
+GO_PACKAGE_ROOTS = ("orchestrator/internal", "orchestrator/pkg", "orchestrator/cmd")
 
 # component path (relative, posix) -> why it has no tests of its own
 ALLOW: dict[str, str] = {
@@ -62,8 +66,19 @@ def _has_test_file(directory: Path) -> bool:
     return directory.is_dir() and any(directory.rglob("test_*.py"))
 
 
+def _go_ignored(directory: Path, base: Path) -> bool:
+    return any(
+        part == "testdata" or part.startswith(("_", "."))
+        for part in directory.relative_to(base).parts
+    )
+
+
+def _is_go_source(p: Path) -> bool:
+    return p.suffix == ".go" and not p.name.endswith("_test.go")
+
+
 def components(root: Path) -> dict[str, str]:
-    """Every component -> its kind (``package``, ``capability``, ``named``)."""
+    """Every component -> its kind (``package``, ``capability``, ``named``, ``go-package``)."""
     found: dict[str, str] = {}
     pkg = root / "homelabnext"
     for d in sorted(pkg.iterdir()) if pkg.is_dir() else ():
@@ -79,6 +94,12 @@ def components(root: Path) -> dict[str, str]:
             if p.name.startswith(("_", ".")) or p.name == "__pycache__":
                 continue
             found[p.relative_to(root).as_posix().rstrip("/")] = "named"
+    for top in GO_PACKAGE_ROOTS:
+        base = root / top
+        dirs = [base, *sorted(d for d in base.rglob("*") if d.is_dir())] if base.is_dir() else []
+        for d in dirs:
+            if not _go_ignored(d, root / "orchestrator") and any(map(_is_go_source, d.iterdir())):
+                found[d.relative_to(root).as_posix()] = "go-package"
     return found
 
 
@@ -87,6 +108,8 @@ def has_tests(root: Path, component: str, kind: str, corpus: str) -> bool:
         return _has_test_file(root / "tests" / component.split("/", 1)[1])
     if kind == "capability":
         return _has_test_file(root / component)
+    if kind == "go-package":
+        return any((root / component).glob("*_test.go"))
     name = Path(component).stem
     return re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", corpus) is not None
 
@@ -111,6 +134,8 @@ def _expect(comp: str, kind: str) -> str:
         return f"add tests/{comp.split('/', 1)[1]}/test_*.py"
     if kind == "capability":
         return f"add {comp}/test_*.py"
+    if kind == "go-package":
+        return f"add {comp}/*_test.go"
     return f"add a test_*.py under {', '.join(TEST_ROOTS)} that exercises {Path(comp).stem!r}"
 
 

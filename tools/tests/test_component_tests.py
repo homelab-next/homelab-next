@@ -70,3 +70,32 @@ def test_every_allowlist_entry_has_a_reason():
 
 def test_this_repo_passes():
     assert component_tests.main([]) == 0
+
+
+def test_every_go_package_under_orchestrator_holds_a_go_test_file(tmp_path):
+    root = _tree(tmp_path)
+    assert component_tests.problems(root, allow={}) == []  # no orchestrator/: a no-op
+    _touch(root, "orchestrator/go.mod", "module example.com/fixture\n")
+    _touch(root, "orchestrator/internal/queue/queue.go", "package queue\n")
+    _touch(root, "orchestrator/internal/queue/queue_test.go", "package queue\n")
+    _touch(root, "orchestrator/internal/tools/notes/notes.go", "package notes\n")  # nested
+    _touch(root, "orchestrator/pkg/safefs/safefs.go", "package safefs\n")
+    _touch(root, "orchestrator/pkg/safefs/doc.md")
+    _touch(root, "orchestrator/cmd/controller/main.go", "package main\n")
+    _touch(root, "orchestrator/cmd/controller/main_test.go", "package main\n")
+    # not packages: test data, ignored directories, a directory with only tests, other roots
+    _touch(root, "orchestrator/internal/queue/testdata/fixture.go", "package fixture\n")
+    _touch(root, "orchestrator/internal/_scratch/x.go", "package x\n")
+    _touch(root, "orchestrator/internal/onlytests/x_test.go", "package x\n")
+    _touch(root, "orchestrator/e2e/boot.go", "package e2e\n")
+    found = component_tests.problems(root, allow={})
+    assert found == [
+        "orchestrator/internal/tools/notes: no tests (add orchestrator/internal/tools/notes/*_test.go)",
+        "orchestrator/pkg/safefs: no tests (add orchestrator/pkg/safefs/*_test.go)",
+    ]
+    kinds = component_tests.components(root)
+    assert kinds["orchestrator/internal/queue"] == "go-package"
+    assert "orchestrator/internal/tools" not in kinds
+    _touch(root, "orchestrator/internal/tools/notes/notes_test.go", "package notes\n")
+    _touch(root, "orchestrator/pkg/safefs/race_test.go", "package safefs\n")
+    assert component_tests.problems(root, allow={}) == []
