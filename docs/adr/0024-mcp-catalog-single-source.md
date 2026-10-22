@@ -64,7 +64,8 @@ because each instance needs its own scope.
    only profiles `hnx agent verify` accepts against the ceiling policy (a compiled profile without
    one is refused: its stored ceiling and digest are whatever last edited the file; the policy
    also attests each profile's `data_tier` and `model_role`, so no profile declares itself
-   local-only to receive local-only servers), and only records that pass check's whole record
+   local-only to receive local-only servers, and grants a local-only profile a server that
+   reaches the internet only by a named `internet_mcp` exception), and only records that pass check's whole record
    check and the reviews of the `review-policy.yml` beside the catalog (refused without one
    unless `--no-review-policy`, for local experiments). A render spec is trusted input.
 7. **The launch is generated, never written.** A stdio record names its origin, the server's
@@ -115,7 +116,8 @@ because each instance needs its own scope.
   client's own `npm_config_*`/`UV_*` environment still apply, as the client user's settings.
 - No message of check, render or import carries a value from a record, spec, profile or
   parameter (a value may be a credential pasted by mistake, and messages reach logs): fields and
-  rules are named, URLs shown as scheme and host.
+  rules are named, URLs shown as scheme and host, a record's free-text `reason` pointed at, never
+  repeated, and a grant name the catalog does not hold given by its position.
   The schema (`platform/mcp_server` 1.0) was not released before this change, so it changed in
   place.
 - Rendered files that land in another program's format (Hermes `mcp_servers`, llm-orchestrator's

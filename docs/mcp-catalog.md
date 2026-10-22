@@ -75,7 +75,10 @@ mistake. A message names the field and the rule it broke (`env/CASES_TOKEN: does
 pattern may appear; a URL appears as its scheme and host, its userinfo as `***`; a file that does
 not parse is reported by its problem, line and column (`homelabnext/mcp/credentials.py`, safe
 messages; `tests/mcp/test_mcp_no_value_in_messages.py` seeds one fake secret everywhere). A
-deprecated record's `reason` is prose meant to be shown and is printed with its note.
+deprecated or retired record's `reason` is free text, so a note or refusal says the record's
+reason says why (render names the record file) and never repeats it; a profile's grant names
+appear only when the catalog or class table holds them, any other as `an unknown MCP server (mcp
+entry N)`.
 
 - the record fits the schema (a mismatch is reported against the origin kind or transport type
   the record names), its id is its file name (so ids are unique), and every record file is
@@ -117,38 +120,42 @@ deprecated record's `reason` is prose meant to be shown and is printed with its 
   (defense in depth) an interpreter, shell, wrapper or launcher in it (`node`, `python3.12`,
   `sh`, `env`, `curl` ...);
 - **the launch is anchored, never the client's working directory.** npx resolves
-  `node_modules/<package>` and reads a project `.npmrc` (a registry, say) in its working
-  directory before the pinned package, so every npm launch carries `--prefix=<npm_prefix>`: an
-  absolute, empty directory on the client's host that the agent cannot write (the render spec's
-  `npm_prefix:`, or `--npm-prefix`; render refuses a missing or relative one for any npm server it
-  writes, and npx itself fails when it does not exist). Where the directory exists on the host
-  render runs on, render also refuses it when it is the filesystem root, a symlink, or not empty;
-  where it does not, render notes that it must be created empty (the render host may not be the
-  client's, so this is a check where it can be one, not a guarantee). npm then reads its project config and
-  `node_modules` from there. uvx launches carry `--no-config`: no `uv.toml` (the user-level one
-  is writable by the agent's own user) or `[tool.uv]` can redirect the index (uv already ignores
-  a project's config for `uv tool run`). Both were verified against npx 10 and uv 0.11 with local
-  fake packages and registries. What remains: npm's user config (`~/.npmrc`) and any
-  `npm_config_*`/`UV_*` in the client's own environment apply, as the client user's settings
-  (a record cannot set one, below); and the server runs with the client's working directory as
-  its own, which is the server's business (a filesystem server's roots, say);
+  `node_modules/<package>` and reads a project `.npmrc` (a registry, say) in its working directory
+  before the pinned package, so every npm launch carries `--prefix=<npm_prefix>`: an absolute, empty
+  directory on the client's host that the agent cannot write (the render spec's `npm_prefix:`, or
+  `--npm-prefix`; render refuses a missing or relative one for any npm server it writes, and npx
+  itself fails when it does not exist). Where the directory exists on the host render runs on,
+  render also refuses it when it is the filesystem root, a symlink, or not empty; where it does not,
+  render notes that it must be created empty (the render host may not be the client's, so this is a
+  check where it can be one, not a guarantee). npm then reads its project config and `node_modules`
+  from there. uvx launches carry `--no-config`: no `uv.toml` (the user-level one is writable by the
+  agent's own user) or `[tool.uv]` can redirect the index (uv already ignores a project's config for
+  `uv tool run`). Both were verified against npx 10 and uv 0.11 with local fake packages and
+  registries. What remains: npm's user config (`~/.npmrc`) and any `npm_config_*`/`UV_*` in the
+  client's own environment apply, as the client user's settings (a record cannot set one, below);
+  and the server runs with the client's working directory as its own, which is the server's business
+  (a filesystem server's roots, say);
 - a **first-party** server runs this checkout's code: `bin: hnx` with an `entry` from a fixed
   allowlist in code (`servers.HNX_ENTRIES`: `mcp-serve` is `hnx mcp serve`, `broker-mcp` is `hnx
   broker mcp`, the subcommands that serve MCP on stdio), whose `args` may hold only that entry's
-  flags, each once and with a value (`--root`, `--registry`, `--scope-from-profile`; `--socket`;
-  the path flags `--root`, `--registry` and `--socket` absolute, since a relative one resolves in
-  the client's working directory), so no record reaches `invariants run --plugins-dir`, `--notify-cmd`, `broker run`, `workflows
-  run`, `conform run` or `--out`; or a path bin under `origin.path`, which render writes absolute
-  under the spec's `checkout_root:` (or `--checkout-root`; required, absolute, not a symlink)
-  after checking it is a file there and not a symlink, and which check holds to the repository when it runs from a
-  checkout;
+  flags, each once and with a value (`--root`, `--registry`, `--scope-from-profile`; `--socket`; the
+  path flags `--root`, `--registry` and `--socket` absolute, since a relative one resolves in the
+  client's working directory), so no record reaches `invariants run --plugins-dir`, `--notify-cmd`,
+  `broker run`, `workflows run`, `conform run` or `--out`; or a path bin under `origin.path`, which
+  render writes absolute under the spec's `checkout_root:` (or `--checkout-root`; required,
+  absolute, not a symlink) after checking it is a file there and not a symlink, and which check
+  holds to the repository when it runs from a checkout;
 - the `sha256` itself is **declarative**: it records the reviewed artifact, but no launcher
   verifies it when it fetches the package;
 - a **third party's hosted** server (`transport: {type: remote, url, protocol}`, `origin: {kind:
   hosted, provider}`, `runtime: hosted`, each only with the others): the URL is https with a DNS
-  host and no userinfo, query, fragment or IP literal, never a private, test or lab host (`.local`,
-  `.internal`, `.home.arpa`, the registry's domain or hosts: a lab server is reached by registry
-  name), its egress names `internet`, and its credentials are only `headers` as `secret:` names;
+  host and no userinfo, query or fragment, never an IPv4 address in any notation (a host whose
+  last label is a decimal, octal or `0x` number is one to a URL parser and to `getaddrinfo`:
+  `0x7f.0x1`), never a private, test or lab host (`.local`, `.internal`, `.home.arpa`, the
+  registry's domain or hosts: a lab server is reached by registry name), its egress names
+  `internet`, its `data_tier` is `cloud-allowed` (what it returns is already at the vendor), and
+  its credentials are only `headers` as `secret:` names. A name that resolves to a lab address
+  (DNS rebinding, `*.nip.io`) is not caught: check does not resolve names;
 - every tool is classed with a declared class, and the server lists at least one;
 - egress agrees with the classes: a tool classed `egress` needs an egress other than `none`, and
   `internet` needs an egress tool;
@@ -214,13 +221,13 @@ deprecated record's `reason` is prose meant to be shown and is printed with its 
   examples/mcp/<id>.yml` gives the digest to stamp);
 - every agent profile and context manifest in the checkout (or `--grants PATH...`) grants only
   catalog ids whose status is `active` or `deprecated` (an allowlist: `draft`, `retired` and
-  anything else are refused), of a server with a known `data_tier`, never a `local-only` server to
-  a profile whose `data_tier` is not `local-only`, and a reader holds no exec, file-write, egress
-  or credential server. A `deprecated` grant passes with a note naming the reason and its
-  `replaced_by`. The compiler, `hnx agent verify`, `hnx agent lint` and `render` apply the same
-  rules, and they judge grants only against a sound catalog: a record that fails the schema, an
-  id that is not its file name or two records with one id refuse every judgement (so a stray
-  record cannot reclassify a server).
+  anything else are refused), of a server with a known `data_tier`, never a `local-only` server to a
+  profile whose `data_tier` is not `local-only`, and a reader holds no exec, file-write, egress or
+  credential server. A `deprecated` grant passes with a note pointing at the record's reason and
+  naming its `replaced_by`. The compiler, `hnx agent verify`, `hnx agent lint` and `render` apply
+  the same rules, and they judge grants only against a sound catalog: a record that fails the
+  schema, an id that is not its file name or two records with one id refuse every judgement (so a
+  stray record cannot reclassify a server).
 
 ## Adding a server
 
@@ -314,7 +321,10 @@ without a policy too (its own `mcp_ceiling` proves only that it agrees with itse
 else is refused. The policy also **attests** each profile's `data_tier` and `model_role`
 (optional keys of its entry): the profile must say the same, and only a profile whose entry says
 `data_tier: local-only` is granted a local-only server, so a profile cannot declare itself
-local-only to receive local-only data ([agent profiles](agent.md)). The example
+local-only to receive local-only data ([agent profiles](agent.md)). A local-only profile is
+granted no server that reaches the internet (a hosted one, or `egress: internet`), where its
+context would go, unless its entry names that server in `internet_mcp`, an exception the policy
+owner makes per profile and server. The example
 specs share `examples/mcp/clients/policy/ceilings.yml`. Nor does render write a record check
 would refuse: every record it writes (the granted ones; for llm-orchestrator every grantable one,
 since its catalog holds them all) must pass check's **whole** record check (schema and id, pin and
