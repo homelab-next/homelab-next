@@ -187,7 +187,7 @@ class MapSite:
             )
         if panel == "roster":
             sessions = (doc.get("agents") or {}).get("sessions") if doc.get("agents") else None
-            return roster.render(roster.build(roster.gather(self.roster), sessions))
+            return roster.render(roster.build(roster.gather(self.roster, self.root), sessions))
 
         if panel == "topology":
             from homelabnext.compute.model import ComputeError

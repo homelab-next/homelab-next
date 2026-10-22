@@ -67,21 +67,32 @@ def _read(path: Path) -> Any:
     return yaml.load(text, Loader=UniqueKeyLoader)
 
 
-def _files(base: Path, patterns: Sequence[str]) -> list[Path]:
+def _inside(root: Path, base: Path, f: Path) -> Path:
+    """``f``, when it resolves inside ``root`` (``..`` and a symlink included)."""
+    top, real = root.resolve(), f.resolve()
+    if real != top and top not in real.parents:
+        raise ValueError(f"{os.path.relpath(f, base)}: resolves outside {root}")
+    return f
+
+
+def _files(root: Path, base: Path, patterns: Sequence[str]) -> list[Path]:
     """The files ``patterns`` name under ``base``: a glob's matches, a plain path as it is (so a
-    missing one is an error, not an empty list)."""
+    missing one is an error, not an empty list); each must resolve inside ``root``."""
     out: list[Path] = []
     for pat in patterns:
         if any(c in pat for c in "*?["):
             out += [h for h in sorted(base.glob(pat)) if h.is_file()]
         else:
             out.append(base / pat)
-    return list(dict.fromkeys(out))
+    return [_inside(root, base, f) for f in dict.fromkeys(out)]
 
 
-def gather(path: str | Path) -> dict[str, Any]:
+def gather(path: str | Path, root: str | Path | None = None) -> dict[str, Any]:
     """The roster file and everything it names, read (raises :class:`RosterError` on a roster
-    that does not validate or a file it names that cannot be read)."""
+    that does not validate, a file it names that cannot be read, or one that resolves outside
+    ``root``: the checkout the hub reads, ``--maps ROOT``; default the roster's directory).
+    Its paths are relative to the roster file and may climb (``../../schemas/...``), but never
+    out of ``root``, whether by ``..``, a glob or a symlink."""
     p = Path(path)
     try:
         doc = _read(p)
@@ -94,17 +105,18 @@ def gather(path: str | Path) -> dict[str, Any]:
             [f"{'/'.join(map(str, e.absolute_path)) or '$'}: {e.message[:200]}" for e in errs],
         )
     base = p.parent
+    top = Path(root) if root is not None else base
 
     out: dict[str, Any] = {"roster": doc, "profiles": [], "brokers": [], "packs": [], "roles": {}}
     try:
-        for f in _files(base, doc.get("profiles") or ()):
+        for f in _files(top, base, doc.get("profiles") or ()):
             out["profiles"].append({"file": os.path.relpath(f, base), "doc": _read(f)})
-        for f in _files(base, doc.get("brokers") or ()):
+        for f in _files(top, base, doc.get("brokers") or ()):
             out["brokers"].append({"file": os.path.relpath(f, base), "doc": _read(f)})
-        for f in _files(base, doc.get("packs") or ()):
+        for f in _files(top, base, doc.get("packs") or ()):
             out["packs"].append({"file": os.path.relpath(f, base), "doc": _read(f)})
         if doc.get("model_roles"):
-            out["roles"] = _read(base / doc["model_roles"]).get("roles") or {}
+            out["roles"] = _read(_inside(top, base, base / doc["model_roles"])).get("roles") or {}
     except (OSError, ValueError, yaml.YAMLError) as exc:
         raise RosterError(f"roster {p}: {exc}") from None
     return out

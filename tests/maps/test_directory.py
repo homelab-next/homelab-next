@@ -355,10 +355,58 @@ def test_an_invalid_roster_is_refused(tmp_path):
         roster.gather(missing)
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "profiles: [../outside.json]",
+        "profiles: ['../*.json']",
+        "brokers: [sub/../../outside.json]",
+        "model_roles: ../outside.json",
+    ],
+)
+def test_a_roster_path_out_of_its_root_is_refused(tmp_path, field):
+    """A roster's paths may climb (the example reads ../../schemas/...) but never out of the root
+    the hub reads (``--maps ROOT``; without one, the roster's own directory)."""
+    d = tmp_path / "checkout" / "roster"
+    (d / "sub").mkdir(parents=True)
+    (d.parent / "outside.json").write_text('{"roles": {"fake": 1}}')
+    r = d / "roster.yml"
+    head = "" if field.startswith("profiles") else "profiles: []\n"
+    r.write_text(f"roster_version: 1\n{head}{field}\nagents: []\n")
+    for root in (None, d):
+        with pytest.raises(roster.RosterError, match="resolves outside"):
+            roster.gather(r, root)
+    roster.gather(r, d.parent)  # inside a root that holds it: read
+
+
+def test_a_roster_file_that_resolves_out_of_its_root_is_refused(tmp_path):
+    (tmp_path / "outside.json").write_text('{"roles": {"fake": 1}}')
+    d = tmp_path / "roster"
+    d.mkdir()
+    (d / "roles.json").symlink_to(tmp_path / "outside.json")
+    (d / "p.json").symlink_to(tmp_path / "outside.json")
+    r = d / "roster.yml"
+    r.write_text("roster_version: 1\nprofiles: []\nmodel_roles: roles.json\nagents: []\n")
+    with pytest.raises(roster.RosterError, match="resolves outside"):
+        roster.gather(r)
+    r.write_text("roster_version: 1\nprofiles: ['*.json']\nagents: []\n")
+    with pytest.raises(roster.RosterError, match="resolves outside"):
+        roster.gather(r, d)
+
+
+def test_the_hub_reads_the_roster_inside_its_maps_root(tmp_path):
+    (tmp_path / "outside.json").write_text('{"roles": {"fake": 1}}')
+    d = tmp_path / "checkout"
+    d.mkdir()
+    r = d / "roster.yml"
+    r.write_text("roster_version: 1\nprofiles: []\nmodel_roles: ../outside.json\nagents: []\n")
+    assert "resolves outside" in MapSite(root=d, roster=r).body("roster")
+
+
 def test_the_example_roster_declares_every_profile_the_repository_names():
     """Every profile a compiled profile, a broker grant or a workflow pack names has an owner and
     a runtime in examples/status/roster.yml (the fixture above shows the check failing)."""
-    vm = roster.build(roster.gather(ROOT / "examples" / "status" / "roster.yml"))
+    vm = roster.build(roster.gather(ROOT / "examples" / "status" / "roster.yml", ROOT))
     assert not [p for p in vm["problems"] if "no roster entry" in p]
     by = {a["id"]: a for a in vm["agents"]}
     assert by["profile:workflow-soc"]["packs"] and by["profile:triage"]["lanes"]

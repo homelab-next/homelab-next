@@ -454,7 +454,9 @@ agents:
     activity_names: [triage-agent]       # other names its sessions report as `agent`
 ```
 
-Grants are never restated there (the schema refuses them): they come from the compiled profile
+Paths are relative to the roster file and may climb, but every file they name (by `..`, a glob
+or a symlink) must resolve inside the checkout the hub reads (`--maps ROOT`); one that does not
+is the page's error, never read. Grants are never restated there (the schema refuses them): they come from the compiled profile
 and the broker manifests, so the page cannot disagree with what is enforced. A profile some file
 names without a roster entry, or a roster entry with no compiled profile, is listed with that
 gap. A session belongs to a profile when its `agent` is the profile id, its bare name or one of
