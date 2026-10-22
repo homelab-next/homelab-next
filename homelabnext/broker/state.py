@@ -21,8 +21,10 @@ the same file and nothing is ever rewritten in place.  State is *derived* from w
 ``decisions/<same name>``        an index of the audit trail's filed decisions (``ok`` approve and
                                  deny records), so the hub's recent-decisions and "already
                                  decided" reads cost O(decisions), however many refusals the trail
-                                 holds; written after the audit record, rebuilt for an older state
-                                 directory
+                                 holds; written after the audit record, rebuilt in full until the
+                                 rebuild has once completed (``decisions.complete``), and on every
+                                 start the newest :data:`RECONCILE_AUDIT` audit records are
+                                 re-indexed, so a crash between the two writes loses no decision
 ``outbox/<event id>.json``       events emitted when no bus is configured
 ``digest.key``                   the broker-held key (hex) for the keyed hash of secret arguments in a
                                  request digest (created once, exclusively)
@@ -70,6 +72,10 @@ _SUBDIRS = (
     "runs",
 )
 _KEY_BYTES = 32
+#: how many of the newest audit records every start re-indexes into ``decisions/``
+RECONCILE_AUDIT = 256
+#: written once a full rebuild of ``decisions/`` has finished (an interrupted one runs again)
+DECISIONS_COMPLETE = "decisions.complete"
 #: the audit records the ``decisions/`` index holds: (operation, outcome)
 DECISION_KINDS = frozenset({("approve", "ok"), ("deny", "ok")})
 
@@ -164,7 +170,6 @@ class StateDir:
         self._clock_ns = clock_ns  # orders requests (``submitted_ns``)
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         index_missing = not (self.root / "open").exists()
-        decisions_missing = not (self.root / "decisions").exists()
         for name in _SUBDIRS:
             d = self.root / name
             if d.is_symlink():
@@ -178,11 +183,22 @@ class StateDir:
             for rid in self.request_ids():
                 if self.get_claim(rid) is None:
                     self._mark_open(rid, self.get_request(rid) or {})
-        if decisions_missing:  # likewise the decisions index (the one full read of the trail)
-            for p in sorted(self._dir("audit").glob("*.json")):
-                doc = _load(p)
-                if isinstance(doc, dict) and _is_decision(doc):
-                    write_exclusive(self._dir("decisions") / p.name, _dumps(doc))
+        self._index_decisions()
+
+    def _index_decisions(self) -> None:
+        """Rebuild ``decisions/`` from the whole trail until a rebuild has once completed; then
+        re-index the newest :data:`RECONCILE_AUDIT` records (a decision whose index write a
+        crash interrupted).  Both are idempotent: an existing index file is left as it is."""
+        names = sorted(p.name for p in self._dir("audit").glob("*.json"))
+        complete = (self.root / DECISIONS_COMPLETE).exists()
+        for name in names if not complete else names[-RECONCILE_AUDIT:]:
+            if (self._dir("decisions") / name).exists():
+                continue
+            doc = _load(self._dir("audit") / name)
+            if isinstance(doc, dict) and _is_decision(doc):
+                write_exclusive(self._dir("decisions") / name, _dumps(doc))
+        if not complete:
+            write_exclusive(self.root / DECISIONS_COMPLETE, b"1\n")
 
     def _dir(self, name: str) -> Path:
         return self.root / name

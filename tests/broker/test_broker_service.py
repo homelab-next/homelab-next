@@ -651,3 +651,53 @@ def test_recent_decisions_read_the_decisions_index_not_the_trail(tmp_path, monke
     assert [r["request_id"] for r in again.state.decision_records()] == rids[:2]
     refused = again.audit_documents(operation="approve", outcome="denied")
     assert refused == [], "only filed decisions are indexed; other queries read the trail"
+
+
+def _decision(i: int) -> dict:
+    return {"operation": "approve", "outcome": "ok", "request_id": f"r{i}"}
+
+
+def test_a_decision_whose_index_write_was_lost_is_reindexed_on_start(tmp_path, monkeypatch):
+    """The index file is written after the audit record; a crash between the two left the
+    decision out of decisions/ for good, because only a missing directory triggered a rebuild."""
+    from homelabnext.broker import state as state_mod
+
+    st = state_mod.StateDir(tmp_path / "s")
+    for i in range(5):
+        st.append_audit(_decision(i), f"2026-01-01T00:00:0{i}Z")
+    newest = sorted((tmp_path / "s" / "decisions").glob("*.json"))[-1]
+    newest.unlink()  # the crash
+    monkeypatch.setattr(state_mod, "RECONCILE_AUDIT", 2)
+    again = state_mod.StateDir(tmp_path / "s")
+    assert [r["request_id"] for r in again.decision_records()] == [f"r{i}" for i in range(5)]
+
+
+def test_an_interrupted_rebuild_of_the_decisions_index_runs_again(tmp_path, monkeypatch):
+    from homelabnext.broker import state as state_mod
+
+    st = state_mod.StateDir(tmp_path / "s")
+    for i in range(6):
+        st.append_audit(_decision(i), f"2026-01-01T00:00:0{i}Z")
+    shutil.rmtree(tmp_path / "s" / "decisions")
+    (tmp_path / "s" / state_mod.DECISIONS_COMPLETE).unlink()  # a state dir from before the index
+    monkeypatch.setattr(state_mod, "write_exclusive", _fail_after(state_mod.write_exclusive, 2))
+    with pytest.raises(OSError):  # the rebuild dies part-way
+        state_mod.StateDir(tmp_path / "s")
+    monkeypatch.undo()
+    monkeypatch.setattr(state_mod, "RECONCILE_AUDIT", 1)  # only a full rebuild can fill the gap
+    again = state_mod.StateDir(tmp_path / "s")
+    assert [r["request_id"] for r in again.decision_records()] == [f"r{i}" for i in range(6)]
+    assert (tmp_path / "s" / state_mod.DECISIONS_COMPLETE).is_file()
+
+
+def _fail_after(real, n):
+    calls = {"n": 0}
+
+    def wrapped(path, data, **kw):
+        if path.parent.name == "decisions":
+            calls["n"] += 1
+            if calls["n"] > n:
+                raise OSError("disk full")
+        return real(path, data, **kw)
+
+    return wrapped
