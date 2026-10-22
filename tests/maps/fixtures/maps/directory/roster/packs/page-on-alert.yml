@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+pack: <img src=x onerror="y">
+trigger: {event: homelabnext.alert.created}
+actor: profile:fixer

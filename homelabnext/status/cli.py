@@ -8,12 +8,12 @@
                        [--notify-topic T] [--secrets-dir DIR]
     hnx status render --out DIR [--state FILE] [--views FILE] [--registry FILE] [--now TIME]
                       [--guests DIR --guests-site SITE [--guests-registry FILE]] [--maps ROOT]
-                      [--invariants-results FILE]
+                      [--invariants-results FILE] [--roster FILE]
     hnx status serve [--state FILE] [--views FILE] [--registry FILE] [--bind HOST] [--port N]
                      [--allow-remote --allowed-host NAME ...] [--agents FILE] [--secrets-dir DIR]
                      [--strategy DIR] [--projects DIR]
                      [--guests DIR --guests-site SITE [--guests-registry FILE]]
-                     [--maps ROOT] [--invariants-results FILE]
+                     [--maps ROOT] [--invariants-results FILE] [--roster FILE]
     hnx status ingest --agents FILE [--registry FILE] [--bind HOST] [--port N] [--publish-to URL]
                       [--allow-remote --allowed-host NAME ...] [--secrets-dir DIR]
 
@@ -32,8 +32,11 @@ defense-layer coverage matrix (``docs/compute-model.md``).
 The generated maps (ADR-0018, ``homelabnext.status.maps``): ``--guests``/``--guests-site`` also
 give the Topology page; ``--maps ROOT`` (a checkout, e.g. ``.``) the Dataflow, Architecture and
 Roadmap pages, the roadmap reading ``--invariants-results`` (``build/invariants/results.json``
-from ``make invariants``) for each criterion's state.  ``render`` writes each available map as
-``<panel>.html`` beside ``index.html``.
+from ``make invariants``) for each criterion's state.  ``--maps`` also gives the directory pages:
+Links (the registry's services), Schedule (every timer, CI schedule, workflow pack and collector
+with its cadence and last/next run) and Agent roster (``--roster FILE``, default
+``ROOT/examples/status/roster.yml``).  ``render`` writes each available page as ``<panel>.html``
+beside ``index.html``.
 
 ``collect`` runs one pass over the due sources (``--all``: every polled source) and writes the
 state file; ``render`` and ``serve`` only read it, so they never wait on a source.  Exit codes:
@@ -136,10 +139,17 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
             "default: --registry)",
         )
         p.add_argument(
-            "--maps", metavar="ROOT", help="a checkout: the Dataflow, Architecture, Roadmap maps"
+            "--maps",
+            metavar="ROOT",
+            help="a checkout: the Dataflow, Architecture, Roadmap maps and the Links, Schedule, Roster pages",
         )
         p.add_argument(
             "--invariants-results", metavar="FILE", help="invariants results for the Roadmap"
+        )
+        p.add_argument(
+            "--roster",
+            metavar="FILE",
+            help="roster.yml for the Agent roster (default: ROOT/examples/status/roster.yml)",
         )
 
     def common(p, *, views=False, state=False):
@@ -335,6 +345,11 @@ def _map_site(args, reg):
         raise ValueError(f"--maps {root}: not a directory")
     if results and not root:
         raise ValueError("--invariants-results needs --maps (the checkout the roadmap reads)")
+    roster = getattr(args, "roster", None)
+    if roster and not root:
+        raise ValueError("--roster needs --maps (the checkout the directory pages read)")
+    if roster and not Path(roster).is_file():
+        raise ValueError(f"--roster {roster}: not a file")
     lab_file = getattr(args, "guests_registry", None)
     if lab_file and not guests:
         raise ValueError("--guests-registry needs --guests (the guests its services run on)")
@@ -353,6 +368,7 @@ def _map_site(args, reg):
         guests_site=args.guests_site,
         results=results,
         lab_registry=lab,
+        roster=roster,
     )
 
 

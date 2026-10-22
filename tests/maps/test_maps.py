@@ -545,8 +545,8 @@ def test_the_site_serves_only_its_configured_maps():
     assert '<a href="/topology">Topology</a>' in html
     assert "unavailable" in site.body("roadmap")
     full = MapSite(root=ROOT, registry=load(REGISTRY), guests=GUESTS, guests_site=SITE)
-    assert full.available() == {"topology", "dataflow", "architecture", "roadmap"}
-    assert MapSite(root=ROOT).available() == {"roadmap"}
+    assert full.available() >= {"topology", "dataflow", "architecture", "roadmap"}
+    assert MapSite(root=ROOT).available() & {"topology", "dataflow", "architecture"} == set()
 
 
 def test_an_unreadable_source_is_an_error_line_not_a_crash(tmp_path):
@@ -610,8 +610,9 @@ def test_render_writes_the_maps_beside_the_page(tmp_path, capsys):
             "--invariants-results", str(results)]  # fmt: skip
     assert main(args) == 0
     names = sorted(p.name for p in out.iterdir())
-    assert names == ["architecture.html", "dataflow.html", "index.html", "roadmap.html",
-                     "status.json", "topology.html"]  # fmt: skip
+    assert names == ["architecture.html", "dataflow.html", "index.html", "links.html",
+                     "roadmap.html", "roster.html", "schedule.html", "status.json",
+                     "topology.html"]  # fmt: skip
     index = (out / "index.html").read_text()
     assert '<a href="topology.html">Topology</a>' in index
     page = (out / "roadmap.html").read_text()

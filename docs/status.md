@@ -145,6 +145,10 @@ alias. Panels:
 - **sources**: the source table: state, kind, module, interval and staleness, last good read,
   error, what it reports.
 
+Every other `panel:` is a page of its own (section 6): the agent pages, strategy, projects,
+baselines, approvals, the generated maps (`group: maps`) and the directory pages Links, Schedule
+and Agent roster (`group: directory`, views 1.7).
+
 ## 4. The page and `status.json` (the contract)
 
 `hnx status render --out DIR [--now TIME]` writes `index.html` (self-contained: inline CSS, no
@@ -400,6 +404,58 @@ live; `hnx status render --out DIR` with the same options writes each available 
 dataflow model are built once per process (they change only with the code); the topology, the
 dataflow's placement on guests and the roadmap are read on each request. A test keeps
 `docs/build-order.md` naming every checklist row and only real ones.
+
+### Directory pages: links, schedule, agent roster
+
+Three more generated pages in the `directory` menu group (views 1.7, `panel: links | schedule |
+roster`), served with `--maps ROOT` and written by `hnx status render` as `<panel>.html`. Like the
+maps they are built only from the repository's data (`homelabnext/status/maps/links.py`,
+`schedule.py`, `roster.py`; goldens in `tests/maps/golden/maps/`, tests in
+`tests/maps/test_directory.py`), script-free under the hub's usual CSP, every value escaped. A
+page whose inputs are missing is listed as unavailable; one that cannot be read gives an error
+line.
+
+| Page | Input | Shows |
+|---|---|---|
+| `/links` | the hub's `--registry` | every service, one table per registry zone, by registry name (`svc:`, `cap:`): an http(s) service links to its public hostname, else its capability alias (as the external menu entries do), with its `http` health check and its MCP endpoint; any other protocol is listed by alias and port, not linked. Access: `public` (a public hostname) or `lab only`, the sign-in (`auth`), and **private tier** for a service with a `front_door` (its private pages open only through the trusted front door). No address is ever written (`tools/no_raw_endpoints.py`) |
+| `/schedule` | `--maps ROOT`, the registry and the hub's state | every scheduled job: each `.timer` a role or profile ships (`OnCalendar=`, a `{{ var }}` resolved from the role's defaults and vars, `RandomizedDelaySec=`) with the catalogued scripts whose header names `timer:<role>/<unit>`; each fleet_units entry (a retired one says what replaced it); each `.github/workflows` `on: schedule` cron with its jobs and scripts; each workflow pack (event-driven: `on each <event> event`); each status source (`every 5 minutes`, or a pushed one's staleness window) |
+| `/roster` | `roster.yml` (`--roster FILE`, default `ROOT/examples/status/roster.yml`; `schemas/status/roster.schema.json`) and, with `--agents`, the activity store | every agent profile a compiled profile, a broker grant, a workflow pack or the roster names: owner and runtime (the roster's own fields), model role and its backends, data tier, granted tier, capabilities and MCP servers, broker actions (approval-gated ones marked), the lanes its actions write (its own or shared), the packs that act as it, and its last session (time, state, runtimes) |
+
+**Cadence and last/next run.** A calendar is described in plain words (`daily at 05:20 UTC`,
+`weekly on Sunday at 02:50 UTC, up to 15 minutes later (randomized)`, `every 15 minutes`) and its
+next run computed after the page's time (`status.json` `generated_at`, or `render --now`) only
+when the expression is read exactly: systemd `OnCalendar=` values ending in `UTC` and five-field
+cron (GitHub's, UTC) with values, lists, ranges, steps and weekdays. A shorthand (`daily`), a
+calendar in the host's local zone or anything else keeps its raw text and reads `not computed`:
+a wrong next run is worse than none. Last runs are never guessed either. A collector's last run
+is its last poll (`sources[].last_attempt`; a pushed source's last good read) and its next one
+that plus its interval. Any other job's last run is the newest observation whose **`item` is the
+job's id** (`timer:aide/scan`, `fleet-unit:lake-compact`, `ci:nightly`), so a status source that
+reports its jobs under those ids lights them up; without one the page says `not reported`. A
+test keeps every catalogued `timer:` trigger, every scheduled workflow and every status source
+of the example registry on the page, each with a computed next run.
+
+**The roster file** names where the facts are and adds only what none of them holds:
+
+```yaml
+roster_version: 1
+profiles: ["../../schemas/agent/examples/profile.*.json"]   # compiled profiles (relative paths, globs)
+brokers: [../broker/manifest.yml, ../../workflows/broker.manifest.json]
+packs: ["../../workflows/packs/*.yml"]
+model_roles: ../model_roles.json
+agents:
+  - profile: profile:triage
+    owner: platform-team                 # a team slug, never a person
+    runtime: claude-code                 # in the activity tier's words
+    what: Triages the alert queue, keeps findings and memory, files proposals.
+    activity_names: [triage-agent]       # other names its sessions report as `agent`
+```
+
+Grants are never restated there (the schema refuses them): they come from the compiled profile
+and the broker manifests, so the page cannot disagree with what is enforced. A profile some file
+names without a roster entry, or a roster entry with no compiled profile, is listed with that
+gap. A session belongs to a profile when its `agent` is the profile id, its bare name or one of
+its `activity_names`.
 
 ### Pages
 

@@ -1,0 +1,4 @@
+{"id": "profile:watcher", "persona": "persona:analyst", "model_role": "mdl:small",
+ "data_tier": "local-only", "reads_untrusted": true, "memory_scopes": ["watcher"],
+ "grants": {"tier": "read", "capabilities": ["cap:lake-query"], "mcp": ["lake"]},
+ "budgets": {"max_input_tokens": 1000, "max_output_tokens": 100, "max_runtime_s": 60, "max_tool_calls": 5}}

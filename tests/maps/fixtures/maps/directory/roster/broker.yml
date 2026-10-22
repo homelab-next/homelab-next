@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+manifest_id: harbor-broker
+default: deny
+lanes:
+  - {name: notes, kind: files, root: notes, per_actor: true}
+  - {name: inbox, kind: records-inbox, root: records, per_actor: false}
+actions:
+  - {action: note.write, tier: write, handler: builtin/lane, lane: notes, requires_approval: false}
+  - {action: proposal.file, tier: write, handler: builtin/lane, lane: inbox, requires_approval: false}
+  - {action: service.restart, tier: execute, handler: handlers/restart.sh, requires_approval: true}
+grants:
+  - {profile: "profile:fixer", actions: [note.write, proposal.file, service.restart], max_tier: execute}
+  - {profile: "profile:orphan", actions: [note.write], max_tier: write}

@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+roster_version: 1
+profiles: ["profiles/*.json"]
+brokers: [broker.yml]
+packs: ["packs/*.yml"]
+model_roles: model_roles.json
+agents:
+  - {profile: "profile:watcher", owner: data-team, runtime: orchestrator, what: Reads and reports.}
+  - {profile: "profile:fixer", owner: ops-team, runtime: claude-code, what: acts via the broker & nothing else, activity_names: [fixer-cli]}
+  - {profile: "profile:ghost", owner: ops-team, runtime: codex}

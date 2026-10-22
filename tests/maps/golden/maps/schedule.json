@@ -1,0 +1,166 @@
+{
+ "counts": {
+  "ci": 1,
+  "collector": 3,
+  "fleet-unit": 2,
+  "pack": 1,
+  "timer": 2
+ },
+ "groups": [
+  {
+   "kind": "timer",
+   "rows": [
+    {
+     "cadence": "daily at 04:10 UTC, up to 15 minutes later (randomized)",
+     "expression": "*-*-* 04:10:00 UTC",
+     "id": "timer:scan/run",
+     "kind": "timer",
+     "last_run": "2026-10-20T04:21:00Z",
+     "next_run": "2026-10-21T04:10:00Z",
+     "path": "r/run.timer",
+     "runs": [
+      "scan-run"
+     ],
+     "state": "ok",
+     "what": "Nightly scan",
+     "where": "role scan"
+    },
+    {
+     "cadence": "*-*-* 02:00 (no UTC token: the host's local time zone)",
+     "expression": "*-*-* 02:00",
+     "id": "timer:local/tick",
+     "kind": "timer",
+     "last_run": null,
+     "next_run": null,
+     "path": "r/tick.timer",
+     "runs": [],
+     "state": null,
+     "what": "Local tick",
+     "where": "role local"
+    }
+   ],
+   "title": "Role timers"
+  },
+  {
+   "kind": "fleet-unit",
+   "rows": [
+    {
+     "cadence": "weekly on Sunday at 01:00 UTC",
+     "expression": "Sun *-*-* 01:00:00 UTC",
+     "id": "fleet-unit:compact",
+     "kind": "fleet-unit",
+     "last_run": null,
+     "next_run": "2026-10-25T01:00:00Z",
+     "path": "fleet_units.yml",
+     "runs": [],
+     "state": null,
+     "what": "Compact",
+     "where": "fleet_units.yml"
+    },
+    {
+     "cadence": "retired: replaced by st2:pack.sweep",
+     "expression": "*-*-* 01:00:00 UTC",
+     "id": "fleet-unit:old",
+     "kind": "fleet-unit",
+     "last_run": null,
+     "next_run": null,
+     "path": "fleet_units.yml",
+     "runs": [],
+     "state": null,
+     "what": "Old",
+     "where": "fleet_units.yml"
+    }
+   ],
+   "title": "Fleet units"
+  },
+  {
+   "kind": "ci",
+   "rows": [
+    {
+     "cadence": "daily at 03:17 UTC",
+     "expression": "17 3 * * *",
+     "id": "ci:nightly",
+     "kind": "ci",
+     "last_run": null,
+     "next_run": "2026-10-21T03:17:00Z",
+     "path": ".github/workflows/nightly.yml",
+     "runs": [
+      "lab-smoke"
+     ],
+     "state": null,
+     "what": "nightly",
+     "where": "jobs smoke"
+    }
+   ],
+   "title": "CI schedules"
+  },
+  {
+   "kind": "pack",
+   "rows": [
+    {
+     "cadence": "on each homelabnext.alert.created event",
+     "expression": "homelabnext.alert.created",
+     "id": "pack:page",
+     "kind": "pack",
+     "last_run": null,
+     "next_run": null,
+     "path": "workflows/packs/page.yml",
+     "runs": [],
+     "state": null,
+     "what": "Pages on <b>alerts</b>",
+     "where": "as profile:fixer"
+    }
+   ],
+   "title": "Workflow packs (event-driven)"
+  },
+  {
+   "kind": "collector",
+   "rows": [
+    {
+     "cadence": "every minute (hnx status collect)",
+     "expression": "interval_s 60",
+     "id": "status:alerts",
+     "kind": "collector",
+     "last_run": "2026-10-20T23:59:30Z",
+     "next_run": "2026-10-21T00:00:30Z",
+     "path": null,
+     "runs": [],
+     "state": "ok",
+     "what": "Firing alerts",
+     "where": "svc:metrics (poll-prometheus)"
+    },
+    {
+     "cadence": "pushed by the service; stale after 15 minutes of silence",
+     "expression": "interval_s 300",
+     "id": "status:runs",
+     "kind": "collector",
+     "last_run": "2026-10-20T20:00:00Z",
+     "next_run": null,
+     "path": null,
+     "runs": [],
+     "state": "stale",
+     "what": "Pushed run outcomes",
+     "where": "svc:runtime (push-event)"
+    },
+    {
+     "cadence": "every hour (hnx status collect)",
+     "expression": "interval_s 3600",
+     "id": "status:never",
+     "kind": "collector",
+     "last_run": null,
+     "next_run": null,
+     "path": null,
+     "runs": [],
+     "state": null,
+     "what": "Not read yet",
+     "where": "svc:records (poll-file)"
+    }
+   ],
+   "title": "Status collectors"
+  }
+ ],
+ "now": "2026-10-21T00:00:00Z",
+ "problems": [
+  "r/tick.timer: OnBootSec= is not a calendar; the next run is not computed"
+ ]
+}

@@ -9,6 +9,7 @@ service registry (`status_sources:` in `schemas/platform/service.json` 2.1).
 | `views.schema.json` | `views.yml`: the shell (`title`, `main`, optional `act_via` service) and the left menu; each entry is a built-in panel (`exceptions`, `grid`, `sources`) with an optional `select` of sources or modules, or an `external` link to a registry service (`optional` when the service may be absent). Consumed by `homelabnext.status.views` |
 | `agent_activity.schema.json` | the summary tier of one agent activity event (stage 1b): ids, runtime, surface, host, project, model, agent, kind, tool name, outcome, tokens, cost. Never a prompt, command, tool input or output. Also the `data` of `homelabnext.agent.activity` |
 | `agent_activity_detail.schema.json` | the private detail of one event: prompt, command, tool input and output, error, approval with its payload; redacted and capped by the hub, never on the bus |
+| `roster.schema.json` | `roster.yml`: where the Agent roster page reads the compiled profiles, broker manifests, workflow packs and model roles, plus each profile's owner, runtime and one line on what it does (never its grants) |
 | `agents.schema.json` | `agents.yml`: the activity store, retention, caps, stuck thresholds, the private tier's front door, the push ingest's senders (secret references only) |
 
 The `status.json` document the hub renders is documented in `docs/status.md` (schema string

@@ -1,0 +1,91 @@
+{
+ "counts": {
+  "private_tier": 1,
+  "public": 2,
+  "services": 4,
+  "web": 3
+ },
+ "lab": "harbor",
+ "zones": [
+  {
+   "description": "shared tools",
+   "services": [
+    {
+     "access": "public",
+     "auth": "its own login",
+     "capability": "idp",
+     "description": "",
+     "endpoint": null,
+     "health": "https://idp.svc.example.internal:9443/-/health/live/",
+     "href": "https://login.lab.example/",
+     "impl": "authentik",
+     "mcp": null,
+     "name": "login",
+     "owner": "ops-team",
+     "private_tier": false,
+     "tags": [],
+     "version": "1.0"
+    },
+    {
+     "access": "public",
+     "auth": "sign-in (identity provider)",
+     "capability": "status-hub",
+     "description": "<script>alert(\"x\")</script> the board",
+     "endpoint": null,
+     "health": "http://status-hub.svc.example.internal:8099/status.json",
+     "href": "https://board.lab.example/",
+     "impl": "homelabnext",
+     "mcp": null,
+     "name": "board",
+     "owner": "ops-team",
+     "private_tier": true,
+     "tags": [],
+     "version": "0.1.0"
+    }
+   ],
+   "zone": "mgmt"
+  },
+  {
+   "description": "storage and query",
+   "services": [
+    {
+     "access": "lab only",
+     "auth": "sign-in (identity provider)",
+     "capability": "lake-query",
+     "description": "SQL over the lake.",
+     "endpoint": null,
+     "health": null,
+     "href": "https://lake-query.svc.example.internal:8443/",
+     "impl": "trino",
+     "mcp": {
+      "href": "https://lake-query.svc.example.internal:8443/mcp",
+      "name": "lake_query",
+      "transport": "http"
+     },
+     "name": "query",
+     "owner": "data-team",
+     "private_tier": false,
+     "tags": [],
+     "version": "450.0"
+    },
+    {
+     "access": "lab only",
+     "auth": "no sign-in",
+     "capability": "records-db",
+     "description": "",
+     "endpoint": "postgres://records-db.svc.example.internal:5432",
+     "health": null,
+     "href": null,
+     "impl": "postgresql",
+     "mcp": null,
+     "name": "db",
+     "owner": "data-team",
+     "private_tier": false,
+     "tags": [],
+     "version": "16.4"
+    }
+   ],
+   "zone": "data"
+  }
+ ]
+}
