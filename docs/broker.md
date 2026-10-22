@@ -287,7 +287,10 @@ decision, and `hnx broker serve` keeps needing no network at all.
 The bus comes from a **target file** binding the `events` capability, the same files
 `hnx conform run` uses (`compose/lab-in-a-box/targets/events.yml` is the lab's); `--stream` and
 `--subject-prefix` name the standing stream (never a scratch one), the endpoint is
-`HNX_ENDPOINT_EVENTS` (`nats://` or `tls://`), and the bus credential is a secret *name*:
+`HNX_ENDPOINT_EVENTS` (`nats://` or `tls://`), and the bus credential is a secret *name*. The
+password goes only over `tls://` (verified against the system CAs, or `ca_file`) or to a loopback
+`nats://`; any other `nats://` endpoint is refused unless the target sets `allow_plaintext: true`
+(the lab-in-a-box does, on its own network):
 
 ```yaml
 # /etc/hnx-broker/events-target.yml
@@ -298,6 +301,7 @@ capabilities:
     config:
       user: hnx-broker
       password_secret: secret:events/broker   # read from HNX_SECRET_EVENTS_BROKER when connecting
+      ca_file: /etc/hnx-broker/events-ca.pem  # the bus's CA (tls:// endpoint)
       client_name: hnx-broker-relay
       duplicate_window: 86400.0
 ```

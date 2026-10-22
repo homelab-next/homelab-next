@@ -8,7 +8,8 @@ interface over nats-py (``pip install 'homelabnext[nats]'``), and the unit tests
 mapping with an in-process fake of the server, so no server is needed offline.  A server with
 accounts takes ``user`` and ``password_secret``, the secret-store *name* of the password (its
 value is delivered as ``HNX_SECRET_<NAME>``, read when the connection is made, and never logged
-or held by the bus).
+or held by the bus).  A password goes only over ``tls://`` (``ca_file`` for a private CA) or to a
+loopback ``nats://`` endpoint, unless ``allow_plaintext=True`` says otherwise explicitly (the lab).
 
 How the contract maps onto JetStream:
 
@@ -66,6 +67,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from conformance.protocols.events import Delivery, EventsError
+from homelabnext._http import check_plaintext
 
 from ._env import env_secret, resolve
 
@@ -477,9 +479,12 @@ class NatsPyWire:
         name: str = "hnx-conform",
         user: str | None = None,
         password: Callable[[], str] | None = None,
+        ca_file: str | None = None,
     ):
         if (user is None) != (password is None):
             raise EventsError("a NATS user needs a password secret, and a password a user")
+        if ca_file is not None and not url.startswith("tls://"):
+            raise EventsError("ca_file needs a tls:// events endpoint")
         try:
             import nats
             import nats.errors
@@ -496,7 +501,11 @@ class NatsPyWire:
         async def note(exc: Exception) -> None:  # nats-py reports connection errors here
             self.last_error = f"{type(exc).__name__}: {exc}"
 
-        auth = {"user": user, "password": password()} if user and password else {}
+        auth: dict[str, Any] = {"user": user, "password": password()} if user and password else {}
+        if ca_file is not None:
+            import ssl
+
+            auth["tls"] = ssl.create_default_context(cafile=ca_file)  # verifies host and chain
         try:
             # max_reconnect_attempts=0 would retry a refused first connect forever in nats-py
             self._nc = self._run(
@@ -614,12 +623,16 @@ def make(
     user: str | None = None,
     password_secret: str | None = None,
     client_name: str = "hnx-conform",
+    allow_plaintext: bool = False,
+    ca_file: str | None = None,
 ) -> JetStreamBus:
     """A bus on the ``events`` endpoint.  ``scratch`` (the conformance default) gives every
     subject its own stream and subject prefix, deleted on ``close()``, so checks never see each
     other or an earlier run; otherwise ``stream`` and ``subject_prefix`` name a standing stream.
     ``provision=False`` creates no stream: both must exist, each with a ``max_bytes`` limit.
-    ``user`` and ``password_secret`` (a secret name, never a value) authenticate the connection."""
+    ``user`` and ``password_secret`` (a secret name, never a value) authenticate the connection;
+    the password goes only over ``tls://`` (``ca_file``: a private CA), to a loopback ``nats://``,
+    or with an explicit ``allow_plaintext``."""
     password = None
     if user is not None or password_secret is not None:
         if not user or not isinstance(password_secret, str) or not password_secret:
@@ -639,7 +652,11 @@ def make(
     own = wire is None
     if wire is None:
         url = resolve(capability, env_only=True, schemes=("nats", "tls")).url
-        wire = NatsPyWire(url, name=client_name, user=user, password=password)
+        try:
+            check_plaintext(url, credentials=password is not None, allow_plaintext=allow_plaintext)
+        except ValueError as exc:
+            raise EventsError(str(exc)) from None
+        wire = NatsPyWire(url, name=client_name, user=user, password=password, ca_file=ca_file)
     try:
         return JetStreamBus(
             wire,

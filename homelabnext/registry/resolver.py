@@ -67,7 +67,8 @@ class Endpoint:
         return self.url
 
 
-_VALID_SCHEMES = {"http", "https", "grpc", "tcp", "udp", "postgres", "nats", "dns", "ssh"}
+# the registry's protocols, plus ``tls`` for an override only: NATS over TLS (``tls://host:port``)
+_VALID_SCHEMES = {"http", "https", "grpc", "tcp", "udp", "postgres", "nats", "tls", "dns", "ssh"}
 
 
 def parse_override(capability: str, var: str, value: str) -> Endpoint:

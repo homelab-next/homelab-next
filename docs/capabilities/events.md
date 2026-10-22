@@ -199,7 +199,7 @@ Each is a deliberately broken fake (`hnx conform run events --target broken:<mut
 The `events` contract on NATS JetStream (pinned: nats 2.10 with `-js`).
 
 - Target file: [`compose/lab-in-a-box/targets/events.yml`](../../compose/lab-in-a-box/targets/events.yml) (target `lab-events`)
-- Factory: `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float=3600.0, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', provision: bool=True, wire: Wire | None=None, user: str | None=None, password_secret: str | None=None, client_name: str='hnx-conform') -> JetStreamBus`
+- Factory: `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float=3600.0, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', provision: bool=True, wire: Wire | None=None, user: str | None=None, password_secret: str | None=None, client_name: str='hnx-conform', allow_plaintext: bool=False, ca_file: str | None=None) -> JetStreamBus`
 - Config in the target: `{ack_wait: 3.0, duplicate_window: 3600.0, dlq_wait: 3.0}`
 
 **Product limits recorded by the adapter:**
@@ -225,7 +225,8 @@ interface over nats-py (`pip install 'homelabnext[nats]'`), and the unit tests d
 mapping with an in-process fake of the server, so no server is needed offline.  A server with
 accounts takes `user` and `password_secret`, the secret-store *name* of the password (its
 value is delivered as `HNX_SECRET_<NAME>`, read when the connection is made, and never logged
-or held by the bus).
+or held by the bus).  A password goes only over `tls://` (`ca_file` for a private CA) or to a
+loopback `nats://` endpoint, unless `allow_plaintext=True` says otherwise explicitly (the lab).
 
 How the contract maps onto JetStream:
 
@@ -296,7 +297,7 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
    def make(**config) -> EventBus: ...
    ```
 
-   The factory this repository ships: `homelabnext.conform.adapters.nats_jetstream:make` is `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float=3600.0, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', provision: bool=True, wire: Wire | None=None, user: str | None=None, password_secret: str | None=None, client_name: str='hnx-conform') -> JetStreamBus`.
+   The factory this repository ships: `homelabnext.conform.adapters.nats_jetstream:make` is `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float=3600.0, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', provision: bool=True, wire: Wire | None=None, user: str | None=None, password_secret: str | None=None, client_name: str='hnx-conform', allow_plaintext: bool=False, ca_file: str | None=None) -> JetStreamBus`.
 
 3. **Describe the target** (YAML; `features` lists only what the product really offers; `waive:` takes SHOULD check ids with a reason, never a MUST):
 

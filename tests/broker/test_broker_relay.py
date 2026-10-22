@@ -365,7 +365,7 @@ def test_the_adapter_takes_a_password_by_secret_name_only(monkeypatch):
         return FakeJetStreamWire()
 
     monkeypatch.setattr(nj, "NatsPyWire", fake_wire)
-    endpoint = "nats://192.0.2.10:4222"  # no-raw-endpoint: allow a documentation-range bus
+    endpoint = "tls://192.0.2.10:4222"  # no-raw-endpoint: allow a documentation-range bus
     monkeypatch.setenv("HNX_ENDPOINT_EVENTS", endpoint)
     kw = {"scratch": False, "stream": STREAM, "subject_prefix": PREFIX}
     monkeypatch.delenv("HNX_SECRET_EVENTS_BROKER", raising=False)
@@ -379,3 +379,61 @@ def test_the_adapter_takes_a_password_by_secret_name_only(monkeypatch):
     bus = nj.make(user="hnx-broker", password_secret="secret:events/broker", **kw)
     assert seen["user"] == "hnx-broker" and seen["password"]() == SECRET
     assert SECRET not in repr(bus) and SECRET not in repr(seen["url"])
+
+
+def _recording_wire(monkeypatch) -> list[dict]:
+    made: list[dict] = []
+
+    def fake_wire(url, **kw):
+        made.append({**kw, "url": url})
+        return FakeJetStreamWire()
+
+    monkeypatch.setattr(nj, "NatsPyWire", fake_wire)
+    monkeypatch.setenv("HNX_SECRET_EVENTS_BROKER", SECRET)
+    return made
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["nats://203.0.113.9:4222", "nats://events.lab.example:4222"],  # no-raw-endpoint: allow
+)
+def test_a_password_never_goes_over_plaintext_nats_to_another_host(monkeypatch, endpoint):
+    """The reviewer's exp3: make() handed user + password to nats.connect for a plain nats://
+    endpoint on another host.  Now it refuses before any connection is made."""
+    made = _recording_wire(monkeypatch)
+    monkeypatch.setenv("HNX_ENDPOINT_EVENTS", endpoint)
+    kw = {"scratch": False, "stream": STREAM, "subject_prefix": PREFIX}
+    with pytest.raises(nj.EventsError, match="plaintext nats") as err:
+        nj.make(user="hnx-broker", password_secret="secret:events/broker", **kw)
+    assert made == [] and SECRET not in str(err.value)
+    # explicitly allowed (the lab), and without credentials, it connects
+    nj.make(user="hnx-broker", password_secret="secret:events/broker", allow_plaintext=True, **kw)
+    nj.make(**kw)
+    assert [m["url"] for m in made] == [endpoint, endpoint]
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["nats://127.0.0.1:4222", "tls://203.0.113.9:4222"],  # no-raw-endpoint: allow
+)
+def test_tls_or_loopback_carries_the_password(monkeypatch, endpoint, tmp_path):
+    made = _recording_wire(monkeypatch)
+    monkeypatch.setenv("HNX_ENDPOINT_EVENTS", endpoint)
+    ca = str(tmp_path / "ca.pem") if endpoint.startswith("tls") else None
+    nj.make(
+        user="hnx-broker",
+        password_secret="secret:events/broker",
+        ca_file=ca,
+        scratch=False,
+        stream=STREAM,
+        subject_prefix=PREFIX,
+    )
+    assert made[0]["url"] == endpoint and made[0]["ca_file"] == ca
+    assert made[0]["password"]() == SECRET
+
+
+def test_a_ca_file_needs_a_tls_endpoint():
+    with pytest.raises(nj.EventsError, match="tls://"):
+        nj.NatsPyWire(
+            "nats://127.0.0.1:4222", ca_file="/nonexistent/ca.pem"
+        )  # no-raw-endpoint: allow
