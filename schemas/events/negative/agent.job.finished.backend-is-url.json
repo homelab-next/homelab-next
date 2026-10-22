@@ -1,0 +1,50 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:llm-orchestrator",
+  "type": "homelabnext.agent.job.finished",
+  "time": "2026-01-01T00:05:12Z",
+  "severity": "info",
+  "subject": "run-0001",
+  "data": {
+    "run_id": "run-0001",
+    "profile": "profile:triage",
+    "profile_revision": "r7",
+    "lane": "real",
+    "outcome": "completed",
+    "failure_class": null,
+    "retry_of_run_id": null,
+    "auto_retry_scheduled": false,
+    "local_attempts": 1,
+    "cloud_fallback_used": false,
+    "backend": "https://gpu0.example.com/v1",
+    "model": "mdl:triage-large",
+    "queued_at": "2026-01-01T00:00:00Z",
+    "started_at": "2026-01-01T00:00:12Z",
+    "finished_at": "2026-01-01T00:05:12Z",
+    "queue_wait_s": 12.0,
+    "wall_s": 300.0,
+    "input_bytes": 2048,
+    "output_bytes": 6144,
+    "usage": {
+      "input_tokens": 41000,
+      "output_tokens": 3200,
+      "reasoning_tokens": null,
+      "cache_read_tokens": 28000,
+      "api_calls": 9,
+      "cost_usd": 0.0
+    },
+    "turn_exit_reason": "end_turn",
+    "tools": [
+      {
+        "name": "read_file",
+        "calls": 6
+      },
+      {
+        "name": "search",
+        "calls": 2
+      }
+    ],
+    "gateway_tag": "run-0001"
+  }
+}
