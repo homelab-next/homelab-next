@@ -146,6 +146,50 @@ def test_the_documented_gateway_memory_total_is_the_real_one(compose):
     assert int(stated[1]) == mem_total(compose, profiled=True)
 
 
+GATEWAY_DOC = ROOT / "docs" / "llm-gateway.md"
+RUNNER_MB = 4096  # the 4 GB runner the gateway-only path is documented to fit
+
+
+def started(compose, names) -> set[str]:
+    """What `docker compose up NAMES` starts: the named services and their depends_on closure."""
+    todo, seen = list(names), set()
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        deps = compose["services"][name].get("depends_on") or {}
+        todo += list(deps if isinstance(deps, dict | list) else [])
+    return seen
+
+
+def documented_gateway_path() -> tuple[list[str], int]:
+    text = GATEWAY_DOC.read_text()
+    up = re.search(r"--profile gateway up -d --build --wait ([\w -]+)\n", text)
+    total = re.search(r"what it depends on \(postgres, the fake inference\): (\d+) MB", text)
+    assert up and total, "docs/llm-gateway.md no longer shows the gateway-only command and total"
+    return up[1].split(), int(total[1])
+
+
+def test_the_documented_gateway_only_path_fits_the_runner(compose):
+    names, stated = documented_gateway_path()
+    assert names == ["llm-gateway", "llm-gateway-keys"]
+    closure = started(compose, names)
+    assert closure == {"llm-gateway", "llm-gateway-keys", "postgres", "inference"}
+    total = sum(mem_mb(compose["services"][n]["mem_limit"]) for n in closure)
+    assert total == stated, f"docs say {stated} MB, the closure's mem_limit sum is {total} MB"
+    assert total <= RUNNER_MB
+
+
+def test_negative_a_new_gateway_dependency_is_counted(compose):
+    broken = json.loads(json.dumps(compose))
+    broken["services"]["llm-gateway"]["depends_on"]["lake-query"] = {"condition": "service_healthy"}
+    closure = started(broken, ["llm-gateway", "llm-gateway-keys"])
+    assert {"lake-query", "lab-init", "object-store"} <= closure  # pulled in transitively
+    _, stated = documented_gateway_path()
+    assert sum(mem_mb(broken["services"][n]["mem_limit"]) for n in closure) != stated
+
+
 def test_negative_an_unprofiled_service_counts_against_the_default_budget(compose):
     # moving a gateway service out of its profile must show up in the 4 GB budget
     broken = json.loads(json.dumps(compose))

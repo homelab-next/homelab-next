@@ -114,7 +114,7 @@ nightly:
 
 ```bash
 lab="--env-file compose/lab-in-a-box/.env.example -f compose/lab-in-a-box/docker-compose.yml"
-# just the gateway and what it depends on (postgres, the fake inference): well inside 4 GB
+# just the gateway and what it depends on (postgres, the fake inference): 1152 MB of mem_limit
 docker compose $lab --profile gateway up -d --build --wait llm-gateway llm-gateway-keys
 set -a; . compose/lab-in-a-box/.env.example; set +a
 export HNX_ENDPOINT_LLM_GATEWAY=http://${LAB_BIND}:${LAB_PORT_GATEWAY}
@@ -134,7 +134,8 @@ the total stated in the compose header. It allows only `llm-gateway*` services t
 and it fails if a gateway service is moved out of its profile. The whole default stack plus
 `gateway` needs about 4.6 GB, more than the 4 GB nightly runner, so the profiles are not in the
 nightly. Starting only the gateway services, as above, brings up just postgres and the fake
-inference with them.
+inference with them: 1152 MB of `mem_limit` in all, inside the 4 GB runner (`tests/compose` sums
+that `depends_on` closure against the figure stated here).
 
 ## Conformance: the `gateway` feature
 
