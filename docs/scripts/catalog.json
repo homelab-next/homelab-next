@@ -580,6 +580,24 @@
     },
     {
       "exit": {
+        "0": "every file was read (a missing file is a result, not a failure)",
+        "1": "a file could not be read (permission, a link loop); the role stops"
+      },
+      "id": "model-store-files",
+      "inputs": "the entry's directory, its manifest files, whether to hash them",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one result per file, in manifest order (JSON, as an Ansible module)",
+      "owner": "platform",
+      "path": "ansible/roles/model_store/library/model_store_files.py",
+      "purpose": "Read every file of one model-store entry (exists, size, sha256, where a link resolves) in one module call.",
+      "status": "active",
+      "trigger": [
+        "role:model_store"
+      ]
+    },
+    {
+      "exit": {
         "0": "every staged file verified and promoted",
         "1": "a staged file is missing, out of place, or not the manifest's; nothing was moved"
       },
