@@ -18,8 +18,8 @@ Checked: ``*.py``, ``*.sh``, ``*.yml``, ``*.yaml``, ``*.toml``.  With no argumen
 ``git ls-files`` (falling back to a directory walk outside a work tree).  Two escape hatches,
 both reviewed in this file rather than spread through the tree:
 
-* ``GENERATED``: expected outputs compared byte for byte (``golden/`` directories); a header
-  there would have to be emitted by the generator under test.
+* ``GENERATED``: expected outputs compared byte for byte (``golden/`` directories, the rendered
+  MCP client configurations); a header there would have to be emitted by the generator.
 * ``VENDORED``: third-party files kept verbatim.  They must still carry *an* SPDX identifier
   (their own licence), just not necessarily Apache-2.0.  Add ``"glob": "reason"`` entries.
 """
@@ -36,7 +36,13 @@ HEADER = "SPDX-License-Identifier: Apache-2.0"
 ANY_HEADER = re.compile(r"SPDX-License-Identifier:\s*\S")
 SUFFIXES = {".py", ".sh", ".yml", ".yaml", ".toml"}
 SKIP_DIRS = {".git", ".venv", "venv", "build", "dist", "__pycache__", "node_modules"}
-GENERATED = ("*/golden/*",)
+GENERATED = (
+    "*/golden/*",
+    # client configurations rendered from the MCP catalog (hnx mcp catalog render, compared byte
+    # for byte by its --check): the formats are other programs', so the render adds no licence line
+    "examples/mcp/clients/hermes/*",
+    "examples/mcp/clients/llm-orchestrator/mcp_catalog.yaml",
+)
 VENDORED: dict[str, str] = {
     # "path/glob/*.sh": "upstream project X, kept verbatim",
 }

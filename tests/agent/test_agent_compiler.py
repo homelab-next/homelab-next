@@ -198,6 +198,7 @@ POLICY = {
             "mcp": ["lake"],
             "capabilities": ["cap:lake-query"],
             "tier": "read",
+            "data_tier": "local-only",  # attested by the policy owner, not the spec
             "budgets": {
                 "max_input_tokens": 64000,
                 "max_output_tokens": 4000,
@@ -222,6 +223,35 @@ def test_spec_cannot_raise_its_own_ceiling_past_the_policy():
     with pytest.raises(CeilingViolation) as exc:
         compile_profile(s, library(), policy=_policy())
     assert any("mcp outside ceiling: ['records']" in p for p in exc.value.problems)
+
+
+def test_only_the_policy_attests_local_only_and_the_model_role():
+    """Round 4 design note: a spec could declare itself ``data_tier: local-only`` to receive
+    local-only MCP servers.  The policy owner now attests ``data_tier`` (and ``model_role``): a
+    profile must say the same, and a local-only server needs the policy's ``local-only``."""
+    from homelabnext.agent import CeilingPolicy
+
+    s = {k: v for k, v in spec().items() if k != "ceiling"}
+    unattested = copy.deepcopy(POLICY)
+    del unattested["ceilings"]["profile:reader"]["data_tier"]
+    with pytest.raises(CeilingViolation, match="does not attest data_tier: local-only"):
+        compile_profile(s, library(), policy=CeilingPolicy.from_mapping(unattested))
+    cloud = copy.deepcopy(POLICY)
+    cloud["ceilings"]["profile:reader"]["data_tier"] = "cloud-allowed"
+    with pytest.raises(CeilingViolation, match="attests data_tier cloud-allowed"):
+        compile_profile(s, library(), policy=CeilingPolicy.from_mapping(cloud))
+    role = copy.deepcopy(POLICY)
+    role["ceilings"]["profile:reader"]["model_role"] = "mdl:some-other-role"
+    with pytest.raises(CeilingViolation, match="attests model_role mdl:some-other-role"):
+        compile_profile(s, library(), policy=CeilingPolicy.from_mapping(role))
+    p = compile_profile(s, library(), policy=_policy())
+    assert verify_profile(p, policy=_policy()) == []
+    assert any("does not attest" in x for x in verify_profile(
+        p, policy=CeilingPolicy.from_mapping(unattested)))  # fmt: skip
+    bad = copy.deepcopy(POLICY)
+    bad["ceilings"]["profile:reader"]["data_tier"] = "anywhere"
+    with pytest.raises(SpecError, match="data_tier must be one of"):
+        CeilingPolicy.from_mapping(bad)
 
 
 def test_policy_needs_an_entry_and_spec_ceiling_is_optional():

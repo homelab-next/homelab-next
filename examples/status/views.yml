@@ -99,6 +99,10 @@ menu:
     title: Agent roster
     panel: roster
     group: directory
+  - id: mcp-servers
+    title: MCP servers
+    panel: mcp-servers
+    group: directory
   # rendered only for a request through the trusted front door (docs/status.md)
   - id: agent-detail
     title: Session detail

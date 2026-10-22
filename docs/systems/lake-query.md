@@ -47,7 +47,7 @@ author: unknown
 
 <!-- hnx:gen:outputs -->
 - Metrics: `/metrics` on port 9091
-- MCP tool server `lake_query` (http, `/mcp`)
+- MCP server `lake` (streamable-http, `/mcp`): read; owner data-team; active; catalog record `mcp/lake.yml`
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:outputs -->

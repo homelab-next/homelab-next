@@ -71,9 +71,16 @@ servers it wants, a tier and budgets. The **ceiling** is read from a `CeilingPol
 # policy.yml: owned and reviewed by someone other than the spec authors (CODEOWNERS)
 ceilings:
   profile:reader: {mcp: [lake], capabilities: [cap:lake-query], tier: read,
+                   data_tier: local-only, model_role: mdl:main-reasoner,
                    budgets: {max_input_tokens: 64000, max_output_tokens: 4000,
                              max_runtime_s: 900, max_tool_calls: 40}}
 ```
+
+`data_tier` and `model_role` on an entry are **attested** by the policy owner: the spec, the
+compiled profile and a lean profile must say the same (`CeilingViolation` otherwise), and a
+profile may be granted a `local-only` MCP server only when its entry says `data_tier:
+local-only`, so a spec cannot declare itself local-only to receive local-only data. Both are
+optional; without `data_tier` the profile receives no local-only server.
 
 A spec may also carry a `ceiling`; with a policy it may only narrow the policy's entry, and a
 profile id with no entry is refused. Without a policy the compiler falls back to the spec's own
@@ -122,13 +129,26 @@ through allowlisted broker actions (G-04).
   it is declared, and an absent value means `true`: an actor has to say `false`. A ceiling-policy
   entry with `reads_untrusted: true` makes the profile a reader whatever its spec says, so the
   policy owner can pin it.
-- **Classified by data.** `homelabnext/agent/tool_classes.yml` maps every MCP server, capability
-  (`cap:` id) and broker tier to capability classes (`read`, `record-write`, `exec`, `file-write`,
+- **Classified by data.** `homelabnext/agent/tool_classes.yml` maps every capability (`cap:` id)
+  and broker tier, and the [MCP catalog](mcp-catalog.md) ([[mcp-catalog]]) every MCP server (the
+  union of its tools' classes: `ToolClasses.load` derives the table's `mcp` section), to capability
+  classes (`read`, `record-write`, `exec`, `file-write`,
   `egress`, `credential`) and lists the classes a reader may not hold (`reader_forbidden`: exec,
   file-write, egress, credential). A grant with several classes counts as its worst. A grant the
-  table does not know is refused for a reader (unknown is never assumed harmless); adding a tool
-  means classifying it there in a reviewed change (the repository's own read-only server,
-  `hnx-catalog`, is `read`: [MCP server](mcp.md), [[mcp]]). `--classes FILE` substitutes another table.
+  table does not know is refused for a reader (unknown is never assumed harmless); adding an MCP
+  server means adding a reviewed catalog record (the repository's own read-only server,
+  `hnx-catalog`, is `read`: [MCP server](mcp.md), [[mcp]]). `--classes FILE` substitutes another
+  table, whose `mcp` section is still derived from the catalog: a table with an `mcp:` section of
+  its own is refused (it would class servers by hand and skip the catalog's status and data-tier
+  rules), and so is one whose `reader_forbidden` leaves out a class the packaged table forbids (a
+  table may forbid a reader more, never less).
+- **Grants name catalog ids.** For every profile and manifest, reader or not, the compiler
+  (`CatalogViolation`), `verify_profile` and `hnx agent lint` refuse an MCP server the catalog
+  does not hold, one whose status is not `active` or `deprecated` (an allowlist), one without a
+  known data tier, and a `local-only` server granted to a profile whose `data_tier` is not
+  `local-only` (`grant_problems`); a `deprecated` grant is a note naming its `replaced_by`
+  (`grant_notes`). A catalog with a record that fails its schema, an id that is not its file
+  name or a duplicate id is refused outright: no grant is judged against it.
 - **Enforced three times.** `compile_profile` raises `ReaderViolation` naming every offending grant
   and its class, after the ceiling check and whatever the ceiling allows; `verify_profile` (and
   `hnx agent verify`) refuses a compiled profile edited into that state, digest recomputed or not;

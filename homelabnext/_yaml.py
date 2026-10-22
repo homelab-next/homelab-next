@@ -21,9 +21,27 @@ import yaml
 __all__ = ["UniqueKeyLoader", "UniqueKeyStrDateLoader"]
 
 
+_MERGE = "tag:yaml.org,2002:merge"
+
+
 def _construct_mapping(loader: yaml.SafeLoader, node: yaml.MappingNode, deep: bool = False):
+    """A mapping whose explicit keys are unique; a merge key (``<<: *anchor``) is not one of them
+    (its keys may be overridden, as YAML intends) and is left to ``SafeLoader`` to expand.  Two
+    merge keys in one mapping are refused like any duplicate: PyYAML keeps the last one, yaml.v3
+    rejects the document (one ``<<`` takes a list of anchors)."""
     seen: set[Any] = set()
+    merges = 0
     for key_node, _ in node.value:
+        if key_node.tag == _MERGE:
+            merges += 1
+            if merges > 1:
+                raise yaml.constructor.ConstructorError(
+                    None,
+                    None,
+                    "duplicate key '<<' (merge several anchors as <<: [*a, *b])",
+                    key_node.start_mark,
+                )
+            continue
         key = loader.construct_object(key_node, deep=deep)
         if key in seen:
             raise yaml.constructor.ConstructorError(

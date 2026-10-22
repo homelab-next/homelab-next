@@ -610,7 +610,7 @@ def test_render_writes_the_maps_beside_the_page(tmp_path, capsys):
             "--invariants-results", str(results)]  # fmt: skip
     assert main(args) == 0
     names = sorted(p.name for p in out.iterdir())
-    assert names == ["architecture.html", "dataflow.html", "index.html", "links.html",
+    assert names == ["architecture.html", "dataflow.html", "index.html", "links.html", "mcp-servers.html",
                      "roadmap.html", "roster.html", "schedule.html", "status.json",
                      "topology.html"]  # fmt: skip
     index = (out / "index.html").read_text()

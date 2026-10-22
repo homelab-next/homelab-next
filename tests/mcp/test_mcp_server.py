@@ -209,7 +209,7 @@ def test_find_services_names_only(cat):
     assert len(every) == len(cat.registry.services)
     assert all(set(s) == allowed_keys for s in every)
     (lq,) = _call(cat, "find_services", capability="cap:lake-query")["services"]
-    assert lq["impl"] == "trino" and lq["mcp"] == "lake_query"
+    assert lq["impl"] == "trino" and lq["mcp"] == "lake"
     data = _call(cat, "find_services", tag="data")["services"]
     assert data and all("data" in s["tags"] for s in data)
     assert _call(cat, "find_services", capability="lake-query", tag="ui")["services"] == []

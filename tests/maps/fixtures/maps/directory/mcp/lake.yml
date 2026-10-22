@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+id: lake
+description: SQL over the lake <script>alert("x")</script>.
+owner: data-team
+status: deprecated
+reason: moving to a newer query server
+origin: {kind: image, image: registry.example/lake-mcp, digest: null}
+transport: {type: streamable-http, endpoint: svc:query, path: /mcp}
+runtime: {host: data-1, user: lake}
+egress: none
+data_tier: local-only
+implements: [cap:lake-query]
+tools:
+- {name: query, classes: [read], approval: false}
+author: unknown

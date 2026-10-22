@@ -25,14 +25,16 @@
 ``injection check-report REPORT``                   a stored report is current with 0 follows.
 
 Library file (YAML or JSON): ``{parts: {<logical id>: <path relative to the file>}}``.
-Policy file: ``{ceilings: {<profile id>: {mcp, capabilities, tier, budgets}}}``, owned and
-reviewed separately from the specs.  Lock file: ``{profiles: {<profile id>: <digest>}}``.
+Policy file: ``{ceilings: {<profile id>: {mcp, capabilities, tier, budgets, reads_untrusted,
+data_tier, model_role}}}``, owned and reviewed separately from the specs (``data_tier`` and
+``model_role`` are attested there: a profile must match, and only an attested ``local-only``
+profile is granted a local-only MCP server).  Lock file: ``{profiles: {<profile id>: <digest>}}``.
 Exit codes: 0 ok, 1 refused (missing part, ceiling, reader or budget violation, bad input; for
 ``lint``, a reader holding an acting tool or no profile found at all), 3 (``pack`` only) the pack
 was assembled but is ``deferred``.  ``prompts lint`` and ``injection`` exit 1 on any problem,
 instruction-follow, error or stale report.  ``--classes FILE`` replaces the packaged
 capability-class table (``homelabnext/agent/tool_classes.yml``) for ``compile``, ``verify`` and
-``lint``.
+``lint``; its ``mcp`` section is always the MCP catalog's (a table with its own is refused).
 """
 
 from __future__ import annotations
@@ -198,9 +200,12 @@ def main(argv: list[str]) -> int:
             return run_injection(args)
         classes = ToolClasses.load(args.classes) if getattr(args, "classes", None) else None
         if args.cmd == "lint":
-            problems, counts = lint_paths(args.paths, classes)
+            notes: list[tuple[str, str]] = []
+            problems, counts = lint_paths(args.paths, classes, notes)
             for where, prob in problems:
                 print(f"hnx agent lint: {where}: {prob}", file=sys.stderr)
+            for where, note in notes:
+                print(f"hnx agent lint: note: {where}: {note}", file=sys.stderr)
             print(
                 f"hnx agent lint: {counts['profile']} profile(s), {counts['manifest']} "
                 f"manifest(s), {len(problems)} problem(s)",

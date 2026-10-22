@@ -1,12 +1,12 @@
 {
   "generated_from": {
     "broker": "sha256:329adee08662989613b59c3c85b509ad24a094c804dafa683f28b805d0ada2cc",
-    "classes": "sha256:303e82d6a1f4f6306f46ec92085c6e303da2e695f21c3caeeb4b5c772ff26fd6",
+    "classes": "sha256:d005f18c2807ff3b934879499f0e5c9882fd5a13ba5cad8034de0981307b246f",
     "profiles": {
       "profile:reader": "sha256:b855f7d3bf4d947b92df54cdb815d2099722c7a62166abf05cd2af0c62837114",
       "profile:responder": "sha256:ed744f7e5a9beed4c46712e50eb47055c08f9e7d0e51c4d7e45fa3b6ac30012d"
     },
-    "registry": "243943f95413ac0bf2c454ec8db6142d7a179313cd87d11c106eea2589457f8b"
+    "registry": "81def9d1b96c48f45f71adc8d1c07ef8c381f9dee5987f230138151f843e5d61"
   },
   "keyring_version": 1,
   "principals": [
@@ -94,11 +94,11 @@
         },
         {
           "reason": "not granted (default deny)",
-          "resource": "mcp:agent_runtime"
+          "resource": "mcp:agent-runtime"
         },
         {
           "reason": "not granted (default deny)",
-          "resource": "mcp:lake_query"
+          "resource": "mcp:lake"
         }
       ],
       "grants": [
@@ -215,11 +215,7 @@
         },
         {
           "reason": "not granted (default deny)",
-          "resource": "mcp:agent_runtime"
-        },
-        {
-          "reason": "not granted (default deny)",
-          "resource": "mcp:lake_query"
+          "resource": "mcp:agent-runtime"
         }
       ],
       "grants": [
@@ -236,7 +232,7 @@
           "resource": "cap:lake-query"
         },
         {
-          "endpoint": null,
+          "endpoint": "lake-query.svc.example.internal/mcp",
           "kind": "mcp",
           "level": "read",
           "resource": "mcp:lake"
@@ -348,11 +344,11 @@
         },
         {
           "reason": "not granted (default deny)",
-          "resource": "mcp:agent_runtime"
+          "resource": "mcp:agent-runtime"
         },
         {
           "reason": "not granted (default deny)",
-          "resource": "mcp:lake_query"
+          "resource": "mcp:lake"
         }
       ],
       "grants": [

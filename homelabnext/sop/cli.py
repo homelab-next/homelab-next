@@ -66,6 +66,19 @@ def capabilities_main(argv: list[str]) -> int:
     return 0 if rep.ok() else 1
 
 
+def _mcp_catalog(option: str | None, registry: str):
+    """The MCP catalog for the pages: ``--mcp-catalog`` (``none``: no catalog), else ``mcp/``
+    beside the registry when it is a directory."""
+    from homelabnext.mcp import servers
+
+    if option == "none":
+        return None
+    path = Path(option) if option else servers.beside(registry)
+    if option is None and not path.is_dir():
+        return None
+    return servers.load(path)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["capabilities"]:
@@ -82,6 +95,11 @@ def main(argv: list[str] | None = None) -> int:
         "--policy",
         help="review policy (default examples/review-policy.yml when it exists; `none` skips)",
     )
+    ap.add_argument(
+        "--mcp-catalog",
+        help="the MCP catalog the pages' MCP lines come from (default: mcp/ beside the "
+        "registry when it exists; `none` uses the registry's mcp entries)",
+    )
     try:
         args = ap.parse_args(argv)
     except SystemExit as exc:
@@ -97,8 +115,13 @@ def main(argv: list[str] | None = None) -> int:
     except (RegistryError, OSError) as exc:
         print(f"hnx docs systems: {exc}", file=sys.stderr)
         return 2
+    try:
+        catalog = _mcp_catalog(args.mcp_catalog, args.registry)
+    except ValueError as exc:
+        print(f"hnx docs systems: {exc}", file=sys.stderr)
+        return 2
     if args.cmd == "generate":
-        res = generate_pages(reg, args.dir)
+        res = generate_pages(reg, args.dir, catalog)
         Path(args.dir, "_TEMPLATE.md").write_text(render_template(), encoding="utf-8")
         print(
             f"systems pages: {len(res.created)} created, {len(res.updated)} updated,"
@@ -113,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     except ReviewError as exc:
         print(f"hnx docs systems: {exc}", file=sys.stderr)
         return 2
-    rep = check_pages(reg, args.dir, policy)
+    rep = check_pages(reg, args.dir, policy, catalog)
     for line in rep.lines():
         print(line)
     for line in rep.info():

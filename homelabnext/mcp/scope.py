@@ -18,6 +18,8 @@ from typing import Any
 
 from homelabnext.context import in_scope
 
+from . import credentials
+
 __all__ = [
     "SERVER_NAME",
     "ScopeError",
@@ -28,8 +30,8 @@ __all__ = [
     "profile_scope",
 ]
 
-#: the server's slug: what a profile lists under ``grants.mcp`` (and ``tool_classes.yml``
-#: classifies as ``read``)
+#: the server's catalog id: what a profile lists under ``grants.mcp``; its record
+#: (``examples/mcp/hnx-catalog.yml``) classes every tool ``read``
 SERVER_NAME = "hnx-catalog"
 
 
@@ -108,10 +110,13 @@ def load_profile_scope(path: str | Path, registry: Any) -> tuple[str, frozenset[
     try:
         profile = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        raise ScopeError(f"cannot read profile {path}: {exc}") from None
+        raise ScopeError(f"cannot read profile {path}: {credentials.reason(exc)}") from None
     if not isinstance(profile, dict):
         raise ScopeError(f"{path}: a compiled profile is a JSON object")
-    problems = verify_profile(profile)
+    # verify_profile's own schema messages quote the values: a schema failure is worded safely
+    problems = credentials.safe_schema_errors("agent", "profile", profile) or verify_profile(
+        profile
+    )
     if problems:
         raise ScopeError(f"{path}: profile does not verify: " + "; ".join(problems))
     if SERVER_NAME not in ((profile.get("grants") or {}).get("mcp") or []):

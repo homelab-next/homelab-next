@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: terminal
+description: Another shell server (terminal); the catalog keeps one.
+owner: platform-team
+status: deprecated
+reason: duplicates shell; grant shell instead
+replaced_by: shell
+origin:
+  kind: package
+  ecosystem: npm
+  package: '@example/mcp-terminal'
+  version: 0.9.0
+  sha256: e57b60e1f98d7a68e73d38d96e73d68f56bfc69f880b41788f07d8dd171c93c4
+  bins: [mcp-terminal]
+transport:
+  type: stdio
+runtime: agent-local
+egress: none
+data_tier: local-only
+tools:
+- {name: run_command, classes: [exec], approval: true}
+author: agent:example-builder

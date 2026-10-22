@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# an image origin carries its digest field
+id: notes
+description: 'A notes store, one instance per agent: each reads the store and writes only under its own
+  prefix.'
+owner: platform-team
+status: active
+origin:
+  kind: image
+  image: registry.example/x:latest
+transport:
+  type: stdio
+  bin: notes-mcp
+runtime: agent-local
+env:
+  NOTES_TOKEN: secret:mcp/notes-token
+settings:
+  NOTES_ROOT: /srv/notes
+timeout: 120
+parameters:
+  writable:
+    description: the prefix this instance may write under
+    env: NOTES_WRITABLE_PREFIX
+    pattern: '[a-z0-9/_-]+/'
+    default: agents/{profile}/
+  mode:
+    description: write in the real lane, read in the shadow lane
+    env: NOTES_MODE
+    enum:
+    - read
+    - write
+    default: write
+instance: notes-{profile}-{lane}
+egress: none
+data_tier: local-only
+tools:
+- name: read_note
+  classes:
+  - read
+  approval: false
+- name: write_note
+  classes:
+  - record-write
+  approval: false
+author: agent:example-builder

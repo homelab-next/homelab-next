@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Render spec: llm-orchestrator's configs/mcp_catalog.yaml (one kind per catalog stdio server) and
+# the grants: block of each profile file, spliced in place (everything from the block's marker
+# comment to the end of the file).  Fictional, like every example.
+client: llm-orchestrator
+catalog: ..
+policy: policy/ceilings.yml          # the ceilings its profiles are judged against
+npm_prefix: /var/lib/hnx/npm-prefix # an empty directory every npx launch reads its config from
+lanes: [real, shadow]
+profiles:
+  - file: profile.collector.json
+    grants_file: llm-orchestrator/profiles/collector.yaml
+    params:
+      notes: {writable: agents/collector/inbox/}
+      notes@shadow: {mode: read}
+owns: [llm-orchestrator/*.yaml, llm-orchestrator/profiles/*.yaml]
+# every orchestrator profile with a grants: block must accept the rendered catalog, rendered here
+# or not (its controller refuses to start otherwise)
+check_profiles: llm-orchestrator/profiles/*.yaml
+outputs:
+  - {path: llm-orchestrator/mcp_catalog.yaml}

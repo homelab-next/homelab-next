@@ -150,7 +150,12 @@ def test_pack_invalid_manifest_exit_1(work, capsys):
 def test_compile_with_policy_and_verify(work, capsys):
     policy = {
         "ceilings": {
-            "profile:reader": {"mcp": ["lake"], "capabilities": ["cap:lake-query"], "tier": "read"}
+            "profile:reader": {
+                "mcp": ["lake"],
+                "capabilities": ["cap:lake-query"],
+                "tier": "read",
+                "data_tier": "local-only",
+            }
         }
     }
     (work / "policy.yml").write_text(yaml.safe_dump(policy))

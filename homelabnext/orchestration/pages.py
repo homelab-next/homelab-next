@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The Orchestration page of the status hub: server-rendered, no script, the hub's stylesheet.
 
-``hnx status serve --orchestration DB`` (menu panel ``orchestration``, views schema 1.8):
+``hnx status serve --orchestration DB`` (menu panel ``orchestration``, views schema 1.9):
 
 ======================== ========================================================================
 ``/orchestration``         per profile, backend and lane over the last ``days`` (``?days=``, 1..90,

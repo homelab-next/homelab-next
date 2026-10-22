@@ -37,7 +37,7 @@ Rules, all enforced here and tested:
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -47,13 +47,21 @@ from .digest import digest_of, sha256_text
 from .errors import (
     AgentError,
     BudgetError,
+    CatalogViolation,
     CeilingViolation,
     MissingPartError,
     ReaderViolation,
     SpecError,
 )
 from .include import normalise_include
-from .readers import ToolClasses, profile_problems, reader_problems
+from .readers import (
+    DATA_TIERS,
+    ToolClasses,
+    default_classes,
+    grant_problems,
+    profile_problems,
+    reader_problems,
+)
 from .schemas import schema_errors
 
 TIER_RANK = {"read": 0, "write": 1, "execute": 2, "privileged": 3}
@@ -128,6 +136,11 @@ class CeilingPolicy:
 
     ``reads_untrusted: true`` on an entry makes that profile a reader whatever its spec says
     (the policy owner, not the spec author, decides); ``false`` or absent leaves it to the spec.
+
+    ``data_tier`` and ``model_role`` on an entry are what the policy owner attests for the
+    profile: a profile (spec, compiled or lean) must say the same, and a profile may be granted
+    a ``local-only`` MCP server only when its entry attests ``data_tier: local-only``, so a spec
+    cannot declare itself local-only to receive local-only data (:meth:`attestation_problems`).
     """
 
     def __init__(self, ceilings: Mapping[str, Mapping[str, Any]], source: str = "policy") -> None:
@@ -135,12 +148,24 @@ class CeilingPolicy:
             raise SpecError(f"{source}: expected a non-empty 'ceilings' mapping of profile id")
         self.source = source
         self._readers = set()
+        self._attested: dict[str, dict[str, str]] = {}
         for pid, c in ceilings.items():
             flag = c.get("reads_untrusted") if isinstance(c, Mapping) else None
             if flag is not None and not isinstance(flag, bool):
                 raise SpecError(f"{source}: {pid}: reads_untrusted must be true or false")
             if flag:
                 self._readers.add(_ids({"id": [pid]}, "id", "profile")[0])
+            if not isinstance(c, Mapping):
+                continue
+            att: dict[str, str] = {}
+            if c.get("data_tier") is not None:
+                if c["data_tier"] not in DATA_TIERS:
+                    raise SpecError(f"{source}: {pid}: data_tier must be one of {list(DATA_TIERS)}")
+                att["data_tier"] = c["data_tier"]
+            if c.get("model_role") is not None:
+                att["model_role"] = _ids({"model_role": [c["model_role"]]}, "model_role", "mdl")[0]
+            if att:
+                self._attested[_ids({"id": [pid]}, "id", "profile")[0]] = att
         self._ceilings = {
             _ids({"id": [pid]}, "id", "profile")[0]: _normal_ceiling(c, f"{source}: {pid}")
             for pid, c in ceilings.items()
@@ -160,6 +185,36 @@ class CeilingPolicy:
     def requires_reader(self, profile_id: str) -> bool:
         """True when the policy marks ``profile_id`` as reading untrusted content."""
         return profile_id in self._readers
+
+    def attestation_problems(
+        self,
+        profile_id: str,
+        data_tier: Any,
+        model_role: Any,
+        mcp: Iterable[str] = (),
+        classes: ToolClasses | None = None,
+    ) -> list[str]:
+        """Where a profile's ``data_tier``/``model_role`` disagree with what this policy attests
+        for it, and a ``local-only`` MCP server granted without the policy attesting
+        ``data_tier: local-only`` (a profile cannot vouch for itself)."""
+        att = self._attested.get(profile_id, {})
+        out = []
+        for key, value in (("data_tier", data_tier), ("model_role", model_role)):
+            if key in att and value != att[key]:
+                out.append(
+                    f"{self.source} attests {key} {att[key]} for {profile_id}; the profile says "
+                    f"{value}"
+                )
+        if att.get("data_tier") != "local-only":
+            meta = (classes if classes is not None else default_classes()).catalog or {}
+            local = sorted(n for n in mcp if (meta.get(n) or {}).get("data_tier") == "local-only")
+            if local:
+                out.append(
+                    f"{profile_id} is granted local-only MCP server(s) {local}, but "
+                    f"{self.source} does not attest data_tier: local-only for it (a profile "
+                    "cannot declare itself local-only to receive local-only data)"
+                )
+        return out
 
 
 def _normal_ceiling(c: Any, where: str) -> dict[str, Any]:
@@ -265,6 +320,8 @@ def compile_profile(
     else:
         ceiling = own  # type: ignore[assignment]
     violations += check_ceiling(grants, ceiling)
+    if policy is not None:
+        violations += policy.attestation_problems(pid, spec["data_tier"], model_role, mcp, classes)
     if violations:
         raise CeilingViolation(violations)
 
@@ -280,6 +337,12 @@ def compile_profile(
         rproblems = reader_problems(grants, classes, pid)
         if rproblems:
             raise ReaderViolation(rproblems)
+
+    # the MCP catalog: every server granted, reader or actor, is a reviewed, current catalog
+    # server whose data may go where this profile's may (ADR-0024)
+    gproblems = grant_problems(grants, classes, pid, spec["data_tier"])
+    if gproblems:
+        raise CatalogViolation(gproblems)
 
     # 4. include: knowledge only about what is granted (IncludeViolation), never a new grant
     include = normalise_include(spec.get("include"), grants)
@@ -361,6 +424,13 @@ def verify_profile(
         except CeilingViolation as exc:
             return list(exc.problems)
         problems += _ceiling_excess(_normal_ceiling(profile["ceiling"], "profile"), ceiling)
+        problems += policy.attestation_problems(
+            profile["id"],
+            profile.get("data_tier"),
+            profile.get("model_role"),
+            profile["grants"].get("mcp") or (),
+            classes,
+        )
     problems += check_ceiling(profile["grants"], ceiling)
     problems += check_budgets(profile["budgets"], ceiling.get("budgets"))
     try:

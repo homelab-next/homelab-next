@@ -100,7 +100,35 @@ def _health(s: Service) -> str:
     return "no probe is defined in the registry (a gap: add one, or say why none is possible)"
 
 
-def _gen_blocks(reg: Registry, s: Service) -> dict[str, str]:
+def _mcp_lines(s: Service, catalog: Any = None) -> str:
+    """The MCP line(s) of a page.  With the MCP catalog (:mod:`homelabnext.mcp.servers`): every
+    catalog server whose endpoint is this service, with its classes, owner, status and record;
+    without one, the registry's own ``mcp`` entry."""
+    if catalog is None:
+        if s.mcp:
+            return (
+                f"- MCP tool server `{s.mcp['name']}` ({s.mcp['transport']}, `{s.mcp['path']}`)\n"
+            )
+        return "- MCP: none\n"
+    lines = []
+    for sid, rec in catalog:
+        t = rec.get("transport") or {}
+        if t.get("endpoint") != f"svc:{s.name}":
+            continue
+        classes = sorted({c for tool in rec.get("tools") or () for c in tool.get("classes") or ()})
+        lines.append(
+            f"- MCP server `{sid}` ({t.get('type')}, `{t.get('path', '/mcp')}`): "
+            f"{', '.join(classes) or 'no tools classed'}; owner {rec.get('owner')}; "
+            f"{rec.get('status')}; catalog record `{catalog.rel(sid)}`\n"
+        )
+    if lines:
+        return "".join(lines)
+    if s.mcp:
+        return f"- MCP tool server `{s.mcp['name']}`: not in the MCP catalog\n"
+    return "- MCP: none\n"
+
+
+def _gen_blocks(reg: Registry, s: Service, catalog: Any = None) -> dict[str, str]:
     host = reg.hosts[s.host]
     downstream = sorted(o.name for o in reg.services.values() if s.name in o.upstreams)
     ups = [_link(u) for u in s.upstreams] or ["none declared"]
@@ -124,11 +152,7 @@ def _gen_blocks(reg: Registry, s: Service) -> dict[str, str]:
                 if s.metrics
                 else "- Metrics: none declared\n"
             )
-            + (
-                f"- MCP tool server `{s.mcp['name']}` ({s.mcp['transport']}, `{s.mcp['path']}`)\n"
-                if s.mcp
-                else "- MCP: none\n"
-            )
+            + _mcp_lines(s, catalog)
         ),
         "verify": f"- Registry health probe: {_health(s)}\n",
         "deps": (
@@ -203,8 +227,10 @@ def _body(gen: Mapping[str, str] | None) -> str:
 _GEN_KEYS = {"what", "inputs", "outputs", "verify", "deps", "access", "source"}
 
 
-def render_page(reg: Registry, s: Service) -> str:
-    text = _dump_front(_front(reg, s)) + _body(_gen_blocks(reg, s))
+def render_page(reg: Registry, s: Service, catalog: Any = None) -> str:
+    """One page; ``catalog``: the MCP catalog its MCP line is generated from (else the
+    registry's ``mcp`` entry)."""
+    text = _dump_front(_front(reg, s)) + _body(_gen_blocks(reg, s, catalog))
     return text.replace("@@TITLE@@", s.name)
 
 
@@ -239,13 +265,13 @@ class GenResult:
     unchanged: list[str] = field(default_factory=list)
 
 
-def generate_pages(reg: Registry, out_dir: str | Path) -> GenResult:
+def generate_pages(reg: Registry, out_dir: str | Path, catalog: Any = None) -> GenResult:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     res = GenResult()
     for s in reg.sorted_services():
         path = out / f"{slug(s.name)}.md"
-        fresh = render_page(reg, s)
+        fresh = render_page(reg, s, catalog)
         if not path.exists():
             path.write_text(fresh, encoding="utf-8")
             res.created.append(path.name)
@@ -372,9 +398,12 @@ def _review_page(
         rep.drafts[name] = need
 
 
-def check_pages(reg: Registry, pages_dir: str | Path, policy=None) -> CheckReport:
+def check_pages(
+    reg: Registry, pages_dir: str | Path, policy=None, catalog: Any = None
+) -> CheckReport:
     """Missing, orphan, malformed and stale pages; and with a review ``policy``
-    (:func:`homelabnext.reviews.load_policy`) every page's status against its reviews."""
+    (:func:`homelabnext.reviews.load_policy`) every page's status against its reviews.
+    ``catalog``: the MCP catalog the pages' MCP lines come from."""
     d = Path(pages_dir)
     rep = CheckReport()
     pages = (
@@ -402,7 +431,7 @@ def check_pages(reg: Registry, pages_dir: str | Path, policy=None) -> CheckRepor
             rep.missing.append(s.name)
             continue
         text = p.read_text(encoding="utf-8")
-        if refresh_page(text, render_page(reg, s)) != text:
+        if refresh_page(text, render_page(reg, s, catalog)) != text:
             rep.stale.append(p.name)
         rep.todo_open[p.name] = _unfilled(text)
         _review_page(p.name, text, yaml.safe_load(FRONT_RE.match(text)["fm"]), policy, rep, p)

@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Render spec: the broker agent's Claude Code configuration (.mcp.json), the example docs/broker.md
+# shows.  Fictional, like every example.
+client: claude-code
+catalog: ..
+policy: policy/ceilings.yml          # the ceilings its profiles are judged against
+npm_prefix: /var/lib/hnx/npm-prefix # an empty directory every npx launch reads its config from
+registry: ../../services.yml
+profiles:
+  - file: profile.broker-agent.json
+    profile_file: /etc/hnx/profiles/broker-agent.json
+owns: [claude-code/*.json]
+outputs:
+  - {path: claude-code/broker-agent.mcp.json}

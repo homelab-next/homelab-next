@@ -1,0 +1,30 @@
+{
+  "id": "profile:collector",
+  "persona": "persona:analyst",
+  "skills": [
+    "skill:summarise"
+  ],
+  "capabilities": [
+    "cap:records-propose"
+  ],
+  "model_role": "mdl:fast-classifier",
+  "mcp": [
+    "notes",
+    "records"
+  ],
+  "mcp_ceiling": [
+    "notes",
+    "records"
+  ],
+  "memory_scopes": [
+    "collector"
+  ],
+  "data_tier": "local-only",
+  "budgets": {
+    "max_input_tokens": 32000,
+    "max_output_tokens": 2000,
+    "max_runtime_s": 600,
+    "max_tool_calls": 20
+  },
+  "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+}

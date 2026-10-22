@@ -1,0 +1,695 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/mcp_server/1.0",
+  "title": "MCP catalog record",
+  "description": "One MCP server of the lab's MCP catalog (ADR-0024, docs/mcp-catalog.md): one YAML file per server, <catalog>/<id>.yml, the single source of truth for what the server is, where its code comes from (the launch a client starts it with is generated from that origin, never written in the record), how a client reaches it, what it may see and reach, the tools it exposes with their capability classes, its review and its lifecycle. Agent profiles grant servers by id; the capability-class table, the knowledge graph, the system pages, the status hub and every client configuration are derived from these records. Endpoints are registry names (svc:<service>), never URLs; credentials are secret-store names (secret:<name>), never values. Semantic rules JSON Schema cannot express (the id is the file name, a third-party origin carries a hash, endpoints and hosts resolve in the registry, egress agrees with the tools' classes, the review policy, grants) are checked by homelabnext.mcp.servers (`hnx mcp catalog check`).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "description",
+    "owner",
+    "status",
+    "origin",
+    "transport",
+    "runtime",
+    "egress",
+    "data_tier",
+    "tools",
+    "author"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "#/$defs/slug",
+      "description": "What a profile lists under grants.mcp; equals the file name without .yml."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "owner": {
+      "$ref": "#/$defs/slug",
+      "description": "Owning team as a slug, like a registry service's owner."
+    },
+    "status": {
+      "enum": [
+        "draft",
+        "active",
+        "deprecated",
+        "retired"
+      ],
+      "description": "draft: imported or new, not reviewed, may not be granted; active: reviewed, may be granted; deprecated: may still be granted, with a warning; retired: may not be granted."
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "description": "Why it is deprecated or retired."
+    },
+    "replaced_by": {
+      "$ref": "#/$defs/slug",
+      "description": "The catalog id to grant instead."
+    },
+    "origin": {
+      "description": "Where the server's code comes from. A third-party origin names an exact version and a hash, an image digest or a commit: never a floating version.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/origin_first_party"
+        },
+        {
+          "$ref": "#/$defs/origin_package"
+        },
+        {
+          "$ref": "#/$defs/origin_image"
+        },
+        {
+          "$ref": "#/$defs/origin_git"
+        },
+        {
+          "$ref": "#/$defs/origin_hosted"
+        },
+        {
+          "$ref": "#/$defs/origin_unknown"
+        }
+      ]
+    },
+    "transport": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/transport_stdio"
+        },
+        {
+          "$ref": "#/$defs/transport_http"
+        },
+        {
+          "$ref": "#/$defs/transport_remote"
+        }
+      ]
+    },
+    "runtime": {
+      "description": "agent-local: started by the agent's client as a subprocess under the agent's own user; hosted: a third party's hosted server (a remote transport); else the registry host and system user it runs as.",
+      "oneOf": [
+        {
+          "const": "agent-local"
+        },
+        {
+          "const": "hosted"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "host",
+            "user"
+          ],
+          "properties": {
+            "host": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,62}$(?!\\n)",
+              "description": "A registry host name."
+            },
+            "user": {
+              "type": "string",
+              "pattern": "^[a-z_][a-z0-9_-]{0,31}$(?!\\n)"
+            }
+          }
+        }
+      ]
+    },
+    "env": {
+      "type": "object",
+      "description": "Environment of a stdio server: every value a secret-store name, resolved at run time (rendered as ${HNX_SECRET_<NAME>}); non-secret values belong in settings.",
+      "propertyNames": {
+        "pattern": "^[A-Z][A-Z0-9_]*$(?!\\n)"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/secret"
+      }
+    },
+    "headers": {
+      "type": "object",
+      "description": "HTTP headers of a remote (http, sse or hosted) server: an optional scheme word and a secret-store name (Bearer secret:<name>).",
+      "propertyNames": {
+        "pattern": "^[A-Za-z][A-Za-z0-9-]{0,63}$(?!\\n)"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^(?:[A-Za-z]+ )?secret:[a-z][a-z0-9_-]*(/[a-z][a-z0-9_-]*)*$(?!\\n)"
+      }
+    },
+    "settings": {
+      "type": "object",
+      "description": "Non-secret environment of a stdio server (paths, modes), the same for every instance; a value may use {profile}, {lane} and parameter templates. A key that names a credential (TOKEN, SECRET, PASSWORD, API_KEY, ...) belongs in env as a secret reference. A key that configures the process or its launcher (PATH, LD_*, PYTHON*, NODE_*, NPM_CONFIG_*, UV_*, PIP_*, the docker CLI's DOCKER_HOST, DOCKER_CONFIG ...) is refused by check.",
+      "propertyNames": {
+        "pattern": "^[A-Z][A-Z0-9_]*$(?!\\n)"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 400
+      }
+    },
+    "timeout": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 86400,
+      "description": "Seconds a client waits for one tool call (rendered for clients that take it)."
+    },
+    "parameters": {
+      "type": "object",
+      "description": "Typed per-instance parameters: the server is declared once and instantiated per granted profile (and lane); each value comes from the render spec's grant, else the default (which may template {profile}, {lane}, {id}). A parameter with env is delivered in that environment variable (the llm-orchestrator kind's allowed_env); keys that configure the process or its launcher (PATH, LD_*, PYTHON*, NODE_*, NPM_CONFIG_*, UV_*, HOME, HERMES_HOME, ...) are refused.",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_]{0,31}$(?!\\n)"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/parameter"
+      }
+    },
+    "instance": {
+      "type": "string",
+      "pattern": "^[a-z0-9{][a-z0-9_{}-]{0,63}$(?!\\n)",
+      "description": "The name a client sees for one instance, a template over {id}, {profile}, {lane} and the parameters (default {id}). Unique per rendered home."
+    },
+    "egress": {
+      "description": "What the server's process may connect to: none, or registry services (svc:<name>), registry hosts (host:<name>) and internet (anything outside the lab).",
+      "oneOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(svc:[a-z][a-z0-9-]{0,62}|host:[a-z][a-z0-9-]{0,62}|internet)$(?!\\n)"
+          }
+        }
+      ]
+    },
+    "data_tier": {
+      "enum": [
+        "local-only",
+        "cloud-allowed"
+      ],
+      "description": "The data the server may return: local-only data may only reach a profile whose data_tier is local-only."
+    },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "The platform capabilities (cap:<name>) the server gives access to.",
+      "items": {
+        "type": "string",
+        "pattern": "^cap:[a-z][a-z0-9-]{0,62}$(?!\\n)"
+      }
+    },
+    "implements": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "homelab-next capability contracts (cap:<name>, a conformance capability) the server implements, so its conformance suite and the graph tie to it.",
+      "items": {
+        "type": "string",
+        "pattern": "^cap:[a-z][a-z0-9-]{0,62}$(?!\\n)"
+      }
+    },
+    "tools": {
+      "type": "array",
+      "description": "Every tool the server exposes, each with its capability classes (homelabnext/agent/tool_classes.yml) and whether calling it needs a person's approval. A draft may list none yet; check refuses that.",
+      "items": {
+        "$ref": "#/$defs/tool"
+      }
+    },
+    "author": {
+      "type": "string",
+      "pattern": "^(unknown|[a-z][a-z0-9_-]*:[A-Za-z0-9._@-]+)$(?!\\n)",
+      "description": "issuer:subject of whoever wrote the record, or unknown."
+    },
+    "reviews": {
+      "type": "array",
+      "description": "Inline reviews (homelabnext.reviews): by, kind, role, date, verdict, digest (`hnx reviews digest FILE`), note.",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "deprecated",
+              "retired"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "reason"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "transport": {
+            "properties": {
+              "type": {
+                "const": "stdio"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": [
+            "headers"
+          ]
+        }
+      },
+      "else": {
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "env"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "settings"
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+      "maxLength": 64
+    },
+    "secret": {
+      "type": "string",
+      "pattern": "^secret:[a-z][a-z0-9_-]*(/[a-z][a-z0-9_-]*)*$(?!\\n)"
+    },
+    "sha256_hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$(?!\\n)"
+    },
+    "origin_first_party": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "path"
+      ],
+      "properties": {
+        "kind": {
+          "const": "first-party"
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*/?$(?!\\n)",
+          "description": "The code path in this project's source tree."
+        }
+      }
+    },
+    "origin_package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "ecosystem",
+        "package",
+        "version"
+      ],
+      "properties": {
+        "kind": {
+          "const": "package"
+        },
+        "ecosystem": {
+          "enum": [
+            "npm",
+            "pypi",
+            "cargo",
+            "go"
+          ]
+        },
+        "package": {
+          "type": "string",
+          "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[A-Za-z0-9][A-Za-z0-9._/-]*$(?!\\n)",
+          "maxLength": 200
+        },
+        "version": {
+          "description": "An exact release (1.4.2, 2.0.0rc1, 0.9.1-beta.2); null until pinned. Never a range, a tag like latest, or a wildcard.",
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^v?[0-9]+\\.[0-9]+(\\.[0-9]+)*(?:[-+][0-9A-Za-z.]+|(?:a|b|rc|\\.post|\\.dev)[0-9]+)?$(?!\\n)"
+            }
+          ]
+        },
+        "extras": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$(?!\\n)"
+          },
+          "description": "pypi only: the package's extras the server is installed with (uvx --from <pkg>[<extra>,...]==<ver>)."
+        },
+        "sha256": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sha256_hex"
+            }
+          ],
+          "description": "sha256 of the released artifact (tarball, wheel); null until pinned."
+        },
+        "lock": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*$(?!\\n)",
+          "description": "A hash-locked lock file (relative to the catalog) that pins this package instead of sha256."
+        },
+        "bins": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 100,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$(?!\\n)"
+          },
+          "description": "The bin names the package declares (package.json bin; a wheel's console_scripts), as the review read them from the released artifact: transport.bin must be one of them. No launcher checks this list (npx and uvx run any command on PATH under that name), and check cannot fetch the artifact, so the list is what the review attests."
+        }
+      }
+    },
+    "origin_image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "image",
+        "digest"
+      ],
+      "properties": {
+        "kind": {
+          "const": "image"
+        },
+        "image": {
+          "type": "string",
+          "pattern": "^(?:[a-z0-9][a-z0-9.-]*(?::[0-9]{1,5})?/)?[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?$(?!\\n)",
+          "maxLength": 200,
+          "description": "Repository, with its registry host and port when it has one (registry.example:5000/team/server), and an optional tag (informational only)."
+        },
+        "digest": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$(?!\\n)"
+            }
+          ]
+        }
+      }
+    },
+    "origin_git": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "repo",
+        "commit"
+      ],
+      "properties": {
+        "kind": {
+          "const": "git"
+        },
+        "repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._@/:+-]+$(?!\\n)",
+          "maxLength": 300,
+          "description": "An https URL without credentials (git+https://host/org/repo)."
+        },
+        "commit": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$(?!\\n)"
+            }
+          ]
+        },
+        "subdirectory": {
+          "type": "string",
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*$(?!\\n)",
+          "description": "pypi only: the package's directory in the repo (git+<repo>@<commit>#subdirectory=<dir>), relative, never .. (npm installs no subdirectory of a git repo)."
+        },
+        "ecosystem": {
+          "enum": [
+            "npm",
+            "pypi"
+          ],
+          "description": "How a stdio server from this repo is installed and started (npm: npx, pypi: uvx); required to start it on stdio."
+        },
+        "bins": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 100,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$(?!\\n)"
+          },
+          "description": "The bin names the repo's package declares at that commit, as the review read them: transport.bin must be one of them (see origin_package.bins)."
+        }
+      }
+    },
+    "origin_hosted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "provider"
+      ],
+      "description": "A third party's hosted MCP server: no code of it runs in the lab, so there is nothing to pin; its transport is remote.",
+      "properties": {
+        "kind": {
+          "const": "hosted"
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9 .&-]*$(?!\\n)",
+          "description": "Who operates it (the vendor's name)."
+        }
+      }
+    },
+    "origin_unknown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "unknown"
+        },
+        "hint": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "What the importer saw (the launcher, never a value)."
+        }
+      }
+    },
+    "transport_stdio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "description": "A server a client starts as a subprocess. The record never writes the launcher: the renderer generates it from the origin (npm: npx -y --prefix=<npm_prefix> --package=<pkg>@<ver> -- <bin>; pypi: uvx --no-config --from <pkg>==<ver> <bin>; git: the same from git+<repo> at its commit; image: docker run -i --rm [-e NAME ...] <image>@<digest>; first-party: hnx <entry> or the bin), so no launcher flag can be expressed.",
+      "properties": {
+        "type": {
+          "const": "stdio"
+        },
+        "bin": {
+          "type": "string",
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*$(?!\\n)",
+          "description": "The server's entrypoint: for a package or git origin one of origin.bins (default: the single declared bin, or the package's base name when bins lists it), for a first-party server hnx or a relative path under origin.path; never an interpreter, shell or launcher. An image takes none (it runs its own entrypoint)."
+        },
+        "entry": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+          "maxLength": 64,
+          "description": "For a first-party hnx server (bin: hnx): which hnx subcommand serves MCP on stdio, from the fixed allowlist in homelabnext.mcp.servers.HNX_ENTRIES (mcp-serve: hnx mcp serve; broker-mcp: hnx broker mcp); its args may hold only that entry's flags, each with a value."
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 400
+          },
+          "description": "The server's own arguments, after the generated launch (never a launcher's; for an hnx entry only its flags); an argument that is secret:<name> (or --flag=secret:<name>) is resolved at run time; {profile_file} is the rendered profile's path; {profile}, {lane}, {id} and parameters are per instance."
+        }
+      }
+    },
+    "transport_http": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "endpoint"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "streamable-http",
+            "sse"
+          ],
+          "description": "sse is the legacy HTTP+SSE transport."
+        },
+        "endpoint": {
+          "type": "string",
+          "pattern": "^svc:[a-z][a-z0-9-]{0,62}$(?!\\n)",
+          "description": "The registry service it is served by; the URL comes from the registry."
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/[A-Za-z0-9._~/%:@+-]*$(?!\\n)",
+          "maxLength": 200,
+          "default": "/mcp"
+        }
+      }
+    },
+    "transport_remote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "url"
+      ],
+      "description": "A third party's hosted MCP server, reached over the internet at an explicit https URL (a lab server is reached by registry name instead: streamable-http or sse with an endpoint). Its credentials go only in headers as secret: names.",
+      "properties": {
+        "type": {
+          "const": "remote"
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 300,
+          "pattern": "^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?(/[A-Za-z0-9._~/%-]*)?$(?!\\n)",
+          "description": "https only, a DNS host name (no userinfo, no query, no fragment, no IP literal); check refuses a private or lab address."
+        },
+        "protocol": {
+          "enum": [
+            "streamable-http",
+            "sse"
+          ],
+          "default": "streamable-http",
+          "description": "sse is the legacy HTTP+SSE transport."
+        }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "classes",
+        "approval"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$(?!\\n)"
+        },
+        "classes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "read",
+              "record-write",
+              "exec",
+              "file-write",
+              "egress",
+              "credential"
+            ]
+          }
+        },
+        "approval": {
+          "type": "boolean",
+          "description": "Calling it needs a person's approval (through the broker or the client)."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 300
+        }
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$(?!\\n)"
+        },
+        "enum": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "pattern": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "A regular expression every value must match in full."
+        },
+        "default": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "required": {
+          "type": "boolean",
+          "description": "No default: every grant must give a value."
+        }
+      }
+    }
+  }
+}

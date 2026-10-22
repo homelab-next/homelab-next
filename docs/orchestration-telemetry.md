@@ -139,7 +139,7 @@ under the secret name. Generating it from the gateway spec is a follow-up.
 ## The hub page
 
 `hnx status serve --orchestration DB` adds the Orchestration page (menu entry `panel:
-orchestration`, views schema 1.8):
+orchestration`, views schema 1.9):
 
 - **By profile and backend** (and lane): jobs, outcomes, p50/p95 wall time and queue wait, tokens
   in/out, cache-read share, cost, retries and auto-retries, cloud fallbacks, input vs output size

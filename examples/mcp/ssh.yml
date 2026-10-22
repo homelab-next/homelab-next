@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: ssh
+description: Runs commands on lab hosts over SSH.
+owner: platform-team
+status: active
+origin:
+  kind: package
+  ecosystem: npm
+  package: '@example/mcp-ssh'
+  version: 2.0.1
+  sha256: 6012493b940814aec11f6a014cd72bb6fb495de24b3f018429dcac80f70c68c4
+  bins: [mcp-ssh]
+transport:
+  type: stdio
+runtime: agent-local
+env:
+  SSH_KEY: secret:mcp/ssh-key
+egress: ['host:runtime-core', 'host:mon-core']
+data_tier: local-only
+tools:
+- {name: ssh_exec, classes: [exec], approval: true}
+author: agent:example-builder
+reviews:
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:acceb1403855'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:acceb1403855'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:acceb1403855'}
