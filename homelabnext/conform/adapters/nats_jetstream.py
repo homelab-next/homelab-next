@@ -22,7 +22,9 @@ How the contract maps onto JetStream:
   and a no-ack publish returns no sequence, so a prefix is required.)  With ``provision=False``
   the bus creates no stream: both (the stream and its DLQ) must exist already, each with a
   ``max_bytes`` limit, or the bus refuses to open (a long-running consumer that creates unbounded
-  streams lets a flood fill the server's disk).
+  streams lets a flood fill the server's disk); and when ``duplicate_window`` is given, the
+  stream's own window must be at least that long, or the bus refuses to open too (the window is
+  the stream's, set when it was provisioned: a client's setting it asks for is otherwise a no-op).
 * **publish** is a request to the subject; the PubAck carries the stream sequence.  ``msg_id`` is
   the ``Nats-Msg-Id`` header; a repeat inside the stream's ``duplicate_window`` gets the PubAck of
   the original (``"duplicate": true``) with the original sequence.
@@ -102,6 +104,8 @@ _ADVISORY_TERM = "$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED"
 _NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _SETTLE = {"ack": b"+ACK", "nack": b"-NAK", "term": b"+TERM"}
 _NS = 1_000_000_000
+#: nats-server's duplicate window for a stream created without one (two minutes)
+_DEFAULT_DUPLICATE_WINDOW_NS = 120 * _NS
 _NOT_FOUND = {"stream": 10059, "consumer": 10014, "message": 10037}
 _PERMISSION_DENIED = re.compile(r'Permissions Violation for Publish to "([^"]+)"', re.I)
 
@@ -301,7 +305,7 @@ class JetStreamBus:
         stream: str,
         subject_prefix: str,
         ack_wait: float = 3.0,
-        duplicate_window: float = 3600.0,
+        duplicate_window: float | None = None,
         storage: str = "file",
         request_timeout: float = 5.0,
         fetch_timeout: float = 1.0,
@@ -318,7 +322,7 @@ class JetStreamBus:
         _check_subject(subject_prefix, pattern=False)
         if storage not in ("file", "memory"):
             raise EventsError("storage must be 'file' or 'memory'")
-        if ack_wait <= 0 or duplicate_window < 0.1:
+        if ack_wait <= 0 or (duplicate_window is not None and duplicate_window < 0.1):
             raise EventsError("ack_wait must be positive and duplicate_window >= 0.1s")
         if replay_s is not None and replay_s <= 0:
             raise EventsError("replay_s must be positive (or None: deliver what is new)")
@@ -345,14 +349,14 @@ class JetStreamBus:
             "num_replicas": 1,
         }
         if not provision:
-            self._require_stream(stream)
+            self._require_stream(stream, duplicate_window=duplicate_window)
             self._require_stream(self.dlq_stream)
             return
         self._ensure_stream(
             {
                 "name": stream,
                 "subjects": [f"{subject_prefix}.>"],
-                "duplicate_window": int(duplicate_window * _NS),
+                "duplicate_window": int((duplicate_window or 3600.0) * _NS),
                 **base,
             }
         )
@@ -378,15 +382,25 @@ class JetStreamBus:
         if self.api(f"STREAM.INFO.{name}", missing="stream") is None:
             self.api(f"STREAM.CREATE.{name}", config)
 
-    def _require_stream(self, name: str) -> None:
+    def _require_stream(self, name: str, *, duplicate_window: float | None = None) -> None:
         info = self.api(f"STREAM.INFO.{name}", missing="stream")
         if info is None:
             raise EventsError(f"stream {name!r} does not exist; provision it (with limits) first")
-        if int(info.get("config", {}).get("max_bytes", -1)) <= 0:
+        config = info.get("config", {})
+        if int(config.get("max_bytes", -1)) <= 0:
             raise EventsError(
                 f"stream {name!r} has no max_bytes limit; a flood would fill the disk, so this "
                 "client refuses it"
             )
+        if duplicate_window is not None:
+            have = int(config.get("duplicate_window", _DEFAULT_DUPLICATE_WINDOW_NS)) / _NS
+            if have < duplicate_window:
+                raise EventsError(
+                    f"stream {name!r} dedupes message ids for {have:g}s, shorter than the "
+                    f"duplicate_window {duplicate_window:g}s this client is configured for; raise "
+                    f"the stream's (nats stream edit {name} --dupe-window <duration>) or lower "
+                    "this one"
+                )
 
     # ---------------------------------------------------------------- contract
     def publish(self, subject: str, data: bytes, *, msg_id: str | None = None) -> int:
@@ -771,7 +785,7 @@ def make(
     subject_prefix: str | None = None,
     scratch: bool = True,
     ack_wait: float = 3.0,
-    duplicate_window: float = 3600.0,
+    duplicate_window: float | None = None,
     storage: str = "file",
     request_timeout: float = 5.0,
     fetch_timeout: float = 1.0,
@@ -794,7 +808,9 @@ def make(
     ``user`` and ``password_secret`` (a secret name, never a value) authenticate the connection;
     the password goes only over ``tls://`` (``ca_file``: a private CA), to a loopback ``nats://``,
     or with an explicit ``allow_plaintext``.
-    ``provision=False`` creates no stream: both must exist, each with a ``max_bytes`` limit.
+    ``provision=False`` creates no stream: both must exist, each with a ``max_bytes`` limit, and a
+    stream whose ``duplicate_window`` is shorter than a given ``duplicate_window`` is refused
+    (a stream this bus provisions gets ``duplicate_window``, by default one hour).
     A ``user``'s replies arrive on ``inbox_prefix``, by default ``_INBOX.<user>``, so the server
     can grant each user its own inbox instead of ``_INBOX.>`` (where one could read another's).
     ``replay_s``: a durable this bus creates starts that many seconds back (default: only what is

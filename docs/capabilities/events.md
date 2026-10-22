@@ -199,7 +199,7 @@ Each is a deliberately broken fake (`hnx conform run events --target broken:<mut
 The `events` contract on NATS JetStream (pinned: nats 2.10 with `-js`).
 
 - Target file: [`compose/lab-in-a-box/targets/events.yml`](../../compose/lab-in-a-box/targets/events.yml) (target `lab-events`)
-- Factory: `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float=3600.0, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', provision: bool=True, wire: Wire | None=None, user: str | None=None, password_secret: str | None=None, client_name: str='hnx-conform', allow_plaintext: bool=False, ca_file: str | None=None, inbox_prefix: str | None=None, replay_s: float | None=None) -> JetStreamBus`
+- Factory: `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float | None=None, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', provision: bool=True, wire: Wire | None=None, user: str | None=None, password_secret: str | None=None, client_name: str='hnx-conform', allow_plaintext: bool=False, ca_file: str | None=None, inbox_prefix: str | None=None, replay_s: float | None=None) -> JetStreamBus`
 - Config in the target: `{user: hnx-conformance, password_secret: 'secret:events/conformance', allow_plaintext: true, ack_wait: 3.0, duplicate_window: 3600.0, dlq_wait: 3.0}`
 
 **Product limits recorded by the adapter:**
@@ -239,7 +239,9 @@ How the contract maps onto JetStream:
   and a no-ack publish returns no sequence, so a prefix is required.)  With `provision=False`
   the bus creates no stream: both (the stream and its DLQ) must exist already, each with a
   `max_bytes` limit, or the bus refuses to open (a long-running consumer that creates unbounded
-  streams lets a flood fill the server's disk).
+  streams lets a flood fill the server's disk); and when `duplicate_window` is given, the
+  stream's own window must be at least that long, or the bus refuses to open too (the window is
+  the stream's, set when it was provisioned: a client's setting it asks for is otherwise a no-op).
 * **publish** is a request to the subject; the PubAck carries the stream sequence.  `msg_id` is
   the `Nats-Msg-Id` header; a repeat inside the stream's `duplicate_window` gets the PubAck of
   the original (`"duplicate": true`) with the original sequence.
@@ -309,7 +311,7 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
    def make(**config) -> EventBus: ...
    ```
 
-   The factory this repository ships: `homelabnext.conform.adapters.nats_jetstream:make` is `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float=3600.0, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', provision: bool=True, wire: Wire | None=None, user: str | None=None, password_secret: str | None=None, client_name: str='hnx-conform', allow_plaintext: bool=False, ca_file: str | None=None, inbox_prefix: str | None=None, replay_s: float | None=None) -> JetStreamBus`.
+   The factory this repository ships: `homelabnext.conform.adapters.nats_jetstream:make` is `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float | None=None, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', provision: bool=True, wire: Wire | None=None, user: str | None=None, password_secret: str | None=None, client_name: str='hnx-conform', allow_plaintext: bool=False, ca_file: str | None=None, inbox_prefix: str | None=None, replay_s: float | None=None) -> JetStreamBus`.
 
 3. **Describe the target** (YAML; `features` lists only what the product really offers; `waive:` takes SHOULD check ids with a reason, never a MUST):
 

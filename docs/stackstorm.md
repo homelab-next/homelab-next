@@ -511,7 +511,7 @@ publish):
 
 ```json
 {"name": "HOMELABNEXT", "subjects": ["lab.>"], "retention": "limits", "discard": "old",
- "storage": "file", "num_replicas": 1, "duplicate_window": 3600000000000,
+ "storage": "file", "num_replicas": 1, "duplicate_window": 86400000000000,
  "max_age": 2592000000000000, "max_bytes": 1073741824, "max_msgs": 1000000, "max_msg_size": 262144}
 ```
 
@@ -523,7 +523,10 @@ publish):
  "max_age": 2592000000000000, "max_bytes": 268435456, "max_msgs": 100000}
 ```
 
-(`nats stream add --config <file>`; durations are nanoseconds: 30 days, one hour.)
+(`nats stream add --config <file>`; durations are nanoseconds: 30 days, one day.) The duplicate
+window is the stream's: the broker's relay (docs/broker.md) dedupes a republish after a crash only
+inside it, and refuses to start on a stream whose window is shorter than its target's
+`duplicate_window` (one day), so a setting that would do nothing is a configuration error.
 
 A dead letter is an advisory that names the original's stream sequence, so the original must
 still be in the event stream to be read back: keep the DLQ's `max_age` no longer than the event

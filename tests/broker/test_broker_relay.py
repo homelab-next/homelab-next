@@ -592,6 +592,40 @@ def test_a_server_that_never_asks_for_tls_never_sees_the_connect():
     assert sent[:1] == b"\x16"  # a TLS handshake record (ClientHello), before anything else
 
 
+def test_a_stream_whose_dedup_window_is_shorter_than_configured_is_refused():
+    """COR7: the relay target's duplicate_window did nothing on a standing stream (the window is
+    the stream's; provision=False only checked max_bytes).  Asking for a day on a stream that
+    keeps message ids for an hour is a configuration error now, not a silent no-op."""
+    server = FakeJetStreamWire()
+    nj.provision_streams(
+        Wire(server), stream=STREAM, subject_prefix=PREFIX, max_bytes=1 << 30,
+        duplicate_window=3600.0,
+    )  # fmt: skip
+    kw = {"wire": Wire(server), "scratch": False, "provision": False, "stream": STREAM,
+          "subject_prefix": PREFIX}  # fmt: skip
+    with pytest.raises(nj.EventsError, match="dedupes message ids for 3600s"):
+        nj.make(duplicate_window=86400.0, **kw)
+    nj.make(duplicate_window=3600.0, **kw)
+    nj.make(**kw)  # a client that does not publish (the bridge) asks for nothing
+
+
+def test_the_documented_and_lab_windows_agree():
+    """The relay targets (docs/broker.md, the lab's) ask for no more than the streams they are
+    documented or provisioned with keep."""
+    import re
+
+    import yaml
+
+    target = yaml.safe_load((ROOT / "compose/lab-in-a-box/broker/events-relay.yml").read_text())
+    lab = target["capabilities"]["events"]["config"]["duplicate_window"]
+    assert lab <= 86400.0  # the lab's stream: provision_streams' default (broker_e2e.py)
+    doc = (ROOT / "docs" / "broker.md").read_text()
+    [relay_doc] = re.findall(r"duplicate_window: ([0-9.]+)", doc)
+    stack = (ROOT / "docs" / "stackstorm.md").read_text()
+    [stream_ns] = re.findall(r'"duplicate_window": ([0-9]+)', stack)
+    assert float(relay_doc) <= int(stream_ns) / 1e9
+
+
 # ---------------------------------------------------------------- poison, malformed files, --skip
 class Refuse:
     """A bus wrapper refusing, for good, the publishes whose msg id is in ``ids`` (``None``:

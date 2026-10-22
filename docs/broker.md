@@ -318,7 +318,9 @@ decision, and `hnx broker serve` keeps needing no network at all.
   republishes the same id on restart, and the stream's `duplicate_window` answers with the
   original sequence. Past that window the bus stores it twice; consumers dedupe by event id anyway
   (the StackStorm runtime's `admit` remembers ids for a day). Make the window at least as long as
-  you expect a relay to stay down after a crash.
+  you expect a relay to stay down after a crash. The window is the stream's (set when it is
+  provisioned); the target's `duplicate_window` is what the relay requires of it, and a stream
+  whose window is shorter is refused at start (exit 2), never silently weaker.
 * **Backoff.** A refused connection or a missing PubAck drops the connection and waits 1 s,
   doubling to `--backoff-max` (60 s), before retrying the same event.
 * **Nothing secret logged.** Logs and the `--stats-file` (written atomically, a `poll-file` status
