@@ -84,7 +84,7 @@ def build(cat: servers.Catalog, profiles: Iterable[Mapping[str, Any]] = ()) -> d
                 "where": (
                     f"{t.get('endpoint')}{t.get('path', '/mcp')}"
                     if t.get("endpoint")
-                    else f"{t.get('command')} ({'agent-local' if rec.get('runtime') == 'agent-local' else 'runs on its host'})"
+                    else f"{servers.launch_command(rec)} ({'agent-local' if rec.get('runtime') == 'agent-local' else 'runs on its host'})"
                 ),
                 "classes": classes.get(sid, []),
                 "tools": len(tools),

@@ -79,11 +79,10 @@ def test_drafts_carry_no_secret_and_the_report_names_each_one(tmp_path, capsys):
     assert notes["origin"] == {"kind": "package", "ecosystem": "npm", "package": "@example/notes-mcp",
                                "version": "1.4.0", "sha256": None}  # fmt: skip
     assert written["search"]["env"] == {"SEARCH_KEY": "secret:mcp/search-key"}
-    assert written["search"]["transport"]["args"] == [
-        "example-search-mcp",
-        "--api-key",
-        "secret:mcp/search-arg-3",
-    ]
+    assert written["search"]["transport"] == {
+        "type": "stdio",
+        "args": ["--api-key", "secret:mcp/search-arg-2"],
+    }
     assert "search: also in claude_desktop_config.json; kept the first" in report.out
     lake = written["remote-lake"]
     assert lake["transport"] == {
@@ -94,9 +93,8 @@ def test_drafts_carry_no_secret_and_the_report_names_each_one(tmp_path, capsys):
     assert lake["headers"] == {"Authorization": "Bearer secret:mcp/remote-lake-authorization"}
     assert "lab.example" not in (out / "remote-lake.yml").read_text()  # the URL is not copied
     assert written["box"]["origin"]["digest"] == "sha256:" + "a" * 64
-    assert written["local-tool"]["transport"]["args"] == [
-        "--password=secret:mcp/local-tool-password"
-    ]
+    # a path is not a launch a record can name: nothing of its command line is copied
+    assert written["local-tool"]["transport"] == {"type": "stdio"}
     assert written["local-tool"]["origin"]["kind"] == "unknown"
     assert written["proj"]["origin"] == {"kind": "first-party", "path": "homelabnext/"}
     assert written["events"]["transport"]["type"] == "sse"
@@ -141,10 +139,10 @@ SHAPES = {
         "remote-hdr": {"command": "npx", "args": ["-y", "mcp-remote@1.2.3", "https://mcp.lab.example/sse",
                                                   "--header", "Authorization: Bearer fakeTok3n"]},
         "zap": {"url": "https://zap.lab.example/api/mcp/s/fakePathSecret123/mcp?key=fakeq"},
-        "uvxgit": {"command": "uvx", "args": ["--from", "git+https://fakeghp9876543210@git.lab.example/org/repo", "srv"]},
-        "uvxgit2": {"command": "uvx", "args": ["--from", "git+https://user:fakepw@git.lab.example/org/repo", "srv"]},
+        "uvxgit": {"command": "uvx", "args": ["--from", "git+https://fakeghp9876543210@git.lab.example/org/srv", "srv"]},
+        "uvxgit2": {"command": "uvx", "args": ["--from", "git+https://user:fakepw@git.lab.example/org/srv", "srv"]},
         "dock": {"command": "docker", "args": ["run", "-i", "--rm", "-e", "API_KEY=fakeshort", "-e", "LOG_LEVEL=debug", "img/x"]},
-        "flags": {"command": "srv", "args": ["--github-token", "fakeghpshort", "--db-password=fakehunter2",
+        "flags": {"command": "npx", "args": ["-y", "@example/flags-mcp@1.0.0", "--github-token", "fakeghpshort", "--db-password=fakehunter2",
                                              "--client-secret", "fakeabc"]},
         "shc": {"command": "sh", "args": ["-c", "GITHUB_TOKEN=fakeAbc123 npx foo"]},
         "envs": {"command": "srv", "env": {"DB_PASSPHRASE": "fakepp", "AUTH": "fakeauthval",
@@ -171,25 +169,29 @@ def test_every_credential_shape_is_stripped_and_pinned_packages_are_kept(tmp_pat
     assert rec["flags"]["transport"]["args"] == [
         "--github-token", "secret:mcp/flags-arg-2", "--db-password=secret:mcp/flags-db-password",
         "--client-secret", "secret:mcp/flags-arg-5"]  # fmt: skip
+    assert rec["flags"]["origin"]["package"] == "@example/flags-mcp"
     assert rec["remote-hdr"]["transport"]["args"][-1] == (
         "Authorization: Bearer secret:mcp/remote-hdr-header-authorization"
     )
-    assert rec["uvxgit"]["origin"] == {
-        "kind": "git", "repo": "https://git.lab.example/org/repo", "commit": None}  # fmt: skip
-    assert rec["uvxgit2"]["transport"]["args"][1] == "git+https://git.lab.example/org/repo"
+    assert rec["uvxgit"]["origin"] == {"kind": "git", "ecosystem": "pypi",
+        "repo": "https://git.lab.example/org/srv", "commit": None}  # fmt: skip
+    assert rec["uvxgit2"]["origin"]["repo"] == "https://git.lab.example/org/srv"
+    assert rec["uvxgit2"]["transport"] == {"type": "stdio", "bin": "srv"}
     assert rec["dock"]["env"] == {"API_KEY": "secret:mcp/dock-api-key"}
-    assert rec["dock"]["transport"]["args"][4:7] == ["API_KEY", "-e", "LOG_LEVEL=debug"]
-    assert rec["shc"]["transport"]["args"] == ["-c", "secret:mcp/shc-arg-2"]
+    assert rec["dock"]["settings"] == {"LOG_LEVEL": "debug"}  # the runner's -e: the environment
+    assert rec["dock"]["transport"] == {"type": "stdio"}
+    assert rec["shc"]["transport"] == {"type": "stdio"}  # a shell line: not mapped, not copied
     assert rec["envs"]["settings"] == {"DATA_DIR": "/srv/data"}  # an allowlisted key only
     assert set(rec["envs"]["env"]) == {"DB_PASSPHRASE", "AUTH", "OPENAI_KEY", "PAT", "CONN", "SA",
                                        "NESTED"}  # fmt: skip
     assert "path" not in rec["zap"]["transport"]
     assert rec["desc"]["description"].startswith("Imported from cfg.json")
     # a pinned package spec is the package, never a secret
-    assert rec["pinned"]["transport"]["args"] == ["--from", "example-notes-mcp==1.2.0", "notes-mcp"]
-    assert rec["pinned2"]["transport"]["args"][0] == "mcp-server-git==0.6.2"
+    assert rec["pinned"]["transport"] == {"type": "stdio", "bin": "notes-mcp"}
+    assert rec["pinned2"]["transport"] == {"type": "stdio", "args": ["--repository", "/srv/repo"]}
     assert rec["pinned2"]["origin"]["version"] == "0.6.2"
-    assert rec["pinned3"]["transport"]["args"] == ["-y", "@example/mcp-github@3.2.0"]
+    assert rec["pinned3"]["transport"] == {"type": "stdio"}
+    assert rec["pinned3"]["origin"]["version"] == "3.2.0"
     assert not importer.looks_secret("example-notes-mcp==1.2.0")
 
 

@@ -33,7 +33,8 @@ owner: platform-team
 status: active                   # draft | active | deprecated | retired (+ reason, replaced_by)
 origin:                          # first-party path | package | image | git | unknown
   {kind: package, ecosystem: pypi, package: example-notes-mcp, version: 1.2.0, sha256: <64 hex>}
-transport: {type: stdio, command: uvx, args: [--from, example-notes-mcp==1.2.0, notes-mcp]}
+transport: {type: stdio, bin: notes-mcp, args: []}   # the server's entrypoint and its own args:
+# the launch (uvx --from example-notes-mcp==1.2.0 notes-mcp) is generated from the origin
 # or {type: streamable-http, endpoint: svc:lake-query, path: /mcp}  -- a registry name, never a URL
 runtime: agent-local             # or {host: <registry host>, user: <system user>}
 env: {NOTES_TOKEN: secret:mcp/notes-token}      # credentials: secret names only
@@ -72,19 +73,29 @@ the registry cross-references were not checked.
   npm a full `x.y.z`) with a sha256 or a lock file (relative to the catalog, existing, naming the
   package), an image digest, or a 40-hex commit; `kind: unknown` fails; a first-party path exists
   in the checkout;
-- the pin is what runs, read the way each launcher reads its arguments (`homelabnext/mcp/launch.py`):
-  the **launch position** (the first positional after the launcher's own flags, or the value of
-  `--package`/`--from`/`--spec`) is `package@version` for `npx`/`bunx`, `package==version` (or
-  `@version`) for `uvx`/`uv tool run`/`pipx run`, `image@digest` for `docker run`/`podman run`
-  and `git+<repo>@<commit>` (npm: `#<commit>`) for a git origin; a first-party server starts with
-  `hnx` or a path in the checkout. The pinned spec merely appearing somewhere is not enough
-  (`npx -y other@latest pinned@1.0.0` runs `other`). Refused: any other launcher for the origin's
-  kind (`npm exec`, `pnpm dlx`, `env`, `sh -c`, `node`, `python -m`, `nerdctl`; a `cargo` or `go`
-  package, which no launcher here pins: run it from an image), an unknown flag before the launch
-  position (it may take a value), and the flags that add or redirect what runs (`--with*`, every
-  index flag, `--registry`, `--call`, `--pip-args`, `--entrypoint`). A leading `v` in a version is
-  not a difference. The `sha256` itself is **declarative**: it records the reviewed artifact, but
-  no launcher verifies it when it fetches the package;
+- the pin is what runs, because the record does not write the launch: it names its origin, the
+  server's entrypoint (`transport.bin`) and the server's own `args`, and render **generates** the
+  launch from the origin with fixed flags (`servers.launch`): npm `npx -y -- <package>@<version>`
+  (with a bin: `npx -y --package=<package>@<version> -- <bin>`), pypi `uvx --from
+  <package>==<version> <bin>` (bin defaults to the package name), git the same from
+  `git+<repo>@<commit>` (npm: `#<commit>`; the origin names its `ecosystem`, its repo is an https
+  URL without credentials, and it names a bin), image `docker run -i --rm [-e NAME ...]
+  <repository>@<digest>` (one `-e` per env, setting and parameter env key; no bin: the image
+  runs its own entrypoint), first-party the bin (`hnx`, or a relative path under `origin.path`).
+  The launchers are bare names resolved on `PATH`. A record therefore cannot carry a launcher
+  flag (`--python <path>`, `--with`, an index, `--registry`, `--privileged`, `-v /:/host`,
+  `--network host`, `--entrypoint`): there is no field for one, and its `args` follow the bin
+  (after npx's `--`, after uvx's command), so they reach the server, never the launcher. A
+  package's bin is the command it installs: a bare name sharing a word with the package, never
+  an interpreter, shell, wrapper or launcher (`node`, `python3.12`, `sh`, `env`, `curl` ...), so
+  `npx -p PIN node -e ...` cannot be written. Refused: a `cargo` or `go` package (no generated
+  launch pins one: run it from an image). A leading `v` in a version is not a difference; an npm
+  version is a full `x.y.z`. Docker is the one container runner the launch names (podman users
+  install its `docker` alias), and no record declares a mount, a published port or a network:
+  none of the examples needs one, so there is no field for it. The `sha256` itself is
+  **declarative**: it records the reviewed artifact, but no launcher verifies it when it fetches
+  the package, and `npx` still reads a project `.npmrc` (and `uvx` a `uv.toml`) in the client's
+  working directory;
 - every tool is classed with a declared class, and the server lists at least one;
 - egress agrees with the classes: a tool classed `egress` needs an egress other than `none`, and
   `internet` needs an egress tool;
@@ -97,7 +108,7 @@ the registry cross-references were not checked.
   reference, nothing looks like a token (a token prefix such as `ghp_`, or a long, mixed,
   high-entropy value, `/`-separated base64 included), no URL carries one (userinfo, a
   credential-named query parameter, a token-like path segment such as a webhook's), no JSON
-  argument, shell line (`sh -c`) or container `-e KEY=VALUE` carries one, `secret:` appears only
+  argument or `KEY=VALUE` carries one, `secret:` appears only
   as a whole argument, `--flag=secret:<name>` or `Header: [Scheme ]secret:<name>`, and `$`
   (`${VAR}`, `$(cmd)`, which a client would expand) appears in neither. Not credentials: a switch
   (`--no-auth`), a flag about one (`--token-file`, `--secret-name`, `--session-timeout`), a path
@@ -291,22 +302,27 @@ It reads `mcpServers` (Claude Code, Claude Desktop, also under `projects` in `~/
   named `mcp/<name>-<key>` unless its key names a path, mode, level and the like and nothing in
   the value looks like a credential (those are kept as `settings`, and the report asks you to
   confirm each); a `${VAR}` becomes a `secret:` name (a rendered `${HNX_SECRET_MCP_NOTES_TOKEN}`
-  becomes `secret:mcp/notes-token` again; `${VAR:-default}` names `VAR`). In the arguments,
-  everything check would refuse as a literal credential (the same rules, above) becomes a
-  reference, and more, failing closed: a container runner's `-e KEY=VALUE` is moved to `env`
-  unless it is an allowlisted setting, any argument carrying a credential marker
-  (`Authorization:`, `password`, a `KEY=VALUE` in a shell line) becomes a reference, and a URL
-  keeps only its scheme, host, port and a plain MCP path (userinfo, query and any other path are
-  removed, in arguments and in `*_URL` settings alike). A launcher's package spec (`name==1.2.0`,
-  `@scope/name@1.2.0`), read at its launch position, is never mistaken for one, and the value of a
-  flag before it (`npx --token X pkg@1.0.0`) is never taken for the package. A path is kept as a
-  setting whatever its key (it says where a credential is, never what it is). The
-  report lists each reference by server and key with the name to store it under and never prints
-  a value; a config that does not parse is reported by file, line and column only. The entry's
-  own description is not copied;
-- the origin is guessed from the launcher's launch position, read as check reads it (`npx`,
-  `uvx`, `uv tool run`, `pipx run`, `docker run`; `git+https://` as a git origin) and never pinned: no hash is invented, so check fails until you add the version
-  and sha256, the image digest or the commit; anything else is `kind: unknown`;
+  becomes `secret:mcp/notes-token` again; `${VAR:-default}` names `VAR`). In the
+  server's own arguments, everything check would refuse as a literal credential (the same rules,
+  above) becomes a reference, and more, failing closed: any argument carrying a credential
+  marker (`Authorization:`, `password`) becomes a reference, and a URL keeps only its scheme,
+  host, port and a plain MCP path (userinfo, query and any other path are removed, in arguments
+  and in `*_URL` settings alike). A path is kept as a setting whatever its key (it says where a
+  credential is, never what it is). The report lists each reference by server and key with the
+  name to store it under and never prints a value; a config that does not parse is reported by
+  file, line and column only. The entry's own description is not copied;
+- the launch is **mapped, never copied**: the command line is read the way its launcher reads
+  it (`npx`/`bunx`, `uvx`, `uv tool run`, `pipx run`, `docker run`/`podman run`, `hnx`;
+  `homelabnext/mcp/launch.py`) and becomes the origin its launch position names (a package, a
+  `git+https://` repo without its userinfo, an image; never pinned: no hash is invented, so check
+  fails until you add the version and sha256, the image digest or the commit), the bin (the
+  command after `--from`/`--spec`/`--package`) and the server's own arguments. Every launcher
+  flag (`--python`, `--with`, an index, `-v`, `--privileged` ...) is dropped and named in the
+  report; a container runner's `-e KEY=VALUE` becomes a setting when it is an allowlisted one,
+  else an `env` secret, and `-e KEY` an `env` secret. What it cannot map (a shell, `env`, an
+  interpreter, a path, `npm exec`, an unknown flag before the launch position, `--entrypoint`, a
+  bin that is not the package's own such as `npx -p PKG node -e ...`) becomes `kind: unknown`
+  with none of its arguments copied;
 - a remote server's URL is not copied: its endpoint becomes `svc:<first label of the host>` for
   you to correct to the registry name, and its path is kept only when it is a plain MCP path
   (`/mcp`, `/sse`, ...);

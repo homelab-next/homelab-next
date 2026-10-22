@@ -13,8 +13,6 @@ origin:
   sha256: e1e7a430ca8aa6f862e6519bd82840c81214edd2cbbcfc113fe4da687839b28f
 transport:
   type: stdio
-  command: npx
-  args: [-y, '@example/mcp-shell@1.4.2']
 runtime: agent-local
 egress: none
 data_tier: local-only
@@ -22,6 +20,6 @@ tools:
 - {name: run_command, classes: [exec], approval: true}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:cd6eb7bbbc0f'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:cd6eb7bbbc0f'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:cd6eb7bbbc0f'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:db5f4887d420'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:db5f4887d420'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:db5f4887d420'}

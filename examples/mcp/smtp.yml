@@ -13,8 +13,6 @@ origin:
   sha256: a00a815302e85643d3e81a4e7ec33cf963bf2c682da68cffd72a8590031fdca4
 transport:
   type: stdio
-  command: npx
-  args: [-y, '@example/mcp-smtp@1.0.0']
 runtime: agent-local
 env:
   SMTP_PASSWORD: secret:mcp/smtp-password
@@ -24,6 +22,6 @@ tools:
 - {name: send_email, classes: [egress], approval: true}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:af994d72a782'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:af994d72a782'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:af994d72a782'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:5c82b68302df'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:5c82b68302df'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:5c82b68302df'}

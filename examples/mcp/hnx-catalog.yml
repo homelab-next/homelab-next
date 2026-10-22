@@ -11,7 +11,7 @@ origin:
   path: homelabnext/mcp/
 transport:
   type: stdio
-  command: hnx
+  bin: hnx
   args: [mcp, serve, --scope-from-profile, '{profile_file}']
 runtime: agent-local
 egress: none
@@ -29,6 +29,6 @@ tools:
 - {name: terms, classes: [read], approval: false}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:dd57032825d8'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:dd57032825d8'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:dd57032825d8'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:b451b9c84ecd'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:b451b9c84ecd'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:b451b9c84ecd'}

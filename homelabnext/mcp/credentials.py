@@ -23,9 +23,13 @@ import).
   ``gpt-4o-mini-2024-07-18``), a ULID or UUID, a package spec and an image digest do not;
 * a **URL** carries one in its userinfo, a credential-named query parameter, or a path segment or
   query value that looks like a token (a webhook);
-* an **argument** also carries one in a JSON object with a credential-named key, in a container
-  runner's ``-e KEY=VALUE`` whose setting would be refused, and in a shell line (``sh -c``) whose
-  own words would be found.
+* an **argument** also carries one in a JSON object with a credential-named key, and in a
+  ``KEY=VALUE`` whose setting would be refused.
+
+The arguments scanned are a server's own: a record never writes a launcher, a shell line or a
+container runner's flags (:func:`homelabnext.mcp.servers.launch` generates the launch), and the
+importer does not map a command line it cannot read.  This is defense in depth: ``leak_scan`` and
+gitleaks guard the repository, and a credential belongs in ``env`` as a ``secret:`` reference.
 """
 
 from __future__ import annotations
@@ -33,12 +37,9 @@ from __future__ import annotations
 import json
 import math
 import re
-import shlex
 from collections.abc import Iterable
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, unquote, urlsplit
-
-from . import launch
 
 #: a key or flag that names a credential (substring: ``GITHUBTOKEN``, ``DB_PASSWORD``)
 SECRET_KEY = re.compile(r"TOKEN|SECRET|PASSW|API_?KEY|PRIVATE|CREDENTIAL|COOKIE|SESSION", re.I)
@@ -70,10 +71,6 @@ AUTH_METHODS = frozenset(
 )  # fmt: skip
 #: a flag whose next argument is an HTTP header (``Name: value``)
 HEADER_FLAGS = ("--header", "-H")
-#: a container runner's flags whose value is ``KEY=VALUE`` (or ``KEY``)
-RUNNER_ENV_FLAGS = ("-e", "--env")
-#: shells whose ``-c`` argument is a command line
-SHELLS = ("sh", "bash", "zsh", "dash", "ksh", "fish", "busybox")
 #: a package spec as a launcher takes it (``name==1.2.0``, ``@scope/name@1.2.0``): never a secret
 PACKAGE_SPEC = re.compile(
     r"^(@[a-z0-9][a-z0-9._-]*/)?[A-Za-z0-9][A-Za-z0-9._-]*(==|@)v?[0-9][A-Za-z0-9._+-]*$"
@@ -270,33 +267,20 @@ class Finding:
     index: int
     #: ``dollar`` (a ``$`` a client would expand), ``inline`` (``secret:`` inside a value),
     #: ``flag-value`` (``--token=X``), ``after-flag`` (``--token X``: the value), ``header``
-    #: (``--header 'Authorization: ...'``), ``env`` (a runner's ``-e KEY=VALUE``), ``shell``
-    #: (a ``-c`` line), ``value`` (a token, a URL or JSON carrying one)
+    #: (``--header 'Authorization: ...'``), ``env`` (``KEY=VALUE`` naming a credential),
+    #: ``value`` (a token, a URL or JSON carrying one)
     kind: str
     #: the flag concerned (``--token``, ``-e``), or ""
     flag: str = ""
 
 
-def _shell_carries(line: str) -> bool:
-    try:
-        toks = shlex.split(line)
-    except ValueError:
-        return True  # an unparseable line: fail closed
-    while toks and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", toks[0]):
-        k, _, v = toks.pop(0).partition("=")
-        if setting_problem(k, v):
-            return True
-    return bool(toks) and bool(scan_args(toks[0], toks[1:]))
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
 
-def scan_args(command: str, args: Iterable[str]) -> list[Finding]:
-    """Every argument of ``command args`` that carries a literal credential or a ``$``.  The
-    launcher's own flags (:mod:`.launch`) are read as the launcher reads them (a runner's ``-e``,
-    ``-p`` publish, ``-u`` user); the server's own arguments as above."""
+def scan_args(args: Iterable[str]) -> list[Finding]:
+    """Every argument of a server (a record's ``args``, the server's own: a record never writes
+    a launcher) that carries a literal credential or a ``$``."""
     args = [str(a) for a in args]
-    got = launch.parse(command, args)
-    start = got.server_args if got.ecosystem in ("npm", "pypi", "image") else 0
-    base = got.launcher
     out: list[Finding] = []
     for i, a in enumerate(args):
         if "$" in a:
@@ -308,19 +292,7 @@ def scan_args(command: str, args: Iterable[str]) -> list[Finding]:
             continue
         if ref:
             continue
-        if i < start:  # the launcher's own flags and the launched spec
-            if got.ecosystem == "image" and got.flag_names.get(i) in RUNNER_ENV_FLAGS:
-                k, eq, v = got.flag_values[i].partition("=")
-                if eq and setting_problem(k, v):
-                    out.append(Finding(i, "env", got.flag_names[i]))
-                continue
-            if i == got.spec_index:
-                if "://" in a and url_carries(a.removeprefix("git+")):
-                    out.append(Finding(i, "value"))
-            elif carries(got.flag_values.get(i, a)):
-                out.append(Finding(i, "value"))
-            continue
-        prev = args[i - 1] if i > start else ""
+        prev = args[i - 1] if i > 0 else ""
         flag, eq, val = a.partition("=")
         if a.startswith("-") and eq:
             if credential_name(flag) and flag_value_credential(flag, val) and not is_path(val):
@@ -332,11 +304,10 @@ def scan_args(command: str, args: Iterable[str]) -> list[Finding]:
             continue  # a flag's own name
         if prev in HEADER_FLAGS:
             out.append(Finding(i, "header", prev))
-        elif base in SHELLS and prev == "-c":
-            if _shell_carries(a):
-                out.append(Finding(i, "shell", prev))
         elif is_value(a) and _after_credential_flag(prev, a):
             out.append(Finding(i, "after-flag", prev))
+        elif _ASSIGNMENT.match(a) and setting_problem(*a.split("=", 1)):
+            out.append(Finding(i, "env", a.split("=", 1)[0]))
         elif carries(a) or re.search(r"(?i)authorization:", a):
             out.append(Finding(i, "value"))
     return out

@@ -13,8 +13,6 @@ origin:
   sha256: 6012493b940814aec11f6a014cd72bb6fb495de24b3f018429dcac80f70c68c4
 transport:
   type: stdio
-  command: npx
-  args: [-y, '@example/mcp-ssh@2.0.1']
 runtime: agent-local
 env:
   SSH_KEY: secret:mcp/ssh-key
@@ -24,6 +22,6 @@ tools:
 - {name: ssh_exec, classes: [exec], approval: true}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:1ed8ed27a720'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:1ed8ed27a720'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:1ed8ed27a720'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:1c71282612e2'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:1c71282612e2'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:1c71282612e2'}

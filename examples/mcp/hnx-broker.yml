@@ -11,7 +11,7 @@ origin:
   path: homelabnext/broker/mcp_tools.py
 transport:
   type: stdio
-  command: hnx
+  bin: hnx
   args: [broker, mcp, --socket, /run/hnx-broker/broker.sock]
 runtime: agent-local
 egress: none
@@ -29,6 +29,6 @@ tools:
 - {name: proposal_file, classes: [record-write], approval: false}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:51a1c605985a'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:51a1c605985a'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:51a1c605985a'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:dae325f46563'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:dae325f46563'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:dae325f46563'}

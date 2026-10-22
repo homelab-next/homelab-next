@@ -1,28 +1,27 @@
 # SPDX-License-Identifier: Apache-2.0
-"""What a stdio server's command line launches: one small parser per launcher (ADR-0024).
+"""Reading a foreign client config's command line, for ``hnx mcp catalog import`` (ADR-0024).
 
-A record pins its origin (``package@version``, ``image@digest``, ``git+repo@commit``), and the pin
-only controls what runs when the launcher's **launch position** names exactly that.  "The pinned
-spec appears somewhere in the arguments" is not enough: ``npx -y other@latest pinned@1.0.0`` runs
-``other``.  So each launcher's argv is read the way the launcher reads it, with the flags it knows
-(which take a value, which are switches), and the launch position is the first positional after
-them, or the value of the flag that names the package (``--from``, ``--spec``, ``--package``).
+A catalog record never writes a launcher command line: it names its origin, the server's
+entrypoint (``transport.bin``) and the server's own arguments, and the renderer generates the
+launch (:func:`homelabnext.mcp.servers.launch`).  So this module is only the importer's: it reads
+``command args`` from an existing ``.mcp.json`` (or Hermes, Claude Desktop ...) the way each
+launcher reads its argv, and maps it to ``(origin, bin, args)`` (:func:`map_launch`), or says why
+it cannot.
 
-* ``npx``/``bunx`` (npm): ``--package``/``-p`` names the package (once), else the first
-  positional; ``--call``/``-c`` (a shell line), ``--registry``, ``--userconfig`` and
-  ``--node-options`` are refused;
-* ``uvx``, ``uv tool run`` (pypi): ``--from`` names the package, else the first positional;
-  ``--with*``, every index flag (``--index-url``, ``--extra-index-url``, ``--index``,
-  ``--default-index``, ``--find-links``) and ``--config-file`` are refused (they add or redirect
-  what is installed);
-* ``pipx run`` (pypi): ``--spec`` names the package, else the first positional; ``--pip-args``,
-  ``--index-url`` and ``--editable`` are refused;
+* ``npx``/``bunx`` (npm): ``--package``/``-p`` names the package (once) and the next positional is
+  the bin, else the first positional is the package;
+* ``uvx``, ``uv tool run`` (pypi): ``--from`` names the package and the next positional is the
+  bin, else the first positional is the package (and the bin);
+* ``pipx run`` (pypi): ``--spec`` names the package, as ``--from``;
 * ``docker run``/``podman run`` (image): the first positional after the run flags is the image;
-  ``--entrypoint`` is refused (the image's own entrypoint is what was reviewed).
+  its ``-e KEY[=VALUE]`` become the record's environment;
+* ``hnx``: a first-party server.
 
-An unknown flag before the launch position is refused: the parser cannot tell whether it takes a
-value, so it cannot tell what runs.  The importer reads the same parser, so it takes the package
-from the same position check verifies (and never takes the value of an unknown flag as one).
+Every other launcher flag (``--python``, ``--with``, an index, ``--registry``, ``-v``,
+``--privileged`` ...) is dropped and named in the report: a record cannot carry one, so the
+rendered launch never has it.  A command line this module cannot read (an unknown flag before the
+launch position, a refused one that changes what runs, a shell, ``env``, an interpreter, a path)
+is not mapped: the draft keeps no command and none of its arguments.
 """
 
 from __future__ import annotations
@@ -30,15 +29,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
+from typing import Any
 
 #: launcher -> what it runs (the origin kinds it can launch)
 NPM = ("npx", "bunx")
 PYPI = ("uvx", "uv", "pipx")
 IMAGE = ("docker", "podman")
 FIRST_PARTY = ("hnx",)
-#: commands that run another command: never "a path in the checkout", whatever their path
-WRAPPERS = ("env", "sh", "bash", "zsh", "dash", "ksh", "fish", "sudo", "doas", "nohup", "nice",
-            "timeout", "xargs", "busybox", "npm", "pnpm", "yarn", "node", "deno", "bun")  # fmt: skip
 
 
 @dataclass(frozen=True)
@@ -131,14 +128,16 @@ class Launch:
 
     #: the launcher's base name (``npx``, ``uvx``, ``docker`` ...)
     launcher: str
-    #: what it launches: ``npm``, ``pypi``, ``image``, ``first-party`` (``hnx`` or a path), or
-    #: None (a launcher this module does not read: an interpreter, a shell, ``env`` ...)
+    #: what it launches: ``npm``, ``pypi``, ``image``, ``first-party`` (``hnx``), or None (a
+    #: launcher this module does not read: an interpreter, a shell, ``env``, a path ...)
     ecosystem: str | None = None
     #: the launched package or image as written, and its argument index
     spec: str | None = None
     spec_index: int | None = None
     #: the index where the server's own arguments start (after the launch position)
     server_args: int = 0
+    #: the index of the command named after ``--from``/``--spec``/``--package`` (the bin)
+    bin_index: int | None = None
     #: indexes of the launcher's own flag values (``--from X``, ``-e K=V``, ``--python 3.12``)
     flag_values: dict[int, str] = field(default_factory=dict)
     #: the flag each of those values belongs to (``-e``, ``--env``, ``--from`` ...)
@@ -200,6 +199,7 @@ def _read(launch: Launch, args: list[str], start: int, flags: Flags) -> None:
     if spec_from_flag:
         launch.spec_index, launch.spec = spec_from_flag[-1]
         launch.server_args = i + 1 if i < len(args) else i  # the command named after --from
+        launch.bin_index = i if i < len(args) else None
     elif i < len(args):
         launch.spec_index, launch.spec = i, args[i]
         launch.server_args = i + 1
@@ -239,7 +239,7 @@ def parse(command: str, args: list[str]) -> Launch:
             launch.server_args = len(args)
         else:
             _read(launch, args, 1, _RUN)
-    elif base in FIRST_PARTY or ("/" in command and base not in WRAPPERS):
+    elif base in FIRST_PARTY:
         launch.ecosystem = "first-party"
     return launch
 
@@ -280,3 +280,95 @@ def split_image(spec: str) -> tuple[str, str | None, str | None] | None:
     if not m:
         return None
     return m.group("repo"), m.group("tag"), m.group("digest")
+
+
+# ---------------------------------------------------------------------------- mapping
+#: flags that change what runs, so a command line carrying one is not mapped (dropping the flag
+#: would make the draft claim a launch that is not the one the config ran)
+_UNMAPPABLE = {"--entrypoint", "-c", "--call"}
+
+
+@dataclass
+class Mapped:
+    """A foreign command line as a record's ``(origin, bin, args)`` (:func:`map_launch`)."""
+
+    #: the origin the launch position names (never pinned beyond what it says), or unknown
+    origin: dict[str, Any]
+    #: the server's entrypoint: the command after ``--from``/``--spec``/``--package``, the
+    #: first-party ``hnx``, or a bare command run as it is (an unknown origin); None: the
+    #: package's own (npm), the package name (pypi), the image's entrypoint
+    bin: str | None = None
+    #: the server's own arguments (everything after the launch position)
+    args: list[str] = field(default_factory=list)
+    #: a container runner's ``-e KEY[=VALUE]``, as ``{KEY: VALUE or None}``
+    env: dict[str, str | None] = field(default_factory=dict)
+    #: the launcher flags that were dropped (names, never values)
+    dropped: list[str] = field(default_factory=list)
+    #: why the command line was not mapped at all (then bin and args are empty)
+    why: str | None = None
+
+
+_VERSION = re.compile(
+    r"v?[0-9]+\.[0-9]+(\.[0-9]+)*(?:[-+][0-9A-Za-z.]+|(?:a|b|rc|\.post|\.dev)[0-9]+)?"
+)
+
+
+def _origin(eco: str, spec: str) -> dict[str, Any] | None:
+    """The origin a launch position names: a package, a git repo (no userinfo), or None."""
+    if spec.startswith("git+"):
+        url = spec.removeprefix("git+")
+        url = re.sub(r"(://)[^/@\s]*@", r"\1", url)
+        sep = "#" if eco == "npm" and "#" in url else "@"
+        head, _, ref = url.rpartition(sep) if sep in url.split("://", 1)[-1] else (url, "", "")
+        repo = head if ref else url
+        commit = ref if re.fullmatch(r"[0-9a-f]{40}", ref or "") else None
+        return {"kind": "git", "ecosystem": eco, "repo": repo, "commit": commit}
+    parts = split_spec(eco, spec)
+    if parts is None or spec.startswith("secret:"):
+        return None
+    name, ver = parts
+    if eco == "pypi" and "[" in spec.split("==", 1)[0]:
+        return None  # extras: a record names one package, nothing beside it
+    return {"kind": "package", "ecosystem": eco, "package": name,
+            "version": ver if ver and _VERSION.fullmatch(ver) else None, "sha256": None}  # fmt: skip
+
+
+def map_launch(command: str, args: list[str]) -> Mapped:
+    """``command args`` (a foreign client config's) as a record's origin, bin and arguments; see
+    the module docstring.  The arguments are returned as written: the importer strips
+    credentials from them."""
+    args = [str(a) for a in args]
+    got = parse(command, args)
+    unknown = {"kind": "unknown", "hint": f"launcher {got.launcher or 'none'}"}
+    if got.ecosystem is None:
+        return Mapped(unknown, why=f"{got.launcher or 'no command'} is not a launcher a record "
+                      "generates (a record names its origin; the renderer writes the launch)")  # fmt: skip
+    if got.ecosystem == "first-party":
+        return Mapped({"kind": "first-party", "path": "homelabnext/"}, bin="hnx", args=args)
+    flags = sorted(set(got.flag_names.values()))  # value flags: switches are harmless
+    blocking = [p for p in got.problems if "unknown flag" in p or "no value" in p
+                or "names nothing" in p or "only `" in p or "more than once" in p]  # fmt: skip
+    blocking += [f"{got.launcher} {f}: changes what runs" for f in flags if f in _UNMAPPABLE]
+    if blocking or got.spec is None:
+        return Mapped(unknown, why="; ".join(blocking) or f"{got.launcher}: names nothing to run")
+    spec = got.spec
+    env: dict[str, str | None] = {}
+    if got.ecosystem == "image":
+        parts = split_image(spec)
+        if parts is None:
+            return Mapped(unknown, why=f"{got.launcher}: {spec!r} is not an image reference")
+        repo, tag, digest = parts
+        origin = {"kind": "image", "image": repo + (f":{tag}" if tag else ""), "digest": digest}
+        for i, name in got.flag_names.items():
+            if name in ("-e", "--env"):
+                k, eq, v = got.flag_values[i].partition("=")
+                env[k] = v if eq else None
+        dropped = [f for f in flags if f not in ("-e", "--env")]
+        return Mapped(origin, None, args[got.server_args :], env, dropped)
+    origin = _origin(got.ecosystem, spec)
+    if origin is None:
+        return Mapped(unknown, why=f"{got.launcher}: {spec!r} is not a package it can pin")
+    bin_ = args[got.bin_index] if got.bin_index is not None else None
+    named = (_NPM if got.ecosystem == "npm" else _UV if got.launcher != "pipx" else _PIPX).spec
+    dropped = [f for f in flags if f not in named]
+    return Mapped(origin, bin_, args[got.server_args :], env, dropped)

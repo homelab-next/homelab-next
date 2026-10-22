@@ -10,11 +10,7 @@ origin:
   image: registry.example/x:latest
 transport:
   type: stdio
-  command: uvx
-  args:
-  - --from
-  - example-notes-mcp==1.2.0
-  - notes-mcp
+  bin: notes-mcp
 runtime: agent-local
 env:
   NOTES_TOKEN: secret:mcp/notes-token

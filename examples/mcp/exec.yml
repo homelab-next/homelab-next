@@ -15,8 +15,6 @@ origin:
   sha256: 9d3d9117deb0705872faa216b97ed4b2f070052a78d9e3b284e28760c3152506
 transport:
   type: stdio
-  command: npx
-  args: [-y, '@example/mcp-exec@0.9.0']
 runtime: agent-local
 egress: none
 data_tier: local-only

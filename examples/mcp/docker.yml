@@ -11,8 +11,6 @@ origin:
   digest: sha256:b77c4fdf59bc86d60de78a824ecc899f1dc358911341c04a9e763b1c9512ca8b
 transport:
   type: stdio
-  command: docker
-  args: [run, -i, --rm, 'registry.example/mcp/docker@sha256:b77c4fdf59bc86d60de78a824ecc899f1dc358911341c04a9e763b1c9512ca8b']
 runtime: agent-local
 egress: none
 data_tier: local-only
@@ -21,6 +19,6 @@ tools:
 - {name: stop_container, classes: [exec], approval: true}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:35487f898ca8'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:35487f898ca8'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:35487f898ca8'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:495cfe29e1ed'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:495cfe29e1ed'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:495cfe29e1ed'}

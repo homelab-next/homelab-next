@@ -13,8 +13,6 @@ origin:
   sha256: ff853a522af956c9cde4c39c46342faf7e60458989afa3b4c7be4d4843a647eb
 transport:
   type: stdio
-  command: npx
-  args: [-y, '@example/mcp-web@1.1.0']
 runtime: agent-local
 egress: [internet]
 data_tier: cloud-allowed
@@ -22,6 +20,6 @@ tools:
 - {name: fetch_page, classes: [egress], approval: false}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:d9bb839ce949'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:d9bb839ce949'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:d9bb839ce949'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:be7118992f3d'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:be7118992f3d'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:be7118992f3d'}

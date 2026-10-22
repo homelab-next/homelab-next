@@ -13,8 +13,7 @@ origin:
   sha256: 7075a7602ac39700c26390044285e7f5b7f7cf65f21f5e7add2e14c5c4d97bdd
 transport:
   type: stdio
-  command: uvx
-  args: [--from, example-cases-mcp==1.0.4, cases-mcp]
+  bin: cases-mcp
 runtime: agent-local
 env:
   CASES_TOKEN: secret:mcp/cases-token
@@ -26,6 +25,6 @@ tools:
 - {name: open_case, classes: [record-write], approval: false}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:353c67a0db82'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:353c67a0db82'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:353c67a0db82'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:993f2c3faba3'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:993f2c3faba3'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:993f2c3faba3'}

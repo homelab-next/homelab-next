@@ -13,8 +13,7 @@ origin:
   sha256: 80ee7c0f94279ff6c43afd3b9c711018920a594d749bb4f5b7578b244f02042a
 transport:
   type: stdio
-  command: uvx
-  args: [--from, example-vault-mcp==0.5.1, vault-mcp]
+  bin: vault-mcp
 runtime: agent-local
 env:
   BAO_TOKEN: secret:mcp/vault-token
@@ -25,6 +24,6 @@ tools:
 - {name: read_secret, classes: [credential], approval: true}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:51a2e468beaf'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:51a2e468beaf'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:51a2e468beaf'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:f42317bae175'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:f42317bae175'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:f42317bae175'}

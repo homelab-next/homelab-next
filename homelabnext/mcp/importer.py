@@ -10,18 +10,23 @@ in YAML).  Each entry becomes a **draft** record (``status: draft``, never grant
   unless it is a path or its key is allowlisted as a mode, level and the like, and nothing in the
   value marks a credential; a ``${VAR}`` (or ``${VAR:-default}``) reference maps to a ``secret:``
   name (a rendered ``${HNX_SECRET_MCP_X}`` back to the ``mcp/x`` name it was rendered from).  In
-  the arguments, everything check refuses (:mod:`.credentials`, the one rule set both use)
-  becomes a reference, and more: a container runner's ``-e KEY=VALUE`` that is not an allowlisted
-  setting (moved to ``env``), an argument carrying a credential marker (``Authorization:``,
-  ``password``, ``KEY=VALUE`` in a shell line ...), and a URL's userinfo, query and any path that
-  is not a plain MCP path (in ``*_URL`` settings too).  A launcher's package spec, read at its
-  launch position, is never a secret.  The entry's own description is not copied.  The
+  the server's arguments, everything check refuses (:mod:`.credentials`, the one rule set both
+  use) becomes a reference, and more: an argument carrying a credential marker
+  (``Authorization:``, ``password`` ...), and a URL's userinfo, query and any path that is not a
+  plain MCP path (in ``*_URL`` settings too).  A container runner's ``-e KEY=VALUE`` that is not
+  an allowlisted setting moves to ``env``.  The entry's own description is not copied.  The
   report names each reference (server, key, the name to store the value under); it never prints
   a value, and a config that does not parse is named by file, line and column only.
-* **origins are guessed, never pinned.**  The launch position (:mod:`.launch`, as check reads it)
-  give a package or image (``git+https://...`` a git origin, without userinfo); a version is kept
-  only when it is exact, and no hash is invented, so :func:`homelabnext.mcp.servers.check` fails
-  until the maintainer pins it.  Anything else is ``origin: {kind: unknown}``.
+* **the launch is mapped, never copied.**  A record writes no launcher: the command line is read
+  the way its launcher reads it (:func:`.launch.map_launch`) and becomes an origin (the package,
+  git repo or image its launch position names; a version only when it is exact; no hash is ever
+  invented, so :func:`homelabnext.mcp.servers.check` fails until the maintainer pins it), a bin
+  (the command named after ``--from``/``--spec``/``--package``, unless it is the pypi package's
+  own name) and the server's own arguments.  Launcher flags are dropped and named in the report;
+  a container runner's ``-e KEY[=VALUE]`` becomes the record's environment.  A command line it
+  cannot read (a shell, ``env``, an interpreter, a path, an unknown flag before the launch
+  position, ``--entrypoint``) or whose bin is not the package's own command (``npx -p PKG node
+  -e ...``) is not mapped: the draft is ``origin: {kind: unknown}`` with none of its arguments.
 * **endpoints become registry names.**  A remote server's URL is not copied: the record names
   ``svc:<first label of the host>``, and the URL's path only when it is a plain MCP path
   (``/mcp``, ``/sse`` ...); check fails until that is a registry service.  Tools are not known
@@ -47,11 +52,8 @@ import yaml
 
 from homelabnext.registry.model import secret_env_name
 
-from . import credentials, launch
+from . import credentials, launch, servers
 
-_VERSION = re.compile(
-    r"^v?[0-9]+\.[0-9]+(\.[0-9]+)*(?:[-+][0-9A-Za-z.]+|(?:a|b|rc|\.post|\.dev)[0-9]+)?$"
-)
 _BARE_FLAG = re.compile(r"^--?[A-Za-z0-9][A-Za-z0-9_-]*$")
 #: text inside an argument or a value that marks it as carrying a credential, whatever its length
 _CRED_TEXT = re.compile(
@@ -65,13 +67,8 @@ _SETTING_KEY = re.compile(
     r"|LOCALE|FORMAT|TIMEOUT|LIMIT|ENABLED|DISABLED|READONLY|READ_ONLY|PREFIX|NAMESPACE"
     r"|WORKSPACE|PROJECT|BASE_URL|URL|ENDPOINT)$"
 )
-#: a package spec at a launcher's package position: name==version or name@version (never a secret)
-_PACKAGE_SPEC = re.compile(
-    r"^(@[a-z0-9][a-z0-9._-]*/)?[A-Za-z0-9][A-Za-z0-9._-]*((==|@)[A-Za-z0-9._+-]+)?$"
-)
 #: remote paths copied into transport.path; anything else may carry a token and is not copied
 _PLAIN_PATHS = re.compile(r"^/(?:mcp|sse|messages|v[0-9]+/mcp|api/mcp)?/?$")
-_URL_USERINFO = re.compile(r"(://)[^/@\s]*@")
 _SCHEMES = ("Bearer", "Basic", "Token")
 
 
@@ -140,22 +137,6 @@ def _is_setting(key: str, value: Any) -> bool:
     return not _CRED_TEXT.search(value)
 
 
-def _package_positions(command: str, args: list[str]) -> set[int]:
-    """The index of the argument that names the package a launcher runs (never a secret): its
-    launch position, read the way the launcher reads it (:mod:`.launch`), so the value of a flag
-    before it (``npx --token X pkg@1.0.0``) is never taken for it."""
-    got = launch.parse(command, args)
-    if got.spec_index is None or got.ecosystem not in ("npm", "pypi", "image"):
-        return set()
-    spec = args[got.spec_index]
-    if got.ecosystem == "image":
-        return {got.spec_index} if launch.split_image(spec) else set()
-    if spec.startswith("git+"):
-        return {got.spec_index}
-    ok = launch.split_spec(got.ecosystem, spec) is not None
-    return {got.spec_index} if ok and _PACKAGE_SPEC.fullmatch(spec.split("[", 1)[0]) else set()
-
-
 def _parse_error(p: Path, exc: Exception) -> ValueError:
     """A config that cannot be parsed, named by file, line and column only: a parser's own
     message quotes the offending line, which may hold a credential."""
@@ -209,38 +190,17 @@ def read_entries(path: str | Path) -> dict[str, dict[str, Any]]:
     return out
 
 
-def _git_origin(spec: str) -> dict[str, Any]:
-    """``git+https://host/org/repo[@ref]`` as a git origin (userinfo already removed)."""
-    url = spec.removeprefix("git+")
-    head, _, ref = url.rpartition("@") if url.count("@") and "://" in url else (url, "", "")
-    repo = head if ref else url
-    commit = ref if re.fullmatch(r"[0-9a-f]{40}", ref or "") else None
-    return {"kind": "git", "repo": repo, "commit": commit}
+def _owner(origin: Mapping[str, Any]) -> str:
+    """The name a bin must share a word with: the package, or the git repo's last segment."""
+    if origin.get("kind") == "git":
+        return str(origin.get("repo", "")).rstrip("/").rsplit("/", 1)[-1]
+    return str(origin.get("package", ""))
 
 
 def guess_origin(command: str, args: list[str]) -> dict[str, Any]:
-    """The origin a launcher implies (unpinned: no hash is ever invented), from the same launch
-    position check verifies (:mod:`.launch`).  ``args`` are the cleaned arguments: no
-    credential, no URL userinfo."""
-    got = launch.parse(command, args)
-    spec = got.spec or ""
-    if got.ecosystem in ("npm", "pypi") and spec.startswith("git+"):
-        return _git_origin(spec)
-    if got.ecosystem in ("npm", "pypi"):
-        parts = launch.split_spec(got.ecosystem, spec)
-        if parts and not spec.startswith("secret:"):
-            name, ver = parts
-            return {"kind": "package", "ecosystem": got.ecosystem, "package": name,
-                    "version": ver if _VERSION.fullmatch(ver or "") else None, "sha256": None}  # fmt: skip
-    if got.ecosystem == "image":
-        parts = launch.split_image(spec)
-        if parts:
-            repo, tag, digest = parts
-            return {"kind": "image", "image": repo + (f":{tag}" if tag else ""),
-                    "digest": digest}  # fmt: skip
-    if got.launcher == "hnx":
-        return {"kind": "first-party", "path": "homelabnext/"}
-    return {"kind": "unknown", "hint": f"launcher {got.launcher}"}
+    """The origin a launcher implies (:func:`.launch.map_launch`; unpinned: no hash is ever
+    invented)."""
+    return launch.map_launch(command, args).origin
 
 
 @dataclass
@@ -250,19 +210,13 @@ class Imported:
     report: list[str] = field(default_factory=list)
 
 
-def _clean_args(
-    sid: str, command: str, args: list[str], env: dict[str, str], notes: list[str]
-) -> list[str]:
-    """The arguments with every credential replaced by a ``secret:`` reference (fail closed):
-    everything check refuses (:func:`.credentials.scan_args`: a credential flag's value, a header
-    after ``--header``, a container runner's ``-e KEY=VALUE`` (moved to ``env``), a token, a URL,
-    JSON or shell line carrying one, ``$VAR``), and more: every runner ``-e`` value that is not an
-    allowlisted setting, every argument carrying a credential marker (``Authorization:``,
-    ``password``, ``KEY=VALUE`` ...), and a URL's userinfo, query and any path that is not a plain
-    MCP path.  A launcher's package spec is never a secret (its URL userinfo is removed)."""
-    packages = _package_positions(command, args)
-    found = {f.index: f for f in credentials.scan_args(command, args)}
-    got = launch.parse(command, args)
+def _clean_args(sid: str, args: list[str], notes: list[str]) -> list[str]:
+    """A server's own arguments with every credential replaced by a ``secret:`` reference (fail
+    closed): everything check refuses (:func:`.credentials.scan_args`: a credential flag's value,
+    a header after ``--header``, a token, a URL, JSON or ``KEY=VALUE`` carrying one, ``$VAR``), and
+    more: every argument carrying a credential marker (``Authorization:``, ``password`` ...), and
+    a URL's userinfo, query and any path that is not a plain MCP path."""
+    found = {f.index: f for f in credentials.scan_args(args)}
     clean: list[str] = []
 
     def secret(n: int, ref: str, text: str) -> None:
@@ -275,12 +229,6 @@ def _clean_args(
     for i, a in enumerate(args):
         n, f = i + 1, found.get(i)
         flag, eq, val = a.partition("=")
-        if i in packages:
-            stripped = _URL_USERINFO.sub(r"\1", a)
-            if stripped != a:
-                notes.append(f"{sid}: argument {n}: credentials in a URL were removed")
-            clean.append(stripped)
-            continue
         if "$" in a:
             var = _var(a) or (_var(val) if eq and flag.startswith("-") else None)
             if var and _var(a):
@@ -290,19 +238,6 @@ def _clean_args(
             else:
                 ref = _secret_name(sid, "arg", str(n))
                 secret(n, ref, ref)
-            continue
-        if got.ecosystem == "image" and got.flag_names.get(i) in credentials.RUNNER_ENV_FLAGS:
-            value = got.flag_values[i]
-            key, has_value, raw = value.partition("=")
-            if not has_value or (f is None and _is_setting(key, raw)):
-                clean.append(a)  # -e KEY (the value comes from the environment), or a setting
-                continue
-            env[key] = _secret_name(sid, key)
-            clean.append(a[: len(a) - len(value)] + key)
-            notes.append(
-                f"{sid}: argument {n}: -e {key}=... moved to env as {env[key]} (store the value "
-                "under that name)"
-            )
             continue
         if f is not None and f.kind == "header":
             name, colon, value = a.partition(":")
@@ -394,10 +329,46 @@ def draft(
         command = str(entry.get("command") or "")
         env: dict[str, str] = {}
         settings: dict[str, str] = {}
-        clean = _clean_args(sid, command, [str(a) for a in entry.get("args") or ()], env, notes)
-        rec["origin"] = guess_origin(command, clean)
-        rec["transport"] = {"type": "stdio", "command": command or "unknown", "args": clean}
+        got = launch.map_launch(command, [str(a) for a in entry.get("args") or ()])
+        rec["origin"] = got.origin
+        rec["transport"] = {"type": "stdio"}
+        if got.why:
+            notes.append(
+                f"{sid}: its launch was not mapped ({got.why}); none of its arguments were copied: "
+                "name the origin, then the bin and the server's own args"
+            )
+        if got.dropped:
+            notes.append(
+                f"{sid}: launcher flag(s) {got.dropped} were not carried over (a record names no "
+                "launcher flag; the render generates the launch from the origin)"
+            )
+        third_party = got.origin.get("kind") in ("package", "git")
+        bin_problem = third_party and got.bin and servers.bin_problem(got.bin, _owner(got.origin))
+        if bin_problem:
+            rec["origin"] = {"kind": "unknown", "hint": "its launch runs "
+                             f"{got.bin}, not the package's own command"}  # fmt: skip
+            notes.append(
+                f"{sid}: {bin_problem}; it was not mapped (no origin, bin or argument copied)"
+            )
+        elif got.bin and not (
+            got.origin.get("kind") == "package"
+            and got.origin.get("ecosystem") == "pypi"
+            and launch.pypi_name(got.bin) == launch.pypi_name(got.origin["package"])
+        ):
+            rec["transport"]["bin"] = got.bin
+        clean = [] if bin_problem else _clean_args(sid, got.args, notes)
+        if clean:
+            rec["transport"]["args"] = clean
         rec["runtime"] = "agent-local"
+        for key, value in got.env.items():  # a container runner's -e KEY[=VALUE]
+            if value is not None and _is_setting(key, value):
+                settings[key] = value
+                notes.append(f"{sid}: -e {key} kept as a setting: confirm it is not a credential")
+            elif key not in (entry.get("env") or {}):
+                env[key] = _secret_name(sid, key)
+                notes.append(
+                    f"{sid}: -e {key} moved to env as {env[key]} (store the value under that name)"
+                )
         for k, v in (entry.get("env") or {}).items():
             key = str(k)
             var = _var(v) if isinstance(v, str) else None

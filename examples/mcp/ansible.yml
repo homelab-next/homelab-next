@@ -13,8 +13,7 @@ origin:
   sha256: 735991a19f1cf75ee7c9ba19a84ecd61f0c073fa1614aaee46be49b924ba80b1
 transport:
   type: stdio
-  command: uvx
-  args: [--from, example-ansible-mcp==0.4.0, ansible-mcp]
+  bin: ansible-mcp
 runtime: agent-local
 egress: ['host:runtime-core']
 data_tier: local-only
@@ -22,6 +21,6 @@ tools:
 - {name: run_playbook, classes: [exec], approval: true}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:c76837056635'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:c76837056635'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:c76837056635'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:7b3cbcba71fb'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:7b3cbcba71fb'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:7b3cbcba71fb'}

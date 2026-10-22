@@ -100,7 +100,7 @@ def _list(args) -> int:
         return 0
     for sid, rec in cat:
         t = rec.get("transport") or {}
-        where = t.get("endpoint") or t.get("command")
+        where = t.get("endpoint") or servers.launch_command(rec)
         print(
             f"{sid}\t{rec.get('status')}\t{rec.get('owner')}\t{t.get('type')} {where}\t"
             f"{','.join(classes.get(sid, ())) or '-'}"

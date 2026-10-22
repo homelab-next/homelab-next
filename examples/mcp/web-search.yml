@@ -13,8 +13,6 @@ origin:
   sha256: c1252115193ccf9b12baab89f3a86d376c9b6e743357139891ffaf1342981919
 transport:
   type: stdio
-  command: npx
-  args: [-y, '@example/mcp-web-search@0.3.0']
 runtime: agent-local
 env:
   SEARCH_TOKEN: secret:mcp/search-token

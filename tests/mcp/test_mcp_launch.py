@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The pin controls what runs (ADR-0024): each launcher's argv is read the way the launcher reads
-it, and its launch position must be the pinned spec.  Every command line below is fictional; each
-"refused" one ran something other than the pin while the pinned spec still appeared in its
-arguments, or used a launcher no pin controls."""
+"""The launch is generated from the origin, never written in a record (ADR-0024).
+
+A record names its origin, the server's entrypoint (``transport.bin``) and the server's own
+arguments; :func:`homelabnext.mcp.servers.launch` writes the launcher with fixed flags.  The
+REFUSED cases are the round-3 bypasses of the old parse-the-command-line check, restated as what
+a record could still try to say: a bin that is an interpreter or shell (``npx -p PIN node -e``,
+``uvx --from PIN python -c``), a path (``/tmp/evil/npx``, ``/usr/bin/python3`` as "first-party"),
+a launcher flag (``--python /tmp/evil``).  Every value is fictional."""
 
 from __future__ import annotations
 
@@ -16,111 +20,180 @@ from homelabnext.mcp import importer, launch, servers
 
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG = ROOT / "examples" / "mcp"
-GH, NOTES, DOCKER = (
-    yaml.safe_load((CATALOG / f"{sid}.yml").read_text()) for sid in ("github", "notes", "docker")
+GH, NOTES, DOCKER, BROKER = (
+    yaml.safe_load((CATALOG / f"{sid}.yml").read_text())
+    for sid in ("github", "notes", "docker", "hnx-broker")
 )
 D = DOCKER["origin"]["digest"]
 IMG = f"registry.example/mcp/docker@{D}"
-GIT = {"kind": "git", "repo": "https://code.example/org/srv", "commit": "a" * 40}
-FIRST = {"kind": "first-party", "path": "homelabnext/"}
+COMMIT = "a" * 40
+GIT_PYPI = {"kind": "git", "ecosystem": "pypi", "repo": "https://code.example/org/srv",
+            "commit": COMMIT}  # fmt: skip
+GIT_NPM = {**GIT_PYPI, "ecosystem": "npm"}
+FIRST = {"kind": "first-party", "path": "homelabnext/mcp/"}
 
 
-def _problems(base: dict, command: str, args: list[str], origin: dict | None = None) -> list[str]:
+def _rec(base: dict, origin: dict | None = None, **transport) -> dict:
     rec = copy.deepcopy(base)
-    rec["transport"].update(command=command, args=args)
+    rec["transport"] = {"type": "stdio", **transport}
     if origin is not None:
         rec["origin"] = origin
-    return servers.launch_problems(rec, "x")
+    return rec
 
 
-ACCEPTED = [
-    (GH, "npx", ["-y", "@example/mcp-github@3.2.0"], None),
-    (GH, "bunx", ["@example/mcp-github@3.2.0", "--read-only"], None),
-    (GH, "npx", ["--package=@example/mcp-github@3.2.0", "-y", "mcp-github"], None),
-    (GH, "/usr/local/bin/npx", ["-y", "@example/mcp-github@v3.2.0"], None),  # v is no difference
-    (NOTES, "uvx", ["--from", "example-notes-mcp==1.2.0", "notes-mcp"], None),
-    (NOTES, "uvx", ["--python", "3.12", "example-notes-mcp==1.2.0"], None),
-    (NOTES, "uvx", ["--from", "Example_Notes.MCP==1.2.0", "notes-mcp"], None),  # PEP 503
-    (NOTES, "uv", ["tool", "run", "--from", "example-notes-mcp==1.2.0", "notes-mcp"], None),
-    (NOTES, "pipx", ["run", "--spec", "example-notes-mcp==1.2.0", "notes-mcp"], None),
-    (NOTES, "uvx", ["--from", "example-notes-mcp==1.2.0", "notes-mcp"],
-     {**NOTES["origin"], "version": "v1.2.0"}),  # V10
-    (DOCKER, "docker", ["run", "-i", "--rm", IMG], None),
-    (DOCKER, "podman", ["run", "-it", "-eLOG_LEVEL=debug", "-v", "/srv/x:/x", IMG, "--flag"], None),
-    (NOTES, "uvx", ["--from", f"git+{GIT['repo']}@{'a' * 40}", "srv"], GIT),
-    (GH, "npx", ["-y", f"git+{GIT['repo']}#{'a' * 40}"], GIT),
-    (GH, "hnx", ["mcp", "serve"], FIRST),
-    (GH, "./bin/serve", [], FIRST),
+def _problems(rec: dict) -> list[str]:
+    return servers._schema_problems(rec, "x") or servers.launch_problems(rec, "x")
+
+
+GH_PIN = "@example/mcp-github@3.2.0"
+NOTES_PIN = "example-notes-mcp==1.2.0"
+#: (record, the generated command line)
+GENERATED = [
+    (_rec(GH), ["npx", "-y", "--", GH_PIN]),
+    (_rec(GH, bin="mcp-github", args=["--read-only"]),
+     ["npx", "-y", f"--package={GH_PIN}", "--", "mcp-github", "--read-only"]),
+    (_rec(NOTES, bin="notes-mcp"), ["uvx", "--from", NOTES_PIN, "notes-mcp"]),
+    (_rec(NOTES), ["uvx", "--from", NOTES_PIN, "example-notes-mcp"]),
+    (_rec(NOTES, {**NOTES["origin"], "version": "v1.2.0"}, bin="notes-mcp"),
+     ["uvx", "--from", NOTES_PIN, "notes-mcp"]),  # a leading v is not a difference
+    (_rec(DOCKER, args=["--read-only"]), ["docker", "run", "-i", "--rm", IMG, "--read-only"]),
+    (_rec({**DOCKER, "env": {"DOCKER_TOKEN": "secret:mcp/docker-token"},
+           "settings": {"LOG_LEVEL": "debug"}}),
+     ["docker", "run", "-i", "--rm", "-e", "DOCKER_TOKEN", "-e", "LOG_LEVEL", IMG]),
+    (_rec(NOTES, GIT_PYPI, bin="srv"), ["uvx", "--from", f"git+{GIT_PYPI['repo']}@{COMMIT}", "srv"]),
+    (_rec(GH, GIT_NPM, bin="srv"),
+     ["npx", "-y", f"--package=git+{GIT_NPM['repo']}#{COMMIT}", "--", "srv"]),
+    (_rec(BROKER, FIRST, bin="hnx", args=["mcp", "serve"]), ["hnx", "mcp", "serve"]),
+    (_rec(BROKER, FIRST, bin="homelabnext/mcp/run.py"), ["homelabnext/mcp/run.py"]),
 ]  # fmt: skip
 
+
+@pytest.mark.parametrize(("rec", "argv"), GENERATED, ids=[" ".join(g[1])[:60] for g in GENERATED])
+def test_the_launch_is_generated_from_the_origin(rec, argv):
+    assert _problems(rec) == []
+    command, launcher_args = servers.launch(rec)
+    assert [command, *launcher_args, *rec["transport"].get("args", ())] == argv
+
+
+#: (record, phrase): each one the round-3 review ran as a working bypass, restated
 REFUSED = [
-    # npm: another package first, --package/-p naming another, a launcher no pin controls
-    (GH, "npx", ["-y", "evil-pkg@latest", "@example/mcp-github@3.2.0"], None, "does not launch the pinned"),
-    (GH, "npx", ["--package=evil@1.0.0", "-y", "@example/mcp-github@3.2.0"], None, "does not launch the pinned"),
-    (GH, "npx", ["-p", "evil@1.0.0", "@example/mcp-github@3.2.0"], None, "does not launch the pinned"),
-    (GH, "npx", ["-c", "evil", "@example/mcp-github@3.2.0"], None, "runs a shell line"),
-    (GH, "npx", ["--registry", "https://npm.example", "@example/mcp-github@3.2.0"], None, "another registry"),
-    (GH, "npx", ["--fancy", "@example/mcp-github@3.2.0"], None, "unknown flag"),
-    (GH, "npm", ["exec", "-y", "@example/mcp-github@3.2.0"], None, "not npm"),
-    (GH, "pnpm", ["dlx", "@example/mcp-github@3.2.0"], None, "not pnpm"),
-    (GH, "/usr/bin/env", ["npx", "-y", "@example/mcp-github@3.2.0"], None, "not env"),
-    (GH, "sh", ["-c", "npx -y @example/mcp-github@3.2.0"], None, "not sh"),
-    (GH, "node", ["/opt/x/index.js", "@example/mcp-github@3.2.0"], None, "not node"),
-    # pypi: extra packages, another --from, another index, a range, uv run, python -m
-    (NOTES, "uvx", ["--with", "evil", "--from", "example-notes-mcp==1.2.0", "notes-mcp"], None, "adds packages"),
-    (NOTES, "uvx", ["--from", "evil==9", "example-notes-mcp==1.2.0"], None, "does not launch the pinned"),
-    (NOTES, "uvx", ["--index-url", "https://pypi.example/simple", "--from", "example-notes-mcp==1.2.0", "n"], None, "another index"),
-    (NOTES, "uvx", ["--extra-index-url", "https://pypi.example/simple", "example-notes-mcp==1.2.0"], None, "another index"),
-    (NOTES, "pipx", ["run", "--spec", "example-notes-mcp", "notes-mcp", "example-notes-mcp==1.2.0"], None, "does not launch the pinned"),
-    (NOTES, "pipx", ["run", "--pip-args=--index-url=x", "example-notes-mcp==1.2.0"], None, "pip another index"),
-    (NOTES, "uv", ["run", "--with", "example-notes-mcp==1.2.0", "notes-mcp"], None, "only `uv tool run`"),
-    (NOTES, "python3", ["-m", "notes_mcp", "example-notes-mcp==1.2.0"], None, "not python3"),
-    # images: another image first, a replaced entrypoint, a tag, a runner no pin controls
-    (DOCKER, "docker", ["run", "-i", "--rm", "evil:latest", IMG], None, "does not run the pinned"),
-    (DOCKER, "docker", ["run", "-i", "--entrypoint", "sh", IMG, "-c", "x"], None, "entrypoint"),
-    (DOCKER, "podman", ["run", "-i", "registry.example/mcp/docker:latest"], None, "does not run the pinned"),
-    (DOCKER, "nerdctl", ["run", "-i", IMG], None, "not nerdctl"),
-    (DOCKER, "docker", ["-H", "tcp://x", "run", IMG], None, "only `docker run`"),
-    (GH, "docker", ["run", "-i", "evil:latest"], None, "not docker"),
-    # origin kind and launcher must agree; a git origin runs its commit, not a branch
-    (GH, "npx", ["-y", "evil@latest"], FIRST, "not npx"),
-    (NOTES, "uvx", ["--from", f"git+{GIT['repo']}@main", "srv"], GIT, "does not launch the pinned"),
-    (NOTES, "uvx", ["--from", f"git+https://code.example/other/x@{'a' * 40}", "srv"], GIT, "does not launch the pinned"),
-    (GH, "npx", ["-y", "@example/mcp-github@3.2.0"],
-     {"kind": "package", "ecosystem": "cargo", "package": "x", "version": "1.0.0", "sha256": "b" * 64}, "run it from an image"),
+    # 1: the command after --package/--from/--spec is checked (npx -p PIN node -e, uvx --from
+    # PIN python -c, pipx --spec PIN python -c, uv tool run --from PIN bash -c)
+    (_rec(GH, bin="node", args=["-e", "require('child_process').execSync('id')"]), "interpreter, shell"),
+    (_rec(GH, bin="sh", args=["-c", "x"]), "interpreter, shell"),
+    (_rec(NOTES, bin="python", args=["-c", "import os"]), "interpreter, shell"),
+    (_rec(NOTES, bin="python3.12", args=["-c", "import os"]), "interpreter, shell"),
+    (_rec(NOTES, bin="bash", args=["-c", "x"]), "interpreter, shell"),
+    (_rec(NOTES, bin="env", args=["x"]), "interpreter, shell"),
+    (_rec(NOTES, bin="curl", args=["-o", "/tmp/x", "https://dl.example/x"]), "interpreter, shell"),
+    (_rec(GH, bin="evil-tool"), "shares no word with @example/mcp-github"),
+    (_rec(NOTES, GIT_PYPI, bin="perl"), "interpreter, shell"),
+    # 3 and 5: no launcher, no launcher flag, no path: a record cannot say --python /tmp/evil,
+    # --directory, --index-url, --privileged, -v /:/host or /tmp/evil/npx
+    ({**_rec(NOTES), "transport": {"type": "stdio", "command": "uvx", "args": ["--python", "/tmp/evil/python"]}},
+     "Additional properties are not allowed ('command' was unexpected)"),
+    (_rec(GH, bin="tmp/evil/npx"), "not a bare command name"),
+    (_rec(GH, bin="/tmp/evil/npx"), "does not match"),
+    (_rec(DOCKER, bin="sh"), "runs its own reviewed entrypoint"),
+    # 4: first-party is hnx or a path under origin.path, never any path
+    (_rec(BROKER, FIRST, bin="/usr/bin/python3", args=["-c", "x"]), "does not match"),
+    (_rec(BROKER, FIRST, bin="python3", args=["-c", "x"]), "neither hnx nor a path under"),
+    (_rec(BROKER, FIRST, bin="node_modules/.bin/x"), "does not match"),
+    (_rec(BROKER, FIRST, bin="homelabnext/agent/x.py"), "neither hnx nor a path under"),
+    (_rec(BROKER, FIRST, bin="homelabnext/mcp/../../x"), "does not match"),
+    (_rec(BROKER, FIRST), "names its bin"),
+    # origins with no generated launch, or not pinned the way a launcher reads them
+    (_rec(GH, {"kind": "package", "ecosystem": "cargo", "package": "x", "version": "1.0.0",
+               "sha256": "b" * 64}), "run it from an image"),
+    (_rec(GH, {**GH["origin"], "version": "3.2"}), "not a full x.y.z"),
+    (_rec(GH, {**GH["origin"], "package": "@Example/Bad Name"}), "does not match"),
+    (_rec(NOTES, {k: v for k, v in GIT_PYPI.items() if k != "ecosystem"}, bin="srv"), "names its ecosystem"),
+    (_rec(NOTES, {**GIT_PYPI, "repo": "https://fakeuser:fakepw@code.example/org/srv"}, bin="srv"),
+     "not an https URL without credentials"),
+    (_rec(NOTES, {**GIT_PYPI, "repo": "http://code.example/org/srv"}, bin="srv"), "not an https URL"),
+    (_rec(NOTES, GIT_PYPI), "names its bin"),
 ]  # fmt: skip
-
-
-@pytest.mark.parametrize(("base", "command", "args", "origin"), ACCEPTED)
-def test_the_pinned_launch_is_accepted(base, command, args, origin):
-    assert _problems(base, command, args, origin) == []
 
 
 @pytest.mark.parametrize(
-    ("base", "command", "args", "origin", "phrase"),
-    REFUSED,
-    ids=[f"{r[1]} {' '.join(r[2])[:40]}" for r in REFUSED],
+    ("rec", "phrase"), REFUSED, ids=[f"{r[1][:24]} {r[0]['transport']}"[:70] for r in REFUSED]
 )
-def test_a_launch_the_pin_does_not_control_is_refused(base, command, args, origin, phrase):
-    problems = _problems(base, command, args, origin)
+def test_a_record_cannot_launch_anything_but_its_pin(rec, phrase):
+    problems = _problems(rec)
     assert any(phrase in p for p in problems), problems
 
 
-def test_the_launch_position_skips_launcher_flags_and_their_values():
-    got = launch.parse("docker", ["run", "-i", "-e", "K=v", "--name", "x", IMG, "--srv-flag"])
-    assert (got.spec, got.spec_index, got.server_args) == (IMG, 6, 7)
-    got = launch.parse("uvx", ["--from", "a==1.0.0", "cmd", "--x"])
-    assert (got.spec, got.server_args) == ("a==1.0.0", 3)
-    assert launch.parse("hnx", ["mcp"]).ecosystem == "first-party"
-    assert launch.parse("/opt/x/sh", []).ecosystem is None  # a shell is never "a path"
+def test_a_launcher_flag_in_args_reaches_the_server_never_the_launcher():
+    """``args`` follow the bin (npx: after ``--``; uvx: after the command, which takes the rest),
+    so ``--python /tmp/evil`` or ``--registry`` is the server's own argument."""
+    rec = _rec(NOTES, bin="notes-mcp", args=["--python", "/tmp/evil/python"])
+    command, prefix = servers.launch(rec)
+    assert (command, prefix) == ("uvx", ["--from", NOTES_PIN, "notes-mcp"])
+    rec = _rec(GH, args=["--registry", "https://npm.example"])
+    assert servers.launch(rec) == ("npx", ["-y", "--", GH_PIN])
 
 
-def test_the_importer_reads_the_origin_from_the_same_launch_position():
-    assert (
-        importer.guess_origin("npx", ["-y", "evil@1.0.0", "@example/mcp-github@3.2.0"])["package"]
-        == "evil"
-    )
+#: (command, args, what the importer keeps): a foreign command line it maps, or refuses to
+IMPORTED = [
+    ("npx", ["-y", GH_PIN, "--read-only"], {"bin": None, "args": ["--read-only"]}),
+    ("npx", ["-y", f"--package={GH_PIN}", "--", "mcp-github"], {"bin": "mcp-github", "args": []}),
+    ("uvx", ["--python", "/tmp/evil/python", "--from", NOTES_PIN, "notes-mcp"],
+     {"bin": "notes-mcp", "args": [], "dropped": ["--python"]}),
+    ("uvx", ["--directory", "/tmp/evil", NOTES_PIN], {"bin": None, "dropped": ["--directory"]}),
+    ("uvx", ["--with", "evil", "--index-url", "https://pypi.example/simple", NOTES_PIN],
+     {"bin": None, "dropped": ["--index-url", "--with"]}),
+    ("docker", ["run", "-i", "--rm", "--privileged", "-v", "/:/host", "--pid", "host", IMG],
+     {"bin": None, "args": [], "dropped": ["--pid", "-v"]}),
+    ("/tmp/evil/npx", ["-y", GH_PIN], {"bin": None}),  # the rendered launch is a bare npx
+    # not mapped at all: the draft keeps no origin, bin or argument
+    ("npx", ["-y", "-p", GH_PIN, "node", "-e", "x"], None),
+    ("uvx", ["--from", NOTES_PIN, "python", "-c", "x"], None),
+    ("pipx", ["run", "--spec", NOTES_PIN, "python", "-c", "x"], None),
+    ("uv", ["tool", "run", "--from", NOTES_PIN, "bash", "-c", "x"], None),
+    ("docker", ["run", "-i", "--entrypoint", "sh", IMG, "-c", "x"], None),
+    ("npx", ["--fancy", GH_PIN], None),
+    ("/usr/bin/python3", ["-c", "x"], None),
+    ("sh", ["-c", f"npx -y {GH_PIN}"], None),
+    ("/usr/bin/env", ["npx", "-y", GH_PIN], None),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("command", "args", "kept"), IMPORTED, ids=[f"{c} {' '.join(a)[:40]}" for c, a, _ in IMPORTED]
+)
+def test_the_importer_maps_a_launch_or_refuses_it(command, args, kept):
+    rec, notes = importer.draft("probe", {"command": command, "args": args}, "t.json")
+    t = rec["transport"]
+    assert "command" not in t
+    if kept is None:
+        assert rec["origin"]["kind"] == "unknown" and t == {"type": "stdio"}, rec
+        assert any("not mapped" in n for n in notes), notes
+        return
+    assert t.get("bin") == kept["bin"] and t.get("args", []) == kept.get("args", t.get("args", []))
+    if kept.get("dropped"):
+        assert any(str(kept["dropped"]) in n for n in notes), notes
+    assert servers.launch_problems(rec, "x") == []
+
+
+def test_the_importer_reads_the_origin_from_the_launch_position():
+    assert importer.guess_origin("npx", ["-y", "evil@1.0.0", GH_PIN])["package"] == "evil"
     assert importer.guess_origin("docker", ["run", "-i", "--name", "n", IMG])["digest"] == D
     assert (
         importer.guess_origin("pipx", ["run", "--spec", "pkg==1.0.0", "app"])["version"] == "1.0.0"
     )
+    git = importer.guess_origin(
+        "uvx", ["--from", f"git+https://code.example/org/srv@{COMMIT}", "srv"]
+    )
+    assert git == GIT_PYPI
+    got = launch.parse("docker", ["run", "-i", "-e", "K=v", "--name", "x", IMG, "--srv-flag"])
+    assert (got.spec, got.spec_index, got.server_args) == (IMG, 6, 7)
+    assert launch.parse("/opt/x/sh", []).ecosystem is None
+
+
+def test_every_example_record_renders_its_generated_launch():
+    cat = servers.load(CATALOG)
+    for sid, rec in cat:
+        if rec["transport"]["type"] == "stdio":
+            assert servers.launch_problems(rec, sid) == []
+            command, _ = servers.launch(rec)
+            assert command in ("npx", "uvx", "docker", "hnx"), sid

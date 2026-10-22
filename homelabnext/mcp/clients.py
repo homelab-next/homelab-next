@@ -266,6 +266,14 @@ def _args(inst: Instance) -> list[str]:
     return [_fill(_secret_text(str(a)), values) for a in inst.record["transport"].get("args") or ()]
 
 
+def _launch(record: Mapping[str, Any], sid: str) -> tuple[str, list[str]]:
+    """The generated launch (:func:`homelabnext.mcp.servers.launch`): never the record's."""
+    try:
+        return servers.launch(record)
+    except ValueError as exc:
+        raise RenderError([f"{sid}: {exc}"]) from None
+
+
 def _env(inst: Instance, *, fixed_only: bool = False) -> dict[str, str]:
     rec = inst.record
     env = {k: _fill(str(v), inst.vars()) for k, v in (rec.get("settings") or {}).items()}
@@ -326,8 +334,9 @@ def definition(inst: Instance, client: str, registry: Any = None) -> dict[str, A
             "http" if t["type"] == "streamable-http" and client == "claude-code" else t["type"]
         )
     if stdio:
-        d["command"] = t["command"]
-        d["args"] = _args(inst)
+        command, launcher_args = _launch(inst.record, inst.server)
+        d["command"] = command
+        d["args"] = [*launcher_args, *_args(inst)]
         env = _env(inst)
         if env:
             d["env"] = env
@@ -425,7 +434,11 @@ def orch_kind(sid: str, rec: Mapping[str, Any]) -> tuple[dict[str, Any] | None, 
     settings = rec.get("settings") or {}
     if any(servers.TEMPLATE.search(str(v)) for v in settings.values()):
         problems.append(f"{sid}: a setting is per instance; make it a parameter with env")
-    entry: dict[str, Any] = {"command": t["command"], "args": [_secret_text(a) for a in args]}
+    command, launcher_args = _launch(rec, sid)
+    entry: dict[str, Any] = {
+        "command": command,
+        "args": [*launcher_args, *(_secret_text(a) for a in args)],
+    }
     if rec.get("timeout"):
         entry["timeout"] = int(rec["timeout"])
     env = {k: str(v) for k, v in settings.items()}

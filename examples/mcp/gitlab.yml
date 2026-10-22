@@ -13,8 +13,6 @@ origin:
   sha256: 1dc08bbd74def3327b4dcbf5bb4240dba4be67f49f247ab5323c614acd9adf7f
 transport:
   type: stdio
-  command: npx
-  args: [-y, '@example/mcp-gitlab@3.2.0']
 runtime: agent-local
 env:
   CODE_HOST_TOKEN: secret:mcp/gitlab-token
@@ -25,6 +23,6 @@ tools:
 - {name: search_code, classes: [egress], approval: false}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:c1d42f275050'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:c1d42f275050'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:c1d42f275050'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:d9b71de85ad0'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:d9b71de85ad0'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:d9b71de85ad0'}

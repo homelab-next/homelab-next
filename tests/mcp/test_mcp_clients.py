@@ -329,7 +329,7 @@ def _open_param_catalog(tmp_path: Path) -> servers.Catalog:
     shutil.copytree(ROOT / "examples" / "mcp", d, ignore=shutil.ignore_patterns("clients"))
     rec = yaml.safe_load((d / "notes.yml").read_text())
     rec["parameters"]["writable"].pop("pattern")  # a parameter with no type of its own
-    rec["transport"]["args"] += ["--prefix={writable}", "--token=secret:mcp/notes-token"]
+    rec["transport"]["args"] = ["--prefix={writable}", "--token=secret:mcp/notes-token"]
     (d / "notes.yml").write_text(yaml.safe_dump(rec))
     return servers.load(d)
 
@@ -547,10 +547,9 @@ def test_render_refuses_a_record_check_would_refuse(tmp_path):
     shutil.copy(ROOT / "examples" / "review-policy.yml", tmp_path / "review-policy.yml")
     pristine = (d / "notes.yml").read_text()
     for edit, phrase in (
-        (lambda r: r["transport"]["args"].extend(["--token", "fakeLiteralT0kenValue9Zq7"]),
+        (lambda r: r["transport"].update(args=["--token", "fakeLiteralT0kenValue9Zq7"]),
          "follows --token"),
-        (lambda r: r["transport"].update(args=["--from", "example-notes-mcp", "notes-mcp"]),
-         "does not launch the pinned"),
+        (lambda r: r["transport"].update(bin="python", args=["-c", "x"]), "interpreter, shell"),
         (lambda r: r["origin"].update(sha256=None), "has no sha256"),
         (lambda r: r.update(description="changed after its review"), "of the current content"),
     ):  # fmt: skip
@@ -562,7 +561,7 @@ def test_render_refuses_a_record_check_would_refuse(tmp_path):
     # llm-orchestrator's catalog holds every grantable stdio server, granted or not
     (d / "notes.yml").write_text(pristine)
     rec = yaml.safe_load((d / "shell.yml").read_text())
-    rec["transport"]["args"].append("--api-key=fakeshort")
+    rec["transport"]["args"] = ["--api-key=fakeshort"]
     (d / "shell.yml").write_text(yaml.safe_dump(rec))
     kw = {"lanes": ["real", "shadow"], "policy": WIDE}
     assert clients.render_profile(servers.load(d), COLLECTOR, "claude-code", policy=WIDE)

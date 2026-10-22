@@ -28,8 +28,8 @@ because each instance needs its own scope.
    (`HNX_EXAMPLES_DIR`, `HNX_DATA_DIR`) or `--catalog`.
 2. A record states: id, owner, description; **origin** (a first-party code path, or a package
    with an exact version and sha256 or lock, an image digest, or a git commit: never a floating
-   version); **transport** (a stdio command with arguments, or streamable-http/sse by **registry
-   service name**, never a URL); runtime (agent-local, or a registry host and user);
+   version); **transport** (a stdio server's entrypoint, `bin`, and its own arguments, never the
+   launcher, or streamable-http/sse by **registry service name**, never a URL); runtime (agent-local, or a registry host and user);
    credentials as **`secret:` names only** (env, headers, arguments); non-secret settings;
    **typed per-instance parameters** and an instance-name template; egress (registry services and
    hosts, `internet`, or `none`); the data tier it returns; the capabilities it fronts and the
@@ -41,7 +41,7 @@ because each instance needs its own scope.
    (`hnx mcp catalog render`: Claude Code, Claude Desktop, Hermes, llm-orchestrator, generic) are
    generated from the records. A hand-written client configuration is drift (`--check`).
 4. **Validation is fatal** (`hnx mcp catalog check`, `make mcp-check`, CI): schema, the id is the
-   file name, pinned third-party origins that are what the launcher runs (the sha256 is a
+   file name, pinned third-party origins whose launch is generated (below; the sha256 is a
    declarative record of the reviewed artifact; no launcher verifies it), no literal credential
    or `$` expansion in arguments and settings, every tool classed, egress agreeing with the tool
    classes, parameters (hard-denied environment keys, collisions, defaults that fit their type),
@@ -62,11 +62,22 @@ because each instance needs its own scope.
    only profiles `hnx agent verify` accepts against the ceiling policy (a compiled profile without
    one is refused: its stored ceiling and digest are whatever last edited the file), and only
    records that pass check's per-record rules and reviews.
-7. **Import, then pin.** `hnx mcp catalog import` turns an existing lab's client configs into
+7. **The launch is generated, never written.** A stdio record names its origin, the server's
+   `bin` (for a package the command it installs: a bare name sharing a word with the package,
+   never an interpreter, shell, wrapper or launcher; for a first-party server `hnx` or a path
+   under its code path) and the server's own arguments. The renderer writes the launcher from
+   the origin kind with fixed flags: npm `npx -y [--package=<pkg>@<ver>] -- <bin|pkg@ver>`, pypi
+   `uvx --from <pkg>==<ver> <bin>`, git the same at its commit, image `docker run -i --rm [-e
+   NAME ...] <image>@<digest>`. A record has no field for a launcher, a launcher flag, a mount, a
+   network or another entrypoint, so the pin controls what runs by construction. (Three review
+   rounds of reading arbitrary launcher command lines each found a new way to run something the
+   pin did not name; the parser now only serves the importer.)
+8. **Import, then pin.** `hnx mcp catalog import` turns an existing lab's client configs into
    draft records in a directory it is given (`--out`, required): credentials become `secret:`
    names, failing closed (every environment value is one unless its key is allowlisted as
-   non-secret; reported by name, never by value), URLs become registry-name guesses, origins stay
-   unpinned, so check fails until the
+   non-secret; reported by name, never by value), URLs become registry-name guesses, a launch is
+   mapped to origin, bin and arguments (its launcher flags dropped and named; one it cannot map
+   is not copied at all), origins stay unpinned, so check fails until the
    maintainer pins, classifies and reviews each one.
 
 ## Consequences
@@ -78,6 +89,13 @@ because each instance needs its own scope.
   finally resolves to the lake query service in the access block and the keyring.
 - The example catalog carries a record for every server name the class table used to list, so
   levels and reader verdicts for those names are unchanged.
+- Literal-credential detection in arguments and settings is defense in depth, not the control:
+  credentials belong in `env` as `secret:` names, and `leak_scan` and gitleaks guard the
+  repository. A heuristic can be tuned (both directions are tested), but it cannot be complete.
+- The generated launch adds `--` after npx's options (so a server argument is never npx's), and
+  a record migrated from the command-line shape keeps only its `bin` and the server's arguments.
+  The schema (`platform/mcp_server` 1.0) was not released before this change, so it changed in
+  place.
 - Rendered files that land in another program's format (Hermes `mcp_servers`, llm-orchestrator's
   `configs/mcp_catalog.yaml` and `grants:` blocks) are byte-stable; that program's own loader stays
   the last word, and its rules are encoded as a test (`clients.orch_accepts`).

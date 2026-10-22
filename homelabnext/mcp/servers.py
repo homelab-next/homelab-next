@@ -17,7 +17,8 @@ Everything else that knows about MCP servers is derived from it:
 
 :func:`check` is fatal, like the other registers: schema, the id is the file name (so ids are
 unique), a third-party origin is pinned (an exact version with a hash or lock, an image digest, a
-40-hex commit), every tool is classed with the table's vocabulary, egress agrees with the tools'
+40-hex commit) and a stdio record's launch can be generated from it (:func:`launch`: a record
+names its origin, ``bin`` and the server's own arguments, never a launcher), every tool is classed with the table's vocabulary, egress agrees with the tools'
 classes, credentials are secret names that stay distinct and no setting names one, parameters are
 typed with env keys that are never hard-denied (:data:`DENIED_ENV`) or shared, templates name only
 builtins and parameters, endpoints and hosts resolve in the registry and every registry ``mcp``
@@ -40,7 +41,7 @@ import yaml
 
 from homelabnext.registry.model import secret_env_name
 
-from . import credentials, launch
+from . import credentials
 
 #: the schema every record validates against
 SCHEMA = ("platform", "mcp_server")
@@ -300,88 +301,167 @@ def origin_problems(
 
 #: an exact npm release: npm resolves 1.2 or 1 as a range
 _NPM_EXACT = re.compile(r"^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
-#: origin kind (package: its ecosystem) -> the launchers that can run it pinned (:mod:`.launch`)
-LAUNCHERS = {
-    "npm": launch.NPM,
-    "pypi": launch.PYPI,
-    "image": launch.IMAGE,
-    "git": launch.NPM + launch.PYPI,
-    "first-party": ("hnx", "a path in the checkout"),
-}
+#: the launchers a stdio record's origin generates (:func:`launch`): bare names, resolved on PATH
+NPX, UVX, DOCKER, HNX = "npx", "uvx", "docker", "hnx"
+#: a server entrypoint (``transport.bin``): a bare command name
+BIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_NPM_NAME = re.compile(r"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*")
+_PYPI_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
+#: a git origin a launcher fetches: https, a host, a path, no userinfo, no query
+_GIT_REPO = re.compile(r"(?:git\+)?https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~-]+)+")
+#: commands a package's ``bin`` may never be: each runs whatever its arguments say (a shell, an
+#: interpreter, a wrapper, a launcher, a network or file tool), so ``npx --package=PIN -- node -e
+#: ...`` would run code no pin controls.  The bin must also share a word with the package name.
+NOT_A_BIN = frozenset(
+    (
+        "sh", "bash", "zsh", "dash", "ksh", "mksh", "fish", "csh", "tcsh", "busybox", "env",
+        "sudo", "doas", "su", "nohup", "nice", "ionice", "timeout", "xargs", "exec", "eval",
+        "command", "chroot", "setsid", "script", "node", "nodejs", "deno", "bun", "bunx", "npx",
+        "npm", "pnpm", "pnpx", "yarn", "corepack", "tsx", "ts-node", "python", "pythonw", "pypy",
+        "uv", "uvx", "pip", "pipx", "poetry", "conda", "ruby", "irb", "gem", "perl", "php", "lua",
+        "luajit", "tclsh", "wish", "expect", "java", "jshell", "go", "cargo", "rustc", "dotnet",
+        "pwsh", "powershell", "cmd", "osascript", "r", "rscript", "julia", "awk", "gawk", "mawk",
+        "sed", "find", "vim", "vi", "nvim", "emacs", "make", "gcc", "cc", "docker", "podman",
+        "nerdctl", "kubectl", "ssh", "scp", "sftp", "rsync", "curl", "wget", "nc", "ncat",
+        "netcat", "socat", "telnet", "git", "tar", "dd", "hnx",
+    )
+)  # fmt: skip
+_NOT_A_BIN = re.compile(r"(?:python|pypy|pip|node|perl|ruby|php|lua|java)[0-9.]*", re.I)
+
+
+def _words(name: str) -> set[str]:
+    return {w for w in re.split(r"[@/._-]+", name.lower()) if w}
+
+
+def bin_problem(bin_: str, owner: str) -> str | None:
+    """Why ``bin_`` may not be the command a package (or git repo) ``owner`` runs, or None: a
+    bare name (a path runs only for a first-party server), never an interpreter, shell, wrapper
+    or launcher (:data:`NOT_A_BIN`), and sharing a word with the package name (the command the
+    package installs, not one that happens to be on PATH)."""
+    if not BIN.fullmatch(bin_):
+        return f"bin {bin_} is not a bare command name (a path runs only for a first-party server)"
+    if bin_.lower() in NOT_A_BIN or _NOT_A_BIN.fullmatch(bin_):
+        return (
+            f"bin {bin_} is an interpreter, shell, wrapper or launcher, not the package's own "
+            "command (it would run whatever its arguments say, not the pinned code)"
+        )
+    if not _words(bin_) & _words(owner):
+        return (
+            f"bin {bin_} shares no word with {owner}: name the command the package installs "
+            "(npx and uvx run any command on PATH)"
+        )
+    return None
 
 
 def launch_problems(rec: Mapping[str, Any], where: str) -> list[str]:
-    """The pinned origin is what the launcher runs, read the way the launcher reads its argv
-    (:mod:`.launch`): the launch position (the first positional after the launcher's own flags, or
-    the value of ``--from``/``--spec``/``--package``) is ``package@version`` for ``npx``/``bunx``,
-    ``package==version`` (or ``@version``) for ``uvx``/``uv tool run``/``pipx run``,
-    ``image@digest`` for ``docker``/``podman run``, ``git+repo@commit`` (npm: ``#commit``) for a
-    git origin; a first-party server starts with ``hnx`` or a path.  Any other launcher, an
-    unknown flag before the launch position, and the flags that add or redirect what runs
-    (``--with``, an index, ``--registry``, ``--entrypoint`` ...) are refused.  A leading ``v`` in a
-    version is not a difference; an npm version is a full ``x.y.z``.  (The sha256 itself is
-    declarative: no launcher verifies it.)"""
+    """A stdio record has a launch :func:`launch` can generate from its origin: an npm or pypi
+    package (an exact npm ``x.y.z``, a valid package name), a git repo with its ecosystem (an
+    https URL without credentials, and a bin), an image (no bin: it runs its own entrypoint), or a
+    first-party server (``hnx``, or a path under ``origin.path``).  A package's bin is the command
+    it installs (:func:`bin_problem`).  A record writes no launcher and no launcher flag, so a
+    ``--python`` path, an index, ``--with``, ``--privileged`` or another entrypoint cannot be
+    expressed.  (The sha256 itself is declarative: no launcher verifies it.)"""
     origin, t = rec.get("origin") or {}, rec.get("transport") or {}
     if t.get("type") != "stdio" or not isinstance(origin, Mapping):
         return []
-    args = [str(a) for a in t.get("args") or ()]
-    got = launch.parse(str(t.get("command", "")), args)
     kind = origin.get("kind")
-    eco = origin.get("ecosystem") if kind == "package" else kind
+    bin_ = t.get("bin")
     out: list[str] = []
-    ver = origin.get("version")
-    if kind == "package" and eco == "npm" and ver and not _NPM_EXACT.fullmatch(str(ver)):
-        out.append(f"{where}: npm version {ver} is not a full x.y.z (npm reads it as a range)")
-    if eco not in LAUNCHERS:
-        if kind == "package":
+    if kind == "package":
+        eco, pkg, ver = origin.get("ecosystem"), str(origin.get("package")), origin.get("version")
+        if eco not in ("npm", "pypi"):
+            return [
+                f"{where}: no generated launch runs a pinned {eco} package (the pin would not "
+                "control what runs): run it from an image pinned by digest"
+            ]
+        if eco == "npm" and ver and not _NPM_EXACT.fullmatch(str(ver)):
+            out.append(f"{where}: npm version {ver} is not a full x.y.z (npm reads it as a range)")
+        if not (_NPM_NAME if eco == "npm" else _PYPI_NAME).fullmatch(pkg):
+            out.append(f"{where}: {pkg} is not an {eco} package name")
+        if bin_ is not None and bin_problem(str(bin_), pkg):
+            out.append(f"{where}: {bin_problem(str(bin_), pkg)}")
+    elif kind == "git":
+        repo = str(origin.get("repo"))
+        if origin.get("ecosystem") not in ("npm", "pypi"):
             out.append(
-                f"{where}: no launcher this check reads runs a pinned {eco} package (the pin "
-                "would not control what runs): run it from an image pinned by digest"
+                f"{where}: a git origin started on stdio names its ecosystem (npm: npx, pypi: "
+                "uvx), which says how it is installed"
             )
-        return out
-    if got.ecosystem is None or (
-        got.ecosystem != eco and not (kind == "git" and got.ecosystem in ("npm", "pypi"))
-    ):
-        what = {"npm": "an npm package", "pypi": "a pypi package", "image": "an image",
-                "git": "a git", "first-party": "a first-party"}[eco]  # fmt: skip
-        out.append(
-            f"{where}: {what} origin is launched by {' / '.join(LAUNCHERS[eco])}, not "
-            f"{got.launcher} (the pin would not control what runs)"
-        )
-        return out
-    out += [f"{where}: {p}" for p in got.problems]
-    spec = got.spec or ""
-    if kind == "package" and ver:
-        pkg = str(origin.get("package"))
-        want = f"{pkg}@{ver}" if eco == "npm" else f"{pkg}=={ver}"
-        parts = launch.split_spec(eco, spec)
-        same = parts is not None and (
-            parts[0] == pkg if eco == "npm" else launch.pypi_name(parts[0]) == launch.pypi_name(pkg)
-        )
-        if not (same and launch.plain_version(parts[1]) == launch.plain_version(ver)):
+        if not _GIT_REPO.fullmatch(repo):
+            out.append(f"{where}: git repo {repo} is not an https URL without credentials")
+        if bin_ is None:
+            out.append(f"{where}: a git origin names its bin (the command the repo installs)")
+        elif bin_problem(str(bin_), repo.rstrip("/").rsplit("/", 1)[-1]):
+            out.append(f"{where}: {bin_problem(str(bin_), repo.rstrip('/').rsplit('/', 1)[-1])}")
+    elif kind == "image":
+        if bin_ is not None:
             out.append(
-                f"{where}: {got.launcher} does not launch the pinned {want} (its launch position "
-                f"is {spec or 'empty'}: the pin would not control what runs)"
+                f"{where}: an image runs its own reviewed entrypoint; bin is for a package or a "
+                "first-party server (the image's arguments go in args)"
             )
-    elif kind == "image" and origin.get("digest"):
-        image = str(origin.get("image"))
-        repo = image.rsplit(":", 1)[0] if ":" in image.rsplit("/", 1)[-1] else image
-        parts = launch.split_image(spec)
-        if parts is None or parts[0] != repo or parts[2] != origin["digest"]:
+    elif kind == "first-party":
+        path = str(origin.get("path", "")).rstrip("/")
+        if bin_ is None:
+            out.append(f"{where}: a first-party server names its bin: hnx, or a path under {path}")
+        elif bin_ != HNX and not (bin_ == path or str(bin_).startswith(path + "/")):
             out.append(
-                f"{where}: {got.launcher} does not run the pinned {repo}@{origin['digest']} "
-                f"(its image is {spec or 'missing'}: pull by digest)"
-            )
-    elif kind == "git" and origin.get("commit"):
-        sep = "#" if got.ecosystem == "npm" else "@"
-        repo = str(origin.get("repo")).removeprefix("git+")
-        want = f"git+{repo}{sep}{origin['commit']}"
-        if spec != want:
-            out.append(
-                f"{where}: {got.launcher} does not launch the pinned {want} (its launch position "
-                f"is {spec or 'empty'}: a branch or tag moves)"
+                f"{where}: first-party bin {bin_} is neither hnx nor a path under origin.path "
+                f"({path}/): a first-party server runs this checkout's code"
             )
     return out
+
+
+def launch(rec: Mapping[str, Any]) -> tuple[str, list[str]]:
+    """The launch a stdio record's origin generates: ``(command, launcher arguments)``; the
+    server's own ``args`` follow.  Fixed flags only, never one from the record:
+
+    * npm: ``npx -y -- <package>@<version>``, or with a bin
+      ``npx -y --package=<package>@<version> -- <bin>`` (``--`` ends npx's options);
+    * pypi: ``uvx --from <package>==<version> <bin>`` (bin defaults to the package name);
+    * git: the same with ``git+<repo>#<commit>`` (npm) or ``git+<repo>@<commit>`` (pypi);
+    * image: ``docker run -i --rm [-e NAME ...] <repository>@<digest>``, one ``-e`` per
+      ``env``, ``settings`` and parameter ``env`` key, so the container gets exactly those;
+    * first-party: the bin (``hnx``, or a path under ``origin.path``).
+
+    Raises ValueError for a record :func:`launch_problems` (or the origin rules) refuse."""
+    origin, t = rec.get("origin") or {}, rec.get("transport") or {}
+    kind, bin_ = origin.get("kind"), t.get("bin")
+    if kind in ("package", "git") and origin.get("ecosystem") in ("npm", "pypi"):
+        eco = origin["ecosystem"]
+        if kind == "package":
+            ver = str(origin.get("version") or "").removeprefix("v")
+            spec = f"{origin['package']}@{ver}" if eco == "npm" else f"{origin['package']}=={ver}"
+            default = str(origin["package"])
+        else:
+            repo = "git+" + str(origin["repo"]).removeprefix("git+")
+            spec = f"{repo}{'#' if eco == 'npm' else '@'}{origin.get('commit')}"
+            default = str(bin_)
+        if eco == "npm":
+            return (NPX, ["-y", f"--package={spec}", "--", str(bin_)]) if bin_ else (
+                NPX, ["-y", "--", spec])  # fmt: skip
+        return UVX, ["--from", spec, str(bin_ or default)]
+    if kind == "image" and origin.get("digest"):
+        image = str(origin["image"])
+        repo = image.rsplit(":", 1)[0] if ":" in image.rsplit("/", 1)[-1] else image
+        params = rec.get("parameters") or {}
+        names = sorted(
+            {*(rec.get("env") or {}), *(rec.get("settings") or {}),
+             *(p["env"] for p in params.values() if p.get("env"))}
+        )  # fmt: skip
+        return DOCKER, ["run", "-i", "--rm", *(x for n in names for x in ("-e", n)),
+                        f"{repo}@{origin['digest']}"]  # fmt: skip
+    if kind == "first-party" and bin_:
+        return str(bin_), []
+    raise ValueError(f"{rec.get('id')}: a {kind} origin has no generated launch")
+
+
+def launch_command(rec: Mapping[str, Any]) -> str | None:
+    """The command a stdio record is started with (``npx``, ``uvx``, ``docker``, ``hnx`` ...), or
+    None when it has none (a remote server, an origin with no generated launch)."""
+    try:
+        return launch(rec)[0] if (rec.get("transport") or {}).get("type") == "stdio" else None
+    except (ValueError, KeyError, TypeError):
+        return None
 
 
 def _tool_problems(rec: Mapping[str, Any], where: str, vocabulary: Iterable[str]) -> list[str]:
@@ -474,7 +554,7 @@ def _literal_problems(rec: Mapping[str, Any], where: str) -> list[str]:
     t = rec.get("transport") or {}
     out = [
         f"{where}: argument {f.index + 1} " + _FINDING[f.kind].format(flag=f.flag)
-        for f in credentials.scan_args(str(t.get("command", "")), t.get("args") or ())
+        for f in credentials.scan_args(t.get("args") or ())
     ]
     for k, v in (rec.get("settings") or {}).items():
         why = credentials.setting_problem(str(k), str(v))

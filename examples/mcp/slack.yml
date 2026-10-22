@@ -13,8 +13,6 @@ origin:
   sha256: ab559534f4003dc4312933d7742becd2444843b2a7fa4bdf0883e109876cd3af
 transport:
   type: stdio
-  command: npx
-  args: [-y, '@example/mcp-slack@2.2.0']
 runtime: agent-local
 env:
   SLACK_BOT_TOKEN: secret:mcp/slack-token
@@ -24,6 +22,6 @@ tools:
 - {name: post_message, classes: [egress], approval: true}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:0e73ae058e01'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:0e73ae058e01'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:0e73ae058e01'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:f61cfe28c6a6'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:f61cfe28c6a6'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:f61cfe28c6a6'}

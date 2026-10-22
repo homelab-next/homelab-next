@@ -13,8 +13,7 @@ origin:
   sha256: d235e5e01058b912dfe25693eb887834b3de0ee4c2893cca6200784b7ed3a961
 transport:
   type: stdio
-  command: uvx
-  args: [--from, example-records-mcp==2.3.1, records-mcp]
+  bin: records-mcp
 runtime: agent-local
 env:
   RECORDS_TOKEN: secret:mcp/records-token
@@ -27,6 +26,6 @@ tools:
 - {name: propose_record, classes: [record-write], approval: false}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:f5ee027c99d6'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:f5ee027c99d6'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:f5ee027c99d6'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:d1611b631b87'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:d1611b631b87'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:d1611b631b87'}
