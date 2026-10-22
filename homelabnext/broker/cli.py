@@ -11,7 +11,8 @@ MCP tool server (stdio) against it (:mod:`homelabnext.broker.mcp_tools`).
 ``relay --state DIR --events-target FILE --stream S --subject-prefix P`` publishes the state
 directory's outbox to the event bus, at least once and in order (:mod:`homelabnext.broker.relay`);
 ``--once`` publishes what is pending and exits (1 when something is still pending); ``--skip ID``
-marks one event undeliverable by hand (the operator's escape for an event the bus will not take).
+marks one event undeliverable by hand (the operator's escape for an event the bus will not take;
+it takes the relay lock, so stop the relay first).
 
 The request commands work two ways:
 
@@ -118,7 +119,8 @@ def _parser() -> argparse.ArgumentParser:
         "--skip",
         metavar="EVENT_ID",
         action="append",
-        help="mark this outbox event undeliverable (never published) and exit; repeatable",
+        help="mark this outbox event undeliverable (never published) and exit; repeatable "
+        "(takes the relay lock: stop the relay first)",
     )
     rel.add_argument(
         "--since",
@@ -489,12 +491,22 @@ def _relay(args) -> int:
     if args.skip:
         try:
             store = RelayStore(args.state)
+            fd = store.lock()  # a running relay could publish the event while it is skipped
+        except RelayBusy as exc:
+            print(f"hnx broker relay: {exc}: stop the relay, --skip, start it", file=sys.stderr)
+            return 2
+        except Exception as exc:
+            print(f"hnx broker relay: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 2
+        try:
             for eid in args.skip:
                 done = store.skip(eid)
                 print(f"hnx broker relay: {eid[:80]} {'skipped' if done else 'already done'}")
         except Exception as exc:
             print(f"hnx broker relay: {type(exc).__name__}: {exc}", file=sys.stderr)
             return 2
+        finally:
+            os.close(fd)
         return 0
     if not (args.events_target and args.stream and args.subject_prefix):
         print(

@@ -481,9 +481,17 @@ def read_outbox_file(path: Path) -> tuple[tuple[int, int, str], dict[str, Any]]:
     before ``queued`` (the bare event, written by a broker without the relay) sorts before every
     current one, by its ``time`` (whole seconds) and then its id: it was emitted before anything
     with a ``queued``, and within one second the id is the only order there is.  Either way the
-    event must name its id (the file's name) and its type."""
+    event must name its id (the file's name) and its type.  A file that cannot be read (but
+    exists: :class:`FileNotFoundError` passes through, it was pruned) is ``unreadable``: one file
+    the relay may not read must cost that file, never every pass."""
     try:
-        doc = json.loads(path.read_bytes())
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        raise
+    except OSError:  # permission, a directory named *.json, an I/O error
+        raise OutboxFileError("unreadable") from None
+    try:
+        doc = json.loads(raw)
     except (UnicodeDecodeError, ValueError):
         raise OutboxFileError("not-json") from None
     if not isinstance(doc, dict):

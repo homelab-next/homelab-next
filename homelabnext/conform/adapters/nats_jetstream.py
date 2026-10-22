@@ -101,8 +101,10 @@ _PERMISSION_DENIED = re.compile(r'Permissions Violation for Publish to "([^"]+)"
 
 class WireError(EventsError):
     """The transport failed: no connection, no responder, or no reply in time.  ``permanent``:
-    retrying the same message cannot succeed (the server refuses its subject or its size), as
-    opposed to an outage, which can."""
+    retrying the same message cannot succeed (the server refuses this user the subject, or the
+    size), as opposed to an outage, which can.  No responders is an outage: a JetStream restart or
+    leader election looks the same as a stream that is missing, and neither is the message's
+    fault."""
 
     def __init__(self, message: str, *, permanent: bool = False) -> None:
         super().__init__(message)
@@ -464,6 +466,9 @@ class JetStreamBus:
 class JetStreamConsumer:
     """One incarnation of a durable pull consumer (a reopen makes a new one)."""
 
+    #: how many settled-for-good deliveries :meth:`dead_letters` waits for at most (the newest)
+    EXPECT_DEAD_MAX = 1024
+
     def __init__(self, bus: JetStreamBus, name: str, durable: str, max_deliver: int, gen: int):
         self.bus, self.name, self.durable = bus, name, durable
         self.max_deliver, self._gen = max_deliver, gen
@@ -512,6 +517,8 @@ class JetStreamConsumer:
         self.bus._wire.request(reply, body, timeout=self.bus.request_timeout)
         if how == "term" or (how == "nack" and d.attempt >= self.max_deliver):
             self._expect_dead.add(d.seq)
+            while len(self._expect_dead) > self.EXPECT_DEAD_MAX:  # a long-lived consumer
+                self._expect_dead.discard(min(self._expect_dead))
 
     def dead_letters(self) -> list[Delivery]:
         bus = self.bus
@@ -519,6 +526,7 @@ class JetStreamConsumer:
         while True:
             dead = self._read_dead()
             if self._expect_dead <= {d.seq for d in dead} or bus._clock() >= deadline:
+                self._expect_dead -= {d.seq for d in dead}  # seen: no need to wait for them again
                 return dead
             bus._sleep(0.05)
 
@@ -655,8 +663,10 @@ class NatsPyWire:
         try:
             return fut.result(timeout)
         except self._errors.NoRespondersError:
+            # not permanent: JetStream restarting, or electing a stream leader, answers nothing
+            # for a while too; the bus (not the message) is at fault and a retry can succeed
             raise WireError(
-                "no responders (no stream captures that subject?)", permanent=True
+                "no responders (JetStream down, or no stream captures that subject?)"
             ) from None
         except self._errors.MaxPayloadError:
             raise WireError(

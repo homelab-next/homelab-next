@@ -724,6 +724,165 @@ def test_the_adapter_marks_a_permission_violation_permanent():
     assert m and m.group(1) == "a.b.c"
 
 
+def _nats_py_raises(error_name: str) -> nj.WireError:
+    """What NatsPyWire._run turns nats-py's ``error_name`` into (a stand-in errors module, an
+    event loop on a thread: no server, no extra needed)."""
+    import asyncio
+    import threading
+    import types
+
+    errors = types.SimpleNamespace(
+        **{n: type(n, (Exception,), {}) for n in ("NoRespondersError", "MaxPayloadError")},
+        TimeoutError=type("TimeoutError", (Exception,), {}),
+        Error=type("Error", (Exception,), {}),
+    )
+    loop = asyncio.new_event_loop()
+    t = threading.Thread(target=loop.run_forever, daemon=True)
+    t.start()
+    w = object.__new__(nj.NatsPyWire)
+    w._errors, w._loop = errors, loop
+
+    async def boom():
+        raise getattr(errors, error_name)()
+
+    try:
+        w._run(boom(), 5)
+    except nj.WireError as exc:
+        return exc
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(5)
+        loop.close()
+    raise AssertionError("no WireError")
+
+
+def test_no_responders_is_an_outage_never_a_reason_to_drop_an_event(tmp_path):
+    """The reviewer's r2: NoRespondersError was permanent, so a JetStream restart (or a leader
+    election) that answered nothing for a minute made the pending events undeliverable."""
+    assert not _nats_py_raises("NoRespondersError").permanent
+    assert _nats_py_raises("MaxPayloadError").permanent  # the message itself: still permanent
+    state, bus, clock = StateDir(tmp_path / "state"), Bus(), Clock()
+    ids = emit(state, 5)
+    r = relay(state, bus, clock)  # max_attempts=5, max_undeliverable_run=3
+    real, t0 = bus.wire.request, clock.t
+
+    def request(subject, payload=b"", *, headers=None, timeout):
+        if headers and "Nats-Msg-Id" in headers and clock.t - t0 < 60:
+            raise _nats_py_raises("NoRespondersError")  # JetStream restarting for a minute
+        return real(subject, payload, headers=headers, timeout=timeout)
+
+    bus.wire.request = request
+    run_until_idle(r, clock, 60)
+    assert RelayStore(state.root).count("undeliverable") == 0 and not r.holding
+    assert [ev["id"] for _, ev, _ in bus.stored()] == ids
+
+
+def test_a_restart_keeps_holding_instead_of_sacrificing_more_events(tmp_path):
+    """The reviewer's r2: the hold lived in memory, so every restart of a relay facing a bus that
+    refuses everything made another max_undeliverable_run events undeliverable."""
+    state, bus, clock = StateDir(tmp_path / "state"), Bus(), Clock()
+    emit(state, 9)
+    refuse = Refuse(bus, None)
+    r = relay(state, bus, clock, max_attempts=1, max_undeliverable_run=2)
+    run_until_idle(r, clock)
+    assert r.holding and RelayStore(state.root).count("undeliverable") == 2
+    assert RelayStore(state.root).holding
+    r.close()
+    r2 = relay(state, bus, clock, max_attempts=1, max_undeliverable_run=2)  # systemd restart
+    assert r2.holding and r2.stats()["holding"] is True
+    run_until_idle(r2, clock)
+    assert RelayStore(state.root).count("undeliverable") == 2 and len(pending(state)) == 7
+    refuse.ids = set()  # the operator fixed the ACL: the first publish ends the hold
+    clock.t = max(clock.t, r2.pause_until)
+    run_until_idle(r2, clock)
+    assert pending(state) == [] and not r2.holding and not RelayStore(state.root).holding
+
+
+def test_once_per_timer_tick_still_counts_attempts(tmp_path):
+    """--once makes one attempt per run: with the count in memory a poison event never reached
+    max_attempts and held everything behind it, run after run."""
+    state, bus, clock = StateDir(tmp_path / "state"), Bus(), Clock()
+    ids = emit(state, 3)
+    Refuse(bus, {ids[0]})
+    for _ in range(2):
+        assert relay(state, bus, clock, max_attempts=3).drain() == 0  # a fresh process each
+    assert RelayStore(state.root).attempts() == {ids[0]: 2}
+    assert relay(state, bus, clock, max_attempts=3).drain() == 2  # the third attempt: given up
+    assert RelayStore(state.root).count("undeliverable") == 1
+    assert [ev["id"] for _, ev, _ in bus.stored()] == ids[1:]
+    assert RelayStore(state.root).get("undeliverable", f"{ids[0]}.json")["attempts"] == 3
+    assert RelayStore(state.root).attempts() == {}
+
+
+def test_once_drains_past_a_batch_that_was_all_quarantined(tmp_path):
+    state, bus = StateDir(tmp_path / "state"), Bus()
+    ids = emit(state, 2)
+    for i in (1, 2):  # sort before the broker's own (same queued, smaller name)
+        foreign = build_event("homelabnext.decision.returned", "svc:someone-else",
+                              {"decision_id": f"req-000{i}", "verdict": "accept",
+                               "confidence": 1.0, "tier_used": "human"},
+                              dedupe_key=f"f{i}", subject=f"req-000{i}")  # fmt: skip
+        foreign["id"] = f"0forged{i}"
+        _forge(state, foreign, 1)
+    r = relay(state, bus, batch=2)
+    assert [ev["id"] for _, ev in RelayStore(state.root).entries()][:2] == ["0forged1", "0forged2"]
+    assert r.drain() == 2 and [ev["id"] for _, ev, _ in bus.stored()] == ids
+    assert RelayStore(state.root).count("quarantine") == 2
+
+
+def test_an_unreadable_outbox_file_is_quarantined_not_a_crash_loop(tmp_path, monkeypatch):
+    """read_outbox_file caught only decode errors: a file the relay may not read raised out of
+    every pass (a crash loop under systemd)."""
+    state, bus = StateDir(tmp_path / "state"), Bus()
+    ids = emit(state, 2)
+    locked = state.root / "outbox" / "locked.json"
+    locked.write_text("{}")
+    (state.root / "outbox" / "adir.json").mkdir()  # a directory named like an event
+    real = Path.read_bytes
+
+    def read_bytes(self):
+        if self == locked:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    assert relay(state, bus).drain() == 2 and [ev["id"] for _, ev, _ in bus.stored()] == ids
+    store = RelayStore(state.root)
+    assert store.get("quarantine", "locked.json")["reason"] == "unreadable"
+    assert store.get("quarantine", "adir.json")["reason"] == "unreadable"
+
+
+def test_skip_takes_the_relay_lock(tmp_path, capsys):
+    """--skip beside a running relay could mark an event the relay was publishing: it now needs
+    the lock, so the relay must be stopped first."""
+    state = StateDir(tmp_path / "state")
+    ids = emit(state, 1)
+    held = OutboxRelay(state, Bus())
+    held.acquire()
+    try:
+        argv = ["relay", "--state", str(state.root), "--skip", ids[0]]
+        assert broker_cli.main(argv) == 2
+        assert "another relay" in capsys.readouterr().err
+        assert RelayStore(state.root).done(f"{ids[0]}.json") is None
+    finally:
+        held.close()
+    assert broker_cli.main(argv) == 0
+
+
+def test_a_long_lived_consumer_bounds_what_it_waits_for():
+    """_expect_dead grew by one per terminated delivery, forever, in a consumer that never asked
+    for its dead letters (the bridge)."""
+    bus = Bus()()
+    cons = bus.consumer("c", "homelabnext.>", max_deliver=1)
+    cons.EXPECT_DEAD_MAX = 4
+    for i in range(10):
+        bus.publish("homelabnext.decision.requested", b"{}", msg_id=f"m{i}")
+    for d in cons.fetch(10):
+        d.term()
+    assert len(cons._expect_dead) == 4
+    assert len(cons.dead_letters()) == 10 and cons._expect_dead == set()
+
+
 # ---------------------------------------------------------------- the first start and growth
 def test_the_first_start_supersedes_history_before_since(tmp_path, capsys):
     """Upgrading a broker whose outbox holds files from before the relay: they were never meant

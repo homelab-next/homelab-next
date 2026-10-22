@@ -25,14 +25,18 @@ it writes lives in ``<state>/relay/`` (:class:`RelayStore`), so it can run as it
 * **Poison does not stall it.**  A file that is not an event (not JSON, no id, no type, a bad
   ``queued``) is *quarantined*: a record in ``relay/quarantine/`` (file name, reason, time), then
   skipped.  A publish the bus refuses for the event itself (``permanent`` on the exception: an
-  invalid subject, a subject no stream captures, a permission violation, a body over
-  ``max_payload``) is retried with backoff; after ``max_attempts`` such failures the event is
-  moved to ``relay/undeliverable/`` and later events go on.  That breaks per-stream order for that
-  one event, deliberately: it will never be delivered, so holding everything behind it forever
-  only turns one bad event into an outage.  If ``max_undeliverable_run`` events in a row end up
-  undeliverable with nothing published in between, the bus is refusing everything (a
-  configuration fault, not poison): the relay stops skipping and holds, ``state`` ``fail``.
-  ``hnx broker relay --skip <id>`` is the operator's escape for an event to drop by hand.
+  invalid subject, a permission violation, a body over ``max_payload``) is retried with backoff;
+  after ``max_attempts`` such failures (counted in ``relay/attempts.json``, so a ``--once`` per
+  timer tick counts too) the event is moved to ``relay/undeliverable/`` and later events go on.
+  That breaks per-stream order for that one event, deliberately: it will never be delivered, so
+  holding everything behind it forever only turns one bad event into an outage.  No responders
+  (JetStream restarting, no stream leader, no stream at all) is an outage, never permanent.  If
+  ``max_undeliverable_run`` events in a row end up undeliverable with nothing published in
+  between, the bus is refusing everything (a configuration fault, not poison): the relay stops
+  skipping and holds, ``state`` ``fail``.  The hold is recorded (``relay/holding``) and survives
+  a restart, so restarting a relay that holds does not sacrifice another run of events; the first
+  event published clears it.  ``hnx broker relay --skip <id>`` is the operator's escape for an
+  event to drop by hand (it takes the relay lock: stop the relay first).
 * **The first start supersedes history.**  Outbox files from before ``queued`` were written by a
   broker that had no relay; publishing them all on the first start would replay old decisions.
   On a first start (no ``relay/initialized``) with such files pending, ``since`` is required: the
@@ -41,6 +45,10 @@ it writes lives in ``<state>/relay/`` (:class:`RelayStore`), so it can run as it
 * **Backs off.**  A failed publish drops the connection (unless the failure was permanent: the
   connection is fine) and waits ``backoff_base_s * 2**(n-1)`` seconds, at most
   ``backoff_max_s``, before retrying the same event.
+* **Retention.**  Delivered markers are swept ``retain_s`` (30 days) after delivery, once the
+  broker pruned the outbox file.  Event ids are unique per emission (the broker's dedupe key
+  names the request or the approval), so a swept marker is never needed again; an outbox file
+  with a swept id written later would be published again, as a new message.
 * **Nothing secret logged.**  Logs and stats name event ids, types and exception *classes*; never
   an event body, an endpoint or a credential (the bus credential is a secret name in the target
   file, read from the environment when connecting).
@@ -82,6 +90,8 @@ BROKER_SOURCE = "svc:broker"
 BROKER_TYPES = ("homelabnext.decision.", "homelabnext.proposal.")
 LOCK_NAME = "relay.lock"
 INITIALIZED = "initialized"
+HOLDING = "holding"
+ATTEMPTS = "attempts.json"
 #: how long delivered markers are kept once the broker pruned their outbox file (30 days)
 RETAIN_S = 30 * 86400.0
 _SWEEP_INTERVAL_S = 3600.0
@@ -165,6 +175,58 @@ class RelayStore:
     def count(self, kind: str) -> int:
         return sum(1 for p in (self.dir / kind).glob("*.json") if not p.name.startswith("."))
 
+    # ------------------------------------------------------------ the lock
+    def lock(self) -> int:
+        """Take the state directory's relay lock (an ``flock`` on ``relay/relay.lock``); returns
+        the descriptor (closing it releases the lock), or raises :class:`RelayBusy`."""
+        import fcntl
+
+        path = self.dir / LOCK_NAME
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            raise RelayBusy(f"another relay holds {path}") from None
+        return fd
+
+    # ------------------------------------------------------------ what survives a restart
+    @property
+    def holding(self) -> bool:
+        """The relay stopped skipping (the bus refuses everything) and has published nothing
+        since: recorded, so a restart keeps holding instead of sacrificing more events."""
+        return (self.dir / HOLDING).exists()
+
+    def set_holding(self, on: bool, *, run: int = 0) -> None:
+        from homelabnext.state.store import atomic_write_text
+
+        path = self.dir / HOLDING
+        if on:
+            doc = {"at": self.now(), "undeliverable_in_a_row": run}
+            atomic_write_text(path, json.dumps(doc, sort_keys=True) + "\n", mode=0o640)
+        else:
+            path.unlink(missing_ok=True)
+
+    def attempts(self) -> dict[str, int]:
+        """Permanent failures per pending event id (``relay/attempts.json``)."""
+        try:
+            doc = json.loads((self.dir / ATTEMPTS).read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            return {}
+        if not isinstance(doc, dict):
+            return {}
+        return {str(k): v for k, v in doc.items() if isinstance(v, int) and v > 0}
+
+    def save_attempts(self, attempts: dict[str, int]) -> None:
+        from homelabnext.state.store import atomic_write_text
+
+        path = self.dir / ATTEMPTS
+        if not attempts:
+            path.unlink(missing_ok=True)
+            return
+        text = json.dumps(attempts, sort_keys=True) + "\n"
+        atomic_write_text(path, text, mode=0o640)
+
     # ------------------------------------------------------------ writing (relay/ only)
     def mark(self, kind: str, event: dict[str, Any], receipt: dict[str, Any]) -> bool:
         """Record that the relay is done with ``event`` (exclusive: False when it already was).
@@ -185,7 +247,8 @@ class RelayStore:
 
     def skip(self, event_id: str, *, who: str = "operator") -> bool:
         """``--skip``: mark ``event_id`` undeliverable by hand (False: the relay is already done
-        with it).  Its outbox file must exist."""
+        with it).  Its outbox file must exist.  The caller holds the relay lock (:meth:`lock`),
+        so no relay is between reading this event and marking it delivered."""
         name = f"{event_id}.json"
         if "/" in event_id or event_id.startswith(".") or not (self.outbox / name).is_file():
             raise StateError(f"no outbox event {event_id[:80]!r}")
@@ -197,6 +260,9 @@ class RelayStore:
             self.quarantine(name, exc.reason)
             return True
         receipt = {"status": "skipped", "reason": f"skipped by {who}", "at": self.now()}
+        attempts = self.attempts()
+        if attempts.pop(event_id, None) is not None:
+            self.save_attempts(attempts)
         return self.mark("undeliverable", event, receipt)
 
     def sweep(self, *, retain_s: float, now: float) -> int:
@@ -290,9 +356,11 @@ class OutboxRelay:
         self.pause_until = float("-inf")
         self.published = 0
         self.undeliverable = 0  # events this process moved to undeliverable/
-        self.holding = False  # the bus refuses everything: stopped skipping
-        self._attempts: dict[str, int] = {}  # permanent failures per event id
-        self._skip_run = 0  # undeliverable in a row, nothing published in between
+        # the bus refuses everything: stopped skipping (recorded, so a restart keeps holding)
+        self.holding = self.store.holding
+        self._attempts = self.store.attempts()  # permanent failures per event id (recorded)
+        # undeliverable in a row, nothing published in between (a recorded hold implies the run)
+        self._skip_run = max_undeliverable_run if self.holding else 0
         self.last_published: str | None = None
         self.last_error: str | None = None
         self._lock_fd: int | None = None
@@ -303,16 +371,7 @@ class OutboxRelay:
         first start if this is one (or raise :class:`RelayFirstStart`)."""
         if self._lock_fd is not None:
             return
-        import fcntl
-
-        path = self.store.dir / LOCK_NAME
-        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            os.close(fd)
-            raise RelayBusy(f"another relay holds {path}") from None
-        self._lock_fd = fd
+        self._lock_fd = self.store.lock()
         try:
             if not self.store.initialized:
                 self.store.initialize(self.since)
@@ -359,6 +418,7 @@ class OutboxRelay:
             "at": self.now(),
         }
         self.store.mark("undeliverable", event, receipt)
+        self.store.save_attempts(self._attempts)
         self.undeliverable += 1
         self._skip_run += 1
         self.last_error = f"{self.now()} undeliverable {event['type']}: {type(exc).__name__}"
@@ -422,9 +482,11 @@ class OutboxRelay:
             except Exception as exc:  # no PubAck: not delivered
                 if getattr(exc, "permanent", False) and not self.holding:
                     n = self._attempts[eid] = self._attempts.get(eid, 0) + 1
+                    self.store.save_attempts(self._attempts)
                     if n >= self.max_attempts:
                         if self._skip_run >= self.max_undeliverable_run:
                             self.holding = True  # refusing everything: hold, do not drain
+                            self.store.set_holding(True, run=self._skip_run)
                             log.error(
                                 "broker relay: %d events in a row refused for good: the bus "
                                 "refuses everything (its ACL or stream?); holding",
@@ -437,7 +499,11 @@ class OutboxRelay:
                 break
             self.store.mark("delivered", event, {"type": etype, "seq": seq, "at": self.now()})
             log.info("broker relay: published %s %s (seq %s)", etype, eid[:80], seq)
-            self._attempts.pop(eid, None)
+            if self._attempts.pop(eid, None) is not None:
+                self.store.save_attempts(self._attempts)
+            if self.holding:
+                self.store.set_holding(False)
+                log.warning("broker relay: published again; no longer holding")
             self._skip_run, self.holding = 0, False
             done += 1
             self.published += 1
@@ -457,14 +523,16 @@ class OutboxRelay:
             log.info("broker relay: removed %d delivered marker(s) past retention", n)
 
     def drain(self, *, max_passes: int = 1000) -> int:
-        """Publish until nothing is pending or a pass fails (``--once``); returns how many were
-        published.  Does not wait out a backoff."""
+        """Publish until nothing is pending, a pass fails or makes no progress (``--once``);
+        returns how many were published.  Does not wait out a backoff.  A pass that published
+        nothing but settled a batch some other way (quarantined, undeliverable) is progress: the
+        events after that batch are still drained."""
         total = 0
         for _ in range(max_passes):
-            before = self.failures
+            before, left = self.failures, self.pending()
             n = self.pass_once()
             total += n
-            if n == 0 or self.failures > before:
+            if self.failures > before or (n == 0 and self.pending() >= left):
                 break
         return total
 

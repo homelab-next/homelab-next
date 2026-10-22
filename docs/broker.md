@@ -286,20 +286,27 @@ decision, and `hnx broker serve` keeps needing no network at all.
   `relay/` holds a marker for it (at start and at most once a minute while emitting), so `outbox/`
   holds what is pending and a pass costs O(pending), not O(history); the marker is the copy.
   Delivered markers older than `--retain-days` (default 30) are removed once their outbox file is
-  gone.
+  gone. Event ids are unique per emission (the broker's dedupe key names the request or the
+  approval), so a removed marker is never needed again; an outbox file written later under a
+  removed id would be published again as a new message.
 * **Poison never stalls it.** An outbox file that is not an event (not JSON, no id or not its
   file name, no type, a bad `queued`) is quarantined: a record in `relay/quarantine/` (file name,
-  reason, time; never its content) and a log line, then skipped. A publish the bus refuses for the
-  event itself (a permission violation, a subject no stream captures, an invalid subject, a body
-  over `max_payload`) is retried with backoff; after `--max-attempts` (default 5) the event goes to
-  `relay/undeliverable/` and the events after it are published. **That breaks per-stream order for
+  reason, time; never its content) and a log line, then skipped; so is a file the relay cannot
+  read (`unreadable`: a permission, a directory). A publish the bus refuses for the event itself
+  (a permission violation, an invalid subject, a body over `max_payload`) is retried with backoff;
+  after `--max-attempts` (default 5; counted in `relay/attempts.json`, so `--once` on a timer
+  counts across runs) the event goes to `relay/undeliverable/` and the events after it are
+  published. **That breaks per-stream order for
   that event, on purpose**: it will never be delivered, and holding every later decision behind it
   forever turns one bad event into an outage; consumers see a gap, never a reordering of the
   events they do get. If three events in a row end up undeliverable with nothing published in
   between, the bus refuses everything (its ACL or stream is wrong, not the events): the relay
-  stops skipping and holds, `state` `fail`. A transport failure (no connection, no PubAck) never
-  makes an event undeliverable. `hnx broker relay --state DIR --skip <event id>` marks one by hand
-  (no bus needed). Quarantined and undeliverable records keep `state` at `fail` until the operator
+  stops skipping and holds, `state` `fail`. The hold is recorded (`relay/holding`), so a restart
+  keeps holding instead of giving up another three events; the first event published clears it. A
+  transport failure (no connection, no PubAck, no responders: JetStream restarting or electing a
+  leader answers nothing for a while) never makes an event undeliverable.
+  `hnx broker relay --state DIR --skip <event id>` marks one by hand (no bus needed; it takes the
+  relay lock, so stop the relay first, then start it again). Quarantined and undeliverable records keep `state` at `fail` until the operator
   deletes them (after the broker has pruned the outbox file).
 * **The first start supersedes history.** Outbox files from before `queued` (the bare event,
   written by a broker that had no relay) would replay old decisions. A first start (no
@@ -319,7 +326,7 @@ decision, and `hnx broker serve` keeps needing no network at all.
   `quarantined`, `holding`, `consecutive_failures`, `last_error`, `state` `ok`/`warn`/`fail`)
   name event ids, types and exception classes only, never a body, an endpoint or a credential.
 * `--once` publishes what is pending and exits 0, or 1 when something is still pending (the bus is
-  down). Exit 2 is a configuration error (the target file, the adapter, the lock).
+  down). A batch that was all quarantined does not end it early. Exit 2 is a configuration error (the target file, the adapter, the lock).
 
 The bus comes from a **target file** binding the `events` capability, the same files
 `hnx conform run` uses (`compose/lab-in-a-box/broker/events-relay.yml` is the lab's); `--stream` and
