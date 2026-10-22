@@ -305,7 +305,11 @@ def test_the_broker_decision_reaches_the_st2_bridge(tmp_path):
             return 202
 
     poster = Poster()
-    bridge = sb.Bridge(bus(), config, poster)
+    # the bridge consumes with its own lease, as it does in production (sb.ACK_WAIT_S)
+    bridge_bus = nj.make(
+        wire=bus.wire, scratch=False, stream=STREAM, subject_prefix=PREFIX, ack_wait=sb.ACK_WAIT_S
+    )
+    bridge = sb.Bridge(bridge_bus, config, poster)
     bridge.open()
     rid = svc.submit("profile:triage", "service.restart", {"grace_s": 30}, target="svc:queue")
     t += timedelta(seconds=30)
