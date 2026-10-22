@@ -23,7 +23,7 @@ inputs:
 | the role table (`schemas/platform/model_roles.json`) | roles, bindings in priority order, `fallback`, `limits`, context length, cost per 1k tokens |
 | the agent profiles (`schemas/agent/profile.schema.json`) | one key per profile (`profile:reader` gets `agent-reader`, secret `secret:llm-gateway/key-reader`), the role it calls and its `data_tier` |
 | a small gateway spec (YAML) | where each `svc:` backend is (`local`, or `cloud` with a provider), the secrets for the master key and the database, and any extra non-agent keys |
-| optionally, a serving spec (`serving:`, [model-serving.md](model-serving.md)) | the store-served backends: each becomes `{locality: local, port}` from the serving plan, and every binding on it must resolve to a store entry its engine may serve |
+| optionally, a serving spec (`serving:`, [model-serving.md](model-serving.md)) | the store-served backends: each becomes `{locality: local, port}` from the serving plan, and every binding on it must resolve to a store entry its engine may serve; the plan's `exposure` must be `zone`, and a registry service for a backend must have the plan's port |
 
 ```bash
 hnx gen gateway render SPEC OUT_DIR            # writes litellm/ and bifrost/ under OUT_DIR

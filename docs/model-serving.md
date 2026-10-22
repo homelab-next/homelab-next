@@ -83,6 +83,7 @@ with the engine.
 version: 1
 store: model_store.json
 roles: model_roles.json
+exposure: zone                 # or loopback; required
 backends:
   svc:inference-large:
     engine: vllm
@@ -103,9 +104,18 @@ What the plan sets on every vLLM instance, never `args`:
 | `--served-model-name` | the binding's `model_id`, which the gateway sends and the K-14 probe expects |
 | `--max-model-len` | the bound roles' `max_context_tokens`; they must declare one and agree |
 | `--scheduling-policy priority` | always: request priority belongs to the engine (docs/llm-gateway.md) |
-| `--host`, `--port` | the role's listen address, the spec's port |
+| `--host`, `--port` | the role's listen address (held to the spec's `exposure`), the spec's port |
 | `--tensor-parallel-size`, `--pipeline-parallel-size` | the spec; their product must equal the number of GPUs |
 | `--gpu-memory-utilization` | the spec (default 0.9) |
+
+`exposure` states where the engines listen, never left to a default: `zone` (the host's zone
+address; the gateway reaches each backend as `<name>.svc.<domain>`, and the host firewall admits
+only the gateway) or `loopback` (the loopback address, this host alone, for bring-up). It is rendered into the
+role's input as `vllm_server_exposure`, and the role refuses a `vllm_server_listen_address` that
+disagrees (a loopback address under `zone`, a zone address under `loopback`, a wildcard under
+either). The gateway generator refuses a `loopback` plan, whose backends it could never reach, and
+a registry service whose port is not the plan's (the gateway would call one port while vLLM
+listened on the other).
 
 Refused: two backends on one port or one GPU; a vLLM backend whose bindings name two model ids (one
 vLLM process serves one model); a backend no role binds; `engine: unsloth-studio` (Studio is the GUI,

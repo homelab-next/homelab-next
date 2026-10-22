@@ -2,6 +2,7 @@
 version: 1
 store: model_store.valid.json
 roles: model_roles.valid.json
+exposure: zone
 backends:
   svc:inference-small:
     engine: unsloth-studio

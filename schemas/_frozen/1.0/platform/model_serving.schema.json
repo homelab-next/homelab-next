@@ -9,6 +9,7 @@
     "version",
     "store",
     "roles",
+    "exposure",
     "backends"
   ],
   "properties": {
@@ -25,6 +26,13 @@
       "type": "string",
       "minLength": 1,
       "description": "Path of the model-role table, relative to this file."
+    },
+    "exposure": {
+      "enum": [
+        "zone",
+        "loopback"
+      ],
+      "description": "Where the engines listen: zone (the host's zone address; the gateway reaches each backend as <name>.svc.<domain>, the host firewall admits only it) or loopback (the host's loopback alone; the gateway generator refuses such a plan). Rendered as vllm_server_exposure, which holds vllm_server_listen_address to it."
     },
     "backends": {
       "type": "object",

@@ -300,3 +300,44 @@ def test_a_gateway_spec_without_serving_is_unchanged():
     """The lab's gateway (no serving: key) still renders exactly what is committed."""
     lab = ROOT / "compose" / "lab-in-a-box" / "config" / "llm-gateway"
     assert hnx(["gen", "gateway", "render", str(lab / "gateway.yml"), str(lab), "--check"]) == 0
+
+
+def test_the_plan_states_its_exposure_and_the_gateway_refuses_a_loopback_one(tmp_path):
+    s = spec()
+    del s["exposure"]
+    assert any("exposure must be one of" in p for p in problems_of(tmp_path, s))
+    s["exposure"] = "loopback"
+    plan = sv.load_plan(workdir(tmp_path, s))
+    assert plan.exposure == "loopback"
+    assert "vllm_server_exposure: loopback\n" in sv.render(plan)["vllm_server/instances.yml"]
+    with pytest.raises(gw.GatewaySpecError) as exc:
+        gw.render_file(tmp_path / "gateway.yml")
+    assert any("has exposure loopback" in p for p in exc.value.problems), exc.value.problems
+
+
+def test_a_registry_service_port_that_is_not_the_plans_is_refused(tmp_path):
+    """A registry service silently won over the plan: the gateway called 9999, vLLM listened on
+    8000.  Both say where the backend is, so they must agree."""
+    workdir(tmp_path)
+    reg = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())
+    svc = dict(reg["services"]["inference"], capability="inference-large")
+    reg["services"]["inference"]["port"] = 8100  # frees 8000 on that host for the plan's backend
+    reg["services"]["inference-large"] = svc
+    g = yaml.safe_load((tmp_path / "gateway.yml").read_text())
+    g["registry"] = "registry.yml"
+    g["domain"] = reg.get("lab", {}).get("domain", g["domain"])
+
+    def render(port):
+        svc["port"] = port
+        (tmp_path / "registry.yml").write_text(yaml.safe_dump(reg))
+        (tmp_path / "gateway.yml").write_text(yaml.safe_dump(g))
+        return gw.render_file(tmp_path / "gateway.yml")
+
+    with pytest.raises(gw.GatewaySpecError) as exc:
+        render(9999)
+    assert any("port 8000 (the spec or the serving plan) is not registry service" in p
+               for p in exc.value.problems), exc.value.problems  # fmt: skip
+    files = render(8000)
+    lt = yaml.safe_load(files["litellm/config.yaml"])
+    bases = {d["model_name"]: d["litellm_params"].get("api_base") for d in lt["model_list"]}
+    assert bases["main-reasoner"].endswith(":8000/v1")

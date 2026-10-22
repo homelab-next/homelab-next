@@ -8,6 +8,11 @@ argument_specs:
         elements: dict
         description: "The served models, as `hnx models serving render` writes them (vllm_server/instances.yml): name, served_model_name, model_path, digest, max_model_len, port, gpus, tensor/pipeline_parallel_size, gpu_memory_utilization, args."
         required: true
+      vllm_server_exposure: &exposure
+        type: str
+        choices: [zone, loopback]
+        description: "Where the engines listen, from the plan (vllm_server/instances.yml): zone (vllm_server_listen_address is the host's zone address, the gateway's way in) or loopback (a loopback address, this host alone)."
+        required: true
       vllm_server_version: &version
         type: str
         description: "The pinned vLLM release; main refuses any other installed version."
@@ -30,12 +35,12 @@ argument_specs:
         default: models
       vllm_server_listen_address: &listen
         type: str
-        description: "Address the API binds (the host's zone address in real use; the gateway is its only client)."
+        description: "Address the API binds: the host's zone address under exposure zone, a loopback address under loopback; never a wildcard."
         default: 127.0.0.1  # no-raw-endpoint: allow loopback default
       vllm_server_health_host: &hhost
         type: str
-        description: "Address the health hook calls."
-        default: 127.0.0.1  # no-raw-endpoint: allow loopback default
+        description: "Address the health hook calls (default: vllm_server_listen_address)."
+        default: "{{ vllm_server_listen_address }}"
       vllm_server_health_timeout: &htimeout
         type: int
         description: "Seconds per health request."

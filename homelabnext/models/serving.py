@@ -26,7 +26,12 @@ Rules (a violation raises :class:`ServingSpecError` listing every problem, nothi
   The model, its name, context length, scheduling policy, address and parallelism always come
   from the plan (:data:`OWNED_FLAGS`).  The ``vllm_server`` role re-checks the rendered argv
   against the same list (its ``vars/main.yml`` is :func:`role_vars_text`, held equal by a test);
-* every served backend is bound by some role (a backend nothing calls is dead config).
+* every served backend is bound by some role (a backend nothing calls is dead config);
+* ``exposure`` says where the engines listen, explicitly: ``zone`` (the host's zone address, so
+  the gateway reaches each backend as ``<name>.svc.<domain>`` and the host firewall admits only
+  it) or ``loopback`` (the host's loopback: reachable from the host alone, for bring-up).  It is rendered
+  into the role's input, which holds ``vllm_server_listen_address`` to it, and the gateway
+  generator refuses a ``loopback`` plan, whose backends it could never reach.
 
 Every vLLM instance runs ``--scheduling-policy priority``: request priority belongs to the engine
 (docs/llm-gateway.md), so the orchestrator's priorities reach it unchanged.
@@ -162,6 +167,8 @@ BACKEND_KEYS = {
     "gpu_memory_utilization", "args", "description",
 }  # fmt: skip
 OUT = "vllm_server/instances.yml"
+#: where the engines listen (see the module docstring)
+EXPOSURES = ("zone", "loopback")
 
 
 class ServingSpecError(ValueError):
@@ -195,6 +202,7 @@ class Plan:
     table: RoleTable
     roles_path: Path
     backends: dict[str, Backend] = field(default_factory=dict)
+    exposure: str = "zone"
 
     def engines(self) -> dict[str, str]:
         return {n: b.engine for n, b in self.backends.items()}
@@ -306,8 +314,14 @@ def plan_from_dict(doc: Any, *, base: Path, source: str = "<serving>") -> Plan:
     if not isinstance(doc, Mapping):
         raise ServingSpecError(f"{source}: a serving spec is a mapping")
     problems: list[str] = []
-    for k in sorted(set(doc) - {"version", "store", "roles", "backends"}):
+    for k in sorted(set(doc) - {"version", "store", "roles", "exposure", "backends"}):
         problems.append(f"unknown key {k!r}")
+    exposure = doc.get("exposure")
+    if exposure not in EXPOSURES:
+        problems.append(
+            f"exposure must be one of {EXPOSURES}: zone (the engines listen on the host's zone "
+            "address, for the gateway) or loopback (on the loopback, for this host alone)"
+        )
     for k in ("store", "roles"):
         if not isinstance(doc.get(k), str):
             raise ServingSpecError(f"{source}: {k!r} (a path) is required")
@@ -326,7 +340,7 @@ def plan_from_dict(doc: Any, *, base: Path, source: str = "<serving>") -> Plan:
         raise ServingSpecError(f"{source}: role table invalid", exc.problems) from None
     except (OSError, ValueError) as exc:
         raise ServingSpecError(f"{source}: cannot read the role table: {exc}") from None
-    plan = Plan(source, store, table, roles_path)
+    plan = Plan(source, store, table, roles_path, exposure=str(exposure))
 
     raw = doc.get("backends")
     if not isinstance(raw, Mapping) or not raw:
@@ -475,10 +489,9 @@ def render(plan: Plan) -> dict[str, str]:
     import yaml
 
     instances = [plan.instance(b) for _, b in sorted(plan.backends.items()) if b.engine == "vllm"]
-    body = yaml.safe_dump(
-        {"vllm_server_instances": instances}, sort_keys=False, default_flow_style=False
-    )
-    digest = hashlib.sha256(json.dumps(instances, sort_keys=True).encode()).hexdigest()[:16]
+    doc = {"vllm_server_exposure": plan.exposure, "vllm_server_instances": instances}
+    body = yaml.safe_dump(doc, sort_keys=False, default_flow_style=False)
+    digest = hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()[:16]
     return {OUT: HEADER.format(spec=Path(plan.source).name, digest=digest) + body}
 
 

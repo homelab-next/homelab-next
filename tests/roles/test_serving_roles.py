@@ -271,9 +271,16 @@ def instances(tmp_path: Path) -> list[dict]:
     return out
 
 
+ZONE_ADDRESS = "192.0.2.10"  # no-raw-endpoint: allow a documentation address for the zone
+
+
 def vllm_vars(tmp_path: Path, **kw) -> dict:
     v = {
         "vllm_server_instances": instances(tmp_path),
+        "vllm_server_exposure": yaml.safe_load(
+            (EXAMPLE / "vllm_server" / "instances.yml").read_text()
+        )["vllm_server_exposure"],
+        "vllm_server_listen_address": ZONE_ADDRESS,
         "vllm_server_store_root": str(tmp_path / "srv"),
         "vllm_server_bin": logging_fake(tmp_path, "vllm", "0.31.0\n"),
         "vllm_server_systemctl_cli": logging_fake(tmp_path, "systemctl"),
@@ -309,7 +316,7 @@ def test_vllm_server_writes_one_unit_per_served_model_from_the_plan(tmp_path):
     assert execstart.split()[1:3] == ["serve", snap + "174d4518adc353b21f63bbd7186645da35935aeb"]
     for flag in ("--served-model-name example-27b", "--max-model-len 131072",
                  "--scheduling-policy priority", "--tensor-parallel-size 2",
-                 "--port 8000", "--host 127.0.0.1", "--tool-call-parser qwen3_xml",  # no-raw-endpoint: allow the rendered unit
+                 "--port 8000", f"--host {ZONE_ADDRESS}", "--tool-call-parser qwen3_xml",
                  "--enable-auto-tool-choice"):  # fmt: skip
         assert f" {flag}" in execstart, flag
     assert "Environment=CUDA_VISIBLE_DEVICES=0,1\n" in unit
@@ -394,6 +401,26 @@ def _bad(tmp_path, field, value):
 def test_vllm_server_refuses_an_edited_instance(tmp_path, field, value):
     r = run_role(tmp_path, "vllm_server", "main", _bad(tmp_path, field, value))
     assert r.returncode != 0 and "must be what `hnx models serving render`" in r.stdout
+
+
+@pytest.mark.parametrize(
+    ("exposure", "address", "ok"),
+    [
+        ("zone", ZONE_ADDRESS, True),
+        ("zone", "127.0.0.1", False),  # no-raw-endpoint: allow the gateway could never reach it
+        ("zone", "0.0.0.0", False),  # no-raw-endpoint: allow a wildcard is refused
+        ("loopback", "127.0.0.1", True),  # no-raw-endpoint: allow loopback for bring-up
+        ("loopback", ZONE_ADDRESS, False),
+    ],
+)
+def test_vllm_server_holds_the_listen_address_to_the_plans_exposure(
+    tmp_path, exposure, address, ok
+):
+    v = vllm_vars(tmp_path, vllm_server_exposure=exposure, vllm_server_listen_address=address)
+    r = run_role(tmp_path, "vllm_server", "main", v)
+    assert (r.returncode == 0) is ok, r.stdout
+    if not ok:
+        assert "the plan's exposure is" in r.stdout
 
 
 def test_vllm_server_refuses_two_instances_on_one_gpu_or_port(tmp_path):

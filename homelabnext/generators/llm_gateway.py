@@ -387,6 +387,18 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
                 )
                 continue
             host = f"{svc.capability}.{svc_label}.{domain}".lower()
+            if "port" in b and b["port"] != svc.port:
+                problems.append(
+                    f"{where}: port {b['port']} (the spec or the serving plan) is not registry "
+                    f"service {name}'s port {svc.port}; the gateway would call one and the engine "
+                    "listen on the other (make them agree)"
+                )
+                continue
+            if b.get("host") and str(b["host"]).lower() != host:
+                problems.append(
+                    f"{where}: host {b['host']} is not registry service {name}'s {host}"
+                )
+                continue
             port, scheme = svc.port, svc.scheme
             registry_hosts.add(host)
         else:
@@ -561,6 +573,13 @@ def _served_backends(
         return declared
     if plan.roles_path != (base / roles_path).resolve():
         problems.append(f"serving: {serving} is built on another role table than {roles_path}")
+    if plan.exposure != "zone":
+        problems.append(
+            f"serving: {serving} has exposure {plan.exposure}: its engines listen on the host's "
+            "loopback, and the gateway reaches a backend over the network as "
+            "<name>.<svc_label>.<domain>; set exposure: zone (and the host's zone address as "
+            "vllm_server_listen_address)"
+        )
     merged = dict(declared)
     for name, b in sorted(plan.backends.items()):
         sid = f"svc:{name}"

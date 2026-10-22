@@ -10,10 +10,12 @@ vllm_server_store_root: /srv/models
 # Units run as this account, in the model store's group: the weights are readable, never writable.
 vllm_server_user: vllm
 vllm_server_group: models
-# The address the API binds. Loopback by default: set the host's zone address so the gateway (and
-# only the gateway, by the host firewall) can reach it. Clients never call vLLM directly.
+# The address the API binds. vllm_server_exposure (rendered by the plan, required) holds it: zone
+# needs the host's zone address here (the gateway, and only the gateway by the host firewall,
+# reaches it), loopback needs a loopback address. Never a wildcard. Clients never call vLLM.
 vllm_server_listen_address: 127.0.0.1  # no-raw-endpoint: allow loopback default, the zone address comes from the host
-vllm_server_health_host: 127.0.0.1  # no-raw-endpoint: allow the health hook runs on the host
+# the health hook calls the address the API binds
+vllm_server_health_host: "{{ vllm_server_listen_address }}"
 vllm_server_health_timeout: 10
 # A per-instance API key the gateway presents (secret:<name>, delivered to the unit through a
 # 0600 environment file); empty: none (then the firewall is the only door besides the gateway).

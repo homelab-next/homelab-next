@@ -8,6 +8,8 @@
 version: 1
 store: model_store.json
 roles: model_roles.json
+# the engines listen on the host's zone address; the gateway is their one client
+exposure: zone
 backends:
   svc:inference-large:
     description: the reasoner, tensor-parallel over two cards
