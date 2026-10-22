@@ -387,8 +387,12 @@ bridge (below).
 webhook. Per entry of `bridge.json` it is one durable JetStream consumer on the subject
 `homelabnext.<type>` (under the stream's subject prefix), and it POSTs each event to
 `/api/v1/webhooks/<webhook>` as `application/json` (StackStorm's webhook does not take
-`application/cloudevents+json`). It runs until SIGTERM, then stops fetching, lets the POSTs in
-flight finish and settles them; an unsettled delivery is redelivered by the bus anyway.
+`application/cloudevents+json`). It runs until SIGTERM, then stops fetching (no further subject is
+fetched in the pass it lands in), lets the POSTs in flight finish and settles them; an unsettled
+delivery is redelivered by the bus anyway. A fetch the bus fails backs that subject off like a
+failed POST; a transport failure also drops the connection, and the next pass reconnects (backing
+off, 1 s doubling to 60 s, while it cannot) and reopens the durables, so a bus restart costs
+retries, not the process.
 
 | What arrives | What the bridge does |
 |---|---|
@@ -413,15 +417,17 @@ At most `--max-in-flight` POSTs run at once (default 8; one fetch takes at most 
 deliveries). `--stats-file` writes, atomically and at most every 30 s, the counters per subject
 (`forwarded`, `retried`, `dead_lettered`, `quarantined` by reason, `consecutive_failures`), the
 longest run of consecutive failures and
-`state` (`ok`, `warn` while retrying, `fail` for 24 hours after an event was dead-lettered; the
-`dead_lettered` counters and `last_dead_letter` keep the history, so it clears without a restart).
+`state` (`ok`, `warn` while retrying (a dead letter is final, and a fetch that finds nothing
+pending ends the run), `fail` for 24 hours after an event was dead-lettered; the `dead_lettered`
+counters and `last_dead_letter` keep the history, so it clears without a restart).
 
 **The key and TLS.** The API key is the secret-store name in `bridge.json`
 (`secret:stackstorm/webhook-key`), read at every POST from `HNX_SECRET_STACKSTORM_WEBHOOK_KEY` and
 never logged. Create it for a StackStorm user whose only RBAC grant is `webhook_send` on the
 `homelabnext` webhook (`st2 apikey create -u <that user>`). The StackStorm URL is https with
 certificate verification (`--ca-file` for a private CA); plain http is accepted only to loopback,
-or with `--allow-plaintext`. No redirect is followed, so the key never reaches another URL.
+or with `--allow-plaintext`. No redirect is followed, so the key never reaches another URL, and no
+proxy is used (`HTTP_PROXY`/`HTTPS_PROXY` are ignored), so the key never reaches a proxy either.
 
 ```ini
 # /etc/systemd/system/hnx-st2-bridge.service
@@ -520,8 +526,10 @@ stream's.
 **The lease.** The bridge creates each durable with `ack_wait` 30 s, longer than a POST (10 s
 timeout) plus 15 s to settle it, so the bus never hands a delivery out again while it is being
 posted. A durable keeps the `ack_wait` it was created with; the bridge refuses to start on one
-whose lease is shorter (delete the durable, `nats consumer rm <stream> <durable>`, and it is
-recreated). A restart after a crash waits one lease before the unsettled deliveries come back.
+whose lease is shorter. Raise it in place, `nats consumer edit <stream> <durable> --wait 30s`
+(JetStream updates `ack_wait` on an existing consumer), never by deleting the durable: a deleted
+durable takes its pending and unacknowledged deliveries with it. A restart after a crash waits one
+lease (in all, not one per durable) before the unsettled deliveries come back.
 
 **The broker's subjects belong to the broker.** The broker's events reach the bus through its
 outbox relay (`hnx broker relay`, [broker.md](broker.md#publishing-events-the-outbox-relay)), as

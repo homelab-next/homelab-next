@@ -30,14 +30,20 @@ prefix, :mod:`homelabnext.conform.adapters.nats_jetstream`) and POSTs each event
   ``St2-Api-Key``.  Give it to a StackStorm user whose RBAC role has ``webhook_send`` only.
 * **TLS on.**  https with certificate verification (``--ca-file`` for a private CA); plain http
   only to loopback or with an explicit ``allow_plaintext``.  No redirect is followed: a 3xx is a
-  failed POST (nacked), so the key never reaches another URL.
+  failed POST (nacked), so the key never reaches another URL.  No proxy either (``HTTP_PROXY`` and
+  ``HTTPS_PROXY`` are ignored): a proxy would read the key off a loopback plain-http POST.
 * **Bounded.**  At most ``max_in_flight`` POSTs at once (one fetch is at most that many
-  deliveries); SIGTERM stops fetching, lets the POSTs in flight finish and settles them.
+  deliveries); SIGTERM stops fetching (no further subject is fetched in the pass it lands in), lets
+  the POSTs in flight finish and settles them.
+* **A bus fault costs a retry, never the bridge.**  A fetch that fails backs that subject off like
+  a failed POST; a transport failure (not ``permanent``) also drops the connection, and with a
+  ``connect`` the next pass reconnects (backing off while it cannot) and reopens the durables.
 
 ``stats()`` (and ``--stats-file``, written atomically) reports per subject what was forwarded,
 retried, quarantined (by reason) and dead-lettered, for a ``poll-file`` status source; its
-``state`` is ``fail`` for ``dead_letter_window_s`` (a day) after the latest dead letter, then
-recovers.
+``state`` is ``warn`` while a subject is failing (a dead letter is final, not a failure in
+progress; an empty fetch ends the run), and ``fail`` for ``dead_letter_window_s`` (a day) after
+the latest dead letter, then recovers.
 """
 
 from __future__ import annotations
@@ -212,8 +218,9 @@ class Webhook:
         self._env = env
         self.timeout = timeout
         ctx = ssl.create_default_context(cafile=str(ca_file) if ca_file else None)
+        # no proxy: the environment's HTTP(S)_PROXY would get the key (in clear for http)
         self._opener = urllib.request.build_opener(
-            _NoRedirect, urllib.request.HTTPSHandler(context=ctx)
+            _NoRedirect, urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=ctx)
         )
 
     def __repr__(self) -> str:
@@ -283,10 +290,15 @@ class Bridge:
         stats_interval_s: float = 30.0,
         dead_letter_window_s: float = 86400.0,
         now: Callable[[], str] | None = None,
+        connect: Callable[[], Any] | None = None,
     ) -> None:
         if max_in_flight < 1 or max_deliver < 1:
             raise BridgeError("max_in_flight and max_deliver are positive")
         self.bus, self.config, self.webhook = bus, config, webhook
+        self.connect = connect  # a new bus after a transport failure (None: keep this one)
+        self._bus_broken = False
+        self._bus_failures = 0
+        self._reconnect_at = 0.0
         self.max_in_flight, self.max_deliver = int(max_in_flight), int(max_deliver)
         self.backoff_base_s, self.backoff_max_s = backoff_base_s, backoff_max_s
         self.clock = clock
@@ -317,14 +329,16 @@ class Bridge:
                 raise BridgeError(
                     f"durable {s.durable}: ack_wait {float(lease):g}s is shorter than the POST "
                     f"timeout plus {LEASE_MARGIN_S:g}s ({need:g}s), so a delivery would be handed "
-                    "out again mid-POST; delete the durable and the bridge recreates it"
+                    f"out again mid-POST; raise its lease in place (nats consumer edit <stream> "
+                    f"{s.durable} --wait {ACK_WAIT_S:g}s), which keeps what it has pending"
                 )
         self._consumers = consumers
 
     @property
     def failures(self) -> int:
-        """The longest run of consecutive failures of any one subject."""
-        return max((st.failures for st in self.per_subject.values()), default=0)
+        """The longest run of consecutive failures of any one subject (or of reconnecting)."""
+        worst = max((st.failures for st in self.per_subject.values()), default=0)
+        return max(worst, self._bus_failures)
 
     @property
     def pause_until(self) -> float:
@@ -434,6 +448,8 @@ class Bridge:
                 d.attempt,
                 why,
             )
+            # final: the bus drops it; it is a loss (state fail), not a failure still in progress
+            return self._settle_or_log(sub, d, "nack")
         else:
             st.retried += 1
             log.warning(
@@ -447,18 +463,79 @@ class Bridge:
         return False
 
     # ------------------------------------------------------------ the loop
-    def poll(self) -> int:
+    def _backoff(self, st: SubjectStats) -> None:
+        st.failures += 1
+        delay = min(self.backoff_max_s, self.backoff_base_s * 2 ** (st.failures - 1))
+        st.pause_until = self.clock() + delay
+
+    def _reconnect(self) -> bool:
+        """After a transport failure: a new bus and the durables reopened (True), or a backoff."""
+        if self.clock() < self._reconnect_at:
+            return False
+        old, self._consumers = self.bus, []
+        with contextlib.suppress(Exception):
+            old.close()
+        try:
+            self.bus = self.connect()  # type: ignore[misc]
+            self.open()
+        except BridgeError:
+            raise  # a durable the bridge cannot use as it stands: configuration, not an outage
+        except Exception as exc:
+            self._bus_failures += 1
+            delay = min(self.backoff_max_s, self.backoff_base_s * 2 ** (self._bus_failures - 1))
+            self._reconnect_at = self.clock() + delay
+            self.last_error = f"{self.now()} reconnect failed: {type(exc).__name__}"
+            log.warning(
+                "st2 bridge: reconnecting to the bus failed (%s); retrying in %.1fs",
+                type(exc).__name__,
+                delay,
+            )
+            return False
+        log.info("st2 bridge: reconnected to the bus")
+        self._bus_broken, self._bus_failures = False, 0
+        return True
+
+    def _fetch(self, sub: Subscription, cons: Any) -> list[Any] | None:
+        """One fetch; None when it failed (that subject backs off, the bridge goes on)."""
+        try:
+            return list(cons.fetch(self.max_in_flight))
+        except Exception as exc:
+            st = self.per_subject[sub.subject]
+            self._backoff(st)
+            self.last_error = f"{self.now()} {sub.subject}: fetch failed: {type(exc).__name__}"
+            if not getattr(exc, "permanent", False) and self.connect is not None:
+                self._bus_broken = True  # the connection is suspect: drop it, reconnect
+            log.warning(
+                "st2 bridge: fetching %s failed (%s); retrying it in %.1fs",
+                sub.subject,
+                type(exc).__name__,
+                max(0.0, st.pause_until - self.clock()),
+            )
+            return None
+
+    def poll(self, stop: threading.Event | None = None) -> int:
         """One pass over every subscription: fetch at most ``max_in_flight`` deliveries, POST the
         valid ones concurrently, settle each.  Returns how many deliveries were settled.  A
-        subject whose POST failed backs off on its own (exponentially): it is not fetched until its
-        pause ends, and every other subject goes on."""
+        subject whose POST or fetch failed backs off on its own (exponentially): it is not fetched
+        until its pause ends, and every other subject goes on.  Once ``stop`` is set no further
+        subject is fetched (what is already fetched is posted and settled)."""
+        if self._bus_broken and not self._reconnect():
+            self.write_stats()
+            return 0
         handled = 0
         for sub, cons in self._consumers:
+            if stop is not None and stop.is_set():
+                break
+            if self._bus_broken:
+                break  # a fetch failed for the connection: reconnect before the next subject
             st = self.per_subject[sub.subject]
             if self.clock() < st.pause_until:
                 continue
-            batch = list(cons.fetch(self.max_in_flight))
+            batch = self._fetch(sub, cons)
+            if batch is None:
+                continue
             if not batch:
+                st.failures = 0  # nothing is pending on it: whatever failed is settled
                 continue
             todo: list[tuple[Any, dict[str, Any]]] = []
             for d in batch:
@@ -476,9 +553,7 @@ class Bridge:
             if ok:
                 st.failures = 0
             else:
-                st.failures += 1
-                delay = min(self.backoff_max_s, self.backoff_base_s * 2 ** (st.failures - 1))
-                st.pause_until = self.clock() + delay
+                self._backoff(st)
         self.write_stats()
         return handled
 
@@ -487,7 +562,7 @@ class Bridge:
         self.open()
         try:
             while not stop.is_set():
-                if self.poll() == 0:  # a subject backing off is skipped, not waited for
+                if self.poll(stop) == 0:  # a subject backing off is skipped, not waited for
                     stop.wait(idle_s)
         finally:
             self.close()

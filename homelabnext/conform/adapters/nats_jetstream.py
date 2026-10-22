@@ -43,6 +43,8 @@ How the contract maps onto JetStream:
   its ``ack_wait`` lapses; the server does not know a client restarted.  So when the durable still
   has unacknowledged deliveries, reopening waits one ``ack_wait`` (plus a margin) for the previous
   incarnation's leases to lapse, after which every one of them is redelivered with attempt + 1.
+  A durable this bus has not opened before was leased before the bus existed, so a new bus that
+  reopens several durables waits one lease from its own start, not one per durable.
   Deliveries handed out before the reopen are detached: settling them is a no-op.
 
 Findings (where the product's semantics are narrower than the contract's words):
@@ -320,6 +322,7 @@ class JetStreamBus:
         self._sleep = sleep
         self._generation: dict[str, int] = {}
         self._closed = False
+        self._opened_at = clock()  # a durable's earlier leases were all granted before this
         base = {
             "retention": "limits",
             "storage": storage,
@@ -423,8 +426,14 @@ class JetStreamBus:
                     f"consumer {name!r} exists on another subject; delete it to change it"
                 )
             if int(info.get("num_ack_pending", 0)) > 0:
-                # the previous incarnation's deliveries are leased for ack_wait; let them lapse
-                self._sleep(self.ack_wait + min(1.0, 0.25 + self.ack_wait / 4))
+                # the previous incarnation's deliveries are leased for the durable's ack_wait;
+                # let them lapse.  One this bus has not opened yet was leased before the bus
+                # existed, so opening several waits out one lease in all, not one per durable.
+                lease = int(info.get("config", {}).get("ack_wait", self.ack_wait * _NS)) / _NS
+                since = self._clock() if durable in self._generation else self._opened_at
+                left = since + lease + min(1.0, 0.25 + lease / 4) - self._clock()
+                if left > 0:
+                    self._sleep(left)
         gen = self._generation[durable] = self._generation.get(durable, 0) + 1
         max_dc = int(info.get("config", {}).get("max_deliver", max_deliver))
         c = JetStreamConsumer(self, name, durable, max_dc, gen)

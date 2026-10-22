@@ -260,6 +260,8 @@ How the contract maps onto JetStream:
   its `ack_wait` lapses; the server does not know a client restarted.  So when the durable still
   has unacknowledged deliveries, reopening waits one `ack_wait` (plus a margin) for the previous
   incarnation's leases to lapse, after which every one of them is redelivered with attempt + 1.
+  A durable this bus has not opened before was leased before the bus existed, so a new bus that
+  reopens several durables waits one lease from its own start, not one per durable.
   Deliveries handed out before the reopen are detached: settling them is a no-op.
 
 Findings (where the product's semantics are narrower than the contract's words):

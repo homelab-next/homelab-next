@@ -116,6 +116,7 @@ def _st2(args) -> int:
 def _st2_bridge(args) -> int:
     """The event bridge: the bus (``HNX_ENDPOINT_EVENTS``, nats:// or tls://) to the webhook,
     until SIGTERM.  Exit 2 on a configuration error."""
+    import contextlib
     import logging
     import signal
     import threading
@@ -141,18 +142,22 @@ def _st2_bridge(args) -> int:
             ca_file=args.ca_file,
             allow_plaintext=args.allow_plaintext,
         )
-        bus = nats_jetstream.make(
-            scratch=False,
-            provision=False,  # read the stream, manage durables, nothing else
-            stream=args.stream,
-            subject_prefix=args.subject_prefix,
-            ack_wait=sb.ACK_WAIT_S,
-            user=args.events_user,
-            password_secret=args.events_password_secret,
-            ca_file=args.events_ca_file,
-            allow_plaintext=args.events_allow_plaintext,
-            client_name="hnx-st2-bridge",
-        )
+
+        def connect():
+            return nats_jetstream.make(
+                scratch=False,
+                provision=False,  # read the stream, manage durables, nothing else
+                stream=args.stream,
+                subject_prefix=args.subject_prefix,
+                ack_wait=sb.ACK_WAIT_S,
+                user=args.events_user,
+                password_secret=args.events_password_secret,
+                ca_file=args.events_ca_file,
+                allow_plaintext=args.events_allow_plaintext,
+                client_name="hnx-st2-bridge",
+            )
+
+        bus = connect()  # the first connect is checked here; later ones are the bridge's
     except Exception as exc:  # configuration, the endpoint variable, the first connect
         print(f"hnx workflows st2 bridge: {exc}", file=sys.stderr)
         return 2
@@ -166,6 +171,7 @@ def _st2_bridge(args) -> int:
         max_in_flight=args.max_in_flight,
         max_deliver=args.max_deliver,
         stats_file=args.stats_file,
+        connect=connect,  # a transport failure reconnects instead of ending the process
     )
     try:
         bridge.run(stop)
@@ -173,7 +179,8 @@ def _st2_bridge(args) -> int:
         print(f"hnx workflows st2 bridge: {exc}", file=sys.stderr)
         return 2
     finally:
-        bus.close()
+        with contextlib.suppress(Exception):
+            bridge.bus.close()  # the bus it holds now (a reconnect replaces the first)
     return 0
 
 

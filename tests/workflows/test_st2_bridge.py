@@ -160,6 +160,39 @@ def test_the_webhook_follows_no_redirect(hook):
     assert hook.redirect_hits == 0 and len(hook.requests) == 1  # the key went nowhere else
 
 
+def test_the_webhook_never_goes_through_a_proxy(hook, monkeypatch):
+    """The reviewer's proxy.py: urllib's default ProxyHandler sent the loopback plain-http POST,
+    St2-Api-Key and all, to whatever HTTP_PROXY named.  The bridge uses no proxy."""
+
+    hits: list[str] = []
+
+    class Proxy(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            hits.append(self.headers.get("St2-Api-Key", ""))
+            self.send_response(202)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_a):
+            pass
+
+    proxy = http.server.ThreadingHTTPServer(("localhost", 0), Proxy)
+    threading.Thread(
+        target=proxy.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+    ).start()
+    try:
+        url = f"http://localhost:{proxy.server_address[1]}"
+        for var in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
+            monkeypatch.setenv(var, url)
+        for var in ("NO_PROXY", "no_proxy"):
+            monkeypatch.delenv(var, raising=False)
+        assert webhook(hook).post(proposal()) == 202
+    finally:
+        proxy.shutdown()
+        proxy.server_close()
+    assert hits == [] and len(hook.requests) == 1
+
+
 def test_the_webhook_refuses_plaintext_values_and_paths():
     cfg = sb.load_bridge(BRIDGE)
     with pytest.raises(sb.BridgeError, match="plaintext"):
@@ -290,6 +323,29 @@ def test_dead_letters_count_by_the_durables_limit_and_fail_clears_after_a_window
     assert b.poll() == 1
     st = b.stats()
     assert st["state"] == "ok" and st["dead_lettered"] == 1
+
+
+def test_a_dead_letter_is_not_a_warning_forever():
+    """The reviewer's r1: after a dead letter the subject's failure count never reset (its
+    fetches came back empty), so state stayed warn long after fail had cleared."""
+
+    class Down:
+        def post(self, _ev):
+            raise sb.WebhookUnavailable("ConnectionRefusedError")
+
+    bus, clock = FakeEventBus(), Clock()
+    b = bridge(bus, Down(), clock=clock, max_deliver=2, dead_letter_window_s=3600.0)
+    publish(bus, proposal(1))
+    for _ in range(4):
+        b.poll()
+        clock.t += 120
+    assert b.stats()["state"] == "fail" and b.stats()["dead_lettered"] == 1
+    clock.t += 10_000  # past the dead-letter window, nothing pending
+    for _ in range(3):
+        b.poll()
+        clock.t += 120
+    st = b.stats()
+    assert (st["state"], st["consecutive_failures"], st["dead_lettered"]) == ("ok", 0, 1)
 
 
 @pytest.mark.parametrize(
@@ -452,6 +508,93 @@ def test_sigterm_stops_fetching_and_settles_what_is_in_flight(tmp_path, hook):
     assert rest == ["evt-bridge-2", "evt-bridge-3"]  # posted concurrently: in any order
 
 
+def test_sigterm_fetches_no_further_subject_in_the_same_pass():
+    """The reviewer's r3: a SIGTERM during one subject's POST still fetched (and posted) every
+    later subject of that pass."""
+    bus, stop, posted = FakeEventBus(), threading.Event(), []
+
+    class StopOnFirst:
+        def post(self, ev):
+            posted.append(ev["type"])
+            stop.set()
+            return 202
+
+    b = sb.Bridge(bus, sb.load_bridge(BRIDGE), StopOnFirst(), max_in_flight=1)
+    b.open()
+    job = json.loads((ROOT / "schemas/events/examples/agent.job.failed.valid.json").read_text())
+    publish(bus, job, subject="homelabnext.agent.job.failed")
+    publish(bus, proposal(1))
+    b.run(stop, idle_s=0.01)
+    assert posted == ["homelabnext.agent.job.failed"]
+
+
+class Flaky:
+    """A bus whose fetches fail (a transport error, or a permanent one) while ``down``."""
+
+    def __init__(self, inner, *, permanent: bool = False):
+        self.inner, self.down, self.permanent, self.closed = inner, False, permanent, 0
+
+    def consumer(self, *a, **kw):
+        cons = self.inner.consumer(*a, **kw)
+        bus = self
+
+        class C:
+            max_deliver = getattr(cons, "max_deliver", 100)
+
+            def fetch(self, n=1):
+                if bus.down:
+                    raise nj.WireError("connection closed", permanent=bus.permanent)
+                return cons.fetch(n)
+
+        return C()
+
+    def close(self):
+        self.closed += 1
+
+
+def test_a_failed_fetch_backs_off_one_subject_and_never_ends_the_bridge(hook):
+    """SEC4: a WireError from one fetch escaped poll() and run(), and the CLI exited.  Now that
+    subject backs off and the others go on."""
+    inner, clock = FakeEventBus(), Clock()
+    bus = Flaky(inner, permanent=True)
+    b = bridge(bus, webhook(hook), clock=clock, backoff_base_s=5.0)
+    bus.down = True
+    publish(inner, proposal(1))
+    assert b.poll() == 0
+    st = b.stats()
+    assert st["state"] == "warn" and "fetch failed: WireError" in st["last_error"]
+    assert all(v["consecutive_failures"] == 1 for v in st["subjects"].values())
+    bus.down = False
+    assert b.poll() == 0  # backing off
+    clock.t = 5.0
+    assert b.poll() == 1 and b.stats()["state"] == "ok"
+    assert [r["headers"]["Idempotency-Key"] for r in hook.requests] == ["evt-bridge-1"]
+
+
+def test_a_transport_failure_reconnects_and_reopens_the_durables(hook):
+    inner, clock = FakeEventBus(), Clock()
+    first, made = Flaky(inner), []
+
+    def connect():
+        if len(made) == 0:
+            made.append("refused")
+            raise nj.WireError("connection refused")
+        made.append("ok")
+        return Flaky(inner)
+
+    b = bridge(first, webhook(hook), clock=clock, backoff_base_s=1.0, connect=connect)
+    first.down = True
+    publish(inner, proposal(1))
+    assert b.poll() == 0 and first.closed == 0  # the first subject failed: no more this pass
+    assert b.poll() == 0 and first.closed == 1 and made == ["refused"]  # dropped; refused
+    assert b.stats()["state"] == "warn" and "reconnect failed" in b.stats()["last_error"]
+    assert b.poll() == 0 and made == ["refused"]  # backing off the reconnect
+    clock.t = 10.0
+    assert b.poll() == 1 and made == ["refused", "ok"] and b.bus is not first
+    assert [r["headers"]["Idempotency-Key"] for r in hook.requests] == ["evt-bridge-1"]
+    assert b.stats()["state"] == "ok"
+
+
 def provisioned(limits: bool = True) -> FakeJetStreamWire:
     """A server where the operator created the stream and its DLQ (docs/stackstorm.md)."""
     wire = FakeJetStreamWire()
@@ -498,9 +641,34 @@ def test_the_lease_outlasts_a_post(hook):
     with pytest.raises(sb.BridgeError, match="ack_wait 3s"):
         bridge(standing(wire, ack_wait=3.0), hook)
     # the durable keeps the lease it was created with: a reopen with a longer one still refuses
-    with pytest.raises(sb.BridgeError, match="delete the durable"):
+    with pytest.raises(sb.BridgeError, match="nats consumer edit"):
         bridge(standing(wire), hook)
     bridge(standing(provisioned()), hook)
+
+
+def test_reopening_several_durables_waits_out_one_lease_not_one_each():
+    """A restarted bridge (a new bus) whose three durables each hold an unsettled delivery: their
+    leases were all granted before the new bus existed, so it waits one lease in all."""
+    wire, clock, slept = provisioned(), Clock(), []
+    old = standing(wire)
+    cfg = sb.load_bridge(BRIDGE)
+    for s in cfg.subscriptions:
+        cons = old.consumer(s.durable, s.subject, max_deliver=5)
+        old.publish(s.subject, b"{}", msg_id=f"m-{s.durable}")
+        assert len(cons.fetch(1)) == 1  # leased, never settled: the process died
+
+    def sleep(t):
+        slept.append(t)
+        clock.t += t
+
+    new = nj.JetStreamBus(
+        wire, stream="HNX", subject_prefix="hnx", ack_wait=sb.ACK_WAIT_S, provision=False,
+        clock=clock, sleep=sleep,
+    )  # fmt: skip
+    for s in cfg.subscriptions:
+        new.consumer(s.durable, s.subject, max_deliver=5)
+    assert len(cfg.subscriptions) == 3 and len(slept) == 1
+    assert sb.ACK_WAIT_S < sum(slept) <= sb.ACK_WAIT_S + 1.0
 
 
 def test_the_bridge_over_the_jetstream_adapter(hook):
