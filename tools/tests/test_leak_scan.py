@@ -462,7 +462,7 @@ def test_keyed_secret_negatives(text: str):
         "secret:" + "hx7k2mq9wz4p/r8tv3n6yb1cd",
         "sec" + "ret:llm-gateway/9f86d081884c7d65" + "9a2feaa0c55ad015",
         "master_key: secret:" + "hx7k2mq9wz4p/r8tv3n6yb1cd",
-        'key = "sec' + 'ret:llm-gateway/9f86d081884c7d65' + '9a2feaa0c55ad015"',
+        'key = "sec' + "ret:llm-gateway/9f86d081884c7d65" + '9a2feaa0c55ad015"',
         # a long mantissa carries as many digits as a numeric secret
         "tok" + "en: 1.23456789e+99",
         "tok" + "en: -4.2424242e-7",

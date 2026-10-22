@@ -279,7 +279,8 @@ def test_audit_refuses_a_self_declared_local_backend():
     doc = yaml.safe_load(files["litellm/config.yaml"])
     for d in doc["model_list"]:
         if d["model_name"] == "fast-classifier":
-            d["litellm_params"]["api_base"] = "https://api.example.com:443/v1"
+            url = "https://api.example.com:443/v1"  # no-raw-endpoint: allow a cloud host in a test
+            d["litellm_params"]["api_base"] = url
     files["litellm/config.yaml"] = yaml.safe_dump(doc)
     problems = "\n".join(gw.audit(files, spec))
     assert "backend svc:inference-small is declared local but api.example.com" in problems

@@ -1,5 +1,17 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: lab-postgres-litellm-role
+#   kind: job
+#   purpose: Create the LLM gateway's own postgres role, owning only schema litellm, on a fresh lab volume.
+#   owner: lab-in-a-box
+#   trigger: [manual]
+#   inputs: POSTGRES_USER, POSTGRES_DB, LAB_GATEWAY_DB_PASSWORD (the postgres service environment)
+#   outputs: role litellm and schema litellm in the catalog database
+#   exit:
+#     "0": created
+#     "1": the password is unset or the SQL failed (postgres initialisation stops)
+#
 # Runs once, when the postgres image initialises an empty data volume
 # (/docker-entrypoint-initdb.d).  The LLM gateway (LiteLLM, profile `gateway`) gets its own login
 # role that owns only the `litellm` schema of the catalog database: it cannot create anything in
