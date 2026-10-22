@@ -123,8 +123,11 @@ markers = [
 suite_budget_default = "60"
 suite_budgets = [
   # runs ansible-playbook against localhost (skipped where ansible is absent); 900 since the
-  # baseline-control roles (21 roles, each config hook run end to end against fake daemons)
-  "tests/roles = 900",
+  # baseline-control roles (21 roles, each config hook run end to end against fake daemons), 1080
+  # since the serving roles (model store, vLLM, Open WebUI): about 0.85s a playbook start and 0.35s
+  # a task, spread thinly over 445 tests, measured 850-920s on CI runners after model_store's
+  # per-file stats became one module call
+  "tests/roles = 1080",
   "tools/tests = 240",  # the gate tools run pytest, git and builds in subprocesses
   "tests/packaging = 120",  # builds and installs the wheel and the sdist
   # each test builds the whole repository graph (about 2s a build), so the suite grows with the docs
