@@ -64,6 +64,7 @@ def test_a_hosted_server_with_an_https_url_is_a_valid_record():
         ({"transport__url": "https://mcp.example/mcp"}, "names a public host"),
         ({"egress": "none"}, "egress names internet"),
         ({"egress": ["svc:notify"]}, "egress names internet"),
+        ({"data_tier": "local-only"}, "data_tier is cloud-allowed"),
         ({"runtime": "agent-local"}, "runtime hosted goes with a remote transport"),
         ({"origin": {"kind": "image", "image": "registry.example/x", "digest": None}},
          "a hosted origin goes with a remote transport"),

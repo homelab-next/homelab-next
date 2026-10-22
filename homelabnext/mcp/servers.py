@@ -723,7 +723,7 @@ def numeric_host(host: str) -> bool:
 
 def remote_problems(rec: Mapping[str, Any], where: str, registry: Any = None) -> list[str]:
     """A third party's hosted server (``transport.type: remote``): a ``hosted`` origin and
-    runtime, egress to the internet, and an https URL whose host is a public DNS name (not an
+    runtime, egress to the internet, ``data_tier: cloud-allowed``, and an https URL whose host is a public DNS name (not an
     IPv4 address in any notation, :func:`numeric_host`; not a private or test suffix; with a
     registry, not one of the lab's hosts or its domain).  The URL's shape (https, a lower-case
     host, no userinfo, query or fragment) is the schema's; its credentials can
@@ -740,6 +740,12 @@ def remote_problems(rec: Mapping[str, Any], where: str, registry: Any = None) ->
     egress = rec.get("egress")
     if not (isinstance(egress, list) and "internet" in egress):
         out.append(f"{where}: a remote server is reached over the internet: egress names internet")
+    if rec.get("data_tier") != "cloud-allowed":
+        out.append(
+            f"{where}: a remote server's data_tier is cloud-allowed (what it returns, and what a "
+            "profile sends it, is already at the vendor; local-only would let a local-only "
+            "profile be granted it)"
+        )
     url = urlsplit(str(t.get("url", "")))
     host = (url.hostname or "").lower()
     if url.scheme != "https":
