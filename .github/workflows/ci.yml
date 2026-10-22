@@ -62,7 +62,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           extras: ${{ matrix.extras }}
-      - run: python -m pytest -q -m "not live"
+      # test_this_repo_meets_the_floor runs tools/coverage_floor.py, which the coverage job below
+      # already runs on every push; here it only repeated the whole suite under coverage (~220s a job)
+      - run: >-
+          python -m pytest -q -m "not live"
+          --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
 
   # Broker, scope guard, records lifecycle, decide cascade and the agent grant ceiling: each keeps
   # >= 80% line coverage from its own tests (tools/coverage_floor.py; pytest-cov from the test extra).

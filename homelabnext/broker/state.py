@@ -25,7 +25,18 @@ the same file and nothing is ever rewritten in place.  State is *derived* from w
                                  rebuild has once completed (``decisions.complete``), and on every
                                  start the newest :data:`RECONCILE_AUDIT` audit records are
                                  re-indexed, so a crash between the two writes loses no decision
-``outbox/<event id>.json``       events emitted when no bus is configured
+``outbox/<event id>.json``       events emitted when no bus is configured, each with its place in
+                                 emit order (``queued``: the next value of ``outbox.seq``, taken
+                                 and linked under one ``flock``); ``hnx broker relay`` publishes
+                                 them
+``outbox.seq``                   the outbox's persisted counter (``flock``-guarded), so emit order
+                                 survives restarts, other processes and a clock that goes back
+``relay/``                       ``hnx broker relay``'s own directory (its user's, when it runs
+                                 as one): ``delivered/`` (the bus acknowledged the event, or it
+                                 was ``superseded`` on the first start), ``undeliverable/`` and
+                                 ``quarantine/`` (malformed files), each a copy of the event with
+                                 a receipt; the broker removes an outbox file once it has one
+                                 (:meth:`StateDir.prune_outbox`).  Lock, first-start marker.
 ``digest.key``                   the broker-held key (hex) for the keyed hash of secret arguments in a
                                  request digest (created once, exclusively)
 ``runs/<rid>/``                  a run's private directory (handler copy, stdout, stderr)
@@ -78,6 +89,13 @@ RECONCILE_AUDIT = 256
 DECISIONS_COMPLETE = "decisions.complete"
 #: the audit records the ``decisions/`` index holds: (operation, outcome)
 DECISION_KINDS = frozenset({("approve", "ok"), ("deny", "ok")})
+#: the outbox's persisted emit-order counter (:meth:`StateDir.put_outbox`)
+OUTBOX_SEQ = "outbox.seq"
+#: the relay's directory under the state directory, and its kinds of "done with this event"
+RELAY_DIR = "relay"
+RELAY_DONE = ("delivered", "undeliverable", "quarantine")
+#: how often (at most) the broker removes outbox files the relay is done with
+PRUNE_INTERVAL_S = 60.0
 
 
 class StateError(RuntimeError):
@@ -164,10 +182,15 @@ class StateDir:
     """The broker's state directory.  Created ``0700``: it holds requests and audit records."""
 
     def __init__(
-        self, root: str | os.PathLike[str], *, clock_ns: Callable[[], int] = time.time_ns
+        self,
+        root: str | os.PathLike[str],
+        *,
+        clock_ns: Callable[[], int] = time.time_ns,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.root = Path(root)
         self._clock_ns = clock_ns  # orders requests (``submitted_ns``)
+        self._monotonic = monotonic  # paces prune_outbox
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         index_missing = not (self.root / "open").exists()
         for name in _SUBDIRS:
@@ -179,11 +202,13 @@ class StateDir:
         self._last_stamp = ""
         self._audit_lock = threading.Lock()  # a threaded server shares one instance
         self._key: bytes | None = None
+        self._pruned = float("-inf")
         if index_missing:  # a state directory from before the index: build it once
             for rid in self.request_ids():
                 if self.get_claim(rid) is None:
                     self._mark_open(rid, self.get_request(rid) or {})
         self._index_decisions()
+        self.prune_outbox(force=True)
 
     def _index_decisions(self) -> None:
         """Rebuild ``decisions/`` from the whole trail until a rebuild has once completed; then
@@ -340,14 +365,152 @@ class StateDir:
         return self._key
 
     def put_outbox(self, event: dict[str, Any]) -> bool:
-        """Record an event (idempotent per event id: a repeat is a no-op)."""
-        eid = str(event["id"])
-        if "/" in eid or eid.startswith("."):
-            raise StateError(f"not an event id: {eid!r}")
-        return write_exclusive(self._dir("outbox") / f"{eid}.json", _dumps(event))
+        """Record an event (idempotent per event id: a repeat is a no-op) with its place in emit
+        order, ``queued``: the next value of the persisted counter ``outbox.seq``.
+
+        The counter is taken and the file linked under one exclusive ``flock`` (and this
+        instance's lock), so across threads and processes an event becomes visible only after
+        every event with a smaller ``queued`` is: a relay pass that sees event *n* sees every
+        earlier one still pending.  No clock is involved, so a clock stepped back (or two
+        processes' clocks) cannot reorder events."""
+        eid = self._event_id(event.get("id"))
+        path = self._dir("outbox") / f"{eid}.json"
+        if path.exists():
+            return False
+        with self._audit_lock, self._outbox_seq() as take:
+            if path.exists():
+                return False
+            doc = {"queued": take(), "event": event}
+            # group-readable: the relay may run as its own user in the outbox's group
+            written = write_exclusive(path, _dumps(doc), mode=0o640)
+        self.prune_outbox()
+        return written
+
+    @contextlib.contextmanager
+    def _outbox_seq(self) -> Iterator[Callable[[], int]]:
+        """Hold ``outbox.seq``'s ``flock``; yields a function returning the next value (stored
+        before it is returned, so a crash leaves a gap, never a repeat)."""
+        import fcntl
+
+        fd = os.open(self.root / OUTBOX_SEQ, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+
+            def take() -> int:
+                raw = os.pread(fd, 64, 0).decode("ascii", "replace").strip()
+                last = int(raw) if raw.isdigit() else self._outbox_max_queued()
+                value = last + 1
+                os.pwrite(fd, f"{value:020d}\n".encode("ascii"), 0)
+                os.fsync(fd)
+                return value
+
+            yield take
+        finally:
+            os.close(fd)  # releases the flock
+
+    def _outbox_max_queued(self) -> int:
+        """The largest ``queued`` in the outbox (a missing or unreadable ``outbox.seq``): every
+        event still pending sorts before the next one."""
+        best = 0
+        for p in outbox_files(self._dir("outbox")):
+            entry = self._outbox_entry(p)
+            if entry is not None and entry[0][0] == 1:
+                best = max(best, entry[0][1])
+        return best
+
+    @staticmethod
+    def _event_id(eid: Any) -> str:
+        eid = str(eid or "")
+        if not eid or "/" in eid or eid.startswith(".") or len(eid) > 200:
+            raise StateError(f"not an event id: {eid[:80]!r}")
+        return eid
+
+    def _outbox_entry(self, path: Path) -> tuple[tuple[int, int, str], dict[str, Any]] | None:
+        try:
+            return read_outbox_file(path)
+        except (OutboxFileError, FileNotFoundError):
+            return None  # malformed: the relay quarantines it (relay/quarantine/)
 
     def outbox(self) -> list[dict[str, Any]]:
-        return [d for p in sorted(self._dir("outbox").glob("*.json")) if (d := _load(p))]
+        """Every event still in the outbox, in emit order (the relay may have published some;
+        :meth:`prune_outbox` removes those)."""
+        entries = (self._outbox_entry(p) for p in outbox_files(self._dir("outbox")))
+        return [ev for _, ev in sorted(e for e in entries if e is not None)]
+
+    def prune_outbox(self, *, force: bool = False) -> int:
+        """Remove every outbox file the relay is done with (a marker under ``relay/delivered``,
+        ``relay/undeliverable`` or ``relay/quarantine``), so ``outbox/`` holds what is pending and
+        a relay pass costs O(pending).  The relay's marker keeps the event (and its receipt).
+        Runs at most every :data:`PRUNE_INTERVAL_S` unless ``force``; returns how many it removed.
+        The broker owns ``outbox/``, so it is the one that removes; the relay only reads it."""
+        now = self._monotonic()
+        if not force and now - self._pruned < PRUNE_INTERVAL_S:
+            return 0
+        self._pruned = now
+        relay, removed = self.root / RELAY_DIR, 0
+        try:  # never fails an emit: a relay directory the broker cannot read prunes nothing
+            if not relay.is_dir():
+                return 0
+            for path in outbox_files(self._dir("outbox")):
+                if any((relay / kind / path.name).exists() for kind in RELAY_DONE):
+                    with contextlib.suppress(FileNotFoundError):
+                        path.unlink()
+                        removed += 1
+        except OSError:
+            pass
+        return removed
+
+
+class OutboxFileError(ValueError):
+    """An outbox file that is not an event the relay can publish; ``reason`` is a short code."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def outbox_files(directory: Path) -> list[Path]:
+    """The outbox's event files (``*.json``; never a temporary ``.name.tmp``)."""
+    return [p for p in directory.glob("*.json") if not p.name.startswith(".")]
+
+
+def read_outbox_file(path: Path) -> tuple[tuple[int, int, str], dict[str, Any]]:
+    """``((format, position, name), event)`` of one outbox file, or :class:`OutboxFileError`.
+
+    A current file is ``{"queued": <int>, "event": {...}}`` and sorts by ``queued``.  A file from
+    before ``queued`` (the bare event, written by a broker without the relay) sorts before every
+    current one, by its ``time`` (whole seconds) and then its id: it was emitted before anything
+    with a ``queued``, and within one second the id is the only order there is.  Either way the
+    event must name its id (the file's name) and its type.  A file that cannot be read (but
+    exists: :class:`FileNotFoundError` passes through, it was pruned) is ``unreadable``: one file
+    the relay may not read must cost that file, never every pass."""
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        raise
+    except OSError:  # permission, a directory named *.json, an I/O error
+        raise OutboxFileError("unreadable") from None
+    try:
+        doc = json.loads(raw)
+    except (UnicodeDecodeError, ValueError):
+        raise OutboxFileError("not-json") from None
+    if not isinstance(doc, dict):
+        raise OutboxFileError("not-an-object")
+    if "queued" in doc or "event" in doc:
+        queued, event = doc.get("queued"), doc.get("event")
+        if not isinstance(queued, int) or isinstance(queued, bool) or queued < 1:
+            raise OutboxFileError("bad-queued")
+        if not isinstance(event, dict):
+            raise OutboxFileError("bad-event")
+        key: tuple[int, int, str] = (1, queued, path.stem)
+    else:
+        event = doc
+        key = (0, _order({"request": {"created": str(doc.get("time", ""))}}), path.stem)
+    if event.get("id") != path.stem:
+        raise OutboxFileError("bad-id")
+    if not isinstance(event.get("type"), str) or not event["type"]:
+        raise OutboxFileError("no-type")
+    return key, event
 
 
 class FileApprovalStore:

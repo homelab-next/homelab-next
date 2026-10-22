@@ -701,3 +701,40 @@ def _fail_after(real, n):
         return real(path, data, **kw)
 
     return wrapped
+
+
+@pytest.mark.parametrize(
+    "who,approver,tier",
+    [
+        (APPROVER, None, "human"),
+        (
+            "svc:auto-approver",
+            {"issuer": "svc", "subject": "auto-approver", "kind": "agent"},
+            "agent",
+        ),
+    ],
+)
+def test_decision_returned_names_who_approved(tmp_path, who, approver, tier):
+    """decision.returned said tier_used human for every approval, an agent's under
+    allow_agent_approvers included, so StackStorm's A03 (which acts on human only) ran what an
+    agent approved.  An agent approver now emits tier_used agent."""
+    import yaml
+
+    path = _copy_example(tmp_path)
+    doc = yaml.safe_load(path.read_text())
+    if approver is not None:
+        doc["approvers"].append(approver)
+        doc["allow_agent_approvers"] = True
+    path.write_text(yaml.safe_dump(doc, sort_keys=False))
+    clock = Clock()
+    svc = BrokerService.from_manifest(
+        path, tmp_path / "state", data_root=tmp_path / "data", clock=clock,
+        resolve_secret={"DEMO_API_TOKEN": TOKEN}.__getitem__,
+    )  # fmt: skip
+    rid = _restart(svc)
+    clock.advance(30)
+    svc.approve(rid, who)
+    [returned] = [e for e in svc.state.outbox() if e["type"] == "homelabnext.decision.returned"]
+    assert returned["data"]["tier_used"] == tier and returned["data"]["verdict"] == "accept"
+    assert event_problems(returned) == []
+    assert svc.run(AGENT, rid)["output"]["would_restart"] == "svc:queue"  # it still counts

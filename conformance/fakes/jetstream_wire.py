@@ -5,7 +5,9 @@ It answers the requests :mod:`homelabnext.conform.adapters.nats_jetstream` sends
 nats-server 2.10 shapes them (read from the server source, ``server/consumer.go``, ``stream.go``,
 ``jetstream_api.go`` at v2.10.22):
 
-* ``$JS.API.STREAM.{INFO,CREATE,DELETE,MSG.GET}`` and ``$JS.API.CONSUMER.{INFO,CREATE}`` with the
+* ``$JS.API.STREAM.{INFO,CREATE,DELETE,MSG.GET}`` (``seq``, ``next_by_subj``, ``last_by_subj``) and ``$JS.API.CONSUMER.{INFO,CREATE}`` (also the
+  2.9+ ``CONSUMER.CREATE.<stream>.<durable>.<filter>`` form, whose filter must be the config's;
+  pull consumers only, ``deliver_policy`` ``new``, ``all`` or ``by_start_time``) with the
   server's error objects (``stream not found`` 10059, ``consumer not found`` 10014, ``no message
   found`` 10037) and its stream-config rules (``>`` and ``$JS.`` subjects need no-ack, except
   ``$JS.EVENT.>``; subjects may not overlap another stream's);
@@ -30,6 +32,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from homelabnext.conform.adapters.nats_jetstream import WireError, WireMsg
@@ -73,6 +76,7 @@ class _Stored:
     subject: str
     data: bytes
     headers: dict[str, str]
+    ts: float = 0.0  # wall-clock seconds when stored (deliver_policy by_start_time)
 
 
 @dataclass
@@ -98,8 +102,15 @@ class _Consumer:
 class FakeJetStreamWire:
     """Implements the adapter's ``Wire`` against an in-memory model of one nats-server."""
 
-    def __init__(self, clock: Callable[[], float] = time.monotonic, *, drop_advisories=False):
+    def __init__(
+        self,
+        clock: Callable[[], float] = time.monotonic,
+        *,
+        drop_advisories=False,
+        wall: Callable[[], float] = time.time,
+    ):
         self._clock = clock
+        self._wall = wall
         self._lock = threading.RLock()
         self.streams: dict[str, _Stream] = {}
         self.log: list[tuple[str, bytes, dict[str, str]]] = []
@@ -187,6 +198,13 @@ class FakeJetStreamWire:
                 return _err(404, 10014, "consumer not found")
             return self._consumer_info(t[2], c)
         if t[0] == "CONSUMER" and t[1] == "CREATE":
+            cfg = body.get("config") or {}
+            if len(t) > 4 and cfg.get("filter_subject") != ".".join(t[4:]):
+                return _err(
+                    400,
+                    10131,
+                    "Consumer create request did not match filtered subject from create subject",
+                )
             return self._create_consumer(t[2], t[3], body)
         return _err(400, 10003, f"fake: unsupported API {what}")
 
@@ -211,8 +229,12 @@ class FakeJetStreamWire:
 
     def _msg_get(self, st: _Stream, body: dict[str, Any]) -> dict[str, Any]:
         seq, nxt = int(body.get("seq", 0)), body.get("next_by_subj")
+        last = body.get("last_by_subj")
         found = None
-        if nxt:
+        if last:
+            hits = [s for s in st.msgs if subject_matches(last, st.msgs[s].subject)]
+            found = st.msgs[max(hits)] if hits else None
+        elif nxt:
             for s in sorted(st.msgs):
                 if s >= seq and subject_matches(nxt, st.msgs[s].subject):
                     found = st.msgs[s]
@@ -250,9 +272,24 @@ class FakeJetStreamWire:
             if body.get("action") == "create" and st.consumers[name].config != cfg:
                 return _err(400, 10148, "consumer already exists")
             return self._consumer_info(stream, st.consumers[name])
-        if cfg.get("deliver_policy", "all") != "new" or cfg.get("ack_policy") != "explicit":
-            return _err(400, 10003, "fake: only deliver_policy=new with ack_policy=explicit")
-        c = _Consumer(name, cfg, st.last_seq + 1)
+        policy = cfg.get("deliver_policy", "all")
+        if policy not in ("new", "all", "by_start_time") or cfg.get("ack_policy") != "explicit":
+            return _err(400, 10003, "fake: deliver_policy new/all/by_start_time, ack explicit")
+        if cfg.get("deliver_subject"):
+            return _err(400, 10003, "fake: push consumers are not modelled")
+        if policy == "new":
+            first = st.last_seq + 1
+        elif policy == "all":
+            first = 1
+        else:
+            stamp = str(cfg.get("opt_start_time") or "")
+            try:
+                start = datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                return _err(400, 10094, "consumer deliver policy requires opt_start_time")
+            later = [m.seq for m in st.msgs.values() if m.ts >= start]
+            first = min(later) if later else st.last_seq + 1
+        c = _Consumer(name, cfg, first)
         st.consumers[name] = c
         return self._consumer_info(stream, c)
 
@@ -275,7 +312,7 @@ class FakeJetStreamWire:
 
     def _store(self, st: _Stream, subject: str, data: bytes, hdrs: dict[str, str]) -> int:
         st.last_seq += 1
-        st.msgs[st.last_seq] = _Stored(st.last_seq, subject, bytes(data), dict(hdrs))
+        st.msgs[st.last_seq] = _Stored(st.last_seq, subject, bytes(data), dict(hdrs), self._wall())
         return st.last_seq
 
     def _publish(self, subject: str, data: bytes, hdrs: dict[str, str]) -> dict[str, Any]:

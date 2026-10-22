@@ -16,7 +16,7 @@ criteria:
     pattern: homelabnext.agent.job.failed
   trigger.body.source:
     type: equals
-    pattern: svc:orchestration
+    pattern: svc:llm-orchestrator
   trigger.body.data.reason:
     type: inside
     pattern:
@@ -28,6 +28,10 @@ criteria:
     type: inside
     pattern:
     - 0
+  trigger.body.data.retried_by_run_id:
+    type: nexists
+  trigger.body.data.auto_retry_scheduled:
+    type: nexists
 action:
   ref: homelabnext.agent_job_retry
   parameters:

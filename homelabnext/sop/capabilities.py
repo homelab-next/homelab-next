@@ -25,8 +25,8 @@ disagree.
 Pages assume they live at ``docs/capabilities/`` (links to sources are ``../../<path>``) and use
 relative Markdown links plus path-qualified ``[[folder/page|label]]`` wiki-links, so the same
 files read on GitHub and in an Obsidian vault opened at ``docs/``.  Output is deterministic: no
-timestamps, source order or sorted order everywhere.  The suites, contracts and fakes live in
-``conformance/`` of a source checkout (not in the wheel), so generation needs one.
+timestamps, source order or sorted order everywhere.  The suites and fakes live in
+``conformance/`` of a source checkout (only the contracts are in the wheel), so generation needs one.
 """
 
 from __future__ import annotations
@@ -190,9 +190,9 @@ def resolve_root(root: str | Path | None = None) -> Path:
         found = paths.checkout_root()
         if found is None:
             raise NotACheckoutError(
-                "hnx docs capabilities needs a homelabnext source checkout: the contracts, suites "
-                "and fakes live in conformance/, which the wheel does not carry; run it from a "
-                "checkout or pass --root"
+                "hnx docs capabilities needs a homelabnext source checkout: the suites and fakes "
+                "live in conformance/, which the wheel does not carry; run it from a checkout or "
+                "pass --root"
             )
         r = found
     if (

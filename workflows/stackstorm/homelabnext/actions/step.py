@@ -13,4 +13,9 @@ PINNED = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "pi
 
 class Step(Action):
     def run(self, **params):
-        return st2_runtime.step(self.config, pinned_dir=PINNED, **params)
+        return st2_runtime.step(
+            self.config,
+            kv=st2_runtime.ActionServiceKV(self.action_service, self.config),
+            pinned_dir=PINNED,
+            **params,
+        )

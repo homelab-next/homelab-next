@@ -69,7 +69,11 @@ def test_wheel_ships_package_data_and_entry_point(wheel_dir, tmp_path):
     )
     assert "x10_conformance = homelabnext.conform.plugins.x10_conformance:register" in eps
     assert "hnx = homelabnext.cli:main" in eps
-    assert not any(n.startswith(("tests/", "schemas/", "compose/", "conformance/")) for n in names)
+    assert "conformance/protocols/broker.py" in names  # imported by the broker and st2 bridge
+    assert not any(n.startswith(("tests/", "schemas/", "compose/")) for n in names)
+    assert not any(
+        n.startswith("conformance/") and not n.startswith("conformance/protocols/") for n in names
+    )
 
 
 def test_packaged_data_equals_the_source_of_truth(wheel_dir, tmp_path):
@@ -151,6 +155,24 @@ def test_installed_wheel_never_sees_the_source_tree(installed, tmp_path):
     assert site in where.parents, where
     assert root == site / "homelabnext" / "_data"
     assert ROOT not in root.parents
+
+
+def test_installed_runtime_imports_the_shipped_contracts(installed, tmp_path):
+    """The broker, the StackStorm bridge and the adapters load conformance.protocols at import."""
+    py, site = installed
+    mods = (
+        "homelabnext.broker.service",
+        "homelabnext.broker.cli",
+        "homelabnext.workflows.st2_runtime",
+        "homelabnext.conform.adapters.nats_jetstream",
+        "homelabnext.conform.adapters.openbao",
+    )
+    code = "import sys, conformance.protocols as p; [__import__(m) for m in sys.argv[1:]]; print(p.__file__)"
+    run = subprocess.run(
+        [str(py), "-I", "-c", code, *mods], cwd=tmp_path, capture_output=True, text=True, timeout=60
+    )
+    assert run.returncode == 0, run.stderr
+    assert site in Path(run.stdout.strip()).parents, run.stdout
 
 
 def test_installed_help_runs_without_the_source_tree(installed, tmp_path):

@@ -22,6 +22,7 @@ import pytest
 import yaml
 from wf_support import PACKS, ROOT, manifest, pack, universe
 
+from conformance.fakes.event_bus import FakeEventBus
 from conformance.protocols.broker import Denied
 from homelabnext.broker.service import BrokerService
 from homelabnext.events.envelope import event_problems
@@ -31,6 +32,7 @@ from homelabnext.workflows import (
     pack_digest,
     run_fixture,
     st2,
+    st2_bridge,
     st2_runtime,
     triggered,
 )
@@ -135,6 +137,24 @@ def corpus() -> list[dict]:
             ev["id"] = f"evt-grid-{reason}-{n}"
             ev["data"] |= {"reason": reason, "resubmits": n}
             evs.append(ev)
+    # the broker's own decision.returned, an approval and a denial (A03)
+    for verdict in ("accept", "reject"):
+        evs.append(
+            {
+                "specversion": "1.0",
+                "id": f"evt-broker-{verdict}",
+                "source": "svc:broker",
+                "type": "homelabnext.decision.returned",
+                "time": "2026-01-01T00:00:00Z",
+                "subject": "restart-0001",
+                "data": {
+                    "decision_id": "restart-0001",
+                    "verdict": verdict,
+                    "confidence": 1.0,
+                    "tier_used": "human",
+                },
+            }
+        )
     return evs
 
 
@@ -185,6 +205,13 @@ class ServiceAsClient:
         rid = self.svc.submit(self.caller, action, dict(params or {}), target=target)
         state = self.svc.status(self.caller, rid).state
         return {"request_id": rid, "state": state, "awaiting_approval": state == "pending"}
+
+    def status(self, request_id):
+        return self.svc.detail(self.caller, request_id)
+
+    def run(self, request_id):
+        self.runs = getattr(self, "runs", 0) + 1
+        return self.svc.run(self.caller, request_id)
 
 
 def broker_service(tmp_path) -> BrokerService:
@@ -264,6 +291,7 @@ def test_the_tree_check_catches_a_task_that_is_not_a_shim():
 # ---------------------------------------------------------------- criteria conformance
 def test_rule_criteria_match_exactly_the_events_the_pack_triggers_on():
     packs = all_packs()
+    packs["approved-run"] = st2_runtime.approved_run_pack(binding()["actor"])
     events = corpus()
     for path, rule in rules_of().items():
         name = rule["action"]["ref"].split(".", 1)[1].replace("_", "-")
@@ -295,7 +323,7 @@ def test_a_rule_without_a_type_criterion_matches_everything_and_is_refused():
     res = go(binding())
     path = "homelabnext/rules/on_proposal_validate.yaml"
     bad = dict(res.files) | {path: yaml.safe_dump(loose)}
-    assert {p.rule for p in st2.tree_problems(bad, "homelabnext")} == {"st2-criteria"}
+    assert {p.rule for p in st2.tree_problems(bad, "homelabnext")} == {"st2-criteria", "st2-source"}
 
 
 def test_criteria_keys_and_repeated_fields():
@@ -332,7 +360,8 @@ def test_the_shipped_binding_passes_and_starts_in_shadow():
     assert res.problems == []
     assert {r["mode"] for r in binding()["rules"]} == {"shadow"}
     pins = [json.loads(t) for p, t in res.files.items() if "/pinned/" in p]
-    assert len(pins) == 2 and {p["mode"] for p in pins} == {"shadow"}
+    assert len(pins) == 3 and {p["mode"] for p in pins} == {"shadow"}
+    assert binding()["approved_run"]["mode"] == "shadow"
     for rule in rules_of().values():
         assert "mode" not in rule["action"]["parameters"]  # never a parameter
 
@@ -563,12 +592,42 @@ def test_a02_coalesces_a_burst_of_failures_of_one_agent():
     assert got["reason"] == "not-triggered"  # before the datastore: it opens no window
 
 
+def test_a_redelivered_event_is_admitted_once_without_a_coalesce_window():
+    """A StackStorm webhook starts one run per POST (it ignores Idempotency-Key) and the bridge
+    delivers at least once, so admit itself drops an event id it already took."""
+    a02 = pack("agent-job-retry")
+    kv = KV()
+    got = [
+        st2_runtime.admit_event(pack=a02["pack"], trigger=a02["trigger"], event=_failure(1), kv=kv)
+        for _ in range(3)
+    ]
+    assert [g["reason"] for g in got] == ["admitted", "duplicate", "duplicate"]
+    other = st2_runtime.admit_event(
+        pack="another-pack", trigger=a02["trigger"], event=_failure(1), kv=kv
+    )
+    assert other["reason"] == "admitted"  # remembered per pack
+    kv.now += st2_runtime.DEDUPE_WINDOW_S
+    again = st2_runtime.admit_event(
+        pack=a02["pack"], trigger=a02["trigger"], event=_failure(1), kv=kv
+    )
+    assert again["reason"] == "admitted"  # forgotten after the window
+    # a CronTimer that fires twice for the same time is one event, so one run
+    firing = {"id": "nightly-digest", "fired_at": "2026-01-15 06:05:00"}
+    twice = [
+        st2_runtime.admit_event(
+            pack="nightly-digest", trigger=SCHED_PACK["trigger"], schedule=firing, kv=kv
+        )["reason"]
+        for _ in range(2)
+    ]
+    assert twice == ["admitted", "duplicate"]
+
+
 def test_every_event_triggered_pack_pins_its_producer():
     rules = rules_of()
     a01 = rules["homelabnext/rules/on_proposal_validate.yaml"]
     a02 = rules["homelabnext/rules/on_agent_job_retry.yaml"]
     assert a01["criteria"]["trigger.body.source"] == {"type": "equals", "pattern": "svc:broker"}
-    assert a02["criteria"]["trigger.body.source"]["pattern"] == "svc:orchestration"
+    assert a02["criteria"]["trigger.body.source"]["pattern"] == st2.ORCHESTRATOR_SOURCE
     ev = pack("proposal-validate")["fixtures"][0]["event"]
     assert st2_matches(a01, ev)
     assert not st2_matches(a01, ev | {"source": "profile:triage"})
@@ -694,7 +753,7 @@ def test_proposal_lane_to_a01_end_to_end_through_a_real_broker(tmp_path):
     )
     [(action, params, target)] = fb.calls
     assert (action, target) == ("agent.job.submit", "svc:orchestration")
-    assert params["input"]["note"] == event["data"]["note"]
+    assert params["task_description"] == event["data"]["note"]  # the controller takes no input
     assert params["idempotency_key"] == event["id"]
 
 
@@ -758,19 +817,31 @@ def test_the_rendered_shims_delegate_to_the_runtime(monkeypatch):
             return self.kv.get(name)
 
         def set_value(self, name, value, ttl=None, local=True):
-            assert local is False and ttl == 600
+            assert local is False
+            assert ttl == (600 if name.startswith("homelabnext.coalesce.") else 86400)
             self.kv[name] = value
 
     a02 = pack("agent-job-retry")
     co = _a02(binding())["coalesce"]
-    admit = _load_shim("admit", monkeypatch)(action_service=Service())
+    service = Service()
+    with pytest.raises(ValueError, match="kv_key"):  # no key, no datastore
+        _load_shim("admit", monkeypatch)(config={}, action_service=service).run(pack="x", event="")
+    admit = _load_shim("admit", monkeypatch)(config=KV_CONFIG, action_service=service)
     ev = a02["fixtures"][0]["event"]
     assert co["window_s"] == 600
     enc = st2_runtime.encode(ev)
     first = admit.run(pack=a02["pack"], event=enc)  # the committed pack's pinned/ directory
-    second = admit.run(pack=a02["pack"], event=enc)
-    assert (first["reason"], second["reason"]) == ("admitted", "coalesced")
-    step = _load_shim("step", monkeypatch)(config={"broker_socket": "/nonexistent"})
+    second = admit.run(pack=a02["pack"], event=enc)  # a redelivery: the same id
+    third = admit.run(pack=a02["pack"], event=st2_runtime.encode(ev | {"id": "evt-other"}))
+    assert (first["reason"], second["reason"], third["reason"]) == (
+        "admitted",
+        "duplicate",
+        "coalesced",
+    )
+    assert st2_runtime.seen_name(a02["pack"], ev["id"]) not in service.kv  # keyed, not plain
+    step = _load_shim("step", monkeypatch)(
+        config=KV_CONFIG | {"broker_socket": "/nonexistent"}, action_service=Service()
+    )
     out = step.run(pack=a02["pack"], step="resubmit", event=first["event"], state="")
     assert calls_of(out)[0]["result"] == "shadow"
     with pytest.raises(TypeError):  # the mode is the pinned rule's, never a parameter
@@ -910,3 +981,596 @@ def test_every_called_action_has_its_handler_pinned_in_the_tree(tmp_path):
         ("st2-handler", "agent-job-retry"),
         ("st2-handler", "proposal-validate"),
     }
+
+
+# ---------------------------------------------------------------- the approved-run rule (A03)
+RESTART = {
+    "pack": "restart-queue",
+    "version": 1,
+    "description": "restart the queue service (a risky action, held for approval)",
+    "actor": "profile:triage",
+    "trigger": {
+        "event": "homelabnext.agent.job.failed",
+        "where": [{"ref": "$event.source", "equals": st2.ORCHESTRATOR_SOURCE}],
+    },
+    "steps": [
+        {
+            "id": "restart",
+            "kind": "action",
+            "action": "service.restart",
+            "target": "svc:queue",
+            "params": {"grace_s": 30},
+        }
+    ],
+}
+
+
+def _pin(pdir, doc: dict, mode: str, risky: dict) -> None:
+    pin = {"pack": doc, "digest": pack_digest(doc), "mode": mode, "risky": risky}
+    (pdir / (st2.st2_name(doc["pack"]) + ".json")).write_text(json.dumps(pin))
+
+
+def approved_run_dir(tmp_path, run_mode="live", pack_mode="live", actor="profile:triage"):
+    """A ``pinned/`` directory as the renderer writes it: a live pack with one risky step, and
+    the built-in approved-run pack (both for ``actor``)."""
+    pdir = tmp_path / "pinned"
+    pdir.mkdir(parents=True, exist_ok=True)
+    _pin(pdir, dict(RESTART, actor=actor), pack_mode, {"restart": True})
+    _pin(pdir, st2_runtime.approved_run_pack(actor), run_mode, {"run": False})
+    return pdir
+
+
+def _job_failed(i: int) -> dict:
+    ev = copy.deepcopy(pack("agent-job-retry")["fixtures"][0]["event"])
+    ev["id"] = f"evt-restart-{i}"
+    return ev
+
+
+def _held(svc, pdir, kv, i: int) -> str:
+    """Run the risky step live: the broker holds it; returns the broker's request id."""
+    out = st2_runtime.step(
+        {"broker_socket": "/s"},
+        pinned_dir=pdir,
+        kv=kv,
+        broker_factory=lambda _s: ServiceAsClient(svc, "profile:triage"),
+        pack="restart-queue",
+        step="restart",
+        event=st2_runtime.encode(_job_failed(i)),
+    )
+    [rec] = calls_of(out)
+    assert (rec["result"], rec["recorded"]) == ("held", True)
+    return rec["broker_request_id"]
+
+
+def _returned(rid: str, **over) -> dict:
+    """A decision.returned as the broker builds it (svc:broker, accept, human)."""
+    from homelabnext.events.envelope import build_event
+
+    data = {"decision_id": rid, "verdict": "accept", "confidence": 1.0, "tier_used": "human"}
+    return build_event(
+        "homelabnext.decision.returned", "svc:broker", data | over, dedupe_key=f"forged:{rid}"
+    )
+
+
+def _run(pdir, kv, ev: dict, broker) -> dict:
+    out = st2_runtime.step(
+        {"broker_socket": "/s"},
+        pinned_dir=pdir,
+        kv=kv,
+        broker_factory=lambda _s: broker,
+        pack="approved-run",
+        step="run",
+        event=st2_runtime.encode(ev),
+    )
+    [rec] = calls_of(out)
+    assert out["result"] == rec["result"]
+    return rec
+
+
+def test_the_approved_run_rule_is_rendered_shadow_and_bound_to_the_broker():
+    rules = rules_of()
+    rule = rules["homelabnext/rules/on_approved_run.yaml"]
+    assert rule["action"]["parameters"] == {"event": st2.ENCODED_BODY}
+    ev = _returned("restart-0001")
+    assert st2_matches(rule, ev)
+    assert not st2_matches(rule, _returned("restart-0001", verdict="reject"))
+    assert not st2_matches(rule, _returned("restart-0001", tier_used="small"))
+    assert not st2_matches(rule, ev | {"source": "svc:decide"})
+    res = go(binding())
+    pin = json.loads(res.files["homelabnext/pinned/approved_run.json"])
+    assert pin["mode"] == "shadow" and pin["pack"] == st2_runtime.approved_run_pack(
+        binding()["actor"]
+    )
+    bridge = json.loads(res.files["bridge.json"])
+    [sub] = [x for x in bridge["subscriptions"] if x["subject"] == st2_runtime.DECISION_EVENT]
+    assert sub["sources"] == ["svc:broker"] and sub["rules"] == ["homelabnext.on_approved_run"]
+
+
+def test_the_approved_run_rule_takes_the_promotion_gate_and_its_name():
+    b = binding()
+    b["approved_run"]["mode"] = "live"
+    assert ("st2-live", "approved-run") in _problems(b)
+    b["approved_run"]["promotion"] = {
+        "shadow_from": "2026-01-01",
+        "live_from": "2026-01-03",
+        "evidence": "docs/parity/a03.md",
+    }
+    assert ("st2-live", "approved-run") in _problems(b)  # a two-day window
+    b["approved_run"]["promotion"]["live_from"] = "2026-01-08"
+    assert ("st2-live", "approved-run") in _problems(b, tracked=lambda _p: False)
+    assert _problems(b) == set()
+    packs = all_packs()
+    packs["approved-run"] = dict(copy.deepcopy(packs["proposal-validate"]), pack="approved-run")
+    b = binding()
+    b["rules"].append({"pack": "approved-run", "mode": "shadow", "coalesce": _a02(b)["coalesce"]})
+    assert ("st2-duplicate", "approved-run") in _problems(b, packs)
+
+
+def test_an_approved_request_st2_submitted_runs_exactly_once(tmp_path):
+    """Live step -> held -> a person approves -> the broker's decision.returned on the bus ->
+    the bridge -> the rule -> admit -> the approved-run step -> the broker runs it, once."""
+    bus = FakeEventBus()
+    svc = BrokerService.from_manifest(
+        ROOT / "examples" / "broker" / "manifest.yml",
+        tmp_path / "state",
+        data_root=tmp_path / "data",
+        clock=lambda: T0,
+        resolve_secret={"DEMO_API_TOKEN": "fake-demo-token-4b1d"}.__getitem__,
+        bus=bus,
+    )
+
+    class Capture:
+        def __init__(self):
+            self.events = []
+
+        def post(self, ev):
+            self.events.append(ev)
+            return 202
+
+    hook = Capture()
+    bridge = st2_bridge.Bridge(
+        bus, st2_bridge.load_bridge(json.loads(go(binding()).files["bridge.json"])), hook
+    )
+    bridge.open()
+    pdir, kv = approved_run_dir(tmp_path), KV()
+    rid = _held(svc, pdir, kv, 1)
+    svc.approve(rid, "sso:operator-one")
+    bridge.poll()
+    [returned] = hook.events
+    assert (returned["type"], returned["data"]["decision_id"]) == (st2_runtime.DECISION_EVENT, rid)
+    assert st2_matches(rules_of()["homelabnext/rules/on_approved_run.yaml"], returned)
+    admitted = st2_runtime.admit(
+        pack="approved-run", pinned_dir=pdir, event=st2_runtime.encode(returned), kv=kv
+    )
+    assert admitted["admitted"]
+    client = ServiceAsClient(svc, "profile:triage")
+    rec = _run(pdir, kv, st2_runtime.decode(admitted["event"]), client)
+    assert (rec["result"], rec["reason"], rec["pack"]) == ("executed", "approved", "restart-queue")
+    assert svc.state.state_of(rid) == "done" and client.runs == 1
+    # the same event again: admit drops it; a forged copy past admit runs nothing either
+    again = st2_runtime.admit(
+        pack="approved-run", pinned_dir=pdir, event=st2_runtime.encode(returned), kv=kv
+    )
+    assert again["reason"] == "duplicate"
+    rec = _run(pdir, kv, returned, client)
+    assert (rec["result"], rec["reason"], client.runs) == ("refused", "not-pending", 1)
+
+
+def test_a_forged_accept_runs_nothing_and_is_refused_with_a_reason(tmp_path, caplog):
+    svc = broker_service(tmp_path)
+    pdir, kv = approved_run_dir(tmp_path), KV()
+    client = ServiceAsClient(svc, "profile:triage")
+    pending = _held(svc, pdir, kv, 1)  # held, never approved
+    denied = _held(svc, pdir, kv, 2)
+    svc.deny(denied, "sso:operator-one")
+    other = svc.submit("profile:triage", "service.restart", {"grace_s": 5}, target="svc:queue")
+    cases = {
+        pending: "not-approved",
+        denied: "not-pending",
+        other: "not-st2-submitted",  # the agent's own request, not one StackStorm submitted
+        "req-nonexistent": "not-st2-submitted",  # an arbitrary id
+        "Restart..0001": "invalid-request-id",  # the event schema allows it, a broker id not
+    }
+    for rid, reason in cases.items():
+        rec = _run(pdir, kv, _returned(rid), client)
+        assert (rec["result"], rec["reason"]) == ("refused", reason), rid
+    assert getattr(client, "runs", 0) == 0
+    assert svc.state.state_of(pending) == "pending" and svc.state.state_of(other) == "pending"
+    assert "not running" in caplog.text and "not-approved" in caplog.text
+    # StackStorm's identity is not the owner: the broker answers not-owner, nothing runs
+    svc.approve(pending, "sso:operator-one")
+    stranger = ServiceAsClient(svc, "profile:reader")
+    rec = _run(pdir, kv, _returned(pending), stranger)
+    assert (rec["result"], rec["reason"]) == ("refused", "not-request-owner")
+    # a record whose request was changed since (not what was submitted) is refused
+    rec_name = st2_runtime.submitted_name(pending)
+    sub = st2_runtime.decode(kv.get(rec_name))
+    kv.set(rec_name, st2_runtime.encode(sub | {"fingerprint": "sha256:" + "0" * 64}), 60)
+    rec = _run(pdir, kv, _returned(pending), client)
+    assert (rec["result"], rec["reason"]) == ("refused", "request-mismatch")
+    kv.set(rec_name, st2_runtime.encode(sub), 60)
+    assert _run(pdir, kv, _returned(pending), client)["result"] == "executed"
+
+
+def test_an_agent_approval_never_runs_whatever_the_event_says_tier_used_is(tmp_path):
+    """The reviewer's test_a03_agent: an agent approver (allow_agent_approvers) approved, the
+    broker emitted tier_used agent, and the same event with tier_used flipped to human (anyone
+    who can publish it or POST the webhook writes it) ran the request.  A03 now asks the broker
+    who approved: approver_kind in its status, never the event."""
+    import shutil
+
+    shutil.copytree(ROOT / "examples" / "broker", tmp_path / "ex")
+    mf = tmp_path / "ex" / "manifest.yml"
+    m = yaml.safe_load(mf.read_text())
+    m["approvers"].append({"issuer": "sso", "subject": "bot-approver", "kind": "agent"})
+    m["allow_agent_approvers"] = True
+    mf.write_text(yaml.safe_dump(m))
+    svc = BrokerService.from_manifest(
+        mf,
+        tmp_path / "state",
+        data_root=tmp_path / "data",
+        clock=lambda: T0,
+        resolve_secret={"DEMO_API_TOKEN": "fake-demo-token-4b1d"}.__getitem__,
+    )
+    pdir, kv = approved_run_dir(tmp_path), KV()
+    client = ServiceAsClient(svc, "profile:triage")
+    rid = _held(svc, pdir, kv, 1)
+    svc.approve(rid, "sso:bot-approver")
+    [emitted] = [e for e in svc.state.outbox() if e["type"] == st2_runtime.DECISION_EVENT]
+    assert emitted["data"]["tier_used"] == "agent"
+    [approval] = client.status(rid)["approvals"]
+    assert approval["approver_kind"] == "agent"
+    rec = _run(pdir, kv, _returned(rid, tier_used="human"), client)  # forged
+    assert (rec["result"], rec["reason"], rec["approver_kind"]) == (
+        "refused",
+        "not-human-approved",
+        "agent",
+    )
+    assert getattr(client, "runs", 0) == 0 and svc.state.state_of(rid) == "pending"
+    # a person's approval of another held request runs; the broker says human
+    other = _held(svc, pdir, kv, 2)
+    svc.approve(other, "sso:operator-one")
+    assert client.status(other)["approvals"][-1]["approver_kind"] == "human"
+    assert _run(pdir, kv, _returned(other), client)["result"] == "executed"
+
+
+def test_a_broker_status_without_the_approver_kind_refuses(tmp_path):
+    """An approval the broker does not vouch for as a person's (an older broker, or an approver
+    since removed from the manifest: approver_kind None) refuses: fail closed."""
+    svc = broker_service(tmp_path)
+    pdir, kv = approved_run_dir(tmp_path), KV()
+    rid = _held(svc, pdir, kv, 1)
+    svc.approve(rid, "sso:operator-one")
+
+    class OldBroker(ServiceAsClient):
+        def status(self, request_id):
+            d = super().status(request_id)
+            return d | {"approvals": [
+                {k: v for k, v in a.items() if k != "approver_kind"} for a in d["approvals"]
+            ]}  # fmt: skip
+
+    client = OldBroker(svc, "profile:triage")
+    rec = _run(pdir, kv, _returned(rid), client)
+    assert (rec["result"], rec["reason"]) == ("refused", "not-human-approved")
+    assert getattr(client, "runs", 0) == 0
+
+
+class ActionService:
+    """StackStorm's ``action_service`` datastore surface (system scope), over :class:`KV`."""
+
+    def __init__(self):
+        self.kv = KV()
+
+    def get_value(self, name, local=True):
+        assert local is False
+        return self.kv.get(name)
+
+    def set_value(self, name, value, ttl=None, local=True):
+        assert local is False
+        self.kv.set(name, value, ttl)
+
+
+KV_CONFIG = {"broker_socket": "/s", "kv_key": "fake-kv-key-" + "0" * 32}
+
+
+def test_the_datastore_names_are_keyed_so_a_writer_cannot_forge_or_pre_seed_them(tmp_path):
+    """Anyone with datastore write can compute a plain-hash name from a predictable input (a
+    broker request id, a schedule's event id).  The actions key every runtime name with the pack
+    config's kv_key: a forged submit record and a pre-seeded seen key are never read."""
+    for config in (None, {}, {"kv_key": "short"}):
+        with pytest.raises(ValueError, match="kv_key"):
+            st2_runtime.ActionServiceKV(ActionService(), config)
+    svc, store = broker_service(tmp_path), ActionService()
+    kv = st2_runtime.ActionServiceKV(store, KV_CONFIG)
+    pdir = approved_run_dir(tmp_path)
+    rid = _held(svc, pdir, kv, 1)
+    plain = st2_runtime.submitted_name(rid)
+    assert plain not in store.kv.items and kv.stored_name(plain) in store.kv.items
+    other = st2_runtime.ActionServiceKV(store, {"kv_key": "fake-other-key-" + "1" * 32})
+    assert other.stored_name(plain) != kv.stored_name(plain)
+    # the reviewer's forge: a record for another request, written where a plain hash points
+    forged = svc.submit("profile:triage", "service.restart", {"grace_s": 5}, target="svc:queue")
+    client = ServiceAsClient(svc, "profile:triage")
+    record = {
+        "pack": "restart-queue",
+        "step": "restart",
+        "action": "service.restart",
+        "fingerprint": st2_runtime.fingerprint(client.status(forged)["request"]),
+    }
+    store.set_value(st2_runtime.submitted_name(forged), st2_runtime.encode(record), 60, False)
+    svc.approve(forged, "sso:operator-one")
+    rec = _run(pdir, kv, _returned(forged), client)
+    assert (rec["result"], rec["reason"]) == ("refused", "not-st2-submitted")
+    assert svc.state.state_of(forged) == "pending"
+    # a pre-seeded seen key does not suppress the event
+    ev = _job_failed(2)
+    store.set_value(st2_runtime.seen_name("restart-queue", ev["id"]), "x", 60, False)
+    got = st2_runtime.admit_event(pack="restart-queue", trigger=RESTART["trigger"], event=ev, kv=kv)
+    assert got["admitted"]
+    # the genuine record still runs once approved
+    svc.approve(rid, "sso:operator-one")
+    assert _run(pdir, kv, _returned(rid), client)["result"] == "executed"
+
+
+def test_the_rendered_config_carries_the_kv_key_as_a_datastore_secret():
+    res = go(binding())
+    schema = yaml.safe_load(res.files["homelabnext/config.schema.yaml"])
+    assert schema["kv_key"] | {"description": ""} == {
+        "type": "string",
+        "secret": True,
+        "required": True,
+        "description": "",
+    }
+    values = yaml.safe_load(res.files["configs/homelabnext.yaml"])
+    assert values["kv_key"] == "{{ st2kv.system.homelabnext.kv_key | decrypt_kv }}"
+    for shim in ("admit", "step"):
+        assert (
+            "ActionServiceKV(self.action_service, self.config)"
+            in (res.files[f"homelabnext/actions/{shim}.py"])
+        )
+    b = binding()
+    b["config"] = {"kv_key": {"st2kv": "elsewhere"}}
+    assert ("st2-binding", "config: kv_key is the runtime's own datastore secret") in {
+        (p.rule, p.detail) for p in go(b).problems
+    }
+
+
+def test_the_approved_run_needs_a_live_bound_pack_and_shadow_never_opens_the_socket(tmp_path):
+    svc = broker_service(tmp_path)
+    kv = KV()
+    pdir = approved_run_dir(tmp_path)
+    rid = _held(svc, pdir, kv, 1)
+    svc.approve(rid, "sso:operator-one")
+    shadow = approved_run_dir(tmp_path / "s", run_mode="shadow")
+    rec = _run(shadow, kv, _returned(rid), NoBroker())
+    assert (rec["result"], rec["reason"], rec["pack"]) == ("shadow", "st2-shadow", "restart-queue")
+    not_live = approved_run_dir(tmp_path / "n", pack_mode="shadow")
+    rec = _run(not_live, kv, _returned(rid), NoBroker())
+    assert (rec["result"], rec["reason"]) == ("refused", "pack-not-live")
+    unbound = tmp_path / "u" / "pinned"
+    unbound.mkdir(parents=True)
+    _pin(unbound, st2_runtime.approved_run_pack("profile:triage"), "live", {"run": False})
+    rec = _run(unbound, kv, _returned(rid), NoBroker())
+    assert (rec["result"], rec["reason"]) == ("refused", "pack-not-bound")
+    # a reject, or another producer, does not even reach the step
+    for ev in (_returned(rid, verdict="reject"), _returned(rid) | {"source": "svc:decide"}):
+        got = st2_runtime.admit(
+            pack="approved-run", pinned_dir=pdir, event=st2_runtime.encode(ev), kv=kv
+        )
+        assert got["reason"] == "not-triggered"
+    assert svc.state.state_of(rid) == "pending"
+
+
+def test_a_broker_run_step_runs_only_as_the_built_in_pack(tmp_path):
+    pdir = approved_run_dir(tmp_path)
+    sneaky = dict(st2_runtime.approved_run_pack("profile:triage"), pack="sneaky")
+    _pin(pdir, sneaky, "live", {"run": False})
+    with pytest.raises(st2_runtime.PinError, match="approved-run"):
+        st2_runtime.step(
+            {"broker_socket": "/s"},
+            pinned_dir=pdir,
+            kv=KV(),
+            broker_factory=lambda _s: NoBroker(),
+            pack="sneaky",
+            step="run",
+            event=st2_runtime.encode(_returned("restart-0001")),
+        )
+
+
+def test_the_tree_check_refuses_a_rule_that_lost_its_producer_or_its_accept():
+    res = go(binding())
+    assert st2.tree_problems(res.files, "homelabnext") == []
+    path = "homelabnext/rules/on_approved_run.yaml"
+    for key, check in (
+        ("trigger.body.source", "st2-source"),
+        ("trigger.body.data.verdict", "st2-criteria"),
+        ("trigger.body.data.tier_used", "st2-criteria"),
+    ):
+        rule = yaml.safe_load(res.files[path])
+        del rule["criteria"][key]
+        bad = dict(res.files) | {path: yaml.safe_dump(rule)}
+        assert [(p.path, p.rule) for p in st2.tree_problems(bad, "homelabnext")] == [
+            (path, check)
+        ], key
+    rule = yaml.safe_load(res.files["homelabnext/rules/on_agent_job_retry.yaml"])
+    rule["criteria"]["trigger.body.source"]["type"] = "exists"
+    bad = dict(res.files) | {"homelabnext/rules/on_agent_job_retry.yaml": yaml.safe_dump(rule)}
+    assert {p.rule for p in st2.tree_problems(bad, "homelabnext")} >= {"st2-source"}
+
+
+# ---------------------------------------------------------------- the controller's job contract
+HANDLER = ROOT / "workflows" / "handlers" / "agent-job-submit.sh"
+TOKEN = "fake-controller-jobs-token-0001"  # scrub-allow: fake placeholder
+
+
+def _bound_problems(mutate) -> set[tuple[str, str]]:
+    packs = all_packs()
+    mutate(packs)
+    return {p for p in _problems(binding(), packs) if p[0] == "st2-bound"}
+
+
+def test_dispatch_sends_only_what_the_controller_takes():
+    a01, a02 = ("st2-bound", "proposal-validate"), ("st2-bound", "agent-job-retry")
+    assert _bound_problems(lambda p: None) == set()
+
+    def a02_source(p):
+        p["agent-job-retry"]["trigger"]["where"][0]["equals"] = "svc:orchestration"
+
+    def a01_input(p):
+        p["proposal-validate"]["steps"][0]["params"]["input"] = {"note": "$event.data.note"}
+
+    def a02_payload(p):
+        p["agent-job-retry"]["steps"][0]["params"]["task_description"] = "$event.data.run_id"
+
+    def a02_resubmits(p):
+        p["agent-job-retry"]["steps"][0]["params"]["resubmits"] = 1
+
+    def a01_reason(p):
+        p["proposal-validate"]["steps"][0]["params"]["reason"] = "capacity"
+
+    assert _bound_problems(a02_source) == {a02}  # not the controller's own source id
+    assert _bound_problems(a01_input) == {a01}  # 400 input_unsupported
+    assert _bound_problems(a02_payload) == {a02}  # 422 payload_override
+    assert _bound_problems(a02_resubmits) == {a02}  # the controller counts the lineage
+    assert _bound_problems(a01_reason) == {a01}  # reason only with retry_of_run_id
+
+
+def test_every_fixture_request_is_one_the_handler_schema_accepts():
+    from homelabnext.broker.validation import inline_errors
+
+    schema = json.loads(HANDLER.with_name("agent-job-submit.handler.json").read_text())
+    schema = schema["params_schema"]
+    seen = 0
+    for doc in all_packs().values():
+        for fx in doc["fixtures"]:
+            for call in fx.get("expect", {}).get("calls", []):
+                if call["action"] == "agent.job.submit":
+                    assert inline_errors(schema, call["params"]) == [], (doc["pack"], fx["name"])
+                    seen += 1
+    assert seen >= 2
+    base = {"agent_key": "triage", "idempotency_key": "k", "priority": 40}
+    for bad in (
+        base | {"input": {"note": "x"}},
+        base | {"resubmits": 0},
+        base | {"reason": "capacity"},
+        base | {"retry_of_run_id": "run-1", "task_description": "x"},
+        base | {"task_description": "{{ st2kv.system.leak }}"},
+    ):
+        assert inline_errors(schema, bad), bad
+
+
+@pytest.mark.parametrize(
+    ("code", "body", "exit_code", "refused"),
+    [
+        (202, '{"run_id": "run-9"}', 0, None),
+        (200, '{"run_id": "run-1", "replayed": true}', 0, None),  # an idempotent replay
+        (409, '{"reason": "already_retried", "retried_by_run_id": "run-2"}', 0, None),
+        (409, '{"reason": "retry_chain_spent"}', 0, "retry_chain_spent"),
+        (422, '{"reason": "not_retryable", "failure_class": "deadline"}', 0, "not_retryable"),
+        (422, '{"reason": "idempotency_key_mismatch"}', 0, "idempotency_key_mismatch"),
+        (404, '{"reason": "unknown_run"}', 0, "unknown_run"),
+        (400, '{"reason": "input_unsupported"}', 1, None),
+        (401, '{"reason": "unauthorized"}', 1, None),  # the token is missing or wrong
+        (403, '{"reason": "forbidden"}', 1, None),  # the token lacks the jobs scope
+        (503, "", 1, None),
+        (None, "", 1, None),  # no answer
+    ],
+)
+def test_the_submit_handler_maps_the_controllers_answers(tmp_path, code, body, exit_code, refused):
+    import os
+    import subprocess
+
+    fake = tmp_path / "bin" / "curl"
+    fake.parent.mkdir()
+    if code is None:
+        script = "#!/bin/sh\ncat >/dev/null\necho 'curl: (7) refused' >&2\nexit 7\n"
+    else:
+        script = (
+            f'#!/bin/sh\nprintf "%s\\n" "$@" > "{tmp_path}/args"\ncat > "{tmp_path}/stdin"\n'
+            f'for a in "$@"; do case $a in @-) ;; @*) cat "${{a#@}}" >> "{tmp_path}/hdrs"; '
+            f'stat -c %a "${{a#@}}" > "{tmp_path}/mode";; esac; done\n'
+            f"printf '%s\\n%s' '{body}' '{code}'\n"
+        )
+    fake.write_text(script)
+    fake.chmod(0o755)
+    run_tmp = tmp_path / "run-tmp"
+    run_tmp.mkdir()
+    env = {
+        "PATH": f"{fake.parent}{os.pathsep}/usr/bin{os.pathsep}/bin",
+        "ORCHESTRATOR_JOBS_URL": "https://controller.example.invalid/jobs",
+        "ORCHESTRATOR_JOBS_TOKEN": TOKEN,
+        "TMPDIR": str(run_tmp),
+    }
+    params = (
+        b'{"agent_key": "triage", "idempotency_key": "run-0001", "retry_of_run_id": "run-0001"}'
+    )
+    got = subprocess.run(["/bin/sh", str(HANDLER)], input=params, env=env, capture_output=True)
+    assert got.returncode == exit_code, got.stderr
+    if code is not None:
+        args = (tmp_path / "args").read_text()
+        assert "Idempotency-Key: run-0001" in args.splitlines()
+        assert (tmp_path / "stdin").read_bytes() == params  # the body goes on unchanged
+        # the token travels in a private header file: never in argv, never on stderr
+        assert (tmp_path / "hdrs").read_text() == f"Authorization: Bearer {TOKEN}\n"
+        assert (tmp_path / "mode").read_text().strip() == "600"
+        assert TOKEN not in args and TOKEN.encode() not in got.stderr + got.stdout
+        assert list(run_tmp.iterdir()) == []  # removed after the POST
+    if code in (401, 403):
+        assert b"refused the token" in got.stderr
+    if exit_code == 0:
+        out = json.loads(got.stdout)
+        if refused:
+            assert out == {"refused": True, "status": code, "reason": refused}
+            assert b"refused by the controller" in got.stderr
+        else:
+            assert out == json.loads(body)
+
+
+def test_the_submit_handler_refuses_params_without_a_key(tmp_path):
+    import subprocess
+
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "ORCHESTRATOR_JOBS_URL": "https://controller.example.invalid/j",
+        "ORCHESTRATOR_JOBS_TOKEN": TOKEN,
+    }
+    got = subprocess.run(
+        ["/bin/sh", str(HANDLER)], input=b'{"agent_key": "x"}', env=env, capture_output=True
+    )
+    assert got.returncode == 1 and b"no idempotency_key" in got.stderr
+
+
+@pytest.mark.parametrize("token", [None, "", "fake-token\r\nX-Injected: 1"])
+def test_the_submit_handler_needs_one_token_and_declares_it(token):
+    import subprocess
+
+    env = {"PATH": "/usr/bin:/bin", "ORCHESTRATOR_JOBS_URL": "https://controller.example.invalid/j"}
+    if token is not None:
+        env["ORCHESTRATOR_JOBS_TOKEN"] = token
+    params = b'{"agent_key": "x", "idempotency_key": "k-1", "priority": 40}'
+    got = subprocess.run(["/bin/sh", str(HANDLER)], input=params, env=env, capture_output=True)
+    assert got.returncode == 1 and b"ORCHESTRATOR_JOBS_TOKEN" in got.stderr
+    doc = json.loads(HANDLER.with_name("agent-job-submit.handler.json").read_text())
+    assert "ORCHESTRATOR_JOBS_TOKEN" in doc["secrets"]  # so the broker hands it over
+
+
+def test_a02_skips_a_run_already_retried_and_keys_on_the_run():
+    a02 = ("st2-bound", "agent-job-retry")
+
+    def no_auto_skip(p):
+        where = p["agent-job-retry"]["trigger"]["where"]
+        where[:] = [c for c in where if c["ref"] != "$event.data.auto_retry_scheduled"]
+
+    def event_key(p):
+        p["agent-job-retry"]["steps"][0]["params"]["idempotency_key"] = "$event.id"
+
+    assert _bound_problems(no_auto_skip) == {a02}
+    assert _bound_problems(event_key) == {a02}  # 422 idempotency_key_mismatch territory
+    doc = pack("agent-job-retry")
+    ev = _job_failed(9)
+    ev["data"] |= {"auto_retry_scheduled": True}
+    assert not triggered(doc, ev)
+    rule = rules_of()["homelabnext/rules/on_agent_job_retry.yaml"]
+    assert not st2_matches(rule, ev)
+    got = st2_runtime.admit_event(pack=doc["pack"], trigger=doc["trigger"], event=ev, kv=KV())
+    assert got["reason"] == "not-triggered"

@@ -70,6 +70,7 @@ from homelabnext.agent.schemas import schema_errors
 
 from . import (
     DEFAULT_APPROVAL_TTL_S,
+    approver_kind,
     check_manifest_handlers,
     decide,
     decide_access,
@@ -78,6 +79,7 @@ from . import (
 )
 from . import execute as _exec
 from . import lanes as _lanes
+from .relay import BROKER_SOURCE
 from .state import DECISION_KINDS, FileApprovalStore, StateDir, is_id, new_id
 
 __all__ = [
@@ -302,7 +304,7 @@ class BrokerService:
         notifier: Any = None,
         resolve_secret: Callable[[str], str] | None = None,
         clock: Callable[[], datetime] = _utcnow,
-        source: str = "svc:broker",
+        source: str = BROKER_SOURCE,
         approvals_url: str | None = None,
     ) -> None:
         self.state = StateDir(state_dir)
@@ -806,14 +808,22 @@ class BrokerService:
         )
 
     def detail(self, caller, request_id) -> dict[str, Any]:
-        """The owner's full view: request, state, approvals and result (``hnx broker status``)."""
+        """The owner's full view: request, state, approvals and result (``hnx broker status``).
+        Each approval carries ``approver_kind``: ``human``, ``agent`` or None (no longer an
+        allowlisted approver), judged now against the manifest -- the authoritative answer to
+        "did a person approve this", where an event's ``tier_used`` is only advisory."""
         st = self.status(caller, request_id)
         rec = self.state.get_request(request_id)
+        view = self._view()
+        approvals = [
+            {**a, "approver_kind": approver_kind(view, a.get("approver") or {})}
+            for a in self.state.approvals(request_id)
+        ]
         return {
             "request": rec["request"],
             "state": st.state,
             "verdict": rec["verdict"],
-            "approvals": self.state.approvals(request_id),
+            "approvals": approvals,
             "result": self.state.get_result(request_id),
         }
 
@@ -1120,13 +1130,16 @@ class BrokerService:
             raise _reasoned(f"request {request_id!r} is no longer pending", "not-pending")
         self.state.put_approval(doc)
         self._audit(who, req["action"], op, "ok", approval_id=doc["approval_id"], **extra)
+        # who decided: a person (``human``), or an approver of kind agent the manifest admits
+        # (``allow_agent_approvers``): StackStorm's A03 acts on ``human`` only
+        tier = "agent" if approver_kind(self._view(), doc["approver"]) == "agent" else "human"
         self._emit(
             "homelabnext.decision.returned",
             {
                 "decision_id": request_id,
                 "verdict": "accept" if decision == "approved" else "reject",
                 "confidence": 1.0,
-                "tier_used": "human",
+                "tier_used": tier,
             },
             request_id,
             key=f"returned:{doc['approval_id']}",
@@ -1194,7 +1207,7 @@ class BrokerService:
             self.notifier.report(key, state, msg)
         except Exception:
             self._audit(
-                "svc:broker", "", "notify", "error", reason="notify-failed", request_id=key[16:]
+                BROKER_SOURCE, "", "notify", "error", reason="notify-failed", request_id=key[16:]
             )
 
 

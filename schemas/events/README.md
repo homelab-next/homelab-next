@@ -10,13 +10,13 @@ detection to decision to swap). Other event families are added later as separate
 | `case.opened` | `homelabnext.case.opened` |
 | `proposal.created` / `proposal.decided` | `homelabnext.proposal.created` / `.decided` |
 | `task.queued` | `homelabnext.task.queued` |
-| `decision.requested` / `decision.returned` | `homelabnext.decision.requested` / `.returned` |
+| `decision.requested` / `decision.returned` (1.1) | `homelabnext.decision.requested` / `.returned` (1.1 adds `tier_used: agent`, an approval by an agent approver the broker manifest admits) |
 | `scope.denied` | `homelabnext.scope.denied` (a writer tool was refused for an out-of-scope target; `docs/scope.md`) |
 | `deploy.changed` | `homelabnext.deploy.changed` (a component was released or deployed: versions and the changelog's changes; `homelabnext.events.deploy`, checklist F-15) |
 | `status.observed` | `homelabnext.status.observed` (one status observation, `schemas/status/observation.schema.json`; collectors publish it, the status hub consumes it: `docs/status.md`, ADR-0013) |
 | `agent.activity` | `homelabnext.agent.activity` (one agent activity event, summary tier only: `schemas/status/agent_activity.schema.json`; the detail tier never goes on the bus: `docs/status.md` section 6) |
 | `project.changed` | `homelabnext.project.changed` (a project, step or task changed: one event per item version, id from `<uid>:v<n>` or `wp:<id>:v<lockVersion>`; `docs/projects.md`, ADR-0020) |
-| `agent.job.failed` | `homelabnext.agent.job.failed` (an agent job in the orchestration controller's queue failed for good: run id, agent key, failure `reason`, `resubmits` in its retry lineage; StackStorm's A02 resubmits it, bounded: `docs/stackstorm.md`) |
+| `agent.job.failed` (1.1) | `homelabnext.agent.job.failed` (an agent job in the orchestration controller's queue failed for good: run id, agent key, failure `reason` (= the controller's `failure_class`), `resubmits` in its retry lineage; 1.1 adds `failure_class`, `retried_by_run_id` once retried, `auto_retry_scheduled` and `profile_revision_drift` only when true; source `svc:llm-orchestrator`; StackStorm's A02 resubmits it, bounded: `docs/stackstorm.md`) |
 | `schedule.fired` | `homelabnext.schedule.fired` (a named schedule fired; a StackStorm CronTimer builds it, id from schedule and time; a scheduled workflow pack triggers on it: `docs/stackstorm.md`) |
 | `swap.step` (1.1) | `homelabnext.swap.step` (steps 1..9 of the swap procedure; 1.1 adds the nine step names of the swap record, `homelabnext.swap.events` builds them from a record) |
 

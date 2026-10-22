@@ -28,6 +28,8 @@ WHEEL_ALLOW = re.compile(
     r"|homelabnext/_data/(?:schemas|profiles|examples)/(?!.*/\.)[\w/.-]+\.(?:json|ya?ml|md|txt|j2)"
     # the example broker manifest pins these handlers by digest; without them it does not validate
     r"|homelabnext/_data/examples/broker/handlers/[\w-]+\.sh"
+    # the capability contracts runtime code imports; never the suites, fakes or targets
+    r"|conformance/protocols/\w+\.py"
     r"|homelabnext-[\w.]+\.dist-info/(?:METADATA|RECORD|WHEEL|entry_points\.txt|top_level\.txt"
     r"|licenses/(?:LICENSE|NOTICE)))$"
 )

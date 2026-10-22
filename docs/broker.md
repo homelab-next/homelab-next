@@ -110,7 +110,9 @@ hnx broker validate examples/broker/manifest.yml
 ## Approvals
 
 1. `submit` of an action that needs approval stores the request `pending` and emits
-   `decision.requested` (to the events bus when one is configured, else to `<state>/outbox/`), plus
+   `decision.requested` (to `<state>/outbox/`, which `hnx broker relay` publishes to the bus:
+   [Publishing events](#publishing-events-the-outbox-relay); an embedded broker given a `bus`
+   publishes directly), plus
    an optional notification through the state-diffed notifier. With `--approvals-url URL` (or
    `HNX_BROKER_APPROVALS_URL`; an `http(s)` page URL without credentials, query or fragment, e.g.
    `https://status.lab.example/approvals`) the event carries `link` = `URL?request=<id>` and the
@@ -119,7 +121,10 @@ hnx broker validate examples/broker/manifest.yml
    (`schemas/broker/approval`) names the request digest and expires after `approval_ttl_s`
    (default 900 s). Self-approval, an unlisted approver and an agent approver (unless
    `allow_agent_approvers`) are refused by the same rules for a denial as for an approval.
-   `decision.returned` records the verdict.
+   `decision.returned` records the verdict and who decided: `tier_used: human` for a person,
+   `agent` for an approver of kind agent (or one naming a granted profile) under
+   `allow_agent_approvers`, so a consumer that acts on a person's approval (StackStorm's A03) can
+   tell them apart.
 
    The allowlist is matched **exactly** on `(issuer, subject)`: write each entry as the approver's
    canonical subject (lower-case, the approval schema's `^[a-z][a-z0-9._-]{0,63}$`), exactly as
@@ -155,8 +160,15 @@ transition out of `pending`: run, cancel or deny), `results/`, `approvals/<reque
 `consumed/`, `audit/` (one record per file, `schemas/broker/audit`; a tail is read newest first),
 `decisions/` (an index of the trail's filed approvals and denials, so the hub's recent-decisions
 read never walks the refusals; rebuilt once for an older state directory),
-`outbox/`, `runs/<request>/` and `digest.key`. Keep it `0700` and owned by the
-broker's user; agents get no access to it.
+`outbox/` (the events still to publish, each with its place in emit order from the
+`flock`-guarded counter `outbox.seq`; the broker removes one once the relay is done with it),
+`relay/` (the relay's own: `delivered/`, `undeliverable/`, `quarantine/`, `relay.lock`,
+`initialized`; [Publishing events](#publishing-events-the-outbox-relay)), `runs/<request>/` and
+`digest.key`.
+Keep it owned by the broker's user, `0700`, or `0710` with the outbox relay's group when the relay
+runs as its own user ([Publishing events](#publishing-events-the-outbox-relay)): then `outbox/` is
+`2750` in that group (its files are `0640`) and `relay/` belongs to the relay; every other
+subdirectory and file stays `0700`/`0600`, the broker's only. Agents get no access to it.
 
 ## Running the service
 
@@ -231,8 +243,9 @@ SupplementaryGroups=hnx-broker-clients
 RuntimeDirectory=hnx-broker
 RuntimeDirectoryMode=0750
 StateDirectory=hnx-broker
-StateDirectoryMode=0700
+StateDirectoryMode=0710
 ExecStartPre=+/bin/chgrp hnx-broker-clients /run/hnx-broker
+ExecStartPre=+/bin/chgrp hnx-broker-relay /var/lib/hnx-broker
 ExecStart=/opt/hnx/bin/hnx broker serve --manifest /etc/hnx-broker/manifest.yml \
   --state /var/lib/hnx-broker/state --data-root /srv/agents \
   --socket /run/hnx-broker/broker.sock --socket-mode 660 --socket-group hnx-broker-clients
@@ -251,6 +264,219 @@ WantedBy=multi-user.target
 memory there if the operator grants it, never write. Handler secrets come from
 `HNX_BROKER_SECRET_<NAME>` in the service's environment (here an environment file readable by
 root and the service user only).
+
+### Publishing events: the outbox relay
+
+The broker never talks to the bus while it decides. Every event it emits (`decision.requested`,
+`decision.returned`, `proposal.created`; source `svc:broker`, `BROKER_SOURCE` in
+`homelabnext.broker.relay`) is written to `<state>/outbox/<event id>.json` with its place in emit
+order, and `hnx broker relay`, a second process under **its own user**, publishes it
+(`homelabnext.broker.relay`). A bus outage therefore delays events and never blocks or fails a
+decision, and `hnx broker serve` keeps needing no network at all.
+
+* **In order, at least once.** Each pass publishes the oldest undelivered events (at most
+  `--batch`, default 100) one after another, as `<prefix>.<event type>` with the event id as the
+  JetStream message id (`Nats-Msg-Id`). Emit order is `queued`, the next value of the persisted
+  counter `<state>/outbox.seq`, taken and the outbox file linked under one `flock`: an event
+  becomes visible only after every earlier one did, and no clock is involved. An event is marked
+  delivered (`relay/delivered/<event id>.json`, a copy of the event with its stream sequence) only
+  after the PubAck; a failure that can pass ends the pass, so nothing overtakes an event that
+  failed. One relay per state directory (`flock` on `relay/relay.lock`; a second one exits 2).
+* **The relay reads `outbox/` and writes only `relay/`.** The broker removes an outbox file once
+  `relay/` holds a marker for it (at start and at most once a minute while emitting), so `outbox/`
+  holds what is pending and a pass costs O(pending), not O(history); the marker is the copy.
+  Delivered markers older than `--retain-days` (default 30) are removed once their outbox file is
+  gone. Event ids are unique per emission (the broker's dedupe key names the request or the
+  approval), so a removed marker is never needed again; an outbox file written later under a
+  removed id would be published again as a new message.
+* **Poison never stalls it.** An outbox file that is not an event (not JSON, no id or not its
+  file name, no type, a bad `queued`) is quarantined: a record in `relay/quarantine/` (file name,
+  reason, time; never its content) and a log line, then skipped; so is a file the relay cannot
+  read (`unreadable`: a permission, a directory). A publish the bus refuses for the event itself
+  (a permission violation, an invalid subject, a body over `max_payload`) is retried with backoff;
+  after `--max-attempts` (default 5; counted in `relay/attempts.json`, so `--once` on a timer
+  counts across runs) the event goes to `relay/undeliverable/` and the events after it are
+  published. **That breaks per-stream order for
+  that event, on purpose**: it will never be delivered, and holding every later decision behind it
+  forever turns one bad event into an outage; consumers see a gap, never a reordering of the
+  events they do get. If three events in a row end up undeliverable with nothing published in
+  between, the bus refuses everything (its ACL or stream is wrong, not the events): the relay
+  stops skipping and holds, `state` `fail`. The hold is recorded (`relay/holding`), so a restart
+  keeps holding instead of giving up another three events; the first event published clears it. A
+  transport failure (no connection, no PubAck, no responders: JetStream restarting or electing a
+  leader answers nothing for a while) never makes an event undeliverable.
+  `hnx broker relay --state DIR --skip <event id>` marks one by hand (no bus needed; it takes the
+  relay lock, so stop the relay first, then start it again). Quarantined and undeliverable records keep `state` at `fail` until the operator
+  deletes them (after the broker has pruned the outbox file).
+* **The first start supersedes history.** Outbox files from before `queued` (the bare event,
+  written by a broker that had no relay) would replay old decisions. A first start (no
+  `relay/initialized`) with such files refuses (exit 2) without `--since TIME`: older ones are
+  marked `superseded` in `relay/delivered/` and never published, newer ones are published in
+  order (before every current event: by `time`, whole seconds, then id).
+  `--since 1970-01-01T00:00:00Z` publishes them all.
+* **A crash is a duplicate, not a loss.** A relay that dies between the PubAck and the marker
+  republishes the same id on restart, and the stream's `duplicate_window` answers with the
+  original sequence. Past that window the bus stores it twice; consumers dedupe by event id anyway
+  (the StackStorm runtime's `admit` remembers ids for a day). Make the window at least as long as
+  you expect a relay to stay down after a crash. The window is the stream's (set when it is
+  provisioned); the target's `duplicate_window` is what the relay requires of it, and a stream
+  whose window is shorter is refused at start (exit 2), never silently weaker.
+* **Backoff.** A refused connection or a missing PubAck drops the connection and waits 1 s,
+  doubling to `--backoff-max` (60 s), before retrying the same event.
+* **Nothing secret logged.** Logs and the `--stats-file` (written atomically, a `poll-file` status
+  source: `pending` (counted by name, nothing parsed), `published`, `undeliverable`,
+  `quarantined`, `holding`, `consecutive_failures`, `last_error`, `state` `ok`/`warn`/`fail`)
+  name event ids, types and exception classes only, never a body, an endpoint or a credential.
+* `--once` publishes what is pending and exits 0, or 1 when something is still pending (the bus is
+  down). A batch that was all quarantined does not end it early. Exit 2 is a configuration error (the target file, the adapter, the lock).
+
+The bus comes from a **target file** binding the `events` capability, the same files
+`hnx conform run` uses (`compose/lab-in-a-box/broker/events-relay.yml` is the lab's); `--stream` and
+`--subject-prefix` name the standing stream (never a scratch one), the endpoint is
+`HNX_ENDPOINT_EVENTS` (`nats://` or `tls://`), and the bus credential is a secret *name*. The
+password goes only over `tls://` (verified against the system CAs, or `ca_file`) or to a loopback
+`nats://`; any other `nats://` endpoint is refused unless the target sets `allow_plaintext: true`
+(the lab-in-a-box does, on its own network). A `tls://` client does the TLS handshake before it
+reads anything (nats-py's `tls_handshake_first`; nats-py 2.7 or later): a client that waits for
+the server's `INFO` to ask for TLS sends its `CONNECT`, password included, in clear to a server (or
+a man in the middle) that does not ask. So the server's `tls` block needs `handshake_first: true`
+(nats-server 2.10.3 or later), or no `tls://` client can connect:
+
+```text
+# nats-server.conf (excerpt)
+tls {
+  cert_file: "/etc/nats/server.pem"
+  key_file: "/etc/nats/server-key.pem"
+  handshake_first: true
+}
+```
+
+The target file:
+
+```yaml
+# /etc/hnx-broker-relay/events-target.yml
+name: broker-events
+capabilities:
+  events:
+    adapter: homelabnext.conform.adapters.nats_jetstream:make
+    config:
+      user: hnx-broker
+      password_secret: secret:events/broker   # read from HNX_SECRET_EVENTS_BROKER when connecting
+      ca_file: /etc/hnx-broker-relay/events-ca.pem  # the bus's CA (tls:// endpoint)
+      client_name: hnx-broker-relay
+      duplicate_window: 86400.0
+```
+
+**The relay is its own user.** It holds a network connection and a bus credential, so it gets
+nothing else of the broker's: it may traverse the state directory and *read* `outbox/` (through
+its group), and it owns `relay/`. It never sees `approvals/`, `claims/`, the audit trail or
+`digest.key`, cannot write an outbox file, and publishes an outbox event only if it passes its
+envelope and type schema, carries source `svc:broker` and is a `decision.*` or `proposal.*` type
+(anything else is quarantined), so a compromised relay is a compromised bus credential, not a
+compromised broker. Once, as root:
+
+```sh
+useradd --system --no-create-home --shell /usr/sbin/nologin hnx-broker-relay
+install -d -o hnx-broker -g hnx-broker-relay -m 0710 /var/lib/hnx-broker/state
+install -d -o hnx-broker -g hnx-broker-relay -m 2750 /var/lib/hnx-broker/state/outbox
+install -d -o hnx-broker-relay -g hnx-broker -m 2750 /var/lib/hnx-broker/state/relay
+# an outbox from an older broker: its files were 0600
+chgrp hnx-broker-relay /var/lib/hnx-broker/state/outbox/*.json
+chmod 0640 /var/lib/hnx-broker/state/outbox/*.json
+```
+
+(`outbox/` is setgid, so the broker's new files get the relay's group; `relay/` is setgid in the
+broker's group, which only needs to *see* the relay's markers to remove the outbox files the
+relay is done with.)
+
+```ini
+# /etc/systemd/system/hnx-broker-relay.service
+[Unit]
+Description=homelab-next broker outbox relay (outbox -> event bus)
+After=network-online.target hnx-broker.service
+Wants=network-online.target
+
+[Service]
+User=hnx-broker-relay
+Group=hnx-broker-relay
+StateDirectory=hnx-broker-relay
+Environment=HNX_ENDPOINT_EVENTS=tls://events.lab.example
+EnvironmentFile=/etc/hnx-broker-relay/relay.env   # HNX_SECRET_EVENTS_BROKER=...
+ExecStart=/opt/hnx/bin/hnx broker relay --state /var/lib/hnx-broker/state \
+  --events-target /etc/hnx-broker-relay/events-target.yml \
+  --stream HOMELABNEXT --subject-prefix lab \
+  --stats-file /var/lib/hnx-broker-relay/stats.json
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadOnlyPaths=/var/lib/hnx-broker/state/outbox
+ReadWritePaths=/var/lib/hnx-broker/state/relay
+InaccessiblePaths=/srv/agents /run/hnx-broker
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
+```
+
+It needs the `nats` extra (`pip install 'homelabnext[nats]'`). The relay's environment holds only
+the bus credential; the broker's handler secrets stay in `hnx-broker.service`. A first start over
+an outbox from before the relay needs `--since` once (see above).
+
+**The bus ACL is what makes the source mean something.** A consumer that pins `source:
+svc:broker` (the StackStorm bridge, A03's approved-run rule, A01) trusts a field the publisher
+writes. Only the broker's NATS user may publish `<prefix>.homelabnext.decision.>` and
+`<prefix>.homelabnext.proposal.>`; no other user may, or any process on the bus can forge an
+approval for A03 to act on. The lab-in-a-box enforces exactly this
+([`compose/lab-in-a-box/config/nats/nats.conf`](../compose/lab-in-a-box/config/nats/nats.conf),
+stream `HNXLAB_BROKER`, prefix `hnxlab`; for production substitute your stream, prefix and
+passwords, ideally bcrypt hashes from `nats server passwd`), and its broker scenario proves it
+(the `bus-acl` step). Every user has an allow-list and nothing else: no `$JS.API.>` wildcard (so
+no `STREAM.PURGE`, `STREAM.UPDATE`, `STREAM.DELETE` or `MSG.DELETE`), no `STREAM.CREATE` for the
+relay or the bridge (an operator provisions both streams with limits; the relay connects with
+`provision=False` and refuses a missing or unbounded stream), and replies on the user's own inbox
+prefix (`_INBOX.<user>`, the adapter's default for a `user`), never a shared `_INBOX.>` where one
+client could read another's replies. The broker's relay and the bridge, verbatim from the lab
+(`tests/compose` fails when this excerpt and the lab drift apart):
+
+```text
+# compose/lab-in-a-box/config/nats/nats.conf (excerpt: account HNX, the relay and the bridge)
+[
+{"user": "hnx-broker", "password": $LAB_EVENTS_BROKER_PASSWORD,
+ "permissions": {
+   "publish": {"allow": ["hnxlab.homelabnext.decision.>", "hnxlab.homelabnext.proposal.>",
+                         "$JS.API.STREAM.INFO.HNXLAB_BROKER",
+                         "$JS.API.STREAM.INFO.HNXLAB_BROKER_DLQ"]},
+   "subscribe": {"allow": ["_INBOX.hnx-broker.>"]}}},
+{"user": "hnx-st2-bridge", "password": $LAB_EVENTS_ST2_BRIDGE_PASSWORD,
+ "permissions": {
+   "publish": {"allow": ["$JS.API.STREAM.INFO.HNXLAB_BROKER",
+                         "$JS.API.STREAM.INFO.HNXLAB_BROKER_DLQ",
+                         "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-agent-job-failed",
+                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-agent-job-failed.hnxlab.homelabnext.agent.job.failed",
+                         "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-agent-job-failed",
+                         "$JS.ACK.HNXLAB_BROKER.st2-agent-job-failed.>",
+                         "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-decision-returned",
+                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-decision-returned.hnxlab.homelabnext.decision.returned",
+                         "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-decision-returned",
+                         "$JS.ACK.HNXLAB_BROKER.st2-decision-returned.>",
+                         "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-proposal-created",
+                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-proposal-created.hnxlab.homelabnext.proposal.created",
+                         "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-proposal-created",
+                         "$JS.ACK.HNXLAB_BROKER.st2-proposal-created.>"]},
+   "subscribe": {"allow": ["_INBOX.hnx-st2-bridge.>"]}}}
+]
+```
+
+The lab's other users: `hnx-lab-admin` (the operator: `STREAM.INFO`/`STREAM.CREATE` of the stream
+and its DLQ, `STREAM.MSG.GET` of the stream; it provisions them, with
+`homelabnext.conform.adapters.nats_jetstream.provision_streams`, and reads back what the relay
+published), and `hnx-conformance` in an account of its own (`CONFORM`), where `hnx conform run
+events` creates and deletes its scratch streams without any way to reach the `HNX` account's
+subjects or streams. No client connects without a user.
 
 ### Agents: the MCP tools
 
@@ -296,6 +522,10 @@ Every request command takes `--socket PATH` (or `$HNX_BROKER_SOCKET`) and then a
 broker instead of opening the state: `actions`, `call`, `submit`, `status`, `run`, `cancel` and
 `pending --mine` act as this process's mapped profile (`--as` is a usage error), `approve`/`deny`
 `--as ISSUER:SUBJECT` need this process to be a relay, and `pending` and `audit` list for a relay.
+`status` is the owner's full view: the request, its state and verdict, its result, and every
+approval filed for it, each with `approver_kind` (`human`, `agent`, or null when the approver is no
+longer in the manifest), judged against the manifest when asked. That, not an event's `tier_used`,
+is what StackStorm's approved-run rule (A03) trusts ([stackstorm.md](stackstorm.md)).
 
 ### Approval relays: the protocol
 
@@ -463,9 +693,9 @@ agents at the MCP tools, then remove the agents' write access to the old directo
 
 | Layer | What runs | Where |
 |---|---|---|
-| unit | the engine, lanes, exec handlers, the socket server (peer map, refusals, modes), the CLI, the MCP tools in memory and over stdio, the hub's Approvals page against a real `hnx broker serve` | `tests/broker/`, `tests/status/test_approvals.py` (`pytest`, every pull request) |
+| unit | the engine, lanes, exec handlers, the socket server (peer map, refusals, modes), the CLI, the outbox (emit order across processes and a clock stepped back; `test_broker_outbox.py`), the outbox relay (ordering, a lost PubAck, a crash before the mark, the bus down, poison and malformed files, `--skip`, the first start, pruning; `test_broker_relay.py`), the MCP tools in memory and over stdio, the hub's Approvals page against a real `hnx broker serve` | `tests/broker/`, `tests/status/test_approvals.py` (`pytest`, every pull request) |
 | scenario, local processes | `compose/lab-in-a-box/broker_e2e.py`'s scenario against a broker socket, a hub subprocess, the agent's `hnx broker mcp` behind a real MCP stdio client and `hnx broker` CLI calls, all as the test's uid (the broker maps each process to a distinct uid by the role it was started with) | `tests/compose/test_lab_broker_e2e.py` (every pull request, with the `mcp` extra) |
-| end to end, real uids | the same scenario in the lab-in-a-box: the broker (`hnx-broker`, no network, `manifest.production.yml`), the hub (`hnx-hub`, the relay) and the edge in three containers sharing the socket volume | the nightly smoke's `broker` check; locally `make lab-broker` (or `make lab-smoke` for the whole lab) |
+| end to end, real uids | the same scenario in the lab-in-a-box: the broker (`hnx-broker`, no network, `manifest.production.yml`), the hub (`hnx-hub`, the relay) and the edge in three containers sharing the socket volume; the edge also runs the broker's outbox relay as its own user, `hnx-broker-relay`, with only the broker's `outbox/` (read-only) and its own `relay/` mounted, against the lab's NATS JetStream (`events`) | the nightly smoke's `broker` check; locally `make lab-broker` (or `make lab-smoke` for the whole lab) |
 
 The scenario's steps, each a line of the report (`broker_e2e.py run --json`, and the smoke's
 `broker` check detail):
@@ -488,7 +718,16 @@ The scenario's steps, each a line of the report (`broker_e2e.py run --json`, and
    token, and posts `decision=approve` to `/approvals/decide` with a same-origin `Origin`; `200`;
 9. `run-once`, `second-run-refused`: the agent runs it once; a second run is refused
    (`not-pending`);
-10. `audit`: the relay's `hnx broker audit` holds a record of every step, each with the peer's
+10. `bus-relay` (with a bus: the lab, and the local test over the JetStream wire fake):
+    `hnx broker relay --once` as the relay's uid (`hnx-broker-relay`) publishes the request's `decision.requested` and
+    `decision.returned`, in that order, with source `svc:broker` and the event id as
+    `Nats-Msg-Id`, and a second pass publishes nothing;
+11. `bus-acl` (with a bus): a client without a user is refused; the StackStorm bridge's NATS user
+    (`hnx-st2-bridge`) tries to publish a forged `decision.returned` for the request with source
+    `svc:broker`, `verdict: accept`, `tier_used: human` and is refused by the server (a permission
+    violation), as is its `STREAM.PURGE`; the stream's last `decision.returned` is still the
+    broker's;
+12. `audit`: the relay's `hnx broker audit` holds a record of every step, each with the peer's
     `via: uid:<n>` (agent, unmapped uid and relay).
 
 ## Embedding

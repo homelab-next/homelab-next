@@ -17,16 +17,23 @@ stays in the broker.  Inputs: the binding (``workflows/stackstorm.yml``,
   event type, plus each ``where`` condition), or a ``core.st2.CronTimer`` rule for a scheduled pack;
 * ``configs/<st2_pack>.yaml``: the pack config (secrets as ``{{ st2kv.system.<key> | decrypt_kv }}``
   references, never values);
-* ``bridge.json``: which bus subjects the event bridge relays to the webhook, and the secret-store
-  name of its API key;
+* ``bridge.json``: which bus subjects the event bridge relays to the webhook, the producers each
+  subject's rules pin (anything else is poison to the bridge), and the secret-store name of its
+  API key (:mod:`homelabnext.workflows.st2_bridge`);
 * ``provenance.json``: the binding and pack digests the tree was rendered from.
+
+With ``approved_run`` in the binding, the same files are rendered for the built-in pack
+``approved-run`` (:func:`homelabnext.workflows.st2_runtime.approved_run_pack`): a webhook rule on
+``homelabnext.decision.returned`` from the broker with a person's ``accept``, whose one step asks
+the broker to run the approved request, if and only if a live step of a bound pack submitted it.
+Every check below applies to it as to a bound pack (``st2-live`` included).
 
 Rules (``<path>: <rule>: <detail>``, exit 1 on any):
 
 ``st2-binding``  the binding is schema-valid.
 ``st2-pin``      every bound pack is pinned in the deploy manifest, with the digest of the pack in
                  the tree, and validates (``hnx workflows validate``).
-``st2-duplicate`` a pack or a schedule id is bound once.
+``st2-duplicate`` a pack or a schedule id is bound once; no bound pack is named ``approved-run``.
 ``st2-actor``    every bound pack's ``actor`` is the binding's ``actor`` (the one broker identity
                  StackStorm's actions authenticate as).
 ``st2-step``     every step runs on StackStorm: ``action``, or ``enrich`` ``pick``/``extract-iocs``.
@@ -53,14 +60,22 @@ Rules (``<path>: <rule>: <detail>``, exit 1 on any):
 ``st2-bound``    a pack that reacts to ``homelabnext.agent.job.failed`` by dispatching agent work
                  bounds it: its trigger pins ``$event.data.resubmits`` to integers below
                  :data:`MAX_RESUBMITS`, and the dispatch carries ``retry_of_run_id`` from
-                 ``$event.data.run_id`` (so the next failure counts one more resubmit).
+                 ``$event.data.run_id`` (so the next failure counts one more resubmit) and the
+                 same run id as its idempotency key; its trigger pins ``$event.source`` to
+                 :data:`ORCHESTRATOR_SOURCE` and skips a run already retried
+                 (``auto_retry_scheduled`` or ``retried_by_run_id`` present).  Every dispatch
+                 step sends only what the controller takes: no ``input`` or ``resubmits``, no
+                 ``task_description`` on a resubmit, ``reason`` only with ``retry_of_run_id``.
 ``st2-secret``   a config key that names a secret (key, token, password, secret, credential) is a
                  datastore reference, not a value.
 ``st2-shape``    every rendered document has the fields StackStorm requires (:data:`SHAPES`, encoded
                  from st2 3.8 ``st2common`` API models and the Orquesta spec), uses only the shim
                  actions, and no runner but ``python-script``/``orquesta``.
 ``st2-criteria`` every webhook rule's criteria test ``trigger.body.type`` for equality with one
-                 ``homelabnext.`` event type (a rule without one would match every event).
+                 ``homelabnext.`` event type (a rule without one would match every event); the
+                 approved-run rule also tests ``verdict`` = ``accept`` and ``tier_used`` =
+                 ``human``.  In the rendered tree, ``st2-source`` also requires every webhook
+                 rule to test ``trigger.body.source`` for equality.
 ``st2-drift``    (``--check``) the committed tree equals the rendered one, file for file.
 """
 
@@ -78,13 +93,29 @@ from homelabnext.agent.digest import digest_of
 
 from .pack import WorkflowError, git_files, load_doc, schema_errors
 from .runner import MODEL_KINDS, is_risky
-from .st2_runtime import SCHEDULE_EVENT, ST2_ENRICH_OPS
+from .st2_runtime import (
+    APPROVED_RUN,
+    BROKER_SOURCE,
+    KV_KEY,
+    KV_KEY_DATASTORE,
+    KV_KEY_MIN,
+    SCHEDULE_EVENT,
+    ST2_ENRICH_OPS,
+    approved_run_pack,
+    pinned_sources,
+)
 from .validate import Problem, Universe, load_universe, validate_repo
 
 DEFAULT_BINDING = Path("workflows") / "stackstorm.yml"
 DEFAULT_OUT = Path("workflows") / "stackstorm"
 JOB_FAILED_EVENT = "homelabnext.agent.job.failed"
+#: the orchestration controller's event source (its default ``events.source``): the one producer
+#: a pack reacting to ``agent.job.failed`` may pin
+ORCHESTRATOR_SOURCE = "svc:llm-orchestrator"
 DISPATCH_ACTIONS = ("agent.job.submit",)
+#: params ``agent.job.submit`` never carries: the controller refuses ``input`` (400) and ignores
+#: ``resubmits`` (it counts a run's lineage itself)
+DISPATCH_REFUSED = ("input", "resubmits")
 MAX_RESUBMITS = 3
 MIN_SHADOW_DAYS = 7
 SHIMS = ("admit", "step")
@@ -320,6 +351,36 @@ def criteria_problems(rule: Mapping[str, Any]) -> list[str]:
     return []
 
 
+#: what the approved-run rule must test besides its type: a person's accept, nothing else
+APPROVED_RUN_CRITERIA = {
+    "trigger.body.data.verdict": {"type": "equals", "pattern": "accept"},
+    "trigger.body.data.tier_used": {"type": "equals", "pattern": "human"},
+}
+
+
+def pin_problems(rule: Mapping[str, Any], ref: str) -> list[tuple[str, str]]:
+    """``(check, detail)`` for a rendered webhook rule that lost a pin: its producer
+    (``st2-source``: ``trigger.body.source`` equals one id) or, for the approved-run rule, a
+    person's ``accept`` (``st2-criteria``)."""
+    if rule.get("trigger", {}).get("type") != WEBHOOK_TRIGGER:
+        return []
+    crit = rule.get("criteria") or {}
+    out = []
+    src = crit.get("trigger.body.source")
+    if not (
+        isinstance(src, Mapping)
+        and src.get("type") == "equals"
+        and isinstance(src.get("pattern"), str)
+        and src["pattern"]
+    ):
+        out.append(("st2-source", "no equality criterion on trigger.body.source: any producer"))
+    if rule.get("action", {}).get("ref") == f"{ref}.{st2_name(APPROVED_RUN)}":
+        for key, want in APPROVED_RUN_CRITERIA.items():
+            if crit.get(key) != want:
+                out.append(("st2-criteria", f"{key}: the approved-run rule must test {want}"))
+    return out
+
+
 def cron_params(cron: str) -> dict[str, Any]:
     """Five cron fields (UTC) -> CronTimer parameters.  Day of week becomes names (``mon-fri``):
     cron counts 0 = Sunday, the CronTimer's scheduler counts 0 = Monday, and names cannot be
@@ -428,10 +489,14 @@ class {cls}(Action):
 def _shim(ref: str, name: str) -> str:
     call = {
         "admit": (
-            "admit(\n            kv=st2_runtime.ActionServiceKV(self.action_service), "
-            "pinned_dir=PINNED, **params\n        )"
+            "admit(\n            kv=st2_runtime.ActionServiceKV(self.action_service, self.config),\n"
+            "            pinned_dir=PINNED,\n            **params,\n        )"
         ),
-        "step": "step(self.config, pinned_dir=PINNED, **params)",
+        "step": (
+            "step(\n            self.config,\n            "
+            "kv=st2_runtime.ActionServiceKV(self.action_service, self.config),\n            "
+            "pinned_dir=PINNED,\n            **params,\n        )"
+        ),
     }[name]
     func = "admit" if name == "admit" else "step"
     return _SHIM.format(header=HEADER, ref=ref, name=name, func=func, cls=name.title(), call=call)
@@ -534,7 +599,9 @@ def _pinned(pack: Mapping[str, Any], digest: str, rule: Mapping[str, Any], manif
         "digest": digest,
         "mode": rule["mode"],
         "risky": {
-            s["id"]: s["kind"] == "action" and is_risky(manifest, s["action"])
+            s["id"]: s["kind"] == "action"
+            and manifest is not None
+            and is_risky(manifest, s["action"])
             for s in pack["steps"]
         },
     }
@@ -596,6 +663,16 @@ def _config(binding: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]
         }
     }
     values: dict[str, Any] = {"broker_socket": binding["broker_socket"]}
+    schema[KV_KEY] = {
+        "type": "string",
+        "secret": True,
+        "required": True,
+        "description": (
+            "keys the runtime's datastore names (seen, coalesce, submitted) so nobody without it "
+            f"can forge or pre-seed one; at least {KV_KEY_MIN} random characters"
+        ),
+    }
+    values[KV_KEY] = "{{ st2kv.system." + KV_KEY_DATASTORE + " | decrypt_kv }}"
     for key, entry in sorted(binding.get("config", {}).items()):
         item: dict[str, Any] = {"description": entry.get("description", key)}
         if "st2kv" in entry:
@@ -675,9 +752,22 @@ def render(
                     bad("st2-handler", f"{name}: step {s['id']} ({act['action']}): {why}")
         if len(out.problems) == n0:
             bound.append((rule, pack, digest, manifest))
+    ar = binding.get("approved_run")
+    if ar is not None:
+        pack = approved_run_pack(binding["actor"], ar.get("source", BROKER_SOURCE))
+        rule = {"pack": APPROVED_RUN, **{k: v for k, v in ar.items() if k != "source"}}
+        if APPROVED_RUN in seen:
+            bad("st2-duplicate", f"{APPROVED_RUN}: the built-in approved-run rule's name")
+        else:
+            n0 = len(out.problems)
+            _check_rule(rule, pack, binding, tracked, bad)
+            if len(out.problems) == n0:
+                bound.append((rule, pack, digest_of(pack), None))
     for key, entry in sorted(binding.get("config", {}).items()):
         if key == "broker_socket":
             bad("st2-binding", "config: broker_socket is set by the binding's own field")
+        if key == KV_KEY:
+            bad("st2-binding", f"config: {key} is the runtime's own datastore secret")
         if _SECRETISH.search(key) and "st2kv" not in entry:
             bad("st2-secret", f"config {key}: a secret is a datastore key (st2kv), never a value")
     if out.problems:
@@ -712,7 +802,7 @@ def render(
     for shim in SHIMS:
         files[f"{base}/actions/{shim}.yaml"] = _yaml(_shim_meta(ref, shim))
         files[f"{base}/actions/{shim}.py"] = _shim(ref, shim)
-    subjects: dict[str, list[str]] = {}
+    subjects: dict[str, dict[str, set[str]]] = {}
     provenance: dict[str, Any] = {"binding": digest_of(dict(binding)), "packs": {}}
     for rule, pack, digest, manifest in bound:
         n = st2_name(pack["pack"])
@@ -722,7 +812,9 @@ def render(
         files[f"{base}/rules/on_{n}.yaml"] = _yaml(_rule(ref, binding, pack, rule))
         provenance["packs"][pack["pack"]] = {"digest": digest, "mode": rule["mode"]}
         if "schedule" not in rule:
-            subjects.setdefault(pack["trigger"]["event"], []).append(f"{ref}.on_{n}")
+            sub = subjects.setdefault(pack["trigger"]["event"], {"rules": set(), "sources": set()})
+            sub["rules"].add(f"{ref}.on_{n}")
+            sub["sources"].update(pinned_sources(pack["trigger"]))
     files["bridge.json"] = _json(
         {
             "webhook": f"/api/v1/webhooks/{binding['webhook']}",
@@ -732,9 +824,10 @@ def render(
                 {
                     "subject": s,
                     "durable": "st2-" + s.removeprefix("homelabnext.").replace(".", "-"),
-                    "rules": sorted(rules),
+                    "rules": sorted(sub["rules"]),
+                    "sources": sorted(sub["sources"]),
                 }
-                for s, rules in sorted(subjects.items())
+                for s, sub in sorted(subjects.items())
             ],
         }
     )
@@ -816,6 +909,39 @@ def _check_rule(rule, pack, binding, tracked, bad) -> None:
         for s in dispatch:
             if s["params"].get("retry_of_run_id") != "$event.data.run_id":
                 bad("st2-bound", f"{name}: step {s['id']} must carry retry_of_run_id")
+            if s["params"].get("idempotency_key") != "$event.data.run_id":
+                bad(
+                    "st2-bound",
+                    f"{name}: step {s['id']}: the idempotency key is the failed run's id "
+                    "(stable per run; the controller refuses a key reused for another run)",
+                )
+        skips = {
+            c["ref"]
+            for c in pack["trigger"].get("where", [])
+            if c.get("exists") is False
+            and c["ref"] in ("$event.data.auto_retry_scheduled", "$event.data.retried_by_run_id")
+        }
+        if len(skips) != 2:
+            bad(
+                "st2-bound",
+                f"{name}: a run the controller already retried is not resubmitted: the trigger "
+                "requires $event.data.auto_retry_scheduled and retried_by_run_id to be absent",
+            )
+        if pinned_sources(pack["trigger"]) != [ORCHESTRATOR_SOURCE]:
+            bad(
+                "st2-bound",
+                f"{name}: retries of failed jobs pin $event.source to the controller's "
+                f"{ORCHESTRATOR_SOURCE}",
+            )
+    for s in dispatch:
+        params = s.get("params") or {}
+        refused = [k for k in DISPATCH_REFUSED if k in params]
+        if "retry_of_run_id" in params and "task_description" in params:
+            refused.append("task_description (a resubmit replays the parent's payload)")
+        if "reason" in params and "retry_of_run_id" not in params:
+            refused.append("reason (only with retry_of_run_id)")
+        for k in refused:
+            bad("st2-bound", f"{name}: step {s['id']}: the controller refuses {k}")
 
 
 def tree_problems(files: Mapping[str, str], ref: str) -> list[Problem]:
@@ -847,6 +973,7 @@ def tree_problems(files: Mapping[str, str], ref: str) -> list[Problem]:
                 f"trigger/parameters: {e}" for e in shape_errors(pk, doc["trigger"]["parameters"])
             ]
             errs += criteria_problems(doc)
+            out += [Problem(path, rule, d) for rule, d in pin_problems(doc, ref)]
             errs += [
                 f"criteria: {k}: pattern is a template"
                 for k, v in (doc.get("criteria") or {}).items()

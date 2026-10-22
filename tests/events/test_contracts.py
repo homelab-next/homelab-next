@@ -131,6 +131,14 @@ def test_consumer_refuses_envelope_negatives_and_garbage():
             decode_event(body)
 
 
+def test_consumer_refuses_a_body_nested_past_the_parsers_stack():
+    """A parser bomb is a refused body (EventError), never a RecursionError that kills the
+    consumer and comes back on every redelivery."""
+    for body in (b"[" * 100_000, b'{"a":' * 20_000 + b"1" + b"}" * 20_000):
+        with pytest.raises(EventError, match="not JSON"):
+            decode_event(body)
+
+
 def test_consumer_refuses_an_id_collision_and_retries_after_a_handler_failure():
     (sample,) = samples("task.queued")
     calls = []

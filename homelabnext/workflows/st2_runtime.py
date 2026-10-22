@@ -28,6 +28,9 @@ may run the pack's actions at all is StackStorm RBAC's (``docs/stackstorm.md``).
   behind the rule's criteria, and the one place the trigger semantics live.  The trigger of every
   event-triggered pack pins ``$event.source`` (``st2-source``), so an event that names another
   producer is ``not-triggered``;
+* **drops a redelivery**: an event id this pack already took (within :data:`DEDUPE_WINDOW_S`,
+  ``homelabnext.seen.<hash of pack and id>``) ends the run ``duplicate``.  A StackStorm webhook
+  starts one run per POST and ignores ``Idempotency-Key``; the bridge is at-least-once;
 * **coalesces**: with ``coalesce = {key, window_s}`` the first event of a key opens a window in the
   StackStorm datastore (``homelabnext.coalesce.<hash of pack, source and key>``, TTL
   ``window_s``); every later event of that key inside the window ends the run ``coalesced`` before
@@ -46,6 +49,9 @@ may run the pack's actions at all is StackStorm RBAC's (``docs/stackstorm.md``).
   is *submitted* - the broker holds it and emits ``homelabnext.decision.requested`` - and any other
   action is *called*.  StackStorm holds no credential for any target; the broker decides, runs the
   pinned handler and audits.
+* a held request is recorded in the datastore (:func:`submitted_name`) with its pack, step and
+  fingerprint; the built-in approved-run pack's one ``broker-run`` step (:func:`run_approved`)
+  runs such a request once a person approved it, and nothing else;
 * ``lookup``, ``decide`` and ``prompt`` steps are not run on StackStorm yet; the renderer refuses a
   pack that has one (``st2-step``), so :class:`UnsupportedStep` here is a defect, not a path.
 """
@@ -53,7 +59,9 @@ may run the pack's actions at all is StackStorm RBAC's (``docs/stackstorm.md``).
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import logging
 import os
 import re
 import urllib.parse
@@ -62,9 +70,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from conformance.protocols.broker import Denied
+from conformance.protocols.broker import BrokerError, Denied
 from homelabnext.agent.digest import digest_of
 from homelabnext.broker import request_digest
+from homelabnext.broker.state import is_id
 from homelabnext.events.envelope import build_event, event_problems
 
 from .runner import _enrich, action_request, holds, resolve, triggered
@@ -76,7 +85,29 @@ ST2_STEP_KINDS = ("enrich", "action")
 MODES = ("shadow", "live")
 SHADOW_REASON = "st2-shadow"
 COALESCE_PREFIX = "homelabnext.coalesce."
+SEEN_PREFIX = "homelabnext.seen."
+#: how long an admitted event id is remembered (or the coalesce window, when that is longer): a
+#: StackStorm webhook dedupes nothing, so a redelivery from the bridge is dropped here
+DEDUPE_WINDOW_S = 86400
 _PACK_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+#: the built-in pack of the approved-run rule (``docs/stackstorm.md``): it is rendered from the
+#: binding, never from ``workflows/packs/``, and its one step is the only ``broker-run`` step
+APPROVED_RUN = "approved-run"
+RUN_STEP_KIND = "broker-run"
+DECISION_EVENT = "homelabnext.decision.returned"
+BROKER_SOURCE = "svc:broker"
+#: ``homelabnext.submitted.<hash of the broker request id>``: what a live step submitted, for
+#: which pack and step, so the approved-run rule runs only those (and only for this long)
+SUBMITTED_PREFIX = "homelabnext.submitted."
+SUBMITTED_TTL_S = 7 * 86400
+#: the pack config key (a datastore secret, ``st2kv.system.homelabnext.kv_key``) that keys the
+#: datastore names above, so nobody without it can compute one to forge or pre-seed
+KV_KEY = "kv_key"
+KV_KEY_DATASTORE = "homelabnext.kv_key"
+KV_KEY_MIN = 32
+_KEYED_PREFIXES = (SEEN_PREFIX, COALESCE_PREFIX, SUBMITTED_PREFIX)
+
+log = logging.getLogger("homelabnext.st2_runtime")
 
 
 class UnsupportedStep(ValueError):
@@ -136,19 +167,42 @@ class Broker(Protocol):
     def submit(
         self, action: str, params: Mapping[str, Any] | None = None, *, target: str | None = None
     ) -> dict[str, Any]: ...
+    def status(self, request_id: str) -> dict[str, Any]: ...
+    def run(self, request_id: str) -> Any: ...
 
 
 class ActionServiceKV:
-    """:class:`KeyValue` over a StackStorm Python action's ``action_service`` (system scope)."""
+    """:class:`KeyValue` over a StackStorm Python action's ``action_service`` (system scope).
 
-    def __init__(self, action_service: Any) -> None:
+    The runtime's own names (``homelabnext.seen.*``, ``.coalesce.*``, ``.submitted.*``) are
+    stored under an HMAC of the name keyed with the pack config's ``kv_key`` (a datastore secret):
+    their inputs (a schedule's event id, a broker request id) are predictable, so with a plain hash
+    anyone allowed to write the datastore could compute a name and pre-seed it (suppress an event)
+    or forge a submit record.  Without a key of at least ``KV_KEY_MIN`` characters nothing is read
+    or written."""
+
+    def __init__(self, action_service: Any, config: Mapping[str, Any] | None = None) -> None:
+        key = (config or {}).get(KV_KEY)
+        if not isinstance(key, str) or len(key) < KV_KEY_MIN:
+            raise ValueError(
+                f"the pack config's {KV_KEY} (st2kv.system.{KV_KEY_DATASTORE}, encrypted) is not "
+                f"set to a secret of at least {KV_KEY_MIN} characters"
+            )
         self.svc = action_service
+        self._key = key.encode("utf-8")
+
+    def stored_name(self, name: str) -> str:
+        for prefix in _KEYED_PREFIXES:
+            if name.startswith(prefix):
+                mac = hmac.new(self._key, name.encode("utf-8"), hashlib.sha256)
+                return prefix + mac.hexdigest()[:32]
+        return name
 
     def get(self, name: str) -> str | None:
-        return self.svc.get_value(name, local=False)
+        return self.svc.get_value(self.stored_name(name), local=False)
 
     def set(self, name: str, value: str, ttl: int) -> None:
-        self.svc.set_value(name, value, ttl=ttl, local=False)
+        self.svc.set_value(self.stored_name(name), value, ttl=ttl, local=False)
 
 
 # ---------------------------------------------------------------- admit
@@ -176,6 +230,11 @@ def schedule_event(schedule: str, fired_at: str, cron: str | None = None) -> dic
         time=at,
         severity="info",
     )
+
+
+def seen_name(pack: str, event_id: Any) -> str:
+    h = hashlib.sha256(f"{pack}\0{event_id!r}".encode()).hexdigest()[:32]
+    return SEEN_PREFIX + h
 
 
 def coalesce_name(pack: str, source: Any, value: Any) -> str:
@@ -231,7 +290,9 @@ def admit_event(
     kv: KeyValue | None = None,
 ) -> dict[str, Any]:
     """``{admitted, reason, event, ...}``; ``reason``: admitted | invalid-event | not-triggered |
-    coalesced.  Only an admitted run goes on to its steps."""
+    duplicate | coalesced.  Only an admitted run goes on to its steps.  With the datastore
+    (``kv``, always given by the rendered ``admit`` action) an event id already admitted for this
+    pack is a ``duplicate``: a webhook does not dedupe, and the bridge delivers at least once."""
     if event is None:
         if not schedule:
             return {"admitted": False, "reason": "invalid-event", "problems": ["no event"]}
@@ -247,6 +308,14 @@ def admit_event(
     if not triggered({"trigger": trigger}, ev):
         return {"admitted": False, "reason": "not-triggered", "event_id": ev.get("id")}
     out: dict[str, Any] = {"admitted": True, "reason": "admitted", "event": ev}
+    if kv is not None:
+        # StackStorm starts one run per webhook POST, whatever its Idempotency-Key: the event id
+        # is the dedupe key, remembered for a day (or the coalesce window, when longer)
+        seen = seen_name(pack, ev.get("id"))
+        if kv.get(seen) is not None:
+            return {"admitted": False, "reason": "duplicate", "event_id": ev.get("id")}
+        window = int(coalesce["window_s"]) if coalesce else 0
+        kv.set(seen, str(ev.get("id")), max(DEDUPE_WINDOW_S, window))
     if coalesce:
         if kv is None:
             raise ValueError("coalesce needs the StackStorm datastore")
@@ -279,9 +348,12 @@ def run_step(
     risky: bool = True,
     digest: str | None = None,
     broker: Broker | None = None,
+    kv: KeyValue | None = None,
 ) -> dict[str, Any]:
     """Run ``step`` for ``event``; returns ``{steps, calls, skipped}`` with this step's output
-    added to ``steps`` and, for an action, its call record appended to ``calls``."""
+    added to ``steps`` and, for an action, its call record appended to ``calls``.  A risky action
+    the broker holds is recorded in the datastore (``kv``, :func:`submitted_name`) with its pack,
+    step and request fingerprint: the approved-run rule runs nothing else."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
     outputs = dict(steps or {})
@@ -322,6 +394,16 @@ def run_step(
                 got = broker.submit(req["action"], req["params"], target=req.get("target"))
                 rec["broker_request_id"] = got.get("request_id")
                 held = bool(got.get("awaiting_approval"))
+                if held and kv is not None and is_id(got.get("request_id")):
+                    record = {
+                        "pack": pack,
+                        "step": sid,
+                        "action": req["action"],
+                        "fingerprint": fingerprint(req),
+                        "event_id": event.get("id"),
+                    }
+                    kv.set(submitted_name(got["request_id"]), encode(record), SUBMITTED_TTL_S)
+                    rec["recorded"] = True
                 rec.update(
                     result="held" if held else "submitted",
                     reason="awaiting-approval" if held else str(got.get("state", "submitted")),
@@ -334,6 +416,145 @@ def run_step(
     outputs[sid] = {"result": rec["result"], "reason": rec["reason"]}
     made.append(rec)
     return {"steps": outputs, "calls": made, "skipped": False}
+
+
+# ---------------------------------------------------------------- the approved-run rule
+def pinned_sources(trigger: Mapping[str, Any]) -> list[str]:
+    """The producers a trigger pins (``$event.source`` ``equals``)."""
+    return [
+        c["equals"]
+        for c in trigger.get("where", [])
+        if c["ref"] == "$event.source" and isinstance(c.get("equals"), str)
+    ]
+
+
+def approved_run_pack(actor: str, source: str = BROKER_SOURCE) -> dict[str, Any]:
+    """The built-in pack of the approved-run rule: on ``decision.returned`` from the broker with
+    an ``accept`` by a person, one ``broker-run`` step for ``$event.data.decision_id``."""
+    return {
+        "pack": APPROVED_RUN,
+        "version": 1,
+        "description": (
+            "Run a request StackStorm submitted for a bound pack once the broker records its "
+            "approval"
+        ),
+        "actor": actor,
+        "trigger": {
+            "event": DECISION_EVENT,
+            "where": [
+                {"ref": "$event.source", "equals": source},
+                {"ref": "$event.data.verdict", "equals": "accept"},
+                {"ref": "$event.data.tier_used", "equals": "human"},
+            ],
+        },
+        "steps": [{"id": "run", "kind": RUN_STEP_KIND, "request": "$event.data.decision_id"}],
+    }
+
+
+def fingerprint(request: Mapping[str, Any]) -> str:
+    """What a request asks for (action, target, params): the same for the request a step built
+    and the one the broker stored for it."""
+    return digest_of(
+        {
+            "action": request.get("action"),
+            "target": request.get("target"),
+            "params": request.get("params"),
+        }
+    )
+
+
+def submitted_name(request_id: str) -> str:
+    return SUBMITTED_PREFIX + hashlib.sha256(request_id.encode()).hexdigest()[:32]
+
+
+def run_approved(
+    *,
+    actor: str,
+    event: Mapping[str, Any],
+    pinned_dir: str | os.PathLike[str],
+    kv: KeyValue,
+    mode: str,
+    broker: Broker | None = None,
+) -> dict[str, Any]:
+    """The approved-run step: ask the broker to run ``event.data.decision_id`` exactly once.
+
+    It runs only a request a live step of a bound pack submitted and recorded
+    (:func:`submitted_name`), still asking for the same thing (:func:`fingerprint`), owned by this
+    pack's actor, still pending, and whose latest decision is an approval by an approver the broker
+    says is a person (``approver_kind`` ``human`` in its ``status``: the event's ``tier_used`` is
+    advisory and never trusted); anything else is ``refused`` with a reason, logged,
+    and the broker is not asked to run it.  The broker re-decides anyway (the approval's digest,
+    expiry and single use, the owner): a forged event costs a refusal, never a run.  Shadow mode
+    checks the record and stops before the socket."""
+    rid = (event.get("data") or {}).get("decision_id")
+    rec: dict[str, Any] = {"step": "run", "action": "broker.run", "mode": mode}
+
+    def refuse(reason: str, **extra: Any) -> dict[str, Any]:
+        log.warning("approved-run: not running %r: %s", str(rid)[:80], reason)
+        rec.update(result="refused", reason=reason, **extra)
+        return rec
+
+    if not is_id(rid):
+        return refuse("invalid-request-id")
+    rec["broker_request_id"] = rid
+    raw = kv.get(submitted_name(rid))
+    if raw is None:
+        return refuse("not-st2-submitted")
+    try:
+        sub = decode(raw)
+        pack, sid = sub["pack"], sub["step"]
+        pin = load_pinned(pinned_dir, pack)
+    except (ValueError, KeyError, TypeError):  # PinError is a ValueError
+        return refuse("pack-not-bound")
+    step = next((s for s in pin["pack"]["steps"] if s["id"] == sid), None)
+    if (
+        pack == APPROVED_RUN
+        or step is None
+        or step["kind"] != "action"
+        or step["action"] != sub.get("action")
+        or not pin["risky"].get(sid)
+    ):
+        return refuse("step-not-bound")
+    rec.update(pack=pack, pack_step=sid, run_action=step["action"])
+    if pin["mode"] != "live":
+        return refuse("pack-not-live")
+    if mode == "shadow":
+        rec.update(result="shadow", reason=SHADOW_REASON)
+        return rec
+    if broker is None:
+        raise ValueError("live mode needs a broker")
+    try:
+        detail = broker.status(rid)
+    except Denied as exc:  # another caller's request reads as not-owner
+        return refuse(str(getattr(exc, "reason", "denied")))
+    req = detail.get("request") or {}
+    if req.get("actor") != actor:
+        return refuse("other-caller")
+    if fingerprint(req) != sub.get("fingerprint"):
+        return refuse("request-mismatch")
+    if detail.get("state") != "pending":
+        return refuse("not-pending", state=detail.get("state"))
+    approvals = detail.get("approvals") or []
+    if not approvals or approvals[-1].get("decision") != "approved":
+        return refuse("not-approved")
+    # who approved is the broker's answer, never the event's: tier_used is whatever the event
+    # says (anyone who can publish it, or POST the webhook, writes it); a missing kind refuses
+    if approvals[-1].get("approver_kind") != "human":
+        return refuse("not-human-approved", approver_kind=approvals[-1].get("approver_kind"))
+    try:
+        broker.run(rid)
+    except Denied as exc:
+        reason = str(getattr(exc, "reason", "denied"))
+        log.warning("approved-run: the broker refused to run %r: %s", rid, reason)
+        rec.update(result="denied", reason=reason)
+        return rec
+    except BrokerError as exc:
+        reason = str(getattr(exc, "reason", "") or "broker-error")
+        log.warning("approved-run: running %r failed: %s", rid, reason)
+        rec.update(result="error", reason=reason)
+        return rec
+    rec.update(result="executed", reason="approved")
+    return rec
 
 
 BrokerFactory = Callable[[str], Broker]
@@ -354,6 +575,7 @@ def step(
     state: str = "",
     pinned_dir: str | os.PathLike[str],
     broker_factory: BrokerFactory = _socket_broker,
+    kv: KeyValue | None = None,
 ) -> dict[str, Any]:
     """The ``homelabnext.step`` action: step ``step`` of the pinned ``pack``, for the encoded
     ``event`` (re-checked against the pack's trigger), after the encoded ``state`` of the steps
@@ -373,6 +595,8 @@ def step(
     prior = decode(state) if state else {"steps": {}, "calls": []}
     if not isinstance(prior, dict):
         raise ValueError("state is not an encoded object")
+    if found[0]["kind"] == RUN_STEP_KIND:
+        return _approved_run_step(config, pin, ev, prior, pinned_dir, broker_factory, kv)
     broker = None
     if pin["mode"] == "live":
         broker = broker_factory(str(config["broker_socket"]))
@@ -387,10 +611,39 @@ def step(
         risky=bool(pin["risky"].get(step, True)),
         digest=pin["digest"],
         broker=broker,
+        kv=kv,
     )
     made = out["calls"][len(prior.get("calls") or ()) :]
     return {
         "state": encode({"steps": out["steps"], "calls": out["calls"]}),
         "skipped": out["skipped"],
         "result": made[0]["result"] if made else None,
+    }
+
+
+def _approved_run_step(config, pin, ev, prior, pinned_dir, broker_factory, kv) -> dict[str, Any]:
+    """Step ``run`` of the built-in approved-run pack, and of nothing else: a ``broker-run``
+    step anywhere but the exact built-in document is a pin error."""
+    doc = pin["pack"]
+    sources = pinned_sources(doc["trigger"])
+    builtin = approved_run_pack(doc["actor"], sources[0]) if len(sources) == 1 else None
+    if doc["pack"] != APPROVED_RUN or doc != builtin:
+        raise PinError(f"{doc['pack']}: a {RUN_STEP_KIND} step is the approved-run rule's only")
+    if kv is None:
+        raise ValueError("the approved-run step needs the StackStorm datastore")
+    broker = broker_factory(str(config["broker_socket"])) if pin["mode"] == "live" else None
+    rec = run_approved(
+        actor=doc["actor"],
+        event=ev,
+        pinned_dir=pinned_dir,
+        kv=kv,
+        mode=pin["mode"],
+        broker=broker,
+    )
+    steps = dict(prior.get("steps") or {}, run={"result": rec["result"], "reason": rec["reason"]})
+    calls = [*(prior.get("calls") or []), rec]
+    return {
+        "state": encode({"steps": steps, "calls": calls}),
+        "skipped": False,
+        "result": rec["result"],
     }

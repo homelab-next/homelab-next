@@ -1,0 +1,613 @@
+# SPDX-License-Identifier: Apache-2.0
+"""``hnx workflows st2 bridge``: the event bridge from the bus to StackStorm's webhook.
+
+The rendered ``bridge.json`` (:func:`homelabnext.workflows.st2.render`) names, per bound event
+type, the bus subject, a durable consumer name, the rules it feeds and the producers (``source``)
+those rules pin.  The bridge is one long-running process that, for each entry, is a durable
+consumer on the subject (``homelabnext.<type>``; with NATS JetStream under the stream's subject
+prefix, :mod:`homelabnext.conform.adapters.nats_jetstream`) and POSTs each event to the webhook.
+
+* **Validated before forwarding.**  Every body is parsed and checked against the envelope and its
+  type's schema (:func:`homelabnext.events.consumer.decode_event`), its type must be the subject's
+  and its ``source`` one the subject's rules pin.  Anything else is *poison*: it is terminated
+  (``term``: JetStream's dead-letter stream is the quarantine, never redelivered, never
+  forwarded), counted by reason and logged with the event id, never its content.  A body over
+  :data:`MAX_EVENT_BYTES` is poison before it is parsed, one nested past the parser's stack is
+  ``not-json``, and any other exception while checking a delivery quarantines that delivery
+  (``unprocessable``): one hostile body never takes the bridge down (or, redelivered, keeps it
+  down).
+* **At least once, and a duplicate is harmless.**  A delivery is acked only after the webhook
+  answered 2xx.  A refused connection, a timeout, a redirect, 401/403/404, 408, 429 and 5xx are
+  *nacked* (redelivered) and the bridge backs off exponentially before fetching that subject again
+  (each subject backs off on its own, so one failing subject never stalls the others), so an
+  outage of StackStorm costs retries, not events.  After ``max_deliver`` attempts the bus
+  dead-letters it.  400, 413, 415 and 422 are StackStorm refusing the body: poison.  Each POST
+  carries ``Idempotency-Key: <event id>``; StackStorm's webhook ignores it and starts a run per
+  POST, so the runtime's ``admit`` drops an event id it has already taken
+  (:data:`homelabnext.workflows.st2_runtime.DEDUPE_WINDOW_S`).
+* **The credential is a secret name.**  ``bridge.json`` names it (the secret-store name
+  ``stackstorm/webhook-key``); it is read from ``HNX_SECRET_STACKSTORM_WEBHOOK_KEY`` at every POST (never held, never logged) and sent as
+  ``St2-Api-Key``.  Give it to a StackStorm user whose RBAC role has ``webhook_send`` only.
+* **TLS on.**  https with certificate verification (``--ca-file`` for a private CA); plain http
+  only to loopback or with an explicit ``allow_plaintext``.  No redirect is followed: a 3xx is a
+  failed POST (nacked), so the key never reaches another URL.  No proxy either (``HTTP_PROXY`` and
+  ``HTTPS_PROXY`` are ignored): a proxy would read the key off a loopback plain-http POST.
+* **Bounded.**  At most ``max_in_flight`` POSTs at once (one fetch is at most that many
+  deliveries); SIGTERM stops fetching (no further subject is fetched in the pass it lands in), lets
+  the POSTs in flight finish and settles them.
+* **A bus fault costs a retry, never the bridge.**  A fetch that fails backs that subject off like
+  a failed POST; a transport failure (not ``permanent``) also drops the connection, and with a
+  ``connect`` the next pass reconnects (backing off while it cannot) and reopens the durables.
+
+``stats()`` (and ``--stats-file``, written atomically) reports per subject what was forwarded,
+retried, quarantined (by reason) and dead-lettered, for a ``poll-file`` status source; its
+``state`` is ``warn`` while a subject is failing (a dead letter is final, not a failure in
+progress; an empty fetch ends the run), and ``fail`` for ``dead_letter_window_s`` (a day) after
+the latest dead letter, then recovers.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import logging
+import os
+import re
+import ssl
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections import Counter
+from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Protocol
+
+from homelabnext._http import ResponseTooLarge, check_plaintext, read_bounded
+from homelabnext.events.consumer import decode_event
+from homelabnext.events.envelope import EventError, canonical_body
+from homelabnext.registry.model import secret_env_name
+from homelabnext.state.store import atomic_write_text
+
+from .st2_runtime import DEDUPE_WINDOW_S
+
+__all__ = [
+    "Bridge",
+    "BridgeConfig",
+    "BridgeError",
+    "Subscription",
+    "Webhook",
+    "load_bridge",
+]
+
+log = logging.getLogger("homelabnext.st2_bridge")
+
+#: StackStorm refused the body itself: retrying the same bytes cannot succeed
+PERMANENT_STATUS = frozenset({400, 413, 415, 422})
+MAX_REPLY_BYTES = 64 << 10
+#: an event body larger than this is poison before it is parsed (the envelope is small; a body this
+#: size is a flood or a parser bomb, never an event a rule takes)
+MAX_EVENT_BYTES = 256 << 10
+#: the bus's lease on a delivery (JetStream ``ack_wait``) the bridge asks for when it creates a
+#: durable; it must outlast a POST (the webhook's timeout) plus :data:`LEASE_MARGIN_S` to settle,
+#: or the bus hands the delivery out again while it is still being posted
+ACK_WAIT_S = 30.0
+LEASE_MARGIN_S = 15.0
+#: how far back a durable the bridge creates starts (JetStream ``by_start_time``): what the relay
+#: published before the durable existed is forwarded, but never more than ``admit`` remembers
+#: (:data:`~homelabnext.workflows.st2_runtime.DEDUPE_WINDOW_S`), so a replay of anything an
+#: earlier durable already forwarded ends ``duplicate`` and a long-retention stream's history is
+#: never replayed
+REPLAY_S = float(DEDUPE_WINDOW_S)
+_WEBHOOK_PATH = re.compile(r"/api/v1/webhooks/[a-z][a-z0-9_-]*")
+_SECRET_REF = re.compile(r"secret:[a-z][a-z0-9_-]*(/[a-z][a-z0-9_-]*)*")
+_SUBJECT = re.compile(r"homelabnext(\.[a-z][a-z0-9-]*)+")
+_DURABLE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+class BridgeError(ValueError):
+    """``bridge.json`` is malformed, or the bridge is configured wrongly."""
+
+
+@dataclass(frozen=True)
+class Subscription:
+    subject: str
+    durable: str
+    rules: tuple[str, ...]
+    sources: frozenset[str]
+
+
+@dataclass(frozen=True)
+class BridgeConfig:
+    webhook: str
+    api_key: str
+    subscriptions: tuple[Subscription, ...]
+
+
+def load_bridge(path_or_doc: str | os.PathLike[str] | Mapping[str, Any]) -> BridgeConfig:
+    """The rendered ``bridge.json``, checked: a webhook path, a secret name, one entry per
+    subject, each with a durable name and the producers its rules pin."""
+    if isinstance(path_or_doc, Mapping):
+        doc: Any = path_or_doc
+    else:
+        try:
+            doc = json.loads(Path(path_or_doc).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise BridgeError(f"bridge file: {exc.__class__.__name__}: {exc}") from None
+    if not isinstance(doc, Mapping):
+        raise BridgeError("bridge file: not an object")
+    webhook, key = doc.get("webhook"), doc.get("api_key")
+    if not isinstance(webhook, str) or not _WEBHOOK_PATH.fullmatch(webhook):
+        raise BridgeError("webhook: not /api/v1/webhooks/<name>")
+    if not isinstance(key, str) or not _SECRET_REF.fullmatch(key):
+        raise BridgeError("api_key: a secret name (secret:<name>), never a value")
+    if doc.get("content_type") != "application/json":
+        raise BridgeError("content_type: StackStorm's webhook takes application/json")
+    subs = doc.get("subscriptions")
+    if not isinstance(subs, list) or not subs:
+        raise BridgeError("subscriptions: none")
+    out: list[Subscription] = []
+    for i, s in enumerate(subs):
+        where = f"subscriptions[{i}]"
+        if not isinstance(s, Mapping):
+            raise BridgeError(f"{where}: not an object")
+        subject, durable = s.get("subject"), s.get("durable")
+        rules, sources = s.get("rules"), s.get("sources")
+        if not isinstance(subject, str) or not _SUBJECT.fullmatch(subject):
+            raise BridgeError(f"{where}: subject is not one homelabnext event type")
+        if not isinstance(durable, str) or not _DURABLE.fullmatch(durable):
+            raise BridgeError(f"{where}: durable is not a consumer name")
+        if not isinstance(rules, list) or not rules or not all(isinstance(r, str) for r in rules):
+            raise BridgeError(f"{where}: rules: none")
+        if (
+            not isinstance(sources, list)
+            or not sources
+            or not all(isinstance(x, str) and x for x in sources)
+        ):
+            raise BridgeError(f"{where}: sources: the producers the rules pin, none given")
+        out.append(Subscription(subject, durable, tuple(rules), frozenset(sources)))
+    if len({s.subject for s in out}) != len(out) or len({s.durable for s in out}) != len(out):
+        raise BridgeError("subscriptions: a subject or a durable name is listed twice")
+    return BridgeConfig(webhook, key, tuple(out))
+
+
+# ---------------------------------------------------------------- the webhook
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: the 3xx surfaces as an HTTPError (a failed POST)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        return None
+
+
+class WebhookUnavailable(RuntimeError):
+    """The POST did not get an HTTP answer (refused, timed out, TLS failed) or had no key."""
+
+
+class Poster(Protocol):
+    def post(self, event: Mapping[str, Any]) -> int: ...
+
+
+class Webhook:
+    """POSTs one event to ``<base_url><path>``; returns the HTTP status (any status, 3xx
+    included, since no redirect is followed) or raises :class:`WebhookUnavailable`."""
+
+    def __init__(
+        self,
+        base_url: str,
+        path: str,
+        api_key: str,
+        *,
+        env: Mapping[str, str] | None = None,
+        ca_file: str | os.PathLike[str] | None = None,
+        timeout: float = 10.0,
+        allow_plaintext: bool = False,
+    ) -> None:
+        parts = urllib.parse.urlsplit(base_url)
+        if parts.scheme not in ("https", "http") or not parts.hostname:
+            raise BridgeError("the StackStorm URL must be an absolute https URL")
+        if parts.username or parts.password or parts.query or parts.fragment:
+            raise BridgeError("the StackStorm URL carries no credentials, query or fragment")
+        if parts.path not in ("", "/"):
+            raise BridgeError("the StackStorm URL is the server's base URL, without a path")
+        if not _WEBHOOK_PATH.fullmatch(path):
+            raise BridgeError("webhook: not /api/v1/webhooks/<name>")
+        if not _SECRET_REF.fullmatch(api_key):
+            raise BridgeError("the API key is a secret name (secret:<name>), never a value")
+        try:
+            check_plaintext(base_url, credentials=True, allow_plaintext=allow_plaintext)
+        except ValueError as exc:
+            raise BridgeError(str(exc)) from None
+        self.url = f"{parts.scheme}://{parts.netloc}{path}"
+        self.key_ref = api_key
+        self._env = env
+        self.timeout = timeout
+        ctx = ssl.create_default_context(cafile=str(ca_file) if ca_file else None)
+        # no proxy: the environment's HTTP(S)_PROXY would get the key (in clear for http)
+        self._opener = urllib.request.build_opener(
+            _NoRedirect, urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=ctx)
+        )
+
+    def __repr__(self) -> str:
+        return f"Webhook({self.url!r}, key={self.key_ref!r})"
+
+    def _key(self) -> str:
+        var = secret_env_name(self.key_ref)
+        value = (os.environ if self._env is None else self._env).get(var, "")
+        if not value:
+            raise WebhookUnavailable(f"the webhook API key is not set: {var} ({self.key_ref})")
+        return value
+
+    def post(self, event: Mapping[str, Any]) -> int:
+        req = urllib.request.Request(self.url, data=canonical_body(event), method="POST")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Accept", "application/json")
+        req.add_header("Idempotency-Key", str(event["id"]))
+        req.add_header("St2-Api-Key", self._key())
+        try:
+            with self._opener.open(req, timeout=self.timeout) as resp:
+                with contextlib.suppress(ResponseTooLarge):  # answered; the echo is not read
+                    read_bounded(resp, MAX_REPLY_BYTES)
+                return int(resp.status)
+        except urllib.error.HTTPError as exc:
+            exc.close()
+            return int(exc.code)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            reason = getattr(exc, "reason", exc)
+            raise WebhookUnavailable(f"{type(reason).__name__}") from None
+
+
+# ---------------------------------------------------------------- the bridge
+@dataclass
+class SubjectStats:
+    forwarded: int = 0
+    retried: int = 0
+    dead_lettered: int = 0
+    quarantined: Counter = field(default_factory=Counter)
+    failures: int = 0  # consecutive failed fetches of this subject (one POST or more failed)
+    pause_until: float = 0.0  # this subject is not fetched again before then
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "consecutive_failures": self.failures,
+            "forwarded": self.forwarded,
+            "retried": self.retried,
+            "dead_lettered": self.dead_lettered,
+            "quarantined": dict(sorted(self.quarantined.items())),
+        }
+
+
+class Bridge:
+    """The bridge over one bus (:class:`conformance.protocols.events.EventBus`)."""
+
+    def __init__(
+        self,
+        bus: Any,
+        config: BridgeConfig,
+        webhook: Poster,
+        *,
+        max_in_flight: int = 8,
+        max_deliver: int = 100,
+        backoff_base_s: float = 1.0,
+        backoff_max_s: float = 60.0,
+        clock: Callable[[], float] = time.monotonic,
+        stats_file: str | os.PathLike[str] | None = None,
+        stats_interval_s: float = 30.0,
+        dead_letter_window_s: float = 86400.0,
+        now: Callable[[], str] | None = None,
+        connect: Callable[[], Any] | None = None,
+    ) -> None:
+        if max_in_flight < 1 or max_deliver < 1:
+            raise BridgeError("max_in_flight and max_deliver are positive")
+        self.bus, self.config, self.webhook = bus, config, webhook
+        self.connect = connect  # a new bus after a transport failure (None: keep this one)
+        self._bus_broken = False
+        self._bus_failures = 0
+        self._reconnect_at = 0.0
+        self.max_in_flight, self.max_deliver = int(max_in_flight), int(max_deliver)
+        self.backoff_base_s, self.backoff_max_s = backoff_base_s, backoff_max_s
+        self.clock = clock
+        self.now = now or _now
+        self.stats_file = Path(stats_file) if stats_file else None
+        self.stats_interval_s = stats_interval_s
+        self.per_subject = {s.subject: SubjectStats() for s in config.subscriptions}
+        self.last_forward: str | None = None
+        self.last_error: str | None = None
+        self.dead_letter_window_s = dead_letter_window_s
+        self.last_dead_letter: str | None = None
+        self._dead_at: float | None = None  # clock() of the latest dead letter
+        self._consumers: list[tuple[Subscription, Any]] = []
+        self._pool = ThreadPoolExecutor(self.max_in_flight, thread_name_prefix="st2-bridge")
+        self._stats_written = float("-inf")
+
+    def open(self) -> None:
+        """Create (or reopen) one durable consumer per subscription; refuse one whose lease
+        (``ack_wait``, when the bus reports it) a POST could outlast."""
+        consumers = [
+            (s, self.bus.consumer(s.durable, s.subject, max_deliver=self.max_deliver))
+            for s in self.config.subscriptions
+        ]
+        need = float(getattr(self.webhook, "timeout", 0.0)) + LEASE_MARGIN_S
+        for s, cons in consumers:
+            lease = getattr(cons, "ack_wait", None)
+            if lease is not None and float(lease) < need:
+                raise BridgeError(
+                    f"durable {s.durable}: ack_wait {float(lease):g}s is shorter than the POST "
+                    f"timeout plus {LEASE_MARGIN_S:g}s ({need:g}s), so a delivery would be handed "
+                    f"out again mid-POST; raise its lease in place (nats consumer edit <stream> "
+                    f"{s.durable} --wait {ACK_WAIT_S:g}s), which keeps what it has pending"
+                )
+        self._consumers = consumers
+
+    @property
+    def failures(self) -> int:
+        """The longest run of consecutive failures of any one subject (or of reconnecting)."""
+        worst = max((st.failures for st in self.per_subject.values()), default=0)
+        return max(worst, self._bus_failures)
+
+    @property
+    def pause_until(self) -> float:
+        """When the first subject that is backing off may be fetched again (0.0: none is)."""
+        now = self.clock()
+        return min(
+            (st.pause_until for st in self.per_subject.values() if st.pause_until > now),
+            default=0.0,
+        )
+
+    def close(self) -> None:
+        self._pool.shutdown(wait=True)
+        self.write_stats(force=True)
+
+    # ------------------------------------------------------------ one delivery
+    def classify(self, sub: Subscription, delivery: Any) -> tuple[dict[str, Any] | None, str]:
+        """``(event, "")`` to forward, or ``(None, reason)`` for poison."""
+        if delivery.subject != sub.subject:
+            return None, "wrong-subject"
+        if len(delivery.data) > MAX_EVENT_BYTES:
+            return None, "too-large"
+        try:
+            event = decode_event(delivery.data)
+        except EventError as exc:
+            return None, "not-json" if "not JSON" in str(exc) else "invalid-event"
+        if event["type"] != sub.subject:
+            return None, "wrong-type"
+        if event.get("source") not in sub.sources:
+            return None, "wrong-source"
+        if delivery.msg_id is not None and delivery.msg_id != event["id"]:
+            return None, "id-mismatch"
+        return event, ""
+
+    def _quarantine(self, sub: Subscription, d: Any, reason: str, event_id: Any = None) -> None:
+        self.per_subject[sub.subject].quarantined[reason] += 1
+        log.warning(
+            "st2 bridge: quarantined %s seq %s (%s), event id %r: not forwarded, not retried",
+            sub.subject,
+            d.seq,
+            reason,
+            str(event_id)[:80] if event_id is not None else None,
+        )
+        self._settle_or_log(sub, d, "term")
+
+    def _settle_or_log(self, sub: Subscription, d: Any, how: str) -> bool:
+        """Settle ``d``; a bus that fails the settlement costs this delivery a redelivery (the
+        lease lapses), never the bridge."""
+        try:
+            getattr(d, how)()
+        except Exception as exc:
+            self.last_error = f"{self.now()} {sub.subject}: {how} failed: {type(exc).__name__}"
+            log.error(
+                "st2 bridge: %s seq %s: %s failed (%s); the bus redelivers it",
+                sub.subject,
+                d.seq,
+                how,
+                type(exc).__name__,
+            )
+            return False
+        return True
+
+    def _classify(self, sub: Subscription, d: Any) -> tuple[dict[str, Any] | None, str]:
+        """:meth:`classify`, where a defect in a check is poison for this one delivery."""
+        try:
+            return self.classify(sub, d)
+        except Exception as exc:  # e.g. a validator recursing on a hostile body
+            log.error(
+                "st2 bridge: %s seq %s could not be checked (%s)",
+                sub.subject,
+                d.seq,
+                type(exc).__name__,
+            )
+            return None, "unprocessable"
+
+    def _post(self, event: Mapping[str, Any]) -> int | str:
+        try:
+            return self.webhook.post(event)
+        except WebhookUnavailable as exc:
+            return str(exc)
+        except Exception as exc:  # a defect in a poster must cost a retry, never the event
+            return type(exc).__name__
+
+    def _settle(
+        self, sub: Subscription, d: Any, event: Mapping[str, Any], got: int | str, max_deliver: int
+    ) -> bool:
+        """Settle one POSTed delivery.  ``max_deliver`` is the durable's own (an existing durable
+        keeps the one it was created with, whatever ``--max-deliver`` says now)."""
+        st = self.per_subject[sub.subject]
+        if isinstance(got, int) and 200 <= got < 300:
+            if not self._settle_or_log(sub, d, "ack"):
+                return False
+            st.forwarded += 1
+            self.last_forward = self.now()
+            return True
+        if isinstance(got, int) and got in PERMANENT_STATUS:
+            self._quarantine(sub, d, f"rejected-{got}", event.get("id"))
+            return True
+        why = f"HTTP {got}" if isinstance(got, int) else got
+        self.last_error = f"{self.now()} {sub.subject}: {why}"
+        if d.attempt >= max_deliver:
+            st.dead_lettered += 1
+            self._dead_at, self.last_dead_letter = self.clock(), self.now()
+            log.error(
+                "st2 bridge: %s event %r dead-lettered after %d attempts (%s)",
+                sub.subject,
+                str(event.get("id"))[:80],
+                d.attempt,
+                why,
+            )
+            # final: the bus drops it; it is a loss (state fail), not a failure still in progress
+            return self._settle_or_log(sub, d, "nack")
+        else:
+            st.retried += 1
+            log.warning(
+                "st2 bridge: %s event %r not delivered (%s), attempt %d: retrying",
+                sub.subject,
+                str(event.get("id"))[:80],
+                why,
+                d.attempt,
+            )
+        self._settle_or_log(sub, d, "nack")
+        return False
+
+    # ------------------------------------------------------------ the loop
+    def _backoff(self, st: SubjectStats) -> None:
+        st.failures += 1
+        delay = min(self.backoff_max_s, self.backoff_base_s * 2 ** (st.failures - 1))
+        st.pause_until = self.clock() + delay
+
+    def _reconnect(self) -> bool:
+        """After a transport failure: a new bus and the durables reopened (True), or a backoff."""
+        if self.clock() < self._reconnect_at:
+            return False
+        old, self._consumers = self.bus, []
+        with contextlib.suppress(Exception):
+            old.close()
+        try:
+            self.bus = self.connect()  # type: ignore[misc]
+            self.open()
+        except BridgeError:
+            raise  # a durable the bridge cannot use as it stands: configuration, not an outage
+        except Exception as exc:
+            self._bus_failures += 1
+            delay = min(self.backoff_max_s, self.backoff_base_s * 2 ** (self._bus_failures - 1))
+            self._reconnect_at = self.clock() + delay
+            self.last_error = f"{self.now()} reconnect failed: {type(exc).__name__}"
+            log.warning(
+                "st2 bridge: reconnecting to the bus failed (%s); retrying in %.1fs",
+                type(exc).__name__,
+                delay,
+            )
+            return False
+        log.info("st2 bridge: reconnected to the bus")
+        self._bus_broken, self._bus_failures = False, 0
+        return True
+
+    def _fetch(self, sub: Subscription, cons: Any) -> list[Any] | None:
+        """One fetch; None when it failed (that subject backs off, the bridge goes on)."""
+        try:
+            return list(cons.fetch(self.max_in_flight))
+        except Exception as exc:
+            st = self.per_subject[sub.subject]
+            self._backoff(st)
+            self.last_error = f"{self.now()} {sub.subject}: fetch failed: {type(exc).__name__}"
+            if not getattr(exc, "permanent", False) and self.connect is not None:
+                self._bus_broken = True  # the connection is suspect: drop it, reconnect
+            log.warning(
+                "st2 bridge: fetching %s failed (%s); retrying it in %.1fs",
+                sub.subject,
+                type(exc).__name__,
+                max(0.0, st.pause_until - self.clock()),
+            )
+            return None
+
+    def poll(self, stop: threading.Event | None = None) -> int:
+        """One pass over every subscription: fetch at most ``max_in_flight`` deliveries, POST the
+        valid ones concurrently, settle each.  Returns how many deliveries were settled.  A
+        subject whose POST or fetch failed backs off on its own (exponentially): it is not fetched
+        until its pause ends, and every other subject goes on.  Once ``stop`` is set no further
+        subject is fetched (what is already fetched is posted and settled)."""
+        if self._bus_broken and not self._reconnect():
+            self.write_stats()
+            return 0
+        handled = 0
+        for sub, cons in self._consumers:
+            if stop is not None and stop.is_set():
+                break
+            if self._bus_broken:
+                break  # a fetch failed for the connection: reconnect before the next subject
+            st = self.per_subject[sub.subject]
+            if self.clock() < st.pause_until:
+                continue
+            batch = self._fetch(sub, cons)
+            if batch is None:
+                continue
+            if not batch:
+                st.failures = 0  # nothing is pending on it: whatever failed is settled
+                continue
+            todo: list[tuple[Any, dict[str, Any]]] = []
+            for d in batch:
+                event, why = self._classify(sub, d)
+                if event is None:
+                    self._quarantine(sub, d, why)
+                else:
+                    todo.append((d, event))
+            results = list(self._pool.map(lambda pair: self._post(pair[1]), todo))
+            ok = True
+            limit = int(getattr(cons, "max_deliver", self.max_deliver))
+            for (d, event), got in zip(todo, results, strict=True):
+                ok = self._settle(sub, d, event, got, limit) and ok
+            handled += len(batch)
+            if ok:
+                st.failures = 0
+            else:
+                self._backoff(st)
+        self.write_stats()
+        return handled
+
+    def run(self, stop: threading.Event, *, idle_s: float = 1.0) -> None:
+        """Poll until ``stop`` is set (SIGTERM); then finish and settle what is in flight."""
+        self.open()
+        try:
+            while not stop.is_set():
+                if self.poll(stop) == 0:  # a subject backing off is skipped, not waited for
+                    stop.wait(idle_s)
+        finally:
+            self.close()
+
+    # ------------------------------------------------------------ stats
+    def stats(self) -> dict[str, Any]:
+        quarantined = sum(sum(s.quarantined.values()) for s in self.per_subject.values())
+        dead = sum(s.dead_lettered for s in self.per_subject.values())
+        state = "ok"
+        if self.failures:
+            state = "warn"
+        if self._dead_at is not None and self.clock() - self._dead_at < self.dead_letter_window_s:
+            state = "fail"  # an event was lost recently; the counters keep the history
+        return {
+            "bridge": "st2",
+            "updated_at": self.now(),
+            "state": state,
+            "consecutive_failures": self.failures,
+            "last_forward": self.last_forward,
+            "last_error": self.last_error,
+            "last_dead_letter": self.last_dead_letter,
+            "dead_lettered": dead,
+            "quarantined": quarantined,
+            "subjects": {k: v.to_dict() for k, v in sorted(self.per_subject.items())},
+        }
+
+    def write_stats(self, *, force: bool = False) -> None:
+        if self.stats_file is None:
+            return
+        now = self.clock()
+        if not force and now - self._stats_written < self.stats_interval_s:
+            return
+        self._stats_written = now
+        self.stats_file.parent.mkdir(parents=True, exist_ok=True)
+        text = json.dumps(self.stats(), indent=2, sort_keys=True) + "\n"
+        atomic_write_text(self.stats_file, text, mode=0o640)
+
+
+def _now() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

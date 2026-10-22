@@ -126,6 +126,25 @@ def write_export(root: Path, store: dict) -> None:
                 p.write_bytes(content(eid, f["path"]))
 
 
+@pytest.fixture(scope="module")
+def fetched_store(tmp_path_factory) -> Path:
+    """A store ``main`` fetched from the example manifest, built once for the tests that only need
+    one to start from (each takes a copy: ``fetched``).  The fetch itself is
+    test_model_store_fetches_at_the_pinned_revision_and_the_store_check_passes."""
+    base = tmp_path_factory.mktemp("fetched")
+    store = manifest()
+    remote_tree(base, store)
+    r = run_role(base, "model_store", "main", store_vars(base, store))
+    assert r.returncode == 0, r.stdout + r.stderr
+    return base / "srv"
+
+
+def fetched(tmp_path: Path, fetched_store: Path) -> dict:
+    """``tmp_path/srv``: a copy of the fetched store (snapshot links copied as links); its vars."""
+    shutil.copytree(fetched_store, tmp_path / "srv", symlinks=True)
+    return store_vars(tmp_path, manifest())
+
+
 def test_model_store_fetches_at_the_pinned_revision_and_the_store_check_passes(tmp_path):
     store = manifest()
     remote_tree(tmp_path, store)
@@ -189,6 +208,10 @@ def test_model_store_refuses_a_floating_revision_before_running_anything(tmp_pat
     r = run_role(tmp_path, "model_store", "main", store_vars(tmp_path, store))
     assert r.returncode != 0 and "must be pinned" in r.stdout
     assert calls(tmp_path) == []
+
+
+def test_model_store_accepts_the_pinned_example_manifest(tmp_path):
+    """The good input for the refusals above and below (the same run for every parameter, so once)."""
     good = run_role(
         tmp_path, "model_store", "main", store_vars(tmp_path, manifest(), model_store_fetch=False)
     )
@@ -239,11 +262,9 @@ def test_model_store_passes_the_hub_token_by_reference_only(tmp_path):
     assert "hub-token-fake" not in r.stdout  # the download task is no_log when a token is used
 
 
-def test_model_store_health_is_by_size_and_verify_by_sha256(tmp_path):
+def test_model_store_health_is_by_size_and_verify_by_sha256(tmp_path, fetched_store):
     store = manifest()
-    remote_tree(tmp_path, store)
-    v = store_vars(tmp_path, store)
-    assert run_role(tmp_path, "model_store", "main", v).returncode == 0
+    v = fetched(tmp_path, fetched_store)
     write_export(tmp_path / "srv", store)
     target = tmp_path / "srv" / "exports" / "2026-10-01-triage" / "model.safetensors"
     target.write_bytes(target.read_bytes().upper())  # same size, other bytes
@@ -255,12 +276,10 @@ def test_model_store_health_is_by_size_and_verify_by_sha256(tmp_path):
     assert gone.returncode != 0 and "model.safetensors (missing)" in gone.stdout
 
 
-def test_model_store_refuses_a_snapshot_link_out_of_its_blobs(tmp_path):
+def test_model_store_refuses_a_snapshot_link_out_of_its_blobs(tmp_path, fetched_store):
     """The right bytes behind a link out of the store still fail: nothing manages them."""
     store = manifest()
-    remote_tree(tmp_path, store)
-    v = store_vars(tmp_path, store)
-    assert run_role(tmp_path, "model_store", "main", v).returncode == 0
+    v = fetched(tmp_path, fetched_store)
     write_export(tmp_path / "srv", store)
     assert run_role(tmp_path, "model_store", "verify", v).returncode == 0
     snap = tmp_path / "srv" / store_mod.Store.from_dict(store).entries["example-27b-fp8"].directory

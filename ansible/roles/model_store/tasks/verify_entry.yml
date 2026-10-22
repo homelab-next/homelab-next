@@ -7,27 +7,14 @@
   ansible.builtin.include_tasks: entry_paths.yml
   tags: [health, verify]
 
-- name: Read {{ model_store_entry.key }}'s files
-  ansible.builtin.stat:
-    path: "{{ model_store_entry_dir }}/{{ item.path }}"
-    follow: true
-    get_checksum: "{{ not (model_store_sizes_only | default(false) | bool) }}"
-    checksum_algorithm: sha256
-  loop: "{{ model_store_entry.value.files }}"
-  loop_control:
-    label: "{{ item.path }}"
+# Followed (exists, size, sha256) and unfollowed (islnk, lnk_source) in one call for every file of
+# the entry (library/model_store_files.py), not two stat round trips per file.
+- name: Read {{ model_store_entry.key }}'s files and where they resolve
+  model_store_files:
+    dir: "{{ model_store_entry_dir }}"
+    files: "{{ model_store_entry.value.files }}"
+    checksum: "{{ not (model_store_sizes_only | default(false) | bool) }}"
   register: model_store_stats
-  tags: [health, verify]
-
-- name: Read where {{ model_store_entry.key }}'s files resolve
-  ansible.builtin.stat:
-    path: "{{ model_store_entry_dir }}/{{ item.path }}"
-    follow: false
-    get_checksum: false
-  loop: "{{ model_store_entry.value.files }}"
-  loop_control:
-    label: "{{ item.path }}"
-  register: model_store_links
   tags: [health, verify]
 
 - name: Fail unless every file matches the manifest
@@ -45,7 +32,7 @@
     model_store_bad: >-
       {%- set bad = [] -%}
       {%- for r in model_store_stats.results -%}
-      {%- set link = model_store_links.results[loop.index0].stat -%}
+      {%- set link = r.link -%}
       {%- set ns = namespace(inside=not (link.islnk | default(false))) -%}
       {%- for i in model_store_inside if link.islnk | default(false) and link.lnk_source.startswith(i) -%}{%- set ns.inside = true -%}{%- endfor -%}
       {%- if not r.stat.exists -%}{{ bad.append(r.item.path ~ ' (missing)') or '' }}
