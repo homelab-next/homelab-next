@@ -213,8 +213,11 @@ class NutSession:
         name = " ".join(words[:2]) if words[0] in ("LIST", "GET") else words[0]
         self._send(" ".join(quote(w) for w in words))
         first = self._line()
-        if first.startswith("ERR "):
-            raise NutError(first.split()[1], name)
+        if first == "ERR" or first.startswith(("ERR ", "ERR\t")):
+            code = first.split()[1:2]
+            if not code:
+                raise MappingError(f"upsd: ERR without an error code (to {name})")
+            raise NutError(code[0], name)
         if words[0] != "LIST":
             return [first]
         if not first.startswith("BEGIN LIST"):
@@ -421,7 +424,12 @@ def credentials(spec: SourceSpec, ctx: CollectContext) -> tuple[str, str] | None
         raise CollectError(
             f"source {spec.id}: its auth credential did not resolve (environment or --secrets-dir)"
         )
-    return str(spec.auth.get("username") or ""), value
+    username = str(spec.auth.get("username") or "")
+    if _UNSAFE.search(value) or _UNSAFE.search(username):
+        raise CollectError(
+            f"source {spec.id}: its auth credential holds a control character (not sent)"
+        )
+    return username, value
 
 
 class NutCollector:
@@ -456,6 +464,8 @@ class NutCollector:
             raise CollectError(str(exc)) from None
         except ssl.SSLError as exc:
             raise CollectError(f"upsd {spec.polled_service}: TLS: {exc.reason or exc}") from None
+        except MappingError as exc:  # a reply that is not the NUT protocol
+            raise CollectError(f"upsd {spec.polled_service}: {exc}") from None
         except (OSError, TimeoutError) as exc:
             raise CollectError(f"upsd {spec.polled_service}: {exc}") from None
         finally:

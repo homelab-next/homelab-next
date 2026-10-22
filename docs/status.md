@@ -808,7 +808,9 @@ quoted by NUT's parseconf rules, a reply line is capped at 4 KiB and a list at 2
 `STARTTLS` is the default: upsd without a certificate answers `ERR FEATURE-NOT-CONFIGURED`, which
 is the source's error ("give upsd a certificate, or set tls: none"). With `tls: none` and a
 credential, the password is **refused** to any non-loopback upsd unless the source also sets
-`allow_plaintext: true`, the same rule as the HTTP clients' `allow_plaintext`. Two facts from the
+`allow_plaintext: true`, the same rule as the HTTP clients' `allow_plaintext`. A credential
+holding a control character is the source's error and is never sent (nor shown), and a reply
+that is not the protocol (an `ERR` without its code, an overlong line) is the source's error. Two facts from the
 real server: upsd answers `OK` to `PASSWORD` whatever it is (it checks the pair only for a command
 that needs it, such as `LOGIN`; reads follow upsd's own access rules), so a wrong password is not
 an error here; and anonymous reads are what most installs allow today, so `auth` is optional.

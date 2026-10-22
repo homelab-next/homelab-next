@@ -330,3 +330,47 @@ def test_power_state_needs_a_line_or_battery_flag():
     assert power_state(["WAIT"]) is None and power_state(["CHRG", "OFF"]) is None
     assert power_state(["OL"]) == "ok" and power_state(["BYPASS"]) == "ok"
     assert power_state(["OB", "LB"]) == "low-battery"
+
+
+def _one_reply_upsd(reply: bytes):
+    """A loopback upsd that answers every line with ``reply`` (to drive malformed answers)."""
+    import socket
+    import threading
+
+    srv = socket.create_server(("127.0.0.1", 0))  # no-raw-endpoint: allow loopback fake
+    srv.settimeout(5)
+
+    def serve():
+        try:
+            conn, _ = srv.accept()
+        except OSError:
+            return
+        with conn:
+            conn.settimeout(5)
+            try:
+                while conn.recv(4096):
+                    conn.sendall(reply)
+            except OSError:
+                pass
+        srv.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    return f"tcp://127.0.0.1:{srv.getsockname()[1]}"  # no-raw-endpoint: allow loopback fake
+
+
+@pytest.mark.parametrize("reply", [b"ERR \n", b"ERR\n", b"ERR  \r\n"])
+def test_an_err_without_its_code_is_the_source_error(clock, reply):
+    url = _one_reply_upsd(reply)
+    with pytest.raises(CollectError, match="ERR without an error code"):
+        NutCollector().collect(nut_spec(ups="ups-a", tls="none"), ctx(url, clock))
+
+
+@pytest.mark.parametrize("password", ["fake\nLOGIN ups-a", "fake\x00pass", "fake\x7f"])
+def test_a_credential_with_a_control_character_is_refused_unsent(clock, password):
+    auth = {"secret": "secret:nut/monitor-password", "username": "hub-monitor"}
+    with FakeUpsd("online") as upsd:
+        spec = nut_spec(ups="ups-a", tls="none", auth=auth)
+        with pytest.raises(CollectError, match="control character") as exc:
+            NutCollector().collect(spec, ctx(upsd.url, clock, secret=password))
+    assert password not in str(exc.value) and "fake" not in str(exc.value)
+    assert not any(c.startswith(("USERNAME", "PASSWORD")) for c, _ in upsd.received)
