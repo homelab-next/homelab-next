@@ -31,12 +31,14 @@ id: notes                        # what a profile grants; the file is notes.yml
 description: A notes store, one instance per agent.
 owner: platform-team
 status: active                   # draft | active | deprecated | retired (+ reason, replaced_by)
-origin:                          # first-party path | package | image | git | unknown
-  {kind: package, ecosystem: pypi, package: example-notes-mcp, version: 1.2.0, sha256: <64 hex>}
-transport: {type: stdio, bin: notes-mcp, args: []}   # the server's entrypoint and its own args:
-# the launch (uvx --from example-notes-mcp==1.2.0 notes-mcp) is generated from the origin
-# or {type: streamable-http, endpoint: svc:lake-query, path: /mcp}  -- a registry name, never a URL
-runtime: agent-local             # or {host: <registry host>, user: <system user>}
+origin:                          # first-party path | package | image | git | hosted | unknown
+  {kind: package, ecosystem: pypi, package: example-notes-mcp, version: 1.2.0, sha256: <64 hex>,
+   bins: [notes-mcp]}            # the bin names the package declares, as the review read them
+transport: {type: stdio, bin: notes-mcp, args: []}   # one of bins, and the server's own args:
+# the launch (uvx --no-config --from example-notes-mcp==1.2.0 notes-mcp) is generated from the origin
+# or {type: streamable-http, endpoint: svc:lake-query, path: /mcp}  -- a lab server: a registry name
+# or {type: remote, url: https://mcp.vendor.example.com/mcp}  -- a third party's hosted server
+runtime: agent-local             # or {host: <registry host>, user: <system user>}, or hosted
 env: {NOTES_TOKEN: secret:mcp/notes-token}      # credentials: secret names only
 settings: {NOTES_ROOT: /srv/notes}              # non-secret, the same for every instance
 timeout: 120
@@ -66,6 +68,15 @@ problems the grants are not judged (a note and the summary line say so), since t
 judged against it. Without a registry (none beside the catalog and no `--registry`) a note says
 the registry cross-references were not checked.
 
+No problem, note or refusal of check, render or import carries a value from a record, a render
+spec, a profile or a parameter: those lines reach logs, and a value may be a credential pasted by
+mistake. A message names the field and the rule it broke (`env/CASES_TOKEN: does not match ...`,
+`parameter mode: the value is not one of the parameter's enum`); a name or id that matches its own
+pattern may appear; a URL appears as its scheme and host, its userinfo as `***`; a file that does
+not parse is reported by its problem, line and column (`homelabnext/mcp/credentials.py`, safe
+messages; `tests/mcp/test_mcp_no_value_in_messages.py` seeds one fake secret everywhere). A
+deprecated record's `reason` is prose meant to be shown and is printed with its note.
+
 - the record fits the schema (a mismatch is reported against the origin kind or transport type
   the record names), its id is its file name (so ids are unique), and every record file is
   `<id>.yml` (a `.yaml` or `.json` file is refused, never skipped);
@@ -75,27 +86,65 @@ the registry cross-references were not checked.
   in the checkout;
 - the pin is what runs, because the record does not write the launch: it names its origin, the
   server's entrypoint (`transport.bin`) and the server's own `args`, and render **generates** the
-  launch from the origin with fixed flags (`servers.launch`): npm `npx -y -- <package>@<version>`
-  (with a bin: `npx -y --package=<package>@<version> -- <bin>`), pypi `uvx --from
-  <package>==<version> <bin>` (bin defaults to the package name), git the same from
-  `git+<repo>@<commit>` (npm: `#<commit>`; the origin names its `ecosystem`, its repo is an https
-  URL without credentials, and it names a bin), image `docker run -i --rm [-e NAME ...]
-  <repository>@<digest>` (one `-e` per env, setting and parameter env key; no bin: the image
-  runs its own entrypoint), first-party the bin (`hnx`, or a relative path under `origin.path`).
-  The launchers are bare names resolved on `PATH`. A record therefore cannot carry a launcher
-  flag (`--python <path>`, `--with`, an index, `--registry`, `--privileged`, `-v /:/host`,
-  `--network host`, `--entrypoint`): there is no field for one, and its `args` follow the bin
-  (after npx's `--`, after uvx's command), so they reach the server, never the launcher. A
-  package's bin is the command it installs: a bare name sharing a word with the package, never
-  an interpreter, shell, wrapper or launcher (`node`, `python3.12`, `sh`, `env`, `curl` ...), so
-  `npx -p PIN node -e ...` cannot be written. Refused: a `cargo` or `go` package (no generated
-  launch pins one: run it from an image). A leading `v` in a version is not a difference; an npm
-  version is a full `x.y.z`. Docker is the one container runner the launch names (podman users
-  install its `docker` alias), and no record declares a mount, a published port or a network:
-  none of the examples needs one, so there is no field for it. The `sha256` itself is
-  **declarative**: it records the reviewed artifact, but no launcher verifies it when it fetches
-  the package, and `npx` still reads a project `.npmrc` (and `uvx` a `uv.toml`) in the client's
-  working directory;
+  launch from the origin with fixed flags (`servers.launch`):
+  - npm: `npx -y --prefix=<npm_prefix> --package=<package>@<version> -- <bin>`;
+  - pypi: `uvx --no-config --from <package>[<extras>]==<version> <bin>` (`extras`: pypi only,
+    each a valid extra name);
+  - git: the same from `git+<repo>#<commit>` (npm) or `git+<repo>@<commit>[#subdirectory=<dir>]`
+    (pypi; `subdirectory` is relative, never `..`, and refused for npm, which installs no git
+    subdirectory); the origin names its `ecosystem`, its repo is an https URL without credentials;
+  - image: `docker run -i --rm [-e NAME ...] <repository>@<digest>` (one `-e` per env, setting and
+    parameter env key; no bin: the image runs its own entrypoint; a registry with a port,
+    `registry.example:5000/team/srv`, is fine);
+  - first-party: `hnx <entry>` or a path bin, below.
+
+  The launchers are bare names resolved on `PATH`. A record cannot carry a launcher flag
+  (`--python <path>`, `--with`, an index, `--registry`, `--privileged`, `-v /:/host`, `--network
+  host`, `--entrypoint`): there is no field for one, and its `args` follow the bin (after npx's
+  `--`, after uvx's command), so they reach the server, never the launcher. Refused: a `cargo` or
+  `go` package (no generated launch pins one: run it from an image). A leading `v` in a version is
+  not a difference; an npm version is a full `x.y.z`. Docker is the one container runner the
+  launch names (podman users install its `docker` alias), and no record declares a mount, a
+  published port or a network: there is no field for one (an image that needs the Docker socket,
+  like the retired `docker` example, cannot be catalogued);
+- **the bin is one of the package's reviewed `bins`.** npx and uvx run *any* command on `PATH`
+  under the bin's name (`npx --package=PIN -- id` runs `id`), so an npm, pypi or git origin lists
+  `bins:`, the bin names its released artifact declares (`package.json` `bin`, a wheel's
+  `console_scripts`), and `transport.bin` must be one of them; without a bin, the launch runs the
+  single declared bin, or the package's base name when `bins` lists it, else the record names
+  one. `bins` is in the review digest: **the review attests it**. Check cannot fetch the package
+  (it runs without network), so it cannot prove the list; it only refuses a bin outside it, and
+  (defense in depth) an interpreter, shell, wrapper or launcher in it (`node`, `python3.12`,
+  `sh`, `env`, `curl` ...);
+- **the launch is anchored, never the client's working directory.** npx resolves
+  `node_modules/<package>` and reads a project `.npmrc` (a registry, say) in its working
+  directory before the pinned package, so every npm launch carries `--prefix=<npm_prefix>`: an
+  absolute, empty directory on the client's host that the agent cannot write (the render spec's
+  `npm_prefix:`, or `--npm-prefix`; render refuses a missing or relative one for any npm server it
+  writes, and npx itself fails when it does not exist). npm then reads its project config and
+  `node_modules` from there. uvx launches carry `--no-config`: no `uv.toml` (the user-level one
+  is writable by the agent's own user) or `[tool.uv]` can redirect the index (uv already ignores
+  a project's config for `uv tool run`). Both were verified against npx 10 and uv 0.11 with local
+  fake packages and registries. What remains: npm's user config (`~/.npmrc`) and any
+  `npm_config_*`/`UV_*` in the client's own environment apply, as the client user's settings
+  (a record cannot set one, below); and the server runs with the client's working directory as
+  its own, which is the server's business (a filesystem server's roots, say);
+- a **first-party** server runs this checkout's code: `bin: hnx` with an `entry` from a fixed
+  allowlist in code (`servers.HNX_ENTRIES`: `mcp-serve` is `hnx mcp serve`, `broker-mcp` is `hnx
+  broker mcp`, the subcommands that serve MCP on stdio), whose `args` may hold only that entry's
+  flags, each once and with a value (`--root`, `--registry`, `--scope-from-profile`; `--socket`),
+  so no record reaches `invariants run --plugins-dir`, `--notify-cmd`, `broker run`, `workflows
+  run`, `conform run` or `--out`; or a path bin under `origin.path`, which render writes absolute
+  under the spec's `checkout_root:` (or `--checkout-root`; required, absolute) after checking it
+  is a file there and not a symlink, and which check holds to the repository when it runs from a
+  checkout;
+- the `sha256` itself is **declarative**: it records the reviewed artifact, but no launcher
+  verifies it when it fetches the package;
+- a **third party's hosted** server (`transport: {type: remote, url, protocol}`, `origin: {kind:
+  hosted, provider}`, `runtime: hosted`, each only with the others): the URL is https with a DNS
+  host and no userinfo, query, fragment or IP literal, never a private, test or lab host (`.local`,
+  `.internal`, `.home.arpa`, the registry's domain or hosts: a lab server is reached by registry
+  name), its egress names `internet`, and its credentials are only `headers` as `secret:` names;
 - every tool is classed with a declared class, and the server lists at least one;
 - egress agrees with the classes: a tool classed `egress` needs an egress other than `none`, and
   `internet` needs an egress tool;
@@ -129,7 +178,13 @@ the registry cross-references were not checked.
   `NPM_CONFIG_REGISTRY` or `UV_INDEX_URL` would fetch another package for the pin. Refused:
   `PATH`, `HOME`, `SHELL`, `BASH_ENV`, `ENV`, `HERMES_HOME`, `LD_*`, `DYLD_*`, `PYTHON*`,
   `NODE_*`, `NPM_CONFIG_*`, `UV_*`, `PIP_*`, `PIPX_*`, `BUN_*`, `COREPACK_*`, `YARN_*`, `PNPM_*`,
-  `GIT_*`, `DOCKER_*`, `CONTAINER*`, `XDG_*` (a superset of llm-orchestrator's hard-denied list);
+  `GIT_*`, `XDG_*`, podman's `CONTAINER*`, and the docker CLI's own configuration: `DOCKER_HOST`,
+  `DOCKER_CONFIG`, `DOCKER_CERT_PATH`, `DOCKER_TLS*`, `DOCKER_CONTEXT`, `DOCKER_API_VERSION`,
+  `DOCKER_DEFAULT_PLATFORM`, `DOCKER_CONTENT_TRUST*`, `DOCKER_CLI_*`, `DOCKER_BUILDKIT`,
+  `DOCKER_CUSTOM_HEADERS`, `BUILDKIT*`, `COMPOSE_*` (an image record's env reaches the docker CLI as
+  well as the container). Another `DOCKER_` name, such as `DOCKER_CONTAINER` that an image reads
+  inside the container, is the server's own setting. A superset of llm-orchestrator's
+  hard-denied list;
 - parameters: every parameter has an `enum` or a `pattern`; its env key never names a credential, never also a fixed setting or secret, never shared by
   two parameters; a default fits its enum and pattern and holds no `$` or `secret:`; templates
   name only `{id}`, `{profile}`, `{lane}`, `{home}`, the parameters, and in arguments
@@ -159,7 +214,8 @@ the registry cross-references were not checked.
 
 ## Adding a server
 
-1. Write `<catalog>/<id>.yml` with `status: draft`, pin its origin, list every tool with its
+1. Write `<catalog>/<id>.yml` with `status: draft`, pin its origin, list the bin names the
+   package declares (`bins`, read from the released artifact), list every tool with its
    classes. Put credentials in the secret store under the `secret:` names you write.
 2. `hnx mcp catalog check` until it is clean.
 3. Get it reviewed (agent check, agent audit, human approve), then set `status: active`.
@@ -177,6 +233,8 @@ catalog: ..                     # relative to the spec
 policy: policy/ceilings.yml     # the ceiling policy (and optionally lock:) profiles are judged by
 registry: ../../services.yml
 lanes: [real, shadow]
+npm_prefix: /var/lib/hnx/npm-prefix   # an absolute, empty directory npx reads its config from
+checkout_root: /opt/hnx               # where a first-party path bin is resolved (when one is)
 profiles:
   - file: profile.broker-agent.json
     profile_file: /etc/hnx/profiles/broker-agent.json   # {profile_file} in arguments
@@ -222,12 +280,12 @@ fallback home can never hold fewer servers than the primary.
 hnx mcp catalog render --spec examples/mcp/clients/hermes.yml [--check]
 hnx mcp catalog render --profile build/profile.json --client claude-code \
     --policy policy.yml [--lock lock.yml] [--param notes.mode=read] [--lanes real] \
-    [--out .mcp.json] [--check]
+    [--npm-prefix /var/lib/hnx/npm-prefix] [--checkout-root /opt/hnx] [--out .mcp.json] [--check]
 ```
 
 | `--client` | Writes |
 |---|---|
-| `claude-code` | `.mcp.json`: `{"mcpServers": {name: {"type": "stdio", "command", "args", "env"}}}`, remote servers as `{"type": "http"/"sse", "url", "headers"}` |
+| `claude-code` | `.mcp.json`: `{"mcpServers": {name: {"type": "stdio", "command", "args", "env"}}}`, remote servers (a lab's by registry name, a hosted one by its URL) as `{"type": "http"/"sse", "url", "headers"}` |
 | `claude-desktop` | a **fragment**: the `mcpServers` to merge into `claude_desktop_config.json` (stdio only; a remote server is reported and left out). Claude Desktop does not expand `${VAR}` in that file, so a server that needs a secret is refused (start it through a wrapper that reads the secret store). Never point an output at the live file: it holds other settings the render would replace |
 | `generic` | `mcpServers` with an explicit `transport` and `timeout` |
 | `hermes` | Hermes Agent's `mcp_servers:` YAML block (`command`, `args`, `env`, `timeout`; remote: `url`, `headers`). An entry has no transport field, so a legacy `sse` server is refused rather than reached as streamable HTTP |
@@ -243,13 +301,20 @@ the file are whatever last edited it, so a hand edit with a recomputed digest wo
 render. A lean one (`platform/agent_profile`) must pass its schema, the same grant rules, `mcp`
 within `mcp_ceiling`, and `mcp` and `capabilities` within the policy's ceiling; it is refused
 without a policy too (its own `mcp_ceiling` proves only that it agrees with itself); anything
-else is refused. The example
+else is refused. The policy also **attests** each profile's `data_tier` and `model_role`
+(optional keys of its entry): the profile must say the same, and only a profile whose entry says
+`data_tier: local-only` is granted a local-only server, so a profile cannot declare itself
+local-only to receive local-only data ([agent profiles](agent.md)). The example
 specs share `examples/mcp/clients/policy/ceilings.yml`. Nor does render write a record check
 would refuse: every record it writes (the granted ones; for llm-orchestrator every grantable one,
-since its catalog holds them all) must pass check's per-record rules (pinned and launched as
-pinned, credentials only as secret names and no literal one, typed parameters and known
-templates) and, with `review-policy.yml` beside the catalog directory as check finds it, carry
-the reviews its status needs. A spec's output and `grants_file` paths are relative to
+since its catalog holds them all) must pass check's **whole** record check (schema and id, pin and
+launch, tools and egress, a hosted server's URL, credentials, parameters and templates,
+capabilities, lifecycle, and the registry's cross-references: the spec's registry, else
+`services.yml` beside the catalog) and carry the reviews its status needs under
+`review-policy.yml` beside the catalog directory. A catalog with no review policy there is
+refused unless `--no-review-policy` says this is a local experiment (the records then go
+unreviewed). A render spec is **trusted input**: it names the catalog, the policy, the lock, the
+anchors and where files are written, so review it like the code that runs it. A spec's output and `grants_file` paths are relative to
 the spec's directory (or `--root DIR`) and must stay under it: an absolute path, a `..` that
 escapes it or a symlink is refused, and each file is written to a temporary file and renamed into
 place.
@@ -334,7 +399,12 @@ It reads `mcpServers` (Claude Code, Claude Desktop, also under `projects` in `~/
   command after `--from`/`--spec`/`--package`) and the server's own arguments. Every launcher
   flag (`--python`, `--with`, an index, `-v`, `--privileged` ...) is dropped and named in the
   report; a container runner's `-e KEY=VALUE` becomes a setting when it is an allowlisted one,
-  else an `env` secret, and `-e KEY` an `env` secret. What it cannot map (a shell, `env`, an
+  else an `env` secret, and `-e KEY` an `env` secret. `origin.bins` is filled with the bin the
+  config ran (or the default npx/uvx picked) and the report says so: it is what the config ran,
+  not what the package declares, so the review reads the real list from the artifact. pypi
+  extras (`pkg[extra]==ver`), a git `#subdirectory=` and a registry port are kept. An `hnx`
+  command line maps to its entry (`hnx mcp serve ...`, `hnx broker mcp ...`) with only that
+  entry's flags, or not at all. What it cannot map (a shell, `env`, an
   interpreter, a path, `npm exec`, an unknown flag before the launch position, `--entrypoint`, a
   bin that is not the package's own such as `npx -p PKG node -e ...`) becomes `kind: unknown`
   with none of its arguments copied;

@@ -18,7 +18,10 @@ Everything else that knows about MCP servers is derived from it:
 :func:`check` is fatal, like the other registers: schema, the id is the file name (so ids are
 unique), a third-party origin is pinned (an exact version with a hash or lock, an image digest, a
 40-hex commit) and a stdio record's launch can be generated from it (:func:`launch`: a record
-names its origin, ``bin`` and the server's own arguments, never a launcher), every tool is classed with the table's vocabulary, egress agrees with the tools'
+names its origin, ``bin`` (one of the reviewed ``origin.bins``, or an allowlisted ``hnx`` entry)
+and the server's own arguments, never a launcher; a render anchors it with
+:class:`LaunchContext`), a hosted server's URL is a public https one (:func:`remote_problems`),
+every tool is classed with the table's vocabulary, egress agrees with the tools'
 classes, credentials are secret names that stay distinct and no setting names one, parameters are
 typed, no setting, secret or parameter env key configures the process or its launcher
 (:data:`DENIED_ENV`) and no parameter env key is shared, templates name only

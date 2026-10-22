@@ -22,8 +22,9 @@
   installs the file.  **Endpoints** are built from the registry (scheme, capability alias, port, path),
   never written in a record.
 
-A render *spec* (YAML) names the client, the catalog, the registry, the lanes, the profiles with
-their grants' parameter values, and every output: one per runtime home (a primary and a fallback
+A render *spec* (YAML, trusted input: review it like code) names the client, the catalog, the
+registry, the ceiling policy, the launch anchors (``npm_prefix``, ``checkout_root``), the lanes,
+the profiles with their grants' parameter values, and every output: one per runtime home (a primary and a fallback
 Hermes home from one source), or for llm-orchestrator the catalog file and each profile's file
 whose ``grants:`` block is spliced (``check_profiles``: every orchestrator profile that must
 accept the rendered catalog).  ``--check`` compares every output and fails on any drift, so a

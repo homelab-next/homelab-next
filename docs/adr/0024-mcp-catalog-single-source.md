@@ -27,9 +27,11 @@ because each instance needs its own scope.
    lab's is its private overlay's `lab/mcp/`, found through the existing data-dir lookups
    (`HNX_EXAMPLES_DIR`, `HNX_DATA_DIR`) or `--catalog`.
 2. A record states: id, owner, description; **origin** (a first-party code path, or a package
-   with an exact version and sha256 or lock, an image digest, or a git commit: never a floating
-   version); **transport** (a stdio server's entrypoint, `bin`, and its own arguments, never the
-   launcher, or streamable-http/sse by **registry service name**, never a URL); runtime (agent-local, or a registry host and user);
+   with an exact version and sha256 or lock and its reviewed `bins`, an image digest, or a git
+   commit: never a floating version; or a third party's `hosted` server); **transport** (a stdio
+   server's entrypoint, `bin`, and its own arguments, never the launcher; a lab server's
+   streamable-http/sse by **registry service name**, never a URL; or a hosted server's `remote`
+   https URL); runtime (agent-local, a registry host and user, or hosted);
    credentials as **`secret:` names only** (env, headers, arguments); non-secret settings;
    **typed per-instance parameters** and an instance-name template; egress (registry services and
    hosts, `internet`, or `none`); the data tier it returns; the capabilities it fronts and the
@@ -60,20 +62,29 @@ because each instance needs its own scope.
    profile and lane with that grant's parameter values, and writes every runtime home a render
    spec names from that one source, so no home can hold fewer servers than another. It renders
    only profiles `hnx agent verify` accepts against the ceiling policy (a compiled profile without
-   one is refused: its stored ceiling and digest are whatever last edited the file), and only
-   records that pass check's per-record rules and reviews.
+   one is refused: its stored ceiling and digest are whatever last edited the file; the policy
+   also attests each profile's `data_tier` and `model_role`, so no profile declares itself
+   local-only to receive local-only servers), and only records that pass check's whole record
+   check and the reviews of the `review-policy.yml` beside the catalog (refused without one
+   unless `--no-review-policy`, for local experiments). A render spec is trusted input.
 7. **The launch is generated, never written.** A stdio record names its origin, the server's
-   `bin` (for a package the command it installs: a bare name sharing a word with the package,
-   never an interpreter, shell, wrapper or launcher; for a first-party server `hnx` or a path
-   under its code path) and the server's own arguments. The renderer writes the launcher from
-   the origin kind with fixed flags: npm `npx -y [--package=<pkg>@<ver>] -- <bin|pkg@ver>`, pypi
-   `uvx --from <pkg>==<ver> <bin>`, git the same at its commit, image `docker run -i --rm [-e
-   NAME ...] <image>@<digest>`. A record has no field for a launcher, a launcher flag, a mount, a
-   network or another entrypoint, so the pin controls what runs by construction. (Three review
-   rounds of reading arbitrary launcher command lines each found a new way to run something the
-   pin did not name; the parser now only serves the importer.) No setting, env or parameter key
-   may configure the process or its launcher (`PATH`, `LD_*`, `NODE_*`, `NPM_CONFIG_*`, `UV_*`,
-   `PIP_*`, `DOCKER_*` ..., any case).
+   `bin` (for a package one of the bin names it declares, `origin.bins`, which the review reads
+   from the released artifact, because npx and uvx run any command on `PATH` under that name;
+   for a first-party server `hnx` with an `entry` from a fixed allowlist of the subcommands that
+   serve MCP, and only that entry's flags, or a path under its code path) and the server's own
+   arguments. The renderer writes the launcher from the origin kind with fixed flags: npm `npx
+   -y --prefix=<npm_prefix> --package=<pkg>@<ver> -- <bin>`, pypi `uvx --no-config --from
+   <pkg>[<extras>]==<ver> <bin>`, git the same at its commit (pypi: and subdirectory), image
+   `docker run -i --rm [-e NAME ...] <image>@<digest>`, a first-party path absolute under the
+   render's `checkout_root`. `npm_prefix` is an absolute, empty directory the render names, so
+   npx reads no `node_modules` or `.npmrc` from the client's working directory; `--no-config`
+   keeps a `uv.toml` from redirecting uvx's index. A record has no field for a launcher, a
+   launcher flag, a mount, a network or another entrypoint, so the pin controls what runs by
+   construction. (Three review rounds of reading arbitrary launcher command lines each found a
+   new way to run something the pin did not name; the parser now only serves the importer.) No
+   setting, env or parameter key may configure the process or its launcher (`PATH`, `LD_*`,
+   `NODE_*`, `NPM_CONFIG_*`, `UV_*`, `PIP_*`, the docker CLI's `DOCKER_HOST`, `DOCKER_CONFIG`
+   ..., any case).
 8. **Import, then pin.** `hnx mcp catalog import` turns an existing lab's client configs into
    draft records in a directory it is given (`--out`, required): credentials become `secret:`
    names, failing closed (every environment value is one unless its key is allowlisted as
@@ -96,6 +107,13 @@ because each instance needs its own scope.
   repository. A heuristic can be tuned (both directions are tested), but it cannot be complete.
 - The generated launch adds `--` after npx's options (so a server argument is never npx's), and
   a record migrated from the command-line shape keeps only its `bin` and the server's arguments.
+- `bins` is attested by review, not proven: check runs without network and cannot fetch the
+  package. The `sha256` is declarative the same way. Every render names an absolute
+  `npm_prefix` (and a `checkout_root` when a path bin is written); npm's user config and the
+  client's own `npm_config_*`/`UV_*` environment still apply, as the client user's settings.
+- No message of check, render or import carries a value from a record, spec, profile or
+  parameter (a value may be a credential pasted by mistake, and messages reach logs): fields and
+  rules are named, URLs shown as scheme and host.
   The schema (`platform/mcp_server` 1.0) was not released before this change, so it changed in
   place.
 - Rendered files that land in another program's format (Hermes `mcp_servers`, llm-orchestrator's
