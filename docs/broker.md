@@ -327,7 +327,22 @@ The bus comes from a **target file** binding the `events` capability, the same f
 `HNX_ENDPOINT_EVENTS` (`nats://` or `tls://`), and the bus credential is a secret *name*. The
 password goes only over `tls://` (verified against the system CAs, or `ca_file`) or to a loopback
 `nats://`; any other `nats://` endpoint is refused unless the target sets `allow_plaintext: true`
-(the lab-in-a-box does, on its own network):
+(the lab-in-a-box does, on its own network). A `tls://` client does the TLS handshake before it
+reads anything (nats-py's `tls_handshake_first`; nats-py 2.7 or later): a client that waits for
+the server's `INFO` to ask for TLS sends its `CONNECT`, password included, in clear to a server (or
+a man in the middle) that does not ask. So the server's `tls` block needs `handshake_first: true`
+(nats-server 2.10.3 or later), or no `tls://` client can connect:
+
+```text
+# nats-server.conf (excerpt)
+tls {
+  cert_file: "/etc/nats/server.pem"
+  key_file: "/etc/nats/server-key.pem"
+  handshake_first: true
+}
+```
+
+The target file:
 
 ```yaml
 # /etc/hnx-broker-relay/events-target.yml

@@ -39,7 +39,8 @@ def is_loopback(host: str | None) -> bool:
         return False
 
 
-#: plaintext schemes and their TLS counterparts (``nats://`` is NATS without TLS, ``tls://`` with)
+#: plaintext schemes and their TLS counterparts (``nats://`` is NATS without TLS, ``tls://`` with;
+#: the NATS adapter makes ``tls://`` handshake first, so it never waits for the server to ask)
 PLAINTEXT_SCHEMES = {"http": "https", "nats": "tls"}
 
 

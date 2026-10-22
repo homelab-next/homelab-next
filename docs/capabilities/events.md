@@ -227,6 +227,10 @@ accounts takes `user` and `password_secret`, the secret-store *name* of the pass
 value is delivered as `HNX_SECRET_<NAME>`, read when the connection is made, and never logged
 or held by the bus).  A password goes only over `tls://` (`ca_file` for a private CA) or to a
 loopback `nats://` endpoint, unless `allow_plaintext=True` says otherwise explicitly (the lab).
+A `tls://` connection does the TLS handshake *first*, before the server's `INFO` (nats-py's
+`tls_handshake_first`): a client that upgrades only when `INFO` asks for TLS sends its
+`CONNECT`, password included, in clear to anything that answers without asking.  The server
+needs `tls { handshake_first: true }` (nats-server 2.10.3 or later).
 
 How the contract maps onto JetStream:
 

@@ -8,6 +8,7 @@ to be down, to lose a PubAck, or the relay to crash between the publish and the 
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import textwrap
@@ -479,6 +480,116 @@ def test_a_ca_file_needs_a_tls_endpoint():
     loopback = "nats://127.0.0.1:4222"  # no-raw-endpoint: allow the refusal under test
     with pytest.raises(nj.EventsError, match="tls://"):
         nj.NatsPyWire(loopback, ca_file="/nonexistent/ca.pem")
+
+
+def _fake_nats(monkeypatch, *, handshake_first: bool = True) -> dict:
+    """A stand-in for nats-py (the CI test job does not install the extra): records what
+    NatsPyWire hands ``nats.connect``.  ``handshake_first``: the installed client knows
+    ``tls_handshake_first`` (2.7 and later)."""
+    import sys
+    import types
+
+    seen: dict = {}
+
+    async def connect(url, **kw):
+        seen.update(kw, url=url)
+        return types.SimpleNamespace(is_closed=True)
+
+    class Client:
+        if handshake_first:
+
+            async def connect(self, servers="", tls=None, tls_handshake_first=False): ...
+        else:
+
+            async def connect(self, servers="", tls=None): ...
+
+    errors = types.ModuleType("nats.errors")
+    for name in ("Error", "NoRespondersError", "MaxPayloadError", "TimeoutError"):
+        setattr(errors, name, type(name, (Exception,), {}))
+    mods = {
+        "nats": types.ModuleType("nats"),
+        "nats.errors": errors,
+        "nats.aio": types.ModuleType("nats.aio"),
+        "nats.aio.client": types.ModuleType("nats.aio.client"),
+    }
+    mods["nats"].connect, mods["nats"].errors = connect, errors
+    mods["nats.aio.client"].Client = Client
+    for name, mod in mods.items():
+        monkeypatch.setitem(sys.modules, name, mod)
+    return seen
+
+
+def test_a_tls_endpoint_does_the_handshake_before_anything_else(monkeypatch):
+    """The reviewer's tls_downgrade: for tls:// nats-py upgraded only when the server's INFO
+    said tls_required, so a server (or a man in the middle) that did not ask got the CONNECT,
+    password included, in clear.  tls:// now always handshakes first."""
+    import ssl
+
+    seen = _fake_nats(monkeypatch)
+    endpoint = "tls://192.0.2.10:4222"  # no-raw-endpoint: allow a documentation-range bus
+    w = nj.NatsPyWire(endpoint, user="hnx-broker", password=lambda: SECRET)
+    w.close()
+    assert seen["url"] == endpoint and seen["tls_handshake_first"] is True
+    assert isinstance(seen["tls"], ssl.SSLContext) and seen["tls"].verify_mode == ssl.CERT_REQUIRED
+    seen.clear()
+    loopback = "nats://127.0.0.1:4222"  # no-raw-endpoint: allow a loopback bus, never dialled
+    nj.NatsPyWire(loopback, user="hnx-broker", password=lambda: SECRET).close()
+    assert "tls_handshake_first" not in seen and "tls" not in seen
+
+
+def test_a_nats_py_without_handshake_first_refuses_a_tls_endpoint(monkeypatch):
+    seen = _fake_nats(monkeypatch, handshake_first=False)
+    endpoint = "tls://192.0.2.10:4222"  # no-raw-endpoint: allow a documentation-range bus
+    with pytest.raises(nj.EventsError, match="handshake first"):
+        nj.NatsPyWire(endpoint, user="hnx-broker", password=lambda: SECRET)
+    assert seen == {}  # nothing was dialled
+
+
+def test_a_server_that_never_asks_for_tls_never_sees_the_connect():
+    """End to end with the real nats-py: a fake server answers a tls:// client in plaintext
+    and never says tls_required.  The client fails the handshake; no CONNECT, no password."""
+    pytest.importorskip("nats")
+    import socket
+    import threading
+
+    srv = socket.socket()
+    srv.bind(("localhost", 0))
+    srv.listen(4)
+    srv.settimeout(0.05)
+    got: list[bytes] = []
+    done = threading.Event()
+
+    def serve():
+        while not done.is_set():
+            try:
+                conn, _ = srv.accept()
+            except TimeoutError:
+                continue
+            data = b""
+            with conn, contextlib.suppress(OSError):
+                conn.sendall(
+                    b'INFO {"server_id":"fake","version":"2.10.22","auth_required":true,'
+                    b'"max_payload":1048576,"headers":true,"proto":1}\r\n'
+                )
+                conn.settimeout(2)
+                while chunk := conn.recv(4096):
+                    data += chunk
+            got.append(data)
+
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+    endpoint = f"tls://localhost:{srv.getsockname()[1]}"
+    try:
+        with pytest.raises(nj.WireError):
+            nj.NatsPyWire(endpoint, user="hnx-broker", password=lambda: SECRET, connect_timeout=1)
+    finally:
+        done.set()
+        t.join(10)
+        srv.close()
+    assert got, "the client never connected"
+    sent = b"".join(got)
+    assert b"CONNECT" not in sent and SECRET.encode() not in sent
+    assert sent[:1] == b"\x16"  # a TLS handshake record (ClientHello), before anything else
 
 
 # ---------------------------------------------------------------- poison, malformed files, --skip

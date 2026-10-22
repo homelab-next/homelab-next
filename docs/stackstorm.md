@@ -445,7 +445,10 @@ PrivateTmp=yes
 WantedBy=multi-user.target
 ```
 
-It needs the `nats` extra (`pip install 'homelabnext[nats]'`). Exit 2 is a configuration error
+It needs the `nats` extra (`pip install 'homelabnext[nats]'`). Over `tls://` it does the TLS
+handshake first, so the bus's `tls` block needs `handshake_first: true` (nats-server 2.10.3 or
+later; broker.md has the line): a client that waits for the server to ask for TLS would send its
+password in clear to a server, or a man in the middle, that never asks. Exit 2 is a configuration error
 (the bridge file, the URL, the endpoint variable, the first connection, a stream that is missing
 or unbounded, a durable whose lease is too short). The bus user it uses
 needs to look up the stream and its DLQ and read through its own durables (one per subject in

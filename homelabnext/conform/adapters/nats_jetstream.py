@@ -10,6 +10,10 @@ accounts takes ``user`` and ``password_secret``, the secret-store *name* of the 
 value is delivered as ``HNX_SECRET_<NAME>``, read when the connection is made, and never logged
 or held by the bus).  A password goes only over ``tls://`` (``ca_file`` for a private CA) or to a
 loopback ``nats://`` endpoint, unless ``allow_plaintext=True`` says otherwise explicitly (the lab).
+A ``tls://`` connection does the TLS handshake *first*, before the server's ``INFO`` (nats-py's
+``tls_handshake_first``): a client that upgrades only when ``INFO`` asks for TLS sends its
+``CONNECT``, password included, in clear to anything that answers without asking.  The server
+needs ``tls { handshake_first: true }`` (nats-server 2.10.3 or later).
 
 How the contract maps onto JetStream:
 
@@ -544,6 +548,17 @@ class JetStreamConsumer:
 
 
 # --------------------------------------------------------------------------- nats-py wire
+def _handshake_first_supported() -> bool:
+    """Does the installed nats-py take ``tls_handshake_first`` (2.7 and later)?"""
+    import inspect
+
+    try:
+        from nats.aio.client import Client
+    except ImportError:
+        return False
+    return "tls_handshake_first" in inspect.signature(Client.connect).parameters
+
+
 class NatsPyWire:
     """:class:`Wire` over nats-py: an asyncio loop on a private thread, one connection."""
 
@@ -587,10 +602,18 @@ class NatsPyWire:
         auth: dict[str, Any] = {"user": user, "password": password()} if user and password else {}
         if inbox_prefix is not None:
             auth["inbox_prefix"] = inbox_prefix  # replies on the user's own inbox, not _INBOX.>
-        if ca_file is not None:
+        if url.startswith("tls://"):
             import ssl
 
+            if not _handshake_first_supported():
+                raise EventsError(
+                    "nats-py cannot do the TLS handshake first (tls:// needs it): "
+                    "pip install 'nats-py>=2.7'"
+                )
+            # TLS before anything else: never wait for the server's INFO to ask for it, or a
+            # server (or a man in the middle) that does not ask gets the CONNECT in clear
             auth["tls"] = ssl.create_default_context(cafile=ca_file)  # verifies host and chain
+            auth["tls_handshake_first"] = True
         try:
             # max_reconnect_attempts=0 would retry a refused first connect forever in nats-py
             self._nc = self._run(
