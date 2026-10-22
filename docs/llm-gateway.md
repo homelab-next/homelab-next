@@ -66,10 +66,18 @@ generator refuses both cases before writing anything:
 Fallbacks between two local roles, and fallbacks for non-agent cloud-allowed roles, are rendered
 as declared.
 
+**`local` is checked, not taken on trust.** A backend is local only when it resolves through the
+registry (`registry:` in the spec) to a service whose host is in a lab zone (not one named `cloud`,
+not a publicly routable network), or when its host is under the lab's internal service domain
+(`<svc_label>.<domain>`, `svc.example.internal` in the lab). `{locality: local, host:
+api.example.com}` is refused, and the `--check` audit counts such a host as cloud even if the spec
+was edited to let it through.
+
 `--check` then audits the rendered files themselves. It decides locality from each file, not from
 the spec:
 
-- In LiteLLM, a deployment is local only if it is `openai/` on a declared local host.
+- In LiteLLM, a deployment is local only if it is `openai/` on a declared local host that passes
+  the rule above.
 - In Bifrost, a provider is local only if it is a custom OpenAI provider on such a host.
 
 Anything else counts as cloud. So a hand-edited `fallbacks`, `context_window_fallbacks` or

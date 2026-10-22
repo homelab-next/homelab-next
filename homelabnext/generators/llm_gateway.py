@@ -29,6 +29,10 @@ Rules enforced at render time (a violation raises :class:`GatewaySpecError`, not
 * Every secret is a ``secret:<name>`` reference, delivered in ``HNX_SECRET_<NAME>`` (the same
   mapping as the registry); a literal value is refused.
 * Every backend a role binds is declared in the spec, and every declared value is one line.
+* A ``local`` backend is local because of where it is, not because the spec says so: it must be a
+  registry service whose host sits in a non-cloud zone, or its host must be under the lab's
+  internal service domain (``<svc_label>.<domain>``).  ``{locality: local, host: <a cloud API>}``
+  is refused, and the audit counts such a host as cloud.
 
 :func:`audit` re-checks the *rendered* files (``hnx gen gateway --check`` runs it on what is on
 disk), so a hand edit that adds a cloud fallback to a local-only role fails the check even though
@@ -40,6 +44,7 @@ from __future__ import annotations
 import argparse
 import glob
 import hashlib
+import ipaddress
 import json
 import math
 import re
@@ -131,6 +136,30 @@ class Spec:
     local_only: dict[str, str] = field(default_factory=dict)  # role -> why
     agent_roles: dict[str, str] = field(default_factory=dict)  # role -> first profile using it
     bifrost_data_dir: str = "/app/data"
+    #: the lab's internal service domain (``<svc_label>.<domain>``): a local host must be under it
+    service_domain: str = "svc.example.internal"
+    #: hosts that resolved through a registry service in a non-cloud zone
+    registry_hosts: frozenset[str] = frozenset()
+
+
+def internal_host(spec: Spec, host: str) -> bool:
+    """A host a ``local`` backend may use: a registry service's alias, or a name under the lab's
+    internal service domain.  Anything else (a cloud API, a bare public name, an address) is not
+    local, whatever the spec calls it."""
+    host = host.lower().rstrip(".")
+    return host in spec.registry_hosts or host.endswith("." + spec.service_domain)
+
+
+def _cloud_zone(registry: Any, svc: Any) -> bool:
+    """A registry zone is cloud when it is named so or its network is publicly routable."""
+    zone = registry.zones.get(registry.hosts[svc.host].zone) if svc.host in registry.hosts else None
+    if zone is None:
+        return True
+    try:
+        net = ipaddress.ip_network(zone.cidr, strict=False)
+    except ValueError:
+        return True
+    return zone.name == "cloud" or net.is_global
 
 
 # ---------------------------------------------------------------------------- loading
@@ -213,6 +242,8 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
         registry = load_registry(base / str(doc["registry"]))
     domain = str(doc.get("domain") or (registry.domain if registry else "example.internal"))
     svc_label = str(doc.get("svc_label") or (registry.svc_label if registry else "svc"))
+    service_domain = f"{svc_label}.{domain}".lower()
+    registry_hosts: set[str] = set()
 
     backends: dict[str, Backend] = {}
     raw_backends = doc.get("backends")
@@ -242,11 +273,23 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
             continue
         svc = registry.services.get(name) if registry else None
         if svc is not None:
-            host = f"{svc.capability}.{svc_label}.{domain}"
+            if _cloud_zone(registry, svc):
+                problems.append(
+                    f"{where}: registry service {name} is not in a lab zone, so it is not local"
+                )
+                continue
+            host = f"{svc.capability}.{svc_label}.{domain}".lower()
             port, scheme = svc.port, svc.scheme
+            registry_hosts.add(host)
         else:
-            host = str(b.get("host") or f"{name}.{svc_label}.{domain}")
+            host = str(b.get("host") or f"{name}.{svc_label}.{domain}").lower()
             port, scheme = b.get("port"), str(b.get("scheme", "http"))
+            if not host.endswith("." + service_domain):
+                problems.append(
+                    f"{where}: locality local is not self-declared: {host} is neither a registry "
+                    f"service nor under the lab's service domain {service_domain}"
+                )
+                continue
         if not isinstance(port, int) or not 0 < port < 65536:
             problems.append(f"{where}: a local backend needs a port (or a registry service)")
             continue
@@ -352,6 +395,8 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
         local_only=local_only,
         agent_roles=agent_roles,
         bifrost_data_dir=data_dir,
+        service_domain=service_domain,
+        registry_hosts=frozenset(registry_hosts),
     )
     if not problems:
         problems += locality_problems(spec)
@@ -719,18 +764,29 @@ def render_file(path: str | Path) -> dict[str, str]:
 
 # ---------------------------------------------------------------------------- audit
 def _local_hosts(spec: Spec) -> set[str]:
-    return {b.host for b in spec.backends.values() if b.locality == "local"}
+    """Hosts of local backends that really are internal (a self-declared one is not)."""
+    return {
+        b.host.lower()
+        for b in spec.backends.values()
+        if b.locality == "local" and internal_host(spec, b.host)
+    }
 
 
 def audit(files: Mapping[str, str], spec: Spec) -> list[str]:
     """Check rendered (or on-disk) gateway files against the locality rule; empty = clean.
 
     Locality is read from the files themselves, not from the spec: a LiteLLM deployment is local
-    only when it is ``openai/`` on an ``api_base`` whose host is a declared local backend; a
-    Bifrost provider only when it is a custom provider whose ``base_url`` host is one.  Anything
-    else - a cloud prefix, an unknown host, a provider without a base URL - counts as cloud.
+    only when it is ``openai/`` on an ``api_base`` whose host is a declared local backend that is
+    really internal (:func:`internal_host`); a Bifrost provider only when it is a custom provider
+    whose ``base_url`` host is one.  Anything else - a cloud prefix, an unknown host, a provider
+    without a base URL, a backend that only calls itself local - counts as cloud.
     """
-    problems: list[str] = []
+    problems: list[str] = [
+        f"backend svc:{b.name} is declared local but {b.host} is neither a registry service nor "
+        f"under {spec.service_domain}"
+        for b in sorted(spec.backends.values(), key=lambda b: b.name)
+        if b.locality == "local" and not internal_host(spec, b.host)
+    ]
     hosts = _local_hosts(spec)
     strict = dict(spec.local_only)
     for role, pid in spec.agent_roles.items():

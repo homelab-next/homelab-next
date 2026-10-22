@@ -5,6 +5,7 @@ drift check and LiteLLM key provisioning (against a stdlib fake; no network)."""
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import shutil
 import threading
@@ -217,6 +218,73 @@ def test_a_non_agent_cloud_role_may_fall_back_to_local(tmp_path):
 def test_spec_errors_are_reported(tmp_path, over, words):
     with pytest.raises(gw.GatewaySpecError, match=words):
         gw.render_file(make_spec(tmp_path, **over))
+
+
+# --- locality is where a backend is, not what the spec calls it ---------------------------------
+
+SELF_DECLARED = {"locality": "local", "host": "api.example.com", "port": 443, "scheme": "https"}
+
+
+def test_a_self_declared_local_backend_is_refused(tmp_path):
+    backends = spec_doc()["backends"] | {"svc:infer-a": SELF_DECLARED}
+    with pytest.raises(gw.GatewaySpecError) as ei:
+        gw.render_file(make_spec(tmp_path, backends=backends))
+    assert "backends.svc:infer-a: locality local is not self-declared: api.example.com" in str(
+        ei.value
+    )
+
+
+def test_a_local_host_under_the_service_domain_is_accepted(tmp_path):
+    host = {"locality": "local", "host": "gpu-box.svc.example.internal", "port": 8000}
+    files = gw.render_file(
+        make_spec(tmp_path, backends=spec_doc()["backends"] | {"svc:infer-a": host})
+    )
+    lt = yaml.safe_load(files["litellm/config.yaml"])
+    bases = {d["litellm_params"].get("api_base") for d in lt["model_list"]}
+    assert "http://gpu-box.svc.example.internal:8000/v1" in bases  # no-raw-endpoint: allow alias
+
+
+def registry_with(tmp_path, zone_name):
+    doc = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())
+    doc["zones"][zone_name] = doc["zones"].pop("compute")
+    for h in doc["hosts"].values():
+        if h["zone"] == "compute":
+            h["zone"] = zone_name
+    for s in doc["services"].values():
+        s["clients"] = [zone_name if c == "compute" else c for c in s.get("clients", [])]
+    (tmp_path / "registry.yml").write_text(yaml.safe_dump(doc))
+    return "registry.yml"
+
+
+def test_a_registry_service_in_a_cloud_zone_is_not_local(tmp_path):
+    backends = spec_doc()["backends"] | {"svc:inference": {"locality": "local"}}
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:inference"
+    reg = registry_with(tmp_path, "cloud")
+    with pytest.raises(
+        gw.GatewaySpecError, match="registry service inference is not in a lab zone"
+    ):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+    reg = registry_with(tmp_path, "compute")
+    files = gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+    assert "inference.svc.example.internal" in files["litellm/config.yaml"]
+
+
+def test_audit_refuses_a_self_declared_local_backend():
+    spec, files = lab_files()
+    bad = dataclasses.replace(spec.backends["inference-small"], host="api.example.com", port=443)
+    spec.backends["inference-small"] = bad
+    doc = yaml.safe_load(files["litellm/config.yaml"])
+    for d in doc["model_list"]:
+        if d["model_name"] == "fast-classifier":
+            d["litellm_params"]["api_base"] = "https://api.example.com:443/v1"
+    files["litellm/config.yaml"] = yaml.safe_dump(doc)
+    problems = "\n".join(gw.audit(files, spec))
+    assert "backend svc:inference-small is declared local but api.example.com" in problems
+    assert (
+        "fast-classifier (profile:reader is data_tier local-only) has a cloud deployment"
+        in problems
+    )
 
 
 # --- audit of rendered files (what --check runs on disk) -----------------------------------------
