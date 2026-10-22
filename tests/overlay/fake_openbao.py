@@ -55,7 +55,10 @@ class FakeOpenBao:
                 n = int(self.headers.get("Content-Length") or 0)
                 raw = self.rfile.read(n) if n else b""
                 if fake.redirect_to:
-                    return self._reply(307, None, [("Location", fake.redirect_to + self.path)])
+                    # a fixed target: the request line never reaches a response header
+                    return self._reply(
+                        307, None, [("Location", fake.redirect_to + "/v1/redirected")]
+                    )
                 if method == "POST" and self.path == "/v1/auth/approle/login":
                     body = json.loads(raw or b"{}")
                     if not (body.get("role_id") and body.get("secret_id")):
@@ -119,5 +122,6 @@ def self_signed(directory: Path) -> tuple[ssl.SSLContext, Path] | None:
     except (OSError, subprocess.SubprocessError):
         return None
     server = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server.minimum_version = ssl.TLSVersion.TLSv1_2
     server.load_cert_chain(cert, key)
     return server, cert
