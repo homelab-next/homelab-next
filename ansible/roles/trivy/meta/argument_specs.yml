@@ -69,6 +69,14 @@ argument_specs:
         type: path
         description: "Where each run writes its report and its exit status (last-run)."
         default: /var/lib/homelabnext/trivy
+      trivy_last_run_dir: &last_run_dir
+        type: path
+        description: "Where each run writes its last-run record (role last_run; the status hub's job-last-run mapping reads it)."
+        default: /var/lib/homelabnext/last-run
+      trivy_last_run_group: &last_run_group
+        type: str
+        description: "The group that may read the last-run records (the account that ships them to the status hub)."
+        default: root
   config:
     short_description: Write the checked configuration, the scan script and its timer, and enable the timer.
     options:
@@ -86,6 +94,8 @@ argument_specs:
       trivy_systemctl_cli: *systemctl
       trivy_unit_dir: *units
       trivy_state_dir: *state
+      trivy_last_run_dir: *last_run_dir
+      trivy_last_run_group: *last_run_group
   health:
     short_description: Fail unless a recent scan reported at most trivy_max_findings findings at or above the severity.
     options:

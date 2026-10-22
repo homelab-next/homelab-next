@@ -9,19 +9,29 @@
 # so a push trigger would deploy every merge unreviewed; pushes and pull requests run checks.yml
 # only.  On Enterprise (or a public repository) you may add `push: {branches: [main]}` back AND
 # required reviewers on the Environment (docs/private-overlay.md "GitHub plans").  Environment
-# `production`: deployment branches main only.  Every credential is an Environment secret, read
-# only by the steps that need it, never echoed:
-#   ANSIBLE_VAULT_PASSWORD   the ansible-vault password (to bin/vault-pass-client.py by env)
+# `production`: deployment branches main only.  The Environment's secrets, each read only by the
+# steps that need it, never echoed:
 #   SOPS_AGE_KEY             the deploy age identity (sops reads it from the environment)
-#   DEPLOY_SSH_KEY           the deploy user's SSH private key (into ssh-agent, never on disk)
-#   TS_OAUTH_CLIENT_ID, TS_OAUTH_SECRET
-#                            Tailscale OAuth client (scope auth_keys, tag tag:ci-deploy); it mints
-#                            an ephemeral, pre-authorized key per run (Tailscale path only)
-# and these repository or Environment variables (not secret):
+#   DEPLOY_SSH_KEY           the deploy user's SSH private key (into ssh-agent, never on disk);
+#                            interim: the target is short-lived certificates from an OpenBao SSH CA
+#   BAO_SECRET_ID            the deploy AppRole's secret_id (bounded TTL): role credentials and the
+#                            vault password are read from OpenBao by name, each with a token minted
+#                            for that one read and revoked right after it
+#   ANSIBLE_VAULT_PASSWORD   optional: the ansible-vault password, when it is not in OpenBao
+# and the Environment's variables (not secret; Environment, not repository, variables, so only
+# this job sees them):
 #   HNX_REF                  full commit SHA of homelab-next whose roles and tools this deploys
 #   SOPS_VERSION, SOPS_SHA256  the sops release and the sha256 of its linux.amd64 binary
 #   HNX_DEPLOY_PATH          `tailscale` (default: a GitHub-hosted runner joins the tailnet) or
-#                            `self-hosted` (a runner inside the lab, labels self-hosted+hnx-deploy)
+#                            `self-hosted` (an ephemeral JIT runner inside the lab, labels
+#                            self-hosted+hnx-deploy, with the job-started hook in runner/)
+#   BAO_ADDR, BAO_ROLE_ID    OpenBao (https://) and the deploy AppRole's role_id
+#   BAO_CACERT_PEM           the internal CA that signed OpenBao's certificate (PEM)
+#   HNX_VAULT_PASSWORD_REF   secret:<name> of the vault password in OpenBao (or use the secret)
+#   TS_OAUTH_CLIENT_ID, TS_AUDIENCE
+#                            Tailscale workload identity federation (a federated identity with the
+#                            auth_keys scope and tag:ci-deploy, trusting this repository's
+#                            `environment:production` subject): no Tailscale secret is stored
 #
 # Never add pull_request_target, never run this on a pull request, and never attach a
 # self-hosted runner to a public repository: anyone who can open a pull request could run code
@@ -46,17 +56,22 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+      id-token: write  # the Tailscale action exchanges the job's OIDC token (workload identity)
     steps:
-      - name: refuse an unpinned hnx or sops
+      - name: refuse an unpinned hnx or sops, or no OpenBao
         env:
           HNX_REF: ${{ vars.HNX_REF }}
           SOPS_VERSION: ${{ vars.SOPS_VERSION }}
           SOPS_SHA256: ${{ vars.SOPS_SHA256 }}
+          BAO_ADDR: ${{ vars.BAO_ADDR }}
+          BAO_ROLE_ID: ${{ vars.BAO_ROLE_ID }}
         run: |
           set -euo pipefail
           [[ "$HNX_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::HNX_REF must be a full commit SHA"; exit 1; }
           [[ "$SOPS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::SOPS_VERSION must be X.Y.Z"; exit 1; }
           [[ "$SOPS_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::SOPS_SHA256 must be a sha256"; exit 1; }
+          [[ "$BAO_ADDR" == https://* ]] || { echo "::error::BAO_ADDR must be an https:// address"; exit 1; }
+          [[ -n "$BAO_ROLE_ID" ]] || { echo "::error::BAO_ROLE_ID (the deploy AppRole) is not set"; exit 1; }
 
       - name: this repository (the lab data)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -100,6 +115,16 @@ jobs:
       - name: no plaintext secret, every sealed file sealed
         run: python hnx/tools/private_leak_check.py private .
 
+      - name: the CA OpenBao's certificate is checked against
+        env:
+          BAO_CACERT_PEM: ${{ vars.BAO_CACERT_PEM }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$BAO_CACERT_PEM" ]]; then
+            printf '%s\n' "$BAO_CACERT_PEM" > "$RUNNER_TEMP/openbao-ca.pem"
+            echo "BAO_CACERT=$RUNNER_TEMP/openbao-ca.pem" >> "$GITHUB_ENV"
+          fi
+
       - name: the lab data validates (SOPS files decrypted in memory)
         env:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
@@ -112,29 +137,35 @@ jobs:
           hnx guests validate lab/guests --site lab/site.yml
           hnx custom check
 
-      # Tailscale path: join the tailnet for this run only.  The OAuth client mints an ephemeral,
-      # pre-authorized key tagged tag:ci-deploy; the node disappears when the job ends.  The tag's
-      # ACL is generated from lab/site.yml tailnet.deploy (docs/private-overlay.md "Tailscale"):
-      # SSH to the declared deploy zones and nothing else, with policy tests that assert it.
+      # Tailscale path: join the tailnet for this run only, by workload identity federation: the
+      # action trades the job's OIDC token for an ephemeral, pre-authorized node tagged
+      # tag:ci-deploy, so no Tailscale secret exists to steal.  The tag's ACL is generated from
+      # lab/site.yml tailnet.deploy (docs/private-overlay.md "Tailscale"): SSH to the declared
+      # deploy zones, plus the OpenBao port as a declared exception, with policy tests.
       - name: join the tailnet as tag:ci-deploy
         if: vars.HNX_DEPLOY_PATH != 'self-hosted'
         uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd  # v4.2.0
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
           tags: tag:ci-deploy
           use-cache: "false"
 
       - name: deploy
         env:
-          HNX_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          # role credentials (secret:<name>) and the vault password come from OpenBao by name: the
+          # hnx_secret lookup and bin/vault-pass-client.py log in with the AppRole, read, and
+          # revoke the token; no credential is an Actions secret of its own
+          BAO_ADDR: ${{ vars.BAO_ADDR }}
+          BAO_ROLE_ID: ${{ vars.BAO_ROLE_ID }}
+          BAO_SECRET_ID: ${{ secrets.BAO_SECRET_ID }}
+          HNX_VAULT_PASSWORD_REF: ${{ vars.HNX_VAULT_PASSWORD_REF }}
+          HNX_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}  # optional, wins when set
           ANSIBLE_CONFIG: ansible.cfg
           HNX_EXAMPLES_DIR: lab
           HNX_CUSTOMIZATIONS_DIR: lab/customizations
-          # a role secret (secret:<name>) reaches the hnx_secret lookup as HNX_SECRET_<NAME>:
-          # HNX_SECRET_REMOTE_ACCESS_AUTH_KEY: ${{ secrets.HNX_SECRET_REMOTE_ACCESS_AUTH_KEY }}
         run: |
           set -euo pipefail
           eval "$(ssh-agent -s)" > /dev/null

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+event: review
+by: agent:example-auditor
+kind: agent
+role: audit
+date: '2026-10-22'
+verdict: pass
+digest: sha256:4b3e5d00932e2dd6884b27060d0c5e277b50acef7cbf41962decbfeb230603de
+note: fictional example review (steps 4-6 read credentials from OpenBao, JIT runner with its hook, Code Owners review)

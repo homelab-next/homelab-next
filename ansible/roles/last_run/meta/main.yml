@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The shared last-run writer every role timer's service calls on start and on stop, and the per-host record directory the status hub's job-last-run mapping reads."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

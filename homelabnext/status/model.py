@@ -230,23 +230,30 @@ class Observation:
 
 
 @cache
-def _validator():
+def _validator(name: str = "observation.schema.json"):
     import jsonschema
     from referencing import Registry as RefRegistry
     from referencing import Resource
     from referencing.jsonschema import DRAFT202012
 
     refs: RefRegistry = RefRegistry()
-    for family, name in (("ids", "common.schema.json"), ("status", "observation.schema.json")):
-        doc = json.loads(paths.schema_file(family, name).read_text(encoding="utf-8"))
+    for family, fname in (("ids", "common.schema.json"), ("status", name)):
+        doc = json.loads(paths.schema_file(family, fname).read_text(encoding="utf-8"))
         refs = refs.with_resource(
             doc["$id"], Resource.from_contents(doc, default_specification=DRAFT202012)
         )
-    schema = json.loads(paths.schema_file("status", "observation.schema.json").read_text("utf-8"))
+    schema = json.loads(paths.schema_file("status", name).read_text("utf-8"))
     return jsonschema.Draft202012Validator(schema, registry=refs)
+
+
+def schema_problems(name: str, doc: Any) -> list[str]:
+    """Problems of ``doc`` against the status schema ``name`` (``schemas/status/<name>``)."""
+    errs = sorted(
+        _validator(name).iter_errors(doc), key=lambda e: [str(p) for p in e.absolute_path]
+    )
+    return [f"{'/'.join(map(str, e.absolute_path)) or '$'}: {e.message[:200]}" for e in errs]
 
 
 def observation_problems(doc: Any) -> list[str]:
     """Schema problems of one observation document (empty = valid)."""
-    errs = sorted(_validator().iter_errors(doc), key=lambda e: [str(p) for p in e.absolute_path])
-    return [f"{'/'.join(map(str, e.absolute_path)) or '$'}: {e.message[:200]}" for e in errs]
+    return schema_problems("observation.schema.json", doc)

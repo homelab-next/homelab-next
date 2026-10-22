@@ -52,5 +52,9 @@
     }
   ],
   "manifest_id": "lab-broker-socket",
-  "mode": "enforce"
+  "mode": "enforce",
+  "refusal_limit": {
+    "max": 30,
+    "window_s": 60
+  }
 }

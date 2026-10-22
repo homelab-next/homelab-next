@@ -79,6 +79,19 @@ def logging_fake(tmp_path: Path, name: str, out: str = "") -> str:
     return fake(tmp_path / name, body)
 
 
+def last_run_vars(tmp_path: Path, role: str) -> dict[str, str]:
+    """A timer role's last-run inputs (role last_run) pointed into ``tmp_path``: the writer at
+    ``bin/hnx-last-run``, the records under ``last-run/``, readable by the test user's own group
+    (the only group an unprivileged run may give a file)."""
+    import grp
+
+    return {
+        f"{role}_last_run_dir": str(tmp_path / "last-run"),
+        f"{role}_last_run_group": grp.getgrgid(os.getgid()).gr_name,
+        f"{role}_last_run_writer": str(tmp_path / "bin" / "hnx-last-run"),
+    }
+
+
 def calls(tmp_path: Path) -> list[str]:
     log = tmp_path / "calls.log"
     return log.read_text().splitlines() if log.exists() else []

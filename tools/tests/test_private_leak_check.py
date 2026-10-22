@@ -7,6 +7,7 @@ scanner; the private overlays are built in ``tmp_path`` (outside any git work tr
 
 from __future__ import annotations
 
+import base64
 import json
 import shutil
 import subprocess
@@ -28,22 +29,45 @@ needs_skeleton = pytest.mark.skipif(
 )
 
 MARKER = "hnx_private_overlay: 1\nansible_vault_files:\n  - inv/*/group_vars/*/vault.yml\n"
-SOPS_RULES = "creation_rules:\n  - path_regex: (^|/)lab/sealed/.*\\.sops\\.ya?ml$\n    age: x\n"
-VAULT = "$" + "ANSIBLE_VAULT;1.1;AES256\n" + "6331" * 16 + "\n" + "3964" * 16 + "\n"
+SOPS_RULES = "creation_rules:\n  - path_regex: (^|/)lab/sealed/\n    age: x\n"
 AWS_KEY = "AKIA" + "QWERTYUIOPASDFGH"
 AGE_KEY = "AGE-SECRET-" + "KEY-1" + ("QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L" * 2)[:58]
-SOPS_FILE = (
-    "wan:\n    address: ENC[AES256_GCM,data:"
-    + "Zx9Qw3Rt7Yp2Lk8V"
-    + "b5Nm1Cd4Fg6Hj0sA"
-    + ",iv:abc,tag:def,type:str]\n"
-    "sops:\n    age:\n        - recipient: age1x\n          enc: |\n"
+
+
+def b64(data: bytes) -> str:
+    return base64.b64encode(data).decode()
+
+
+def enc(plain: bytes = b"fake-sealed-value", kind: str = "str") -> str:
+    """A token shaped exactly as sops writes one (32-byte IV, 16-byte tag); not real ciphertext."""
+    iv, tag = b64(b"fake-iv-" * 4), b64(b"fake-tag" * 2)
+    return f"ENC[AES256_GCM,data:{b64(plain)},iv:{iv},tag:{tag},type:{kind}]"
+
+
+def vault(inner: str | None = None) -> str:
+    """An ansible-vault envelope: hexlify(salt-hex NL hmac-hex NL ciphertext-hex), 80 a line."""
+    inner = inner or "\n".join(("ab12" * 16, "cd34" * 16, "ef56" * 24))
+    body = inner.encode().hex()
+    return (
+        "$"
+        + "ANSIBLE_VAULT;1.1;AES256\n"
+        + "\n".join(body[i : i + 80] for i in range(0, len(body), 80))
+        + "\n"
+    )
+
+
+VAULT = vault()
+SOPS_META = (
+    "sops:\n    age:\n        - recipient: age1fake\n          enc: |\n"
     "            -----BEGIN AGE ENCRYPTED FILE-----\n"
     "            YWdlLWVuY3J5cHRp" + "b24ub3JnL3YxCi0+" + "IFgyNTUxOSBhYmNk\n"
     "            -----END AGE ENCRYPTED FILE-----\n"
-    "    mac: ENC[AES256_GCM,data:Qk9Mzx7Lp2Vb5N" + "m1Cd4Fg6Hj0sAZx9,iv:a,tag:b,type:str]\n"
+    "    lastmodified: '2026-10-21T00:00:00Z'\n"
+    f"    mac: {enc(b'fake-mac')}\n"
+    "    unencrypted_suffix: _unencrypted\n"
     "    version: 3.9.0\n"
 )
+SOPS_FILE = f"wan:\n    address: {enc()}\n    port_unencrypted: 51820\n" + SOPS_META
 
 
 def overlay(tmp_path: Path, files: dict[str, str]) -> Path:
@@ -121,10 +145,270 @@ def test_file_the_sops_rules_cover_must_be_sealed(tmp_path):
     assert [(f.path, f.rule) for f in found] == [("lab/sealed/wan.sops.yaml", "sops-unencrypted")]
 
 
+GH_TOKEN = "gh" + "p_" + "a1B2c3D4e5F6g7H8" + "i9J0k1L2m3N4o5P6q7R8"
+WAN = ".".join(["203", "0", "113", "7"])  # a documentation address, assembled
+PEER_KEY = b64(b"fake-wireguard-peer-public-key!!")  # 44 chars of base64, like a WireGuard key
+
+
+def found_at(found) -> set[tuple[str, str]]:
+    return {(f.path, f.rule) for f in found}
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "lab/sealed/wan.yml",  # no .sops infix: the .sops.yaml rule does not cover it
+        "lab/sealed/sub/peers.sops.yaml.bak",  # a backup copy, under a subdirectory
+        "lab/sealed/notes.txt",
+    ],
+)
+def test_everything_under_a_sealed_path_must_be_sealed(tmp_path, rel):
+    # the skeleton's first rule only named *.sops.yaml: what it did not cover went unchecked
+    narrow = SOPS_RULES.replace("lab/sealed/", "lab/sealed/.*\\.sops\\.ya?ml$")
+    found = plc.check_private(overlay(tmp_path, {".sops.yaml": narrow, rel: f"wan_ipv4: {WAN}\n"}))
+    assert found_at(found) == {(rel, "sops-unencrypted"), (".sops.yaml", "sops-policy")}
+    assert WAN not in "\n".join(map(str, found))
+
+
+def test_a_readme_under_a_sealed_path_stays_plain_and_is_still_scanned(tmp_path):
+    assert plc.check_private(overlay(tmp_path, {"lab/sealed/README.md": "what lives here\n"})) == []
+    found = plc.check_private(overlay(tmp_path / "b", {"lab/sealed/README.md": f"k {AWS_KEY}\n"}))
+    assert rules(found) == {"secret"}
+
+
+@pytest.mark.parametrize(
+    ("text", "needle"),
+    [
+        # plaintext values next to a fake sops block (JSON): the metadata is not real
+        (f'{{"wan": "{WAN}", "sops": {{"mac": "x"}}}}', "without a well-formed mac"),
+        # plaintext values with a sops block that has a version only
+        (f"wan_ipv4: {WAN}\nwg_peer: {PEER_KEY}\nsops:\n  version: 3.9.0\n", "no recipient"),
+        # real-looking metadata, but one value was never encrypted
+        (f"wan:\n    address: {WAN}\n    peer: {enc()}\n" + SOPS_META, "wan/address"),
+        # a comment sops would have encrypted, left in the clear
+        (f"# peer is {WAN}\n" + SOPS_FILE, "line 1 (comment)"),
+        # a value wrapped to look like ciphertext
+        (f"wan:\n    address: ENC[AES256_GCM,data:{GH_TOKEN}]\n" + SOPS_META, "wan/address"),
+        # metadata with a key sops never writes, where plain text could hide
+        (SOPS_FILE + "    note: anything\n", "unknown SOPS metadata key"),
+    ],
+    ids=[
+        "fake-json-mac",
+        "version-only",
+        "one-plain-value",
+        "plain-comment",
+        "wrapped",
+        "extra-key",
+    ],
+)
+def test_a_sealed_file_must_be_encrypted_throughout(tmp_path, text, needle):
+    rel = "lab/sealed/wan.sops.yaml"
+    found = plc.check_private(overlay(tmp_path, {rel: text}))
+    assert found_at(found) <= {(rel, "sops-malformed")} and found, found
+    shown = "\n".join(map(str, found))
+    assert needle in shown
+    assert WAN not in shown and GH_TOKEN not in shown  # keys and rules, never values
+
+
+def test_partial_encryption_is_refused_on_a_sealed_path(tmp_path):
+    text = f"wan:\n    address: {WAN}\n    peer: {enc()}\n" + SOPS_META.replace(
+        "    version:", "    encrypted_regex: ^peer$\n    version:"
+    )
+    found = plc.check_private(overlay(tmp_path, {"lab/sealed/wan.sops.yaml": text}))
+    assert ("lab/sealed/wan.sops.yaml", "sops-partial") in found_at(found)
+    assert any("encrypted_regex" in f.detail for f in found)
+
+
+def test_only_the_configured_unencrypted_suffix_stays_plain(tmp_path):
+    custom = SOPS_META.replace("_unencrypted", "_plain")
+    pinned = {".hnx-private-overlay.yml": MARKER + "unencrypted_suffix: _plain\n"}
+    ok = f"wan:\n    address: {enc()}\n    port_plain: 51820\n" + custom
+    root = overlay(tmp_path / "a", {"lab/sealed/a.sops.yaml": ok, **pinned})
+    assert plc.check_private(root) == []
+    bad = f"wan:\n    address: {enc()}\n    port_unencrypted: 51820\n" + custom
+    found = plc.check_private(overlay(tmp_path / "b", {"lab/sealed/a.sops.yaml": bad, **pinned}))
+    assert [f.detail for f in found] == ["wan/port_unencrypted: not a well-formed ENC[...] value"]
+
+
+def test_a_sealed_file_cannot_choose_its_own_unencrypted_suffix(tmp_path):
+    """``unencrypted_suffix: s`` in the file's own metadata used to make every key ending in ``s``
+    plain: any key at all, with a one-letter suffix."""
+    text = f"wan:\n    address: {WAN}\n    peer: {enc()}\n" + SOPS_META.replace("_unencrypted", "s")
+    found = plc.check_private(overlay(tmp_path, {"lab/sealed/wan.sops.yaml": text}))
+    assert ("lab/sealed/wan.sops.yaml", "sops-partial") in found_at(found)
+    assert any("wan/address" in f.detail for f in found)  # and the value is checked anyway
+    assert WAN not in "\n".join(map(str, found))
+    with pytest.raises(plc.ConfigError):
+        plc.read_marker(
+            overlay(
+                tmp_path / "m", {".hnx-private-overlay.yml": MARKER + "unencrypted_suffix: ''\n"}
+            )
+            / ".hnx-private-overlay.yml"
+        )
+
+
+@pytest.mark.parametrize("fmt", ["yaml", "json"])
+def test_a_key_set_twice_in_a_sealed_file_is_a_finding(tmp_path, fmt):
+    """PyYAML and json keep the last of two equal keys: a plain first value went unchecked."""
+    if fmt == "yaml":
+        text = f"wan:\n    address: {AWS_KEY}\n    address: {enc()}\n" + SOPS_META
+    else:
+        meta = {"age": [{"recipient": "age1fake"}], "mac": enc(b"fake-mac"), "version": "3.9.0"}
+        text = f'{{"address": "{AWS_KEY}", "address": "{enc()}", "sops": {json.dumps(meta)}}}'
+    rel = f"lab/sealed/wan.sops.{fmt}"
+    found = plc.check_private(overlay(tmp_path, {rel: text}))
+    assert (rel, "sops-malformed") in found_at(found)
+    assert any("duplicate key 'address'" in f.detail for f in found)
+    assert AWS_KEY not in "\n".join(map(str, found))
+    # outside a sealed path the plain first value is scanned, not dropped by re-serialising
+    other = "lab/other.json"
+    if fmt == "json":
+        assert "secret" in rules(plc.check_private(overlay(tmp_path / "o", {other: text})))
+
+
+def test_sealed_dotenv_and_ini_are_checked_too(tmp_path):
+    meta = f"sops_age__list_0__map_recipient=age1fake\nsops_mac={enc(b'fake-mac')}\n"
+    good = f"WAN={enc()}\n" + meta
+    assert plc.check_private(overlay(tmp_path / "a", {"lab/sealed/wan.env": good})) == []
+    found = plc.check_private(
+        overlay(tmp_path / "b", {"lab/sealed/wan.env": f"WAN={WAN}\n" + meta})
+    )
+    assert [f.detail for f in found] == ["WAN: not a well-formed ENC[...] value"]
+    ini = f"[wan]\naddress = {enc()}\n[sops]\nage__list_0__map_recipient = age1fake\nmac = {enc(b'm')}\n"
+    assert plc.check_private(overlay(tmp_path / "c", {"lab/sealed/wan.ini": ini})) == []
+
+
+@pytest.mark.parametrize(
+    ("files", "needle"),
+    [
+        # one commit drops the rule: the sealed path is pinned in the tool, so it still holds,
+        # and the rule set that no longer covers it is itself the finding
+        (
+            {".sops.yaml": "creation_rules:\n  - path_regex: ^elsewhere/\n    age: x\n"},
+            "no creation rule covers lab/sealed/probe.sops.yaml",
+        ),
+        (
+            {
+                ".sops.yaml": SOPS_RULES.replace(
+                    "    age: x", "    encrypted_regex: ^nothing$\n    age: x"
+                )
+            },
+            "encrypts only in part (encrypted_regex)",
+        ),
+        (
+            {"lab/.sops.yaml": "creation_rules:\n  - path_regex: .*\n    age: x\n"},
+            "nested .sops.yaml",
+        ),
+    ],
+)
+def test_a_sops_config_that_narrows_the_sealed_paths_is_a_finding(tmp_path, files, needle):
+    found = plc.check_private(overlay(tmp_path, {"lab/sealed/wan.sops.yaml": SOPS_FILE, **files}))
+    assert rules(found) == {"sops-policy"}, found
+    assert any(needle in f.detail for f in found)
+
+
+def test_without_a_sops_config_the_sealed_paths_still_hold(tmp_path):
+    root = overlay(tmp_path, {"lab/sealed/wan.yml": f"wan_ipv4: {WAN}\n"})
+    (root / ".sops.yaml").unlink()
+    found = plc.check_private(root)
+    assert found_at(found) == {
+        ("lab/sealed/wan.yml", "sops-unencrypted"),
+        (".sops.yaml", "sops-policy"),
+    }
+
+
+def test_the_marker_may_add_sealed_paths(tmp_path):
+    marker = MARKER + "sealed_paths:\n  - lab/peers/\n"
+    root = overlay(tmp_path, {".hnx-private-overlay.yml": marker, "lab/peers/a.yml": "a: b\n"})
+    assert ("lab/peers/a.yml", "sops-unencrypted") in found_at(plc.check_private(root))
+
+
 def test_vault_file_must_be_vault_encrypted(tmp_path):
     for rel in ("inv/prod/group_vars/all/vault.yml", "roles/x/creds.vault.yml"):
         found = plc.check_private(overlay(tmp_path / rel.replace("/", "_"), {rel: "a: b\n"}))
         assert [(f.path, f.rule) for f in found] == [(rel, "vault-unencrypted")]
+
+
+@pytest.mark.parametrize(
+    ("text", "needle"),
+    [
+        # the header, then plain text: the header alone used to pass
+        (VAULT.splitlines()[0] + f"\ngithub_token: {GH_TOKEN}\n", "not only hex"),
+        (VAULT + f"github_token: {GH_TOKEN}\n", "not only hex"),
+        # hex lines that are plain text hexlified, not salt, HMAC and ciphertext
+        (vault(f"github_token: {GH_TOKEN}"), "salt, HMAC and ciphertext"),
+        ("$" + "ANSIBLE_VAULT;9.9;ROT13\n" + "ab" * 40 + "\n", "header"),
+    ],
+    ids=["header-then-plain", "envelope-then-plain", "hexlified-plain", "bad-header"],
+)
+def test_a_vault_file_is_the_header_then_hex_only(tmp_path, text, needle):
+    rel = "inv/prod/group_vars/all/vault.yml"
+    found = plc.check_private(overlay(tmp_path, {rel: text}))
+    assert [(f.path, f.rule) for f in found] == [(rel, "vault-unencrypted")]
+    assert needle in found[0].detail and GH_TOKEN not in found[0].detail
+
+
+def test_a_vault_header_does_not_hide_the_rest_of_a_file(tmp_path):
+    text = VAULT.splitlines()[0] + f"\ngithub: {GH_TOKEN}\n"
+    found = plc.check_private(overlay(tmp_path, {"lab/notes.md": text}))
+    assert rules(found) == {"secret"} and all(f.detail.startswith("line 2:") for f in found)
+
+
+def test_only_well_formed_ciphertext_is_masked(tmp_path):
+    found = plc.check_private(
+        overlay(tmp_path, {"lab/enc.yml": f"x: ENC[AES256_GCM,data:{GH_TOKEN}]\n"})
+    )
+    assert rules(found) == {"secret"}
+    assert plc.masked(SOPS_FILE).splitlines()[1].strip() == "address: ENC[]"
+    for bad in (
+        f"ENC[AES256_GCM,data:{b64(b'x')},iv:abc,tag:def,type:str]",  # short IV and tag
+        enc().replace("type:str", "type:secret"),
+        enc().replace("AES256_GCM", "PLAIN"),
+    ):
+        assert not plc.well_formed_enc(bad), bad
+        assert plc.masked(bad) == bad
+
+
+@pytest.mark.parametrize(
+    "rel", ["lab/notes.md", "lab/hosts.yml", "lab/plain.env", "lab/wan.sops.yaml"]
+)
+def test_a_well_formed_token_hides_nothing_outside_a_sops_value(tmp_path, rel):
+    """An access key id is valid base64, so ``ENC[AES256_GCM,data:<key>,iv:..,tag:..]`` was a
+    well-formed token and was masked in ANY file: the key vanished from the scan."""
+    wrapped = enc().replace(f"data:{b64(b'fake-sealed-value')}", f"data:{AWS_KEY}")
+    assert plc.well_formed_enc(wrapped)  # the shape alone cannot tell
+    if rel.endswith(".sops.yaml"):  # a SOPS file (not sealed), the token inside a value
+        text = f"wan:\n    address: id {wrapped}\n" + SOPS_META
+    else:
+        text = f"token: {wrapped}\n"
+    assert "secret" in rules(plc.check_private(overlay(tmp_path, {rel: text}))), rel
+    assert plc.masked(f"x: {wrapped}\n") == f"x: {wrapped}\n"  # not a SOPS file: unchanged
+
+
+def test_files_that_cannot_be_scanned_fail_unless_allowed(tmp_path):
+    root = overlay(tmp_path, {"lab/a.yml": "a: b\n"})
+    (root / "logs").mkdir()
+    (root / "logs" / "big.log").write_text("x" * (6 * 1024 * 1024))
+    (root / "lab" / "blob.bin").write_bytes(b"\x00\x01\x02\xff" * 64)
+    found = plc.check_private(root)
+    assert found_at(found) == {("logs/big.log", "unscanned"), ("lab/blob.bin", "unscanned")}
+    assert "larger than 5 MB" in str(found)
+    marker = MARKER + "allow_unscanned:\n  - logs/*.log\n  - '*.bin'\n"
+    (root / ".hnx-private-overlay.yml").write_text(marker)
+    assert plc.check_private(root) == []
+    # a sealed file is never let through unscanned
+    (root / "lab" / "sealed").mkdir()
+    (root / "lab" / "sealed" / "x.sops.yaml").write_bytes(b"\x00\x01\x02\xff" * 8)
+    assert found_at(plc.check_private(root)) == {("lab/sealed/x.sops.yaml", "unscannable")}
+
+
+def test_utf16_without_a_byte_order_mark_is_scanned(tmp_path):
+    root = overlay(tmp_path, {})
+    (root / "lab").mkdir()
+    for name, codec in (("le.txt", "utf-16-le"), ("be.txt", "utf-16-be")):
+        (root / "lab" / name).write_bytes(f"github: {GH_TOKEN}\n".encode(codec))
+    found = plc.check_private(root)
+    assert {f.path for f in found} == {"lab/le.txt", "lab/be.txt"} and rules(found) == {"secret"}
 
 
 @pytest.mark.parametrize(
@@ -164,11 +448,11 @@ def test_masking_keeps_plaintext_lines(tmp_path):
     out = plc.masked(text)
     assert "ENC[AES256_GCM" not in out and "BEGIN AGE" not in out
     assert out.splitlines()[-1] == "after: " + AWS_KEY  # top-level key after the block is kept
-    doc = {"a": "ENC[AES256_GCM,data:abc,iv:x,tag:y,type:str]", "sops": {"mac": "m"}}
+    doc = {"a": enc(), "sops": {"mac": "m"}}
     assert json.loads(plc.masked(json.dumps(doc))) == {"a": "ENC[]"}
     assert plc.sops_format("k=ENC[AES256_GCM,data:x]\nsops_mac=y\n") == "dotenv"
     assert plc.sops_format("[x]\nk=v\n[sops]\nmac=y\n") == "ini"
-    assert plc.masked(VAULT) == ""
+    assert plc.masked(VAULT).strip() == ""
 
 
 def test_cli_private_exit_codes(tmp_path):

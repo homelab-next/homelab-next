@@ -7,10 +7,14 @@
 # Actions Environment (secret SOPS_AGE_KEY).  Never commit an identity (AGE-SECRET-KEY-1...).
 #
 # `tools/private_leak_check.py private` fails on a file one of these path_regex rules covers that
-# is not SOPS-encrypted, so a rule here is a promise CI keeps.
+# is not SOPS-encrypted throughout, so a rule here is a promise CI keeps.  lab/sealed/ is sealed
+# whatever this file says (the tool pins it): a rule may ADD paths, and a rule that no longer
+# covers lab/sealed/, encrypts only part of a file there (encrypted_regex and friends) or a
+# nested .sops.yaml that shadows this one is itself a finding.
 creation_rules:
-  # sensitive lab data that is not a credential (WAN addresses, peer details): sealed per file
-  - path_regex: (^|/)lab/sealed/.*\.sops\.ya?ml$
+  # sensitive lab data that is not a credential (WAN addresses, peer details): sealed per file,
+  # any format (name them *.sops.yaml by habit; the rule covers every file in the directory)
+  - path_regex: (^|/)lab/sealed/
     age: >-
       age1fakefakefakefakefakefakefakefakefakefakefakefakefakefakefakeaa,
       age1fakefakefakefakefakefakefakefakefakefakefakefakefakefakefakeee

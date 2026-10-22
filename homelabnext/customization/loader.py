@@ -29,6 +29,7 @@ from typing import Any
 import yaml
 
 from homelabnext import paths, sops
+from homelabnext._schema_text import safe_message
 from homelabnext._yaml import UniqueKeyStrDateLoader
 
 from .model import Customization, Finding
@@ -105,7 +106,7 @@ def validate_doc(doc: Any) -> list[str]:
                 f"{where}: {detail} (review_by is required unless maintained_upstream is true)"
             )
         else:
-            out.append(f"{where}: {err.message}")
+            out.append(f"{where}: {safe_message(err)}")
     return out
 
 

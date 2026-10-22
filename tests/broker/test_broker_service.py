@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import re
 import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -201,13 +202,19 @@ def test_findings_and_proposals_lanes(tmp_path):
     assert f["path"] == "findings/triage/2026-01-15-queue.md"
     note = {"title": "Raise the drain timeout", "risk": "low", "rollback": "set it back"}
     p = svc.call(AGENT, "proposal.file", {"note": note, "body": "Seen twice."})
-    assert p["path"] == "records/inbox/2026-01-15-triage-raise-the-drain-timeout.md"
+    assert re.fullmatch(
+        r"records/inbox/2026-01-15-triage-raise-the-drain-timeout-[0-9a-f]{8}\.md", p["path"]
+    )
     events = svc.state.outbox()
     assert [e["type"] for e in events] == ["homelabnext.proposal.created"]
     assert event_problems(events[0]) == [] and events[0]["data"]["risk"] == "low"
     with pytest.raises(Denied) as info:
         svc.call(AGENT, "proposal.file", {"note": dict(note, requesting_agent="profile:reader")})
     assert info.value.reason == "lane-identity-mismatch"
+    # a future-dated note (to pre-claim a later day's name) is refused: the broker dates it
+    with pytest.raises(InvalidArguments) as info:
+        svc.call(AGENT, "proposal.file", {"note": dict(note, created="2026-12-01T00:00:00Z")})
+    assert info.value.reason == "lane-created-set"
 
 
 def test_read_only_exec_action(tmp_path):
@@ -616,3 +623,81 @@ def test_request_documents_validate(tmp_path):
     req = svc.state.get_request(rid)["request"]
     assert schema_errors("broker", "request", req) == []
     assert req["digest"] == request_digest(req)
+
+
+def test_recent_decisions_read_the_decisions_index_not_the_trail(tmp_path, monkeypatch):
+    """The hub's recent approve/deny query walked the whole audit trail newest first until it
+    found its rows, so a trail an agent filled with refusals made the Approvals page time out."""
+    svc = _svc(tmp_path)
+    rids = [svc.submit(AGENT, "service.restart", {"grace_s": 5}) for _ in range(3)]
+    svc.approve(rids[0], "sso:operator-one")
+    svc.deny(rids[1], "sso:operator-one")
+    for i in range(30):  # the noise: refusals far outnumber decisions
+        with pytest.raises(Denied):
+            svc.call(AGENT, f"nope.{i}", {})
+
+    def no_trail(**kw):
+        raise AssertionError("the decisions query read the whole audit trail")
+
+    monkeypatch.setattr(svc.state, "audit_records", no_trail)
+    [appr] = svc.audit_documents(operation="approve", outcome="ok", limit=20)
+    [deny] = svc.audit_documents(operation="deny", outcome="ok", limit=20)
+    assert (appr["request_id"], deny["request_id"]) == (rids[0], rids[1])
+    assert svc.audit_documents(request_id=rids[0], operation="approve", outcome="ok", limit=50)
+    monkeypatch.undo()
+    # a state directory from before the index gets it built once, from the trail
+    shutil.rmtree(tmp_path / "state" / "decisions")
+    again = BrokerService.from_manifest(EXAMPLE, tmp_path / "state")
+    assert [r["request_id"] for r in again.state.decision_records()] == rids[:2]
+    refused = again.audit_documents(operation="approve", outcome="denied")
+    assert refused == [], "only filed decisions are indexed; other queries read the trail"
+
+
+def _decision(i: int) -> dict:
+    return {"operation": "approve", "outcome": "ok", "request_id": f"r{i}"}
+
+
+def test_a_decision_whose_index_write_was_lost_is_reindexed_on_start(tmp_path, monkeypatch):
+    """The index file is written after the audit record; a crash between the two left the
+    decision out of decisions/ for good, because only a missing directory triggered a rebuild."""
+    from homelabnext.broker import state as state_mod
+
+    st = state_mod.StateDir(tmp_path / "s")
+    for i in range(5):
+        st.append_audit(_decision(i), f"2026-01-01T00:00:0{i}Z")
+    newest = sorted((tmp_path / "s" / "decisions").glob("*.json"))[-1]
+    newest.unlink()  # the crash
+    monkeypatch.setattr(state_mod, "RECONCILE_AUDIT", 2)
+    again = state_mod.StateDir(tmp_path / "s")
+    assert [r["request_id"] for r in again.decision_records()] == [f"r{i}" for i in range(5)]
+
+
+def test_an_interrupted_rebuild_of_the_decisions_index_runs_again(tmp_path, monkeypatch):
+    from homelabnext.broker import state as state_mod
+
+    st = state_mod.StateDir(tmp_path / "s")
+    for i in range(6):
+        st.append_audit(_decision(i), f"2026-01-01T00:00:0{i}Z")
+    shutil.rmtree(tmp_path / "s" / "decisions")
+    (tmp_path / "s" / state_mod.DECISIONS_COMPLETE).unlink()  # a state dir from before the index
+    monkeypatch.setattr(state_mod, "write_exclusive", _fail_after(state_mod.write_exclusive, 2))
+    with pytest.raises(OSError):  # the rebuild dies part-way
+        state_mod.StateDir(tmp_path / "s")
+    monkeypatch.undo()
+    monkeypatch.setattr(state_mod, "RECONCILE_AUDIT", 1)  # only a full rebuild can fill the gap
+    again = state_mod.StateDir(tmp_path / "s")
+    assert [r["request_id"] for r in again.decision_records()] == [f"r{i}" for i in range(6)]
+    assert (tmp_path / "s" / state_mod.DECISIONS_COMPLETE).is_file()
+
+
+def _fail_after(real, n):
+    calls = {"n": 0}
+
+    def wrapped(path, data, **kw):
+        if path.parent.name == "decisions":
+            calls["n"] += 1
+            if calls["n"] > n:
+                raise OSError("disk full")
+        return real(path, data, **kw)
+
+    return wrapped

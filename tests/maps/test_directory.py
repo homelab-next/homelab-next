@@ -162,6 +162,13 @@ OBSERVATIONS = [
      "observed_at": "2026-10-20T04:21:00Z"},
     {"source": "jobs", "module": "jobs", "item": "timer:scan/run", "state": "fail",
      "observed_at": "2026-10-19T04:20:00Z"},
+    # what the job-last-run mapping reports: one item per host, value = the run's age
+    {"source": "job-runs", "module": "jobs", "item": "fleet-unit:compact@web-1", "state": "ok",
+     "summary": "success; started 2026-10-18T01:00:00Z", "observed_at": "2026-10-20T23:55:00Z",
+     "value": 255300},
+    {"source": "job-runs", "module": "jobs", "item": "fleet-unit:compact@web-2", "state": "warn",
+     "summary": "overdue since 2026-10-11T01:00:00Z: success; started 2026-10-04T01:00:00Z",
+     "observed_at": "2026-10-20T23:55:00Z", "value": 1465500},
 ]  # fmt: skip
 
 
@@ -178,6 +185,12 @@ def test_schedule_view_model_and_page_match_their_goldens():
     assert scan["runs"] == ["scan-run"] and rows["ci:nightly"]["runs"] == ["lab-smoke"]
     assert rows["timer:local/tick"]["next_run"] is None  # a local-time calendar: not computed
     assert rows["fleet-unit:compact"]["next_run"] == "2026-10-25T01:00:00Z"
+    # per-host reports: the newest run (observed_at less its age), the worst state, who is late
+    compact = rows["fleet-unit:compact"]
+    assert (compact["last_run"], compact["state"], compact["hosts"]) == (
+        "2026-10-18T01:00:00Z", "warn", 2)  # fmt: skip
+    assert [a["host"] for a in compact["attention"]] == ["web-2"]
+    assert (rows["fleet-unit:old"]["last_run"], rows["fleet-unit:old"]["hosts"]) == (None, 0)
     assert rows["fleet-unit:old"]["cadence"] == "retired: replaced by st2:pack.sweep"
     assert rows["fleet-unit:old"]["next_run"] is None
     assert rows["pack:page"]["cadence"] == "on each homelabnext.alert.created event"
@@ -197,6 +210,7 @@ def test_schedule_view_model_and_page_match_their_goldens():
     html = schedule.render(vm)
     assert_safe(html)
     assert "Pages on &lt;b&gt;alerts&lt;/b&gt;" in html and "not reported" in html
+    assert "2 hosts" in html and "web-2: overdue since 2026-10-11T01:00:00Z" in html
     golden("schedule.html", html)
 
 
@@ -217,6 +231,16 @@ def _checkout(tmp: Path) -> Path:
         "[Unit]\nDescription=Nightly scan\n[Timer]\nOnCalendar={{ scan_schedule }}\n"
         "RandomizedDelaySec=15min\n")  # fmt: skip
     put("ansible/roles/scan/templates/run.service.j2", "[Service]\nExecStart=/bin/true\n")
+    put("ansible/roles/good/templates/tick.timer.j2",
+        "[Timer]\nOnCalendar={{ good_schedule }}\nRandomizedDelaySec=10min\n")  # fmt: skip
+    put("ansible/roles/good/defaults/main.yml", 'good_schedule: "*-*-* 03:00:00 UTC"\n')
+    args = ('--dir /var/lib/homelabnext/last-run --group root --job timer:good/tick --unit %n '
+            '--calendar "{{ good_schedule }}" --delay 600')  # fmt: skip
+    put("ansible/roles/good/templates/tick.service.j2",
+        f"[Service]\nExecStartPre=-{schedule.WRITER} start {args}\nExecStart=/bin/true\n"
+        f"ExecStopPost=-{schedule.WRITER} finish {args}\n")  # fmt: skip
+    put("ansible/roles/good/tasks/config.yml",
+        "- ansible.builtin.include_role:\n    name: last_run\n")  # fmt: skip
     put(
         "ansible/roles/boot/files/tick.timer", "[Timer]\nOnBootSec=5min\nOnCalendar={{ missing }}\n"
     )
@@ -239,16 +263,22 @@ def test_schedule_gathers_a_checkout(tmp_path):
     reg = load(FIX / "services.yml")
     inputs = schedule.gather(_checkout(tmp_path), reg)
     timers = {t["id"]: t for t in inputs["timers"]}
-    assert sorted(timers) == ["timer:boot/tick", "timer:extra/sweep", "timer:scan/run"]
+    assert sorted(timers) == [
+        "timer:boot/tick", "timer:extra/sweep", "timer:good/tick", "timer:scan/run"]  # fmt: skip
     assert timers["timer:scan/run"]["calendars"] == ["*-*-* 04:10:00 UTC"]
     assert (timers["timer:scan/run"]["delay_s"], timers["timer:scan/run"]["what"]) == (
         900,
         "Nightly scan",
     )
-    assert (
-        timers["timer:boot/tick"]["calendars"] == []
-        and len(timers["timer:boot/tick"]["problems"]) == 2
-    )
+    assert timers["timer:boot/tick"]["calendars"] == []
+    assert [p.split(": ", 1)[1][:24] for p in timers["timer:boot/tick"]["problems"]] == [
+        "OnCalendar {{ missing }}", "OnBootSec= is not a cale", "no tick.service beside i"]  # fmt: skip
+    # every timer must report its runs: a service without the writer fails, a compliant one passes
+    assert timers["timer:good/tick"]["problems"] == []
+    scan = "\n".join(timers["timer:scan/run"]["problems"])
+    assert "no ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start" in scan
+    assert "no ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish" in scan
+    assert "ansible/roles/scan: no task includes role last_run" in scan
     assert [u["id"] for u in inputs["fleet_units"]] == [
         "fleet-unit:compact",
         "fleet-unit:old",

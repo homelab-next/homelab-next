@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from homelabnext._schema_text import safe_message
 from homelabnext.generators.safe import control_char_paths
 
 from .loader import schema
@@ -55,7 +56,7 @@ def schema_problems(doc: Any) -> list[str]:
     out = []
     for err in sorted(validator.iter_errors(doc), key=lambda e: [str(p) for p in e.absolute_path]):
         where = "/".join(str(p) for p in err.absolute_path) or "<root>"
-        out.append(f"schema: {where}: {err.message}")
+        out.append(f"schema: {where}: {safe_message(err)}")
     return out
 
 

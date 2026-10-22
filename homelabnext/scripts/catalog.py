@@ -56,6 +56,8 @@ EXCLUDED: dict[str, str] = {
     "tools/tests/": "test code: pytest imports it",
     "conformance/": "conformance suites, protocols and fakes that the suites import",
     "ansible/plugins/": "Ansible plugins: Ansible loads them, nothing executes them",
+    "workflows/stackstorm/": "rendered StackStorm action shims: its python runner imports them "
+    "(`hnx workflows st2 render`)",
     "conftest.py": "pytest configuration",
     "setup.py": "the build backend's hook, run by setuptools",
 }

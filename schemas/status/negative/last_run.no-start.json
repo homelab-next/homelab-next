@@ -1,0 +1,8 @@
+{
+  "schema": "homelabnext.status.last-run/1",
+  "job": "timer:lynis/scan",
+  "unit": "hnx-lynis.service",
+  "host": "web-1",
+  "on_calendar": "*-*-* 04:10:00 UTC",
+  "running": false
+}

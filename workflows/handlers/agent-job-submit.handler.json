@@ -1,0 +1,26 @@
+{
+  "action": "agent.job.submit",
+  "audit": true,
+  "description": "Put one agent job on the orchestration controller's queue (POST /jobs); the controller admits it against live load.",
+  "handler": "handlers/agent-job-submit.sh",
+  "handler_digest": "sha256:05eb976e36ccb85f306fe34c536ca15e9201cbb91defb1bf9510144bf0eb2303",
+  "idempotent": true,
+  "max_output_bytes": 65536,
+  "params_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "agent_key": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$", "type": "string"},
+      "idempotency_key": {"maxLength": 200, "minLength": 1, "type": "string"},
+      "input": {"type": "object"},
+      "priority": {"maximum": 100, "minimum": 1, "type": "integer"},
+      "reason": {"maxLength": 64, "type": "string"},
+      "retry_of_run_id": {"maxLength": 200, "minLength": 1, "type": "string"}
+    },
+    "required": ["agent_key", "idempotency_key", "priority"],
+    "type": "object"
+  },
+  "requires_approval": false,
+  "secrets": ["ORCHESTRATOR_JOBS_URL"],
+  "tier": "write",
+  "timeout_s": 30
+}

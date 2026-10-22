@@ -188,8 +188,42 @@ def _load_records(path: Path) -> dict[str, list[dict[str, Any]]]:
         raise CollectError(f"records: {exc}") from None
 
 
+#: a last-run record directory: at most this many records, each at most this large
+MAX_RECORDS = 4096
+MAX_RECORD = 64 << 10
+
+
+def _load_last_runs(path: Path) -> dict[str, list[Any]]:
+    """Every ``*.json`` of a last-run record directory, at its top level and one level down
+    (``<dir>/<host>/<job>.json``, one subdirectory per shipped host).  A file that cannot be read
+    is listed by name under ``unreadable``, never dropped: it is a job that cannot be seen.
+    ``hosts`` names, per record, the host subdirectory it was read from (``None`` at the top
+    level): the mapping takes the host from there, so one host's records cannot speak for
+    another's."""
+    records: list[Any] = []
+    hosts: list[str | None] = []
+    unreadable: list[tuple[str, str]] = []
+    files = sorted([*path.glob("*.json"), *path.glob("*/*.json")])
+    if len(files) > MAX_RECORDS:
+        raise CollectError(f"{path.name}: more than {MAX_RECORDS} last-run records")
+    for f in files:
+        name = f.relative_to(path).as_posix()
+        try:
+            if f.stat().st_size > MAX_RECORD:
+                unreadable.append((name, f"larger than {MAX_RECORD} bytes"))
+                continue
+            records.append(json.loads(f.read_text(encoding="utf-8")))
+            hosts.append(f.parent.name if f.parent != path else None)
+        except OSError as exc:
+            unreadable.append((name, str(exc.strerror or exc)))
+        except (UnicodeDecodeError, ValueError):
+            unreadable.append((name, "not JSON"))
+    return {"records": records, "unreadable": unreadable, "hosts": hosts}
+
+
 class FileCollector:
-    """``poll-file``: a JSON or YAML file (or a records directory) under the status root."""
+    """``poll-file``: a JSON or YAML file (or a records or last-run directory) under the status
+    root."""
 
     def collect(self, spec: SourceSpec, ctx: CollectContext) -> list[Draft]:
         if spec.mapping.get("builtin") == "broker-pending" and ctx.broker is not None:
@@ -199,6 +233,8 @@ class FileCollector:
             if not path.is_dir():
                 raise CollectError(f"{spec.file}: no records directory")
             return _map(spec, _load_records(path), ctx)
+        if spec.mapping.get("builtin") == "job-last-run" and path.is_dir():
+            return _map(spec, _load_last_runs(path), ctx)
         try:
             if path.stat().st_size > MAX_PAYLOAD:
                 raise CollectError(f"{spec.file}: larger than {MAX_PAYLOAD} bytes")

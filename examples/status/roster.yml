@@ -28,3 +28,7 @@ agents:
     owner: platform-team
     runtime: workflow-runner
     what: The identity the SOC workflow packs act as.
+  - profile: profile:workflow-agents
+    owner: platform-team
+    runtime: stackstorm
+    what: The identity the StackStorm-bound packs submit agent jobs as (agent.job.submit only).

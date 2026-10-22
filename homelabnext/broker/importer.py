@@ -18,8 +18,10 @@ records note       taken from                                      if absent or 
                    critical -> high)
 ``rollback``       ``rollback`` / ``rollback_plan`` / ``backout``   ``--default-rollback``, else
                                                                     not imported
-``created``        ``created`` / ``date`` (a date alone is          the filename's leading date,
-                   midnight UTC)                                    else the file's mtime
+original date      ``created`` / ``date`` (a date alone is          the filename's leading date,
+                   midnight UTC), kept as provenance                else the file's mtime
+                   ``created:<timestamp>`` (the broker dates the
+                   filed note itself)
 ``affects``,       the same keys, when every entry is valid         dropped and reported
 ``related``
 ``provenance``     ``inputs``: ``imported-from:<file>`` and, when   -
@@ -31,9 +33,10 @@ slug               the original requester (sanitised), then the     from the tit
 body               the Markdown after the front-matter              empty
 =================  ==============================================  ============================
 
-The filed name is ``<date>-<importer>-<slug>.md`` (the lane binds ``requesting_agent`` to the
-importing caller), so the original requester is kept in the slug: two agents' proposals with the
-same date and title land in two files.  Two source files that still map to one name are a
+The filed name is ``<date>-<importer>-<slug>-<tag>.md`` (the lane binds ``requesting_agent`` to
+the importing caller and ``created`` to the broker's clock, so ``date`` is the day of the import),
+so the original requester is kept in the slug: two agents' proposals with the same title land in
+two files.  Two source files that still map to one name are a
 ``conflict`` -- the second is not filed and the command exits nonzero -- rather than an
 ``exists`` that would hide a different proposal behind the first.
 
@@ -44,8 +47,9 @@ A ``type`` other than ``proposal`` is skipped -- a ``completion-request`` is a r
 transition, not a new proposal.  Every other key is reported as unmapped and left behind.
 
 Dry run (the default) maps and validates every file against the records schema and reports;
-``--apply`` files them.  The filename is derived from ``created`` and the slug, so a second
-``--apply`` answers ``lane-exists`` for what is already filed and adds nothing.
+``--apply`` files them.  The filename is derived from the day and the slug, so a second
+``--apply`` the same day answers ``lane-exists`` for what is already filed and adds nothing; a
+re-run on a later day files the queue again (run ``--apply`` once, after a clean dry run).
 """
 
 from __future__ import annotations
@@ -133,12 +137,14 @@ def _created(value: Any, name: str, mtime: float) -> tuple[str, str]:
 def _slug(name: str, agent: str | None, title: str) -> str | None:
     from homelabnext.records.notes import NoteError, slugify
 
+    from .lanes import MAX_CALLER_SLUG as most  # the broker appends its name tag
+
     rest = _NAME_RE.match(name)
     text = rest.group(2) if rest else ""
     prefix = ""
     if agent:
         try:
-            prefix = slugify(agent.partition(":")[2] or agent)
+            prefix = slugify(agent.partition(":")[2] or agent, max_len=most)
         except NoteError:
             prefix = ""
     if prefix and text.startswith(prefix + "-"):
@@ -147,10 +153,10 @@ def _slug(name: str, agent: str | None, title: str) -> str | None:
         if not candidate:
             continue
         try:
-            base = slugify(candidate)
+            base = slugify(candidate, max_len=most)
         except NoteError:
             continue
-        return slugify(f"{prefix}-{base}") if prefix else base
+        return slugify(f"{prefix}-{base}", max_len=most) if prefix else base
     return None
 
 
@@ -221,9 +227,9 @@ def map_proposal(
         "title": str(title or "")[:200],
         "risk": risk,
         "rollback": str(rollback or ""),
-        "created": created,
     }
-    inputs = [f"imported-from:{name}"]
+    # the broker dates the filed note itself; the original date survives as provenance
+    inputs = [f"imported-from:{name}", f"created:{created}"]
     if agent:
         inputs.append(f"requested-by:{agent}")
         out.notes.append("original requester kept as provenance, not as requesting_agent")
@@ -232,7 +238,7 @@ def map_proposal(
         if key in fm:
             used.add(key)
             value = fm[key]
-            trial = {**note, key: value, "requesting_agent": source}
+            trial = {**note, key: value, "requesting_agent": source, "created": created}
             try:
                 validate_note(trial)
                 note[key] = value
@@ -246,7 +252,7 @@ def map_proposal(
         return out
     slug = _slug(name, str(agent) if agent else None, note["title"])
     try:
-        validate_note({**note, "requesting_agent": source})
+        validate_note({**note, "requesting_agent": source, "created": created})
         if slug is None:
             raise NoteError("cannot derive a slug")
     except NoteError as exc:
@@ -283,13 +289,14 @@ def read_dir(
 
 
 def mark_conflicts(rows: list[Mapped]) -> list[Mapped]:
-    """Mark every mapped row whose filed name (date and slug) an earlier row already takes as a
-    ``conflict``: it would otherwise be answered ``exists`` and silently not filed."""
-    first: dict[tuple[str, str], str] = {}
+    """Mark every mapped row whose filed name (its slug: one import files them all on one day)
+    an earlier row already takes as a ``conflict``: it would otherwise be answered ``exists`` and
+    silently not filed."""
+    first: dict[str, str] = {}
     for row in rows:
         if row.params is None or row.outcome != "mapped":
             continue
-        key = (str(row.params["note"]["created"])[:10], str(row.params["slug"]))
+        key = str(row.params["slug"])
         if key in first:
             row.outcome = "conflict"
             row.problem = f"maps to the same file name as {first[key]}; rename one and re-run"

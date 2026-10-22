@@ -141,9 +141,11 @@ injection-eval:
 
 # R-01/R-03/R-04/R-07: every workflow pack in git validates offline (references resolve,
 # deterministic steps before any model, fixtures round-trip to the exact action calls, risky
-# actions bound to an approval of their payload digest) and the deploy pins match
+# actions bound to an approval of their payload digest) and the deploy pins match; the StackStorm
+# pack rendered from the bound packs (workflows/stackstorm/) is current (docs/stackstorm.md)
 workflows:
 	$(PY) -m homelabnext.cli workflows validate
+	$(PY) -m homelabnext.cli workflows st2 check
 
 # M-01 every script has a valid header and docs/scripts/catalog.* is current (`hnx scripts catalog`
 # regenerates it); M-02 the headers' triggers are exactly what runs each script, nothing called is
@@ -306,10 +308,10 @@ fix-check:
 # Regenerate the hashed CI constraints (needs uv).  Versions published in the last 14 days are
 # skipped unless a direct pin needs one (CONSTRAINTS_FRESH: packages exempt from that cooldown).
 CONSTRAINTS_CUTOFF ?= $(shell date -u -d '14 days ago' +%Y-%m-%d 2>/dev/null)
-CONSTRAINTS_FRESH ?= ruff pyarrow
+CONSTRAINTS_FRESH ?= ruff pyarrow certifi
 constraints:
 	uv pip compile pyproject.toml constraints/ci-tools.in --extra dev --extra test --extra lake \
-	  --extra core --extra nats --extra mcp --universal --python-version 3.11 --generate-hashes --no-header \
+	  --extra core --extra nats --extra mcp --extra ansible --universal --python-version 3.11 --generate-hashes --no-header \
 	  --exclude-newer $(CONSTRAINTS_CUTOFF) \
 	  $(foreach p,$(CONSTRAINTS_FRESH),--exclude-newer-package $(p)=$(shell date -u +%Y-%m-%d)) \
 	  -o constraints/ci.txt

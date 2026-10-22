@@ -299,6 +299,28 @@ def request_id(pack: str, event_id: Any, step_id: str) -> str:
     return f"{step_id}-{h.split(':', 1)[1][:12]}"
 
 
+def action_request(
+    pack: Mapping[str, Any], step: Mapping[str, Any], scope: Mapping[str, Any]
+) -> dict[str, Any]:
+    """The broker request one action step makes for the event in ``scope`` (no digest yet).
+
+    The offline runner and the StackStorm step runtime (:mod:`homelabnext.workflows.st2_runtime`)
+    both build requests here, so a shadow run on StackStorm logs the very request id and digest
+    ``hnx workflows run`` prints for the same event.
+    """
+    event = scope["event"]
+    req = {
+        "request_id": request_id(pack["pack"], event.get("id"), step["id"]),
+        "action": step["action"],
+        "actor": pack["actor"],
+        "params": render(step["params"], scope),
+        "created": event.get("time"),
+    }
+    if "target" in step:
+        req["target"] = step["target"]
+    return req
+
+
 def triggered(pack: Mapping[str, Any], event: Mapping[str, Any]) -> bool:
     trig = pack["trigger"]
     return event.get("type") == trig["event"] and holds(trig.get("where"), {"event": event})
@@ -346,15 +368,7 @@ def run_fixture(
             res.outputs[sid] = _model(step, model, spec_labels or {}, res.problems)
             used_model.add(sid)
         else:
-            req = {
-                "request_id": request_id(pack["pack"], event.get("id"), sid),
-                "action": step["action"],
-                "actor": pack["actor"],
-                "params": render(step["params"], scope),
-                "created": event.get("time"),
-            }
-            if "target" in step:
-                req["target"] = step["target"]
+            req = action_request(pack, step, scope)
             if tamper is not None:
                 req = tamper(step, req)
             req["digest"] = broker.request_digest(req)

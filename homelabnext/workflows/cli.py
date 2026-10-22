@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``hnx workflows``: validate (every pack in git, offline), run (one pack's fixtures), digest."""
+"""``hnx workflows``: validate (every pack in git, offline), run (one pack's fixtures), digest,
+st2 render|check (the pinned packs as a StackStorm pack, docs/stackstorm.md)."""
 
 from __future__ import annotations
 
@@ -27,8 +28,16 @@ def main(argv: list[str]) -> int:
     ru.add_argument("--root", type=Path, default=None, help="git tree (default: cwd)")
     di = sub.add_parser("digest", help="print '<pack> <digest>' for the deploy manifest's pins")
     di.add_argument("paths", nargs="+", type=Path)
+    st = sub.add_parser("st2", help="render or check the StackStorm pack of the bound packs")
+    st.add_argument("action", choices=("render", "check"))
+    st.add_argument("--root", type=Path, default=None, help="git tree (default: cwd)")
+    st.add_argument("--binding", type=Path, default=None, help="default: workflows/stackstorm.yml")
+    st.add_argument("--out", type=Path, default=None, help="default: workflows/stackstorm")
+    st.add_argument("--check", action="store_true", help="render: fail on drift, write nothing")
     args = ap.parse_args(argv)
     try:
+        if args.cmd == "st2":
+            return _st2(args)
         if args.cmd == "validate":
             return _validate(args)
         if args.cmd == "run":
@@ -48,6 +57,28 @@ def _validate(args) -> int:
         print(p)
     print(f"workflows validate: {len(rep.packs)} pack(s), {len(rep.problems)} problem(s)")
     return 1 if rep.problems else 0
+
+
+def _st2(args) -> int:
+    from . import st2
+
+    root = (args.root or Path.cwd()).resolve()
+    res, _binding = st2.render_repo(root, args.binding)
+    out = args.out if args.out is not None else st2.DEFAULT_OUT
+    out_dir = out if out.is_absolute() else root / out
+    base = out.as_posix()
+    problems = list(res.problems)
+    check = args.check or args.action == "check"
+    if not problems:
+        if check:
+            problems += st2.drift(res.files, out_dir, base)
+        else:
+            written = st2.write(res.files, out_dir)
+            print(f"workflows st2: wrote {len(written)} file(s) under {base}")
+    for p in problems:
+        print(p)
+    print(f"workflows st2: {len(res.files)} file(s), {len(problems)} problem(s)")
+    return 1 if problems else 0
 
 
 def _run(args) -> int:

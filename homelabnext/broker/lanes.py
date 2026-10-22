@@ -11,8 +11,14 @@ Two kinds:
   ``content_schema`` (``<dir>/<name>`` of a packaged schema) when one is set.
 * ``records-inbox`` - params ``{note, body?, slug?}``: a records note (``schemas/records/note``)
   filed into ``<data_root>/<root>/inbox/`` under the records filename convention, its
-  ``requesting_agent`` bound to the actor, its ``type`` one of the lane's ``note_types``
-  (``proposal`` by default).
+  ``requesting_agent`` bound to the actor, its ``created`` set by the broker (a note that names
+  its own ``created`` is refused), its ``type`` one of the lane's ``note_types`` (``proposal`` by
+  default).  The file is ``<date>-<agent>-<slug>-<tag>.md``: ``tag`` (:data:`TAG_CHARS` hex) is a
+  keyed hash of the actor, the date and the slug under the broker-held key, so the name stays
+  ``<YYYY-MM-DD>-<agent>-<slug>.md`` to every records reader while no agent can produce another
+  agent's name -- not even one whose profile slug is a prefix of the other's (``triage`` and
+  ``triage-lead``): its own tag is computed over its own actor.  The same actor filing the same
+  slug the same day gets the same name (``lane-exists``), so a retry never files twice.
 
 Enforced on every write, each refusal with a machine reason (:class:`LaneError`):
 
@@ -28,7 +34,12 @@ Enforced on every write, each refusal with a machine reason (:class:`LaneError`)
 * ``lane-too-large`` - the encoded content exceeds ``max_bytes``;
 * ``lane-content-invalid`` - wrong params shape, content not matching the format or schema, a note
   failing the records schema or a note type the lane does not take;
-* ``lane-identity-mismatch`` - a note naming another ``requesting_agent`` than the actor.
+* ``lane-identity-mismatch`` - a note naming another ``requesting_agent`` than the actor;
+* ``lane-created-set`` - a note naming its own ``created`` (the broker's clock dates every note,
+  so no agent can file one back- or forward-dated, or claim a future day's name);
+* ``lane-content-invalid`` also for a note whose front matter holds a template marker
+  (:data:`TEMPLATE_MARKERS`): its title becomes the ``homelabnext.proposal.created`` summary, and
+  an event consumer that renders templates (StackStorm renders Jinja, Orquesta YAQL) would run it.
 
 Content is validated and sized *before* any byte is written, and the write itself is atomic: a
 temp file in the target directory, fsynced, then linked (or, for an ``overwrite`` lane, renamed)
@@ -40,6 +51,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -52,13 +64,43 @@ from typing import Any
 from . import validation
 from .state import write_temp
 
-__all__ = ["DEFAULT_NAME_PATTERN", "LANE_HANDLER", "Lane", "LaneError", "check_params", "write"]
+__all__ = [
+    "DEFAULT_NAME_PATTERN",
+    "LANE_HANDLER",
+    "MAX_CALLER_SLUG",
+    "TAG_CHARS",
+    "Lane",
+    "LaneError",
+    "check_params",
+    "name_tag",
+    "template_marker",
+    "write",
+]
 
 #: the ``handler`` value of every lane action
 LANE_HANDLER = "builtin/lane"
 DEFAULT_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 _PROFILE_RE = re.compile(r"^profile:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)$")
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+#: hex characters of a records-inbox file name's tag
+TAG_CHARS = 8
+#: the longest slug a caller may give: the records convention's 60, less the tag and its hyphen
+MAX_CALLER_SLUG = 60 - TAG_CHARS - 1
+#: Jinja and YAQL delimiters: never in a note's front matter, which events carry (``docs/stackstorm.md``)
+TEMPLATE_MARKERS = ("{{", "{%", "<%", "%>")
+
+
+def template_marker(value: Any) -> str | None:
+    """The first template marker in any string of ``value`` (keys included), else ``None``."""
+    if isinstance(value, str):
+        return next((m for m in TEMPLATE_MARKERS if m in value), None)
+    if isinstance(value, Mapping):
+        items = [x for kv in value.items() for x in kv]
+    elif isinstance(value, (list, tuple)):
+        items = list(value)
+    else:
+        return None
+    return next((m for m in map(template_marker, items) if m is not None), None)
 
 
 class LaneError(Exception):
@@ -170,8 +212,17 @@ def _encode_files(lane: Lane, params: Mapping[str, Any]) -> tuple[str, bytes]:
     return name, data
 
 
-def _encode_note(lane: Lane, actor: str, params: Mapping[str, Any], now: str) -> tuple[str, bytes]:
+def name_tag(key: bytes, actor: str, date: str, slug: str) -> str:
+    """The keyed tag that ends a records-inbox file name (see the module doc)."""
+    msg = json.dumps(["records-inbox-name", actor, date, slug]).encode("utf-8")
+    return hmac.new(key, msg, hashlib.sha256).hexdigest()[:TAG_CHARS]
+
+
+def _encode_note(
+    lane: Lane, actor: str, params: Mapping[str, Any], now: str, key: bytes
+) -> tuple[str, bytes]:
     from homelabnext.records.notes import (
+        MAX_SLUG,
         NoteError,
         build_filename,
         render_note,
@@ -191,6 +242,10 @@ def _encode_note(lane: Lane, actor: str, params: Mapping[str, Any], now: str) ->
         raise LaneError(
             "lane-identity-mismatch", f"requesting_agent {claimed!r} is not the actor {actor!r}"
         )
+    if "created" in fm:
+        raise LaneError(
+            "lane-created-set", "created is set by the broker; leave it out of the note", "invalid"
+        )
     fm["requesting_agent"] = actor
     fm.setdefault("type", lane.note_types[0])
     if fm["type"] not in lane.note_types:
@@ -199,15 +254,26 @@ def _encode_note(lane: Lane, actor: str, params: Mapping[str, Any], now: str) ->
             f"lane {lane.name} takes notes of {list(lane.note_types)}",
             "invalid",
         )
-    fm.setdefault("created", now)
+    marker = template_marker(fm)
+    if marker is not None:
+        raise LaneError(
+            "lane-content-invalid",
+            f"note front matter holds the template marker {marker!r}",
+            "invalid",
+        )
+    fm["created"] = now
     if fm["type"] == "proposal":
         fm.setdefault("status", "proposed")
+    room = min(MAX_CALLER_SLUG, MAX_SLUG - TAG_CHARS - 1)  # the tag and its hyphen end it
     try:
         validate_note(fm)
-        slug = params.get("slug") or slugify(str(fm["title"]))
+        slug = params.get("slug") or slugify(str(fm["title"]), max_len=room)
         if not isinstance(slug, str):
             raise NoteError("slug must be a string")
-        name = build_filename(fm, slug)
+        if len(slug) > room:
+            raise NoteError(f"slug is at most {room} characters (the broker adds a tag)")
+        build_filename(fm, slug)  # the caller's slug, checked on its own
+        name = build_filename(fm, f"{slug}-{name_tag(key, actor, now[:10], slug)}")
     except NoteError as exc:
         raise LaneError("lane-content-invalid", f"note: {exc}", "invalid") from None
     data = render_note(fm, body).encode("utf-8")
@@ -216,13 +282,13 @@ def _encode_note(lane: Lane, actor: str, params: Mapping[str, Any], now: str) ->
     return _check_name(lane, name), data
 
 
-def _target(lane: Lane, actor: str, params: Mapping[str, Any], now: str):
+def _target(lane: Lane, actor: str, params: Mapping[str, Any], now: str, key: bytes):
     """(directory components under data_root, file name, bytes), or :class:`LaneError`."""
     if not isinstance(params, Mapping):
         raise LaneError("lane-content-invalid", "params must be an object", "invalid")
     parts = lane.root.split("/")
     if lane.kind == "records-inbox":
-        name, data = _encode_note(lane, actor, params, now)
+        name, data = _encode_note(lane, actor, params, now, key)
         return [*parts, "inbox"], name, data
     name, data = _encode_files(lane, params)
     if lane.per_actor:
@@ -230,9 +296,13 @@ def _target(lane: Lane, actor: str, params: Mapping[str, Any], now: str):
     return parts, name, data
 
 
-def check_params(lane: Lane, actor: str, params: Mapping[str, Any], now: str) -> None:
-    """Every check that needs no filesystem: shape, name, identity, size, schema."""
-    _target(lane, actor, params, now)
+def check_params(
+    lane: Lane, actor: str, params: Mapping[str, Any], now: str, *, key: bytes = b""
+) -> None:
+    """Every check that needs no filesystem: shape, name, identity, size, schema.  ``now`` is
+    the broker's time (a records note's ``created``); ``key`` the broker-held key of a
+    records-inbox name's tag."""
+    _target(lane, actor, params, now, key)
 
 
 # ---------------------------------------------------------------- the write
@@ -250,11 +320,18 @@ def _open_dir(parent_fd: int, name: str) -> int:
 
 
 def write(
-    lane: Lane, data_root: str | os.PathLike[str], actor: str, params: Mapping[str, Any], now: str
+    lane: Lane,
+    data_root: str | os.PathLike[str],
+    actor: str,
+    params: Mapping[str, Any],
+    now: str,
+    *,
+    key: bytes = b"",
 ) -> dict[str, Any]:
     """Validate, then write one file into ``lane``; returns ``{path, bytes, digest}`` (``path``
-    relative to ``data_root``).  Raises :class:`LaneError` with the refusal reason."""
-    parts, name, data = _target(lane, actor, params, now)
+    relative to ``data_root``).  Raises :class:`LaneError` with the refusal reason.  ``now`` and
+    ``key`` as for :func:`check_params`."""
+    parts, name, data = _target(lane, actor, params, now, key)
     root = Path(data_root)
     root.mkdir(parents=True, exist_ok=True)
     fds = [os.open(root, os.O_RDONLY | os.O_DIRECTORY)]

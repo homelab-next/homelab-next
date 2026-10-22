@@ -9,3 +9,4 @@ approvals:
   socket: /run/hnx-broker/broker.sock
   issuer: sso
   approver_group: hub-approvers
+  public_origin: https://status.lab.example

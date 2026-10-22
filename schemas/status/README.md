@@ -10,6 +10,7 @@ service registry (`status_sources:` in `schemas/platform/service.json` 2.1).
 | `agent_activity.schema.json` | the summary tier of one agent activity event (stage 1b): ids, runtime, surface, host, project, model, agent, kind, tool name, outcome, tokens, cost. Never a prompt, command, tool input or output. Also the `data` of `homelabnext.agent.activity` |
 | `agent_activity_detail.schema.json` | the private detail of one event: prompt, command, tool input and output, error, approval with its payload; redacted and capped by the hub, never on the bus |
 | `roster.schema.json` | `roster.yml`: where the Agent roster page reads the compiled profiles, broker manifests, workflow packs and model roles, plus each profile's owner, runtime and one line on what it does (never its grants) |
+| `last_run.schema.json` | the record a role timer's job leaves on its host (the shared writer of role `last_run`, on start and on stop): job id, unit, host, the schedule the host runs (`on_calendar`, `randomized_delay_s`), start and end times, `running`, and systemd's `result`, `exit_code` and `exit_status`. Read by the `job-last-run` mapping (`docs/status.md`) |
 | `agents.schema.json` | `agents.yml`: the activity store, retention, caps, stuck thresholds, the private tier's front door, the push ingest's senders (secret references only) |
 
 The `status.json` document the hub renders is documented in `docs/status.md` (schema string

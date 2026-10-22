@@ -16,6 +16,7 @@ lab-private/                       (a new PRIVATE repository; copy this director
 ├── .hnx-private-overlay.yml       marker: enables `private_leak_check.py private`, lists vault files
 ├── .sops.yaml                     which paths are sealed, to which age recipients
 ├── .gitignore                     keys and decrypted scratch copies never get added
+├── .github/CODEOWNERS             owner review on workflows, deploy tools, sealing rules
 ├── .github/workflows/
 │   ├── checks.yml                 every pull request: private_leak_check (no secrets)
 │   └── deploy.yml                 manual dispatch from main, Environment `production`
@@ -25,6 +26,7 @@ lab-private/                       (a new PRIVATE repository; copy this director
 │   ├── known_hosts                the hosts' PUBLIC keys (or an SSH host CA line)
 │   └── playbooks/site.yml         applies hnx roles to the inventory
 ├── bin/vault-pass-client.py       password from HNX_VAULT_PASSWORD or OpenBao, never a file
+├── runner/job-started.sh          self-hosted runner hook: only deploy.yml, dispatched, on main
 ├── lab/                           the lab, laid out like the public examples/ (HNX_EXAMPLES_DIR)
 │   ├── services.yml  site.yml  guests/  registers/  strategy/  customizations/
 │   └── sealed/*.sops.yaml         sealed per file (.sops.yaml rule)
@@ -32,5 +34,6 @@ lab-private/                       (a new PRIVATE repository; copy this director
 ```
 
 To start one: create an empty private repository, copy these files in, delete `fictional: true`
-from the marker, replace the fake recipients with yours, and follow the runbook RB 3,
+from the marker, replace the fake recipients with yours and `@lab-owner-fake` in CODEOWNERS with
+your GitHub user, and follow the runbook RB 3,
 [First deploy from the private repository](../registers/runbooks/01a15f29-ff7e-764c-a17e-d2d50c304e9b.md).

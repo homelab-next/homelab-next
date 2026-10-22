@@ -19,9 +19,12 @@ Sources of truth, all read from the checkout and never copied:
 
 Last and next run come from the hub's own state, never guessed: a collector's last run is its
 last poll (``status.json`` ``sources[].last_attempt``) and its next is that plus its interval;
-any other job's last run is the newest observation whose ``item`` is the job's id (a status
-source that reports ``timer:aide/scan`` reports that timer), and its next run is computed from
-its calendar when the expression is one :mod:`.cadence` reads exactly (UTC).
+any other job's last run comes from the observations whose ``item`` is the job's id, or the id
+and a host (``timer:aide/scan@web-1``, what the ``job-last-run`` mapping reports per host): the
+run's time is ``observed_at`` less ``value`` (the run's age in seconds) when the observation
+carries one, else ``observed_at``; the row shows the newest run, the worst state over its hosts
+and every host that is not ok (an overdue or failed run says so in its summary).  Its next run is
+computed from its calendar when the expression is one :mod:`.cadence` reads exactly (UTC).
 """
 
 from __future__ import annotations
@@ -88,6 +91,70 @@ def _role_vars(owner_dir: Path) -> dict[str, Any]:
     return out
 
 
+#: the shared last-run writer (role last_run) every timer's service runs on start and on stop
+WRITER = "/usr/local/libexec/homelabnext/hnx-last-run"
+_WRITER_LINES = (("start", "ExecStartPre"), ("finish", "ExecStopPost"))
+
+
+def record_problems(
+    root: Path, rel: str, job: str, owner_dir: Path, calendars: Sequence[str], delay_s: int | None
+) -> list[str]:
+    """Why the timer at ``rel`` would not report its runs, or ``[]``: its service runs the
+    last-run writer on start (``ExecStartPre=-``) and on stop (``ExecStopPost=-``) with the
+    timer's own job id, ``%n``, calendar (as written in the timer) and randomized delay, and its
+    role or profile installs the writer (``include_role: last_run``).  docs/role-interface.md
+    section 8."""
+    import shlex
+
+    suffix = ".j2" if rel.endswith(".j2") else ""
+    svc_rel = rel.removesuffix(suffix).removesuffix(".timer") + ".service" + suffix
+    svc = root / svc_rel
+    if not svc.is_file():
+        return [f"{rel}: no {svc_rel.rsplit('/', 1)[-1]} beside it, so no last-run record"]
+    keys = _unit_keys(svc.read_text(encoding="utf-8"))
+    out = []
+    if len(calendars) != 1:
+        out.append(f"{rel}: a last-run record carries one OnCalendar=, not {len(calendars)}")
+    want = {
+        "--job": job,
+        "--unit": "%n",
+        "--calendar": calendars[0] if len(calendars) == 1 else None,
+        "--delay": str(delay_s or 0),
+    }
+    for action, key in _WRITER_LINES:
+        found = None
+        for line in keys.get(key, []):
+            try:
+                argv = shlex.split(line.lstrip("@+!:"))
+            except ValueError:
+                continue
+            if len(argv) > 1 and argv[0].lstrip("-") == WRITER and argv[1] == action:
+                found = line, argv
+        if found is None:
+            out.append(f"{svc_rel}: no {key}=-{WRITER} {action} ...: the timer's runs are never "
+                       "reported")  # fmt: skip
+            continue
+        line, argv = found
+        if not line.startswith("-"):
+            out.append(
+                f"{svc_rel}: {key}= must start with - (a writer problem never fails the job)"
+            )
+        rest = argv[2:]
+        opts = {rest[i]: rest[i + 1] for i in range(0, len(rest) - 1, 2)}  # --flag value pairs
+        for opt, value in want.items():
+            if value is not None and opts.get(opt) != value:
+                out.append(
+                    f"{svc_rel}: {key}= {opt} is {opts.get(opt)!r}, the timer's is {value!r}"
+                )
+        if not {"--dir", "--group"} <= set(opts):
+            out.append(f"{svc_rel}: {key}= names no --dir and --group")
+    tasks = [*owner_dir.glob("tasks/*.yml"), *owner_dir.glob("tasks/**/*.yml")]
+    if not any(re.search(r"(?m)^\s*name:\s*last_run\s*$", f.read_text("utf-8")) for f in tasks):
+        out.append(f"{owner_dir.relative_to(root).as_posix()}: no task includes role last_run, "
+                   "which installs the writer")  # fmt: skip
+    return sorted(set(out))
+
+
 def gather_timers(root: Path, files: Sequence[str]) -> list[dict[str, Any]]:
     """The role and profile timers of the checkout (``files``: its repository-relative paths)."""
     out = []
@@ -118,13 +185,17 @@ def gather_timers(root: Path, files: Sequence[str]) -> list[dict[str, Any]]:
         problems += [f"{rel}: {k}= is not a calendar; the next run is not computed" for k in other]
         delay = keys.get("RandomizedDelaySec", [None])[-1]
         unit = base.removesuffix(".timer")
+        delay_s = _seconds(delay) if delay else None
+        problems += record_problems(
+            root, rel, f"timer:{owner}/{unit}", owner_dir, keys.get("OnCalendar", []), delay_s
+        )
         out.append(
             {
                 "id": f"timer:{owner}/{unit}",
                 "owner": owner,
                 "what": (keys.get("Description") or [""])[-1],
                 "calendars": exprs,
-                "delay_s": _seconds(delay) if delay else None,
+                "delay_s": delay_s,
                 "path": rel,
                 "problems": problems,
             }
@@ -237,12 +308,33 @@ def _iso(t: datetime) -> str:
     return t.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _last_by_item(observations: Sequence[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
-    out: dict[str, Mapping[str, Any]] = {}
+def _ran_at(o: Mapping[str, Any]) -> float:
+    """When the reported run happened: ``observed_at`` less ``value`` (its age), else
+    ``observed_at``."""
+    at = parse_iso(o["observed_at"])
+    v = o.get("value")
+    return at - v if isinstance(v, int | float) and not isinstance(v, bool) and v >= 0 else at
+
+
+def _reports(observations: Sequence[Mapping[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Job id -> one report per host (``<id>@<host>``) or for the job itself (``<id>``), the
+    newest observation of each."""
+    newest: dict[str, Mapping[str, Any]] = {}
     for o in observations:
-        prev = out.get(o["item"])
+        prev = newest.get(o["item"])
         if prev is None or parse_iso(o["observed_at"]) > parse_iso(prev["observed_at"]):
-            out[o["item"]] = o
+            newest[o["item"]] = o
+    out: dict[str, list[dict[str, Any]]] = {}
+    for item, o in sorted(newest.items()):
+        job, _, host = item.partition("@")
+        out.setdefault(job, []).append(
+            {
+                "host": host or None,
+                "state": o["state"],
+                "last_run": _iso(datetime.fromtimestamp(_ran_at(o), UTC)),
+                "summary": o.get("summary") or "",
+            }
+        )
     return out
 
 
@@ -373,13 +465,17 @@ def build(
                 "state": live.get("state"),
             }
         )
-    seen = _last_by_item(observations)
+    from homelabnext.status.model import worst
+
+    reported = _reports(observations)
     for row in rows:
         if row["kind"] == "collector":
             continue
-        o = seen.get(row["id"])
-        row["last_run"] = o["observed_at"] if o else None
-        row["state"] = o["state"] if o else None
+        reps = reported.get(row["id"], [])
+        row["last_run"] = max((r["last_run"] for r in reps), default=None)
+        row["state"] = worst([r["state"] for r in reps]) if reps else None
+        row["hosts"] = sum(1 for r in reps if r["host"])
+        row["attention"] = [r for r in reps if r["state"] != "ok"]
     groups = [
         {"kind": k, "title": KIND_TITLES[k], "rows": [r for r in rows if r["kind"] == k]}
         for k in KINDS
@@ -401,6 +497,21 @@ def _span(seconds: int) -> str:
 # ------------------------------------------------------------------------------ render
 def _when(v: str | None, none: str) -> str:
     return svg.e(v) if v else f'<span class="muted">{svg.e(none)}</span>'
+
+
+def _last(r: Mapping[str, Any]) -> str:
+    """The last-run cell: the newest run, how many hosts report it, and each host that is not ok
+    (an overdue or failed run, a stale report) with its own summary."""
+    out = _when(r.get("last_run"), "not reported")
+    if r.get("hosts"):
+        out += f'<br><span class="muted">{r["hosts"]} host{"" if r["hosts"] == 1 else "s"}</span>'
+    for a in r.get("attention") or ():
+        who = f"{a['host']}: " if a["host"] else ""
+        out += (
+            f'<br><span class="s {svg.e(a["state"])}">{svg.e(a["state"])}</span> '
+            f"{svg.e(who + a['summary'])}"
+        )
+    return out
 
 
 def render(vm: Mapping[str, Any]) -> str:
@@ -438,7 +549,7 @@ def render(vm: Mapping[str, Any]) -> str:
                             if r["expression"]
                             else ""
                         ),
-                        _when(r.get("last_run"), "not reported"),
+                        _last(r),
                         _when(
                             r["next_run"], "on its event" if r["kind"] == "pack" else "not computed"
                         ),

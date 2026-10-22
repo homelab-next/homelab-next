@@ -50,7 +50,7 @@ generated from it (`hnx status catalog generate`, checked by `hnx status catalog
 | Kind | Reads | Target |
 |---|---|---|
 | `poll-http-json` | `GET` the service's capability alias + `path`, 2xx JSON | `service` (default: the declaring one), `path` |
-| `poll-file` | a JSON or YAML file, or a records directory, under the status root (`--root`) | `file` (relative, no `..`) |
+| `poll-file` | a JSON or YAML file, a records directory or a last-run record directory, under the status root (`--root`) | `file` (relative, no `..`) |
 | `push-event` | `homelabnext.status.observed` events the source publishes itself: the envelope `source` must be `svc:<the declaring service>` and the module the one the source reports; an `observed_at` in the future is clamped to now (kept as the source's `clock_skew_s`) and `expires_at` is capped at now + `stale_after_s` | none: silence for `stale_after_s` reads stale |
 | `agent-activity` | drains agent activity into the activity store and reports stuck and errored sessions (section 6) | `file` for `agent-spool` and `agentmetry-jsonl`, none for `agent-push` |
 | `poll-prometheus` | a Prometheus instant query, or its firing alerts (section 7) | `service`, `path` (`.../api/v1/query` or `.../api/v1/alerts`) |
@@ -85,6 +85,59 @@ Built-in mappers for sources this repository has:
 | `orchestrator-queue` | the LLM orchestrator's `GET /admin/queue-summary` (`poll-http-json`, section 7) | `queued`, `running` (live work), `history` |
 | `agentmetry-audit` | Agentmetry's `GET /api/v1/audit/status` (`poll-http-json`, section 7) | `audit-trail`: warn when off, empty, or silent past `warn_after_s` |
 | `prometheus-alerts` | Prometheus `GET /api/v1/alerts` (`poll-prometheus` only, section 7) | one per firing alert, by severity |
+| `job-last-run` | a directory of last-run records (`poll-file`, below), or one record, or a list of them | one per job and host, `<job id>@<host>`: fail when the run failed, warn when the next one is overdue |
+
+### Scheduled jobs: last-run records (`job-last-run`, registry 2.6)
+
+Every role timer reports its runs the same way ([role interface section 8](role-interface.md#every-role-timer-reports-its-runs)):
+its service runs the shared writer of role `last_run` on start (`ExecStartPre=-`) and on stop
+(`ExecStopPost=-`, which systemd runs after a success, a failure, a timeout or a kill alike), and
+the writer leaves one JSON record per job on the host, `/var/lib/homelabnext/last-run/<job>.json`
+(the job id with `:` and `/` percent-encoded, `timer%3Alynis%2Fscan.json`, so two ids never share a file)
+(mode 0640, directory 0750, group `<role>_last_run_group`;
+[`schemas/status/last_run.schema.json`](../schemas/status/last_run.schema.json)): the job id
+(`timer:lynis/scan`), unit, host, the `on_calendar` and `randomized_delay_s` the host actually
+runs, `started_at`, `finished_at`, `running`, and systemd's own `result` (`SERVICE_RESULT`),
+`exit_code` and `exit_status`.
+
+```yaml
+- id: job-runs
+  kind: poll-file
+  target: {file: examples/status/last-run}   # <file>/<host>/*.json, or <file>/*.json
+  interval_s: 300
+  timeout_s: 10
+  mapping: {builtin: job-last-run, module: jobs}   # warn_after_s: for a calendar not read exactly
+  what: The last run of each role timer on each host whose last-run records reach the hub.
+```
+
+The directory is read at its top level and one level down (one subdirectory per host), at most
+4096 records of 64 KiB each; a file that is not JSON is an `unknown` item `unreadable/<file>`, a
+record the schema refuses an `unknown` item `invalid/<job>`, never dropped and never `ok`. A
+record under `<file>/<host>/` belongs to that host: one that names another host is `invalid` (a
+host cannot write a newer, passing record over another host's failure). A record that starts more
+than 300 s in the future is `unknown` and never counts as the newest. The same job and host twice:
+the newest start wins. Each record is one item `<job>@<host>`:
+
+| Record | State | Summary |
+|---|---|---|
+| `result` is not `success` | fail | `failed: exit-code (exit status 2); started ..., took 3m` |
+| the next run is overdue | warn | `overdue since <due>: ...` |
+| `running` | ok (warn once overdue) | `running since ...` |
+| otherwise | ok | `success; started ..., took 2m; next due by <due>` |
+
+**Overdue** is judged from the record's own schedule, so a host whose `<role>_schedule` differs
+from the role default is judged by what it runs: the next calendar time after the run's start,
+plus the timer's randomized delay, plus this run's duration (a run as slow as the last one is not
+late). A calendar [`cadence`](#directory-pages-links-schedule-agent-roster) does not read exactly
+(no `UTC` token, a shorthand) is late `warn_after_s` after the start, or not judged at all without
+it (the summary says so). The item's `value` is the run's age in seconds at the poll, so
+`observed_at - value` is the start: the Schedule page dates the run with it.
+
+**Getting the records to the hub** is the one part not done here: the hub reads them under its
+status root, so each host's directory has to be copied there as `<file>/<host>/` by something
+that can read it, an account in `<role>_last_run_group` (a pull by the hub over SSH, a shared
+mount). Until a host's records arrive its timers read `not reported`; once they stop arriving the
+items go `stale` after the source's `stale_after_s`, like any other reading.
 
 ## 2. Collect
 
@@ -223,7 +276,7 @@ runtime's, which beats the default) or `working`.
 `store` (SQLite), `retention_days`, `detail` (keep the private tier at all),
 `redact_personal_data`, `caps` (per-field characters), `stuck_after_s` (`default`, `runtimes`,
 `models`), `private` (the front door), `ingest` (the senders) and `approvals` (the broker
-Approvals page; agents 1.1, `approvals.csrf_key` 1.2). Schema:
+Approvals page; agents 1.1, `approvals.csrf_key` 1.2, `approvals.public_origin` 1.3). Schema:
 `schemas/status/agents.schema.json`. Secrets are secret-store references (`secret:a/b`), never
 values; at run time `secret:a/b-token` is read from `HNX_SECRET_A_B_TOKEN` (or the file `a/b-token` under
 `--secrets-dir`). A reference that does not resolve **disables** what it guards (the private
@@ -432,11 +485,18 @@ cron (GitHub's, UTC) with values, lists, ranges, steps and weekdays. A shorthand
 calendar in the host's local zone or anything else keeps its raw text and reads `not computed`:
 a wrong next run is worse than none. Last runs are never guessed either. A collector's last run
 is its last poll (`sources[].last_attempt`; a pushed source's last good read) and its next one
-that plus its interval. Any other job's last run is the newest observation whose **`item` is the
-job's id** (`timer:aide/scan`, `fleet-unit:lake-compact`, `ci:nightly`), so a status source that
-reports its jobs under those ids lights them up; without one the page says `not reported`. A
-test keeps every catalogued `timer:` trigger, every scheduled workflow and every status source
-of the example registry on the page, each with a computed next run.
+that plus its interval. Any other job's last run comes from the observations whose **`item` is
+the job's id** (`timer:aide/scan`, `fleet-unit:lake-compact`, `ci:nightly`) **or the id and a
+host** (`timer:aide/scan@web-1`, what [`job-last-run`](#scheduled-jobs-last-run-records-job-last-run-registry-26)
+reports): the run is dated `observed_at` less the observation's `value` (its age in seconds) when
+it has one, else `observed_at`. The row shows the newest run, how many hosts report it, the worst
+state over them, and each host that is not `ok` with its own summary (`overdue since ...`,
+`failed: ...`, a `stale` report); without a report the page says `not reported`. The page's
+problems also name every role or profile timer whose service does not run the last-run writer on
+start and stop with its own job id, calendar and delay, or whose role does not install it
+(`schedule.record_problems`, [role interface section 8](role-interface.md#every-role-timer-reports-its-runs)).
+A test keeps every catalogued `timer:` trigger, every scheduled workflow and every status source
+of the example registry on the page, each with a computed next run, and no problem.
 
 **The roster file** names where the facts are and adds only what none of them holds:
 
@@ -534,8 +594,17 @@ approvals:
   issuer: sso                           # the broker manifest's approval_relays[].issuer for the hub
   approver_group: hub-approvers         # required to decide; must differ from viewer_group
   csrf_key: "secret:status/approvals-csrf-secret"   # the form tokens' HMAC key (agents 1.2)
+  public_origin: https://status.lab.example   # the page's origin in browsers (agents 1.3)
   # timeout_s: 10
 ```
+
+**The public origin.** `public_origin` is the page's origin as people's browsers see it
+(`scheme://host[:port]`, no path). A decision's `Origin` (or, without one, its `Referer`) must
+equal it in scheme, host and port: another port or scheme on the same hostname is another origin
+(another service on the hub's host, or a plain-`http` page behind the TLS edge) and is refused.
+Without it the hub compares the `Origin` with the request's `Host` header, host and port (a `Host`
+without a port matches the scheme's default port) but cannot check the scheme, since the edge
+terminates TLS; it warns once at startup (`approvals.public_origin is not set: ...`).
 
 **The form-token key.** `csrf_key` names, in the secret store, the HMAC key the forms' CSRF tokens
 are signed with (delivered like every reference: `HNX_SECRET_STATUS_APPROVALS_CSRF_SECRET`, or the file
@@ -555,14 +624,18 @@ params are as sensitive as the private tier's details, and people who already re
 commands can see what agents ask to do. **Deciding** needs the **approver group** (create it in
 Authentik next to the viewer group; a person in only the approver group may also see the page).
 The approver the hub sends to the broker is `issuer` from the config and `subject` = the
-`X-Authentik-Username` the front door passed (lower-cased: the broker compares identities
-case-folded), never a form field. The broker then applies its own approver rules (allowlist, no
-self-approval, no agent approver).
+`X-Authentik-Username` the front door passed, unchanged, never a form field. The broker matches
+its approver allowlist exactly and Authentik's usernames are case-sensitive, so the hub never
+folds one username into another: a username that is not already a canonical approver subject
+(lower-case: a letter, then letters, digits, `.`, `_` or `-`) is read only on this page and its
+decisions are refused (`403`). Give approvers lower-case usernames. The broker then applies its
+own approver rules (allowlist, no self-approval, no agent approver).
 
 **The hub's only write.** `POST /approvals/decide` (every other `POST` is still `405`) answers, in
 order: `403` the front door or the approver group fails; `403` a foreign `Host`/`Origin` (the
-console's DNS-rebinding guard), no `Origin` and no same-host `Referer`, or a `Sec-Fetch-Site` other
-than `same-origin`; `415` not `application/x-www-form-urlencoded`; `411` no length; `413` over
+console's DNS-rebinding guard), an `Origin` (else `Referer`) that is not `public_origin` (scheme,
+host and port; without it, not the `Host`'s host and port), or a `Sec-Fetch-Site` other than
+`same-origin`; `415` not `application/x-www-form-urlencoded`; `411` no length; `413` over
 8 KiB; `400` a field other than `request_id`, `digest`, `decision` (approve, deny), `token` and
 `note` (at most 2000 characters), a repeated or malformed one; `403` a CSRF token that is not the
 HMAC (under the `csrf_key` above, else a key drawn when the hub starts) of its issue time, the
@@ -859,6 +932,10 @@ not added to the lab-in-a-box: it needs a driver, and a dummy UPS proves nothing
 transcripts do not.
 
 ## What needs a server
+
+Shipping the role timers' last-run records from each host into the hub's status root (section 1,
+`job-last-run`) is left to the lab: the records, their group and the hub's reader are proven
+here, the copy between hosts is not.
 
 The checklist rows O-02 and O-07 are also measured against a real deployment: stopping a monitored
 service turns its tile red within 5 minutes, and with one source blackholed the page still renders

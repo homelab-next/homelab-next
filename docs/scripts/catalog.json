@@ -483,6 +483,32 @@
     },
     {
       "exit": {
+        "0": "the record was written",
+        "1": "it could not be written (the units ignore it, with the - prefix)",
+        "2": "bad arguments"
+      },
+      "id": "last-run-writer",
+      "inputs": "the job's id, unit, schedule and record directory (arguments); systemd's SERVICE_RESULT, EXIT_CODE and EXIT_STATUS (finish)",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-last-run",
+      "kind": "job",
+      "language": "python",
+      "outputs": "<dir>/<job id as a file name>.json, mode 0640, group-readable by --group",
+      "owner": "platform",
+      "path": "ansible/roles/last_run/files/hnx-last-run.py",
+      "purpose": "Write a scheduled job's last-run record (schemas/status/last_run.schema.json) when its service starts and again when it stops, whatever the outcome.",
+      "status": "active",
+      "trigger": [
+        "role:last_run",
+        "timer:aide/scan",
+        "timer:clamav/scan",
+        "timer:lynis/scan",
+        "timer:needrestart/check",
+        "timer:rkhunter/scan",
+        "timer:trivy/scan"
+      ]
+    },
+    {
+      "exit": {
         "0": "clean",
         "1": "at least one hit or an unscannable file",
         "2": "misconfiguration"
@@ -599,8 +625,26 @@
     },
     {
       "exit": {
+        "0": "the job is the manual deploy from main; it may run",
+        "1": "any other job; the runner fails it before its first step"
+      },
+      "id": "overlay-runner-job-started",
+      "inputs": "env HNX_DEPLOY_REPOSITORY (owner/repo, set by the runner host) and the job's GITHUB_REPOSITORY, GITHUB_EVENT_NAME, GITHUB_REF, GITHUB_WORKFLOW_REF",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "one line on stderr naming why a job was refused, or one line on stdout naming the accepted workflow",
+      "owner": "maintainers",
+      "path": "examples/private-overlay/runner/job-started.sh",
+      "purpose": "Refuse every job on the self-hosted deploy runner except deploy.yml dispatched by hand on main of the one private repository.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
         "0": "password printed",
-        "1": "OpenBao refused or returned no value",
+        "1": "OpenBao refused, redirected or returned no value",
         "2": "not configured"
       },
       "id": "overlay-vault-pass-client",
@@ -814,6 +858,24 @@
       "trigger": [
         "timer:trivy/scan",
         "role:trivy"
+      ]
+    },
+    {
+      "exit": {
+        "0": "queued (or the idempotency key was already queued)",
+        "1": "the controller refused the job or could not be reached"
+      },
+      "id": "workflow-broker-agent-job-submit",
+      "inputs": "the validated params as JSON on stdin; the ORCHESTRATOR_JOBS_URL secret (the controller's POST /jobs URL)",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "the controller's answer (the run id) as JSON on stdout",
+      "owner": "broker",
+      "path": "workflows/handlers/agent-job-submit.sh",
+      "purpose": "Broker handler for agent.job.submit; puts one job on the orchestration controller's queue.",
+      "status": "active",
+      "trigger": [
+        "manual"
       ]
     },
     {

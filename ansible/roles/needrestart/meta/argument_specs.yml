@@ -72,6 +72,14 @@ argument_specs:
         type: path
         description: Where the check writes its state file (owner-only).
         default: /var/lib/homelabnext/needrestart
+      needrestart_last_run_dir: &last_run_dir
+        type: path
+        description: "Where each run writes its last-run record (role last_run; the status hub's job-last-run mapping reads it)."
+        default: /var/lib/homelabnext/last-run
+      needrestart_last_run_group: &last_run_group
+        type: str
+        description: "The group that may read the last-run records (the account that ships them to the status hub)."
+        default: root
   config:
     short_description: Write the list-only drop-in (checked by perl -c), the check script and its timer.
     options:
@@ -91,6 +99,8 @@ argument_specs:
       needrestart_aliases_file: *aliases
       needrestart_unit_dir: *units
       needrestart_state_dir: *state
+      needrestart_last_run_dir: *last_run_dir
+      needrestart_last_run_group: *last_run_group
   health:
     short_description: Fail unless the state file was written within needrestart_max_age_hours.
     options:

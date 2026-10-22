@@ -123,7 +123,7 @@ def test_hnx_site_validate_reports_it():
     assert validate(doc, reg).ok
     doc["tailnet"]["deploy"]["zones"] = ["*"]  # the schema refuses a wildcard first
     assert validate(doc, reg).errors == [
-        "schema: tailnet/deploy/zones/0: '*' does not match '^[a-z][a-z0-9]*(-[a-z0-9]+)*$'"
+        "schema: tailnet/deploy/zones/0: does not match '^[a-z][a-z0-9]*(-[a-z0-9]+)*$'"
     ]
     doc["tailnet"]["deploy"]["zones"] = ["mgmt", "lab"]
     assert validate(doc, reg).errors == ["tailnet.deploy.zones: 'lab' is not a zone of the site"]

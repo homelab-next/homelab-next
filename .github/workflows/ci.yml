@@ -47,9 +47,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # the optional lake and mcp extras installed: the DuckDB/Iceberg and MCP SDK tests run
+          # the optional lake, mcp and ansible extras installed: the DuckDB/Iceberg, MCP SDK and
+          # lookup-plugin tests (which import ansible) run
           - python-version: "3.12"
-            extras: "test,lake,mcp"
+            extras: "test,lake,mcp,ansible"
           # the extras absent: proves the lake and MCP SDK tests skip cleanly instead of failing
           - python-version: "3.11"
             extras: "test"
@@ -276,7 +277,7 @@ jobs:
       - uses: ./.github/actions/python-deps
         with:
           python-version: "3.12"
-          extras: test
+          extras: test,ansible  # a fix to an ansible plugin proves its test like any other
       - name: every fix ships a regression test that fails without the fix
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}

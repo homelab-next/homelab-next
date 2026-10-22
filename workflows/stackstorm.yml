@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# When the pinned workflow packs run on StackStorm (schemas/workflows/stackstorm.schema.json).
+# `hnx workflows st2 render` turns this file, workflows/deploy.yml and the packs into the pack under
+# workflows/stackstorm/; `make workflows` fails when that tree drifts.  Guide: docs/stackstorm.md.
+# Every rule starts in shadow: it logs the broker request it would make and submits nothing.
+# Going live is a reviewed change of `mode` with `promotion` (a >= 7-day shadow window and the
+# parity evidence, tracked in git).
+st2_pack: homelabnext
+version: 0.1.0
+deploy: workflows/deploy.yml
+webhook: homelabnext
+bridge_api_key: secret:stackstorm/webhook-key
+broker_socket: /run/hnx-broker/broker.sock
+actor: profile:workflow-agents
+rules:
+  # A01: replaces the proposal-validator timer; one job per proposal, a redelivered event is a no-op
+  - pack: proposal-validate
+    id: A01
+    mode: shadow
+    coalesce: {key: $event.data.proposal_id, window_s: 3600}
+  # A02: a burst of failures of one agent (a backend going down fails every running job at once)
+  # becomes one resubmit per agent per ten minutes; the pack's trigger caps it at one resubmit
+  - pack: agent-job-retry
+    id: A02
+    mode: shadow
+    coalesce: {key: $event.data.agent_key, window_s: 600}

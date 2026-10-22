@@ -4,6 +4,9 @@ Description=homelabnext Lynis host audit (control host-assessment)
 
 [Service]
 Type=oneshot
+# the job's last-run record (role last_run), written on start and again on stop, whatever
+# the outcome; a writer problem never changes the job's own result (the - prefix)
+ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ lynis_last_run_dir }} --group {{ lynis_last_run_group }} --job timer:lynis/scan --unit %n --calendar "{{ lynis_schedule }}" --delay 900
 ExecStart=/usr/local/libexec/homelabnext/lynis-scan
 {% if lynis_dpkg_verify | bool %}
 # the package integrity sweep, on the same timer
@@ -11,3 +14,4 @@ ExecStart=/usr/local/libexec/homelabnext/lynis-dpkg-verify
 {% endif %}
 Nice=10
 IOSchedulingClass=idle
+ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ lynis_last_run_dir }} --group {{ lynis_last_run_group }} --job timer:lynis/scan --unit %n --calendar "{{ lynis_schedule }}" --delay 900

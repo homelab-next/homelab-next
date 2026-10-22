@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+st2_pack: homelabnext
+version: 0.1.0
+deploy: workflows/deploy.yml
+webhook: homelabnext
+bridge_api_key: secret:stackstorm/webhook-key
+broker_socket: /run/hnx-broker/broker.sock
+actor: profile:workflow-agents
+rules:
+  - {pack: proposal-validate, mode: dry-run}

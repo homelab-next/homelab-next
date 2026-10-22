@@ -11,8 +11,10 @@
    "kind": "timer",
    "rows": [
     {
+     "attention": [],
      "cadence": "daily at 04:10 UTC, up to 15 minutes later (randomized)",
      "expression": "*-*-* 04:10:00 UTC",
+     "hosts": 0,
      "id": "timer:scan/run",
      "kind": "timer",
      "last_run": "2026-10-20T04:21:00Z",
@@ -26,8 +28,10 @@
      "where": "role scan"
     },
     {
+     "attention": [],
      "cadence": "*-*-* 02:00 (no UTC token: the host's local time zone)",
      "expression": "*-*-* 02:00",
+     "hosts": 0,
      "id": "timer:local/tick",
      "kind": "timer",
      "last_run": null,
@@ -45,21 +49,32 @@
    "kind": "fleet-unit",
    "rows": [
     {
+     "attention": [
+      {
+       "host": "web-2",
+       "last_run": "2026-10-04T00:50:00Z",
+       "state": "warn",
+       "summary": "overdue since 2026-10-11T01:00:00Z: success; started 2026-10-04T01:00:00Z"
+      }
+     ],
      "cadence": "weekly on Sunday at 01:00 UTC",
      "expression": "Sun *-*-* 01:00:00 UTC",
+     "hosts": 2,
      "id": "fleet-unit:compact",
      "kind": "fleet-unit",
-     "last_run": null,
+     "last_run": "2026-10-18T01:00:00Z",
      "next_run": "2026-10-25T01:00:00Z",
      "path": "fleet_units.yml",
      "runs": [],
-     "state": null,
+     "state": "warn",
      "what": "Compact",
      "where": "fleet_units.yml"
     },
     {
+     "attention": [],
      "cadence": "retired: replaced by st2:pack.sweep",
      "expression": "*-*-* 01:00:00 UTC",
+     "hosts": 0,
      "id": "fleet-unit:old",
      "kind": "fleet-unit",
      "last_run": null,
@@ -77,8 +92,10 @@
    "kind": "ci",
    "rows": [
     {
+     "attention": [],
      "cadence": "daily at 03:17 UTC",
      "expression": "17 3 * * *",
+     "hosts": 0,
      "id": "ci:nightly",
      "kind": "ci",
      "last_run": null,
@@ -98,8 +115,10 @@
    "kind": "pack",
    "rows": [
     {
+     "attention": [],
      "cadence": "on each homelabnext.alert.created event",
      "expression": "homelabnext.alert.created",
+     "hosts": 0,
      "id": "pack:page",
      "kind": "pack",
      "last_run": null,

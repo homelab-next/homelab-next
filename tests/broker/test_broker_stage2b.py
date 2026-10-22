@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -117,11 +118,10 @@ def test_import_dry_run_maps_generically_and_reports_what_it_cannot():
     a = rows["2026-03-02-queue-bot-raise-drain-timeout.md"]
     assert a.outcome == "mapped" and a.params["slug"] == "queue-bot-raise-drain-timeout"
     note = a.params["note"]
-    assert (note["title"], note["risk"], note["created"]) == (
-        "Raise the queue drain timeout",
-        "medium",
-        "2026-03-02T00:00:00Z",
-    )
+    assert (note["title"], note["risk"]) == ("Raise the queue drain timeout", "medium")
+    # the broker dates the filed note; the original date is provenance, never `created`
+    assert "created:2026-03-02T00:00:00Z" in note["provenance"]["inputs"]
+    assert "created" not in note
     assert "requesting_agent" not in note and "status" not in note
     assert "requested-by:queue-bot" in note["provenance"]["inputs"]
     assert a.unmapped == ["labels"] and note["affects"] == ["svc:queue"]
@@ -150,7 +150,13 @@ def test_import_keeps_invalid_lists_out_and_never_names_the_requester():
     m = importer.map_proposal("2026-01-02-widen.md", text)
     assert m.outcome == "mapped" and "affects" not in m.params["note"]
     assert m.unmapped and m.unmapped[0].startswith("affects (invalid")
-    validate_note({**m.params["note"], "requesting_agent": "profile:importer"})
+    validate_note(
+        {
+            **m.params["note"],
+            "requesting_agent": "profile:importer",
+            "created": "2026-01-02T00:00:00Z",
+        }
+    )
     assert "requesting_agent" not in m.params["note"]
 
 
@@ -180,12 +186,16 @@ def test_import_dry_run_writes_nothing_and_apply_files_through_the_broker(tmp_pa
     out = {f["source"]: f for f in json.loads(capsys.readouterr().out)["files"]}
     assert out["2026-03-02-queue-bot-raise-drain-timeout.md"]["outcome"] == "filed"
     names = sorted(p.name for p in inbox.iterdir())
-    assert names == [
-        "2026-03-02-triage-queue-bot-raise-drain-timeout.md",
-        "2026-03-03-triage-log-bot-rotate-audit-logs.md",
+    # dated the day of the import (the broker's clock), tagged per agent
+    assert [re.sub(r"^\d{4}-\d{2}-\d{2}-|-[0-9a-f]{8}\.md$", "", n) for n in names] == [
+        "triage-log-bot-rotate-audit-logs",
+        "triage-queue-bot-raise-drain-timeout",
     ]
+    names = sorted(names, key=lambda n: "queue-bot" not in n)
     fm, body = parse_note((inbox / names[0]).read_text())
     assert fm["requesting_agent"] == AGENT and fm["provenance"]["source"] == AGENT
+    assert names[0].startswith(fm["created"][:10]) and fm["created"] != "2026-03-02T00:00:00Z"
+    assert "created:2026-03-02T00:00:00Z" in fm["provenance"]["inputs"]
     assert body.strip() == "The queue drained slowly twice this week."
     svc = BrokerService.from_manifest(EXAMPLE, tmp_path / "state")
     filed = svc.audit_documents(action="proposal.file", outcome="ok", operation="call")
@@ -195,7 +205,7 @@ def test_import_dry_run_writes_nothing_and_apply_files_through_the_broker(tmp_pa
     main(_cli(tmp_path, "--apply", "--as", AGENT))
     again = {f["source"]: f for f in json.loads(capsys.readouterr().out)["files"]}
     assert again["2026-03-02-queue-bot-raise-drain-timeout.md"]["outcome"] == "exists"
-    assert sorted(p.name for p in inbox.iterdir()) == names
+    assert sorted(p.name for p in inbox.iterdir()) == sorted(names)
 
 
 def test_import_apply_needs_an_authenticated_caller(tmp_path, capsys):
@@ -226,13 +236,13 @@ def test_same_named_proposals_from_two_agents_get_two_files(tmp_path):
     filed: set[str] = set()
 
     def call(params):
-        key = (params["note"]["created"], params["slug"])
+        key = params["slug"]
         if key in filed:
             err = BrokerError("exists")
             err.reason = "lane-exists"
             raise err
         filed.add(key)
-        return {"path": "/".join(key)}
+        return {"path": key}
 
     assert [r.outcome for r in importer.apply(rows, call, "profile:importer")] == ["filed"] * 2
 

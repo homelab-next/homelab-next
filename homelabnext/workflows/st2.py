@@ -1,0 +1,980 @@
+# SPDX-License-Identifier: Apache-2.0
+"""``hnx workflows st2 render | check``: pinned workflow packs as a StackStorm pack.
+
+StackStorm is the *when* engine: it receives events (a webhook the event bridge posts the bus's
+envelopes to) and clock ticks (CronTimers), filters them with rule criteria, and starts one
+Orquesta workflow per admitted event.  The *what* stays in the workflow pack, and every effect
+stays in the broker.  Inputs: the binding (``workflows/stackstorm.yml``,
+``schemas/workflows/stackstorm.schema.json``), the deploy pins and the packs.  Output (committed,
+``--check`` fails on drift), under ``workflows/stackstorm/``:
+
+* ``<st2_pack>/pack.yaml``, ``config.schema.yaml``, ``requirements.txt``;
+* ``<st2_pack>/actions/admit.{yaml,py}`` and ``step.{yaml,py}``: the only two Python actions, shims
+  over :mod:`homelabnext.workflows.st2_runtime`;
+* per bound pack: ``actions/<name>.yaml`` (an ``orquesta`` action), ``actions/workflows/<name>.yaml``
+  (``admit`` then one task per pack step, in order) and ``rules/on_<name>.yaml``: a
+  ``core.st2.webhook`` rule whose criteria are the pack's trigger (``trigger.body.type`` equals the
+  event type, plus each ``where`` condition), or a ``core.st2.CronTimer`` rule for a scheduled pack;
+* ``configs/<st2_pack>.yaml``: the pack config (secrets as ``{{ st2kv.system.<key> | decrypt_kv }}``
+  references, never values);
+* ``bridge.json``: which bus subjects the event bridge relays to the webhook, and the secret-store
+  name of its API key;
+* ``provenance.json``: the binding and pack digests the tree was rendered from.
+
+Rules (``<path>: <rule>: <detail>``, exit 1 on any):
+
+``st2-binding``  the binding is schema-valid.
+``st2-pin``      every bound pack is pinned in the deploy manifest, with the digest of the pack in
+                 the tree, and validates (``hnx workflows validate``).
+``st2-duplicate`` a pack or a schedule id is bound once.
+``st2-actor``    every bound pack's ``actor`` is the binding's ``actor`` (the one broker identity
+                 StackStorm's actions authenticate as).
+``st2-step``     every step runs on StackStorm: ``action``, or ``enrich`` ``pick``/``extract-iocs``.
+``st2-template`` no literal in a bound pack holds ``{{``, ``{%`` or ``<%``: StackStorm renders those
+                 (Jinja in rule criteria and parameters, YAQL/Jinja in Orquesta), so a literal would
+                 become an expression.  In the rendered tree, a rule passes the trigger only as
+                 :data:`RULE_PARAMS` (the webhook body JSON- then URL-encoded, so it holds no
+                 template marker whatever an event says), and a workflow task's inputs are
+                 literals or one of :data:`TASK_EXPRESSIONS` (the encoded event and state): st2
+                 renders every action parameter that contains a marker with an unsandboxed Jinja
+                 environment, so raw event data in one would be code on the action runner.
+``st2-source``   an event-triggered pack pins its producer: its ``where`` has ``$event.source``
+                 ``equals`` one logical id (the rule's criteria and ``admit`` both test it).
+``st2-handler``  every broker action a bound pack calls has its handler file in the tree, pinned by
+                 a ``<handler>.handler.json`` document whose ``handler_digest`` matches the file.
+``st2-trigger``  a rule with a ``schedule`` binds a pack triggered by ``homelabnext.schedule.fired``
+                 whose ``where`` pins ``$event.data.schedule`` to that schedule id; any other pack
+                 is event-triggered and has no ``schedule``.
+``st2-cron``     a schedule is five valid cron fields (UTC), and does not restrict both day of month and
+                 day of week (cron fires when either matches, the CronTimer only when both do).
+``st2-live``     a ``live`` rule carries ``promotion``: a shadow window of at least
+                 :data:`MIN_SHADOW_DAYS` days and parity evidence tracked in git.
+``st2-coalesce`` a rule whose pack dispatches agent work (:data:`DISPATCH_ACTIONS`) coalesces.
+``st2-bound``    a pack that reacts to ``homelabnext.agent.job.failed`` by dispatching agent work
+                 bounds it: its trigger pins ``$event.data.resubmits`` to integers below
+                 :data:`MAX_RESUBMITS`, and the dispatch carries ``retry_of_run_id`` from
+                 ``$event.data.run_id`` (so the next failure counts one more resubmit).
+``st2-secret``   a config key that names a secret (key, token, password, secret, credential) is a
+                 datastore reference, not a value.
+``st2-shape``    every rendered document has the fields StackStorm requires (:data:`SHAPES`, encoded
+                 from st2 3.8 ``st2common`` API models and the Orquesta spec), uses only the shim
+                 actions, and no runner but ``python-script``/``orquesta``.
+``st2-criteria`` every webhook rule's criteria test ``trigger.body.type`` for equality with one
+                 ``homelabnext.`` event type (a rule without one would match every event).
+``st2-drift``    (``--check``) the committed tree equals the rendered one, file for file.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from datetime import date
+from pathlib import Path
+from typing import Any
+
+from homelabnext.agent.digest import digest_of
+
+from .pack import WorkflowError, git_files, load_doc, schema_errors
+from .runner import MODEL_KINDS, is_risky
+from .st2_runtime import SCHEDULE_EVENT, ST2_ENRICH_OPS
+from .validate import Problem, Universe, load_universe, validate_repo
+
+DEFAULT_BINDING = Path("workflows") / "stackstorm.yml"
+DEFAULT_OUT = Path("workflows") / "stackstorm"
+JOB_FAILED_EVENT = "homelabnext.agent.job.failed"
+DISPATCH_ACTIONS = ("agent.job.submit",)
+MAX_RESUBMITS = 3
+MIN_SHADOW_DAYS = 7
+SHIMS = ("admit", "step")
+RUNNERS = ("python-script", "orquesta")
+WEBHOOK_TRIGGER = "core.st2.webhook"
+CRON_TRIGGER = "core.st2.CronTimer"
+HEADER = "Generated by `hnx workflows st2 render` from workflows/stackstorm.yml; do not edit."
+#: the only rule parameters: the trigger reaches an action URL-encoded (``to_json_string`` is st2's,
+#: ``urlencode`` Jinja's own; ``{``, ``%``, ``<`` all become ``%XX``), never as an object or a
+#: string StackStorm would render again
+ENCODED_BODY = "{{ trigger.body | to_json_string | urlencode }}"
+RULE_PARAMS = {
+    WEBHOOK_TRIGGER: {"event": ENCODED_BODY},
+    CRON_TRIGGER: {"fired_at": "{{ trigger.executed_at }}"},
+}
+#: the only expressions a workflow task's input may hold: values the runtime encoded
+TASK_EXPRESSIONS = frozenset({"<% ctx(event) %>", "<% ctx(state) %>", "<% ctx(fired_at) %>"})
+_TEMPLATE = re.compile(r"\{\{|\{%|<%")
+_SECRETISH = re.compile(r"(key|token|passw|secret|cred)", re.I)
+_DOW = ("sun", "mon", "tue", "wed", "thu", "fri", "sat", "sun")
+_CRON_FIELDS = (("minute", 0, 59), ("hour", 0, 23), ("day", 1, 31), ("month", 1, 12))
+
+
+# ---------------------------------------------------------------- StackStorm shapes
+# Encoded from st2 v3.8.1: st2common/models/api/{pack,rule,action}.py (required fields, name and
+# version patterns, closed key sets), st2common/constants/triggers.py (webhook and CronTimer
+# parameters) and the Orquesta native spec (workflow and task keys).  st2common itself is not a
+# dependency (it pulls MongoDB/RabbitMQ clients); these are the documented required fields.
+_PARAM = {
+    "type": "object",
+    "required": ["type"],
+    "properties": {
+        "type": {"enum": ["string", "integer", "number", "boolean", "object", "array", "null"]},
+        "description": {"type": "string"},
+        "required": {"type": "boolean"},
+        "default": {},
+        "enum": {"type": "array"},
+        "immutable": {"type": "boolean"},
+        "secret": {"type": "boolean"},
+    },
+    "additionalProperties": False,
+}
+SHAPES: dict[str, dict[str, Any]] = {
+    "pack": {
+        "type": "object",
+        "required": ["ref", "name", "description", "version", "author"],
+        "properties": {
+            "ref": {"type": "string", "pattern": r"^[a-z0-9_]+$"},
+            "name": {"type": "string"},
+            "description": {"type": "string"},
+            "version": {
+                "type": "string",
+                "pattern": r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$",
+            },
+            "author": {"type": "string"},
+            "keywords": {"type": "array", "items": {"type": "string"}},
+            "python_versions": {"type": "array", "items": {"enum": ["2", "3"]}, "minItems": 1},
+            "stackstorm_version": {
+                "type": "string",
+                "pattern": r"^((>?>|>=|=|<=|<?<)\s*[0-9]+\.[0-9]+\.[0-9]+?(\s*,)?\s*)+$",
+            },
+        },
+    },
+    "action": {
+        "type": "object",
+        "required": ["name", "pack", "runner_type", "entry_point", "enabled"],
+        "properties": {
+            "name": {"type": "string", "pattern": r"^[A-Za-z0-9_]+$"},
+            "pack": {"type": "string"},
+            "description": {"type": "string"},
+            "enabled": {"type": "boolean"},
+            "runner_type": {"enum": list(RUNNERS)},
+            "entry_point": {"type": "string", "minLength": 1},
+            "parameters": {
+                "type": "object",
+                "propertyNames": {"pattern": r"^\w+$"},
+                "additionalProperties": _PARAM,
+            },
+        },
+        "additionalProperties": False,
+    },
+    "rule": {
+        "type": "object",
+        "required": ["name", "pack", "trigger", "action", "enabled"],
+        "properties": {
+            "name": {"type": "string", "pattern": r"^[A-Za-z0-9_]+$"},
+            "pack": {"type": "string"},
+            "description": {"type": "string"},
+            "enabled": {"type": "boolean"},
+            "trigger": {
+                "type": "object",
+                "required": ["type", "parameters"],
+                "properties": {
+                    "type": {"enum": [WEBHOOK_TRIGGER, CRON_TRIGGER]},
+                    "parameters": {"type": "object"},
+                },
+                "additionalProperties": False,
+            },
+            "criteria": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "object",
+                    "required": ["type"],
+                    "properties": {
+                        "type": {"enum": ["equals", "inside", "exists", "nexists"]},
+                        "pattern": {},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            "action": {
+                "type": "object",
+                "required": ["ref", "parameters"],
+                "properties": {"ref": {"type": "string"}, "parameters": {"type": "object"}},
+                "additionalProperties": False,
+            },
+        },
+        "additionalProperties": False,
+    },
+    "workflow": {
+        "type": "object",
+        "required": ["version", "input", "tasks"],
+        "properties": {
+            "version": {"const": 1.0},
+            "description": {"type": "string"},
+            "input": {
+                "type": "array",
+                "items": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "object", "minProperties": 1, "maxProperties": 1},
+                    ]
+                },
+            },
+            "vars": {"type": "array", "items": {"type": "object", "maxProperties": 1}},
+            "output": {"type": "array", "items": {"type": "object", "maxProperties": 1}},
+            "tasks": {
+                "type": "object",
+                "minProperties": 1,
+                "propertyNames": {"pattern": r"^[a-z][a-z0-9_]*$", "not": {"enum": ["retry"]}},
+                "additionalProperties": {
+                    "type": "object",
+                    "required": ["action"],
+                    "properties": {
+                        "action": {"type": "string"},
+                        "input": {"type": "object"},
+                        "next": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "when": {"type": "string"},
+                                    "publish": {"type": "array"},
+                                    "do": {"type": "string"},
+                                },
+                                "additionalProperties": False,
+                            },
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "additionalProperties": False,
+    },
+    "webhook-params": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {"url": {"type": "string"}},
+        "additionalProperties": False,
+    },
+    "cron-params": {
+        "type": "object",
+        "required": ["timezone"],
+        "properties": {
+            k: {"anyOf": [{"type": "string"}, {"type": "integer"}]}
+            for k in ("minute", "hour", "day", "month", "day_of_week")
+        }
+        | {"timezone": {"const": "UTC"}},
+        "additionalProperties": False,
+    },
+}
+
+
+def shape_errors(kind: str, doc: Any) -> list[str]:
+    from jsonschema import Draft202012Validator
+
+    v = Draft202012Validator(SHAPES[kind])
+    return [
+        f"{'/'.join(map(str, e.absolute_path)) or '$'}: {e.message[:200]}"
+        for e in sorted(v.iter_errors(doc), key=lambda e: list(map(str, e.absolute_path)))
+    ]
+
+
+# ---------------------------------------------------------------- criteria and cron
+def criteria_key(ref: str) -> str:
+    """``$event.data.entities.0.kind`` -> ``trigger.body.data.entities[0].kind`` (st2's
+    jsonpath lookup over the webhook payload; a numeric part indexes a list, as offline)."""
+    out = "trigger.body"
+    for part in ref[1:].split(".")[1:]:
+        out += f"[{part}]" if part.isdigit() else f".{part}"
+    return out
+
+
+def rule_criteria(trigger: Mapping[str, Any]) -> dict[str, Any]:
+    """The pack trigger as st2 criteria: the event type, then each ``where`` condition."""
+    crit: dict[str, Any] = {"trigger.body.type": {"type": "equals", "pattern": trigger["event"]}}
+    for c in trigger.get("where", []):
+        key = criteria_key(c["ref"])
+        n = 2
+        while key in crit:  # st2 strips '#...' from a key: the same field tested twice
+            key = f"{criteria_key(c['ref'])}#{n}"
+            n += 1
+        if "equals" in c:
+            crit[key] = {"type": "equals", "pattern": c["equals"]}
+        elif "in" in c:
+            crit[key] = {"type": "inside", "pattern": list(c["in"])}
+        else:
+            crit[key] = {"type": "exists" if c["exists"] else "nexists"}
+    return crit
+
+
+def criteria_problems(rule: Mapping[str, Any]) -> list[str]:
+    """Why a webhook rule could match events it is not for (empty = bounded)."""
+    if rule.get("trigger", {}).get("type") != WEBHOOK_TRIGGER:
+        return []
+    t = (rule.get("criteria") or {}).get("trigger.body.type")
+    if not isinstance(t, Mapping) or t.get("type") != "equals":
+        return ["no equality criterion on trigger.body.type: the rule matches every event"]
+    pat = t.get("pattern")
+    if not isinstance(pat, str) or not re.fullmatch(r"homelabnext(\.[a-z][a-z0-9-]*)+", pat):
+        return [f"trigger.body.type pattern {pat!r} is not one homelabnext event type"]
+    return []
+
+
+def cron_params(cron: str) -> dict[str, Any]:
+    """Five cron fields (UTC) -> CronTimer parameters.  Day of week becomes names (``mon-fri``):
+    cron counts 0 = Sunday, the CronTimer's scheduler counts 0 = Monday, and names cannot be
+    misread.  Raises ValueError on a field it cannot translate exactly."""
+    fields = cron.split()
+    if len(fields) != 5:
+        raise ValueError("a schedule is five cron fields")
+    if fields[2] != "*" and fields[4] != "*":
+        raise ValueError(
+            "day of month and day of week both set: cron fires when either matches, the "
+            "CronTimer only when both do; bind two schedules instead"
+        )
+    out: dict[str, Any] = {"timezone": "UTC"}
+    for (name, lo, hi), f in zip(_CRON_FIELDS, fields[:4], strict=True):
+        _cron_field(f, lo, hi, name)
+        if f != "*":
+            out[name] = int(f) if f.isdigit() else f
+    if fields[4] != "*":
+        out["day_of_week"] = ",".join(_dow(tok) for tok in fields[4].split(","))
+    return out
+
+
+def _cron_field(f: str, lo: int, hi: int, name: str) -> None:
+    for tok in f.split(","):
+        m = re.fullmatch(r"(\*|(\d+)(?:-(\d+))?)(?:/(\d+))?", tok)
+        if not m:
+            raise ValueError(f"{name}: {tok!r} is not a cron field")
+        nums = [int(x) for x in (m.group(2), m.group(3)) if x is not None]
+        if any(not lo <= n <= hi for n in nums) or (len(nums) == 2 and nums[0] > nums[1]):
+            raise ValueError(f"{name}: {tok!r} is outside {lo}-{hi}")
+        if m.group(4) is not None and int(m.group(4)) < 1:
+            raise ValueError(f"{name}: step must be >= 1")
+
+
+def _dow(tok: str) -> str:
+    m = re.fullmatch(r"([0-7])(?:-([0-7]))?", tok)
+    if not m:
+        raise ValueError(f"day of week: {tok!r} (use digits 0-7 or ranges, no steps)")
+    a = int(m.group(1))
+    if m.group(2) is None:
+        return _DOW[a]
+    b = int(m.group(2))
+    if a > b:
+        raise ValueError(f"day of week: {tok!r} wraps")
+    return f"{_DOW[a]}-{_DOW[b]}"
+
+
+# ---------------------------------------------------------------- rendering
+def st2_name(pack: str) -> str:
+    return pack.replace("-", "_")
+
+
+def task_name(step_id: str) -> str:
+    return "step_" + step_id.replace("-", "_")
+
+
+def _strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, Mapping):
+        return [s for k, v in value.items() for s in [str(k), *_strings(v)]]
+    if isinstance(value, list):
+        return [s for v in value for s in _strings(v)]
+    return []
+
+
+@dataclass
+class Rendered:
+    files: dict[str, str] = field(default_factory=dict)  # path under the output dir -> text
+    problems: list[Problem] = field(default_factory=list)
+
+
+def _yaml(doc: Any, comment: str = "") -> str:
+    import yaml
+
+    head = f"# SPDX-License-Identifier: Apache-2.0\n# {HEADER}\n"
+    if comment:
+        head += "".join(f"# {line}\n" for line in comment.splitlines())
+    body = yaml.safe_dump(doc, sort_keys=False, default_flow_style=False, width=100)
+    return head + "---\n" + body
+
+
+def _json(doc: Any) -> str:
+    return json.dumps(doc, indent=2, sort_keys=True) + "\n"
+
+
+_SHIM = '''# SPDX-License-Identifier: Apache-2.0
+# {header}
+"""{ref}.{name}: a shim over homelabnext.workflows.st2_runtime.{func} (docs/stackstorm.md)."""
+
+import os
+
+from st2common.runners.base_action import Action
+
+from homelabnext.workflows import st2_runtime
+
+PINNED = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "pinned")
+
+
+class {cls}(Action):
+    def run(self, **params):
+        return st2_runtime.{call}
+'''
+
+
+def _shim(ref: str, name: str) -> str:
+    call = {
+        "admit": (
+            "admit(\n            kv=st2_runtime.ActionServiceKV(self.action_service), "
+            "pinned_dir=PINNED, **params\n        )"
+        ),
+        "step": "step(self.config, pinned_dir=PINNED, **params)",
+    }[name]
+    func = "admit" if name == "admit" else "step"
+    return _SHIM.format(header=HEADER, ref=ref, name=name, func=func, cls=name.title(), call=call)
+
+
+def _shim_meta(ref: str, name: str) -> dict[str, Any]:
+    req = {"type": "string", "required": True}
+    if name == "admit":
+        desc = (
+            "Decode or build the event, re-check the pinned pack's trigger, coalesce bursts "
+            "(the trigger, window and schedule come from pinned/<pack>.json, never a parameter)."
+        )
+        params = {
+            "pack": dict(req),
+            "event": {"type": "string", "description": "the URL-encoded JSON webhook body"},
+            "fired_at": {"type": "string", "description": "the CronTimer's executed_at"},
+        }
+    else:
+        desc = (
+            "Run one step of a pinned workflow pack, in the mode its rule was rendered with; an "
+            "action goes to the broker (never in shadow mode)."
+        )
+        params = {
+            "pack": dict(req),
+            "step": dict(req, description="the step id in pinned/<pack>.json"),
+            "event": dict(req, description="the URL-encoded event admit returned"),
+            "state": {"type": "string", "default": "", "description": "the previous step's"},
+        }
+    return {
+        "name": name,
+        "pack": ref,
+        "description": desc,
+        "enabled": True,
+        "runner_type": "python-script",
+        "entry_point": f"{name}.py",
+        "parameters": params,
+    }
+
+
+def _workflow(ref: str, pack: Mapping[str, Any], digest: str, rule: Mapping[str, Any]):
+    """Task ``admit``, then one task per step.  Every value a task passes on is the runtime's
+    URL-encoded text (``event``, ``state``): an object here would reach the next action's
+    parameters, which StackStorm renders as Jinja when they contain a marker."""
+    first = "fired_at" if "schedule" in rule else "event"
+    names = [task_name(s["id"]) for s in pack["steps"]]
+    tasks: dict[str, Any] = {
+        "admit": {
+            "action": f"{ref}.admit",
+            "input": {"pack": pack["pack"], first: f"<% ctx({first}) %>"},
+            "next": [
+                {
+                    "when": "<% succeeded() and result().result.admitted %>",
+                    "publish": [{"event": "<% result().result.event %>"}],
+                    "do": names[0],
+                },
+                {
+                    "when": "<% succeeded() and not result().result.admitted %>",
+                    "publish": [{"outcome": "<% result().result.reason %>"}],
+                },
+                {"when": "<% failed() %>", "do": "fail"},
+            ],
+        }
+    }
+    for i, s in enumerate(pack["steps"]):
+        ok: dict[str, Any] = {
+            "when": "<% succeeded() %>",
+            "publish": [{"state": "<% result().result.state %>"}],
+        }
+        if i + 1 < len(names):
+            ok["do"] = names[i + 1]
+        else:
+            ok["publish"].append({"outcome": "completed"})
+        tasks[names[i]] = {
+            "action": f"{ref}.step",
+            "input": {
+                "pack": pack["pack"],
+                "step": s["id"],
+                "event": "<% ctx(event) %>",
+                "state": "<% ctx(state) %>",
+            },
+            "next": [ok, {"when": "<% failed() %>", "do": "fail"}],
+        }
+    return {
+        "version": 1.0,
+        "description": f"{pack['description']} (workflow pack {pack['pack']} {digest})",
+        "input": [first],
+        "vars": [{"state": ""}, {"outcome": None}]
+        + ([{"event": None}] if "schedule" in rule else []),
+        "output": [{"outcome": "<% ctx(outcome) %>"}, {"state": "<% ctx(state) %>"}],
+        "tasks": tasks,
+    }
+
+
+def _pinned(pack: Mapping[str, Any], digest: str, rule: Mapping[str, Any], manifest) -> str:
+    """``pinned/<pack>.json``: what the two actions run, read by them from the installed pack and
+    never from a parameter -- the pack document (its digest re-checked on load), the mode of its
+    rule (the promotion state), each action step's risk, the coalesce window and the schedule."""
+    doc: dict[str, Any] = {
+        "pack": dict(pack),
+        "digest": digest,
+        "mode": rule["mode"],
+        "risky": {
+            s["id"]: s["kind"] == "action" and is_risky(manifest, s["action"])
+            for s in pack["steps"]
+        },
+    }
+    for key in ("coalesce", "schedule"):
+        if key in rule:
+            doc[key] = dict(rule[key])
+    return _json(doc)
+
+
+def _rule(ref: str, binding: Mapping[str, Any], pack: Mapping[str, Any], rule: Mapping[str, Any]):
+    name = st2_name(pack["pack"])
+    mode = rule["mode"]
+    doc: dict[str, Any] = {
+        "name": f"on_{name}",
+        "pack": ref,
+        "description": f"{rule.get('id', pack['pack'])}: {pack['description']} [{mode}]",
+        "enabled": rule.get("enabled", True),
+    }
+    if "schedule" in rule:
+        doc["trigger"] = {"type": CRON_TRIGGER, "parameters": cron_params(rule["schedule"]["cron"])}
+    else:
+        doc["trigger"] = {"type": WEBHOOK_TRIGGER, "parameters": {"url": binding["webhook"]}}
+        doc["criteria"] = rule_criteria(pack["trigger"])
+    params = dict(RULE_PARAMS[doc["trigger"]["type"]])
+    doc["action"] = {"ref": f"{ref}.{name}", "parameters": params}
+    return doc
+
+
+def _wf_meta(ref: str, pack: Mapping[str, Any], rule: Mapping[str, Any]) -> dict[str, Any]:
+    name = st2_name(pack["pack"])
+    first = (
+        {"fired_at": {"type": "string", "required": True}}
+        if "schedule" in rule
+        else {
+            "event": {
+                "type": "string",
+                "required": True,
+                "description": "the webhook body, JSON then URL-encoded by the rule",
+            }
+        }
+    )
+    return {
+        "name": name,
+        "pack": ref,
+        "description": pack["description"],
+        "enabled": True,
+        "runner_type": "orquesta",
+        "entry_point": f"workflows/{name}.yaml",
+        "parameters": first,
+    }
+
+
+def _config(binding: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    schema: dict[str, Any] = {
+        "broker_socket": {
+            "type": "string",
+            "description": "the broker's Unix socket; the only endpoint the pack's actions use",
+            "required": True,
+        }
+    }
+    values: dict[str, Any] = {"broker_socket": binding["broker_socket"]}
+    for key, entry in sorted(binding.get("config", {}).items()):
+        item: dict[str, Any] = {"description": entry.get("description", key)}
+        if "st2kv" in entry:
+            item |= {"type": "string", "secret": True, "required": True}
+            values[key] = "{{ st2kv.system." + entry["st2kv"] + " | decrypt_kv }}"
+        else:
+            v = entry["value"]
+            item |= {"type": {bool: "boolean", int: "integer"}.get(type(v), "string")}
+            values[key] = v
+        schema[key] = item
+    return schema, values
+
+
+def render(
+    binding: Mapping[str, Any],
+    packs: Mapping[str, Mapping[str, Any]],
+    *,
+    pins: Mapping[str, str],
+    manifests: Callable[[str], Any],
+    clean: set[str] | frozenset[str] = frozenset(),
+    tracked: Callable[[str], bool] = lambda _p: True,
+    handlers: Callable[[str, str], str | None] | None = None,
+    binding_path: str = DEFAULT_BINDING.as_posix(),
+) -> Rendered:
+    """Render the StackStorm tree.  ``packs`` maps a pack name to its document, ``pins`` to its
+    pinned digest, ``clean`` names the packs that validate; ``manifests(rel)`` loads a broker
+    manifest; ``tracked(rel)`` says whether git tracks a path (promotion evidence);
+    ``handlers(manifest_rel, handler)`` says why a manifest's handler is not in the tree pinned
+    (``None`` when it is; :func:`handler_problem` over a checkout)."""
+    out = Rendered()
+    where = binding_path
+
+    def bad(rule: str, detail: str) -> None:
+        out.problems.append(Problem(where, rule, detail))
+
+    errs = schema_errors("workflows", "stackstorm", binding)
+    if errs:
+        for e in errs:
+            bad("st2-binding", e)
+        return out
+    ref = binding["st2_pack"]
+    seen: set[str] = set()
+    schedules: set[str] = set()
+    bound: list[tuple[Mapping[str, Any], Mapping[str, Any], str, Any]] = []
+    for rule in binding["rules"]:
+        name = rule["pack"]
+        if name in seen:
+            bad("st2-duplicate", f"{name}: bound twice")
+            continue
+        seen.add(name)
+        pack = packs.get(name)
+        if pack is None:
+            bad("st2-pin", f"{name}: no such pack")
+            continue
+        digest = digest_of(pack)
+        if pins.get(name) != digest:
+            bad("st2-pin", f"{name}: not pinned at {digest} in the deploy manifest")
+            continue
+        if name not in clean:
+            bad("st2-pin", f"{name}: pinned, but does not validate (hnx workflows validate)")
+            continue
+        n0 = len(out.problems)
+        _check_rule(rule, pack, binding, tracked, bad)
+        if "schedule" in rule:
+            if rule["schedule"]["id"] in schedules:
+                bad("st2-duplicate", f"schedule {rule['schedule']['id']!r} bound twice")
+            schedules.add(rule["schedule"]["id"])
+        manifest = manifests(pack["broker_manifest"])
+        if manifest is None:
+            bad("st2-pin", f"{name}: broker manifest {pack['broker_manifest']} does not load")
+        elif handlers is not None:
+            by_action = {a["action"]: a for a in manifest.get("actions", [])}
+            for s in pack["steps"]:
+                act = by_action.get(s.get("action")) if s["kind"] == "action" else None
+                why = act and handlers(pack["broker_manifest"], act["handler"])
+                if why:
+                    bad("st2-handler", f"{name}: step {s['id']} ({act['action']}): {why}")
+        if len(out.problems) == n0:
+            bound.append((rule, pack, digest, manifest))
+    for key, entry in sorted(binding.get("config", {}).items()):
+        if key == "broker_socket":
+            bad("st2-binding", "config: broker_socket is set by the binding's own field")
+        if _SECRETISH.search(key) and "st2kv" not in entry:
+            bad("st2-secret", f"config {key}: a secret is a datastore key (st2kv), never a value")
+    if out.problems:
+        return out
+    files = out.files
+    base = ref
+    files[f"{base}/pack.yaml"] = _yaml(
+        {
+            "ref": ref,
+            "name": ref,
+            "description": "homelab-next workflow packs on StackStorm: rules decide when, the "
+            "broker does every effect (docs/stackstorm.md).",
+            "keywords": ["homelab-next", "workflows"],
+            "version": binding["version"],
+            "author": "homelab-next",
+            "python_versions": ["3"],
+            "stackstorm_version": ">=3.8.0",
+        }
+    )
+    schema, values = _config(binding)
+    files[f"{base}/config.schema.yaml"] = _yaml(schema)
+    files[f"configs/{ref}.yaml"] = _yaml(
+        values,
+        "Copy to /opt/stackstorm/configs/; secrets are datastore references, never values.",
+    )
+    files[f"{base}/requirements.txt"] = (
+        "# SPDX-License-Identifier: Apache-2.0\n"
+        f"# {HEADER}\n"
+        "# Deliberately empty: install homelabnext[core] into this pack's virtualenv from the\n"
+        "# checkout this tree was rendered from, never from an index (docs/stackstorm.md).\n"
+    )
+    for shim in SHIMS:
+        files[f"{base}/actions/{shim}.yaml"] = _yaml(_shim_meta(ref, shim))
+        files[f"{base}/actions/{shim}.py"] = _shim(ref, shim)
+    subjects: dict[str, list[str]] = {}
+    provenance: dict[str, Any] = {"binding": digest_of(dict(binding)), "packs": {}}
+    for rule, pack, digest, manifest in bound:
+        n = st2_name(pack["pack"])
+        files[f"{base}/actions/{n}.yaml"] = _yaml(_wf_meta(ref, pack, rule))
+        files[f"{base}/actions/workflows/{n}.yaml"] = _yaml(_workflow(ref, pack, digest, rule))
+        files[f"{base}/pinned/{n}.json"] = _pinned(pack, digest, rule, manifest)
+        files[f"{base}/rules/on_{n}.yaml"] = _yaml(_rule(ref, binding, pack, rule))
+        provenance["packs"][pack["pack"]] = {"digest": digest, "mode": rule["mode"]}
+        if "schedule" not in rule:
+            subjects.setdefault(pack["trigger"]["event"], []).append(f"{ref}.on_{n}")
+    files["bridge.json"] = _json(
+        {
+            "webhook": f"/api/v1/webhooks/{binding['webhook']}",
+            "api_key": binding["bridge_api_key"],
+            "content_type": "application/json",
+            "subscriptions": [
+                {
+                    "subject": s,
+                    "durable": "st2-" + s.removeprefix("homelabnext.").replace(".", "-"),
+                    "rules": sorted(rules),
+                }
+                for s, rules in sorted(subjects.items())
+            ],
+        }
+    )
+    files["provenance.json"] = _json(provenance)
+    out.problems += tree_problems(out.files, ref)
+    return out
+
+
+def _check_rule(rule, pack, binding, tracked, bad) -> None:
+    name = pack["pack"]
+    if pack["actor"] != binding["actor"]:
+        bad("st2-actor", f"{name}: actor {pack['actor']} is not the binding's {binding['actor']}")
+    for s in pack["steps"]:
+        if s["kind"] in MODEL_KINDS or (s["kind"] == "enrich" and s["op"] not in ST2_ENRICH_OPS):
+            what = s["kind"] if s["kind"] in MODEL_KINDS else f"enrich {s['op']}"
+            bad("st2-step", f"{name}: step {s['id']} ({what}) does not run on StackStorm yet")
+    lits = [x for x in _strings([pack["trigger"], pack["steps"]]) if _TEMPLATE.search(x)]
+    for x in lits:
+        bad("st2-template", f"{name}: literal {x[:60]!r} would be rendered as a template")
+    event = pack["trigger"]["event"]
+    if "schedule" in rule:
+        sid = rule["schedule"]["id"]
+        pinned = any(
+            c["ref"] == "$event.data.schedule" and c.get("equals") == sid
+            for c in pack["trigger"].get("where", [])
+        )
+        if event != SCHEDULE_EVENT or not pinned:
+            bad(
+                "st2-trigger",
+                f"{name}: a scheduled pack triggers on {SCHEDULE_EVENT} with "
+                f"where $event.data.schedule equals {sid!r}",
+            )
+        try:
+            cron_params(rule["schedule"]["cron"])
+        except ValueError as exc:
+            bad("st2-cron", f"{name}: {exc}")
+    elif event == SCHEDULE_EVENT:
+        bad("st2-trigger", f"{name}: triggers on {SCHEDULE_EVENT} but the rule has no schedule")
+    else:
+        sources = [
+            c.get("equals")
+            for c in pack["trigger"].get("where", [])
+            if c["ref"] == "$event.source" and "equals" in c
+        ]
+        if not sources or not all(isinstance(v, str) and v for v in sources):
+            bad(
+                "st2-source",
+                f"{name}: the trigger must pin its producer ($event.source equals one logical id)",
+            )
+    if rule["mode"] == "live":
+        pr = rule.get("promotion")
+        if pr is None:
+            bad("st2-live", f"{name}: live without promotion (shadow window and parity evidence)")
+        else:
+            days = (
+                date.fromisoformat(pr["live_from"]) - date.fromisoformat(pr["shadow_from"])
+            ).days
+            if days < MIN_SHADOW_DAYS:
+                bad("st2-live", f"{name}: shadow window {days}d < {MIN_SHADOW_DAYS}d")
+            if not tracked(pr["evidence"]):
+                bad("st2-live", f"{name}: evidence {pr['evidence']} is not tracked by git")
+    dispatch = [s for s in pack["steps"] if s.get("action") in DISPATCH_ACTIONS]
+    if dispatch and "coalesce" not in rule:
+        bad("st2-coalesce", f"{name}: dispatches agent work without a coalesce window")
+    if dispatch and event == JOB_FAILED_EVENT:
+        bounds = [
+            c
+            for c in pack["trigger"].get("where", [])
+            if c["ref"] == "$event.data.resubmits" and ("in" in c or "equals" in c)
+        ]
+        vals = [v for c in bounds for v in (c["in"] if "in" in c else [c["equals"]])]
+        ok = bounds and all(type(v) is int and 0 <= v < MAX_RESUBMITS for v in vals)
+        if not ok:
+            bad(
+                "st2-bound",
+                f"{name}: retries of failed jobs must pin $event.data.resubmits to integers "
+                f"below {MAX_RESUBMITS} in the trigger",
+            )
+        for s in dispatch:
+            if s["params"].get("retry_of_run_id") != "$event.data.run_id":
+                bad("st2-bound", f"{name}: step {s['id']} must carry retry_of_run_id")
+
+
+def tree_problems(files: Mapping[str, str], ref: str) -> list[Problem]:
+    """Shape and criteria checks over a rendered (or committed) tree."""
+    import yaml
+
+    out: list[Problem] = []
+    shims = {f"{ref}.{s}" for s in SHIMS}
+    for path, text in sorted(files.items()):
+        if not path.endswith(".yaml") or path.startswith("configs/"):
+            continue
+        doc = yaml.safe_load(text)
+        parts = Path(path).parts
+        if parts[-1] == "pack.yaml":
+            kind = "pack"
+        elif parts[-1] == "config.schema.yaml":
+            continue
+        elif parts[1] == "rules":
+            kind = "rule"
+        elif parts[1:3] == ("actions", "workflows"):
+            kind = "workflow"
+        else:
+            kind = "action"
+        errs = shape_errors(kind, doc)
+        if kind == "rule" and not errs:
+            tt = doc["trigger"]["type"]
+            pk = "webhook-params" if tt == WEBHOOK_TRIGGER else "cron-params"
+            errs += [
+                f"trigger/parameters: {e}" for e in shape_errors(pk, doc["trigger"]["parameters"])
+            ]
+            errs += criteria_problems(doc)
+            errs += [
+                f"criteria: {k}: pattern is a template"
+                for k, v in (doc.get("criteria") or {}).items()
+                if any(_TEMPLATE.search(x) for x in _strings(v.get("pattern")))
+            ]
+            if doc["action"]["parameters"] != RULE_PARAMS.get(tt):
+                out.append(
+                    Problem(
+                        path,
+                        "st2-template",
+                        f"action/parameters: {doc['action']['parameters']!r} is not "
+                        f"{RULE_PARAMS.get(tt)!r}: a rule passes the trigger only encoded",
+                    )
+                )
+        if kind == "workflow" and not errs:
+            for tname, task in doc["tasks"].items():
+                if task["action"] not in shims:
+                    errs.append(f"tasks/{tname}: action {task['action']} is not a shim")
+                for nx in task.get("next", []):
+                    if "do" in nx and nx["do"] not in (*doc["tasks"], "fail", "noop"):
+                        errs.append(f"tasks/{tname}: next goes to unknown task {nx['do']!r}")
+                for key, val in (task.get("input") or {}).items():
+                    raw = [x for x in _strings(val) if _TEMPLATE.search(x)]
+                    if raw and (not isinstance(val, str) or val not in TASK_EXPRESSIONS):
+                        out.append(
+                            Problem(
+                                path,
+                                "st2-template",
+                                f"tasks/{tname}/input/{key}: {raw[0][:60]!r} is not one of the "
+                                "encoded values (an expression here reaches StackStorm's Jinja)",
+                            )
+                        )
+        for e in errs:
+            out.append(
+                Problem(path, "st2-criteria" if "trigger.body.type" in e else "st2-shape", e)
+            )
+    return out
+
+
+# ---------------------------------------------------------------- the repository
+def render_repo(
+    root: Path, binding_path: Path | None = None
+) -> tuple[Rendered, Mapping[str, Any] | None]:
+    """Render from the git tree at ``root``: its binding, deploy pins and packs."""
+    root = root.resolve()
+    bpath = root / (binding_path or DEFAULT_BINDING)
+    rel = bpath.relative_to(root).as_posix() if bpath.is_relative_to(root) else str(bpath)
+    if not bpath.is_file():
+        raise WorkflowError(f"{rel}: no such binding")
+    binding = load_doc(bpath)
+    if not isinstance(binding, Mapping):
+        raise WorkflowError(f"{rel}: not a mapping")
+    rep = validate_repo(root=root)
+    packs = {name: load_doc(root / path) for name, (path, _d) in rep.packs.items()}
+    deploy_rel = binding.get("deploy", DEFAULT_BINDING.parent.joinpath("deploy.yml").as_posix())
+    deploy = load_doc(root / deploy_rel) if (root / deploy_rel).is_file() else {"pins": []}
+    pins = {p["pack"]: p["digest"] for p in deploy.get("pins", [])}
+    uni: Universe = load_universe(root)
+    tracked_set = set(git_files(root, "--cached"))
+    res = render(
+        binding,
+        packs,
+        pins=pins,
+        manifests=lambda r: uni.manifest(r)[0],
+        clean=rep.clean,
+        tracked=lambda p: p in tracked_set,
+        handlers=lambda m, h: handler_problem(root, m, h),
+        binding_path=rel,
+    )
+    return res, binding
+
+
+def handler_problem(root: Path, manifest_rel: str, handler: str) -> str | None:
+    """Why ``handler`` (relative to the manifest's directory) is not in the tree, pinned: the file
+    and a ``<stem>.handler.json`` beside it whose ``handler_digest`` is the file's."""
+    from homelabnext.broker.execute import file_digest
+
+    base = (root / manifest_rel).parent
+    path = base / handler
+    if not path.resolve().is_relative_to(root.resolve()) or not path.is_file():
+        return f"handler {handler} is not in the tree"
+    doc_path = path.with_name(path.name.rsplit(".", 1)[0] + ".handler.json")
+    try:
+        doc = json.loads(doc_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return f"handler {handler} has no handler document {doc_path.name}"
+    if not isinstance(doc, Mapping) or doc.get("handler") != handler:
+        return f"{doc_path.name} does not name {handler}"
+    if doc.get("handler_digest") != file_digest(path):
+        return f"{doc_path.name}: handler_digest is not the digest of {handler}"
+    return None
+
+
+def drift(rendered: Mapping[str, str], out_dir: Path, base: str) -> list[Problem]:
+    """Files that differ between the rendered tree and ``out_dir`` (missing, changed, extra)."""
+    probs: list[Problem] = []
+    have = (
+        {p.relative_to(out_dir).as_posix() for p in out_dir.rglob("*") if p.is_file()}
+        if out_dir.is_dir()
+        else set()
+    )
+    for path, text in sorted(rendered.items()):
+        f = out_dir / path
+        if path not in have:
+            probs.append(
+                Problem(f"{base}/{path}", "st2-drift", "missing: run hnx workflows st2 render")
+            )
+        elif f.read_text(encoding="utf-8") != text:
+            probs.append(Problem(f"{base}/{path}", "st2-drift", "differs from the rendered file"))
+    for path in sorted(have - set(rendered)):
+        if "__pycache__" in path:
+            continue
+        probs.append(Problem(f"{base}/{path}", "st2-drift", "not rendered: remove it"))
+    return probs
+
+
+def write(rendered: Mapping[str, str], out_dir: Path) -> list[Path]:
+    """Write the tree and remove files it no longer has; returns the paths written."""
+    written = []
+    if out_dir.is_dir():
+        for p in sorted(out_dir.rglob("*"), reverse=True):
+            rel = p.relative_to(out_dir).as_posix()
+            if p.is_file() and rel not in rendered:
+                p.unlink()
+    for path, text in sorted(rendered.items()):
+        f = out_dir / path
+        f.parent.mkdir(parents=True, exist_ok=True)
+        if not f.is_file() or f.read_text(encoding="utf-8") != text:
+            f.write_text(text, encoding="utf-8")
+            written.append(f)
+    return written

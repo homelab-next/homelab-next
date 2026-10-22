@@ -3,3 +3,6 @@
 # ExecStart names the script).
 needrestart_script: /usr/local/libexec/homelabnext/needrestart-check
 needrestart_notify_auth_file: /etc/homelabnext/needrestart-notify.auth
+# Fixed, not a setting: where the shared last-run writer (role last_run) is installed (the
+# service's ExecStartPre= and ExecStopPost= name it).
+needrestart_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run

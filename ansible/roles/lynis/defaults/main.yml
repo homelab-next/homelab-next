@@ -42,3 +42,7 @@ lynis_dpkg_cli: dpkg
 lynis_debsums_cli: debsums
 lynis_sendmail_cli: /usr/sbin/sendmail
 lynis_aliases_file: /etc/aliases
+# Each run's last-run record (role last_run, docs/role-interface.md section 8): the shared
+# per-host directory the status hub's job-last-run mapping reads, and the group that may read it.
+lynis_last_run_dir: /var/lib/homelabnext/last-run
+lynis_last_run_group: root

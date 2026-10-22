@@ -5,5 +5,9 @@ After=apt-daily-upgrade.service
 
 [Service]
 Type=oneshot
+# the job's last-run record (role last_run), written on start and again on stop, whatever
+# the outcome; a writer problem never changes the job's own result (the - prefix)
+ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ needrestart_last_run_dir }} --group {{ needrestart_last_run_group }} --job timer:needrestart/check --unit %n --calendar "{{ needrestart_schedule }}" --delay 600
 ExecStart=/usr/local/libexec/homelabnext/needrestart-check
 Nice=10
+ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ needrestart_last_run_dir }} --group {{ needrestart_last_run_group }} --job timer:needrestart/check --unit %n --calendar "{{ needrestart_schedule }}" --delay 600

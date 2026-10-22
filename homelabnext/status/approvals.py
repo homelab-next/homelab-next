@@ -19,13 +19,19 @@ approve / deny (``POST``)  the **approver group** only, distinct from the viewer
 =========================  ==================================================================
 
 The approver sent to the broker is ``issuer`` = the configured SSO issuer and ``subject`` = the
-forward-auth username (lower-cased; the broker compares identities case-folded) -- **never
-anything from the form body**, which may carry only ``request_id``, ``digest``, ``decision``,
-``token`` and ``note``.
+forward-auth username **unchanged** -- **never anything from the form body**, which may carry
+only ``request_id``, ``digest``, ``decision``, ``token`` and ``note``.  The broker matches its
+approver allowlist exactly, and an IdP's usernames are case-sensitive (Authentik's are: ``Bob``
+and ``bob`` can be two accounts), so the hub never folds one into another: a username that is not
+already a canonical approver subject (:data:`SUBJECT_RE`, the approval schema's: lower-case, a
+letter first, then letters, digits, ``.``, ``_`` or ``-``) cannot decide (``403``) and the page
+says why.
 
 This is the hub's only state-changing endpoint, so a decision passes, in order (first failure
 answers): the front door and the approver group (``403``); a same-origin ``Origin`` (or, without
-one, ``Referer``) naming the request's own host, and no cross-site ``Sec-Fetch-Site`` (``403``);
+one, ``Referer``) -- scheme, host and port equal to the configured ``public_origin``, or, without
+one, host and port equal to the request's ``Host`` (:func:`same_origin`) -- and no cross-site
+``Sec-Fetch-Site`` (``403``);
 ``application/x-www-form-urlencoded`` (``415``) with a ``Content-Length`` (``411``) of at most
 8 KiB (``413``) holding exactly the fields above, each well-formed (``400``); the CSRF token
 (``403``): an HMAC over the issue time, the request id, the digest shown and the approver, valid
@@ -63,7 +69,7 @@ from homelabnext.broker.state import is_id
 from .agents.auth import AccessLog, Decision, authorize
 from .agents.config import ApprovalsSettings, FrontDoor
 from .render import _e, nav_html, shell_html
-from .serve import host_header_name, origin_name, style_hash
+from .serve import host_header_name, style_hash
 
 Response = tuple[int, str, bytes, dict[str, str]]
 HTML = "text/html; charset=utf-8"
@@ -76,6 +82,8 @@ RECENT = 20
 FORM_FIELDS = frozenset({"request_id", "digest", "decision", "token", "note"})
 _REQUIRED = FORM_FIELDS - {"note"}
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+#: an approver subject as ``schemas/broker/approval`` takes it, and as the allowlist names it
+SUBJECT_RE = re.compile(r"[a-z][a-z0-9._-]{0,63}")  # fullmatch: "$" would take a "\n"
 _TOKEN_RE = re.compile(r"^[0-9]{1,12}\.[0-9a-f]{64}$")
 _DECISIONS = {"approve": "approved", "deny": "denied"}
 #: the hub's CSP with forms allowed to post back to the hub (and nowhere else)
@@ -122,21 +130,57 @@ def approval_valid(row: Mapping[str, Any]) -> bool:
     return bool(row.get("approved"))
 
 
-def same_origin(headers: Any) -> tuple[bool, str]:
-    """True when a state-changing request comes from a page of this very host: its ``Origin``
-    (or, when absent, its ``Referer``) names the ``Host`` it was sent to, and ``Sec-Fetch-Site``,
-    when sent, is ``same-origin``.  No header at all is refused (fail closed)."""
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def origin_tuple(value: str | None) -> tuple[str, str, int] | None:
+    """(scheme, host, port) of an http(s) origin or URL, the port made explicit; None for
+    ``null``, other schemes and garbage."""
+    try:
+        parts = urllib.parse.urlsplit((value or "").strip())
+        port = parts.port
+    except ValueError:
+        return None
+    scheme = parts.scheme.lower()
+    if scheme not in _DEFAULT_PORTS or not parts.hostname:
+        return None
+    return scheme, parts.hostname.rstrip(".").lower(), port or _DEFAULT_PORTS[scheme]
+
+
+def _host_port(value: str | None) -> tuple[str, int | None] | None:
+    name = host_header_name(value)
+    if name is None:
+        return None
+    try:
+        return name.lower(), urllib.parse.urlsplit(f"//{value.strip()}").port  # type: ignore[union-attr]
+    except ValueError:
+        return None
+
+
+def same_origin(headers: Any, public_origin: str | None = None) -> tuple[bool, str]:
+    """True when a state-changing request comes from a page of this hub: its ``Origin`` (or,
+    when absent, its ``Referer``) is ``public_origin`` -- scheme, host and port, compared
+    exactly -- or, when no public origin is configured, names the ``Host`` it was sent to, host
+    and port (a ``Host`` without a port matches the origin scheme's default port; the scheme
+    itself cannot be checked behind a TLS-terminating proxy, which is why ``public_origin`` is
+    the better setting).  ``Sec-Fetch-Site``, when sent, must be ``same-origin``.  No header at
+    all is refused (fail closed); so is another port or scheme on the same hostname, which is
+    another origin."""
     site = headers.get("Sec-Fetch-Site")
     if site is not None and site.strip().lower() != "same-origin":
         return False, "cross-site request"
-    host = host_header_name(headers.get("Host"))
     origin = headers.get("Origin")
     if origin is None:
         origin = headers.get("Referer")
         if origin is None:
             return False, "no Origin or Referer"
-    name = origin_name(origin)
-    if host is None or name is None or name.lower() != host:
+    got = origin_tuple(origin)
+    if got is None:
+        return False, "foreign Origin"
+    if public_origin is not None:
+        return (True, "") if got == origin_tuple(public_origin) else (False, "foreign Origin")
+    host = _host_port(headers.get("Host"))
+    if host is None or host[0] != got[1] or (host[1] or _DEFAULT_PORTS[got[0]]) != got[2]:
         return False, "foreign Origin"
     return True, ""
 
@@ -185,8 +229,10 @@ class ApprovalsSite:
     def _approver(self, client: str | None, headers: Any) -> Decision:
         return authorize(self.front_door, client, headers, group=self.settings.approver_group)
 
-    def subject(self, user: str) -> str:
-        return user.lower()
+    def subject(self, user: str) -> str | None:
+        """The approver subject for the front door's ``user``: the username unchanged when it is
+        canonical, else None (never folded: two spellings may be two accounts)."""
+        return user if SUBJECT_RE.fullmatch(user) else None
 
     # ---------------------------------------------------------------- the CSRF token
     def token(self, request_id: str, digest: str, user: str, *, at: float | None = None) -> str:
@@ -194,7 +240,7 @@ class ApprovalsSite:
         return f"{issued}.{self._mac(issued, request_id, digest, user)}"
 
     def _mac(self, issued: int, request_id: str, digest: str, user: str) -> str:
-        msg = "\n".join((str(issued), request_id, digest, self.settings.issuer, self.subject(user)))
+        msg = "\n".join((str(issued), request_id, digest, self.settings.issuer, user))
         return hmac.new(self._key, msg.encode("utf-8"), hashlib.sha256).hexdigest()
 
     def token_ok(self, token: str, request_id: str, digest: str, user: str) -> bool:
@@ -242,12 +288,20 @@ class ApprovalsSite:
             return self._shell(doc, private, main, code=502)
         rows = [r for r in pending if only is None or r.get("request_id") == only]
         now = self.clock()
-        who = f"{self.settings.issuer}:{self.subject(user)}"
+        subject = self.subject(user)
+        if subject is None:
+            can_decide = False
         role = "approver" if can_decide else "viewer (read only)"
+        filed = (
+            f"decisions are filed as <code>{_e(f'{self.settings.issuer}:{subject}')}</code>"
+            if subject is not None
+            else "this username is not a canonical approver subject (lower-case), so it cannot "
+            "decide"
+        )
         parts = [
             "<h2>Approvals</h2>",
             f'<p class="muted">signed in as <code>{_e(user)}</code> &middot; {_e(role)} &middot; '
-            f"decisions are filed as <code>{_e(who)}</code></p>",
+            f"{filed}</p>",
         ]
         if only:
             parts.append(
@@ -301,7 +355,7 @@ class ApprovalsSite:
 
     def _recent(self) -> list[Mapping[str, Any]]:
         # two bounded reads (``tail``): the hub never pulls more than RECENT rows of each; the
-        # broker filters its audit trail server-side (it has no index, so it reads its trail)
+        # broker answers both from its decisions index, not by walking its whole audit trail
         rows = [
             *self.client.audit(operation="approve", outcome="ok", tail=RECENT),
             *self.client.audit(operation="deny", outcome="ok", tail=RECENT),
@@ -354,7 +408,10 @@ class ApprovalsSite:
 
         if not d.allowed:
             return refuse(403, "decide", "not an approver through the front door")
-        ok, why = same_origin(headers)
+        subject = self.subject(user)
+        if subject is None:
+            return refuse(403, "decide", "username is not a canonical approver subject")
+        ok, why = same_origin(headers, self.settings.public_origin)
         if not ok:
             return refuse(403, "decide", why)
         ctype = (headers.get("Content-Type") or "").split(";")[0].strip().lower()
@@ -389,7 +446,6 @@ class ApprovalsSite:
         if not self.token_ok(f["token"], rid, digest, user):
             return refuse(403, op, "bad or expired form token")
 
-        subject = self.subject(user)
         private = authorize(self.front_door, client, headers).allowed
         try:
             pending = {r.get("request_id"): r for r in self.client.pending()}

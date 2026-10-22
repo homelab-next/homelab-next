@@ -16,3 +16,7 @@ aide_max_age_hours: 48
 aide_systemctl_cli: systemctl
 aide_unit_dir: /etc/systemd/system
 aide_state_dir: /var/lib/homelabnext/aide
+# Each run's last-run record (role last_run, docs/role-interface.md section 8): the shared
+# per-host directory the status hub's job-last-run mapping reads, and the group that may read it.
+aide_last_run_dir: /var/lib/homelabnext/last-run
+aide_last_run_group: root

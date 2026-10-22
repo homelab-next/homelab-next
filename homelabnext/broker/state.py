@@ -18,6 +18,13 @@ the same file and nothing is ever rewritten in place.  State is *derived* from w
 ``consumed/<aid>.json``          consumed-approval markers: :class:`FileApprovalStore`, so an
                                  approval is single use across processes and restarts
 ``audit/<stamp>-<pid>-<n>-<rand>.json``  one audit record per file (``schemas/broker/audit``)
+``decisions/<same name>``        an index of the audit trail's filed decisions (``ok`` approve and
+                                 deny records), so the hub's recent-decisions and "already
+                                 decided" reads cost O(decisions), however many refusals the trail
+                                 holds; written after the audit record, rebuilt in full until the
+                                 rebuild has once completed (``decisions.complete``), and on every
+                                 start the newest :data:`RECONCILE_AUDIT` audit records are
+                                 re-indexed, so a crash between the two writes loses no decision
 ``outbox/<event id>.json``       events emitted when no bus is configured
 ``digest.key``                   the broker-held key (hex) for the keyed hash of secret arguments in a
                                  request digest (created once, exclusively)
@@ -60,10 +67,17 @@ _SUBDIRS = (
     "approvals",
     "consumed",
     "audit",
+    "decisions",
     "outbox",
     "runs",
 )
 _KEY_BYTES = 32
+#: how many of the newest audit records every start re-indexes into ``decisions/``
+RECONCILE_AUDIT = 256
+#: written once a full rebuild of ``decisions/`` has finished (an interrupted one runs again)
+DECISIONS_COMPLETE = "decisions.complete"
+#: the audit records the ``decisions/`` index holds: (operation, outcome)
+DECISION_KINDS = frozenset({("approve", "ok"), ("deny", "ok")})
 
 
 class StateError(RuntimeError):
@@ -142,6 +156,10 @@ def _load(path: Path) -> Any:
         return None
 
 
+def _is_decision(record: dict[str, Any]) -> bool:
+    return (record.get("operation"), record.get("outcome")) in DECISION_KINDS
+
+
 class StateDir:
     """The broker's state directory.  Created ``0700``: it holds requests and audit records."""
 
@@ -165,6 +183,22 @@ class StateDir:
             for rid in self.request_ids():
                 if self.get_claim(rid) is None:
                     self._mark_open(rid, self.get_request(rid) or {})
+        self._index_decisions()
+
+    def _index_decisions(self) -> None:
+        """Rebuild ``decisions/`` from the whole trail until a rebuild has once completed; then
+        re-index the newest :data:`RECONCILE_AUDIT` records (a decision whose index write a
+        crash interrupted).  Both are idempotent: an existing index file is left as it is."""
+        names = sorted(p.name for p in self._dir("audit").glob("*.json"))
+        complete = (self.root / DECISIONS_COMPLETE).exists()
+        for name in names if not complete else names[-RECONCILE_AUDIT:]:
+            if (self._dir("decisions") / name).exists():
+                continue
+            doc = _load(self._dir("audit") / name)
+            if isinstance(doc, dict) and _is_decision(doc):
+                write_exclusive(self._dir("decisions") / name, _dumps(doc))
+        if not complete:
+            write_exclusive(self.root / DECISIONS_COMPLETE, b"1\n")
 
     def _dir(self, name: str) -> Path:
         return self.root / name
@@ -269,12 +303,21 @@ class StateDir:
         path = self._dir("audit") / name
         if not write_exclusive(path, _dumps(record)):  # pragma: no cover - random suffix
             raise StateError(f"audit record {name} already exists")
+        if _is_decision(record):
+            write_exclusive(self._dir("decisions") / name, _dumps(record))
         return path
 
     def audit_records(self, *, newest_first: bool = False) -> Iterator[dict[str, Any]]:
         """Audit records in trail order (or newest first): names are listed, and a record is
         read only when the iteration reaches it, so a tail reads only the tail."""
-        for p in sorted(self._dir("audit").glob("*.json"), reverse=newest_first):
+        yield from self._records("audit", newest_first)
+
+    def decision_records(self, *, newest_first: bool = False) -> Iterator[dict[str, Any]]:
+        """The ``decisions/`` index: the audit records of filed approvals and denials only."""
+        yield from self._records("decisions", newest_first)
+
+    def _records(self, where: str, newest_first: bool) -> Iterator[dict[str, Any]]:
+        for p in sorted(self._dir(where).glob("*.json"), reverse=newest_first):
             doc = _load(p)
             if doc is not None:
                 yield doc

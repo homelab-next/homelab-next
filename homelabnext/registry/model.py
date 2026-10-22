@@ -19,6 +19,7 @@ from typing import Any
 import yaml
 
 from homelabnext import paths, sops
+from homelabnext._schema_text import safe_message
 from homelabnext._yaml import UniqueKeyLoader
 
 
@@ -138,7 +139,7 @@ def schema_problems(doc: Any) -> list[str]:
     out = []
     for err in sorted(validator.iter_errors(doc), key=lambda e: [str(p) for p in e.absolute_path]):
         where = "/".join(str(p) for p in err.absolute_path) or "<root>"
-        out.append(f"schema: {where}: {err.message}")
+        out.append(f"schema: {where}: {safe_message(err)}")
     return out
 
 
@@ -293,6 +294,7 @@ _KIND_BUILTINS = {
     "invariants-results": ("poll-file", {"module"}),
     "records-lanes": ("poll-file", {"module", "warn_after_s"}),
     "broker-pending": ("poll-file", {"module", "warn_after_s"}),
+    "job-last-run": ("poll-file", {"module", "warn_after_s"}),
     "orchestrator-queue": ("poll-http-json", {"module", "warn_after_s"}),
     "agentmetry-audit": ("poll-http-json", {"module", "warn_after_s"}),
     "prometheus-alerts": ("poll-prometheus", {"module", "states", "item"}),

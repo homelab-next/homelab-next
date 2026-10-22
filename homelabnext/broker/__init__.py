@@ -19,8 +19,10 @@ Order of checks (first failure wins):
    - decision is not ``approved`` -> ``approval-denied``;
    - approver is the actor (compared normalized, see :func:`normalize_identity`)
      -> ``approval-self-approved``;
-   - approver not in ``manifest.approvers`` (issuer and subject) -> ``approval-approver-not-allowed``;
-   - approver is an agent and ``allow_agent_approvers`` is not true -> ``approval-agent-approver``;
+   - approver not in ``manifest.approvers`` (issuer and subject, compared **exactly**)
+     -> ``approval-approver-not-allowed``;
+   - approver is an agent (compared normalized) and ``allow_agent_approvers`` is not true
+     -> ``approval-agent-approver``;
    - ``approved_at`` before the request was created, or after ``now`` -> ``approval-time-invalid``;
    - ``now`` past ``expires_at`` or past ``approved_at + approval_ttl_s`` -> ``approval-expired``;
    - the approval id was already consumed -> ``approval-replayed``;
@@ -33,6 +35,14 @@ TTL and the approval's own ``expires_at`` wins.
 Approvers: a manifest without ``approvers`` accepts no approval at all (fail closed).  An
 approver counts as an agent when its allowlist entry says ``kind: agent`` or when its normalized
 subject is the name of any profile the manifest grants actions to.
+
+Normalization folds only where folding is the cautious direction: it widens what counts as the
+actor (self-approval) or as an agent, so a spelling variant cannot slip past either refusal.  The
+allowlist itself is matched **exactly** on (issuer, subject): ``operator_one``, ``operator.one``
+and ``Operator-One`` are distinct accounts at an IdP, and folding them would let any of them
+approve for an allowlist entry naming ``operator-one``.  An allowlist entry is therefore the
+approver's canonical subject exactly as the approval relay sends it (the hub sends the front
+door's username unchanged and refuses one that is not already canonical: ``docs/broker.md``).
 
 Single use: an approval allows exactly one request.  :class:`ApprovalStore` is the interface a
 broker implements over durable storage; :class:`MemoryApprovalStore` is the in-process default.
@@ -108,19 +118,18 @@ def request_digest(request: Mapping[str, Any]) -> str:
 def normalize_identity(value: str) -> str:
     """Case-folded, with ``.``, ``_`` and whitespace runs folded to ``-``.
 
-    ``ops_bot``, ``Ops.Bot`` and ``ops-bot`` are the same identity for every comparison the
-    broker makes, so a spelling variant cannot pass as someone else.
+    ``ops_bot``, ``Ops.Bot`` and ``ops-bot`` fold to one value.  The broker uses it only where a
+    match *refuses* (the actor approving its own request, an agent approving, the owner of a
+    request), never to grant: the approver allowlist is matched exactly (see the module doc).
     """
     return _SEP_RE.sub("-", value.strip().casefold()).strip("-")
 
 
 def qualified_identity(issuer: str, subject: str) -> tuple[str, str]:
-    """(issuer, subject), each normalized: the identity every broker comparison uses (and the
-    review model in :mod:`homelabnext.reviews`)."""
+    """(issuer, subject), each normalized: for comparisons that refuse a match (the review model
+    in :mod:`homelabnext.reviews`: an author never reviews their own record).  Not for an
+    allowlist, which is matched exactly."""
     return normalize_identity(issuer), normalize_identity(subject)
-
-
-_qualified = qualified_identity
 
 
 def _profile_name(profile_id: str) -> str:
@@ -238,21 +247,20 @@ def _evaluate(manifest, request, approval, actual, now):
     if approval["decision"] != "approved":
         return "deny", "approval-denied", aid
     who = approval["approver"]
-    issuer, subject = _qualified(who["issuer"], who["subject"])
-    if subject == _profile_name(request["actor"]):
+    folded = normalize_identity(who["subject"])
+    # folded: refusing a spelling variant of the actor is the cautious direction
+    if folded == _profile_name(request["actor"]):
         return "deny", "approval-self-approved", aid
+    # exact: an allowlist entry names one account, never its spelling variants
+    exact = (who["issuer"], who["subject"])
     allowed = next(
-        (
-            a
-            for a in manifest.get("approvers", [])
-            if _qualified(a["issuer"], a["subject"]) == (issuer, subject)
-        ),
+        (a for a in manifest.get("approvers", []) if (a["issuer"], a["subject"]) == exact),
         None,
     )
     if allowed is None:
         return "deny", "approval-approver-not-allowed", aid
     agents = {_profile_name(g["profile"]) for g in manifest.get("grants", [])}
-    is_agent = allowed.get("kind", "human") == "agent" or subject in agents
+    is_agent = allowed.get("kind", "human") == "agent" or folded in agents
     if is_agent and manifest.get("allow_agent_approvers") is not True:
         return "deny", "approval-agent-approver", aid
     t_now, t_appr = _ts(now), _ts(approval["approved_at"])

@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install the last-run writer and the record directory (each timer role includes this from its own configuration).
+    options:
+      last_run_dir: &dir
+        type: path
+        description: "The host's record directory (mode 0750, group last_run_group); every timer role passes its own <role>_last_run_dir, /var/lib/homelabnext/last-run by default."
+        required: true
+      last_run_group: &group
+        type: str
+        description: "The group that may read the records (the account that ships them to the status hub); root when nothing ships them."
+        required: true
+      last_run_writer: &writer
+        type: path
+        description: "Where the writer is installed (the services' ExecStartPre= and ExecStopPost= name it)."
+        required: true
+  health:
+    short_description: Fail unless the writer is installed and the record directory exists.
+    options:
+      last_run_dir: *dir
+      last_run_writer: *writer
+  readiness:
+    short_description: No dependency; succeeds.
+    options: {}
+  backup:
+    short_description: Nothing to back up; every run rewrites its record.
+    options: {}
+  restore:
+    short_description: Nothing to restore; the next run of each job writes its record again.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; the writer ships with the role.
+    options: {}
+  export:
+    short_description: Nothing to export beyond the records themselves (JSON in the record directory).
+    options: {}

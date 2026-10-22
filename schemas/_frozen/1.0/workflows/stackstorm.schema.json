@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/workflows/stackstorm/1.0",
+  "title": "StackStorm binding of workflow packs",
+  "description": "When pinned workflow packs run on StackStorm: the rendered pack's name and version, the webhook the event bridge posts to, the broker socket its actions call, and one rule per pack - shadow or live, an optional coalesce window, an optional cron schedule for a pack triggered by homelabnext.schedule.fired. `hnx workflows st2 render` turns this file, the deploy pins and the packs into a StackStorm pack; rules JSON Schema cannot express (the pack is pinned, its steps run on StackStorm, a live rule carries shadow evidence, agent dispatch is coalesced and bounded, secrets are datastore references) are enforced by `hnx workflows st2 check` (docs/stackstorm.md).",
+  "type": "object",
+  "properties": {
+    "st2_pack": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "the StackStorm pack ref (letters, digits, underscores)"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "deploy": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/rel_path"
+    },
+    "webhook": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]*$",
+      "description": "POST /api/v1/webhooks/<webhook>"
+    },
+    "bridge_api_key": {
+      "type": "string",
+      "pattern": "^secret:[a-z][a-z0-9_-]*(/[a-z][a-z0-9_-]*)*$",
+      "description": "the secret-store name of the webhook-only StackStorm API key the event bridge sends; never a value"
+    },
+    "broker_socket": {
+      "type": "string",
+      "pattern": "^/[A-Za-z0-9._/-]+$",
+      "description": "the broker's Unix socket on the StackStorm host"
+    },
+    "actor": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id",
+      "description": "the broker identity StackStorm's actions run as (the manifest maps the StackStorm runner's peer credentials to it); every bound pack must declare this actor"
+    },
+    "config": {
+      "type": "object",
+      "description": "extra pack config keys: a literal value, or a StackStorm datastore key (rendered as a decrypt_kv reference, never a value)",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_]*$"
+      },
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": [
+                  "string",
+                  "integer",
+                  "boolean"
+                ]
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "st2kv": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.-]*$"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "st2kv"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/rule"
+      }
+    }
+  },
+  "required": [
+    "st2_pack",
+    "version",
+    "deploy",
+    "webhook",
+    "bridge_api_key",
+    "broker_socket",
+    "actor",
+    "rules"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "rule": {
+      "type": "object",
+      "properties": {
+        "pack": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Z][0-9]{2}$",
+          "description": "catalog id (A01, A02, ...)"
+        },
+        "mode": {
+          "enum": [
+            "shadow",
+            "live"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "coalesce": {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "pattern": "^\\$event(\\.[A-Za-z0-9_-]+)+$"
+            },
+            "window_s": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 86400
+            }
+          },
+          "required": [
+            "key",
+            "window_s"
+          ],
+          "additionalProperties": false
+        },
+        "schedule": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+            },
+            "cron": {
+              "type": "string",
+              "pattern": "^\\S+ \\S+ \\S+ \\S+ \\S+$",
+              "description": "five fields, UTC"
+            }
+          },
+          "required": [
+            "id",
+            "cron"
+          ],
+          "additionalProperties": false
+        },
+        "promotion": {
+          "type": "object",
+          "description": "required for mode live: the shadow window and the parity evidence that justified going live",
+          "properties": {
+            "shadow_from": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+            },
+            "live_from": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+            },
+            "evidence": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/rel_path"
+            }
+          },
+          "required": [
+            "shadow_from",
+            "live_from",
+            "evidence"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "pack",
+        "mode"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

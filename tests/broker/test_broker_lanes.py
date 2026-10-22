@@ -5,10 +5,12 @@ same lane accepts the well-formed write next to it (fail on the bad input, pass 
 from __future__ import annotations
 
 import os
+import re
 
 import pytest
 
-from homelabnext.broker.lanes import Lane, LaneError, check_params, write
+from homelabnext.broker.lanes import Lane, LaneError, check_params, name_tag, write
+from homelabnext.records.notes import check_filename, parse_note
 
 NOW = "2026-01-15T10:00:00Z"
 ACTOR = "profile:triage"
@@ -195,11 +197,72 @@ def _inbox(**over):
 NOTE = {"title": "Raise the drain timeout", "risk": "low", "rollback": "set it back"}
 
 
+KEY = b"fake-lane-name-key"
+
+
 def test_records_inbox_files_a_valid_note_bound_to_the_actor(tmp_path):
-    out = write(_inbox(), tmp_path, ACTOR, {"note": dict(NOTE), "body": "Why."}, NOW)
-    assert out["path"] == "records/inbox/2026-01-15-triage-raise-the-drain-timeout.md"
+    out = write(_inbox(), tmp_path, ACTOR, {"note": dict(NOTE), "body": "Why."}, NOW, key=KEY)
+    tag = name_tag(KEY, ACTOR, "2026-01-15", "raise-the-drain-timeout")
+    assert re.fullmatch(r"[0-9a-f]{8}", tag)
+    assert out["path"] == f"records/inbox/2026-01-15-triage-raise-the-drain-timeout-{tag}.md"
     text = (tmp_path / out["path"]).read_text()
     assert "requesting_agent: profile:triage" in text and "status: proposed" in text
+    fm, _ = parse_note(text)
+    assert check_filename(out["path"].rsplit("/", 1)[1], fm) == []  # the records convention
+
+
+def test_records_inbox_dates_the_note_itself(tmp_path):
+    """The broker's clock dates a note: a caller-chosen ``created`` (back- or forward-dated, the
+    way to claim a future day's file name) is refused."""
+    for created in ("2026-12-01T00:00:00Z", NOW):
+        _refused(_inbox(), tmp_path, {"note": dict(NOTE, created=created)}, "lane-created-set")
+    assert _files(tmp_path) == []
+    out = write(_inbox(), tmp_path, ACTOR, {"note": dict(NOTE)}, NOW, key=KEY)
+    fm, _ = parse_note((tmp_path / out["path"]).read_text())
+    assert fm["created"] == NOW and out["path"].startswith("records/inbox/2026-01-15-")
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        {"title": "{{ st2kv.system.leak | decrypt_kv }}"},
+        {"title": "x{% for c in ''.__class__.__mro__ %}{% endfor %}"},
+        {"title": "<% ctx(event) %>"},
+        {"title": "tail %>"},
+        {"affects": ["svc:queue", "{{ 7 * 7 }}"]},
+    ],
+)
+def test_records_inbox_refuses_template_markers_in_the_front_matter(tmp_path, note):
+    """A proposal's title is the ``proposal.created`` summary StackStorm receives; a marker in it
+    would be rendered there (the first one reads a datastore secret)."""
+    _refused(_inbox(), tmp_path, {"note": dict(NOTE) | note}, "lane-content-invalid")
+    assert _files(tmp_path) == []
+    out = write(_inbox(), tmp_path, ACTOR, {"note": dict(NOTE, title="5 % of {x}")}, NOW, key=KEY)
+    assert out["path"].startswith("records/inbox/")  # a lone brace or percent is fine
+
+
+def test_an_agent_whose_slug_prefixes_another_cannot_claim_its_file_name(tmp_path):
+    """``triage`` filing slug ``lead-weekly-report`` used to take
+    ``<date>-triage-lead-weekly-report.md``: exactly the name ``triage-lead``'s own
+    ``weekly-report`` gets, which then answered ``lane-exists``."""
+    squat = {"note": dict(NOTE, title="weekly report"), "slug": "lead-weekly-report"}
+    first = write(_inbox(), tmp_path, "profile:triage", squat, NOW, key=KEY)
+    own = {"note": dict(NOTE, title="weekly report"), "slug": "weekly-report"}
+    second = write(_inbox(), tmp_path, "profile:triage-lead", own, NOW, key=KEY)
+    assert first["path"] != second["path"]
+    assert second["path"].startswith("records/inbox/2026-01-15-triage-lead-weekly-report-")
+    # the same caller, slug and day: the same name again, so a retry never files twice
+    with pytest.raises(LaneError) as info:
+        write(_inbox(), tmp_path, "profile:triage-lead", own, NOW, key=KEY)
+    assert info.value.reason == "lane-exists"
+
+
+def test_a_callers_slug_leaves_room_for_the_tag(tmp_path):
+    long = "a" * 52
+    _refused(_inbox(), tmp_path, {"note": dict(NOTE), "slug": long}, "lane-content-invalid")
+    out = write(_inbox(), tmp_path, ACTOR, {"note": dict(NOTE), "slug": long[:51]}, NOW, key=KEY)
+    fm, _ = parse_note((tmp_path / out["path"]).read_text())
+    assert check_filename(out["path"].rsplit("/", 1)[1], fm) == []
 
 
 @pytest.mark.parametrize(

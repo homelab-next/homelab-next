@@ -4,3 +4,6 @@ lynis_script: /usr/local/libexec/homelabnext/lynis-scan
 # Fixed, not settings: the integrity sweep's script and the ntfy token file.
 lynis_verify_script: /usr/local/libexec/homelabnext/lynis-dpkg-verify
 lynis_notify_auth_file: /etc/homelabnext/lynis-notify.auth
+# Fixed, not a setting: where the shared last-run writer (role last_run) is installed (the
+# service's ExecStartPre= and ExecStopPost= name it).
+lynis_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run

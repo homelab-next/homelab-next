@@ -39,7 +39,8 @@ What was missing was a service that runs actions, keeps durable state and can be
    `..`, no absolute names, no symlink escape and no check-then-write window), created
    exclusively unless the lane says `overwrite: true`, and written atomically. Every refusal has
    a machine reason (`lane-name-invalid`, `lane-path-escape`, `lane-symlink`, `lane-exists`,
-   `lane-too-large`, `lane-content-invalid`, `lane-identity-mismatch`, `lane-actor-invalid`).
+   `lane-too-large`, `lane-content-invalid`, `lane-identity-mismatch`, `lane-created-set`,
+   `lane-actor-invalid`).
 3. **Everything else runs a pinned handler.** A handler document (`schemas/broker/handler` 1.1)
    pins the file's sha256; the broker reads the file once, verifies the digest before *every*
    run, and executes those verified bytes from the run's private directory, with a fixed argv

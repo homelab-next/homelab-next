@@ -1,0 +1,912 @@
+# SPDX-License-Identifier: Apache-2.0
+"""``hnx workflows st2``: the rendered StackStorm pack, its checks, and the runtime it calls.
+
+Hermetic: no StackStorm.  Rendered documents are checked against the fields st2 3.8 requires
+(``st2.SHAPES``); rule criteria are evaluated by :func:`st2_matches`, a transcription of
+``st2reactor/rules/filter.py`` and ``st2common/operators.py`` for the four operators the renderer
+emits, against every event example and fixture in the repository.
+"""
+
+from __future__ import annotations
+
+import copy
+import importlib.util
+import json
+import re
+import sys
+import types
+import urllib.parse
+from datetime import UTC, datetime
+
+import pytest
+import yaml
+from wf_support import PACKS, ROOT, manifest, pack, universe
+
+from conformance.protocols.broker import Denied
+from homelabnext.broker.service import BrokerService
+from homelabnext.events.envelope import event_problems
+from homelabnext.workflows import (
+    cli,
+    load_doc,
+    pack_digest,
+    run_fixture,
+    st2,
+    st2_runtime,
+    triggered,
+)
+from homelabnext.workflows.st2 import render, render_repo
+
+BINDING = ROOT / "workflows" / "stackstorm.yml"
+OUT = ROOT / "workflows" / "stackstorm"
+T0 = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+
+
+# ---------------------------------------------------------------- helpers
+def binding() -> dict:
+    return copy.deepcopy(load_doc(BINDING))
+
+
+def all_packs() -> dict[str, dict]:
+    return {load_doc(p)["pack"]: load_doc(p) for p in sorted(PACKS.glob("*.yml"))}
+
+
+def go(b: dict, packs: dict | None = None, tracked=lambda _p: True):
+    packs = packs if packs is not None else all_packs()
+    return render(
+        b,
+        packs,
+        pins={n: pack_digest(d) for n, d in packs.items()},
+        manifests=lambda rel: universe().manifest(rel)[0],
+        clean=set(packs),
+        tracked=tracked,
+        handlers=lambda m, h: st2.handler_problem(ROOT, m, h),
+    )
+
+
+def pinned_dir(tmp_path, b: dict | None = None, packs: dict | None = None):
+    """The ``pinned/`` directory of a tree rendered from ``b`` and ``packs``, written out."""
+    res = go(b or binding(), packs)
+    assert res.problems == [], [str(p) for p in res.problems]
+    st2.write(res.files, tmp_path / "st2")
+    return tmp_path / "st2" / "homelabnext" / "pinned"
+
+
+def calls_of(out: dict) -> list[dict]:
+    return st2_runtime.decode(out["state"])["calls"]
+
+
+#: what a reviewer filed as a proposal title: st2 would render it, unsandboxed, as Jinja
+HOSTILE = (
+    "{{ st2kv.system.leak | decrypt_kv }}{% for c in ''.__class__.__mro__ %}x{% endfor %}<% 1 %>"
+)
+
+
+def rules_of(b: dict | None = None, packs: dict | None = None) -> dict[str, dict]:
+    res = go(b or binding(), packs)
+    assert res.problems == [], [str(p) for p in res.problems]
+    return {
+        p: yaml.safe_load(t)
+        for p, t in res.files.items()
+        if "/rules/" in p  # rule name -> document
+    }
+
+
+def lookup(payload, key: str):
+    """st2's PayloadLookup for the key shapes the renderer emits (``a.b[0].c``)."""
+    cur = {"trigger": payload}
+    for part in re.findall(r"[^.\[\]]+|\[\d+\]", key.split("#", 1)[0]):
+        if part.startswith("["):
+            i = int(part[1:-1])
+            if not isinstance(cur, list) or i >= len(cur):
+                return None
+            cur = cur[i]
+        elif isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return None
+    return cur
+
+
+def st2_matches(rule: dict, body: dict) -> bool:
+    """Would StackStorm fire ``rule`` for a webhook POST of ``body``? (all criteria must hold)."""
+    payload = {"headers": {}, "body": body}
+    for key, crit in (rule.get("criteria") or {}).items():
+        value, op, pat = lookup(payload, key), crit["type"], crit.get("pattern")
+        ok = {
+            "equals": lambda v, p: p is not None and v == p,
+            "inside": lambda v, p: p is not None and v in p,
+            "exists": lambda v, _p: v is not None,
+            "nexists": lambda v, _p: v is None,
+        }[op](value, pat)
+        if not ok:
+            return False
+    return True
+
+
+def corpus() -> list[dict]:
+    """Every event example, every fixture event, and A02's reason x resubmits grid."""
+    evs = [json.loads(p.read_text()) for p in sorted((ROOT / "schemas/events/examples").glob("*"))]
+    for doc in all_packs().values():
+        evs += [fx["event"] for fx in doc["fixtures"]]
+    base = load_doc(PACKS / "agent-job-retry.yml")["fixtures"][0]["event"]
+    for reason in ("capacity", "stall", "timeout", "backend-down", "deadline", "budget", "unknown"):
+        for n in range(4):
+            ev = copy.deepcopy(base)
+            ev["id"] = f"evt-grid-{reason}-{n}"
+            ev["data"] |= {"reason": reason, "resubmits": n}
+            evs.append(ev)
+    return evs
+
+
+class KV:
+    """The StackStorm datastore with TTLs, on a fake clock."""
+
+    def __init__(self):
+        self.now, self.items = 0.0, {}
+
+    def get(self, name):
+        v = self.items.get(name)
+        return v[0] if v and v[1] > self.now else None
+
+    def set(self, name, value, ttl):
+        self.items[name] = (value, self.now + ttl)
+
+
+class FakeBroker:
+    def __init__(self, deny: str | None = None):
+        self.calls, self.submits, self.deny = [], [], deny
+
+    def call(self, action, params=None, *, target=None):
+        if self.deny:
+            raise Denied("no", reason=self.deny)
+        self.calls.append((action, params, target))
+        return {"ok": True}
+
+    def submit(self, action, params=None, *, target=None):
+        self.submits.append((action, params, target))
+        return {"request_id": "req-1", "state": "pending", "awaiting_approval": True}
+
+
+class NoBroker:
+    def __getattr__(self, name):
+        raise AssertionError(f"shadow mode used the broker ({name})")
+
+
+class ServiceAsClient:
+    """A real BrokerService behind the BrokerClient surface, as one caller."""
+
+    def __init__(self, svc: BrokerService, caller: str):
+        self.svc, self.caller = svc, caller
+
+    def call(self, action, params=None, *, target=None):
+        return self.svc.call(self.caller, action, dict(params or {}), target=target)
+
+    def submit(self, action, params=None, *, target=None):
+        rid = self.svc.submit(self.caller, action, dict(params or {}), target=target)
+        state = self.svc.status(self.caller, rid).state
+        return {"request_id": rid, "state": state, "awaiting_approval": state == "pending"}
+
+
+def broker_service(tmp_path) -> BrokerService:
+    return BrokerService.from_manifest(
+        ROOT / "examples" / "broker" / "manifest.yml",
+        tmp_path / "state",
+        data_root=tmp_path / "data",
+        clock=lambda: T0,
+        resolve_secret={"DEMO_API_TOKEN": "fake-demo-token-4b1d"}.__getitem__,
+    )
+
+
+def workflow_steps(name: str, b: dict | None = None) -> list[dict]:
+    res = go(b or binding())
+    wf = yaml.safe_load(res.files[f"homelabnext/actions/workflows/{st2.st2_name(name)}.yaml"])
+    pin = json.loads(res.files[f"homelabnext/pinned/{st2.st2_name(name)}.json"])
+    ids = [t["input"]["step"] for n, t in wf["tasks"].items() if n != "admit"]
+    return [next(s for s in pin["pack"]["steps"] if s["id"] == i) for i in ids]
+
+
+# ---------------------------------------------------------------- the committed tree
+def test_committed_tree_is_the_rendered_one():
+    res, _b = render_repo(ROOT)
+    assert res.problems == [], [str(p) for p in res.problems]
+    assert st2.drift(res.files, OUT, "workflows/stackstorm") == []
+    assert cli.main(["st2", "check"]) == 0
+
+
+def test_drift_is_reported_file_by_file(tmp_path):
+    res, _b = render_repo(ROOT)
+    st2.write(res.files, tmp_path)
+    assert st2.drift(res.files, tmp_path, "x") == []
+    (tmp_path / "bridge.json").write_text("{}\n")
+    (tmp_path / "homelabnext/rules/on_proposal_validate.yaml").unlink()
+    (tmp_path / "homelabnext/rules/on_extra.yaml").write_text("name: extra\n")
+    got = {(p.path, p.detail.split(":")[0]) for p in st2.drift(res.files, tmp_path, "x")}
+    assert got == {
+        ("x/bridge.json", "differs from the rendered file"),
+        ("x/homelabnext/rules/on_proposal_validate.yaml", "missing"),
+        ("x/homelabnext/rules/on_extra.yaml", "not rendered"),
+    }
+    st2.write(res.files, tmp_path)  # write removes what it no longer renders
+    assert st2.drift(res.files, tmp_path, "x") == []
+
+
+def test_rendered_documents_have_the_fields_stackstorm_requires():
+    res = go(binding())
+    kinds = {}
+    for path, text in res.files.items():
+        if path.endswith(".yaml"):
+            assert text.startswith("# SPDX-License-Identifier: Apache-2.0\n"), path
+            kinds[path] = yaml.safe_load(text)
+    assert st2.tree_problems(res.files, "homelabnext") == []
+    meta = kinds["homelabnext/actions/agent_job_retry.yaml"]
+    assert meta["runner_type"] == "orquesta" and set(meta["parameters"]) == {"event"}
+    assert meta["parameters"]["event"]["type"] == "string"  # the encoded body, never an object
+    for broken in (
+        {k: v for k, v in meta.items() if k != "entry_point"},
+        meta | {"runner_type": "local-shell-cmd"},
+        meta | {"parameters": {"bad-name": {"type": "string"}}},
+    ):
+        assert st2.shape_errors("action", broken)
+    assert st2.shape_errors("pack", {"ref": "homelabnext", "name": "x", "version": "1"})
+
+
+def test_the_tree_check_catches_a_task_that_is_not_a_shim():
+    res = go(binding())
+    path = "homelabnext/actions/workflows/agent_job_retry.yaml"
+    wf = yaml.safe_load(res.files[path])
+    wf["tasks"]["step_resubmit"]["action"] = "core.http"
+    bad = dict(res.files) | {path: yaml.safe_dump(wf)}
+    assert [p.detail for p in st2.tree_problems(bad, "homelabnext")] == [
+        "tasks/step_resubmit: action core.http is not a shim"
+    ]
+
+
+# ---------------------------------------------------------------- criteria conformance
+def test_rule_criteria_match_exactly_the_events_the_pack_triggers_on():
+    packs = all_packs()
+    events = corpus()
+    for path, rule in rules_of().items():
+        name = rule["action"]["ref"].split(".", 1)[1].replace("_", "-")
+        doc = packs[name]
+        hits = [e for e in events if st2_matches(rule, e)]
+        assert hits, f"{path} matches nothing in the corpus"
+        for ev in events:
+            assert st2_matches(rule, ev) == triggered(doc, ev), (path, ev["id"], ev["type"])
+
+
+def test_a02_criteria_retry_only_environment_failures_of_original_submits():
+    rule = rules_of()["homelabnext/rules/on_agent_job_retry.yaml"]
+    grid = [e for e in corpus() if e["id"].startswith("evt-grid-")]
+    fired = {(e["data"]["reason"], e["data"]["resubmits"]) for e in grid if st2_matches(rule, e)}
+    assert fired == {("capacity", 0), ("stall", 0), ("timeout", 0), ("backend-down", 0)}
+
+
+def test_a_rule_without_a_type_criterion_matches_everything_and_is_refused():
+    rule = rules_of()["homelabnext/rules/on_proposal_validate.yaml"]
+    assert st2.criteria_problems(rule) == []
+    loose = copy.deepcopy(rule)
+    del loose["criteria"]["trigger.body.type"]
+    del loose["criteria"]["trigger.body.source"]
+    assert all(st2_matches(loose, e) for e in corpus())  # the failure the check exists for
+    assert st2.criteria_problems(loose)
+    wild = copy.deepcopy(rule)
+    wild["criteria"]["trigger.body.type"] = {"type": "equals", "pattern": "homelabnext"}
+    assert st2.criteria_problems(wild)
+    res = go(binding())
+    path = "homelabnext/rules/on_proposal_validate.yaml"
+    bad = dict(res.files) | {path: yaml.safe_dump(loose)}
+    assert {p.rule for p in st2.tree_problems(bad, "homelabnext")} == {"st2-criteria"}
+
+
+def test_criteria_keys_and_repeated_fields():
+    assert st2.criteria_key("$event.data.entities.0.kind") == "trigger.body.data.entities[0].kind"
+    crit = st2.rule_criteria(
+        {
+            "event": "homelabnext.alert.created",
+            "where": [
+                {"ref": "$event.data.severity", "exists": True},
+                {"ref": "$event.data.severity", "in": ["high", "critical"]},
+                {"ref": "$event.data.title", "exists": False},
+            ],
+        }
+    )
+    assert crit == {
+        "trigger.body.type": {"type": "equals", "pattern": "homelabnext.alert.created"},
+        "trigger.body.data.severity": {"type": "exists"},
+        "trigger.body.data.severity#2": {"type": "inside", "pattern": ["high", "critical"]},
+        "trigger.body.data.title": {"type": "nexists"},
+    }
+
+
+# ---------------------------------------------------------------- the binding's rules
+def _a02(b: dict) -> dict:
+    return next(r for r in b["rules"] if r["pack"] == "agent-job-retry")
+
+
+def _problems(b: dict, packs: dict | None = None, **kw) -> set[tuple[str, str]]:
+    return {(p.rule, p.detail.split(":")[0]) for p in go(b, packs, **kw).problems}
+
+
+def test_the_shipped_binding_passes_and_starts_in_shadow():
+    res = go(binding())
+    assert res.problems == []
+    assert {r["mode"] for r in binding()["rules"]} == {"shadow"}
+    pins = [json.loads(t) for p, t in res.files.items() if "/pinned/" in p]
+    assert len(pins) == 2 and {p["mode"] for p in pins} == {"shadow"}
+    for rule in rules_of().values():
+        assert "mode" not in rule["action"]["parameters"]  # never a parameter
+
+
+def test_live_needs_a_week_of_shadow_and_tracked_evidence():
+    b = binding()
+    _a02(b)["mode"] = "live"
+    assert ("st2-live", "agent-job-retry") in _problems(b)
+    _a02(b)["promotion"] = {
+        "shadow_from": "2026-01-01",
+        "live_from": "2026-01-05",
+        "evidence": "docs/parity/a02.md",
+    }
+    assert ("st2-live", "agent-job-retry") in _problems(b)
+    _a02(b)["promotion"]["live_from"] = "2026-01-08"
+    assert ("st2-live", "agent-job-retry") in _problems(b, tracked=lambda _p: False)
+    assert go(b).problems == []
+    assert json.loads(go(b).files["homelabnext/pinned/agent_job_retry.json"])["mode"] == "live"
+
+
+def test_agent_dispatch_must_coalesce_and_retries_must_be_bounded():
+    b = binding()
+    del _a02(b)["coalesce"]
+    assert _problems(b) == {("st2-coalesce", "agent-job-retry")}
+    packs = all_packs()
+    a02 = packs["agent-job-retry"]
+    a02["trigger"]["where"] = a02["trigger"]["where"][:2]  # drop the resubmits bound
+    assert ("st2-bound", "agent-job-retry") in _problems(binding(), packs)
+    a02["trigger"]["where"].append({"ref": "$event.data.resubmits", "in": [0, 5]})
+    assert ("st2-bound", "agent-job-retry") in _problems(binding(), packs)
+    a02["trigger"]["where"][-1] = {"ref": "$event.data.resubmits", "equals": 0}
+    del a02["steps"][0]["params"]["retry_of_run_id"]
+    assert _problems(binding(), packs) == {("st2-bound", "agent-job-retry")}
+
+
+def test_steps_actor_pins_and_templates():
+    b = binding()
+    b["rules"].append({"pack": "new-critical-alert", "mode": "shadow"})
+    got = _problems(b)
+    assert ("st2-step", "new-critical-alert") in got  # lookup and decide do not run on st2 yet
+    assert ("st2-actor", "new-critical-alert") in got
+    packs = all_packs()
+    packs["proposal-validate"]["steps"][0]["params"]["note"] = "{{ st2kv.system.leak }}"
+    res = render(
+        binding(),
+        packs,
+        pins={n: pack_digest(d) for n, d in all_packs().items()},  # the old digest is pinned
+        manifests=lambda rel: universe().manifest(rel)[0],
+        clean=set(packs),
+    )
+    assert {(p.rule, p.detail.split(":")[0]) for p in res.problems} == {
+        ("st2-pin", "proposal-validate")
+    }
+    assert ("st2-template", "proposal-validate") in _problems(binding(), packs)
+    b = binding()
+    b["rules"].append(copy.deepcopy(b["rules"][0]))
+    assert ("st2-duplicate", "proposal-validate") in _problems(b)
+
+
+def test_secrets_are_datastore_references_never_values():
+    b = binding()
+    b["config"] = {"notify_token": {"value": "fake-token-value"}}
+    assert _problems(b) == {("st2-secret", "config notify_token")}
+    b["config"] = {"notify_token": {"st2kv": "homelabnext.notify_token"}, "site": {"value": "lab"}}
+    res = go(b)
+    cfg = yaml.safe_load(res.files["configs/homelabnext.yaml"])
+    schema = yaml.safe_load(res.files["homelabnext/config.schema.yaml"])
+    assert cfg["notify_token"] == "{{ st2kv.system.homelabnext.notify_token | decrypt_kv }}"
+    assert schema["notify_token"]["secret"] is True and cfg["site"] == "lab"
+    bridge = json.loads(res.files["bridge.json"])
+    assert bridge["api_key"].startswith("secret:")  # a secret-store name, not a key
+
+
+# ---------------------------------------------------------------- schedules
+SCHED_PACK = {
+    "pack": "nightly-digest",
+    "version": 1,
+    "description": "Post the nightly digest.",
+    "trigger": {
+        "event": "homelabnext.schedule.fired",
+        "where": [{"ref": "$event.data.schedule", "equals": "nightly-digest"}],
+    },
+    "actor": "profile:workflow-agents",
+    "broker_manifest": "workflows/broker.manifest.json",
+    "steps": [
+        {
+            "id": "dispatch",
+            "kind": "action",
+            "action": "agent.job.submit",
+            "target": "svc:orchestration",
+            "params": {"agent_key": "digest", "idempotency_key": "$event.id", "priority": 70},
+        }
+    ],
+    "fixtures": [],
+}
+
+
+def _sched(cron: str = "5 6 * * 1-5", sid: str = "nightly-digest"):
+    b = binding()
+    b["rules"].append(
+        {
+            "pack": "nightly-digest",
+            "mode": "shadow",
+            "schedule": {"id": sid, "cron": cron},
+            "coalesce": {"key": "$event.data.schedule", "window_s": 3600},
+        }
+    )
+    return b, all_packs() | {"nightly-digest": copy.deepcopy(SCHED_PACK)}
+
+
+def test_a_scheduled_pack_becomes_a_crontimer_rule():
+    b, packs = _sched()
+    res = go(b, packs)
+    assert res.problems == []
+    rule = yaml.safe_load(res.files["homelabnext/rules/on_nightly_digest.yaml"])
+    assert rule["trigger"] == {
+        "type": "core.st2.CronTimer",
+        "parameters": {"timezone": "UTC", "minute": 5, "hour": 6, "day_of_week": "mon-fri"},
+    }
+    assert "criteria" not in rule and rule["action"]["parameters"]["fired_at"]
+    subjects = [s["subject"] for s in json.loads(res.files["bridge.json"])["subscriptions"]]
+    assert "homelabnext.schedule.fired" not in subjects  # the clock is StackStorm's own
+    assert ("st2-cron", "nightly-digest") in _problems(*_sched("61 6 * * *"))
+    assert ("st2-trigger", "nightly-digest") in _problems(*_sched(sid="other"))
+
+
+@pytest.mark.parametrize(
+    ("cron", "params"),
+    [
+        ("*/15 * * * *", {"minute": "*/15"}),
+        ("0 2 1 * *", {"minute": 0, "hour": 2, "day": 1}),
+        ("0 2 * * 0", {"minute": 0, "hour": 2, "day_of_week": "sun"}),
+        ("30 23 * 1-6 6,7", {"minute": 30, "hour": 23, "month": "1-6", "day_of_week": "sat,sun"}),
+    ],
+)
+def test_cron_fields(cron, params):
+    assert st2.cron_params(cron) == {"timezone": "UTC", **params}
+
+
+@pytest.mark.parametrize(
+    "cron", ["* * * *", "60 * * * *", "* * * * */2", "* * * * 5-1", "a * * * *", "0 2 1 * 0"]
+)
+def test_bad_cron_fields(cron):
+    with pytest.raises(ValueError):
+        st2.cron_params(cron)
+
+
+def test_day_of_month_and_day_of_week_together_are_refused():
+    # cron fires on the 1st OR on Sundays; the CronTimer (APScheduler) only on a Sunday the 1st
+    with pytest.raises(ValueError, match="day of month and day of week"):
+        st2.cron_params("0 2 1 * 0")
+    assert ("st2-cron", "nightly-digest") in _problems(*_sched("0 6 1 * 1"))
+
+
+def test_a_firing_is_one_stable_event():
+    a = st2_runtime.schedule_event("nightly-digest", "2026-01-15 06:05:00.123456", "5 6 * * *")
+    b = st2_runtime.schedule_event("nightly-digest", "2026-01-15T06:05:00Z")
+    assert event_problems(a) == [] and a["id"] == b["id"] and a["time"] == "2026-01-15T06:05:00Z"
+    got = st2_runtime.admit_event(
+        pack="nightly-digest",
+        trigger=SCHED_PACK["trigger"],
+        schedule={"id": "nightly-digest", "fired_at": "2026-01-15 06:05:00"},
+    )
+    assert got["admitted"] and got["event"]["id"] == a["id"]
+
+
+def test_a_scheduled_run_takes_its_schedule_from_the_pinned_pack(tmp_path):
+    b, packs = _sched()
+    pdir = pinned_dir(tmp_path, b, packs)
+    got = st2_runtime.admit(
+        pack="nightly-digest", pinned_dir=pdir, fired_at="2026-01-15 06:05:00", kv=KV()
+    )
+    assert got["admitted"]
+    ev = st2_runtime.decode(got["event"])
+    assert ev["data"] == {
+        "schedule": "nightly-digest",
+        "fired_at": "2026-01-15T06:05:00Z",
+        "cron": "5 6 * * 1-5",
+    }
+    forged = st2_runtime.admit(pack="nightly-digest", pinned_dir=pdir, event=got["event"])
+    assert forged["reason"] == "invalid-event"  # a scheduled pack takes no event
+
+
+# ---------------------------------------------------------------- admit and coalesce
+def _failure(i: int, agent: str = "triage", **data) -> dict:
+    ev = copy.deepcopy(load_doc(PACKS / "agent-job-retry.yml")["fixtures"][0]["event"])
+    ev["id"], ev["subject"] = f"evt-burst-{i}", f"run-{i}"
+    ev["data"] |= {"run_id": f"run-{i}", "agent_key": agent, **data}
+    return ev
+
+
+def test_a02_coalesces_a_burst_of_failures_of_one_agent():
+    a02 = pack("agent-job-retry")
+    co = _a02(binding())["coalesce"]
+    kv = KV()
+    got = [
+        st2_runtime.admit_event(
+            pack=a02["pack"], trigger=a02["trigger"], event=_failure(i), coalesce=co, kv=kv
+        )
+        for i in range(5)
+    ]
+    assert [g["reason"] for g in got] == ["admitted"] + ["coalesced"] * 4
+    assert {g.get("coalesced_into") for g in got[1:]} == {"evt-burst-0"}
+    other = st2_runtime.admit_event(
+        pack=a02["pack"], trigger=a02["trigger"], event=_failure(9, "reader"), coalesce=co, kv=kv
+    )
+    assert other["reason"] == "admitted"  # coalescing is per agent
+    kv.now += co["window_s"]
+    again = st2_runtime.admit_event(
+        pack=a02["pack"], trigger=a02["trigger"], event=_failure(10), coalesce=co, kv=kv
+    )
+    assert again["reason"] == "admitted"  # a new window
+    capped = st2_runtime.admit_event(
+        pack=a02["pack"],
+        trigger=a02["trigger"],
+        event=_failure(11, resubmits=1),
+        coalesce=co,
+        kv=kv,
+    )
+    assert capped["reason"] == "not-triggered"  # the attempt cap, before the datastore is touched
+    bad = st2_runtime.admit_event(pack=a02["pack"], trigger=a02["trigger"], event={"type": "x"})
+    assert bad["reason"] == "invalid-event"
+    forged = _failure(12)
+    forged["source"] = "profile:triage"  # anyone who may post to the bus, but not the controller
+    got = st2_runtime.admit_event(
+        pack=a02["pack"], trigger=a02["trigger"], event=forged, coalesce=co, kv=kv
+    )
+    assert got["reason"] == "not-triggered"  # before the datastore: it opens no window
+
+
+def test_every_event_triggered_pack_pins_its_producer():
+    rules = rules_of()
+    a01 = rules["homelabnext/rules/on_proposal_validate.yaml"]
+    a02 = rules["homelabnext/rules/on_agent_job_retry.yaml"]
+    assert a01["criteria"]["trigger.body.source"] == {"type": "equals", "pattern": "svc:broker"}
+    assert a02["criteria"]["trigger.body.source"]["pattern"] == "svc:orchestration"
+    ev = pack("proposal-validate")["fixtures"][0]["event"]
+    assert st2_matches(a01, ev)
+    assert not st2_matches(a01, ev | {"source": "profile:triage"})
+    packs = all_packs()
+    packs["proposal-validate"]["trigger"].pop("where")
+    assert ("st2-source", "proposal-validate") in _problems(binding(), packs)
+    # the window is keyed by producer too: an event of another source never shares one
+    assert st2_runtime.coalesce_name("p", "svc:a", "k") != st2_runtime.coalesce_name(
+        "p", "svc:b", "k"
+    )
+
+
+# ---------------------------------------------------------------- steps: shadow, live, broker
+def test_shadow_logs_the_offline_request_and_submits_nothing(tmp_path):
+    a01 = pack("proposal-validate")
+    fx = a01["fixtures"][0]
+    [offline] = run_fixture(a01, fx, manifest=manifest()).calls
+    got = st2_runtime.step(
+        {"broker_socket": "/nonexistent"},
+        pinned_dir=pinned_dir(tmp_path),
+        broker_factory=lambda _s: NoBroker(),
+        pack=a01["pack"],
+        step="submit",
+        event=st2_runtime.encode(fx["event"]),
+    )
+    assert got["result"] == "shadow"
+    [rec] = calls_of(got)
+    assert rec["result"] == "shadow" and rec["reason"] == "st2-shadow"
+    assert (rec["request_id"], rec["request_digest"]) == (
+        offline.request_id,
+        offline.request_digest,
+    )
+    assert rec["params"] == offline.params
+
+
+def _live_a02() -> dict:
+    b = binding()
+    _a02(b)["mode"] = "live"
+    _a02(b)["promotion"] = {
+        "shadow_from": "2026-01-01",
+        "live_from": "2026-01-08",
+        "evidence": "docs/parity/a02.md",
+    }
+    return b
+
+
+def test_live_calls_or_submits_through_the_broker_only(tmp_path):
+    a02 = pack("agent-job-retry")
+    ev = a02["fixtures"][0]["event"]
+    [st] = workflow_steps("agent-job-retry")
+    pdir = pinned_dir(tmp_path, _live_a02())
+    enc = st2_runtime.encode(ev)
+    fb = FakeBroker()
+    out = st2_runtime.step(
+        {"broker_socket": "/s"},
+        pinned_dir=pdir,
+        broker_factory=lambda _s: fb,
+        pack=a02["pack"],
+        step="resubmit",
+        event=enc,
+    )
+    [rec] = calls_of(out)
+    assert rec["result"] == "executed" and fb.calls == [
+        ("agent.job.submit", rec["params"], "svc:orchestration")
+    ]
+    assert rec["params"]["retry_of_run_id"] == "run-0001"
+    out = st2_runtime.step(
+        {"broker_socket": "/s"},
+        pinned_dir=pdir,
+        broker_factory=lambda _s: FakeBroker("not-granted"),
+        pack=a02["pack"],
+        step="resubmit",
+        event=enc,
+    )
+    assert (calls_of(out)[0]["result"], calls_of(out)[0]["reason"]) == ("denied", "not-granted")
+    kw = {"pack": a02["pack"], "actor": a02["actor"], "step": st, "event": ev, "mode": "live"}
+    fb = FakeBroker()
+    out = st2_runtime.run_step(broker=fb, risky=True, **kw)
+    assert (out["calls"][0]["result"], fb.calls, len(fb.submits)) == ("held", [], 1)
+    with pytest.raises(ValueError, match="mode"):
+        st2_runtime.run_step(**(kw | {"mode": "dry-run"}))
+    with pytest.raises(st2_runtime.UnsupportedStep):
+        st2_runtime.run_step(**(kw | {"step": {"id": "d", "kind": "decide"}}))
+
+
+def test_skipped_and_enrich_steps_match_the_offline_runner():
+    ev = pack("phishing-report")["fixtures"][0]["event"]
+    step = {"id": "iocs", "kind": "enrich", "op": "extract-iocs", "from": "$event.data"}
+    got = st2_runtime.run_step(pack="p", actor="profile:x", step=step, event=ev)
+    assert got["steps"]["iocs"]["count"] >= 0 and got["calls"] == []
+    when = dict(step, when=[{"ref": "$event.data.nope", "exists": True}])
+    got = st2_runtime.run_step(pack="p", actor="profile:x", step=when, event=ev)
+    assert got["skipped"] and got["steps"] == {"iocs": None}
+
+
+def test_proposal_lane_to_a01_end_to_end_through_a_real_broker(tmp_path):
+    svc = broker_service(tmp_path)
+    note = {"title": "Raise the drain timeout", "risk": "low", "rollback": "set it back"}
+    svc.call("profile:triage", "proposal.file", {"note": note, "body": "Seen twice."})
+    [event] = svc.state.outbox()
+    assert event["type"] == "homelabnext.proposal.created"
+    rule = rules_of()["homelabnext/rules/on_proposal_validate.yaml"]
+    assert st2_matches(rule, event)
+    a01 = pack("proposal-validate")
+    admitted = st2_runtime.admit_event(
+        pack=a01["pack"],
+        trigger=a01["trigger"],
+        event=event,
+        coalesce=next(r for r in binding()["rules"] if r["pack"] == a01["pack"])["coalesce"],
+        kv=KV(),
+    )
+    assert admitted["admitted"]
+    [st] = workflow_steps("proposal-validate")
+    fb = FakeBroker()
+    st2_runtime.run_step(
+        pack=a01["pack"],
+        actor=a01["actor"],
+        step=st,
+        event=admitted["event"],
+        mode="live",
+        risky=False,
+        broker=fb,
+    )
+    [(action, params, target)] = fb.calls
+    assert (action, target) == ("agent.job.submit", "svc:orchestration")
+    assert params["input"]["note"] == event["data"]["note"]
+    assert params["idempotency_key"] == event["id"]
+
+
+def test_a_risky_action_is_held_and_the_broker_emits_decision_requested(tmp_path):
+    svc = broker_service(tmp_path)
+    step = {
+        "id": "restart",
+        "kind": "action",
+        "action": "service.restart",
+        "target": "svc:queue",
+        "params": {"grace_s": 30},
+    }
+    ev = pack("agent-job-retry")["fixtures"][0]["event"]
+    out = st2_runtime.run_step(
+        pack="restart-queue",
+        actor="profile:triage",
+        step=step,
+        event=ev,
+        mode="live",
+        risky=True,
+        broker=ServiceAsClient(svc, "profile:triage"),
+    )
+    [rec] = out["calls"]
+    assert (rec["result"], rec["reason"]) == ("held", "awaiting-approval")
+    [requested] = svc.state.outbox()
+    assert requested["type"] == "homelabnext.decision.requested"
+    assert requested["data"]["decision_id"] == rec["broker_request_id"]
+    assert requested["data"]["action"] == "service.restart"
+    with pytest.raises(Denied):  # calling it instead of submitting is refused by the broker
+        ServiceAsClient(svc, "profile:triage").call(
+            "service.restart", {"grace_s": 30}, target="svc:queue"
+        )
+
+
+# ---------------------------------------------------------------- the shims
+def _load_shim(name: str, monkeypatch):
+    base = types.ModuleType("st2common.runners.base_action")
+
+    class Action:
+        def __init__(self, config=None, action_service=None):
+            self.config, self.action_service = config, action_service
+
+    base.Action = Action
+    for mod in ("st2common", "st2common.runners"):
+        monkeypatch.setitem(sys.modules, mod, types.ModuleType(mod))
+    monkeypatch.setitem(sys.modules, "st2common.runners.base_action", base)
+    path = OUT / "homelabnext" / "actions" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"st2shim_{name}", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return getattr(mod, name.title())
+
+
+def test_the_rendered_shims_delegate_to_the_runtime(monkeypatch):
+    class Service:
+        def __init__(self):
+            self.kv = {}
+
+        def get_value(self, name, local=True):
+            assert local is False
+            return self.kv.get(name)
+
+        def set_value(self, name, value, ttl=None, local=True):
+            assert local is False and ttl == 600
+            self.kv[name] = value
+
+    a02 = pack("agent-job-retry")
+    co = _a02(binding())["coalesce"]
+    admit = _load_shim("admit", monkeypatch)(action_service=Service())
+    ev = a02["fixtures"][0]["event"]
+    assert co["window_s"] == 600
+    enc = st2_runtime.encode(ev)
+    first = admit.run(pack=a02["pack"], event=enc)  # the committed pack's pinned/ directory
+    second = admit.run(pack=a02["pack"], event=enc)
+    assert (first["reason"], second["reason"]) == ("admitted", "coalesced")
+    step = _load_shim("step", monkeypatch)(config={"broker_socket": "/nonexistent"})
+    out = step.run(pack=a02["pack"], step="resubmit", event=first["event"], state="")
+    assert calls_of(out)[0]["result"] == "shadow"
+    with pytest.raises(TypeError):  # the mode is the pinned rule's, never a parameter
+        step.run(pack=a02["pack"], step="resubmit", event=first["event"], mode="live")
+
+
+# ---------------------------------------------------------------- what crosses StackStorm
+def _hostile_proposal() -> dict:
+    ev = copy.deepcopy(pack("proposal-validate")["fixtures"][0]["event"])
+    ev["data"]["summary"] = HOSTILE  # the one free-text field (the note path is a pattern)
+    return ev
+
+
+def st2_jinja_body(body: dict) -> str:
+    """What st2 hands the rule's action for ``ENCODED_BODY``: ``to_json_string`` is st2's own
+    (``json.dumps`` with its default separators), ``urlencode`` Jinja's (``quote``, ``/`` safe)."""
+    text = json.dumps(body, indent=None, sort_keys=False, separators=(",", ": "))
+    return urllib.parse.quote(text.encode("utf-8"), safe="/")
+
+
+def test_rules_pass_the_trigger_encoded_and_never_raw():
+    for rule in rules_of().values():
+        params = rule["action"]["parameters"]
+        assert params == {"event": st2.ENCODED_BODY}, rule["name"]
+    passed = st2_jinja_body(_hostile_proposal())
+    assert not st2._TEMPLATE.search(passed) and "%>" not in passed
+    assert st2_runtime.decode(passed) == _hostile_proposal()
+
+
+def test_hostile_event_text_never_reaches_an_action_parameter_unencoded(tmp_path):
+    pdir = pinned_dir(tmp_path)
+    got = st2_runtime.admit(
+        pack="proposal-validate",
+        pinned_dir=pdir,
+        event=st2_jinja_body(_hostile_proposal()),
+        kv=KV(),
+    )
+    assert got["admitted"]
+    out = st2_runtime.step(
+        {"broker_socket": "/nonexistent"},
+        pinned_dir=pdir,
+        broker_factory=lambda _s: NoBroker(),
+        pack="proposal-validate",
+        step="submit",
+        event=got["event"],
+    )
+    for text in (got["event"], out["state"]):  # what the workflow publishes and passes on
+        assert isinstance(text, str) and not st2._TEMPLATE.search(text) and "%>" not in text
+    assert st2_runtime.decode(got["event"])["data"]["summary"] == HOSTILE
+    assert calls_of(out)[0]["result"] == "shadow"
+    raw = st2_runtime.admit(pack="proposal-validate", pinned_dir=pdir, event=_hostile_proposal())
+    assert raw["reason"] == "invalid-event"  # an object is refused: st2 would have rendered it
+
+
+def test_stackstorm_jinja_sees_no_marker_in_any_parameter(tmp_path):
+    jinja2 = pytest.importorskip("jinja2")
+    env = jinja2.Environment()
+    env.filters["to_json_string"] = lambda v: json.dumps(v, separators=(",", ": "))
+    rule = rules_of()["homelabnext/rules/on_proposal_validate.yaml"]
+    body = _hostile_proposal()
+    rendered = env.from_string(rule["action"]["parameters"]["event"]).render(trigger={"body": body})
+    assert not st2._TEMPLATE.search(rendered)
+    assert env.from_string(rendered).render() == rendered  # rendering it again is inert
+    got = st2_runtime.admit(
+        pack="proposal-validate", pinned_dir=pinned_dir(tmp_path), event=rendered, kv=KV()
+    )
+    assert st2_runtime.decode(got["event"]) == body
+
+
+def test_the_tree_check_refuses_raw_trigger_data_and_raw_task_expressions():
+    res = go(binding())
+    path = "homelabnext/rules/on_proposal_validate.yaml"
+    rule = yaml.safe_load(res.files[path])
+    rule["action"]["parameters"] = {"event": "{{ trigger.body }}", "mode": "live"}
+    bad = dict(res.files) | {path: yaml.safe_dump(rule)}
+    assert {(p.path, p.rule) for p in st2.tree_problems(bad, "homelabnext")} == {
+        (path, "st2-template")
+    }
+    wpath = "homelabnext/actions/workflows/proposal_validate.yaml"
+    wf = yaml.safe_load(res.files[wpath])
+    wf["tasks"]["step_submit"]["input"]["event"] = "<% ctx(event).data %>"
+    wf["tasks"]["step_submit"]["input"]["step"] = {"id": "x", "note": "{{ st2kv.system.leak }}"}
+    bad = dict(res.files) | {wpath: yaml.safe_dump(wf)}
+    got = [p.detail.split(":")[0] for p in st2.tree_problems(bad, "homelabnext")]
+    assert got == ["tasks/step_submit/input/event", "tasks/step_submit/input/step"]
+
+
+def test_the_step_action_runs_only_a_pinned_step_in_its_pinned_mode(tmp_path):
+    pdir = pinned_dir(tmp_path)  # shipped: shadow
+    ev = st2_runtime.encode(pack("agent-job-retry")["fixtures"][0]["event"])
+    kw = {"pack": "agent-job-retry", "pinned_dir": pdir, "broker_factory": lambda _s: NoBroker()}
+    assert st2_runtime.step({}, step="resubmit", event=ev, **kw)["result"] == "shadow"
+    with pytest.raises(TypeError):
+        st2_runtime.step({}, step="resubmit", event=ev, mode="live", **kw)
+    with pytest.raises(TypeError):  # no step document from a parameter either
+        st2_runtime.step({}, step={"id": "x", "kind": "action", "action": "host.isolate"}, **kw)
+    with pytest.raises(st2_runtime.PinError):
+        st2_runtime.step({}, step="isolate", event=ev, **kw)
+    with pytest.raises(st2_runtime.PinError):
+        st2_runtime.step({}, step="resubmit", event=ev, **(kw | {"pack": "../../etc"}))
+    other = st2_runtime.encode(pack("agent-job-retry")["fixtures"][1]["event"])  # resubmits: 1
+    with pytest.raises(ValueError, match="triggers on"):
+        st2_runtime.step({}, step="resubmit", event=other, **kw)
+    f = pdir / "agent_job_retry.json"
+    doc = json.loads(f.read_text())
+    doc["pack"]["steps"][0]["action"] = "host.isolate"  # edited after rendering
+    f.write_text(json.dumps(doc))
+    with pytest.raises(st2_runtime.PinError, match="digest"):
+        st2_runtime.step({}, step="resubmit", event=ev, **kw)
+
+
+def test_every_called_action_has_its_handler_pinned_in_the_tree(tmp_path):
+    assert (
+        st2.handler_problem(ROOT, "workflows/broker.manifest.json", "handlers/agent-job-submit.sh")
+        is None
+    )
+    root = tmp_path / "repo"
+    (root / "workflows" / "handlers").mkdir(parents=True)
+    rel = "workflows/broker.manifest.json"
+    assert "not in the tree" in st2.handler_problem(root, rel, "handlers/agent-job-submit.sh")
+    sh = root / "workflows" / "handlers" / "agent-job-submit.sh"
+    sh.write_text((ROOT / "workflows/handlers/agent-job-submit.sh").read_text() + "# edited\n")
+    (root / "workflows/handlers/agent-job-submit.handler.json").write_text(
+        (ROOT / "workflows/handlers/agent-job-submit.handler.json").read_text()
+    )
+    assert "handler_digest" in st2.handler_problem(root, rel, "handlers/agent-job-submit.sh")
+    assert "not in the tree" in st2.handler_problem(root, rel, "../../outside.sh")
+    res = render(
+        binding(),
+        all_packs(),
+        pins={n: pack_digest(d) for n, d in all_packs().items()},
+        manifests=lambda r: universe().manifest(r)[0],
+        clean=set(all_packs()),
+        handlers=lambda m, h: st2.handler_problem(root, m, h),
+    )
+    assert {(p.rule, p.detail.split(":")[0]) for p in res.problems} == {
+        ("st2-handler", "agent-job-retry"),
+        ("st2-handler", "proposal-validate"),
+    }

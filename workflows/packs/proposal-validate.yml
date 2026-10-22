@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: Apache-2.0
+# A01: a proposal filed through the broker's records-inbox lane (`proposal.file`) is validated at
+# once instead of on the next timer tick.  The pack never runs an agent: it asks the broker to put
+# one proposal-validator job on the orchestration controller's queue, which admits it by priority
+# against live load.  The event id is the idempotency key, so a redelivered event cannot
+# queue a second job.  On StackStorm this pack is rule A01 (workflows/stackstorm.yml).
+pack: proposal-validate
+version: 1
+description: Queue one proposal-validator job for every proposal filed in the records inbox.
+trigger:
+  event: homelabnext.proposal.created
+  where:
+    - {ref: $event.source, equals: "svc:broker"}  # the producer: the broker's records-inbox lane
+actor: profile:workflow-agents
+broker_manifest: workflows/broker.manifest.json
+steps:
+  - id: submit
+    kind: action
+    action: agent.job.submit
+    target: svc:orchestration
+    params:
+      agent_key: proposal-validator
+      idempotency_key: $event.id
+      priority: 40
+      input:
+        proposal_id: $event.data.proposal_id
+        note: $event.data.note
+        risk: $event.data.risk
+        requesting_agent: $event.data.requesting_agent
+fixtures:
+  - name: proposal-queued-for-validation
+    event:
+      specversion: "1.0"
+      id: evt-prop-0001
+      source: svc:broker
+      type: homelabnext.proposal.created
+      time: "2026-01-01T00:00:00Z"
+      subject: proposal-file-0001
+      data:
+        proposal_id: 2026-01-01-triage-tune-auth-rule
+        note: records/inbox/2026-01-01-triage-tune-auth-rule.md
+        requesting_agent: profile:triage
+        risk: low
+        summary: Raise the burst threshold from 5 to 8
+    expect:
+      calls:
+        - action: agent.job.submit
+          target: svc:orchestration
+          params:
+            agent_key: proposal-validator
+            idempotency_key: evt-prop-0001
+            priority: 40
+            input:
+              proposal_id: 2026-01-01-triage-tune-auth-rule
+              note: records/inbox/2026-01-01-triage-tune-auth-rule.md
+              risk: low
+              requesting_agent: profile:triage
+          result: executed
+  - name: other-event-type-ignored
+    event:
+      specversion: "1.0"
+      id: evt-prop-0002
+      source: svc:broker
+      type: homelabnext.proposal.decided
+      time: "2026-01-01T00:05:00Z"
+      data:
+        proposal_id: 2026-01-01-triage-tune-auth-rule
+        decision: approved
+        decided_by: operator
+        decided_at: "2026-01-01T00:05:00Z"
+    expect:
+      triggered: false
+      calls: []

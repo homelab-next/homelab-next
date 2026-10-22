@@ -13,7 +13,13 @@ from wf_support import MANIFEST, PACKS, ROOT, manifest, pack, problems, rules, s
 from homelabnext.workflows import Universe, check_pack, pack_digest, validate_repo
 from homelabnext.workflows.cli import main
 
-ALL = ("new-critical-alert", "phishing-report", "case-opened-notify")
+ALL = (
+    "new-critical-alert",
+    "phishing-report",
+    "case-opened-notify",
+    "proposal-validate",
+    "agent-job-retry",
+)
 
 
 # ---------------------------------------------------------------- the repository passes
@@ -304,7 +310,7 @@ def test_r07_stale_approval_fails():
 def test_cli_validate_run_digest(capsys, tmp_path, monkeypatch):
     monkeypatch.chdir(ROOT)
     assert main(["validate"]) == 0
-    assert "3 pack(s), 0 problem(s)" in capsys.readouterr().out
+    assert "5 pack(s), 0 problem(s)" in capsys.readouterr().out
     assert (
         main(
             [

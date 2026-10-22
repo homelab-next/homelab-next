@@ -39,7 +39,7 @@ lanes:
     filename_pattern: '^[a-z0-9][a-z0-9-]{0,62}\.md$'
     max_bytes: 65536
     format: text                 # or json, with an optional content_schema: <dir>/<name>
-  - name: proposals              # proposal.file -> <data-root>/records/inbox/<date>-<agent>-<slug>.md
+  - name: proposals              # proposal.file -> <data-root>/records/inbox/<date>-<agent>-<slug>-<tag>.md
     kind: records-inbox
     root: records
     per_actor: false
@@ -49,16 +49,24 @@ lanes:
 
 Params: a `files` lane takes `{name, content}`; a `records-inbox` lane takes
 `{note, body?, slug?}` where `note` is the records frontmatter. The broker binds
-`requesting_agent` to the caller, fills `created`, validates the note against
-`schemas/records/note` and names the file by the records convention, so an agent cannot file a
-note as someone else or under someone else's name. A filed proposal emits `proposal.created`.
+`requesting_agent` to the caller, sets `created` from its own clock (a note that names its own
+`created` is refused: `lane-created-set`), validates the note against `schemas/records/note` and
+names the file by the records convention, so an agent cannot file a note as someone else or under
+someone else's name. The name is `<date>-<agent>-<slug>-<tag>.md`: `tag` is 8 hex characters of a
+keyed hash (under the broker-held key in the state directory) of the caller, the date and the
+slug. Profile slugs can prefix each other (`triage`, `triage-lead`), so without it `triage` could
+file `<date>-triage-lead-weekly-report.md` first and leave `triage-lead`'s own proposal
+`lane-exists`; with it, every agent's names are its own, and the same caller filing the same slug
+the same day gets the same name again (`lane-exists`), so a retry files nothing twice. A caller's
+`slug` is at most 51 characters (the tag takes the rest of the records convention's 60). A filed
+proposal emits `proposal.created`.
 
 What a lane refuses, each with its audit reason: a name that is not one plain segment or does not
 match the pattern (`lane-name-invalid`), a symlinked or non-directory component on the way
 (`lane-path-escape`), a target that is a symlink (`lane-symlink`), an existing file when the lane
 does not say `overwrite: true` (`lane-exists`), content over `max_bytes` (`lane-too-large`),
 content of the wrong shape or failing its schema (`lane-content-invalid`), a note naming another
-agent (`lane-identity-mismatch`) and a per-actor lane with a caller that is not `profile:<slug>`
+agent (`lane-identity-mismatch`) or its own `created` (`lane-created-set`) and a per-actor lane with a caller that is not `profile:<slug>`
 (`lane-actor-invalid`). Lane roots live under the broker's **data root** (`--data-root`, default
 `<state>/lanes`); point it at the directory the agents' memory, findings and records live in.
 
@@ -86,7 +94,11 @@ reason, never the handler's own error text. JSON on stdout is the action's resul
 **Secrets** are named, never passed. The default resolver reads `HNX_BROKER_SECRET_<NAME>` from the
 *broker's* environment and hands the value to that one handler as `<NAME>`; an embedding program
 can pass `resolve_secret=` (for example a lookup in the secrets capability). A value never appears
-in a request, an approval or the audit trail, and is replaced by `<redacted>` in captured output.
+in a request, an approval or the audit trail, and is replaced by `<redacted>` in captured output,
+as are its trivially derived forms: JSON-escaped (with and without `\uXXXX` escapes),
+percent-encoded and base64. That redaction is a backstop: **a handler must never print a
+secret**, because any other transformation of it (a substring, a hash, another encoding) is not
+recognised.
 
 After editing a handler, update its digest:
 
@@ -108,6 +120,14 @@ hnx broker validate examples/broker/manifest.yml
    (default 900 s). Self-approval, an unlisted approver and an agent approver (unless
    `allow_agent_approvers`) are refused by the same rules for a denial as for an approval.
    `decision.returned` records the verdict.
+
+   The allowlist is matched **exactly** on `(issuer, subject)`: write each entry as the approver's
+   canonical subject (lower-case, the approval schema's `^[a-z][a-z0-9._-]{0,63}$`), exactly as
+   the relay sends it. `operator_one`, `operator.one` and `operator-one` are three different
+   accounts at an IdP, and only the one named is accepted. Spellings are folded (case, `.`, `_`
+   and whitespace to `-`) only where that refuses more: an approver whose folded subject is the
+   requesting profile's name is self-approval, and one whose folded subject names a granted
+   profile is an agent.
 3. The owner runs it. The broker re-decides with the approval, takes the request's claim, and
    only then consumes the approval (an exclusive-create marker, so single use across processes and
    restarts) and runs once: a run refused on the way (arguments that no longer validate, a lost
@@ -133,6 +153,8 @@ processes share it without locks: `requests/`, `open/` (an index of the requests
 so listing them reads only those; rebuilt once for an older state directory), `claims/` (the one
 transition out of `pending`: run, cancel or deny), `results/`, `approvals/<request>/`,
 `consumed/`, `audit/` (one record per file, `schemas/broker/audit`; a tail is read newest first),
+`decisions/` (an index of the trail's filed approvals and denials, so the hub's recent-decisions
+read never walks the refusals; rebuilt once for an older state directory),
 `outbox/`, `runs/<request>/` and `digest.key`. Keep it `0700` and owned by the
 broker's user; agents get no access to it.
 
@@ -140,7 +162,7 @@ broker's user; agents get no access to it.
 
 `hnx broker serve` runs the broker on a Unix-domain socket. Who is calling is the **peer's uid**,
 read from the kernel (`SO_PEERCRED`, Linux), and mapped through the manifest
-(`schemas/broker/manifest` 1.3; example: `examples/broker/manifest.production.yml`):
+(`schemas/broker/manifest` 1.4; example: `examples/broker/manifest.production.yml`):
 
 ```yaml
 dev_identity: false                       # the CLI's asserted --as is refused (absent = false)
@@ -149,6 +171,7 @@ callers:                                  # an agent's system user -> the one pr
   - {uid: 2002, profile: profile:reader}
 approval_relays:                          # a process that authenticated a person, for one issuer
   - {user: hnx-hub, issuer: sso}
+refusal_limit: {max: 60, window_s: 60}    # refused requests per peer per window (the default)
 ```
 
 A peer is listed once, as a caller *or* a relay (`hnx broker validate` refuses a peer in both);
@@ -180,6 +203,15 @@ group-writable or open to others, and a file at the socket path that is not a st
 Bounds: one request per connection, at most 1 MiB (`--max-request-bytes`) read within 10 s
 (`--timeout`, for the whole request, not each read); 32 connections at once for callers, plus 4
 kept for approval relays so agents cannot crowd out the hub; more get `busy`.
+
+Refusals are rate limited per peer: a caller or an unknown peer with more than
+`refusal_limit.max` refused requests (`Denied` or `InvalidArguments`: an unknown action, a
+malformed request, `unknown-caller`, ...) within `refusal_limit.window_s` seconds (manifest 1.4;
+default 60 per 60 s) is answered `rate-limited` for the rest of the window, without its request
+being parsed. The limit is audited **once per peer and window** (`operation: connect`,
+`reason: rate-limited`) and the number of requests it suppressed is logged when the window ends,
+so a looping or hostile agent can fill neither the audit trail nor the disk. Approval relays are
+exempt, as they are from the connection cap.
 
 ### A systemd unit
 
@@ -275,8 +307,8 @@ approval can no longer be used: show the form again, a fresh approval is accepte
 (the approval no longer matches: show the form). `approved` is `true` exactly when the state is
 `valid`; a relay written against the older field keeps working and stops hiding an expired one.
 
-`approver.issuer` must be the relay's own `issuer` (else `relay-issuer-mismatch`); `subject` is the
-person's SSO subject. The broker then applies the manifest's rules to that person:
+`approver.issuer` must be the relay's own `issuer`, exactly (else `relay-issuer-mismatch`);
+`subject` is the person's SSO subject. The broker then applies the manifest's rules to that person:
 `approval-approver-not-allowed`, `approval-self-approved`, `approval-agent-approver`. A relay
 never runs, submits or reads a request for itself (`not-a-caller`).
 
@@ -293,7 +325,13 @@ short:
 - the page reuses the private tier's front door (trusted proxy, shared secret header, identity
   header), then requires the approver group (distinct from the viewer group) to decide;
 - the approver sent to the broker is `{issuer: <configured>, subject: <the front door's
-  username>}`, never a form field;
+  username>}`, never a form field. The username is sent **unchanged**: Authentik's usernames are
+  case-sensitive (`Bob` and `bob` may be two accounts), so the hub does not lower-case them, and a
+  username that is not already canonical (lower-case, as the approver allowlist names it) cannot
+  decide. Name approvers in Authentik in lower case. A username can be renamed by an IdP admin;
+  pinning the approver to the IdP's immutable id (Authentik's `X-Authentik-Uid`, passed by the
+  front door next to the username) is a recommended follow-up: the hub does not receive that
+  header today;
 - the form carries the request id **and the digest shown**; the hub refuses (`409`) when the
   broker's current digest differs, so a person approves exactly what they read, and the broker
   binds the approval to that digest again;
@@ -386,7 +424,7 @@ hnx broker import-proposals /path/to/old-vault/proposed --apply --socket /run/hn
 | `title` | `title`, `summary`, `subject`; else the body's first `# heading` | not imported |
 | `risk` | `risk`, `risk_level`, `severity` (`low`, `medium`, `high`; `med`/`moderate` -> `medium`, `critical` -> `high`) | `--default-risk`, else not imported |
 | `rollback` | `rollback`, `rollback_plan`, `backout` | `--default-rollback`, else not imported |
-| `created` | `created`, `date` (a bare date is midnight UTC) | the filename's leading date, else the file's mtime |
+| original date | `created`, `date` (a bare date is midnight UTC): kept as provenance `created:<timestamp>`; the filed note's `created` is the broker's clock | the filename's leading date, else the file's mtime |
 | `affects`, `related` | the same keys, when valid | dropped and reported |
 | `provenance` | `inputs`: `imported-from:<file>`, `requested-by:<original agent>`; `source`: the importing caller | - |
 | slug | the original agent's name, then the filename after its date (and that name) | the agent's name, then the title |
@@ -396,10 +434,11 @@ hnx broker import-proposals /path/to/old-vault/proposed --apply --socket /run/hn
 import cannot file a note as another agent; the original requester survives as provenance.
 `status` is dropped (the broker keeps state). A `completion-request` or any other non-proposal
 `type` is skipped and reported (close those with the records lifecycle). Every other key is listed
-as unmapped. Filenames come from `created` and the slug, so a second `--apply` reports
-`lane-exists` and adds nothing; the slug keeps the original agent's name, so two agents' proposals
-with the same date and title get two files, and two source files that would still share one name
-are a `conflict` (the second is not filed). Exit status 1 when any file could not be mapped or
+as unmapped. Filenames come from the day of the import and the slug, so a second `--apply` the
+same day reports `lane-exists` and adds nothing (a re-run on a later day files the queue again:
+run `--apply` once, after a clean dry run); the slug keeps the original agent's name, so two
+agents' proposals with the same title get two files, and two source files that would still share
+one name are a `conflict` (the second is not filed). Exit status 1 when any file could not be mapped or
 filed, or conflicts. A
 suggested order: run the broker in `shadow` beside the guard hook, import the queue, point the
 agents at the MCP tools, then remove the agents' write access to the old directory.
@@ -419,7 +458,7 @@ The scenario's steps, each a line of the report (`broker_e2e.py run --json`, and
    peer's uid maps to;
 2. `memory-write`: `memory_write` lands in `<data-root>/memory/<profile>/`, mode `600`, owned by
    the broker, not the agent;
-3. `proposal-file`: `proposal_file` files `records/inbox/<date>-<agent>-<slug>.md`, named after the
+3. `proposal-file`: `proposal_file` files `records/inbox/<date>-<agent>-<slug>-<tag>.md`, named after the
    peer's profile;
 4. `submit`, `run-before-approval`: an approval-gated `service.restart` is pending and
    `broker_run` is refused (`approval-required`);

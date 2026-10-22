@@ -43,6 +43,14 @@ argument_specs:
         type: path
         description: "Where each run writes its report and its exit status (last-run)."
         default: /var/lib/homelabnext/lynis
+      lynis_last_run_dir: &last_run_dir
+        type: path
+        description: "Where each run writes its last-run record (role last_run; the status hub's job-last-run mapping reads it)."
+        default: /var/lib/homelabnext/last-run
+      lynis_last_run_group: &last_run_group
+        type: str
+        description: "The group that may read the last-run records (the account that ships them to the status hub)."
+        default: root
       lynis_dpkg_verify: &verify
         type: bool
         description: "Run the package integrity sweep (dpkg --verify) on the same timer."
@@ -117,6 +125,8 @@ argument_specs:
       lynis_systemctl_cli: *systemctl
       lynis_unit_dir: *units
       lynis_state_dir: *state
+      lynis_last_run_dir: *last_run_dir
+      lynis_last_run_group: *last_run_group
       lynis_dpkg_verify: *verify
       lynis_dpkg_verify_include_conffiles: *conffiles
       lynis_dpkg_verify_allow: *allow

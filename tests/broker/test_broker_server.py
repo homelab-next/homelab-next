@@ -30,6 +30,7 @@ from homelabnext.broker.client import BrokerClient
 from homelabnext.broker.server import (
     BrokerServer,
     PeerMap,
+    RefusalLimiter,
     handle_request,
     peer_credentials,
     supported,
@@ -459,6 +460,95 @@ def test_handle_request_is_the_whole_protocol(tmp_path):
     assert resp["error"] == "unknown-caller"
     resp = handle_request(svc, peers, READER_UID, b'{"op": "actions"}')
     assert resp["ok"] and resp["result"]["caller"] == "profile:reader"
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.t = 1000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def _ask(svc, peers, uid, limiter, op="call", **body):
+    raw = json.dumps({"op": op, **body}).encode()
+    return handle_request(svc, peers, uid, raw, limiter=limiter)
+
+
+def _limited_records(svc):
+    return [r for r in svc.audit_documents() if r["reason"] == "rate-limited"]
+
+
+def test_refusals_are_rate_limited_per_peer_and_audited_once_per_window(tmp_path):
+    """An agent probing unknown actions (or a stranger knocking) wrote one audit file per try,
+    with no limit: the trail, the disk and every full read of it grew without bound."""
+    svc = _service(tmp_path)
+    peers = PeerMap(svc.manifest)
+    clock = _Clock()
+    limiter = RefusalLimiter(3, 60, clock=clock)
+    for i in range(3):
+        resp = _ask(svc, peers, READER_UID, limiter, action=f"nope.{i}")
+        assert resp["error"] == "default-deny"
+    before = len(svc.audit_documents())
+    for i in range(50):
+        resp = _ask(svc, peers, READER_UID, limiter, action=f"nope.x{i}")
+        assert (resp["ok"], resp["error"], resp["kind"]) == (False, "rate-limited", "Denied")
+    assert len(svc.audit_documents()) == before + 1, "coalesced: one record per window"
+    [rec] = _limited_records(svc)
+    assert (rec["operation"], rec["outcome"], rec["via"]) == (
+        "connect",
+        "denied",
+        f"uid:{READER_UID}",
+    )
+    assert schema_errors("broker", "audit", rec) == []
+    # per peer: another caller, an allowed request and a relay are untouched
+    assert _ask(svc, peers, STRANGER_UID, limiter, op="actions")["error"] == "unknown-caller"
+    assert _ask(svc, peers, RELAY_UID, limiter, op="pending")["ok"]
+    for _ in range(10):  # a relay's refusals never lock the hub out
+        assert _ask(svc, peers, RELAY_UID, limiter, op="call")["error"] == "not-a-caller"
+    assert _ask(svc, peers, RELAY_UID, limiter, op="pending")["ok"]
+    # the window ends: served again, and limited again (one more record) only when it re-offends
+    clock.t += 61
+    assert _ask(svc, peers, READER_UID, limiter, op="actions")["ok"]
+    for i in range(4):
+        _ask(svc, peers, READER_UID, limiter, action=f"again.{i}")
+    assert len(_limited_records(svc)) == 2
+
+
+def test_unknown_peers_are_rate_limited_too(tmp_path):
+    svc = _service(tmp_path)
+    peers = PeerMap(svc.manifest)
+    limiter = RefusalLimiter(2, 60, clock=_Clock())
+    errors = [_ask(svc, peers, STRANGER_UID, limiter, op="actions")["error"] for _ in range(20)]
+    assert errors == ["unknown-caller"] * 2 + ["rate-limited"] * 18
+    assert len(svc.audit_documents()) == 3
+
+
+def test_the_refusal_limit_comes_from_the_manifest(tmp_path):
+    svc = _service(tmp_path, refusal_limit={"max": 5, "window_s": 30})
+    assert validate_manifest(svc.manifest, tmp_path / "broker")[1] == []
+    srv = BrokerServer(svc, tmp_path / "run" / "broker.sock")
+    assert (srv.limiter.max_refusals, srv.limiter.window_s) == (5, 30.0)
+    dflt = BrokerServer(_service(tmp_path / "b"), tmp_path / "run2" / "broker.sock").limiter
+    assert (dflt.max_refusals, dflt.window_s) == (60, 60.0)
+    bad = dict(svc.manifest, refusal_limit={"max": 0})
+    assert validate_manifest(bad, tmp_path / "broker")[1]
+    with pytest.raises(ValueError):
+        RefusalLimiter(0, 60)
+
+
+def test_a_running_server_rate_limits_a_flooding_agent(tmp_path, monkeypatch):
+    monkeypatch.setenv("HNX_BROKER_SECRET_DEMO_API_TOKEN", "fake-socket-token")
+    svc = _service(tmp_path, refusal_limit={"max": 5, "window_s": 600})
+    with BrokerServer(svc, tmp_path / "run" / "broker.sock") as srv:
+        c = BrokerClient(srv.path)
+        reasons = []
+        for i in range(40):
+            with pytest.raises(BrokerError) as info:
+                c.call(f"nope.{i}", {})
+            reasons.append(info.value.reason)
+    assert reasons == ["default-deny"] * 5 + ["rate-limited"] * 35
+    assert len(svc.audit_documents()) == 6
 
 
 # -- the CLI -----------------------------------------------------------------------------------

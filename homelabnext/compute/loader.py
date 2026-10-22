@@ -11,6 +11,7 @@ from typing import Any
 import yaml
 
 from homelabnext import paths, sops
+from homelabnext._schema_text import safe_message
 from homelabnext._yaml import UniqueKeyStrDateLoader
 from homelabnext.generators.safe import control_char_paths
 
@@ -38,7 +39,7 @@ def schema_problems(doc: Any, where: str) -> list[Problem]:
     out = []
     for err in sorted(validator.iter_errors(doc), key=lambda e: [str(p) for p in e.absolute_path]):
         path = "/".join(str(p) for p in err.absolute_path) or "<root>"
-        out.append(Problem(where, f"schema: {path}: {err.message}"))
+        out.append(Problem(where, f"schema: {path}: {safe_message(err)}"))
     return out
 
 

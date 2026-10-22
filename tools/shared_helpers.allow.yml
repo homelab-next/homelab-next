@@ -18,6 +18,9 @@ allow:
   - path: homelabnext/status/agents/store.py
     rule: lake
     reason: the status hub's agent activity store is a local SQLite file of agent events (both tiers, redacted before writing), not a client of the shared lake; nothing here queries the lake
+  - path: ansible/roles/last_run/files/hnx-last-run.py
+    rule: state
+    reason: the last-run writer is a standalone stdlib script installed on every guest, which has no homelabnext package to import; its record is a contract document (schemas/status/last_run.schema.json) the status hub reads, not checker state
   - path: hooks/claude_code_activity.py
     rule: state
     reason: the hook is a standalone stdlib script copied to workstations and cloud sessions, so it cannot import homelabnext.state; each spool file is one immutable record handed to the hub, not checker state
