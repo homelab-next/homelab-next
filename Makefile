@@ -308,10 +308,10 @@ fix-check:
 # Regenerate the hashed CI constraints (needs uv).  Versions published in the last 14 days are
 # skipped unless a direct pin needs one (CONSTRAINTS_FRESH: packages exempt from that cooldown).
 CONSTRAINTS_CUTOFF ?= $(shell date -u -d '14 days ago' +%Y-%m-%d 2>/dev/null)
-CONSTRAINTS_FRESH ?= ruff pyarrow
+CONSTRAINTS_FRESH ?= ruff pyarrow certifi
 constraints:
 	uv pip compile pyproject.toml constraints/ci-tools.in --extra dev --extra test --extra lake \
-	  --extra core --extra nats --extra mcp --universal --python-version 3.11 --generate-hashes --no-header \
+	  --extra core --extra nats --extra mcp --extra ansible --universal --python-version 3.11 --generate-hashes --no-header \
 	  --exclude-newer $(CONSTRAINTS_CUTOFF) \
 	  $(foreach p,$(CONSTRAINTS_FRESH),--exclude-newer-package $(p)=$(shell date -u +%Y-%m-%d)) \
 	  -o constraints/ci.txt
