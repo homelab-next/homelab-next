@@ -6,6 +6,7 @@ encoded in :func:`homelabnext.mcp.clients.orch_accepts`)."""
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import shutil
@@ -28,6 +29,14 @@ BROKER_AGENT = SPECS / "profile.broker-agent.json"
 COLLECTOR = SPECS / "profile.collector.json"
 NPM_PREFIX = "/var/lib/hnx/npm-prefix"
 CTX = servers.LaunchContext(npm_prefix=NPM_PREFIX)
+
+
+def _lax_review_policy(beside: Path) -> None:
+    """The example review policy beside a copied catalog, asking no MCP server review: these
+    tests edit records (render refuses a catalog with no review policy at all)."""
+    doc = yaml.safe_load((ROOT / "examples" / "review-policy.yml").read_text())
+    doc["requirements"]["mcp-server"] = {s: [] for s in doc["requirements"]["mcp-server"]}
+    (beside / "review-policy.yml").write_text(yaml.safe_dump(doc))
 
 
 def _policy() -> CeilingPolicy:
@@ -110,6 +119,7 @@ def test_ungrantable_and_unknown_servers_are_refused():
 def test_two_definitions_under_one_name_are_refused(tmp_path):
     d = tmp_path / "mcp"
     shutil.copytree(ROOT / "examples" / "mcp", d, ignore=shutil.ignore_patterns("clients"))
+    _lax_review_policy(d.parent)
     rec = yaml.safe_load((d / "notes.yml").read_text())
     rec["instance"] = "notes"
     (d / "notes.yml").write_text(yaml.safe_dump(rec))
@@ -143,6 +153,7 @@ def test_the_committed_renders_have_no_drift(spec):
 def test_check_finds_a_hand_edit_and_a_lost_entry_in_any_home(tmp_path, capsys):
     dst = tmp_path / "mcp"
     shutil.copytree(ROOT / "examples" / "mcp", dst)
+    _lax_review_policy(dst.parent)
     shutil.copy(ROOT / "examples" / "services.yml", tmp_path / "services.yml")
     spec = dst / "clients" / "hermes.yml"
     assert cli.main(["mcp", "catalog", "render", "--spec", str(spec), "--check"]) == 0
@@ -360,6 +371,7 @@ def test_a_compiled_profile_is_judged_against_the_policy_and_the_lock(tmp_path):
 def _open_param_catalog(tmp_path: Path) -> servers.Catalog:
     d = tmp_path / "mcp"
     shutil.copytree(ROOT / "examples" / "mcp", d, ignore=shutil.ignore_patterns("clients"))
+    _lax_review_policy(d.parent)
     rec = yaml.safe_load((d / "notes.yml").read_text())
     rec["parameters"]["writable"].pop("pattern")  # a parameter with no type of its own
     rec["transport"]["args"] = ["--prefix={writable}", "--token=secret:mcp/notes-token"]
@@ -403,6 +415,7 @@ def test_a_parameter_value_never_routes_a_secret_or_a_variable(tmp_path):
 def test_render_writes_only_under_its_root_never_through_a_link(tmp_path):
     dst = tmp_path / "mcp"
     shutil.copytree(ROOT / "examples" / "mcp", dst)
+    _lax_review_policy(dst.parent)
     shutil.copy(ROOT / "examples" / "services.yml", tmp_path / "services.yml")
     spec = dst / "clients" / "hermes.yml"
     doc = yaml.safe_load(spec.read_text())
@@ -433,6 +446,8 @@ def test_render_writes_only_under_its_root_never_through_a_link(tmp_path):
 def _orch_copy(tmp_path: Path) -> Path:
     dst = tmp_path / "mcp"
     shutil.copytree(ROOT / "examples" / "mcp", dst)
+    _lax_review_policy(dst.parent)
+    shutil.copy(ROOT / "examples" / "services.yml", dst.parent)  # the registry beside it
     return dst / "clients" / "llm-orchestrator.yml"
 
 
@@ -499,16 +514,20 @@ def test_claude_desktop_refuses_a_server_that_needs_a_secret():
 def test_hermes_refuses_an_sse_server(tmp_path):
     d = tmp_path / "mcp"
     shutil.copytree(ROOT / "examples" / "mcp", d, ignore=shutil.ignore_patterns("clients"))
+    _lax_review_policy(d.parent)
     rec = yaml.safe_load((d / "lake.yml").read_text())
     rec["transport"]["type"] = "sse"
     (d / "lake.yml").write_text(yaml.safe_dump(rec))
+    reg = copy.deepcopy(REGISTRY)  # the registry agrees (render runs the full record check)
+    reg.services["lake-query"].mcp["transport"] = "sse"
     with pytest.raises(clients.RenderError, match="legacy sse transport"):
-        clients.render_profile(servers.load(d), READER, "hermes", registry=REGISTRY, policy=POLICY)
+        clients.render_profile(servers.load(d), READER, "hermes", registry=reg, policy=POLICY)
 
 
 def _hermes_copy(tmp_path: Path) -> Path:
     dst = tmp_path / "mcp"
     shutil.copytree(ROOT / "examples" / "mcp", dst)
+    _lax_review_policy(dst.parent)
     shutil.copy(ROOT / "examples" / "services.yml", tmp_path / "services.yml")
     return dst / "clients" / "hermes.yml"
 
@@ -548,6 +567,7 @@ def test_a_file_drifts_only_when_a_record_it_holds_changes(tmp_path):
 def test_a_spec_lane_or_home_is_a_plain_name_and_params_name_a_real_lane(tmp_path):
     dst = tmp_path / "mcp"
     shutil.copytree(ROOT / "examples" / "mcp", dst)
+    _lax_review_policy(dst.parent)
     shutil.copy(ROOT / "examples" / "services.yml", tmp_path / "services.yml")
     spec = dst / "clients" / "hermes.yml"
     base = yaml.safe_load(spec.read_text())
@@ -579,6 +599,7 @@ def test_render_refuses_a_record_check_would_refuse(tmp_path):
     unpinned launch or a record edited after its review rendered."""
     d = tmp_path / "mcp"
     shutil.copytree(ROOT / "examples" / "mcp", d, ignore=shutil.ignore_patterns("clients"))
+    _lax_review_policy(d.parent)
     shutil.copy(ROOT / "examples" / "review-policy.yml", tmp_path / "review-policy.yml")
     pristine = (d / "notes.yml").read_text()
     for edit, phrase in (
@@ -631,3 +652,30 @@ def test_a_lean_profile_cannot_declare_itself_local_only_to_render_a_local_only_
             CATALOG, COLLECTOR, "claude-code", policy=CeilingPolicy.from_mapping(doc)
         )
     assert clients.render_profile(CATALOG, COLLECTOR, "claude-code", policy=POLICY)
+
+
+def test_render_needs_the_review_policy_and_runs_the_full_record_check(tmp_path, capsys):
+    """Round 4 design notes: without ``review-policy.yml`` beside the catalog a render would
+    write unreviewed records, so it is refused unless ``--no-review-policy`` says this is a local
+    experiment; and render runs check's whole record rules (tools, egress included), not a
+    subset."""
+    d = tmp_path / "mcp"
+    shutil.copytree(ROOT / "examples" / "mcp", d, ignore=shutil.ignore_patterns("clients"))
+    with pytest.raises(clients.RenderError, match=r"no review-policy\.yml beside the catalog"):
+        clients.render_profile(servers.load(d), COLLECTOR, "claude-code", policy=WIDE)
+    assert clients.render_profile(
+        servers.load(d), COLLECTOR, "claude-code", policy=WIDE, review_policy=False
+    )
+    pol = tmp_path / "pol.yml"
+    pol.write_text((SPECS / "policy" / "ceilings.yml").read_text())
+    base = ["mcp", "catalog", "render", "--catalog", str(d), "--profile", str(COLLECTOR),
+            "--client", "claude-code", "--policy", str(pol)]  # fmt: skip
+    assert cli.main(base) == 1
+    assert "no review-policy.yml" in capsys.readouterr().out
+    assert cli.main([*base, "--no-review-policy"]) == 0
+    _lax_review_policy(tmp_path)
+    notes = yaml.safe_load((d / "notes.yml").read_text())
+    notes["egress"] = ["internet"]  # yet no tool is classed egress
+    (d / "notes.yml").write_text(yaml.safe_dump(notes))
+    with pytest.raises(clients.RenderError, match="egress names internet but no tool"):
+        clients.render_profile(servers.load(d), COLLECTOR, "claude-code", policy=WIDE)

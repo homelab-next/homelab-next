@@ -144,7 +144,9 @@ def _render(args) -> int:
                 file=sys.stderr,
             )
             return 2
-        rendered = clients.render_spec(args.spec, args.root)
+        rendered = clients.render_spec(
+            args.spec, args.root, review_policy=not args.no_review_policy
+        )
     else:
         if not args.client:
             print("hnx mcp catalog render: --profile needs --client", file=sys.stderr)
@@ -162,6 +164,7 @@ def _render(args) -> int:
             lock=clients.load_lock(args.lock) if args.lock else None,
             npm_prefix=args.npm_prefix,
             checkout_root=args.checkout_root,
+            review_policy=not args.no_review_policy,
         )
         if not args.out:
             if args.check:
@@ -265,6 +268,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     r.add_argument(
         "--check", action="store_true", help="fail when an output differs from the render"
+    )
+    r.add_argument(
+        "--no-review-policy",
+        action="store_true",
+        help="render although no review-policy.yml is beside the catalog (local experiments "
+        "only: the records written are not held to their reviews)",
     )
     i = sub.choices["import"]
     i.add_argument("configs", nargs="+", help="client config files (JSON or YAML)")

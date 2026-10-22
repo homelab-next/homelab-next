@@ -45,6 +45,14 @@ CLAUDE_JSON = {
 HERMES = {"mcp_servers": {"events": {"type": "sse", "url": "https://bus.lab.example/sse"}}}
 
 
+def _lax_review_policy(beside: Path) -> None:
+    """The example review policy beside a copied catalog, asking no MCP server review: these
+    tests edit records (render refuses a catalog with no review policy at all)."""
+    doc = yaml.safe_load((ROOT / "examples" / "review-policy.yml").read_text())
+    doc["requirements"]["mcp-server"] = {s: [] for s in doc["requirements"]["mcp-server"]}
+    (beside / "review-policy.yml").write_text(yaml.safe_dump(doc))
+
+
 def _write(tmp_path: Path) -> list[Path]:
     files = []
     for name, doc in (("mcp.json", CLAUDE_CODE), ("claude_desktop_config.json", DESKTOP),
@@ -220,6 +228,7 @@ def test_a_rendered_record_imports_back_to_the_same_server(tmp_path):
 
     d = tmp_path / "mcp"
     shutil.copytree(ROOT / "examples" / "mcp", d, ignore=shutil.ignore_patterns("clients"))
+    _lax_review_policy(d.parent)
     gh = yaml.safe_load((d / "github.yml").read_text())
     gh["timeout"] = 45
     (d / "github.yml").write_text(yaml.safe_dump(gh))

@@ -65,12 +65,37 @@ GRANTS_MARKER = "# Per-job MCP grants (ADR-022)."
 _SECRET_REF = re.compile(r"secret:[a-z][a-z0-9_-]*(?:/[a-z][a-z0-9_-]*)*")
 
 
-def refuse_unsound_records(cat: servers.Catalog, sids: Iterable[str]) -> None:
-    """Refuse to render records that ``hnx mcp catalog check`` would refuse: unpinned or not
-    launched as pinned, a literal credential, an untyped parameter, missing reviews (with the
-    review policy beside the catalog, as check finds it).  Render never writes what check would
-    have stopped."""
-    problems = servers.record_problems(cat, sids, policy=servers.default_policy(cat))
+def refuse_unsound_records(
+    cat: servers.Catalog,
+    sids: Iterable[str],
+    *,
+    registry: Any = None,
+    review_policy: bool = True,
+) -> None:
+    """Refuse to render records that ``hnx mcp catalog check`` would refuse: the full record
+    check (:func:`homelabnext.mcp.servers.record_problems`: schema, pin and launch, tools and
+    egress, credentials, parameters, capabilities, lifecycle, and with a registry its
+    cross-references; the registry beside the catalog when the render names none) and the
+    reviews ``review-policy.yml`` beside the catalog asks for.  That policy must exist unless
+    ``review_policy`` is False (``--no-review-policy``, for a local experiment): a catalog
+    without one would render unreviewed records.  Render never writes what check would have
+    stopped."""
+    policy = servers.default_policy(cat)
+    if policy is None and review_policy:
+        raise RenderError(
+            [
+                f"no review-policy.yml beside the catalog {cat.root.name}/ (render writes only "
+                "reviewed records; --no-review-policy renders without one, for a local "
+                "experiment only)"
+            ]
+        )
+    if registry is None:
+        beside = cat.root.resolve().parent / "services.yml"
+        if beside.is_file():
+            from homelabnext.registry.model import load
+
+            registry = load(beside)
+    problems = servers.record_problems(cat, sids, policy=policy, registry=registry)
     if problems:
         raise RenderError(
             [*problems, "(the catalog fails hnx mcp catalog check for what this render writes)"]
@@ -782,14 +807,18 @@ def render_profile(
     lock: Mapping[str, str] | None = None,
     npm_prefix: str | None = None,
     checkout_root: str | None = None,
+    review_policy: bool = True,
 ) -> tuple[str, list[str]]:
     """One profile's client file (``--profile``); ``policy``/``lock``: :func:`profile_refusals`;
-    ``npm_prefix``/``checkout_root``: :class:`homelabnext.mcp.servers.LaunchContext`."""
+    ``npm_prefix``/``checkout_root``: :class:`homelabnext.mcp.servers.LaunchContext`;
+    ``review_policy``: :func:`refuse_unsound_records`."""
     ctx = launch_context(npm_prefix, checkout_root)
     p = Path(profile_path)
     prof = _load_profile(p, cat, policy, lock)
     lanes = list(lanes)
-    refuse_unsound_records(cat, _rendered_ids(cat, client, [prof]))
+    refuse_unsound_records(
+        cat, _rendered_ids(cat, client, [prof]), registry=registry, review_policy=review_policy
+    )
     insts = instances(
         cat, prof, lanes=lanes, params=params, profile_file=profile_file or str(profile_path)
     )
@@ -862,9 +891,14 @@ def _inside(root: Path, rel: Any, what: str) -> Path:
     return p
 
 
-def render_spec(spec_path: str | Path, root: str | Path | None = None) -> Rendered:
+def render_spec(
+    spec_path: str | Path, root: str | Path | None = None, *, review_policy: bool = True
+) -> Rendered:
     """Every output a render spec names (see the module docstring).  Output and ``grants_file``
-    paths are relative to ``root`` (default: the spec's directory) and must stay under it."""
+    paths are relative to ``root`` (default: the spec's directory) and must stay under it.  A
+    spec is trusted input (it names the catalog, the policy, the lock and where files are
+    written), so it is reviewed like the code that runs it; ``review_policy``:
+    :func:`refuse_unsound_records`."""
     from homelabnext.registry.model import RegistryError, load
 
     sp = Path(spec_path)
@@ -899,7 +933,12 @@ def render_spec(spec_path: str | Path, root: str | Path | None = None) -> Render
     for entry in spec["profiles"]:
         pf = base / str(entry["file"])
         loaded.append((entry, _load_profile(pf, cat, policy, lock), pf))
-    refuse_unsound_records(cat, _rendered_ids(cat, client, [prof for _, prof, _ in loaded]))
+    refuse_unsound_records(
+        cat,
+        _rendered_ids(cat, client, [prof for _, prof, _ in loaded]),
+        registry=registry,
+        review_policy=review_policy,
+    )
     for entry, prof, pf in loaded:
         res.notes += deprecation_notes(cat, prof)
         if client != "llm-orchestrator":

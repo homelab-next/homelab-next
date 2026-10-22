@@ -1079,27 +1079,18 @@ def default_policy(cat: Catalog) -> Any:
 
 
 def record_problems(
-    cat: Catalog, sids: Iterable[str], policy: Any = None, source_root: Path | None = None
+    cat: Catalog,
+    sids: Iterable[str],
+    policy: Any = None,
+    source_root: Path | None = None,
+    registry: Any = None,
 ) -> list[str]:
-    """The per-record rules of :func:`check` for the records ``sids`` (what a render is about to
-    write into a client file): pinned and launched as pinned, credentials only as secret names
-    and no literal one, typed parameters and known templates, and with ``policy`` the reviews
-    the record's status needs.  (The schema and id rules: :func:`integrity_problems`.)"""
-    out: list[str] = []
-    sids = sorted(set(sids))
-    for sid in sids:
-        rec = cat.get(sid)
-        if rec is None:
-            continue
-        where = cat.rel(sid)
-        out += origin_problems(rec.get("origin"), where, source_root, cat.root)
-        out += launch_problems(rec, where)
-        out += _secret_problems(rec, where)
-        out += _literal_problems(rec, where)
-        out += _template_problems(rec, where)
-    if policy is not None:
-        out += _review_problems(cat, policy, sids)
-    return out
+    """Everything :func:`check` says about the records ``sids`` (what a render is about to write
+    into a client file): the schema and id, every per-record rule (pin and launch, tools and
+    egress, a hosted server's URL, credentials, parameters and templates, capabilities,
+    lifecycle), with ``registry`` the cross-references of these records, and with ``policy``
+    the reviews each one's status needs."""
+    return check(cat, registry=registry, policy=policy, source_root=source_root, only=sids)
 
 
 def check(
@@ -1109,20 +1100,27 @@ def check(
     vocabulary: Iterable[str] | None = None,
     policy: Any = None,
     source_root: Path | None = None,
+    only: Iterable[str] | None = None,
 ) -> list[str]:
     """Every problem with the catalog (empty = valid).  ``registry``: cross-check endpoints,
     hosts, egress and the registry's ``mcp`` entries; ``vocabulary``: the capability classes
     (default: ``tool_classes.yml``'s); ``policy``: the review policy; ``source_root``: the
-    checkout first-party paths are relative to."""
+    checkout first-party paths are relative to; ``only``: just these records' problems (what
+    a render writes, :func:`record_problems`)."""
     if vocabulary is None:
         from homelabnext.agent.readers import table_vocabulary
 
         vocabulary = table_vocabulary()
     vocabulary = list(vocabulary)
-    out = list(cat.problems)
+    keep = None if only is None else set(only)
+    out = list(cat.problems) if keep is None else [
+        p for p in cat.problems if p.split(":", 1)[0] in {f"{s}.yml" for s in keep}
+    ]  # fmt: skip
     invalid: set[str] = set()
     known = known_capabilities(registry)
     for sid, rec in cat:
+        if keep is not None and sid not in keep:
+            continue
         f = cat.files[sid]
         where = cat.rel(sid)
         schema = _schema_problems(rec, where)
@@ -1158,7 +1156,11 @@ def check(
             elif cat.status(repl) != "active":
                 out.append(f"{where}: replaced_by {repl!r} is not an active catalog server")
     if registry is not None:
-        out += _registry_problems(cat, registry, invalid)
+        regp = _registry_problems(cat, registry, invalid)
+        if keep is not None:
+            wheres = tuple(f"{cat.rel(s)}:" for s in keep if s in cat.files)
+            regp = [p for p in regp if p.startswith(wheres)] if wheres else []
+        out += regp
     if policy is not None:
-        out += _review_problems(cat, policy)
+        out += _review_problems(cat, policy, keep)
     return out
