@@ -26,7 +26,11 @@ the same file and nothing is ever rewritten in place.  State is *derived* from w
                                  start the newest :data:`RECONCILE_AUDIT` audit records are
                                  re-indexed, so a crash between the two writes loses no decision
 ``outbox/<event id>.json``       events emitted when no bus is configured, each with its place in
-                                 emit order (``queued``); ``hnx broker relay`` publishes them
+                                 emit order (``queued``: the next value of ``outbox.seq``, taken
+                                 and linked under one ``flock``); ``hnx broker relay`` publishes
+                                 them
+``outbox.seq``                   the outbox's persisted counter (``flock``-guarded), so emit order
+                                 survives restarts, other processes and a clock that goes back
 ``delivered/<event id>.json``    the relay's marker: the bus acknowledged that outbox event (its
                                  stream and sequence); written only after the publish ack
 ``digest.key``                   the broker-held key (hex) for the keyed hash of secret arguments in a
@@ -82,6 +86,8 @@ RECONCILE_AUDIT = 256
 DECISIONS_COMPLETE = "decisions.complete"
 #: the audit records the ``decisions/`` index holds: (operation, outcome)
 DECISION_KINDS = frozenset({("approve", "ok"), ("deny", "ok")})
+#: the outbox's persisted emit-order counter (:meth:`StateDir.put_outbox`)
+OUTBOX_SEQ = "outbox.seq"
 
 
 class StateError(RuntimeError):
@@ -181,7 +187,6 @@ class StateDir:
             d.mkdir(mode=0o700, exist_ok=True)
         self._seq = 0
         self._last_stamp = ""
-        self._outbox_ns = 0  # emit order: never goes backwards within this process
         self._audit_lock = threading.Lock()  # a threaded server shares one instance
         self._key: bytes | None = None
         if index_missing:  # a state directory from before the index: build it once
@@ -346,17 +351,55 @@ class StateDir:
 
     def put_outbox(self, event: dict[str, Any]) -> bool:
         """Record an event (idempotent per event id: a repeat is a no-op) with its place in emit
-        order: ``queued`` = (wall-clock ns, pid, sequence), which never goes backwards within one
-        process, so the relay publishes one process's events in the order they were emitted."""
+        order, ``queued``: the next value of the persisted counter ``outbox.seq``.
+
+        The counter is taken and the file linked under one exclusive ``flock`` (and this
+        instance's lock), so across threads and processes an event becomes visible only after
+        every event with a smaller ``queued`` is: a relay pass that sees event *n* sees every
+        earlier one still pending.  No clock is involved, so a clock stepped back (or two
+        processes' clocks) cannot reorder events."""
         eid = self._event_id(event.get("id"))
-        if (self._dir("outbox") / f"{eid}.json").exists():
+        path = self._dir("outbox") / f"{eid}.json"
+        if path.exists():
             return False
-        with self._audit_lock:
-            self._outbox_ns = max(self._clock_ns(), self._outbox_ns + 1)
-            self._seq += 1
-            queued = [self._outbox_ns, os.getpid(), self._seq]
-        doc = {"queued": queued, "event": event}
-        return write_exclusive(self._dir("outbox") / f"{eid}.json", _dumps(doc))
+        with self._audit_lock, self._outbox_seq() as take:
+            if path.exists():
+                return False
+            doc = {"queued": take(), "event": event}
+            # group-readable: the relay may run as its own user in the outbox's group
+            return write_exclusive(path, _dumps(doc), mode=0o640)
+
+    @contextlib.contextmanager
+    def _outbox_seq(self) -> Iterator[Callable[[], int]]:
+        """Hold ``outbox.seq``'s ``flock``; yields a function returning the next value (stored
+        before it is returned, so a crash leaves a gap, never a repeat)."""
+        import fcntl
+
+        fd = os.open(self.root / OUTBOX_SEQ, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+
+            def take() -> int:
+                raw = os.pread(fd, 64, 0).decode("ascii", "replace").strip()
+                last = int(raw) if raw.isdigit() else self._outbox_max_queued()
+                value = last + 1
+                os.pwrite(fd, f"{value:020d}\n".encode("ascii"), 0)
+                os.fsync(fd)
+                return value
+
+            yield take
+        finally:
+            os.close(fd)  # releases the flock
+
+    def _outbox_max_queued(self) -> int:
+        """The largest ``queued`` in the outbox (a missing or unreadable ``outbox.seq``): every
+        event still pending sorts before the next one."""
+        best = 0
+        for p in self._dir("outbox").glob("*.json"):
+            entry = self._outbox_entry(p)
+            if entry is not None and entry[0][0] == 1:
+                best = max(best, entry[0][1])
+        return best
 
     @staticmethod
     def _event_id(eid: Any) -> str:
@@ -365,17 +408,19 @@ class StateDir:
             raise StateError(f"not an event id: {eid[:80]!r}")
         return eid
 
-    def _outbox_entry(self, path: Path) -> tuple[tuple[int, int, int, str], dict[str, Any]] | None:
+    def _outbox_entry(self, path: Path) -> tuple[tuple[int, int, str], dict[str, Any]] | None:
+        """``((format, position, name), event)``.  An outbox file from before ``queued`` (the
+        bare event) sorts before every current one, by its ``time`` (whole seconds) and then its
+        id: it was written by an older broker, so it was emitted before anything with a
+        ``queued``, and within one second the id is the only order there is."""
         doc = _load(path)
         if not isinstance(doc, dict):
             return None
-        if isinstance(doc.get("event"), dict) and isinstance(doc.get("queued"), list):
-            ns, pid, seq = (int(x) for x in doc["queued"][:3])
-            event = doc["event"]
-        else:  # an outbox file from before ``queued``: the bare event, ordered by its time
-            event, pid, seq = doc, 0, 0
-            ns = _order({"request": {"created": doc.get("time", "")}})
-        return (ns, pid, seq, path.stem), event
+        queued = doc.get("queued")
+        if isinstance(doc.get("event"), dict) and isinstance(queued, int):
+            return (1, queued, path.stem), doc["event"]
+        when = _order({"request": {"created": doc.get("time", "")}})
+        return (0, when, path.stem), doc
 
     def outbox(self) -> list[dict[str, Any]]:
         """Every outbox event, in emit order (delivered or not)."""
