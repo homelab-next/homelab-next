@@ -32,7 +32,11 @@ It writes:
 
 - **`litellm/config.yaml`**. The `model_list` has one entry per binding, and `model_name` is the
   role. Binding priority becomes `order`. Role `limits` become per-deployment `rpm`/`tpm` (the
-  per-minute share, rounded down) and `max_budget`. Role fallbacks go in `router_settings`, with
+  per-minute share, rounded down) and `max_budget`. LiteLLM counts only per minute, so a limit
+  must have a window of whole minutes and at least one call a minute: `1` per `3600` s or `5` per
+  `10` s is refused rather than rendered looser (`1` rpm, `30` rpm). Counts are whole numbers of
+  at least 1; `max_requests: 0` is refused, never rendered as unlimited. Bifrost gets the
+  declared count and window exactly. Role fallbacks go in `router_settings`, with
   `enable_pre_call_checks: true` so the limits are enforced. `general_settings` holds the master
   key and the database only as `os.environ/HNX_SECRET_*` references.
 - **`litellm/keys.json`**. These are the virtual keys. LiteLLM stores keys in Postgres, not in its

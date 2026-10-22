@@ -48,7 +48,6 @@ import glob
 import hashlib
 import ipaddress
 import json
-import math
 import re
 import sys
 from collections.abc import Iterable, Mapping
@@ -79,6 +78,7 @@ SECRET_RE = re.compile(r"^secret:[a-z0-9][a-z0-9/_.-]*$")
 SVC_RE = re.compile(r"^svc:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)$")
 MDL_RE = re.compile(r"^mdl:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)$")
 SLUG_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+ROLE_LIMIT_KEYS = ("max_requests", "max_tokens", "max_cost", "cost_per_1k_tokens")
 HOST_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$")
 LOCALITIES = ("local", "cloud")
 DATA_TIERS = ("local-only", "cloud-allowed")
@@ -122,7 +122,7 @@ class Key:
     roles: tuple[str, ...]
     data_tier: str
     owner: str = ""  # profile:<id> for agent keys
-    window_s: float | None = None
+    window_s: int | None = None
     max_requests: int | None = None
     max_tokens: int | None = None
 
@@ -191,17 +191,72 @@ def _role_name(where: str, value: Any, problems: list[str]) -> str | None:
     return m.group(1)
 
 
+def _whole(value: Any) -> int | None:
+    """``value`` as a positive whole number, or ``None`` (a bool, a string, 0, 2.5 are not)."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    return int(value) if value >= 1 else None
+
+
+def per_minute(count: int, window_s: int) -> int | None:
+    """``count`` per ``window_s`` as a per-minute limit that is never looser, or ``None``.
+
+    LiteLLM counts every rpm/tpm limit over one sliding 60 s window.  ``count`` per ``k`` minutes
+    becomes ``floor(count / k)`` per minute: any ``k``-minute span then holds at most ``count``
+    (rounding down only tightens).  A window that is not a whole number of minutes cannot be
+    expressed that way (90 s: two sliding minutes fit in it), nor can a share below one a minute
+    (1 per hour is not "1 a minute"), so those are ``None`` and the spec is refused."""
+    if window_s % 60:
+        return None
+    share = count // (window_s // 60)
+    return share if share >= 1 else None
+
+
+def limit_problems(where: str, raw: Any, *, allowed: Iterable[str]) -> list[str]:
+    """Problems with a ``limits`` mapping (a role's or a key's); empty when both gateways can
+    enforce it exactly as declared or tighter.  A zero or missing count never means unlimited."""
+    allowed = tuple(allowed)
+    if not isinstance(raw, Mapping) or set(raw) - set(allowed):
+        return [f"{where}: limits takes {', '.join(allowed)}"]
+    w = _whole(raw.get("window_s"))
+    if w is None:
+        return [f"{where}: limits.window_s must be a whole number of seconds, at least 1"]
+    problems: list[str] = []
+    counts = [k for k in ("max_requests", "max_tokens") if k in raw]
+    for k in counts:
+        n = _whole(raw[k])
+        if n is None:
+            problems.append(
+                f"{where}: limits.{k} must be a whole number, at least 1 ({raw[k]!r} is not; "
+                "0 would read as unlimited, so it is refused)"
+            )
+        elif per_minute(n, w) is None:
+            problems.append(
+                f"{where}: limits.{k} {n} per {w}s cannot be a per-minute limit (LiteLLM's only "
+                "window) without loosening it: use a window of whole minutes with at least one "
+                "call per minute"
+            )
+    if "max_cost" in raw and (
+        isinstance(raw["max_cost"], bool)
+        or not isinstance(raw["max_cost"], int | float)
+        or raw["max_cost"] <= 0
+    ):
+        problems.append(f"{where}: limits.max_cost must be a positive number")
+    if not counts and "max_cost" not in raw:
+        problems.append(f"{where}: limits needs max_requests, max_tokens or max_cost")
+    return problems
+
+
 def _limits(where: str, raw: Any, problems: list[str]) -> dict[str, Any]:
     if raw is None:
         return {}
-    if not isinstance(raw, Mapping) or set(raw) - {"window_s", "max_requests", "max_tokens"}:
-        problems.append(f"{where}: limits takes window_s, max_requests, max_tokens")
+    found = limit_problems(where, raw, allowed=("window_s", "max_requests", "max_tokens"))
+    if found:
+        problems += found
         return {}
-    w = raw.get("window_s")
-    if not isinstance(w, int | float) or w <= 0:
-        problems.append(f"{where}: limits.window_s must be a positive number")
-        return {}
-    return dict(raw)
+    return {k: int(v) for k, v in raw.items()}
 
 
 def _profile_slug(pid: str) -> str:
@@ -301,6 +356,10 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
         backends[name] = Backend(name, loc, host=host, port=port, scheme=scheme, api_key=key)
 
     for rname, role in sorted(table.roles.items()):
+        if role.limits:
+            problems += limit_problems(
+                f"mdl:{rname}", role.limits, allowed=("window_s", *ROLE_LIMIT_KEYS)
+            )
         for b in role.bindings:
             if b.backend not in backends:
                 problems.append(
@@ -499,12 +558,18 @@ def _env_ref_bifrost(secret: str) -> str:
 
 
 def _per_minute(count: float, window_s: float) -> int:
-    """A per-window count as LiteLLM's per-minute limit, rounded down (never looser), at least 1."""
-    return max(1, math.floor(count * 60 / window_s))
+    """The validated per-minute form of a limit (:func:`per_minute`; the loader refused the rest)."""
+    share = per_minute(int(count), int(window_s))
+    if share is None:  # unreachable after load_spec: never render a looser limit
+        raise GatewaySpecError(f"{count:g} per {window_s:g}s has no per-minute form")
+    return share
 
 
 def _duration(window_s: float) -> str:
+    """A whole-second window as Bifrost's/LiteLLM's duration string (``60`` -> ``1m``)."""
     s = int(window_s)
+    if s != window_s or s < 1:
+        raise GatewaySpecError(f"window {window_s!r} is not a whole number of seconds")
     for unit, n in (("d", 86400), ("h", 3600), ("m", 60)):
         if s % n == 0:
             return f"{s // n}{unit}"
@@ -552,7 +617,7 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
         if lim and lim.get("window_s") != 60 and (lim.get("max_requests") or lim.get("max_tokens")):
             notes.append(
                 f"mdl:{rname}: limits are per {lim['window_s']:g}s; LiteLLM counts per minute, "
-                "so rpm/tpm are the per-minute share rounded down"
+                "so rpm/tpm are the per-minute share rounded down (never looser)"
             )
         if len(role.bindings) > 1 and (lim.get("max_requests") or lim.get("max_tokens")):
             notes.append(f"mdl:{rname}: rpm/tpm apply per deployment ({len(role.bindings)} here)")

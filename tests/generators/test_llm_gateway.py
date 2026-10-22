@@ -343,6 +343,58 @@ def test_an_agent_profile_key_may_not_be_reused_by_a_spec_key():
         gw.spec_from_dict(doc, base=LAB_SPEC.parent)
 
 
+# --- limits are enforced as declared or tighter, never looser -----------------------------------
+
+
+def with_limits(limits):
+    keys = spec_doc()["keys"]
+    keys[1] = dict(keys[1], limits=limits)
+    return keys
+
+
+@pytest.mark.parametrize(
+    "limits, words",
+    [
+        ({"window_s": 3600, "max_requests": 0}, "0 would read as unlimited"),
+        ({"window_s": 3600, "max_requests": 1}, "cannot be a per-minute limit"),  # was 1 rpm
+        ({"window_s": 10, "max_requests": 5}, "cannot be a per-minute limit"),  # was 30 rpm
+        ({"window_s": 90, "max_requests": 3}, "cannot be a per-minute limit"),
+        ({"window_s": 60, "max_requests": "3"}, "must be a whole number"),
+        ({"window_s": 60, "max_requests": 2.5}, "must be a whole number"),
+        ({"window_s": 60, "max_tokens": True}, "must be a whole number"),
+        ({"window_s": 0.5, "max_requests": 3}, "window_s must be a whole number of seconds"),
+        ({"window_s": 60}, "limits needs max_requests, max_tokens or max_cost"),
+    ],
+)
+def test_a_key_limit_that_would_render_looser_is_refused(tmp_path, limits, words):
+    with pytest.raises(gw.GatewaySpecError, match=words):
+        gw.render_file(make_spec(tmp_path, keys=with_limits(limits)))
+
+
+def test_a_role_limit_that_would_render_looser_is_refused(tmp_path):
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["small-local"]["limits"] = {"window_s": 3600, "max_requests": 1}
+    with pytest.raises(gw.GatewaySpecError, match=r"mdl:small-local: limits\.max_requests 1 per"):
+        gw.render_file(make_spec(tmp_path, roles))
+
+
+def test_a_whole_minute_window_renders_its_exact_or_tighter_share(tmp_path):
+    files = gw.render_file(
+        make_spec(tmp_path, keys=with_limits({"window_s": 600, "max_requests": 25}))
+    )
+    keys = {k["key_alias"]: k for k in json.loads(files["litellm/keys.json"])["keys"]}
+    assert keys["cloud-tool"]["rpm_limit"] == 2  # 25 per 10 min: 2 a minute, never 3
+    vks = json.loads(files["bifrost/config.json"])["governance"]["rate_limits"]
+    rl = next(r for r in vks if r["id"] == "rl-key-cloud-tool")
+    assert (rl["request_max_limit"], rl["request_reset_duration"]) == (25, "10m")  # exact
+
+
+def test_duration_refuses_a_fraction_of_a_second():
+    assert gw._duration(90) == "90s"
+    with pytest.raises(gw.GatewaySpecError):
+        gw._duration(0.5)
+
+
 # --- audit of rendered files (what --check runs on disk) -----------------------------------------
 
 
