@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -95,6 +96,26 @@ def _secret_text(text: str) -> str:
     return _SECRET_REF.sub(lambda m: _placeholder(m.group(0)), text)
 
 
+#: what a parameter value may never contain: a client would expand ``$VAR``/``${VAR}``/``$(...)``
+#: from its own environment, and ``secret:`` would become a secret placeholder, so a value could
+#: route any secret to any server; control characters split a line or an argument
+_UNSAFE_VALUE = re.compile(r"\$|secret:|[\x00-\x1f\x7f]")
+
+
+def unsafe_value(value: Any) -> str | None:
+    """Why a parameter value from a grant may not be used, or None.  A value is a string (YAML
+    ``true`` or ``0755`` would arrive as ``True`` and ``493``) and is passed through verbatim,
+    so it may not carry a variable reference, a secret reference or a control character."""
+    if not isinstance(value, str):
+        return f"{value!r} is not a string (quote it: YAML reads true and 0755 as other types)"
+    if _UNSAFE_VALUE.search(value):
+        return (
+            f"{value!r} carries $, secret: or a control character (a value is never expanded; "
+            "secrets come only from the record's own env, headers and arguments)"
+        )
+    return None
+
+
 def profile_name(pid: str) -> str:
     return pid.split(":", 1)[1] if ":" in pid else pid
 
@@ -137,6 +158,9 @@ def instances(
     problems: list[str] = []
     out: list[Instance] = []
     names = granted(profile)
+    bad_file = unsafe_value(profile_file)
+    if bad_file:
+        problems.append(f"{pid}: profile_file {bad_file}")
     for key in params:
         sid = key.split("@", 1)[0]
         if sid not in names:
@@ -161,16 +185,17 @@ def instances(
             for pname, p in declared.items():
                 if pname in given:
                     raw = given[pname]
-                    vals = [str(v) for v in raw] if isinstance(raw, list) else [str(raw)]
+                    vals = list(raw) if isinstance(raw, list) else [raw]
                 elif p.get("default") is not None:
                     vals = [_fill(str(p["default"]), base)]
                 else:
                     problems.append(f"{pid}: {sid}: parameter {pname} needs a value ({lane})")
                     vals = []
                 for v in vals:
-                    bad = servers.value_problem(p, v)
+                    bad = unsafe_value(v) or servers.value_problem(p, v)
                     if bad:
                         problems.append(f"{pid}: {sid}: parameter {pname}: {bad}")
+                vals = [v for v in vals if isinstance(v, str)]
                 choices.append([(pname, v) for v in vals])
             for combo in itertools.product(*choices) if declared else [()]:
                 values = dict(combo)
@@ -199,8 +224,10 @@ def instances(
 
 # ------------------------------------------------------------------------------- one instance
 def _args(inst: Instance) -> list[str]:
+    """The record's arguments: its own literal ``secret:`` references become placeholders first,
+    then templates are filled, so a substituted value is never read as a secret reference."""
     values = {**inst.vars(), servers.PROFILE_FILE: inst.profile_file}
-    return [_secret_text(_fill(str(a), values)) for a in inst.record["transport"].get("args") or ()]
+    return [_fill(_secret_text(str(a)), values) for a in inst.record["transport"].get("args") or ()]
 
 
 def _env(inst: Instance, *, fixed_only: bool = False) -> dict[str, str]:
@@ -457,9 +484,36 @@ class Rendered:
     notes: list[str] = field(default_factory=list)
 
 
-def _load_profile(path: Path) -> dict[str, Any]:
-    from homelabnext.agent.compiler import profile_digest
+def profile_refusals(doc: Mapping[str, Any], cat: servers.Catalog) -> list[str]:
+    """Why a profile may not be rendered: everything ``hnx agent verify`` refuses for a compiled
+    profile (schema, the reader rule and catalog grants judged against *this* catalog, the stored
+    ceiling, budgets, a digest that is present and matches), and for a lean one
+    (``platform/agent_profile``) its schema, the same grant rules and ``mcp`` within
+    ``mcp_ceiling``.  Rendering never trusts a profile the compiler would not have produced."""
+    from homelabnext.agent.compiler import verify_profile
+    from homelabnext.agent.errors import AgentError
+    from homelabnext.agent.readers import ToolClasses, profile_problems
+    from homelabnext.agent.schemas import schema_errors
 
+    try:
+        classes = ToolClasses.from_catalog(cat)
+    except AgentError as exc:
+        return [str(exc)]
+    if "grants" in doc:
+        if not doc.get("digest"):
+            return ["a compiled profile carries its digest (hnx agent compile)"]
+        return verify_profile(doc, classes=classes)
+    problems = schema_errors("platform", "agent_profile", json.loads(json.dumps(doc)))
+    if problems:
+        return [f"not a compiled or lean agent profile: {p}" for p in problems]
+    problems = profile_problems(doc, classes)
+    over = sorted(set(doc.get("mcp") or ()) - set(doc.get("mcp_ceiling") or ()))
+    if over:
+        problems.append(f"mcp outside mcp_ceiling: {over}")
+    return problems
+
+
+def _load_profile(path: Path, cat: servers.Catalog) -> dict[str, Any]:
     try:
         text = path.read_text(encoding="utf-8")
         doc = json.loads(text) if path.suffix == ".json" else yaml.safe_load(text)
@@ -467,8 +521,9 @@ def _load_profile(path: Path) -> dict[str, Any]:
         raise RenderError([f"{path}: cannot read the profile: {exc}"]) from None
     if not isinstance(doc, Mapping) or not str(doc.get("id", "")).startswith("profile:"):
         raise RenderError([f"{path}: not an agent profile (no profile: id)"])
-    if "grants" in doc and doc.get("digest") and profile_digest(doc) != doc["digest"]:
-        raise RenderError([f"{path}: the profile's digest does not match its content"])
+    refused = profile_refusals(doc, cat)
+    if refused:
+        raise RenderError([f"{path}: refused: {p}" for p in refused])
     return dict(doc)
 
 
@@ -484,7 +539,7 @@ def render_profile(
 ) -> tuple[str, list[str]]:
     """One profile's client file (``--profile``)."""
     p = Path(profile_path)
-    prof = _load_profile(p)
+    prof = _load_profile(p, cat)
     lanes = list(lanes)
     insts = instances(
         cat, prof, lanes=lanes, params=params, profile_file=profile_file or str(profile_path)
@@ -512,8 +567,23 @@ def _spec_problems(spec: Any) -> list[str]:
     return out
 
 
-def render_spec(spec_path: str | Path) -> Rendered:
-    """Every output a render spec names (see the module docstring)."""
+def _inside(root: Path, rel: Any, what: str) -> Path:
+    """``root / rel`` for a path the render writes (or splices): relative, not a symlink, and
+    still under ``root`` once resolved."""
+    raw = Path(str(rel))
+    if raw.is_absolute():
+        raise RenderError([f"{what} {rel}: an absolute path (write it relative to {root})"])
+    p = root / raw
+    if p.is_symlink():
+        raise RenderError([f"{what} {rel}: a symlink (the render never writes through one)"])
+    if not p.resolve().is_relative_to(root.resolve()):
+        raise RenderError([f"{what} {rel}: outside {root}"])
+    return p
+
+
+def render_spec(spec_path: str | Path, root: str | Path | None = None) -> Rendered:
+    """Every output a render spec names (see the module docstring).  Output and ``grants_file``
+    paths are relative to ``root`` (default: the spec's directory) and must stay under it."""
     from homelabnext.registry.model import RegistryError, load
 
     sp = Path(spec_path)
@@ -525,6 +595,7 @@ def render_spec(spec_path: str | Path) -> Rendered:
     if problems:
         raise RenderError([f"{sp}: {p}" for p in problems])
     base = sp.parent
+    out_root = Path(root) if root is not None else base
     cat = servers.load((base / str(spec.get("catalog", ".."))).resolve())
     registry = None
     if spec.get("registry"):
@@ -539,7 +610,7 @@ def render_spec(spec_path: str | Path) -> Rendered:
     blocks: dict[str, tuple[Path, str]] = {}
     for entry in spec["profiles"]:
         pf = base / str(entry["file"])
-        prof = _load_profile(pf)
+        prof = _load_profile(pf, cat)
         insts = instances(
             cat,
             prof,
@@ -552,7 +623,8 @@ def render_spec(spec_path: str | Path) -> Rendered:
         if client == "llm-orchestrator":
             if not entry.get("grants_file"):
                 raise RenderError([f"{sp}: {prof['id']}: llm-orchestrator needs grants_file"])
-            blocks[prof["id"]] = (base / str(entry["grants_file"]), orch_grants(insts, lanes))
+            gf = _inside(out_root, entry["grants_file"], "grants_file")
+            blocks[prof["id"]] = (gf, orch_grants(insts, lanes))
     if client == "llm-orchestrator":
         text, notes = orch_catalog(cat, {i.server for i in every})
         res.notes += notes
@@ -560,7 +632,7 @@ def render_spec(spec_path: str | Path) -> Rendered:
         if bad:
             raise RenderError(bad)
         for out in spec["outputs"]:
-            res.outputs.append(Output(base / str(out["path"]), text))
+            res.outputs.append(Output(_inside(out_root, out["path"], "output"), text))
         for path, block in blocks.values():
             res.outputs.append(Output(path, block, splice=True))
         return res
@@ -568,16 +640,25 @@ def render_spec(spec_path: str | Path) -> Rendered:
         what = f"home {out['home']}" if out.get("home") else f"{sp.name}"
         text, skipped = render_home(every, client, cat, registry, what)
         res.notes += [f"{what}: {client} cannot hold {n}" for n in skipped]
-        res.outputs.append(Output(base / str(out["path"]), text))
+        res.outputs.append(Output(_inside(out_root, out["path"], "output"), text))
     return res
 
 
 def write(rendered: Rendered) -> list[Path]:
+    """Write every output: refuse a symlink, write a temporary file beside it and rename it over
+    the old one, so a reader never sees half a file and a link never redirects the write."""
+    texts = [(o.path, o.expected()) for o in rendered.outputs]  # every splice first, then write
+    for path, _ in texts:
+        if path.is_symlink():
+            raise RenderError([f"{path}: a symlink (the render never writes through one)"])
     paths = []
-    for o in rendered.outputs:
-        o.path.parent.mkdir(parents=True, exist_ok=True)
-        o.path.write_text(o.expected(), encoding="utf-8")
-        paths.append(o.path)
+    for path, text in texts:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.hnx-render")
+        tmp.unlink(missing_ok=True)
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+        paths.append(path)
     return paths
 
 

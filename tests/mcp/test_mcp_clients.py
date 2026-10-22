@@ -215,7 +215,98 @@ def test_a_deprecated_grant_renders_with_a_note(tmp_path):
     prof = tmp_path / "p.json"
     doc = json.loads(COLLECTOR.read_text())
     doc["mcp"] = doc["mcp_ceiling"] = ["bash"]
+    doc["reads_untrusted"] = False
     prof.write_text(json.dumps(doc))
     text, notes = clients.render_profile(CATALOG, prof, "claude-code")
     assert "bash" in json.loads(text)["mcpServers"]
     assert any("deprecated" in n and "grant 'shell' instead" in n for n in notes)
+
+
+# ------------------------------------------------------------------ what render will trust
+def _lean(tmp_path: Path, **changes) -> Path:
+    doc = {**json.loads(COLLECTOR.read_text()), **changes}
+    p = tmp_path / "lean.json"
+    p.write_text(json.dumps(doc))
+    return p
+
+
+def test_render_refuses_a_profile_verify_would_refuse(tmp_path):
+    reader = _lean(tmp_path, mcp=["shell", "vault"], mcp_ceiling=[], data_tier="cloud-allowed")
+    with pytest.raises(clients.RenderError) as exc:
+        clients.render_profile(CATALOG, reader, "claude-code")
+    text = "\n".join(exc.value.problems)
+    assert "readers cannot act" in text and "outside mcp_ceiling" in text
+    with pytest.raises(clients.RenderError, match="not a compiled or lean agent profile"):
+        clients.render_profile(CATALOG, _lean(tmp_path, digest="sha256:00"), "claude-code")
+    compiled = json.loads(BROKER_AGENT.read_text())
+    for edit, phrase in (
+        (lambda d: d.pop("digest"), "carries its digest"),
+        (lambda d: d["grants"]["mcp"].append("vault"), "outside ceiling"),
+        (lambda d: d.update(budget_mode="warn"), "digest does not match"),
+    ):
+        doc = json.loads(json.dumps(compiled))
+        edit(doc)
+        f = tmp_path / "compiled.json"
+        f.write_text(json.dumps(doc))
+        with pytest.raises(clients.RenderError, match=phrase):
+            clients.render_profile(CATALOG, f, "claude-code")
+
+
+def _open_param_catalog(tmp_path: Path) -> servers.Catalog:
+    d = tmp_path / "mcp"
+    shutil.copytree(ROOT / "examples" / "mcp", d, ignore=shutil.ignore_patterns("clients"))
+    rec = yaml.safe_load((d / "notes.yml").read_text())
+    rec["parameters"]["writable"].pop("pattern")  # a parameter with no type of its own
+    rec["transport"]["args"] += ["--prefix={writable}", "--token=secret:mcp/notes-token"]
+    (d / "notes.yml").write_text(yaml.safe_dump(rec))
+    return servers.load(d)
+
+
+def test_a_parameter_value_never_routes_a_secret_or_a_variable(tmp_path):
+    cat = _open_param_catalog(tmp_path)
+    prof = {"id": "profile:a", "mcp": ["notes"]}
+    for value, phrase in (
+        ("secret:mcp/vault-token", "carries $, secret:"),
+        ("${VAULT_ROOT_TOKEN}", "carries $, secret:"),
+        ("$(id)", "carries $, secret:"),
+        ("a\nb", "control character"),
+        (True, "True is not a string"),
+        (493, "493 is not a string"),
+    ):
+        with pytest.raises(clients.RenderError, match=re.escape(phrase)):
+            clients.instances(cat, prof, params={"notes": {"writable": value}})
+    with pytest.raises(clients.RenderError, match="profile_file"):
+        clients.instances(cat, prof, profile_file="${HOME}/p.json")
+    (inst,) = clients.instances(cat, prof, params={"notes": {"writable": "x/"}})
+    args = clients.definition(inst, "claude-code")["args"]
+    # the record's own secret reference becomes a placeholder; a filled value stays verbatim
+    assert args[-2:] == ["--prefix=x/", "--token=${HNX_SECRET_MCP_NOTES_TOKEN}"]
+
+
+def test_render_writes_only_under_its_root_never_through_a_link(tmp_path):
+    dst = tmp_path / "mcp"
+    shutil.copytree(ROOT / "examples" / "mcp", dst)
+    shutil.copy(ROOT / "examples" / "services.yml", tmp_path / "services.yml")
+    spec = dst / "clients" / "hermes.yml"
+    doc = yaml.safe_load(spec.read_text())
+    for path, phrase in (
+        ("../../escape.yaml", "outside"),
+        (str(tmp_path / "abs.yaml"), "absolute"),
+    ):
+        doc["outputs"] = [{"home": "primary", "path": path}]
+        spec.write_text(yaml.safe_dump(doc))
+        with pytest.raises(clients.RenderError, match=phrase):
+            clients.render_spec(spec)
+    target = tmp_path / "elsewhere.yaml"
+    target.write_text("keep\n")
+    (dst / "clients" / "link.yaml").symlink_to(target)
+    doc["outputs"] = [{"home": "primary", "path": "link.yaml"}]
+    spec.write_text(yaml.safe_dump(doc))
+    with pytest.raises(clients.RenderError, match="symlink"):
+        clients.render_spec(spec)
+    assert target.read_text() == "keep\n"
+    doc["outputs"] = [{"home": "primary", "path": "out/primary.yaml"}]
+    spec.write_text(yaml.safe_dump(doc))
+    assert cli.main(["mcp", "catalog", "render", "--spec", str(spec), "--root", str(tmp_path)]) == 0
+    assert (tmp_path / "out" / "primary.yaml").is_file()
+    assert not list((tmp_path / "out").glob(".*"))  # the temporary file was renamed into place

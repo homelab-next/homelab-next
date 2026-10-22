@@ -7,8 +7,9 @@
   checkout) judged against the catalog (unknown, retired, draft, reader, data tier);
 * ``list [--json]``: one line per server; ``classes``: the derived ``mcp`` class table;
 * ``render --profile FILE --client CLIENT [--param SERVER.NAME=VALUE ...] [--lanes L,L]
-  [--out FILE] [--check]`` or ``render --spec FILE [--check]``: client configurations
-  (:mod:`.clients`); ``--check`` fails on drift in any output;
+  [--out FILE] [--check]`` or ``render --spec FILE [--root DIR] [--check]``: client
+  configurations (:mod:`.clients`) of profiles ``hnx agent verify`` would accept; ``--check``
+  fails on drift in any output;
 * ``import CONFIG ... [--out DIR] [--force]``: draft records from existing client configs
   (:mod:`.importer`); the report names every secret it stripped, never a value.
 
@@ -121,7 +122,7 @@ def _render(args) -> int:
         )
         return 2
     if args.spec:
-        rendered = clients.render_spec(args.spec)
+        rendered = clients.render_spec(args.spec, args.root)
     else:
         if not args.client:
             print("hnx mcp catalog render: --profile needs --client", file=sys.stderr)
@@ -216,6 +217,11 @@ def main(argv: list[str] | None = None) -> int:
         "--profile-path", help="the profile's path as the client sees it ({profile_file})"
     )
     r.add_argument("--out", help="write here instead of stdout")
+    r.add_argument(
+        "--root",
+        help="with --spec: the directory output paths are relative to and confined to "
+        "(default: the spec's directory)",
+    )
     r.add_argument(
         "--check", action="store_true", help="fail when an output differs from the render"
     )

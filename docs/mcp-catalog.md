@@ -126,7 +126,10 @@ outputs:
 ```
 
 Each parameter's value is the grant's (`params`), else its default; a list value expands into one
-instance per element. Values are checked against the parameter's enum and pattern; an unknown
+instance per element. A value is a string (quote YAML's `true` or `0755`), passed through
+verbatim: it may not contain `$`, `secret:` or a control character, so a grant can never route a
+secret or an environment variable to a server (secrets come only from the record's own `env`,
+`headers` and arguments). Values are checked against the parameter's enum and pattern; an unknown
 parameter, a missing required value, a parameter for a server the profile is not granted, or two
 different definitions under one instance name are refused. Every home gets every instance, so a
 fallback home can never hold fewer servers than the primary.
@@ -146,6 +149,15 @@ hnx mcp catalog render --profile build/profile.json --client claude-code \
 | `generic` | `mcpServers` with an explicit `transport` and `timeout` |
 | `hermes` | Hermes Agent's `mcp_servers:` YAML block (`command`, `args`, `env`, `timeout`; remote: `url`, `headers`) |
 | `llm-orchestrator` | its `configs/mcp_catalog.yaml` (`kinds:` with `command`, `args`, `timeout`, fixed `env`, `allowed_env` = the parameters' env keys) and each profile's `grants:` block (`real`/`shadow` lists of `name`, `kind`, `env`), spliced into the profile file |
+
+Render trusts no profile the compiler would not have produced: a compiled profile must pass
+everything `hnx agent verify` checks (schema, a digest that is present and matches, the stored
+ceiling and budgets, the reader rule and the catalog grant rules judged against the catalog being
+rendered), a lean one (`platform/agent_profile`) its schema, the same grant rules and `mcp` within
+`mcp_ceiling`; anything else is refused. A spec's output and `grants_file` paths are relative to
+the spec's directory (or `--root DIR`) and must stay under it: an absolute path, a `..` that
+escapes it or a symlink is refused, and each file is written to a temporary file and renamed into
+place.
 
 Only the profile's granted servers are rendered. A credential is never a value: it is
 `${HNX_SECRET_<NAME>}` (the registry's `secret_env_name`), which Claude Code expands from its
