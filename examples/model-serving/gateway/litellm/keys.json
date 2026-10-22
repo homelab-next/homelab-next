@@ -1,0 +1,16 @@
+{
+  "keys": [
+    {
+      "key_alias": "chat-ui",
+      "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_CHAT_UI",
+      "models": [
+        "fast-classifier",
+        "main-reasoner"
+      ],
+      "metadata": {
+        "owner": "chat-ui",
+        "data_tier": "local-only"
+      }
+    }
+  ]
+}

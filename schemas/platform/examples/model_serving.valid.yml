@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+version: 1
+store: model_store.valid.json
+roles: model_roles.valid.json
+exposure: zone
+backends:
+  svc:inference-large:
+    engine: vllm
+    port: 8000
+    gpus: [0, 1]
+    tensor_parallel_size: 2
+    args:
+      tool-call-parser: qwen3_xml
+      enable-auto-tool-choice: true
+  svc:inference-small:
+    engine: llama-server
+    port: 8001

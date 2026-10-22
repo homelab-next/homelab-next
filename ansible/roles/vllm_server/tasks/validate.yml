@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every value lands in a systemd unit: refuse a newline, a space or a % specifier in anything that
+# is not a number, and re-check what the serving plan already guarantees (one GPU per instance,
+# unique ports, tp x pp = GPUs), because the instances file could have been edited.
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - vllm_server_version is match('^[0-9]+\.[0-9]+\.[0-9]+([.+a-z0-9]*)?\Z')
+      - vllm_server_bin is match('^/[A-Za-z0-9._/-]+\Z')
+      - vllm_server_store_root is match('^/[A-Za-z0-9._/-]+\Z')
+      - vllm_server_user is match('^[a-z_][a-z0-9_-]{0,31}\Z') and vllm_server_user != 'root'
+      - vllm_server_group is match('^[a-z_][a-z0-9_-]{0,31}\Z') and vllm_server_group != 'root'
+      - vllm_server_listen_address is match('^[A-Za-z0-9.:-]+\Z')
+      - vllm_server_api_key_ref == '' or vllm_server_api_key_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+      - vllm_server_unit_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - vllm_server_verify_bin is match('^/[A-Za-z0-9._/-]+\Z')
+      - vllm_server_env_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - vllm_server_cache_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - vllm_server_instances | length > 0
+      - vllm_server_instances | map(attribute='name') | unique | length == vllm_server_instances | length
+      - vllm_server_instances | map(attribute='port') | unique | length == vllm_server_instances | length
+      - vllm_server_instances | map(attribute='gpus') | flatten | unique | length == vllm_server_instances | map(attribute='gpus') | flatten | length
+    fail_msg: >-
+      vllm_server: a pinned version, absolute paths, a non-root user and group, an address, a
+      secret: reference or nothing for the API key, and instances (from `hnx models serving
+      render`) with distinct names, ports and GPUs
+
+# The plan states where the engines listen; the host's address must say the same, or the gateway
+# would route to a backend that listens on loopback only (or the engine would listen everywhere).
+- name: Hold the listen address to the plan's exposure
+  ansible.builtin.assert:
+    that:
+      - vllm_server_exposure in ['zone', 'loopback']
+      - vllm_server_listen_address not in ['0.0.0.0', '::', '[::]', '*', '']  # no-raw-endpoint: allow refused wildcards
+      - (vllm_server_listen_address in vllm_server_loopback) == (vllm_server_exposure == 'loopback')
+    fail_msg: >-
+      vllm_server: the plan's exposure is {{ vllm_server_exposure | default('unset') }}, the listen
+      address {{ vllm_server_listen_address }}: exposure zone needs the host's zone address (the
+      gateway reaches the backends over the network), loopback a loopback address, and neither a
+      wildcard
+  vars:
+    vllm_server_loopback: ['127.0.0.1', '::1', 'localhost']  # no-raw-endpoint: allow loopback names
+
+- name: Validate each instance
+  ansible.builtin.assert:
+    that:
+      - item.name is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - item.served_model_name is match('^[A-Za-z0-9._:/-]{1,128}\Z')
+      - item.model_path is match('^/[A-Za-z0-9._/-]+\Z') and '..' not in item.model_path.split('/')
+      - item.model_path.startswith(vllm_server_store_root ~ '/')
+      - item.digest is match('^sha256:[0-9a-f]{64}\Z')
+      - item.store_id is match('^[a-z][a-z0-9]*([-.][a-z0-9]+)*\Z')
+      - item.max_model_len | int > 0
+      - item.port | int >= 1024 and item.port | int <= 65535
+      - item.gpus | length > 0
+      - item.gpus | select('integer') | select('ge', 0) | list | length == item.gpus | length
+      - item.tensor_parallel_size | int * item.pipeline_parallel_size | int == item.gpus | length
+      - item.gpu_memory_utilization | float > 0 and item.gpu_memory_utilization | float <= 1
+      - vllm_server_bad_args | from_json | length == 0
+    fail_msg: >-
+      vllm_server: instance {{ item.name | default('?') }} must be what `hnx models serving render`
+      writes: a slug name, a model id, a model path under {{ vllm_server_store_root }}, a digest,
+      a context length, an unprivileged port, GPUs matching tensor x pipeline parallelism, and
+      args the plan allows (vars/main.yml vllm_server_arg_rules: exact --flag names, each value
+      matching its rule; bad: {{ vllm_server_bad_args }})
+  vars:
+    # walk the argv: an allowed --flag, then its value when its rule has one; anything else
+    # (a single-dash flag, an abbreviation, a value that starts with '-') is bad
+    vllm_server_bad_args: >-
+      {%- set bad = [] -%}
+      {%- set ns = namespace(want=none, flag='') -%}
+      {%- for a in (item.args if item.args is sequence and item.args is not string else ['(not a list)']) -%}
+      {%- if ns.want is not none -%}
+      {%- if a is not string or a.startswith('-') or a is not match(ns.want) -%}{{ bad.append(ns.flag ~ ' ' ~ a) or '' }}{%- endif -%}
+      {%- set ns.want = none -%}
+      {%- elif a is string and a.startswith('--') and a[2:] in vllm_server_arg_rules -%}
+      {%- set ns.want = vllm_server_arg_rules[a[2:]] -%}
+      {%- set ns.flag = a -%}
+      {%- else -%}{{ bad.append(a | string) or '' }}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- if ns.want is not none -%}{{ bad.append(ns.flag ~ ' (no value)') or '' }}{%- endif -%}
+      {{ bad | to_json }}
+  loop: "{{ vllm_server_instances }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"

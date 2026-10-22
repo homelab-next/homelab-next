@@ -1,0 +1,112 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run one vLLM systemd unit per instance of the rendered serving plan.
+    options:
+      vllm_server_instances: &instances
+        type: list
+        elements: dict
+        description: "The served models, as `hnx models serving render` writes them (vllm_server/instances.yml): name, served_model_name, model_path, digest, max_model_len, port, gpus, tensor/pipeline_parallel_size, gpu_memory_utilization, args."
+        required: true
+      vllm_server_exposure: &exposure
+        type: str
+        choices: [zone, loopback]
+        description: "Where the engines listen, from the plan (vllm_server/instances.yml): zone (vllm_server_listen_address is the host's zone address, the gateway's way in) or loopback (a loopback address, this host alone)."
+        required: true
+      vllm_server_version: &version
+        type: str
+        description: "The pinned vLLM release; main refuses any other installed version."
+        default: "0.31.0"
+      vllm_server_bin: &bin
+        type: path
+        description: "The vllm command in its virtualenv."
+        default: /opt/vllm/bin/vllm
+      vllm_server_store_root: &store
+        type: path
+        description: "The model store root, mounted read-only into every unit; model paths must be under it."
+        default: /srv/models
+      vllm_server_user: &user
+        type: str
+        description: "Unprivileged account the units run as."
+        default: vllm
+      vllm_server_group: &group
+        type: str
+        description: "Group the units run as: the model store's readers group."
+        default: models
+      vllm_server_listen_address: &listen
+        type: str
+        description: "Address the API binds: the host's zone address under exposure zone, a loopback address under loopback; never a wildcard."
+        default: 127.0.0.1  # no-raw-endpoint: allow loopback default
+      vllm_server_health_host: &hhost
+        type: str
+        description: "Address the health hook calls (default: vllm_server_listen_address)."
+        default: "{{ vllm_server_listen_address }}"
+      vllm_server_health_timeout: &htimeout
+        type: int
+        description: "Seconds per health request."
+        default: 10
+      vllm_server_api_key_ref: &key
+        type: str
+        description: "secret:<name> of the API key vLLM requires (the gateway's backend api_key); empty: none."
+        default: ""
+      vllm_server_nccl_p2p_disable: &p2p
+        type: bool
+        description: "Set NCCL_P2P_DISABLE=1 (cards without peer-to-peer, such as the CMP 170HX)."
+        default: false
+      vllm_server_verify_bin: &verify
+        type: path
+        description: "Where the pre-start byte check (sha256 of the store's listing = the pinned digest, then sha256sum --check) is installed."
+        default: /usr/local/libexec/homelabnext/hnx-model-verify
+      vllm_server_unit_dir: &units
+        type: path
+        description: "Where the units are written."
+        default: /etc/systemd/system
+      vllm_server_env_dir: &envdir
+        type: path
+        description: "Where the 0600 API key environment files are written."
+        default: /etc/homelabnext/vllm
+      vllm_server_cache_dir: &cache
+        type: path
+        description: "Per-instance writable cache (compiled kernels, torch.compile artefacts)."
+        default: /var/cache/homelabnext/vllm
+      vllm_server_state_dir: &state
+        type: path
+        description: "Where the upgrade hook records a pending version."
+        default: /var/lib/homelabnext/vllm
+      vllm_server_systemctl_cli: &systemctl
+        type: str
+        description: "The systemctl command."
+        default: systemctl
+      vllm_server_start: &start
+        type: bool
+        description: "Enable, start and restart the units (false: write them only)."
+        default: true
+  health:
+    short_description: Fail unless each instance answers /health and serves its role's model id with its context length (K-14).
+    options:
+      vllm_server_instances: *instances
+      vllm_server_health_host: *hhost
+      vllm_server_health_timeout: *htimeout
+      vllm_server_api_key_ref: *key
+  readiness:
+    short_description: Fail unless every instance's model is in the store.
+    options:
+      vllm_server_instances: *instances
+  backup:
+    short_description: Nothing to back up; the units come from the plan.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-run main.
+    options: {}
+  upgrade:
+    short_description: Validate a vLLM version bump and record it as pending.
+    options:
+      vllm_server_version: *version
+      vllm_server_state_dir: *state
+      vllm_server_target_version:
+        type: str
+        description: The release to move to.
+        required: true
+  export:
+    short_description: Nothing to export; the plan and the manifest are in the repository.
+    options: {}

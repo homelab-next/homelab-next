@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to restore (re-run main from the plan)
+  ansible.builtin.debug:
+    msg: vllm_server keeps no data a restore hook must handle
+  tags: [restore]

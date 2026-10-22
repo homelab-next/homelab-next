@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to back up (the units are rendered from the plan; the weights are the model store's)
+  ansible.builtin.debug:
+    msg: vllm_server keeps no data; its caches are rebuilt on start
+  tags: [backup]

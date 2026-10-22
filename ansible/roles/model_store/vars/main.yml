@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: the store layout (homelabnext.models.store.Entry.directory).
+model_store_hub_formats: [hf, gguf]
+model_store_revision_pattern: '^[0-9a-f]{40}\Z'

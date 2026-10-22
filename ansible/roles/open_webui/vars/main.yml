@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: what makes Open WebUI a gateway client and nothing else.
+open_webui_fixed_env:
+  ENABLE_OPENAI_API: "true"
+  ENABLE_OLLAMA_API: "false"
+  ENABLE_DIRECT_CONNECTIONS: "false"
+  ENABLE_SIGNUP: "false"
+  ENABLE_COMMUNITY_SHARING: "false"
+  ENABLE_VERSION_UPDATE_CHECK: "false"
+  OFFLINE_MODE: "true"
+  ANONYMIZED_TELEMETRY: "false"
+  DO_NOT_TRACK: "true"
+  SCARF_NO_ANALYTICS: "true"
+  # the environment is the configuration on every start; a setting changed in the admin UI (a
+  # new connection, say) is not kept in the database past a restart
+  ENABLE_PERSISTENT_CONFIG: "false"
+# Names of model backends: the gateway id may not be one (Open WebUI never calls an engine).
+open_webui_backend_id_pattern: '^(inference|vllm|llama|ollama|lmstudio|unsloth)([-.]|\Z)'
+# What the gateway id must resolve to in the registry (its service's capability): a registry id
+# that is not the gateway (gpu-01 pointing at a vLLM, say) is refused whatever it is named.
+open_webui_gateway_capability: llm-gateway
+# extra env may not name a model or tool endpoint, a key, or a feature that calls out of the lab
+# (web search, RAG loaders and embeddings, image, audio, code execution), nor the fixed settings
+open_webui_reserved_env_pattern: >-
+  (?i)(BASE_URL|API_BASE|API_KEY|ENDPOINT|^TOOL_SERVER|^OPENAI_|^OLLAMA_|^WEBUI_SECRET_KEY|^ENABLE_(OPENAI_API|OLLAMA_API|DIRECT_CONNECTIONS|PERSISTENT_CONFIG|WEB_SEARCH|RAG_WEB_SEARCH|IMAGE_GENERATION|CODE_EXECUTION|CODE_INTERPRETER|WEBSOCKET_SUPPORT)|^(RAG|WEB_SEARCH|WEB_LOADER|IMAGES?|IMAGE_GENERATION|AUDIO|STT|TTS|WHISPER|COMFYUI|AUTOMATIC1111|SEARXNG|TAVILY|BRAVE|SERPER|SERPAPI|SERPSTACK|SERPLY|JINA|BING|EXA|PERPLEXITY|KAGI|MOJEEK|GOOGLE_PSE|DDGS|FIRECRAWL|EXTERNAL|CODE_EXECUTION|CODE_INTERPRETER|PLAYWRIGHT|YOUTUBE|OAUTH|LDAP)_)
+open_webui_repository: "{{ open_webui_image.split('@')[0].rsplit(':', 1)[0] }}"
+open_webui_tag: "{{ open_webui_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+open_webui_digest: "{{ open_webui_image.split('@')[1] | default('') }}"

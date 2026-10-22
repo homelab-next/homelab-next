@@ -1,0 +1,32 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: model-verify
+#   kind: job
+#   purpose: Refuse to start a vLLM unit unless its store listing hashes to the pinned digest and the model directory matches it.
+#   owner: platform
+#   trigger: [role:vllm_server]
+#   inputs: the entry's sha256sum listing, the pinned digest, the model directory
+#   outputs: nothing on success; the mismatch on stderr
+#   installs_to: /usr/local/libexec/homelabnext/hnx-model-verify
+#   exit:
+#     "0": the bytes are the pinned ones
+#     "1": the listing is not the pinned one, or a file differs; the unit does not start
+#     "2": usage error
+# A vLLM unit's ExecStartPre (role vllm_server): never serve bytes the plan did not pin, also after
+# Restart=on-failure. Usage: hnx-model-verify <listing> <sha256:digest> <model dir>
+#  1. sha256 of the listing (written by model_store into manifests/listings/) is the pinned digest;
+#  2. every file in it has its sha256 in the model directory (sha256sum --check --strict).
+set -eu
+[ "$#" -eq 3 ] || { echo "usage: hnx-model-verify <listing> <sha256:digest> <model dir>" >&2; exit 2; }
+listing=$1 digest=$2 dir=$3
+have=$(sha256sum < "$listing" | cut -d ' ' -f 1)
+if [ "sha256:$have" != "$digest" ]; then
+  echo "hnx-model-verify: $listing is sha256:$have, the plan pins $digest; refusing to serve" >&2
+  exit 1
+fi
+cd "$dir"
+if ! sha256sum --check --strict --quiet "$listing" >&2; then
+  echo "hnx-model-verify: $dir does not match $listing; refusing to serve (run model_store)" >&2
+  exit 1
+fi

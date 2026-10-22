@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run Open WebUI as a compose_app, pointed at the LLM gateway with its own key.
+    options:
+      open_webui_gateway_id: &gateway
+        type: str
+        description: "The LLM gateway's logical id in the registry (never a model backend's)."
+        required: true
+      open_webui_image: &image
+        type: str
+        description: "repository:tag@sha256:<digest> of the Open WebUI image."
+        default: "ghcr.io/open-webui/open-webui:v0.11.4@sha256:9591b13f13843c7721c2b8eaf7382846c81b3ffe126526d1888d1fed50c6a33f"
+      open_webui_gateway_key_ref: &gwkey
+        type: str
+        description: "secret:<name> of this app's gateway key (a key of the gateway spec)."
+        default: secret:llm-gateway/key-chat-ui
+      open_webui_session_key_ref: &session
+        type: str
+        description: "secret:<name> of the session signing key (WEBUI_SECRET_KEY)."
+        default: secret:open-webui/session-key
+      open_webui_bind: &bind
+        type: str
+        description: "Host address the port is published on (loopback: the front door proxies it)."
+        default: 127.0.0.1  # no-raw-endpoint: allow loopback default
+      open_webui_port: &port
+        type: int
+        description: "Host port."
+        default: 3000
+      open_webui_dir: &dir
+        type: path
+        description: "The compose project directory (data/ under it)."
+        default: /opt/compose/open-webui
+      open_webui_owner: &owner
+        type: str
+        description: "Owner of the project directory."
+        default: root
+      open_webui_group: &group
+        type: str
+        description: "Group of the project directory."
+        default: root
+      open_webui_mem_limit:
+        type: str
+        description: "Container memory limit."
+        default: 2g
+      open_webui_extra_env:
+        type: dict
+        description: "Extra non-secret Open WebUI settings; backend, Ollama and direct-connection settings are refused."
+        default: {}
+      open_webui_export_dir: &export
+        type: path
+        description: "Open-format export target."
+        default: /var/backups/compose/open-webui/export
+      open_webui_start:
+        type: bool
+        description: "Run docker compose up after rendering."
+        default: true
+      open_webui_validate_with_docker:
+        type: bool
+        description: "Run docker compose config on the rendered file."
+        default: true
+      open_webui_health_timeout: &htimeout
+        type: int
+        description: "Seconds for the health request."
+        default: 10
+  health:
+    short_description: Fail unless the container is healthy and Open WebUI answers /health.
+    options:
+      open_webui_dir: *dir
+      open_webui_bind: *bind
+      open_webui_port: *port
+      open_webui_health_timeout: *htimeout
+  readiness:
+    short_description: Fail unless the LLM gateway accepts connections.
+    options:
+      open_webui_gateway_id: *gateway
+  backup:
+    short_description: Name the data directory (chats, users, settings) for the backup.
+    options: &appopts
+      open_webui_gateway_id: *gateway
+      open_webui_image: *image
+      open_webui_dir: *dir
+      open_webui_owner: *owner
+      open_webui_group: *group
+      open_webui_export_dir: *export
+  restore:
+    short_description: Restore the data directory from a backup source.
+    options:
+      open_webui_dir: *dir
+      open_webui_restore_source:
+        type: path
+        description: Directory to restore from.
+        required: true
+  upgrade:
+    short_description: Validate an image bump (tag and digest) and record it as pending.
+    options:
+      <<: *appopts
+      open_webui_target_image:
+        type: str
+        description: "repository:tag@sha256:<digest> to move to."
+        required: true
+  export:
+    short_description: Write the open-format exit copy of the data directory.
+    options: *appopts

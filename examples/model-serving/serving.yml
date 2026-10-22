@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# Which engine serves which store entry for which role (docs/model-serving.md).  Synthetic:
+# every file in model_store.json is the line "fake <path> of <entry id>", so a test can build
+# the store on disk and `hnx models store check` it.
+#   hnx models serving render examples/model-serving/serving.yml examples/model-serving
+# writes vllm_server/instances.yml (the vllm_server role's input); gateway.yml reads this file
+# for its local backends.
+version: 1
+store: model_store.json
+roles: model_roles.json
+# the engines listen on the host's zone address; the gateway is their one client
+exposure: zone
+backends:
+  svc:inference-large:
+    description: the reasoner, tensor-parallel over two cards
+    engine: vllm
+    port: 8000
+    gpus: [0, 1]
+    tensor_parallel_size: 2
+    gpu_memory_utilization: 0.9
+    args:
+      tool-call-parser: qwen3_xml
+      enable-auto-tool-choice: true
+      max-num-seqs: 24
+  svc:inference-triage:
+    description: the promoted fine-tune, one card
+    engine: vllm
+    port: 8002
+    gpus: [2]
+  svc:inference-small:
+    description: the GGUF classifier (llama-server; not rendered by vllm_server)
+    engine: llama-server
+    port: 8001
+    gpus: [3]

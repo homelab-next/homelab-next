@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Stop and disable {{ vllm_server_stale }}
+  ansible.builtin.command:
+    argv: ["{{ vllm_server_systemctl_cli }}", disable, --now, "{{ vllm_server_stale }}"]
+  changed_when: true
+  when: vllm_server_start | bool
+
+- name: Remove {{ vllm_server_stale }}
+  ansible.builtin.file:
+    path: "{{ vllm_server_unit_dir }}/{{ vllm_server_stale }}"
+    state: absent

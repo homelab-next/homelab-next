@@ -31,6 +31,9 @@ Rules enforced at render time (a violation raises :class:`GatewaySpecError`, not
   master key, the database URL) share a reference or a resulting variable, and none is a
   backend's upstream key.
 * Every backend a role binds is declared in the spec, and every declared value is one line.
+  ``serving: <serving spec>`` declares the store-served ones from the serving plan
+  (:mod:`homelabnext.models.serving`): each becomes ``{locality: local, port}`` and every binding
+  on it must resolve to a store entry its engine may serve.
 * A ``local`` backend is local because of where it is, not because the spec says so: it must be a
   registry service whose host sits in a non-cloud zone, or its host must be under the lab's
   internal service domain (``<svc_label>.<domain>``).  ``{locality: local, host: <a cloud API>}``
@@ -59,6 +62,7 @@ from urllib.parse import urlsplit
 import yaml
 
 from homelabnext._yaml import UniqueKeyLoader
+from homelabnext.models.store import ProblemsError
 from homelabnext.registry.model import secret_env_name
 from homelabnext.registry.models import RoleTable, RoleTableError
 
@@ -108,12 +112,8 @@ PROVIDER_PREFIX = "hnx-"  # Bifrost provider name of a local backend: hnx-<svc n
 HEADER = f"# {MARKER} llm_gateway from {{spec}} - do not edit; sha256:{{digest}}\n"
 
 
-class GatewaySpecError(ValueError):
+class GatewaySpecError(ProblemsError):
     """The gateway spec, the role table or the profiles break a rule.  ``problems`` lists all."""
-
-    def __init__(self, message: str, problems: Iterable[str] = ()):
-        self.problems = list(problems)
-        super().__init__(message + "".join(f"\n  - {p}" for p in self.problems))
 
 
 @dataclass(frozen=True)
@@ -306,7 +306,7 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
     _one_line("spec", dict(doc), problems)
     known = {
         "roles", "profiles", "registry", "domain", "svc_label", "master_key", "database_url",
-        "backends", "local_only", "keys", "bifrost",
+        "backends", "local_only", "keys", "bifrost", "serving",
     }  # fmt: skip
     for k in sorted(set(doc) - known):
         problems.append(f"unknown key {k!r}")
@@ -348,6 +348,10 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
 
     backends: dict[str, Backend] = {}
     raw_backends = doc.get("backends")
+    if doc.get("serving") is not None:
+        raw_backends = _served_backends(
+            base, roles_path, doc["serving"], raw_backends or {}, problems
+        )
     if not isinstance(raw_backends, Mapping) or not raw_backends:
         problems.append("backends: declare every svc: backend the role table binds")
         raw_backends = {}
@@ -380,6 +384,18 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
                 )
                 continue
             host = f"{svc.capability}.{svc_label}.{domain}".lower()
+            if "port" in b and b["port"] != svc.port:
+                problems.append(
+                    f"{where}: port {b['port']} (the spec or the serving plan) is not registry "
+                    f"service {name}'s port {svc.port}; the gateway would call one and the engine "
+                    "listen on the other (make them agree)"
+                )
+                continue
+            if b.get("host") and str(b["host"]).lower() != host:
+                problems.append(
+                    f"{where}: host {b['host']} is not registry service {name}'s {host}"
+                )
+                continue
             port, scheme = svc.port, svc.scheme
             registry_hosts.add(host)
         else:
@@ -529,6 +545,53 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
     if problems:
         raise GatewaySpecError(f"{source}: invalid gateway spec", problems)
     return spec
+
+
+def _served_backends(
+    base: Path, roles_path: str, serving: Any, declared: Any, problems: list[str]
+) -> Mapping[str, Any]:
+    """``backends`` with every backend of the serving plan added as ``{locality: local, port}``.
+
+    The serving plan (``homelabnext.models.serving``) says which engine serves which store entry
+    on which port; the gateway needs only where each backend is.  A backend the spec also declares
+    must agree (local, same port), and the plan must be built on this spec's role table, or the
+    gateway and the engines would disagree about what a role is."""
+    from homelabnext.models.serving import ServingSpecError, load_plan
+
+    if not isinstance(declared, Mapping):
+        return declared
+    try:
+        plan = load_plan(base / str(serving))
+    except ServingSpecError as exc:
+        problems += [f"serving: {p}" for p in exc.problems] or [f"serving: {exc}"]
+        return declared
+    except (OSError, yaml.YAMLError) as exc:
+        problems.append(f"serving: cannot read {serving}: {exc}")
+        return declared
+    if plan.roles_path != (base / roles_path).resolve():
+        problems.append(f"serving: {serving} is built on another role table than {roles_path}")
+    if plan.exposure != "zone":
+        problems.append(
+            f"serving: {serving} has exposure {plan.exposure}: its engines listen on the host's "
+            "loopback, and the gateway reaches a backend over the network as "
+            "<name>.<svc_label>.<domain>; set exposure: zone (and the host's zone address as "
+            "vllm_server_listen_address)"
+        )
+    merged = dict(declared)
+    for name, b in sorted(plan.backends.items()):
+        sid = f"svc:{name}"
+        if sid not in merged:
+            merged[sid] = {"locality": "local", "port": b.port}
+            continue
+        have = merged[sid]
+        if isinstance(have, Mapping) and (
+            have.get("locality") != "local" or have.get("port", b.port) != b.port
+        ):
+            problems.append(
+                f"backends.{sid}: the serving plan runs it locally on port {b.port} "
+                f"({b.engine}); drop the declaration or match it"
+            )
+    return merged
 
 
 def _provider_collisions(table: RoleTable, backends: Mapping[str, Backend]) -> list[str]:

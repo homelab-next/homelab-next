@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+# vLLM, one unit per served model (ADR-0023, docs/model-serving.md). vllm_server_instances is
+# required and is never written by hand: `hnx models serving render` writes it
+# (vllm_server/instances.yml) from the model store, the role table and the serving spec, so
+# --served-model-name is the role's backend model id and --max-model-len its max_context_tokens.
+# vLLM itself is a prerequisite: a virtualenv at the pinned version (main refuses any other).
+vllm_server_version: "0.31.0"
+vllm_server_bin: /opt/vllm/bin/vllm
+vllm_server_store_root: /srv/models
+# Units run as this account, in the model store's group: the weights are readable, never writable.
+vllm_server_user: vllm
+vllm_server_group: models
+# The address the API binds. vllm_server_exposure (rendered by the plan, required) holds it: zone
+# needs the host's zone address here (the gateway, and only the gateway by the host firewall,
+# reaches it), loopback needs a loopback address. Never a wildcard. Clients never call vLLM.
+vllm_server_listen_address: 127.0.0.1  # no-raw-endpoint: allow loopback default, the zone address comes from the host
+# the health hook calls the address the API binds
+vllm_server_health_host: "{{ vllm_server_listen_address }}"
+vllm_server_health_timeout: 10
+# A per-instance API key the gateway presents (secret:<name>, delivered to the unit through a
+# 0600 environment file); empty: none (then the firewall is the only door besides the gateway).
+vllm_server_api_key_ref: ""
+# NCCL peer-to-peer off: required on cards without P2P (CMP 170HX), harmless elsewhere.
+vllm_server_nccl_p2p_disable: false
+vllm_server_unit_dir: /etc/systemd/system
+# The pre-start check every unit runs (files/hnx-model-verify): the entry's listing hashes to the
+# pinned digest and the bytes match it, so a restart never serves unverified bytes.
+vllm_server_verify_bin: /usr/local/libexec/homelabnext/hnx-model-verify
+vllm_server_env_dir: /etc/homelabnext/vllm
+vllm_server_cache_dir: /var/cache/homelabnext/vllm
+vllm_server_state_dir: /var/lib/homelabnext/vllm
+vllm_server_systemctl_cli: systemctl
+vllm_server_start: true

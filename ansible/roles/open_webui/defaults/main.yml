@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Open WebUI, the chat front end (ADR-0023): it talks to the LLM gateway, which maps the role
+# names it lists to backends and enforces this app's own key, and never to vLLM or llama-server
+# directly. Ollama, direct connections, sign-up and the update check are off.
+open_webui_image: "ghcr.io/open-webui/open-webui:v0.11.4@sha256:9591b13f13843c7721c2b8eaf7382846c81b3ffe126526d1888d1fed50c6a33f"
+# open_webui_gateway_id (required): the gateway's logical id in the registry, e.g. llm-gateway
+# this app's gateway key, by reference (the gateway spec's key for the chat front end)
+open_webui_gateway_key_ref: secret:llm-gateway/key-chat-ui
+# the signing key of Open WebUI's sessions, by reference
+open_webui_session_key_ref: secret:open-webui/session-key
+# published on loopback: the front door (reverse proxy with the lab's sign-in) is the way in
+open_webui_bind: 127.0.0.1  # no-raw-endpoint: allow loopback default, the front door proxies it
+open_webui_port: 3000
+open_webui_dir: /opt/compose/open-webui
+open_webui_owner: root
+open_webui_group: root
+open_webui_mem_limit: 2g
+# extra, non-secret Open WebUI settings; nothing here may re-point the backends or turn Ollama on
+open_webui_extra_env: {}
+open_webui_export_dir: /var/backups/compose/open-webui/export
+open_webui_start: true
+open_webui_validate_with_docker: true
+open_webui_health_timeout: 10

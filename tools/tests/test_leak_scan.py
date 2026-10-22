@@ -446,6 +446,9 @@ def test_compressed_ipv6_negatives(text: str):
         "cost_per_token: 0.000002",
         "rate: 1.5e-3",
         '{secret: "secret:<name>", header?: <name>}',
+        # a model's tokenizer is not a token
+        "tokenizer-mode: ^(auto|slow|mistral)",
+        '({"tokenizer": "org/remote"}, "--tokenizer is not an allowed")',
     ],
 )
 def test_keyed_secret_negatives(text: str):
@@ -547,3 +550,10 @@ def test_check_authors_requires_noreply(tmp_path: Path):
 )
 def test_noreply_commit_identities(identity: str, ok: bool):
     assert bool(leak_scan.NOREPLY_COMMIT_RE.match(identity)) is ok
+
+
+def test_product_defined_secret_names_are_not_findings():
+    for name in ("VLLM_API_KEY", "IMAGES_OPENAI_API_KEY"):
+        assert "secret-name" not in {h.pattern for h in leak_scan.scan_text(f"env: {name}", "t")}
+    for name in ("LAB_ROUTER_API" + "_KEY", "MY_API" + "_KEY", "vau" + "lt_router_password"):
+        assert "secret-name" in {h.pattern for h in leak_scan.scan_text(f"env: {name}", "t")}

@@ -159,6 +159,11 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "decision specs and cascade: eval|scan|lint|safety",
         lambda a: importlib.import_module("homelabnext.decide.cli").main(a),
     ),
+    "models": (
+        "the model store and serving plan: store validate|check|list, serving render|check "
+        "(docs/model-serving.md)",
+        lambda a: importlib.import_module("homelabnext.models.cli").main(a),
+    ),
     "golden": (
         "golden tasks and model pins: run|pins check|pins report",
         lambda a: importlib.import_module("homelabnext.golden.cli").main(a),

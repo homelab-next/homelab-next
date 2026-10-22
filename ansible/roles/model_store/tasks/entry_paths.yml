@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# model_store_entry ({key, value}) -> its directory (homelabnext.models.store.Entry.directory) and
+# the directory the hf CLI writes (the hub cache for hf, the entry directory for gguf).
+- name: Locate {{ model_store_entry.key }}
+  ansible.builtin.set_fact:
+    model_store_entry_dir: >-
+      {{ model_store_root ~ (
+           '/hf/hub/models--' ~ model_store_entry.value.source.repo | replace('/', '--')
+           ~ '/snapshots/' ~ model_store_entry.value.source.revision
+         if model_store_entry.value.format == 'hf' else
+           '/gguf/' ~ model_store_entry.value.source.repo
+         if model_store_entry.value.format == 'gguf' else
+           '/exports/' ~ model_store_entry.value.source.run) }}
+    model_store_entry_top: >-
+      {{ model_store_root ~ (
+           '/hf/hub/models--' ~ model_store_entry.value.source.repo | replace('/', '--')
+         if model_store_entry.value.format == 'hf' else
+           '/gguf/' ~ model_store_entry.value.source.repo
+         if model_store_entry.value.format == 'gguf' else
+           '/exports/' ~ model_store_entry.value.source.run) }}
+  tags: [health, verify]

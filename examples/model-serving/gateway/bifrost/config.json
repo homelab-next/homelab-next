@@ -1,0 +1,204 @@
+{
+  "$schema": "https://www.getbifrost.ai/schema",
+  "source_of_truth": "config.json",
+  "client": {
+    "enforce_auth_on_inference": true,
+    "drop_excess_requests": false,
+    "disable_content_logging": true
+  },
+  "config_store": {
+    "enabled": true,
+    "type": "sqlite",
+    "config": {
+      "path": "/app/data/config.db"
+    }
+  },
+  "logs_store": {
+    "enabled": false
+  },
+  "framework": {
+    "pricing": {
+      "pricing_url": "file:///app/data/pricing.json",
+      "model_parameters_url": "file:///app/data/model-parameters.json",
+      "mcp_library_sync_interval": 0
+    }
+  },
+  "providers": {
+    "hnx-inference-large": {
+      "keys": [
+        {
+          "id": "hnx-inference-large-key",
+          "name": "hnx-inference-large-key",
+          "value": "no-key",
+          "models": [
+            "main-reasoner"
+          ],
+          "aliases": {
+            "main-reasoner": "example-27b"
+          },
+          "weight": 1.0
+        }
+      ],
+      "network_config": {
+        "base_url": "http://inference-large.svc.example.internal:8000",
+        "default_request_timeout_in_seconds": 120
+      },
+      "custom_provider_config": {
+        "base_provider_type": "openai"
+      }
+    },
+    "hnx-inference-small": {
+      "keys": [
+        {
+          "id": "hnx-inference-small-key",
+          "name": "hnx-inference-small-key",
+          "value": "no-key",
+          "models": [
+            "fast-classifier"
+          ],
+          "aliases": {
+            "fast-classifier": "example-4b"
+          },
+          "weight": 1.0
+        }
+      ],
+      "network_config": {
+        "base_url": "http://inference-small.svc.example.internal:8001",
+        "default_request_timeout_in_seconds": 120
+      },
+      "custom_provider_config": {
+        "base_provider_type": "openai"
+      }
+    },
+    "hnx-inference-triage": {
+      "keys": [
+        {
+          "id": "hnx-inference-triage-key",
+          "name": "hnx-inference-triage-key",
+          "value": "no-key",
+          "models": [
+            "triage"
+          ],
+          "aliases": {
+            "triage": "example-4b-triage"
+          },
+          "weight": 1.0
+        }
+      ],
+      "network_config": {
+        "base_url": "http://inference-triage.svc.example.internal:8002",
+        "default_request_timeout_in_seconds": 120
+      },
+      "custom_provider_config": {
+        "base_provider_type": "openai"
+      }
+    }
+  },
+  "governance": {
+    "virtual_keys": [
+      {
+        "id": "vk-gateway-admin",
+        "name": "gateway-admin",
+        "value": "env.HNX_SECRET_LLM_GATEWAY_MASTER_KEY",
+        "is_active": true,
+        "provider_configs": [
+          {
+            "provider": "hnx-inference-large",
+            "allowed_models": [
+              "main-reasoner"
+            ],
+            "key_ids": [
+              "*"
+            ],
+            "weight": 1.0
+          },
+          {
+            "provider": "hnx-inference-small",
+            "allowed_models": [
+              "fast-classifier"
+            ],
+            "key_ids": [
+              "*"
+            ],
+            "weight": 1.0
+          },
+          {
+            "provider": "hnx-inference-triage",
+            "allowed_models": [
+              "triage"
+            ],
+            "key_ids": [
+              "*"
+            ],
+            "weight": 1.0
+          }
+        ]
+      },
+      {
+        "id": "vk-chat-ui",
+        "name": "chat-ui",
+        "value": "env.HNX_SECRET_LLM_GATEWAY_KEY_CHAT_UI",
+        "is_active": true,
+        "provider_configs": [
+          {
+            "provider": "hnx-inference-large",
+            "allowed_models": [
+              "main-reasoner"
+            ],
+            "key_ids": [
+              "*"
+            ],
+            "weight": 1.0
+          },
+          {
+            "provider": "hnx-inference-small",
+            "allowed_models": [
+              "fast-classifier"
+            ],
+            "key_ids": [
+              "*"
+            ],
+            "weight": 1.0
+          }
+        ]
+      }
+    ],
+    "routing_rules": [
+      {
+        "id": "route-main-reasoner",
+        "name": "mdl:main-reasoner bindings in priority order, then its fallback chain",
+        "cel_expression": "model == 'main-reasoner'",
+        "targets": [
+          {
+            "provider": "hnx-inference-large",
+            "model": "main-reasoner",
+            "weight": 1.0
+          }
+        ],
+        "fallbacks": [
+          "hnx-inference-small/fast-classifier"
+        ]
+      },
+      {
+        "id": "route-triage",
+        "name": "mdl:triage bindings in priority order, then its fallback chain",
+        "cel_expression": "model == 'triage'",
+        "targets": [
+          {
+            "provider": "hnx-inference-triage",
+            "model": "triage",
+            "weight": 1.0
+          }
+        ],
+        "fallbacks": [
+          "hnx-inference-small/fast-classifier"
+        ]
+      }
+    ],
+    "auth_config": {
+      "admin_username": "admin",
+      "admin_password": "env.HNX_SECRET_LLM_GATEWAY_BIFROST_ADMIN_PASSWORD",
+      "is_enabled": true
+    }
+  }
+}

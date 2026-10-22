@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+# Paths and names reach the hf command line and file modes: refuse anything outside the store's
+# grammar (the same rules as homelabnext.models.store), and every floating revision.
+- name: Validate the store settings
+  ansible.builtin.assert:
+    that:
+      - model_store_manifest is mapping
+      - model_store_manifest.models is defined and model_store_manifest.models is mapping
+      - model_store_manifest.models | length > 0
+      - model_store_root is match('^/[A-Za-z0-9._/-]+\Z') and '..' not in model_store_root.split('/')
+      - model_store_owner is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - model_store_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - model_store_exports_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - model_store_hf_endpoint == '' or model_store_hf_endpoint is match('^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._/-]*)?\Z')
+      - model_store_hf_token_ref == '' or model_store_hf_token_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+      - model_store_fetch_ids | difference(model_store_manifest.models.keys() | list) | length == 0
+    fail_msg: >-
+      model_store: a manifest with models, an absolute root, account and group names, an https
+      hub mirror or nothing, a secret: reference for the hub token or nothing, and fetch ids that
+      name manifest entries
+
+- name: Refuse an entry that is not pinned, or a path that leaves its directory
+  ansible.builtin.assert:
+    that:
+      - item.key is match('^[a-z][a-z0-9]*([-.][a-z0-9]+)*\Z')
+      - item.value.format in ['hf', 'gguf', 'export']
+      - >-
+        item.value.format == 'export' and (item.value.source.run | default('')) is match('^[a-z0-9][a-z0-9._-]{0,63}\Z')
+        or item.value.format != 'export'
+        and (item.value.source.repo | default('')) is match('^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*\Z')
+        and '..' not in item.value.source.repo
+        and (item.value.source.revision | default('')) is match(model_store_revision_pattern)
+      - item.value.files | length > 0
+      - item.value.files | map(attribute='path') | select('match', '^[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*\Z') | list | length == item.value.files | length
+      - item.value.files | map(attribute='path') | select('search', '(^|/)\.\.(/|$)') | list | length == 0
+      - item.value.files | map(attribute='sha256') | select('match', '^[0-9a-f]{64}\Z') | list | length == item.value.files | length
+    fail_msg: >-
+      model_store: {{ item.key }} must be pinned: a hub entry names a full 40-hex commit as
+      source.revision (got {{ item.value.source.revision | default('none') }}; a branch such as
+      main is a different model tomorrow), an export its run id, and every file a relative path
+      and a sha256
+  loop: "{{ model_store_manifest.models | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"

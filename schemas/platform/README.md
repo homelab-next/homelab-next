@@ -3,6 +3,8 @@
 | Schema | What |
 |---|---|
 | `model_roles.json` (1.2) | alias table: `mdl:<alias>` -> tier + bindings (`svc:` backend, model id) + fallback. Consumers name only the alias. 1.2 adds a per-binding pin (`version`, `digest: sha256:<hex>`; `hnx golden pins check` requires both and a current evaluation report, G-11) and per-role `limits` (requests, tokens, cost per window; `homelabnext.registry.limits`, G-10) |
+| `model_store.schema.json` (1.0) | the one model store (ADR-0023): each model once per (source, revision, quant), `format` hf / gguf / export, the pinned 40-hex source commit, every file's sha256 and size, licence, the engines that may serve it; an entry's digest (sha256 of its `sha256sum` listing) is what a role binding pins. Semantic rules in `homelabnext.models.store` (`hnx models store validate|check`) |
+| `model_serving.schema.json` (1.0) | the serving spec: per `svc:` backend the engine (vllm, llama-server), port, GPUs, parallelism and extra engine flags; joined with the store and the role table by `homelabnext.models.serving` into the `vllm_server` role's instances and the gateway's local backends (`hnx models serving render|check`) |
 | `capability.schema.json` | descriptor for a `cap:` seam: layer 1..13, contract `$id`s, conformance path, readiness flags, implementations |
 | `role_interface.schema.json` | what a deployable role provides/requires, its `svc:` id and the five hooks `deploy health readiness backup export` (tags + idempotency); UTC-only schedules |
 | `agent_profile.schema.json` | compiled least-privilege agent profile; `mcp` must be a subset of `mcp_ceiling` (`check_profile_ceiling`); model is a role alias; hard budgets |

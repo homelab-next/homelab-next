@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The one model store: /srv/models/{hf,gguf,exports}, fetched by manifest at pinned revisions and verified by sha256; engines read it, never write it."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

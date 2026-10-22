@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Create the model store, fetch every hub entry at its pinned revision and verify it by sha256.
+    options:
+      model_store_manifest: &manifest
+        type: dict
+        description: "The store manifest (schemas/platform/model_store.schema.json), for example lookup('file', 'model_store.json') | from_json."
+        required: true
+      model_store_root: &root
+        type: path
+        description: "The store root (default: the manifest's root, /srv/models)."
+        default: "{{ model_store_manifest.root | default('/srv/models') }}"
+      model_store_owner: &owner
+        type: str
+        description: "Account owning the tree (the fetcher); engines never run as it."
+        default: models
+      model_store_group: &group
+        type: str
+        description: "Group the engines' accounts join: read-only access (directories 2750, files 0640)."
+        default: models
+      model_store_exports_group: &xgroup
+        type: str
+        description: "Group allowed to write exports/ (the trainers, Unsloth Studio)."
+        default: model-trainers
+      model_store_fetch: &fetch
+        type: bool
+        description: "Fetch the hub entries (false: create the layout and the manifest copy only)."
+        default: true
+      model_store_fetch_ids: &ids
+        type: list
+        elements: str
+        description: "Fetch only these entry ids (empty: every hf and gguf entry)."
+        default: []
+      model_store_hf_cli: &cli
+        type: str
+        description: "The Hugging Face CLI (hf, from huggingface_hub)."
+        default: hf
+      model_store_hf_endpoint: &endpoint
+        type: str
+        description: "A hub mirror (https URL) used instead of the public hub; empty: the hub."
+        default: ""
+      model_store_hf_token_ref: &token
+        type: str
+        description: "secret:<name> holding the hub token for gated repositories; empty: anonymous."
+        default: ""
+      model_store_export_dir: &export
+        type: path
+        description: "Where the export hook writes the manifest and the sha256sum listings."
+        default: /var/backups/model-store/export
+  health:
+    short_description: Fail unless the layout exists and every entry's files are present with their sizes.
+    options:
+      model_store_manifest: *manifest
+      model_store_root: *root
+  verify:
+    short_description: Fail unless every entry's files match their sha256 (the slow pass).
+    options:
+      model_store_manifest: *manifest
+      model_store_root: *root
+  readiness:
+    short_description: The hf CLI runs (when fetching).
+    options:
+      model_store_hf_cli: *cli
+      model_store_fetch: *fetch
+  backup:
+    short_description: Name exports/ and manifests/ (hub entries are re-fetched from the manifest).
+    options:
+      model_store_manifest: *manifest
+      model_store_root: *root
+  restore:
+    short_description: Restore exports/ from a backup source.
+    options:
+      model_store_root: *root
+      model_store_restore_source:
+        type: path
+        description: Directory to restore exports/ from.
+        required: true
+  upgrade:
+    short_description: Nothing pinned here; a model changes by a new manifest entry.
+    options: {}
+  export:
+    short_description: Write the manifest and each entry's sha256sum listing.
+    options:
+      model_store_manifest: *manifest
+      model_store_export_dir: *export

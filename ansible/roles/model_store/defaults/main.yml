@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# The one model store (ADR-0023, docs/model-serving.md). model_store_manifest is required: the
+# manifest (schemas/platform/model_store.schema.json), validated by `hnx models store validate`
+# in CI. Every hub entry is fetched at its pinned 40-hex revision with the hf CLI, then every file
+# is checked against its sha256; a branch such as main is refused before anything runs.
+model_store_root: "{{ model_store_manifest.root | default('/srv/models') }}"
+# The tree is owned by this account; engines read it through model_store_group (directories
+# 2750, files 0640), so an engine account in the group can read the weights and never write them.
+model_store_owner: models
+model_store_group: models
+# exports/ alone is writable by the trainers' group (Unsloth Studio writes fine-tune exports
+# there); an export is served only after it is promoted into the manifest with its hashes.
+model_store_exports_group: model-trainers
+model_store_fetch: true
+# fetch only these entry ids (empty: every hf and gguf entry of the manifest)
+model_store_fetch_ids: []
+model_store_hf_cli: hf
+# A hub mirror (https URL) instead of the public hub; empty: the hub.
+model_store_hf_endpoint: ""
+# The hub token for gated repositories, by reference (secret:<name>); empty: anonymous.
+model_store_hf_token_ref: ""
+model_store_export_dir: /var/backups/model-store/export

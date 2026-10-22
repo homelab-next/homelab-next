@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# Generated from homelabnext.models.serving.ALLOWED_ARGS (role_vars_text); a test holds
+# it equal. Fixed, not settings: the vLLM flags an instance's args may carry, each with
+# the regex its value must match (null: a bare flag, no value).
+vllm_server_arg_rules:
+  async-scheduling: null
+  block-size: ^(8|16|32|64|128)\Z
+  calculate-kv-scales: null
+  cpu-offload-gb: ^[0-9]{1,6}(\.[0-9]{1,8})?\Z
+  disable-custom-all-reduce: null
+  disable-fastapi-docs: null
+  disable-log-stats: null
+  disable-sliding-window: null
+  disable-uvicorn-access-log: null
+  dtype: ^(auto|half|float16|bfloat16|float|float32)\Z
+  enable-auto-tool-choice: null
+  enable-chunked-prefill: null
+  enable-expert-parallel: null
+  enable-force-include-usage: null
+  enable-log-requests: null
+  enable-prefix-caching: null
+  enable-prompt-tokens-details: null
+  enable-request-id-headers: null
+  enforce-eager: null
+  generation-config: ^(auto|vllm)\Z
+  kv-cache-dtype: ^(auto|bfloat16|fp8|fp8_e4m3|fp8_e5m2)\Z
+  long-prefill-token-threshold: ^[0-9]{1,10}\Z
+  max-log-len: ^[0-9]{1,10}\Z
+  max-logprobs: ^[0-9]{1,10}\Z
+  max-num-batched-tokens: ^[0-9]{1,10}\Z
+  max-num-partial-prefills: ^[0-9]{1,10}\Z
+  max-num-seqs: ^[0-9]{1,10}\Z
+  no-enable-prefix-caching: null
+  num-gpu-blocks-override: ^[0-9]{1,10}\Z
+  quantization: ^[a-z0-9][a-z0-9_.-]{0,31}\Z
+  reasoning-parser: ^[a-z0-9][a-z0-9_.-]{0,31}\Z
+  response-role: ^[a-z0-9][a-z0-9_.-]{0,31}\Z
+  return-tokens-as-token-ids: null
+  seed: ^[0-9]{1,10}\Z
+  swap-space: ^[0-9]{1,6}(\.[0-9]{1,8})?\Z
+  tokenizer-mode: ^(auto|slow|mistral)\Z
+  tool-call-parser: ^[a-z0-9][a-z0-9_.-]{0,31}\Z
+  uvicorn-log-level: ^(critical|error|warning|info|debug|trace)\Z

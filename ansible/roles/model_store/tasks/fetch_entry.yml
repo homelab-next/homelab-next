@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: Apache-2.0
+# One hub entry (model_store_entry): download what is missing or wrong at the pinned revision into
+# <root>/.staging/<id>, verify it there by sha256 and rename it into place (files/promote_entry.py),
+# then verify the live entry by sha256.  Always --revision <commit>: the hf CLI's default is main.
+- name: Locate the entry
+  ansible.builtin.include_tasks: entry_paths.yml
+
+- name: Read what is already on disk
+  ansible.builtin.stat:
+    path: "{{ model_store_entry_dir }}/{{ item.path }}"
+    follow: true
+    get_checksum: true
+    checksum_algorithm: sha256
+  loop: "{{ model_store_entry.value.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: model_store_present
+
+- name: List what is missing or wrong
+  ansible.builtin.set_fact:
+    model_store_stage: "{{ model_store_root }}/.staging/{{ model_store_entry.key }}"
+    model_store_missing: >-
+      {%- set m = [] -%}
+      {%- for r in model_store_present.results -%}
+      {%- if not r.stat.exists or (r.stat.checksum | default('')) != r.item.sha256 -%}{{ m.append(r.item.path) or '' }}{%- endif -%}
+      {%- endfor -%}
+      {{ m | to_json }}
+
+- name: Start from an empty staging directory for {{ model_store_entry.key }}
+  ansible.builtin.file:
+    path: "{{ model_store_stage }}"
+    state: "{{ item }}"
+    owner: "{{ model_store_owner }}"
+    group: "{{ model_store_group }}"
+    mode: "0700"
+  loop: [absent, directory]
+  when: model_store_missing | from_json | length > 0
+
+# Into staging, never into the live store: an interrupted or wrong download is never in place.
+- name: Download the missing files of {{ model_store_entry.key }} at {{ model_store_entry.value.source.revision[:12] }}
+  ansible.builtin.command:
+    argv: >-
+      {{ [model_store_hf_cli, 'download', model_store_entry.value.source.repo]
+         + (model_store_missing | from_json)
+         + ['--revision', model_store_entry.value.source.revision]
+         + (['--cache-dir', model_store_stage] if model_store_entry.value.format == 'hf'
+            else ['--local-dir', model_store_stage]) }}
+  environment: >-
+    {{ {'HF_HUB_DISABLE_TELEMETRY': '1', 'HF_HUB_DISABLE_PROGRESS_BARS': '1'}
+       | combine({'HF_ENDPOINT': model_store_hf_endpoint} if model_store_hf_endpoint else {})
+       | combine({'HF_TOKEN': lookup('hnx_secret', model_store_hf_token_ref)} if model_store_hf_token_ref else {}) }}
+  when: model_store_missing | from_json | length > 0
+  changed_when: true
+  no_log: "{{ model_store_hf_token_ref != '' }}"
+
+- name: Verify the staged files by sha256, then rename them into the store
+  ansible.builtin.script:
+    cmd: "promote_entry.py {{ model_store_promote | to_json | quote }}"
+    executable: "{{ ansible_python_interpreter | default(ansible_playbook_python) }}"
+  vars:
+    model_store_promote:
+      format: "{{ model_store_entry.value.format }}"
+      stage_top: "{{ model_store_stage }}"
+      staged: >-
+        {{ model_store_stage ~ ('/' ~ model_store_entry_top | basename ~ '/snapshots/'
+           ~ model_store_entry.value.source.revision if model_store_entry.value.format == 'hf' else '') }}
+      live: "{{ model_store_entry_dir }}"
+      blobs: "{{ model_store_entry_top ~ '/blobs' if model_store_entry.value.format == 'hf' else '' }}"
+      files: >-
+        {{ model_store_entry.value.files | selectattr('path', 'in', model_store_missing | from_json) | list }}
+  when: model_store_missing | from_json | length > 0
+  changed_when: true
+
+- name: Remove the staging directory
+  ansible.builtin.file:
+    path: "{{ model_store_stage }}"
+    state: absent
+
+- name: Verify every file by sha256
+  ansible.builtin.include_tasks: verify_entry.yml
+  vars:
+    model_store_sizes_only: false
+
+- name: Give the entry to the store owner, readable by the engines' group only
+  ansible.builtin.file:
+    path: "{{ model_store_entry_top }}"
+    state: directory
+    recurse: true
+    owner: "{{ model_store_owner }}"
+    group: "{{ model_store_group }}"
+    mode: "u=rwX,g=rX,o="

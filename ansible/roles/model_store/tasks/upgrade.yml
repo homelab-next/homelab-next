@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing pinned here (a model changes by a manifest entry, the hf CLI with the host)
+  ansible.builtin.debug:
+    msg: model_store pins models in the manifest; add an entry (new revision, new hashes) to change one
+  tags: [upgrade]

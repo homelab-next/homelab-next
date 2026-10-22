@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: The hf CLI runs (it fetches by manifest; without fetching there is no dependency)
+  ansible.builtin.command:
+    argv: ["{{ model_store_hf_cli }}", version]
+  changed_when: false
+  when: model_store_fetch | bool
+  tags: [readiness]

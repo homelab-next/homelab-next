@@ -32,6 +32,7 @@ relate.
   [workflows](workflows.md) ([[workflows]]),
   [StackStorm](stackstorm.md) ([[stackstorm]]), [decisions and models](decide.md) ([[decide]]),
   [LLM gateway](llm-gateway.md) ([[llm-gateway]]),
+  [model serving](model-serving.md) ([[model-serving]]),
   [LLM orchestrator](orchestration-controller.md) ([[orchestration-controller]]),
   [agent profiles](agent.md) ([[agent]]), [broker service](broker.md) ([[broker]]),
   [scope guard](scope.md) ([[scope]]),

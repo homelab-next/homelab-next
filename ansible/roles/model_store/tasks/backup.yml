@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# Hub entries are re-fetchable byte for byte from the manifest (pinned commit + sha256); only the
+# exports (fine-tunes exist nowhere else) and the manifests need a backup.
+- name: Write the backup manifest
+  ansible.builtin.copy:
+    dest: "{{ model_store_root }}/manifests/backup-manifest.json"
+    content: "{{ {'service': 'model-store', 'paths': [model_store_root ~ '/exports', model_store_root ~ '/manifests'], 'refetch': model_store_manifest.models | dict2items | selectattr('value.format', 'in', model_store_hub_formats) | map(attribute='key') | sort} | to_nice_json }}\n"
+    mode: "0640"
+  tags: [backup]

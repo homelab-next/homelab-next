@@ -86,8 +86,15 @@ decide-safety:
 # (golden suites + the K-12 replay gate, against the deterministic fake) is the one for these pins
 MODEL_ROLES := examples/model_roles.json
 MODEL_EVAL := examples/model_roles.eval.json
+# the model store and serving plan (docs/model-serving.md): the example store is valid, every
+# binding resolves to an entry its engine may serve, and the generated vllm_server instances and
+# gateway config match the plan
+SERVING := examples/model-serving
 models-check:
 	$(PY) -m homelabnext.cli golden pins check --roles $(MODEL_ROLES) --report $(MODEL_EVAL)
+	$(PY) -m homelabnext.cli models store validate $(SERVING)/model_store.json --roles $(SERVING)/model_roles.json
+	$(PY) -m homelabnext.cli models serving check $(SERVING)/serving.yml $(SERVING)
+	$(PY) -m homelabnext.cli gen gateway render $(SERVING)/gateway.yml $(SERVING)/gateway --check
 
 # the LLM gateway config (LiteLLM + Bifrost) is generated from the role table and the agent
 # profiles: no drift, and no local-only or agent role can reach a cloud model (docs/llm-gateway.md)
@@ -100,6 +107,12 @@ gateway-check:
 # after changing the role table, a profile or the gateway spec: regenerate and commit
 gateway-render:
 	$(PY) -m homelabnext.cli gen gateway render $(GATEWAY_SPEC) $(dir $(GATEWAY_SPEC))
+
+# after changing the example store, its role table or its serving spec: regenerate and commit
+.PHONY: serving-render
+serving-render:
+	$(PY) -m homelabnext.cli models serving render $(SERVING)/serving.yml $(SERVING)
+	$(PY) -m homelabnext.cli gen gateway render $(SERVING)/gateway.yml $(SERVING)/gateway
 
 # after changing a pin, a golden suite or the replay inputs: regenerate the report and commit it
 models-report:

@@ -53,6 +53,7 @@ homelabnext/
   records/      propose/finding/completion          (W5)   core (+ records for pydantic)
   decide/       decision specs, replay, eval        (W7)   extra: decide
   golden/       golden-task format and runner       (W7)   core
+  models/       model store manifest, serving plan  (ADR-0023)  core (+ yaml for the serving spec)
   paths.py      locates schemas/, profiles/, examples/  (W16)  core
   conform/      conformance harness core            (W6)   core (+ yaml for target files)
   swap/         nine-step swap runner and record    (W11)  extra: swap (= yaml + schema)
@@ -155,7 +156,8 @@ Check = Callable[[Mapping[str, Any]], Result]                           # the pl
 
 `hnx` sub-commands are rows in `COMMANDS` in `homelabnext/cli.py` (name, one-line help, handler that
 imports its package lazily). Current names, in that order: `registry`, `new`, `gen`, `detections`,
-`registers`, `invariants`, `strategy`, `projects`, `records`, `reviews`, `ids`, `decide`, `golden`,
+`registers`, `invariants`, `strategy`, `projects`, `records`, `reviews`, `ids`, `decide`, `models`,
+`golden`,
 `site`, `guests`, `schema-check`, `swap`, `conform`, `decommission`, `docs`, `agent`, `workflows`,
 `scripts`, `events`, `status`, `graph`, `mcp`, `broker`, `custom`.
 `parity` is a library only (the swap runner calls it; no sub-command).
@@ -213,6 +215,11 @@ safety.check() -> [SpecResult]                               # hnx decide safety
 # homelabnext.golden
 pins.run_eval(table, suites, factory, model_name=...) ; pins.check_report(report, table, suites)   # hnx golden pins (G-11)
 load_suite(path) -> Suite ; run_suite(suite, completer, *, role=None, model_id="") -> Report ; score(output, expect)
+
+# homelabnext.models   (docs/model-serving.md)
+store.load(path) -> Store ; store.bindings_problems(store, table, engines=None) -> [str] ; store.check_disk(store, root) -> [str]
+store.resolve_binding(store, model_id, *, engine=None, digest=None) -> (Entry | None, why)   # Entry.digest = sha256 of its sha256sum listing
+serving.load_plan(path) -> Plan ; serving.render(plan) -> {"vllm_server/instances.yml": text}   # hnx models serving render|check
 
 # homelabnext.network   (site model; pure, no network access)
 load_site(path) -> dict ; validate(doc, registry) -> Report(.ok, .errors, .warnings)
