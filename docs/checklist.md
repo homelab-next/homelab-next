@@ -110,6 +110,7 @@ Cases, status, notifications and reports reach people.
 | O-08 | Notifications are state-diffed | Same state twice sends once; recovery sends one message (fake sender test) | PUBLIC-NOW |
 | O-09 | The hub lists every service link, scheduled job and agent from repository data | The Links, Schedule and Agent roster pages are generated from the registry, role timers / fleet units / CI schedules / workflow packs / status sources, and the roster with compiled profiles and broker manifests; every catalogued `timer:` trigger, scheduled workflow and status source is a Schedule row with a computed next run, every profile named anywhere has a roster owner and runtime, and no page writes an address (`tests/maps/test_directory.py`) | PUBLIC-NOW |
 | O-10 | Every role timer reports its runs | Each role or profile `.timer` has its service run the shared last-run writer (role `last_run`) on start and on stop with its own job id, calendar and delay, and its role installs it; the `job-last-run` mapping turns the records into one item per job and host, fail on a failed run and warn once the next run is overdue (next calendar time + randomized delay + run duration), and the Schedule page dates each timer's last run from them; a record shipped under `<dir>/<host>/` speaks only for that host and one dated more than 300 s ahead is unknown, and record file names are injective in the job id (`tests/roles/test_last_run.py`, `tests/status/test_status_last_run.py`, `tests/maps/test_directory.py`) | PUBLIC-NOW |
+| O-11 | Every orchestration job's usage is recorded and shown, names and numbers only | The controller's `homelabnext.agent.job.finished` 1.0 (closed schema: no prompt, task, tool or model text) is consumed idempotently by event and run id, only from `svc:llm-orchestrator`, into the hub's store; per-turn records come from the gateway's `/spend/logs/v2` with a viewer key by secret name, reduced to an allow-list and joined by `gateway_tag`; the Orchestration page shows per profile, backend and lane outcomes, p50/p95 wall and queue wait, tokens, cache-read share, cost, retries, fallbacks, sizes, a daily trend and one job's turns, "no gateway data" rather than zeros (`tests/orchestration/`, the generated event contract tests) | PUBLIC-NOW |
 
 ## P - Control plane
 
@@ -302,4 +303,4 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 
 ---
 
-**Totals:** 179 criteria across 16 pillars; 97 PUBLIC-NOW, 82 SERVER.
+**Totals:** 180 criteria across 16 pillars; 98 PUBLIC-NOW, 82 SERVER.
