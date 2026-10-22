@@ -7,5 +7,6 @@ registry: ../../services.yml
 profiles:
   - file: profile.broker-agent.json
     profile_file: /etc/hnx/profiles/broker-agent.json
+owns: [claude-code/*.json]
 outputs:
   - {path: claude-code/broker-agent.mcp.json}

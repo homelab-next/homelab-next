@@ -11,5 +11,9 @@ profiles:
     params:
       notes: {writable: agents/collector/inbox/}
       notes@shadow: {mode: read}
+owns: [llm-orchestrator/*.yaml, llm-orchestrator/profiles/*.yaml]
+# every orchestrator profile with a grants: block must accept the rendered catalog, rendered here
+# or not (its controller refuses to start otherwise)
+check_profiles: llm-orchestrator/profiles/*.yaml
 outputs:
   - {path: llm-orchestrator/mcp_catalog.yaml}

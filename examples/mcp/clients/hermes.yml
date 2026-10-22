@@ -16,6 +16,7 @@ profiles:
     params:
       notes: {writable: agents/collector/inbox/}
       notes@shadow: {mode: read}
+owns: [hermes/*.yaml]                # a stray file there is drift
 outputs:
   - {home: primary, path: hermes/primary.yaml}
   - {home: fallback, path: hermes/fallback.yaml}

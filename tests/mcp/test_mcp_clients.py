@@ -310,3 +310,58 @@ def test_render_writes_only_under_its_root_never_through_a_link(tmp_path):
     assert cli.main(["mcp", "catalog", "render", "--spec", str(spec), "--root", str(tmp_path)]) == 0
     assert (tmp_path / "out" / "primary.yaml").is_file()
     assert not list((tmp_path / "out").glob(".*"))  # the temporary file was renamed into place
+
+
+# ---------------------------------------------- llm-orchestrator: what its loaders accept
+def _orch_copy(tmp_path: Path) -> Path:
+    dst = tmp_path / "mcp"
+    shutil.copytree(ROOT / "examples" / "mcp", dst)
+    return dst / "clients" / "llm-orchestrator.yml"
+
+
+def test_llm_orchestrator_refuses_a_granted_remote_server_and_one_empty_lane(tmp_path):
+    lake = _lean(tmp_path, mcp=["notes", "records", "lake"],
+                 mcp_ceiling=["notes", "records", "lake"])  # fmt: skip
+    with pytest.raises(clients.RenderError, match="a streamable-http server; llm-orchestrator"):
+        clients.render_profile(CATALOG, lake, "llm-orchestrator", lanes=["real", "shadow"])
+    # a real lane without a shadow lane: llm-orchestrator fails every shadow job
+    with pytest.raises(clients.RenderError, match="fails every shadow job"):
+        clients.render_profile(CATALOG, COLLECTOR, "llm-orchestrator", lanes=["real"])
+    block, _ = clients.render_profile(CATALOG, COLLECTOR, "llm-orchestrator",
+                                      lanes=["real", "shadow"])  # fmt: skip
+    assert block.startswith("\n" + clients.GRANTS_MARKER)
+
+
+def test_the_splice_never_makes_a_second_grants_key_or_drops_keys():
+    block = clients.ORCH_GRANTS_HEAD + "grants: {real: [], shadow: []}\n"
+    with pytest.raises(clients.RenderError, match="grants: key outside the generated block"):
+        clients.splice_grants("name: x\ngrants: {real: []}\n", block)
+    after = clients.splice_grants("name: x\n", block) + "toolsets: {real: a}\n"
+    with pytest.raises(clients.RenderError, match=r"\['toolsets'\] follow the generated"):
+        clients.splice_grants(after, block)
+    # a new file: no leading blank lines; yaml.v3 refuses a duplicate key, and so does the check
+    assert clients.splice_grants("", block).startswith(clients.GRANTS_MARKER)
+    bad = clients.orch_accepts("kinds: {}", {"p": "name: x\nname: y\n"})
+    assert bad and "duplicate key 'name'" in bad[0]
+
+
+def test_a_spec_refuses_a_missing_grants_file_and_checks_every_orchestrator_profile(tmp_path):
+    spec = _orch_copy(tmp_path)
+    profiles = spec.parent / "llm-orchestrator" / "profiles"
+    other = profiles / "monitor.yaml"  # not in the spec, but loaded by the same controller
+    other.write_text("name: monitor\ngrants:\n  real: [{name: c, kind: collectormcp}]\n"
+                     "  shadow: [{name: c, kind: collectormcp}]\n")  # fmt: skip
+    with pytest.raises(clients.RenderError, match="unknown kind 'collectormcp'"):
+        clients.render_spec(spec)
+    other.unlink()
+    (profiles / "collector.yaml").unlink()
+    with pytest.raises(clients.RenderError, match="no such profile file"):
+        clients.render_spec(spec)
+
+
+def test_check_reports_a_file_the_spec_owns_but_does_not_render(tmp_path, capsys):
+    spec = _orch_copy(tmp_path).with_name("hermes.yml")
+    shutil.copy(ROOT / "examples" / "services.yml", tmp_path / "services.yml")
+    (spec.parent / "hermes" / "old-home.yaml").write_text("mcp_servers: {}\n")
+    assert cli.main(["mcp", "catalog", "render", "--spec", str(spec), "--check"]) == 1
+    assert "old-home.yaml: owned by the spec (owns:) but not rendered" in capsys.readouterr().out

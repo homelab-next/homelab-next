@@ -23,8 +23,10 @@
 A render *spec* (YAML) names the client, the catalog, the registry, the lanes, the profiles with
 their grants' parameter values, and every output: one per runtime home (a primary and a fallback
 Hermes home from one source), or for llm-orchestrator the catalog file and each profile's file
-whose ``grants:`` block is spliced.  ``--check`` compares every output and fails on any drift, so
-a hand edit or a home that lost an entry is caught.
+whose ``grants:`` block is spliced (``check_profiles``: every orchestrator profile that must
+accept the rendered catalog).  ``--check`` compares every output and fails on any drift, so a
+hand edit or a home that lost an entry is caught, and on any file under the spec's ``owns``
+globs that no output renders.
 """
 
 from __future__ import annotations
@@ -40,6 +42,7 @@ from typing import Any
 
 import yaml
 
+from homelabnext._yaml import UniqueKeyLoader
 from homelabnext.registry.model import secret_env_name
 
 from . import servers
@@ -391,35 +394,88 @@ def orch_catalog(cat: servers.Catalog, granted_ids: Iterable[str] = ()) -> tuple
 
 
 def orch_grants(insts: list[Instance], lanes: Iterable[str]) -> str:
-    """One profile's ``grants:`` block (``real`` and ``shadow`` lists, by instance name)."""
+    """One profile's ``grants:`` block (``real`` and ``shadow`` lists, by instance name).  A
+    granted server llm-orchestrator cannot start (a remote one: its kinds start a command) is
+    refused, never dropped: the job would silently run without it."""
     out: dict[str, list[dict[str, Any]]] = {lane: [] for lane in ORCH_LANES}
     for lane in lanes:
         out.setdefault(lane, [])
+    problems: list[str] = []
     for inst in sorted(insts, key=lambda i: (i.lane, i.name)):
-        if (inst.record.get("transport") or {}).get("type") != "stdio":
+        kind = (inst.record.get("transport") or {}).get("type")
+        if kind != "stdio":
+            problems.append(
+                f"profile:{inst.profile}: granted {inst.server}, a {kind} server; llm-orchestrator "
+                "kinds start a command, so it cannot be granted there"
+            )
             continue
         g: dict[str, Any] = {"name": inst.name, "kind": inst.server}
         if inst.param_env:
             g["env"] = dict(sorted(inst.param_env.items()))
         out[inst.lane].append(g)
+    if problems:
+        raise RenderError(sorted(set(problems)))
     return ORCH_GRANTS_HEAD + yaml.safe_dump({"grants": out}, sort_keys=False, width=100)
 
 
-def splice_grants(existing: str, block: str) -> str:
+def load_strict(text: str, what: str) -> Any:
+    """``text`` as YAML, refusing a duplicate key as llm-orchestrator's yaml.v3 does (PyYAML
+    keeps the last one silently); a :class:`RenderError` names ``what``."""
+    try:
+        return yaml.load(text, Loader=UniqueKeyLoader)  # a SafeLoader subclass
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        at = f" (line {mark.line + 1})" if mark is not None else ""
+        why = getattr(exc, "problem", None) or exc
+        raise RenderError([f"{what}: not YAML llm-orchestrator can read{at}: {why}"]) from None
+
+
+def splice_grants(existing: str, block: str, what: str = "profile") -> str:
     """``existing`` (a profile file) with its generated grants block replaced by ``block``
-    (appended when it has none)."""
-    at = existing.find("\n" + GRANTS_MARKER)
+    (appended when it has none).  Refused: a ``grants:`` key outside the generated block (the
+    result would have two, which yaml.v3 rejects), and keys after the block's marker (the splice
+    would delete them)."""
+    at = existing.find(GRANTS_MARKER)
+    if at > 0 and existing[at - 1] != "\n":
+        at = existing.find("\n" + GRANTS_MARKER) + 1 or -1
     head = existing if at < 0 else existing[:at]
-    return head.rstrip("\n") + "\n" + block
+    tail = "" if at < 0 else existing[at:]
+    head_doc = load_strict(head, what) if head.strip() else {}
+    if isinstance(head_doc, Mapping) and "grants" in head_doc:
+        raise RenderError(
+            [
+                f"{what}: has a grants: key outside the generated block (remove it; the block "
+                f"is rendered after the line {GRANTS_MARKER!r})"
+            ]
+        )
+    tail_doc = load_strict(tail, what) if tail.strip() else {}
+    extra = sorted(set(tail_doc) - {"grants"}) if isinstance(tail_doc, Mapping) else []
+    if extra:
+        raise RenderError(
+            [
+                f"{what}: key(s) {extra} follow the generated grants block and would be "
+                "deleted (move them above it)"
+            ]
+        )
+    text = head.rstrip("\n") + "\n" + block if head.strip() else block.lstrip("\n")
+    load_strict(text, what)
+    return text
 
 
 def orch_accepts(catalog_text: str, grant_blocks: Mapping[str, str]) -> list[str]:
-    """What llm-orchestrator's ``internal/grants`` would refuse in these files, its rules encoded
-    here (grants.go at llm-orchestrator commit 68ffbcd): known fields only (85, KnownFields), kind
-    and server names (68, 90, 111), a command (94), no hard-denied allowed_env key (71, 98), no
-    duplicate server (115), a known kind (119), only allowed, non-denied env keys (127)."""
+    """What llm-orchestrator would refuse in these files (a catalog, and profile files or their
+    grants blocks), its rules encoded here (llm-orchestrator commit 68ffbcd): YAML without a
+    duplicate key (yaml.v3), and internal/grants/grants.go's known fields only (85, KnownFields),
+    kind and server names (68, 90, 111), a command (94), no hard-denied allowed_env key (71, 98), no
+    duplicate server (115), a known kind (119), only allowed, non-denied env keys (127); and
+    internal/queue/scheduler.go:626, which fails every job of a lane with no grants when the
+    other lane has some."""
     problems: list[str] = []
-    doc = yaml.safe_load(catalog_text) or {}
+    try:
+        doc = load_strict(catalog_text, "catalog") or {}
+        docs = {who: load_strict(text, who) or {} for who, text in grant_blocks.items()}
+    except RenderError as exc:
+        return exc.problems
     if set(doc) != {"kinds"}:
         problems.append(f"catalog: top-level keys {sorted(doc)} (only kinds)")
     kinds = doc.get("kinds") or {}
@@ -434,12 +490,17 @@ def orch_accepts(catalog_text: str, grant_blocks: Mapping[str, str]) -> list[str
         for key in k.get("allowed_env") or ():
             if servers.DENIED_ENV.match(key):
                 problems.append(f"kind {name}: env key {key} may never be grant-settable")
-    for who, block in grant_blocks.items():
-        doc = yaml.safe_load(block) or {}
-        lanes = doc.get("grants") or {}
+    for who, doc in docs.items():
+        lanes = (doc.get("grants") if isinstance(doc, Mapping) else None) or {}
         extra = set(lanes) - set(ORCH_LANES)
         if extra:
             problems.append(f"{who}: unknown lane(s) {sorted(extra)}")
+        empty = [lane for lane in ORCH_LANES if not lanes.get(lane)]
+        if len(empty) == 1:
+            problems.append(
+                f"{who}: grants the {ORCH_LANES[1 - ORCH_LANES.index(empty[0])]} lane but not "
+                f"{empty[0]}: llm-orchestrator fails every {empty[0]} job (render both lanes)"
+            )
         for lane, gs in lanes.items():
             seen: set[str] = set()
             for g in gs or ():
@@ -474,14 +535,22 @@ class Output:
     def expected(self) -> str:
         if not self.splice:
             return self.text
-        old = self.path.read_text(encoding="utf-8") if self.path.is_file() else ""
-        return splice_grants(old, self.text)
+        if not self.path.is_file():
+            raise RenderError(
+                [
+                    f"{self.path}: no such profile file (the grants block is spliced into the "
+                    "orchestrator's own profile; create it there first)"
+                ]
+            )
+        return splice_grants(self.path.read_text(encoding="utf-8"), self.text, str(self.path))
 
 
 @dataclass
 class Rendered:
     outputs: list[Output] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    #: files the spec owns (``owns:`` globs) that no output renders: stale or hand-written
+    unlisted: list[Path] = field(default_factory=list)
 
 
 def profile_refusals(doc: Mapping[str, Any], cat: servers.Catalog) -> list[str]:
@@ -546,7 +615,12 @@ def render_profile(
     )
     notes = deprecation_notes(cat, prof)
     if client == "llm-orchestrator":
-        return orch_grants(insts, lanes), notes
+        block = orch_grants(insts, lanes)
+        catalog_text, _ = orch_catalog(cat, {i.server for i in insts})
+        bad = orch_accepts(catalog_text, {prof["id"]: block})
+        if bad:
+            raise RenderError(bad)
+        return block, notes
     text, skipped = render_home(insts, client, cat, registry, prof["id"])
     return text, notes + [f"{client} cannot hold {n} (not a stdio server)" for n in skipped]
 
@@ -555,7 +629,9 @@ def _spec_problems(spec: Any) -> list[str]:
     if not isinstance(spec, Mapping):
         return ["the spec must be a mapping"]
     out = []
-    extra = set(spec) - {"client", "catalog", "registry", "lanes", "profiles", "outputs"}
+    extra = set(spec) - {
+        "client", "catalog", "registry", "lanes", "profiles", "outputs", "owns", "check_profiles"
+    }  # fmt: skip
     if extra:
         out.append(f"unknown key(s) {sorted(extra)}")
     if spec.get("client") not in CLIENTS:
@@ -628,20 +704,45 @@ def render_spec(spec_path: str | Path, root: str | Path | None = None) -> Render
     if client == "llm-orchestrator":
         text, notes = orch_catalog(cat, {i.server for i in every})
         res.notes += notes
-        bad = orch_accepts(text, {k: v[1] for k, v in blocks.items()})
-        if bad:
-            raise RenderError(bad)
         for out in spec["outputs"]:
             res.outputs.append(Output(_inside(out_root, out["path"], "output"), text))
+        full: dict[str, str] = {}
         for path, block in blocks.values():
-            res.outputs.append(Output(path, block, splice=True))
-        return res
-    for out in spec["outputs"]:
-        what = f"home {out['home']}" if out.get("home") else f"{sp.name}"
-        text, skipped = render_home(every, client, cat, registry, what)
-        res.notes += [f"{what}: {client} cannot hold {n}" for n in skipped]
-        res.outputs.append(Output(_inside(out_root, out["path"], "output"), text))
+            o = Output(path, block, splice=True)
+            full[str(path)] = o.expected()  # the whole profile file, as the orchestrator reads it
+            res.outputs.append(o)
+        # every profile the orchestrator loads must accept the catalog that replaces its own,
+        # not only the profiles this spec renders (its controller refuses to start otherwise)
+        for f in _owned(out_root, spec.get("check_profiles")):
+            if str(f) not in full and f.is_file():
+                other = f.read_text(encoding="utf-8")
+                if "grants" in (load_strict(other, str(f)) or {}):
+                    full[str(f)] = other
+        bad = orch_accepts(text, full)
+        if bad:
+            raise RenderError(bad)
+    else:
+        for out in spec["outputs"]:
+            what = f"home {out['home']}" if out.get("home") else f"{sp.name}"
+            text, skipped = render_home(every, client, cat, registry, what)
+            res.notes += [f"{what}: {client} cannot hold {n}" for n in skipped]
+            res.outputs.append(Output(_inside(out_root, out["path"], "output"), text))
+    mine = {o.path.resolve() for o in res.outputs}
+    res.unlisted = [f for f in _owned(out_root, spec.get("owns")) if f.resolve() not in mine]
+    res.notes += [f"{f}: owned by the spec but not rendered (stale?)" for f in res.unlisted]
     return res
+
+
+def _owned(root: Path, globs: Any) -> list[Path]:
+    """Files under ``root`` matching a spec's globs (``owns``, ``check_profiles``)."""
+    if isinstance(globs, str):
+        globs = [globs]
+    out: set[Path] = set()
+    for g in globs or ():
+        if Path(str(g)).is_absolute() or ".." in Path(str(g)).parts:
+            raise RenderError([f"glob {g}: write it relative to {root}, inside it"])
+        out |= {f for f in root.glob(str(g)) if f.is_file()}
+    return sorted(out)
 
 
 def write(rendered: Rendered) -> list[Path]:
@@ -663,11 +764,13 @@ def write(rendered: Rendered) -> list[Path]:
 
 
 def drift(rendered: Rendered) -> list[str]:
-    """The outputs whose file differs from the render (missing, hand-edited, stale)."""
+    """The outputs whose file differs from the render (missing, hand-edited, stale), and every
+    file the spec owns that no output renders."""
     out = []
     for o in rendered.outputs:
         if not o.path.is_file():
             out.append(f"{o.path}: missing")
         elif o.path.read_text(encoding="utf-8") != o.expected():
             out.append(f"{o.path}: differs from the render (hand-edited or stale)")
+    out += [f"{f}: owned by the spec (owns:) but not rendered by it" for f in rendered.unlisted]
     return out

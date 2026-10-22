@@ -141,6 +141,10 @@ outputs:
   - {home: fallback, path: hermes/fallback.yaml}
 ```
 
+A spec may also name `owns:`, globs (relative to the spec) of the files it is the only writer
+of: `--check` reports any file there that no output renders (a stale home, a hand-written
+config).
+
 Each parameter's value is the grant's (`params`), else its default; a list value expands into one
 instance per element. A value is a string (quote YAML's `true` or `0755`), passed through
 verbatim: it may not contain `$`, `secret:` or a control character, so a grant can never route a
@@ -191,18 +195,30 @@ The generated example that [broker](broker.md) shows is
 `--client llm-orchestrator` emits exactly the format llm-orchestrator's per-job grants read
 (`internal/grants`, ADR-022 there): one kind per grantable stdio server (a remote server, or one
 whose arguments or settings vary per instance, is reported and left out unless a rendered profile
-is granted it, when it is refused), and per profile a `grants:` block whose instances set only
-their parameters' env keys. `clients.orch_accepts` encodes that loader's rules (known fields only,
-names, a command, no hard-denied allowed key, no duplicate, a known kind, only allowed env keys)
-and the render refuses anything it would refuse. To switch an orchestrator checkout from a
-hand-written catalog to the rendered one:
+is granted it, when it is refused: the job would otherwise run silently without it), and per
+profile a `grants:` block whose instances set only their parameters' env keys.
+`clients.orch_accepts` encodes that loader's rules (YAML without a duplicate key, as yaml.v3
+reads it; known fields only, names, a command, no hard-denied allowed key, no duplicate server, a
+known kind, only allowed env keys) and its scheduler's (a profile that grants one lane must grant
+the other, or every job of the empty lane fails), and the render refuses anything it would refuse,
+in `--profile` mode too. So render both lanes (`lanes: [real, shadow]`).
+
+The block is spliced into the orchestrator's own profile file, which must exist: everything from
+the marker line `# Per-job MCP grants (ADR-022).` to the end of the file is the render's. A
+`grants:` key outside the block (the result would have two) or any key after the marker (the
+splice would delete it) is refused. The rendered catalog replaces the orchestrator's whole
+`configs/mcp_catalog.yaml`, so the spec's `check_profiles:` glob names every profile file the
+orchestrator loads: each one with a `grants:` block, rendered by this spec or not, must accept the
+new catalog, or the render is refused (the controller would refuse to start).
+
+To switch an orchestrator checkout from a hand-written catalog to the rendered one:
 
 1. import its servers (below), pin, classify and review them, and add `parameters` with `env`
    for every key its grants set per agent, and an `instance` template that reproduces the names
    its prompts use;
 2. write a render spec with `client: llm-orchestrator`, `lanes: [real, shadow]`, one `profiles`
-   entry per orchestrator profile (`grants_file:` that profile's YAML, `params:` its values) and
-   one output for `configs/mcp_catalog.yaml`;
+   entry per orchestrator profile (`grants_file:` that profile's YAML, `params:` its values),
+   one output for `configs/mcp_catalog.yaml` and `check_profiles: configs/profiles/*.yaml`;
 3. render, diff against the hand-written files (the server definitions must come out identical;
    the orchestrator's equivalence test is the judge), commit, and run `--check` in its CI.
 
