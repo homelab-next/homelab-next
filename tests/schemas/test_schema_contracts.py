@@ -64,6 +64,7 @@ EXPECTED = {
     "status/agents.schema.json",
     "status/views.schema.json",
     "status/roster.schema.json",
+    "status/last_run.schema.json",
 }
 
 

@@ -36,3 +36,7 @@ needrestart_dropin: /etc/needrestart/conf.d/50-homelabnext.conf
 needrestart_aliases_file: /etc/aliases
 needrestart_unit_dir: /etc/systemd/system
 needrestart_state_dir: /var/lib/homelabnext/needrestart
+# Each run's last-run record (role last_run, docs/role-interface.md section 8): the shared
+# per-host directory the status hub's job-last-run mapping reads, and the group that may read it.
+needrestart_last_run_dir: /var/lib/homelabnext/last-run
+needrestart_last_run_group: root

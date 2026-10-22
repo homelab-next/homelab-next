@@ -25,3 +25,7 @@ trivy_max_age_hours: 48
 trivy_systemctl_cli: systemctl
 trivy_unit_dir: /etc/systemd/system
 trivy_state_dir: /var/lib/homelabnext/trivy
+# Each run's last-run record (role last_run, docs/role-interface.md section 8): the shared
+# per-host directory the status hub's job-last-run mapping reads, and the group that may read it.
+trivy_last_run_dir: /var/lib/homelabnext/last-run
+trivy_last_run_group: root

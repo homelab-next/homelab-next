@@ -1,0 +1,14 @@
+{
+  "schema": "homelabnext.status.last-run/1",
+  "job": "timer:lynis/scan",
+  "unit": "hnx-lynis.service",
+  "host": "web-1",
+  "on_calendar": "*-*-* 04:10:00 UTC",
+  "randomized_delay_s": 900,
+  "started_at": "2026-10-20T04:17:03Z",
+  "finished_at": "2026-10-20T04:19:41Z",
+  "running": false,
+  "result": "success",
+  "exit_code": "exited",
+  "exit_status": "0"
+}

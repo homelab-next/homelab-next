@@ -294,6 +294,7 @@ _KIND_BUILTINS = {
     "invariants-results": ("poll-file", {"module"}),
     "records-lanes": ("poll-file", {"module", "warn_after_s"}),
     "broker-pending": ("poll-file", {"module", "warn_after_s"}),
+    "job-last-run": ("poll-file", {"module", "warn_after_s"}),
     "orchestrator-queue": ("poll-http-json", {"module", "warn_after_s"}),
     "agentmetry-audit": ("poll-http-json", {"module", "warn_after_s"}),
     "prometheus-alerts": ("poll-prometheus", {"module", "states", "item"}),

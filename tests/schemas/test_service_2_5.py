@@ -33,10 +33,10 @@ def _src(doc):
     return doc["services"]["ups-monitor"]["status_sources"][0]
 
 
-def test_version_is_2_5_frozen_and_additive():
-    assert CURRENT["$id"].endswith("/platform/service/2.5")
-    assert CURRENT == FROZEN_25
-    assert sc.is_additive(FROZEN_24, CURRENT) == []
+def test_version_2_5_is_frozen_and_additive():
+    assert FROZEN_25["$id"].endswith("/platform/service/2.5")
+    assert sc.is_additive(FROZEN_24, FROZEN_25) == []
+    assert sc.is_additive(FROZEN_25, CURRENT) == []
 
 
 def test_poll_nut_validates_in_2_5_only_and_reaches_the_model():

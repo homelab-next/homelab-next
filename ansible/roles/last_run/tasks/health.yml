@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Look for the writer and the record directory
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: ["{{ last_run_writer }}", "{{ last_run_dir }}"]
+      register: last_run_paths
+    - name: Fail unless both are there
+      ansible.builtin.assert:
+        that:
+          - last_run_paths.results[0].stat.exists and last_run_paths.results[0].stat.executable
+          - last_run_paths.results[1].stat.isdir | default(false)
+        fail_msg: "last_run: {{ last_run_writer }} is not an installed writer, or {{ last_run_dir }} is not a directory"
+  tags: [health]

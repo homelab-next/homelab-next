@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# 2.6-only: the status hub reads the role timers' last-run records (documentation addresses only)
+registry_version: 1
+lab: {name: lab, domain: example.internal, svc_label: svc, owner: ops}
+zones:
+  mgmt: {cidr: 192.0.2.0/26}
+hosts:
+  mon-1: {address: 192.0.2.10, zone: mgmt}
+services:
+  status-hub:
+    capability: status-hub
+    impl: homelabnext
+    host: mon-1
+    protocol: http
+    port: 8099
+    health: {kind: http, path: /status.json, expect_status: 200}
+    owner: ops
+    version: "0.1.0"
+    tls: none
+    status_sources:
+      - id: job-runs
+        kind: poll-file
+        target: {file: last-run}
+        interval_s: 300
+        timeout_s: 10
+        mapping: {builtin: job-last-run, module: jobs, warn_after_s: 172800}
+        what: The last run of every role timer on every host that ships its records.

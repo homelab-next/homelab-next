@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Included by every role that ships a timer (its config.yml), before it writes its units.
+- name: Validate the inputs
+  ansible.builtin.assert:
+    that:
+      - last_run_dir is match('^/[A-Za-z0-9._/-]+\Z') and '..' not in last_run_dir
+      - last_run_writer is match('^/[A-Za-z0-9._/-]+\Z') and '..' not in last_run_writer
+      - last_run_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+    fail_msg: "last_run: the record directory and the writer are absolute paths of [A-Za-z0-9._/-], and the group a plain group name"
+
+- name: Ensure the record and writer directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+    group: "{{ item.group | default(omit) }}"
+  loop:
+    - {path: "{{ last_run_dir }}", mode: "0750", group: "{{ last_run_group }}"}
+    - {path: "{{ last_run_writer | dirname }}", mode: "0755"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Install the last-run writer
+  ansible.builtin.copy:
+    src: hnx-last-run.py
+    dest: "{{ last_run_writer }}"
+    mode: "0755"

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/status/last_run/1.0",
+  "title": "Job last-run record",
+  "description": "What one scheduled job left behind on its host: the shared writer (role last_run, hnx-last-run) rewrites it when the job's service starts (running) and again when it stops, whatever the outcome (systemd ExecStopPost, SERVICE_RESULT/EXIT_CODE/EXIT_STATUS). It carries the schedule the host actually runs, so the status hub's job-last-run mapping can tell a late job from an idle one without the repository. One file per job per host, mode 0640, named after the job id. Evolve additively.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "job", "unit", "host", "on_calendar", "started_at", "running"],
+  "properties": {
+    "schema": {"const": "homelabnext.status.last-run/1"},
+    "job": {
+      "type": "string",
+      "pattern": "^(?:timer|fleet-unit):[A-Za-z0-9_.-]{1,64}(?:/[A-Za-z0-9_.-]{1,64})?$(?!\\n)",
+      "description": "The job's id on the Schedule page: timer:<role>/<unit> for a role or profile timer, fleet-unit:<name> for a fleet unit."
+    },
+    "unit": {"type": "string", "pattern": "^[A-Za-z0-9@_.:-]{1,247}\\.service$(?!\\n)", "description": "The systemd service the timer starts."},
+    "host": {"type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$(?!\\n)", "description": "The short host name the job ran on."},
+    "on_calendar": {"type": "string", "pattern": "^[A-Za-z0-9*:,./~ -]{1,128}$(?!\\n)", "description": "The timer's OnCalendar= value as rendered on the host."},
+    "randomized_delay_s": {"type": "integer", "minimum": 0, "description": "The timer's RandomizedDelaySec= in seconds (absent: none)."},
+    "started_at": {"$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"},
+    "finished_at": {"anyOf": [{"$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"}, {"type": "null"}]},
+    "running": {"type": "boolean", "description": "true from the start until the service stops."},
+    "result": {"type": ["string", "null"], "pattern": "^[a-z][a-z-]{0,31}$(?!\\n)", "description": "systemd's SERVICE_RESULT: success, exit-code, signal, timeout, core-dump, watchdog, ..."},
+    "exit_code": {"type": ["string", "null"], "pattern": "^[a-z]{1,16}$(?!\\n)", "description": "systemd's EXIT_CODE: exited, killed or dumped."},
+    "exit_status": {"type": ["string", "null"], "pattern": "^[A-Z0-9]{1,16}$(?!\\n)", "description": "systemd's EXIT_STATUS: the exit status, or the signal name."}
+  }
+}

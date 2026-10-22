@@ -14,3 +14,7 @@ clamav_max_age_hours: 192
 clamav_systemctl_cli: systemctl
 clamav_unit_dir: /etc/systemd/system
 clamav_state_dir: /var/lib/homelabnext/clamav
+# Each run's last-run record (role last_run, docs/role-interface.md section 8): the shared
+# per-host directory the status hub's job-last-run mapping reads, and the group that may read it.
+clamav_last_run_dir: /var/lib/homelabnext/last-run
+clamav_last_run_group: root

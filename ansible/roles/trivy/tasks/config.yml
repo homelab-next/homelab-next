@@ -14,6 +14,14 @@
     dest: "{{ trivy_script }}"
     mode: "0750"
 
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ trivy_last_run_dir }}"
+    last_run_group: "{{ trivy_last_run_group }}"
+    last_run_writer: "{{ trivy_last_run_writer }}"
+
 - name: Write the service and timer units
   ansible.builtin.template:
     src: "scan.{{ item }}.j2"

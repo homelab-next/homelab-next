@@ -180,6 +180,54 @@ by default: without `user:` a unit runs as `DynamicUser=yes`, `user: root` needs
 `ProtectSystem=strict`; `hardening_opt_out: [Directive, ...]` drops named directives for one
 unit, and shows up in review as exactly that.
 
+### Every role timer reports its runs
+
+A role (or profile) that ships its own `U.timer` + `U.service` makes the status hub's Schedule
+page show the timer's last run, and whether it failed or is overdue, through one shared
+convention: a **last-run record** per job per host
+([`schemas/status/last_run.schema.json`](../schemas/status/last_run.schema.json), read by the
+hub's `job-last-run` mapping, [docs/status.md](status.md#scheduled-jobs-last-run-records-job-last-run-registry-26)).
+
+* The role's configuration includes role **`last_run`**, which installs the writer
+  `/usr/local/libexec/homelabnext/hnx-last-run` (catalogued as `last-run-writer`) and the record
+  directory (mode 0750, group `last_run_group`), before it writes its units:
+
+  ```yaml
+  - name: Install the shared last-run writer and the record directory (role last_run)
+    ansible.builtin.include_role:
+      name: last_run
+    vars:
+      last_run_dir: "{{ lynis_last_run_dir }}"       # default /var/lib/homelabnext/last-run
+      last_run_group: "{{ lynis_last_run_group }}"   # default root: who may read the records
+      last_run_writer: "{{ lynis_last_run_writer }}" # vars/main.yml, fixed
+  ```
+
+* Its service runs the writer on start and on stop, with the timer's own job id, `%n`, the
+  timer's `OnCalendar=` value as written there and its `RandomizedDelaySec=` in seconds:
+
+  ```ini
+  ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ lynis_last_run_dir }} --group {{ lynis_last_run_group }} --job timer:lynis/scan --unit %n --calendar "{{ lynis_schedule }}" --delay 900
+  ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish ...the same arguments
+  ```
+
+  `ExecStopPost=` runs after a success, a failure, a timeout or a kill alike and gets systemd's
+  verdict (`SERVICE_RESULT`, `EXIT_CODE`, `EXIT_STATUS`), so a failed run is recorded as failed;
+  the `-` prefix means a writer problem never changes the job's own result. The record is written
+  atomically, mode 0640, group `<role>_last_run_group`, at `<dir>/<job id>.json` (`:` and `/` as
+  `-`). It carries the schedule the host actually runs, so lateness is judged without the
+  repository.
+
+* It says whether the job **ran**. What a scanner found stays with the role's health hook (the
+  scan scripts still write their own `last-run` exit status beside their report).
+
+Enforced: `homelabnext.status.maps.schedule.record_problems` lists every role or profile timer
+whose service lacks either line, names another job, calendar or delay, or whose role does not
+include `last_run`; the Schedule page shows those as problems and
+`tests/roles/test_last_run.py::test_every_role_timer_writes_a_last_run_record` fails on any.
+`hnx scripts reality` reads `ExecStartPre=` and `ExecStopPost=` beside `ExecStart=`, so the
+writer's header must name every timer that runs it. A fleet unit (`fleet_units`) is not a role
+timer and is not covered yet: its job id is `fleet-unit:<name>`, and the writer accepts it.
+
 ## 9. Scaffolds
 
 `hnx new role|schema|capability|detection <name> [--dest DIR]` writes a minimal

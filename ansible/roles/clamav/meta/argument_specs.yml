@@ -53,6 +53,14 @@ argument_specs:
         type: path
         description: "Where each run writes its report and its exit status (last-run)."
         default: /var/lib/homelabnext/clamav
+      clamav_last_run_dir: &last_run_dir
+        type: path
+        description: "Where each run writes its last-run record (role last_run; the status hub's job-last-run mapping reads it)."
+        default: /var/lib/homelabnext/last-run
+      clamav_last_run_group: &last_run_group
+        type: str
+        description: "The group that may read the last-run records (the account that ships them to the status hub)."
+        default: root
   config:
     short_description: Write the checked configuration, the scan script and its timer, and enable the timer.
     options:
@@ -65,6 +73,8 @@ argument_specs:
       clamav_systemctl_cli: *systemctl
       clamav_unit_dir: *units
       clamav_state_dir: *state
+      clamav_last_run_dir: *last_run_dir
+      clamav_last_run_group: *last_run_group
   health:
     short_description: Fail unless a recent scan found nothing and the signatures are current.
     options:

@@ -1,0 +1,10 @@
+{
+  "schema": "homelabnext.status.last-run/1",
+  "job": "timer:aide/scan",
+  "unit": "hnx-aide.service",
+  "host": "web-1",
+  "on_calendar": "Sun *-*-* 02:50:00 UTC",
+  "started_at": "2026-10-20T02:58:00Z",
+  "finished_at": null,
+  "running": true
+}

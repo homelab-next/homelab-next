@@ -1,3 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Fixed, not a setting: where the scan script is installed (the service's ExecStart names it).
 rkhunter_script: /usr/local/libexec/homelabnext/rkhunter-scan
+# Fixed, not a setting: where the shared last-run writer (role last_run) is installed (the
+# service's ExecStartPre= and ExecStopPost= name it).
+rkhunter_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run

@@ -15,8 +15,8 @@ Callers are discovered, never declared.  Each becomes a trigger string in the he
 ``code:P``          package module ``P`` loads it with ``paths.checkout_tool("NAME")``
 ``fleet-unit:N``    entry ``N`` of a fleet_units spec (``fleet_unit_specs`` globs) execs it:
                     a **timer**
-``timer:R/U``       role ``R`` ships ``U.timer`` and ``U.service`` whose ``ExecStart`` runs it:
-                    a **timer**
+``timer:R/U``       role ``R`` ships ``U.timer`` and ``U.service`` whose ``ExecStart`` (or
+                    ``ExecStartPre``/``ExecStopPost``, the last-run writer) runs it: a **timer**
 ``role:R``          a task file of role ``R`` names a script shipped in that role
 ``profile:P``       a file of profile ``P`` names a script shipped in that profile
 ==================  ====================================================================
@@ -405,7 +405,7 @@ def _exec(real: Reality, idx: _Index, caller: str, cmd: str) -> None:
         real.unresolved_exec.append((caller, detail))
 
 
-_EXECSTART = re.compile(r"^ExecStart=(.+)$", re.M)
+_EXECSTART = re.compile(r"^Exec(?:Start|StartPre|StopPost)=(.+)$", re.M)
 
 
 def _roles_and_profiles(real: Reality, idx: _Index) -> None:

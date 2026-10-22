@@ -13,7 +13,7 @@ import json
 import shutil
 
 import pytest
-from rolerun import calls, fake, logging_fake, run_cases, run_role
+from rolerun import calls, fake, last_run_vars, logging_fake, run_cases, run_role
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ansible-playbook") is None, reason="ansible-playbook not installed"
@@ -1091,6 +1091,7 @@ def scanner_vars(tmp_path, role, **kw):
         f"{role}_script": str(tmp_path / "bin" / "scan"),
         f"{role}_state_dir": str(tmp_path / "state"),
         f"{role}_systemctl_cli": logging_fake(tmp_path, "systemctl"),
+        **last_run_vars(tmp_path, role),
     }
     (tmp_path / "units").mkdir(exist_ok=True)
     d.update(kw)
@@ -1508,6 +1509,7 @@ def nr_setup(tmp_path, **kw):
         "needrestart_unit_dir": str(tmp_path / "units"),
         "needrestart_state_dir": str(tmp_path / "state"),
         "needrestart_script": str(tmp_path / "bin" / "needrestart-check"),
+        **last_run_vars(tmp_path, "needrestart"),
     }
     (tmp_path / "units").mkdir(exist_ok=True)
     d.update(kw)

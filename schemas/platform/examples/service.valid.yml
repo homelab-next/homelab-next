@@ -427,3 +427,10 @@ services:
         timeout_s: 10
         mapping: {builtin: agentmetry-jsonl, module: agents}
         what: Agent sessions read from an Agentmetry canonical JSONL trail (optional external app).
+      - id: job-runs
+        kind: poll-file
+        target: {file: examples/status/last-run}
+        interval_s: 300
+        timeout_s: 10
+        mapping: {builtin: job-last-run, module: jobs}
+        what: The last run of each role timer on each host whose last-run records reach the hub; a failed run is fail, an overdue one warn.

@@ -32,6 +32,17 @@ more than one request are collectors, :mod:`.products`):
   ``audit-trail``, warn when the audit export is off, has no event yet, or its last event is older
   than ``warn_after_s`` (silent hook failure).
 
+and for the scheduled jobs (``poll-file`` over a directory of last-run records):
+
+* ``job-last-run`` -- the records the shared writer of role ``last_run`` leaves on each host
+  (``schemas/status/last_run.schema.json``): one item ``<job id>@<host>`` per record
+  (``timer:aide/scan@web-1``), whose ``value`` is the age of the run's start in seconds, so the
+  Schedule page can date the run.  A failed run (systemd's result other than ``success``) is
+  fail; a run whose next one is overdue -- its next calendar time after this start, plus the
+  timer's randomized delay, plus this run's duration, has passed -- is warn; else ok.  A
+  calendar this repository cannot read exactly (no ``UTC`` token, a shorthand) falls back to
+  ``warn_after_s`` past the start, or no lateness at all without one.
+
 A payload the mapping cannot read raises :class:`MappingError`; the scheduler turns that into the
 source's error, exactly like a timeout, so one malformed source never touches another.
 """
@@ -337,6 +348,86 @@ def agentmetry_audit(payload: Any, mapping: Mapping[str, Any], now: float) -> li
     return [Draft("audit-trail", "warn" if late else "ok", clean_summary(summary), value=age)]
 
 
+LAST_RUN_SCHEMA = "homelabnext.status.last-run/1"
+
+
+def _last_run_problems(doc: Any) -> list[str]:
+    from .model import schema_problems
+
+    return schema_problems("last_run.schema.json", doc)
+
+
+def _late(rec: Mapping[str, Any], start: float, now: float, mapping: Mapping[str, Any]):
+    """(due time or None, how it was judged) for one record."""
+    from datetime import UTC, datetime
+
+    from .maps import cadence
+
+    finished = rec.get("finished_at")
+    took = max(0.0, parse_iso(finished) - start) if finished else 0.0
+    cal = cadence.from_oncalendar(str(rec["on_calendar"]))
+    if cal is not None:
+        nxt = cadence.next_run(cal, datetime.fromtimestamp(start, UTC))
+        if nxt is not None:
+            return nxt.timestamp() + int(rec.get("randomized_delay_s") or 0) + took, ""
+    warn = mapping.get("warn_after_s")
+    if warn is not None:
+        return start + float(warn), ""
+    return None, f"; lateness not judged (calendar {rec['on_calendar']!r} is not read exactly)"
+
+
+def _ago(seconds: float) -> str:
+    return f"{age_text(seconds)} ago"
+
+
+def job_last_run(payload: Any, mapping: Mapping[str, Any], now: float) -> list[Draft]:
+    """Last-run records (a list, one record, or what :class:`~.collectors.FileCollector` reads
+    from a record directory: ``{"records": [...], "unreadable": [...]}``)."""
+    from .model import iso
+
+    if isinstance(payload, Mapping) and "records" in payload:
+        records, unreadable = payload.get("records") or [], payload.get("unreadable") or []
+    else:
+        records, unreadable = (payload if isinstance(payload, list) else [payload]), []
+    best: dict[str, tuple[float, Draft]] = {}
+    out: list[Draft] = []
+    for name, why in unreadable:
+        out.append(Draft(clean_item(f"unreadable/{name}", "unreadable"), "unknown",
+                         clean_summary(f"{name}: {why}")))  # fmt: skip
+    for rec in records:
+        problems = _last_run_problems(rec)
+        if problems:
+            label = rec.get("job") if isinstance(rec, Mapping) else None
+            out.append(Draft(clean_item(f"invalid/{label or 'record'}", "invalid"), "unknown",
+                             clean_summary(f"not a last-run record: {problems[0]}")))  # fmt: skip
+            continue
+        start = parse_iso(rec["started_at"])
+        due, judged = _late(rec, start, now, mapping)
+        late = due is not None and now > due
+        if rec["running"]:
+            state = "warn" if late else "ok"
+            summary = f"running since {iso(start)} ({_ago(now - start)})"
+        else:
+            took = (
+                age_text(parse_iso(rec["finished_at"]) - start) if rec.get("finished_at") else "?"
+            )
+            status = rec.get("exit_status")
+            how = rec.get("result") or "unknown"
+            if how != "success":
+                how = f"failed: {how}" + (f" (exit status {status})" if status else "")
+            state = "fail" if rec.get("result") != "success" else ("warn" if late else "ok")
+            summary = f"{how}; started {iso(start)} ({_ago(now - start)}), took {took}"
+        if late:
+            summary = f"overdue since {iso(due)}: " + summary
+        elif due is not None:
+            summary += f"; next due by {iso(due)}"
+        item = clean_item(f"{rec['job']}@{rec['host']}", "job")
+        draft = Draft(item, state, clean_summary(summary + judged), value=max(0, int(now - start)))
+        if item not in best or start > best[item][0]:  # the same job and host twice: the newest
+            best[item] = (start, draft)
+    return out + [d for _, d in sorted(best.values(), key=lambda x: x[1].item)]
+
+
 Builtin = Callable[[Any, Mapping[str, Any], float], list[Draft]]
 BUILTINS: dict[str, Builtin] = {
     "invariants-results": invariants_results,
@@ -344,6 +435,7 @@ BUILTINS: dict[str, Builtin] = {
     "broker-pending": broker_pending,
     "orchestrator-queue": orchestrator_queue,
     "agentmetry-audit": agentmetry_audit,
+    "job-last-run": job_last_run,
 }
 
 

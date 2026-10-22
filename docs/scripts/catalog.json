@@ -483,6 +483,32 @@
     },
     {
       "exit": {
+        "0": "the record was written",
+        "1": "it could not be written (the units ignore it, with the - prefix)",
+        "2": "bad arguments"
+      },
+      "id": "last-run-writer",
+      "inputs": "the job's id, unit, schedule and record directory (arguments); systemd's SERVICE_RESULT, EXIT_CODE and EXIT_STATUS (finish)",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-last-run",
+      "kind": "job",
+      "language": "python",
+      "outputs": "<dir>/<job id as a file name>.json, mode 0640, group-readable by --group",
+      "owner": "platform",
+      "path": "ansible/roles/last_run/files/hnx-last-run.py",
+      "purpose": "Write a scheduled job's last-run record (schemas/status/last_run.schema.json) when its service starts and again when it stops, whatever the outcome.",
+      "status": "active",
+      "trigger": [
+        "role:last_run",
+        "timer:aide/scan",
+        "timer:clamav/scan",
+        "timer:lynis/scan",
+        "timer:needrestart/check",
+        "timer:rkhunter/scan",
+        "timer:trivy/scan"
+      ]
+    },
+    {
+      "exit": {
         "0": "clean",
         "1": "at least one hit or an unscannable file",
         "2": "misconfiguration"

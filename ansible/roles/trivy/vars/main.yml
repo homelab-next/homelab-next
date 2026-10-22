@@ -6,3 +6,6 @@ trivy_severities: [UNKNOWN, LOW, MEDIUM, HIGH, CRITICAL]
 trivy_severity_list: "{{ trivy_severities[trivy_severities.index(trivy_severity):] }}"
 # Fixed, not a setting: where the scan script is installed (the service's ExecStart names it).
 trivy_script: /usr/local/libexec/homelabnext/trivy-scan
+# Fixed, not a setting: where the shared last-run writer (role last_run) is installed (the
+# service's ExecStartPre= and ExecStopPost= name it).
+trivy_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run

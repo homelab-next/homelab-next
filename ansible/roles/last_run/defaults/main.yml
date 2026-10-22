@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Job last-run records (docs/role-interface.md section 8, docs/status.md job-last-run): every role
+# that ships a .timer includes this role from its configuration, passing its own
+# <role>_last_run_dir, <role>_last_run_group and <role>_last_run_writer, so the inputs here are all
+# required and have no default.

@@ -66,6 +66,7 @@ SHIPPED = [
     "etckeeper",
     "example_service",
     "greenbone_target",
+    "last_run",
     "lynis",
     "needrestart",
     "nftables_host",

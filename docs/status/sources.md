@@ -20,6 +20,7 @@ The menu of the status hub ([status hub](../status.md) ([[status]]), [ADR-0013](
 | [`automation-executions`](#automation-executions) | automation | poll-stackstorm | 2 min | 6 min | Actions with failed or timed-out executions in the last hour (fail) and the running executions. |
 | [`dataflow-status`](#dataflow-status) | dataflow | poll-nifi | 1 min | 3 min | Queued flowfiles, invalid and stopped components, and error or warning bulletins of the dataflow service. |
 | [`invariants`](#invariants) | invariants | poll-file | 1 h | 3 h | The last invariants run, one item per criterion (pass is ok, fail is fail, error is unknown). |
+| [`job-runs`](#job-runs) | jobs | poll-file | 5 min | 15 min | The last run of each role timer on each host whose last-run records reach the hub; a failed run is fail, an overdue one warn. |
 | [`metrics-alerts`](#metrics-alerts) | metrics | poll-prometheus | 1 min | 3 min | Every firing alert of the metrics service, fail or warn by its severity label; resolved alerts drop out. |
 | [`metrics-targets`](#metrics-targets) | metrics | poll-prometheus | 1 min | 3 min | Whether each scrape job's targets answer (up is 1); a job whose target is down is fail. |
 | [`notify-health`](#notify-health) | notify | poll-http-json | 1 min | 3 min | Whether the notification service answers its own health endpoint. |
@@ -112,6 +113,16 @@ The last invariants run, one item per criterion (pass is ok, fail is fail, error
 - Mapping: builtin invariants-results
 - Module: `invariants`; graph node `status:invariants`
 - Every 1 h, timeout 10 s; stale after 3 h without a reading; a failed poll reads as `unknown`
+
+### job-runs
+
+The last run of each role timer on each host whose last-run records reach the hub; a failed run is fail, an overdue one warn.
+
+- Declared by: [`svc:status-hub`](../systems/status-hub.md) ([[systems/status-hub|status-hub]]), capability `cap:status-hub`
+- Kind: `poll-file`; target: file `examples/status/last-run`
+- Mapping: builtin job-last-run
+- Module: `jobs`; graph node `status:job-runs`
+- Every 5 min, timeout 10 s; stale after 15 min without a reading; a failed poll reads as `unknown`
 
 ### metrics-alerts
 

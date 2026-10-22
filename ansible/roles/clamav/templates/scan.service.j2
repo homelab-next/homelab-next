@@ -4,6 +4,10 @@ Description=homelabnext ClamAV malware scan (control malware-scan)
 
 [Service]
 Type=oneshot
+# the job's last-run record (role last_run), written on start and again on stop, whatever
+# the outcome; a writer problem never changes the job's own result (the - prefix)
+ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ clamav_last_run_dir }} --group {{ clamav_last_run_group }} --job timer:clamav/scan --unit %n --calendar "{{ clamav_schedule }}" --delay 900
 ExecStart=/usr/local/libexec/homelabnext/clamav-scan
 Nice=10
 IOSchedulingClass=idle
+ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ clamav_last_run_dir }} --group {{ clamav_last_run_group }} --job timer:clamav/scan --unit %n --calendar "{{ clamav_schedule }}" --delay 900

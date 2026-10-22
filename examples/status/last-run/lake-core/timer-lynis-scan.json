@@ -1,0 +1,14 @@
+{
+ "exit_code": "exited",
+ "exit_status": "0",
+ "finished_at": "2026-10-20T04:24:30Z",
+ "host": "lake-core",
+ "job": "timer:lynis/scan",
+ "on_calendar": "*-*-* 04:10:00 UTC",
+ "randomized_delay_s": 900,
+ "result": "success",
+ "running": false,
+ "schema": "homelabnext.status.last-run/1",
+ "started_at": "2026-10-20T04:21:05Z",
+ "unit": "hnx-lynis.service"
+}

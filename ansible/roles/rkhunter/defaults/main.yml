@@ -19,3 +19,7 @@ rkhunter_max_age_hours: 48
 rkhunter_systemctl_cli: systemctl
 rkhunter_unit_dir: /etc/systemd/system
 rkhunter_state_dir: /var/lib/homelabnext/rkhunter
+# Each run's last-run record (role last_run, docs/role-interface.md section 8): the shared
+# per-host directory the status hub's job-last-run mapping reads, and the group that may read it.
+rkhunter_last_run_dir: /var/lib/homelabnext/last-run
+rkhunter_last_run_group: root
