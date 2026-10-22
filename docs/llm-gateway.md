@@ -192,4 +192,5 @@ recommended:
   [model-serving.md](model-serving.md) ([[model-serving]]), ADR-0023.
 - SSO for either product's admin UI (Bifrost's gets a password login, LiteLLM's the master key).
 - Postgres high availability.
-- Spend reporting.
+- Spend reporting. The hub reads per-call usage from the spend-log API for orchestration jobs:
+  [orchestration telemetry](orchestration-telemetry.md) ([[orchestration-telemetry]]).

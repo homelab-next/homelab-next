@@ -147,6 +147,10 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "record identity (uids, computed numbers): assign-uids (the migration)|numbers|uid",
         lambda a: importlib.import_module("homelabnext.identity.cli").main(a),
     ),
+    "orchestration": (
+        "orchestration telemetry: consume|ingest|turns|report (docs/orchestration-telemetry.md)",
+        lambda a: importlib.import_module("homelabnext.orchestration.cli").main(a),
+    ),
     "reviews": (
         "the shared review model (records, system pages): digest",
         lambda a: importlib.import_module("homelabnext.reviews").main(a),

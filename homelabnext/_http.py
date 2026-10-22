@@ -6,6 +6,8 @@
   :class:`homelabnext.lake.trino.TrinoLake`).
 * :func:`safe_opener` follows a redirect only to the same scheme, host and port, so an
   ``Authorization`` header is never replayed to another origin and https is never downgraded.
+* :func:`credential_opener` follows no redirect and uses no proxy, for a request carrying a key
+  (the st2 bridge's webhook, the gateway's spend-log reader).
 * :func:`read_bounded` reads at most ``limit`` bytes and refuses a longer reply instead of
   buffering whatever a server chooses to send.
 * :func:`send_json` writes a JSON reply from a stdlib ``BaseHTTPRequestHandler`` (the fake and
@@ -16,6 +18,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -72,6 +75,23 @@ class SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
                 req.full_url, code, f"refusing cross-origin redirect ({msg})", headers, fp
             )
         return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: the 3xx surfaces as an HTTPError."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        return None
+
+
+def credential_opener(ca_file: str | None = None) -> urllib.request.OpenerDirector:
+    """An opener for a request that carries a credential to one origin: https verified
+    (``ca_file`` for a private CA), no redirect followed (a 3xx is the answer), and no proxy (the
+    environment's ``HTTP(S)_PROXY`` would get the credential, in clear for http)."""
+    ctx = ssl.create_default_context(cafile=str(ca_file) if ca_file else None)
+    return urllib.request.build_opener(
+        _NoRedirect, urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=ctx)
+    )
 
 
 def safe_opener() -> urllib.request.OpenerDirector:

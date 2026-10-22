@@ -1,0 +1,160 @@
+# SPDX-License-Identifier: Apache-2.0
+"""The hub's Orchestration page and the ``hnx orchestration`` command line: per profile and
+backend, the trend, one job's turns; names and numbers only, served read-only by the hub."""
+
+from __future__ import annotations
+
+import json
+import threading
+import urllib.request
+
+import pytest
+from orch_helpers import KEY_ENV, NEVER, ROOT, T0, FakeSpendLogs, body, examples
+
+from homelabnext.orchestration import cli
+from homelabnext.orchestration.gateway import SpendLogReader, sync_turns
+from homelabnext.orchestration.pages import OrchestrationSite
+from homelabnext.registry.model import load
+from homelabnext.status.model import iso
+from homelabnext.status.serve import make_server
+from homelabnext.status.views import build_status
+
+VIEWS = {
+    "views_version": 1,
+    "shell": {"title": "Test lab", "main": "overview"},
+    "menu": [
+        {"id": "overview", "title": "Overview", "panel": "exceptions"},
+        {"id": "orchestration", "title": "Orchestration", "panel": "orchestration"},
+    ],
+}
+
+
+def _doc(orchestration: bool = True) -> dict:
+    snapshot = {"now": iso(T0), "observations": [], "sources": []}
+    registry = load(ROOT / "examples" / "services.yml")
+    return build_status(
+        snapshot, VIEWS, registry, [], capability_pages=set(), orchestration=orchestration
+    )
+
+
+@pytest.fixture
+def site(filled) -> OrchestrationSite:
+    with FakeSpendLogs() as gw:
+        sync_turns(filled, SpendLogReader(gw.url, env=KEY_ENV).rows, now=T0)
+    return OrchestrationSite(filled, clock=lambda: T0)
+
+
+def _page(site, route, query="") -> str:
+    code, ctype, raw = site.handle(route, query, _doc())
+    assert (code, ctype) == (200, "text/html; charset=utf-8")
+    return raw.decode()
+
+
+def test_the_menu_lists_the_page_available_only_with_a_store():
+    menu = {m["id"]: m for m in _doc()["menu"]}
+    assert menu["orchestration"] == {
+        "id": "orchestration", "title": "Orchestration", "kind": "page",
+        "panel": "orchestration", "href": "/orchestration", "available": True,
+    }  # fmt: skip
+    assert not {m["id"]: m for m in _doc(False)["menu"]}["orchestration"]["available"]
+
+
+def test_the_overview_shows_each_profile_backend_and_lane(site):
+    html = _page(site, "/orchestration")
+    assert "<h2>Orchestration</h2>" in html and "4 jobs" in html
+    for cell in (
+        "<td>local-large</td><td>real</td><td>2</td>",  # run-0001 and run-0002
+        "<td>local-small</td><td>shadow</td><td>1</td>",
+        "<td>-</td><td>real</td><td>1</td>",  # run-0004 never reached a backend
+        "300.0s / 570.0s",  # wall p50 / p95
+        "50000/3600",  # tokens in/out
+        "68.3%",  # cache-read share
+        "3 in 2 of 2 jobs",  # gateway turns joined by tag
+        "no gateway data",  # run-0004: not a zero
+        "2.0 KiB / 6.0 KiB",  # input vs output p50
+    ):
+        assert cell in html, cell
+    assert '<a href="/orchestration/job?run=run-0001">' in html
+    assert [n for n in NEVER if n in html] == []
+
+
+def test_filters_and_the_window_narrow_the_page(site):
+    shadow = _page(site, "/orchestration", "lane=shadow")
+    assert "1 jobs" in shadow and "local-large" not in shadow.split("<h3>By profile")[1]
+    assert "<b>shadow</b>" in shadow  # the active chip
+    assert "1 jobs" in _page(site, "/orchestration", "outcome=cancelled")
+    assert "0 jobs" in _page(site, "/orchestration", "days=1&backend=nope")
+    assert "4 jobs" in _page(site, "/orchestration", "days=<script>")  # refused, default kept
+
+
+def test_one_job_shows_its_record_and_its_gateway_turns(site):
+    html = _page(site, "/orchestration/job", "run=run-0001")
+    assert "<h2>Job <code>run-0001</code></h2>" in html
+    for cell in ("req-a1", "req-a2", "mdl:triage-large", "example-27b", "400ms", "read_file"):
+        assert cell in html, cell
+    assert "The gateway saw 2 turn(s): 41000 tokens in, 3200 out" in html
+    assert [n for n in NEVER if n in html] == []
+    assert "no gateway data</span>: none of this job" in _page(
+        site, "/orchestration/job", "run=run-0004"
+    )
+    assert "no such job" in _page(site, "/orchestration/job", "run=run-9999")
+    assert "no such job" in _page(site, "/orchestration/job", "run=<b>")
+    assert site.handle("/orchestration/other", "", _doc()) is None
+
+
+def test_the_hub_serves_the_page_read_only(site):
+    srv = make_server(_doc, orchestration=site)
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
+    host, port = srv.server_address[:2]
+    try:
+        with urllib.request.urlopen(f"http://{host}:{port}/orchestration", timeout=5) as r:
+            assert r.status == 200 and "default-src 'none'" in r.headers["Content-Security-Policy"]
+            assert b"By profile and backend" in r.read()
+        req = urllib.request.Request(f"http://{host}:{port}/orchestration", method="POST")
+        with pytest.raises(urllib.error.HTTPError) as err:
+            urllib.request.urlopen(req, timeout=5)
+        assert err.value.code == 405
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+# ------------------------------------------------------------------------------ the CLI
+def test_cli_ingest_turns_and_report(tmp_path, monkeypatch, capsys):
+    db, events = tmp_path / "t.db", tmp_path / "events.jsonl"
+    lines = [body(e).decode() for e in examples()]
+    events.write_text("\n".join([*lines, lines[0], "not json", ""]) + "\n", encoding="utf-8")
+    run = lambda *a: cli.main([*a, "--db", str(db)], clock=lambda: T0)  # noqa: E731
+    assert run("ingest", str(events)) == 1  # the garbage line is refused, the rest stored
+    out, err = capsys.readouterr()
+    assert "4 processed, 1 duplicate, 1 refused" in out and "events.jsonl:6: " in err
+    monkeypatch.delenv("HNX_ENDPOINT_LLM_GATEWAY", raising=False)
+    assert run("turns") == 2
+    monkeypatch.setenv(*next(iter(KEY_ENV.items())))
+    with FakeSpendLogs() as gw:
+        assert run("turns", "--gateway-url", gw.url) == 0
+    assert "4 turn(s) for 4 job(s), 4 settled" in capsys.readouterr().out
+    assert run("report", "--days", "7") == 0
+    roll = json.loads(capsys.readouterr().out)
+    assert roll["schema"] == "homelabnext.orchestration.rollup/1"
+    assert sum(g["turns"]["count"] for g in roll["groups"]) == 4
+    assert run("report", "--days", "0") == 2
+
+
+def test_cli_consume_without_a_bus_is_a_configuration_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("HNX_ENDPOINT_EVENTS", raising=False)
+    argv = ["consume", "--db", str(tmp_path / "t.db"), "--stream", "S", "--subject-prefix", "p"]
+    assert cli.main(argv, clock=lambda: T0) == 2
+    assert "hnx orchestration consume:" in capsys.readouterr().err
+
+
+def test_hnx_status_serve_builds_the_page_from_orchestration(tmp_path):
+    """``hnx status serve --orchestration DB`` gives the site and marks the menu entry served."""
+    import argparse
+
+    from homelabnext.status import cli as status_cli
+
+    assert status_cli._orchestration_site(argparse.Namespace(), lambda: T0) is None
+    args = argparse.Namespace(orchestration=str(tmp_path / "t.db"))
+    site = status_cli._orchestration_site(args, lambda: T0)
+    assert isinstance(site, OrchestrationSite) and site.store.path == tmp_path / "t.db"

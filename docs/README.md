@@ -34,6 +34,7 @@ relate.
   [LLM gateway](llm-gateway.md) ([[llm-gateway]]),
   [model serving](model-serving.md) ([[model-serving]]),
   [LLM orchestrator](orchestration-controller.md) ([[orchestration-controller]]),
+  [orchestration telemetry](orchestration-telemetry.md) ([[orchestration-telemetry]]),
   [agent profiles](agent.md) ([[agent]]), [broker service](broker.md) ([[broker]]),
   [scope guard](scope.md) ([[scope]]),
   [customization](customization.md) ([[customization]]),

@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Draining agent.job.finished from the bus (the in-memory fake): stored or duplicate is acked,
+poison is dead-lettered and never retried, a store failure is redelivered."""
+
+from __future__ import annotations
+
+import copy
+import sqlite3
+
+from orch_helpers import body, examples
+
+from conformance.fakes.event_bus import FakeEventBus
+from homelabnext.orchestration import FINISHED_EVENT
+from homelabnext.orchestration.bus import DURABLE, drain
+
+
+def _bus_with(*bodies: bytes) -> FakeEventBus:
+    bus = FakeEventBus()
+    bus.consumer(DURABLE, FINISHED_EVENT)  # the durable exists before anything is published
+    for i, b in enumerate(bodies):
+        bus.publish(FINISHED_EVENT, b, msg_id=f"m{i}")
+    return bus
+
+
+def test_valid_records_are_stored_and_poison_is_dead_lettered(store):
+    evs = examples()
+    foreign = copy.deepcopy(evs[0]) | {"id": "evt-foreign", "source": "svc:status-hub"}
+    bus = _bus_with(
+        *(body(e) for e in evs), body(evs[0]), b"not json", body(foreign), b"x" * 70_000
+    )
+    bus.publish("homelabnext.agent.job.failed", body(evs[0]))  # not this durable's subject
+    counts = drain(bus, store, batch=3)
+    assert counts == {"processed": 4, "duplicate": 1, "quarantined": 3}
+    assert len(store.jobs()) == 4
+    dead = bus.consumer(DURABLE, FINISHED_EVENT).dead_letters()
+    assert [d.data[:8] for d in dead] == [b"not json", body(foreign)[:8], b"x" * 8]
+    assert drain(bus, store) == {}  # all settled: nothing comes back
+
+
+def test_a_store_failure_is_redelivered_not_lost(store, monkeypatch):
+    bus = _bus_with(*(body(e) for e in examples()))
+    real, calls = store.consume, []
+
+    def flaky(data):
+        calls.append(1)
+        if len(calls) == 2:
+            raise sqlite3.OperationalError("database is locked")
+        return real(data)
+
+    monkeypatch.setattr(store, "consume", flaky)
+    assert drain(bus, store, batch=4) == {"processed": 1, "retried": 3}
+    assert drain(bus, store, batch=4) == {"processed": 3}
+    assert len(store.jobs()) == 4

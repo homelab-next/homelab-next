@@ -370,6 +370,15 @@ projects` (views schema 1.6): open projects with their step progress, blocked wo
 blocks it, and the work linked to each strategy record. It reads the project files only; see
 [projects](projects.md) ([[projects]]).
 
+### Orchestration page
+
+`hnx status serve --orchestration DB` adds the Orchestration page, menu entry `panel:
+orchestration` (views schema 1.8): agent jobs of the orchestration controller per profile, backend
+and lane (outcomes, p50/p95 wall time and queue wait, tokens, cache-read share, cost, retries,
+fallbacks, input vs output size), the trend by day, and one job's gateway turns. It reads the
+telemetry store `hnx orchestration` fills, names and numbers only; see
+[orchestration telemetry](orchestration-telemetry.md) ([[orchestration-telemetry]]).
+
 ### Baselines page
 
 `hnx status serve --guests DIR --guests-site SITE` adds the Baselines page, menu entry `panel:

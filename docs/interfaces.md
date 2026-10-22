@@ -156,7 +156,7 @@ Check = Callable[[Mapping[str, Any]], Result]                           # the pl
 
 `hnx` sub-commands are rows in `COMMANDS` in `homelabnext/cli.py` (name, one-line help, handler that
 imports its package lazily). Current names, in that order: `registry`, `new`, `gen`, `detections`,
-`registers`, `invariants`, `strategy`, `projects`, `records`, `reviews`, `ids`, `decide`, `models`,
+`registers`, `invariants`, `strategy`, `projects`, `records`, `orchestration`, `reviews`, `ids`, `decide`, `models`,
 `golden`,
 `site`, `guests`, `schema-check`, `swap`, `conform`, `decommission`, `docs`, `agent`, `workflows`,
 `scripts`, `events`, `status`, `graph`, `mcp`, `broker`, `custom`.

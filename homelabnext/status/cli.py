@@ -11,7 +11,7 @@
                       [--invariants-results FILE] [--roster FILE]
     hnx status serve [--state FILE] [--views FILE] [--registry FILE] [--bind HOST] [--port N]
                      [--allow-remote --allowed-host NAME ...] [--agents FILE] [--secrets-dir DIR]
-                     [--strategy DIR] [--projects DIR]
+                     [--strategy DIR] [--projects DIR] [--orchestration DB]
                      [--guests DIR --guests-site SITE [--guests-registry FILE]]
                      [--maps ROOT] [--invariants-results FILE] [--roster FILE]
     hnx status ingest --agents FILE [--registry FILE] [--bind HOST] [--port N] [--publish-to URL]
@@ -26,7 +26,9 @@ the same front door; the hub's one ``POST``: ``homelabnext.status.approvals``).
 ``--strategy`` (``examples/strategy``) has ``serve`` add the strategy pages (Strategy,
 Requirements, Objectives, RFIs; ``docs/strategy.md``); ``--projects`` (``examples/projects``)
 adds the Projects page (open projects and their steps, blocked work, work by strategy record;
-``docs/projects.md``); ``--guests`` (``examples/minimal/guests``
+``docs/projects.md``); ``--orchestration DB`` (the store ``hnx orchestration`` fills) adds the
+Orchestration page (agent jobs per profile and backend, and one job's gateway turns;
+``docs/orchestration-telemetry.md``); ``--guests`` (``examples/minimal/guests``
 with ``--guests-site examples/minimal/site.yml``) adds the Baselines page, the guest x
 defense-layer coverage matrix (``docs/compute-model.md``).
 The generated maps (ADR-0018, ``homelabnext.status.maps``): ``--guests``/``--guests-site`` also
@@ -96,6 +98,7 @@ def _document(args, reg, specs, views, clock, site=None, *, approvals=False, map
     agents = site.summary(now) if site is not None else None
     strategy = bool(getattr(args, "strategy", None))
     projects = bool(getattr(args, "projects", None))
+    orchestration = bool(getattr(args, "orchestration", None))
     baselines = getattr(args, "cmd", "serve") == "serve" and bool(getattr(args, "guests", None))
     return build_status(
         hub.snapshot(now),
@@ -108,6 +111,7 @@ def _document(args, reg, specs, views, clock, site=None, *, approvals=False, map
         approvals=approvals,
         maps=maps.available() if maps is not None else (),
         projects=projects,
+        orchestration=orchestration,
     )
 
 
@@ -219,6 +223,11 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     p.add_argument("--strategy", help="a strategy directory: serve its pages (docs/strategy.md)")
     p.add_argument(
         "--projects", help="a projects directory: serve the Projects page (docs/projects.md)"
+    )
+    p.add_argument(
+        "--orchestration",
+        help="the orchestration telemetry store: serve the Orchestration page "
+        "(docs/orchestration-telemetry.md)",
     )
     map_opts(p)
     agents_opt(p)
@@ -339,6 +348,7 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
             agents=site,
             strategy=_strategy_site(args, clock),
             projects=_projects_site(args, clock),
+            orchestration=_orchestration_site(args, clock),
             baselines=_baseline_site(args),
             approvals=approvals,
             maps=maps,
@@ -431,6 +441,16 @@ def _strategy_site(args, clock: Callable[[], float]):
     from homelabnext.strategy.pages import StrategySite
 
     return StrategySite(args.strategy, clock=clock)
+
+
+def _orchestration_site(args, clock: Callable[[], float]):
+    """The Orchestration page for ``--orchestration DB``, or None."""
+    if not getattr(args, "orchestration", None):
+        return None
+    from homelabnext.orchestration.pages import OrchestrationSite
+    from homelabnext.orchestration.store import TelemetryStore
+
+    return OrchestrationSite(TelemetryStore(args.orchestration, clock=clock), clock=clock)
 
 
 def _projects_site(args, clock: Callable[[], float]):

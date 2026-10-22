@@ -49,7 +49,9 @@ network beyond loopback: `pytest tests/events`.
 The `homelabnext.scope.denied` event (a writer tool was refused) is described in `docs/scope.md`.
 The `homelabnext.status.observed` event (one status observation, published by status collectors
 and consumed by the status hub) is described in `docs/status.md`, and so is
-`homelabnext.agent.activity` (an agent activity event, summary tier only).
+`homelabnext.agent.activity` (an agent activity event, summary tier only). The
+`homelabnext.agent.job.finished` event (the per-job usage record of the orchestration controller,
+consumed by the status hub) is described in `docs/orchestration-telemetry.md`.
 
 ## Consumers (`homelabnext.events.consumer`)
 

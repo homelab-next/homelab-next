@@ -55,6 +55,10 @@ menu:
   - id: projects
     title: Projects
     panel: projects
+  # orchestration telemetry (docs/orchestration-telemetry.md; unavailable without --orchestration)
+  - id: orchestration
+    title: Orchestration
+    panel: orchestration
   # guest baselines (docs/compute-model.md; listed as unavailable without --guests)
   - id: baselines
     title: Baselines
