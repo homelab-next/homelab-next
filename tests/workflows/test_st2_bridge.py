@@ -705,7 +705,8 @@ def test_a_new_durable_forwards_what_was_published_before_it_existed(hook):
     publish(bus, proposal(2))
     while b.poll():
         pass
-    got = [r["headers"]["Idempotency-Key"] for r in hook.requests]
+    # one fetch is POSTed concurrently, so the two may land in either order
+    got = sorted(r["headers"]["Idempotency-Key"] for r in hook.requests)
     assert got == ["evt-bridge-1", "evt-bridge-2"]
 
 

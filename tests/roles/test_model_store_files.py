@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("ansible", reason="ansible not installed")
+# the repo's own ansible/ dir also imports as "ansible": ask for what the module really imports
+pytest.importorskip("ansible.module_utils.basic")
 
 MODULE = (
     Path(__file__).resolve().parents[2] / "ansible/roles/model_store/library/model_store_files.py"
