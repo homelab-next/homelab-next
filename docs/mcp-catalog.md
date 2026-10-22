@@ -199,19 +199,32 @@ hnx mcp catalog check --catalog lab/mcp --registry lab/services.yml
 ```
 
 It reads `mcpServers` (Claude Code, Claude Desktop, also under `projects` in `~/.claude.json`),
-`servers` (VS Code) and `mcp_servers` (Hermes) and writes one **draft** record per server:
+`servers` (VS Code) and `mcp_servers` (Hermes) and writes one **draft** record per server into
+`--out` (required, so a draft never lands in a catalog or a public checkout by default):
 
-- every environment value or header that is, or looks like, a credential, every `${VAR}`
-  reference and every argument after a credential flag (or that looks like a token) becomes a
-  `secret:` reference named `mcp/<name>`; the report lists each one by server and key with the name to
-  store it under, and never prints a value. Other environment values are kept as `settings`, and
-  the report asks you to confirm each is not a credential;
-- the origin is guessed from the launcher (`npx`, `uvx`, `pipx`, `docker run`) and never pinned:
-  no hash is invented, so check fails until you add the version and sha256, the image digest or
-  the commit; anything else is `kind: unknown`;
+- secrets are stripped, **failing closed**: every environment value becomes a `secret:` reference
+  named `mcp/<name>-<key>` unless its key names a path, mode, level and the like and nothing in
+  the value looks like a credential (those are kept as `settings`, and the report asks you to
+  confirm each); a `${VAR}` becomes a `secret:` name (a rendered `${HNX_SECRET_MCP_NOTES_TOKEN}`
+  becomes `secret:mcp/notes-token` again). In the arguments, the value after a credential flag
+  (`--token`, `--github-token`, `--client-secret`, ...) or in `--flag=VALUE`, a header after
+  `--header` (its name kept), a container runner's `-e KEY=VALUE` (moved to `env`), anything that
+  looks like a token and any argument carrying a credential marker (`Authorization:`, a
+  `KEY=VALUE` in a shell line) become references; URL userinfo and query strings are removed. A
+  launcher's package spec (`name==1.2.0`, `@scope/name@1.2.0`) is never mistaken for one. The
+  report lists each reference by server and key with the name to store it under and never prints
+  a value; a config that does not parse is reported by file, line and column only. The entry's
+  own description is not copied;
+- the origin is guessed from the launcher (`npx`, `uvx`, `pipx`, `docker run`; `git+https://` as
+  a git origin) and never pinned: no hash is invented, so check fails until you add the version
+  and sha256, the image digest or the commit; anything else is `kind: unknown`;
 - a remote server's URL is not copied: its endpoint becomes `svc:<first label of the host>` for
-  you to correct to the registry name;
-- tools are not in a client config, so none are listed; egress is written as `none`.
+  you to correct to the registry name, and its path is kept only when it is a plain MCP path
+  (`/mcp`, `/sse`, ...);
+- tools are not in a client config, so none are listed; egress is written as `none`; a `timeout`
+  is kept;
+- importing is lossy: every rendered instance (`notes-collector-real`, `notes-collector-shadow`)
+  comes back as its own record. Fold them into one record with `parameters` by hand.
 
 Then, per record: pin the origin, list and class the tools, correct endpoint, egress and data
 tier, set the owner, store each reported secret in the secret store, get it reviewed and set it

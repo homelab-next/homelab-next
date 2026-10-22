@@ -29,6 +29,7 @@ reviews the review policy asks of ``mcp-server.active``.
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -281,6 +282,28 @@ def _secret_problems(rec: Mapping[str, Any], where: str) -> list[str]:
             )
         by_var[var] = ref
     return out
+
+
+#: a package spec as a launcher takes it (``name==1.2.0``, ``@scope/name@1.2.0``): never a secret
+PACKAGE_SPEC = re.compile(
+    r"^(@[a-z0-9][a-z0-9._-]*/)?[A-Za-z0-9][A-Za-z0-9._-]*(==|@)v?[0-9][A-Za-z0-9._+-]*$"
+)
+
+
+def looks_secret(value: str) -> bool:
+    """A value that is probably a credential: a URL with a password, or a long token-like string
+    (mixed letters and digits, high entropy, no spaces or path separators).  A package spec with
+    its version (``example-notes-mcp==1.2.0``) is not one."""
+    if re.search(r"://[^/@\s:]+:[^/@\s]+@", value):
+        return True
+    v = value.strip()
+    if len(v) < 20 or " " in v or "/" in v or v.startswith("$") or PACKAGE_SPEC.match(v):
+        return False
+    if not (re.search(r"[0-9]", v) and re.search(r"[A-Za-z]", v)):
+        return False
+    counts = {c: v.count(c) for c in set(v)}
+    entropy = -sum(n / len(v) * math.log2(n / len(v)) for n in counts.values())
+    return entropy >= 3.5
 
 
 def arg_secret(arg: str) -> str | None:

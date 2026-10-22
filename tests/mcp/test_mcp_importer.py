@@ -82,7 +82,7 @@ def test_drafts_carry_no_secret_and_the_report_names_each_one(tmp_path, capsys):
     assert written["search"]["transport"]["args"] == [
         "example-search-mcp",
         "--api-key",
-        "secret:mcp/search-arg-2",
+        "secret:mcp/search-arg-3",
     ]
     assert "search: also in claude_desktop_config.json; kept the first" in report.out
     lake = written["remote-lake"]
@@ -133,3 +133,101 @@ def test_looks_secret():
     assert importer.looks_secret(TOKEN)
     assert importer.looks_secret("postgres://user:fake-pw@db.lab.example/x")
     assert not importer.looks_secret("/srv/notes/agents") and not importer.looks_secret("info")
+
+
+# --------------------------------------------------------------- fail closed, round trip
+SHAPES = {
+    "mcpServers": {
+        "remote-hdr": {"command": "npx", "args": ["-y", "mcp-remote@1.2.3", "https://mcp.lab.example/sse",
+                                                  "--header", "Authorization: Bearer fakeTok3n"]},
+        "zap": {"url": "https://zap.lab.example/api/mcp/s/fakePathSecret123/mcp?key=fakeq"},
+        "uvxgit": {"command": "uvx", "args": ["--from", "git+https://fakeghp9876543210@git.lab.example/org/repo", "srv"]},
+        "uvxgit2": {"command": "uvx", "args": ["--from", "git+https://user:fakepw@git.lab.example/org/repo", "srv"]},
+        "dock": {"command": "docker", "args": ["run", "-i", "--rm", "-e", "API_KEY=fakeshort", "-e", "LOG_LEVEL=debug", "img/x"]},
+        "flags": {"command": "srv", "args": ["--github-token", "fakeghpshort", "--db-password=fakehunter2",
+                                             "--client-secret", "fakeabc"]},
+        "shc": {"command": "sh", "args": ["-c", "GITHUB_TOKEN=fakeAbc123 npx foo"]},
+        "envs": {"command": "srv", "env": {"DB_PASSPHRASE": "fakepp", "AUTH": "fakeauthval",
+                                           "OPENAI_KEY": "fake-sk-1", "PAT": "fakepat",
+                                           "CONN": "Server=x;Password=fakepw;", "DATA_DIR": "/srv/data",
+                                           "SA": '{"private_key": "fake -----BEGIN"}', "NESTED": {"token": "fakenested"}}},
+        "desc": {"command": "srv", "description": "token is fakeDescTok"},
+        "pinned": {"command": "uvx", "args": ["--from", "example-notes-mcp==1.2.0", "notes-mcp"]},
+        "pinned2": {"command": "uvx", "args": ["mcp-server-git==0.6.2", "--repository", "/srv/repo"]},
+        "pinned3": {"command": "npx", "args": ["-y", "@example/mcp-github@3.2.0"]},
+    }
+}  # fmt: skip
+
+
+def test_every_credential_shape_is_stripped_and_pinned_packages_are_kept(tmp_path, capsys):
+    src = tmp_path / "cfg.json"
+    src.write_text(json.dumps(SHAPES))
+    out = tmp_path / "drafts"
+    assert cli.main(["mcp", "catalog", "import", str(src), "--out", str(out)]) == 0
+    report = capsys.readouterr()
+    text = "".join(f.read_text() for f in out.glob("*.yml")) + report.out + report.err
+    assert "fake" not in text.lower()  # no value anywhere: drafts, report
+    rec = {f.stem: yaml.safe_load(f.read_text()) for f in out.glob("*.yml")}
+    assert rec["flags"]["transport"]["args"] == [
+        "--github-token", "secret:mcp/flags-arg-2", "--db-password=secret:mcp/flags-db-password",
+        "--client-secret", "secret:mcp/flags-arg-5"]  # fmt: skip
+    assert rec["remote-hdr"]["transport"]["args"][-1] == (
+        "Authorization: Bearer secret:mcp/remote-hdr-header-authorization"
+    )
+    assert rec["uvxgit"]["origin"] == {
+        "kind": "git", "repo": "https://git.lab.example/org/repo", "commit": None}  # fmt: skip
+    assert rec["uvxgit2"]["transport"]["args"][1] == "git+https://git.lab.example/org/repo"
+    assert rec["dock"]["env"] == {"API_KEY": "secret:mcp/dock-api-key"}
+    assert rec["dock"]["transport"]["args"][4:7] == ["API_KEY", "-e", "LOG_LEVEL=debug"]
+    assert rec["shc"]["transport"]["args"] == ["-c", "secret:mcp/shc-arg-2"]
+    assert rec["envs"]["settings"] == {"DATA_DIR": "/srv/data"}  # an allowlisted key only
+    assert set(rec["envs"]["env"]) == {"DB_PASSPHRASE", "AUTH", "OPENAI_KEY", "PAT", "CONN", "SA",
+                                       "NESTED"}  # fmt: skip
+    assert "path" not in rec["zap"]["transport"]
+    assert rec["desc"]["description"].startswith("Imported from cfg.json")
+    # a pinned package spec is the package, never a secret
+    assert rec["pinned"]["transport"]["args"] == ["--from", "example-notes-mcp==1.2.0", "notes-mcp"]
+    assert rec["pinned2"]["transport"]["args"][0] == "mcp-server-git==0.6.2"
+    assert rec["pinned2"]["origin"]["version"] == "0.6.2"
+    assert rec["pinned3"]["transport"]["args"] == ["-y", "@example/mcp-github@3.2.0"]
+    assert not importer.looks_secret("example-notes-mcp==1.2.0")
+
+
+def test_a_config_that_does_not_parse_is_named_by_line_never_quoted(tmp_path, capsys):
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(
+        'mcp_servers:\n  x:\n    env:\n      API_TOKEN: "fakeSecretValue123\n      foo: [\n'
+    )
+    shape = tmp_path / "shape.yaml"
+    shape.write_text("mcp_servers:\n  x:\n    command: srv\n    env: [fakeListSecret]\n")
+    for f, phrase in ((bad, "not valid YAML (line"), (shape, "env is not a mapping")):
+        assert cli.main(["mcp", "catalog", "import", str(f), "--out", str(tmp_path / "o")]) == 2
+        err = capsys.readouterr()
+        assert phrase in err.err and "fake" not in err.out + err.err
+    # --out is required: a draft never lands in a catalog (or a public checkout) by default
+    assert cli.main(["mcp", "catalog", "import", str(bad)]) == 2
+
+
+def test_a_rendered_record_imports_back_to_the_same_server(tmp_path):
+    import shutil
+
+    from homelabnext.mcp import clients
+
+    d = tmp_path / "mcp"
+    shutil.copytree(ROOT / "examples" / "mcp", d, ignore=shutil.ignore_patterns("clients"))
+    gh = yaml.safe_load((d / "github.yml").read_text())
+    gh["timeout"] = 45
+    (d / "github.yml").write_text(yaml.safe_dump(gh))
+    prof = tmp_path / "p.json"
+    doc = json.loads((ROOT / "examples/mcp/clients/profile.collector.json").read_text())
+    prof.write_text(json.dumps({**doc, "mcp": ["github"], "mcp_ceiling": ["github"],
+                                "reads_untrusted": False}))  # fmt: skip
+    text, _ = clients.render_profile(servers.load(d), prof, "hermes")
+    rendered = tmp_path / "config.yaml"
+    rendered.write_text(text)
+    back = importer.import_configs([rendered]).records["github"]
+    assert back["transport"] == gh["transport"]
+    assert back["env"] == gh["env"]  # ${HNX_SECRET_MCP_GITHUB_TOKEN} -> secret:mcp/github-token
+    assert back["timeout"] == 45
+    assert {k: back["origin"][k] for k in ("package", "version")} == {
+        "package": "@example/mcp-github", "version": "3.2.0"}  # fmt: skip

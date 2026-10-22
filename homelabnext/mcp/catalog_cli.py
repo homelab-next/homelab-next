@@ -10,7 +10,7 @@
   [--out FILE] [--check]`` or ``render --spec FILE [--root DIR] [--check]``: client
   configurations (:mod:`.clients`) of profiles ``hnx agent verify`` would accept; ``--check``
   fails on drift in any output;
-* ``import CONFIG ... [--out DIR] [--force]``: draft records from existing client configs
+* ``import CONFIG ... --out DIR [--force]``: draft records from existing client configs
   (:mod:`.importer`); the report names every secret it stripped, never a value.
 
 Defaults: ``--catalog`` is the example data's ``mcp/`` (``HNX_EXAMPLES_DIR`` aware), and
@@ -25,6 +25,8 @@ import argparse
 import json
 import sys
 from pathlib import Path
+
+import yaml
 
 from homelabnext.registry.model import RegistryError
 
@@ -165,8 +167,8 @@ def _render(args) -> int:
 
 
 def _import(args) -> int:
-    out = Path(args.out) if args.out else servers.default_dir()
-    existing = [f.stem for f in out.glob("*.yml")] if out.is_dir() else []
+    out = Path(args.out)
+    existing = [f.stem for f in out.glob("*.yml")] if out.is_dir() and not args.force else []
     res = importer.import_configs(args.configs, existing)
     written, skipped = importer.write_records(res.records, out, force=args.force)
     for line in res.report + skipped:
@@ -227,14 +229,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     i = sub.choices["import"]
     i.add_argument("configs", nargs="+", help="client config files (JSON or YAML)")
-    i.add_argument("--out", help="where the drafts go (default: the catalog directory)")
+    i.add_argument(
+        "--out",
+        required=True,
+        help="where the drafts go (required: drafts are reviewed before they join a catalog, "
+        "and never land in a public checkout by default)",
+    )
     i.add_argument("--force", action="store_true", help="replace existing records")
     try:
         args = ap.parse_args(argv)
     except SystemExit as exc:
         return 2 if exc.code else 0
-    if args.cmd == "import" and args.catalog and not args.out:
-        args.out = args.catalog
     try:
         return {
             "check": _check,
@@ -248,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
             print(p)
         print(f"hnx mcp catalog render: refused ({len(exc.problems)} problem(s))", file=sys.stderr)
         return 1
-    except (servers.CatalogError, ValueError, OSError, RegistryError) as exc:
+    except (servers.CatalogError, ValueError, OSError, RegistryError, yaml.YAMLError) as exc:
         print(f"hnx mcp catalog: {exc}", file=sys.stderr)
         return 2
 

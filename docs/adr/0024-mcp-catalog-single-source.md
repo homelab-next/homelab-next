@@ -58,8 +58,10 @@ because each instance needs its own scope.
    profile and lane with that grant's parameter values, and writes every runtime home a render
    spec names from that one source, so no home can hold fewer servers than another.
 7. **Import, then pin.** `hnx mcp catalog import` turns an existing lab's client configs into
-   draft records: literal credentials become `secret:` names (reported by name, never by
-   value), URLs become registry-name guesses, origins stay unpinned, so check fails until the
+   draft records in a directory it is given (`--out`, required): credentials become `secret:`
+   names, failing closed (every environment value is one unless its key is allowlisted as
+   non-secret; reported by name, never by value), URLs become registry-name guesses, origins stay
+   unpinned, so check fails until the
    maintainer pins, classifies and reviews each one.
 
 ## Consequences
