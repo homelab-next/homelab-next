@@ -337,6 +337,20 @@ def _is_hit_keyed_value(m: re.Match[str], _line: str) -> bool:
     return len(set(value)) > 3  # 'xxxxxx', '000000' are fillers
 
 
+# Variable names a product itself defines and the roles must set or reserve: naming them says
+# nothing about this lab.  Each entry is reviewed; a lab's own API-key variable names stay findings.
+PRODUCT_SECRET_NAMES = frozenset(
+    {
+        "VLLM_API_KEY",  # vLLM's server key, written by the vllm_server role
+        "IMAGES_OPENAI_API_KEY",  # an Open WebUI setting the open_webui role reserves
+    }
+)
+
+
+def _is_hit_secret_name(m: re.Match[str], _line: str) -> bool:
+    return m.group(0) not in PRODUCT_SECRET_NAMES
+
+
 def _p(
     name: str,
     group: str,
@@ -424,11 +438,12 @@ PATTERNS: tuple[Pattern, ...] = (
         "secret",
         r"\bvault_[a-z0-9_]+\b|\bANTHROPIC_[A-Z_]+\b|\b[A-Z0-9_]*_API_KE[Y]\b",
         "secret variable name (Ansible vault_ convention, provider keys)",
+        accept=_is_hit_secret_name,
     ),
     _p(
         "keyed-secret",
         "secret",
-        r"(?i)(?<![\w.:/-])[\w-]*(?:passw|secret|token)[\w-]*(?P<q1>[\"']?)\s*[:=]\s*(?P<q>[\"']?)(?P<val>[^\s\"',;)}\]]{6,})",
+        r"(?i)(?<![\w.:/-])[\w-]*(?:passw|secret|token(?!iz))[\w-]*(?P<q1>[\"']?)\s*[:=]\s*(?P<q>[\"']?)(?P<val>[^\s\"',;)}\]]{6,})",
         "literal value assigned to a password/secret/token key",
         redact=True,
         accept=_is_hit_keyed_value,
