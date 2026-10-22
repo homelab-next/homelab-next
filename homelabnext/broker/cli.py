@@ -8,6 +8,10 @@ the lane configuration and the transport peers.
 peer credentials (:mod:`homelabnext.broker.server`); ``mcp --socket PATH`` runs the agent-facing
 MCP tool server (stdio) against it (:mod:`homelabnext.broker.mcp_tools`).
 
+``relay --state DIR --events-target FILE --stream S --subject-prefix P`` publishes the state
+directory's outbox to the event bus, at least once and in order (:mod:`homelabnext.broker.relay`);
+``--once`` publishes what is pending and exits (1 when something is still pending).
+
 The request commands work two ways:
 
 * with ``--socket PATH`` (or ``$HNX_BROKER_SOCKET``) they ask a running broker, which knows who
@@ -100,6 +104,20 @@ def _parser() -> argparse.ArgumentParser:
     srv.add_argument("--socket-group", help="group owning the socket (the agents' group)")
     srv.add_argument("--max-request-bytes", type=int, default=None)
     srv.add_argument("--timeout", type=float, default=None, help="seconds to read one request")
+    rel = sub.add_parser("relay", help="publish the outbox to the event bus (at least once)")
+    rel.add_argument("--state", default=os.environ.get("HNX_BROKER_STATE"))
+    rel.add_argument(
+        "--events-target",
+        required=True,
+        help="a target file binding the events capability (adapter, config; no URL, no secret)",
+    )
+    rel.add_argument("--stream", required=True, help="the standing JetStream stream")
+    rel.add_argument("--subject-prefix", required=True, help="the stream's subject prefix")
+    rel.add_argument("--once", action="store_true", help="publish what is pending, then exit")
+    rel.add_argument("--batch", type=int, default=100, help="events per pass (default 100)")
+    rel.add_argument("--idle", type=float, default=1.0, help="seconds between idle passes")
+    rel.add_argument("--backoff-max", type=float, default=60.0, help="longest retry wait (s)")
+    rel.add_argument("--stats-file", help="write the relay's stats here (a poll-file source)")
     m = sub.add_parser("mcp", help="the agent-facing MCP tool server (stdio) for a broker socket")
     m.add_argument("--socket", default=os.environ.get("HNX_BROKER_SOCKET"))
     for name in _AGENT_CMDS:
@@ -133,7 +151,7 @@ def _parser() -> argparse.ArgumentParser:
     imp.add_argument("--default-rollback", help="rollback text for proposals that have none")
     imp.add_argument("--as", dest="who", help="the importing actor (dev identity only)")
     for p in sub.choices.values():
-        if p.prog.split()[-1] not in ("validate", "serve", "mcp"):
+        if p.prog.split()[-1] not in ("validate", "serve", "mcp", "relay"):
             _common(p)
     return ap
 
@@ -416,6 +434,66 @@ def _serve(args) -> int:
     return 0
 
 
+def events_connector(target: str, *, stream: str, subject_prefix: str) -> Any:
+    """A zero-argument factory for the bus the target file's ``events`` binding names, on the
+    standing ``stream`` / ``subject_prefix`` (never a scratch stream)."""
+    from dataclasses import replace
+
+    from homelabnext.conform.target import load_target, make_factory
+
+    binding = load_target(target).binding("events")
+    if binding.builtin or not binding.adapter:
+        raise ValueError(f"{target}: the events binding must name an adapter")
+    config = {
+        **binding.config,
+        "scratch": False,
+        "stream": stream,
+        "subject_prefix": subject_prefix,
+    }
+    return make_factory(replace(binding, config=config))
+
+
+def _relay(args) -> int:
+    from .relay import OutboxRelay, RelayBusy
+    from .state import StateDir
+
+    logging.basicConfig(level=logging.INFO, format="hnx-broker-relay %(levelname)s %(message)s")
+    if not args.state:
+        print("hnx broker relay: --state (or HNX_BROKER_STATE) is required", file=sys.stderr)
+        return 2
+    try:
+        connect = events_connector(
+            args.events_target, stream=args.stream, subject_prefix=args.subject_prefix
+        )
+        relay = OutboxRelay(
+            StateDir(args.state),
+            connect,
+            batch=args.batch,
+            backoff_max_s=args.backoff_max,
+            stats_file=args.stats_file,
+        )
+        relay.acquire()
+    except RelayBusy as exc:
+        print(f"hnx broker relay: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # the target file, the adapter, the state directory
+        print(f"hnx broker relay: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+    if args.once:
+        try:
+            published = relay.drain()
+            left = len(relay.state.outbox_pending())
+        finally:
+            relay.close()
+        print(f"hnx broker relay: published {published}, {left} pending")
+        return 1 if left else 0
+    stop = threading.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda *_: stop.set())
+    relay.run(stop, idle_s=args.idle)
+    return 0
+
+
 def _mcp(args) -> int:
     from homelabnext.mcp.server import sdk_missing
 
@@ -441,6 +519,8 @@ def main(argv: list[str] | None = None) -> int:
         return _validate(args)
     if args.cmd == "mcp":
         return _mcp(args)
+    if args.cmd == "relay":
+        return _relay(args)
     try:
         if args.cmd == "import-proposals":
             return _import(args)

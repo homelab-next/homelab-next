@@ -35,7 +35,10 @@ an unmapped uid is refused (``unknown-caller``); the agent cannot approve its ow
 (``not-an-approval-relay``); the hub refuses a request without the front-door secret; the
 approver reads the page (token and digest from the form) and approves through
 ``POST /approvals/decide``; the agent runs the request once; a second run is refused
-(``not-pending``); the audit trail holds every step, each with the peer's ``via``.
+(``not-pending``); with an events bus configured, the broker's outbox relay (as the broker's
+uid) publishes the request's ``decision.requested`` and ``decision.returned`` to the bus, in order,
+as ``svc:broker`` with the event id as the message id, and a second relay pass publishes nothing;
+the audit trail holds every step, each with the peer's ``via``.
 
 ``tests/compose/test_lab_broker_e2e.py`` runs :func:`run_scenario` against local processes.
 """
@@ -43,6 +46,7 @@ approver reads the page (token and digest from the form) and approves through
 from __future__ import annotations
 
 import argparse
+import base64
 import html
 import json
 import os
@@ -66,6 +70,12 @@ LAB_DATA_ROOT = "/srv/agents"
 LAB_HUB = "http://status-hub.svc.example.internal:8099"  # no-raw-endpoint: allow the lab hub alias
 LAB_UIDS = {"agent": 10011, "relay": 10012, "stranger": 10013}
 LAB_CLIENTS_GID = 10020
+#: the broker's own uid (the image's hnx-broker): the outbox relay runs as it, on its state
+LAB_BROKER_UID = 10010
+LAB_STATE = "/var/lib/hnx-broker/state"
+LAB_EVENTS_TARGET = "/src/compose/lab-in-a-box/targets/events.yml"
+LAB_EVENTS_STREAM, LAB_EVENTS_PREFIX = "HNXLAB_BROKER", "hnxlab"
+BROKER_SOURCE = "svc:broker"  # homelabnext.broker.relay.BROKER_SOURCE (tests/compose pins it)
 #: the hub's public name: the Host and Origin the edge passes on (registry public_hostname)
 HUB_HOST = "status.lab.example"
 SECRET_ENV = "HNX_SECRET_STATUS_FRONT_DOOR_SECRET"
@@ -80,6 +90,34 @@ TIMEOUT = 60
 
 class StepFailed(Exception):
     pass
+
+
+@dataclass
+class Relay:
+    """The broker's outbox relay and the bus it publishes to.  ``launch`` is the argv prefix
+    running a command as the broker's uid; ``open_bus()`` returns the JetStream adapter on the
+    same stream (the scenario reads what the relay published through it)."""
+
+    state: str
+    target: str
+    stream: str
+    prefix: str
+    launch: Sequence[str] = ()
+    open_bus: Callable[[], Any] | None = None
+    #: runs one ``--once`` pass and returns (exit status, stdout); default: the CLI, as the broker
+    run_once: Callable[[], tuple[int, str]] | None = None
+
+    def argv(self, hnx: Sequence[str]) -> list[str]:
+        return [*self.launch, *hnx, "broker", "relay", "--state", self.state, "--events-target",
+                self.target, "--stream", self.stream, "--subject-prefix", self.prefix,
+                "--once"]  # fmt: skip
+
+    def bus(self) -> Any:
+        if self.open_bus is not None:
+            return self.open_bus()
+        from homelabnext.conform.adapters import nats_jetstream as nj
+
+        return nj.make(scratch=False, stream=self.stream, subject_prefix=self.prefix)
 
 
 @dataclass
@@ -99,6 +137,7 @@ class Setup:
     hnx: Sequence[str] = (sys.executable, "-m", "homelabnext.cli")
     env: Mapping[str, str] = field(default_factory=lambda: dict(os.environ))
     tag: str = field(default_factory=lambda: secrets.token_hex(4))
+    relay: Relay | None = None  # None: no events bus here, the bus-relay step is not run
 
     def role_env(self, role: str) -> dict[str, str]:
         return {**self.env, ROLE_ENV: role}
@@ -357,6 +396,8 @@ def run_scenario(setup: Setup) -> list[dict[str, Any]]:
                 for name, fn, blocking in session_steps:
                     if not await one(name, fn, blocking, s):
                         return
+            if setup.relay is not None:
+                await one("bus-relay", lambda: check_relay(setup, ctx["rid"]), True, None)
             await one("audit", audit, True, None)
 
     try:
@@ -372,6 +413,65 @@ def run_scenario(setup: Setup) -> list[dict[str, Any]]:
 STEPS = ("mcp-tools", "memory-write", "proposal-file", "submit", "run-before-approval",
          "unknown-caller", "agent-cannot-approve", "hub-front-door", "hub-approve", "run-once",
          "second-run-refused", "audit")  # fmt: skip
+
+
+def steps(setup: Setup) -> tuple[str, ...]:
+    """The steps a complete run of ``setup`` reports: ``bus-relay`` only with a bus."""
+    return (*STEPS[:-1], "bus-relay", STEPS[-1]) if setup.relay is not None else STEPS
+
+
+def check_relay(setup: Setup, rid: str) -> str:
+    """``hnx broker relay --once`` as the broker publishes the request's decision events, in
+    order, as the broker's source with the event id as the message id; a second pass publishes
+    nothing (delivered markers on the broker's state)."""
+    from homelabnext.conform.adapters.nats_jetstream import parse_headers
+
+    relay = setup.relay
+    assert relay is not None
+    argv = relay.argv(setup.hnx)
+
+    def once() -> str:
+        if relay.run_once is not None:
+            rc, out, err = (*relay.run_once(), "")
+        else:
+            proc = subprocess.run(
+                argv, env=setup.env, capture_output=True, text=True, timeout=TIMEOUT
+            )
+            rc, out, err = proc.returncode, proc.stdout, proc.stderr
+        if rc != 0:
+            raise StepFailed(f"relay --once: rc={rc} {out[-200:]} {err[-200:]}")
+        return out.strip()
+
+    first = once()
+    bus = relay.bus()
+    seqs = {}
+    try:
+        for kind in ("decision.requested", "decision.returned"):
+            got = bus.api(
+                f"STREAM.MSG.GET.{relay.stream}",
+                {"last_by_subj": f"{relay.prefix}.homelabnext.{kind}"},
+                missing="message",
+            )
+            if got is None:
+                raise StepFailed(f"no homelabnext.{kind} on the bus")
+            msg = got["message"]
+            event = json.loads(base64.b64decode(msg.get("data") or ""))
+            msg_id = parse_headers(base64.b64decode(msg.get("hdrs") or "")).get("Nats-Msg-Id")
+            if event.get("subject") != rid or event.get("source") != BROKER_SOURCE:
+                raise StepFailed(f"the last {kind} is not the broker's for {rid}")
+            if msg_id != event.get("id"):
+                raise StepFailed(f"{kind}: Nats-Msg-Id is not the event id")
+            seqs[kind] = int(msg["seq"])
+    finally:
+        bus.close()
+    if not seqs["decision.requested"] < seqs["decision.returned"]:
+        raise StepFailed(f"published out of order: {seqs}")
+    second = once()
+    if "published 0, 0 pending" not in second:
+        raise StepFailed(f"the second pass republished: {second}")
+    return f"{first}; requested seq {seqs['decision.requested']} < returned seq " + str(
+        seqs["decision.returned"]
+    )
 
 
 def check_audit(setup: Setup, rid: str, profile: str) -> str:
@@ -505,6 +605,12 @@ def lab_launch(role: str) -> list[str]:
     return [sys.executable, os.path.abspath(__file__), "as", f"{uid}:{uid}:{LAB_CLIENTS_GID}", "--"]
 
 
+def broker_launch() -> list[str]:
+    """Inside the broker-edge container: run as the broker's own uid (the outbox relay)."""
+    uid = LAB_BROKER_UID
+    return [sys.executable, os.path.abspath(__file__), "as", f"{uid}:{uid}", "--"]
+
+
 def _ready(args) -> int:
     if not Path(args.socket).is_socket():
         return 1
@@ -523,6 +629,14 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--hub", default=LAB_HUB)
     r.add_argument("--data-root", default=LAB_DATA_ROOT)
     r.add_argument("--json", action="store_true")
+    r.add_argument(
+        "--events-target",
+        default=os.environ.get("LAB_BROKER_EVENTS_TARGET"),
+        help="with a bus: the events target file the broker's relay uses (bus-relay step)",
+    )
+    r.add_argument("--state", default=LAB_STATE, help="the broker's state directory")
+    r.add_argument("--stream", default=LAB_EVENTS_STREAM)
+    r.add_argument("--subject-prefix", default=LAB_EVENTS_PREFIX)
     h = sub.add_parser("serve-hub", help="write the hub's configuration and run the hub")
     h.add_argument("--dir", required=True)
     h.add_argument("--edge-address", default=os.environ.get("LAB_BROKER_EDGE_ADDRESS"))
@@ -561,8 +675,16 @@ def main(argv: list[str] | None = None) -> int:
         launch=lab_launch,
         env={**os.environ, "HOME": "/tmp"},
     )
+    if args.events_target:
+        setup.relay = Relay(
+            args.state,
+            args.events_target,
+            args.stream,
+            args.subject_prefix,
+            launch=broker_launch(),
+        )
     rows = run_scenario(setup)
-    ok = len(rows) == len(STEPS) and all(r["ok"] for r in rows)
+    ok = [r["step"] for r in rows] == list(steps(setup)) and all(r["ok"] for r in rows)
     if args.json:
         print(json.dumps({"ok": ok, "steps": rows}))
     else:

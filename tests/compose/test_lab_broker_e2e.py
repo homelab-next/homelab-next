@@ -122,10 +122,56 @@ def lab(tmp_path, e2e, monkeypatch):
         srv.close()
 
 
+class _SharedWire:
+    """The JetStream wire fake, kept open across the relay's and the check's adapters."""
+
+    def __init__(self):
+        from conformance.fakes.jetstream_wire import FakeJetStreamWire
+
+        self.server = FakeJetStreamWire()
+
+    def request(self, *a, **kw):
+        return self.server.request(*a, **kw)
+
+    def pull(self, *a, **kw):
+        return self.server.pull(*a, **kw)
+
+    def close(self):
+        pass
+
+
+def _relay(e2e, state_root: Path, wire: _SharedWire, *, drop_marks: bool = False):
+    """The scenario's relay, in this process: ``OutboxRelay`` on the broker's state over the wire
+    fake (the CLI is tested in tests/broker/test_broker_relay.py)."""
+    from homelabnext.broker.relay import OutboxRelay
+    from homelabnext.broker.state import StateDir
+    from homelabnext.conform.adapters import nats_jetstream as nj
+
+    def bus():
+        return nj.make(wire=wire, scratch=False, stream="HNXT", subject_prefix="hnxt")
+
+    def once():
+        state = StateDir(state_root)
+        if drop_marks:  # a defect: publishes and never marks, so every pass republishes
+            state.mark_delivered = lambda *_a: True
+        r = OutboxRelay(state, bus)
+        try:
+            n = r.drain()
+            left = len(state.outbox_pending()) if not drop_marks else 0
+        finally:
+            r.close()
+        return (1 if left else 0), f"hnx broker relay: published {n}, {left} pending"
+
+    return e2e.Relay(str(state_root), "unused", "HNXT", "hnxt", open_bus=bus, run_once=once)
+
+
 def test_the_scenario_passes_every_step(lab, e2e):
     setup, svc = lab
-    rows = e2e.run_scenario(setup())
-    assert [r["step"] for r in rows] == list(e2e.STEPS), rows
+    s = setup()
+    s.relay = _relay(e2e, svc.state.root, _SharedWire())
+    rows = e2e.run_scenario(s)
+    assert [r["step"] for r in rows] == list(e2e.steps(s)), rows
+    assert "bus-relay" in e2e.steps(s) and "bus-relay" not in e2e.STEPS
     assert all(r["ok"] for r in rows), [r for r in rows if not r["ok"]]
     # what the steps claim, checked here against the broker's own state
     vias = {r["via"] for r in svc.audit_documents()}
@@ -143,6 +189,36 @@ def test_the_scenario_fails_when_the_edge_lacks_the_front_door_secret(lab, e2e):
     assert all(r["ok"] for r in rows[:-1])
     [pending] = svc.pending()  # never approved, never run
     assert not svc.state.approvals(pending["request_id"])
+
+
+def test_the_relay_check_refuses_an_empty_bus_and_a_republish(e2e, tmp_path):
+    from homelabnext.broker.relay import BROKER_SOURCE
+    from homelabnext.broker.state import StateDir
+    from homelabnext.events.envelope import build_event
+
+    assert e2e.BROKER_SOURCE == BROKER_SOURCE
+    state = StateDir(tmp_path / "state")
+    setup = e2e.Setup(socket=tmp_path / "s", hub="", data_root=tmp_path, uids={}, secret="")
+    setup.relay = _relay(e2e, state.root, _SharedWire())
+    with pytest.raises(e2e.StepFailed, match=r"no homelabnext\.decision\.requested"):
+        e2e.check_relay(setup, "req-1")
+    data = {"decision_id": "req-1", "verdict": "accept", "confidence": 1.0, "tier_used": "human"}
+    req = {"decision_id": "req-1", "spec": "broker-approval", "subject": "requests/req-1.json",
+           "action": "service.restart", "actor": "profile:triage",
+           "request_digest": "sha256:" + "0" * 64}  # fmt: skip
+    state.put_outbox(build_event("homelabnext.decision.requested", BROKER_SOURCE, req,
+                                 dedupe_key="q", subject="req-1"))  # fmt: skip
+    state.put_outbox(build_event("homelabnext.decision.returned", BROKER_SOURCE, data,
+                                 dedupe_key="r", subject="req-1"))  # fmt: skip
+    assert "requested seq 1 < returned seq 2" in e2e.check_relay(setup, "req-1")
+    with pytest.raises(e2e.StepFailed, match="is not the broker's for req-2"):
+        e2e.check_relay(setup, "req-2")
+    other = StateDir(tmp_path / "other")
+    for ev in state.outbox():
+        other.put_outbox(ev)
+    setup.relay = _relay(e2e, other.root, _SharedWire(), drop_marks=True)
+    with pytest.raises(e2e.StepFailed, match="republished"):
+        e2e.check_relay(setup, "req-1")
 
 
 def test_form_fields_and_the_audit_check_refuse_what_is_missing(e2e, tmp_path):

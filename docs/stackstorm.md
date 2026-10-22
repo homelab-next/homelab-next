@@ -481,6 +481,17 @@ posted. A durable keeps the `ack_wait` it was created with; the bridge refuses t
 whose lease is shorter (delete the durable, `nats consumer rm <stream> <durable>`, and it is
 recreated). A restart after a crash waits one lease before the unsettled deliveries come back.
 
+**The broker's subjects belong to the broker.** The broker's events reach the bus through its
+outbox relay (`hnx broker relay`, [broker.md](broker.md#publishing-events-the-outbox-relay)), as
+the broker's own NATS user, with source `svc:broker` (`BROKER_SOURCE` in
+`homelabnext.broker.relay`, the value A01 and A03 pin). Grant publish on
+`<prefix>.homelabnext.decision.>` and `<prefix>.homelabnext.proposal.>` to that user only, and deny
+it to every other account, the bridge's included: otherwise any client of the bus can publish a
+`decision.returned` with `source: svc:broker`, `verdict: accept`, `tier_used: human`, and A03 asks
+the broker to run it. The broker still re-decides with the approval it holds (digest, expiry,
+single use), so a forged event cannot run an unapproved request, but it can trigger runs and fill
+the refusal log; the ACL keeps the pin honest. broker.md has a `nats-server.conf` excerpt.
+
 The stats file is a status source with the existing `poll-file` kind:
 
 ```yaml

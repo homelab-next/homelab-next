@@ -47,6 +47,7 @@ volumes:
   uptime-data:
   broker-run:
   broker-data:
+  broker-state:
   llm-gateway-bifrost-data:
 
 services:
@@ -400,7 +401,9 @@ services:
   # user, created in broker/Dockerfile); the hub relays approvals to it; broker-edge plays the
   # edge in front of the hub (its address is the hub's one trusted proxy) and starts every other
   # peer of the socket as its own uid: the agent's `hnx broker mcp`, an unmapped uid and the
-  # relay's audit read.  smoke_checks.py runs broker_e2e.py in it.  Nothing here is published.
+  # relay's audit read, and the broker's outbox relay (as the broker's uid, on the broker's state
+# volume: `hnx broker relay --once` publishes to the events service while the broker itself keeps
+# no network).  smoke_checks.py runs broker_e2e.py in it.  Nothing here is published.
   broker:
     <<: [*restart, *hardened]
     image: hnx-lab-broker:local
@@ -419,6 +422,7 @@ services:
     volumes:
       - broker-run:/run/hnx-broker
       - broker-data:/srv/agents
+      - broker-state:/var/lib/hnx-broker
     network_mode: none  # the broker has no network listener; its socket is its only door
     healthcheck:
       test: ["CMD", "test", "-S", "/run/hnx-broker/broker.sock"]
@@ -466,13 +470,19 @@ services:
     environment:
       HNX_SECRET_STATUS_FRONT_DOOR_SECRET: ${LAB_HUB_FRONT_DOOR_SECRET:?see .env.example}
       MALLOC_ARENA_MAX: "2"
+      # the bus-relay step: the broker's relay publishes its outbox to the events service
+      HNX_ENDPOINT_EVENTS: nats://events.svc.example.internal:4222
+      LAB_BROKER_EVENTS_TARGET: /src/compose/lab-in-a-box/targets/events.yml
     volumes:
       - broker-run:/run/hnx-broker
       - broker-data:/srv/agents:ro
+      - broker-state:/var/lib/hnx-broker  # the relay (as the broker's uid) marks what it sent
     depends_on:
       broker:
         condition: service_healthy
       status-hub:
+        condition: service_healthy
+      events:
         condition: service_healthy
     healthcheck:  # a shell test, not python: the scenario's processes need the memory
       test: ["CMD", "test", "-S", "/run/hnx-broker/broker.sock"]

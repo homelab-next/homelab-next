@@ -646,6 +646,36 @@ def test_broker_services_are_three_users_on_one_socket(compose, env_vars):
     assert {"user": users["relay"], "issuer": "sso"} in manifest["approval_relays"]
 
 
+def test_the_broker_relay_publishes_from_the_edge_as_the_broker(compose):
+    """The bus-relay step: the broker keeps no network; the edge runs ``hnx broker relay`` as the
+    broker's uid on the broker's state volume, against the events service, with nats-py."""
+    e2e = load_module("broker_e2e", LAB / "broker_e2e.py")
+    from homelabnext.broker.relay import BROKER_SOURCE
+
+    svc = compose["services"]
+    broker, edge = svc["broker"], svc["broker-edge"]
+    state_mount = f"broker-state:{Path(e2e.LAB_STATE).parent}"
+    assert broker["network_mode"] == "none" and state_mount in broker["volumes"]
+    assert state_mount in edge["volumes"] and "broker-state" in compose["volumes"]
+    env = edge["environment"]
+    assert env["HNX_ENDPOINT_EVENTS"].startswith("nats://events.svc.example.internal:")
+    assert "events.svc.example.internal" in svc["events"]["networks"]["lab"]["aliases"]
+    assert edge["depends_on"]["events"]["condition"] == "service_healthy"
+    target = env["LAB_BROKER_EVENTS_TARGET"]
+    assert target == e2e.LAB_EVENTS_TARGET
+    local = ROOT / target.removeprefix("/src/")
+    binding = yaml.safe_load(local.read_text())["capabilities"]["events"]
+    assert binding["adapter"] == "homelabnext.conform.adapters.nats_jetstream:make"
+    dockerfile = (LAB / "broker" / "Dockerfile").read_text()
+    assert f"COPY {local.relative_to(ROOT)} {target}" in dockerfile
+    assert "x['nats']" in dockerfile and f"--uid {e2e.LAB_BROKER_UID} " in dockerfile
+    assert f"--uid {e2e.LAB_BROKER_UID} --gid {e2e.LAB_BROKER_UID} --no-create-home hnx-broker" in (
+        dockerfile
+    )
+    assert broker["user"] == f"{e2e.LAB_BROKER_UID}:{e2e.LAB_BROKER_UID}"
+    assert e2e.BROKER_SOURCE == BROKER_SOURCE
+
+
 def test_bases_come_from_the_documented_env_names(checks, env_vars):
     bases = checks.bases_from_env(env_vars)
     assert bases["lake-query"] == f"http://{LOOPBACK}:8080"

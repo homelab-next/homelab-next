@@ -78,6 +78,7 @@ from . import (
 )
 from . import execute as _exec
 from . import lanes as _lanes
+from .relay import BROKER_SOURCE
 from .state import DECISION_KINDS, FileApprovalStore, StateDir, is_id, new_id
 
 __all__ = [
@@ -302,7 +303,7 @@ class BrokerService:
         notifier: Any = None,
         resolve_secret: Callable[[str], str] | None = None,
         clock: Callable[[], datetime] = _utcnow,
-        source: str = "svc:broker",
+        source: str = BROKER_SOURCE,
         approvals_url: str | None = None,
     ) -> None:
         self.state = StateDir(state_dir)
@@ -1194,7 +1195,7 @@ class BrokerService:
             self.notifier.report(key, state, msg)
         except Exception:
             self._audit(
-                "svc:broker", "", "notify", "error", reason="notify-failed", request_id=key[16:]
+                BROKER_SOURCE, "", "notify", "error", reason="notify-failed", request_id=key[16:]
             )
 
 

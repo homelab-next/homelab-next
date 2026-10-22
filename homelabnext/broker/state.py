@@ -25,7 +25,10 @@ the same file and nothing is ever rewritten in place.  State is *derived* from w
                                  rebuild has once completed (``decisions.complete``), and on every
                                  start the newest :data:`RECONCILE_AUDIT` audit records are
                                  re-indexed, so a crash between the two writes loses no decision
-``outbox/<event id>.json``       events emitted when no bus is configured
+``outbox/<event id>.json``       events emitted when no bus is configured, each with its place in
+                                 emit order (``queued``); ``hnx broker relay`` publishes them
+``delivered/<event id>.json``    the relay's marker: the bus acknowledged that outbox event (its
+                                 stream and sequence); written only after the publish ack
 ``digest.key``                   the broker-held key (hex) for the keyed hash of secret arguments in a
                                  request digest (created once, exclusively)
 ``runs/<rid>/``                  a run's private directory (handler copy, stdout, stderr)
@@ -69,6 +72,7 @@ _SUBDIRS = (
     "audit",
     "decisions",
     "outbox",
+    "delivered",
     "runs",
 )
 _KEY_BYTES = 32
@@ -177,6 +181,7 @@ class StateDir:
             d.mkdir(mode=0o700, exist_ok=True)
         self._seq = 0
         self._last_stamp = ""
+        self._outbox_ns = 0  # emit order: never goes backwards within this process
         self._audit_lock = threading.Lock()  # a threaded server shares one instance
         self._key: bytes | None = None
         if index_missing:  # a state directory from before the index: build it once
@@ -340,14 +345,65 @@ class StateDir:
         return self._key
 
     def put_outbox(self, event: dict[str, Any]) -> bool:
-        """Record an event (idempotent per event id: a repeat is a no-op)."""
-        eid = str(event["id"])
-        if "/" in eid or eid.startswith("."):
-            raise StateError(f"not an event id: {eid!r}")
-        return write_exclusive(self._dir("outbox") / f"{eid}.json", _dumps(event))
+        """Record an event (idempotent per event id: a repeat is a no-op) with its place in emit
+        order: ``queued`` = (wall-clock ns, pid, sequence), which never goes backwards within one
+        process, so the relay publishes one process's events in the order they were emitted."""
+        eid = self._event_id(event.get("id"))
+        if (self._dir("outbox") / f"{eid}.json").exists():
+            return False
+        with self._audit_lock:
+            self._outbox_ns = max(self._clock_ns(), self._outbox_ns + 1)
+            self._seq += 1
+            queued = [self._outbox_ns, os.getpid(), self._seq]
+        doc = {"queued": queued, "event": event}
+        return write_exclusive(self._dir("outbox") / f"{eid}.json", _dumps(doc))
+
+    @staticmethod
+    def _event_id(eid: Any) -> str:
+        eid = str(eid or "")
+        if not eid or "/" in eid or eid.startswith(".") or len(eid) > 200:
+            raise StateError(f"not an event id: {eid[:80]!r}")
+        return eid
+
+    def _outbox_entry(self, path: Path) -> tuple[tuple[int, int, int, str], dict[str, Any]] | None:
+        doc = _load(path)
+        if not isinstance(doc, dict):
+            return None
+        if isinstance(doc.get("event"), dict) and isinstance(doc.get("queued"), list):
+            ns, pid, seq = (int(x) for x in doc["queued"][:3])
+            event = doc["event"]
+        else:  # an outbox file from before ``queued``: the bare event, ordered by its time
+            event, pid, seq = doc, 0, 0
+            ns = _order({"request": {"created": doc.get("time", "")}})
+        return (ns, pid, seq, path.stem), event
 
     def outbox(self) -> list[dict[str, Any]]:
-        return [d for p in sorted(self._dir("outbox").glob("*.json")) if (d := _load(p))]
+        """Every outbox event, in emit order (delivered or not)."""
+        entries = (self._outbox_entry(p) for p in self._dir("outbox").glob("*.json"))
+        return [ev for _, ev in sorted(e for e in entries if e is not None)]
+
+    def outbox_pending(self, limit: int | None = None) -> list[dict[str, Any]]:
+        """The outbox events the bus has not acknowledged yet, oldest first (at most ``limit``).
+        Reads only the undelivered files: the delivered ones are known by name."""
+        delivered = {p.stem for p in self._dir("delivered").glob("*.json")}
+        entries = []
+        for p in self._dir("outbox").glob("*.json"):
+            if p.stem in delivered:
+                continue
+            entry = self._outbox_entry(p)
+            if entry is not None:
+                entries.append(entry)
+        entries.sort(key=lambda e: e[0])
+        return [ev for _, ev in entries[:limit]]
+
+    def mark_delivered(self, event_id: str, receipt: dict[str, Any]) -> bool:
+        """Record that the bus acknowledged ``event_id`` (False when it already was)."""
+        eid = self._event_id(event_id)
+        doc = {"id": eid, **receipt}
+        return write_exclusive(self._dir("delivered") / f"{eid}.json", _dumps(doc))
+
+    def delivered(self, event_id: str) -> dict[str, Any] | None:
+        return _load(self._dir("delivered") / f"{self._event_id(event_id)}.json")
 
 
 class FileApprovalStore:

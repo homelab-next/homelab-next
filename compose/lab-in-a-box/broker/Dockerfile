@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # The broker end-to-end services (broker, status-hub, broker-edge in docker-compose.yml): this
-# checkout with the mcp extra, hash-pinned like CI (constraints/ci.txt), and the system users the
+# checkout with the mcp and nats extras (nats: the broker's outbox relay), hash-pinned like CI
+# (constraints/ci.txt), and the system users the
 # example production manifest maps (examples/broker/manifest.production.yml).  Build context is
 # the repository root:
 #   docker build -f compose/lab-in-a-box/broker/Dockerfile .
@@ -9,10 +10,11 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /src
 COPY constraints/bootstrap.txt constraints/ci.txt /src/constraints/
 COPY pyproject.toml /src/
-# pip from bootstrap.txt (--require-hashes); the project's requirements and the mcp extra under
-# ci.txt, whose hashes pip enforces; nothing is installed from this checkout (PYTHONPATH=/src)
+# pip from bootstrap.txt (--require-hashes); the project's requirements and the mcp and nats
+# extras under ci.txt, whose hashes pip enforces; nothing is installed from this checkout
+# (PYTHONPATH=/src)
 RUN python -m pip install --no-cache-dir --require-hashes --no-deps -r constraints/bootstrap.txt \
- && python -c "import tomllib; p = tomllib.load(open('pyproject.toml', 'rb'))['project']; print('\n'.join(dict.fromkeys(p['dependencies'] + p['optional-dependencies']['mcp'])))" > /tmp/requirements.txt \
+ && python -c "import tomllib; p = tomllib.load(open('pyproject.toml', 'rb'))['project']; x = p['optional-dependencies']; print('\n'.join(dict.fromkeys(p['dependencies'] + x['mcp'] + x['nats'])))" > /tmp/requirements.txt \
  && python -m pip install --no-cache-dir -c constraints/ci.txt -r /tmp/requirements.txt \
  && rm /tmp/requirements.txt
 # one system user per peer of the socket: the broker, the triage and reader agents (callers), the
@@ -37,5 +39,6 @@ COPY schemas /src/schemas
 COPY profiles /src/profiles
 COPY examples /src/examples
 COPY compose/lab-in-a-box/broker_e2e.py /src/compose/lab-in-a-box/broker_e2e.py
+COPY compose/lab-in-a-box/targets/events.yml /src/compose/lab-in-a-box/targets/events.yml
 USER 10010
 CMD ["python", "-m", "homelabnext.cli", "broker", "--help"]

@@ -5,7 +5,10 @@
 (``nats://host:port``).  The bus speaks the JetStream wire API (``$JS.API.*`` JSON requests,
 ``$JS.ACK.*`` replies) through a small :class:`Wire` interface; :class:`NatsPyWire` is that
 interface over nats-py (``pip install 'homelabnext[nats]'``), and the unit tests drive the same
-mapping with an in-process fake of the server, so no server is needed offline.
+mapping with an in-process fake of the server, so no server is needed offline.  A server with
+accounts takes ``user`` and ``password_secret``, the secret-store *name* of the password (its
+value is delivered as ``HNX_SECRET_<NAME>``, read when the connection is made, and never logged
+or held by the bus).
 
 How the contract maps onto JetStream:
 
@@ -64,7 +67,7 @@ from typing import Any, Protocol
 
 from conformance.protocols.events import Delivery, EventsError
 
-from ._env import resolve
+from ._env import env_secret, resolve
 
 __all__ = [
     "JetStreamApiError",
@@ -466,7 +469,17 @@ class JetStreamConsumer:
 class NatsPyWire:
     """:class:`Wire` over nats-py: an asyncio loop on a private thread, one connection."""
 
-    def __init__(self, url: str, *, connect_timeout: float = 5.0, name: str = "hnx-conform"):
+    def __init__(
+        self,
+        url: str,
+        *,
+        connect_timeout: float = 5.0,
+        name: str = "hnx-conform",
+        user: str | None = None,
+        password: Callable[[], str] | None = None,
+    ):
+        if (user is None) != (password is None):
+            raise EventsError("a NATS user needs a password secret, and a password a user")
         try:
             import nats
             import nats.errors
@@ -483,12 +496,14 @@ class NatsPyWire:
         async def note(exc: Exception) -> None:  # nats-py reports connection errors here
             self.last_error = f"{type(exc).__name__}: {exc}"
 
+        auth = {"user": user, "password": password()} if user and password else {}
         try:
             # max_reconnect_attempts=0 would retry a refused first connect forever in nats-py
             self._nc = self._run(
                 nats.connect(
                     url,
                     name=name,
+                    **auth,
                     connect_timeout=max(1, int(connect_timeout)),
                     allow_reconnect=False,
                     max_reconnect_attempts=1,
@@ -596,11 +611,24 @@ def make(
     capability: str = "events",
     provision: bool = True,
     wire: Wire | None = None,
+    user: str | None = None,
+    password_secret: str | None = None,
+    client_name: str = "hnx-conform",
 ) -> JetStreamBus:
     """A bus on the ``events`` endpoint.  ``scratch`` (the conformance default) gives every
     subject its own stream and subject prefix, deleted on ``close()``, so checks never see each
     other or an earlier run; otherwise ``stream`` and ``subject_prefix`` name a standing stream.
-    ``provision=False`` creates no stream: both must exist, each with a ``max_bytes`` limit."""
+    ``provision=False`` creates no stream: both must exist, each with a ``max_bytes`` limit.
+    ``user`` and ``password_secret`` (a secret name, never a value) authenticate the connection."""
+    password = None
+    if user is not None or password_secret is not None:
+        if not user or not isinstance(password_secret, str) or not password_secret:
+            raise EventsError("a NATS user needs password_secret (a secret name), and vice versa")
+        if not password_secret.startswith("secret:"):
+            raise EventsError("password_secret is a secret name (secret:<name>), never a value")
+        from homelabnext.registry.model import secret_env_name
+
+        password = env_secret(secret_env_name(password_secret))  # checked now, read at connect
     if scratch:
         token = secrets.token_hex(6)
         stream = stream or f"HNXCONF_{token}"
@@ -610,7 +638,8 @@ def make(
     assert stream is not None and subject_prefix is not None
     own = wire is None
     if wire is None:
-        wire = NatsPyWire(resolve(capability, env_only=True, schemes=("nats", "tls")).url)
+        url = resolve(capability, env_only=True, schemes=("nats", "tls")).url
+        wire = NatsPyWire(url, name=client_name, user=user, password=password)
     try:
         return JetStreamBus(
             wire,

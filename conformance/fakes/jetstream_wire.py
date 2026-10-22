@@ -5,7 +5,7 @@ It answers the requests :mod:`homelabnext.conform.adapters.nats_jetstream` sends
 nats-server 2.10 shapes them (read from the server source, ``server/consumer.go``, ``stream.go``,
 ``jetstream_api.go`` at v2.10.22):
 
-* ``$JS.API.STREAM.{INFO,CREATE,DELETE,MSG.GET}`` and ``$JS.API.CONSUMER.{INFO,CREATE}`` with the
+* ``$JS.API.STREAM.{INFO,CREATE,DELETE,MSG.GET}`` (``seq``, ``next_by_subj``, ``last_by_subj``) and ``$JS.API.CONSUMER.{INFO,CREATE}`` with the
   server's error objects (``stream not found`` 10059, ``consumer not found`` 10014, ``no message
   found`` 10037) and its stream-config rules (``>`` and ``$JS.`` subjects need no-ack, except
   ``$JS.EVENT.>``; subjects may not overlap another stream's);
@@ -211,8 +211,12 @@ class FakeJetStreamWire:
 
     def _msg_get(self, st: _Stream, body: dict[str, Any]) -> dict[str, Any]:
         seq, nxt = int(body.get("seq", 0)), body.get("next_by_subj")
+        last = body.get("last_by_subj")
         found = None
-        if nxt:
+        if last:
+            hits = [s for s in st.msgs if subject_matches(last, st.msgs[s].subject)]
+            found = st.msgs[max(hits)] if hits else None
+        elif nxt:
             for s in sorted(st.msgs):
                 if s >= seq and subject_matches(nxt, st.msgs[s].subject):
                     found = st.msgs[s]
