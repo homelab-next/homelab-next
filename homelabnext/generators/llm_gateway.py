@@ -84,6 +84,26 @@ LOCALITIES = ("local", "cloud")
 DATA_TIERS = ("local-only", "cloud-allowed")
 #: cloud providers the renderers know how to name (LiteLLM prefix == Bifrost provider name)
 CLOUD_PROVIDERS = ("anthropic", "openai", "gemini", "mistral")
+#: API domains of hosted model providers: no service domain or local host may sit under one, so a
+#: spec that names one as the lab's ``domain`` cannot make a cloud API look internal
+CLOUD_API_DOMAINS = (
+    "anthropic.com",
+    "openai.com",
+    "googleapis.com",
+    "mistral.ai",
+    "azure.com",
+    "amazonaws.com",
+    "cohere.ai",
+    "cohere.com",
+    "groq.com",
+    "together.xyz",
+    "together.ai",
+    "deepseek.com",
+    "x.ai",
+    "openrouter.ai",
+    "fireworks.ai",
+    "perplexity.ai",
+)
 PROVIDER_PREFIX = "hnx-"  # Bifrost provider name of a local backend: hnx-<svc name>
 HEADER = f"# {MARKER} llm_gateway from {{spec}} - do not edit; sha256:{{digest}}\n"
 
@@ -152,7 +172,13 @@ def internal_host(spec: Spec, host: str) -> bool:
     internal service domain.  Anything else (a cloud API, a bare public name, an address) is not
     local, whatever the spec calls it."""
     host = host.lower().rstrip(".")
+    if _under_cloud_api(host):
+        return False
     return host in spec.registry_hosts or host.endswith("." + spec.service_domain)
+
+
+def _under_cloud_api(host: str) -> bool:
+    return any(host == d or host.endswith("." + d) for d in CLOUD_API_DOMAINS)
 
 
 def _cloud_zone(registry: Any, svc: Any) -> bool:
@@ -303,6 +329,21 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
     domain = str(doc.get("domain") or (registry.domain if registry else "example.internal"))
     svc_label = str(doc.get("svc_label") or (registry.svc_label if registry else "svc"))
     service_domain = f"{svc_label}.{domain}".lower()
+    if registry is not None:
+        for field, ours, theirs in (
+            ("domain", domain, registry.domain),
+            ("svc_label", svc_label, registry.svc_label),
+        ):
+            if str(ours).lower() != str(theirs).lower():
+                problems.append(
+                    f"{source}: {field} {ours!r} differs from the registry's {theirs!r}; "
+                    "the service domain comes from the registry"
+                )
+    if _under_cloud_api(service_domain):
+        problems.append(
+            f"{source}: the service domain {service_domain} is under a model provider's API "
+            "domain, so nothing under it is local"
+        )
     registry_hosts: set[str] = set()
 
     backends: dict[str, Backend] = {}

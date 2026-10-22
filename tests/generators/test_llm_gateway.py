@@ -272,6 +272,29 @@ def test_a_registry_service_in_a_cloud_zone_is_not_local(tmp_path):
     assert "inference.svc.example.internal" in files["litellm/config.yaml"]
 
 
+def test_a_cloud_api_domain_named_as_the_lab_domain_is_refused(tmp_path):
+    # the spec's own domain cannot make a provider's API internal (review of #32)
+    host = {"locality": "local", "host": "x.api.anthropic.com", "port": 443, "scheme": "https"}
+    backends = spec_doc()["backends"] | {"svc:infer-a": host}
+    with pytest.raises(gw.GatewaySpecError, match="under a model provider's API domain"):
+        gw.render_file(
+            make_spec(tmp_path, backends=backends, domain="anthropic.com", svc_label="api")
+        )
+
+
+def test_audit_counts_a_host_under_a_cloud_api_domain_as_cloud(tmp_path):
+    spec = dataclasses.replace(
+        gw.load_spec(make_spec(tmp_path)), service_domain="api.anthropic.com"
+    )
+    assert not gw.internal_host(spec, "x.api.anthropic.com")
+
+
+def test_a_spec_domain_that_differs_from_the_registry_is_refused(tmp_path):
+    reg = registry_with(tmp_path, "compute")
+    with pytest.raises(gw.GatewaySpecError, match="differs from the registry's"):
+        gw.render_file(make_spec(tmp_path, registry=reg, domain="elsewhere.example"))
+
+
 def test_audit_refuses_a_self_declared_local_backend():
     spec, files = lab_files()
     bad = dataclasses.replace(spec.backends["inference-small"], host="api.example.com", port=443)
