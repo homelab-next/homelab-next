@@ -143,7 +143,7 @@ RULES = [
     ("lake", lambda r: r.update(author="agent:example-checker"), "nobody reviews their own work"),
     # the launch is generated from the pin: a record names only the package's own bin (C1)
     ("notes", lambda r: r["transport"].update(bin="python", args=["-c", "x"]), "interpreter, shell"),
-    ("github", lambda r: r["transport"].update(bin="other-tool"), "shares no word with"),
+    ("github", lambda r: r["transport"].update(bin="other-tool"), "not one of the package's reviewed bins"),
     ("github", lambda r: r["origin"].update(version="3.2"), "not a full x.y.z"),
     ("docker", lambda r: r["transport"].update(bin="docker-mcp"), "runs its own reviewed entrypoint"),
     ("github", lambda r: r["transport"].update(command="npx"), "('command' was unexpected)"),

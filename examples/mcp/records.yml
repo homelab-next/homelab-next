@@ -11,6 +11,7 @@ origin:
   package: example-records-mcp
   version: 2.3.1
   sha256: d235e5e01058b912dfe25693eb887834b3de0ee4c2893cca6200784b7ed3a961
+  bins: [records-mcp]
 transport:
   type: stdio
   bin: records-mcp
@@ -26,6 +27,6 @@ tools:
 - {name: propose_record, classes: [record-write], approval: false}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:d1611b631b87'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:d1611b631b87'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:d1611b631b87'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:523bb3b41eaa'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:523bb3b41eaa'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:523bb3b41eaa'}

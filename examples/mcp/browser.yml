@@ -11,6 +11,7 @@ origin:
   package: '@example/mcp-browser'
   version: 1.1.0
   sha256: 92babc68c81a5dc8eda18ec93f1c3354f12de77702073636dcd4d01817c37da4
+  bins: [mcp-browser]
 transport:
   type: stdio
 runtime: agent-local
@@ -20,6 +21,6 @@ tools:
 - {name: navigate, classes: [egress], approval: false}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:4c947ab58bf4'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:4c947ab58bf4'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:4c947ab58bf4'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:32fe7814ac85'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:32fe7814ac85'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:32fe7814ac85'}

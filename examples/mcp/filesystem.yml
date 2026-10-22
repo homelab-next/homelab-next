@@ -11,6 +11,7 @@ origin:
   package: '@example/mcp-filesystem'
   version: 2.1.0
   sha256: 6aa43acca2ce5f5a31f04551a3cf2129e88d92dab0a5ff11f04d0436dcbd5a24
+  bins: [mcp-filesystem]
 transport:
   type: stdio
 runtime: agent-local
@@ -21,6 +22,6 @@ tools:
 - {name: write_file, classes: [file-write], approval: false}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:a6b6f0ec2a79'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:a6b6f0ec2a79'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:a6b6f0ec2a79'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:ea9f4d68ee2f'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:ea9f4d68ee2f'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:ea9f4d68ee2f'}

@@ -164,7 +164,7 @@ FOREIGN = [
 
 #: the package every case's record launches (its bin is the package's own)
 ORIGIN = {"kind": "package", "ecosystem": "npm", "package": "@example/srv", "version": "1.0.0",
-          "sha256": "b" * 64}  # fmt: skip
+          "sha256": "b" * 64, "bins": ["srv"]}  # fmt: skip
 
 
 def _record(args: list[str], settings: dict[str, str]) -> dict:

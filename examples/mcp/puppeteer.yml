@@ -13,6 +13,7 @@ origin:
   package: '@example/mcp-puppeteer'
   version: 0.8.2
   sha256: 7f553e516fe087a6d78355f3d03046200b600fd075c35e239b3e2a0b7b27c686
+  bins: [mcp-puppeteer]
 transport:
   type: stdio
 runtime: agent-local

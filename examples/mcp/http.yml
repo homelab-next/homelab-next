@@ -11,6 +11,7 @@ origin:
   package: '@example/mcp-http'
   version: 1.1.0
   sha256: 6235736e09ab648c18751ab728dca94ab6a482116f05b3b1a32dc377f7b9fbf8
+  bins: [mcp-http]
 transport:
   type: stdio
 runtime: agent-local
@@ -20,6 +21,6 @@ tools:
 - {name: request, classes: [egress], approval: false}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:240c9f521945'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:240c9f521945'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:240c9f521945'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:7e6e9226e1a7'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:7e6e9226e1a7'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:7e6e9226e1a7'}

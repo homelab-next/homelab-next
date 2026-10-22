@@ -200,13 +200,6 @@ def read_entries(path: str | Path) -> dict[str, dict[str, Any]]:
     return out
 
 
-def _owner(origin: Mapping[str, Any]) -> str:
-    """The name a bin must share a word with: the package, or the git repo's last segment."""
-    if origin.get("kind") == "git":
-        return str(origin.get("repo", "")).rstrip("/").rsplit("/", 1)[-1]
-    return str(origin.get("package", ""))
-
-
 def guess_origin(command: str, args: list[str]) -> dict[str, Any]:
     """The origin a launcher implies (:func:`.launch.map_launch`; unpinned: no hash is ever
     invented)."""
@@ -356,7 +349,7 @@ def draft(
                 "launcher flag; the render generates the launch from the origin)"
             )
         third_party = got.origin.get("kind") in ("package", "git")
-        bin_problem = third_party and got.bin and servers.bin_problem(got.bin, _owner(got.origin))
+        bin_problem = third_party and got.bin and servers.bin_problem(got.bin)
         if bin_problem:
             rec["origin"] = {"kind": "unknown", "hint": "its launch runs "
                              f"{got.bin}, not the package's own command"}  # fmt: skip
@@ -365,10 +358,25 @@ def draft(
             )
         elif got.bin and not (
             got.origin.get("kind") == "package"
-            and got.origin.get("ecosystem") == "pypi"
-            and launch.pypi_name(got.bin) == launch.pypi_name(got.origin["package"])
-        ):
+            and (
+                launch.pypi_name(got.bin) == launch.pypi_name(got.origin["package"])
+                if got.origin.get("ecosystem") == "pypi"
+                else got.bin == servers.base_name(got.origin)
+            )
+        ):  # the bin the origin defaults to is not written
             rec["transport"]["bin"] = got.bin
+        if third_party and not bin_problem:
+            # what the config ran: the bin it named, else the default npx/uvx picked for it
+            seen = got.bin or (
+                got.origin["package"] if got.origin.get("ecosystem") == "pypi" and
+                got.origin.get("kind") == "package" else servers.base_name(got.origin)
+            )  # fmt: skip
+            rec["origin"]["bins"] = [seen]
+            notes.append(
+                f"{sid}: origin.bins {[seen]} is what the config ran, not what the package "
+                "declares: review the released artifact's bin names (package.json bin, the "
+                "wheel's console_scripts) and list them (check cannot fetch the package)"
+            )
         clean = [] if bin_problem else _clean_args(sid, got.args, notes)
         if clean:
             rec["transport"]["args"] = clean

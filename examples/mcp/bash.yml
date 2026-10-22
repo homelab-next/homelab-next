@@ -13,6 +13,7 @@ origin:
   package: '@example/mcp-bash'
   version: 0.9.0
   sha256: 1c03730bfe0f3cb70503bf59bf65abc09b49bddcb9b456591048d9feac2d9f9f
+  bins: [mcp-bash]
 transport:
   type: stdio
 runtime: agent-local

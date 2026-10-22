@@ -77,7 +77,9 @@ def test_drafts_carry_no_secret_and_the_report_names_each_one(tmp_path, capsys):
     assert notes["settings"] == {"NOTES_ROOT": "/srv/notes"}  # not a credential: kept, flagged
     assert "env NOTES_ROOT kept as a setting: confirm it is not a credential" in report.out
     assert notes["origin"] == {"kind": "package", "ecosystem": "npm", "package": "@example/notes-mcp",
-                               "version": "1.4.0", "sha256": None}  # fmt: skip
+                               "version": "1.4.0", "sha256": None,
+                               "bins": ["notes-mcp"]}  # fmt: skip
+    assert "origin.bins ['notes-mcp'] is what the config ran" in report.out  # for review
     assert written["search"]["env"] == {"SEARCH_KEY": "secret:mcp/search-key"}
     assert written["search"]["transport"] == {
         "type": "stdio",
@@ -174,7 +176,7 @@ def test_every_credential_shape_is_stripped_and_pinned_packages_are_kept(tmp_pat
         "Authorization: Bearer secret:mcp/remote-hdr-header-authorization"
     )
     assert rec["uvxgit"]["origin"] == {"kind": "git", "ecosystem": "pypi",
-        "repo": "https://git.lab.example/org/srv", "commit": None}  # fmt: skip
+        "repo": "https://git.lab.example/org/srv", "commit": None, "bins": ["srv"]}  # fmt: skip
     assert rec["uvxgit2"]["origin"]["repo"] == "https://git.lab.example/org/srv"
     assert rec["uvxgit2"]["transport"] == {"type": "stdio", "bin": "srv"}
     assert rec["dock"]["env"] == {"API_KEY": "secret:mcp/dock-api-key"}

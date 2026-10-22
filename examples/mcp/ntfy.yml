@@ -11,6 +11,7 @@ origin:
   package: '@example/mcp-ntfy'
   version: 1.0.2
   sha256: eee787133f1d7e1e468f1edb7a0fd945df9a1432cb37ab70afb74b9af73f006a
+  bins: [mcp-ntfy]
 transport:
   type: stdio
 runtime: agent-local
@@ -22,6 +23,6 @@ tools:
 - {name: publish, classes: [egress], approval: false}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:6d52e2450748'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:6d52e2450748'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:6d52e2450748'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:b447f9d6f79a'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:b447f9d6f79a'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:b447f9d6f79a'}

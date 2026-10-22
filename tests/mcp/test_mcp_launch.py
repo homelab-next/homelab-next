@@ -28,7 +28,7 @@ D = DOCKER["origin"]["digest"]
 IMG = f"registry.example/mcp/docker@{D}"
 COMMIT = "a" * 40
 GIT_PYPI = {"kind": "git", "ecosystem": "pypi", "repo": "https://code.example/org/srv",
-            "commit": COMMIT}  # fmt: skip
+            "commit": COMMIT, "bins": ["srv"]}  # fmt: skip
 GIT_NPM = {**GIT_PYPI, "ecosystem": "npm"}
 FIRST = {"kind": "first-party", "path": "homelabnext/mcp/"}
 PREFIX = "/var/lib/hnx/npm-prefix"
@@ -51,11 +51,11 @@ GH_PIN = "@example/mcp-github@3.2.0"
 NOTES_PIN = "example-notes-mcp==1.2.0"
 #: (record, the generated command line)
 GENERATED = [
-    (_rec(GH), ["npx", "-y", f"--prefix={PREFIX}", "--", GH_PIN]),
+    (_rec(GH), ["npx", "-y", f"--prefix={PREFIX}", f"--package={GH_PIN}", "--", "mcp-github"]),
     (_rec(GH, bin="mcp-github", args=["--read-only"]),
      ["npx", "-y", f"--prefix={PREFIX}", f"--package={GH_PIN}", "--", "mcp-github", "--read-only"]),
     (_rec(NOTES, bin="notes-mcp"), ["uvx", "--no-config", "--from", NOTES_PIN, "notes-mcp"]),
-    (_rec(NOTES), ["uvx", "--no-config", "--from", NOTES_PIN, "example-notes-mcp"]),
+    (_rec(NOTES), ["uvx", "--no-config", "--from", NOTES_PIN, "notes-mcp"]),  # its one bin
     (_rec(NOTES, {**NOTES["origin"], "version": "v1.2.0"}, bin="notes-mcp"),
      ["uvx", "--no-config", "--from", NOTES_PIN, "notes-mcp"]),  # a leading v is no difference
     (_rec(DOCKER, args=["--read-only"]), ["docker", "run", "-i", "--rm", IMG, "--read-only"]),
@@ -89,7 +89,14 @@ REFUSED = [
     (_rec(NOTES, bin="bash", args=["-c", "x"]), "interpreter, shell"),
     (_rec(NOTES, bin="env", args=["x"]), "interpreter, shell"),
     (_rec(NOTES, bin="curl", args=["-o", "/tmp/x", "https://dl.example/x"]), "interpreter, shell"),
-    (_rec(GH, bin="evil-tool"), "shares no word with @example/mcp-github"),
+    (_rec(GH, bin="evil-tool"), "not one of the package's reviewed bins"),
+    # round 4, F2: npx and uvx run any command on PATH as the bin (`npx --package=PIN -- id -un`
+    # printed root), so the bin is one of the reviewed bins, never one the package might lack
+    (_rec(GH, bin="id", args=["-un"]), "not one of the package's reviewed bins"),
+    (_rec(GH, {k: v for k, v in GH["origin"].items() if k != "bins"}), "names no bins"),
+    (_rec(GH, {**GH["origin"], "bins": ["mcp-github-a", "mcp-github-b"]}), "declares several bins"),
+    (_rec(GH, {**GH["origin"], "bins": ["mcp-github", "node"]}), "interpreter, shell"),
+    (_rec(NOTES, {**GIT_PYPI, "bins": ["srv-a", "srv-b"]}), "declares several bins"),
     (_rec(NOTES, GIT_PYPI, bin="perl"), "interpreter, shell"),
     # 3 and 5: no launcher, no launcher flag, no path: a record cannot say --python /tmp/evil,
     # --directory, --index-url, --privileged, -v /:/host or /tmp/evil/npx
@@ -114,7 +121,7 @@ REFUSED = [
     (_rec(NOTES, {**GIT_PYPI, "repo": "https://fakeuser:fakepw@code.example/org/srv"}, bin="srv"),
      "not an https URL without credentials"),
     (_rec(NOTES, {**GIT_PYPI, "repo": "http://code.example/org/srv"}, bin="srv"), "not an https URL"),
-    (_rec(NOTES, GIT_PYPI), "names its bin"),
+    (_rec(NOTES, {k: v for k, v in GIT_PYPI.items() if k != "bins"}, bin="srv"), "names no bins"),
 ]  # fmt: skip
 
 
@@ -133,7 +140,18 @@ def test_a_launcher_flag_in_args_reaches_the_server_never_the_launcher():
     command, prefix = servers.launch(rec, CTX)
     assert (command, prefix) == ("uvx", ["--no-config", "--from", NOTES_PIN, "notes-mcp"])
     rec = _rec(GH, args=["--registry", "https://npm.example"])
-    assert servers.launch(rec, CTX) == ("npx", ["-y", f"--prefix={PREFIX}", "--", GH_PIN])
+    assert servers.launch(rec, CTX) == (
+        "npx", ["-y", f"--prefix={PREFIX}", f"--package={GH_PIN}", "--", "mcp-github"])  # fmt: skip
+
+
+def test_the_default_bin_is_the_single_declared_one_or_the_base_name_when_listed():
+    """No bin: the one declared bin, else the package's base name when bins lists it; with
+    several and no base name among them, the record names the bin."""
+    many = {**GH["origin"], "bins": ["mcp-github", "mcp-github-admin"]}
+    assert servers.launch(_rec(GH, many), CTX)[1][-1] == "mcp-github"
+    assert servers.resolve_bin({**many, "bins": ["a-cli", "b-cli"]}, None)[0] is None
+    assert servers.resolve_bin({**GIT_PYPI, "repo": GIT_PYPI["repo"] + ".git",
+                                "bins": ["srv", "x"]}, None) == ("srv", None)  # fmt: skip
 
 
 def test_an_npm_launch_is_anchored_at_an_absolute_prefix_never_the_clients_cwd():
@@ -155,14 +173,14 @@ def test_a_uvx_launch_reads_no_uv_config():
     """``uvx --no-config``: a ``uv.toml`` (user-level, which the agent's own user can write) or
     ``[tool.uv]`` cannot redirect the index for the pin (verified with uv 0.11)."""
     for origin in (NOTES["origin"], GIT_PYPI):
-        command, argv = servers.launch(_rec(NOTES, origin, bin="srv"), CTX)
+        command, argv = servers.launch(_rec(NOTES, origin), CTX)
         assert (command, argv[:2]) == ("uvx", ["--no-config", "--from"])
 
 
 #: (command, args, what the importer keeps): a foreign command line it maps, or refuses to
 IMPORTED = [
     ("npx", ["-y", GH_PIN, "--read-only"], {"bin": None, "args": ["--read-only"]}),
-    ("npx", ["-y", f"--package={GH_PIN}", "--", "mcp-github"], {"bin": "mcp-github", "args": []}),
+    ("npx", ["-y", f"--package={GH_PIN}", "--", "mcp-github"], {"bin": None, "args": []}),  # default
     ("uvx", ["--python", "/tmp/evil/python", "--from", NOTES_PIN, "notes-mcp"],
      {"bin": "notes-mcp", "args": [], "dropped": ["--python"]}),
     ("uvx", ["--directory", "/tmp/evil", NOTES_PIN], {"bin": None, "dropped": ["--directory"]}),
@@ -210,7 +228,7 @@ def test_the_importer_reads_the_origin_from_the_launch_position():
     git = importer.guess_origin(
         "uvx", ["--from", f"git+https://code.example/org/srv@{COMMIT}", "srv"]
     )
-    assert git == GIT_PYPI
+    assert git == {k: v for k, v in GIT_PYPI.items() if k != "bins"}  # bins: the review's
     got = launch.parse("docker", ["run", "-i", "-e", "K=v", "--name", "x", IMG, "--srv-flag"])
     assert (got.spec, got.spec_index, got.server_args) == (IMG, 6, 7)
     assert launch.parse("/opt/x/sh", []).ecosystem is None

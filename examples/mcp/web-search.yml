@@ -11,6 +11,7 @@ origin:
   package: '@example/mcp-web-search'
   version: 0.3.0
   sha256: c1252115193ccf9b12baab89f3a86d376c9b6e743357139891ffaf1342981919
+  bins: [mcp-web-search]
 transport:
   type: stdio
 runtime: agent-local

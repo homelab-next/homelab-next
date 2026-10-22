@@ -11,6 +11,7 @@ origin:
   package: '@example/mcp-playwright'
   version: 1.1.0
   sha256: 314c84709a62531186e78780c369ad9564aeaf71b333e65543ca58ac28e4d83a
+  bins: [mcp-playwright]
 transport:
   type: stdio
 runtime: agent-local
@@ -20,6 +21,6 @@ tools:
 - {name: browser_navigate, classes: [egress], approval: false}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:93b0310d90f6'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:93b0310d90f6'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:93b0310d90f6'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:edc30946f8f8'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:edc30946f8f8'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:edc30946f8f8'}

@@ -11,6 +11,7 @@ origin:
   package: example-vault-mcp
   version: 0.5.1
   sha256: 80ee7c0f94279ff6c43afd3b9c711018920a594d749bb4f5b7578b244f02042a
+  bins: [vault-mcp]
 transport:
   type: stdio
   bin: vault-mcp
@@ -24,6 +25,6 @@ tools:
 - {name: read_secret, classes: [credential], approval: true}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:f42317bae175'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:f42317bae175'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:f42317bae175'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:089ec9ec3971'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:089ec9ec3971'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:089ec9ec3971'}

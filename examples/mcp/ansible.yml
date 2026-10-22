@@ -11,6 +11,7 @@ origin:
   package: example-ansible-mcp
   version: 0.4.0
   sha256: 735991a19f1cf75ee7c9ba19a84ecd61f0c073fa1614aaee46be49b924ba80b1
+  bins: [ansible-mcp]
 transport:
   type: stdio
   bin: ansible-mcp
@@ -21,6 +22,6 @@ tools:
 - {name: run_playbook, classes: [exec], approval: true}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:7b3cbcba71fb'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:7b3cbcba71fb'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:7b3cbcba71fb'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:ab2b98be9823'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:ab2b98be9823'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:ab2b98be9823'}

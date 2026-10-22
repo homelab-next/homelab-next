@@ -11,6 +11,7 @@ origin:
   package: '@example/mcp-kubernetes'
   version: 1.8.0
   sha256: faada1a8a091f14f6cf22a5875bdca4fe1b3252452aa739fd5ef4321bf336ef6
+  bins: [mcp-kubernetes]
 transport:
   type: stdio
 runtime: agent-local
@@ -23,6 +24,6 @@ tools:
 - {name: kubectl, classes: [exec], approval: true}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:532a5f9780ce'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:532a5f9780ce'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:532a5f9780ce'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:4cfed22be9ca'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:4cfed22be9ca'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:4cfed22be9ca'}

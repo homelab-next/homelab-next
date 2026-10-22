@@ -11,6 +11,7 @@ origin:
   package: '@example/mcp-github'
   version: 3.2.0
   sha256: 4447f89b828e98eaa693b5abc9242687afe48f07fca3465e947cde4e07f429be
+  bins: [mcp-github]
 transport:
   type: stdio
 runtime: agent-local
@@ -23,6 +24,6 @@ tools:
 - {name: search_code, classes: [egress], approval: false}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:8e08d649eb92'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:8e08d649eb92'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:8e08d649eb92'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:3ba9691a0065'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:3ba9691a0065'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:3ba9691a0065'}

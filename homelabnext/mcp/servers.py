@@ -328,9 +328,10 @@ _NPM_NAME = re.compile(r"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*")
 _PYPI_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
 #: a git origin a launcher fetches: https, a host, a path, no userinfo, no query
 _GIT_REPO = re.compile(r"(?:git\+)?https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~-]+)+")
-#: commands a package's ``bin`` may never be: each runs whatever its arguments say (a shell, an
-#: interpreter, a wrapper, a launcher, a network or file tool), so ``npx --package=PIN -- node -e
-#: ...`` would run code no pin controls.  The bin must also share a word with the package name.
+#: commands a package's ``bin`` (and ``bins``) may never be: each runs whatever its arguments say
+#: (a shell, an interpreter, a wrapper, a launcher, a network or file tool), so ``npx
+#: --package=PIN -- node -e ...`` would run code no pin controls.  Defense in depth: the control
+#: is that the bin is one of the reviewed ``origin.bins``.
 NOT_A_BIN = frozenset(
     (
         "sh", "bash", "zsh", "dash", "ksh", "mksh", "fish", "csh", "tcsh", "busybox", "env",
@@ -348,15 +349,10 @@ NOT_A_BIN = frozenset(
 _NOT_A_BIN = re.compile(r"(?:python|pypy|pip|node|perl|ruby|php|lua|java)[0-9.]*", re.I)
 
 
-def _words(name: str) -> set[str]:
-    return {w for w in re.split(r"[@/._-]+", name.lower()) if w}
-
-
-def bin_problem(bin_: str, owner: str) -> str | None:
-    """Why ``bin_`` may not be the command a package (or git repo) ``owner`` runs, or None: a
+def bin_problem(bin_: str) -> str | None:
+    """Why ``bin_`` may not be a command a package (or git repo) declares and runs, or None: a
     bare name (a path runs only for a first-party server), never an interpreter, shell, wrapper
-    or launcher (:data:`NOT_A_BIN`), and sharing a word with the package name (the command the
-    package installs, not one that happens to be on PATH)."""
+    or launcher (:data:`NOT_A_BIN`)."""
     if not BIN.fullmatch(bin_):
         return f"bin {bin_} is not a bare command name (a path runs only for a first-party server)"
     if bin_.lower() in NOT_A_BIN or _NOT_A_BIN.fullmatch(bin_):
@@ -364,20 +360,61 @@ def bin_problem(bin_: str, owner: str) -> str | None:
             f"bin {bin_} is an interpreter, shell, wrapper or launcher, not the package's own "
             "command (it would run whatever its arguments say, not the pinned code)"
         )
-    if not _words(bin_) & _words(owner):
-        return (
-            f"bin {bin_} shares no word with {owner}: name the command the package installs "
-            "(npx and uvx run any command on PATH)"
-        )
     return None
+
+
+def base_name(origin: Mapping[str, Any]) -> str:
+    """The package's base name (``@scope/name`` -> ``name``), or a git repo's last segment."""
+    if origin.get("kind") == "git":
+        return str(origin.get("repo", "")).rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+    return str(origin.get("package", "")).rsplit("/", 1)[-1]
+
+
+def resolve_bin(origin: Mapping[str, Any], bin_: Any) -> tuple[str | None, str | None]:
+    """``(bin, None)``: the command a package or git origin runs, one of its reviewed ``bins``
+    (``bin_`` when given, else the single declared bin, else the base name when bins lists it);
+    or ``(None, why not)``.  npx and uvx run *any* command on PATH under the bin's name (``npx
+    --package=PIN -- id`` runs ``id``), so the only bin a record may name is one the review read
+    from the package."""
+    bins = [str(b) for b in origin.get("bins") or ()]
+    if not bins:
+        return None, (
+            "names no bins: list the bin names the package declares (package.json bin, the "
+            "wheel's console_scripts), as the review read them from the released artifact"
+        )
+    if bin_ is not None:
+        if str(bin_) not in bins:
+            return None, (
+                f"bin {bin_} is not one of the package's reviewed bins {bins} (npx and uvx run "
+                "any command on PATH under that name)"
+            )
+        return str(bin_), None
+    if len(bins) == 1:
+        return bins[0], None
+    if base_name(origin) in bins:
+        return base_name(origin), None
+    return None, f"declares several bins {bins}: name the one it runs (transport.bin)"
+
+
+def _bins_problems(origin: Mapping[str, Any], bin_: Any, where: str) -> list[str]:
+    """The reviewed ``bins`` (each a bare name, never an interpreter or shell) and the bin the
+    launch runs (:func:`resolve_bin`)."""
+    out = [f"{where}: {why}" for b in origin.get("bins") or () if (why := bin_problem(str(b)))]
+    if bin_ is not None and (why := bin_problem(str(bin_))):
+        out.append(f"{where}: {why}")
+    _, why = resolve_bin(origin, bin_)
+    if why:
+        out.append(f"{where}: {why}")
+    return out
 
 
 def launch_problems(rec: Mapping[str, Any], where: str) -> list[str]:
     """A stdio record has a launch :func:`launch` can generate from its origin: an npm or pypi
     package (an exact npm ``x.y.z``, a valid package name), a git repo with its ecosystem (an
     https URL without credentials, and a bin), an image (no bin: it runs its own entrypoint), or a
-    first-party server (``hnx``, or a path under ``origin.path``).  A package's bin is the command
-    it installs (:func:`bin_problem`).  A record writes no launcher and no launcher flag, so a
+    first-party server (``hnx``, or a path under ``origin.path``).  A package's bin is one of the
+    reviewed ``origin.bins`` (:func:`resolve_bin`), never an interpreter or shell
+    (:func:`bin_problem`).  A record writes no launcher and no launcher flag, so a
     ``--python`` path, an index, ``--with``, ``--privileged`` or another entrypoint cannot be
     expressed.  (The sha256 itself is declarative: no launcher verifies it.)"""
     origin, t = rec.get("origin") or {}, rec.get("transport") or {}
@@ -397,8 +434,7 @@ def launch_problems(rec: Mapping[str, Any], where: str) -> list[str]:
             out.append(f"{where}: npm version {ver} is not a full x.y.z (npm reads it as a range)")
         if not (_NPM_NAME if eco == "npm" else _PYPI_NAME).fullmatch(pkg):
             out.append(f"{where}: {pkg} is not an {eco} package name")
-        if bin_ is not None and bin_problem(str(bin_), pkg):
-            out.append(f"{where}: {bin_problem(str(bin_), pkg)}")
+        out += _bins_problems(origin, bin_, where)
     elif kind == "git":
         repo = str(origin.get("repo"))
         if origin.get("ecosystem") not in ("npm", "pypi"):
@@ -408,10 +444,7 @@ def launch_problems(rec: Mapping[str, Any], where: str) -> list[str]:
             )
         if not _GIT_REPO.fullmatch(repo):
             out.append(f"{where}: git repo {repo} is not an https URL without credentials")
-        if bin_ is None:
-            out.append(f"{where}: a git origin names its bin (the command the repo installs)")
-        elif bin_problem(str(bin_), repo.rstrip("/").rsplit("/", 1)[-1]):
-            out.append(f"{where}: {bin_problem(str(bin_), repo.rstrip('/').rsplit('/', 1)[-1])}")
+        out += _bins_problems(origin, bin_, where)
     elif kind == "image":
         if bin_ is not None:
             out.append(
@@ -464,13 +497,12 @@ def launch(rec: Mapping[str, Any], ctx: LaunchContext | None = None) -> tuple[st
     """The launch a stdio record's origin generates: ``(command, launcher arguments)``; the
     server's own ``args`` follow.  Fixed flags only, never one from the record:
 
-    * npm: ``npx -y --prefix=<npm_prefix> -- <package>@<version>``, or with a bin
-      ``npx -y --prefix=<npm_prefix> --package=<package>@<version> -- <bin>`` (``--`` ends npx's
-      options; ``--prefix`` makes npx read its project config and ``node_modules`` from that
+    * npm: ``npx -y --prefix=<npm_prefix> --package=<package>@<version> -- <bin>`` (``--``
+      ends npx's options; the bin is one of the reviewed ``bins``, :func:`resolve_bin`;
+      ``--prefix`` makes npx read its project config and ``node_modules`` from that
       empty directory, so neither a ``node_modules/<package>`` nor an ``.npmrc`` in the client's
       working directory replaces the pinned package);
-    * pypi: ``uvx --no-config --from <package>==<version> <bin>`` (bin defaults to the package
-      name; ``--no-config`` reads no ``uv.toml`` or ``[tool.uv]``, so none can redirect the index);
+    * pypi: ``uvx --no-config --from <package>==<version> <bin>`` (``--no-config`` reads no ``uv.toml`` or ``[tool.uv]``, so none can redirect the index);
     * git: the same with ``git+<repo>#<commit>`` (npm) or ``git+<repo>@<commit>`` (pypi);
     * image: ``docker run -i --rm [-e NAME ...] <repository>@<digest>``, one ``-e`` per
       ``env``, ``settings`` and parameter ``env`` key, so the container gets exactly those;
@@ -487,19 +519,18 @@ def launch(rec: Mapping[str, Any], ctx: LaunchContext | None = None) -> tuple[st
         if kind == "package":
             ver = str(origin.get("version") or "").removeprefix("v")
             spec = f"{origin['package']}@{ver}" if eco == "npm" else f"{origin['package']}=={ver}"
-            default = str(origin["package"])
         else:
             repo = "git+" + str(origin["repo"]).removeprefix("git+")
             spec = f"{repo}{'#' if eco == 'npm' else '@'}{origin.get('commit')}"
-            default = str(bin_)
+        run, why = resolve_bin(origin, bin_)
+        if run is None:
+            raise ValueError(f"{why}")
         if eco == "npm":
             bad = anchor_problem(ctx.npm_prefix, "npm_prefix")
             if bad:
                 raise ValueError(f"an npm launch needs npm_prefix: {bad}")
-            prefix = f"--prefix={ctx.npm_prefix}"
-            return (NPX, ["-y", prefix, f"--package={spec}", "--", str(bin_)]) if bin_ else (
-                NPX, ["-y", prefix, "--", spec])  # fmt: skip
-        return UVX, ["--no-config", "--from", spec, str(bin_ or default)]
+            return NPX, ["-y", f"--prefix={ctx.npm_prefix}", f"--package={spec}", "--", run]
+        return UVX, ["--no-config", "--from", spec, run]
     if kind == "image" and origin.get("digest"):
         image = str(origin["image"])
         repo = image.rsplit(":", 1)[0] if ":" in image.rsplit("/", 1)[-1] else image

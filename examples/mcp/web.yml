@@ -11,6 +11,7 @@ origin:
   package: '@example/mcp-web'
   version: 1.1.0
   sha256: ff853a522af956c9cde4c39c46342faf7e60458989afa3b4c7be4d4843a647eb
+  bins: [mcp-web]
 transport:
   type: stdio
 runtime: agent-local
@@ -20,6 +21,6 @@ tools:
 - {name: fetch_page, classes: [egress], approval: false}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:be7118992f3d'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:be7118992f3d'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:be7118992f3d'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:7358091d3284'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:7358091d3284'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:7358091d3284'}

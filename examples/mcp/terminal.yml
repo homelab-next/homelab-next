@@ -13,6 +13,7 @@ origin:
   package: '@example/mcp-terminal'
   version: 0.9.0
   sha256: e57b60e1f98d7a68e73d38d96e73d68f56bfc69f880b41788f07d8dd171c93c4
+  bins: [mcp-terminal]
 transport:
   type: stdio
 runtime: agent-local
