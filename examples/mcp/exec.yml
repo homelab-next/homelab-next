@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: exec
+description: Another shell server (exec); the catalog keeps one.
+owner: platform-team
+status: deprecated
+reason: duplicates shell; grant shell instead
+replaced_by: shell
+origin:
+  kind: package
+  ecosystem: npm
+  package: '@example/mcp-exec'
+  version: 0.9.0
+  sha256: 9d3d9117deb0705872faa216b97ed4b2f070052a78d9e3b284e28760c3152506
+transport:
+  type: stdio
+  command: npx
+  args: [-y, '@example/mcp-exec@0.9.0']
+runtime: agent-local
+egress: none
+data_tier: local-only
+tools:
+- {name: run_command, classes: [exec], approval: true}
+author: agent:example-builder

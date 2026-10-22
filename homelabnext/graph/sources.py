@@ -975,6 +975,56 @@ def read_strategy(b: Builder) -> None:
 KEYRING_SOURCES = "examples/keyring/sources.yml"
 
 
+MCP_CATALOG = "examples/mcp"
+
+
+def read_mcp_catalog(b: Builder) -> None:
+    """The MCP catalog (``examples/mcp/<id>.yml``): one ``mcp:<id>`` node per record (classes,
+    owner, status, transport, data tier), mcp -served_by-> svc (an HTTP transport's endpoint),
+    mcp -reaches-> svc/host (egress), mcp -fronts-> cap (``capabilities``), mcp -implements->
+    cap (``implements``: the contract and so its conformance suite), mcp -replaced_by-> mcp."""
+    from homelabnext.mcp import servers
+
+    d = b.root / MCP_CATALOG
+    if not d.is_dir():
+        return
+    cat = servers.load(d)
+    classes = cat.classes()
+    for sid, rec in cat:
+        rel = b.rel(cat.files[sid])
+        mid = f"mcp:{sid}"
+        t = rec.get("transport") or {}
+        b.declare(
+            mid,
+            "mcp",
+            rel,
+            sid,
+            rel,
+            classes=classes.get(sid, []),
+            owner=rec.get("owner"),
+            status=rec.get("status"),
+            transport=t.get("type"),
+            data_tier=rec.get("data_tier"),
+        )
+        if t.get("endpoint"):
+            b.edge(
+                mid,
+                f"svc:{str(t['endpoint']).removeprefix('svc:')}",
+                "served_by",
+                f"{rel}#transport",
+            )
+        egress = rec.get("egress")
+        for e in egress if isinstance(egress, list) else ():
+            if e.startswith(("svc:", "host:")):
+                b.edge(mid, e, "reaches", f"{rel}#egress")
+        for cap in rec.get("capabilities") or ():
+            b.edge(mid, str(cap), "fronts", f"{rel}#capabilities")
+        for cap in rec.get("implements") or ():
+            b.edge(mid, str(cap), "implements", f"{rel}#implements")
+        if rec.get("replaced_by"):
+            b.edge(mid, f"mcp:{rec['replaced_by']}", "replaced_by", f"{rel}#replaced_by")
+
+
 def read_agent(b: Builder) -> None:
     """Agent profiles, parts, model roles, context manifests, the broker and the keyring.
 
@@ -983,11 +1033,9 @@ def read_agent(b: Builder) -> None:
     records them; mdl -backed_by-> svc (``bindings[].backend``), mdl -falls_back_to-> mdl;
     manifest -uses-> skill/persona/mcp (``skills``, ``persona``, ``tools``); broker -defines->
     action; principal -grants-> cap/mcp/action/svc/broker (``examples/keyring/keyring.json``,
-    with ``level``); mcp slugs come from ``tool_classes.yml`` and the registry."""
-    tc_rel = "homelabnext/agent/tool_classes.yml"
-    tc = _yaml(b.root / tc_rel) or {}
-    for slug, classes in sorted((tc.get("mcp") or {}).items()):
-        b.declare(f"mcp:{slug}", "mcp", tc_rel, slug, classes=classes)
+    with ``level``); mcp nodes come from the MCP catalog (:func:`read_mcp_catalog`) and the
+    registry."""
+    read_mcp_catalog(b)
 
     roles_rel = "examples/model_roles.json"
     roles = json.loads((b.root / roles_rel).read_text(encoding="utf-8")).get("roles") or {}

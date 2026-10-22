@@ -16,9 +16,13 @@ false`` to hold an acting tool.  A ceiling policy may also mark a profile a read
 cannot undo.  :func:`manifest_problems` applies the same rule to a context manifest, where it *is*
 derivable: a manifest with any ``source: input`` section feeds untrusted content.
 
-The classification is data, not code: ``tool_classes.yml`` next to this module maps every MCP
-server, capability and broker tier to capability classes and lists the classes a reader may not
-hold.  A grant missing from that table is refused for a reader (unknown is never assumed safe).
+The classification is data, not code: ``tool_classes.yml`` next to this module maps every
+capability and broker tier to capability classes and lists the classes a reader may not hold; its
+``mcp`` section is derived from the MCP catalog (:mod:`homelabnext.mcp.servers`, ADR-0024): a
+server's classes are the union of its tools'.  A grant missing from that table is refused for a
+reader (unknown is never assumed safe), and :func:`grant_problems` refuses, for every profile, an
+MCP server the catalog does not hold, a retired or draft one, and a local-only server granted to a
+profile whose data may go to the cloud.
 """
 
 from __future__ import annotations
@@ -37,7 +41,17 @@ KINDS = ("mcp", "capabilities", "tiers")
 class ToolClasses:
     """The classification table: ``{mcp, capabilities, tiers}`` -> classes, plus the reader ban."""
 
-    def __init__(self, doc: Mapping[str, Any], source: str = "tool classes") -> None:
+    def __init__(
+        self,
+        doc: Mapping[str, Any],
+        source: str = "tool classes",
+        catalog: Mapping[str, Mapping[str, Any]] | None = None,
+        catalog_source: str | None = None,
+    ) -> None:
+        #: per MCP server of the catalog the table was derived from: status, reason, data_tier
+        #: (``None`` when the table states its own ``mcp`` section: then its keys are the catalog)
+        self.catalog = dict(catalog) if catalog is not None else None
+        self.catalog_source = catalog_source or source
         if not isinstance(doc, Mapping):
             raise SpecError(f"{source}: expected a mapping")
         classes = doc.get("classes")
@@ -64,11 +78,37 @@ class ToolClasses:
             raise SpecError(f"{source}: undeclared classes {sorted(unknown)}")
 
     @classmethod
-    def load(cls, path: str | Path | None = None) -> ToolClasses:
+    def load(cls, path: str | Path | None = None, catalog: str | Path | None = None) -> ToolClasses:
+        """The table at ``path`` (default: the packaged ``tool_classes.yml``).  Without an ``mcp``
+        section of its own, the section is derived from the MCP catalog at ``catalog`` (default:
+        :func:`homelabnext.mcp.servers.default_dir`, so a private overlay's catalog is used where
+        its examples directory is)."""
         import yaml
 
         p = Path(path) if path else DEFAULT_CLASSES
-        return cls(yaml.safe_load(p.read_text(encoding="utf-8")) or {}, source=str(p))
+        doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        if not isinstance(doc, Mapping) or "mcp" in doc:
+            return cls(doc, source=str(p))
+        from homelabnext.mcp import servers
+
+        try:
+            cat = servers.load_cached(catalog)
+        except servers.CatalogError as exc:
+            raise SpecError(f"{p}: its mcp section comes from the MCP catalog: {exc}") from None
+        meta = {
+            sid: {
+                "status": rec.get("status"),
+                "reason": rec.get("reason"),
+                "data_tier": rec.get("data_tier"),
+            }
+            for sid, rec in cat
+        }
+        return cls(
+            {**doc, "mcp": cat.classes()},
+            source=f"{p} + the MCP catalog {cat.root}",
+            catalog=meta,
+            catalog_source=f"the MCP catalog {cat.root}",
+        )
 
     def classify(self, kind: str, name: str) -> tuple[str, ...] | None:
         """Classes of one grant, or ``None`` if the table does not know it."""
@@ -78,6 +118,58 @@ class ToolClasses:
 @cache
 def default_classes() -> ToolClasses:
     return ToolClasses.load()
+
+
+def table_vocabulary(path: str | Path | None = None) -> list[str]:
+    """The capability classes ``tool_classes.yml`` declares (without reading the catalog)."""
+    import yaml
+
+    doc = yaml.safe_load(Path(path or DEFAULT_CLASSES).read_text(encoding="utf-8")) or {}
+    return sorted((doc.get("classes") or {}) if isinstance(doc, Mapping) else ())
+
+
+def grant_problems(
+    grants: Mapping[str, Any],
+    classes: ToolClasses | None = None,
+    who: str = "profile",
+    data_tier: str | None = None,
+) -> list[str]:
+    """MCP grants the catalog does not allow, for any profile (reader or actor): a server the
+    catalog does not hold, a retired or draft one, and a ``local-only`` server granted to a
+    profile whose ``data_tier`` is ``cloud-allowed`` (its context may go to a cloud model)."""
+    classes = classes or default_classes()
+    problems: list[str] = []
+    for name in _names(grants.get("mcp")):
+        if classes.catalog is None:
+            if classes.classify("mcp", name) is None:
+                problems.append(
+                    f"{who} names MCP server {name!r}, which is not in {classes.source} "
+                    "(grant a catalog id)"
+                )
+            continue
+        meta = classes.catalog.get(name)
+        if meta is None:
+            problems.append(
+                f"{who} names MCP server {name!r}, which is not in {classes.catalog_source} "
+                "(add a record, or grant a catalog id)"
+            )
+            continue
+        status = meta.get("status")
+        if status == "retired":
+            problems.append(
+                f"{who} is granted MCP server {name!r}, which is retired: {meta.get('reason')}"
+            )
+        elif status == "draft":
+            problems.append(
+                f"{who} is granted MCP server {name!r}, which is a draft (not reviewed; "
+                "make it active first)"
+            )
+        if data_tier == "cloud-allowed" and meta.get("data_tier") == "local-only":
+            problems.append(
+                f"{who} may send its context to the cloud (data_tier cloud-allowed) but is "
+                f"granted MCP server {name!r}, whose data is local-only"
+            )
+    return problems
 
 
 def reader_problems(
@@ -118,26 +210,31 @@ def is_reader(doc: Mapping[str, Any]) -> bool:
 
 
 def profile_problems(doc: Mapping[str, Any], classes: ToolClasses | None = None) -> list[str]:
-    """Reader problems for any agent-profile shape: a spec, a compiled ``agent/profile`` (grants
-    under ``grants``) or the lean ``platform/agent_profile`` (``mcp``/``capabilities`` at the top).
+    """Catalog problems (:func:`grant_problems`, every profile) and reader problems (readers) for
+    any agent-profile shape: a spec, a compiled ``agent/profile`` (grants under ``grants``) or the
+    lean ``platform/agent_profile`` (``mcp``/``capabilities`` at the top).
     """
     if "reads_untrusted" in doc and not isinstance(doc["reads_untrusted"], bool):
         return ["reads_untrusted must be true or false"]
-    if not is_reader(doc):
-        return []
     grants = doc.get("grants") if isinstance(doc.get("grants"), Mapping) else doc
-    return reader_problems(grants, classes, str(doc.get("id", "profile")))
+    who = str(doc.get("id", "profile"))
+    tier = doc.get("data_tier") if isinstance(doc.get("data_tier"), str) else None
+    problems = grant_problems(grants, classes, who, tier)
+    if not is_reader(doc):
+        return problems
+    return problems + reader_problems(grants, classes, who)
 
 
 def manifest_problems(doc: Mapping[str, Any], classes: ToolClasses | None = None) -> list[str]:
-    """A context manifest with any ``source: input`` section feeds untrusted content to its
-    agent, so its ``tools`` (MCP servers) obey the reader rule."""
+    """A context manifest's ``tools`` (MCP servers) must be grantable catalog servers; and a
+    manifest with any ``source: input`` section feeds untrusted content to its agent, so its
+    tools obey the reader rule too."""
     sections = doc.get("sections") or []
+    who = f"manifest {doc.get('id', '?')}"
+    problems = grant_problems({"mcp": doc.get("tools") or []}, classes, who)
     if not any(isinstance(s, Mapping) and s.get("source") == "input" for s in sections):
-        return []
-    return reader_problems(
-        {"mcp": doc.get("tools") or []}, classes, f"manifest {doc.get('id', '?')}"
-    )
+        return problems
+    return problems + reader_problems({"mcp": doc.get("tools") or []}, classes, who)
 
 
 def _names(raw: Any) -> list[str]:

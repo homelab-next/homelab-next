@@ -1,16 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 # Capability classes of every grant an agent profile can hold (checklist G-03, docs/agent.md
-# "Readers cannot act").  A profile grants three kinds of thing, each classified here:
-#   mcp:           the MCP servers (tools) it may call, by slug;
+# "Readers cannot act").  A profile grants three kinds of thing, each classified:
+#   mcp:           the MCP servers (tools) it may call, by catalog id.  NOT listed here: the
+#                  section is derived from the MCP catalog (examples/mcp/<id>.yml, or the private
+#                  overlay's; ADR-0024, docs/mcp-catalog.md), a server's classes being the union
+#                  of its tools' classes.  A file passed with --classes that has its own `mcp:`
+#                  section is used as written;
 #   capabilities:  the platform capabilities (cap: ids, capabilities.yml) it may use;
 #   tiers:         the broker action tier it may request (read < write < execute < privileged).
 # A grant may carry several classes; it is as dangerous as the worst of them.
 #
 # A profile that reads raw or untrusted content (reads_untrusted) may hold NO grant in a class
-# listed under reader_forbidden, and NO grant that is not classified here at all (unknown is
-# refused, never assumed harmless).  The compiler refuses such a reader whatever the ceiling
-# policy allows, `hnx agent verify` refuses a hand-edited one, and `hnx agent lint` checks every
-# profile in the repository.  Adding a tool = adding it here, in a reviewed change.
+# listed under reader_forbidden, and NO grant that is not classified at all (unknown is refused,
+# never assumed harmless).  The compiler refuses such a reader whatever the ceiling policy
+# allows, `hnx agent verify` refuses a hand-edited one, and `hnx agent lint` checks every profile
+# in the repository.  Adding an MCP server = adding a catalog record, in a reviewed change.
 
 classes:
   read: queries or fetches from a platform service; no effect outside the agent's own output
@@ -50,35 +54,3 @@ capabilities:
   cap:secrets: [credential]
   cap:idp: [credential]
 
-mcp:
-  # platform servers
-  lake: [read]
-  records: [record-write]
-  cases: [record-write]
-  hnx-catalog: [read]  # `hnx mcp serve`: read-only answers from this repository (docs/mcp.md)
-  hnx-broker: [record-write, exec]  # `hnx broker mcp`: broker actions as the authenticated caller (docs/broker.md)
-  # common third-party servers, classified so a profile naming one is judged, not guessed
-  shell: [exec]
-  bash: [exec]
-  terminal: [exec]
-  exec: [exec]
-  ssh: [exec]
-  docker: [exec]
-  kubernetes: [exec]
-  ansible: [exec]
-  filesystem: [read, file-write]
-  git: [read, file-write]
-  github: [egress, file-write]
-  gitlab: [egress, file-write]
-  fetch: [egress]
-  http: [egress]
-  web: [egress]
-  web-search: [egress]
-  browser: [egress]
-  playwright: [egress]
-  puppeteer: [egress]
-  email: [egress]
-  smtp: [egress]
-  slack: [egress]
-  ntfy: [egress]
-  vault: [credential]

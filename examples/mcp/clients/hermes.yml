@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Render spec (docs/mcp-catalog.md): every Hermes home the example lab runs, rendered from the one
+# catalog, so a fallback home can never hold fewer servers than the primary.  Regenerate with
+#   hnx mcp catalog render --spec examples/mcp/clients/hermes.yml
+# and `--check` (make mcp-check) fails on any drift in any home.  Fictional, like every example.
+client: hermes
+catalog: ..
+registry: ../../services.yml
+lanes: [real, shadow]
+profiles:
+  - file: profile.broker-agent.json
+    profile_file: /etc/hnx/profiles/broker-agent.json   # where the deploy installs it
+    params:
+      notes@shadow: {mode: read}        # the shadow lane only reads
+  - file: profile.collector.json
+    params:
+      notes: {writable: agents/collector/inbox/}
+      notes@shadow: {mode: read}
+outputs:
+  - {home: primary, path: hermes/primary.yaml}
+  - {home: fallback, path: hermes/fallback.yaml}

@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: playwright
+description: Fetches pages from outside the lab (playwright).
+owner: security-team
+status: active
+origin:
+  kind: package
+  ecosystem: npm
+  package: '@example/mcp-playwright'
+  version: 1.1.0
+  sha256: 314c84709a62531186e78780c369ad9564aeaf71b333e65543ca58ac28e4d83a
+transport:
+  type: stdio
+  command: npx
+  args: [-y, '@example/mcp-playwright@1.1.0']
+runtime: agent-local
+egress: [internet]
+data_tier: cloud-allowed
+tools:
+- {name: browser_navigate, classes: [egress], approval: false}
+author: agent:example-builder
+reviews:
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:b8082b8fdab0'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:b8082b8fdab0'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:b8082b8fdab0'}

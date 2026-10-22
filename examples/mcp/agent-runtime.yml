@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: agent-runtime
+description: 'The LLM orchestrator''s tool server: its queue and job submission.'
+owner: platform-team
+status: active
+origin:
+  kind: image
+  image: registry.example/lab/agent-runtime:3.1.4
+  digest: sha256:9a29d28c694957322faf38159d4755b4d07bad2ea6788d624fd9f581c71a37ef
+transport:
+  type: sse
+  endpoint: svc:agent-runtime
+  path: /sse
+runtime:
+  host: runtime-core
+  user: agent-runtime
+egress: ['svc:inference']
+data_tier: local-only
+capabilities: ['cap:agent-runtime']
+tools:
+- {name: queue_summary, classes: [read], approval: false}
+- {name: submit_job, classes: [exec], approval: true}
+author: agent:example-builder
+reviews:
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:398435e2fbcf'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:398435e2fbcf'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:398435e2fbcf'}

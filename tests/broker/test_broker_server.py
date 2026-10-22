@@ -659,6 +659,7 @@ def test_serve_command_runs_until_terminated(tmp_path):
 
 
 def test_hnx_broker_is_classified_and_kept_from_readers():
-    assert default_classes().classify("mcp", "hnx-broker") == ("exec", "record-write")
+    # derived from the catalog record: the union of its tools' classes (read-only tools add read)
+    assert default_classes().classify("mcp", "hnx-broker") == ("exec", "read", "record-write")
     problems = reader_problems({"mcp": ["hnx-broker"], "capabilities": []})
     assert problems and "readers cannot act" in problems[0]

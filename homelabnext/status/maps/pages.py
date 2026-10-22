@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """The generated pages of the status hub: the maps ``/topology``, ``/dataflow``, ``/architecture``,
-``/roadmap`` and the directory pages ``/links``, ``/schedule``, ``/roster``.
+``/roadmap`` and the directory pages ``/links``, ``/schedule``, ``/roster``, ``/mcp-servers``.
 
 ``hnx status serve`` routes them (``--guests DIR --guests-site SITE`` for the topology, ``--maps
 ROOT`` for the rest, ``--invariants-results FILE`` for the roadmap's live state, ``--roster FILE``
-for the roster, default ``ROOT/examples/status/roster.yml``) and
+for the roster, default ``ROOT/examples/status/roster.yml``, ``--mcp-catalog DIR`` for the MCP
+servers, default ``ROOT/examples/mcp``) and
 ``hnx status render`` writes them beside ``index.html`` as ``<panel>.html``.  Each page is built
 from the repository's own models on request (the dataflow and architecture, which only change
 with the code, once per process); a source that cannot be read gives the page an error line,
@@ -41,9 +42,12 @@ MAP_ROUTES = {
     "/links": "links",
     "/schedule": "schedule",
     "/roster": "roster",
+    "/mcp-servers": "mcp-servers",
 }
 #: the roster file read under ``--maps ROOT`` when ``--roster`` is not given
 DEFAULT_ROSTER = "examples/status/roster.yml"
+#: the MCP catalog read under ``--maps ROOT`` when ``--mcp-catalog`` is not given
+DEFAULT_MCP_CATALOG = "examples/mcp"
 TITLES = {
     "topology": "Topology",
     "dataflow": "Dataflow",
@@ -52,6 +56,7 @@ TITLES = {
     "links": "Links",
     "schedule": "Schedule",
     "roster": "Agent roster",
+    "mcp-servers": "MCP servers",
 }
 #: what each page is generated from (shown on the page; ADR-0018)
 SOURCES = {
@@ -74,6 +79,8 @@ SOURCES = {
     "workflows/packs triggers, the registry's status sources and the hub's state (last runs)",
     "roster": "roster.yml: the compiled agent profiles, the broker manifests (grants, actions, "
     "lanes), workflows/packs actors, the model role table, and the agent-activity tier",
+    "mcp-servers": "the MCP catalog (one record per server: owner, origin and pin, transport, "
+    "tools and their classes, review, lifecycle) and the agent profiles roster.yml names (grants)",
 }
 _ERRORS = (OSError, ValueError, LookupError, TypeError, yaml.YAMLError)
 
@@ -93,6 +100,7 @@ class MapSite:
         results: str | Path | None = None,
         lab_registry: Any = None,
         roster: str | Path | None = None,
+        mcp_catalog: str | Path | None = None,
     ):
         self.root = Path(root) if root else None
         self.registry = registry
@@ -108,6 +116,12 @@ class MapSite:
             self.roster = self.root / DEFAULT_ROSTER
         else:
             self.roster = None
+        if mcp_catalog:
+            self.mcp_catalog: Path | None = Path(mcp_catalog)
+        elif self.root is not None and (self.root / DEFAULT_MCP_CATALOG).is_dir():
+            self.mcp_catalog = self.root / DEFAULT_MCP_CATALOG
+        else:
+            self.mcp_catalog = None
 
     def available(self) -> frozenset[str]:
         """The map panels this site serves."""
@@ -120,6 +134,8 @@ class MapSite:
                 out |= {"architecture", "links"}
             if self.roster is not None:
                 out |= {"roster"}
+            if self.mcp_catalog is not None:
+                out |= {"mcp-servers"}
             if self.lab is not None:
                 out |= {"dataflow"}
         return frozenset(out)
@@ -170,7 +186,7 @@ class MapSite:
         return idx, host_flows(doc, idx)
 
     def _render(self, panel: str, doc: Mapping[str, Any]) -> str:
-        from . import architecture, dataflow, links, roadmap, roster, schedule, topology
+        from . import architecture, dataflow, links, mcp, roadmap, roster, schedule, topology
 
         if panel == "links":
             return links.render(links.build(self.registry))
@@ -185,6 +201,12 @@ class MapSite:
                     observations=doc.get("observations") or (),
                 )
             )
+        if panel == "mcp-servers":
+            from homelabnext.mcp import servers
+
+            profiles = roster.gather(self.roster, self.root)["profiles"] if self.roster else []
+            docs = [p["doc"] for p in profiles if isinstance(p.get("doc"), Mapping)]
+            return mcp.render(mcp.build(servers.load(self.mcp_catalog), docs))
         if panel == "roster":
             sessions = (doc.get("agents") or {}).get("sessions") if doc.get("agents") else None
             return roster.render(roster.build(roster.gather(self.roster, self.root), sessions))

@@ -1,0 +1,92 @@
+{
+ "counts": {
+  "active": 1,
+  "granted": 2,
+  "servers": 3,
+  "unpinned": 2
+ },
+ "servers": [
+  {
+   "approval": [],
+   "classes": [
+    "read"
+   ],
+   "data_tier": "local-only",
+   "description": "SQL over the lake <script>alert(\"x\")</script>.",
+   "granted_to": [
+    "profile:watcher"
+   ],
+   "id": "lake",
+   "implements": [
+    "cap:lake-query"
+   ],
+   "origin": "image registry.example/lake-mcp",
+   "owner": "data-team",
+   "parameters": [],
+   "pin": "no digest",
+   "pinned": false,
+   "reason": "moving to a newer query server",
+   "record": "mcp/lake.yml",
+   "replaced_by": null,
+   "reviews": [],
+   "status": "deprecated",
+   "tools": 1,
+   "transport": "streamable-http",
+   "where": "svc:query/mcp"
+  },
+  {
+   "approval": [],
+   "classes": [],
+   "data_tier": "local-only",
+   "description": "Imported from a client config; describe it.",
+   "granted_to": [],
+   "id": "probe",
+   "implements": [],
+   "origin": "unknown",
+   "owner": "unassigned",
+   "parameters": [],
+   "pin": "not pinned",
+   "pinned": false,
+   "reason": null,
+   "record": "mcp/probe.yml",
+   "replaced_by": null,
+   "reviews": [],
+   "status": "draft",
+   "tools": 0,
+   "transport": "stdio",
+   "where": "probe (agent-local)"
+  },
+  {
+   "approval": [
+    "propose"
+   ],
+   "classes": [
+    "read",
+    "record-write"
+   ],
+   "data_tier": "local-only",
+   "description": "Proposes records.",
+   "granted_to": [
+    "profile:fixer"
+   ],
+   "id": "records",
+   "implements": [],
+   "origin": "pypi example-records-mcp",
+   "owner": "ops-team",
+   "parameters": [
+    "scope"
+   ],
+   "pin": "1.0.0 sha256:000000000000",
+   "pinned": true,
+   "reason": null,
+   "record": "mcp/records.yml",
+   "replaced_by": null,
+   "reviews": [],
+   "status": "active",
+   "tools": 2,
+   "transport": "stdio",
+   "where": "records-mcp (agent-local)"
+  }
+ ],
+ "unknown_grants": []
+}

@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# Render spec: llm-orchestrator's configs/mcp_catalog.yaml (one kind per catalog stdio server) and
+# the grants: block of each profile file, spliced in place (everything from the block's marker
+# comment to the end of the file).  Fictional, like every example.
+client: llm-orchestrator
+catalog: ..
+lanes: [real, shadow]
+profiles:
+  - file: profile.collector.json
+    grants_file: llm-orchestrator/profiles/collector.yaml
+    params:
+      notes: {writable: agents/collector/inbox/}
+      notes@shadow: {mode: read}
+outputs:
+  - {path: llm-orchestrator/mcp_catalog.yaml}

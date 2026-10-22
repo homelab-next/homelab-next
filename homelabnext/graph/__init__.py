@@ -20,7 +20,11 @@ Edge vocabulary (``from -> to: asserted by``; the table is :data:`.vocab.EDGE_TY
     depends_on     svc -> svc: registry upstreams
     serves         svc -> zone: registry clients; req -> req: FFIR -> CCIR, PIR -> CCIR/FFIR
     exposes        svc -> mcp: registry mcp
-    implements     adapter -> cap: target binding, contract import, make_fake
+    implements     adapter, mcp -> cap: target binding, contract import, make_fake; MCP catalog
+    served_by      mcp -> svc: MCP catalog transport endpoint
+    reaches        mcp -> svc, host: MCP catalog egress
+    fronts         mcp -> cap: MCP catalog capabilities
+    replaced_by    mcp -> mcp: MCP catalog replaced_by
     faked_by       cap -> adapter: suite make_fake
     for            adapter -> product: a compose stack's target file + that stack's image
     checked_by     cap -> check: suite specs

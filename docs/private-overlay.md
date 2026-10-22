@@ -44,7 +44,7 @@ reverse guard (below) fails its CI if any part of an overlay is committed to it.
 |---|---|---|
 | Code, schemas, roles, the `hnx_secret` lookup, tools | public | plain text, Apache-2.0 |
 | A complete fictional lab, the overlay skeleton | public `examples/` | plain text, documentation values only |
-| Real site, registry, guests, registers, strategy, customizations | private `lab/` | plain text under the repository's access control |
+| Real site, registry, guests, registers, strategy, customizations, the MCP catalog (`lab/mcp/`) and its render specs | private `lab/` | plain text under the repository's access control |
 | Real data that would hurt if the private repository leaked (WAN addresses, peer details) | private `lab/sealed/` | SOPS + age, one file at a time |
 | Inventory variables that must stay confidential and no role takes as a reference | private `ansible/inventory/*/group_vars/*/vault.yml` | ansible-vault |
 | Credentials (passwords, tokens, API keys, enrollment secrets), and the vault password | OpenBao | referenced in git as `secret:<name>`; the deploy reads them by name through its AppRole |
@@ -67,6 +67,13 @@ hnx needs no special mode for an overlay; it uses the lookups it already has.
   `profiles/` directory in the overlay: it would shadow the pinned ones wholesale.
 * **Customizations.** `HNX_CUSTOMIZATIONS_DIR=lab/customizations` adds the overlay's records to the
   shipped profiles ([customization.md](customization.md)).
+* **The MCP catalog.** The real catalog is `lab/mcp/<id>.yml`, beside `lab/services.yml`
+  ([MCP catalog](mcp-catalog.md)). With `HNX_EXAMPLES_DIR=lab` the agent compiler, lint and
+  keyring derive their MCP classes from it; `hnx mcp catalog check --catalog lab/mcp --registry
+  lab/services.yml` checks it, `hnx docs systems ... lab/services.yml` finds it beside the
+  registry, and the overlay's render specs (`lab/mcp/clients/*.yml`) write its runtimes' client
+  configs. Its records hold `secret:` names only; `hnx mcp catalog import` turns an existing
+  lab's client configs into draft records without copying a credential.
 * **Credentials.** A registry service or a role names a credential as `secret:<name>`. On the
   Ansible controller the `hnx_secret` lookup resolves it:
   * **from OpenBao** when `BAO_ADDR` is set (the deploy): KV v2 `<BAO_KV_MOUNT>/data/<name>`

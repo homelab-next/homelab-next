@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: hnx-broker
+description: Named broker actions, memory, findings and proposals as the authenticated caller (hnx broker mcp, docs/broker.md);
+  what the agent may do is the broker manifest's grant.
+owner: platform-team
+status: active
+origin:
+  kind: first-party
+  path: homelabnext/broker/mcp_tools.py
+transport:
+  type: stdio
+  command: hnx
+  args: [broker, mcp, --socket, /run/hnx-broker/broker.sock]
+runtime: agent-local
+egress: none
+data_tier: local-only
+tools:
+- {name: broker_actions, classes: [read], approval: false}
+- {name: broker_call, classes: [exec], approval: false, description: refuses an action that needs approval}
+- {name: broker_cancel, classes: [record-write], approval: false}
+- {name: broker_pending, classes: [read], approval: false}
+- {name: broker_run, classes: [exec], approval: true}
+- {name: broker_status, classes: [read], approval: false}
+- {name: broker_submit, classes: [exec], approval: true}
+- {name: finding_write, classes: [record-write], approval: false}
+- {name: memory_write, classes: [record-write], approval: false}
+- {name: proposal_file, classes: [record-write], approval: false}
+author: agent:example-builder
+reviews:
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:51a1c605985a'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:51a1c605985a'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:51a1c605985a'}

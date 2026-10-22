@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``hnx mcp serve|tools|call``.
+"""``hnx mcp serve|tools|call`` and ``hnx mcp catalog ...`` (the MCP catalog:
+:mod:`.catalog_cli`, docs/mcp-catalog.md).
 
 * ``serve [--root CHECKOUT] [--registry FILE] [--scope-from-profile PROFILE.json]`` runs the
   read-only MCP server on stdio (needs ``pip install 'homelabnext[mcp]'``); there is no network
@@ -38,10 +39,19 @@ def _catalog(args) -> Catalog:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["catalog"]:
+        from .catalog_cli import main as catalog_main
+
+        return catalog_main(argv[1:])
     ap = argparse.ArgumentParser(
         prog="hnx mcp", description="the read-only MCP server over this repository (docs/mcp.md)"
     )
-    ap.add_argument("cmd", choices=["serve", "tools", "call"])
+    ap.add_argument(
+        "cmd",
+        choices=["serve", "tools", "call"],
+        help="(also: catalog ..., see `hnx mcp catalog -h`)",
+    )
     ap.add_argument("tool", nargs="?", help="call: the tool to run")
     ap.add_argument("--args", default="{}", help="call: the tool's arguments as a JSON object")
     ap.add_argument("--root", help="source checkout (default: this checkout)")

@@ -104,6 +104,20 @@ check: gateway-check
 gateway-check:
 	$(PY) -m homelabnext.cli gen gateway render $(GATEWAY_SPEC) $(dir $(GATEWAY_SPEC)) --check
 
+# the MCP catalog (docs/mcp-catalog.md, ADR-0024): every record valid and reviewed, the registry's
+# MCP entries and every profile's grants resolve to it, and the rendered example client configs
+# (every home of every render spec) have no drift
+MCP_SPECS := $(wildcard examples/mcp/clients/*.yml)
+.PHONY: mcp-check mcp-render
+check: mcp-check
+mcp-check:
+	$(PY) -m homelabnext.cli mcp catalog check
+	@for s in $(MCP_SPECS); do $(PY) -m homelabnext.cli mcp catalog render --spec $$s --check || exit 1; done
+
+# after changing a catalog record, a render spec or a profile: regenerate and commit
+mcp-render:
+	@for s in $(MCP_SPECS); do $(PY) -m homelabnext.cli mcp catalog render --spec $$s || exit 1; done
+
 # after changing the role table, a profile or the gateway spec: regenerate and commit
 gateway-render:
 	$(PY) -m homelabnext.cli gen gateway render $(GATEWAY_SPEC) $(dir $(GATEWAY_SPEC))

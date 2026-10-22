@@ -122,13 +122,20 @@ through allowlisted broker actions (G-04).
   it is declared, and an absent value means `true`: an actor has to say `false`. A ceiling-policy
   entry with `reads_untrusted: true` makes the profile a reader whatever its spec says, so the
   policy owner can pin it.
-- **Classified by data.** `homelabnext/agent/tool_classes.yml` maps every MCP server, capability
-  (`cap:` id) and broker tier to capability classes (`read`, `record-write`, `exec`, `file-write`,
+- **Classified by data.** `homelabnext/agent/tool_classes.yml` maps every capability (`cap:` id)
+  and broker tier, and the [MCP catalog](mcp-catalog.md) ([[mcp-catalog]]) every MCP server (the
+  union of its tools' classes: `ToolClasses.load` derives the table's `mcp` section), to capability
+  classes (`read`, `record-write`, `exec`, `file-write`,
   `egress`, `credential`) and lists the classes a reader may not hold (`reader_forbidden`: exec,
   file-write, egress, credential). A grant with several classes counts as its worst. A grant the
-  table does not know is refused for a reader (unknown is never assumed harmless); adding a tool
-  means classifying it there in a reviewed change (the repository's own read-only server,
-  `hnx-catalog`, is `read`: [MCP server](mcp.md), [[mcp]]). `--classes FILE` substitutes another table.
+  table does not know is refused for a reader (unknown is never assumed harmless); adding an MCP
+  server means adding a reviewed catalog record (the repository's own read-only server,
+  `hnx-catalog`, is `read`: [MCP server](mcp.md), [[mcp]]). `--classes FILE` substitutes another
+  table (its own `mcp:` section, if it has one, is used as written).
+- **Grants name catalog ids.** For every profile and manifest, reader or not, the compiler
+  (`CatalogViolation`), `verify_profile` and `hnx agent lint` refuse an MCP server the catalog
+  does not hold, a `retired` or `draft` one, and a `local-only` server granted to a profile whose
+  `data_tier` is `cloud-allowed` (`grant_problems`).
 - **Enforced three times.** `compile_profile` raises `ReaderViolation` naming every offending grant
   and its class, after the ceiling check and whatever the ceiling allows; `verify_profile` (and
   `hnx agent verify`) refuses a compiled profile edited into that state, digest recomputed or not;

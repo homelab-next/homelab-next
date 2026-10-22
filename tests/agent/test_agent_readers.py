@@ -16,6 +16,7 @@ from agent_support import PARTS, library, spec
 
 from homelabnext import cli
 from homelabnext.agent import (
+    CatalogViolation,
     CeilingPolicy,
     ReaderViolation,
     SpecError,
@@ -26,7 +27,12 @@ from homelabnext.agent import (
     reader_problems,
     verify_profile,
 )
-from homelabnext.agent.readers import DEFAULT_CLASSES, manifest_problems, profile_problems
+from homelabnext.agent.readers import (
+    DEFAULT_CLASSES,
+    default_classes,
+    manifest_problems,
+    profile_problems,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 EXTRA_PARTS = {
@@ -54,6 +60,14 @@ FORBIDDEN = [
 
 def _lib():
     return library({**PARTS, **EXTRA_PARTS})
+
+
+def _table_doc() -> dict:
+    """The packaged table with its mcp section written out (derived from the MCP catalog), the
+    shape of a table passed with --classes."""
+    doc = yaml.safe_load(DEFAULT_CLASSES.read_text())
+    doc["mcp"] = {k: list(v) for k, v in default_classes().table["mcp"].items()}
+    return doc
 
 
 def _with(s: dict, kind: str, name: str) -> dict:
@@ -270,7 +284,7 @@ def test_malformed_classification_is_refused(doc, match):
 
 
 def test_a_custom_table_changes_the_verdict(tmp_path):
-    doc = yaml.safe_load(DEFAULT_CLASSES.read_text())
+    doc = _table_doc()
     doc["mcp"]["lake"] = ["egress"]
     custom = ToolClasses(doc)
     assert reader_problems({"mcp": ["lake"]}) == []
@@ -346,7 +360,7 @@ def test_cli_lint_exit_codes(tmp_path, capsys):
 
 
 def test_cli_lint_accepts_a_custom_table(tmp_path, capsys):
-    doc = yaml.safe_load(DEFAULT_CLASSES.read_text())
+    doc = _table_doc()
     doc["mcp"]["shell"] = ["read"]
     _write(tmp_path / "classes.yml", doc)
     _write(tmp_path / "spec.yml", {**spec(), "mcp": ["shell"]})
@@ -362,3 +376,14 @@ def test_cli_lint_accepts_a_custom_table(tmp_path, capsys):
         )
         == 0
     )
+
+
+def test_the_compiler_refuses_an_actor_granted_a_retired_server():
+    s = copy.deepcopy(spec())
+    s["reads_untrusted"] = False
+    s["mcp"] = ["puppeteer"]
+    s["ceiling"]["mcp"] = ["puppeteer"]
+    with pytest.raises(CatalogViolation, match="retired"):
+        compile_profile(s, library())
+    s["mcp"] = s["ceiling"]["mcp"] = ["playwright"]
+    assert compile_profile(s, library())["grants"]["mcp"] == ["playwright"]

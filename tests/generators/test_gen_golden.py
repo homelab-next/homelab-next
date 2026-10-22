@@ -167,8 +167,8 @@ def test_systemd_dropin_lists_upstreams():
 
 def test_mcp_config_json():
     doc = json.loads(generate(REG, ["mcp_config"])["mcp_config"]["agents/mcp.json"])
-    assert set(doc["mcpServers"]) == {"lake_query", "agent_runtime"}
-    assert doc["mcpServers"]["agent_runtime"] == {
+    assert set(doc["mcpServers"]) == {"lake", "agent-runtime"}
+    assert doc["mcpServers"]["agent-runtime"] == {
         "type": "sse",
         "url": "http://" + REG.alias("agent-runtime") + ":" + "8088/sse",
     }

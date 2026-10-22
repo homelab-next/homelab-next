@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: ansible
+description: Runs playbooks from the deploy repository.
+owner: platform-team
+status: active
+origin:
+  kind: package
+  ecosystem: pypi
+  package: example-ansible-mcp
+  version: 0.4.0
+  sha256: 735991a19f1cf75ee7c9ba19a84ecd61f0c073fa1614aaee46be49b924ba80b1
+transport:
+  type: stdio
+  command: uvx
+  args: [--from, example-ansible-mcp==0.4.0, ansible-mcp]
+runtime: agent-local
+egress: ['host:runtime-core']
+data_tier: local-only
+tools:
+- {name: run_playbook, classes: [exec], approval: true}
+author: agent:example-builder
+reviews:
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:c76837056635'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:c76837056635'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:c76837056635'}

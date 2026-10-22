@@ -47,13 +47,14 @@ from .digest import digest_of, sha256_text
 from .errors import (
     AgentError,
     BudgetError,
+    CatalogViolation,
     CeilingViolation,
     MissingPartError,
     ReaderViolation,
     SpecError,
 )
 from .include import normalise_include
-from .readers import ToolClasses, profile_problems, reader_problems
+from .readers import ToolClasses, grant_problems, profile_problems, reader_problems
 from .schemas import schema_errors
 
 TIER_RANK = {"read": 0, "write": 1, "execute": 2, "privileged": 3}
@@ -280,6 +281,12 @@ def compile_profile(
         rproblems = reader_problems(grants, classes, pid)
         if rproblems:
             raise ReaderViolation(rproblems)
+
+    # the MCP catalog: every server granted, reader or actor, is a reviewed, current catalog
+    # server whose data may go where this profile's may (ADR-0024)
+    gproblems = grant_problems(grants, classes, pid, spec["data_tier"])
+    if gproblems:
+        raise CatalogViolation(gproblems)
 
     # 4. include: knowledge only about what is granted (IncludeViolation), never a new grant
     include = normalise_include(spec.get("include"), grants)

@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: cases
+description: Opens cases and appends case notes through the case API.
+owner: security-team
+status: active
+origin:
+  kind: package
+  ecosystem: pypi
+  package: example-cases-mcp
+  version: 1.0.4
+  sha256: 7075a7602ac39700c26390044285e7f5b7f7cf65f21f5e7add2e14c5c4d97bdd
+transport:
+  type: stdio
+  command: uvx
+  args: [--from, example-cases-mcp==1.0.4, cases-mcp]
+runtime: agent-local
+env:
+  CASES_TOKEN: secret:mcp/cases-token
+egress: ['svc:records-db']
+data_tier: local-only
+capabilities: ['cap:cases']
+tools:
+- {name: add_case_note, classes: [record-write], approval: false}
+- {name: open_case, classes: [record-write], approval: false}
+author: agent:example-builder
+reviews:
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:353c67a0db82'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:353c67a0db82'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:353c67a0db82'}

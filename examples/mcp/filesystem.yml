@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: filesystem
+description: Reads and writes files under the agent's work directory.
+owner: platform-team
+status: active
+origin:
+  kind: package
+  ecosystem: npm
+  package: '@example/mcp-filesystem'
+  version: 2.1.0
+  sha256: 6aa43acca2ce5f5a31f04551a3cf2129e88d92dab0a5ff11f04d0436dcbd5a24
+transport:
+  type: stdio
+  command: npx
+  args: [-y, '@example/mcp-filesystem@2.1.0']
+runtime: agent-local
+egress: none
+data_tier: local-only
+tools:
+- {name: read_file, classes: [read], approval: false}
+- {name: write_file, classes: [file-write], approval: false}
+author: agent:example-builder
+reviews:
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:69a5115d2758'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:69a5115d2758'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:69a5115d2758'}

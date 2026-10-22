@@ -95,7 +95,7 @@ def copy_repo(dest: Path) -> Path:
         ("svc:secrets", "runs", "product:openbao"),
         ("svc:secrets", "runs_on", "host:secrets-core"),
         ("svc:lake-query", "depends_on", "svc:lake-catalog"),
-        ("svc:lake-query", "exposes", "mcp:lake_query"),
+        ("svc:lake-query", "exposes", "mcp:lake"),
         ("host:secrets-core", "in_zone", "zone:mgmt"),
         # capabilities, adapters, compose
         (OPENBAO, "implements", "cap:secrets"),

@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: ntfy
+description: Publishes notifications through the lab's notify service.
+owner: platform-team
+status: active
+origin:
+  kind: package
+  ecosystem: npm
+  package: '@example/mcp-ntfy'
+  version: 1.0.2
+  sha256: eee787133f1d7e1e468f1edb7a0fd945df9a1432cb37ab70afb74b9af73f006a
+transport:
+  type: stdio
+  command: npx
+  args: [-y, '@example/mcp-ntfy@1.0.2']
+runtime: agent-local
+env:
+  NTFY_TOKEN: secret:mcp/ntfy-token
+egress: ['svc:notify']
+data_tier: local-only
+tools:
+- {name: publish, classes: [egress], approval: false}
+author: agent:example-builder
+reviews:
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:13358a18179f'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:13358a18179f'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:13358a18179f'}

@@ -32,7 +32,7 @@ Requirements, Objectives, RFIs: :mod:`homelabnext.strategy.pages`) and the Basel
 configures ``approvals:``: :mod:`homelabnext.status.approvals`) and the generated maps
 (:data:`MAP_PANELS`: topology with ``--guests``, dataflow, architecture and roadmap with ``--maps``;
 :mod:`homelabnext.status.maps`, ADR-0018), the directory pages (:data:`DIRECTORY_PANELS`: Links,
-Schedule and Agent roster with ``--maps``) and the Projects page (with ``--projects``:
+Schedule, Agent roster and MCP servers with ``--maps``) and the Projects page (with ``--projects``:
 :mod:`homelabnext.projects.pages`).  Their menu entries are
 ``available`` only when that part is configured.  The private pages (:data:`PRIVATE_PANELS`, the
 ``private`` menu group) are never in the public ``status.json`` and render only for a request
@@ -87,12 +87,13 @@ PAGE_PANELS = {
     "links": "/links",
     "schedule": "/schedule",
     "roster": "/roster",
+    "mcp-servers": "/mcp-servers",
     # the Projects page (homelabnext.projects.pages), served with ``--projects DIR``
     "projects": "/projects",
 }
 STRATEGY_PANELS = frozenset({"strategy", "requirements", "objectives", "rfis"})
 MAP_PANELS = frozenset({"topology", "dataflow", "architecture", "roadmap"})
-DIRECTORY_PANELS = frozenset({"links", "schedule", "roster"})
+DIRECTORY_PANELS = frozenset({"links", "schedule", "roster", "mcp-servers"})
 #: the pages :class:`homelabnext.status.maps.MapSite` serves and ``hnx status render`` writes
 GENERATED_PANELS = MAP_PANELS | DIRECTORY_PANELS
 PRIVATE_PANELS = frozenset({"agent-detail", "agent-access-log", "approvals"})

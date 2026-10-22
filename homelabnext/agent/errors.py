@@ -53,6 +53,19 @@ class ReaderViolation(AgentError):
         )
 
 
+class CatalogViolation(AgentError):
+    """The profile names MCP servers the MCP catalog does not allow it (ADR-0024): unknown,
+    retired or draft, or local-only data for a profile that may use a cloud model."""
+
+    def __init__(self, problems: list[str]) -> None:
+        self.problems = list(problems)
+        super().__init__(
+            "profile names MCP servers the catalog does not allow: "
+            + "; ".join(self.problems)
+            + " (grant active catalog servers only; the catalog is the reviewed list)"
+        )
+
+
 class IncludeViolation(AgentError):
     """An ``include:`` rule would seed knowledge from something the profile is not granted."""
 

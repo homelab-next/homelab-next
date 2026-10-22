@@ -1,0 +1,209 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+# The MCP catalog: one list of MCP servers
+
+Every MCP server an agent may use is one record in one catalog. Everything else that knows about
+MCP servers is generated from it: the capability classes the agent compiler and the reader rule
+judge, the knowledge graph's `mcp:` nodes, the MCP line of the system pages, the status hub's
+**MCP servers** page, and every client configuration an agent runtime reads. The decision is
+[ADR-0024](adr/0024-mcp-catalog-single-source.md); the schema is
+`schemas/platform/mcp_server.schema.json` (1.0); the code is `homelabnext/mcp/servers.py` (records
+and checks), `clients.py` (rendering), `importer.py` (import) and `catalog_cli.py`.
+
+## What lives where now
+
+| What | Where | Source or derived |
+|---|---|---|
+| One record per server (`<id>.yml`) | `examples/mcp/` (fictional); a real lab's in its private overlay, `lab/mcp/` ([private overlay](private-overlay.md)) | **source** |
+| Who may use a server | a profile's `grants.mcp` (compiled) or `mcp` (lean), by catalog id | source (the grant); checked against the catalog |
+| Per-instance parameter values, lanes, runtime homes | a render spec, `examples/mcp/clients/*.yml` | source (the deployment) |
+| Capability classes of each server | `homelabnext/agent/tool_classes.yml` has no `mcp` section any more | derived: union of the record's tool classes |
+| A registry service's `mcp` block | `services.yml` | must name the catalog id whose endpoint it is (checked) |
+| Graph `mcp:<id>` nodes, `served_by`, `reaches`, `fronts`, `implements`, `replaced_by` edges | `hnx graph` ([graph](graph.md)) | derived |
+| System page MCP line | `docs/systems/<service>.md` (`hnx docs systems generate`) | derived |
+| Status hub MCP servers page | `/mcp-servers` (directory menu group) | derived |
+| Client configs (`.mcp.json`, Claude Desktop, Hermes `mcp_servers`, llm-orchestrator catalog and `grants:` blocks) | wherever each runtime reads them | derived: `hnx mcp catalog render` |
+| The access block and keyring levels | `hnx agent pack`, `hnx agent keyring` | derived (through the classes) |
+
+## A record
+
+```yaml
+id: notes                        # what a profile grants; the file is notes.yml
+description: A notes store, one instance per agent.
+owner: platform-team
+status: active                   # draft | active | deprecated | retired (+ reason, replaced_by)
+origin:                          # first-party path | package | image | git | unknown
+  {kind: package, ecosystem: pypi, package: example-notes-mcp, version: 1.2.0, sha256: <64 hex>}
+transport: {type: stdio, command: uvx, args: [--from, example-notes-mcp==1.2.0, notes-mcp]}
+# or {type: streamable-http, endpoint: svc:lake-query, path: /mcp}  -- a registry name, never a URL
+runtime: agent-local             # or {host: <registry host>, user: <system user>}
+env: {NOTES_TOKEN: secret:mcp/notes-token}      # credentials: secret names only
+settings: {NOTES_ROOT: /srv/notes}              # non-secret, the same for every instance
+timeout: 120
+parameters:                      # typed, per instance; delivered in env
+  writable: {env: NOTES_WRITABLE_PREFIX, pattern: '[a-z0-9/_-]+/', default: 'agents/{profile}/'}
+  mode: {env: NOTES_MODE, enum: [read, write], default: write}
+instance: notes-{profile}-{lane} # the name a client sees
+egress: none                     # or [svc:<name>, host:<name>, internet]
+data_tier: local-only            # what it returns may reach local-only profiles only
+capabilities: [cap:records-propose]   # the platform capabilities it gives access to
+implements: [cap:context]        # homelab-next contracts it implements (its conformance suite)
+tools:
+- {name: read_note, classes: [read], approval: false}
+- {name: write_note, classes: [record-write], approval: false}
+author: agent:example-builder
+reviews: [...]                   # check, audit, approve (homelabnext.reviews)
+```
+
+The classes are `tool_classes.yml`'s: `read`, `record-write`, `exec`, `file-write`, `egress`,
+`credential`. A server's classes are the union of its tools'.
+
+## The rules (`hnx mcp catalog check`, fatal)
+
+`make mcp-check` (part of `make check` and CI) runs the check and every render spec's `--check`.
+
+- the record fits the schema, and its id is its file name (so ids are unique);
+- a third-party origin is **pinned**: an exact version (never a range, `latest` or a wildcard)
+  with a sha256 or a lock file, an image digest, or a 40-hex commit; `kind: unknown` fails; a
+  first-party path exists in the checkout;
+- every tool is classed with a declared class, and the server lists at least one;
+- egress agrees with the classes: a tool classed `egress` needs an egress other than `none`, and
+  `internet` needs an egress tool;
+- credentials are `secret:` names (env, headers, arguments), two of them never map to the same
+  `HNX_SECRET_*` variable, and a setting whose key names a credential is refused;
+- parameters: a parameter's env key is never one llm-orchestrator hard-denies (`PATH`, `LD_*`,
+  `DYLD_*`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONSTARTUP`, `PYTHONINSPECT`, `HOME`, `SHELL`,
+  `BASH_ENV`, `ENV`, `NODE_OPTIONS`, `HERMES_HOME`), never also a fixed setting or secret, never
+  shared by two parameters; a default fits its enum and pattern; templates name only `{id}`,
+  `{profile}`, `{lane}`, the parameters, and in arguments `{profile_file}`;
+- with the registry: an HTTP endpoint is a registry http(s) service, and a registry service's
+  `mcp` block names this catalog id with the same transport and path; every registry `mcp` entry
+  resolves to a catalog server; runtime hosts and egress services and hosts exist;
+- `replaced_by` names an active server; `implements` names a homelab-next capability contract
+  (a conformance capability), so the graph ties the server to that contract's suite;
+- with the review policy: an `active` record carries current agent check, agent audit and human
+  approve reviews (`mcp-server.active` in `examples/review-policy.yml`; `hnx reviews digest
+  examples/mcp/<id>.yml` gives the digest to stamp);
+- every agent profile and context manifest in the checkout (or `--grants PATH...`) grants only
+  catalog ids, never a retired or draft server, never a `local-only` server to a profile whose
+  `data_tier` is `cloud-allowed`, and a reader holds no exec, file-write, egress or credential
+  server. The compiler, `hnx agent verify` and `hnx agent lint` apply the same rules.
+
+## Adding a server
+
+1. Write `<catalog>/<id>.yml` with `status: draft`, pin its origin, list every tool with its
+   classes. Put credentials in the secret store under the `secret:` names you write.
+2. `hnx mcp catalog check` until it is clean.
+3. Get it reviewed (agent check, agent audit, human approve), then set `status: active`.
+4. Grant it: add the id to a profile spec's `mcp` (and its ceiling), recompile.
+5. `make mcp-render`, commit the rendered client configs.
+
+## Instances: one declaration, every profile, every home
+
+A record with `parameters` is instantiated per granted profile and lane. A render spec says which
+profiles, lanes and homes:
+
+```yaml
+client: hermes
+catalog: ..                     # relative to the spec
+registry: ../../services.yml
+lanes: [real, shadow]
+profiles:
+  - file: profile.broker-agent.json
+    profile_file: /etc/hnx/profiles/broker-agent.json   # {profile_file} in arguments
+    params:
+      notes@shadow: {mode: read}           # SERVER@LANE overrides one lane
+  - file: profile.collector.json
+    params:
+      notes: {writable: agents/collector/inbox/}
+outputs:
+  - {home: primary, path: hermes/primary.yaml}
+  - {home: fallback, path: hermes/fallback.yaml}
+```
+
+Each parameter's value is the grant's (`params`), else its default; a list value expands into one
+instance per element. Values are checked against the parameter's enum and pattern; an unknown
+parameter, a missing required value, a parameter for a server the profile is not granted, or two
+different definitions under one instance name are refused. Every home gets every instance, so a
+fallback home can never hold fewer servers than the primary.
+
+## Rendering client configs
+
+```
+hnx mcp catalog render --spec examples/mcp/clients/hermes.yml [--check]
+hnx mcp catalog render --profile build/profile.json --client claude-code \
+    [--param notes.mode=read] [--lanes real] [--out .mcp.json] [--check]
+```
+
+| `--client` | Writes |
+|---|---|
+| `claude-code` | `.mcp.json`: `{"mcpServers": {name: {"type": "stdio", "command", "args", "env"}}}`, remote servers as `{"type": "http"/"sse", "url", "headers"}` |
+| `claude-desktop` | `claude_desktop_config.json`'s `mcpServers` (stdio only; a remote server is reported and left out) |
+| `generic` | `mcpServers` with an explicit `transport` and `timeout` |
+| `hermes` | Hermes Agent's `mcp_servers:` YAML block (`command`, `args`, `env`, `timeout`; remote: `url`, `headers`) |
+| `llm-orchestrator` | its `configs/mcp_catalog.yaml` (`kinds:` with `command`, `args`, `timeout`, fixed `env`, `allowed_env` = the parameters' env keys) and each profile's `grants:` block (`real`/`shadow` lists of `name`, `kind`, `env`), spliced into the profile file |
+
+Only the profile's granted servers are rendered. A credential is never a value: it is
+`${HNX_SECRET_<NAME>}` (the registry's `secret_env_name`), which Claude Code expands from its
+environment and every other client's deploy substitutes when it installs the file. An HTTP
+server's URL is built from the registry (scheme, capability alias, port, path). Every rendered
+file carries a generated note (a JSON `_generated` key or a YAML comment) naming the catalog
+digest. `--check` compares every output of the spec and fails on any drift: a hand edit, a stale
+render, or a home that lost an entry.
+
+The generated example that [broker](broker.md) shows is
+`examples/mcp/clients/claude-code/broker-agent.mcp.json`.
+
+### llm-orchestrator
+
+`--client llm-orchestrator` emits exactly the format llm-orchestrator's per-job grants read
+(`internal/grants`, ADR-022 there): one kind per grantable stdio server (a remote server, or one
+whose arguments or settings vary per instance, is reported and left out unless a rendered profile
+is granted it, when it is refused), and per profile a `grants:` block whose instances set only
+their parameters' env keys. `clients.orch_accepts` encodes that loader's rules (known fields only,
+names, a command, no hard-denied allowed key, no duplicate, a known kind, only allowed env keys)
+and the render refuses anything it would refuse. To switch an orchestrator checkout from a
+hand-written catalog to the rendered one:
+
+1. import its servers (below), pin, classify and review them, and add `parameters` with `env`
+   for every key its grants set per agent, and an `instance` template that reproduces the names
+   its prompts use;
+2. write a render spec with `client: llm-orchestrator`, `lanes: [real, shadow]`, one `profiles`
+   entry per orchestrator profile (`grants_file:` that profile's YAML, `params:` its values) and
+   one output for `configs/mcp_catalog.yaml`;
+3. render, diff against the hand-written files (the server definitions must come out identical;
+   the orchestrator's equivalence test is the judge), commit, and run `--check` in its CI.
+
+## Importing an existing lab
+
+```
+hnx mcp catalog import ~/.claude.json .mcp.json claude_desktop_config.json hermes-config.yaml \
+    --out lab/mcp
+hnx mcp catalog check --catalog lab/mcp --registry lab/services.yml
+```
+
+It reads `mcpServers` (Claude Code, Claude Desktop, also under `projects` in `~/.claude.json`),
+`servers` (VS Code) and `mcp_servers` (Hermes) and writes one **draft** record per server:
+
+- every environment value or header that is, or looks like, a credential, every `${VAR}`
+  reference and every argument after a credential flag (or that looks like a token) becomes a
+  `secret:` reference named `mcp/<name>`; the report lists each one by server and key with the name to
+  store it under, and never prints a value. Other environment values are kept as `settings`, and
+  the report asks you to confirm each is not a credential;
+- the origin is guessed from the launcher (`npx`, `uvx`, `pipx`, `docker run`) and never pinned:
+  no hash is invented, so check fails until you add the version and sha256, the image digest or
+  the commit; anything else is `kind: unknown`;
+- a remote server's URL is not copied: its endpoint becomes `svc:<first label of the host>` for
+  you to correct to the registry name;
+- tools are not in a client config, so none are listed; egress is written as `none`.
+
+Then, per record: pin the origin, list and class the tools, correct endpoint, egress and data
+tier, set the owner, store each reported secret in the secret store, get it reviewed and set it
+`active`. Finally write the render specs for your runtimes and replace each hand-written client
+config by its render.
+
+## Reviews and lifecycle
+
+A record's review digest is the record without its `reviews` (`hnx reviews digest FILE`), so any
+change to what the server is drops it back to needing review. `draft` and `retired` servers cannot
+be granted; a `deprecated` one can while profiles move to its `replaced_by`. The MCP servers page
+shows each server's current reviews and state.

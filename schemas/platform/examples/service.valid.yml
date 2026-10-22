@@ -136,7 +136,7 @@ services:
     version: "450.0"
     tls: internal
     auth: idp
-    mcp: {name: lake_query, transport: http, path: /mcp}
+    mcp: {name: lake, transport: http, path: /mcp}
     tags: [data, query]
 
   records-db:
@@ -206,7 +206,7 @@ services:
     owner: ml-team
     version: "0.3.0"
     tls: none
-    mcp: {name: agent_runtime, transport: sse, path: /sse}
+    mcp: {name: agent-runtime, transport: sse, path: /sse}
     tags: [compute, agents]
     status_sources:
       # the LLM orchestrator's own queue summary (GET /admin/queue-summary); it has no other

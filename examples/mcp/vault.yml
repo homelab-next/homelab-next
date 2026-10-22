@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: vault
+description: Reads secrets from the secret store.
+owner: security-team
+status: active
+origin:
+  kind: package
+  ecosystem: pypi
+  package: example-vault-mcp
+  version: 0.5.1
+  sha256: 80ee7c0f94279ff6c43afd3b9c711018920a594d749bb4f5b7578b244f02042a
+transport:
+  type: stdio
+  command: uvx
+  args: [--from, example-vault-mcp==0.5.1, vault-mcp]
+runtime: agent-local
+env:
+  BAO_TOKEN: secret:mcp/vault-token
+egress: ['svc:secrets']
+data_tier: local-only
+capabilities: ['cap:secrets']
+tools:
+- {name: read_secret, classes: [credential], approval: true}
+author: agent:example-builder
+reviews:
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:51a2e468beaf'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:51a2e468beaf'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:51a2e468beaf'}

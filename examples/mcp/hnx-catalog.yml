@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: hnx-catalog
+description: 'Read-only structured answers from this repository: capability contracts, schemas, the registry, the
+  knowledge graph, context, lessons due, terms, invariants (hnx mcp serve, docs/mcp.md).'
+owner: platform-team
+status: active
+origin:
+  kind: first-party
+  path: homelabnext/mcp/
+transport:
+  type: stdio
+  command: hnx
+  args: [mcp, serve, --scope-from-profile, '{profile_file}']
+runtime: agent-local
+egress: none
+data_tier: cloud-allowed
+implements: ['cap:context']
+tools:
+- {name: context_for, classes: [read], approval: false}
+- {name: find_services, classes: [read], approval: false}
+- {name: get_contract, classes: [read], approval: false}
+- {name: get_schema, classes: [read], approval: false}
+- {name: invariants_status, classes: [read], approval: false}
+- {name: lessons_due, classes: [read], approval: false}
+- {name: list_capabilities, classes: [read], approval: false}
+- {name: related, classes: [read], approval: false}
+- {name: terms, classes: [read], approval: false}
+author: agent:example-builder
+reviews:
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:dd57032825d8'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:dd57032825d8'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:dd57032825d8'}

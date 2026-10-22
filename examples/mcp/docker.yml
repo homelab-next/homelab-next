@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: docker
+description: Starts and stops containers on the agent's host.
+owner: platform-team
+status: active
+origin:
+  kind: image
+  image: registry.example/mcp/docker:0.6.3
+  digest: sha256:b77c4fdf59bc86d60de78a824ecc899f1dc358911341c04a9e763b1c9512ca8b
+transport:
+  type: stdio
+  command: docker
+  args: [run, -i, --rm, 'registry.example/mcp/docker@sha256:b77c4fdf59bc86d60de78a824ecc899f1dc358911341c04a9e763b1c9512ca8b']
+runtime: agent-local
+egress: none
+data_tier: local-only
+tools:
+- {name: run_container, classes: [exec], approval: true}
+- {name: stop_container, classes: [exec], approval: true}
+author: agent:example-builder
+reviews:
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:35487f898ca8'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:35487f898ca8'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:35487f898ca8'}

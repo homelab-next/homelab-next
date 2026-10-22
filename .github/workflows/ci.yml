@@ -123,6 +123,8 @@ jobs:
         run: python -m homelabnext.cli agent prompts lint
       - name: injection corpus against the fence-respecting fake (G-02, golden report current)
         run: python -m homelabnext.cli agent injection run --fake fence --check homelabnext/agent/prompts/injection/report.json
+      - name: the MCP catalog is valid, grants resolve, rendered client configs have 0 drift (ADR-0024)
+        run: make mcp-check PY=python
       - name: the keyring has 0 drift from its sources (M-12)
         run: python -m homelabnext.cli agent keyring check examples/keyring/sources.yml
       - name: workflow packs (R-01/R-03/R-04/R-07, offline, deploy pins)

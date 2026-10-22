@@ -8,12 +8,13 @@
                        [--notify-topic T] [--secrets-dir DIR] [--site SITE [--site-guests DIR]]
     hnx status render --out DIR [--state FILE] [--views FILE] [--registry FILE] [--now TIME]
                       [--guests DIR --guests-site SITE [--guests-registry FILE]] [--maps ROOT]
-                      [--invariants-results FILE] [--roster FILE]
+                      [--invariants-results FILE] [--roster FILE] [--mcp-catalog DIR]
     hnx status serve [--state FILE] [--views FILE] [--registry FILE] [--bind HOST] [--port N]
                      [--allow-remote --allowed-host NAME ...] [--agents FILE] [--secrets-dir DIR]
                      [--strategy DIR] [--projects DIR]
                      [--guests DIR --guests-site SITE [--guests-registry FILE]]
                      [--maps ROOT] [--invariants-results FILE] [--roster FILE]
+                     [--mcp-catalog DIR]
     hnx status ingest --agents FILE [--registry FILE] [--bind HOST] [--port N] [--publish-to URL]
                       [--allow-remote --allowed-host NAME ...] [--secrets-dir DIR]
 
@@ -34,8 +35,9 @@ give the Topology page; ``--maps ROOT`` (a checkout, e.g. ``.``) the Dataflow, A
 Roadmap pages, the roadmap reading ``--invariants-results`` (``build/invariants/results.json``
 from ``make invariants``) for each criterion's state.  ``--maps`` also gives the directory pages:
 Links (the registry's services), Schedule (every timer, CI schedule, workflow pack and collector
-with its cadence and last/next run) and Agent roster (``--roster FILE``, default
-``ROOT/examples/status/roster.yml``).  ``render`` writes each available page as ``<panel>.html``
+with its cadence and last/next run), Agent roster (``--roster FILE``, default
+``ROOT/examples/status/roster.yml``) and MCP servers (``--mcp-catalog DIR``, default
+``ROOT/examples/mcp``).  ``render`` writes each available page as ``<panel>.html``
 beside ``index.html``.
 
 ``--site`` (every subcommand but ``catalog``) adds one ``poll-nut`` source per UPS the site
@@ -156,6 +158,11 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
             "--roster",
             metavar="FILE",
             help="roster.yml for the Agent roster (default: ROOT/examples/status/roster.yml)",
+        )
+        p.add_argument(
+            "--mcp-catalog",
+            metavar="DIR",
+            help="the MCP catalog for the MCP servers page (default: ROOT/examples/mcp)",
         )
 
     def common(p, *, views=False, state=False, site=True):
@@ -402,6 +409,11 @@ def _map_site(args, reg):
         raise ValueError("--roster needs --maps (the checkout the directory pages read)")
     if roster and not Path(roster).is_file():
         raise ValueError(f"--roster {roster}: not a file")
+    mcp_catalog = getattr(args, "mcp_catalog", None)
+    if mcp_catalog and not root:
+        raise ValueError("--mcp-catalog needs --maps (the checkout the directory pages read)")
+    if mcp_catalog and not Path(mcp_catalog).is_dir():
+        raise ValueError(f"--mcp-catalog {mcp_catalog}: not a directory")
     lab_file = getattr(args, "guests_registry", None)
     if lab_file and not guests:
         raise ValueError("--guests-registry needs --guests (the guests its services run on)")
@@ -421,6 +433,7 @@ def _map_site(args, reg):
         results=results,
         lab_registry=lab,
         roster=roster,
+        mcp_catalog=mcp_catalog,
     )
 
 

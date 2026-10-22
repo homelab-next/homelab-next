@@ -215,7 +215,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.graph.cli").main(a),
     ),
     "mcp": (
-        "read-only MCP server over this repository: serve (stdio)|tools|call (docs/mcp.md)",
+        "read-only MCP server over this repository: serve (stdio)|tools|call (docs/mcp.md); the MCP catalog: catalog check|list|classes|render|import (docs/mcp-catalog.md)",
         lambda a: importlib.import_module("homelabnext.mcp.cli").main(a),
     ),
     "broker": (

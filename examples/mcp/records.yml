@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: records
+description: Proposes and annotates structured records through the records API, which validates them.
+owner: platform-team
+status: active
+origin:
+  kind: package
+  ecosystem: pypi
+  package: example-records-mcp
+  version: 2.3.1
+  sha256: d235e5e01058b912dfe25693eb887834b3de0ee4c2893cca6200784b7ed3a961
+transport:
+  type: stdio
+  command: uvx
+  args: [--from, example-records-mcp==2.3.1, records-mcp]
+runtime: agent-local
+env:
+  RECORDS_TOKEN: secret:mcp/records-token
+egress: ['svc:records-db']
+data_tier: local-only
+capabilities: ['cap:records-propose']
+tools:
+- {name: add_note, classes: [record-write], approval: false}
+- {name: link_records, classes: [record-write], approval: false}
+- {name: propose_record, classes: [record-write], approval: false}
+author: agent:example-builder
+reviews:
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:f5ee027c99d6'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:f5ee027c99d6'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:f5ee027c99d6'}
