@@ -121,8 +121,48 @@ def test_derived_encodings_of_a_secret_are_redacted(form):
     out = execute_mod._redact(f'{{"t": "{form}"}}'.encode(), [ODD_SECRET])
     assert out == b'{"t": "<redacted>"}', out
     cut = f"x={form}"[:-3].encode()  # cut at the cap: a tail that begins the form is dropped
-    assert execute_mod._redact(cut, [ODD_SECRET], truncated=True) == b"x="
+    # dropped as a tail, or (base64: its offset-0 core is a form too) redacted whole
+    assert execute_mod._redact(cut, [ODD_SECRET], truncated=True) in (b"x=", b"x=<redacted>")
     assert execute_mod.secret_forms(ODD_SECRET) >= {form.encode()}
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        ODD_SECRET.encode().hex(),
+        ODD_SECRET.encode().hex().upper(),
+        json.dumps(ODD_SECRET)[1:-1].replace("/", "\\/"),  # JSON that escapes the slash
+        urllib.parse.quote(ODD_SECRET, safe="").lower(),  # lower-case percent hex
+    ],
+    ids=["hex", "HEX", "json-escaped-slash", "percent-lower"],
+)
+def test_more_derived_encodings_are_redacted(form):
+    out = execute_mod._redact(f'{{"t": "{form}"}}'.encode(), [ODD_SECRET])
+    assert out == b'{"t": "<redacted>"}', out
+
+
+@pytest.mark.parametrize("offset", [0, 1, 2])
+@pytest.mark.parametrize("urlsafe", [False, True])
+def test_base64_of_a_secret_inside_a_longer_blob_is_redacted(offset, urlsafe):
+    """``base64(prefix + secret + suffix)`` holds none of ``base64(secret)``'s exact bytes unless
+    the secret starts at a multiple of three; it starts at one of three offsets, so all three."""
+    enc = base64.urlsafe_b64encode if urlsafe else base64.b64encode
+    blob = enc(b"user="[: offset + 3] + ODD_SECRET.encode() + b";expires=never")
+    out = execute_mod._redact(blob, [ODD_SECRET])
+    assert b"<redacted>" in out and len(out) < len(blob)
+    assert (
+        execute_mod._redact(enc(b"unrelated output, nothing secret"), [ODD_SECRET]).find(
+            b"<redacted>"
+        )
+        == -1
+    )
+
+
+def test_line_wrapped_base64_is_redacted_best_effort():
+    secret = "fake-long-secret-value-0123456789abcdef"
+    b64 = base64.b64encode(secret.encode())
+    wrapped = b"\n".join(b64[i : i + 16] for i in range(0, len(b64), 16))
+    assert execute_mod._redact(b"key:\n" + wrapped + b"\n", [secret]) == b"key:\n<redacted>\n"
 
 
 def test_a_handler_printing_json_does_not_leak_an_escaped_secret(tmp_path):
