@@ -342,6 +342,8 @@ def test_a_parameter_value_never_routes_a_secret_or_a_variable(tmp_path):
         {"lanes": ["secret:mcp/vault-token"]},
         {"home": "secret:mcp/vault-token"},
         {"home": "${HOME}"},
+        {"lanes": ["real\n"]},  # a pattern's $ matches before a final newline: fullmatch
+        {"home": "primary\n"},
     ):
         with pytest.raises(clients.RenderError, match="is not a plain name"):
             clients.instances(cat, prof, params={"notes": {"writable": "x/"}}, **kw)
@@ -502,6 +504,8 @@ def test_a_spec_lane_or_home_is_a_plain_name_and_params_name_a_real_lane(tmp_pat
         (lambda d: d.update(lanes=["${HNX_SECRET_MCP_VAULT_TOKEN}"]), "lanes must list plain names"),
         (lambda d: d.update(lanes="real"), "lanes must list plain names"),
         (lambda d: d["outputs"][0].update(home="$(id)"), "home must be a plain name"),
+        (lambda d: d["outputs"][0].update(home="primary\n"), "home must be a plain name"),
+        (lambda d: d.update(lanes=["real\n", "shadow"]), "lanes must list plain names"),
         # a typo in a server or lane name is refused, never silently ignored
         (lambda d: d["profiles"][1]["params"].update({"notes@shadwo": {"mode": "read"}}),
          "'shadwo' is not a lane"),

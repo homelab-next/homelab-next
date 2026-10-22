@@ -192,7 +192,7 @@ def instances(
     if bad_file:
         problems.append(f"{pid}: profile_file {bad_file}")
     for what, value in [*(("lane", lane) for lane in lanes), *([("home", home)] if home else [])]:
-        if not isinstance(value, str) or not NAME.match(value):
+        if not isinstance(value, str) or not NAME.fullmatch(value):
             problems.append(f"{pid}: {what} {value!r} is not a plain name ({NAME.pattern})")
     for key in params:
         sid, at, lane = str(key).partition("@")
@@ -248,7 +248,7 @@ def instances(
                     runtime_home=home,
                 )
                 inst.name = _fill(str(rec.get("instance") or "{id}"), inst.vars())
-                if not ORCH_NAME.match(inst.name):
+                if not ORCH_NAME.fullmatch(inst.name):
                     problems.append(
                         f"{pid}: {sid}: instance name {inst.name!r} is not a valid name"
                     )
@@ -548,7 +548,7 @@ def orch_accepts(catalog_text: str, grant_blocks: Mapping[str, str]) -> list[str
         problems.append(f"catalog: top-level keys {sorted(doc)} (only kinds)")
     kinds = doc.get("kinds") or {}
     for name, k in kinds.items():
-        if not ORCH_NAME.match(name):
+        if not ORCH_NAME.fullmatch(name):
             problems.append(f"kind {name!r}: bad name")
         extra = set(k) - set(ORCH_KIND_KEYS)
         if extra:
@@ -577,7 +577,7 @@ def orch_accepts(catalog_text: str, grant_blocks: Mapping[str, str]) -> list[str
                         f"{who}/{lane}: unknown grant field(s) {sorted(set(g) - set(ORCH_GRANT_KEYS))}"
                     )
                 name = str(g.get("name"))
-                if not ORCH_NAME.match(name):
+                if not ORCH_NAME.fullmatch(name):
                     problems.append(f"{who}/{lane}: server name {name!r}")
                 if name in seen:
                     problems.append(f"{who}/{lane}: server {name} granted twice")
@@ -771,7 +771,9 @@ def _spec_problems(spec: Any) -> list[str]:
             out.append(f"outputs[{i}]: unknown key(s) {sorted(extra)}")
         if spec.get("client") == "llm-orchestrator" and ({"home", "params"} & set(o)):
             out.append(f"outputs[{i}]: llm-orchestrator's catalog has no home or params")
-        if o.get("home") is not None and not (isinstance(o["home"], str) and NAME.match(o["home"])):
+        if o.get("home") is not None and not (
+            isinstance(o["home"], str) and NAME.fullmatch(o["home"])
+        ):
             out.append(f"outputs[{i}]: home must be a plain name ({NAME.pattern})")
         if o.get("params") is not None and not isinstance(o["params"], Mapping):
             out.append(f"outputs[{i}]: params must map SERVER (or SERVER@LANE) to values")
@@ -779,7 +781,7 @@ def _spec_problems(spec: Any) -> list[str]:
     if lanes is not None and (
         not isinstance(lanes, list)
         or not lanes
-        or not all(isinstance(x, str) and NAME.match(x) for x in lanes)
+        or not all(isinstance(x, str) and NAME.fullmatch(x) for x in lanes)
     ):
         out.append(f"lanes must list plain names ({NAME.pattern})")
     return out

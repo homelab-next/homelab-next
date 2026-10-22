@@ -108,7 +108,7 @@ def _plain_url(url: str) -> str:
         port = f":{parts.port}" if parts.port else ""
     except ValueError:
         return ""
-    path = parts.path if _PLAIN_PATHS.match(parts.path or "/") else ""
+    path = parts.path if _PLAIN_PATHS.fullmatch(parts.path or "/") else ""
     return f"{parts.scheme}://{host}{port}{path}"
 
 
@@ -153,7 +153,7 @@ def _package_positions(command: str, args: list[str]) -> set[int]:
     if spec.startswith("git+"):
         return {got.spec_index}
     ok = launch.split_spec(got.ecosystem, spec) is not None
-    return {got.spec_index} if ok and _PACKAGE_SPEC.match(spec.split("[", 1)[0]) else set()
+    return {got.spec_index} if ok and _PACKAGE_SPEC.fullmatch(spec.split("[", 1)[0]) else set()
 
 
 def _parse_error(p: Path, exc: Exception) -> ValueError:
@@ -231,7 +231,7 @@ def guess_origin(command: str, args: list[str]) -> dict[str, Any]:
         if parts and not spec.startswith("secret:"):
             name, ver = parts
             return {"kind": "package", "ecosystem": got.ecosystem, "package": name,
-                    "version": ver if _VERSION.match(ver or "") else None, "sha256": None}  # fmt: skip
+                    "version": ver if _VERSION.fullmatch(ver or "") else None, "sha256": None}  # fmt: skip
     if got.ecosystem == "image":
         parts = launch.split_image(spec)
         if parts:
@@ -315,7 +315,7 @@ def _clean_args(
         elif f is not None:
             ref = _secret_name(sid, "arg", str(n))
             secret(n, ref, ref)
-        elif not eq and _BARE_FLAG.match(a):
+        elif not eq and _BARE_FLAG.fullmatch(a):
             clean.append(a)  # a flag's own name
         elif "://" in a:
             url = val if eq and flag.startswith("-") else a
@@ -363,7 +363,7 @@ def draft(
         rec["origin"] = {"kind": "unknown", "hint": "a remote server: name the code it runs"}
         rec["transport"] = {"type": "sse" if kind == "sse" else "streamable-http",
                             "endpoint": f"svc:{_slug(host)}"}  # fmt: skip
-        if _PLAIN_PATHS.match(parts.path or "/"):
+        if _PLAIN_PATHS.fullmatch(parts.path or "/"):
             rec["transport"]["path"] = parts.path.rstrip("/") or "/mcp"
         else:
             notes.append(

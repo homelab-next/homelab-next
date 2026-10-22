@@ -330,7 +330,7 @@ def launch_problems(rec: Mapping[str, Any], where: str) -> list[str]:
     eco = origin.get("ecosystem") if kind == "package" else kind
     out: list[str] = []
     ver = origin.get("version")
-    if kind == "package" and eco == "npm" and ver and not _NPM_EXACT.match(str(ver)):
+    if kind == "package" and eco == "npm" and ver and not _NPM_EXACT.fullmatch(str(ver)):
         out.append(f"{where}: npm version {ver} is not a full x.y.z (npm reads it as a range)")
     if eco not in LAUNCHERS:
         if kind == "package":
