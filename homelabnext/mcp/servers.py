@@ -657,6 +657,24 @@ def path_bin_problems(rec: Mapping[str, Any], where: str, root: Path | None) -> 
     return []
 
 
+def program(rec: Mapping[str, Any]) -> str:
+    """What a stdio record runs, for display (pages, ``list``): the package's bin, the image,
+    ``hnx <subcommand>`` or the first-party path; never None (a record with no generated launch
+    says so)."""
+    origin, t = rec.get("origin") or {}, rec.get("transport") or {}
+    kind = origin.get("kind")
+    if kind in ("package", "git") and origin.get("ecosystem") in ("npm", "pypi"):
+        return resolve_bin(origin, t.get("bin"))[0] or base_name(origin)
+    if kind == "image":
+        image = str(origin.get("image", ""))
+        return image.rsplit(":", 1)[0] if ":" in image.rsplit("/", 1)[-1] else image
+    if kind == "first-party" and t.get("bin") == HNX and t.get("entry") in HNX_ENTRIES:
+        return " ".join((HNX, *HNX_ENTRIES[t["entry"]][0]))
+    if kind == "first-party" and t.get("bin"):
+        return str(t["bin"])
+    return f"no generated launch: {kind or 'no'} origin"
+
+
 def launch_command(rec: Mapping[str, Any]) -> str | None:
     """The command a stdio record is started with (``npx``, ``uvx``, ``docker``, ``hnx`` ...), or
     None when it has none (a remote server, an origin with no generated launch)."""

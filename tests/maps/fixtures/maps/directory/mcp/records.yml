@@ -3,8 +3,8 @@ id: records
 description: Proposes records.
 owner: ops-team
 status: active
-origin: {kind: package, ecosystem: pypi, package: example-records-mcp, version: 1.0.0, sha256: '0000000000000000000000000000000000000000000000000000000000000000'}
-transport: {type: stdio, command: records-mcp, args: []}
+origin: {kind: package, ecosystem: pypi, package: example-records-mcp, version: 1.0.0, sha256: '0000000000000000000000000000000000000000000000000000000000000000', bins: [records-mcp]}
+transport: {type: stdio, bin: records-mcp}
 runtime: agent-local
 env: {RECORDS_TOKEN: secret:fixture/records-token}
 parameters:

@@ -4,7 +4,7 @@ description: Imported from a client config; describe it.
 owner: unassigned
 status: draft
 origin: {kind: unknown, hint: launcher probe}
-transport: {type: stdio, command: probe, args: []}
+transport: {type: stdio}
 runtime: agent-local
 egress: none
 data_tier: local-only

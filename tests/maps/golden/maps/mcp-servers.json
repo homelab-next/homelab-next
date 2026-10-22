@@ -54,7 +54,7 @@
    "status": "draft",
    "tools": 0,
    "transport": "stdio",
-   "where": "probe (agent-local)"
+   "where": "no generated launch: unknown origin (agent-local)"
   },
   {
    "approval": [
