@@ -8,11 +8,14 @@
   ``Authorization`` header is never replayed to another origin and https is never downgraded.
 * :func:`read_bounded` reads at most ``limit`` bytes and refuses a longer reply instead of
   buffering whatever a server chooses to send.
+* :func:`send_json` writes a JSON reply from a stdlib ``BaseHTTPRequestHandler`` (the fake and
+  callback servers adapters run in-process).
 """
 
 from __future__ import annotations
 
 import ipaddress
+import json
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -83,3 +86,13 @@ def read_bounded(resp: Any, limit: int = DEFAULT_MAX_BYTES) -> bytes:
     if len(data) > limit:
         raise ResponseTooLarge(f"response larger than {limit} bytes")
     return data
+
+
+def send_json(handler: Any, status: int, doc: Any) -> None:
+    """Send ``doc`` as a complete JSON response with its length set."""
+    data = json.dumps(doc).encode()
+    handler.send_response(status)
+    handler.send_header("Content-Type", "application/json")
+    handler.send_header("Content-Length", str(len(data)))
+    handler.end_headers()
+    handler.wfile.write(data)

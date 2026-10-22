@@ -54,7 +54,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from homelabnext._http import read_bounded, safe_urlopen
+from homelabnext._http import read_bounded, safe_urlopen, send_json
 
 from ._env import AdapterConfigError, resolve, run_token
 
@@ -148,12 +148,7 @@ class _HandlerHost:
                 except ValueError:
                     body = None
                 status, doc = host.run(body) if self.path == "/run" else (404, {"ok": False})
-                data = json.dumps(doc).encode()
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
+                send_json(self, status, doc)
 
         return Handler
 
