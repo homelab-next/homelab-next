@@ -40,6 +40,50 @@ def load_module(name: str, path: Path):
     return mod
 
 
+NATS_CONF = LAB / "config" / "nats" / "nats.conf"
+_NATS_VAR = re.compile(r"(?<![\w\"])\$([A-Z][A-Z0-9_]*)")
+
+
+def _nats_body(text: str) -> str:
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+
+def nats_vars(text: str) -> set[str]:
+    """The ``$VAR`` references of a NATS config (outside comments and strings)."""
+    return set(_NATS_VAR.findall(_nats_body(text)))
+
+
+def parse_nats_conf(text: str):
+    """The lab's NATS config (the JSON subset of its syntax, ``$VAR`` references and ``#``
+    comment lines): what the server reads, for the tests (``nats-server -t`` agrees, see
+    tests/compose/test_lab_in_a_box.py's live test)."""
+    return json.loads(_NATS_VAR.sub(r'"$\1"', _nats_body(text)))
+
+
+def nats_users() -> dict[str, dict]:
+    """Every NATS user of the lab by name, with its ``account``."""
+    conf = parse_nats_conf(NATS_CONF.read_text())
+    return {
+        u["user"]: {**u, "account": name}
+        for name, account in conf["accounts"].items()
+        for u in account.get("users", [])
+    }
+
+
+def nats_allowed(user: dict, direction: str, subject: str) -> bool:
+    """Does ``user`` (a :func:`nats_users` entry) may ``direction`` (publish / subscribe) on
+    ``subject``: allow-list semantics, deny wins; a user with no permissions may do anything in
+    its own account."""
+    from conformance.fakes.jetstream_wire import subject_matches
+
+    perms = (user.get("permissions") or {}).get(direction)
+    if perms is None:
+        return "permissions" not in user
+    if any(subject_matches(p, subject) for p in perms.get("deny", [])):
+        return False
+    return any(subject_matches(p, subject) for p in perms.get("allow", []))
+
+
 @pytest.fixture(scope="module")
 def compose() -> dict:
     return yaml.safe_load(COMPOSE.read_text())
@@ -676,6 +720,14 @@ def test_the_broker_relay_publishes_from_the_edge_as_its_own_user(compose):
     local = ROOT / target.removeprefix("/src/")
     binding = yaml.safe_load(local.read_text())["capabilities"]["events"]
     assert binding["adapter"] == "homelabnext.conform.adapters.nats_jetstream:make"
+    # the relay connects as the broker's NATS user, with only that password in its process
+    from homelabnext.registry.model import secret_env_name
+
+    assert binding["config"]["user"] == "hnx-broker"
+    var = secret_env_name(binding["config"]["password_secret"])
+    assert e2e.LAB_BUS_USERS["hnx-broker"] == var and var in env
+    assert e2e.Relay("s", "t", "S", "p").secrets == (var,)
+    assert set(e2e.LAB_BUS_USERS.values()) <= set(env)
     dockerfile = (LAB / "broker" / "Dockerfile").read_text()
     assert f"COPY {local.relative_to(ROOT)} {target}" in dockerfile
     assert "x['nats']" in dockerfile and f"--uid {e2e.LAB_BROKER_UID} " in dockerfile
@@ -756,6 +808,10 @@ CREDENTIALS = (
     "LAB_GATEWAY_KEY_RESPONDER",
     "LAB_GATEWAY_KEY_THROTTLE",
     "LAB_GATEWAY_BIFROST_ADMIN_PASSWORD",
+    "LAB_EVENTS_BROKER_PASSWORD",
+    "LAB_EVENTS_ST2_BRIDGE_PASSWORD",
+    "LAB_EVENTS_ADMIN_PASSWORD",
+    "LAB_EVENTS_CONFORMANCE_PASSWORD",
 )
 
 
@@ -919,3 +975,99 @@ def test_the_relays_user_and_directories_keep_the_broker_state_private():
     for path, flags in want.items():
         assert f"install -d {flags} {path} " in dockerfile, path
     assert dockerfile.count("hnx-broker-relay -m") == 3  # nothing else is the relay's group's
+
+
+# ---------------------------------------------------------------- the events service's ACL
+def test_the_events_service_requires_a_user_and_reads_the_lab_config(compose, env_vars):
+    events = compose["services"]["events"]
+    assert events["command"] == ["-c", "/etc/nats/nats.conf"]
+    assert "./config/nats/nats.conf:/etc/nats/nats.conf:ro" in events["volumes"]
+    conf = parse_nats_conf(NATS_CONF.read_text())
+    assert "authorization" not in conf and "no_auth_user" not in str(conf)  # no anonymous user
+    variables = nats_vars(NATS_CONF.read_text())
+    assert variables == set(events["environment"])
+    for var in variables:
+        assert events["environment"][var] == f"${{{var}:?see .env.example}}"
+        assert "fake" in env_vars[var]
+    users = nats_users()
+    assert {u: v["account"] for u, v in users.items()} == {
+        "hnx-broker": "HNX",
+        "hnx-st2-bridge": "HNX",
+        "hnx-lab-admin": "HNX",
+        "hnx-conformance": "CONFORM",
+    }
+
+
+@pytest.mark.parametrize("kind", ["decision.returned", "decision.requested", "proposal.created"])
+def test_only_the_broker_may_publish_the_brokers_subjects(kind):
+    e2e = load_module("broker_e2e", LAB / "broker_e2e.py")
+    subject = f"{e2e.LAB_EVENTS_PREFIX}.homelabnext.{kind}"
+    hnx = {n: u for n, u in nats_users().items() if u["account"] == "HNX"}
+    assert [n for n, u in hnx.items() if nats_allowed(u, "publish", subject)] == ["hnx-broker"]
+    broker = hnx["hnx-broker"]
+    other = f"{e2e.LAB_EVENTS_PREFIX}.homelabnext.agent.job.failed"
+    assert not nats_allowed(broker, "publish", other)
+
+
+def test_no_user_may_purge_rewrite_or_read_another_users_inbox():
+    e2e = load_module("broker_e2e", LAB / "broker_e2e.py")
+    stream = e2e.LAB_EVENTS_STREAM
+    hnx = {n: u for n, u in nats_users().items() if u["account"] == "HNX"}
+    for name, user in hnx.items():
+        assert "permissions" in user, name  # an allow-list for everyone in HNX
+        for what in ("STREAM.PURGE", "STREAM.UPDATE", "STREAM.DELETE", "STREAM.MSG.DELETE",
+                     "CONSUMER.DELETE"):  # fmt: skip
+            assert not nats_allowed(user, "publish", f"$JS.API.{what}.{stream}"), (name, what)
+        subs = user["permissions"]["subscribe"]["allow"]
+        assert subs == [f"_INBOX.{name}.>"], name
+        for other in hnx:
+            if other != name:
+                assert not nats_allowed(user, "subscribe", f"_INBOX.{other}.x.y"), (name, other)
+    # the bridge reads its own durables only, and creates no stream
+    bridge = hnx["hnx-st2-bridge"]
+    bridge_json = json.loads((ROOT / "workflows" / "stackstorm" / "bridge.json").read_text())
+    for sub in bridge_json["subscriptions"]:
+        d = sub["durable"]
+        for what in ("INFO", "CREATE", "MSG.NEXT"):
+            assert nats_allowed(bridge, "publish", f"$JS.API.CONSUMER.{what}.{stream}.{d}")
+        assert nats_allowed(bridge, "publish", f"$JS.ACK.{stream}.{d}.1.2.3.4.5")
+    assert not nats_allowed(bridge, "publish", f"$JS.API.CONSUMER.CREATE.{stream}.other")
+    assert not nats_allowed(bridge, "publish", f"$JS.API.STREAM.CREATE.{stream}")
+    assert not nats_allowed(hnx["hnx-broker"], "publish", f"$JS.API.STREAM.CREATE.{stream}")
+
+
+def test_negative_a_wildcard_grant_would_be_caught():
+    broken = {"user": "x", "permissions": {"publish": {"allow": ["$JS.API.>", "hnxlab.>"]},
+                                           "subscribe": {"allow": ["_INBOX.>"]}}}  # fmt: skip
+    assert nats_allowed(broken, "publish", "$JS.API.STREAM.PURGE.HNXLAB_BROKER")
+    assert nats_allowed(broken, "publish", "hnxlab.homelabnext.decision.returned")
+    assert nats_allowed(broken, "subscribe", "_INBOX.hnx-broker.x.y")
+
+
+def _doc_excerpts(path: Path) -> list:
+    """The ```text blocks of ``path`` that quote the lab's nats.conf (a JSON list of users)."""
+    blocks = re.findall(r"```text\n(# compose/lab-in-a-box/config/nats/nats\.conf.*?)```",
+                        path.read_text(), re.S)  # fmt: skip
+    return [parse_nats_conf(b) for b in blocks]
+
+
+@pytest.mark.parametrize("doc", ["broker.md", "stackstorm.md"])
+def test_the_docs_acl_excerpts_are_exactly_what_the_lab_enforces(doc):
+    [excerpt] = _doc_excerpts(ROOT / "docs" / doc)
+    users = nats_users()
+    assert excerpt and all(u == {k: v for k, v in users[u["user"]].items() if k != "account"}
+                           for u in excerpt)  # fmt: skip
+    if doc == "broker.md":
+        assert {u["user"] for u in excerpt} == {"hnx-broker", "hnx-st2-bridge"}
+    else:
+        assert {u["user"] for u in excerpt} == {"hnx-st2-bridge"}
+
+
+@pytest.mark.skipif(not shutil.which("nats-server"), reason="nats-server is not installed")
+def test_nats_server_accepts_the_lab_config(tmp_path, env_vars):
+    conf = tmp_path / "nats.conf"
+    conf.write_text(NATS_CONF.read_text().replace('"/data"', json.dumps(str(tmp_path))))
+    env = {**os.environ, **{v: env_vars[v] for v in nats_vars(conf.read_text())}}
+    proc = subprocess.run(["nats-server", "-c", str(conf), "-t"], env=env, capture_output=True,
+                          text=True, timeout=30)  # fmt: skip
+    assert proc.returncode == 0, proc.stderr

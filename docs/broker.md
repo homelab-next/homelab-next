@@ -319,7 +319,7 @@ decision, and `hnx broker serve` keeps needing no network at all.
   down). Exit 2 is a configuration error (the target file, the adapter, the lock).
 
 The bus comes from a **target file** binding the `events` capability, the same files
-`hnx conform run` uses (`compose/lab-in-a-box/targets/events.yml` is the lab's); `--stream` and
+`hnx conform run` uses (`compose/lab-in-a-box/broker/events-relay.yml` is the lab's); `--stream` and
 `--subject-prefix` name the standing stream (never a scratch one), the endpoint is
 `HNX_ENDPOINT_EVENTS` (`nats://` or `tls://`), and the bus credential is a secret *name*. The
 password goes only over `tls://` (verified against the system CAs, or `ca_file`) or to a loopback
@@ -401,30 +401,55 @@ an outbox from before the relay needs `--since` once (see above).
 
 **The bus ACL is what makes the source mean something.** A consumer that pins `source:
 svc:broker` (the StackStorm bridge, A03's approved-run rule, A01) trusts a field the publisher
-writes. Only the broker's NATS user may publish `homelabnext.decision.>` and
-`homelabnext.proposal.>` under the stream's prefix; deny them to every other account, or any
-process on the bus can forge an approval for A03 to act on. The relay's user needs, besides those
-two subjects, the stream lookups the adapter makes on connect (`$JS.API.STREAM.INFO.<stream>` and
-`<stream>_DLQ`; create both streams ahead of time so it needs no `STREAM.CREATE`) and replies on
-its own inbox:
+writes. Only the broker's NATS user may publish `<prefix>.homelabnext.decision.>` and
+`<prefix>.homelabnext.proposal.>`; no other user may, or any process on the bus can forge an
+approval for A03 to act on. The lab-in-a-box enforces exactly this
+([`compose/lab-in-a-box/config/nats/nats.conf`](../compose/lab-in-a-box/config/nats/nats.conf),
+stream `HNXLAB_BROKER`, prefix `hnxlab`; for production substitute your stream, prefix and
+passwords, ideally bcrypt hashes from `nats server passwd`), and its broker scenario proves it
+(the `bus-acl` step). Every user has an allow-list and nothing else: no `$JS.API.>` wildcard (so
+no `STREAM.PURGE`, `STREAM.UPDATE`, `STREAM.DELETE` or `MSG.DELETE`), no `STREAM.CREATE` for the
+relay or the bridge (an operator provisions both streams with limits; the relay connects with
+`provision=False` and refuses a missing or unbounded stream), and replies on the user's own inbox
+prefix (`_INBOX.<user>`, the adapter's default for a `user`), never a shared `_INBOX.>` where one
+client could read another's replies. The broker's relay and the bridge, verbatim from the lab
+(`tests/compose` fails when this excerpt and the lab drift apart):
 
 ```text
-# nats-server.conf (excerpt)
-authorization {
-  users = [
-    { user: hnx-broker, password: $HNX_BROKER_NATS_BCRYPT,
-      permissions: {
-        publish: { allow: ["lab.homelabnext.decision.>", "lab.homelabnext.proposal.>",
-                           "$JS.API.STREAM.INFO.HOMELABNEXT", "$JS.API.STREAM.INFO.HOMELABNEXT_DLQ"] }
-        subscribe: { allow: ["_INBOX.>"] } } }
-    { user: hnx-st2-bridge, password: $HNX_ST2_BRIDGE_NATS_BCRYPT,
-      permissions: {
-        publish: { deny: ["lab.homelabnext.decision.>", "lab.homelabnext.proposal.>"],
-                   allow: ["$JS.API.>", "$JS.ACK.>"] }
-        subscribe: { allow: ["_INBOX.>"] } } }
-  ]
-}
+# compose/lab-in-a-box/config/nats/nats.conf (excerpt: account HNX, the relay and the bridge)
+[
+{"user": "hnx-broker", "password": $LAB_EVENTS_BROKER_PASSWORD,
+ "permissions": {
+   "publish": {"allow": ["hnxlab.homelabnext.decision.>", "hnxlab.homelabnext.proposal.>",
+                         "$JS.API.STREAM.INFO.HNXLAB_BROKER",
+                         "$JS.API.STREAM.INFO.HNXLAB_BROKER_DLQ"]},
+   "subscribe": {"allow": ["_INBOX.hnx-broker.>"]}}},
+{"user": "hnx-st2-bridge", "password": $LAB_EVENTS_ST2_BRIDGE_PASSWORD,
+ "permissions": {
+   "publish": {"allow": ["$JS.API.STREAM.INFO.HNXLAB_BROKER",
+                         "$JS.API.STREAM.INFO.HNXLAB_BROKER_DLQ",
+                         "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-agent-job-failed",
+                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-agent-job-failed",
+                         "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-agent-job-failed",
+                         "$JS.ACK.HNXLAB_BROKER.st2-agent-job-failed.>",
+                         "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-decision-returned",
+                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-decision-returned",
+                         "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-decision-returned",
+                         "$JS.ACK.HNXLAB_BROKER.st2-decision-returned.>",
+                         "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-proposal-created",
+                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-proposal-created",
+                         "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-proposal-created",
+                         "$JS.ACK.HNXLAB_BROKER.st2-proposal-created.>"]},
+   "subscribe": {"allow": ["_INBOX.hnx-st2-bridge.>"]}}}
+]
 ```
+
+The lab's other users: `hnx-lab-admin` (the operator: `STREAM.INFO`/`STREAM.CREATE` of the stream
+and its DLQ, `STREAM.MSG.GET` of the stream; it provisions them, with
+`homelabnext.conform.adapters.nats_jetstream.provision_streams`, and reads back what the relay
+published), and `hnx-conformance` in an account of its own (`CONFORM`), where `hnx conform run
+events` creates and deletes its scratch streams without any way to reach the `HNX` account's
+subjects or streams. No client connects without a user.
 
 ### Agents: the MCP tools
 
@@ -650,7 +675,12 @@ The scenario's steps, each a line of the report (`broker_e2e.py run --json`, and
     `hnx broker relay --once` as the relay's uid (`hnx-broker-relay`) publishes the request's `decision.requested` and
     `decision.returned`, in that order, with source `svc:broker` and the event id as
     `Nats-Msg-Id`, and a second pass publishes nothing;
-11. `audit`: the relay's `hnx broker audit` holds a record of every step, each with the peer's
+11. `bus-acl` (with a bus): a client without a user is refused; the StackStorm bridge's NATS user
+    (`hnx-st2-bridge`) tries to publish a forged `decision.returned` for the request with source
+    `svc:broker`, `verdict: accept`, `tier_used: human` and is refused by the server (a permission
+    violation), as is its `STREAM.PURGE`; the stream's last `decision.returned` is still the
+    broker's;
+12. `audit`: the relay's `hnx broker audit` holds a record of every step, each with the peer's
     `via: uid:<n>` (agent, unmapped uid and relay).
 
 ## Embedding

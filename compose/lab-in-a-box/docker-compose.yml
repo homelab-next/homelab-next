@@ -200,12 +200,20 @@ services:
         aliases: [lake-query.svc.example.internal]
 
   # --- events: NATS JetStream -------------------------------------------------------------
+  # Accounts and per-user permissions (config/nats/nats.conf): only the broker's user may publish
+  # the broker's subjects; no client connects without a user.
   events:
     <<: [*restart, *hardened]
     image: nats:2.10.22-alpine@sha256:73b0ba5fec5518c5f698597c58d2a3350a2b5ccae43e84c308f8d2da1242deca
-    command: ["-js", "-sd", "/data", "-m", "8222"]
+    command: ["-c", "/etc/nats/nats.conf"]
+    environment:
+      LAB_EVENTS_BROKER_PASSWORD: ${LAB_EVENTS_BROKER_PASSWORD:?see .env.example}
+      LAB_EVENTS_ST2_BRIDGE_PASSWORD: ${LAB_EVENTS_ST2_BRIDGE_PASSWORD:?see .env.example}
+      LAB_EVENTS_ADMIN_PASSWORD: ${LAB_EVENTS_ADMIN_PASSWORD:?see .env.example}
+      LAB_EVENTS_CONFORMANCE_PASSWORD: ${LAB_EVENTS_CONFORMANCE_PASSWORD:?see .env.example}
     volumes:
       - events-data:/data
+      - ./config/nats/nats.conf:/etc/nats/nats.conf:ro
     ports:
       - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_EVENTS:-4222}:4222"
       - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_EVENTS_MONITOR:-8222}:8222"
@@ -475,9 +483,14 @@ services:
     environment:
       HNX_SECRET_STATUS_FRONT_DOOR_SECRET: ${LAB_HUB_FRONT_DOOR_SECRET:?see .env.example}
       MALLOC_ARENA_MAX: "2"
-      # the bus-relay step: the broker's relay publishes its outbox to the events service
+      # the bus-relay and bus-acl steps: the broker's relay publishes its outbox to the events
+      # service as hnx-broker (the relay's process gets only that password); the operator
+      # (hnx-lab-admin) provisions the stream and reads it back; hnx-st2-bridge tries to forge
       HNX_ENDPOINT_EVENTS: nats://events.svc.example.internal:4222
-      LAB_BROKER_EVENTS_TARGET: /src/compose/lab-in-a-box/targets/events.yml
+      LAB_BROKER_EVENTS_TARGET: /src/compose/lab-in-a-box/broker/events-relay.yml
+      HNX_SECRET_EVENTS_BROKER: ${LAB_EVENTS_BROKER_PASSWORD:?see .env.example}
+      HNX_SECRET_EVENTS_ST2_BRIDGE: ${LAB_EVENTS_ST2_BRIDGE_PASSWORD:?see .env.example}
+      HNX_SECRET_EVENTS_ADMIN: ${LAB_EVENTS_ADMIN_PASSWORD:?see .env.example}
     volumes:
       - broker-run:/run/hnx-broker
       - broker-data:/srv/agents:ro

@@ -75,10 +75,19 @@ LAB_CLIENTS_GID = 10020
 LAB_BROKER_UID = 10010
 LAB_RELAY_UID = 10015
 LAB_STATE = "/var/lib/hnx-broker/state"
-LAB_EVENTS_TARGET = "/src/compose/lab-in-a-box/targets/events.yml"
+LAB_EVENTS_TARGET = "/src/compose/lab-in-a-box/broker/events-relay.yml"
 LAB_EVENTS_STREAM, LAB_EVENTS_PREFIX = "HNXLAB_BROKER", "hnxlab"
 BROKER_SOURCE = "svc:broker"  # homelabnext.broker.relay.BROKER_SOURCE (tests/compose pins it)
 STREAM_MAX_BYTES = 64 << 20  # the lab's standing stream (its DLQ gets a quarter)
+#: the lab's NATS users in the HNX account (config/nats/nats.conf) -> their password variables
+LAB_BUS_USERS = {
+    "hnx-broker": "HNX_SECRET_EVENTS_BROKER",
+    "hnx-st2-bridge": "HNX_SECRET_EVENTS_ST2_BRIDGE",
+    "hnx-lab-admin": "HNX_SECRET_EVENTS_ADMIN",
+}
+LAB_ADMIN = "hnx-lab-admin"
+#: a consumer of the broker's decisions that must not be able to forge one
+LAB_NOT_BROKER = "hnx-st2-bridge"
 #: the hub's public name: the Host and Origin the edge passes on (registry public_hostname)
 HUB_HOST = "status.lab.example"
 SECRET_ENV = "HNX_SECRET_STATUS_FRONT_DOOR_SECRET"
@@ -98,33 +107,58 @@ class StepFailed(Exception):
 @dataclass
 class Relay:
     """The broker's outbox relay and the bus it publishes to.  ``launch`` is the argv prefix
-    running a command as the relay's own uid; ``open_bus()`` returns the JetStream adapter on the
-    same stream (the scenario reads what the relay published through it)."""
+    running a command as the relay's own uid.  ``wire_as(user)`` opens a connection to the bus as
+    one of the lab's NATS users (``None``: no user at all); by default nats-py on
+    ``HNX_ENDPOINT_EVENTS`` with the user's password from :data:`LAB_BUS_USERS`.  The operator
+    (``hnx-lab-admin``) provisions the stream and reads back what the relay published."""
 
     state: str
     target: str
     stream: str
     prefix: str
     launch: Sequence[str] = ()
-    open_bus: Callable[[], Any] | None = None
     #: runs one ``--once`` pass and returns (exit status, stdout); default: the CLI, as the relay's uid
     run_once: Callable[[], tuple[int, str]] | None = None
     #: the only ``HNX_SECRET_*`` variables the relay's process gets (its bus password)
-    secrets: Sequence[str] = ()
-    #: the operator's wire (it provisions the streams); default: nats-py on HNX_ENDPOINT_EVENTS
-    open_wire: Callable[[], Any] | None = None
+    secrets: Sequence[str] = ("HNX_SECRET_EVENTS_BROKER",)
+    wire_as: Callable[[str | None], Any] | None = None
+
+    def wire(self, user: str | None) -> Any:
+        if self.wire_as is not None:
+            return self.wire_as(user)
+        from homelabnext.conform.adapters import nats_jetstream as nj
+        from homelabnext.conform.adapters._env import env_secret, resolve
+
+        url = resolve("events", env_only=True).url
+        if user is None:
+            return nj.NatsPyWire(url, name="hnx-lab-anonymous")
+        return nj.NatsPyWire(  # the lab's own network: plaintext nats:// by choice
+            url,
+            name=user,
+            user=user,
+            password=env_secret(LAB_BUS_USERS[user]),
+            inbox_prefix=f"_INBOX.{user}",
+        )
+
+    def bus_as(self, user: str) -> Any:
+        """The JetStream adapter on the standing stream as ``user``; it creates nothing."""
+        from homelabnext.conform.adapters import nats_jetstream as nj
+
+        wire = self.wire(user)
+        try:
+            return nj.JetStreamBus(
+                wire, stream=self.stream, subject_prefix=self.prefix, provision=False
+            )
+        except Exception:
+            wire.close()
+            raise
 
     def provision(self) -> list[str]:
         """The operator's one-time step: the standing stream and its DLQ, bounded.  The relay
         never creates them (its bus user may not)."""
         from homelabnext.conform.adapters import nats_jetstream as nj
 
-        if self.open_wire is not None:
-            wire = self.open_wire()
-        else:
-            from homelabnext.conform.adapters._env import resolve
-
-            wire = nj.NatsPyWire(resolve("events", env_only=True).url, name="hnx-lab-admin")
+        wire = self.wire(LAB_ADMIN)
         try:
             return nj.provision_streams(
                 wire, stream=self.stream, subject_prefix=self.prefix, max_bytes=STREAM_MAX_BYTES
@@ -144,11 +178,7 @@ class Relay:
                 "--once"]  # fmt: skip
 
     def bus(self) -> Any:
-        if self.open_bus is not None:
-            return self.open_bus()
-        from homelabnext.conform.adapters import nats_jetstream as nj
-
-        return nj.make(scratch=False, stream=self.stream, subject_prefix=self.prefix)
+        return self.bus_as(LAB_ADMIN)
 
 
 @dataclass
@@ -427,8 +457,11 @@ def run_scenario(setup: Setup) -> list[dict[str, Any]]:
                 for name, fn, blocking in session_steps:
                     if not await one(name, fn, blocking, s):
                         return
-            if setup.relay is not None:
-                await one("bus-relay", lambda: check_relay(setup, ctx["rid"]), True, None)
+            relayed = setup.relay is not None and await one(
+                "bus-relay", lambda: check_relay(setup, ctx["rid"]), True, None
+            )
+            if relayed:
+                await one("bus-acl", lambda: check_bus_acl(setup, ctx["rid"]), True, None)
             await one("audit", audit, True, None)
 
     try:
@@ -447,8 +480,9 @@ STEPS = ("mcp-tools", "memory-write", "proposal-file", "submit", "run-before-app
 
 
 def steps(setup: Setup) -> tuple[str, ...]:
-    """The steps a complete run of ``setup`` reports: ``bus-relay`` only with a bus."""
-    return (*STEPS[:-1], "bus-relay", STEPS[-1]) if setup.relay is not None else STEPS
+    """The steps a complete run of ``setup`` reports: ``bus-relay`` and ``bus-acl`` only with a
+    bus."""
+    return (*STEPS[:-1], "bus-relay", "bus-acl", STEPS[-1]) if setup.relay is not None else STEPS
 
 
 def check_relay(setup: Setup, rid: str) -> str:
@@ -503,6 +537,65 @@ def check_relay(setup: Setup, rid: str) -> str:
         raise StepFailed(f"the second pass republished: {second}")
     return f"{first}; requested seq {seqs['decision.requested']} < returned seq " + str(
         seqs["decision.returned"]
+    )
+
+
+def check_bus_acl(setup: Setup, rid: str) -> str:
+    """Only the broker's user may publish the broker's subjects: a client with no user is
+    refused, and the StackStorm bridge's user (which reads ``decision.returned``) cannot publish
+    a forged ``decision.returned`` for ``rid`` with source ``svc:broker`` -- what A03 would act
+    on -- nor purge the stream; the stream's last ``decision.returned`` is still the broker's."""
+    from homelabnext.events.envelope import build_event, canonical_body
+
+    relay = setup.relay
+    assert relay is not None
+    subject = f"{relay.prefix}.homelabnext.decision.returned"
+
+    def last_returned() -> int:
+        bus = relay.bus()
+        try:
+            got = bus.api(f"STREAM.MSG.GET.{relay.stream}", {"last_by_subj": subject})
+            return int(got["message"]["seq"])
+        finally:
+            bus.close()
+
+    before = last_returned()
+    try:
+        relay.wire(None).close()
+    except Exception as exc:
+        anonymous = type(exc).__name__
+    else:
+        raise StepFailed("a client without a user connected to the bus")
+    forged = build_event(
+        "homelabnext.decision.returned",
+        BROKER_SOURCE,
+        {"decision_id": rid, "verdict": "accept", "confidence": 1.0, "tier_used": "human"},
+        dedupe_key=f"forged-{secrets.token_hex(4)}",
+        subject=rid,
+    )
+    bus = relay.bus_as(LAB_NOT_BROKER)
+    try:
+        try:
+            seq = bus.publish(forged["type"], canonical_body(forged), msg_id=forged["id"])
+        except Exception as exc:
+            if not getattr(exc, "permanent", False):
+                raise StepFailed(f"the forged publish failed, but not as refused: {exc}") from None
+        else:
+            raise StepFailed(f"{LAB_NOT_BROKER} published a decision.returned (seq {seq})")
+        try:
+            bus.api(f"STREAM.PURGE.{relay.stream}", {})
+        except Exception:
+            pass
+        else:
+            raise StepFailed(f"{LAB_NOT_BROKER} purged the stream")
+    finally:
+        bus.close()
+    after = last_returned()
+    if after != before:
+        raise StepFailed(f"the last decision.returned moved: {before} -> {after}")
+    return (
+        f"no user: refused ({anonymous}); {LAB_NOT_BROKER}: forged decision.returned and "
+        f"purge refused; last decision.returned still seq {after}"
     )
 
 

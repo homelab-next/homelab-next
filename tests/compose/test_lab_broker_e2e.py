@@ -140,19 +140,57 @@ class _SharedWire:
         pass
 
 
-def _relay(e2e, state_root: Path, wire: _SharedWire, *, drop_marks: bool = False):
+class _AclWire:
+    """The fake behind the lab's own NATS permissions (config/nats/nats.conf, parsed): a
+    connection as ``user`` may publish (and pull) what that user may on the lab's server, and a
+    connection without a known user is refused, as nats-server refuses it."""
+
+    def __init__(self, shared: _SharedWire, user: str | None, *, permissive: bool = False):
+        from test_lab_in_a_box import nats_users
+
+        from homelabnext.conform.adapters import nats_jetstream as nj
+
+        users = nats_users()
+        if user not in users and not permissive:
+            raise nj.WireError("nats: 'Authorization Violation'")
+        self.shared, self.user = shared, users.get(user, {"user": user})
+        self.permissive, self._nj = permissive, nj
+
+    def _check(self, subject: str) -> None:
+        from test_lab_in_a_box import nats_allowed
+
+        if not self.permissive and not nats_allowed(self.user, "publish", subject):
+            raise self._nj.WireError("permission denied: publish", permanent=True)
+
+    def request(self, subject, *a, **kw):
+        self._check(subject)
+        return self.shared.request(subject, *a, **kw)
+
+    def pull(self, subject, *a, **kw):
+        self._check(subject)
+        return self.shared.pull(subject, *a, **kw)
+
+    def close(self):
+        pass
+
+
+def _relay(e2e, state_root: Path, wire: _SharedWire, *, drop_marks: bool = False,
+           acl: bool = True):  # fmt: skip
     """The scenario's relay, in this process: ``OutboxRelay`` on the broker's state over the wire
-    fake (the CLI is tested in tests/broker/test_broker_relay.py)."""
+    fake, as the lab's ``hnx-broker`` under the lab's NATS permissions (``acl=False``: a bus that
+    lets anyone publish anything, the defect the ``bus-acl`` step exists for).  The CLI is tested
+    in tests/broker/test_broker_relay.py."""
     from homelabnext.broker.relay import OutboxRelay
     from homelabnext.conform.adapters import nats_jetstream as nj
 
-    def bus():  # the scenario's reader: the operator's view
-        return nj.make(wire=wire, scratch=False, stream="HNXT", subject_prefix="hnxt")
+    stream, prefix = e2e.LAB_EVENTS_STREAM, e2e.LAB_EVENTS_PREFIX
+
+    def wire_as(user):
+        return _AclWire(wire, user, permissive=not acl)
 
     def relay_bus():  # the relay's: provisions nothing
-        return nj.make(
-            wire=wire, scratch=False, provision=False, stream="HNXT", subject_prefix="hnxt"
-        )
+        return nj.make(wire=wire_as("hnx-broker"), scratch=False, provision=False, stream=stream,
+                       subject_prefix=prefix)  # fmt: skip
 
     def once():
         r = OutboxRelay(state_root, relay_bus)
@@ -165,15 +203,7 @@ def _relay(e2e, state_root: Path, wire: _SharedWire, *, drop_marks: bool = False
             r.close()
         return (1 if left else 0), f"hnx broker relay: published {n}, {left} pending"
 
-    return e2e.Relay(
-        str(state_root),
-        "unused",
-        "HNXT",
-        "hnxt",
-        open_bus=bus,
-        run_once=once,
-        open_wire=lambda: wire,
-    )
+    return e2e.Relay(str(state_root), "unused", stream, prefix, run_once=once, wire_as=wire_as)
 
 
 def test_the_scenario_passes_every_step(lab, e2e):
@@ -182,7 +212,9 @@ def test_the_scenario_passes_every_step(lab, e2e):
     s.relay = _relay(e2e, svc.state.root, _SharedWire())
     rows = e2e.run_scenario(s)
     assert [r["step"] for r in rows] == list(e2e.steps(s)), rows
-    assert "bus-relay" in e2e.steps(s) and "bus-relay" not in e2e.STEPS
+    assert {"bus-relay", "bus-acl"} <= set(e2e.steps(s)) and "bus-relay" not in e2e.STEPS
+    acl = next(r for r in rows if r["step"] == "bus-acl")["detail"]
+    assert "hnx-st2-bridge: forged decision.returned and purge refused" in acl
     assert all(r["ok"] for r in rows), [r for r in rows if not r["ok"]]
     # what the steps claim, checked here against the broker's own state
     vias = {r["via"] for r in svc.audit_documents()}
@@ -258,3 +290,29 @@ def test_hub_files_trust_only_the_edge_address(e2e, tmp_path):
     assert cfg.approvals.socket == Path("/run/x.sock") and cfg.approvals.issuer == "sso"
     with pytest.raises(ValueError):
         e2e.hub_files(tmp_path, edge_address="not-an-address", socket_path="/run/x.sock")
+
+
+def test_the_acl_check_fails_on_a_bus_anyone_may_publish_to(e2e, tmp_path):
+    """The lab's events service used to run with no authorization at all: any client could
+    publish a decision.returned as svc:broker.  The bus-acl step refuses such a bus."""
+    from homelabnext.broker.relay import BROKER_SOURCE
+    from homelabnext.broker.state import StateDir
+    from homelabnext.events.envelope import build_event
+
+    state = StateDir(tmp_path / "state")
+    data = {"decision_id": "req-1", "verdict": "accept", "confidence": 1.0, "tier_used": "human"}
+    state.put_outbox(build_event("homelabnext.decision.returned", BROKER_SOURCE, data,
+                                 dedupe_key="r", subject="req-1"))  # fmt: skip
+    setup = e2e.Setup(socket=tmp_path / "s", hub="", data_root=tmp_path, uids={}, secret="")
+    shared = _SharedWire()
+    setup.relay = _relay(e2e, state.root, shared)
+    setup.relay.provision()
+    setup.relay.run_once()
+    assert "forged decision.returned and purge refused" in e2e.check_bus_acl(setup, "req-1")
+    setup.relay = _relay(e2e, state.root, shared, acl=False)
+    with pytest.raises(e2e.StepFailed, match="a client without a user connected"):
+        e2e.check_bus_acl(setup, "req-1")
+    # users required, but the bridge's may publish anything: the forgery itself is caught
+    setup.relay.wire_as = lambda user: _AclWire(shared, user, permissive=user is not None)
+    with pytest.raises(e2e.StepFailed, match=r"hnx-st2-bridge published a decision\.returned"):
+        e2e.check_bus_acl(setup, "req-1")

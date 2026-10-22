@@ -146,6 +146,8 @@ conform_cmd="${HNX_CONFORM_CMD:-hnx conform run}"
 if ${conform_cmd%% run*} --help >/dev/null 2>&1; then
   conform_state="pass"
   set -a; . "$endpoints"; set +a
+  # the events target's user (targets/events.yml); exported, never written to the report
+  export HNX_SECRET_EVENTS_CONFORMANCE="${LAB_EVENTS_CONFORMANCE_PASSWORD:-}"
   for cap in $conform_caps; do
     # a real-product adapter for this capability, when one ships, replaces the built-in fake
     target_args=""

@@ -444,9 +444,37 @@ WantedBy=multi-user.target
 
 It needs the `nats` extra (`pip install 'homelabnext[nats]'`). Exit 2 is a configuration error
 (the bridge file, the URL, the endpoint variable, the first connection, a stream that is missing
-or unbounded, a durable whose lease is too short). The bus account it uses needs to read the stream
-and manage its own durables, nothing else; who may *publish* each subject is the bound that makes
-a pinned `source` mean something.
+or unbounded, a durable whose lease is too short). The bus user it uses
+needs to look up the stream and its DLQ and read through its own durables (one per subject in
+`bridge.json`), nothing else: no publish on any event subject, no `STREAM.CREATE`, `PURGE`,
+`UPDATE`, `DELETE` or `MSG.DELETE`, no other durable, and replies on its own inbox prefix. The
+lab-in-a-box enforces exactly this (stream `HNXLAB_BROKER`; `tests/compose` fails when this
+excerpt drifts from it):
+
+```text
+# compose/lab-in-a-box/config/nats/nats.conf (excerpt: account HNX, the bridge)
+[
+{"user": "hnx-st2-bridge", "password": $LAB_EVENTS_ST2_BRIDGE_PASSWORD,
+ "permissions": {
+   "publish": {"allow": ["$JS.API.STREAM.INFO.HNXLAB_BROKER",
+                         "$JS.API.STREAM.INFO.HNXLAB_BROKER_DLQ",
+                         "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-agent-job-failed",
+                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-agent-job-failed",
+                         "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-agent-job-failed",
+                         "$JS.ACK.HNXLAB_BROKER.st2-agent-job-failed.>",
+                         "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-decision-returned",
+                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-decision-returned",
+                         "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-decision-returned",
+                         "$JS.ACK.HNXLAB_BROKER.st2-decision-returned.>",
+                         "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-proposal-created",
+                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-proposal-created",
+                         "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-proposal-created",
+                         "$JS.ACK.HNXLAB_BROKER.st2-proposal-created.>"]},
+   "subscribe": {"allow": ["_INBOX.hnx-st2-bridge.>"]}}}
+]
+```
+
+Who may *publish* each subject is the bound that makes a pinned `source` mean something.
 
 **The streams are provisioned, never created by the bridge.** It refuses to start unless the event
 stream and its dead-letter stream (`<stream>_DLQ`, which captures JetStream's max-deliveries and
@@ -490,7 +518,9 @@ it to every other account, the bridge's included: otherwise any client of the bu
 `decision.returned` with `source: svc:broker`, `verdict: accept`, `tier_used: human`, and A03 asks
 the broker to run it. The broker still re-decides with the approval it holds (digest, expiry,
 single use), so a forged event cannot run an unapproved request, but it can trigger runs and fill
-the refusal log; the ACL keeps the pin honest. broker.md has a `nats-server.conf` excerpt.
+the refusal log; the ACL keeps the pin honest. broker.md has the broker's half of the lab's
+`nats.conf`, and the lab's broker scenario proves a forged `decision.returned` from the bridge's
+user is refused (`bus-acl`).
 
 The stats file is a status source with the existing `poll-file` kind:
 

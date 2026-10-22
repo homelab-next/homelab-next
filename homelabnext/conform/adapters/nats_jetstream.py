@@ -556,11 +556,14 @@ class NatsPyWire:
         user: str | None = None,
         password: Callable[[], str] | None = None,
         ca_file: str | None = None,
+        inbox_prefix: str | None = None,
     ):
         if (user is None) != (password is None):
             raise EventsError("a NATS user needs a password secret, and a password a user")
         if ca_file is not None and not url.startswith("tls://"):
             raise EventsError("ca_file needs a tls:// events endpoint")
+        if inbox_prefix is not None:
+            _check_subject(inbox_prefix, pattern=False)
         try:
             import nats
             import nats.errors
@@ -582,6 +585,8 @@ class NatsPyWire:
                 self._denied.add(m.group(1))
 
         auth: dict[str, Any] = {"user": user, "password": password()} if user and password else {}
+        if inbox_prefix is not None:
+            auth["inbox_prefix"] = inbox_prefix  # replies on the user's own inbox, not _INBOX.>
         if ca_file is not None:
             import ssl
 
@@ -718,6 +723,7 @@ def make(
     client_name: str = "hnx-conform",
     allow_plaintext: bool = False,
     ca_file: str | None = None,
+    inbox_prefix: str | None = None,
 ) -> JetStreamBus:
     """A bus on the ``events`` endpoint.  ``scratch`` (the conformance default) gives every
     subject its own stream and subject prefix, deleted on ``close()``, so checks never see each
@@ -726,7 +732,9 @@ def make(
     ``user`` and ``password_secret`` (a secret name, never a value) authenticate the connection;
     the password goes only over ``tls://`` (``ca_file``: a private CA), to a loopback ``nats://``,
     or with an explicit ``allow_plaintext``.
-    ``provision=False`` creates no stream: both must exist, each with a ``max_bytes`` limit."""
+    ``provision=False`` creates no stream: both must exist, each with a ``max_bytes`` limit.
+    A ``user``'s replies arrive on ``inbox_prefix``, by default ``_INBOX.<user>``, so the server
+    can grant each user its own inbox instead of ``_INBOX.>`` (where one could read another's)."""
     password = None
     if user is not None or password_secret is not None:
         if not user or not isinstance(password_secret, str) or not password_secret:
@@ -736,6 +744,9 @@ def make(
         from homelabnext.registry.model import secret_env_name
 
         password = env_secret(secret_env_name(password_secret))  # checked now, read at connect
+        if not _NAME_RE.match(user):
+            raise EventsError("a NATS user name is 1-64 of [A-Za-z0-9_-] (it names its inbox)")
+        inbox_prefix = inbox_prefix or f"_INBOX.{user}"
     if scratch:
         token = secrets.token_hex(6)
         stream = stream or f"HNXCONF_{token}"
@@ -750,7 +761,14 @@ def make(
             check_plaintext(url, credentials=password is not None, allow_plaintext=allow_plaintext)
         except ValueError as exc:
             raise EventsError(str(exc)) from None
-        wire = NatsPyWire(url, name=client_name, user=user, password=password, ca_file=ca_file)
+        wire = NatsPyWire(
+            url,
+            name=client_name,
+            user=user,
+            password=password,
+            ca_file=ca_file,
+            inbox_prefix=inbox_prefix,
+        )
     try:
         return JetStreamBus(
             wire,

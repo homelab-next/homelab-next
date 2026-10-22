@@ -48,6 +48,6 @@ COPY schemas /src/schemas
 COPY profiles /src/profiles
 COPY examples /src/examples
 COPY compose/lab-in-a-box/broker_e2e.py /src/compose/lab-in-a-box/broker_e2e.py
-COPY compose/lab-in-a-box/targets/events.yml /src/compose/lab-in-a-box/targets/events.yml
+COPY compose/lab-in-a-box/broker/events-relay.yml /src/compose/lab-in-a-box/broker/events-relay.yml
 USER 10010
 CMD ["python", "-m", "homelabnext.cli", "broker", "--help"]

@@ -720,3 +720,16 @@ def test_the_relay_only_reads_the_outbox_and_needs_nothing_else(tmp_path, monkey
     assert snapshot() == before
     outside = [p for p in opened if p.parent.name != "outbox" and "relay" not in p.parts]
     assert outside == []
+
+
+def test_a_user_gets_its_own_inbox_prefix(monkeypatch):
+    """Replies arrive on _INBOX.<user>, so the server can grant each user its own inbox instead of
+    _INBOX.> (where any client reads every other client's replies)."""
+    made = _recording_wire(monkeypatch)
+    monkeypatch.setenv("HNX_ENDPOINT_EVENTS", "nats://127.0.0.1:4222")  # no-raw-endpoint: allow
+    kw = {"scratch": False, "stream": STREAM, "subject_prefix": PREFIX}
+    nj.make(user="hnx-broker", password_secret="secret:events/broker", **kw)
+    nj.make(user="hnx-broker", password_secret="secret:events/broker", inbox_prefix="_I.b", **kw)
+    assert [m["inbox_prefix"] for m in made] == ["_INBOX.hnx-broker", "_I.b"]
+    with pytest.raises(nj.EventsError, match="user name"):
+        nj.make(user="a.b", password_secret="secret:events/broker", **kw)
