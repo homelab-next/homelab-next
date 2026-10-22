@@ -164,7 +164,96 @@ Each is a deliberately broken fake (`hnx conform run orchestration --target brok
 
 ### Real-product adapters
 
-None yet in this repository. See [Integrating a new product](#integrating-a-new-product).
+#### [`homelabnext.conform.adapters.llm_orchestrator:make`](../../homelabnext/conform/adapters/llm_orchestrator.py)
+
+The `orchestration` contract on the LLM orchestrator (the Go controller; pinned: `a52a1c4`).
+
+- Target file: [`conformance/targets/orchestration-llm-orchestrator-recorded.yml`](../../conformance/targets/orchestration-llm-orchestrator-recorded.yml) (target `orchestration-llm-orchestrator-recorded`)
+- Factory: `make(*, profiles_dir: str | None=None, recorded_fake: bool=False, fixes: list[str] | tuple[str, ...]=(), capability: str='orchestration', priority: int=50, poll: float=0.2, wait_floor: float=60.0) -> LLMOrchestrator`
+- Config in the target: `{recorded_fake: true}`
+
+<details><summary>Full adapter notes</summary>
+
+The `orchestration` contract on the LLM orchestrator (the Go controller; pinned: `a52a1c4`).
+
+`make(**config)` returns an `LLMOrchestrator`: a stdlib client of the controller's job
+API on `HNX_ENDPOINT_ORCHESTRATION` plus a loopback *handler host* that runs the job bodies.
+The mapping (docs/orchestration-controller.md has the whole table):
+
+* `define(name, handler, retries=n)` -> a profile file `<agent key>.yaml` written into the
+  controller's profiles directory (`profiles_dir`, or `HNX_ORCHESTRATION_PROFILES_DIR`), then
+  `POST /admin/reload-profiles`.  The agent key is `hnxconf-<run token>-<name>`; the profile
+  is `local_only` and asks for `max_attempts: n + 1`, a field only a controller with the
+  proposed retry change reads.  The handler is kept by the handler host, never sent anywhere.
+* `submit` -> `POST /jobs` with that agent key, the idempotency key namespaced by the run
+  token (the controller's keys are global and never expire), and a task description holding one
+  job line (`hnx-conform-job:<base64url JSON>`: handler host URL, a per-target secret, a token
+  per submit, the job and its parameters).  `404` is `UnknownJob`.
+* the job body -> the controller runs `hermes -z PROMPT`; for a conformance run `hermes` is
+  `conformance/fakes/llm_orchestrator_hermes.py`, which posts the job line to the handler host
+  and prints the handler's answer (or exits 1 with its error).
+* `wait` -> polls `GET /jobs/{id}` until a terminal state: `done` is `succeeded`,
+  `failed` and `budget_killed` are `failed`, `cancelled` is `cancelled`; `result` is
+  the answer decoded from `response_body`, `error` is `local_failed_reason`.  A controller
+  that does not report `attempts` gets the number of executions the handler host saw for the
+  run.  The timeout is at least `wait_floor` seconds: the controller admits on a 2 s tick.
+* `cancel` -> `POST /jobs/{id}/cancel`; `409` (a run that may no longer be cancelled) reads
+  the run back unchanged, which is the contract for a finished run.
+
+The adapter never answers for the controller: it does not raise `UnknownJob` for a name it was
+not given and does not retry a failed run itself, so the suite sees what the controller does.
+
+Controller limits (of `a52a1c4`, not of this adapter): an unknown `agent_key` is accepted and
+queued as an HTTP passthrough job (`unknown-job-raises` fails); a run is attempted once
+(`retries-until-success` and `retries-are-bounded` fail); a submit cannot be held, so a cancel
+races the next admission tick; the API has no authentication.
+
+</details>
+
+#### [`homelabnext.conform.adapters.llm_orchestrator:make`](../../homelabnext/conform/adapters/llm_orchestrator.py)
+
+The `orchestration` contract on the LLM orchestrator (the Go controller; pinned: `a52a1c4`).
+
+- Target file: [`conformance/targets/orchestration-llm-orchestrator.yml`](../../conformance/targets/orchestration-llm-orchestrator.yml) (target `orchestration-llm-orchestrator`)
+- Factory: `make(*, profiles_dir: str | None=None, recorded_fake: bool=False, fixes: list[str] | tuple[str, ...]=(), capability: str='orchestration', priority: int=50, poll: float=0.2, wait_floor: float=60.0) -> LLMOrchestrator`
+
+<details><summary>Full adapter notes</summary>
+
+The `orchestration` contract on the LLM orchestrator (the Go controller; pinned: `a52a1c4`).
+
+`make(**config)` returns an `LLMOrchestrator`: a stdlib client of the controller's job
+API on `HNX_ENDPOINT_ORCHESTRATION` plus a loopback *handler host* that runs the job bodies.
+The mapping (docs/orchestration-controller.md has the whole table):
+
+* `define(name, handler, retries=n)` -> a profile file `<agent key>.yaml` written into the
+  controller's profiles directory (`profiles_dir`, or `HNX_ORCHESTRATION_PROFILES_DIR`), then
+  `POST /admin/reload-profiles`.  The agent key is `hnxconf-<run token>-<name>`; the profile
+  is `local_only` and asks for `max_attempts: n + 1`, a field only a controller with the
+  proposed retry change reads.  The handler is kept by the handler host, never sent anywhere.
+* `submit` -> `POST /jobs` with that agent key, the idempotency key namespaced by the run
+  token (the controller's keys are global and never expire), and a task description holding one
+  job line (`hnx-conform-job:<base64url JSON>`: handler host URL, a per-target secret, a token
+  per submit, the job and its parameters).  `404` is `UnknownJob`.
+* the job body -> the controller runs `hermes -z PROMPT`; for a conformance run `hermes` is
+  `conformance/fakes/llm_orchestrator_hermes.py`, which posts the job line to the handler host
+  and prints the handler's answer (or exits 1 with its error).
+* `wait` -> polls `GET /jobs/{id}` until a terminal state: `done` is `succeeded`,
+  `failed` and `budget_killed` are `failed`, `cancelled` is `cancelled`; `result` is
+  the answer decoded from `response_body`, `error` is `local_failed_reason`.  A controller
+  that does not report `attempts` gets the number of executions the handler host saw for the
+  run.  The timeout is at least `wait_floor` seconds: the controller admits on a 2 s tick.
+* `cancel` -> `POST /jobs/{id}/cancel`; `409` (a run that may no longer be cancelled) reads
+  the run back unchanged, which is the contract for a finished run.
+
+The adapter never answers for the controller: it does not raise `UnknownJob` for a name it was
+not given and does not retry a failed run itself, so the suite sees what the controller does.
+
+Controller limits (of `a52a1c4`, not of this adapter): an unknown `agent_key` is accepted and
+queued as an HTTP passthrough job (`unknown-job-raises` fails); a run is attempted once
+(`retries-until-success` and `retries-are-bounded` fail); a submit cannot be held, so a cancel
+races the next admission tick; the API has no authentication.
+
+</details>
 
 ### Registry services
 
@@ -187,6 +276,8 @@ No service in `examples/services.yml` declares `capability: orchestration`.
    ```python
    def make(**config) -> Orchestrator: ...
    ```
+
+   The factory this repository ships: `homelabnext.conform.adapters.llm_orchestrator:make` is `make(*, profiles_dir: str | None=None, recorded_fake: bool=False, fixes: list[str] | tuple[str, ...]=(), capability: str='orchestration', priority: int=50, poll: float=0.2, wait_floor: float=60.0) -> LLMOrchestrator`.
 
 3. **Describe the target** (YAML; `features` lists only what the product really offers; `waive:` takes SHOULD check ids with a reason, never a MUST):
 

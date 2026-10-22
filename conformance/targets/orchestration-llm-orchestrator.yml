@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# The orchestration adapter (homelabnext.conform.adapters.llm_orchestrator) on a running LLM
+# orchestrator controller: HNX_ENDPOINT_ORCHESTRATION is its job API, HNX_ORCHESTRATION_PROFILES_DIR
+# the profiles directory it loads, and `hermes` on its PATH is conformance/fakes/
+# llm_orchestrator_hermes.py (docs/orchestration-controller.md has the dev setup).
+#   hnx conform run orchestration --target orchestration-llm-orchestrator
+name: orchestration-llm-orchestrator
+capabilities:
+  orchestration:
+    adapter: homelabnext.conform.adapters.llm_orchestrator:make
