@@ -497,6 +497,10 @@ Every request command takes `--socket PATH` (or `$HNX_BROKER_SOCKET`) and then a
 broker instead of opening the state: `actions`, `call`, `submit`, `status`, `run`, `cancel` and
 `pending --mine` act as this process's mapped profile (`--as` is a usage error), `approve`/`deny`
 `--as ISSUER:SUBJECT` need this process to be a relay, and `pending` and `audit` list for a relay.
+`status` is the owner's full view: the request, its state and verdict, its result, and every
+approval filed for it, each with `approver_kind` (`human`, `agent`, or null when the approver is no
+longer in the manifest), judged against the manifest when asked. That, not an event's `tier_used`,
+is what StackStorm's approved-run rule (A03) trusts ([stackstorm.md](stackstorm.md)).
 
 ### Approval relays: the protocol
 

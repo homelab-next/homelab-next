@@ -808,14 +808,22 @@ class BrokerService:
         )
 
     def detail(self, caller, request_id) -> dict[str, Any]:
-        """The owner's full view: request, state, approvals and result (``hnx broker status``)."""
+        """The owner's full view: request, state, approvals and result (``hnx broker status``).
+        Each approval carries ``approver_kind``: ``human``, ``agent`` or None (no longer an
+        allowlisted approver), judged now against the manifest -- the authoritative answer to
+        "did a person approve this", where an event's ``tier_used`` is only advisory."""
         st = self.status(caller, request_id)
         rec = self.state.get_request(request_id)
+        view = self._view()
+        approvals = [
+            {**a, "approver_kind": approver_kind(view, a.get("approver") or {})}
+            for a in self.state.approvals(request_id)
+        ]
         return {
             "request": rec["request"],
             "state": st.state,
             "verdict": rec["verdict"],
-            "approvals": self.state.approvals(request_id),
+            "approvals": approvals,
             "result": self.state.get_result(request_id),
         }
 

@@ -480,7 +480,9 @@ def run_approved(
 
     It runs only a request a live step of a bound pack submitted and recorded
     (:func:`submitted_name`), still asking for the same thing (:func:`fingerprint`), owned by this
-    pack's actor, still pending and approved; anything else is ``refused`` with a reason, logged,
+    pack's actor, still pending, and whose latest decision is an approval by an approver the broker
+    says is a person (``approver_kind`` ``human`` in its ``status``: the event's ``tier_used`` is
+    advisory and never trusted); anything else is ``refused`` with a reason, logged,
     and the broker is not asked to run it.  The broker re-decides anyway (the approval's digest,
     expiry and single use, the owner): a forged event costs a refusal, never a run.  Shadow mode
     checks the record and stops before the socket."""
@@ -535,6 +537,10 @@ def run_approved(
     approvals = detail.get("approvals") or []
     if not approvals or approvals[-1].get("decision") != "approved":
         return refuse("not-approved")
+    # who approved is the broker's answer, never the event's: tier_used is whatever the event
+    # says (anyone who can publish it, or POST the webhook, writes it); a missing kind refuses
+    if approvals[-1].get("approver_kind") != "human":
+        return refuse("not-human-approved", approver_kind=approvals[-1].get("approver_kind"))
     try:
         broker.run(rid)
     except Denied as exc:

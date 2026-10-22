@@ -159,8 +159,10 @@ approved_run: {id: A03, mode: shadow}     # source: svc:broker by default; promo
 It triggers on `homelabnext.decision.returned` from the broker with `verdict: accept` and
 `tier_used: human` (what the broker emits when a person approves; an approver of kind agent,
 admitted by the manifest's `allow_agent_approvers`, emits `tier_used: agent` and never matches,
-and a denial is `reject` and never matches either). Its one step, `run`, asks the broker to run `data.decision_id`, and only when all of
-this holds, else the run ends `refused` with the reason, logged:
+and a denial is `reject` and never matches either). That match is a filter, not the guard: an
+event's `tier_used` is whatever its publisher wrote. Its one step, `run`, asks the broker to run
+`data.decision_id`, and only when all of this holds, else the run ends `refused` with the reason,
+logged:
 
 | Check | Refusal |
 |---|---|
@@ -171,6 +173,7 @@ this holds, else the run ends `refused` with the reason, logged:
 | the broker shows the request to this caller (the owner) | `not-request-owner` |
 | its actor is this actor, and it still asks for what was submitted (the fingerprint) | `other-caller`, `request-mismatch` |
 | it is still pending, and its latest decision is an approval | `not-pending`, `not-approved` |
+| the broker says that approver is a person: `approver_kind: human` on the approval in its `status`, judged against the manifest when asked, whatever the event's `tier_used` says | `not-human-approved` |
 
 The broker then re-decides anyway: the approval's digest binding, expiry and single use, the
 owner. A run happens at most once (the broker claims the request first), so a redelivered or
@@ -194,9 +197,14 @@ What A03 does not do, or cannot do yet:
   `privileged` (or `requires_approval: true`) with its handler pinned in the tree (`st2-handler`),
   a risky `action` step that calls it, the pack's rule live, and `approved_run: {mode: live}` with
   its own `promotion`.
-- **`tier_used: human` does not prove a person approved.** The broker emits `tier_used: human` for
-  every approval, including one by an agent approver a manifest allows (`allow_agent_approvers`).
-  Until it tells the two apart, do not allow agent approvers on any action a bound pack submits.
+- **`tier_used` is advisory.** The broker emits `tier_used: agent` for an approval by an agent
+  approver the manifest admits (`allow_agent_approvers`) and `human` otherwise, and the rule
+  filters on it, but a forged event (published by anyone the bus ACL lets publish
+  `decision.returned`, or POSTed with the webhook key) can say `human`. The step therefore asks the
+  broker: each approval in `status` carries `approver_kind` (`human`, `agent`, or null for an
+  approver no longer in the manifest), and anything but `human` on the latest one is refused
+  (`not-human-approved`). An agent approval of a request StackStorm submitted is therefore never
+  run by A03; run it by hand if that is what you want.
 
 ```mermaid
 sequenceDiagram

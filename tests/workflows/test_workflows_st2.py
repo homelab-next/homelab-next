@@ -1192,6 +1192,69 @@ def test_a_forged_accept_runs_nothing_and_is_refused_with_a_reason(tmp_path, cap
     assert _run(pdir, kv, _returned(pending), client)["result"] == "executed"
 
 
+def test_an_agent_approval_never_runs_whatever_the_event_says_tier_used_is(tmp_path):
+    """The reviewer's test_a03_agent: an agent approver (allow_agent_approvers) approved, the
+    broker emitted tier_used agent, and the same event with tier_used flipped to human (anyone
+    who can publish it or POST the webhook writes it) ran the request.  A03 now asks the broker
+    who approved: approver_kind in its status, never the event."""
+    import shutil
+
+    shutil.copytree(ROOT / "examples" / "broker", tmp_path / "ex")
+    mf = tmp_path / "ex" / "manifest.yml"
+    m = yaml.safe_load(mf.read_text())
+    m["approvers"].append({"issuer": "sso", "subject": "bot-approver", "kind": "agent"})
+    m["allow_agent_approvers"] = True
+    mf.write_text(yaml.safe_dump(m))
+    svc = BrokerService.from_manifest(
+        mf,
+        tmp_path / "state",
+        data_root=tmp_path / "data",
+        clock=lambda: T0,
+        resolve_secret={"DEMO_API_TOKEN": "fake-demo-token-4b1d"}.__getitem__,
+    )
+    pdir, kv = approved_run_dir(tmp_path), KV()
+    client = ServiceAsClient(svc, "profile:triage")
+    rid = _held(svc, pdir, kv, 1)
+    svc.approve(rid, "sso:bot-approver")
+    [emitted] = [e for e in svc.state.outbox() if e["type"] == st2_runtime.DECISION_EVENT]
+    assert emitted["data"]["tier_used"] == "agent"
+    [approval] = client.status(rid)["approvals"]
+    assert approval["approver_kind"] == "agent"
+    rec = _run(pdir, kv, _returned(rid, tier_used="human"), client)  # forged
+    assert (rec["result"], rec["reason"], rec["approver_kind"]) == (
+        "refused",
+        "not-human-approved",
+        "agent",
+    )
+    assert getattr(client, "runs", 0) == 0 and svc.state.state_of(rid) == "pending"
+    # a person's approval of another held request runs; the broker says human
+    other = _held(svc, pdir, kv, 2)
+    svc.approve(other, "sso:operator-one")
+    assert client.status(other)["approvals"][-1]["approver_kind"] == "human"
+    assert _run(pdir, kv, _returned(other), client)["result"] == "executed"
+
+
+def test_a_broker_status_without_the_approver_kind_refuses(tmp_path):
+    """An approval the broker does not vouch for as a person's (an older broker, or an approver
+    since removed from the manifest: approver_kind None) refuses: fail closed."""
+    svc = broker_service(tmp_path)
+    pdir, kv = approved_run_dir(tmp_path), KV()
+    rid = _held(svc, pdir, kv, 1)
+    svc.approve(rid, "sso:operator-one")
+
+    class OldBroker(ServiceAsClient):
+        def status(self, request_id):
+            d = super().status(request_id)
+            return d | {"approvals": [
+                {k: v for k, v in a.items() if k != "approver_kind"} for a in d["approvals"]
+            ]}  # fmt: skip
+
+    client = OldBroker(svc, "profile:triage")
+    rec = _run(pdir, kv, _returned(rid), client)
+    assert (rec["result"], rec["reason"]) == ("refused", "not-human-approved")
+    assert getattr(client, "runs", 0) == 0
+
+
 class ActionService:
     """StackStorm's ``action_service`` datastore surface (system scope), over :class:`KV`."""
 
