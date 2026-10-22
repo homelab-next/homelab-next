@@ -67,6 +67,9 @@
           "$ref": "#/$defs/origin_git"
         },
         {
+          "$ref": "#/$defs/origin_hosted"
+        },
+        {
           "$ref": "#/$defs/origin_unknown"
         }
       ]
@@ -78,14 +81,20 @@
         },
         {
           "$ref": "#/$defs/transport_http"
+        },
+        {
+          "$ref": "#/$defs/transport_remote"
         }
       ]
     },
     "runtime": {
-      "description": "agent-local: started by the agent's client as a subprocess under the agent's own user; else the registry host and system user it runs as.",
+      "description": "agent-local: started by the agent's client as a subprocess under the agent's own user; hosted: a third party's hosted server (a remote transport); else the registry host and system user it runs as.",
       "oneOf": [
         {
           "const": "agent-local"
+        },
+        {
+          "const": "hosted"
         },
         {
           "type": "object",
@@ -120,7 +129,7 @@
     },
     "headers": {
       "type": "object",
-      "description": "HTTP headers of a remote server: an optional scheme word and a secret-store name (Bearer secret:<name>).",
+      "description": "HTTP headers of a remote (http, sse or hosted) server: an optional scheme word and a secret-store name (Bearer secret:<name>).",
       "propertyNames": {
         "pattern": "^[A-Za-z][A-Za-z0-9-]{0,63}$(?!\\n)"
       },
@@ -481,6 +490,27 @@
         }
       }
     },
+    "origin_hosted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "provider"
+      ],
+      "description": "A third party's hosted MCP server: no code of it runs in the lab, so there is nothing to pin; its transport is remote.",
+      "properties": {
+        "kind": {
+          "const": "hosted"
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9 .&-]*$(?!\\n)",
+          "description": "Who operates it (the vendor's name)."
+        }
+      }
+    },
     "origin_unknown": {
       "type": "object",
       "additionalProperties": false,
@@ -556,6 +586,34 @@
           "pattern": "^/[A-Za-z0-9._~/%:@+-]*$(?!\\n)",
           "maxLength": 200,
           "default": "/mcp"
+        }
+      }
+    },
+    "transport_remote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "url"
+      ],
+      "description": "A third party's hosted MCP server, reached over the internet at an explicit https URL (a lab server is reached by registry name instead: streamable-http or sse with an endpoint). Its credentials go only in headers as secret: names.",
+      "properties": {
+        "type": {
+          "const": "remote"
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 300,
+          "pattern": "^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?(/[A-Za-z0-9._~/%-]*)?$(?!\\n)",
+          "description": "https only, a DNS host name (no userinfo, no query, no fragment, no IP literal); check refuses a private or lab address."
+        },
+        "protocol": {
+          "enum": [
+            "streamable-http",
+            "sse"
+          ],
+          "default": "streamable-http",
+          "description": "sse is the legacy HTTP+SSE transport."
         }
       }
     },

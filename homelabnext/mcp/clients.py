@@ -299,6 +299,10 @@ def _env(inst: Instance, *, fixed_only: bool = False) -> dict[str, str]:
 
 def _url(inst: Instance, registry: Any) -> str:
     t = inst.record["transport"]
+    if t["type"] == servers.REMOTE:  # a hosted server: its reviewed https URL
+        if not str(t.get("url", "")).startswith("https://"):
+            raise RenderError([f"{inst.server}: a remote server's URL is https (never plaintext)"])
+        return str(t["url"])
     if registry is None:
         raise RenderError([f"{inst.server}: an HTTP server needs the registry for its URL"])
     svc = registry.services.get(str(t["endpoint"]).removeprefix("svc:"))
@@ -325,6 +329,8 @@ def definition(
     """One instance's entry in ``client``'s format (``None``: the client cannot take it)."""
     t = inst.record["transport"]
     stdio = t["type"] == "stdio"
+    # the wire protocol: a lab server's transport type, a hosted one's protocol
+    wire = t.get("protocol", "streamable-http") if t["type"] == servers.REMOTE else t["type"]
     if client == "claude-desktop" and not stdio:
         return None
     if client == "claude-desktop" and secret_refs(inst.record):
@@ -336,7 +342,7 @@ def definition(
                 "client that expands them (claude-code)"
             ]
         )
-    if client == "hermes" and t["type"] == "sse":
+    if client == "hermes" and wire == "sse":
         raise RenderError(
             [
                 f"{inst.name}: {inst.server} speaks the legacy sse transport; a Hermes "
@@ -347,7 +353,7 @@ def definition(
     d: dict[str, Any] = {}
     if client in ("claude-code", "generic"):
         d["type" if client == "claude-code" else "transport"] = (
-            "http" if t["type"] == "streamable-http" and client == "claude-code" else t["type"]
+            "http" if wire == "streamable-http" and client == "claude-code" else wire
         )
     if stdio:
         command, launcher_args = _launch(inst.record, inst.server, ctx)

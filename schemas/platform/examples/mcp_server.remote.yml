@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# A third party's hosted server: an explicit https URL, internet egress, its credential a secret
+# name in a header (fictional).
+id: tracker
+description: Issues and projects in a hosted tracker, through the vendor's hosted MCP server.
+owner: platform-team
+status: draft
+origin:
+  kind: hosted
+  provider: Example Tracker Inc
+transport:
+  type: remote
+  url: https://mcp.tracker.example.com/mcp
+  protocol: streamable-http
+runtime: hosted
+headers:
+  Authorization: Bearer secret:mcp/tracker-token
+egress:
+- internet
+data_tier: cloud-allowed
+tools:
+- name: search_issues
+  classes:
+  - read
+  - egress
+  approval: false
+- name: create_issue
+  classes:
+  - record-write
+  - egress
+  approval: true
+author: agent:example-builder

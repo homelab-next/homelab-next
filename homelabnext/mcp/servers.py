@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -52,6 +53,8 @@ STATUSES = ("draft", "active", "deprecated", "retired")
 #: statuses a profile may be granted (deprecated with a warning)
 GRANTABLE = ("active", "deprecated")
 HTTP_TRANSPORTS = ("streamable-http", "sse")
+#: a third party's hosted server, reached at an explicit https URL (``transport.url``)
+REMOTE = "remote"
 #: registry ``mcp.transport`` -> catalog transport type
 REGISTRY_TRANSPORT = {"http": "streamable-http", "sse": "sse", "stdio": "stdio"}
 #: the directory name of a catalog beside a registry file or under an examples tree
@@ -227,9 +230,10 @@ def file_digest(path: str | Path) -> str:
 #: reported against the branch the record meant, not as "not valid under any of the given schemas"
 _BRANCHES = {
     "origin": ("kind", {"first-party": "origin_first_party", "package": "origin_package",
-                        "image": "origin_image", "git": "origin_git", "unknown": "origin_unknown"}),
+                        "image": "origin_image", "git": "origin_git", "hosted": "origin_hosted",
+                        "unknown": "origin_unknown"}),
     "transport": ("type", {"stdio": "transport_stdio", "streamable-http": "transport_http",
-                           "sse": "transport_http"}),
+                           "sse": "transport_http", "remote": "transport_remote"}),
 }  # fmt: skip
 #: the record-level ``not required`` rules (headers only on a remote server, env and settings
 #: only on a stdio one)
@@ -684,6 +688,59 @@ def launch_command(rec: Mapping[str, Any]) -> str | None:
         return None
 
 
+#: top-level domains (and suffixes) that name a private, lab or test network, never a vendor's
+#: hosted server: a lab server is reached by its registry name (``endpoint: svc:<name>``)
+PRIVATE_SUFFIXES = (
+    "localhost", "local", "lan", "home", "internal", "intranet", "corp", "private", "localdomain",
+    "home.arpa", "arpa", "test", "invalid", "example", "onion", "lab",
+)  # fmt: skip
+
+
+def remote_problems(rec: Mapping[str, Any], where: str, registry: Any = None) -> list[str]:
+    """A third party's hosted server (``transport.type: remote``): a ``hosted`` origin and
+    runtime, egress to the internet, and an https URL whose host is a public DNS name (not a
+    private or test suffix, and with a registry, not one of the lab's hosts or its domain).  The
+    URL's shape (https, no userinfo, query or IP literal) is the schema's; its credentials can
+    only be headers' ``secret:`` names (headers are the only place a remote record has)."""
+    t, origin = rec.get("transport") or {}, rec.get("origin") or {}
+    remote = t.get("type") == "remote"
+    out: list[str] = []
+    if remote != (origin.get("kind") == "hosted"):
+        out.append(f"{where}: a hosted origin goes with a remote transport, and only with one")
+    if remote != (rec.get("runtime") == "hosted"):
+        out.append(f"{where}: runtime hosted goes with a remote transport, and only with one")
+    if not remote:
+        return out
+    egress = rec.get("egress")
+    if not (isinstance(egress, list) and "internet" in egress):
+        out.append(f"{where}: a remote server is reached over the internet: egress names internet")
+    url = urlsplit(str(t.get("url", "")))
+    host = (url.hostname or "").lower()
+    if url.scheme != "https":
+        out.append(f"{where}: a remote server's URL is https (never plaintext)")
+    if (
+        not host
+        or "." not in host
+        or host.rsplit(".", 1)[-1].isdigit()  # an IP literal: no name a review can attest
+        or any(host == s or host.endswith("." + s) for s in PRIVATE_SUFFIXES)
+    ):
+        out.append(
+            f"{where}: a remote server's URL names a public host; a lab or private one is reached "
+            "by registry name (streamable-http or sse with endpoint: svc:<name>)"
+        )
+    if registry is not None:
+        domain = str(getattr(registry, "domain", "") or "").lower()
+        lab = (domain and (host == domain or host.endswith("." + domain))) or host.split(".")[
+            0
+        ] in set(registry.hosts)
+        if lab:
+            out.append(
+                f"{where}: a remote server's URL names a lab host; reach it by registry name "
+                "(endpoint: svc:<name>)"
+            )
+    return out
+
+
 def _tool_problems(rec: Mapping[str, Any], where: str, vocabulary: Iterable[str]) -> list[str]:
     tools = rec.get("tools") or []
     out: list[str] = []
@@ -1080,6 +1137,7 @@ def check(
         out += path_bin_problems(rec, where, source_root)
         out += _tool_problems(rec, where, vocabulary)
         out += _egress_problems(rec, where)
+        out += remote_problems(rec, where, registry)
         out += _secret_problems(rec, where)
         out += _literal_problems(rec, where)
         out += _template_problems(rec, where)

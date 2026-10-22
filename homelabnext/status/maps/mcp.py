@@ -40,6 +40,10 @@ def _origin(o: Mapping[str, Any]) -> tuple[str, str, bool]:
     if kind == "git":
         c = o.get("commit")
         return f"git {o.get('repo')}", str(c)[:12] if c else "no commit", bool(c)
+    if (
+        kind == "hosted"
+    ):  # a third party runs it: there is no code to pin, so it never counts as pinned
+        return f"hosted by {o.get('provider')}", "nothing to pin (a third party runs it)", False
     return "unknown", "not pinned", False
 
 
@@ -84,6 +88,8 @@ def build(cat: servers.Catalog, profiles: Iterable[Mapping[str, Any]] = ()) -> d
                 "where": (
                     f"{t.get('endpoint')}{t.get('path', '/mcp')}"
                     if t.get("endpoint")
+                    else f"{t['url']} (hosted by {(rec.get('origin') or {}).get('provider')})"
+                    if t.get("url")
                     else f"{servers.program(rec)} ({'agent-local' if rec.get('runtime') == 'agent-local' else 'runs on its host'})"
                 ),
                 "classes": classes.get(sid, []),
