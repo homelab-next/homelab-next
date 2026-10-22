@@ -187,8 +187,13 @@ The mapping (docs/orchestration-controller.md has the whole table):
   proposed retry change reads.  The handler is kept by the handler host, never sent anywhere.
 * `submit` -> `POST /jobs` with that agent key, the idempotency key namespaced by the run
   token (the controller's keys are global and never expire), and a task description holding one
-  job line (`hnx-conform-job:<base64url JSON>`: handler host URL, a per-target secret, a token
-  per submit, the job and its parameters).  `404` is `UnknownJob`.
+  job line (`hnx-conform-job:<base64url JSON>`: handler host URL, a token per submit and its
+  HMAC, the job and its parameters).  `404` is `UnknownJob`.  The HMAC key never leaves
+  the adapter process: the controller's `GET /jobs/{id}` (unauthenticated) shows the task
+  description to anyone, so the line carries no host-wide secret, and the handler host runs only
+  a token it issued, with a valid MAC, for that token's own job and parameters.  Its request
+  body is bounded (`Content-Length`: not a number or negative is 400, over
+  `MAX_RUN_BODY` is 413).
 * the job body -> the controller runs `hermes -z PROMPT`; for a conformance run `hermes` is
   `conformance/fakes/llm_orchestrator_hermes.py`, which posts the job line to the handler host
   and prints the handler's answer (or exits 1 with its error).
@@ -232,8 +237,13 @@ The mapping (docs/orchestration-controller.md has the whole table):
   proposed retry change reads.  The handler is kept by the handler host, never sent anywhere.
 * `submit` -> `POST /jobs` with that agent key, the idempotency key namespaced by the run
   token (the controller's keys are global and never expire), and a task description holding one
-  job line (`hnx-conform-job:<base64url JSON>`: handler host URL, a per-target secret, a token
-  per submit, the job and its parameters).  `404` is `UnknownJob`.
+  job line (`hnx-conform-job:<base64url JSON>`: handler host URL, a token per submit and its
+  HMAC, the job and its parameters).  `404` is `UnknownJob`.  The HMAC key never leaves
+  the adapter process: the controller's `GET /jobs/{id}` (unauthenticated) shows the task
+  description to anyone, so the line carries no host-wide secret, and the handler host runs only
+  a token it issued, with a valid MAC, for that token's own job and parameters.  Its request
+  body is bounded (`Content-Length`: not a number or negative is 400, over
+  `MAX_RUN_BODY` is 413).
 * the job body -> the controller runs `hermes -z PROMPT`; for a conformance run `hermes` is
   `conformance/fakes/llm_orchestrator_hermes.py`, which posts the job line to the handler host
   and prints the handler's answer (or exits 1 with its error).

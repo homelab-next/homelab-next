@@ -25,6 +25,7 @@ from homelabnext.conform.core import run_checks
 #: what a52a1c4 fails: no unknown-agent rejection, no per-job retries
 CONTROLLER_GAPS = ["retries-are-bounded", "retries-until-success", "unknown-job-raises"]
 FIXES = ("reject-unknown-agent-key", "max-attempts")
+CALLBACK = "http://127.0.0.1:8123"  # no-raw-endpoint: allow the stand-in's loopback handler host
 
 
 def _failing(results):
@@ -87,23 +88,66 @@ def test_attempts_fall_back_to_executions_the_handler_host_saw(tmp_path):
         fake.stop()
 
 
-def test_handler_host_rejects_a_wrong_secret(tmp_path):
+def test_handler_host_runs_only_the_jobs_it_issued(tmp_path):
+    """Each submit gets its own token and an HMAC of it under a key that never leaves the
+    adapter: the job line (readable by any client of the controller's API) carries no host-wide
+    secret, a token the host did not issue or a wrong MAC is refused, and an issued token runs
+    only its own job with its own parameters."""
     fake = FakeController(tmp_path).start()
     o = lo.LLMOrchestrator(fake.url, profiles_dir=tmp_path)
     try:
-        o.define("j", lambda p: 1)
-        key = next(iter(fake.profiles))
-        status, doc = o._host.run({"secret": "fake-wrong", "token": "t", "job": key})
-        assert status == 403 and not doc["ok"]
-        status, doc = o._host.run({"secret": o._host.secret, "token": "t", "job": key})
-        assert (status, doc) == (200, {"ok": True, "result": 1})
+        o.define("j", lambda p: p.get("n"))
+        o.define("other", lambda p: "other ran")
+        rid = o.submit("j", {"n": 1}, idempotency_key="k")
+        job = hermes.decode(fake._jobs[rid]["task_description"])
+        assert set(job) == {"v", "callback", "token", "mac", "job", "params"}
+        assert "secret" not in job and not hasattr(o._host, "secret")
+        assert o._host._key.hex() not in fake._jobs[rid]["task_description"]
+        good = {k: job[k] for k in ("token", "mac", "job", "params")}
+        assert o._host.run(good) == (200, {"ok": True, "result": 1})
+        refused = [
+            {**good, "mac": "00" * 32},  # a wrong MAC
+            {**good, "token": "fake-not-issued"},  # a token the host never issued
+            {**good, "job": next(k for k in o._host.handlers if k.endswith("-other"))},
+            {**good, "params": {"n": 2}},  # its own job, someone else's parameters
+            {"secret": "fake-old-style", "token": job["token"], "job": job["job"]},
+            [good],
+        ]
+        for body in refused:
+            status, doc = o._host.run(body)
+            assert status in (400, 403) and doc["ok"] is False, body
+    finally:
+        o.close()
+        fake.stop()
+
+
+@pytest.mark.parametrize(
+    "length,expect",
+    [("abc", 400), ("-5", 400), (str(10**9), 413), ("", 400)],
+)
+def test_handler_host_bounds_the_request_body(tmp_path, length, expect):
+    import http.client
+    from urllib.parse import urlsplit
+
+    fake = FakeController(tmp_path).start()
+    o = lo.LLMOrchestrator(fake.url, profiles_dir=tmp_path)
+    try:
+        u = urlsplit(o._host.url)
+        conn = http.client.HTTPConnection(u.hostname, u.port, timeout=5)
+        conn.putrequest("POST", "/run")
+        if length:
+            conn.putheader("Content-Length", length)
+        conn.endheaders()
+        resp = conn.getresponse()
+        assert resp.status == expect and json.loads(resp.read())["ok"] is False
+        conn.close()
     finally:
         o.close()
         fake.stop()
 
 
 def test_hermes_stand_in_answers_like_hermes(tmp_path):
-    job = {"callback": "http://127.0.0.1:8123", "secret": "fake-s", "token": "t", "job": "j"}
+    job = {"callback": CALLBACK, "token": "t", "mac": "fake-mac", "job": "j"}
     prompt = "task\n" + lo.encode_job({**job, "params": {"a": [1, None]}}) + "\n\ncontracts"
     assert hermes.decode(prompt)["params"] == {"a": [1, None]}
     usage = tmp_path / "usage.json"
@@ -115,7 +159,7 @@ def test_hermes_stand_in_answers_like_hermes(tmp_path):
 
     code, out, err = hermes.run(["-z", prompt, "--usage-file", str(usage)], post=ok)
     assert (code, json.loads(out), err) == (0, {"hnx_result": {"n": 2}}, "")
-    assert seen[0][0] == "http://127.0.0.1:8123/run" and seen[0][1]["params"] == {"a": [1, None]}
+    assert seen[0][0] == CALLBACK + "/run" and seen[0][1]["params"] == {"a": [1, None]}
     assert json.loads(usage.read_text())["completed"] is True
     code, out, err = hermes.run(
         ["-z", prompt], post=lambda u, b: {"ok": False, "error": "RuntimeError: boom"}
@@ -131,22 +175,22 @@ def test_hermes_stand_in_answers_like_hermes(tmp_path):
     "callback",
     [
         "file:///etc/passwd",
-        "https://203.0.113.7:8443",
-        "http://203.0.113.7:8123",
-        "http://handler.invalid:8123",
-        "http://localhost:8123",
-        "http://fake-user@127.0.0.1:8123",
-        "http://127.0.0.1@203.0.113.7:8123",
-        "http://127.0.0.1",
-        "http://127.0.0.1:8123/elsewhere",
-        "http://127.0.0.1:8123?x=1",
-        "https://127.0.0.1:8123",
-        "gopher://127.0.0.1:8123",
+        "https://203.0.113.7:8443",  # no-raw-endpoint: allow a callback under test
+        "http://203.0.113.7:8123",  # no-raw-endpoint: allow a callback under test
+        "http://handler.invalid:8123",  # no-raw-endpoint: allow a callback under test
+        "http://localhost:8123",  # no-raw-endpoint: allow a callback under test
+        "http://fake-user@127.0.0.1:8123",  # no-raw-endpoint: allow a callback under test
+        "http://127.0.0.1@203.0.113.7:8123",  # no-raw-endpoint: allow a callback under test
+        "http://127.0.0.1",  # no-raw-endpoint: allow a callback under test
+        "http://127.0.0.1:8123/elsewhere",  # no-raw-endpoint: allow a callback under test
+        "http://127.0.0.1:8123?x=1",  # no-raw-endpoint: allow a callback under test
+        "https://127.0.0.1:8123",  # no-raw-endpoint: allow a callback under test
+        "gopher://127.0.0.1:8123",  # no-raw-endpoint: allow a callback under test
     ],
 )
 def test_hermes_stand_in_follows_only_a_loopback_callback(callback):
     """The job line is controller data anyone can read and write: the stand-in only ever posts to
-    the handler host on 127.0.0.1, never a file, another host or a URL with userinfo."""
+    the handler host on IPv4 loopback, never a file, another host or a URL with userinfo."""
     job = {"callback": callback, "token": "t", "job": "j", "params": {}}
     seen = []
     code, out, err = hermes.run(

@@ -9,8 +9,8 @@ The controller runs every profiled job as ``hermes -z PROMPT [--toolsets T] [--u
 ``hnx-conform-job:<base64url JSON>`` naming its loopback handler host, the job and its parameters.
 This script finds the line, asks the handler host to run the job's handler, and answers the way
 hermes does.  The job line is controller data (any client of its API can read or write a task
-description), so the only URL it ever posts to is ``http://127.0.0.1:<port>/run``: a callback
-with another scheme (``file://`` included), host, userinfo, path or query is refused.
+description), so the only URL it ever posts to is ``/run`` on IPv4 loopback (:data:`LOOPBACK`):
+a callback with another scheme (``file://`` included), host, userinfo, path or query is refused.
 
 * success: the answer on stdout (``{"hnx_result": ...}``) and exit 0 -- the controller stores
   stdout as ``response_body`` (``internal/queue/scheduler.go:744``);
@@ -38,12 +38,12 @@ from urllib.parse import urlsplit
 JOB_MARKER = "hnx-conform-job:"
 CALL_TIMEOUT_S = 120.0
 #: the handler host is always on IPv4 loopback (homelabnext.conform.adapters.llm_orchestrator)
-LOOPBACK = "127.0.0.1"
+LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow the handler host is local by design
 
 
 def run_url(callback: Any) -> str | None:
-    """``http://127.0.0.1:<port>/run`` for a callback that is exactly the loopback handler host
-    (``http://127.0.0.1:<port>``, an optional trailing ``/``), else ``None``."""
+    """``http://<LOOPBACK>:<port>/run`` for a callback that is exactly the loopback handler host
+    (``http://<LOOPBACK>:<port>``, an optional trailing ``/``), else ``None``."""
     if not isinstance(callback, str):
         return None
     try:
@@ -112,7 +112,7 @@ def run(
     url = run_url(job.get("callback"))
     if url is None:
         return 1, "", f"job callback is not http://{LOOPBACK}:<port>: refused"
-    body = {k: job.get(k) for k in ("secret", "token", "job", "params")}
+    body = {k: job.get(k) for k in ("token", "mac", "job", "params")}
     try:
         answer = _call(post, url, body)
     except (OSError, ValueError) as exc:

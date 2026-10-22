@@ -12,8 +12,13 @@ The mapping (docs/orchestration-controller.md has the whole table):
   proposed retry change reads.  The handler is kept by the handler host, never sent anywhere.
 * ``submit`` -> ``POST /jobs`` with that agent key, the idempotency key namespaced by the run
   token (the controller's keys are global and never expire), and a task description holding one
-  job line (``hnx-conform-job:<base64url JSON>``: handler host URL, a per-target secret, a token
-  per submit, the job and its parameters).  ``404`` is :class:`UnknownJob`.
+  job line (``hnx-conform-job:<base64url JSON>``: handler host URL, a token per submit and its
+  HMAC, the job and its parameters).  ``404`` is :class:`UnknownJob`.  The HMAC key never leaves
+  the adapter process: the controller's ``GET /jobs/{id}`` (unauthenticated) shows the task
+  description to anyone, so the line carries no host-wide secret, and the handler host runs only
+  a token it issued, with a valid MAC, for that token's own job and parameters.  Its request
+  body is bounded (``Content-Length``: not a number or negative is 400, over
+  :data:`MAX_RUN_BODY` is 413).
 * the job body -> the controller runs ``hermes -z PROMPT``; for a conformance run ``hermes`` is
   ``conformance/fakes/llm_orchestrator_hermes.py``, which posts the job line to the handler host
   and prints the handler's answer (or exits 1 with its error).
@@ -63,6 +68,8 @@ __all__ = ["JOB_MARKER", "LLMOrchestrator", "encode_job", "make"]
 JOB_MARKER = "hnx-conform-job:"
 PROFILES_ENV = "HNX_ORCHESTRATION_PROFILES_DIR"
 _LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow the handler host is local by design
+#: the largest ``POST /run`` body the handler host reads (a job line's token, MAC and parameters)
+MAX_RUN_BODY = 1 << 20
 _AGENT_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 #: controller state -> contract state (internal/store/job.go:8-15)
 STATES = {
@@ -93,12 +100,17 @@ def encode_job(doc: Mapping[str, Any]) -> str:
 
 
 class _HandlerHost:
-    """Runs a defined job's handler when the hermes stand-in asks, and counts executions."""
+    """Runs a defined job's handler when the hermes stand-in asks, and counts executions.
+
+    :meth:`issue` gives every submit a token and ``HMAC-SHA256(key, token)``; the key stays in
+    this object.  :meth:`run` accepts only an issued token with its MAC, for the job and the
+    parameters it was issued for."""
 
     def __init__(self) -> None:
-        self.secret = secrets.token_hex(16)
+        self._key = secrets.token_bytes(32)
         self.handlers: dict[str, Callable[[Mapping[str, Any]], Any]] = {}
         self.executions: dict[str, int] = {}
+        self.issued: dict[str, tuple[str, str]] = {}  # token -> (job, canonical params)
         self._lock = threading.Lock()
         self._server = ThreadingHTTPServer((_LOOPBACK, 0), self._handler())
         self._server.daemon_threads = True
@@ -116,11 +128,33 @@ class _HandlerHost:
         with self._lock:
             return self.executions.get(token, 0)
 
+    def _mac(self, token: str) -> str:
+        return hmac.new(self._key, token.encode(), "sha256").hexdigest()
+
+    @staticmethod
+    def _canon(params: Any) -> str:
+        return json.dumps(params, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+    def issue(self, job: str, params: Mapping[str, Any]) -> tuple[str, str]:
+        """A fresh ``(token, mac)`` for one submit of ``job`` with ``params``."""
+        token = secrets.token_hex(16)
+        with self._lock:
+            self.issued[token] = (job, self._canon(dict(params)))
+        return token, self._mac(token)
+
     def run(self, body: Any) -> tuple[int, dict[str, Any]]:
-        if not isinstance(body, dict) or not hmac.compare_digest(
-            str(body.get("secret", "")), self.secret
+        if not isinstance(body, dict):
+            return 400, {"ok": False, "error": "the request is not a JSON object"}
+        token, mac = body.get("token"), body.get("mac")
+        with self._lock:
+            issued = self.issued.get(token) if isinstance(token, str) else None
+        if (
+            issued is None
+            or not isinstance(mac, str)
+            or not hmac.compare_digest(mac, self._mac(token))
+            or issued != (body.get("job"), self._canon(body.get("params") or {}))
         ):
-            return 403, {"ok": False, "error": "bad handler-host secret"}
+            return 403, {"ok": False, "error": "not a job this handler host issued"}
         handler = self.handlers.get(str(body.get("job")))
         if handler is None:
             return 404, {"ok": False, "error": f"no handler for {body.get('job')!r}"}
@@ -142,7 +176,14 @@ class _HandlerHost:
                 pass
 
             def do_POST(self) -> None:
-                n = int(self.headers.get("Content-Length") or 0)
+                raw = self.headers.get("Content-Length") or ""
+                n = int(raw) if raw.isascii() and raw.isdigit() else -1
+                if n < 0:
+                    self.close_connection = True
+                    return send_json(self, 400, {"ok": False, "error": "bad Content-Length"})
+                if n > MAX_RUN_BODY:
+                    self.close_connection = True
+                    return send_json(self, 413, {"ok": False, "error": "request too large"})
                 try:
                     body = json.loads(self.rfile.read(n))
                 except ValueError:
@@ -245,12 +286,13 @@ class LLMOrchestrator:
         _, _, unknown_job = _protocol()
         if not idempotency_key:
             raise ValueError("idempotency_key is required")
-        key, token = self._agent_key(name), secrets.token_hex(8)
+        key = self._agent_key(name)
+        token, mac = self._host.issue(key, params)
         job = {
             "v": 1,
             "callback": self._host.url,
-            "secret": self._host.secret,
             "token": token,
+            "mac": mac,
             "job": key,
             "params": dict(params),
         }
