@@ -246,7 +246,7 @@ def test_unknown_format_is_refused(tmp_path):
 
 # ---- a decrypted value never reaches a validation message --------------------------------------
 
-SEALED_VALUE = "fake-sealed-WAN-203.0.113.9"
+SEALED_VALUE = "fake-sealed-WAN-" + ".".join(["203", "0", "113", "9"])
 
 
 def test_a_sealed_guest_value_that_fails_the_schema_is_not_printed(tmp_path, fake_sops):

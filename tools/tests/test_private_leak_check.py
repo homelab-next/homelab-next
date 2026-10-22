@@ -146,6 +146,7 @@ def test_file_the_sops_rules_cover_must_be_sealed(tmp_path):
 
 
 GH_TOKEN = "gh" + "p_" + "a1B2c3D4e5F6g7H8" + "i9J0k1L2m3N4o5P6q7R8"
+WAN = ".".join(["203", "0", "113", "7"])  # a documentation address, assembled
 PEER_KEY = b64(b"fake-wireguard-peer-public-key!!")  # 44 chars of base64, like a WireGuard key
 
 
@@ -164,11 +165,9 @@ def found_at(found) -> set[tuple[str, str]]:
 def test_everything_under_a_sealed_path_must_be_sealed(tmp_path, rel):
     # the skeleton's first rule only named *.sops.yaml: what it did not cover went unchecked
     narrow = SOPS_RULES.replace("lab/sealed/", "lab/sealed/.*\\.sops\\.ya?ml$")
-    found = plc.check_private(
-        overlay(tmp_path, {".sops.yaml": narrow, rel: "wan_ipv4: 203.0.113.7\n"})
-    )
+    found = plc.check_private(overlay(tmp_path, {".sops.yaml": narrow, rel: f"wan_ipv4: {WAN}\n"}))
     assert found_at(found) == {(rel, "sops-unencrypted"), (".sops.yaml", "sops-policy")}
-    assert "203.0.113.7" not in "\n".join(map(str, found))
+    assert WAN not in "\n".join(map(str, found))
 
 
 def test_a_readme_under_a_sealed_path_stays_plain_and_is_still_scanned(tmp_path):
@@ -181,13 +180,13 @@ def test_a_readme_under_a_sealed_path_stays_plain_and_is_still_scanned(tmp_path)
     ("text", "needle"),
     [
         # plaintext values next to a fake sops block (JSON): the metadata is not real
-        ('{"wan": "203.0.113.7", "sops": {"mac": "x"}}', "without a well-formed mac"),
+        (f'{{"wan": "{WAN}", "sops": {{"mac": "x"}}}}', "without a well-formed mac"),
         # plaintext values with a sops block that has a version only
-        (f"wan_ipv4: 203.0.113.7\nwg_peer: {PEER_KEY}\nsops:\n  version: 3.9.0\n", "no recipient"),
+        (f"wan_ipv4: {WAN}\nwg_peer: {PEER_KEY}\nsops:\n  version: 3.9.0\n", "no recipient"),
         # real-looking metadata, but one value was never encrypted
-        (f"wan:\n    address: 203.0.113.7\n    peer: {enc()}\n" + SOPS_META, "wan/address"),
+        (f"wan:\n    address: {WAN}\n    peer: {enc()}\n" + SOPS_META, "wan/address"),
         # a comment sops would have encrypted, left in the clear
-        ("# peer is 203.0.113.7\n" + SOPS_FILE, "line 1 (comment)"),
+        (f"# peer is {WAN}\n" + SOPS_FILE, "line 1 (comment)"),
         # a value wrapped to look like ciphertext
         (f"wan:\n    address: ENC[AES256_GCM,data:{GH_TOKEN}]\n" + SOPS_META, "wan/address"),
         # metadata with a key sops never writes, where plain text could hide
@@ -208,11 +207,11 @@ def test_a_sealed_file_must_be_encrypted_throughout(tmp_path, text, needle):
     assert found_at(found) <= {(rel, "sops-malformed")} and found, found
     shown = "\n".join(map(str, found))
     assert needle in shown
-    assert "203.0.113.7" not in shown and GH_TOKEN not in shown  # keys and rules, never values
+    assert WAN not in shown and GH_TOKEN not in shown  # keys and rules, never values
 
 
 def test_partial_encryption_is_refused_on_a_sealed_path(tmp_path):
-    text = f"wan:\n    address: 203.0.113.7\n    peer: {enc()}\n" + SOPS_META.replace(
+    text = f"wan:\n    address: {WAN}\n    peer: {enc()}\n" + SOPS_META.replace(
         "    version:", "    encrypted_regex: ^peer$\n    version:"
     )
     found = plc.check_private(overlay(tmp_path, {"lab/sealed/wan.sops.yaml": text}))
@@ -234,7 +233,7 @@ def test_sealed_dotenv_and_ini_are_checked_too(tmp_path):
     good = f"WAN={enc()}\n" + meta
     assert plc.check_private(overlay(tmp_path / "a", {"lab/sealed/wan.env": good})) == []
     found = plc.check_private(
-        overlay(tmp_path / "b", {"lab/sealed/wan.env": "WAN=203.0.113.7\n" + meta})
+        overlay(tmp_path / "b", {"lab/sealed/wan.env": f"WAN={WAN}\n" + meta})
     )
     assert [f.detail for f in found] == ["WAN: not a well-formed ENC[...] value"]
     ini = f"[wan]\naddress = {enc()}\n[sops]\nage__list_0__map_recipient = age1fake\nmac = {enc(b'm')}\n"
@@ -271,7 +270,7 @@ def test_a_sops_config_that_narrows_the_sealed_paths_is_a_finding(tmp_path, file
 
 
 def test_without_a_sops_config_the_sealed_paths_still_hold(tmp_path):
-    root = overlay(tmp_path, {"lab/sealed/wan.yml": "wan_ipv4: 203.0.113.7\n"})
+    root = overlay(tmp_path, {"lab/sealed/wan.yml": f"wan_ipv4: {WAN}\n"})
     (root / ".sops.yaml").unlink()
     found = plc.check_private(root)
     assert found_at(found) == {

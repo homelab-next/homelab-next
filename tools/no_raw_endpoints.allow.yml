@@ -57,6 +57,10 @@ allow:
     reason: tests plant documentation-range addresses to prove they are rejected in ids
   - path: "tests/ids/test_ids_lint.py"
     reason: tests plant documentation-range addresses to prove the lint catches them
+  - path: "tests/overlay/fake_openbao.py"
+    reason: a fake OpenBao that binds loopback for the vault password client and hnx_secret lookup tests
+  - path: "tests/overlay/test_private_overlay_example.py"
+    reason: a redirect test points at a loopback discard port that must never be reached
   - path: "tests/roles/test_role_lint.py"
     reason: tests plant a loopback literal to prove role_lint flags it
   - path: "tests/roles/test_role_render.py"

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """A JSON Schema validation error, told without the value that failed it.
 
-``jsonschema``'s ``ValidationError.message`` quotes the offending instance (``'203.0.113.7' does
+``jsonschema``'s ``ValidationError.message`` quotes the offending instance (``'<the value>' does
 not match '^...$'``).  The lab-data readers decrypt SOPS files in memory (``homelabnext.sops``),
 so a sealed value that fails validation would be printed into a terminal or a CI log by the
 message meant to explain it.  :func:`safe_message` names the rule and what the *schema* expected
