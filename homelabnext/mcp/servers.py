@@ -396,6 +396,55 @@ def resolve_bin(origin: Mapping[str, Any], bin_: Any) -> tuple[str | None, str |
     return None, f"declares several bins {bins}: name the one it runs (transport.bin)"
 
 
+#: the first-party ``hnx`` subcommands that serve MCP on stdio (``transport.entry`` names one),
+#: each with the only flags its arguments may hold, every one once and with a value.  Every other
+#: hnx subcommand can run code or write files a record must not reach (``invariants run
+#: --plugins-dir``, ``--notify-cmd``, ``broker run``, ``workflows run``, ``conform run``,
+#: ``--out``), so ``bin: hnx`` with free arguments is refused.  A test holds each entry to its
+#: real parser.
+HNX_ENTRIES: dict[str, tuple[tuple[str, ...], frozenset[str]]] = {
+    # hnx mcp serve: the read-only catalog server (homelabnext/mcp/cli.py)
+    "mcp-serve": (("mcp", "serve"), frozenset({"--root", "--registry", "--scope-from-profile"})),
+    # hnx broker mcp: the broker's agent-facing tools (homelabnext/broker/cli.py)
+    "broker-mcp": (("broker", "mcp"), frozenset({"--socket"})),
+}
+
+
+def hnx_args_problems(entry: Any, args: Iterable[Any]) -> list[str]:
+    """Why ``hnx <entry> <args>`` is not an MCP server's launch: an entry outside
+    :data:`HNX_ENTRIES`, or an argument that is not one of its flags (``--flag VALUE`` or
+    ``--flag=VALUE``, each flag once, the value never another flag)."""
+    if entry not in HNX_ENTRIES:
+        return [
+            f"a first-party hnx server names its entry, one of {sorted(HNX_ENTRIES)} (the hnx "
+            "subcommands that serve MCP on stdio)"
+        ]
+    allowed = HNX_ENTRIES[entry][1]
+    out: list[str] = []
+    seen: set[str] = set()
+    items = [str(a) for a in args]
+    i = 0
+    while i < len(items):
+        flag, eq, value = items[i].partition("=")
+        if flag not in allowed:
+            out.append(
+                f"hnx entry {entry}: argument {i + 1} is not one of its flags {sorted(allowed)}"
+            )
+            break
+        if not eq:
+            if i + 1 >= len(items) or items[i + 1].startswith("-"):
+                out.append(f"hnx entry {entry}: {flag} has no value")
+                break
+            value, i = items[i + 1], i + 1
+        if not value:
+            out.append(f"hnx entry {entry}: {flag} has no value")
+        if flag in seen:
+            out.append(f"hnx entry {entry}: {flag} is given twice")
+        seen.add(flag)
+        i += 1
+    return out
+
+
 def _bins_problems(origin: Mapping[str, Any], bin_: Any, where: str) -> list[str]:
     """The reviewed ``bins`` (each a bare name, never an interpreter or shell) and the bin the
     launch runs (:func:`resolve_bin`)."""
@@ -423,6 +472,8 @@ def launch_problems(rec: Mapping[str, Any], where: str) -> list[str]:
     kind = origin.get("kind")
     bin_ = t.get("bin")
     out: list[str] = []
+    if t.get("entry") is not None and not (kind == "first-party" and bin_ == HNX):
+        out.append(f"{where}: entry is for a first-party hnx server (bin: hnx)")
     if kind == "package":
         eco, pkg, ver = origin.get("ecosystem"), str(origin.get("package")), origin.get("version")
         if eco not in ("npm", "pypi"):
@@ -455,6 +506,8 @@ def launch_problems(rec: Mapping[str, Any], where: str) -> list[str]:
         path = str(origin.get("path", "")).rstrip("/")
         if bin_ is None:
             out.append(f"{where}: a first-party server names its bin: hnx, or a path under {path}")
+        elif bin_ == HNX:
+            out += [f"{where}: {p}" for p in hnx_args_problems(t.get("entry"), t.get("args") or ())]
         elif bin_ != HNX and not (bin_ == path or str(bin_).startswith(path + "/")):
             out.append(
                 f"{where}: first-party bin {bin_} is neither hnx nor a path under origin.path "
@@ -506,7 +559,8 @@ def launch(rec: Mapping[str, Any], ctx: LaunchContext | None = None) -> tuple[st
     * git: the same with ``git+<repo>#<commit>`` (npm) or ``git+<repo>@<commit>`` (pypi);
     * image: ``docker run -i --rm [-e NAME ...] <repository>@<digest>``, one ``-e`` per
       ``env``, ``settings`` and parameter ``env`` key, so the container gets exactly those;
-    * first-party: the bin (``hnx``, or a path under ``origin.path``).
+    * first-party: ``hnx <entry's subcommand>`` (:data:`HNX_ENTRIES`), or a path under
+      ``origin.path``.
 
     ``ctx`` anchors the launch (:class:`LaunchContext`); an npm launch needs its ``npm_prefix``.
     Raises ValueError for a record :func:`launch_problems` (or the origin rules) refuse, or a
@@ -541,6 +595,10 @@ def launch(rec: Mapping[str, Any], ctx: LaunchContext | None = None) -> tuple[st
         )  # fmt: skip
         return DOCKER, ["run", "-i", "--rm", *(x for n in names for x in ("-e", n)),
                         f"{repo}@{origin['digest']}"]  # fmt: skip
+    if kind == "first-party" and bin_ == HNX:
+        if hnx_args_problems(t.get("entry"), t.get("args") or ()):
+            raise ValueError("an hnx launch names an MCP-serving entry and only its flags")
+        return HNX, list(HNX_ENTRIES[t["entry"]][0])
     if kind == "first-party" and bin_:
         return str(bin_), []
     raise ValueError(f"{rec.get('id')}: a {kind} origin has no generated launch")

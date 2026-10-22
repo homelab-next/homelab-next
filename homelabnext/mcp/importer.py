@@ -365,6 +365,8 @@ def draft(
             )
         ):  # the bin the origin defaults to is not written
             rec["transport"]["bin"] = got.bin
+        if got.entry:
+            rec["transport"]["entry"] = got.entry
         if third_party and not bin_problem:
             # what the config ran: the bin it named, else the default npx/uvx picked for it
             seen = got.bin or (

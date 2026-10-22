@@ -15,7 +15,8 @@ it cannot.
 * ``pipx run`` (pypi): ``--spec`` names the package, as ``--from``;
 * ``docker run``/``podman run`` (image): the first positional after the run flags is the image;
   its ``-e KEY[=VALUE]`` become the record's environment;
-* ``hnx``: a first-party server.
+* ``hnx``: a first-party server, when it runs one of the subcommands that serve MCP
+  (:data:`homelabnext.mcp.servers.HNX_ENTRIES`) with only that entry's flags.
 
 Every other launcher flag (``--python``, ``--with``, an index, ``--registry``, ``-v``,
 ``--privileged`` ...) is dropped and named in the report: a record cannot carry one, so the
@@ -306,6 +307,8 @@ class Mapped:
     dropped: list[str] = field(default_factory=list)
     #: why the command line was not mapped at all (then bin and args are empty)
     why: str | None = None
+    #: a first-party ``hnx`` server's entry (:data:`homelabnext.mcp.servers.HNX_ENTRIES`)
+    entry: str | None = None
 
 
 _VERSION = re.compile(
@@ -344,7 +347,18 @@ def map_launch(command: str, args: list[str]) -> Mapped:
         return Mapped(unknown, why=f"{got.launcher or 'no command'} is not a launcher a record "
                       "generates (a record names its origin; the renderer writes the launch)")  # fmt: skip
     if got.ecosystem == "first-party":
-        return Mapped({"kind": "first-party", "path": "homelabnext/"}, bin="hnx", args=args)
+        from .servers import HNX_ENTRIES, hnx_args_problems
+
+        for entry, (words, _) in sorted(HNX_ENTRIES.items()):
+            if tuple(args[: len(words)]) == words:
+                rest = args[len(words) :]
+                why = "; ".join(hnx_args_problems(entry, rest))
+                if why:
+                    return Mapped(unknown, why=why)
+                origin = {"kind": "first-party", "path": "homelabnext/"}
+                return Mapped(origin, bin="hnx", args=rest, entry=entry)
+        return Mapped(unknown, why="hnx: not a subcommand that serves MCP on stdio "
+                      f"({', '.join(' '.join(w) for w, _ in sorted(HNX_ENTRIES.values()))})")  # fmt: skip
     flags = sorted(set(got.flag_names.values()))  # value flags: switches are harmless
     blocking = [p for p in got.problems if "unknown flag" in p or "no value" in p
                 or "names nothing" in p or "only `" in p or "more than once" in p]  # fmt: skip

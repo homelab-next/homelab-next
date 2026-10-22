@@ -66,7 +66,11 @@ GENERATED = [
      ["uvx", "--no-config", "--from", f"git+{GIT_PYPI['repo']}@{COMMIT}", "srv"]),
     (_rec(GH, GIT_NPM, bin="srv"),
      ["npx", "-y", f"--prefix={PREFIX}", f"--package=git+{GIT_NPM['repo']}#{COMMIT}", "--", "srv"]),
-    (_rec(BROKER, FIRST, bin="hnx", args=["mcp", "serve"]), ["hnx", "mcp", "serve"]),
+    (_rec(BROKER, FIRST, bin="hnx", entry="mcp-serve"), ["hnx", "mcp", "serve"]),
+    (_rec(BROKER, FIRST, bin="hnx", entry="mcp-serve", args=["--scope-from-profile", "/p.json"]),
+     ["hnx", "mcp", "serve", "--scope-from-profile", "/p.json"]),
+    (_rec(BROKER, FIRST, bin="hnx", entry="broker-mcp", args=["--socket=/run/b.sock"]),
+     ["hnx", "broker", "mcp", "--socket=/run/b.sock"]),
     (_rec(BROKER, FIRST, bin="homelabnext/mcp/run.py"), ["homelabnext/mcp/run.py"]),
 ]  # fmt: skip
 
@@ -112,6 +116,23 @@ REFUSED = [
     (_rec(BROKER, FIRST, bin="homelabnext/agent/x.py"), "neither hnx nor a path under"),
     (_rec(BROKER, FIRST, bin="homelabnext/mcp/../../x"), "does not match"),
     (_rec(BROKER, FIRST), "names its bin"),
+    # round 4, F3: `bin: hnx` with free arguments reached subcommands that run code or write
+    # files; a record names an MCP-serving entry and only that entry's flags
+    (_rec(BROKER, FIRST, bin="hnx", args=["invariants", "run", "--plugins-dir", "/tmp/x"]),
+     "names its entry"),
+    (_rec(BROKER, FIRST, bin="hnx", entry="workflows-run", args=["x"]), "names its entry"),
+    (_rec(BROKER, FIRST, bin="hnx", entry="mcp-serve", args=["--notify-cmd", "id"]),
+     "is not one of its flags"),
+    (_rec(BROKER, FIRST, bin="hnx", entry="broker-mcp", args=["--socket", "/s", "--out", "/etc/x"]),
+     "is not one of its flags"),
+    (_rec(BROKER, FIRST, bin="hnx", entry="broker-mcp", args=["run", "deploy"]),
+     "is not one of its flags"),
+    (_rec(BROKER, FIRST, bin="hnx", entry="mcp-serve", args=["--root"]), "has no value"),
+    (_rec(BROKER, FIRST, bin="hnx", entry="mcp-serve", args=["--root", "--registry", "x"]),
+     "has no value"),
+    (_rec(BROKER, FIRST, bin="hnx", entry="mcp-serve", args=["--root", "/a", "--root=/b"]),
+     "given twice"),
+    (_rec(BROKER, FIRST, bin="homelabnext/mcp/run.py", entry="mcp-serve"), "entry is for a first-party hnx"),
     # origins with no generated launch, or not pinned the way a launcher reads them
     (_rec(GH, {"kind": "package", "ecosystem": "cargo", "package": "x", "version": "1.0.0",
                "sha256": "b" * 64}), "run it from an image"),
@@ -142,6 +163,23 @@ def test_a_launcher_flag_in_args_reaches_the_server_never_the_launcher():
     rec = _rec(GH, args=["--registry", "https://npm.example"])
     assert servers.launch(rec, CTX) == (
         "npx", ["-y", f"--prefix={PREFIX}", f"--package={GH_PIN}", "--", "mcp-github"])  # fmt: skip
+
+
+def test_every_hnx_entry_is_a_subcommand_that_serves_mcp_with_those_flags(capsys):
+    """HNX_ENTRIES is held to the real parsers: each entry's words select the subcommand that
+    serves MCP on stdio, and each allowed flag is one that subcommand takes."""
+    from homelabnext.broker.cli import _parser
+    from homelabnext.mcp import cli as mcp_cli
+
+    assert sorted(servers.HNX_ENTRIES) == ["broker-mcp", "mcp-serve"]
+    words, flags = servers.HNX_ENTRIES["broker-mcp"]
+    sub = next(a for a in _parser()._actions if a.dest == "cmd").choices[words[1]]
+    assert words[0] == "broker" and flags <= set(sub._option_string_actions)
+    words, flags = servers.HNX_ENTRIES["mcp-serve"]
+    assert mcp_cli.main(["--help"]) == 0
+    help_text = capsys.readouterr().out
+    assert words == ("mcp", "serve") and "serve" in help_text
+    assert all(f in help_text for f in flags)
 
 
 def test_the_default_bin_is_the_single_declared_one_or_the_base_name_when_listed():
@@ -189,6 +227,10 @@ IMPORTED = [
     ("docker", ["run", "-i", "--rm", "--privileged", "-v", "/:/host", "--pid", "host", IMG],
      {"bin": None, "args": [], "dropped": ["--pid", "-v"]}),
     ("/tmp/evil/npx", ["-y", GH_PIN], {"bin": None}),  # the rendered launch is a bare npx
+    ("hnx", ["mcp", "serve", "--scope-from-profile", "/p.json"],
+     {"bin": "hnx", "args": ["--scope-from-profile", "/p.json"]}),
+    ("hnx", ["invariants", "run", "--plugins-dir", "/tmp/x"], None),
+    ("hnx", ["broker", "mcp", "--socket", "/s", "--notify-cmd", "id"], None),
     # not mapped at all: the draft keeps no origin, bin or argument
     ("npx", ["-y", "-p", GH_PIN, "node", "-e", "x"], None),
     ("uvx", ["--from", NOTES_PIN, "python", "-c", "x"], None),

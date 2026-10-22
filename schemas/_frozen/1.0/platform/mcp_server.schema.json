@@ -487,7 +487,7 @@
       "required": [
         "type"
       ],
-      "description": "A server a client starts as a subprocess. The record never writes the launcher: the renderer generates it from the origin (npm: npx -y --prefix=<npm_prefix> --package=<pkg>@<ver> -- <bin>; pypi: uvx --no-config --from <pkg>==<ver> <bin>; git: the same from git+<repo> at its commit; image: docker run -i --rm [-e NAME ...] <image>@<digest>; first-party: the bin), so no launcher flag can be expressed.",
+      "description": "A server a client starts as a subprocess. The record never writes the launcher: the renderer generates it from the origin (npm: npx -y --prefix=<npm_prefix> --package=<pkg>@<ver> -- <bin>; pypi: uvx --no-config --from <pkg>==<ver> <bin>; git: the same from git+<repo> at its commit; image: docker run -i --rm [-e NAME ...] <image>@<digest>; first-party: hnx <entry> or the bin), so no launcher flag can be expressed.",
       "properties": {
         "type": {
           "const": "stdio"
@@ -498,13 +498,19 @@
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*$(?!\\n)",
           "description": "The server's entrypoint: for a package or git origin one of origin.bins (default: the single declared bin, or the package's base name when bins lists it), for a first-party server hnx or a relative path under origin.path; never an interpreter, shell or launcher. An image takes none (it runs its own entrypoint)."
         },
+        "entry": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+          "maxLength": 64,
+          "description": "For a first-party hnx server (bin: hnx): which hnx subcommand serves MCP on stdio, from the fixed allowlist in homelabnext.mcp.servers.HNX_ENTRIES (mcp-serve: hnx mcp serve; broker-mcp: hnx broker mcp); its args may hold only that entry's flags, each with a value."
+        },
         "args": {
           "type": "array",
           "items": {
             "type": "string",
             "maxLength": 400
           },
-          "description": "The server's own arguments, after the generated launch (never a launcher's); an argument that is secret:<name> (or --flag=secret:<name>) is resolved at run time; {profile_file} is the rendered profile's path; {profile}, {lane}, {id} and parameters are per instance."
+          "description": "The server's own arguments, after the generated launch (never a launcher's; for an hnx entry only its flags); an argument that is secret:<name> (or --flag=secret:<name>) is resolved at run time; {profile_file} is the rendered profile's path; {profile}, {lane}, {id} and parameters are per instance."
         }
       }
     },

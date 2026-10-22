@@ -12,7 +12,8 @@ origin:
 transport:
   type: stdio
   bin: hnx
-  args: [broker, mcp, --socket, /run/hnx-broker/broker.sock]
+  entry: broker-mcp
+  args: [--socket, /run/hnx-broker/broker.sock]
 runtime: agent-local
 egress: none
 data_tier: local-only
@@ -29,6 +30,6 @@ tools:
 - {name: proposal_file, classes: [record-write], approval: false}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:dae325f46563'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:dae325f46563'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:dae325f46563'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:b7cca256c930'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:b7cca256c930'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:b7cca256c930'}
