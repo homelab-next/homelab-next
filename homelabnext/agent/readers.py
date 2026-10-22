@@ -88,7 +88,8 @@ class ToolClasses:
         always derived from the MCP catalog at ``catalog`` (default:
         :func:`homelabnext.mcp.servers.default_dir`, so a private overlay's catalog is used where
         its examples directory is).  A table with an ``mcp`` section of its own is refused: it
-        would class servers, and skip the catalog's status and data-tier rules, by hand."""
+        would class servers, and skip the catalog's status and data-tier rules, by hand; so is
+        one whose ``reader_forbidden`` leaves out a class the packaged table forbids."""
         import yaml
 
         p = Path(path) if path else DEFAULT_CLASSES
@@ -100,6 +101,16 @@ class ToolClasses:
                 f"{p}: has an mcp section; MCP servers are classed only by the MCP catalog "
                 "(its records' tools), so remove it (hnx mcp catalog classes shows the derived one)"
             )
+        if p.resolve() != DEFAULT_CLASSES.resolve():
+            packaged = yaml.safe_load(DEFAULT_CLASSES.read_text(encoding="utf-8")) or {}
+            lost = sorted(
+                set(packaged.get("reader_forbidden") or ()) - set(doc.get("reader_forbidden") or ())
+            )
+            if lost:
+                raise SpecError(
+                    f"{p}: reader_forbidden leaves out {lost}, which the packaged table forbids a "
+                    "reader (a table may forbid more, never less)"
+                )
         from homelabnext.mcp import servers
 
         try:

@@ -312,6 +312,24 @@ def test_a_classes_file_cannot_reclass_an_mcp_server(tmp_path, capsys):
     assert "classed only by the MCP catalog" in capsys.readouterr().err
 
 
+def test_a_classes_file_cannot_narrow_the_reader_ban(tmp_path, capsys):
+    """A --classes table with reader_forbidden: [credential] let a reader hold exec, egress and
+    file-write grants; a table may add to the ban, never drop a packaged class from it."""
+    table = yaml.safe_load(DEFAULT_CLASSES.read_text())
+    table["reader_forbidden"] = ["credential"]
+    _write(tmp_path / "classes.yml", table)
+    with pytest.raises(SpecError, match="leaves out .*'egress'.*'exec'"):
+        ToolClasses.load(tmp_path / "classes.yml")
+    _write(tmp_path / "spec.yml", {**spec(), "mcp": ["shell"]})
+    args = ["agent", "lint", str(tmp_path / "spec.yml"), "--classes", str(tmp_path / "classes.yml")]
+    assert cli.main(args) == 1
+    assert "never less" in capsys.readouterr().err
+    table["reader_forbidden"] = [*yaml.safe_load(DEFAULT_CLASSES.read_text())["reader_forbidden"]]
+    table["reader_forbidden"].append("record-write")  # forbidding more is fine
+    _write(tmp_path / "classes.yml", table)
+    assert "record-write" in ToolClasses.load(tmp_path / "classes.yml").reader_forbidden
+
+
 # ---------------------------------------------------------------- lint
 def test_lint_passes_on_the_repository():
     problems, counts = lint_paths([ROOT])

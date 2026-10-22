@@ -4,8 +4,8 @@
 #   mcp:           the MCP servers (tools) it may call, by catalog id.  NOT listed here: the
 #                  section is derived from the MCP catalog (examples/mcp/<id>.yml, or the private
 #                  overlay's; ADR-0024, docs/mcp-catalog.md), a server's classes being the union
-#                  of its tools' classes.  A file passed with --classes that has its own `mcp:`
-#                  section is used as written;
+#                  of its tools' classes.  A file passed with --classes may not have its own
+#                  `mcp:` section, nor a reader_forbidden that leaves out a class listed here;
 #   capabilities:  the platform capabilities (cap: ids, capabilities.yml) it may use;
 #   tiers:         the broker action tier it may request (read < write < execute < privileged).
 # A grant may carry several classes; it is as dangerous as the worst of them.
