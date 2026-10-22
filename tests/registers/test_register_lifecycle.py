@@ -5,6 +5,7 @@ import copy
 import datetime as dt
 import json
 import pathlib
+import re
 import shutil
 
 import pytest
@@ -15,7 +16,7 @@ OTHER = "01a15e4e-0000-7000-8000-00000000000f"  # a valid uid no example record 
 from homelabnext.registers import RegisterError, build_all, load_register, records
 from homelabnext.registers.__main__ import main as registers_main
 from homelabnext.registers.due import review
-from homelabnext.registers.render import load_sources
+from homelabnext.registers.render import load_sources, render_runbooks
 from homelabnext.registers.schema import (
     check_links,
     record_digest_of,
@@ -227,6 +228,52 @@ def test_from_lessons_round_trips_as_wiki_links():
     assert f"   - from_lessons: [[{U['LL-004']}]]" in text
     step = by_id(load_register(EX / "runbooks"), "runbooks", "RB-002")["steps"][0]
     assert step["from_lessons"] == [U["LL-004"]]
+
+
+# --- a runbook's own `lessons:` (runbook schema 2.1): lesson uids, resolved like every link -----
+
+
+def test_runbook_lessons_are_lesson_uids_that_resolve(ll, rb):
+    by_id(rb, "runbooks", "RB-001")["lessons"] = [U["LL-001"], U["LL-005"]]
+    validate_runbooks(rb)
+    links(ll, rb)
+    html, _ = render_runbooks(rb, ll["lessons"])
+    assert f'<a href="lessons.html#{U["LL-001"]}">LL 1</a>' in html  # the register page
+
+
+@pytest.mark.parametrize(
+    ("value", "needle"),
+    [
+        (["LL-001"], "'LL-001' is a legacy numbered code"),
+        (["lesson-1"], "'lesson-1' is not a uid"),
+        ([], "`lessons` must be a non-empty list of lesson uids"),
+        ("LL-001", "`lessons` must be a non-empty list of lesson uids"),
+        ([U["LL-001"], U["LL-001"]], "`lessons` repeats a uid"),
+    ],
+)
+def test_runbook_lessons_refuse_codes_and_malformed_lists(rb, value, needle):
+    by_id(rb, "runbooks", "RB-001")["lessons"] = value
+    with pytest.raises(RegisterError, match=re.escape(needle)):
+        validate_runbooks(rb)
+
+
+@pytest.mark.parametrize("target", [OTHER, "RB-002"], ids=["unknown-uid", "a-runbook"])
+def test_runbook_lessons_must_name_a_lesson(ll, rb, target):
+    ref = U.get(target, target)
+    by_id(rb, "runbooks", "RB-001")["lessons"] = [ref]
+    with pytest.raises(RegisterError, match=f"lessons {ref} is not a lesson"):
+        links(ll, rb)
+
+
+def test_runbook_lessons_are_written_as_links_and_round_trip():
+    entry = dict(by_id(load_register(EX / "runbooks"), "runbooks", "RB-001"))
+    entry["lessons"] = [U["LL-005"]]
+    text = records.render_record(entry, "runbooks")
+    assert f"lessons: [{U['LL-005']}]" in text
+    assert f"- Lessons: [[{U['LL-005']}]]" in text  # the generated Links block
+    problems: list[str] = []
+    back = records.parse_record(text, f("RB-001"), "runbooks", problems)
+    assert problems == [] and back["lessons"] == [U["LL-005"]]
 
 
 # --- active_only and the archive ---------------------------------------------------------------

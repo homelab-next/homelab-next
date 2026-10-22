@@ -485,7 +485,7 @@ def _sub_prose_record(r: Record, codes: Codes | None) -> str:
     return "---\n" + _sub_codes(m["fm"], codes) + "---\n" + _sub_prose(body, codes)
 
 
-_LINK_FIELDS = ("parent", "supports", "serves", "raised_by", "related", "superseded_by")
+_LINK_FIELDS = ("parent", "supports", "serves", "raised_by", "related", "superseded_by", "lessons")
 
 
 def _links_resolve(r: Record, entry: Mapping[str, Any], by_uid: Mapping[str, Record], problems):

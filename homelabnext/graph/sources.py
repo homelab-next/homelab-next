@@ -780,9 +780,10 @@ def read_registers(b: Builder) -> None:
         for ref in _id_refs(str(e.get("purpose") or ""), inv_ids, records):
             if ref != nid:
                 b.edge(nid, ref, "mentions", f"{at}.purpose")
-        for ll in _listed(e.get("from_lessons")):
-            t = ll if ll.startswith("lesson:") else f"lesson:{ll}"
-            b.edge(nid, t, "from_lesson", f"{at}.from_lessons")
+        for key in ("lessons", "from_lessons"):  # its own lessons (runbook schema 2.1), by uid
+            for ll in _listed(e.get(key)):
+                t = ll if ll.startswith("lesson:") else f"lesson:{ll}"
+                b.edge(nid, t, "from_lesson", f"{at}.{key}")
         for i, st in enumerate(e.get("steps") or (), 1):
             for ll in _listed(st.get("from_lessons")) if isinstance(st, dict) else ():
                 t = ll if ll.startswith("lesson:") else f"lesson:{ll}"

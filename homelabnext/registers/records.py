@@ -22,6 +22,7 @@ A record file::
     review_by: 2027-01-17
     verification: {observable: ..., expected: ...}
     related: [<uid>]                # optional typed links to other lessons/runbooks, by uid
+    lessons: [<uid>]                # a runbook's: the lessons it was written from, by uid
     reviews: [...]
     ---
 
@@ -145,6 +146,7 @@ FRONT_ORDER = {
         "review_by",
         "superseded_by",
         "related",
+        "lessons",
     ),
     "rfis": (
         *("uid", "type", "title", "order", "status", "date", "author", "raised_by", "triage"),
@@ -505,6 +507,9 @@ def links_block(entry: Mapping) -> str:
     related = entry.get("related")
     if _scalar_list(related) and related:
         rows.append("- Related: " + ", ".join(_wiki(str(r)) for r in related))
+    lessons = entry.get("lessons")  # a runbook's own lessons (runbook schema 2.1)
+    if _scalar_list(lessons) and lessons:
+        rows.append("- Lessons: " + ", ".join(_wiki(str(r)) for r in lessons))
     for field, label in LINK_FIELDS:
         v = entry.get(field)
         refs = [v] if isinstance(v, str) else v if _scalar_list(v) else []

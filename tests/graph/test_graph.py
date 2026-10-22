@@ -596,6 +596,22 @@ def test_incorporated_lessons_give_way_to_their_runbook(tmp_path, repo_copy):
     assert "reviewed" not in g.nodes[f"lesson:{U['LL-003']}"].attrs
 
 
+def test_a_runbooks_own_lessons_are_from_lesson_edges(tmp_path, repo_copy):
+    """``lessons:`` on a runbook (runbook schema 2.1) names lesson uids: each is an edge, and
+    one naming no lesson is dangling."""
+    root = _fresh(tmp_path, repo_copy)
+    front(root / RUNBOOKS / F("RB-001"), lessons=[U["LL-001"]])
+    g, rep = build(root)
+    assert rep.dangling == []
+    assert has(g, f"runbook:{U['RB-001']}", "from_lesson", f"lesson:{U['LL-001']}")
+    (e,) = [x for x in g.out_edges(f"runbook:{U['RB-001']}") if x.dst == f"lesson:{U['LL-001']}"]
+    assert e.source.endswith(".lessons")
+    nobody = "01a15e4e-0000-7000-8000-00000000000f"  # a valid uid no record has
+    front(root / RUNBOOKS / F("RB-001"), lessons=[nobody])
+    _, rep = build(root)
+    assert any(nobody in str(d) for d in rep.dangling)
+
+
 def test_reviewed_counts_only_current_valid_passing_reviews(tmp_path, repo_copy):
     """The graph's ``reviewed`` is what the register validation accepts of the reviews derived
     from the sidecar events: a review of an earlier content, a self-review, an audit by the

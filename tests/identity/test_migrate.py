@@ -413,6 +413,33 @@ def test_a_dangling_reference_stops_the_migration(registers):
     assert snapshot(registers) == before
 
 
+def test_a_runbooks_own_lessons_become_uids(registers):
+    """``lessons: [LL-002]`` (runbook schema 2.0's numbered codes) is rewritten as the lesson's
+    uid, validates, resolves and is shown in the Links block; one naming no record stops it."""
+    from homelabnext.registers.records import load_register
+    from homelabnext.registers.schema import check_links, validate_runbooks
+
+    p = registers / "runbooks" / "RB-001.md"
+    p.write_text(p.read_text().replace("systems: [proxy]", "systems: [proxy]\nlessons: [LL-002]"))
+    migrate(registers)
+    aliases = load_aliases(registers).codes
+    rb = load_register(registers / "runbooks")["runbooks"]
+    validate_runbooks({"runbooks": rb})
+    check_links(load_register(registers / "lessons")["lessons"], rb, set(), registers)
+    assert rb[0]["lessons"] == [aliases["LL-002"]]
+    text = (registers / "runbooks" / f"{aliases['RB-001']}.md").read_text()
+    assert f"- Lessons: [[{aliases['LL-002']}]]" in text
+
+
+def test_a_runbook_lesson_naming_no_record_stops_the_migration(registers):
+    p = registers / "runbooks" / "RB-001.md"
+    p.write_text(p.read_text().replace("systems: [proxy]", "systems: [proxy]\nlessons: [LL-009]"))
+    before = snapshot(registers)
+    with pytest.raises(MigrationError, match="LL-009 has no uid"):
+        migrate(registers)
+    assert snapshot(registers) == before
+
+
 def test_a_record_directory_is_not_a_tree(registers):
     with pytest.raises(MigrationError, match="pass the tree"):
         migrate(registers / "lessons")
