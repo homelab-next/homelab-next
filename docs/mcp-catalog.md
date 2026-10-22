@@ -60,25 +60,41 @@ The classes are `tool_classes.yml`'s: `read`, `record-write`, `exec`, `file-writ
 ## The rules (`hnx mcp catalog check`, fatal)
 
 `make mcp-check` (part of `make check` and CI) runs the check and every render spec's `--check`.
+Every problem is printed with its file and the exit code is 1; while the catalog itself has
+problems the grants are not judged (a note says so), since they would be judged against it.
 
-- the record fits the schema, and its id is its file name (so ids are unique);
-- a third-party origin is **pinned**: an exact version (never a range, `latest` or a wildcard)
-  with a sha256 or a lock file, an image digest, or a 40-hex commit; `kind: unknown` fails; a
-  first-party path exists in the checkout;
+- the record fits the schema (a mismatch is reported against the origin kind or transport type
+  the record names), its id is its file name (so ids are unique), and every record file is
+  `<id>.yml` (a `.yaml` or `.json` file is refused, never skipped);
+- a third-party origin is **pinned**: an exact version (never a range, `latest` or a wildcard;
+  npm a full `x.y.z`) with a sha256 or a lock file (relative to the catalog, existing, naming the
+  package), an image digest, or a 40-hex commit; `kind: unknown` fails; a first-party path exists
+  in the checkout;
+- the pin is what runs: `npx`/`bunx` arguments name `package@version`, `uvx`/`pipx`/`uv`
+  `package==version`, `docker`/`podman` `image@digest`. The `sha256` itself is **declarative**:
+  it records the reviewed artifact, but no launcher verifies it when it fetches the package;
 - every tool is classed with a declared class, and the server lists at least one;
 - egress agrees with the classes: a tool classed `egress` needs an egress other than `none`, and
   `internet` needs an egress tool;
 - credentials are `secret:` names (env, headers, arguments), two of them never map to the same
-  `HNX_SECRET_*` variable, and a setting whose key names a credential is refused;
-- parameters: a parameter's env key is never one llm-orchestrator hard-denies (`PATH`, `LD_*`,
-  `DYLD_*`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONSTARTUP`, `PYTHONINSPECT`, `HOME`, `SHELL`,
-  `BASH_ENV`, `ENV`, `NODE_OPTIONS`, `HERMES_HOME`), never also a fixed setting or secret, never
-  shared by two parameters; a default fits its enum and pattern; templates name only `{id}`,
+  `HNX_SECRET_*` variable, and a setting whose key names a credential is refused; no argument or
+  setting holds a literal credential: a credential flag's value (`--token X`, `--api-key=X`, a
+  header after `--header`) is a `secret:` reference, nothing looks like a token, `secret:` appears
+  only as a whole argument, `--flag=secret:<name>` or `Header: [Scheme ]secret:<name>`, and `$`
+  (`${VAR}`, `$(cmd)`, which a client would expand) appears in neither;
+- parameters: every parameter has an `enum` or a `pattern`; its env key is never one
+  llm-orchestrator hard-denies (`PATH`, `LD_*`, `DYLD_*`, `PYTHONPATH`, `PYTHONHOME`,
+  `PYTHONSTARTUP`, `PYTHONINSPECT`, `HOME`, `SHELL`, `BASH_ENV`, `ENV`, `NODE_OPTIONS`,
+  `HERMES_HOME`), never names a credential, never also a fixed setting or secret, never shared by
+  two parameters; a default fits its enum and pattern and holds no `$` or `secret:`; templates name only `{id}`,
   `{profile}`, `{lane}`, the parameters, and in arguments `{profile_file}`;
 - with the registry: an HTTP endpoint is a registry http(s) service, and a registry service's
   `mcp` block names this catalog id with the same transport and path; every registry `mcp` entry
-  resolves to a catalog server; runtime hosts and egress services and hosts exist;
-- `replaced_by` names an active server; `implements` names a homelab-next capability contract
+  resolves to a catalog server; runtime hosts and egress services and hosts exist; every
+  `capabilities` entry is a registry service's capability, a class-table capability or a
+  conformance contract (a record that fails the schema gets no follow-on registry errors);
+- `reason` and `replaced_by` appear only on a deprecated or retired record, and `replaced_by`
+  names an active server; `implements` names a homelab-next capability contract
   (a conformance capability), so the graph ties the server to that contract's suite;
 - with the review policy: an `active` record carries current agent check, agent audit and human
   approve reviews (`mcp-server.active` in `examples/review-policy.yml`; `hnx reviews digest

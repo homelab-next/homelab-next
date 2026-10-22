@@ -110,7 +110,7 @@
     },
     "env": {
       "type": "object",
-      "description": "Environment of a stdio server: every value a secret-store name, resolved at run time (rendered as ${HNX_SECRET_<NAME>}); non-secret settings belong in args.",
+      "description": "Environment of a stdio server: every value a secret-store name, resolved at run time (rendered as ${HNX_SECRET_<NAME>}); non-secret values belong in settings.",
       "propertyNames": {
         "pattern": "^[A-Z][A-Z0-9_]*$(?!\\n)"
       },

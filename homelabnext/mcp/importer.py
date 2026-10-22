@@ -53,13 +53,8 @@ _VERSION = re.compile(
     r"^v?[0-9]+\.[0-9]+(\.[0-9]+)*(?:[-+][0-9A-Za-z.]+|(?:a|b|rc|\.post|\.dev)[0-9]+)?$"
 )
 _VAR = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
-#: a flag whose value is a credential: --token, --api-key, --github-token, --client-secret,
-#: --db-password, ... (the value follows as ``=VALUE`` or as the next argument)
-_SECRET_FLAG = re.compile(
-    r"^--?(?:[a-z0-9]+[-_])*(token|api[-_]?key|apikey|key|password|passwd|pass|pwd|passphrase"
-    r"|secret|auth|bearer|credentials?|pat)$",
-    re.I,
-)
+#: a flag whose value is a credential (the value follows as ``=VALUE`` or as the next argument)
+_SECRET_FLAG = servers.CREDENTIAL_FLAG
 _BARE_FLAG = re.compile(r"^--?[A-Za-z0-9][A-Za-z0-9_-]*$")
 #: a flag whose next argument is an HTTP header (``Name: value``)
 _HEADER_FLAG = ("--header", "-H")

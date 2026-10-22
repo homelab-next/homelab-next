@@ -49,6 +49,7 @@ def _registry(path: Path | None):
 
 def _check(args) -> int:
     from homelabnext import paths
+    from homelabnext.agent.errors import SpecError
     from homelabnext.agent.readers import ToolClasses, lint_paths
     from homelabnext.reviews import load_policy
 
@@ -62,12 +63,18 @@ def _check(args) -> int:
         policy = load_policy(pol) if args.policy or pol.is_file() else None
     problems = servers.check(cat, registry=_registry(reg_path), policy=policy, source_root=root)
     grants = args.grants or ([str(root)] if root else [])
-    classes = ToolClasses.load(catalog=cat_dir)
     notes: list[tuple[str, str]] = []
-    gp, counts = (
-        lint_paths(grants, classes, notes) if grants else ([], {"profile": 0, "manifest": 0})
-    )
-    problems += [f"{f}: {p}" for f, p in gp]
+    counts = {"profile": 0, "manifest": 0}
+    if problems and grants:
+        notes.append(("grants", "not judged: fix the catalog's problems first"))
+    elif grants:
+        try:
+            classes = ToolClasses.from_catalog(cat)
+        except SpecError as exc:
+            problems.append(str(exc))
+        else:
+            gp, counts = lint_paths(grants, classes, notes)
+            problems += [f"{f}: {p}" for f, p in gp]
     for p in problems:
         print(p)
     for f, n in notes:

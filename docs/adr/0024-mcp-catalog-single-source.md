@@ -41,7 +41,9 @@ because each instance needs its own scope.
    (`hnx mcp catalog render`: Claude Code, Claude Desktop, Hermes, llm-orchestrator, generic) are
    generated from the records. A hand-written client configuration is drift (`--check`).
 4. **Validation is fatal** (`hnx mcp catalog check`, `make mcp-check`, CI): schema, the id is the
-   file name, pinned third-party origins, every tool classed, egress agreeing with the tool
+   file name, pinned third-party origins that are what the launcher runs (the sha256 is a
+   declarative record of the reviewed artifact; no launcher verifies it), no literal credential
+   or `$` expansion in arguments and settings, every tool classed, egress agreeing with the tool
    classes, parameters (hard-denied environment keys, collisions, defaults that fit their type),
    templates naming declared parameters, endpoints, hosts and egress resolving in the registry,
    every registry `mcp` entry resolving to a catalog server, `replaced_by` naming an active

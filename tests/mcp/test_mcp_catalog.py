@@ -97,7 +97,7 @@ RULES = [
     ("notes", lambda r: r.update(origin={"kind": "unknown", "hint": "launcher x"}), "origin is unknown"),
     ("notes", lambda r: r.update(origin={"kind": "git", "repo": "code.example/x", "commit": None}), "has no commit"),
     ("hnx-catalog", lambda r: r["origin"].update(path="homelabnext/nothing-here/"), "not in the source tree"),
-    ("notes", lambda r: r["origin"].update(version="^1.2.0"), "origin"),  # schema: a range
+    ("notes", lambda r: r["origin"].update(version="^1.2.0"), "origin/version: '^1.2.0' does not match"),  # schema: a range
     ("notes", lambda r: r.update(tools=[]), "lists no tools"),
     ("notes", lambda r: r["tools"].append(dict(r["tools"][0])), "is listed twice"),
     ("notes", lambda r: r.update(id="other-id"), "is not the file name"),
@@ -125,6 +125,33 @@ RULES = [
     ("lake", lambda r: r["reviews"].pop(), "needs human approve review(s)"),
     ("lake", lambda r: r.update(description="changed"), "review(s) of the current content"),
     ("lake", lambda r: r.update(author="agent:example-checker"), "nobody reviews their own work"),
+    # the pin controls what runs (C1)
+    ("notes", lambda r: r["transport"].update(args=["--from", "example-notes-mcp", "notes-mcp"]), "does not launch the pinned"),
+    ("github", lambda r: r["transport"].update(args=["-y", "@example/mcp-github@latest"]), "does not launch the pinned"),
+    ("github", lambda r: (r["origin"].update(version="3.2"), r["transport"].update(args=["-y", "@example/mcp-github@3.2"])), "not a full x.y.z"),
+    ("docker", lambda r: r["transport"].update(args=["run", "-i", "--rm", "registry.example/mcp/docker:0.6.3"]), "does not run the pinned"),
+    ("notes", lambda r: (r["origin"].pop("sha256"), r["origin"].update(lock="locks/none.lock")), "lock file locks/none.lock does not exist"),
+    # no literal credential, nothing a client would expand (S4)
+    ("filesystem", lambda r: r["transport"]["args"].extend(["--github-token", "fakeGhTokenAbCdEf0123456789xyz"]), "follows --github-token"),
+    ("filesystem", lambda r: r["transport"]["args"].append("--api-key=fakeshort"), "--api-key takes a credential"),
+    ("filesystem", lambda r: r["transport"]["args"].extend(["--header", "Authorization: Bearer fakeTok3n"]), "is a header after --header"),
+    ("filesystem", lambda r: r["transport"]["args"].append("${AWS_SECRET_ACCESS_KEY}"), "contains $"),
+    ("filesystem", lambda r: r["transport"]["args"].append("--x=a-secret:mcp/y"), "carries secret: inside a value"),
+    ("filesystem", lambda r: r["transport"]["args"].append("fakeT0kenValue9Zq7Xw2Lp5Rt8Vb"), "looks like a literal credential"),
+    ("notes", lambda r: r["settings"].update(NOTES_X="${HNX_SECRET_MCP_GITHUB_TOKEN}"), "holds $ or secret:"),
+    ("notes", lambda r: r["settings"].update(AUTH="fake-literal-auth"), "setting AUTH names a credential"),
+    # parameters are typed and never a credential (S2)
+    ("notes", lambda r: r["parameters"]["writable"].pop("pattern"), "has no enum or pattern"),
+    ("notes", lambda r: r["parameters"]["writable"].update(env="NOTES_API_TOKEN"), "names a credential (a grant never sets one"),
+    ("notes", lambda r: r["parameters"]["mode"].update(enum=["read", "write", "$X"], default="$X"), "default holds $ or secret:"),
+    # lifecycle, capabilities, readable schema messages
+    ("notes", lambda r: r.update(reason="why"), "reason on a record whose status is active"),
+    ("notes", lambda r: r.update(replaced_by="lake"), "replaced_by on a record whose status is active"),
+    ("lake", lambda r: r.update(capabilities=["cap:telepathy"]), "capabilities names cap:telepathy"),
+    ("notes", lambda r: r.update(headers={"X": "secret:mcp/x"}), "headers are for a remote (http/sse) server"),
+    ("lake", lambda r: r.update(env={"X": "secret:mcp/x"}), "env is for a stdio server"),
+    ("lake", lambda r: r["origin"].update(digest="sha256:zz"), "origin/digest: 'sha256:zz' does not match"),
+    ("lake", lambda r: r.update(origin={"kind": "tarball"}), "origin.kind must be one of"),
 ]  # fmt: skip
 
 
@@ -225,3 +252,49 @@ def test_cli_check(capsys, tmp_catalog):
     assert "hnx-broker\tactive" in capsys.readouterr().out
     assert cli.main(["mcp", "catalog", "classes"]) == 0
     assert yaml.safe_load(capsys.readouterr().out)["mcp"]["vault"] == ["credential"]
+
+
+def test_a_record_file_that_is_not_yml_is_refused(tmp_catalog):
+    (tmp_catalog / "notes.yml").rename(tmp_catalog / "notes.yaml")
+    problems = servers.check(servers.load(tmp_catalog))
+    assert any("notes.yaml: a record file is <id>.yml" in p for p in problems)
+
+
+def test_a_lock_file_must_name_the_package(tmp_catalog):
+    (tmp_catalog / "locks").mkdir()
+    (tmp_catalog / "locks" / "notes.lock").write_text("other-package==1.0.0 --hash=sha256:00\n")
+    cat = _edit(tmp_catalog, "notes", lambda r: (r["origin"].pop("sha256"),
+                                                  r["origin"].update(lock="locks/notes.lock")))  # fmt: skip
+    assert any("does not mention example-notes-mcp" in p for p in servers.check(cat))
+    (tmp_catalog / "locks" / "notes.lock").write_text("example-notes-mcp==1.2.0 --hash=sha256:00\n")
+    assert not [p for p in servers.check(servers.load(tmp_catalog)) if "lock" in p]
+
+
+def test_a_schema_invalid_record_gets_no_follow_on_registry_errors(tmp_catalog):
+    cat = _edit(tmp_catalog, "lake", lambda r: r["transport"].update(endpoint="https://x/mcp"))
+    problems = servers.check(cat, registry=REGISTRY)
+    assert any("transport/endpoint" in p for p in problems)
+    assert not any("does not name it as its endpoint" in p for p in problems), problems
+
+
+def test_the_schema_class_enum_is_the_tables_vocabulary():
+    import json
+
+    from homelabnext.agent.readers import table_vocabulary
+
+    schema = json.loads((ROOT / "schemas/platform/mcp_server.schema.json").read_text())
+    assert sorted(schema["$defs"]["tool"]["properties"]["classes"]["items"]["enum"]) == (
+        table_vocabulary()
+    )
+
+
+def test_cli_check_reports_a_bad_record_by_file_and_keeps_the_others(tmp_catalog, capsys):
+    from homelabnext import cli
+
+    _edit(tmp_catalog, "notes", lambda r: r["tools"][0].update(classes=["admin"]))
+    _edit(tmp_catalog, "fetch", lambda r: r.update(tools=[]))
+    args = ["mcp", "catalog", "check", "--catalog", str(tmp_catalog), "--policy", "none"]
+    assert cli.main([*args, "--grants", str(ROOT / "schemas" / "agent" / "examples")]) == 1
+    out = capsys.readouterr()
+    assert "mcp/notes.yml: tools/0/classes/0" in out.out and "fetch.yml: lists no tools" in out.out
+    assert "grants: not judged" in out.err

@@ -160,6 +160,15 @@ def table_vocabulary(path: str | Path | None = None) -> list[str]:
     return sorted((doc.get("classes") or {}) if isinstance(doc, Mapping) else ())
 
 
+def table_capabilities(path: str | Path | None = None) -> list[str]:
+    """The ``cap:`` ids ``tool_classes.yml`` classifies."""
+    import yaml
+
+    doc = yaml.safe_load(Path(path or DEFAULT_CLASSES).read_text(encoding="utf-8")) or {}
+    caps = doc.get("capabilities") if isinstance(doc, Mapping) else None
+    return sorted(caps or ())
+
+
 def grant_problems(
     grants: Mapping[str, Any],
     classes: ToolClasses | None = None,

@@ -139,11 +139,17 @@ def _read(path: Path) -> Any:
 
 
 def load(path: str | Path | None = None) -> Catalog:
-    """Read every ``*.yml`` record of a catalog directory (not validated: :func:`check`)."""
+    """Read every ``*.yml`` record of a catalog directory (not validated: :func:`check`).  Another
+    record-like file (``*.yaml``, ``*.json``) is a load problem, never silently skipped."""
     root = Path(path) if path is not None else default_dir()
     if not root.is_dir():
         raise CatalogError(f"{root}: no MCP catalog directory")
     cat = Catalog(root)
+    for f in sorted(root.iterdir()):
+        if f.is_file() and f.suffix.lower() in (".yml", ".yaml", ".json") and f.suffix != ".yml":
+            cat.problems.append(
+                f"{f.name}: a record file is <id>.yml; this one is not read (rename it)"
+            )
     for f in sorted(root.glob("*.yml")):
         doc = _read(f)
         if not isinstance(doc, Mapping):
@@ -186,14 +192,74 @@ def file_digest(path: str | Path) -> str:
 
 
 # ------------------------------------------------------------------------------------ check
+#: the ``oneOf`` branches of the schema, chosen by a discriminating field so a mismatch is
+#: reported against the branch the record meant, not as "not valid under any of the given schemas"
+_BRANCHES = {
+    "origin": ("kind", {"first-party": "origin_first_party", "package": "origin_package",
+                        "image": "origin_image", "git": "origin_git", "unknown": "origin_unknown"}),
+    "transport": ("type", {"stdio": "transport_stdio", "streamable-http": "transport_http",
+                           "sse": "transport_http"}),
+}  # fmt: skip
+#: the record-level ``not required`` rules (headers only on a remote server, env and settings
+#: only on a stdio one)
+_NOT_REQUIRED = {
+    "headers": "headers are for a remote (http/sse) server; a stdio server takes env",
+    "env": "env is for a stdio server; a remote server's credentials go in headers",
+    "settings": "settings are for a stdio server; a remote server takes none",
+}
+
+
+@cache
+def _validator() -> Any:
+    from jsonschema import Draft202012Validator
+
+    from homelabnext import paths
+    from homelabnext.agent.schemas import _registry
+
+    schema = json.loads(paths.schema_file(*SCHEMA[:1], f"{SCHEMA[1]}.schema.json").read_text())
+    return Draft202012Validator(schema, registry=_registry())
+
+
+def _message(e: Any) -> str:
+    """One readable message for a schema error: for a ``oneOf`` (a version that is null or exact,
+    a digest that is null or sha256), the alternative that is not a type mismatch."""
+    if e.validator == "oneOf" and e.context:
+        useful = [c for c in e.context if c.validator != "type"] or list(e.context)
+        return useful[0].message
+    return e.message
+
+
 def _schema_problems(rec: Mapping[str, Any], where: str) -> list[str]:
-    from homelabnext.agent.schemas import schema_errors
+    v = _validator()
+    doc = json.loads(json.dumps(rec))
+    out: list[str] = []
+    for e in sorted(v.iter_errors(doc), key=lambda e: list(map(str, e.absolute_path))):
+        path = "/".join(map(str, e.absolute_path)) or "$"
+        if e.validator == "oneOf" and path in _BRANCHES and isinstance(e.instance, Mapping):
+            key, branches = _BRANCHES[path]
+            got = e.instance.get(key)
+            if got not in branches:
+                out.append(f"{where}: {path}.{key} must be one of {sorted(branches)}, not {got!r}")
+                continue
+            sub = v.evolve(schema={"$ref": f"#/$defs/{branches[got]}", "$defs": v.schema["$defs"]})
+            for se in sorted(sub.iter_errors(e.instance), key=lambda x: list(map(str, x.path))):
+                spath = "/".join(map(str, se.absolute_path))
+                out.append(f"{where}: {path}{'/' + spath if spath else ''}: {_message(se)}")
+            continue
+        if e.validator == "not" and isinstance(e.validator_value, Mapping):
+            field = (e.validator_value.get("required") or [""])[0]
+            if field in _NOT_REQUIRED:
+                out.append(f"{where}: {_NOT_REQUIRED[field]}")
+                continue
+        out.append(f"{where}: {path}: {_message(e)}")
+    return out
 
-    return [f"{where}: {e}" for e in schema_errors(*SCHEMA, json.loads(json.dumps(rec)))]
 
-
-def origin_problems(origin: Any, where: str, source_root: Path | None = None) -> list[str]:
-    """A third-party origin must be pinned; a first-party path must exist (in a checkout)."""
+def origin_problems(
+    origin: Any, where: str, source_root: Path | None = None, catalog_root: Path | None = None
+) -> list[str]:
+    """A third-party origin must be pinned; a lock file (relative to the catalog) must exist and
+    name the package; a first-party path must exist (in a checkout)."""
     if not isinstance(origin, Mapping):
         return []
     kind = origin.get("kind")
@@ -212,6 +278,13 @@ def origin_problems(origin: Any, where: str, source_root: Path | None = None) ->
                 f"{where}: package {origin.get('package')} has no sha256 and no lock file "
                 "(unpinned: record the release artifact's hash)"
             )
+        lock = origin.get("lock")
+        if lock and catalog_root is not None:
+            f = catalog_root / str(lock)
+            if not f.is_file():
+                out.append(f"{where}: lock file {lock} does not exist (relative to the catalog)")
+            elif str(origin.get("package")) not in f.read_text(encoding="utf-8", errors="replace"):
+                out.append(f"{where}: lock file {lock} does not mention {origin.get('package')}")
     elif kind == "image" and not origin.get("digest"):
         out.append(f"{where}: image {origin.get('image')} has no digest (unpinned)")
     elif kind == "git" and not origin.get("commit"):
@@ -220,6 +293,49 @@ def origin_problems(origin: Any, where: str, source_root: Path | None = None) ->
         p = source_root / str(origin.get("path", ""))
         if not p.exists():
             out.append(f"{where}: first-party path {origin.get('path')} is not in the source tree")
+    return out
+
+
+#: launchers whose arguments name the package or image they run
+NPM_LAUNCHERS = ("npx", "bunx")
+PYPI_LAUNCHERS = ("uvx", "pipx", "uv")
+IMAGE_LAUNCHERS = ("docker", "podman")
+#: an exact npm release: npm resolves 1.2 or 1 as a range
+_NPM_EXACT = re.compile(r"^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
+
+
+def launch_problems(rec: Mapping[str, Any], where: str) -> list[str]:
+    """The pinned origin is what the launcher runs: ``npx``/``bunx`` name ``package@version``,
+    ``uvx``/``pipx``/``uv`` ``package==version`` (or ``@version``), ``docker``/``podman``
+    ``image@digest``; an npm version is a full ``x.y.z``.  (The sha256 itself is declarative: no
+    launcher verifies it.)"""
+    origin, t = rec.get("origin") or {}, rec.get("transport") or {}
+    if t.get("type") != "stdio":
+        return []
+    launcher = Path(str(t.get("command", ""))).name
+    args = [str(a) for a in t.get("args") or ()]
+    kind = origin.get("kind")
+    out: list[str] = []
+    if kind == "package" and origin.get("version"):
+        pkg, ver = origin.get("package"), origin.get("version")
+        if origin.get("ecosystem") == "npm" and not _NPM_EXACT.match(str(ver)):
+            out.append(f"{where}: npm version {ver} is not a full x.y.z (npm reads it as a range)")
+        want: tuple[str, ...] = ()
+        if launcher in NPM_LAUNCHERS:
+            want = (f"{pkg}@{ver}",)
+        elif launcher in PYPI_LAUNCHERS:
+            want = (f"{pkg}=={ver}", f"{pkg}@{ver}")
+        if want and not set(want) & set(args):
+            out.append(
+                f"{where}: {launcher} does not launch the pinned {want[0]} (its arguments name "
+                "another version, or none: the pin would not control what runs)"
+            )
+    if kind == "image" and origin.get("digest") and launcher in IMAGE_LAUNCHERS:
+        image = str(origin.get("image"))
+        repo = image.rsplit(":", 1)[0] if ":" in image.rsplit("/", 1)[-1] else image
+        want = (f"{repo}@{origin['digest']}", f"{image}@{origin['digest']}")
+        if not set(want) & set(args):
+            out.append(f"{where}: {launcher} does not run the pinned {want[0]} (pull by digest)")
     return out
 
 
@@ -306,12 +422,72 @@ def looks_secret(value: str) -> bool:
     return entropy >= 3.5
 
 
+_SECRET_REF_FULL = re.compile(r"secret:[a-z][a-z0-9_-]*(?:/[a-z][a-z0-9_-]*)*")
+#: ``Header-Name: [Scheme ]secret:<name>``, the argument after ``--header`` (mcp-remote and kin)
+_HEADER_ARG = re.compile(r"^[A-Za-z][A-Za-z0-9-]*:\s*(?:[A-Za-z]+ )?(secret:\S+)$")
+#: a flag whose value is a credential (``--token``, ``--github-token``, ``--client-secret`` ...)
+CREDENTIAL_FLAG = re.compile(
+    r"^--?(?:[a-z0-9]+[-_])*(token|api[-_]?key|apikey|key|password|passwd|pass|pwd|passphrase"
+    r"|secret|auth|bearer|credentials?|pat)$",
+    re.I,
+)
+
+
 def arg_secret(arg: str) -> str | None:
-    """The secret ref an argument carries (``secret:x`` or ``--flag=secret:x``), else None."""
-    value = arg.split("=", 1)[1] if arg.startswith("-") and "=" in arg else arg
-    if value.startswith("secret:") and len(value) > len("secret:"):
+    """The secret ref an argument carries (``secret:x``, ``--flag=secret:x`` or
+    ``Header: [Scheme ]secret:x``), else None."""
+    m = _HEADER_ARG.match(arg)
+    value = m.group(1) if m else arg.split("=", 1)[1] if arg.startswith("-") and "=" in arg else arg
+    if _SECRET_REF_FULL.fullmatch(value):
         return value
     return None
+
+
+def _credential_flag(flag: str) -> bool:
+    return bool(CREDENTIAL_FLAG.match(flag) or SECRET_KEY.search(flag.lstrip("-")))
+
+
+def _literal_problems(rec: Mapping[str, Any], where: str) -> list[str]:
+    """No literal credential and nothing a client would expand: an argument or a setting never
+    holds ``$`` (``${VAR}``, ``$(cmd)``), a ``secret:`` reference only as a whole argument, a
+    ``--flag=`` value or a header value, a credential flag's value is a ``secret:`` reference, and
+    nothing looks like a token."""
+    out: list[str] = []
+    args = [str(a) for a in (rec.get("transport") or {}).get("args") or ()]
+    for i, a in enumerate(args):
+        n, ref = i + 1, arg_secret(a)
+        flag, eq, val = a.partition("=")
+        prev = args[i - 1] if i else ""
+        if "$" in a:
+            out.append(
+                f"{where}: argument {n} contains $ (a client would expand it from its "
+                "environment): use a secret: reference or a parameter"
+            )
+        elif "secret:" in a and not ref:
+            out.append(
+                f"{where}: argument {n} carries secret: inside a value; write secret:<name>, "
+                "--flag=secret:<name> or Header: [Scheme ]secret:<name>"
+            )
+        elif not ref and a.startswith("-") and eq and _credential_flag(flag):
+            out.append(f"{where}: argument {n}: {flag} takes a credential; give it secret:<name>")
+        elif not ref and prev.startswith("-") and "=" not in prev and _credential_flag(prev):
+            out.append(f"{where}: argument {n} follows {prev}; give it secret:<name>")
+        elif not ref and prev in ("--header", "-H"):
+            out.append(
+                f"{where}: argument {n} is a header after {prev}; its value is secret:<name>"
+            )
+        elif not ref and (looks_secret(val if eq else a) or re.search(r"(?i)authorization:", a)):
+            out.append(f"{where}: argument {n} looks like a literal credential")
+    for k, v in (rec.get("settings") or {}).items():
+        v = str(v)
+        if "$" in v or "secret:" in v:
+            out.append(
+                f"{where}: setting {k} holds $ or secret: (a setting is a literal; a credential "
+                "goes in env as a secret reference)"
+            )
+        elif looks_secret(v):
+            out.append(f"{where}: setting {k} looks like a literal credential")
+    return out
 
 
 def _template_problems(rec: Mapping[str, Any], where: str) -> list[str]:
@@ -333,7 +509,7 @@ def _template_problems(rec: Mapping[str, Any], where: str) -> list[str]:
     settings = rec.get("settings") or {}
     for k, v in settings.items():
         refs(str(v), f"setting {k}")
-        if SECRET_KEY.search(k):
+        if SECRET_KEY.search(k) or CREDENTIAL_FLAG.match("--" + k.lower()):
             out.append(
                 f"{where}: setting {k} names a credential; put it in env as a secret reference"
             )
@@ -341,9 +517,19 @@ def _template_problems(rec: Mapping[str, Any], where: str) -> list[str]:
     seen: dict[str, str] = {}
     for name, p in params.items():
         key = p.get("env")
+        if p.get("enum") is None and p.get("pattern") is None:
+            out.append(
+                f"{where}: parameter {name} has no enum or pattern (every value a grant can give "
+                "is typed)"
+            )
         if key:
             if DENIED_ENV.match(key):
                 out.append(f"{where}: parameter {name}: env {key} may never be set by a grant")
+            if SECRET_KEY.search(key):
+                out.append(
+                    f"{where}: parameter {name}: env {key} names a credential (a grant never "
+                    "sets one; put it in env as a secret reference)"
+                )
             if key in fixed:
                 out.append(
                     f"{where}: parameter {name}: env {key} is also a fixed setting or secret"
@@ -354,6 +540,8 @@ def _template_problems(rec: Mapping[str, Any], where: str) -> list[str]:
         default = p.get("default")
         if p.get("required") and default is not None:
             out.append(f"{where}: parameter {name} is required and has a default")
+        if default is not None and ("$" in default or "secret:" in default):
+            out.append(f"{where}: parameter {name}: default holds $ or secret:")
         if default is not None:
             for ref in TEMPLATE.findall(default):
                 if ref not in BUILTINS:
@@ -393,11 +581,43 @@ def _implements_problems(rec: Mapping[str, Any], where: str) -> list[str]:
     ]
 
 
-def _registry_problems(cat: Catalog, registry: Any) -> list[str]:
+def known_capabilities(registry: Any = None) -> set[str]:
+    """``cap:`` ids a record may front: the class table's capabilities, the conformance
+    capabilities and (with a registry) every registry service's capability."""
+    from homelabnext.agent.readers import table_capabilities
+    from homelabnext.conform.registry import CAPABILITIES, EXTENDED
+
+    known = set(table_capabilities()) | {f"cap:{c}" for c in (*CAPABILITIES, *EXTENDED)}
+    if registry is not None:
+        known |= {f"cap:{s.capability}" for s in registry.services.values() if s.capability}
+    return known
+
+
+def _lifecycle_problems(rec: Mapping[str, Any], where: str) -> list[str]:
+    if rec.get("status") in ("deprecated", "retired"):
+        return []
+    return [
+        f"{where}: {k} on a record whose status is {rec.get('status')} (only a deprecated or "
+        "retired one says why and what replaces it)"
+        for k in ("reason", "replaced_by")
+        if rec.get(k) is not None
+    ]
+
+
+def _registry_problems(cat: Catalog, registry: Any, skip: Iterable[str] = ()) -> list[str]:
+    """Registry cross-references; ``skip``: records that failed the schema (no follow-on noise)."""
     out: list[str] = []
+    skip = set(skip)
     endpoints: dict[str, list[str]] = {}
+    known = known_capabilities(registry)
     for sid, rec in cat:
+        if sid in skip:
+            continue
         where = cat.rel(sid)
+        for c in rec.get("capabilities") or ():
+            if c not in known:
+                out.append(f"{where}: capabilities names {c}, which no registry service, class "
+                           "table entry or conformance contract defines")  # fmt: skip
         t = rec.get("transport") or {}
         if t.get("type") in HTTP_TRANSPORTS:
             svc_name = str(t.get("endpoint", "")).removeprefix("svc:")
@@ -437,6 +657,8 @@ def _registry_problems(cat: Catalog, registry: Any) -> list[str]:
         if not svc.mcp:
             continue
         name = svc.mcp.get("name")
+        if name in skip:
+            continue
         if name not in cat.servers:
             out.append(
                 f"registry svc:{svc.name}: MCP server {name!r} is not in the MCP catalog "
@@ -505,6 +727,7 @@ def check(
         vocabulary = table_vocabulary()
     vocabulary = list(vocabulary)
     out = list(cat.problems)
+    invalid: set[str] = set()
     for sid, rec in cat:
         f = cat.files[sid]
         where = cat.rel(sid)
@@ -513,13 +736,17 @@ def check(
         if f.stem != sid:
             out.append(f"{where}: id {sid!r} is not the file name ({f.stem}.yml)")
         if schema:
+            invalid.add(sid)
             continue  # the semantic rules assume the shape
-        out += origin_problems(rec.get("origin"), where, source_root)
+        out += origin_problems(rec.get("origin"), where, source_root, cat.root)
+        out += launch_problems(rec, where)
         out += _tool_problems(rec, where, vocabulary)
         out += _egress_problems(rec, where)
         out += _secret_problems(rec, where)
+        out += _literal_problems(rec, where)
         out += _template_problems(rec, where)
         out += _implements_problems(rec, where)
+        out += _lifecycle_problems(rec, where)
         repl = rec.get("replaced_by")
         if repl is not None:
             if repl == sid:
@@ -527,7 +754,7 @@ def check(
             elif cat.status(repl) != "active":
                 out.append(f"{where}: replaced_by {repl!r} is not an active catalog server")
     if registry is not None:
-        out += _registry_problems(cat, registry)
+        out += _registry_problems(cat, registry, invalid)
     if policy is not None:
         out += _review_problems(cat, policy)
     return out
