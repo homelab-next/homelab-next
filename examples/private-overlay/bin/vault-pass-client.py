@@ -49,8 +49,8 @@ from collections.abc import Callable, Mapping
 ENV_PASSWORD = "HNX_VAULT_PASSWORD"
 ENV_REF = "HNX_VAULT_PASSWORD_REF"
 TIMEOUT = 10.0
-NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*$")  # as the hnx_secret lookup
-MOUNT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+NAME = re.compile(r"[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*")  # as hnx_secret; fullmatch
+MOUNT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
 Opener = Callable[..., object]
 Warn = Callable[[str], None]
@@ -110,13 +110,13 @@ def _stderr(message: str) -> None:
 
 def from_openbao(ref: str, env: Mapping[str, str], opener: Opener, warn: Warn = _stderr) -> str:
     name = ref.removeprefix("secret:")
-    if not ref.startswith("secret:") or not NAME.match(name):
+    if not ref.startswith("secret:") or not NAME.fullmatch(name):
         raise ClientError(f"{ENV_REF} is not a secret reference (secret:<name>)", 2)
     addr = env.get("BAO_ADDR", "").rstrip("/")
     if not addr.startswith("https://"):
         raise ClientError("BAO_ADDR must be an https:// address", 2)
     mount = env.get("BAO_KV_MOUNT") or "secret"
-    if not MOUNT.match(mount):
+    if not MOUNT.fullmatch(mount):
         raise ClientError("BAO_KV_MOUNT is not a mount name", 2)
     ctx = ssl.create_default_context(cafile=env.get("BAO_CACERT") or None)
     token = env.get("BAO_TOKEN")

@@ -554,3 +554,18 @@ def test_sops_config_recipients_are_marked_fake():
     ]
     assert recipients and all(r.startswith("age1fake") for r in recipients)
     assert "FAKE" in text.upper() and "fictional" in text.lower()
+
+
+@pytest.mark.parametrize(
+    "env", [{"BAO_REF": "secret:ansible/vault-password\n"}, {"BAO_KV_MOUNT": "kv\n"}]
+)
+def test_a_name_or_mount_with_a_trailing_newline_is_refused(client, env):
+    """``^...$`` matches before a final newline, so ``secret:x\\n`` read as the name ``x\\n``."""
+    bao = FakeOpenBao()
+    with pytest.raises(client.ClientError) as exc:
+        client.from_openbao(
+            env.get("BAO_REF", "secret:ansible/vault-password"),
+            {**BAO, "BAO_TOKEN": "fake-token", **env},
+            bao,
+        )
+    assert exc.value.code == 2 and bao.calls == []

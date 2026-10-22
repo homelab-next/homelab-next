@@ -13,13 +13,21 @@ A reference ``secret:<name>`` resolves on the controller from one of two backend
   never followed, so the token reaches the configured address only.  The token is
   ``BAO_TOKEN``, else an AppRole login with ``BAO_ROLE_ID`` and ``BAO_SECRET_ID`` made for this
   one lookup and revoked (``auth/token/revoke-self``) as soon as its values are read; a failed
-  revoke is a warning and the token lapses at the role's (short) TTL.
+  revoke is a warning and the token lapses at the role's (short) TTL.  Every lookup therefore
+  spends one ``secret_id`` use: the AppRole needs ``secret_id_num_uses=0`` (a short
+  ``secret_id_ttl`` and rotation bound it instead) and ``token_num_uses`` of 0 or at least one
+  more than the references per lookup (docs/private-overlay.md, step 4).  The token is not
+  cached for the play: Ansible runs a lookup in a forked worker per task and host, which exits
+  without running exit handlers, so a cached token could never be revoked reliably.
 * **Environment or directory** (lab-in-a-box and the conformance lab): the environment variable
   the registry delivers it in (``HNX_SECRET_<NAME>``:
   ``homelabnext.registry.model.secret_env_name``), else the file ``<hnx_secrets_dir>/<name>``
   (inventory variable).  That mapping folds every non-alphanumeric to ``_``, so ``a/b``, ``a-b``
   and ``a.b`` share one variable: two such references in one lookup, or in one controller
-  process, are refused instead of silently handing one the other's value.
+  process, are refused instead of silently handing one the other's value.  "One process" is one
+  Ansible worker (``_SEEN``): forks do not share it, so two tasks that each read one of a
+  colliding pair are not caught here (the registry refuses such pairs among its own references:
+  ``homelabnext.registry.model.secret_ref_problems``).
 
 Either way an empty or missing secret fails the lookup, never reads as "no secret", and errors
 name the reference, the variable or the HTTP status, never a value or a token.  A task that uses
@@ -53,11 +61,12 @@ options:
     required: true
 """
 
-NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*$")
-MOUNT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+NAME = re.compile(r"[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*")  # fullmatch: "$" takes a "\n"
+MOUNT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 TIMEOUT = 10.0
 MAX_BYTES = 1 << 20
-#: env name -> the reference first read through it in this controller process
+#: env name -> the reference first read through it in this process (one Ansible worker: a fork
+#: per task and host, so this is per worker, never play-wide)
 _SEEN: dict[str, str] = {}
 
 display = Display()
@@ -71,7 +80,7 @@ def env_name(ref: str) -> str:
 
 def _name(ref: object) -> str:
     name = ref.removeprefix("secret:") if isinstance(ref, str) else ""
-    if not isinstance(ref, str) or not ref.startswith("secret:") or not NAME.match(name):
+    if not isinstance(ref, str) or not ref.startswith("secret:") or not NAME.fullmatch(name):
         raise AnsibleLookupError(f"hnx_secret: {ref!r} is not a secret reference (secret:<name>)")
     return name
 
@@ -105,7 +114,7 @@ class OpenBao:
         if not self.addr.startswith("https://"):
             raise AnsibleLookupError("hnx_secret: BAO_ADDR must be an https:// address")
         self.mount = env.get("BAO_KV_MOUNT") or "secret"
-        if not MOUNT.match(self.mount):
+        if not MOUNT.fullmatch(self.mount):
             raise AnsibleLookupError("hnx_secret: BAO_KV_MOUNT is not a mount name")
         self.field = env.get("BAO_FIELD") or "value"
         self.env = env

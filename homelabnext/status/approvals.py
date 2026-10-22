@@ -83,7 +83,7 @@ FORM_FIELDS = frozenset({"request_id", "digest", "decision", "token", "note"})
 _REQUIRED = FORM_FIELDS - {"note"}
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 #: an approver subject as ``schemas/broker/approval`` takes it, and as the allowlist names it
-SUBJECT_RE = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
+SUBJECT_RE = re.compile(r"[a-z][a-z0-9._-]{0,63}")  # fullmatch: "$" would take a "\n"
 _TOKEN_RE = re.compile(r"^[0-9]{1,12}\.[0-9a-f]{64}$")
 _DECISIONS = {"approve": "approved", "deny": "denied"}
 #: the hub's CSP with forms allowed to post back to the hub (and nowhere else)
@@ -232,7 +232,7 @@ class ApprovalsSite:
     def subject(self, user: str) -> str | None:
         """The approver subject for the front door's ``user``: the username unchanged when it is
         canonical, else None (never folded: two spellings may be two accounts)."""
-        return user if SUBJECT_RE.match(user) else None
+        return user if SUBJECT_RE.fullmatch(user) else None
 
     # ---------------------------------------------------------------- the CSRF token
     def token(self, request_id: str, digest: str, user: str, *, at: float | None = None) -> str:

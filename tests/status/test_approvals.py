@@ -754,3 +754,10 @@ def test_round_trip_through_a_real_broker_socket(tmp_path, clock, registry):
     finally:
         proc.terminate()
         assert proc.wait(timeout=10) == 0
+
+
+def test_an_approver_subject_with_a_trailing_newline_is_not_canonical(broker, tmp_path, clock):
+    """``^...$`` matches before a final newline: ``operator\\n`` passed as canonical."""
+    site = ApprovalsSite(broker, SETTINGS, front_door(tmp_path), clock=clock)
+    assert site.subject("operator") == "operator"
+    assert site.subject("operator\n") is None and site.subject("operator\r\n") is None

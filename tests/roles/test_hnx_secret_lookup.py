@@ -49,6 +49,7 @@ def test_environment_first_then_the_secrets_dir(mod, tmp_path, monkeypatch):
         ("plain-value-fake", "is not a secret reference"),
         ("secret:../etc/passwd", "is not a secret reference"),
         ("secret:a/../../b-token", "is not a secret reference"),
+        ("secret:siem/token\n", "is not a secret reference"),  # "$" took a final newline
         ("secret:missing/token", "secret:missing/token is not set"),
     ],
 )
@@ -186,6 +187,7 @@ def test_openbao_failed_revoke_is_a_warning(mod, tls, bao_env, monkeypatch):
     [
         ({"BAO_ADDR": "http://bao.example.internal"}, "https://"),
         ({"BAO_ADDR": "https://bao.example.internal", "BAO_KV_MOUNT": "a/b"}, "mount name"),
+        ({"BAO_ADDR": "https://bao.example.internal", "BAO_KV_MOUNT": "kv\n"}, "mount name"),
         ({"BAO_ADDR": "https://bao.example.internal"}, "BAO_ROLE_ID and BAO_SECRET_ID"),
     ],
 )
