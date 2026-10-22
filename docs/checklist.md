@@ -199,6 +199,12 @@ Tiered: screen, fast model, heavy model.
 | A-05 | Low confidence escalates | Below-threshold items reach the heavy model or a human; none auto-actioned | PUBLIC-NOW |
 | A-06 | The heavy model is reserved for hard cases | <= 10% of routed items reach the heavy tier; cost within budget | SERVER |
 | A-07 | The AI agrees with analysts | Agreement >= 90% on a rolling 30-day sample | SERVER |
+| A-08 | Each model is on disk once, pinned | The store manifest lists each (source, revision, quant) once, every hub entry at a 40-hex commit (never `main`), every file with sha256 and size; every role binding resolves to an entry its engine may serve, and a pinned digest names it (`hnx models store validate --roles`, `make models-check`; `tests/models/test_model_store.py`) | PUBLIC-NOW |
+| A-09 | The store's bytes are the manifest's | `hnx models store check` passes by sha256 (missing, resized, changed or unlisted files fail); the `model_store` role fetches with `--revision <commit>` and refuses a mismatch (`tests/models/test_model_store.py`, `tests/roles/test_serving_roles.py` against a fake `hf`) | PUBLIC-NOW |
+| A-10 | vLLM runs what the role table says | Units generated from store + role table + serving spec: `--served-model-name` = binding model id, `--max-model-len` = role context, `--scheduling-policy priority`, one model per instance, distinct ports and GPUs; the `vllm_server` health hook agrees with the K-14 probe (`hnx models serving check`, `tests/models/test_serving_plan.py`, `tests/roles/test_serving_roles.py`) | PUBLIC-NOW |
+| A-11 | Chat goes through the gateway | Open WebUI's only backend is the gateway URL with its own key by secret name; a backend id, Ollama or a direct connection is refused (`open_webui` role, `tests/roles/test_serving_roles.py`) | PUBLIC-NOW |
+| A-12 | The serving stack runs on the GPU host | `vllm_server` health passes on the CMP 170HX host for every instance; TP/PP benchmarked; the docs/model-serving.md hardware items checked off | SERVER |
+| A-13 | Served model bytes are pinned end to end | `uv run pytest tests/models tests/roles/test_serving_roles.py` exits 0: vLLM `args` are a typed allowlist (`homelabnext.models.serving.ALLOWED_ARGS`, mirrored into `vllm_server/vars/main.yml` and the schema, held equal by a test); a serving spec states `exposure` and the gateway refuses a loopback plan or a registry port that is not the plan's; `model_store` fetches into staging and renames only sha256-verified files into place, locks promoted exports (store-owned, sticky `exports/`), and writes per-entry listings; every vLLM unit runs `ExecStartPre=hnx-model-verify` (listing hashes to the pinned digest, `sha256sum --check --strict`); `check_disk` refuses files resolving out of their entry/blobs; Open WebUI's target must resolve to the registry's `llm-gateway` capability; units allow only their own `/dev/nvidiaN` | PUBLIC-NOW |
 
 ## G - AI safety guardrails
 
@@ -293,4 +299,4 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 
 ---
 
-**Totals:** 170 criteria across 16 pillars; 89 PUBLIC-NOW, 81 SERVER.
+**Totals:** 176 criteria across 16 pillars; 94 PUBLIC-NOW, 82 SERVER.
