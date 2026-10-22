@@ -242,7 +242,8 @@ resource_dir(kind) / resource_file(kind, *parts) / data_root() / source_root() /
 # kind in {schemas, profiles, examples}.  Order: HNX_<KIND>_DIR, then HNX_DATA_DIR (a whole tree), then the
 # wheel's homelabnext/_data/<kind>, then the checkout.  Each function takes env=, package_root=, source_root=
 # for tests; ResourceNotFound lists every place tried.  No module under homelabnext/ may locate the data
-# itself (tests/paths enforces it).  The wheel carries schemas/, profiles/ and examples/ only: conformance/,
+# itself (tests/paths enforces it).  The wheel carries schemas/, profiles/ and examples/ as data, plus the
+# conformance.protocols contracts runtime code imports; the rest of conformance/ (suites, fakes, targets),
 # compose/, tools/ and docs/ stay in the source tree.
 
 # homelabnext.agent   (extra: agent = PyYAML + jsonschema; hnx agent; docs/agent.md)

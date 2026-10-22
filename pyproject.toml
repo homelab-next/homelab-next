@@ -73,7 +73,12 @@ Issues = "https://github.com/homelab-next/homelab-next/issues"
 version = { attr = "homelabnext._version.VERSION" }
 
 [tool.setuptools.packages.find]
-include = ["homelabnext*"]
+# conformance.protocols holds the capability contracts that the broker, the StackStorm bridge and
+# several adapters import at run time, so the wheel carries it (as part of the `conformance`
+# namespace package; the repo-level conformance/ has no __init__.py).  The rest of conformance/
+# (suites, fakes, targets) needs a source checkout and stays out:
+# tests/packaging/test_runtime_imports_packaged.py
+include = ["homelabnext*", "conformance.protocols"]
 
 [tool.setuptools.package-data]
 homelabnext = [
