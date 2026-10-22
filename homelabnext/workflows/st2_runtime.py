@@ -6,15 +6,32 @@ semantics as the offline runner (:mod:`homelabnext.workflows.runner`), so a pack
 StackStorm the way its fixtures say.  The rendered pack's ``admit.py`` and ``step.py`` are
 two-line shims over :func:`admit` and :func:`step`; nothing else runs on StackStorm.
 
+**What crosses StackStorm is text it cannot render.**  StackStorm renders every action parameter
+that contains ``{{`` or ``{%`` with an unsandboxed Jinja environment (datastore reads, and code on
+the action runner), and an event is written by its producer -- a proposal's title by any agent
+that may file one.  So the rule hands the webhook body over JSON- then URL-encoded, the workflow
+passes on only text this module encoded (:func:`encode`: ``{``, ``%`` and ``<`` are ``%XX``), and
+only Python decodes it (:func:`decode`).  No event field is ever an Orquesta or Jinja expression.
+
+**What a run does comes from the installed pack, not from a parameter.**  Both actions take the
+pack name (and :func:`step` the step id); the pack document, its digest, the mode its rule was
+rendered with (the promotion state), each step's risk, the coalesce window and the schedule are
+read from ``pinned/<pack>.json`` beside the actions (:func:`load_pinned`, digest re-checked).  So
+``st2 run homelabnext.step`` can run only a pinned step, only in the mode it was promoted to; who
+may run the pack's actions at all is StackStorm RBAC's (``docs/stackstorm.md``).
+
 :func:`admit` (the first task of every rendered workflow):
 
 * builds the ``homelabnext.schedule.fired`` event for a CronTimer firing (its id derives from the
   schedule and the firing time, so a re-fired timer is the same event), or takes the webhook body;
 * validates the event against its schema and re-checks the pack's own trigger - defence in depth
-  behind the rule's criteria, and the one place the trigger semantics live;
+  behind the rule's criteria, and the one place the trigger semantics live.  The trigger of every
+  event-triggered pack pins ``$event.source`` (``st2-source``), so an event that names another
+  producer is ``not-triggered``;
 * **coalesces**: with ``coalesce = {key, window_s}`` the first event of a key opens a window in the
-  StackStorm datastore (``homelabnext.coalesce.<hash>``, TTL ``window_s``); every later event of
-  that key inside the window ends the run ``coalesced`` before any step runs.  The datastore has no
+  StackStorm datastore (``homelabnext.coalesce.<hash of pack, source and key>``, TTL
+  ``window_s``); every later event of that key inside the window ends the run ``coalesced`` before
+  any step runs.  The datastore has no
   compare-and-set, so two events in the same instant can both pass: the bound that holds anyway is
   the controller's idempotency key and the pack's own trigger (``docs/stackstorm.md``).
 
@@ -36,11 +53,17 @@ two-line shims over :func:`admit` and :func:`step`; nothing else runs on StackSt
 from __future__ import annotations
 
 import hashlib
+import json
+import os
+import re
+import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Protocol
 
 from conformance.protocols.broker import Denied
+from homelabnext.agent.digest import digest_of
 from homelabnext.broker import request_digest
 from homelabnext.events.envelope import build_event, event_problems
 
@@ -53,10 +76,52 @@ ST2_STEP_KINDS = ("enrich", "action")
 MODES = ("shadow", "live")
 SHADOW_REASON = "st2-shadow"
 COALESCE_PREFIX = "homelabnext.coalesce."
+_PACK_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 
 
 class UnsupportedStep(ValueError):
     """A step kind the StackStorm runtime does not run (the renderer refuses such packs)."""
+
+
+class PinError(ValueError):
+    """``pinned/<pack>.json`` is missing, is not the pack asked for, or fails its digest."""
+
+
+# ---------------------------------------------------------------- the encoded hand-over
+def encode(value: Any) -> str:
+    """JSON, then every byte but ``A-Za-z0-9_.-~`` percent-encoded: no template marker survives."""
+    text = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return urllib.parse.quote(text, safe="")
+
+
+def decode(text: Any) -> Any:
+    """The inverse of :func:`encode`, and of the rule's ``to_json_string | urlencode``.  Raises
+    ValueError on anything else (an object StackStorm would already have rendered included)."""
+    if not isinstance(text, str):
+        raise ValueError("an encoded value is a string")
+    return json.loads(urllib.parse.unquote(text, errors="strict"))
+
+
+def load_pinned(pinned_dir: str | os.PathLike[str], pack: str) -> dict[str, Any]:
+    """The rendered ``pinned/<pack>.json``, its pack document re-checked against its digest."""
+    if not isinstance(pack, str) or not _PACK_NAME.fullmatch(pack):
+        raise PinError(f"{pack!r} is not a pack name")
+    path = Path(pinned_dir) / (pack.replace("-", "_") + ".json")
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise PinError(f"{pack}: no pinned document ({exc.__class__.__name__})") from None
+    if (
+        not isinstance(doc, dict)
+        or not isinstance(doc.get("pack"), dict)
+        or doc["pack"].get("pack") != pack
+        or doc.get("mode") not in MODES
+        or not isinstance(doc.get("risky"), dict)
+    ):
+        raise PinError(f"{pack}: the pinned document is not this pack's")
+    if digest_of(doc["pack"]) != doc.get("digest"):
+        raise PinError(f"{pack}: the pinned pack does not match its digest")
+    return doc
 
 
 class KeyValue(Protocol):
@@ -113,12 +178,50 @@ def schedule_event(schedule: str, fired_at: str, cron: str | None = None) -> dic
     )
 
 
-def coalesce_name(pack: str, value: Any) -> str:
-    h = hashlib.sha256(f"{pack}\0{value!r}".encode()).hexdigest()[:32]
+def coalesce_name(pack: str, source: Any, value: Any) -> str:
+    h = hashlib.sha256(f"{pack}\0{source!r}\0{value!r}".encode()).hexdigest()[:32]
     return COALESCE_PREFIX + h
 
 
 def admit(
+    *,
+    pack: str,
+    pinned_dir: str | os.PathLike[str],
+    event: str | None = None,
+    fired_at: str | None = None,
+    kv: KeyValue | None = None,
+) -> dict[str, Any]:
+    """The ``homelabnext.admit`` action: :func:`admit_event` for the pinned pack, the event taken
+    URL-encoded (a webhook rule) or built from ``fired_at`` (a CronTimer rule), and the admitted
+    event handed on encoded."""
+    pin = load_pinned(pinned_dir, pack)
+    doc = pin["pack"]
+    schedule = ev = None
+    if "schedule" in pin:
+        if fired_at is None or event is not None:
+            return {"admitted": False, "reason": "invalid-event", "problems": ["not a firing"]}
+        schedule = dict(pin["schedule"], fired_at=fired_at)
+    else:
+        try:
+            ev = decode(event)
+        except ValueError:
+            return {"admitted": False, "reason": "invalid-event", "problems": ["not encoded"]}
+        if not isinstance(ev, dict):
+            return {"admitted": False, "reason": "invalid-event", "problems": ["not an object"]}
+    got = admit_event(
+        pack=pack,
+        trigger=doc["trigger"],
+        event=ev,
+        schedule=schedule,
+        coalesce=pin.get("coalesce"),
+        kv=kv,
+    )
+    if got["admitted"]:
+        got["event"] = encode(got["event"])
+    return got
+
+
+def admit_event(
     *,
     pack: str,
     trigger: Mapping[str, Any],
@@ -148,7 +251,7 @@ def admit(
         if kv is None:
             raise ValueError("coalesce needs the StackStorm datastore")
         value = resolve(coalesce["key"], {"event": ev, "steps": {}})
-        name = coalesce_name(pack, value)
+        name = coalesce_name(pack, ev.get("source"), value)
         first = kv.get(name)
         if first is not None:
             return {
@@ -243,13 +346,51 @@ def _socket_broker(socket_path: str) -> Broker:
 
 
 def step(
-    config: Mapping[str, Any], *, broker_factory: BrokerFactory = _socket_broker, **params: Any
+    config: Mapping[str, Any],
+    *,
+    pack: str,
+    step: str,
+    event: str,
+    state: str = "",
+    pinned_dir: str | os.PathLike[str],
+    broker_factory: BrokerFactory = _socket_broker,
 ) -> dict[str, Any]:
-    """The ``homelabnext.step`` action: :func:`run_step` with the broker from the pack config.
+    """The ``homelabnext.step`` action: step ``step`` of the pinned ``pack``, for the encoded
+    ``event`` (re-checked against the pack's trigger), after the encoded ``state`` of the steps
+    before it.  Mode, risk, actor and digest come from the pinned document.  Returns ``{state,
+    skipped, result}``, ``state`` encoded for the next step.
 
     Shadow mode never opens the socket, so a shadow rule works on a host with no broker at all.
     """
+    pin = load_pinned(pinned_dir, pack)
+    doc = pin["pack"]
+    found = [s for s in doc["steps"] if s["id"] == step]
+    if len(found) != 1:
+        raise PinError(f"{pack}: no step {step!r}")
+    ev = decode(event)
+    if not isinstance(ev, dict) or event_problems(ev) or not triggered(doc, ev):
+        raise ValueError(f"{pack}: the event is not one the pack triggers on")
+    prior = decode(state) if state else {"steps": {}, "calls": []}
+    if not isinstance(prior, dict):
+        raise ValueError("state is not an encoded object")
     broker = None
-    if params.get("mode", "shadow") == "live":
+    if pin["mode"] == "live":
         broker = broker_factory(str(config["broker_socket"]))
-    return run_step(broker=broker, **params)
+    out = run_step(
+        pack=pack,
+        actor=doc["actor"],
+        step=found[0],
+        event=ev,
+        steps=prior.get("steps"),
+        calls=prior.get("calls"),
+        mode=pin["mode"],
+        risky=bool(pin["risky"].get(step, True)),
+        digest=pin["digest"],
+        broker=broker,
+    )
+    made = out["calls"][len(prior.get("calls") or ()) :]
+    return {
+        "state": encode({"steps": out["steps"], "calls": out["calls"]}),
+        "skipped": out["skipped"],
+        "result": made[0]["result"] if made else None,
+    }

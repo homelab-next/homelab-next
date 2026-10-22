@@ -14,6 +14,9 @@ criteria:
   trigger.body.type:
     type: equals
     pattern: homelabnext.agent.job.failed
+  trigger.body.source:
+    type: equals
+    pattern: svc:orchestration
   trigger.body.data.reason:
     type: inside
     pattern:
@@ -28,5 +31,4 @@ criteria:
 action:
   ref: homelabnext.agent_job_retry
   parameters:
-    event: '{{ trigger.body }}'
-    mode: shadow
+    event: '{{ trigger.body | to_json_string | urlencode }}'

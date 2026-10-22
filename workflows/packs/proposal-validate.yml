@@ -9,6 +9,8 @@ version: 1
 description: Queue one proposal-validator job for every proposal filed in the records inbox.
 trigger:
   event: homelabnext.proposal.created
+  where:
+    - {ref: $event.source, equals: "svc:broker"}  # the producer: the broker's records-inbox lane
 actor: profile:workflow-agents
 broker_manifest: workflows/broker.manifest.json
 steps:

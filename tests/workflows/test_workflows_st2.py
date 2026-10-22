@@ -15,6 +15,7 @@ import json
 import re
 import sys
 import types
+import urllib.parse
 from datetime import UTC, datetime
 
 import pytest
@@ -58,7 +59,26 @@ def go(b: dict, packs: dict | None = None, tracked=lambda _p: True):
         manifests=lambda rel: universe().manifest(rel)[0],
         clean=set(packs),
         tracked=tracked,
+        handlers=lambda m, h: st2.handler_problem(ROOT, m, h),
     )
+
+
+def pinned_dir(tmp_path, b: dict | None = None, packs: dict | None = None):
+    """The ``pinned/`` directory of a tree rendered from ``b`` and ``packs``, written out."""
+    res = go(b or binding(), packs)
+    assert res.problems == [], [str(p) for p in res.problems]
+    st2.write(res.files, tmp_path / "st2")
+    return tmp_path / "st2" / "homelabnext" / "pinned"
+
+
+def calls_of(out: dict) -> list[dict]:
+    return st2_runtime.decode(out["state"])["calls"]
+
+
+#: what a reviewer filed as a proposal title: st2 would render it, unsandboxed, as Jinja
+HOSTILE = (
+    "{{ st2kv.system.leak | decrypt_kv }}{% for c in ''.__class__.__mro__ %}x{% endfor %}<% 1 %>"
+)
 
 
 def rules_of(b: dict | None = None, packs: dict | None = None) -> dict[str, dict]:
@@ -180,7 +200,9 @@ def broker_service(tmp_path) -> BrokerService:
 def workflow_steps(name: str, b: dict | None = None) -> list[dict]:
     res = go(b or binding())
     wf = yaml.safe_load(res.files[f"homelabnext/actions/workflows/{st2.st2_name(name)}.yaml"])
-    return [t["input"]["step"] for n, t in wf["tasks"].items() if n != "admit"]
+    pin = json.loads(res.files[f"homelabnext/pinned/{st2.st2_name(name)}.json"])
+    ids = [t["input"]["step"] for n, t in wf["tasks"].items() if n != "admit"]
+    return [next(s for s in pin["pack"]["steps"] if s["id"] == i) for i in ids]
 
 
 # ---------------------------------------------------------------- the committed tree
@@ -217,7 +239,8 @@ def test_rendered_documents_have_the_fields_stackstorm_requires():
             kinds[path] = yaml.safe_load(text)
     assert st2.tree_problems(res.files, "homelabnext") == []
     meta = kinds["homelabnext/actions/agent_job_retry.yaml"]
-    assert meta["runner_type"] == "orquesta" and meta["parameters"]["mode"]["default"] == "shadow"
+    assert meta["runner_type"] == "orquesta" and set(meta["parameters"]) == {"event"}
+    assert meta["parameters"]["event"]["type"] == "string"  # the encoded body, never an object
     for broken in (
         {k: v for k, v in meta.items() if k != "entry_point"},
         meta | {"runner_type": "local-shell-cmd"},
@@ -263,6 +286,7 @@ def test_a_rule_without_a_type_criterion_matches_everything_and_is_refused():
     assert st2.criteria_problems(rule) == []
     loose = copy.deepcopy(rule)
     del loose["criteria"]["trigger.body.type"]
+    del loose["criteria"]["trigger.body.source"]
     assert all(st2_matches(loose, e) for e in corpus())  # the failure the check exists for
     assert st2.criteria_problems(loose)
     wild = copy.deepcopy(rule)
@@ -304,10 +328,13 @@ def _problems(b: dict, packs: dict | None = None, **kw) -> set[tuple[str, str]]:
 
 
 def test_the_shipped_binding_passes_and_starts_in_shadow():
-    assert go(binding()).problems == []
+    res = go(binding())
+    assert res.problems == []
     assert {r["mode"] for r in binding()["rules"]} == {"shadow"}
+    pins = [json.loads(t) for p, t in res.files.items() if "/pinned/" in p]
+    assert len(pins) == 2 and {p["mode"] for p in pins} == {"shadow"}
     for rule in rules_of().values():
-        assert rule["action"]["parameters"]["mode"] == "shadow"
+        assert "mode" not in rule["action"]["parameters"]  # never a parameter
 
 
 def test_live_needs_a_week_of_shadow_and_tracked_evidence():
@@ -323,7 +350,7 @@ def test_live_needs_a_week_of_shadow_and_tracked_evidence():
     _a02(b)["promotion"]["live_from"] = "2026-01-08"
     assert ("st2-live", "agent-job-retry") in _problems(b, tracked=lambda _p: False)
     assert go(b).problems == []
-    assert "mode: live" in go(b).files["homelabnext/rules/on_agent_job_retry.yaml"]
+    assert json.loads(go(b).files["homelabnext/pinned/agent_job_retry.json"])["mode"] == "live"
 
 
 def test_agent_dispatch_must_coalesce_and_retries_must_be_bounded():
@@ -332,7 +359,7 @@ def test_agent_dispatch_must_coalesce_and_retries_must_be_bounded():
     assert _problems(b) == {("st2-coalesce", "agent-job-retry")}
     packs = all_packs()
     a02 = packs["agent-job-retry"]
-    a02["trigger"]["where"] = a02["trigger"]["where"][:1]  # drop the resubmits bound
+    a02["trigger"]["where"] = a02["trigger"]["where"][:2]  # drop the resubmits bound
     assert ("st2-bound", "agent-job-retry") in _problems(binding(), packs)
     a02["trigger"]["where"].append({"ref": "$event.data.resubmits", "in": [0, 5]})
     assert ("st2-bound", "agent-job-retry") in _problems(binding(), packs)
@@ -436,7 +463,8 @@ def test_a_scheduled_pack_becomes_a_crontimer_rule():
     ("cron", "params"),
     [
         ("*/15 * * * *", {"minute": "*/15"}),
-        ("0 2 1 * 0", {"minute": 0, "hour": 2, "day": 1, "day_of_week": "sun"}),
+        ("0 2 1 * *", {"minute": 0, "hour": 2, "day": 1}),
+        ("0 2 * * 0", {"minute": 0, "hour": 2, "day_of_week": "sun"}),
         ("30 23 * 1-6 6,7", {"minute": 30, "hour": 23, "month": "1-6", "day_of_week": "sat,sun"}),
     ],
 )
@@ -445,23 +473,47 @@ def test_cron_fields(cron, params):
 
 
 @pytest.mark.parametrize(
-    "cron", ["* * * *", "60 * * * *", "* * * * */2", "* * * * 5-1", "a * * * *"]
+    "cron", ["* * * *", "60 * * * *", "* * * * */2", "* * * * 5-1", "a * * * *", "0 2 1 * 0"]
 )
 def test_bad_cron_fields(cron):
     with pytest.raises(ValueError):
         st2.cron_params(cron)
 
 
+def test_day_of_month_and_day_of_week_together_are_refused():
+    # cron fires on the 1st OR on Sundays; the CronTimer (APScheduler) only on a Sunday the 1st
+    with pytest.raises(ValueError, match="day of month and day of week"):
+        st2.cron_params("0 2 1 * 0")
+    assert ("st2-cron", "nightly-digest") in _problems(*_sched("0 6 1 * 1"))
+
+
 def test_a_firing_is_one_stable_event():
     a = st2_runtime.schedule_event("nightly-digest", "2026-01-15 06:05:00.123456", "5 6 * * *")
     b = st2_runtime.schedule_event("nightly-digest", "2026-01-15T06:05:00Z")
     assert event_problems(a) == [] and a["id"] == b["id"] and a["time"] == "2026-01-15T06:05:00Z"
-    got = st2_runtime.admit(
+    got = st2_runtime.admit_event(
         pack="nightly-digest",
         trigger=SCHED_PACK["trigger"],
         schedule={"id": "nightly-digest", "fired_at": "2026-01-15 06:05:00"},
     )
     assert got["admitted"] and got["event"]["id"] == a["id"]
+
+
+def test_a_scheduled_run_takes_its_schedule_from_the_pinned_pack(tmp_path):
+    b, packs = _sched()
+    pdir = pinned_dir(tmp_path, b, packs)
+    got = st2_runtime.admit(
+        pack="nightly-digest", pinned_dir=pdir, fired_at="2026-01-15 06:05:00", kv=KV()
+    )
+    assert got["admitted"]
+    ev = st2_runtime.decode(got["event"])
+    assert ev["data"] == {
+        "schedule": "nightly-digest",
+        "fired_at": "2026-01-15T06:05:00Z",
+        "cron": "5 6 * * 1-5",
+    }
+    forged = st2_runtime.admit(pack="nightly-digest", pinned_dir=pdir, event=got["event"])
+    assert forged["reason"] == "invalid-event"  # a scheduled pack takes no event
 
 
 # ---------------------------------------------------------------- admit and coalesce
@@ -477,23 +529,23 @@ def test_a02_coalesces_a_burst_of_failures_of_one_agent():
     co = _a02(binding())["coalesce"]
     kv = KV()
     got = [
-        st2_runtime.admit(
+        st2_runtime.admit_event(
             pack=a02["pack"], trigger=a02["trigger"], event=_failure(i), coalesce=co, kv=kv
         )
         for i in range(5)
     ]
     assert [g["reason"] for g in got] == ["admitted"] + ["coalesced"] * 4
     assert {g.get("coalesced_into") for g in got[1:]} == {"evt-burst-0"}
-    other = st2_runtime.admit(
+    other = st2_runtime.admit_event(
         pack=a02["pack"], trigger=a02["trigger"], event=_failure(9, "reader"), coalesce=co, kv=kv
     )
     assert other["reason"] == "admitted"  # coalescing is per agent
     kv.now += co["window_s"]
-    again = st2_runtime.admit(
+    again = st2_runtime.admit_event(
         pack=a02["pack"], trigger=a02["trigger"], event=_failure(10), coalesce=co, kv=kv
     )
     assert again["reason"] == "admitted"  # a new window
-    capped = st2_runtime.admit(
+    capped = st2_runtime.admit_event(
         pack=a02["pack"],
         trigger=a02["trigger"],
         event=_failure(11, resubmits=1),
@@ -501,27 +553,49 @@ def test_a02_coalesces_a_burst_of_failures_of_one_agent():
         kv=kv,
     )
     assert capped["reason"] == "not-triggered"  # the attempt cap, before the datastore is touched
-    bad = st2_runtime.admit(pack=a02["pack"], trigger=a02["trigger"], event={"type": "x"})
+    bad = st2_runtime.admit_event(pack=a02["pack"], trigger=a02["trigger"], event={"type": "x"})
     assert bad["reason"] == "invalid-event"
+    forged = _failure(12)
+    forged["source"] = "profile:triage"  # anyone who may post to the bus, but not the controller
+    got = st2_runtime.admit_event(
+        pack=a02["pack"], trigger=a02["trigger"], event=forged, coalesce=co, kv=kv
+    )
+    assert got["reason"] == "not-triggered"  # before the datastore: it opens no window
+
+
+def test_every_event_triggered_pack_pins_its_producer():
+    rules = rules_of()
+    a01 = rules["homelabnext/rules/on_proposal_validate.yaml"]
+    a02 = rules["homelabnext/rules/on_agent_job_retry.yaml"]
+    assert a01["criteria"]["trigger.body.source"] == {"type": "equals", "pattern": "svc:broker"}
+    assert a02["criteria"]["trigger.body.source"]["pattern"] == "svc:orchestration"
+    ev = pack("proposal-validate")["fixtures"][0]["event"]
+    assert st2_matches(a01, ev)
+    assert not st2_matches(a01, ev | {"source": "profile:triage"})
+    packs = all_packs()
+    packs["proposal-validate"]["trigger"].pop("where")
+    assert ("st2-source", "proposal-validate") in _problems(binding(), packs)
+    # the window is keyed by producer too: an event of another source never shares one
+    assert st2_runtime.coalesce_name("p", "svc:a", "k") != st2_runtime.coalesce_name(
+        "p", "svc:b", "k"
+    )
 
 
 # ---------------------------------------------------------------- steps: shadow, live, broker
-def test_shadow_logs_the_offline_request_and_submits_nothing():
+def test_shadow_logs_the_offline_request_and_submits_nothing(tmp_path):
     a01 = pack("proposal-validate")
     fx = a01["fixtures"][0]
     [offline] = run_fixture(a01, fx, manifest=manifest()).calls
-    [st] = workflow_steps("proposal-validate")
     got = st2_runtime.step(
         {"broker_socket": "/nonexistent"},
+        pinned_dir=pinned_dir(tmp_path),
         broker_factory=lambda _s: NoBroker(),
         pack=a01["pack"],
-        actor=a01["actor"],
-        step=st,
-        event=fx["event"],
-        mode="shadow",
-        risky=False,
+        step="submit",
+        event=st2_runtime.encode(fx["event"]),
     )
-    [rec] = got["calls"]
+    assert got["result"] == "shadow"
+    [rec] = calls_of(got)
     assert rec["result"] == "shadow" and rec["reason"] == "st2-shadow"
     assert (rec["request_id"], rec["request_digest"]) == (
         offline.request_id,
@@ -530,27 +604,50 @@ def test_shadow_logs_the_offline_request_and_submits_nothing():
     assert rec["params"] == offline.params
 
 
-def test_live_calls_or_submits_through_the_broker_only():
+def _live_a02() -> dict:
+    b = binding()
+    _a02(b)["mode"] = "live"
+    _a02(b)["promotion"] = {
+        "shadow_from": "2026-01-01",
+        "live_from": "2026-01-08",
+        "evidence": "docs/parity/a02.md",
+    }
+    return b
+
+
+def test_live_calls_or_submits_through_the_broker_only(tmp_path):
     a02 = pack("agent-job-retry")
     ev = a02["fixtures"][0]["event"]
     [st] = workflow_steps("agent-job-retry")
-    kw = {"pack": a02["pack"], "actor": a02["actor"], "step": st, "event": ev, "mode": "live"}
+    pdir = pinned_dir(tmp_path, _live_a02())
+    enc = st2_runtime.encode(ev)
     fb = FakeBroker()
-    out = st2_runtime.step({"broker_socket": "/s"}, broker_factory=lambda _s: fb, risky=False, **kw)
-    assert out["calls"][0]["result"] == "executed" and fb.calls == [
-        ("agent.job.submit", out["calls"][0]["params"], "svc:orchestration")
-    ]
-    assert out["calls"][0]["params"]["retry_of_run_id"] == "run-0001"
-    fb = FakeBroker()
-    out = st2_runtime.step({"broker_socket": "/s"}, broker_factory=lambda _s: fb, risky=True, **kw)
-    assert (out["calls"][0]["result"], fb.calls, len(fb.submits)) == ("held", [], 1)
     out = st2_runtime.step(
         {"broker_socket": "/s"},
-        broker_factory=lambda _s: FakeBroker("not-granted"),
-        risky=False,
-        **kw,
+        pinned_dir=pdir,
+        broker_factory=lambda _s: fb,
+        pack=a02["pack"],
+        step="resubmit",
+        event=enc,
     )
-    assert (out["calls"][0]["result"], out["calls"][0]["reason"]) == ("denied", "not-granted")
+    [rec] = calls_of(out)
+    assert rec["result"] == "executed" and fb.calls == [
+        ("agent.job.submit", rec["params"], "svc:orchestration")
+    ]
+    assert rec["params"]["retry_of_run_id"] == "run-0001"
+    out = st2_runtime.step(
+        {"broker_socket": "/s"},
+        pinned_dir=pdir,
+        broker_factory=lambda _s: FakeBroker("not-granted"),
+        pack=a02["pack"],
+        step="resubmit",
+        event=enc,
+    )
+    assert (calls_of(out)[0]["result"], calls_of(out)[0]["reason"]) == ("denied", "not-granted")
+    kw = {"pack": a02["pack"], "actor": a02["actor"], "step": st, "event": ev, "mode": "live"}
+    fb = FakeBroker()
+    out = st2_runtime.run_step(broker=fb, risky=True, **kw)
+    assert (out["calls"][0]["result"], fb.calls, len(fb.submits)) == ("held", [], 1)
     with pytest.raises(ValueError, match="mode"):
         st2_runtime.run_step(**(kw | {"mode": "dry-run"}))
     with pytest.raises(st2_runtime.UnsupportedStep):
@@ -576,7 +673,7 @@ def test_proposal_lane_to_a01_end_to_end_through_a_real_broker(tmp_path):
     rule = rules_of()["homelabnext/rules/on_proposal_validate.yaml"]
     assert st2_matches(rule, event)
     a01 = pack("proposal-validate")
-    admitted = st2_runtime.admit(
+    admitted = st2_runtime.admit_event(
         pack=a01["pack"],
         trigger=a01["trigger"],
         event=event,
@@ -668,10 +765,148 @@ def test_the_rendered_shims_delegate_to_the_runtime(monkeypatch):
     co = _a02(binding())["coalesce"]
     admit = _load_shim("admit", monkeypatch)(action_service=Service())
     ev = a02["fixtures"][0]["event"]
-    first = admit.run(pack=a02["pack"], trigger=a02["trigger"], event=ev, coalesce=co)
-    second = admit.run(pack=a02["pack"], trigger=a02["trigger"], event=ev, coalesce=co)
+    assert co["window_s"] == 600
+    enc = st2_runtime.encode(ev)
+    first = admit.run(pack=a02["pack"], event=enc)  # the committed pack's pinned/ directory
+    second = admit.run(pack=a02["pack"], event=enc)
     assert (first["reason"], second["reason"]) == ("admitted", "coalesced")
     step = _load_shim("step", monkeypatch)(config={"broker_socket": "/nonexistent"})
-    [st] = workflow_steps("agent-job-retry")
-    out = step.run(pack=a02["pack"], actor=a02["actor"], step=st, event=ev, mode="shadow")
-    assert out["calls"][0]["result"] == "shadow"
+    out = step.run(pack=a02["pack"], step="resubmit", event=first["event"], state="")
+    assert calls_of(out)[0]["result"] == "shadow"
+    with pytest.raises(TypeError):  # the mode is the pinned rule's, never a parameter
+        step.run(pack=a02["pack"], step="resubmit", event=first["event"], mode="live")
+
+
+# ---------------------------------------------------------------- what crosses StackStorm
+def _hostile_proposal() -> dict:
+    ev = copy.deepcopy(pack("proposal-validate")["fixtures"][0]["event"])
+    ev["data"]["summary"] = HOSTILE  # the one free-text field (the note path is a pattern)
+    return ev
+
+
+def st2_jinja_body(body: dict) -> str:
+    """What st2 hands the rule's action for ``ENCODED_BODY``: ``to_json_string`` is st2's own
+    (``json.dumps`` with its default separators), ``urlencode`` Jinja's (``quote``, ``/`` safe)."""
+    text = json.dumps(body, indent=None, sort_keys=False, separators=(",", ": "))
+    return urllib.parse.quote(text.encode("utf-8"), safe="/")
+
+
+def test_rules_pass_the_trigger_encoded_and_never_raw():
+    for rule in rules_of().values():
+        params = rule["action"]["parameters"]
+        assert params == {"event": st2.ENCODED_BODY}, rule["name"]
+    passed = st2_jinja_body(_hostile_proposal())
+    assert not st2._TEMPLATE.search(passed) and "%>" not in passed
+    assert st2_runtime.decode(passed) == _hostile_proposal()
+
+
+def test_hostile_event_text_never_reaches_an_action_parameter_unencoded(tmp_path):
+    pdir = pinned_dir(tmp_path)
+    got = st2_runtime.admit(
+        pack="proposal-validate",
+        pinned_dir=pdir,
+        event=st2_jinja_body(_hostile_proposal()),
+        kv=KV(),
+    )
+    assert got["admitted"]
+    out = st2_runtime.step(
+        {"broker_socket": "/nonexistent"},
+        pinned_dir=pdir,
+        broker_factory=lambda _s: NoBroker(),
+        pack="proposal-validate",
+        step="submit",
+        event=got["event"],
+    )
+    for text in (got["event"], out["state"]):  # what the workflow publishes and passes on
+        assert isinstance(text, str) and not st2._TEMPLATE.search(text) and "%>" not in text
+    assert st2_runtime.decode(got["event"])["data"]["summary"] == HOSTILE
+    assert calls_of(out)[0]["result"] == "shadow"
+    raw = st2_runtime.admit(pack="proposal-validate", pinned_dir=pdir, event=_hostile_proposal())
+    assert raw["reason"] == "invalid-event"  # an object is refused: st2 would have rendered it
+
+
+def test_stackstorm_jinja_sees_no_marker_in_any_parameter(tmp_path):
+    jinja2 = pytest.importorskip("jinja2")
+    env = jinja2.Environment()
+    env.filters["to_json_string"] = lambda v: json.dumps(v, separators=(",", ": "))
+    rule = rules_of()["homelabnext/rules/on_proposal_validate.yaml"]
+    body = _hostile_proposal()
+    rendered = env.from_string(rule["action"]["parameters"]["event"]).render(trigger={"body": body})
+    assert not st2._TEMPLATE.search(rendered)
+    assert env.from_string(rendered).render() == rendered  # rendering it again is inert
+    got = st2_runtime.admit(
+        pack="proposal-validate", pinned_dir=pinned_dir(tmp_path), event=rendered, kv=KV()
+    )
+    assert st2_runtime.decode(got["event"]) == body
+
+
+def test_the_tree_check_refuses_raw_trigger_data_and_raw_task_expressions():
+    res = go(binding())
+    path = "homelabnext/rules/on_proposal_validate.yaml"
+    rule = yaml.safe_load(res.files[path])
+    rule["action"]["parameters"] = {"event": "{{ trigger.body }}", "mode": "live"}
+    bad = dict(res.files) | {path: yaml.safe_dump(rule)}
+    assert {(p.path, p.rule) for p in st2.tree_problems(bad, "homelabnext")} == {
+        (path, "st2-template")
+    }
+    wpath = "homelabnext/actions/workflows/proposal_validate.yaml"
+    wf = yaml.safe_load(res.files[wpath])
+    wf["tasks"]["step_submit"]["input"]["event"] = "<% ctx(event).data %>"
+    wf["tasks"]["step_submit"]["input"]["step"] = {"id": "x", "note": "{{ st2kv.system.leak }}"}
+    bad = dict(res.files) | {wpath: yaml.safe_dump(wf)}
+    got = [p.detail.split(":")[0] for p in st2.tree_problems(bad, "homelabnext")]
+    assert got == ["tasks/step_submit/input/event", "tasks/step_submit/input/step"]
+
+
+def test_the_step_action_runs_only_a_pinned_step_in_its_pinned_mode(tmp_path):
+    pdir = pinned_dir(tmp_path)  # shipped: shadow
+    ev = st2_runtime.encode(pack("agent-job-retry")["fixtures"][0]["event"])
+    kw = {"pack": "agent-job-retry", "pinned_dir": pdir, "broker_factory": lambda _s: NoBroker()}
+    assert st2_runtime.step({}, step="resubmit", event=ev, **kw)["result"] == "shadow"
+    with pytest.raises(TypeError):
+        st2_runtime.step({}, step="resubmit", event=ev, mode="live", **kw)
+    with pytest.raises(TypeError):  # no step document from a parameter either
+        st2_runtime.step({}, step={"id": "x", "kind": "action", "action": "host.isolate"}, **kw)
+    with pytest.raises(st2_runtime.PinError):
+        st2_runtime.step({}, step="isolate", event=ev, **kw)
+    with pytest.raises(st2_runtime.PinError):
+        st2_runtime.step({}, step="resubmit", event=ev, **(kw | {"pack": "../../etc"}))
+    other = st2_runtime.encode(pack("agent-job-retry")["fixtures"][1]["event"])  # resubmits: 1
+    with pytest.raises(ValueError, match="triggers on"):
+        st2_runtime.step({}, step="resubmit", event=other, **kw)
+    f = pdir / "agent_job_retry.json"
+    doc = json.loads(f.read_text())
+    doc["pack"]["steps"][0]["action"] = "host.isolate"  # edited after rendering
+    f.write_text(json.dumps(doc))
+    with pytest.raises(st2_runtime.PinError, match="digest"):
+        st2_runtime.step({}, step="resubmit", event=ev, **kw)
+
+
+def test_every_called_action_has_its_handler_pinned_in_the_tree(tmp_path):
+    assert (
+        st2.handler_problem(ROOT, "workflows/broker.manifest.json", "handlers/agent-job-submit.sh")
+        is None
+    )
+    root = tmp_path / "repo"
+    (root / "workflows" / "handlers").mkdir(parents=True)
+    rel = "workflows/broker.manifest.json"
+    assert "not in the tree" in st2.handler_problem(root, rel, "handlers/agent-job-submit.sh")
+    sh = root / "workflows" / "handlers" / "agent-job-submit.sh"
+    sh.write_text((ROOT / "workflows/handlers/agent-job-submit.sh").read_text() + "# edited\n")
+    (root / "workflows/handlers/agent-job-submit.handler.json").write_text(
+        (ROOT / "workflows/handlers/agent-job-submit.handler.json").read_text()
+    )
+    assert "handler_digest" in st2.handler_problem(root, rel, "handlers/agent-job-submit.sh")
+    assert "not in the tree" in st2.handler_problem(root, rel, "../../outside.sh")
+    res = render(
+        binding(),
+        all_packs(),
+        pins={n: pack_digest(d) for n, d in all_packs().items()},
+        manifests=lambda r: universe().manifest(r)[0],
+        clean=set(all_packs()),
+        handlers=lambda m, h: st2.handler_problem(root, m, h),
+    )
+    assert {(p.rule, p.detail.split(":")[0]) for p in res.problems} == {
+        ("st2-handler", "agent-job-retry"),
+        ("st2-handler", "proposal-validate"),
+    }

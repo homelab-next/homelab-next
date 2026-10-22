@@ -12,6 +12,7 @@ description: Resubmit an agent job once, at lower priority, when it failed for a
 trigger:
   event: homelabnext.agent.job.failed
   where:
+    - {ref: $event.source, equals: "svc:orchestration"}  # the producer: the controller
     - {ref: $event.data.reason, in: [capacity, stall, timeout, backend-down]}
     - {ref: $event.data.resubmits, in: [0]}
 actor: profile:workflow-agents

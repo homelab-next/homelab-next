@@ -1,0 +1,141 @@
+{
+  "coalesce": {
+    "key": "$event.data.agent_key",
+    "window_s": 600
+  },
+  "digest": "sha256:eb61dff038b16211f06d60e300bb1c4ff17474e93870396a9330e77d4e39c98e",
+  "mode": "shadow",
+  "pack": {
+    "actor": "profile:workflow-agents",
+    "broker_manifest": "workflows/broker.manifest.json",
+    "description": "Resubmit an agent job once, at lower priority, when it failed for an environment reason.",
+    "fixtures": [
+      {
+        "event": {
+          "data": {
+            "agent_key": "triage",
+            "attempts": 2,
+            "reason": "capacity",
+            "resubmits": 0,
+            "run_id": "run-0001",
+            "state": "failed"
+          },
+          "id": "evt-job-0001",
+          "source": "svc:orchestration",
+          "specversion": "1.0",
+          "subject": "run-0001",
+          "time": "2026-01-01T00:00:00Z",
+          "type": "homelabnext.agent.job.failed"
+        },
+        "expect": {
+          "calls": [
+            {
+              "action": "agent.job.submit",
+              "params": {
+                "agent_key": "triage",
+                "idempotency_key": "evt-job-0001",
+                "priority": 90,
+                "reason": "capacity",
+                "retry_of_run_id": "run-0001"
+              },
+              "result": "executed",
+              "target": "svc:orchestration"
+            }
+          ]
+        },
+        "name": "capacity-failure-resubmitted"
+      },
+      {
+        "event": {
+          "data": {
+            "agent_key": "triage",
+            "attempts": 2,
+            "reason": "capacity",
+            "resubmits": 1,
+            "retry_of_run_id": "run-0001",
+            "run_id": "run-0002",
+            "state": "failed"
+          },
+          "id": "evt-job-0002",
+          "source": "svc:orchestration",
+          "specversion": "1.0",
+          "subject": "run-0002",
+          "time": "2026-01-01T00:20:00Z",
+          "type": "homelabnext.agent.job.failed"
+        },
+        "expect": {
+          "calls": [],
+          "triggered": false
+        },
+        "name": "resubmitted-job-not-retried-again"
+      },
+      {
+        "event": {
+          "data": {
+            "agent_key": "triage",
+            "attempts": 1,
+            "reason": "deadline",
+            "resubmits": 0,
+            "run_id": "run-0003",
+            "state": "failed"
+          },
+          "id": "evt-job-0003",
+          "source": "svc:orchestration",
+          "specversion": "1.0",
+          "subject": "run-0003",
+          "time": "2026-01-01T00:30:00Z",
+          "type": "homelabnext.agent.job.failed"
+        },
+        "expect": {
+          "calls": [],
+          "triggered": false
+        },
+        "name": "deadline-not-retried"
+      }
+    ],
+    "pack": "agent-job-retry",
+    "steps": [
+      {
+        "action": "agent.job.submit",
+        "id": "resubmit",
+        "kind": "action",
+        "params": {
+          "agent_key": "$event.data.agent_key",
+          "idempotency_key": "$event.id",
+          "priority": 90,
+          "reason": "$event.data.reason",
+          "retry_of_run_id": "$event.data.run_id"
+        },
+        "target": "svc:orchestration"
+      }
+    ],
+    "trigger": {
+      "event": "homelabnext.agent.job.failed",
+      "where": [
+        {
+          "equals": "svc:orchestration",
+          "ref": "$event.source"
+        },
+        {
+          "in": [
+            "capacity",
+            "stall",
+            "timeout",
+            "backend-down"
+          ],
+          "ref": "$event.data.reason"
+        },
+        {
+          "in": [
+            0
+          ],
+          "ref": "$event.data.resubmits"
+        }
+      ]
+    },
+    "version": 1
+  },
+  "risky": {
+    "resubmit": false
+  }
+}

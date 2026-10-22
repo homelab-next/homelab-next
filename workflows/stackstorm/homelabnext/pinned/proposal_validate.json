@@ -1,0 +1,106 @@
+{
+  "coalesce": {
+    "key": "$event.data.proposal_id",
+    "window_s": 3600
+  },
+  "digest": "sha256:86f4bb37eba88fb2ada8a30537d93b11f4081b5e4d1690e411bafe432d5a7ee3",
+  "mode": "shadow",
+  "pack": {
+    "actor": "profile:workflow-agents",
+    "broker_manifest": "workflows/broker.manifest.json",
+    "description": "Queue one proposal-validator job for every proposal filed in the records inbox.",
+    "fixtures": [
+      {
+        "event": {
+          "data": {
+            "note": "records/inbox/2026-01-01-triage-tune-auth-rule.md",
+            "proposal_id": "2026-01-01-triage-tune-auth-rule",
+            "requesting_agent": "profile:triage",
+            "risk": "low",
+            "summary": "Raise the burst threshold from 5 to 8"
+          },
+          "id": "evt-prop-0001",
+          "source": "svc:broker",
+          "specversion": "1.0",
+          "subject": "proposal-file-0001",
+          "time": "2026-01-01T00:00:00Z",
+          "type": "homelabnext.proposal.created"
+        },
+        "expect": {
+          "calls": [
+            {
+              "action": "agent.job.submit",
+              "params": {
+                "agent_key": "proposal-validator",
+                "idempotency_key": "evt-prop-0001",
+                "input": {
+                  "note": "records/inbox/2026-01-01-triage-tune-auth-rule.md",
+                  "proposal_id": "2026-01-01-triage-tune-auth-rule",
+                  "requesting_agent": "profile:triage",
+                  "risk": "low"
+                },
+                "priority": 40
+              },
+              "result": "executed",
+              "target": "svc:orchestration"
+            }
+          ]
+        },
+        "name": "proposal-queued-for-validation"
+      },
+      {
+        "event": {
+          "data": {
+            "decided_at": "2026-01-01T00:05:00Z",
+            "decided_by": "operator",
+            "decision": "approved",
+            "proposal_id": "2026-01-01-triage-tune-auth-rule"
+          },
+          "id": "evt-prop-0002",
+          "source": "svc:broker",
+          "specversion": "1.0",
+          "time": "2026-01-01T00:05:00Z",
+          "type": "homelabnext.proposal.decided"
+        },
+        "expect": {
+          "calls": [],
+          "triggered": false
+        },
+        "name": "other-event-type-ignored"
+      }
+    ],
+    "pack": "proposal-validate",
+    "steps": [
+      {
+        "action": "agent.job.submit",
+        "id": "submit",
+        "kind": "action",
+        "params": {
+          "agent_key": "proposal-validator",
+          "idempotency_key": "$event.id",
+          "input": {
+            "note": "$event.data.note",
+            "proposal_id": "$event.data.proposal_id",
+            "requesting_agent": "$event.data.requesting_agent",
+            "risk": "$event.data.risk"
+          },
+          "priority": 40
+        },
+        "target": "svc:orchestration"
+      }
+    ],
+    "trigger": {
+      "event": "homelabnext.proposal.created",
+      "where": [
+        {
+          "equals": "svc:broker",
+          "ref": "$event.source"
+        }
+      ]
+    },
+    "version": 1
+  },
+  "risky": {
+    "submit": false
+  }
+}

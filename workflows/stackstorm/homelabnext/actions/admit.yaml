@@ -3,7 +3,8 @@
 ---
 name: admit
 pack: homelabnext
-description: Validate or build the event, re-check the pack trigger, coalesce bursts.
+description: Decode or build the event, re-check the pinned pack's trigger, coalesce bursts (the trigger,
+  window and schedule come from pinned/<pack>.json, never a parameter).
 enabled: true
 runner_type: python-script
 entry_point: admit.py
@@ -11,12 +12,9 @@ parameters:
   pack:
     type: string
     required: true
-  trigger:
-    type: object
-    required: true
   event:
-    type: object
-  schedule:
-    type: object
-  coalesce:
-    type: object
+    type: string
+    description: the URL-encoded JSON webhook body
+  fired_at:
+    type: string
+    description: the CronTimer's executed_at

@@ -33,9 +33,10 @@ risk), never a burst of agent processes.
 |---|---|---|
 | `homelabnext/pack.yaml`, `config.schema.yaml`, `requirements.txt` | the binding | the StackStorm pack (`st2_pack`, `version`) |
 | `homelabnext/actions/admit.{yaml,py}`, `step.{yaml,py}` | fixed | the only two Python actions: shims over `st2_runtime.admit` and `st2_runtime.step` |
-| `homelabnext/actions/<pack>.yaml` | each bound pack | an `orquesta` action with inputs `event` (or `fired_at`) and `mode` (default `shadow`) |
-| `homelabnext/actions/workflows/<pack>.yaml` | each bound pack | task `admit`, then one task per pack step, in order. The step's own document is passed literally. |
-| `homelabnext/rules/on_<pack>.yaml` | each bound rule | the trigger and criteria below, and the rule's `mode` |
+| `homelabnext/actions/<pack>.yaml` | each bound pack | an `orquesta` action with one string input: `event` (the encoded webhook body) or `fired_at` |
+| `homelabnext/actions/workflows/<pack>.yaml` | each bound pack | task `admit`, then one task per pack step, in order. A task names its pack and step id; it never carries a step document, a mode or event data in clear. |
+| `homelabnext/pinned/<pack>.json` | each bound rule | what the actions run: the pack document and its digest, the rule's `mode`, each step's risk, the coalesce window and the schedule |
+| `homelabnext/rules/on_<pack>.yaml` | each bound rule | the trigger and criteria below; the one parameter is the encoded body |
 | `configs/homelabnext.yaml` | the binding | the pack config: `broker_socket`, plus any `config` entries |
 | `bridge.json` | the bound event types | the bus subjects the event bridge relays to the webhook |
 | `provenance.json` | everything | the binding digest and, per pack, the pinned digest and mode |
@@ -51,15 +52,46 @@ criteria are the pack trigger:
 | `{ref: $event.data.a, exists: true/false}` | `exists` / `nexists` |
 | `$event.data.list.0.kind` | `trigger.body.data.list[0].kind` |
 
+Every event-triggered pack pins its producer: its `where` has `{ref: $event.source, equals: <id>}`
+(`st2-source`), so the rule fires, and `admit` admits, only events that name that source. A01 takes
+`svc:broker`, A02 `svc:orchestration`. The source is what the producer writes, not proof of who
+sent it: who may post to the webhook (the bridge's API key) and publish the subject on the bus are
+the bounds that make it mean something.
+
+**What crosses StackStorm is encoded.** StackStorm renders every action parameter that contains
+`{{` or `{%` with an unsandboxed Jinja environment: a datastore read (`st2kv ... decrypt_kv`), and
+code on the action runner. Events carry text their producers do not control in full (a proposal's
+title is any agent's that may file one). So:
+
+- the rule's only parameter is `event: '{{ trigger.body | to_json_string | urlencode }}'`
+  (`to_json_string` is st2's filter, `urlencode` Jinja's own): `{`, `%` and `<` arrive as `%XX`,
+  whatever the event says, and rendering the result again changes nothing;
+- `admit` decodes it in Python and hands the admitted event on encoded the same way
+  (`st2_runtime.encode`); each step returns its outputs and calls as one encoded `state`. A
+  workflow task's input is a literal or one of `<% ctx(event) %>`, `<% ctx(state) %>`,
+  `<% ctx(fired_at) %>`; no event field is ever an expression;
+- the broker refuses a records-inbox note whose front matter holds `{{`, `{%`, `<%` or `%>`
+  (`lane-content-invalid`), so a proposal title never carries one in the first place.
+
+`st2-template` checks the rendered tree for both: a rule parameter other than the encoded body
+(or the CronTimer's `fired_at`), and a task input that is any other expression.
+
 The `admit` task checks the event against its schema and re-checks the same trigger with the
 offline runner's code, so the rule and the pack cannot disagree about what fires. A pack triggered by
 `homelabnext.schedule.fired` instead takes a `schedule: {id, cron}` in its rule and becomes a
 `core.st2.CronTimer` rule (UTC; day of week rendered as names, because cron counts 0 = Sunday and
-the timer's scheduler counts 0 = Monday). `admit` builds the event from the firing. Its id derives
+the timer's scheduler counts 0 = Monday). A schedule may not restrict both day of month and day of
+week (`st2-cron`): cron fires when either matches, the CronTimer's scheduler only when both do;
+bind two schedules instead. `admit` builds the event from the firing. Its id derives
 from the schedule and the firing time, so a timer that fires twice for the same time makes one event.
 The pack's `where` must pin `$event.data.schedule` to that id.
 
-**Steps.** `st2_runtime.step` runs a step exactly as `hnx workflows run` does. A step whose `when`
+**Steps.** `st2_runtime.step` takes a pack name, a step id, the encoded event and the previous
+state. It loads `pinned/<pack>.json` from the installed pack, re-checks its digest, looks the step
+up there and re-checks the event against the pack's trigger. The mode is the one the rule was
+rendered with and the risk the manifest's; neither is a parameter, so `st2 run homelabnext.step`
+can run only a pinned step, only in the mode it was promoted to. It runs the step exactly as
+`hnx workflows run` does. A step whose `when`
 does not hold is skipped. `enrich` `pick` and `extract-iocs` are computed. An `action` step builds the
 broker request with the runner's own `action_request`. `lookup`, `decide` and `prompt` steps do not
 run on StackStorm yet, and the renderer refuses a pack that has one (`st2-step`). The two packs that
@@ -100,7 +132,17 @@ key `homelabnext.coalesce.<hash of pack and key>` with TTL `window_s`. Every lat
 inside the window ends its run `coalesced`, before any step runs, and records which event it was
 folded into. A02 keys on `$event.data.agent_key` with a ten-minute window. When a backend goes down
 and fails every running job of an agent at once, A02 makes one resubmit, not one per failure. A01
-keys on `$event.data.proposal_id`, so a redelivered event is a no-op.
+keys on `$event.data.proposal_id`, so a redelivered event is a no-op. The datastore key also
+hashes the event's `source`, and an event from another producer is `not-triggered` before the
+datastore is touched, so it opens no window.
+
+A forged event that names the right source can still open a window and fold the genuine one into
+it (an A02 resubmit lost for ten minutes). StackStorm cannot tell the two apart: it does not ask
+the controller whether `run_id` failed. The bounds are outside it, and the controller must hold
+them: the bridge's webhook-only API key and the bus's publish permissions decide who can inject an
+event, and the controller must refuse a submit whose `retry_of_run_id` is not one of its own runs
+that failed with `resubmits` 0, whatever the event said. Until it does, A02's cap is the trigger's
+and is only as good as the event.
 
 The StackStorm datastore has no compare-and-set, so two events in the same instant can both pass
 the window. Two things still hold in that case:
@@ -119,8 +161,8 @@ result `shadow` (reason `st2-shadow`), together with its `request_id` and `reque
 **sends nothing**. Shadow mode never opens the broker socket. The id and digest are the ones `hnx
 workflows run PACK` prints for the same event, so a shadow log can be compared line by line with
 the offline fixtures and with what the timer it replaces actually did (the parity method of
-[swap.md](swap.md), [[swap]]). The `mode` input of every workflow action defaults to `shadow`, so a
-run started by hand without one is also a shadow run.
+[swap.md](swap.md), [[swap]]). The mode is in `pinned/<pack>.json`, rendered from the rule, so a
+run started by hand is in the rule's mode too: no parameter turns a shadow rule live.
 
 To promote a rule, change `mode: live` in `workflows/stackstorm.yml` and add:
 
@@ -143,8 +185,24 @@ secret. The event bridge's StackStorm API key appears only as a secret-store nam
 (`bridge_api_key: secret:stackstorm/webhook-key`). It belongs to a StackStorm user whose RBAC role
 can only post webhooks.
 
+**Who may run the pack's actions.** Turn StackStorm RBAC on (`[rbac] enable = True`, backend
+`default`). Rules run their actions as the system user (`stanley` by default); give that user, and
+only it, `action_execute` on the `homelabnext` pack's actions (a role with
+`resource_uid: pack:homelabnext`, permission `action_execute`). Operators get `action_view` and
+`execution_view` for the shadow logs, never `action_execute` there; the bridge's user gets
+`webhook_send` and nothing else. Without RBAC every authenticated user can `st2 run
+homelabnext.step` with an event of their own. The step still runs only pinned steps in their pinned
+mode, and the broker still decides, but the event is theirs.
+
+**Handlers.** Every broker action a bound pack calls has its handler in the tree, pinned
+(`st2-handler`): `agent.job.submit` is `workflows/handlers/agent-job-submit.sh`, with
+`agent-job-submit.handler.json` beside it naming its digest. It posts the validated params to the
+controller's `POST /jobs`, whose URL the broker resolves by name like a secret
+(`ORCHESTRATOR_JOBS_URL`), so no endpoint is in the tree.
+
 No literal in a bound pack may contain `{{`, `{%` or `<%` (`st2-template`). StackStorm renders
-those in criteria, parameters and Orquesta inputs, so a literal would become an expression.
+those in criteria, parameters and Orquesta inputs, so a literal would become an expression. Event
+data never reaches them in clear (above).
 
 ## Installing the rendered pack
 
@@ -179,8 +237,10 @@ the stream prefix). It POSTs each envelope as `application/json` to the webhook 
 | `st2-duplicate` | a pack or a schedule id is bound twice |
 | `st2-actor` | a bound pack's `actor` is not the binding's `actor` |
 | `st2-step` | a step does not run on StackStorm (`lookup`, `decide`, `prompt`) |
-| `st2-template` | a literal holds `{{`, `{%` or `<%` |
-| `st2-trigger`, `st2-cron` | a schedule does not match its pack's trigger, or is not five valid fields |
+| `st2-template` | a literal holds `{{`, `{%` or `<%`; a rendered rule passes anything but the encoded body (or `fired_at`); a task input is an expression other than the encoded `event`, `state` or `fired_at` |
+| `st2-source` | an event-triggered pack does not pin `$event.source` to one producer |
+| `st2-handler` | an action a bound pack calls has no handler file in the tree, or none whose `handler.json` digest matches |
+| `st2-trigger`, `st2-cron` | a schedule does not match its pack's trigger, is not five valid fields, or sets both day of month and day of week |
 | `st2-live` | a live rule has no promotion, too short a shadow window, or untracked evidence |
 | `st2-coalesce`, `st2-bound` | agent dispatch without a window, or job-failed retries without a cap |
 | `st2-secret` | a secret-like config key holds a literal |

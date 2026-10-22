@@ -13,8 +13,10 @@ criteria:
   trigger.body.type:
     type: equals
     pattern: homelabnext.proposal.created
+  trigger.body.source:
+    type: equals
+    pattern: svc:broker
 action:
   ref: homelabnext.proposal_validate
   parameters:
-    event: '{{ trigger.body }}'
-    mode: shadow
+    event: '{{ trigger.body | to_json_string | urlencode }}'

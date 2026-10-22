@@ -3,29 +3,21 @@
 ---
 version: 1.0
 description: Queue one proposal-validator job for every proposal filed in the records inbox. (workflow
-  pack proposal-validate sha256:928f5f6be42804662f650c1640b47f5a97e4b4dc57db0fc3374645e3b256ae47)
+  pack proposal-validate sha256:86f4bb37eba88fb2ada8a30537d93b11f4081b5e4d1690e411bafe432d5a7ee3)
 input:
 - event
-- mode: shadow
 vars:
-- steps: {}
-- calls: []
+- state: ''
 - outcome: null
 output:
 - outcome: <% ctx(outcome) %>
-- calls: <% ctx(calls) %>
-- steps: <% ctx(steps) %>
+- state: <% ctx(state) %>
 tasks:
   admit:
     action: homelabnext.admit
     input:
       pack: proposal-validate
-      trigger:
-        event: homelabnext.proposal.created
       event: <% ctx(event) %>
-      coalesce:
-        key: $event.data.proposal_id
-        window_s: 3600
     next:
     - when: <% succeeded() and result().result.admitted %>
       publish:
@@ -40,32 +32,13 @@ tasks:
     action: homelabnext.step
     input:
       pack: proposal-validate
-      digest: sha256:928f5f6be42804662f650c1640b47f5a97e4b4dc57db0fc3374645e3b256ae47
-      actor: profile:workflow-agents
-      step:
-        id: submit
-        kind: action
-        action: agent.job.submit
-        target: svc:orchestration
-        params:
-          agent_key: proposal-validator
-          idempotency_key: $event.id
-          priority: 40
-          input:
-            proposal_id: $event.data.proposal_id
-            note: $event.data.note
-            risk: $event.data.risk
-            requesting_agent: $event.data.requesting_agent
-      risky: false
+      step: submit
       event: <% ctx(event) %>
-      steps: <% ctx(steps) %>
-      calls: <% ctx(calls) %>
-      mode: <% ctx(mode) %>
+      state: <% ctx(state) %>
     next:
     - when: <% succeeded() %>
       publish:
-      - steps: <% result().result.steps %>
-      - calls: <% result().result.calls %>
+      - state: <% result().result.state %>
       - outcome: completed
     - when: <% failed() %>
       do: fail

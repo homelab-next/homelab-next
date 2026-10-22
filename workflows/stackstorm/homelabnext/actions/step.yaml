@@ -3,7 +3,8 @@
 ---
 name: step
 pack: homelabnext
-description: Run one workflow-pack step; an action goes to the broker (never in shadow mode).
+description: Run one step of a pinned workflow pack, in the mode its rule was rendered with; an action
+  goes to the broker (never in shadow mode).
 enabled: true
 runner_type: python-script
 entry_point: step.py
@@ -11,28 +12,15 @@ parameters:
   pack:
     type: string
     required: true
-  digest:
+  step:
     type: string
     required: true
-  actor:
+    description: the step id in pinned/<pack>.json
+  event:
     type: string
     required: true
-  step: &id001
-    type: object
-    required: true
-  event: *id001
-  steps:
-    type: object
-    default: {}
-  calls:
-    type: array
-    default: []
-  mode:
+    description: the URL-encoded event admit returned
+  state:
     type: string
-    enum:
-    - shadow
-    - live
-    default: shadow
-  risky:
-    type: boolean
-    default: true
+    default: ''
+    description: the previous step's

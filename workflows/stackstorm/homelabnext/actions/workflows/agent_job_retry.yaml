@@ -3,39 +3,21 @@
 ---
 version: 1.0
 description: Resubmit an agent job once, at lower priority, when it failed for an environment reason.
-  (workflow pack agent-job-retry sha256:7e0687607fdbf948b18839cb31665db8c5534ff83ab241af2026267cc8959de3)
+  (workflow pack agent-job-retry sha256:eb61dff038b16211f06d60e300bb1c4ff17474e93870396a9330e77d4e39c98e)
 input:
 - event
-- mode: shadow
 vars:
-- steps: {}
-- calls: []
+- state: ''
 - outcome: null
 output:
 - outcome: <% ctx(outcome) %>
-- calls: <% ctx(calls) %>
-- steps: <% ctx(steps) %>
+- state: <% ctx(state) %>
 tasks:
   admit:
     action: homelabnext.admit
     input:
       pack: agent-job-retry
-      trigger:
-        event: homelabnext.agent.job.failed
-        where:
-        - ref: $event.data.reason
-          in:
-          - capacity
-          - stall
-          - timeout
-          - backend-down
-        - ref: $event.data.resubmits
-          in:
-          - 0
       event: <% ctx(event) %>
-      coalesce:
-        key: $event.data.agent_key
-        window_s: 600
     next:
     - when: <% succeeded() and result().result.admitted %>
       publish:
@@ -50,29 +32,13 @@ tasks:
     action: homelabnext.step
     input:
       pack: agent-job-retry
-      digest: sha256:7e0687607fdbf948b18839cb31665db8c5534ff83ab241af2026267cc8959de3
-      actor: profile:workflow-agents
-      step:
-        id: resubmit
-        kind: action
-        action: agent.job.submit
-        target: svc:orchestration
-        params:
-          agent_key: $event.data.agent_key
-          retry_of_run_id: $event.data.run_id
-          idempotency_key: $event.id
-          priority: 90
-          reason: $event.data.reason
-      risky: false
+      step: resubmit
       event: <% ctx(event) %>
-      steps: <% ctx(steps) %>
-      calls: <% ctx(calls) %>
-      mode: <% ctx(mode) %>
+      state: <% ctx(state) %>
     next:
     - when: <% succeeded() %>
       publish:
-      - steps: <% result().result.steps %>
-      - calls: <% result().result.calls %>
+      - state: <% result().result.state %>
       - outcome: completed
     - when: <% failed() %>
       do: fail

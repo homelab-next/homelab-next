@@ -9,11 +9,6 @@ runner_type: orquesta
 entry_point: workflows/proposal_validate.yaml
 parameters:
   event:
-    type: object
-    required: true
-  mode:
     type: string
-    enum:
-    - shadow
-    - live
-    default: shadow
+    required: true
+    description: the webhook body, JSON then URL-encoded by the rule
