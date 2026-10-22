@@ -211,6 +211,36 @@ def test_a_failed_post_is_nacked_and_retried_after_a_backoff(hook):
     assert ids == ["evt-bridge-1"] * 3  # the same id each time: admit drops a second run
 
 
+def test_one_failing_subject_backs_off_alone():
+    """A subject whose POSTs fail is paused on its own; every other subject keeps flowing."""
+    failed = json.loads((ROOT / "schemas/events/examples/agent.job.failed.valid.json").read_text())
+    failed["source"] = st2.ORCHESTRATOR_SOURCE
+
+    class PickyHook:
+        def __init__(self):
+            self.ok: list[str] = []
+
+        def post(self, ev):
+            if ev["type"] == "homelabnext.proposal.created":
+                return 503
+            self.ok.append(ev["id"])
+            return 202
+
+    bus, clock, picky = FakeEventBus(), Clock(), PickyHook()
+    b = bridge(bus, picky, clock=clock, backoff_base_s=30.0)
+    publish(bus, proposal(1))
+    publish(bus, failed | {"id": "evt-failed-1"}, "homelabnext.agent.job.failed")
+    b.poll()
+    publish(bus, failed | {"id": "evt-failed-2"}, "homelabnext.agent.job.failed")
+    clock.t = 1.0  # the proposal subject is backing off; the other one is not
+    b.poll()
+    assert picky.ok == ["evt-failed-1", "evt-failed-2"]
+    subjects = b.stats()["subjects"]
+    assert subjects["homelabnext.proposal.created"]["consecutive_failures"] == 1
+    assert subjects["homelabnext.agent.job.failed"]["consecutive_failures"] == 0
+    assert b.pause_until == 30.0
+
+
 def test_an_unreachable_webhook_retries_until_the_bus_dead_letters_it():
     class Down:
         def post(self, _ev):

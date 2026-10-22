@@ -18,7 +18,8 @@ prefix, :mod:`homelabnext.conform.adapters.nats_jetstream`) and POSTs each event
   down).
 * **At least once, and a duplicate is harmless.**  A delivery is acked only after the webhook
   answered 2xx.  A refused connection, a timeout, a redirect, 401/403/404, 408, 429 and 5xx are
-  *nacked* (redelivered) and the bridge backs off exponentially before fetching again, so an
+  *nacked* (redelivered) and the bridge backs off exponentially before fetching that subject again
+  (each subject backs off on its own, so one failing subject never stalls the others), so an
   outage of StackStorm costs retries, not events.  After ``max_deliver`` attempts the bus
   dead-letters it.  400, 413, 415 and 422 are StackStorm refusing the body: poison.  Each POST
   carries ``Idempotency-Key: <event id>``; StackStorm's webhook ignores it and starts a run per
@@ -249,9 +250,12 @@ class SubjectStats:
     retried: int = 0
     dead_lettered: int = 0
     quarantined: Counter = field(default_factory=Counter)
+    failures: int = 0  # consecutive failed fetches of this subject (one POST or more failed)
+    pause_until: float = 0.0  # this subject is not fetched again before then
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "consecutive_failures": self.failures,
             "forwarded": self.forwarded,
             "retried": self.retried,
             "dead_lettered": self.dead_lettered,
@@ -287,8 +291,6 @@ class Bridge:
         self.stats_file = Path(stats_file) if stats_file else None
         self.stats_interval_s = stats_interval_s
         self.per_subject = {s.subject: SubjectStats() for s in config.subscriptions}
-        self.failures = 0  # consecutive failed POSTs
-        self.pause_until = 0.0
         self.last_forward: str | None = None
         self.last_error: str | None = None
         self._consumers: list[tuple[Subscription, Any]] = []
@@ -312,6 +314,20 @@ class Bridge:
                     "out again mid-POST; delete the durable and the bridge recreates it"
                 )
         self._consumers = consumers
+
+    @property
+    def failures(self) -> int:
+        """The longest run of consecutive failures of any one subject."""
+        return max((st.failures for st in self.per_subject.values()), default=0)
+
+    @property
+    def pause_until(self) -> float:
+        """When the first subject that is backing off may be fetched again (0.0: none is)."""
+        now = self.clock()
+        return min(
+            (st.pause_until for st in self.per_subject.values() if st.pause_until > now),
+            default=0.0,
+        )
 
     def close(self) -> None:
         self._pool.shutdown(wait=True)
@@ -422,12 +438,14 @@ class Bridge:
     # ------------------------------------------------------------ the loop
     def poll(self) -> int:
         """One pass over every subscription: fetch at most ``max_in_flight`` deliveries, POST the
-        valid ones concurrently, settle each.  Returns how many deliveries were settled; 0 while
-        backing off after a failed POST."""
-        if self.clock() < self.pause_until:
-            return 0
+        valid ones concurrently, settle each.  Returns how many deliveries were settled.  A
+        subject whose POST failed backs off on its own (exponentially): it is not fetched until its
+        pause ends, and every other subject goes on."""
         handled = 0
         for sub, cons in self._consumers:
+            st = self.per_subject[sub.subject]
+            if self.clock() < st.pause_until:
+                continue
             batch = list(cons.fetch(self.max_in_flight))
             if not batch:
                 continue
@@ -444,12 +462,11 @@ class Bridge:
                 ok = self._settle(sub, d, event, got) and ok
             handled += len(batch)
             if ok:
-                self.failures = 0
+                st.failures = 0
             else:
-                self.failures += 1
-                delay = min(self.backoff_max_s, self.backoff_base_s * 2 ** (self.failures - 1))
-                self.pause_until = self.clock() + delay
-                break
+                st.failures += 1
+                delay = min(self.backoff_max_s, self.backoff_base_s * 2 ** (st.failures - 1))
+                st.pause_until = self.clock() + delay
         self.write_stats()
         return handled
 
@@ -458,9 +475,8 @@ class Bridge:
         self.open()
         try:
             while not stop.is_set():
-                if self.poll() == 0:
-                    wait = max(0.0, self.pause_until - self.clock()) or idle_s
-                    stop.wait(min(wait, self.backoff_max_s))
+                if self.poll() == 0:  # a subject backing off is skipped, not waited for
+                    stop.wait(idle_s)
         finally:
             self.close()
 

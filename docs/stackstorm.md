@@ -332,7 +332,7 @@ flight finish and settles them; an unsettled delivery is redelivered by the bus 
 | What arrives | What the bridge does |
 |---|---|
 | a valid event of the subject's type, from a producer the subject's rules pin (`sources` in `bridge.json`) | POST it with `St2-Api-Key` and `Idempotency-Key: <event id>`; **ack only after a 2xx** |
-| no answer (refused, timeout, TLS), a redirect, 401, 403, 404, 408, 429, 5xx | **nack** (redelivered) and back off exponentially (1 s doubling to 60 s) before fetching again; after `--max-deliver` attempts (default 100) the bus dead-letters it |
+| no answer (refused, timeout, TLS), a redirect, 401, 403, 404, 408, 429, 5xx | **nack** (redelivered) and back off exponentially (1 s doubling to 60 s) before fetching that subject again (every other subject goes on); after `--max-deliver` attempts (default 100) the bus dead-letters it |
 | 400, 413, 415, 422 (StackStorm refuses the body) | poison |
 | a body that is not JSON, fails the envelope or its type's schema, has another type than the subject, names a producer the rules do not pin, or a `Nats-Msg-Id` that is not its id | poison |
 | a body over 256 KiB (`too-large`, refused before it is parsed), or nested too deeply to parse (`not-json`) | poison |
@@ -350,7 +350,8 @@ id ([Redeliveries](#redeliveries)).
 
 At most `--max-in-flight` POSTs run at once (default 8; one fetch takes at most that many
 deliveries). `--stats-file` writes, atomically and at most every 30 s, the counters per subject
-(`forwarded`, `retried`, `dead_lettered`, `quarantined` by reason), the consecutive failures and
+(`forwarded`, `retried`, `dead_lettered`, `quarantined` by reason, `consecutive_failures`), the
+longest run of consecutive failures and
 `state` (`ok`, `warn` while retrying, `fail` once anything was dead-lettered).
 
 **The key and TLS.** The API key is the secret-store name in `bridge.json`
