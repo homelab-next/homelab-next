@@ -41,6 +41,7 @@ from typing import Any
 import yaml
 
 from homelabnext import paths
+from homelabnext._schema_text import safe_message
 from homelabnext._yaml import UniqueKeyStrDateLoader
 from homelabnext.generators.safe import control_char_paths
 
@@ -258,7 +259,7 @@ def load_baselines(
     validator = jsonschema.Draft202012Validator(schema())
     for err in sorted(validator.iter_errors(doc), key=lambda e: [str(x) for x in e.absolute_path]):
         loc = "/".join(str(x) for x in err.absolute_path) or "<root>"
-        out.append(Problem(where, f"schema: {loc}: {err.message}"))
+        out.append(Problem(where, f"schema: {loc}: {safe_message(err)}"))
     if out:
         return None, out
     rd = roles_dir if roles_dir is not None else default_roles_dir()

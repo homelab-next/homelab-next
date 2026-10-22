@@ -242,3 +242,71 @@ def test_decrypt_times_out(tmp_path, fake_sops, monkeypatch):
 def test_unknown_format_is_refused(tmp_path):
     with pytest.raises(ValueError, match="unsupported"):
         sops.decrypt(tmp_path / "x", "ini", env={})
+
+
+# ---- a decrypted value never reaches a validation message --------------------------------------
+
+SEALED_VALUE = "fake-sealed-WAN-203.0.113.9"
+
+
+def test_a_sealed_guest_value_that_fails_the_schema_is_not_printed(tmp_path, fake_sops):
+    d = tmp_path / "guests"
+    shutil.copytree(MINIMAL / "guests", d)
+    g = d / "bus-core.yml"
+    text = g.read_text(encoding="utf-8").replace("kind: vm", f"kind: {SEALED_VALUE}")
+    g.write_text(encrypt_yaml(text, "kind"), encoding="utf-8")
+    _, problems = load_guests(d)
+    shown = "\n".join(map(str, problems))
+    assert "schema: kind: is not one of" in shown  # the path and the rule
+    assert SEALED_VALUE not in shown
+
+
+def test_a_sealed_site_value_that_fails_the_schema_is_not_printed(tmp_path, fake_sops):
+    from homelabnext.network.validate import schema_problems
+
+    plain = (MINIMAL / "site.yml").read_text(encoding="utf-8")
+    p = write(tmp_path, "site.yml", encrypt_yaml(plain, "domain"))
+    doc = load_site(p)
+    doc["site"]["domain"] = SEALED_VALUE  # as if the decrypted value were malformed
+    shown = "\n".join(schema_problems(doc))
+    assert "schema: site/domain: does not match" in shown and SEALED_VALUE not in shown
+
+
+def test_a_sealed_registry_value_that_fails_the_schema_is_not_printed():
+    doc = registry_model.yaml.safe_load((MINIMAL / "services.yml").read_text(encoding="utf-8"))
+    doc["lab"]["domain"] = SEALED_VALUE
+    shown = "\n".join(registry_model.schema_problems(doc))
+    assert "schema: lab/domain: does not match" in shown and SEALED_VALUE not in shown
+
+
+@pytest.mark.parametrize(
+    ("schema", "value", "expect"),
+    [
+        ({"type": "integer"}, SEALED_VALUE, "is not of type 'integer'"),
+        ({"pattern": "^[a-z]+$"}, SEALED_VALUE, "does not match '^[a-z]+$'"),
+        ({"enum": ["a", "b"]}, SEALED_VALUE, "is not one of ['a', 'b']"),
+        ({"const": "a"}, SEALED_VALUE, "is not the constant 'a'"),
+        ({"maxLength": 3}, SEALED_VALUE, "fails maxLength 3"),
+        (
+            {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+            SEALED_VALUE,
+            "allowed shapes (anyOf)",
+        ),
+        ({"not": {"type": "string"}}, SEALED_VALUE, "allowed shapes (not)"),
+        ({"required": ["x"]}, {"y": SEALED_VALUE}, "'x' is a required property"),
+        (
+            {"additionalProperties": False},
+            {"extra": SEALED_VALUE},
+            "('extra' was unexpected)",
+        ),
+        ({"propertyNames": {"maxLength": 2}}, {SEALED_VALUE: 1}, "fails maxLength 2"),
+    ],
+)
+def test_safe_message_names_the_rule_not_the_value(schema, value, expect):
+    import jsonschema
+
+    from homelabnext._schema_text import safe_message
+
+    (err,) = jsonschema.Draft202012Validator(schema).iter_errors(value)
+    got = safe_message(err)
+    assert expect in got and SEALED_VALUE not in got
