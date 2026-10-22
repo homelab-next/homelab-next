@@ -76,6 +76,7 @@ __all__ = [
     "JetStreamBus",
     "JetStreamConsumer",
     "NatsPyWire",
+    "PublishRefused",
     "Wire",
     "WireError",
     "WireMsg",
@@ -88,10 +89,23 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _SETTLE = {"ack": b"+ACK", "nack": b"-NAK", "term": b"+TERM"}
 _NS = 1_000_000_000
 _NOT_FOUND = {"stream": 10059, "consumer": 10014, "message": 10037}
+_PERMISSION_DENIED = re.compile(r'Permissions Violation for Publish to "([^"]+)"', re.I)
 
 
 class WireError(EventsError):
-    """The transport failed: no connection, no responder, or no reply in time."""
+    """The transport failed: no connection, no responder, or no reply in time.  ``permanent``:
+    retrying the same message cannot succeed (the server refuses its subject or its size), as
+    opposed to an outage, which can."""
+
+    def __init__(self, message: str, *, permanent: bool = False) -> None:
+        super().__init__(message)
+        self.permanent = permanent
+
+
+class PublishRefused(EventsError):
+    """The message itself cannot be published (an invalid subject or message id): permanent."""
+
+    permanent = True
 
 
 class JetStreamApiError(EventsError):
@@ -295,11 +309,14 @@ class JetStreamBus:
 
     # ---------------------------------------------------------------- contract
     def publish(self, subject: str, data: bytes, *, msg_id: str | None = None) -> int:
-        _check_subject(subject, pattern=False)
+        try:
+            _check_subject(subject, pattern=False)
+        except EventsError as exc:
+            raise PublishRefused(str(exc)) from None
         headers = None
         if msg_id is not None:
             if not msg_id or any(c in msg_id for c in "\r\n"):
-                raise EventsError("msg_id must be a non-empty single-line string")
+                raise PublishRefused("msg_id must be a non-empty single-line string")
             headers = {"Nats-Msg-Id": msg_id}
         msg = self._wire.request(
             f"{self.prefix}.{subject}", bytes(data), headers=headers, timeout=self.request_timeout
@@ -497,9 +514,13 @@ class NatsPyWire:
         self._thread = threading.Thread(target=self._loop.run_forever, name=name, daemon=True)
         self._thread.start()
         self.last_error = ""
+        self._denied: set[str] = set()  # subjects the server refused to let this user publish
 
         async def note(exc: Exception) -> None:  # nats-py reports connection errors here
             self.last_error = f"{type(exc).__name__}: {exc}"
+            m = _PERMISSION_DENIED.search(str(exc))
+            if m:
+                self._denied.add(m.group(1))
 
         auth: dict[str, Any] = {"user": user, "password": password()} if user and password else {}
         if ca_file is not None:
@@ -538,7 +559,13 @@ class NatsPyWire:
         try:
             return fut.result(timeout)
         except self._errors.NoRespondersError:
-            raise WireError("no responders (no stream captures that subject?)") from None
+            raise WireError(
+                "no responders (no stream captures that subject?)", permanent=True
+            ) from None
+        except self._errors.MaxPayloadError:
+            raise WireError(
+                "the message exceeds the server's max_payload", permanent=True
+            ) from None
         except (self._errors.TimeoutError, TimeoutError):
             fut.cancel()
             raise WireError(f"no reply within {timeout:.1f}s") from None
@@ -559,7 +586,14 @@ class NatsPyWire:
             )
             return WireMsg(msg.subject, msg.data, dict(msg.headers or {}), msg.reply or "")
 
-        return self._run(go(), timeout + 1)
+        self._denied.discard(subject)
+        try:
+            return self._run(go(), timeout + 1)
+        except WireError:
+            # the server drops a publish this user may not make and says so out of band
+            if subject in self._denied:
+                raise WireError("permission denied: publish", permanent=True) from None
+            raise
 
     def pull(self, subject: str, payload: bytes, *, max_msgs: int, timeout: float) -> list[WireMsg]:
         async def go() -> list[WireMsg]:

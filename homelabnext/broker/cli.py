@@ -10,7 +10,8 @@ MCP tool server (stdio) against it (:mod:`homelabnext.broker.mcp_tools`).
 
 ``relay --state DIR --events-target FILE --stream S --subject-prefix P`` publishes the state
 directory's outbox to the event bus, at least once and in order (:mod:`homelabnext.broker.relay`);
-``--once`` publishes what is pending and exits (1 when something is still pending).
+``--once`` publishes what is pending and exits (1 when something is still pending); ``--skip ID``
+marks one event undeliverable by hand (the operator's escape for an event the bus will not take).
 
 The request commands work two ways:
 
@@ -108,12 +109,34 @@ def _parser() -> argparse.ArgumentParser:
     rel.add_argument("--state", default=os.environ.get("HNX_BROKER_STATE"))
     rel.add_argument(
         "--events-target",
-        required=True,
         help="a target file binding the events capability (adapter, config; no URL, no secret)",
     )
-    rel.add_argument("--stream", required=True, help="the standing JetStream stream")
-    rel.add_argument("--subject-prefix", required=True, help="the stream's subject prefix")
+    rel.add_argument("--stream", help="the standing JetStream stream")
+    rel.add_argument("--subject-prefix", help="the stream's subject prefix")
     rel.add_argument("--once", action="store_true", help="publish what is pending, then exit")
+    rel.add_argument(
+        "--skip",
+        metavar="EVENT_ID",
+        action="append",
+        help="mark this outbox event undeliverable (never published) and exit; repeatable",
+    )
+    rel.add_argument(
+        "--since",
+        help="first start only: outbox events from before the relay older than this ISO time "
+        "are marked superseded, never published",
+    )
+    rel.add_argument(
+        "--max-attempts",
+        type=int,
+        default=5,
+        help="permanent refusals of one event before it is undeliverable (default 5)",
+    )
+    rel.add_argument(
+        "--retain-days",
+        type=float,
+        default=30.0,
+        help="keep delivered markers this long after the broker pruned the event (default 30)",
+    )
     rel.add_argument("--batch", type=int, default=100, help="events per pass (default 100)")
     rel.add_argument("--idle", type=float, default=1.0, help="seconds between idle passes")
     rel.add_argument("--backoff-max", type=float, default=60.0, help="longest retry wait (s)")
@@ -454,26 +477,44 @@ def events_connector(target: str, *, stream: str, subject_prefix: str) -> Any:
 
 
 def _relay(args) -> int:
-    from .relay import OutboxRelay, RelayBusy
-    from .state import StateDir
+    from .relay import OutboxRelay, RelayBusy, RelayFirstStart, RelayStore
 
     logging.basicConfig(level=logging.INFO, format="hnx-broker-relay %(levelname)s %(message)s")
     if not args.state:
         print("hnx broker relay: --state (or HNX_BROKER_STATE) is required", file=sys.stderr)
+        return 2
+    if args.skip:
+        try:
+            store = RelayStore(args.state)
+            for eid in args.skip:
+                done = store.skip(eid)
+                print(f"hnx broker relay: {eid[:80]} {'skipped' if done else 'already done'}")
+        except Exception as exc:
+            print(f"hnx broker relay: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 2
+        return 0
+    if not (args.events_target and args.stream and args.subject_prefix):
+        print(
+            "hnx broker relay: --events-target, --stream and --subject-prefix are required",
+            file=sys.stderr,
+        )
         return 2
     try:
         connect = events_connector(
             args.events_target, stream=args.stream, subject_prefix=args.subject_prefix
         )
         relay = OutboxRelay(
-            StateDir(args.state),
+            args.state,
             connect,
             batch=args.batch,
             backoff_max_s=args.backoff_max,
+            max_attempts=args.max_attempts,
+            retain_s=args.retain_days * 86400.0,
+            since=args.since,
             stats_file=args.stats_file,
         )
         relay.acquire()
-    except RelayBusy as exc:
+    except (RelayBusy, RelayFirstStart) as exc:
         print(f"hnx broker relay: {exc}", file=sys.stderr)
         return 2
     except Exception as exc:  # the target file, the adapter, the state directory
@@ -482,7 +523,7 @@ def _relay(args) -> int:
     if args.once:
         try:
             published = relay.drain()
-            left = len(relay.state.outbox_pending())
+            left = relay.pending()
         finally:
             relay.close()
         print(f"hnx broker relay: published {published}, {left} pending")

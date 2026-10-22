@@ -54,12 +54,12 @@ def test_an_event_in_flight_is_never_overtaken(tmp_path, monkeypatch):
     second = threading.Thread(target=b.put_outbox, args=(ev(RET),))
     second.start()
     time.sleep(0.2)
-    seen = types(StateDir(tmp_path).outbox_pending())  # a relay pass, mid-write
+    seen = types(StateDir(tmp_path).outbox())  # a relay pass, mid-write
     gate.set()
     first.join(5)
     second.join(5)
     assert seen == []  # not the later event alone
-    assert types(StateDir(tmp_path).outbox_pending()) == [REQ, RET]
+    assert types(StateDir(tmp_path).outbox()) == [REQ, RET]
 
 
 def test_a_clock_stepped_back_cannot_reorder_events(tmp_path):
@@ -67,7 +67,7 @@ def test_a_clock_stepped_back_cannot_reorder_events(tmp_path):
     went back had its new event published before an older pending one."""
     StateDir(tmp_path, clock_ns=lambda: 2_000_000_000_000_000_000).put_outbox(ev(REQ))
     StateDir(tmp_path, clock_ns=lambda: 1_999_999_999_000_000_000).put_outbox(ev(RET))
-    assert types(StateDir(tmp_path).outbox_pending()) == [REQ, RET]
+    assert types(StateDir(tmp_path).outbox()) == [REQ, RET]
 
 
 def test_the_counter_is_persisted_and_recovers(tmp_path):

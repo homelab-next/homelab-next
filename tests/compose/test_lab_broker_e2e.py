@@ -144,20 +144,18 @@ def _relay(e2e, state_root: Path, wire: _SharedWire, *, drop_marks: bool = False
     """The scenario's relay, in this process: ``OutboxRelay`` on the broker's state over the wire
     fake (the CLI is tested in tests/broker/test_broker_relay.py)."""
     from homelabnext.broker.relay import OutboxRelay
-    from homelabnext.broker.state import StateDir
     from homelabnext.conform.adapters import nats_jetstream as nj
 
     def bus():
         return nj.make(wire=wire, scratch=False, stream="HNXT", subject_prefix="hnxt")
 
     def once():
-        state = StateDir(state_root)
+        r = OutboxRelay(state_root, bus)
         if drop_marks:  # a defect: publishes and never marks, so every pass republishes
-            state.mark_delivered = lambda *_a: True
-        r = OutboxRelay(state, bus)
+            r.store.mark = lambda *_a: True
         try:
             n = r.drain()
-            left = len(state.outbox_pending()) if not drop_marks else 0
+            left = r.pending() if not drop_marks else 0
         finally:
             r.close()
         return (1 if left else 0), f"hnx broker relay: published {n}, {left} pending"

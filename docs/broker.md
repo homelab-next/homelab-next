@@ -157,8 +157,11 @@ transition out of `pending`: run, cancel or deny), `results/`, `approvals/<reque
 `consumed/`, `audit/` (one record per file, `schemas/broker/audit`; a tail is read newest first),
 `decisions/` (an index of the trail's filed approvals and denials, so the hub's recent-decisions
 read never walks the refusals; rebuilt once for an older state directory),
-`outbox/` (every event emitted, with its place in emit order), `delivered/` (the relay's marker per
-outbox event the bus acknowledged), `runs/<request>/`, `digest.key` and the relay's `relay.lock`.
+`outbox/` (the events still to publish, each with its place in emit order from the
+`flock`-guarded counter `outbox.seq`; the broker removes one once the relay is done with it),
+`relay/` (the relay's own: `delivered/`, `undeliverable/`, `quarantine/`, `relay.lock`,
+`initialized`; [Publishing events](#publishing-events-the-outbox-relay)), `runs/<request>/` and
+`digest.key`.
 Keep it `0700` and owned by the
 broker's user; agents get no access to it.
 
@@ -267,10 +270,37 @@ decision, and `hnx broker serve` keeps needing no network at all.
 
 * **In order, at least once.** Each pass publishes the oldest undelivered events (at most
   `--batch`, default 100) one after another, as `<prefix>.<event type>` with the event id as the
-  JetStream message id (`Nats-Msg-Id`). An event is marked delivered (`delivered/<event id>.json`,
-  with its stream sequence) only after the PubAck; the first failure ends the pass, so nothing
-  overtakes an event that failed. One relay per state directory (`flock` on `relay.lock`; a
-  second one exits 2).
+  JetStream message id (`Nats-Msg-Id`). Emit order is `queued`, the next value of the persisted
+  counter `<state>/outbox.seq`, taken and the outbox file linked under one `flock`: an event
+  becomes visible only after every earlier one did, and no clock is involved. An event is marked
+  delivered (`relay/delivered/<event id>.json`, a copy of the event with its stream sequence) only
+  after the PubAck; a failure that can pass ends the pass, so nothing overtakes an event that
+  failed. One relay per state directory (`flock` on `relay/relay.lock`; a second one exits 2).
+* **The relay reads `outbox/` and writes only `relay/`.** The broker removes an outbox file once
+  `relay/` holds a marker for it (at start and at most once a minute while emitting), so `outbox/`
+  holds what is pending and a pass costs O(pending), not O(history); the marker is the copy.
+  Delivered markers older than `--retain-days` (default 30) are removed once their outbox file is
+  gone.
+* **Poison never stalls it.** An outbox file that is not an event (not JSON, no id or not its
+  file name, no type, a bad `queued`) is quarantined: a record in `relay/quarantine/` (file name,
+  reason, time; never its content) and a log line, then skipped. A publish the bus refuses for the
+  event itself (a permission violation, a subject no stream captures, an invalid subject, a body
+  over `max_payload`) is retried with backoff; after `--max-attempts` (default 5) the event goes to
+  `relay/undeliverable/` and the events after it are published. **That breaks per-stream order for
+  that event, on purpose**: it will never be delivered, and holding every later decision behind it
+  forever turns one bad event into an outage; consumers see a gap, never a reordering of the
+  events they do get. If three events in a row end up undeliverable with nothing published in
+  between, the bus refuses everything (its ACL or stream is wrong, not the events): the relay
+  stops skipping and holds, `state` `fail`. A transport failure (no connection, no PubAck) never
+  makes an event undeliverable. `hnx broker relay --state DIR --skip <event id>` marks one by hand
+  (no bus needed). Quarantined and undeliverable records keep `state` at `fail` until the operator
+  deletes them (after the broker has pruned the outbox file).
+* **The first start supersedes history.** Outbox files from before `queued` (the bare event,
+  written by a broker that had no relay) would replay old decisions. A first start (no
+  `relay/initialized`) with such files refuses (exit 2) without `--since TIME`: older ones are
+  marked `superseded` in `relay/delivered/` and never published, newer ones are published in
+  order (before every current event: by `time`, whole seconds, then id).
+  `--since 1970-01-01T00:00:00Z` publishes them all.
 * **A crash is a duplicate, not a loss.** A relay that dies between the PubAck and the marker
   republishes the same id on restart, and the stream's `duplicate_window` answers with the
   original sequence. Past that window the bus stores it twice; consumers dedupe by event id anyway
@@ -279,8 +309,9 @@ decision, and `hnx broker serve` keeps needing no network at all.
 * **Backoff.** A refused connection or a missing PubAck drops the connection and waits 1 s,
   doubling to `--backoff-max` (60 s), before retrying the same event.
 * **Nothing secret logged.** Logs and the `--stats-file` (written atomically, a `poll-file` status
-  source: `pending`, `published`, `consecutive_failures`, `last_error`, `state` `ok`/`warn`) name
-  event ids, types and exception classes only, never a body, an endpoint or a credential.
+  source: `pending` (counted by name, nothing parsed), `published`, `undeliverable`,
+  `quarantined`, `holding`, `consecutive_failures`, `last_error`, `state` `ok`/`warn`/`fail`)
+  name event ids, types and exception classes only, never a body, an endpoint or a credential.
 * `--once` publishes what is pending and exits 0, or 1 when something is still pending (the bus is
   down). Exit 2 is a configuration error (the target file, the adapter, the lock).
 
@@ -559,7 +590,7 @@ agents at the MCP tools, then remove the agents' write access to the old directo
 
 | Layer | What runs | Where |
 |---|---|---|
-| unit | the engine, lanes, exec handlers, the socket server (peer map, refusals, modes), the CLI, the outbox relay (ordering, a lost PubAck, a crash before the mark, the bus down; `test_broker_relay.py`), the MCP tools in memory and over stdio, the hub's Approvals page against a real `hnx broker serve` | `tests/broker/`, `tests/status/test_approvals.py` (`pytest`, every pull request) |
+| unit | the engine, lanes, exec handlers, the socket server (peer map, refusals, modes), the CLI, the outbox (emit order across processes and a clock stepped back; `test_broker_outbox.py`), the outbox relay (ordering, a lost PubAck, a crash before the mark, the bus down, poison and malformed files, `--skip`, the first start, pruning; `test_broker_relay.py`), the MCP tools in memory and over stdio, the hub's Approvals page against a real `hnx broker serve` | `tests/broker/`, `tests/status/test_approvals.py` (`pytest`, every pull request) |
 | scenario, local processes | `compose/lab-in-a-box/broker_e2e.py`'s scenario against a broker socket, a hub subprocess, the agent's `hnx broker mcp` behind a real MCP stdio client and `hnx broker` CLI calls, all as the test's uid (the broker maps each process to a distinct uid by the role it was started with) | `tests/compose/test_lab_broker_e2e.py` (every pull request, with the `mcp` extra) |
 | end to end, real uids | the same scenario in the lab-in-a-box: the broker (`hnx-broker`, no network, `manifest.production.yml`), the hub (`hnx-hub`, the relay) and the edge in three containers sharing the socket volume; the edge also runs the broker's outbox relay as `hnx-broker` on the broker's state volume, against the lab's NATS JetStream (`events`) | the nightly smoke's `broker` check; locally `make lab-broker` (or `make lab-smoke` for the whole lab) |
 

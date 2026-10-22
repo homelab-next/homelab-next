@@ -18,7 +18,13 @@ import pytest
 
 from conformance.fakes.jetstream_wire import FakeJetStreamWire
 from homelabnext.broker import cli as broker_cli
-from homelabnext.broker.relay import BROKER_SOURCE, OutboxRelay, RelayBusy
+from homelabnext.broker.relay import (
+    BROKER_SOURCE,
+    OutboxRelay,
+    RelayBusy,
+    RelayFirstStart,
+    RelayStore,
+)
 from homelabnext.broker.service import BrokerService
 from homelabnext.broker.state import StateDir
 from homelabnext.conform.adapters import nats_jetstream as nj
@@ -117,6 +123,15 @@ def relay(state: StateDir, bus: Bus, clock: Clock | None = None, **kw) -> Outbox
     return OutboxRelay(state, bus, clock=clock or Clock(), **kw)
 
 
+def pending(state: StateDir) -> list[dict]:
+    """What the relay still has to publish, in order."""
+    return [ev for _, ev in RelayStore(state.root).entries()]
+
+
+def delivered(state: StateDir, event_id: str) -> dict | None:
+    return RelayStore(state.root).get("delivered", f"{event_id}.json")
+
+
 # ---------------------------------------------------------------- order and dedupe
 def test_publishes_in_emit_order_with_the_event_id_as_msg_id(tmp_path):
     state, bus = StateDir(tmp_path / "state"), Bus()
@@ -128,7 +143,7 @@ def test_publishes_in_emit_order_with_the_event_id_as_msg_id(tmp_path):
     assert all(mid == ev["id"] for _, ev, mid in stored)
     assert {s for s, _, _ in stored} == {f"{PREFIX}.homelabnext.decision.requested"}
     assert all(ev["source"] == "svc:broker" for _, ev, _ in stored)
-    assert state.outbox_pending() == [] and state.delivered(ids[0])["seq"] == 1
+    assert pending(state) == [] and delivered(state, ids[0])["seq"] == 1
     assert relay(state, bus).drain() == 0 and len(bus.stored()) == 5  # delivered stays delivered
 
 
@@ -146,12 +161,12 @@ def test_a_lost_puback_is_republished_and_deduplicated(tmp_path):
     bus.wire.lose_acks = 1  # the server stores the first event, the PubAck never arrives
     r = relay(state, bus, clock)
     assert r.pass_once() == 0 and r.failures == 1
-    assert [e["id"] for e in state.outbox_pending()] == ids  # nothing marked, order kept
+    assert [e["id"] for e in pending(state)] == ids  # nothing marked, order kept
     assert r.pass_once() == 0  # backing off
     clock.t += 1.0
     assert r.pass_once() == 3
     assert [ev["id"] for _, ev, _ in bus.stored()] == ids  # stored once each
-    assert state.delivered(ids[0])["seq"] == 1
+    assert delivered(state, ids[0])["seq"] == 1
 
 
 def test_crash_between_publish_and_mark_republishes_under_the_same_id(tmp_path, monkeypatch):
@@ -164,15 +179,15 @@ def test_crash_between_publish_and_mark_republishes_under_the_same_id(tmp_path, 
     def crash(*_a, **_kw):
         raise Crash
 
-    monkeypatch.setattr(state, "mark_delivered", crash)
+    monkeypatch.setattr(RelayStore, "mark", crash)
     with pytest.raises(Crash):  # the process dies after the PubAck, before the marker
         relay(state, bus).pass_once()
     monkeypatch.undo()
     after = StateDir(tmp_path / "state")  # a restarted relay over the same directory
-    assert [e["id"] for e in after.outbox_pending()] == ids
+    assert [e["id"] for e in pending(after)] == ids
     assert relay(after, bus).drain() == 2
     assert [ev["id"] for _, ev, _ in bus.stored()] == ids  # the republish was a duplicate
-    assert after.delivered(ids[0])["seq"] == 1 and after.outbox_pending() == []
+    assert delivered(after, ids[0])["seq"] == 1 and pending(after) == []
 
 
 def test_bus_down_then_up_keeps_order_and_backs_off(tmp_path):
@@ -208,7 +223,7 @@ def test_a_failed_event_holds_back_the_ones_after_it(tmp_path):
     bus.wire.request = flaky
     assert r.pass_once() == 1
     assert [ev["id"] for _, ev, _ in bus.stored()] == ids[:1]
-    assert [e["id"] for e in state.outbox_pending()] == ids[1:]
+    assert [e["id"] for e in pending(state)] == ids[1:]
     clock.t = r.pause_until
     assert r.pass_once() == 2 and [ev["id"] for _, ev, _ in bus.stored()] == ids
 
@@ -255,7 +270,8 @@ def test_an_outbox_file_from_before_the_order_field_is_still_relayed(tmp_path):
     old = event(9)
     (state.root / "outbox" / f"{old['id']}.json").write_text(json.dumps(old))
     assert state.outbox() == [old]
-    assert relay(state, bus).drain() == 1 and bus.stored()[0][1] == old
+    r = relay(state, bus, since="1970-01-01T00:00:00Z")  # the first start: publish them all
+    assert r.drain() == 1 and bus.stored()[0][1] == old
 
 
 # ---------------------------------------------------------------- the broker through to the bridge
@@ -437,3 +453,191 @@ def test_a_ca_file_needs_a_tls_endpoint():
         nj.NatsPyWire(
             "nats://127.0.0.1:4222", ca_file="/nonexistent/ca.pem"
         )  # no-raw-endpoint: allow
+
+
+# ---------------------------------------------------------------- poison, malformed files, --skip
+class Refuse:
+    """A bus wrapper refusing, for good, the publishes whose msg id is in ``ids`` (``None``:
+    every publish), the way NatsPyWire reports a permission violation or max_payload."""
+
+    def __init__(self, bus: Bus, ids: set[str] | None) -> None:
+        self.bus, self.ids, self.tries = bus, ids, 0
+        real = bus.wire.request
+
+        def request(subject, payload=b"", *, headers=None, timeout):
+            mid = (headers or {}).get("Nats-Msg-Id")
+            if mid and (self.ids is None or mid in self.ids):
+                self.tries += 1
+                raise nj.WireError("permission denied: publish", permanent=True)
+            return real(subject, payload, headers=headers, timeout=timeout)
+
+        bus.wire.request = request
+
+
+def run_until_idle(r: OutboxRelay, clock: Clock, passes: int = 50) -> None:
+    for _ in range(passes):
+        r.pass_once()
+        clock.t = max(clock.t, r.pause_until)
+
+
+def test_a_poison_event_becomes_undeliverable_and_the_rest_go_on(tmp_path):
+    """The reviewer's exp1 A: an event the bus refuses for good stalled the relay forever."""
+    state, bus, clock = StateDir(tmp_path / "state"), Bus(), Clock()
+    ids = emit(state, 4)
+    refuse = Refuse(bus, {ids[1]})
+    r = relay(state, bus, clock, max_attempts=3, stats_file=tmp_path / "stats.json")
+    assert r.pass_once() == 1 and r.failures == 1  # retried first, with backoff
+    run_until_idle(r, clock)
+    assert [ev["id"] for _, ev, _ in bus.stored()] == [ids[0], ids[2], ids[3]]
+    assert refuse.tries == 3 and pending(state) == []
+    mark = RelayStore(state.root).get("undeliverable", f"{ids[1]}.json")
+    assert mark["status"] == "undeliverable" and mark["attempts"] == 3
+    assert mark["reason"] == "WireError" and mark["event"]["id"] == ids[1]
+    doc = json.loads((tmp_path / "stats.json").read_text())
+    assert doc["state"] == "fail" and doc["undeliverable"] == 1 and doc["pending"] == 0
+
+
+def test_an_invalid_subject_is_permanent_too(tmp_path):
+    state, bus, clock = StateDir(tmp_path / "state"), Bus(), Clock()
+    bad = event(1)
+    bad["type"] = "homelabnext.bad subject"
+    state.put_outbox(event(0))
+    state.put_outbox(bad)
+    state.put_outbox(event(2, "homelabnext.decision.returned"))
+    r = relay(state, bus, clock, max_attempts=2)
+    run_until_idle(r, clock)
+    assert len(bus.stored()) == 2 and r.undeliverable == 1
+
+
+def test_an_outage_never_makes_an_event_undeliverable(tmp_path):
+    state, bus, clock = StateDir(tmp_path / "state"), Bus(), Clock()
+    ids = emit(state, 2)
+    bus.wire.lose_acks = 10**6  # no PubAck, ever: transport, not the event
+    r = relay(state, bus, clock, max_attempts=1)
+    run_until_idle(r, clock, 20)
+    assert RelayStore(state.root).count("undeliverable") == 0
+    assert [e["id"] for e in pending(state)] == ids
+
+
+def test_a_bus_refusing_everything_holds_instead_of_draining(tmp_path):
+    state, bus, clock = StateDir(tmp_path / "state"), Bus(), Clock()
+    emit(state, 6)
+    Refuse(bus, None)
+    r = relay(state, bus, clock, max_attempts=1, max_undeliverable_run=2)
+    run_until_idle(r, clock)
+    assert r.undeliverable == 2 and r.holding and len(pending(state)) == 4
+    assert r.stats()["state"] == "fail" and r.stats()["holding"] is True
+
+
+@pytest.mark.parametrize(
+    "content,reason",
+    [
+        ('{"queued": ["x", 1, 2], "event": {"id": "NAME", "type": "t"}}', "bad-queued"),
+        ('{"queued": [1], "event": {"id": "NAME", "type": "t"}}', "bad-queued"),
+        ('{"queued": 7, "event": {"id": "NAME"}}', "no-type"),
+        ('{"queued": 7, "event": {"id": "other", "type": "t"}}', "bad-id"),
+        ("{trunc", "not-json"),
+        ("[1, 2]", "not-an-object"),
+        ('{"type": "homelabnext.decision.requested"}', "bad-id"),  # old format, no id
+    ],
+)
+def test_a_malformed_outbox_file_is_quarantined_not_fatal(tmp_path, content, reason):
+    """The reviewer's exp1 B/C/E: such a file raised out of every pass, forever."""
+    state, bus, clock = StateDir(tmp_path / "state"), Bus(), Clock()
+    ids = emit(state, 2)
+    name = "bad-file"
+    (state.root / "outbox" / f"{name}.json").write_text(content.replace("NAME", name))
+    r = relay(state, bus, clock)
+    assert r.drain() == 2 and [ev["id"] for _, ev, _ in bus.stored()] == ids
+    record = RelayStore(state.root).get("quarantine", f"{name}.json")
+    assert record["reason"] == reason and record["file"] == f"{name}.json"
+    assert r.stats()["quarantined"] == 1 and r.stats()["state"] == "fail"
+    assert state.prune_outbox(force=True) == 3  # the broker removes all three, bad one included
+    assert state.outbox() == [] and r.pending() == 0
+
+
+def test_skip_is_the_operators_escape(tmp_path, capsys):
+    state, bus, clock = StateDir(tmp_path / "state"), Bus(), Clock()
+    ids = emit(state, 3)
+    assert broker_cli.main(["relay", "--state", str(state.root), "--skip", ids[0]]) == 0
+    assert "skipped" in capsys.readouterr().out
+    assert broker_cli.main(["relay", "--state", str(state.root), "--skip", "nope"]) == 2
+    assert relay(state, bus, clock).drain() == 2
+    assert [ev["id"] for _, ev, _ in bus.stored()] == ids[1:]
+    mark = RelayStore(state.root).get("undeliverable", f"{ids[0]}.json")
+    assert mark["status"] == "skipped"
+
+
+def test_the_adapter_marks_a_permission_violation_permanent():
+    """NatsPyWire: the server drops a denied publish and says so out of band (error_cb); the
+    request then times out, and that timeout is reported as permanent for that subject."""
+    w = object.__new__(nj.NatsPyWire)
+    w._denied = set()
+
+    def run(coro, timeout):
+        coro.close()
+        w._denied.add("hnx.homelabnext.decision.returned")  # error_cb, meanwhile
+        raise nj.WireError("no reply within 6.0s")
+
+    w._run = run
+    with pytest.raises(nj.WireError) as err:
+        w.request("hnx.homelabnext.decision.returned", b"{}", timeout=5.0)
+    assert err.value.permanent
+    w._denied = set()
+    w._run = lambda coro, t: (coro.close(), (_ for _ in ()).throw(nj.WireError("no reply")))
+    with pytest.raises(nj.WireError) as err:
+        w.request("hnx.other", b"{}", timeout=5.0)
+    assert not err.value.permanent
+    m = nj._PERMISSION_DENIED.search('nats: Permissions Violation for Publish to "a.b.c"')
+    assert m and m.group(1) == "a.b.c"
+
+
+# ---------------------------------------------------------------- the first start and growth
+def test_the_first_start_supersedes_history_before_since(tmp_path, capsys):
+    """Upgrading a broker whose outbox holds files from before the relay: they were never meant
+    for a bus, so the first start publishes nothing older than --since (and needs it)."""
+    state, bus = StateDir(tmp_path / "state"), Bus()
+    olds = []
+    for i, when in enumerate(("2026-01-01T00:00:00Z", "2026-03-01T00:00:00Z")):
+        old = event(10 + i)
+        old["time"] = when
+        (state.root / "outbox" / f"{old['id']}.json").write_text(json.dumps(old))
+        olds.append(old)
+    [new] = emit(state, 1)
+    with pytest.raises(RelayFirstStart, match="--since"):
+        relay(state, bus).acquire()
+    r = relay(state, bus, since="2026-02-01T00:00:00Z")
+    r.acquire()
+    assert r.drain() == 2
+    assert [ev["id"] for _, ev, _ in bus.stored()] == [olds[1]["id"], new]
+    assert delivered(state, olds[0]["id"])["status"] == "superseded"
+    r.close()
+    # initialized: a later start needs no --since
+    old = event(20)
+    (state.root / "outbox" / f"{old['id']}.json").write_text(json.dumps(old))
+    assert relay(state, bus).drain() == 1
+
+
+def test_an_idle_pass_reads_only_what_is_pending(tmp_path, monkeypatch):
+    """Delivered events leave the outbox (the broker prunes them; the relay keeps the copy), so
+    a pass costs O(pending), and delivered markers past retention go once pruned."""
+    import homelabnext.broker.relay as relay_mod
+
+    state, bus, clock = StateDir(tmp_path / "state"), Bus(), Clock()
+    emit(state, 30)
+    r = relay(state, bus, clock, retain_s=100.0, wall=lambda: 10**10)
+    assert r.drain() == 30
+    assert len(list((state.root / "outbox").glob("*.json"))) == 30  # until the broker prunes
+    assert state.prune_outbox(force=True) == 30 and state.outbox() == []
+    reads = []
+    real = relay_mod.read_outbox_file
+    monkeypatch.setattr(relay_mod, "read_outbox_file", lambda p: reads.append(p) or real(p))
+    fresh = event(99)["id"]
+    state.put_outbox(event(99))
+    assert r.pass_once() == 1 and len(reads) == 1
+    assert r.pass_once() == 0 and len(reads) == 1  # idle: nothing parsed
+    store = RelayStore(state.root)
+    assert store.count("delivered") == 31
+    # retention: old markers go once their outbox file is gone, the fresh one's file is still there
+    assert store.sweep(retain_s=100.0, now=10**10) == 30
+    assert store.get("delivered", f"{fresh}.json") is not None
