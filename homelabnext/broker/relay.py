@@ -117,8 +117,8 @@ class RelayStore:
     ``relay/`` (``delivered/``, ``undeliverable/``, ``quarantine/``, ``relay.lock``,
     ``initialized``), so it needs no other access to the broker's state."""
 
-    def __init__(self, root: str | os.PathLike[str]) -> None:
-        self.root = Path(root)
+    def __init__(self, root: str | os.PathLike[str], *, now: Callable[[], str] = _now) -> None:
+        self.root, self.now = Path(root), now
         self.outbox = self.root / "outbox"
         self.dir = self.root / RELAY_DIR
         for d in (self.dir, *(self.dir / k for k in RELAY_DONE)):
@@ -179,7 +179,7 @@ class RelayStore:
         file stays where it is until the broker prunes it; its content is not copied)."""
         from .state import write_exclusive
 
-        record = {"file": name, "reason": reason, "at": _now(), "id": event_id}
+        record = {"file": name, "reason": reason, "at": self.now(), "id": event_id}
         if write_exclusive(self.dir / "quarantine" / name, _dumps(record)):
             log.error("broker relay: quarantined outbox file %r (%s)", name[:80], reason)
 
@@ -196,7 +196,7 @@ class RelayStore:
         except OutboxFileError as exc:
             self.quarantine(name, exc.reason)
             return True
-        receipt = {"status": "skipped", "reason": f"skipped by {who}", "at": _now()}
+        receipt = {"status": "skipped", "reason": f"skipped by {who}", "at": self.now()}
         return self.mark("undeliverable", event, receipt)
 
     def sweep(self, *, retain_s: float, now: float) -> int:
@@ -237,8 +237,8 @@ class RelayStore:
         for _, ev in old:
             when = _epoch(str(ev.get("time", "")))
             if when is None or (cut is not None and when < cut):
-                n += self.mark("delivered", ev, {"status": "superseded", "at": _now()})
-        write_exclusive(self.dir / INITIALIZED, _dumps({"at": _now(), "superseded": n}))
+                n += self.mark("delivered", ev, {"status": "superseded", "at": self.now()})
+        write_exclusive(self.dir / INITIALIZED, _dumps({"at": self.now(), "superseded": n}))
         if n:
             log.warning("broker relay: first start: %d old outbox event(s) superseded", n)
         return n
@@ -274,7 +274,7 @@ class OutboxRelay:
         if max_attempts < 1 or max_undeliverable_run < 1 or retain_s <= 0:
             raise ValueError("max_attempts, max_undeliverable_run and retain_s must be positive")
         root = state.root if isinstance(state, StateDir) else Path(state)
-        self.store = RelayStore(root)
+        self.store = RelayStore(root, now=now)
         self.connect = connect
         self.batch = int(batch)
         self.backoff_base_s, self.backoff_max_s = backoff_base_s, backoff_max_s
@@ -510,14 +510,13 @@ class OutboxRelay:
     def write_stats(self, *, force: bool = False) -> None:
         """Write :meth:`stats` to ``stats_file`` (atomically) after a pass that published or
         failed, and otherwise at most every ``stats_interval_s``."""
-        if self.stats_file is None:
-            return
         now = self.clock()
-        if not force and now - self._stats_written < self.stats_interval_s:
-            return
-        self._stats_written = now
-        from homelabnext.state.store import atomic_write_text
+        due = force or now - self._stats_written >= self.stats_interval_s
+        if self.stats_file is not None and due:
+            from homelabnext.state.store import atomic_write_text
 
-        self.stats_file.parent.mkdir(parents=True, exist_ok=True)
-        text = json.dumps(self.stats(), indent=2, sort_keys=True) + "\n"
-        atomic_write_text(self.stats_file, text, mode=0o640)
+            self._stats_written = now
+            self.stats_file.parent.mkdir(parents=True, exist_ok=True)
+            doc = self.stats()
+            atomic_write_text(self.stats_file, json.dumps(doc, indent=2, sort_keys=True) + "\n",
+                              mode=0o640)  # fmt: skip

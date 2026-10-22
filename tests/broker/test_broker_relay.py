@@ -430,7 +430,10 @@ def _recording_wire(monkeypatch) -> list[dict]:
 
 @pytest.mark.parametrize(
     "endpoint",
-    ["nats://203.0.113.9:4222", "nats://events.lab.example:4222"],  # no-raw-endpoint: allow
+    [
+        "nats://203.0.113.9:4222",  # no-raw-endpoint: allow a documentation-range host
+        "nats://events.lab.example:4222",  # no-raw-endpoint: allow a documentation host
+    ],
 )
 def test_a_password_never_goes_over_plaintext_nats_to_another_host(monkeypatch, endpoint):
     """The reviewer's exp3: make() handed user + password to nats.connect for a plain nats://
@@ -449,7 +452,8 @@ def test_a_password_never_goes_over_plaintext_nats_to_another_host(monkeypatch, 
 
 @pytest.mark.parametrize(
     "endpoint",
-    ["nats://127.0.0.1:4222", "tls://203.0.113.9:4222"],  # no-raw-endpoint: allow
+    # no-raw-endpoint: allow the loopback and TLS cases of the plaintext rule under test
+    ["nats://127.0.0.1:4222", "tls://203.0.113.9:4222"],  # no-raw-endpoint: allow the rule's cases
 )
 def test_tls_or_loopback_carries_the_password(monkeypatch, endpoint, tmp_path):
     made = _recording_wire(monkeypatch)
@@ -468,10 +472,9 @@ def test_tls_or_loopback_carries_the_password(monkeypatch, endpoint, tmp_path):
 
 
 def test_a_ca_file_needs_a_tls_endpoint():
+    loopback = "nats://127.0.0.1:4222"  # no-raw-endpoint: allow the refusal under test
     with pytest.raises(nj.EventsError, match="tls://"):
-        nj.NatsPyWire(
-            "nats://127.0.0.1:4222", ca_file="/nonexistent/ca.pem"
-        )  # no-raw-endpoint: allow
+        nj.NatsPyWire(loopback, ca_file="/nonexistent/ca.pem")
 
 
 # ---------------------------------------------------------------- poison, malformed files, --skip
@@ -726,7 +729,8 @@ def test_a_user_gets_its_own_inbox_prefix(monkeypatch):
     """Replies arrive on _INBOX.<user>, so the server can grant each user its own inbox instead of
     _INBOX.> (where any client reads every other client's replies)."""
     made = _recording_wire(monkeypatch)
-    monkeypatch.setenv("HNX_ENDPOINT_EVENTS", "nats://127.0.0.1:4222")  # no-raw-endpoint: allow
+    loopback = "nats://127.0.0.1:4222"  # no-raw-endpoint: allow a loopback bus, never dialled
+    monkeypatch.setenv("HNX_ENDPOINT_EVENTS", loopback)
     kw = {"scratch": False, "stream": STREAM, "subject_prefix": PREFIX}
     nj.make(user="hnx-broker", password_secret="secret:events/broker", **kw)
     nj.make(user="hnx-broker", password_secret="secret:events/broker", inbox_prefix="_I.b", **kw)

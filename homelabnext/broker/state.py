@@ -182,10 +182,15 @@ class StateDir:
     """The broker's state directory.  Created ``0700``: it holds requests and audit records."""
 
     def __init__(
-        self, root: str | os.PathLike[str], *, clock_ns: Callable[[], int] = time.time_ns
+        self,
+        root: str | os.PathLike[str],
+        *,
+        clock_ns: Callable[[], int] = time.time_ns,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.root = Path(root)
         self._clock_ns = clock_ns  # orders requests (``submitted_ns``)
+        self._monotonic = monotonic  # paces prune_outbox
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         index_missing = not (self.root / "open").exists()
         for name in _SUBDIRS:
@@ -438,7 +443,7 @@ class StateDir:
         a relay pass costs O(pending).  The relay's marker keeps the event (and its receipt).
         Runs at most every :data:`PRUNE_INTERVAL_S` unless ``force``; returns how many it removed.
         The broker owns ``outbox/``, so it is the one that removes; the relay only reads it."""
-        now = time.monotonic()
+        now = self._monotonic()
         if not force and now - self._pruned < PRUNE_INTERVAL_S:
             return 0
         self._pruned = now
