@@ -43,6 +43,12 @@
   loop_control:
     label: "{{ item.name }}"
 
+- name: Create the pre-start byte check's directory
+  ansible.builtin.file:
+    path: "{{ vllm_server_verify_bin | dirname }}"
+    state: directory
+    mode: "0755"
+
 - name: Install the pre-start byte check
   ansible.builtin.copy:
     src: hnx-model-verify

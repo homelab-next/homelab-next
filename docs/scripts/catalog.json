@@ -580,6 +580,44 @@
     },
     {
       "exit": {
+        "0": "every staged file verified and promoted",
+        "1": "a staged file is missing, out of place, or not the manifest's; nothing was moved"
+      },
+      "id": "model-store-promote",
+      "inputs": "one JSON argument (the entry's format, staging and live directories, and its files)",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the files renamed into place; one JSON line naming them",
+      "owner": "platform",
+      "path": "ansible/roles/model_store/files/promote_entry.py",
+      "purpose": "Verify a staged model-store download by size and sha256, then rename each file into the live store.",
+      "status": "active",
+      "trigger": [
+        "role:model_store"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the bytes are the pinned ones",
+        "1": "the listing is not the pinned one, or a file differs; the unit does not start",
+        "2": "usage error"
+      },
+      "id": "model-verify",
+      "inputs": "the entry's sha256sum listing, the pinned digest, the model directory",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-model-verify",
+      "kind": "job",
+      "language": "shell",
+      "outputs": "nothing on success; the mismatch on stderr",
+      "owner": "platform",
+      "path": "ansible/roles/vllm_server/files/hnx-model-verify",
+      "purpose": "Refuse to start a vLLM unit unless its store listing hashes to the pinned digest and the model directory matches it.",
+      "status": "active",
+      "trigger": [
+        "role:vllm_server"
+      ]
+    },
+    {
+      "exit": {
         "0": "checked (and alerted, if the set changed)",
         "1": "needrestart failed; the state file is not rewritten",
         "2": "the alert could not be sent; it stays owed to the next run"

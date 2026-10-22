@@ -62,6 +62,7 @@ from urllib.parse import urlsplit
 import yaml
 
 from homelabnext._yaml import UniqueKeyLoader
+from homelabnext.models.store import ProblemsError
 from homelabnext.registry.model import secret_env_name
 from homelabnext.registry.models import RoleTable, RoleTableError
 
@@ -111,12 +112,8 @@ PROVIDER_PREFIX = "hnx-"  # Bifrost provider name of a local backend: hnx-<svc n
 HEADER = f"# {MARKER} llm_gateway from {{spec}} - do not edit; sha256:{{digest}}\n"
 
 
-class GatewaySpecError(ValueError):
+class GatewaySpecError(ProblemsError):
     """The gateway spec, the role table or the profiles break a rule.  ``problems`` lists all."""
-
-    def __init__(self, message: str, problems: Iterable[str] = ()):
-        self.problems = list(problems)
-        super().__init__(message + "".join(f"\n  - {p}" for p in self.problems))
 
 
 @dataclass(frozen=True)

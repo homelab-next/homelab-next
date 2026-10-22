@@ -52,7 +52,7 @@ from typing import Any
 from homelabnext.registry.models import RoleTable, RoleTableError
 
 from . import store as store_mod
-from .store import Entry, Store, StoreError
+from .store import Entry, ProblemsError, Store, StoreError
 
 __all__ = [
     "ALLOWED_ARGS",
@@ -171,12 +171,8 @@ OUT = "vllm_server/instances.yml"
 EXPOSURES = ("zone", "loopback")
 
 
-class ServingSpecError(ValueError):
+class ServingSpecError(ProblemsError):
     """The serving spec, the store or the role table break a rule.  ``problems`` lists all."""
-
-    def __init__(self, message: str, problems: Iterable[str] = ()):
-        self.problems = list(problems)
-        super().__init__(message + "".join(f"\n  - {p}" for p in self.problems))
 
 
 @dataclass(frozen=True)

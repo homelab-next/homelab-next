@@ -25,7 +25,7 @@ vllm_server_nccl_p2p_disable: false
 vllm_server_unit_dir: /etc/systemd/system
 # The pre-start check every unit runs (files/hnx-model-verify): the entry's listing hashes to the
 # pinned digest and the bytes match it, so a restart never serves unverified bytes.
-vllm_server_verify_bin: /usr/local/libexec/hnx-model-verify
+vllm_server_verify_bin: /usr/local/libexec/homelabnext/hnx-model-verify
 vllm_server_env_dir: /etc/homelabnext/vllm
 vllm_server_cache_dir: /var/cache/homelabnext/vllm
 vllm_server_state_dir: /var/lib/homelabnext/vllm

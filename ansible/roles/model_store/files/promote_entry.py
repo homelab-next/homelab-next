@@ -1,4 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: model-store-promote
+#   kind: tool
+#   purpose: Verify a staged model-store download by size and sha256, then rename each file into the live store.
+#   owner: platform
+#   trigger: [role:model_store]
+#   inputs: one JSON argument (the entry's format, staging and live directories, and its files)
+#   outputs: the files renamed into place; one JSON line naming them
+#   exit:
+#     "0": every staged file verified and promoted
+#     "1": a staged file is missing, out of place, or not the manifest's; nothing was moved
 """Promote one fetched model-store entry from its staging directory into the live store.
 
 Run by the model_store role (``ansible.builtin.script``) on the store host, after ``hf download``
@@ -23,11 +34,13 @@ from pathlib import Path
 
 
 def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        while True:
+            block = fh.read(8 << 20)
+            if not block:
+                return digest.hexdigest()
+            digest.update(block)
 
 
 def _inside(path: Path, top: Path) -> bool:

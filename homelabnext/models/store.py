@@ -70,12 +70,16 @@ ENTRY_KEYS = {
 }  # fmt: skip
 
 
-class StoreError(ValueError):
-    """The store manifest is malformed.  ``problems`` lists every defect found."""
+class ProblemsError(ValueError):
+    """A spec breaks rules; ``problems`` lists every one (the message lists them too)."""
 
     def __init__(self, message: str, problems: Iterable[str] = ()):
         self.problems = list(problems)
         super().__init__(message + "".join(f"\n  - {p}" for p in self.problems))
+
+
+class StoreError(ProblemsError):
+    """The store manifest is malformed.  ``problems`` lists every defect found."""
 
 
 @dataclass(frozen=True)
