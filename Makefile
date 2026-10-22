@@ -141,9 +141,11 @@ injection-eval:
 
 # R-01/R-03/R-04/R-07: every workflow pack in git validates offline (references resolve,
 # deterministic steps before any model, fixtures round-trip to the exact action calls, risky
-# actions bound to an approval of their payload digest) and the deploy pins match
+# actions bound to an approval of their payload digest) and the deploy pins match; the StackStorm
+# pack rendered from the bound packs (workflows/stackstorm/) is current (docs/stackstorm.md)
 workflows:
 	$(PY) -m homelabnext.cli workflows validate
+	$(PY) -m homelabnext.cli workflows st2 check
 
 # M-01 every script has a valid header and docs/scripts/catalog.* is current (`hnx scripts catalog`
 # regenerates it); M-02 the headers' triggers are exactly what runs each script, nothing called is

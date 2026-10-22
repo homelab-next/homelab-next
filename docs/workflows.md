@@ -8,6 +8,9 @@ digest from a passing commit. Contract: `schemas/workflows/` (`pack`, `deploy`).
 `workflows/packs/`; the broker manifest they act through: `workflows/broker.manifest.json`; the
 deploy pins: `workflows/deploy.yml`.
 
+StackStorm runs the pinned packs on events and schedules: [stackstorm.md](stackstorm.md)
+([[stackstorm]]), `hnx workflows st2 render | check`.
+
 Checklist rows: R-01 (workflows are code), R-03 (deterministic steps first), R-04 (risky actions
 need bound approval), R-07 (fixtures round-trip). R-02, R-05 and R-06 need the running
 orchestrator (SERVER); the `orchestration` conformance suite covers the job-runner contract a real

@@ -5,6 +5,12 @@
   "approval_ttl_s": 900,
   "actions": [
     {
+      "action": "agent.job.submit",
+      "tier": "write",
+      "handler": "handlers/agent-job-submit.sh",
+      "requires_approval": false
+    },
+    {
       "action": "case.open",
       "tier": "write",
       "handler": "handlers/case-open.sh",
@@ -45,6 +51,13 @@
         "dns.block-domains"
       ],
       "max_tier": "execute"
+    },
+    {
+      "profile": "profile:workflow-agents",
+      "actions": [
+        "agent.job.submit"
+      ],
+      "max_tier": "write"
     }
   ],
   "approvers": [

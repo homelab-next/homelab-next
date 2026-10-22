@@ -1,0 +1,13 @@
+{
+  "binding": "sha256:0b189dc6ec1210cc0a752926d33678b4baf8ef182279a02b9d305776ac422e20",
+  "packs": {
+    "agent-job-retry": {
+      "digest": "sha256:7e0687607fdbf948b18839cb31665db8c5534ff83ab241af2026267cc8959de3",
+      "mode": "shadow"
+    },
+    "proposal-validate": {
+      "digest": "sha256:928f5f6be42804662f650c1640b47f5a97e4b4dc57db0fc3374645e3b256ae47",
+      "mode": "shadow"
+    }
+  }
+}

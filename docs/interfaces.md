@@ -257,9 +257,13 @@ validate_manifest(manifest, base_dir) -> (handler_docs, problems)   # schema, ha
 # homelabnext.broker.execute: run_handler(path, digest, *, params, run_dir, timeout_s, argv, env, secrets, resolve_secret,
 #   max_output) -> ExecResult ; file_digest(path) ; ExecError(.reason) ; env_secret_resolver()
 # homelabnext.broker.state: StateDir(root), FileApprovalStore(dir) (durable ApprovalStore), write_exclusive(path, data)
-# homelabnext.workflows  (hnx workflows validate|run|digest; docs/workflows.md; schemas/workflows)
+# homelabnext.workflows  (hnx workflows validate|run|digest|st2; docs/workflows.md; schemas/workflows)
 validate_repo(paths=(), *, root=None, deploy=None) -> Report ; check_pack(doc, universe) -> [(rule, detail)]
 run_fixture(pack, fixture, *, manifest, spec_labels=None, executor_factory=BrokerExecutor) -> RunResult ; pack_digest(doc)
+# homelabnext.workflows.st2: render(binding, packs, *, pins, manifests, clean, tracked) -> Rendered(files, problems) ;
+#   render_repo(root) ; drift(files, out_dir, base) ; write(files, out_dir) ; rule_criteria(trigger) ; cron_params(cron)
+# homelabnext.workflows.st2_runtime: admit(*, pack, trigger, event|schedule, coalesce, kv) ; step(config, **params) ;
+#   run_step(*, pack, actor, step, event, steps, calls, mode='shadow', risky, broker) ; schedule_event(id, fired_at)
 
 # homelabnext.swap   (extra: swap = PyYAML + jsonschema; hnx swap; docs/swap.md; ADR-0005)
 STEPS: tuple[str, ...]                  # declare, shadow-start, dual-write, parity-compare, soak, cutover,

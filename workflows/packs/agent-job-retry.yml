@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: Apache-2.0
+# A02: an agent job that failed for a reason of the environment (capacity, a stall, a timeout, a
+# backend that went down) is resubmitted once, at a lower priority, through the orchestration
+# controller's queue - never run directly.  The trigger bounds it: only an original submit
+# (resubmits 0) is retried, so a resubmitted job that fails again stops here.  Failures the
+# controller decided on purpose (deadline, cancel, turn cap, budget) are never retried.  On
+# StackStorm this is rule A02, which also coalesces a burst of failures of one agent into one
+# resubmit (workflows/stackstorm.yml, docs/stackstorm.md).
+pack: agent-job-retry
+version: 1
+description: Resubmit an agent job once, at lower priority, when it failed for an environment reason.
+trigger:
+  event: homelabnext.agent.job.failed
+  where:
+    - {ref: $event.data.reason, in: [capacity, stall, timeout, backend-down]}
+    - {ref: $event.data.resubmits, in: [0]}
+actor: profile:workflow-agents
+broker_manifest: workflows/broker.manifest.json
+steps:
+  - id: resubmit
+    kind: action
+    action: agent.job.submit
+    target: svc:orchestration
+    params:
+      agent_key: $event.data.agent_key
+      retry_of_run_id: $event.data.run_id
+      idempotency_key: $event.id
+      priority: 90
+      reason: $event.data.reason
+fixtures:
+  - name: capacity-failure-resubmitted
+    event:
+      specversion: "1.0"
+      id: evt-job-0001
+      source: svc:orchestration
+      type: homelabnext.agent.job.failed
+      time: "2026-01-01T00:00:00Z"
+      subject: run-0001
+      data: {run_id: run-0001, agent_key: triage, state: failed, reason: capacity, attempts: 2, resubmits: 0}
+    expect:
+      calls:
+        - action: agent.job.submit
+          target: svc:orchestration
+          params: {agent_key: triage, retry_of_run_id: run-0001, idempotency_key: evt-job-0001, priority: 90, reason: capacity}
+          result: executed
+  - name: resubmitted-job-not-retried-again
+    event:
+      specversion: "1.0"
+      id: evt-job-0002
+      source: svc:orchestration
+      type: homelabnext.agent.job.failed
+      time: "2026-01-01T00:20:00Z"
+      subject: run-0002
+      data: {run_id: run-0002, agent_key: triage, state: failed, reason: capacity, attempts: 2, resubmits: 1, retry_of_run_id: run-0001}
+    expect:
+      triggered: false
+      calls: []
+  - name: deadline-not-retried
+    event:
+      specversion: "1.0"
+      id: evt-job-0003
+      source: svc:orchestration
+      type: homelabnext.agent.job.failed
+      time: "2026-01-01T00:30:00Z"
+      subject: run-0003
+      data: {run_id: run-0003, agent_key: triage, state: failed, reason: deadline, attempts: 1, resubmits: 0}
+    expect:
+      triggered: false
+      calls: []

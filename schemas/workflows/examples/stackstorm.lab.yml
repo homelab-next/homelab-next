@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+st2_pack: homelabnext
+version: 0.1.0
+deploy: workflows/deploy.yml
+webhook: homelabnext
+bridge_api_key: secret:stackstorm/webhook-key
+broker_socket: /run/hnx-broker/broker.sock
+actor: profile:workflow-agents
+config:
+  site_label: {value: lab}
+  notify_token: {st2kv: homelabnext.notify_token}
+rules:
+  - {pack: proposal-validate, id: A01, mode: shadow, coalesce: {key: $event.data.proposal_id, window_s: 3600}}
+  - pack: agent-job-retry
+    id: A02
+    mode: live
+    coalesce: {key: $event.data.agent_key, window_s: 600}
+    promotion: {shadow_from: "2026-01-01", live_from: "2026-01-08", evidence: docs/parity/a02.md}
+  - {pack: nightly-digest, mode: shadow, schedule: {id: nightly-digest, cron: "5 6 * * *"}}

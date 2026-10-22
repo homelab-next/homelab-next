@@ -1,0 +1,19 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0001",
+  "source": "svc:orchestration",
+  "type": "homelabnext.agent.job.done",
+  "time": "2026-01-01T00:00:00Z",
+  "severity": "medium",
+  "data": {
+    "run_id": "run-0001",
+    "agent_key": "triage",
+    "profile": "profile:triage",
+    "state": "failed",
+    "reason": "capacity",
+    "attempts": 2,
+    "resubmits": 0,
+    "priority": 50,
+    "idempotency_key": "triage-2026-01-01"
+  }
+}

@@ -4,6 +4,8 @@
 # not validate; the deployer loads only these digests from a commit CI passed (docs/workflows.md).
 deploy_id: lab-workflows
 pins:
+  - {pack: agent-job-retry, digest: "sha256:7e0687607fdbf948b18839cb31665db8c5534ff83ab241af2026267cc8959de3"}
   - {pack: case-opened-notify, digest: "sha256:bc1e7964dc4563f4b9e6207ee8c07b3c03a5db4b7bf48abba731272a3605f246"}
   - {pack: new-critical-alert, digest: "sha256:c4b395a871a318eaa882c9411933f6ae8039ca8746ebd170faca037ae491cf3d"}
   - {pack: phishing-report, digest: "sha256:6fba6e2ae69f2182326504d2fb03b710636b463917f278c1c42922da714b185b"}
+  - {pack: proposal-validate, digest: "sha256:928f5f6be42804662f650c1640b47f5a97e4b4dc57db0fc3374645e3b256ae47"}

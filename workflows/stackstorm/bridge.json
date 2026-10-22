@@ -1,0 +1,21 @@
+{
+  "api_key": "secret:stackstorm/webhook-key",
+  "content_type": "application/json",
+  "subscriptions": [
+    {
+      "durable": "st2-agent-job-failed",
+      "rules": [
+        "homelabnext.on_agent_job_retry"
+      ],
+      "subject": "homelabnext.agent.job.failed"
+    },
+    {
+      "durable": "st2-proposal-created",
+      "rules": [
+        "homelabnext.on_proposal_validate"
+      ],
+      "subject": "homelabnext.proposal.created"
+    }
+  ],
+  "webhook": "/api/v1/webhooks/homelabnext"
+}
