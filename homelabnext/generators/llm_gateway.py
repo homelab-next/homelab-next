@@ -27,7 +27,9 @@ Rules enforced at render time (a violation raises :class:`GatewaySpecError`, not
   per request would switch a running agent session between local and cloud models, which is the
   orchestrator's session-level decision, not the gateway's.
 * Every secret is a ``secret:<name>`` reference, delivered in ``HNX_SECRET_<NAME>`` (the same
-  mapping as the registry); a literal value is refused.
+  mapping as the registry); a literal value is refused.  No two client credentials (keys, the
+  master key, the database URL) share a reference or a resulting variable, and none is a
+  backend's upstream key.
 * Every backend a role binds is declared in the spec, and every declared value is one line.
 * A ``local`` backend is local because of where it is, not because the spec says so: it must be a
   registry service whose host sits in a non-cloud zone, or its host must be under the lab's
@@ -385,13 +387,17 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
     if not data_dir.startswith("/"):
         problems.append("bifrost.data_dir must be an absolute path")
 
+    master_key = _secret("master_key", doc.get("master_key"), problems)
+    database_url = _secret("database_url", doc.get("database_url"), problems)
+    problems += _secret_collisions(keys, master_key, database_url, backends)
+
     spec = Spec(
         source=source,
         table=table,
         backends=backends,
         keys=keys,
-        master_key=_secret("master_key", doc.get("master_key"), problems),
-        database_url=_secret("database_url", doc.get("database_url"), problems),
+        master_key=master_key,
+        database_url=database_url,
         local_only=local_only,
         agent_roles=agent_roles,
         bifrost_data_dir=data_dir,
@@ -403,6 +409,42 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
     if problems:
         raise GatewaySpecError(f"{source}: invalid gateway spec", problems)
     return spec
+
+
+def _secret_collisions(
+    keys: list[Key], master_key: str, database_url: str, backends: Mapping[str, Backend]
+) -> list[str]:
+    """Every client credential is its own secret.  Two keys (or a key and the master key or the
+    database URL) sharing a ``secret:`` reference, or two distinct references that map to the same
+    ``HNX_SECRET_*`` variable (``key-private`` and ``key.private``), would make one value both a
+    local-only key and a cloud-allowed one.  A client credential may not be a backend's upstream
+    key either; backends may share an upstream key among themselves."""
+    owners = [(f"key {k.name}", k.secret) for k in keys]
+    owners += [("master_key", master_key), ("database_url", database_url)]
+    owners = [(who, ref) for who, ref in owners if ref != "secret:invalid"]
+    problems: list[str] = []
+    by_ref: dict[str, list[str]] = {}
+    by_env: dict[str, list[tuple[str, str]]] = {}
+    for who, ref in owners:
+        by_ref.setdefault(ref, []).append(who)
+        by_env.setdefault(secret_env_name(ref), []).append((who, ref))
+    for ref, whos in sorted(by_ref.items()):
+        if len(whos) > 1:
+            problems.append(f"{' and '.join(whos)} use the same secret {ref}")
+    for env, uses in sorted(by_env.items()):
+        if len({ref for _, ref in uses}) > 1:
+            named = ", ".join(f"{who} ({ref})" for who, ref in uses)
+            problems.append(f"{named} are all delivered in {env}: one value, several credentials")
+    upstream = {
+        secret_env_name(b.api_key): f"backend svc:{b.name}" for b in backends.values() if b.api_key
+    }
+    for who, ref in owners:
+        env = secret_env_name(ref)
+        if env in upstream:
+            problems.append(
+                f"{who} ({ref}) is delivered in {env}, the upstream key of {upstream[env]}"
+            )
+    return problems
 
 
 # ---------------------------------------------------------------------------- the rule

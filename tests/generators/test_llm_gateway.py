@@ -287,6 +287,62 @@ def test_audit_refuses_a_self_declared_local_backend():
     )
 
 
+# --- one secret, one credential ------------------------------------------------------------------
+
+
+def with_extra_key(ref):
+    return spec_doc()["keys"] + [
+        {"name": "batch", "key": ref, "roles": ["mdl:cloud-reasoner"], "data_tier": "cloud-allowed"}
+    ]
+
+
+@pytest.mark.parametrize(
+    "over, words",
+    [
+        # distinct references, one environment variable: HNX_SECRET_LLM_GATEWAY_KEY_LOCAL_AGENT
+        (
+            {"keys": with_extra_key("secret:llm-gateway/key.local-agent")},
+            "are all delivered in HNX_SECRET_LLM_GATEWAY_KEY_LOCAL_AGENT",
+        ),
+        (
+            {"keys": with_extra_key("secret:llm-gateway/key-local-agent")},
+            "key local-agent and key batch use the same secret secret:llm-gateway/key-local-agent",
+        ),
+        (
+            {"keys": with_extra_key("secret:llm-gateway/master-key")},
+            "key batch and master_key use the same secret",
+        ),
+        (
+            {"keys": with_extra_key("secret:llm-gateway/database_url")},
+            "are all delivered in HNX_SECRET_LLM_GATEWAY_DATABASE_URL",
+        ),
+        (
+            {"keys": with_extra_key("secret:llm-gateway/anthropic-api-key")},
+            "the upstream key of backend svc:cloud",
+        ),
+        ({"database_url": "secret:llm-gateway/master-key"}, "master_key and database_url use"),
+    ],
+)
+def test_a_secret_serves_exactly_one_credential(tmp_path, over, words):
+    with pytest.raises(gw.GatewaySpecError) as ei:
+        gw.render_file(make_spec(tmp_path, **over))
+    assert words in str(ei.value)
+
+
+def test_an_agent_profile_key_may_not_be_reused_by_a_spec_key():
+    doc = yaml.safe_load(LAB_SPEC.read_text())
+    doc["keys"].append(
+        {
+            "name": "cloud-batch",
+            "key": "secret:llm-gateway/key.reader",  # the reader agent's variable
+            "roles": ["mdl:main-reasoner"],
+            "data_tier": "cloud-allowed",
+        }
+    )
+    with pytest.raises(gw.GatewaySpecError, match="HNX_SECRET_LLM_GATEWAY_KEY_READER"):
+        gw.spec_from_dict(doc, base=LAB_SPEC.parent)
+
+
 # --- audit of rendered files (what --check runs on disk) -----------------------------------------
 
 
