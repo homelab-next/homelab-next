@@ -38,7 +38,7 @@ failures; `finished` is the usage record of every outcome.
 | `auto_retry_scheduled` | boolean | as `agent.job.failed` 1.1 |
 | `local_attempts` | integer >= 0 | |
 | `cloud_fallback_used` | boolean | |
-| `backend` | string or null | the logical backend name; no `.`, `:` or `/`, so never a host, address or URL |
+| `backend` | string or null | the logical backend name as the controller emits it (1 to 64 of `A-Za-z0-9._-`; a leading dot or digit is fine); no `:` or `/`, so never a URL or host:port |
 | `model` | string or null | opaque: the usage file's model, else the request's (a vLLM model path is possible); no control characters |
 | `queued_at`, `finished_at` | date-time | |
 | `started_at` | date-time or null | null for a job that never started |

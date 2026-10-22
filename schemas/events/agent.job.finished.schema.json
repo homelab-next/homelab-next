@@ -61,8 +61,8 @@
             },
             "backend": {
               "type": ["string", "null"],
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$(?!\\n)",
-              "description": "the logical name of the backend actually used (the controller's local_backend_used); never a host, an address or a URL (no '.', ':' or '/')"
+              "pattern": "^[A-Za-z0-9._-]{1,64}$(?!\\n)",
+              "description": "the logical name of the backend actually used (the controller's local_backend_used, verbatim: it may start with a dot or a digit); never a URL or host:port (no ':' or '/')"
             },
             "model": {
               "type": ["string", "null"],

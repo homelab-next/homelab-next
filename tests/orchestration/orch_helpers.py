@@ -18,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 EXAMPLES = ROOT / "schemas" / "events" / "examples"
 CONTROLLER_EXAMPLE = "agent.job.finished.controller.json"
+#: a controller backend name as it is emitted (local_backend_used, verbatim): a leading dot
+DOTTED_EXAMPLE = "agent.job.finished.dotted-backend.json"
 #: well after every example job finished (the last at 03:00)
 T0 = parse_iso("2026-01-01T06:00:00Z")
 VIEWER_KEY = "fake-viewer-key-0001"
@@ -43,11 +45,12 @@ NEVER = (
 
 def examples() -> list[dict]:
     """The four triage ``agent.job.finished`` examples (completed, failed, no usage, shadow), in
-    file order; ``controller`` is the controller's own test event, checked on its own."""
+    file order; ``controller`` (the controller's own test event) and ``dotted-backend`` are
+    checked on their own."""
     return [
         json.loads(p.read_text(encoding="utf-8"))
         for p in sorted(EXAMPLES.glob("agent.job.finished.*.json"))
-        if p.name != CONTROLLER_EXAMPLE
+        if p.name not in (CONTROLLER_EXAMPLE, DOTTED_EXAMPLE)
     ]
 
 

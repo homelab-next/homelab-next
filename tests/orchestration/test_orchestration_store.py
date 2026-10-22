@@ -5,9 +5,10 @@ from the controller, purged by age; the rollup's numbers per profile, backend an
 from __future__ import annotations
 
 import copy
+import json
 
 import pytest
-from orch_helpers import CONTROLLER_EXAMPLE, EXAMPLES, T0, body, examples
+from orch_helpers import CONTROLLER_EXAMPLE, DOTTED_EXAMPLE, EXAMPLES, T0, body, examples
 
 from homelabnext.events.envelope import EventError
 from homelabnext.orchestration import ROLLUP_SCHEMA, percentile, rollup
@@ -146,3 +147,21 @@ def test_the_controllers_own_event_is_accepted_as_sent(store):
     prefixed = CONTROLLER_EVENT.replace('"gateway_tag":"run-c1"', '"gateway_tag":"lab/hnx:run-c1"')
     prefixed = prefixed.replace("evt-0db5", "evt-2db5").replace('"run-c1"', '"run-c3"')
     assert store.consume(prefixed).status == "processed"
+
+
+@pytest.mark.parametrize("backend", [".lab-gateway", "lab9", "node.7_gw-a"])
+def test_a_backend_name_is_stored_as_the_controller_emits_it(store, backend):
+    """Regression: the controller emits local_backend_used verbatim, and real names start with a
+    dot or digits; a pattern that refused them sent every such record to the dead-letter stream.
+    A ':' or '/' (a host:port or a URL) is still refused."""
+    ev = json.loads((EXAMPLES / DOTTED_EXAMPLE).read_text())
+    assert store.consume(body(ev)).status == "processed"
+    ev = copy.deepcopy(ev) | {"id": f"evt-b-{len(backend)}"}
+    ev["data"].update(run_id=f"run-b-{len(backend)}", backend=backend)
+    assert store.consume(body(ev)).status == "processed"
+    assert store.job(f"run-b-{len(backend)}")["backend"] == backend
+    for bad in ("gw.example.com:8000", "https://gw.example.com/v1", "a" * 65, ""):
+        ev = copy.deepcopy(ev) | {"id": "evt-bad"}
+        ev["data"].update(run_id="run-bad", backend=bad)
+        with pytest.raises(EventError):
+            store.consume(body(ev))
