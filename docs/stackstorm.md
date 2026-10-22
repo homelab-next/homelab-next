@@ -125,6 +125,17 @@ inside one run stay the controller's (`max_attempts`). Failures the controller d
 - `st2-bound`: a pack that reacts to `agent.job.failed` by dispatching pins `$event.data.resubmits` to
   integers below 3, and carries `retry_of_run_id: $event.data.run_id`.
 
+## Redeliveries
+
+A StackStorm webhook starts one run for every POST and ignores an `Idempotency-Key` header, and the
+event bridge delivers at least once (a POST that timed out after StackStorm took it is sent
+again). So `admit` drops an event id it has already taken for the same pack: it remembers the id
+in the datastore (`homelabnext.seen.<hash of pack and id>`) for a day, or for the coalesce window
+when that is longer, and a second delivery ends its run `duplicate` before any step runs. A
+CronTimer that fires twice for the same time builds the same event id, so it is one run too. The
+bound that holds when two deliveries race inside the same instant is the same as for coalescing
+(below): the controller's idempotency key.
+
 ## Coalescing bursts
 
 `coalesce: {key, window_s}` on a rule. The first event of a key opens a window. That is a datastore

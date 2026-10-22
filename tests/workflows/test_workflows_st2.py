@@ -563,6 +563,36 @@ def test_a02_coalesces_a_burst_of_failures_of_one_agent():
     assert got["reason"] == "not-triggered"  # before the datastore: it opens no window
 
 
+def test_a_redelivered_event_is_admitted_once_without_a_coalesce_window():
+    """A StackStorm webhook starts one run per POST (it ignores Idempotency-Key) and the bridge
+    delivers at least once, so admit itself drops an event id it already took."""
+    a02 = pack("agent-job-retry")
+    kv = KV()
+    got = [
+        st2_runtime.admit_event(pack=a02["pack"], trigger=a02["trigger"], event=_failure(1), kv=kv)
+        for _ in range(3)
+    ]
+    assert [g["reason"] for g in got] == ["admitted", "duplicate", "duplicate"]
+    other = st2_runtime.admit_event(
+        pack="another-pack", trigger=a02["trigger"], event=_failure(1), kv=kv
+    )
+    assert other["reason"] == "admitted"  # remembered per pack
+    kv.now += st2_runtime.DEDUPE_WINDOW_S
+    again = st2_runtime.admit_event(
+        pack=a02["pack"], trigger=a02["trigger"], event=_failure(1), kv=kv
+    )
+    assert again["reason"] == "admitted"  # forgotten after the window
+    # a CronTimer that fires twice for the same time is one event, so one run
+    firing = {"id": "nightly-digest", "fired_at": "2026-01-15 06:05:00"}
+    twice = [
+        st2_runtime.admit_event(
+            pack="nightly-digest", trigger=SCHED_PACK["trigger"], schedule=firing, kv=kv
+        )["reason"]
+        for _ in range(2)
+    ]
+    assert twice == ["admitted", "duplicate"]
+
+
 def test_every_event_triggered_pack_pins_its_producer():
     rules = rules_of()
     a01 = rules["homelabnext/rules/on_proposal_validate.yaml"]
@@ -758,7 +788,8 @@ def test_the_rendered_shims_delegate_to_the_runtime(monkeypatch):
             return self.kv.get(name)
 
         def set_value(self, name, value, ttl=None, local=True):
-            assert local is False and ttl == 600
+            assert local is False
+            assert ttl == (600 if name.startswith("homelabnext.coalesce.") else 86400)
             self.kv[name] = value
 
     a02 = pack("agent-job-retry")
@@ -768,8 +799,13 @@ def test_the_rendered_shims_delegate_to_the_runtime(monkeypatch):
     assert co["window_s"] == 600
     enc = st2_runtime.encode(ev)
     first = admit.run(pack=a02["pack"], event=enc)  # the committed pack's pinned/ directory
-    second = admit.run(pack=a02["pack"], event=enc)
-    assert (first["reason"], second["reason"]) == ("admitted", "coalesced")
+    second = admit.run(pack=a02["pack"], event=enc)  # a redelivery: the same id
+    third = admit.run(pack=a02["pack"], event=st2_runtime.encode(ev | {"id": "evt-other"}))
+    assert (first["reason"], second["reason"], third["reason"]) == (
+        "admitted",
+        "duplicate",
+        "coalesced",
+    )
     step = _load_shim("step", monkeypatch)(config={"broker_socket": "/nonexistent"})
     out = step.run(pack=a02["pack"], step="resubmit", event=first["event"], state="")
     assert calls_of(out)[0]["result"] == "shadow"

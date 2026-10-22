@@ -28,6 +28,9 @@ may run the pack's actions at all is StackStorm RBAC's (``docs/stackstorm.md``).
   behind the rule's criteria, and the one place the trigger semantics live.  The trigger of every
   event-triggered pack pins ``$event.source`` (``st2-source``), so an event that names another
   producer is ``not-triggered``;
+* **drops a redelivery**: an event id this pack already took (within :data:`DEDUPE_WINDOW_S`,
+  ``homelabnext.seen.<hash of pack and id>``) ends the run ``duplicate``.  A StackStorm webhook
+  starts one run per POST and ignores ``Idempotency-Key``; the bridge is at-least-once;
 * **coalesces**: with ``coalesce = {key, window_s}`` the first event of a key opens a window in the
   StackStorm datastore (``homelabnext.coalesce.<hash of pack, source and key>``, TTL
   ``window_s``); every later event of that key inside the window ends the run ``coalesced`` before
@@ -76,6 +79,10 @@ ST2_STEP_KINDS = ("enrich", "action")
 MODES = ("shadow", "live")
 SHADOW_REASON = "st2-shadow"
 COALESCE_PREFIX = "homelabnext.coalesce."
+SEEN_PREFIX = "homelabnext.seen."
+#: how long an admitted event id is remembered (or the coalesce window, when that is longer): a
+#: StackStorm webhook dedupes nothing, so a redelivery from the bridge is dropped here
+DEDUPE_WINDOW_S = 86400
 _PACK_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 
 
@@ -178,6 +185,11 @@ def schedule_event(schedule: str, fired_at: str, cron: str | None = None) -> dic
     )
 
 
+def seen_name(pack: str, event_id: Any) -> str:
+    h = hashlib.sha256(f"{pack}\0{event_id!r}".encode()).hexdigest()[:32]
+    return SEEN_PREFIX + h
+
+
 def coalesce_name(pack: str, source: Any, value: Any) -> str:
     h = hashlib.sha256(f"{pack}\0{source!r}\0{value!r}".encode()).hexdigest()[:32]
     return COALESCE_PREFIX + h
@@ -231,7 +243,9 @@ def admit_event(
     kv: KeyValue | None = None,
 ) -> dict[str, Any]:
     """``{admitted, reason, event, ...}``; ``reason``: admitted | invalid-event | not-triggered |
-    coalesced.  Only an admitted run goes on to its steps."""
+    duplicate | coalesced.  Only an admitted run goes on to its steps.  With the datastore
+    (``kv``, always given by the rendered ``admit`` action) an event id already admitted for this
+    pack is a ``duplicate``: a webhook does not dedupe, and the bridge delivers at least once."""
     if event is None:
         if not schedule:
             return {"admitted": False, "reason": "invalid-event", "problems": ["no event"]}
@@ -247,6 +261,14 @@ def admit_event(
     if not triggered({"trigger": trigger}, ev):
         return {"admitted": False, "reason": "not-triggered", "event_id": ev.get("id")}
     out: dict[str, Any] = {"admitted": True, "reason": "admitted", "event": ev}
+    if kv is not None:
+        # StackStorm starts one run per webhook POST, whatever its Idempotency-Key: the event id
+        # is the dedupe key, remembered for a day (or the coalesce window, when longer)
+        seen = seen_name(pack, ev.get("id"))
+        if kv.get(seen) is not None:
+            return {"admitted": False, "reason": "duplicate", "event_id": ev.get("id")}
+        window = int(coalesce["window_s"]) if coalesce else 0
+        kv.set(seen, str(ev.get("id")), max(DEDUPE_WINDOW_S, window))
     if coalesce:
         if kv is None:
             raise ValueError("coalesce needs the StackStorm datastore")
