@@ -704,13 +704,29 @@ PRIVATE_SUFFIXES = (
     "localhost", "local", "lan", "home", "internal", "intranet", "corp", "private", "localdomain",
     "home.arpa", "arpa", "test", "invalid", "example", "onion", "lab",
 )  # fmt: skip
+#: a host label that is a number: decimal, octal (a leading 0) or hex (``0x``, digits optional).
+#: A host whose last label is one is an IPv4 address to a WHATWG URL parser ("ends in a
+#: number") and to ``inet_aton``/``getaddrinfo`` (``0x7f.0x1`` and ``2130706433`` are the
+#: loopback address; a hex last label after three decimal ones is the address they spell), never
+#: a DNS name
+_NUMBER_LABEL = re.compile(r"0x[0-9a-f]*|[0-9]+")
+
+
+def numeric_host(host: str) -> bool:
+    """``host`` is an IPv4 address in some notation (its last label, or every label, is a
+    number), not a name a review can attest."""
+    labels = host.lower().removesuffix(".").split(".")
+    return bool(_NUMBER_LABEL.fullmatch(labels[-1])) or all(
+        _NUMBER_LABEL.fullmatch(x) for x in labels
+    )
 
 
 def remote_problems(rec: Mapping[str, Any], where: str, registry: Any = None) -> list[str]:
     """A third party's hosted server (``transport.type: remote``): a ``hosted`` origin and
-    runtime, egress to the internet, and an https URL whose host is a public DNS name (not a
-    private or test suffix, and with a registry, not one of the lab's hosts or its domain).  The
-    URL's shape (https, no userinfo, query or IP literal) is the schema's; its credentials can
+    runtime, egress to the internet, and an https URL whose host is a public DNS name (not an
+    IPv4 address in any notation, :func:`numeric_host`; not a private or test suffix; with a
+    registry, not one of the lab's hosts or its domain).  The URL's shape (https, a lower-case
+    host, no userinfo, query or fragment) is the schema's; its credentials can
     only be headers' ``secret:`` names (headers are the only place a remote record has)."""
     t, origin = rec.get("transport") or {}, rec.get("origin") or {}
     remote = t.get("type") == "remote"
@@ -731,7 +747,7 @@ def remote_problems(rec: Mapping[str, Any], where: str, registry: Any = None) ->
     if (
         not host
         or "." not in host
-        or host.rsplit(".", 1)[-1].isdigit()  # an IP literal: no name a review can attest
+        or numeric_host(host)  # an IP literal in any notation: no name a review can attest
         or any(host == s or host.endswith("." + s) for s in PRIVATE_SUFFIXES)
     ):
         out.append(

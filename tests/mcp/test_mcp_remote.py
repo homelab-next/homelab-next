@@ -77,6 +77,29 @@ def test_a_hosted_server_is_https_public_internet_and_secret_headers_only(change
     assert any(phrase in p for p in problems), problems
 
 
+@pytest.mark.parametrize(
+    "host",
+    [
+        "0x7f.0x1",  # the loopback address to a WHATWG URL parser and to getaddrinfo
+        "198.51.100.0x1",  # no-raw-endpoint: allow a hex last label the IPv4 check refuses
+        "192.0.2.0xa",  # no-raw-endpoint: allow a hex last label the IPv4 check refuses
+        "0177.0.0.1",  # no-raw-endpoint: allow an octal address the IPv4 check refuses
+        "2130706433",  # one decimal number
+        "a1.0x0",  # a name that ends in a number is an address
+        "0x7f.0x0.0x0.0x1",
+    ],
+)
+def test_a_remote_url_never_names_an_ipv4_address_in_any_notation(host):
+    problems = _problems(_edit(transport__url=f"https://{host}/mcp"), REGISTRY)
+    assert any("names a public host" in p or "does not match" in p for p in problems), problems
+    assert servers.numeric_host(host)
+
+
+@pytest.mark.parametrize("host", ["mcp.tracker.example.com", "x0a.example.com", "0x7f.example.com"])
+def test_a_name_with_a_number_like_label_is_still_a_name(host):
+    assert not servers.numeric_host(host)
+
+
 def test_a_lab_host_is_reached_by_registry_name_not_a_remote_url():
     host = sorted(REGISTRY.hosts)[0]
     rec = _edit(transport__url=f"https://{host}.tools.example.com/mcp")
