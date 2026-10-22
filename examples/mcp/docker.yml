@@ -4,7 +4,8 @@
 id: docker
 description: Starts and stops containers on the agent's host.
 owner: platform-team
-status: active
+status: retired
+reason: the generated launch mounts nothing, so the container never reaches the Docker socket it manages; a record has no mount field by design
 origin:
   kind: image
   image: registry.example/mcp/docker:0.6.3
@@ -19,6 +20,6 @@ tools:
 - {name: stop_container, classes: [exec], approval: true}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:495cfe29e1ed'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:495cfe29e1ed'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:495cfe29e1ed'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:1023e8860cc7'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:1023e8860cc7'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:1023e8860cc7'}
