@@ -40,6 +40,13 @@ digest, because GitHub release assets were not reachable. Both are versions at l
 | offline start | starts | starts | **fatal** with default settings (datasheet download); starts with `file://` datasheets |
 | release cadence | 14 stable releases in 14 days | | 5 releases in 19 days |
 
+Bifrost's admin API was checked separately against the same 2.2.6 binary. With no
+`auth_config`, `/api` is locked behind a setup token rather than open, and `config.db` keeps API
+and UI edits over the file (the default `source_of_truth: split`). The generated config now
+enables `governance.auth_config` (password by `env.` reference: `/api` answers 401 without it and
+200 with it, while virtual keys still serve `/v1`) and sets `source_of_truth: config.json` (a key
+added and a key deactivated through the API were both reverted to the file at the next start).
+
 Two documentation and behaviour findings on Bifrost came up during the run. Its governance docs
 write routing-rule CEL as `request.model`, but the engine only compiles `model`. And the npm
 launcher downloads the binary without verifying a checksum.

@@ -48,6 +48,12 @@ It writes:
   (`hnx-<svc>`). Role → model id mappings are key `aliases`. The file also holds virtual keys
   (`env.HNX_SECRET_*`), per-role `model_configs` with rate limits and budgets, and routing rules
   (`model == '<role>'`) that list bindings in priority order and then the fallback chain.
+  The admin API and UI need a login (`governance.auth_config`: user `admin`, or
+  `bifrost.admin_user`, and the password from `bifrost.admin_password`, default
+  `secret:llm-gateway/bifrost-admin-password`), and `source_of_truth: config.json` makes the file
+  authoritative: at every start Bifrost overwrites `config.db` from it and prunes rows it does not
+  declare, so a key or limit changed through the API does not survive a restart. `--check` fails
+  if either is missing.
 - **`bifrost/pricing.json`, `bifrost/model-parameters.json`**. These are empty local datasheets.
   At its default settings Bifrost will not start if it cannot download them. Because the datasheets are
   empty, Bifrost prices every call at zero: the role budgets are rendered but never trigger, and
@@ -180,6 +186,6 @@ recommended:
   a GPU-backed engine.
 - The model-serving stack behind the gateway (one model store, one serving engine). This is
   context for later work, not built here.
-- Admin UI and SSO for either product.
+- SSO for either product's admin UI (Bifrost's gets a password login, LiteLLM's the master key).
 - Postgres high availability.
 - Spend reporting.

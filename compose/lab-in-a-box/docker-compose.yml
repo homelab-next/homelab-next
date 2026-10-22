@@ -541,7 +541,9 @@ services:
         condition: service_healthy
     mem_limit: 64m
 
-  # the alternate: one static Go binary; keys and limits are in its config file (sqlite state).
+  # the alternate: one static Go binary; keys and limits are in its config file, which is
+  # authoritative (source_of_truth: config.json - API/UI edits to config.db do not survive a
+  # restart).  The admin API and UI log in as admin with LAB_GATEWAY_BIFROST_ADMIN_PASSWORD.
   # Key values must start with sk-bf- (anything else is silently replaced by a generated key).
   llm-gateway-bifrost:
     <<: [*restart, *hardened]
@@ -552,6 +554,7 @@ services:
       HNX_SECRET_LLM_GATEWAY_KEY_READER: ${LAB_GATEWAY_KEY_READER:?see .env.example}
       HNX_SECRET_LLM_GATEWAY_KEY_RESPONDER: ${LAB_GATEWAY_KEY_RESPONDER:?see .env.example}
       HNX_SECRET_LLM_GATEWAY_KEY_CONFORMANCE_THROTTLE: ${LAB_GATEWAY_KEY_THROTTLE:?see .env.example}
+      HNX_SECRET_LLM_GATEWAY_BIFROST_ADMIN_PASSWORD: ${LAB_GATEWAY_BIFROST_ADMIN_PASSWORD:?see .env.example}
     volumes:
       - llm-gateway-bifrost-data:/app/data
       - ./config/llm-gateway/bifrost/config.json:/app/data/config.json:ro

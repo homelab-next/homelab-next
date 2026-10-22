@@ -485,6 +485,31 @@ def test_audit_catches_cloud_routes_and_keys_in_bifrost():
     assert "local-only key agent-reader may call non-local anthropic" in problems
 
 
+def test_bifrost_admin_api_needs_a_login_and_the_file_is_authoritative():
+    spec, files = lab_files()
+    doc = json.loads(files["bifrost/config.json"])
+    assert doc["source_of_truth"] == "config.json"
+    assert doc["governance"]["auth_config"] == {
+        "admin_username": "admin",
+        "admin_password": "env.HNX_SECRET_LLM_GATEWAY_BIFROST_ADMIN_PASSWORD",
+        "is_enabled": True,
+    }
+    del doc["governance"]["auth_config"]
+    doc["source_of_truth"] = "split"
+    files["bifrost/config.json"] = json.dumps(doc)
+    problems = "\n".join(gw.audit(files, spec))
+    assert "the admin API has no login" in problems
+    assert 'source_of_truth is not "config.json"' in problems
+
+
+def test_bifrost_admin_password_is_a_secret_of_its_own(tmp_path):
+    with pytest.raises(gw.GatewaySpecError, match="must be a secret:"):
+        gw.render_file(make_spec(tmp_path, bifrost={"admin_password": "fake-literal"}))
+    shared = {"admin_password": "secret:llm-gateway/master-key"}
+    with pytest.raises(gw.GatewaySpecError, match=r"master_key and bifrost\.admin_password use"):
+        gw.render_file(make_spec(tmp_path, bifrost=shared))
+
+
 def test_check_fails_on_a_tampered_output_dir_and_on_drift(tmp_path, capsys):
     out = tmp_path / "out"
     shutil.copytree(LAB, out)

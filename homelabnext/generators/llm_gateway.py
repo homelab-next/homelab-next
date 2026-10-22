@@ -138,6 +138,9 @@ class Spec:
     local_only: dict[str, str] = field(default_factory=dict)  # role -> why
     agent_roles: dict[str, str] = field(default_factory=dict)  # role -> first profile using it
     bifrost_data_dir: str = "/app/data"
+    #: Bifrost's admin API and UI login (governance.auth_config); the password is a secret
+    bifrost_admin_user: str = "admin"
+    bifrost_admin_password: str = "secret:llm-gateway/bifrost-admin-password"
     #: the lab's internal service domain (``<svc_label>.<domain>``): a local host must be under it
     service_domain: str = "svc.example.internal"
     #: hosts that resolved through a registry service in a non-cloud zone
@@ -444,13 +447,26 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
             problems.append(f"mdl:{rn} is used but not in the role table")
 
     bif = doc.get("bifrost") or {}
-    data_dir = str(bif.get("data_dir", "/app/data")) if isinstance(bif, Mapping) else "/app/data"
+    if not isinstance(bif, Mapping) or set(bif) - {"data_dir", "admin_user", "admin_password"}:
+        problems.append("bifrost takes data_dir, admin_user, admin_password")
+        bif = {}
+    data_dir = str(bif.get("data_dir", "/app/data"))
     if not data_dir.startswith("/"):
         problems.append("bifrost.data_dir must be an absolute path")
+    admin_user = str(bif.get("admin_user", "admin"))
+    if not SLUG_RE.match(admin_user):
+        problems.append("bifrost.admin_user must be a slug (the admin password is the secret)")
+    admin_password = _secret(
+        "bifrost.admin_password",
+        bif.get("admin_password", "secret:llm-gateway/bifrost-admin-password"),
+        problems,
+    )
 
     master_key = _secret("master_key", doc.get("master_key"), problems)
     database_url = _secret("database_url", doc.get("database_url"), problems)
-    problems += _secret_collisions(keys, master_key, database_url, backends)
+    problems += _secret_collisions(
+        keys, master_key, database_url, backends, {"bifrost.admin_password": admin_password}
+    )
 
     spec = Spec(
         source=source,
@@ -462,6 +478,8 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
         local_only=local_only,
         agent_roles=agent_roles,
         bifrost_data_dir=data_dir,
+        bifrost_admin_user=admin_user,
+        bifrost_admin_password=admin_password,
         service_domain=service_domain,
         registry_hosts=frozenset(registry_hosts),
     )
@@ -504,7 +522,11 @@ def _provider_collisions(table: RoleTable, backends: Mapping[str, Backend]) -> l
 
 
 def _secret_collisions(
-    keys: list[Key], master_key: str, database_url: str, backends: Mapping[str, Backend]
+    keys: list[Key],
+    master_key: str,
+    database_url: str,
+    backends: Mapping[str, Backend],
+    others: Mapping[str, str] | None = None,
 ) -> list[str]:
     """Every client credential is its own secret.  Two keys (or a key and the master key or the
     database URL) sharing a ``secret:`` reference, or two distinct references that map to the same
@@ -513,6 +535,7 @@ def _secret_collisions(
     key either; backends may share an upstream key among themselves."""
     owners = [(f"key {k.name}", k.secret) for k in keys]
     owners += [("master_key", master_key), ("database_url", database_url)]
+    owners += list((others or {}).items())
     owners = [(who, ref) for who, ref in owners if ref != "secret:invalid"]
     problems: list[str] = []
     by_ref: dict[str, list[str]] = {}
@@ -851,8 +874,20 @@ def render_bifrost(spec: Spec) -> str:
     governance["virtual_keys"] = vks
     if rules:
         governance["routing_rules"] = rules
+    # The admin API and UI need a login (without one, v2.2.6 locks /api behind a setup token and
+    # an operator would be tempted to open it); the password is an env reference, hashed by
+    # Bifrost on first start.
+    governance["auth_config"] = {
+        "admin_username": spec.bifrost_admin_user,
+        "admin_password": _env_ref_bifrost(spec.bifrost_admin_password),
+        "is_enabled": True,
+    }
     doc = {
         "$schema": "https://www.getbifrost.ai/schema",
+        # the file is authoritative: every present section overwrites config.db at startup and
+        # prunes rows the file does not declare, so state edited through the API or UI cannot
+        # outlive a restart (the default "split" mode keeps such edits until the file changes)
+        "source_of_truth": "config.json",
         "client": {
             "enforce_auth_on_inference": True,
             "drop_excess_requests": False,
@@ -1023,6 +1058,19 @@ def _audit_bifrost(text: str, hosts: set[str], strict: Mapping[str, str], spec: 
                 problems.append(
                     f"routing rule {rule.get('id')} sends {', '.join(sorted(hit))} to non-local {t}"
                 )
+    auth = (doc.get("governance") or {}).get("auth_config") or doc.get("auth_config") or {}
+    if auth.get("is_enabled") is not True or not str(auth.get("admin_password", "")).startswith(
+        "env."
+    ):
+        problems.append(
+            "the admin API has no login: governance.auth_config must be enabled with an env. "
+            "password reference"
+        )
+    if doc.get("source_of_truth") != "config.json":
+        problems.append(
+            'source_of_truth is not "config.json": state edited through the admin API would '
+            "survive a restart"
+        )
     strict_keys = {k.name for k in spec.keys if k.data_tier == "local-only"}
     for vk in (doc.get("governance") or {}).get("virtual_keys") or []:
         if vk.get("name") not in strict_keys:

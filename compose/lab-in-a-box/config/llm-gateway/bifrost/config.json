@@ -1,5 +1,6 @@
 {
   "$schema": "https://www.getbifrost.ai/schema",
+  "source_of_truth": "config.json",
   "client": {
     "enforce_auth_on_inference": true,
     "drop_excess_requests": false,
@@ -212,6 +213,11 @@
           "hnx-inference-small/fast-classifier"
         ]
       }
-    ]
+    ],
+    "auth_config": {
+      "admin_username": "admin",
+      "admin_password": "env.HNX_SECRET_LLM_GATEWAY_BIFROST_ADMIN_PASSWORD",
+      "is_enabled": true
+    }
   }
 }
