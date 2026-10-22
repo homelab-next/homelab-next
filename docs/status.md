@@ -223,7 +223,7 @@ runtime's, which beats the default) or `working`.
 `store` (SQLite), `retention_days`, `detail` (keep the private tier at all),
 `redact_personal_data`, `caps` (per-field characters), `stuck_after_s` (`default`, `runtimes`,
 `models`), `private` (the front door), `ingest` (the senders) and `approvals` (the broker
-Approvals page; agents 1.1, `approvals.csrf_key` 1.2). Schema:
+Approvals page; agents 1.1, `approvals.csrf_key` 1.2, `approvals.public_origin` 1.3). Schema:
 `schemas/status/agents.schema.json`. Secrets are secret-store references (`secret:a/b`), never
 values; at run time `secret:a/b-token` is read from `HNX_SECRET_A_B_TOKEN` (or the file `a/b-token` under
 `--secrets-dir`). A reference that does not resolve **disables** what it guards (the private
@@ -534,8 +534,17 @@ approvals:
   issuer: sso                           # the broker manifest's approval_relays[].issuer for the hub
   approver_group: hub-approvers         # required to decide; must differ from viewer_group
   csrf_key: "secret:status/approvals-csrf-secret"   # the form tokens' HMAC key (agents 1.2)
+  public_origin: https://status.lab.example   # the page's origin in browsers (agents 1.3)
   # timeout_s: 10
 ```
+
+**The public origin.** `public_origin` is the page's origin as people's browsers see it
+(`scheme://host[:port]`, no path). A decision's `Origin` (or, without one, its `Referer`) must
+equal it in scheme, host and port: another port or scheme on the same hostname is another origin
+(another service on the hub's host, or a plain-`http` page behind the TLS edge) and is refused.
+Without it the hub compares the `Origin` with the request's `Host` header, host and port (a `Host`
+without a port matches the scheme's default port) but cannot check the scheme, since the edge
+terminates TLS; it warns once at startup (`approvals.public_origin is not set: ...`).
 
 **The form-token key.** `csrf_key` names, in the secret store, the HMAC key the forms' CSRF tokens
 are signed with (delivered like every reference: `HNX_SECRET_STATUS_APPROVALS_CSRF_SECRET`, or the file
@@ -564,8 +573,9 @@ own approver rules (allowlist, no self-approval, no agent approver).
 
 **The hub's only write.** `POST /approvals/decide` (every other `POST` is still `405`) answers, in
 order: `403` the front door or the approver group fails; `403` a foreign `Host`/`Origin` (the
-console's DNS-rebinding guard), no `Origin` and no same-host `Referer`, or a `Sec-Fetch-Site` other
-than `same-origin`; `415` not `application/x-www-form-urlencoded`; `411` no length; `413` over
+console's DNS-rebinding guard), an `Origin` (else `Referer`) that is not `public_origin` (scheme,
+host and port; without it, not the `Host`'s host and port), or a `Sec-Fetch-Site` other than
+`same-origin`; `415` not `application/x-www-form-urlencoded`; `411` no length; `413` over
 8 KiB; `400` a field other than `request_id`, `digest`, `decision` (approve, deny), `token` and
 `note` (at most 2000 characters), a repeated or malformed one; `403` a CSRF token that is not the
 HMAC (under the `csrf_key` above, else a key drawn when the hub starts) of its issue time, the

@@ -112,13 +112,16 @@ MIN_CSRF_KEY_CHARS = 32
 class ApprovalsSettings:
     """The Approvals page (:mod:`homelabnext.status.approvals`): the broker socket the hub
     relays through, the SSO issuer it vouches for, the group allowed to decide and the HMAC key
-    of its form tokens (``csrf_key``, from the secret store; None: a per-process key)."""
+    of its form tokens (``csrf_key``, from the secret store; None: a per-process key) and the
+    page's public origin (``public_origin``, ``scheme://host[:port]``, what a decision's
+    ``Origin`` must equal; None: compared with the request's ``Host``)."""
 
     socket: Path
     issuer: str
     approver_group: str
     timeout_s: float = 10.0
     csrf_key: bytes | None = field(default=None, repr=False)
+    public_origin: str | None = None
 
 
 @dataclass
@@ -288,7 +291,13 @@ def build_config(
                 approver_group=appr["approver_group"],
                 timeout_s=float(appr.get("timeout_s", 10)),
                 csrf_key=_csrf_key(doc, registry, secrets, cfg.warnings),
+                public_origin=appr.get("public_origin"),
             )
+            if cfg.approvals.public_origin is None:
+                cfg.warnings.append(
+                    "approvals.public_origin is not set: a decision's Origin is compared with its"
+                    " Host header (host and port; not the scheme)"
+                )
     ing = doc.get("ingest")
     if ing:
         refs = service_secret_refs(registry.services)

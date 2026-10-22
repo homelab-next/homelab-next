@@ -6,6 +6,7 @@ through a real ``hnx broker serve`` socket."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import shutil
@@ -24,7 +25,7 @@ from status_helpers import ROOT, T0, VIEWS
 from homelabnext.status import build_status, load_views
 from homelabnext.status.agents import AgentsConfigError, load_config
 from homelabnext.status.agents.config import ApprovalsSettings
-from homelabnext.status.approvals import TOKEN_TTL_S, ApprovalsSite
+from homelabnext.status.approvals import TOKEN_TTL_S, ApprovalsSite, same_origin
 from homelabnext.status.model import iso
 from homelabnext.status.serve import LOOPBACK, make_server
 
@@ -230,6 +231,65 @@ def test_cross_origin_posts_are_refused(served, broker, tmp_path, origin, extra,
     status, _, body = _post(base, _form(site), {**APPROVER, **extra}, origin=origin)
     assert status == 403 and reason in body.decode() and broker.calls == []
     assert _log(tmp_path)[-1]["reason"] == reason
+
+
+def test_another_port_on_the_same_host_is_another_origin(served, broker, tmp_path):
+    """The check compared hostnames only, so a page on another port of the hub's host (another
+    service, another origin) could post a decision."""
+    base, site = served()
+    port = int(base.rsplit(":", 1)[1])
+    other = f"http://{LOOPBACK}:{port + 1 if port < 65535 else port - 1}"
+    for headers, origin in (
+        (APPROVER, other),
+        ({**APPROVER, "Referer": other + "/approvals"}, None),
+    ):
+        status, _, body = _post(base, _form(site), headers, origin=origin)
+        assert status == 403 and "foreign Origin" in body.decode(), (origin, headers)
+    assert broker.calls == [] and _log(tmp_path)[-1]["reason"] == "foreign Origin"
+
+
+def test_a_configured_public_origin_is_compared_in_full(served, broker):
+    """With ``public_origin`` the scheme counts too: behind a TLS-terminating edge, an ``http``
+    page on the hub's name is not the ``https`` page the person uses."""
+    base, site = served()
+    hostport = base.removeprefix("http://")
+    public = f"https://{hostport}"  # what browsers see through the edge
+    site.settings = dataclasses.replace(SETTINGS, public_origin=public)
+    for origin in (base, f"{public}0", f"https://{LOOPBACK}"):
+        status, _, body = _post(base, _form(site), origin=origin)
+        assert status == 403 and "foreign Origin" in body.decode(), origin
+    assert broker.calls == []
+    assert _post(base, _form(site), origin=public)[0] == 200
+    assert broker.calls == [("approve", RID, "sso", "operator", None)]
+
+
+HUB = "hub.lab.example"
+
+
+@pytest.mark.parametrize(
+    "host, origin, public, ok",
+    [
+        ("", "https://", None, True),
+        ("", "http://", None, True),  # no public origin: the scheme cannot be checked
+        (":8443", "https://:8443", None, True),
+        ("", "https://:8443", None, False),  # another port is another origin
+        (":8443", "https://", None, False),
+        ("", "https://", "https://", True),
+        ("", "https://:443", "https://", True),  # the default port, spelled out
+        ("", "http://", "https://", False),  # with a public origin, the scheme counts
+        ("", "https://:444", "https://", False),
+        ("", "https://:99999", None, False),  # not a port
+    ],
+)
+def test_same_origin_compares_scheme_host_and_port(host, origin, public, ok):
+    def url(spec):  # "https://:8443" -> the hub's name with that scheme and port
+        scheme, _, port = spec.partition("//")
+        return f"{scheme}//{HUB}{port}"
+
+    headers = {"Host": HUB + host, "Origin": url(origin)}
+    assert same_origin(headers, url(public) if public else None)[0] is ok
+    referer = {"Host": HUB + host, "Referer": url(origin) + "/approvals?x"}
+    assert same_origin(referer, url(public) if public else None)[0] is ok
 
 
 def test_a_same_origin_referer_is_enough_without_origin(served, broker):
@@ -493,8 +553,14 @@ def test_config(tmp_path, registry):
         issuer="sso",
         approver_group="hub-approvers",
         csrf_key=CSRF_KEY.encode(),
+        public_origin="https://status.lab.example",
     )
     assert CSRF_KEY not in repr(cfg.approvals) and cfg.warnings == []
+    loose = _cfg(tmp_path, registry, public_origin=None)
+    assert loose.approvals.public_origin is None
+    assert any("public_origin is not set" in w for w in loose.warnings)
+    with pytest.raises(AgentsConfigError, match="public_origin"):
+        _cfg(tmp_path, registry, public_origin="https://status.lab.example/approvals")
     with pytest.raises(AgentsConfigError, match="needs private"):
         _cfg(tmp_path, registry, drop_private=True)
     with pytest.raises(AgentsConfigError, match="must differ"):
@@ -521,7 +587,7 @@ def _two_sites(settings, broker, tmp_path, clock, other=None):
 def test_a_token_from_one_instance_verifies_on_another_with_the_same_key(
     served, broker, tmp_path, clock, registry
 ):
-    settings = _settings(tmp_path, registry)
+    settings = _settings(tmp_path, registry, public_origin=None)  # the test server's own origin
     a, b = _two_sites(settings, broker, tmp_path, clock)
     assert a.persistent_key and b.persistent_key
     token = a.token(RID, DIGEST, "operator")
@@ -569,7 +635,7 @@ def test_the_csrf_key_is_its_own_secret(tmp_path, registry):
 def test_without_a_csrf_key_a_per_process_key_still_works_within_the_process(
     served, broker, tmp_path, clock, registry, kw, warning
 ):
-    cfg = _cfg(tmp_path, registry, **kw)
+    cfg = _cfg(tmp_path, registry, public_origin=None, **kw)
     assert cfg.approvals is not None and cfg.approvals.csrf_key is None
     assert any(w.startswith(warning) and "per-process key" in w for w in cfg.warnings)
     assert not any(FAKE_SECRET in w or CSRF_KEY in w for w in cfg.warnings)

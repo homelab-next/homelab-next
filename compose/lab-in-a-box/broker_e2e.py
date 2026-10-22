@@ -460,7 +460,12 @@ def hub_files(directory: Path, *, edge_address: str, socket_path: str) -> dict[s
         "detail": False,
         "private": {"service": "status-hub", "viewer_group": VIEWER_GROUP,
                     "access_log": "access.jsonl"},
-        "approvals": {"socket": socket_path, "issuer": "sso", "approver_group": APPROVER_GROUP},
+        "approvals": {
+            "socket": socket_path,
+            "issuer": "sso",
+            "approver_group": APPROVER_GROUP,
+            "public_origin": f"https://{HUB_HOST}",
+        },
     }  # fmt: skip
     views = {
         "views_version": 1,

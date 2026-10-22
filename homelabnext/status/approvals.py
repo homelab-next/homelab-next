@@ -29,7 +29,9 @@ says why.
 
 This is the hub's only state-changing endpoint, so a decision passes, in order (first failure
 answers): the front door and the approver group (``403``); a same-origin ``Origin`` (or, without
-one, ``Referer``) naming the request's own host, and no cross-site ``Sec-Fetch-Site`` (``403``);
+one, ``Referer``) -- scheme, host and port equal to the configured ``public_origin``, or, without
+one, host and port equal to the request's ``Host`` (:func:`same_origin`) -- and no cross-site
+``Sec-Fetch-Site`` (``403``);
 ``application/x-www-form-urlencoded`` (``415``) with a ``Content-Length`` (``411``) of at most
 8 KiB (``413``) holding exactly the fields above, each well-formed (``400``); the CSRF token
 (``403``): an HMAC over the issue time, the request id, the digest shown and the approver, valid
@@ -67,7 +69,7 @@ from homelabnext.broker.state import is_id
 from .agents.auth import AccessLog, Decision, authorize
 from .agents.config import ApprovalsSettings, FrontDoor
 from .render import _e, nav_html, shell_html
-from .serve import host_header_name, origin_name, style_hash
+from .serve import host_header_name, style_hash
 
 Response = tuple[int, str, bytes, dict[str, str]]
 HTML = "text/html; charset=utf-8"
@@ -128,21 +130,57 @@ def approval_valid(row: Mapping[str, Any]) -> bool:
     return bool(row.get("approved"))
 
 
-def same_origin(headers: Any) -> tuple[bool, str]:
-    """True when a state-changing request comes from a page of this very host: its ``Origin``
-    (or, when absent, its ``Referer``) names the ``Host`` it was sent to, and ``Sec-Fetch-Site``,
-    when sent, is ``same-origin``.  No header at all is refused (fail closed)."""
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def origin_tuple(value: str | None) -> tuple[str, str, int] | None:
+    """(scheme, host, port) of an http(s) origin or URL, the port made explicit; None for
+    ``null``, other schemes and garbage."""
+    try:
+        parts = urllib.parse.urlsplit((value or "").strip())
+        port = parts.port
+    except ValueError:
+        return None
+    scheme = parts.scheme.lower()
+    if scheme not in _DEFAULT_PORTS or not parts.hostname:
+        return None
+    return scheme, parts.hostname.rstrip(".").lower(), port or _DEFAULT_PORTS[scheme]
+
+
+def _host_port(value: str | None) -> tuple[str, int | None] | None:
+    name = host_header_name(value)
+    if name is None:
+        return None
+    try:
+        return name.lower(), urllib.parse.urlsplit(f"//{value.strip()}").port  # type: ignore[union-attr]
+    except ValueError:
+        return None
+
+
+def same_origin(headers: Any, public_origin: str | None = None) -> tuple[bool, str]:
+    """True when a state-changing request comes from a page of this hub: its ``Origin`` (or,
+    when absent, its ``Referer``) is ``public_origin`` -- scheme, host and port, compared
+    exactly -- or, when no public origin is configured, names the ``Host`` it was sent to, host
+    and port (a ``Host`` without a port matches the origin scheme's default port; the scheme
+    itself cannot be checked behind a TLS-terminating proxy, which is why ``public_origin`` is
+    the better setting).  ``Sec-Fetch-Site``, when sent, must be ``same-origin``.  No header at
+    all is refused (fail closed); so is another port or scheme on the same hostname, which is
+    another origin."""
     site = headers.get("Sec-Fetch-Site")
     if site is not None and site.strip().lower() != "same-origin":
         return False, "cross-site request"
-    host = host_header_name(headers.get("Host"))
     origin = headers.get("Origin")
     if origin is None:
         origin = headers.get("Referer")
         if origin is None:
             return False, "no Origin or Referer"
-    name = origin_name(origin)
-    if host is None or name is None or name.lower() != host:
+    got = origin_tuple(origin)
+    if got is None:
+        return False, "foreign Origin"
+    if public_origin is not None:
+        return (True, "") if got == origin_tuple(public_origin) else (False, "foreign Origin")
+    host = _host_port(headers.get("Host"))
+    if host is None or host[0] != got[1] or (host[1] or _DEFAULT_PORTS[got[0]]) != got[2]:
         return False, "foreign Origin"
     return True, ""
 
@@ -373,7 +411,7 @@ class ApprovalsSite:
         subject = self.subject(user)
         if subject is None:
             return refuse(403, "decide", "username is not a canonical approver subject")
-        ok, why = same_origin(headers)
+        ok, why = same_origin(headers, self.settings.public_origin)
         if not ok:
             return refuse(403, "decide", why)
         ctype = (headers.get("Content-Type") or "").split(";")[0].strip().lower()
