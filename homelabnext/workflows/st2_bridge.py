@@ -73,6 +73,8 @@ from homelabnext.events.envelope import EventError, canonical_body
 from homelabnext.registry.model import secret_env_name
 from homelabnext.state.store import atomic_write_text
 
+from .st2_runtime import DEDUPE_WINDOW_S
+
 __all__ = [
     "Bridge",
     "BridgeConfig",
@@ -95,6 +97,12 @@ MAX_EVENT_BYTES = 256 << 10
 #: or the bus hands the delivery out again while it is still being posted
 ACK_WAIT_S = 30.0
 LEASE_MARGIN_S = 15.0
+#: how far back a durable the bridge creates starts (JetStream ``by_start_time``): what the relay
+#: published before the durable existed is forwarded, but never more than ``admit`` remembers
+#: (:data:`~homelabnext.workflows.st2_runtime.DEDUPE_WINDOW_S`), so a replay of anything an
+#: earlier durable already forwarded ends ``duplicate`` and a long-retention stream's history is
+#: never replayed
+REPLAY_S = float(DEDUPE_WINDOW_S)
 _WEBHOOK_PATH = re.compile(r"/api/v1/webhooks/[a-z][a-z0-9_-]*")
 _SECRET_REF = re.compile(r"secret:[a-z][a-z0-9_-]*(/[a-z][a-z0-9_-]*)*")
 _SUBJECT = re.compile(r"homelabnext(\.[a-z][a-z0-9-]*)+")

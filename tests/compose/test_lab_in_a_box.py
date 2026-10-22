@@ -1026,10 +1026,16 @@ def test_no_user_may_purge_rewrite_or_read_another_users_inbox():
     # the bridge reads its own durables only, and creates no stream
     bridge = hnx["hnx-st2-bridge"]
     bridge_json = json.loads((ROOT / "workflows" / "stackstorm" / "bridge.json").read_text())
+    prefix = e2e.LAB_EVENTS_PREFIX
     for sub in bridge_json["subscriptions"]:
         d = sub["durable"]
-        for what in ("INFO", "CREATE", "MSG.NEXT"):
+        for what in ("INFO", "MSG.NEXT"):
             assert nats_allowed(bridge, "publish", f"$JS.API.CONSUMER.{what}.{stream}.{d}")
+        # only the filtered create (nats 2.9+): the server holds the request to that filter
+        create = f"$JS.API.CONSUMER.CREATE.{stream}.{d}"
+        assert nats_allowed(bridge, "publish", f"{create}.{prefix}.{sub['subject']}")
+        assert not nats_allowed(bridge, "publish", create)  # any filter, any shape
+        assert not nats_allowed(bridge, "publish", f"{create}.{prefix}.homelabnext.other")
         assert nats_allowed(bridge, "publish", f"$JS.ACK.{stream}.{d}.1.2.3.4.5")
     assert not nats_allowed(bridge, "publish", f"$JS.API.CONSUMER.CREATE.{stream}.other")
     assert not nats_allowed(bridge, "publish", f"$JS.API.STREAM.CREATE.{stream}")

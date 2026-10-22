@@ -671,6 +671,68 @@ def test_reopening_several_durables_waits_out_one_lease_not_one_each():
     assert sb.ACK_WAIT_S < sum(slept) <= sb.ACK_WAIT_S + 1.0
 
 
+class Wall:
+    def __init__(self, t: float = 1_800_000_000.0):
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def test_a_new_durable_forwards_what_was_published_before_it_existed(hook):
+    """The reviewer's r4: durables were created deliver_policy new, so whatever the relay
+    published before the bridge's first start (or after a durable was recreated) was skipped for
+    good.  A durable the bridge creates now starts REPLAY_S back: no further, so a
+    long-retention stream does not replay its history."""
+    wall = Wall()
+    wire = FakeJetStreamWire(wall=wall)
+    for name, subjects in (
+        ("HNX", ["hnx.>"]),
+        ("HNX_DLQ", ["$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.HNX.*",
+                     "$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED.HNX.*"]),
+    ):  # fmt: skip
+        body = {"name": name, "subjects": subjects, "retention": "limits", "max_bytes": 1 << 30}
+        wire.request(f"$JS.API.STREAM.CREATE.{name}", json.dumps(body).encode(), timeout=1)
+    bus = nj.JetStreamBus(
+        wire, stream="HNX", subject_prefix="hnx", ack_wait=sb.ACK_WAIT_S, provision=False,
+        replay_s=sb.REPLAY_S, wall=wall,
+    )  # fmt: skip
+    publish(bus, proposal(0))  # ancient: older than admit's memory
+    wall.t += sb.REPLAY_S + 3600
+    publish(bus, proposal(1))  # the relay published it before the bridge's first start
+    wall.t += 60
+    b = bridge(bus, webhook(hook))
+    publish(bus, proposal(2))
+    while b.poll():
+        pass
+    got = [r["headers"]["Idempotency-Key"] for r in hook.requests]
+    assert got == ["evt-bridge-1", "evt-bridge-2"]
+
+
+def test_the_bridge_creates_pull_durables_through_the_filtered_create_only():
+    """SEC5: CONSUMER.CREATE.<stream>.<durable> takes any config, a push deliver_subject or
+    another filter included.  The adapter creates pull durables only, through the 2.9+ form whose
+    subject carries the filter, so the bus ACL can grant exactly that."""
+    wire = provisioned()
+    before = len(wire.log)
+    bridge(standing(wire), lambda _ev: 202)
+    creates = [(s, json.loads(p)) for s, p, _h in wire.log[before:] if ".CONSUMER.CREATE." in s]
+    assert len(creates) == 3
+    for subject, body in creates:
+        cfg = body["config"]
+        assert (
+            subject == f"$JS.API.CONSUMER.CREATE.HNX.{cfg['durable_name']}.{cfg['filter_subject']}"
+        )
+        assert "deliver_subject" not in cfg and cfg["ack_policy"] == "explicit"
+    with pytest.raises(EventsError, match="did not match filtered subject"):
+        nj._api(
+            wire,
+            "CONSUMER.CREATE.HNX.x.hnx.homelabnext.other",
+            {"stream_name": "HNX", "config": {"durable_name": "x", "filter_subject": "hnx.>"}},
+            timeout=1,
+        )
+
+
 def test_the_bridge_over_the_jetstream_adapter(hook):
     """The subject the broker publishes (the event type) is the subject the bridge consumes."""
     bus = standing(provisioned())
@@ -719,3 +781,4 @@ def test_the_bridge_command_passes_its_bus_credentials(monkeypatch):
     assert seen["ca_file"] == "/etc/fake/nats-ca.pem"
     assert seen["allow_plaintext"] is False
     assert seen["provision"] is False
+    assert seen["replay_s"] == sb.REPLAY_S == 86400.0  # what admit remembers, no more

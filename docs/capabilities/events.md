@@ -199,7 +199,7 @@ Each is a deliberately broken fake (`hnx conform run events --target broken:<mut
 The `events` contract on NATS JetStream (pinned: nats 2.10 with `-js`).
 
 - Target file: [`compose/lab-in-a-box/targets/events.yml`](../../compose/lab-in-a-box/targets/events.yml) (target `lab-events`)
-- Factory: `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float=3600.0, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', provision: bool=True, wire: Wire | None=None, user: str | None=None, password_secret: str | None=None, client_name: str='hnx-conform', allow_plaintext: bool=False, ca_file: str | None=None, inbox_prefix: str | None=None) -> JetStreamBus`
+- Factory: `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float=3600.0, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', provision: bool=True, wire: Wire | None=None, user: str | None=None, password_secret: str | None=None, client_name: str='hnx-conform', allow_plaintext: bool=False, ca_file: str | None=None, inbox_prefix: str | None=None, replay_s: float | None=None) -> JetStreamBus`
 - Config in the target: `{user: hnx-conformance, password_secret: 'secret:events/conformance', allow_plaintext: true, ack_wait: 3.0, duplicate_window: 3600.0, dlq_wait: 3.0}`
 
 **Product limits recorded by the adapter:**
@@ -243,9 +243,15 @@ How the contract maps onto JetStream:
 * **publish** is a request to the subject; the PubAck carries the stream sequence.  `msg_id` is
   the `Nats-Msg-Id` header; a repeat inside the stream's `duplicate_window` gets the PubAck of
   the original (`"duplicate": true`) with the original sequence.
-* **consumer** is a durable pull consumer: `deliver_policy=new` (it sees what is published after
-  it was created), `ack_policy=explicit`, `max_deliver`, `ack_wait` and a filter of
-  `<prefix>.<pattern>` (`*` and `>` are native NATS wildcards).
+* **consumer** is a durable pull consumer (never a push one: no `deliver_subject`):
+  `deliver_policy=new` (it sees what is published after it was created), `ack_policy=explicit`,
+  `max_deliver`, `ack_wait` and a filter of `<prefix>.<pattern>` (`*` and `>` are native
+  NATS wildcards).  With `replay_s` a durable this bus creates starts `replay_s` seconds back
+  instead (`deliver_policy=by_start_time`), so what was published before it existed (the first
+  start of a consumer, or one recreated) is not skipped, while a long-retention stream still does
+  not replay its whole history.  A literal filter is created with the 2.9+ form
+  `CONSUMER.CREATE.<stream>.<durable>.<filter>`: the server holds the request to the filter in
+  its subject, so a user granted exactly that subject can create that durable and no other shape.
 * **fetch** is one `CONSUMER.MSG.NEXT` pull with `no_wait`: the server answers with what is
   deliverable now and a `404`/`408` status, so an empty consumer returns at once.  The attempt
   number is the delivery count from the ack reply subject.
@@ -303,7 +309,7 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
    def make(**config) -> EventBus: ...
    ```
 
-   The factory this repository ships: `homelabnext.conform.adapters.nats_jetstream:make` is `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float=3600.0, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', provision: bool=True, wire: Wire | None=None, user: str | None=None, password_secret: str | None=None, client_name: str='hnx-conform', allow_plaintext: bool=False, ca_file: str | None=None, inbox_prefix: str | None=None) -> JetStreamBus`.
+   The factory this repository ships: `homelabnext.conform.adapters.nats_jetstream:make` is `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float=3600.0, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', provision: bool=True, wire: Wire | None=None, user: str | None=None, password_secret: str | None=None, client_name: str='hnx-conform', allow_plaintext: bool=False, ca_file: str | None=None, inbox_prefix: str | None=None, replay_s: float | None=None) -> JetStreamBus`.
 
 3. **Describe the target** (YAML; `features` lists only what the product really offers; `waive:` takes SHOULD check ids with a reason, never a MUST):
 

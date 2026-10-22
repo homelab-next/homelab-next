@@ -26,9 +26,15 @@ How the contract maps onto JetStream:
 * **publish** is a request to the subject; the PubAck carries the stream sequence.  ``msg_id`` is
   the ``Nats-Msg-Id`` header; a repeat inside the stream's ``duplicate_window`` gets the PubAck of
   the original (``"duplicate": true``) with the original sequence.
-* **consumer** is a durable pull consumer: ``deliver_policy=new`` (it sees what is published after
-  it was created), ``ack_policy=explicit``, ``max_deliver``, ``ack_wait`` and a filter of
-  ``<prefix>.<pattern>`` (``*`` and ``>`` are native NATS wildcards).
+* **consumer** is a durable pull consumer (never a push one: no ``deliver_subject``):
+  ``deliver_policy=new`` (it sees what is published after it was created), ``ack_policy=explicit``,
+  ``max_deliver``, ``ack_wait`` and a filter of ``<prefix>.<pattern>`` (``*`` and ``>`` are native
+  NATS wildcards).  With ``replay_s`` a durable this bus creates starts ``replay_s`` seconds back
+  instead (``deliver_policy=by_start_time``), so what was published before it existed (the first
+  start of a consumer, or one recreated) is not skipped, while a long-retention stream still does
+  not replay its whole history.  A literal filter is created with the 2.9+ form
+  ``CONSUMER.CREATE.<stream>.<durable>.<filter>``: the server holds the request to the filter in
+  its subject, so a user granted exactly that subject can create that durable and no other shape.
 * **fetch** is one ``CONSUMER.MSG.NEXT`` pull with ``no_wait``: the server answers with what is
   deliverable now and a ``404``/``408`` status, so an empty consumer returns at once.  The attempt
   number is the delivery count from the ack reply subject.
@@ -70,6 +76,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from conformance.protocols.events import Delivery, EventsError
@@ -301,8 +308,10 @@ class JetStreamBus:
         dlq_wait: float = 3.0,
         delete_on_close: bool = False,
         provision: bool = True,
+        replay_s: float | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        wall: Callable[[], float] = time.time,
     ):
         if not _NAME_RE.match(stream or ""):
             raise EventsError("stream name must be 1-64 of [A-Za-z0-9_-]")
@@ -311,6 +320,10 @@ class JetStreamBus:
             raise EventsError("storage must be 'file' or 'memory'")
         if ack_wait <= 0 or duplicate_window < 0.1:
             raise EventsError("ack_wait must be positive and duplicate_window >= 0.1s")
+        if replay_s is not None and replay_s <= 0:
+            raise EventsError("replay_s must be positive (or None: deliver what is new)")
+        self.replay_s = replay_s
+        self._wall = wall
         self._wire = wire
         self.stream = stream
         self.dlq_stream = f"{stream}_DLQ"
@@ -408,7 +421,7 @@ class JetStreamBus:
         filt = f"{self.prefix}.{subject}"
         info = self.api(f"CONSUMER.INFO.{self.stream}.{durable}", missing="consumer")
         if info is None:
-            config = {
+            config: dict[str, Any] = {
                 "durable_name": durable,
                 "deliver_policy": "new",
                 "ack_policy": "explicit",
@@ -417,9 +430,15 @@ class JetStreamBus:
                 "filter_subject": filt,
                 "replay_policy": "instant",
             }
+            if self.replay_s is not None:
+                start = datetime.fromtimestamp(self._wall() - self.replay_s, UTC)
+                config["deliver_policy"] = "by_start_time"
+                config["opt_start_time"] = start.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            create = f"CONSUMER.CREATE.{self.stream}.{durable}"
+            if "*" not in filt and ">" not in filt:
+                create += f".{filt}"  # the server refuses any other filter for this request
             info = self.api(
-                f"CONSUMER.CREATE.{self.stream}.{durable}",
-                {"stream_name": self.stream, "config": config, "action": "create"},
+                create, {"stream_name": self.stream, "config": config, "action": "create"}
             )
         else:
             have = info.get("config", {}).get("filter_subject")
@@ -766,6 +785,7 @@ def make(
     allow_plaintext: bool = False,
     ca_file: str | None = None,
     inbox_prefix: str | None = None,
+    replay_s: float | None = None,
 ) -> JetStreamBus:
     """A bus on the ``events`` endpoint.  ``scratch`` (the conformance default) gives every
     subject its own stream and subject prefix, deleted on ``close()``, so checks never see each
@@ -776,7 +796,9 @@ def make(
     or with an explicit ``allow_plaintext``.
     ``provision=False`` creates no stream: both must exist, each with a ``max_bytes`` limit.
     A ``user``'s replies arrive on ``inbox_prefix``, by default ``_INBOX.<user>``, so the server
-    can grant each user its own inbox instead of ``_INBOX.>`` (where one could read another's)."""
+    can grant each user its own inbox instead of ``_INBOX.>`` (where one could read another's).
+    ``replay_s``: a durable this bus creates starts that many seconds back (default: only what is
+    published after it exists)."""
     password = None
     if user is not None or password_secret is not None:
         if not user or not isinstance(password_secret, str) or not password_secret:
@@ -824,6 +846,7 @@ def make(
             dlq_wait=dlq_wait,
             delete_on_close=scratch,
             provision=provision or scratch,
+            replay_s=replay_s,
         )
     except Exception:
         if own:

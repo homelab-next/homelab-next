@@ -467,7 +467,13 @@ password in clear to a server, or a man in the middle, that never asks. Exit 2 i
 or unbounded, a durable whose lease is too short). The bus user it uses
 needs to look up the stream and its DLQ and read through its own durables (one per subject in
 `bridge.json`), nothing else: no publish on any event subject, no `STREAM.CREATE`, `PURGE`,
-`UPDATE`, `DELETE` or `MSG.DELETE`, no other durable, and replies on its own inbox prefix. The
+`UPDATE`, `DELETE` or `MSG.DELETE`, no other durable, and replies on its own inbox prefix. It
+creates a missing durable through the filtered form
+`$JS.API.CONSUMER.CREATE.<stream>.<durable>.<prefix>.homelabnext.<type>` (nats-server 2.9 and
+later), whose subject the server holds the request's filter to; grant that subject, never the bare
+`...CREATE.<stream>.<durable>`, which takes any filter. A NATS ACL cannot forbid a push
+`deliver_subject` in that request; the bridge only ever creates pull durables, and where even that
+is too much, create the durables once as the admin and grant the bridge no `CREATE` at all. The
 lab-in-a-box enforces exactly this (stream `HNXLAB_BROKER`; `tests/compose` fails when this
 excerpt drifts from it):
 
@@ -479,15 +485,15 @@ excerpt drifts from it):
    "publish": {"allow": ["$JS.API.STREAM.INFO.HNXLAB_BROKER",
                          "$JS.API.STREAM.INFO.HNXLAB_BROKER_DLQ",
                          "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-agent-job-failed",
-                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-agent-job-failed",
+                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-agent-job-failed.hnxlab.homelabnext.agent.job.failed",
                          "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-agent-job-failed",
                          "$JS.ACK.HNXLAB_BROKER.st2-agent-job-failed.>",
                          "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-decision-returned",
-                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-decision-returned",
+                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-decision-returned.hnxlab.homelabnext.decision.returned",
                          "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-decision-returned",
                          "$JS.ACK.HNXLAB_BROKER.st2-decision-returned.>",
                          "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-proposal-created",
-                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-proposal-created",
+                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-proposal-created.hnxlab.homelabnext.proposal.created",
                          "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-proposal-created",
                          "$JS.ACK.HNXLAB_BROKER.st2-proposal-created.>"]},
    "subscribe": {"allow": ["_INBOX.hnx-st2-bridge.>"]}}}
@@ -522,6 +528,15 @@ publish):
 A dead letter is an advisory that names the original's stream sequence, so the original must
 still be in the event stream to be read back: keep the DLQ's `max_age` no longer than the event
 stream's.
+
+**Where a new durable starts.** A durable the bridge creates starts one day back
+(`deliver_policy: by_start_time`, `opt_start_time` = now minus 24 h), not at what is new: on the
+first start, or after a durable was lost, the events the relay published meanwhile are forwarded
+instead of skipped for good. One day is `admit`'s memory ([Redeliveries](#redeliveries)): an
+event an earlier durable already forwarded inside that day ends `duplicate`, and the stream's 30
+days of history are never replayed. An event older than a day that no durable ever forwarded is
+not forwarded either; replay it by hand if it still matters. A durable that already exists keeps
+its position, so a restart neither skips nor replays anything.
 
 **The lease.** The bridge creates each durable with `ack_wait` 30 s, longer than a POST (10 s
 timeout) plus 15 s to settle it, so the bus never hands a delivery out again while it is being
