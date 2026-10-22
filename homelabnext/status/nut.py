@@ -28,8 +28,10 @@ on battery is warn, low battery, replace battery, overload, off and forced shutd
 a status with no line flag (OL, OB, OFF, BYPASS) is unknown, never ok.
 
 Every summary of a ``status`` item starts with the raw flags and a colon (``OB DISCHRG: on
-battery, ...``); :func:`flags_of` reads them back, which is how the hub knows a UPS is on battery
-(:mod:`.power`) without a second protocol.
+battery, ...``) for the reader.  The flags themselves travel as a structured field
+(``Draft.flags``), which is how the hub knows a UPS is on battery (:mod:`.power`): never by
+re-parsing a summary, since one that means "no reading" (``UPS1: upsd has stale data``,
+``NONE: no ups.status``) can look just like a list of flags.  An unreadable UPS has no flags.
 """
 
 from __future__ import annotations
@@ -103,7 +105,6 @@ UPS_ERRORS = {
     "DATA-STALE": "upsd has stale data (the driver lost the UPS)",
     "DRIVER-NOT-CONNECTED": "upsd has no driver for it (the driver is not running)",
 }
-_FLAGS_PREFIX = re.compile(r"^([A-Z][A-Z0-9]*(?: [A-Z][A-Z0-9]*)*): ")
 _NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 _UNSAFE = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -282,12 +283,6 @@ class NutSession:
 
 
 # ---------------------------------------------------------------- the mapper
-def flags_of(summary: str) -> list[str] | None:
-    """The ``ups.status`` flags a status item's summary starts with (None: no reading)."""
-    m = _FLAGS_PREFIX.match(summary or "")
-    return m.group(1).split() if m else None
-
-
 def _num(raw: str | None) -> float:
     try:
         return float(raw) if raw is not None else math.nan
@@ -356,7 +351,8 @@ def ups_drafts(
     if model:
         text += f"; {model}"
     head = " ".join(flags) or "NONE"
-    out = [Draft(clean_item(f"{prefix}status", "status"), state, clean_summary(f"{head}: {text}"))]
+    status = clean_summary(f"{head}: {text}")
+    out = [Draft(clean_item(f"{prefix}status", "status"), state, status, flags=tuple(flags))]
     for item, key, lim_name, below, unit, show in (
         ("battery-charge", "battery.charge", "charge", True, "%", lambda v: f"{v:g}%"),
         ("battery-runtime", "battery.runtime", "runtime_s", True, " s", _runtime),

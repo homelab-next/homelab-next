@@ -97,6 +97,7 @@ class StatusHub:
             link=draft.link or f"status:{spec.id}",
             value=draft.value,
             work=draft.work,
+            flags=draft.flags,
         )
         self._put(obs, now)
         return obs
@@ -107,7 +108,10 @@ class StatusHub:
         hist = list(rec.get("history", []))
         if not hist or hist[-1][1] != obs.state:  # history keeps transitions, bounded
             hist.append([iso(now), obs.state])
-        self.store.put(k, {"latest": obs.to_dict(), "history": hist[-self.history :]})
+        new = {"latest": obs.to_dict(), "history": hist[-self.history :]}
+        if obs.flags is not None:
+            new["flags"] = list(obs.flags)
+        self.store.put(k, new)
 
     def record(self, result: SourceResult) -> list[Observation]:
         """Store one scheduler result; returns the observations it produced."""
@@ -220,6 +224,8 @@ class StatusHub:
             row["reported_state"] = latest["state"]
             row["state"] = effective_state(latest, now)
             row["history"] = [list(h) for h in rec.get("history", [])]
+            if rec.get("flags") is not None:
+                row["flags"] = [str(f) for f in rec["flags"]]
             out.append(row)
         return out
 

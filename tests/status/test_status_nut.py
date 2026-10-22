@@ -14,7 +14,7 @@ from homelabnext.notify import FakeSender, Notifier
 from homelabnext.registry.model import load
 from homelabnext.status import SourceSpec, sources_from_registry
 from homelabnext.status.collectors import CollectContext, CollectError
-from homelabnext.status.nut import NutCollector, flags_of, quote, split_words, ups_drafts
+from homelabnext.status.nut import NutCollector, quote, split_words, ups_drafts
 from homelabnext.status.power import PowerError, expand, power_state, states
 from homelabnext.status.power import load as load_power
 from homelabnext.status.scheduler import Scheduler, SourceResult
@@ -79,15 +79,15 @@ def test_on_line_is_ok_on_battery_is_warn_replace_and_low_battery_are_fail():
     assert online["battery-runtime"].state == "ok" and online["load"].state == "ok"
 
     ob = by_item(ups_drafts("ups-a", lvars("on-battery", "ups-a"), {}))
-    assert ob["status"].state == "warn" and flags_of(ob["status"].summary) == ["OB", "DISCHRG"]
-    assert power_state(ob["status"].summary) == "on-battery"
+    assert ob["status"].state == "warn" and ob["status"].flags == ("OB", "DISCHRG")
+    assert power_state(ob["status"].flags) == "on-battery"
 
     rb = by_item(ups_drafts("ups-a", lvars("replace-battery", "ups-a"), {}))
     assert rb["status"].state == "fail" and "replace battery" in rb["status"].summary
-    assert power_state(rb["status"].summary) == "ok"  # on line: not an on-battery event
+    assert power_state(rb["status"].flags) == "ok"  # on line: not an on-battery event
 
     lb = by_item(ups_drafts("ups-b", lvars("online", "ups-b"), {}))  # OB DISCHRG LB, 14%, 180 s
-    assert lb["status"].state == "fail" and power_state(lb["status"].summary) == "low-battery"
+    assert lb["status"].state == "fail" and power_state(lb["status"].flags) == "low-battery"
     assert lb["battery-charge"].state == "fail"  # at or below 20 (no battery.charge.low)
     assert lb["battery-runtime"].state == "warn"  # 180 s: at or below 600, above 120
 
@@ -281,6 +281,7 @@ def test_the_topology_ups_card_shows_its_live_state():
                 "item": "status",
                 "state": "warn",
                 "summary": "OB DISCHRG: on battery, discharging; 87% charge",
+                "flags": ["OB", "DISCHRG"],
                 "observed_at": "2026-09-21T13:33:20Z",
             }
         ],
@@ -292,3 +293,40 @@ def test_the_topology_ups_card_shows_its_live_state():
     plain = topology.load(LAB / "guests", LAB / "site.yml")
     [card] = [c for row in plain["top"] for c in row if c["node"] == "ups:ups-a"]
     assert not any(b["cls"].startswith("ups-") for b in card["badges"])  # no reading, no badge
+
+
+def test_no_reading_is_held_never_a_recovery(make_hub, clock):
+    """A summary that only looks like flags (an uppercase upsname, ``NONE``, ``WAIT``) is no
+    reading: it must neither page nor send "back on line power" mid-outage."""
+    from homelabnext.status.nut import unreadable
+
+    spec = nut_spec(ups="UPSA", tls="none")
+    hub = make_hub([spec])
+    sender = FakeSender()
+    notifier = Notifier(sender, hub.store, clock=clock)
+    key = "status-power/ups/UPSA"
+
+    def reading(*drafts):
+        hub.record(SourceResult(spec.id, drafts))
+        return [k for k in hub.notify(notifier) if k.startswith("status-power/")]
+
+    assert reading(*ups_drafts("UPSA", {"ups.status": "OB DISCHRG"}, {})) == [key]
+    assert reading(unreadable("UPSA", "DATA-STALE")) == []  # the USB driver dropped
+    assert reading(unreadable("UPSA", "DRIVER-NOT-CONNECTED")) == []
+    assert reading(*ups_drafts("UPSA", {}, {})) == []  # NONE: no ups.status
+    assert reading(*ups_drafts("UPSA", {"ups.status": "WAIT"}, {})) == []
+    assert reading(*ups_drafts("UPSA", {"ups.status": "CHRG"}, {})) == []  # no line flag
+    assert sender.titles.count("UPS back on line power") == 0
+    assert reading(*ups_drafts("UPSA", {"ups.status": "OL CHRG"}, {})) == [key]
+    assert sender.titles.count("UPS back on line power") == 1
+    assert sender.titles.count("UPS on battery") == 1
+
+
+def test_power_state_needs_a_line_or_battery_flag():
+    from homelabnext.status.nut import unreadable
+
+    assert unreadable("UPS1", "DATA-STALE").flags is None  # no reading, whatever its name
+    assert power_state(None) is None and power_state(()) is None
+    assert power_state(["WAIT"]) is None and power_state(["CHRG", "OFF"]) is None
+    assert power_state(["OL"]) == "ok" and power_state(["BYPASS"]) == "ok"
+    assert power_state(["OB", "LB"]) == "low-battery"

@@ -332,7 +332,7 @@ class _Cards:
         )
 
 
-#: a UPS's live power state (from its status summary) -> the badge text
+#: a UPS's live power state (from its status flags) -> the badge text
 _UPS_WORDS = {"on-battery": "on battery", "low-battery": "on battery, low"}
 
 
@@ -344,7 +344,7 @@ def _ups_live(live: Mapping[str, Any] | None) -> tuple[dict[str, str] | None, li
 
     state = str(live.get("state") or "unknown")
     summary = str(live.get("summary") or "")
-    word = _UPS_WORDS.get(power_state(summary) or "", "")
+    word = _UPS_WORDS.get(power_state(live.get("flags")) or "", "")
     if not word:
         word = "on line" if state == "ok" else state
     if state == "stale":

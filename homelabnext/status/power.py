@@ -14,9 +14,13 @@ facts.  Without a site the template is an ordinary source over every UPS upsd li
 
 :func:`notify` is the state-diffed "UPS on battery" message, through the same shared Notifier
 the hub pages with: one key per UPS, ``on-battery`` (warn) and ``low-battery`` (crit, on
-battery with LB) page, anything else is ``ok`` and sends the one "back on line power"
-recovery.  The body lists what the UPS feeds, so the reader knows which guests are on borrowed
-time.  A stale source is held (an unreachable upsd during a power cut is not a recovery).
+battery with LB) page, line power (OL or BYPASS without OB) is ``ok`` and sends the one "back
+on line power" recovery.  The state comes from the observation's structured ``flags`` (from the
+NUT mapper), never from its summary.  The body lists what the UPS feeds, so the reader knows
+which guests are on borrowed time.  No reading is held, neither paged nor recovered: a stale
+source (an unreachable upsd during a power cut is not a recovery), an ``unknown`` status (the
+driver dropped: ``DATA-STALE``, ``DRIVER-NOT-CONNECTED``; ``WAIT``; no ``ups.status``) and a
+status without a line or battery flag.
 
 :func:`states` reads the UPS states back out of a ``status.json`` document for the Topology
 map's UPS badges.
@@ -32,7 +36,6 @@ from typing import Any
 from homelabnext import power as pw
 
 from .model import SourceSpec
-from .nut import flags_of
 
 PREFIX = "status-power"
 ON_BATTERY_TITLE = "UPS on battery"
@@ -189,14 +192,17 @@ def _ups_rows(
     return out
 
 
-def power_state(summary: str) -> str | None:
-    """``on-battery``, ``low-battery`` or ``ok`` from a status summary; None: no reading."""
-    flags = flags_of(summary)
-    if flags is None:
-        return None
-    if "OB" not in flags:
-        return "ok"
-    return "low-battery" if "LB" in flags else "on-battery"
+#: the flags that put the load on line power (BYPASS: mains, without battery protection)
+LINE_POWER = {"OL", "BYPASS"}
+
+
+def power_state(flags: Iterable[str] | None) -> str | None:
+    """``on-battery``, ``low-battery`` or ``ok`` from a status item's ``ups.status`` flags;
+    None (no reading) unless a battery (OB) or line-power (OL, BYPASS) flag is present."""
+    got = {str(f).upper() for f in flags or ()}
+    if "OB" in got:
+        return "low-battery" if "LB" in got else "on-battery"
+    return "ok" if got & LINE_POWER else None
 
 
 def body(spec: SourceSpec, label: str, row: Mapping[str, Any]) -> str:
@@ -224,8 +230,8 @@ def notify(
     held = set(dead)
     sent = []
     for spec, label, row in _ups_rows(specs, observations):
-        state = power_state(str(row.get("summary") or ""))
-        if spec.id in held or row.get("state") == "stale" or state is None:
+        state = power_state(row.get("flags"))
+        if spec.id in held or row.get("state") in ("stale", "unknown") or state is None:
             continue
         key = f"{PREFIX}/{spec.id}/{label}"
         msg = Message(
@@ -242,7 +248,7 @@ def notify(
 
 # ---------------------------------------------------------------- the topology badges
 def states(doc: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
-    """Site UPS id -> ``{state, summary, observed_at, source}`` from a status document (its
+    """Site UPS id -> ``{state, summary, flags, observed_at, source}`` from a status document (its
     ``sources`` name the UPS a generated source reads)."""
     if not doc:
         return {}
@@ -254,6 +260,7 @@ def states(doc: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
             out[ups] = {
                 "state": row.get("state"),
                 "summary": row.get("summary"),
+                "flags": row.get("flags"),
                 "observed_at": row.get("observed_at"),
                 "source": row.get("source"),
             }

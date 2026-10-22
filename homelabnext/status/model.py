@@ -187,6 +187,9 @@ class Observation:
     link: str | None = None
     value: float | None = None
     work: bool = False
+    #: the item's raw flags (a NUT ``ups.status``), kept beside the observation in the hub's
+    #: store, never in the observation document (the summary is for people, not for parsing)
+    flags: tuple[str, ...] | None = None
 
     @property
     def key(self) -> str:

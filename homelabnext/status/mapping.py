@@ -67,6 +67,8 @@ class Draft:
     link: str | None = None
     value: float | None = None
     work: bool = False
+    #: the raw flags of a reading that has them (a NUT ``ups.status``); None: not that kind
+    flags: tuple[str, ...] | None = None
 
 
 # ---------------------------------------------------------------- selectors

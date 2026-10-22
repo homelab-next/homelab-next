@@ -838,9 +838,12 @@ on battery, discharging; 87% charge, 25m runtime, load 33%`).
 mains power is exactly what someone should hear about: `hnx status collect --notify-topic T`
 also sends **"UPS on battery"** through the same state-diffed Notifier, one key per UPS
 (`status-power/<source>/<ups>`): `on-battery` (warn) and `low-battery` (crit, `OB` with `LB`)
-page, anything else is `ok` and sends the one **"UPS back on line power"** recovery. The message
-lists what the UPS feeds and every guest on it, from the power inheritance (without a site: says
-that it is not known). A source gone stale during the outage is held, never a false recovery.
+page, line power (`OL` or `BYPASS`, without `OB`) is `ok` and sends the one **"UPS back on line
+power"** recovery. The state is read from the flags the mapper records beside the observation,
+never re-parsed from its summary. The message lists what the UPS feeds and every guest on it, from
+the power inheritance (without a site: says that it is not known). No reading is held, never a
+false recovery: a source gone stale during the outage, an `unknown` status (`DATA-STALE`,
+`DRIVER-NOT-CONNECTED`, `WAIT`, no `ups.status`) and a status with no line or battery flag.
 
 **Tested against** a real upsd 2.8.1 (the Ubuntu 24.04 package, NSS build, `dummy-ups` driver,
 STARTTLS with a certificate database): the replies are recorded in `tests/status/fixtures/nut/`
