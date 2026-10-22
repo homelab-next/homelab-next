@@ -556,6 +556,9 @@ def test_yaml_merge_keys_are_read_and_duplicates_still_refused():
     assert clients.load_strict(head, "p")["limits"] == {"model": "m", "budget": 9}
     text = clients.splice_grants(head, clients.ORCH_GRANTS_HEAD + "grants: {}\n")
     assert text.startswith(head)
-    for dup in ("a: 1\na: 2\n", "d: &d {x: 1}\nc:\n  <<: *d\n  y: 1\n  y: 2\n"):
+    two_merges = "a: &a {x: 1}\nb: &b {x: 2}\nc:\n  <<: *a\n  <<: *b\n"  # PyYAML: last wins
+    for dup in ("a: 1\na: 2\n", "d: &d {x: 1}\nc:\n  <<: *d\n  y: 1\n  y: 2\n", two_merges):
         with pytest.raises(clients.RenderError, match="duplicate key"):
             clients.load_strict(dup, "p")
+    merged = "a: &a {x: 1}\nb: &b {y: 2}\nc:\n  <<: [*a, *b]\n"
+    assert clients.load_strict(merged, "p")["c"] == {"x": 1, "y": 2}
