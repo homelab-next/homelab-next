@@ -251,7 +251,7 @@ def test_dsn_users_and_digests_in_urls_are_not_credentials():
     for arg in ("postgresql://app1@db.example/x", "postgresql://Admin@db.example/x",
                 f"https://code.example/org/repo/blob/{COMMIT}/README.md"):  # fmt: skip
         assert _check([arg], {}) == [], arg
-    assert _check(["redis://fakeTok3nAbC9xYz12345@cache.example:6379"], {})  # a token as the user
+    assert _check(["redis://fakeTok3nAbC9xYz12345@cache.example/0"], {})  # a token as the user
 
 
 def test_looks_secret_both_ways():
