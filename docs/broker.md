@@ -94,7 +94,11 @@ reason, never the handler's own error text. JSON on stdout is the action's resul
 **Secrets** are named, never passed. The default resolver reads `HNX_BROKER_SECRET_<NAME>` from the
 *broker's* environment and hands the value to that one handler as `<NAME>`; an embedding program
 can pass `resolve_secret=` (for example a lookup in the secrets capability). A value never appears
-in a request, an approval or the audit trail, and is replaced by `<redacted>` in captured output.
+in a request, an approval or the audit trail, and is replaced by `<redacted>` in captured output,
+as are its trivially derived forms: JSON-escaped (with and without `\uXXXX` escapes),
+percent-encoded and base64. That redaction is a backstop: **a handler must never print a
+secret**, because any other transformation of it (a substring, a hash, another encoding) is not
+recognised.
 
 After editing a handler, update its digest:
 

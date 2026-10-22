@@ -18,7 +18,11 @@ What :func:`run_handler` guarantees, in order:
    by the broker's resolver and handed to that one process as an environment variable.  Values
    never appear in a request, an approval, the audit trail or a result; any occurrence of one in
    the captured output is replaced by ``<redacted>``, and when the output is cut at its cap, a
-   tail that is the beginning of a secret is dropped too (the cut cannot leak a prefix).
+   tail that is the beginning of a secret is dropped too (the cut cannot leak a prefix).  The
+   redaction also catches the encodings a handler most often prints a value in without meaning
+   to (:func:`secret_forms`: JSON-escaped, with and without ``\\uXXXX`` escapes, percent-encoded
+   and base64).  It is a backstop, not a licence: **a handler must never print a secret**, since
+   any other transformation (a substring, a hash, a different encoding) is not recognised.
 5. **Bounded.**  ``timeout_s`` is enforced; stdout and stderr are each captured up to
    ``max_output_bytes`` and the rest discarded, into ``stdout`` / ``stderr`` files in the run
    directory.  When the handler exits, or at the timeout, its whole process group is killed
@@ -34,6 +38,7 @@ that descriptor is open, the child holds it until it execs and the handler's own
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import errno
 import hashlib
@@ -44,6 +49,7 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,6 +62,7 @@ __all__ = [
     "env_secret_resolver",
     "file_digest",
     "run_handler",
+    "secret_forms",
 ]
 
 DEFAULT_MAX_OUTPUT = 1024 * 1024
@@ -149,10 +156,29 @@ def _feed(stream, data: bytes) -> None:
         stream.close()
 
 
+def secret_forms(value: str) -> set[bytes]:
+    """The byte strings a secret ``value`` is redacted in: itself (UTF-8) and its trivially
+    derived encodings -- inside a JSON string (``json.dumps`` with and without ``ensure_ascii``,
+    so ``\\"``, ``\\\\`` and ``\\uXXXX`` escapes), percent-encoded (``quote`` and ``quote_plus``)
+    and base64 (standard and URL-safe)."""
+    raw = value.encode("utf-8")
+    texts = {
+        value,
+        json.dumps(value, ensure_ascii=False)[1:-1],
+        json.dumps(value, ensure_ascii=True)[1:-1],
+        urllib.parse.quote(value, safe=""),
+        urllib.parse.quote_plus(value, safe=""),
+        base64.b64encode(raw).decode("ascii"),
+        base64.urlsafe_b64encode(raw).decode("ascii"),
+    }
+    return {t.encode("utf-8") for t in texts if t}
+
+
 def _redact(data: bytes, values: Sequence[str], *, truncated: bool = False) -> bytes:
-    """Every secret in ``data`` replaced by ``<redacted>``; for output cut at its cap
-    (``truncated``), a tail that begins a secret is dropped as well."""
-    secrets_ = sorted({v.encode("utf-8") for v in values if v}, key=len, reverse=True)
+    """Every secret in ``data``, in any of its :func:`secret_forms`, replaced by ``<redacted>``;
+    for output cut at its cap (``truncated``), a tail that begins one is dropped as well."""
+    forms = {f for v in values if v for f in secret_forms(v)}
+    secrets_ = sorted(forms, key=len, reverse=True)
     for v in secrets_:
         data = data.replace(v, b"<redacted>")
     changed = truncated

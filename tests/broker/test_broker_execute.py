@@ -4,11 +4,13 @@ timeout and output caps.  Each refusal is shown failing on the bad input and pas
 
 from __future__ import annotations
 
+import base64
 import errno
 import json
 import os
 import subprocess
 import time
+import urllib.parse
 
 import pytest
 
@@ -96,6 +98,42 @@ def test_secrets_by_name_reach_only_the_handler_and_are_redacted_from_output(tmp
     with pytest.raises(ExecError) as info:
         _run(tmp_path, h, secrets=["MISSING"], resolve_secret={}.__getitem__)
     assert info.value.reason == "secret-unavailable" and SECRET not in str(info.value)
+
+
+ODD_SECRET = 'fake-"tok\\en/é+ +x'  # a quote, a backslash, a slash, non-ASCII, spaces
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        json.dumps(ODD_SECRET, ensure_ascii=False)[1:-1],  # inside a JSON string
+        json.dumps(ODD_SECRET)[1:-1],  # the same with \\uXXXX escapes
+        urllib.parse.quote(ODD_SECRET, safe=""),
+        urllib.parse.quote_plus(ODD_SECRET, safe=""),
+        base64.b64encode(ODD_SECRET.encode()).decode(),
+        base64.urlsafe_b64encode(ODD_SECRET.encode()).decode(),
+    ],
+)
+def test_derived_encodings_of_a_secret_are_redacted(form):
+    """Only the exact bytes were caught: a handler printing JSON (the usual output) leaked a
+    secret holding a quote, a backslash or non-ASCII in its escaped form."""
+    assert form != ODD_SECRET
+    out = execute_mod._redact(f'{{"t": "{form}"}}'.encode(), [ODD_SECRET])
+    assert out == b'{"t": "<redacted>"}', out
+    cut = f"x={form}"[:-3].encode()  # cut at the cap: a tail that begins the form is dropped
+    assert execute_mod._redact(cut, [ODD_SECRET], truncated=True) == b"x="
+    assert execute_mod.secret_forms(ODD_SECRET) >= {form.encode()}
+
+
+def test_a_handler_printing_json_does_not_leak_an_escaped_secret(tmp_path):
+    h = _handler(
+        tmp_path,
+        'python3 -c \'import json,os,sys; json.dump({"t": os.environ["DEMO_TOKEN"]}, sys.stdout)\'\n',
+    )
+    res, _ = _run(
+        tmp_path, h, secrets=["DEMO_TOKEN"], resolve_secret={"DEMO_TOKEN": ODD_SECRET}.get
+    )
+    assert res.exit_code == 0 and res.stdout == b'{"t": "<redacted>"}', res.stdout
 
 
 def test_env_secret_resolver_reads_the_brokers_prefixed_variable():
