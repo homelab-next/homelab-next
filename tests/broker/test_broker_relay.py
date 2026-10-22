@@ -323,6 +323,19 @@ def test_the_broker_decision_reaches_the_st2_bridge(tmp_path):
 
 
 # ---------------------------------------------------------------- the CLI and the adapter's credential
+def provision(server: FakeJetStreamWire, *, max_bytes: int = 1 << 30) -> None:
+    """What the operator does once: the standing stream and its DLQ, each with limits
+    (``max_bytes=0``: created by a client that provisions, without any)."""
+    if max_bytes:
+        made = nj.provision_streams(
+            Wire(server), stream=STREAM, subject_prefix=PREFIX, max_bytes=max_bytes
+        )
+        assert made == [STREAM, f"{STREAM}_DLQ"]
+        assert server.streams[f"{STREAM}_DLQ"].config["max_bytes"] == max_bytes // 4
+    else:
+        nj.make(wire=Wire(server), scratch=False, stream=STREAM, subject_prefix=PREFIX).close()
+
+
 def test_relay_cli_once(tmp_path, monkeypatch, capsys):
     shared = FakeJetStreamWire()
     mod = tmp_path / "mods" / "relay_fake_bus.py"
@@ -359,11 +372,17 @@ def test_relay_cli_once(tmp_path, monkeypatch, capsys):
     assert broker_cli.main(argv) == 1
     assert "published 0, 2 pending" in capsys.readouterr().out
     relay_fake_bus.DOWN = False
+    # the relay never creates the stream: missing (or unbounded) is a failed connect, not a create
+    assert broker_cli.main(argv) == 1 and STREAM not in shared.streams
+    provision(shared, max_bytes=0)
+    assert broker_cli.main(argv) == 1
+    capsys.readouterr()
+    shared.streams.clear()
+    provision(shared)
     assert broker_cli.main(argv) == 0
     assert "published 2, 0 pending" in capsys.readouterr().out
     stored = shared.streams[STREAM]
     assert [json.loads(m.data)["id"] for _, m in sorted(stored.msgs.items())] == ids
-    assert stored.config["duplicate_window"] == 60 * 10**9
     held = OutboxRelay(state, relay_fake_bus.make)
     held.acquire()
     try:

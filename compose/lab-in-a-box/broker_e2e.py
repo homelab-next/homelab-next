@@ -78,6 +78,7 @@ LAB_STATE = "/var/lib/hnx-broker/state"
 LAB_EVENTS_TARGET = "/src/compose/lab-in-a-box/targets/events.yml"
 LAB_EVENTS_STREAM, LAB_EVENTS_PREFIX = "HNXLAB_BROKER", "hnxlab"
 BROKER_SOURCE = "svc:broker"  # homelabnext.broker.relay.BROKER_SOURCE (tests/compose pins it)
+STREAM_MAX_BYTES = 64 << 20  # the lab's standing stream (its DLQ gets a quarter)
 #: the hub's public name: the Host and Origin the edge passes on (registry public_hostname)
 HUB_HOST = "status.lab.example"
 SECRET_ENV = "HNX_SECRET_STATUS_FRONT_DOOR_SECRET"
@@ -110,6 +111,26 @@ class Relay:
     run_once: Callable[[], tuple[int, str]] | None = None
     #: the only ``HNX_SECRET_*`` variables the relay's process gets (its bus password)
     secrets: Sequence[str] = ()
+    #: the operator's wire (it provisions the streams); default: nats-py on HNX_ENDPOINT_EVENTS
+    open_wire: Callable[[], Any] | None = None
+
+    def provision(self) -> list[str]:
+        """The operator's one-time step: the standing stream and its DLQ, bounded.  The relay
+        never creates them (its bus user may not)."""
+        from homelabnext.conform.adapters import nats_jetstream as nj
+
+        if self.open_wire is not None:
+            wire = self.open_wire()
+        else:
+            from homelabnext.conform.adapters._env import resolve
+
+            wire = nj.NatsPyWire(resolve("events", env_only=True).url, name="hnx-lab-admin")
+        try:
+            return nj.provision_streams(
+                wire, stream=self.stream, subject_prefix=self.prefix, max_bytes=STREAM_MAX_BYTES
+            )
+        finally:
+            wire.close()
 
     def env(self, base: Mapping[str, str]) -> dict[str, str]:
         """``base`` without any secret the relay does not need (the edge holds the hub's)."""
@@ -452,6 +473,7 @@ def check_relay(setup: Setup, rid: str) -> str:
             raise StepFailed(f"relay --once: rc={rc} {out[-200:]} {err[-200:]}")
         return out.strip()
 
+    relay.provision()  # idempotent: what exists is left alone
     first = once()
     bus = relay.bus()
     seqs = {}

@@ -146,11 +146,16 @@ def _relay(e2e, state_root: Path, wire: _SharedWire, *, drop_marks: bool = False
     from homelabnext.broker.relay import OutboxRelay
     from homelabnext.conform.adapters import nats_jetstream as nj
 
-    def bus():
+    def bus():  # the scenario's reader: the operator's view
         return nj.make(wire=wire, scratch=False, stream="HNXT", subject_prefix="hnxt")
 
+    def relay_bus():  # the relay's: provisions nothing
+        return nj.make(
+            wire=wire, scratch=False, provision=False, stream="HNXT", subject_prefix="hnxt"
+        )
+
     def once():
-        r = OutboxRelay(state_root, bus)
+        r = OutboxRelay(state_root, relay_bus)
         if drop_marks:  # a defect: publishes and never marks, so every pass republishes
             r.store.mark = lambda *_a: True
         try:
@@ -160,7 +165,15 @@ def _relay(e2e, state_root: Path, wire: _SharedWire, *, drop_marks: bool = False
             r.close()
         return (1 if left else 0), f"hnx broker relay: published {n}, {left} pending"
 
-    return e2e.Relay(str(state_root), "unused", "HNXT", "hnxt", open_bus=bus, run_once=once)
+    return e2e.Relay(
+        str(state_root),
+        "unused",
+        "HNXT",
+        "hnxt",
+        open_bus=bus,
+        run_once=once,
+        open_wire=lambda: wire,
+    )
 
 
 def test_the_scenario_passes_every_step(lab, e2e):

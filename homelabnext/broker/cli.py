@@ -459,7 +459,9 @@ def _serve(args) -> int:
 
 def events_connector(target: str, *, stream: str, subject_prefix: str) -> Any:
     """A zero-argument factory for the bus the target file's ``events`` binding names, on the
-    standing ``stream`` / ``subject_prefix`` (never a scratch stream)."""
+    standing ``stream`` / ``subject_prefix`` (never a scratch stream), which it never creates:
+    the stream and its DLQ must be provisioned, each with a ``max_bytes`` limit (a relay with
+    ``STREAM.CREATE`` could make an unbounded one; its bus user is granted lookups only)."""
     from dataclasses import replace
 
     from homelabnext.conform.target import load_target, make_factory
@@ -470,6 +472,7 @@ def events_connector(target: str, *, stream: str, subject_prefix: str) -> Any:
     config = {
         **binding.config,
         "scratch": False,
+        "provision": False,
         "stream": stream,
         "subject_prefix": subject_prefix,
     }

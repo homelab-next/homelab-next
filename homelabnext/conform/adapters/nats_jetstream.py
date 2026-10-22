@@ -81,6 +81,7 @@ __all__ = [
     "WireError",
     "WireMsg",
     "make",
+    "provision_streams",
 ]
 
 _ADVISORY_MAX = "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES"
@@ -200,6 +201,78 @@ def _noop(_how: str) -> None:
     return None
 
 
+def _api(
+    wire: Wire, what: str, body: Mapping[str, Any] | None, *, timeout: float, missing: str = ""
+) -> Any:
+    payload = b"" if body is None else json.dumps(body).encode("utf-8")
+    msg = wire.request(f"$JS.API.{what}", payload, timeout=timeout)
+    try:
+        doc = json.loads(msg.data or b"{}")
+    except ValueError:
+        raise EventsError(f"{what}: reply is not JSON") from None
+    if not isinstance(doc, dict):
+        raise EventsError(f"{what}: reply is not an object")
+    err = doc.get("error")
+    if err:
+        code, err_code = int(err.get("code", 0)), int(err.get("err_code", 0))
+        if missing and err_code == _NOT_FOUND[missing]:
+            return None
+        raise JetStreamApiError(what, code, err_code, str(err.get("description", "")))
+    return doc
+
+
+def provision_streams(
+    wire: Wire,
+    *,
+    stream: str,
+    subject_prefix: str,
+    max_bytes: int,
+    dlq_max_bytes: int | None = None,
+    max_age: float = 30 * 86400.0,
+    duplicate_window: float = 86400.0,
+    storage: str = "file",
+    timeout: float = 5.0,
+) -> list[str]:
+    """The operator's one-time step for a standing bus: create the stream (``<prefix>.>``) and
+    its DLQ (the dead-letter advisories), each bounded (``max_bytes``, ``max_age``), when missing.
+    Returns the names it created.  Clients opened with ``provision=False`` (the broker's relay,
+    the StackStorm bridge) then need no ``STREAM.CREATE`` at all.  The same as ``nats stream add``
+    with these settings."""
+    if not _NAME_RE.match(stream or "") or max_bytes <= 0:
+        raise EventsError("a stream name and a positive max_bytes are required")
+    _check_subject(subject_prefix, pattern=False)
+    base = {
+        "retention": "limits",
+        "storage": storage,
+        "discard": "old",
+        "num_replicas": 1,
+        "max_age": int(max_age * _NS),
+    }
+    dlq = f"{stream}_DLQ"
+    configs = [
+        {
+            "name": stream,
+            "subjects": [f"{subject_prefix}.>"],
+            "duplicate_window": int(duplicate_window * _NS),
+            "max_bytes": int(max_bytes),
+            **base,
+        },
+        {
+            "name": dlq,
+            "subjects": [f"{_ADVISORY_MAX}.{stream}.*", f"{_ADVISORY_TERM}.{stream}.*"],
+            "max_bytes": int(dlq_max_bytes or max(1, max_bytes // 4)),
+            **base,
+        },
+    ]
+    created = []
+    for config in configs:
+        name = config["name"]
+        if _api(wire, f"STREAM.INFO.{name}", None, timeout=timeout, missing="stream") is None:
+            _api(wire, f"STREAM.CREATE.{name}", config, timeout=timeout)
+            created.append(name)
+    return created
+
+
 # --------------------------------------------------------------------------- the bus
 class JetStreamBus:
     """:class:`conformance.protocols.events.EventBus` on one JetStream stream (see module doc)."""
@@ -276,21 +349,7 @@ class JetStreamBus:
     def api(self, what: str, body: Mapping[str, Any] | None = None, *, missing: str = "") -> Any:
         """One ``$JS.API.<what>`` request.  Returns the decoded reply, or None when it is the
         ``missing`` kind's not-found error (``stream``, ``consumer`` or ``message``)."""
-        payload = b"" if body is None else json.dumps(body).encode("utf-8")
-        msg = self._wire.request(f"$JS.API.{what}", payload, timeout=self.request_timeout)
-        try:
-            doc = json.loads(msg.data or b"{}")
-        except ValueError:
-            raise EventsError(f"{what}: reply is not JSON") from None
-        if not isinstance(doc, dict):
-            raise EventsError(f"{what}: reply is not an object")
-        err = doc.get("error")
-        if err:
-            code, err_code = int(err.get("code", 0)), int(err.get("err_code", 0))
-            if missing and err_code == _NOT_FOUND[missing]:
-                return None
-            raise JetStreamApiError(what, code, err_code, str(err.get("description", "")))
-        return doc
+        return _api(self._wire, what, body, timeout=self.request_timeout, missing=missing)
 
     def _ensure_stream(self, config: Mapping[str, Any]) -> None:
         name = config["name"]
@@ -666,7 +725,8 @@ def make(
     ``provision=False`` creates no stream: both must exist, each with a ``max_bytes`` limit.
     ``user`` and ``password_secret`` (a secret name, never a value) authenticate the connection;
     the password goes only over ``tls://`` (``ca_file``: a private CA), to a loopback ``nats://``,
-    or with an explicit ``allow_plaintext``."""
+    or with an explicit ``allow_plaintext``.
+    ``provision=False`` creates no stream: both must exist, each with a ``max_bytes`` limit."""
     password = None
     if user is not None or password_secret is not None:
         if not user or not isinstance(password_secret, str) or not password_secret:
