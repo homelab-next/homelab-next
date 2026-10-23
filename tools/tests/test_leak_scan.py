@@ -881,7 +881,20 @@ def test_a_random_literal_with_a_verb_or_layout_inside_is_still_judged(value: st
 
 
 @pytest.mark.parametrize(
-    "value", ["2006-01-02T15:04:05Z07:00", "Jan _2 15:04:05", "%s:%d", "X-Api-Key", "ipv6-only"]
+    "value",
+    [
+        "2006-01-02T15:04:05Z07:00",
+        "Jan _2 15:04:05",
+        "%s:%d",
+        "X-Api-Key",
+        "ipv6-only",
+        # verify7.md (v7/fp): unpadded month, day, hour, minute and second
+        "January 2, 2006",
+        "Jan 2 15:04",
+        "2006-1-2",
+        "2006-1-2 3:4:5",
+        "3:04PM Jan 2",
+    ],
 )
 def test_layouts_verbs_and_words_stay_text(value: str):
     assert leak_scan._is_go_text_literal(value)
