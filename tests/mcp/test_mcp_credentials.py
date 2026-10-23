@@ -149,13 +149,13 @@ ACCEPTED = [
     (["-u1000:1000"], {}),  # uid:gid attached
     (["-uanalyst"], {}),
     (["-a", "0.0.0.0:8080"], {}),  # a listen address, not user:password
-    (["-a", "localhost:8080"], {}),
+    (["-a", "localhost:8080"], {}),  # no-raw-endpoint: allow a flag value under test, never dialled
     (["-a", "[::1]:8080"], {}),
     (["-a", ":8080"], {}),
     (["-a"], {}),
     (["-A", "Mozilla/5.0 (X11; rv:109.0) Gecko/20100101"], {}),  # curl's user agent
-    (["-A", "localhost:8080"], {}),
-    (["-a", "LOCALHOST:8080"], {}),
+    (["-A", "localhost:8080"], {}),  # no-raw-endpoint: allow a flag value under test, never dialled
+    (["-a", "LOCALHOST:8080"], {}),  # no-raw-endpoint: allow a flag value under test, never dialled
     (["-a", "localhost.:8080"], {}),
     (["-a", "backup.example.com:/data"], {}),  # rsync-style host:/path
     (["-a", "C:/work/out"], {}),
@@ -323,7 +323,7 @@ def test_scan_args_finds_attached_and_short_user_password_forms(args, flag):
         ["-a127.0.0.1:8080"],
         ["-uanalyst"],
         ["-A", "Mozilla/5.0 (X11; rv:109.0) Gecko/20100101"],
-        ["-A", "localhost:8080"],
+        ["-A", "localhost:8080"],  # no-raw-endpoint: allow a flag value under test, never dialled
         ["-a", "Localhost.:8080"],
         ["-a", "backup.example.com:/srv/data"],
         ["-aC:/x"],

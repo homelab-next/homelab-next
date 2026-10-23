@@ -233,7 +233,7 @@ pack, pack_hash = assemble_pack(manifest, {"sections": {...}, "pregates": {...}}
   `[A-Za-z0-9_]`, `[0-9]` and an ASCII boundary; whitespace stays Unicode), so a value glued to a
   CJK, Thai or Cyrillic letter (`用户alice@example.com已登录`) is found. The cost is the same rate of
   false positives that spaced text already has: a dotted quad glued to such letters
-  (`バージョン192.0.2.4`) is redacted as an address, as `192.0.2.4` without a version context would
+  (`バージョン192.0.2.4`) is redacted as an address, as `192.0.2.4` without a version context would <!-- no-raw-endpoint: allow RFC 5737 documentation address in an example -->
   be. A value overlapped by a higher-priority span keeps its own label for the parts the other span does not cover, so no part of it is left in clear (`password=4111 1111 1111 1111` gives a secret and a card label; the cost is over-redaction, such as the host of an e-mail address whose local part is a token). A label already in the text is never redacted again, so screening screened text changes nothing, and a value split by another span is counted once. When two overlapping spans of one type are merged, the plain text's value labels them, so
   one value keeps one label. Every rule is linear in the length of the text, whatever the
   length of a key.
