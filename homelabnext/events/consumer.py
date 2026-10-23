@@ -66,7 +66,9 @@ def decode_event(
     ``Infinity`` and a number too large for a float (``1e999``) are refused at the parse: Python's
     parser accepts them, a schema's ``minimum`` does not reject ``NaN``, and a consumer that kept
     one would emit invalid JSON (or ``nan`` in a page) downstream.  So is a string holding a lone
-    surrogate (``"\\ud800"``), which is no Unicode text and fails whatever encodes it later."""
+    surrogate (``"\\ud800"``), which is no Unicode text and fails whatever encodes it later.  A body
+    given as a mapping gets the same refusals: the surrogate walk here, and a number that is not
+    finite in :func:`~homelabnext.events.envelope.validate_event` (which a producer runs too)."""
     if isinstance(body, bytes | str):
         try:
             event = json.loads(body, parse_constant=_no_constant, parse_float=_finite)

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -99,10 +100,30 @@ def load_validator(event_type: str) -> None:
     _LOADED.add(str(path))
 
 
+def _non_finite(value: Any) -> list[str]:
+    """Where ``value`` holds a float that is not finite (``NaN``, ``Infinity``): none is JSON, a
+    schema's ``minimum`` does not reject ``NaN``, and every consumer refuses them on the wire.
+    Walked without recursion (a body may be nested as deep as a parser allows)."""
+    out: list[str] = []
+    stack: list[tuple[str, Any]] = [("", value)]
+    while stack and len(out) < 20:
+        where, v = stack.pop()
+        if isinstance(v, float) and not math.isfinite(v):
+            out.append(f"{where or '$'}: not a finite number ({v!r} is not JSON)")
+        elif isinstance(v, Mapping):
+            stack.extend((f"{where}/{k}".lstrip("/"), x) for k, x in v.items())
+        elif isinstance(v, list | tuple):
+            stack.extend((f"{where}/{i}".lstrip("/"), x) for i, x in enumerate(v))
+    return sorted(out)
+
+
 def event_problems(event: Any) -> list[str]:
-    """Every schema problem of ``event`` (empty list = valid)."""
+    """Every schema problem of ``event`` (empty list = valid), and every number in it that is not
+    finite."""
     if not isinstance(event, Mapping):
         return ["event must be a JSON object"]
+    if bad := _non_finite(event):
+        return bad  # the schema validator cannot reason about NaN
     path = schema_for_type(event.get("type", "")) or (_events_dir() / "envelope.schema.json")
     out = []
     for err in sorted(
@@ -180,8 +201,11 @@ def build_event(
 
 
 def canonical_body(event: Mapping[str, Any]) -> bytes:
-    """The deterministic wire form (sorted keys, no whitespace)."""
-    return json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    """The deterministic wire form (sorted keys, no whitespace); :class:`ValueError` for a number
+    that is not finite, which is not JSON (``NaN``, ``Infinity``)."""
+    return json.dumps(
+        event, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
+    ).encode()
 
 
 def body_digest(event: Mapping[str, Any]) -> str:
