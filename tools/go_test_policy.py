@@ -739,7 +739,10 @@ def declares_tests(directory: Path, files: Iterable[str] | None = None) -> bool:
     list's TestGoFiles and XTestGoFiles, so build constraints count), or every ``*_test.go``."""
     paths = [directory / f for f in files] if files is not None else directory.glob("*_test.go")
     for path in sorted(paths):
-        toks = go_tokens(path.read_text(encoding="utf-8", errors="replace"))
+        try:
+            toks = go_tokens(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError as exc:
+            raise PolicyError(f"cannot read the test file {path}: {exc.strerror}") from exc
         for i in range(len(toks) - 2):
             if toks[i].text != "func" or toks[i + 1].kind != "ident" or toks[i + 2].text != "(":
                 continue
@@ -768,13 +771,13 @@ def _has_output(toks: list[GoToken], start: int) -> bool:
 def runnable(lines: list[str]) -> list[str]:
     """The import paths whose packages declare tests.  A line is ``<import path>``, taken as
     declaring them; ``<import path> <dir>``, every ``*_test.go`` there; or go list's
-    ``<import path> <dir> <TestGoFiles> <XTestGoFiles>``, tab-separated, the file lists
-    comma-separated (the CI step's ``go list`` template)."""
+    ``<import path> <dir> <TestGoFiles> <XTestGoFiles>``, tab-separated, the file lists joined
+    with ``/``, which no file name holds (the CI step's ``go list`` template)."""
     out = []
     for line in lines:
         if "\t" in line:
             pkg, directory, *lists = line.split("\t")
-            files = [f for group in lists for f in group.split(",") if f]
+            files = [f for group in lists for f in group.split("/") if f]
             if declares_tests(Path(directory), files):
                 out.append(pkg)
             continue

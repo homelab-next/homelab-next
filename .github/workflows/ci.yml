@@ -375,7 +375,9 @@ jobs:
           go list ./... | /usr/bin/sudo tee "$res/go-packages.txt" > /dev/null
           /usr/bin/sudo test -s "$res/go-packages.txt"
           # (read before the tests run, so a test that rewrites its own files cannot change it)
-          go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{"\t"}}{{.Dir}}{{"\t"}}{{join .TestGoFiles ","}}{{"\t"}}{{join .XTestGoFiles ","}}{{end}}' ./... \
+          # with -race, as the run below, so race-tagged files count as they will there; the file
+          # lists are joined with "/", which no file name contains
+          go list -race -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{"\t"}}{{.Dir}}{{"\t"}}{{join .TestGoFiles "/"}}{{"\t"}}{{join .XTestGoFiles "/"}}{{end}}' ./... \
             | /usr/bin/sudo tee "$res/go-test-files.txt" > /dev/null
           /usr/bin/sudo /usr/bin/python3 -I "$pol/go_test_policy.py" \
             --declared-tests "$res/go-test-files.txt" | /usr/bin/sudo tee "$res/go-tested.txt" > /dev/null

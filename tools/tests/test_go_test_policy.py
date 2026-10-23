@@ -857,7 +857,9 @@ def test_the_results_are_root_owned_and_the_tests_cannot_sudo():
     assert '--expect-tests "$res/go-tested.txt"' in main
     # verify6.md (v6/et/ws): the list of packages that declare tests is read before the tests run
     assert main.index("--declared-tests") < main.index("go test -race -shuffle=on")
-    assert "join .TestGoFiles" in main and "join .XTestGoFiles" in main
+    assert 'join .TestGoFiles "/"' in main and 'join .XTestGoFiles "/"' in main
+    # verify7.md (v7/race): listed with the run's build tags
+    assert "go list -race -f '{{if or .TestGoFiles" in main
     # verify6.md (v6/priv/stale-m): no stale binary runs for a package that built none
     assert 'rm -f "$RUNNER_TEMP/privileged.test"' in root and "no test binary built" in root
     for run in (root, main):
@@ -1055,6 +1057,45 @@ def test_only_the_test_files_go_list_selected_are_read(tmp_path):
     line = f"{MOD}/w\t{tmp_path}\thelpers_test.go\t"
     assert policy.runnable([line]) == []
     assert policy.runnable([f"{MOD}/w\t{tmp_path}\t\tx_windows_test.go"]) == [f"{MOD}/w"]
+
+
+def test_a_comma_in_a_test_file_name_is_read_as_one_file(tmp_path):
+    # verify7.md: the lists were comma-joined, so "a,b_test.go" read the plain file "a" instead
+    (tmp_path / "a").write_text("not go\n")
+    (tmp_path / "a,b_test.go").write_text("package x\n\nfunc TestX(t *testing.T) {}\n")
+    (tmp_path / "b_test.go").write_text("package x\n\nfunc helper() {}\n")
+    line = f"{MOD}/c\t{tmp_path}\ta,b_test.go/b_test.go\t"
+    assert policy.runnable([line]) == [f"{MOD}/c"]
+    with pytest.raises(policy.PolicyError, match="cannot read the test file"):
+        policy.runnable([f"{MOD}/c\t{tmp_path}\tmissing_test.go\t"])
+
+
+@pytest.mark.usefixtures("go_toolchain")  # tools/tests/conftest.py (HNX_REQUIRE_GO)
+def test_the_ci_go_list_lists_test_files_with_the_race_tag(tmp_path):
+    # verify7.md (v7/race): a //go:build !race file was listed, so the package was expected to
+    # report a test the race run never builds
+    (tmp_path / "go.mod").write_text("module example.com/race\n\ngo 1.21\n")
+    (tmp_path / "p").mkdir()
+    (tmp_path / "p" / "p.go").write_text("package p\n")
+    (tmp_path / "p" / "h_test.go").write_text("package p\n\nfunc helper() {}\n")
+    (tmp_path / "p" / "slow_test.go").write_text(
+        '//go:build !race\n\npackage p\n\nimport "testing"\n\nfunc TestSlow(t *testing.T) {}\n'
+    )
+    (cmd,) = [x for x in ci_step("tests (race").splitlines() if "go list -race -f" in x]
+    template = cmd.split("-f '", 1)[1].split("'", 1)[0]
+    listed = subprocess.run(
+        ["go", "list", "-race", "-f", template, "./..."],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    assert [x.split("\t")[2] for x in listed] == ["h_test.go"]
+    assert policy.runnable(listed) == []
+    plain = subprocess.run(
+        ["go", "list", "-f", template, "./..."], cwd=tmp_path, capture_output=True, text=True
+    ).stdout.splitlines()
+    assert policy.runnable(plain) == ["example.com/race/p"]  # what the list without -race said
 
 
 def test_declared_tests_prints_the_list_the_judge_expects(tmp_path, capsys):
