@@ -263,16 +263,16 @@ def skip_reason(res: Result) -> str:
     for it.  The stream cannot tell that apart from ``t.Log(...); t.SkipNow()`` (the logged line
     becomes the reason) or from the last line of a multi-line message, so ``--check-sources``
     rejects those forms in the module's sources: a skip states its reason in the call, on one line.
+
+    The last line is taken even when it is empty: ``t.Skip("")`` writes an empty message line of its
+    own, and stepping over it would read an earlier ``t.Log`` line as the reason.
     """
     out = res.output
     ends = [i for i, line in enumerate(out) if SKIP_LINE.match(line)]
     before = out[: ends[-1]] if ends else out
     for line in reversed(before):
-        if FRAMING.match(line):
-            continue
-        text = CALLER.sub("", line).strip()
-        if text:
-            return text
+        if not FRAMING.match(line):
+            return CALLER.sub("", line).strip()
     return ""
 
 
@@ -606,24 +606,33 @@ def _skip_problem(name: str, rest: list[GoToken]) -> str | None:
     )
     if not one:
         return f"Skip's whole argument list must be one string literal: {use}"
-    lit = args[0]
-    multi = "\n" in lit.text if lit.kind == "raw" else _breaks_line(lit.text)
-    return f"Skip's reason spans lines: only its last line would be read: {use}" if multi else None
+    value = go_literal_value(args[0])
+    if "\n" in value or "\r" in value:
+        return f"Skip's reason spans lines: only its last line would be read: {use}"
+    if not any(c.isprintable() and not c.isspace() for c in value):
+        return f"Skip's reason is empty or only white space: {use}"
+    return None
 
 
-def _breaks_line(literal: str) -> bool:
-    """An interpreted string literal with an escape for a line feed or carriage return in it."""
-    for m in _ESCAPE.finditer(literal):
+_SIMPLE_ESCAPES = {"a": "\a", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v"}
+
+
+def go_literal_value(tok: GoToken) -> str:
+    """The value of a Go string literal token: a raw one without its carriage returns (as the
+    spec drops them), an interpreted one with its escapes decoded."""
+    body = tok.text[1:-1]
+    if tok.kind == "raw":
+        return body.replace("\r", "")
+
+    def decode(m: re.Match[str]) -> str:
         e = m.group()[1:]
         if e[0] in "xuU" and len(e) > 1:
-            code = int(e[1:], 16)
-        elif len(e) == 3 and e.isdigit():
-            code = int(e, 8)
-        else:
-            code = {"n": 10, "r": 13}.get(e, 0)
-        if code in (10, 13):
-            return True
-    return False
+            return chr(min(int(e[1:], 16), 0x10FFFF))
+        if len(e) == 3 and e.isdigit():
+            return chr(int(e, 8))
+        return _SIMPLE_ESCAPES.get(e, e)
+
+    return _ESCAPE.sub(decode, body)
 
 
 def list_privileged(policy: Policy) -> list[str]:

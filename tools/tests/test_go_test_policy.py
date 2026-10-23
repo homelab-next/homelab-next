@@ -899,6 +899,50 @@ def test_check_sources_sees_every_way_a_skip_can_take_its_reason_from_a_log(tmp_
     assert len(found) == 1 and found[0].startswith("p/p_test.go:7: ."), found
 
 
+def test_an_empty_skip_message_is_the_reason_not_the_line_logged_before_it(tmp_path, capsys):
+    # verify4.md (v4/cs): t.Log("docker not available"); t.Skip("") wrote "p_test.go:28: " last,
+    # and skip_reason stepped over it to the logged line, a registered reason
+    lines = package(
+        "internal/queue",
+        "pass",
+        events_of("internal/queue", "TestEmpty", "skip", "docker not available", ""),
+    )
+    res = policy.parse(lines).tests[(f"{MOD}/internal/queue", "TestEmpty")]
+    assert policy.skip_reason(res) == ""
+    assert run(tmp_path, lines) == 1
+    assert "TestEmpty: silent skip, reason ''" in capsys.readouterr().out
+
+
+EMPTY_REASONS = {
+    "empty": 't.Skip("")',
+    "a vertical tab": 't.Skip("\\v")',
+    "an ideographic space": 't.Skip("\u3000")',
+    "an escaped ideographic space": 't.Skip("\\u3000")',
+    "a zero-width space": 't.Skip("\\u200b")',
+    "blanks in a raw literal": "t.Skip(`  \t `)",
+    "an escaped tab": 't.Skip("\\t")',
+}
+
+
+@pytest.mark.parametrize("call", EMPTY_REASONS.values(), ids=EMPTY_REASONS.keys())
+def test_check_sources_rejects_an_empty_or_blank_reason(tmp_path, call):
+    (tmp_path / "p_test.go").write_text(
+        'package p\n\nimport "testing"\n\nfunc TestX(t *testing.T) {\n'
+        f'\tt.Log("docker not available")\n\t{call}\n}}\n'
+    )
+    found = policy.check_sources(tmp_path)
+    assert len(found) == 1 and "empty or only white space" in found[0], found
+
+
+def test_go_literal_values_decode_escapes():
+    def value(text: str) -> str:
+        (tok,) = policy.go_tokens(text)
+        return policy.go_literal_value(tok)
+
+    assert value('"a\\tb\\x41\\101\\u00e9\\U0001F600\\\\n\\""') == 'a\tbAAé\U0001f600\\n"'
+    assert value("`a\r\nb`") == "a\nb"
+
+
 def test_check_sources_reads_helpers_in_non_test_files(tmp_path):
     (tmp_path / "testutil").mkdir()
     (tmp_path / "testutil" / "testutil.go").write_text(
