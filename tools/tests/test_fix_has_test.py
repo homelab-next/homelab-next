@@ -36,8 +36,12 @@ def test_is_fix(msg, fix):
 
 
 def test_test_files():
-    files = ["homelabnext/a.py", "tests/a/test_b.py", "tools/tests/x.json", "pkg/b_test.py"]
+    files = ["homelabnext/a.py", "tests/a/test_b.py", "tools/tests/x.json", "pkg/tests/b_test.py"]
     assert gate.test_files(files) == files[1:]
+    # *_test.py is a test only under a test directory: tools/x_test.py is a tool
+    assert gate.test_files(["pkg/b_test.py", "tools/lint_test.py"]) == []
+    assert gate.TEST_MODULE.search("pkg/tests/b_test.py")
+    assert not gate.TEST_MODULE.search("tools/lint_test.py")
     assert gate.test_files(["conformance/dns/test_dns.py"]) == ["conformance/dns/test_dns.py"]
     assert gate.test_files(["docs/testing.md", "src/latest.py"]) == []
     go = ["orchestrator/internal/queue/queue_test.go", "orchestrator/internal/queue/queue.go"]

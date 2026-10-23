@@ -17,7 +17,8 @@
 
 A commit is a *fix* when its subject is a conventional-commit fix (``fix: ...``,
 ``fix(scope): ...``, ``fix!: ...``) or its message carries a ``Fixes:`` trailer.  Every fix in the
-range must touch at least one test file (a ``test_*.py``/``*_test.py``/``*_test.go`` file, or
+range must touch at least one test file (a ``test_*.py`` or ``*_test.go`` file, a ``*_test.py``
+file under a test directory, or
 anything under a ``tests/``, ``test/`` or Go ``testdata/`` directory: a fix whose only test
 change is a fixture or golden file has a test).  A fix that genuinely cannot have one (documentation, a CI
 setting) says why in a ``No-regression-test: <reason>`` trailer; the gate lists every waiver.
@@ -70,15 +71,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 FIX_SUBJECT = re.compile(r"^fix(\([^)]*\))?!?:\s*\S", re.I)
 FIXES_TRAILER = re.compile(r"^Fixes:\s*\S", re.M | re.I)
 WAIVER = re.compile(r"^No-regression-test:[ \t]*(?P<why>\S.{7,})$", re.M | re.I)
-TEST_PATH = re.compile(r"(^|/)tests?/|(^|/)testdata/|(^|/)test_[^/]*\.py$|_test\.py$|_test\.go$")
+# a ``*_test.py`` name is a test only under a test directory (a tool may be called x_test.py,
+# as this gate is): ``test_*.py`` anywhere, and anything under tests/ or test/
+TEST_PATH = re.compile(r"(^|/)tests?/|(^|/)testdata/|(^|/)test_[^/]*\.py$|_test\.go$")
 # Go's testdata directory: fixtures of the package in the directory that holds it
 # (the outermost one: testdata/ below a testdata/ is still the outer package's data)
 GO_TESTDATA = re.compile(r"^(?P<pkg>(?:.*?/)?)testdata/")
-TEST_MODULE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$")
-#: files whose names look like tests but are not: this gate's own source ends in ``_test.py``, so
-#: a fix to the gate counted as shipping a test (itself), and --prove staged the fixed gate on the
-#: parent and collected its helper functions as tests
-NOT_TESTS = frozenset({"tools/fix_has_test.py"})
+TEST_MODULE = re.compile(r"(^|/)test_[^/]*\.py$|(^|/)tests?/(?:[^/]+/)*[^/]*_test\.py$")
 GO_TEST_FILE = re.compile(r"(^|/)[^/]+_test\.go$")
 # a top-level test or fuzz function: go test's rule, Test/Fuzz then nothing or a non-lowercase
 # character (``Testable`` is a helper); ``TestMain`` is the package's harness, not a test
@@ -118,7 +117,7 @@ def waiver(message: str) -> str | None:
 
 
 def test_files(files: list[str]) -> list[str]:
-    return [f for f in files if TEST_PATH.search(f) and f not in NOT_TESTS]
+    return [f for f in files if TEST_PATH.search(f)]
 
 
 def _git(*args: str, cwd: Path = REPO_ROOT) -> str:
