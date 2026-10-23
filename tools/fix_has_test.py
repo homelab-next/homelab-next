@@ -17,13 +17,22 @@
 
 A commit is a *fix* when its subject is a conventional-commit fix (``fix: ...``,
 ``fix(scope): ...``, ``fix!: ...``) or its message carries a ``Fixes:`` trailer.  Every fix in the
-range must touch at least one test file (a ``test_*.py``/``*_test.py`` file, or anything under a
-``tests/`` or ``test/`` directory).  A fix that genuinely cannot have one (documentation, a CI
+range must touch at least one test file (a ``test_*.py``/``*_test.py``/``*_test.go`` file, or
+anything under a ``tests/``, ``test/`` or Go ``testdata/`` directory: a fix whose only test
+change is a fixture or golden file has a test).  A fix that genuinely cannot have one (documentation, a CI
 setting) says why in a ``No-regression-test: <reason>`` trailer; the gate lists every waiver.
 
 ``--prove`` also checks the "fails without the fix" half: for each fix, the commit's test files are
 put on top of its parent in a temporary worktree and the touched test modules are run there; they
 must fail.  A regression test that passes without the fix proves nothing and is reported.
+
+A Go test file (``*_test.go``) is proved in its module (the nearest directory with a ``go.mod``,
+at any depth, so in any discovered module): ``go test ./<pkg> -run '^(<Test funcs>)$'`` runs the test
+and fuzz functions the commit added or changed (the whole package when only helpers changed) and
+must fail; a package that no longer builds without the fix counts as failing, like pytest's exit
+2.  The commit's ``testdata/`` files are staged on the parent with its tests (a test reading a
+fixture the parent lacks would otherwise "fail" for that reason alone), and a package whose
+``testdata/`` the commit changed is run whole.  Without a Go toolchain on PATH the commit cannot be proved, which is a problem, not a pass.
 
 Usage: python tools/fix_has_test.py [--range A..B] [--prove] [--allow-missing-base] [--repo DIR]
 Exit: 0 every fix has a test, 1 some fix has none (or, with --prove, a test passes without the
@@ -34,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -44,8 +54,22 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 FIX_SUBJECT = re.compile(r"^fix(\([^)]*\))?!?:\s*\S", re.I)
 FIXES_TRAILER = re.compile(r"^Fixes:\s*\S", re.M | re.I)
 WAIVER = re.compile(r"^No-regression-test:[ \t]*(?P<why>\S.{7,})$", re.M | re.I)
-TEST_PATH = re.compile(r"(^|/)tests?/|(^|/)test_[^/]*\.py$|_test\.py$")
+TEST_PATH = re.compile(r"(^|/)tests?/|(^|/)testdata/|(^|/)test_[^/]*\.py$|_test\.py$|_test\.go$")
+# Go's testdata directory: fixtures of the package in the directory that holds it
+# (the outermost one: testdata/ below a testdata/ is still the outer package's data)
+GO_TESTDATA = re.compile(r"^(?P<pkg>(?:.*?/)?)testdata/")
 TEST_MODULE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$")
+GO_TEST_FILE = re.compile(r"(^|/)[^/]+_test\.go$")
+# a top-level test or fuzz function: go test's rule, Test/Fuzz then nothing or a non-lowercase
+# character (``Testable`` is a helper); ``TestMain`` is the package's harness, not a test
+GO_TEST_FUNC = re.compile(r"^func ((?:Test|Fuzz)(?:[A-Z0-9_]\w*)?)\(", re.M)
+GO_NOT_A_TEST = frozenset({"TestMain"})
+# go test output that means the tests never ran: not a failing test.  ``go: downloading ...`` (a
+# cold module cache) is progress, not an error.
+GO_SETUP_ERROR = re.compile(
+    r"\[setup failed\]|^go: (?:errors parsing|cannot find main module|updates to go\.mod needed)",
+    re.M,
+)
 
 
 @dataclass
@@ -111,7 +135,125 @@ def check(commits: list[Commit]) -> tuple[list[str], list[str]]:
     return problems, notes
 
 
-def prove(c: Commit, cwd: Path = REPO_ROOT, python: str = sys.executable) -> str | None:
+def _go_func_end(text: str, start: int) -> int:
+    """The index just past the ``}`` closing the function declared at ``start``.
+
+    Counts braces, skipping string, raw-string and rune literals and comments, so a ``}`` inside
+    a literal (a raw-string JSON fixture, say) does not end the function early; ``len(text)``
+    when the source ends first.
+    """
+    depth, i, n = 0, start, len(text)
+    while i < n:
+        ch = text[i]
+        if text.startswith("//", i):
+            nl = text.find("\n", i)
+            i = n if nl < 0 else nl
+        elif text.startswith("/*", i):
+            close = text.find("*/", i + 2)
+            i = n if close < 0 else close + 2
+            continue
+        elif ch == "`":
+            close = text.find("`", i + 1)
+            i = n if close < 0 else close + 1
+            continue
+        elif ch in "\"'":
+            i += 1
+            while i < n and text[i] != ch and text[i] != "\n":
+                i += 2 if text[i] == "\\" else 1
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return n
+
+
+def _go_funcs(text: str) -> dict[str, str]:
+    """Top-level test and fuzz functions of a Go file -> their source."""
+    return {
+        m.group(1): text[m.start() : _go_func_end(text, m.start())]
+        for m in GO_TEST_FUNC.finditer(text)
+        if m.group(1) not in GO_NOT_A_TEST
+    }
+
+
+def changed_go_tests(c: Commit, path: str, cwd: Path = REPO_ROOT) -> list[str]:
+    """The test and fuzz functions of ``path`` that ``c`` added or changed."""
+    new = _go_funcs(_git("show", f"{c.sha}:{path}", cwd=cwd))
+    try:
+        old = _go_funcs(_git("show", f"{c.sha}^:{path}", cwd=cwd))
+    except subprocess.CalledProcessError:
+        old = {}  # a new file: every function is new
+    return sorted(name for name, body in new.items() if old.get(name) != body)
+
+
+def _go_module(wt: Path, path: str) -> Path | None:
+    """The nearest directory above ``path`` (inside ``wt``) that holds a go.mod."""
+    d = (wt / path).parent
+    while d == wt or wt in d.parents:
+        if (d / "go.mod").is_file():
+            return d
+        if d == wt:
+            return None
+        d = d.parent
+    return None
+
+
+def _go_module_at(c: Commit, path: str, cwd: Path) -> bool:
+    """Whether ``path`` lies in a Go module (a go.mod in a directory above it) at commit ``c``."""
+    parts = path.split("/")[:-1]
+    for n in range(len(parts), -1, -1):
+        mod = "/".join([*parts[:n], "go.mod"])
+        probe = ["git", "cat-file", "-e", f"{c.sha}:{mod}"]  # quiet: a missing go.mod is the answer
+        if subprocess.run(probe, cwd=cwd, capture_output=True).returncode == 0:
+            return True
+    return False
+
+
+def _prove_go(
+    c: Commit, wt: Path, go: str, files: list[str], cwd: Path, data: list[str] | None = None
+) -> list[str]:
+    """Run the Go tests ``c`` touched on the parent tree ``wt``; problems when they pass."""
+    targets: dict[tuple[Path, str], set[str] | None] = {}
+    problems = []
+    for f in data or []:  # testdata/: the package in the directory holding it, run whole
+        pkg_dir = wt / GO_TESTDATA.match(f).group("pkg")
+        mod = _go_module(wt, (pkg_dir / "testdata").relative_to(wt).as_posix())
+        if mod is not None:
+            targets[(mod, "./" + pkg_dir.relative_to(mod).as_posix())] = None
+    for f in files:
+        mod = _go_module(wt, f)
+        if mod is None:
+            problems.append(f"{c.short}: {f} is in no Go module on the parent (no go.mod above it)")
+            continue
+        pkg = "./" + ((wt / f).parent.relative_to(mod).as_posix())
+        funcs = changed_go_tests(c, f, cwd=cwd)
+        key = (mod, pkg)
+        if not funcs or targets.get(key, set()) is None:
+            targets[key] = None  # only helpers changed: the whole package
+        else:
+            targets.setdefault(key, set()).update(funcs)
+    for (mod, pkg), funcs in sorted(targets.items(), key=lambda t: (str(t[0][0]), t[0][1])):
+        cmd = [go, "test", "-count=1", pkg]
+        if funcs:
+            cmd += ["-run", f"^({'|'.join(sorted(funcs))})$"]
+        run = subprocess.run(cmd, cwd=mod, capture_output=True, text=True, check=False)
+        what = f"{mod.relative_to(wt).as_posix()}: {' '.join(cmd[1:])}"
+        out = run.stdout + run.stderr
+        if run.returncode == 0:
+            problems.append(f"{c.short}: its regression test passes WITHOUT the fix ({what})")
+        elif run.returncode != 1 or GO_SETUP_ERROR.search(out):
+            # 1 is a failing test or a test package that does not build without the fix; a
+            # setup or module error (missing go.mod, no network for a module) proves nothing
+            problems.append(f"{c.short}: its Go tests could not run on the parent ({what})")
+    return problems
+
+
+def prove(
+    c: Commit, cwd: Path = REPO_ROOT, python: str = sys.executable, go: str = "go"
+) -> str | None:
     """Run the fix's test modules against its parent; None when they fail there (good)."""
     tests = [
         f
@@ -119,8 +261,15 @@ def prove(c: Commit, cwd: Path = REPO_ROOT, python: str = sys.executable) -> str
         if subprocess.run(["git", "cat-file", "-e", f"{c.sha}:{f}"], cwd=cwd).returncode == 0
     ]  # deleted files are not staged
     modules = [f for f in tests if TEST_MODULE.search(f)]
-    if not modules:
-        return None  # only fixtures changed: nothing runnable to prove with
+    go_files = [f for f in tests if GO_TEST_FILE.search(f)]
+    # a Go package's fixtures: its tests run whole with them (and the tests' own changes)
+    go_data = [f for f in tests if GO_TESTDATA.match(f) and _go_module_at(c, f, cwd)]
+    if not modules and not go_files and not go_data:
+        return None  # only fixtures outside a Go package changed: nothing runnable to prove with
+    go_bin = shutil.which(go) if go_files or go_data else None
+    if (go_files or go_data) and go_bin is None:
+        return f"{c.short}: cannot prove its Go tests: no Go toolchain ({go!r}) on PATH"
+    problems: list[str] = []
     with tempfile.TemporaryDirectory() as tmp:
         wt = Path(tmp) / "parent"
         try:
@@ -129,24 +278,33 @@ def prove(c: Commit, cwd: Path = REPO_ROOT, python: str = sys.executable) -> str
             return f"{c.short}: cannot check out its parent to prove the test"
         try:
             _git("checkout", c.sha, "--", *tests, cwd=wt)
-            run = subprocess.run(
-                [python, "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *modules],
-                cwd=wt,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            if modules:
+                run = subprocess.run(
+                    [python, "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *modules],
+                    cwd=wt,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if run.returncode == 0:
+                    problems.append(
+                        f"{c.short}: its regression test passes WITHOUT the fix "
+                        f"({', '.join(modules)})"
+                    )
+                elif run.returncode not in (1, 2):  # 1 failed, 2 interrupted (a missing name)
+                    problems.append(
+                        f"{c.short}: its tests could not run on the parent "
+                        f"(pytest exit {run.returncode})"
+                    )
+            if (go_files or go_data) and go_bin:
+                problems += _prove_go(c, wt, go_bin, go_files, cwd, data=go_data)
         except subprocess.CalledProcessError as exc:
             return f"{c.short}: could not stage its tests on the parent ({exc.stderr.strip()})"
         finally:
             subprocess.run(
                 ["git", "worktree", "remove", "--force", str(wt)], cwd=cwd, capture_output=True
             )
-    if run.returncode == 0:
-        return f"{c.short}: its regression test passes WITHOUT the fix ({', '.join(modules)})"
-    if run.returncode not in (1, 2):  # 1 failed, 2 interrupted (e.g. the fixed name is missing)
-        return f"{c.short}: its tests could not run on the parent (pytest exit {run.returncode})"
-    return None
+    return "; ".join(problems) or None
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -11,7 +11,7 @@ import copy
 import json
 
 import pytest
-from orch_helpers import NEVER, T0, FakeSpendLogs, body, examples, turn_source
+from orch_helpers import KEY_ENV, NEVER, T0, FakeSpendLogs, body, examples, turn_source
 
 from conformance.protocols.inference import TURN_FIELDS, TurnSourceError
 from homelabnext.orchestration.gateway import MAX_WINDOW_S, SLACK_S, _span, sync_turns
@@ -508,6 +508,29 @@ def test_an_option_the_adapter_declares_secret_takes_only_a_secret_name(site_ada
     assert "upstream_ref" in capsys.readouterr().err and not (site_adapters / "opts.json").exists()
     ok = ["--turn-source-option", "upstream_ref=secret:gw/ref"]
     assert _turns_cli(site_adapters, *spec, *ok) == 0
+
+
+@pytest.mark.parametrize("timeout", ["-1", "0", "601", "1e308"])
+def test_a_timeout_out_of_range_is_exit_2_at_startup_not_a_traceback(
+    timeout, capsys, monkeypatch, filled
+):
+    """The shipped adapter took any float, so a bad value failed at read time on every pass.
+    The gateway and its viewer key are both set, so on the old code the run reaches the read
+    (and its ValueError or OverflowError) instead of stopping at a missing setting."""
+    from homelabnext.orchestration import cli
+
+    for var, value in KEY_ENV.items():
+        monkeypatch.setenv(var, value)
+    with FakeSpendLogs() as gw:
+        monkeypatch.setenv("HNX_ENDPOINT_LLM_GATEWAY", gw.url)
+        argv = ["turns", "--db", str(filled.path)]
+        argv += ["--turn-source", "homelabnext.conform.adapters.litellm_spend_log:make"]
+        argv += ["--allow-plaintext"]
+        argv += ["--turn-source-option", f"timeout={timeout}"]
+        assert cli.main(argv, clock=lambda: T0) == 2
+    out, err = capsys.readouterr()
+    assert "0 < timeout <= 600" in err
+    assert "Traceback" not in out + err
 
 
 def test_turns_exits_3_when_rows_were_refused_and_1_when_the_gateway_is_unreadable(

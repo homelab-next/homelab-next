@@ -11,19 +11,19 @@ directory beside it (``<uid>.events/``, ``docs/systems/dns.events/``; see
 inline ``reviews:`` list::
 
     reviews:
-      - by: agent:j8-lead        # issuer:subject, compared like the broker's approvals
-        kind: agent              # agent | human
-        role: check              # check | audit | approve
+      - by: agent:assessment-lead  # issuer:subject, compared like the broker's approvals
+        kind: agent                # agent | human
+        role: check                # check | audit | approve
         date: 2026-10-19
-        verdict: pass            # pass | changes | reject
-        digest: sha256:3f9a...   # the content reviewed (`hnx reviews digest FILE`); prefix >= 12
+        verdict: pass              # pass | changes | reject
+        digest: sha256:3f9a...     # the content reviewed (`hnx reviews digest FILE`); prefix >= 12
         note: optional one line or a link to the evidence
 
 Identity rules (always fatal):
 
 * identities are ``issuer:subject``, normalized with the broker's
-  :func:`homelabnext.broker.qualified_identity`, so ``agent:J8_Lead`` and ``agent:j8-lead`` are
-  one reviewer;
+  :func:`homelabnext.broker.qualified_identity`, so ``agent:Assessment_Lead`` and
+  ``agent:assessment-lead`` are one reviewer;
 * the ``author`` never reviews their own artefact, in any role;
 * an ``audit`` review (an independent agent audit that looks for what is wrong, missing or
   unproven) comes from an agent identity other than every ``check`` reviewer;

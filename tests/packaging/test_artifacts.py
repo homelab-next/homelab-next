@@ -57,6 +57,13 @@ SDIST_TOP_ALLOW = {
     "tools",
 }
 PLANTED = "LAB_DB_PASS" + "WORD=Zq81kXw" + "Lm2pV9a\n"
+# a stand-in for the Go module (orchestrator/): source, an example config and a Python helper
+ORCHESTRATOR = {
+    "orchestrator/go.mod": "module example.com/fixture\n\ngo 1.21\n",
+    "orchestrator/internal/queue/queue.go": "package queue\n",
+    "orchestrator/examples/controller.yaml": "listen: example.internal\n",
+    "orchestrator/contrib/hnx_adapter/adapter.py": "X = 1\n",
+}
 
 
 @pytest.fixture(scope="module")
@@ -65,6 +72,10 @@ def artefacts(tmp_path_factory):
     work = export_tree(tmp_path_factory.mktemp("src"))
     for bait in ("examples/.env", "schemas/local.env", "homelabnext/scratch_notes.py"):
         (work / bait).write_text(PLANTED)  # untracked: must not ship
+    for rel, text in ORCHESTRATOR.items():  # tracked, as the Go module will be: must not ship
+        (work / rel).parent.mkdir(parents=True, exist_ok=True)
+        (work / rel).write_text(text)
+    git(work, "add", "orchestrator")
     out = tmp_path_factory.mktemp("dist")
     sdist = build("sdist", work, out)
     wheel = build("wheel", work, out)
@@ -92,6 +103,19 @@ def test_sdist_contents_match_the_allowlist(artefacts):
     assert not any(".env" in Path(r).name for r in rel)
     assert not any(m.issym() or m.islnk() for m in members)
     assert not any(r.endswith("scratch_notes.py") for r in rel)
+
+
+def test_the_go_module_is_in_neither_artefact(artefacts):
+    """orchestrator/ is a Go module with its own CI job; MANIFEST.in prunes it from the sdist and
+    the wheel's package list never reaches it (docs: the migration plan, section 3.3)."""
+    work, sdist, wheel = artefacts
+    assert (work / "orchestrator" / "go.mod").is_file()  # the stand-in was really there
+    with tarfile.open(sdist) as t:
+        sdist_names = [m.name.split("/", 1)[1] for m in t.getmembers() if "/" in m.name]
+    wheel_names = zipfile.ZipFile(wheel).namelist()
+    for names in (sdist_names, wheel_names):
+        assert [n for n in names if "orchestrator" in Path(n).parts] == []
+        assert not any(n.endswith((".go", "go.mod", "hnx_adapter/adapter.py")) for n in names)
 
 
 def test_unpacked_artefacts_are_leak_clean(artefacts, tmp_path):

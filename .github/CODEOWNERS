@@ -7,6 +7,7 @@
 /.github/                 @PeteSampras
 /tools/                   @PeteSampras
 /conformance/             @PeteSampras
+/orchestrator/            @PeteSampras
 /constraints/             @PeteSampras
 /.gitleaks.toml           @PeteSampras
 /.pre-commit-config.yaml  @PeteSampras
