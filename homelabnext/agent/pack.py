@@ -71,20 +71,40 @@ ESCAPE_PREFIX = "[escaped] "
 LINE_BREAK = re.compile("(\r\n|[\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029])")
 
 
-def fence_key(line: str) -> str:
-    """``line`` without its leading whitespace and format characters (Unicode category Cf: zero
-    width space, BOM, joiners, bidi controls), which a reader of the prompt does not see: what a
-    fence test must look at."""
-    i = 0
-    while i < len(line) and (line[i].isspace() or unicodedata.category(line[i]) == "Cf"):
-        i += 1
-    return line[i:]
+#: characters a reader does not see as ink: format characters (zero width space, BOM, joiners,
+#: bidi controls, tags), combining marks (a mark or variation selector before or inside a
+#: delimiter), and the blank letters and symbols that render as nothing (Hangul fillers, the
+#: braille blank)
+_INVISIBLE_CATEGORIES = frozenset({"Cf", "Mn", "Me"})
+_BLANK_FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
+
+
+def fence_key(line: str, width: int | None = None) -> str:
+    """What a fence test must look at: ``line`` as a reader sees it.  Every character is
+    NFKC-folded (a full-width delimiter reads as the ASCII one), invisible characters are
+    dropped wherever they are (:data:`_INVISIBLE_CATEGORIES`, :data:`_BLANK_FILLERS`), and
+    leading whitespace is skipped.  With ``width``, folding stops once that many characters are kept, so a very long
+    line costs no more than its start."""
+    out: list[str] = []
+    for ch in line:
+        for c in ch if ch.isascii() else unicodedata.normalize("NFKC", ch):
+            if not c.isascii() and (
+                c in _BLANK_FILLERS or unicodedata.category(c) in _INVISIBLE_CATEGORIES
+            ):
+                continue
+            if not out and c.isspace():
+                continue
+            out.append(c)
+        if width is not None and len(out) >= width:
+            break
+    return "".join(out)
 
 
 def looks_like_fence(line: str, delims: tuple[str, ...]) -> bool:
     """True when ``line`` would read as a fence (or as the escape prefix) to a model."""
-    key = fence_key(line)
-    return key.startswith(delims) or key.startswith(ESCAPE_PREFIX.rstrip())
+    escape = ESCAPE_PREFIX.rstrip()
+    key = fence_key(line, max([len(escape), *map(len, delims)]))
+    return key.startswith(delims) or key.startswith(escape)
 
 
 def split_lines(text: str) -> list[str]:
@@ -94,8 +114,8 @@ def split_lines(text: str) -> list[str]:
 
 def _escape(text: str, delims: tuple[str, ...]) -> str:
     """Prefix every line that looks like a fence so it reads as data, not structure.  A line is
-    what any line boundary ends (not only LF), and the test ignores leading format characters;
-    the text's own line breaks are kept."""
+    what any line boundary ends (not only LF), and the test looks at the line as a reader sees it
+    (:func:`fence_key`); the text's own line breaks are kept."""
     parts = LINE_BREAK.split(text)  # line, break, line, break, ..., line
     for i in range(0, len(parts), 2):
         if looks_like_fence(parts[i], delims):

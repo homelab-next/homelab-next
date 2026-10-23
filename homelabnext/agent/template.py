@@ -142,7 +142,7 @@ def _placeholders(text: str) -> tuple[list[str], list[str]]:
 
 def _fence_like(text: str, delims: tuple[str, ...]) -> list[str]:
     """Lines of ``text`` (split on every line boundary) that read as a fence or the escape
-    prefix, leading whitespace and format characters ignored (:func:`pack.looks_like_fence`)."""
+    prefix, read as a reader sees the line (:func:`pack.looks_like_fence`)."""
     return [ln for ln in split_lines(text) if looks_like_fence(ln, delims)]
 
 

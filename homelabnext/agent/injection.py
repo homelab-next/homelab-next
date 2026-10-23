@@ -147,7 +147,23 @@ class Case:
     lang: str | None = None
 
     def place(self, slot: str, delimiter: str) -> str:
-        return self.payload.replace("<<slot>>", slot).replace("<<delim>>", delimiter)
+        return _DELIM.sub(
+            lambda m: _delim_variant(delimiter, m.group(1)), self.payload.replace("<<slot>>", slot)
+        )
+
+
+# <<delim>> is the template's delimiter; <<delim:zw>> the same with a zero-width space in the
+# middle, <<delim:fullwidth>> spelled in full-width forms: what a reader still sees as a fence
+_DELIM = re.compile(r"<<delim(?::(zw|fullwidth))?>>")
+
+
+def _delim_variant(delimiter: str, how: str | None) -> str:
+    if how == "zw":
+        half = max(1, len(delimiter) // 2)
+        return delimiter[:half] + chr(0x200B) + delimiter[half:]
+    if how == "fullwidth":
+        return "".join(chr(ord(c) + 0xFEE0) if "!" <= c <= "~" else c for c in delimiter)
+    return delimiter
 
 
 @dataclass(frozen=True)
@@ -267,8 +283,8 @@ _OPEN = re.compile(r"^(\S{4,64}) ([a-z][a-z0-9-]*) \[(?:session|volatile)\] ([0-
 
 def outside_fences(text: str) -> str:
     """``text`` with every untrusted-data fence removed, read the way a gullible model would: lines
-    end at every line boundary (not only LF), leading whitespace and format characters are not
-    seen, and a fence ends at the first line that starts with its delimiter.  That line is skipped
+    end at every line boundary (not only LF), each line is read as a reader sees it
+    (:func:`homelabnext.agent.pack.fence_key`: folded, invisible characters dropped), and a fence ends at the first line that starts with its delimiter.  That line is skipped
     when it closes the section (with any nonce); anything else that starts with the delimiter (a
     forged ``instructions`` header the escaping missed) ends the data and stays visible, so a
     payload that slips past :func:`homelabnext.agent.pack._escape` counts as followed."""

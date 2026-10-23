@@ -249,8 +249,10 @@ pack, pack_hash = assemble_pack(manifest, {"sections": {...}, "pregates": {...}}
   carry a per-pack nonce derived from the digest of that content
   (`<delim> <name> [<tier>] <nonce> <delim>` ... `<delim> end <name> <nonce> <delim>`), and any line
   of their text that starts with the delimiter is prefixed `[escaped] `. A line is what any line
-  boundary ends (CR, VT, FF, NEL, U+2028 and U+2029 as well as LF), and leading whitespace and
-  format characters (zero-width space, BOM) are ignored in the test; the template lint and the
+  boundary ends (CR, VT, FF, NEL, U+2028 and U+2029 as well as LF), and the test reads the line
+  as a reader sees it: NFKC-folded (a full-width delimiter reads as the ASCII one), with format characters, combining
+  marks and blank fillers (U+3164, U+FFA0, U+115F, U+1160, U+2800) dropped wherever they are and
+  leading whitespace skipped; the template lint and the
   injection eval's fake model read lines the same way. Input therefore cannot
   open a section of its own, least of all a stable one. This is a structural guarantee about the
   text, not about the model: a model can still be persuaded by data it reads, so the broker, not
