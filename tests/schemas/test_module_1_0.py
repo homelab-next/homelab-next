@@ -921,6 +921,14 @@ def test_the_schema_and_the_reader_agree_on_a_scope_entry(entry):
     assert (schema_ok, reader_ok) == SCOPE_ENTRIES[entry]
 
 
+@pytest.mark.parametrize("value", ["0.0.0.0", "::", ".".join("2104"), "cafe::beef", f"{D1}.10"])
+def test_a_site_config_value_that_is_no_site_address_is_accepted(value):
+    """S7: a bind address, a version, a label or a documentation address is not refused."""
+    site = copy.deepcopy(SITES["single-box"])
+    site["features"]["external-collector"]["config"]["edge_region"] = value
+    assert mr.site_problems(site, MODULES, SLOTS) == []
+
+
 def test_an_explicit_empty_exclusion_and_a_dynamic_wan_source_are_valid_shapes():
     """S3: "nothing excluded" is an explicit [] (absent still fails closed), and trusted.wan may
     name a dynamic source; the schema takes both, so freezing it later is not a breaking change.
@@ -1259,9 +1267,17 @@ SITE_DEFECTS.update(
         "an address literal as a site config value": (
             "single-box",
             lambda s, m: s["features"]["external-collector"]["config"].__setitem__(
-                "edge_region", "192.0.2.10"
+                "edge_region", ".".join(("10", "20", "0", "1"))
             ),
-            "edge_region: an address literal (addresses live in the selection's scope block",
+            "edge_region: an address literal (" + ".".join(("10", "20", "0", "1")) + "): a lab "
+            "address belongs in the selection's scope block",
+        ),
+        "a zero-padded address as a site config value": (
+            "single-box",
+            lambda s, m: s["features"]["external-collector"]["config"].__setitem__(
+                "edge_region", "010.020.000.001"
+            ),
+            "edge_region: an address literal (010.020.000.001)",
         ),
         "count multiplies the footprint": (
             "single-box",

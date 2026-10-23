@@ -332,3 +332,62 @@ def test_an_agent_on_a_calendar_or_a_trigger_runs_unattended():
     assert not ms.runs_unattended({"contributes": {"agents": [agent]}})
     for extra in ({"schedule": {"on_calendar": "daily UTC"}}, {"trigger": {"event": "x"}}):
         assert ms.runs_unattended({"contributes": {"agents": [agent | extra]}})
+
+
+#: a public resolver and a public host, assembled at run time
+RESOLVER = ".".join(("9",) * 4)
+LAB_HOST = ".".join(("10", "20", "0", "1"))
+GLOBAL_V6 = ":".join(("2a00", "1450", "", "1"))
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        v4(0, 0, 0, 0).removesuffix("/32"),  # bind all
+        v4(127, 0, 0, 1).removesuffix("/32"),
+        "::",
+        "::1",
+        "[::]:8080",
+        v4(0, 0, 0, 0).removesuffix("/32") + ":8080",
+        ".".join("2104"),  # a version: a bare global dotted quad is never refused
+        ".".join("1234") + "-beta",
+        "v" + ".".join("2104"),
+        "cafe::beef",
+        "a::b",
+        "12:30:45",
+        ":".join(("fe80", "", "1%eth0")),
+        f"{D1}.10",  # documentation
+        "2001:db8::1",
+        RESOLVER,  # bare: indistinguishable from a version (documented)
+        "1700000000",  # a number (a global address only as an integer)
+        "0x1f",
+        "eu-west",
+        ":".join(("collector.example.internal", "443")),
+    ],
+)
+def test_a_config_value_that_is_not_a_site_address_is_kept(value):
+    """S7: bind and listen addresses, versions, labels and numbers are legitimate config."""
+    assert ms.address_literals(value) == []
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        LAB_HOST,
+        f"{LAB_HOST}:8080",
+        f"svc:{LAB_HOST}",
+        f"udp://{RESOLVER}:53",  # an external endpoint is a hostname or a svc: reference
+        f"{RESOLVER}:53",
+        f"{RESOLVER}/32",
+        "010.020.000.001",  # zero-padded (inet_aton reads octal)
+        "0x0a000001",  # hex integer
+        "0x0a.0.0.1",  # hex dotted
+        "3232235777",  # an integer naming a private address
+        ":".join(("fd00", "", "1")),  # unique local
+        GLOBAL_V6,
+        f"http://[{GLOBAL_V6}]:80/x",
+    ],
+)
+def test_a_config_value_naming_a_site_address_is_refused(value):
+    """S7: an address in any spelling, outside the special and documentation blocks."""
+    assert ms.address_literals(value), value

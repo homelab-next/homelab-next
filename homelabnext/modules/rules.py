@@ -14,9 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext import paths
-from homelabnext.ids.lint import scan_text
 from homelabnext.modules.scope import (
     ScopeMissing,
+    address_literals,
     manifest_scope_problems,
     scope_networks,
     scope_problems,
@@ -49,12 +49,6 @@ SECTION = {"feature": "features", "core": "core", "provider": "providers"}
 SHARED_ADAPTERS = "homelabnext.conform.adapters."
 PRIVILEGED_SHARED_CONFIG = {"cap:edge", "cap:idp"}
 STATIC_HOSTING = "cap:static-hosting"
-
-
-def _address_literal(value: Any) -> bool:
-    return isinstance(value, str) and any(
-        v.code == "IP_LITERAL" for v in scan_text(value, allow_documentation=False)
-    )
 
 
 def us(mid: str) -> str:
@@ -844,10 +838,16 @@ def _config_problems(site: Doc, sel: dict[str, Doc], grants: Doc) -> list[str]:
             if k not in spec:
                 out.append(f"{where}.config.{k}: the module declares no such key")
                 continue
-            if _address_literal(v):
+            literal = None
+            if spec[k]["type"] not in ("integer", "duration_s", "boolean"):
+                text = str(v) if isinstance(v, int) and not isinstance(v, bool) else v
+                literal = address_literals(text) if isinstance(text, str) else None
+            if literal:
                 out.append(
-                    f"{where}.config.{k}: an address literal (addresses live in the selection's "
-                    "scope block, which the module requires)"
+                    f"{where}.config.{k}: an address literal ({literal[0]}): a lab address "
+                    "belongs in the selection's scope block, which the module requires; an "
+                    "external endpoint (a resolver, an NTP server) is a hostname or a svc: "
+                    "reference"
                 )
                 continue
             secretish = isinstance(v, str) and v.lower().startswith("secret:")

@@ -34,6 +34,7 @@ __all__ = [
     "Network",
     "ScopeMissing",
     "ScopeUndeclared",
+    "address_literals",
     "declared_parts",
     "effective_targets",
     "embedded_ipv4",
@@ -446,3 +447,103 @@ def effective_targets(site: Doc, module: Doc) -> list[Network]:
     v4 = ipaddress.collapse_addresses(n for n in left if n.version == 4)
     v6 = ipaddress.collapse_addresses(n for n in left if n.version == 6)
     return [*v4, *v6]
+
+
+# ---- address literals outside the scope block (a selection's config values) -------------------
+
+_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
+_SPLIT = re.compile(r"[\s,;=@()<>\"'`|{}!?*&^$#~\\\[\]]+")
+_DOTTED = re.compile(r"(?:0[xX][0-9A-Fa-f]+|[0-9]+)(?:\.(?:0[xX][0-9A-Fa-f]+|[0-9]+)){3}")
+_HEX_INT = re.compile(r"0[xX][0-9A-Fa-f]{1,8}")
+_BARE_INT = re.compile(r"[0-9]{8,10}")
+
+
+def _special(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Not a site's address: unspecified or "this network", loopback, link-local, multicast,
+    reserved, or a
+    documentation address (a bind address, ``::``, a label like ``cafe::beef``, an example)."""
+    if (
+        addr.is_unspecified
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_multicast
+        or addr.is_reserved
+    ):
+        return True
+    if addr.version == 4 and addr.packed[0] == 0:  # "this network": a small number in hex
+        return True
+    return any(addr in d for d in DOCUMENTATION_NETS)
+
+
+def _readings(parts: list[str]) -> list[ipaddress.IPv4Address]:
+    """A dotted quad with hex or zero-padded parts, as a person reads it (decimal) and as
+    ``inet_aton`` does (octal after a leading zero, hex after 0x)."""
+    out = []
+    for octal in (False, True):
+        values = []
+        for p in parts:
+            if p[:2].lower() == "0x":
+                values.append(int(p, 16))
+            elif octal and len(p) > 1 and p[0] == "0":
+                try:
+                    values.append(int(p, 8))
+                except ValueError:
+                    values.append(256)  # not octal: no address under this reading
+            else:
+                values.append(int(p))
+        if all(v <= 255 for v in values):
+            out.append(ipaddress.IPv4Address(".".join(map(str, values))))
+    return out
+
+
+def _flag_v4(host: str, context: bool) -> bool:
+    if _DOTTED.fullmatch(host):
+        parts = host.split(".")
+        if any(p[:2].lower() == "0x" or (len(p) > 1 and p[0] == "0") for p in parts):
+            return any(not _special(a) for a in _readings(parts))
+        return any(not _special(a) and (context or not a.is_global) for a in _readings(parts))
+    if _HEX_INT.fullmatch(host):
+        return not _special(ipaddress.IPv4Address(int(host, 16)))
+    if _BARE_INT.fullmatch(host) and int(host) < 1 << 32:
+        a = ipaddress.IPv4Address(int(host))
+        return not _special(a) and (context or not a.is_global)
+    return False
+
+
+def address_literals(value: str) -> list[str]:
+    """The tokens of ``value`` that name a site's own address (docs/modules.md, "The network
+    scope": a selection's config value carries none; addresses live in the scope block).
+
+    Never flagged: a special address (:func:`_special`: ``0.0.0.0``, loopback, ``::``,
+    ``[::]:8080``, ``cafe::beef``, multicast, a documentation address).  Always flagged when not
+    special: an IPv6 address, a hex or zero-padded dotted quad, a ``0x`` integer, and any IPv4
+    address with a port, a prefix length or inside a URL.  A plain dotted quad or a bare 8 to 10
+    digit integer is also a version or a number (a four-part version), so it is flagged only when it is
+    private or shared address space (``is_global`` false): a lab's internal address, never a
+    version.  An external endpoint (a public resolver, an NTP server) is written as a hostname
+    or a ``svc:`` reference, so with a port or a scheme its literal is refused too."""
+    out: list[str] = []
+    url = bool(_SCHEME.search(value))
+    bracketed = "[" in value
+    for tok in _SPLIT.split(_SCHEME.sub(" ", value)):
+        host, slash, rest = tok.partition("/")
+        cidr = bool(slash) and rest.isdigit()
+        if host.count(":") >= 2:
+            try:
+                addr6 = ipaddress.ip_address(host.split("%", 1)[0])
+            except ValueError:
+                continue
+            if not _special(addr6):
+                out.append(tok)
+            continue
+        if ":" in host:  # host:port, or a label before a colon (svc:<x>, a key: value)
+            left, _, right = host.partition(":")
+            hosts = [(left, True)] if right.isdigit() else [(left, False), (right, False)]
+        else:
+            hosts = [(host, False)]
+        flagged = False
+        for h, port in hosts:
+            flagged = flagged or _flag_v4(h, url or bracketed or cidr or port)
+        if flagged:
+            out.append(tok)
+    return out
