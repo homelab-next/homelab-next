@@ -11,7 +11,8 @@
 #   outputs: the reason on stderr when it fails
 #   exit:
 #     "0": both sections present
-#     "1": a section is missing or the version cannot be read
+#     "1": a section is missing
+#     "2": the version or CHANGELOG.md cannot be read
 """Fail unless CHANGELOG.md has a section for the version in homelabnext/_version.py."""
 
 from __future__ import annotations
@@ -23,11 +24,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class Unreadable(Exception):
+    """The version or the changelog cannot be read: misconfiguration (exit 2), not a failed check."""
+
+
 def current_version(root: Path = ROOT) -> str:
-    text = (root / "homelabnext" / "_version.py").read_text()
+    try:
+        text = (root / "homelabnext" / "_version.py").read_text()
+    except OSError as exc:
+        raise Unreadable(f"cannot read homelabnext/_version.py: {exc}") from None
     m = re.search(r'^VERSION\s*=\s*"([^"]+)"', text, re.M)
     if not m:
-        raise SystemExit("check_changelog: VERSION not found in homelabnext/_version.py")
+        raise Unreadable("VERSION not found in homelabnext/_version.py")
     return m.group(1)
 
 
@@ -35,9 +43,13 @@ def has_section(changelog: str, version: str) -> bool:
     return re.search(rf"^## \[{re.escape(version)}\]", changelog, re.M) is not None
 
 
-def main() -> int:
-    version = current_version()
-    changelog = (ROOT / "CHANGELOG.md").read_text()
+def main(root: Path = ROOT) -> int:
+    try:
+        version = current_version(root)
+        changelog = (root / "CHANGELOG.md").read_text()
+    except (Unreadable, OSError) as exc:
+        print(f"check_changelog: {exc}", file=sys.stderr)
+        return 2
     if "## [Unreleased]" not in changelog:
         print("check_changelog: CHANGELOG.md must keep an [Unreleased] section", file=sys.stderr)
         return 1

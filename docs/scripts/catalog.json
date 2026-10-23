@@ -57,7 +57,8 @@
     {
       "exit": {
         "0": "both sections present",
-        "1": "a section is missing or the version cannot be read"
+        "1": "a section is missing",
+        "2": "the version or CHANGELOG.md cannot be read"
       },
       "id": "check-changelog",
       "inputs": [
