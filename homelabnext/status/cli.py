@@ -457,13 +457,16 @@ def _strategy_site(args, clock: Callable[[], float]):
 
 
 def _orchestration_site(args, clock: Callable[[], float]):
-    """The Orchestration page for ``--orchestration DB``, or None."""
+    """The Orchestration page for ``--orchestration DB``, or None.  The hub only reads the store:
+    it is opened read-only, and a path that is not an existing store is an error at start
+    (``OSError``/``ValueError``, exit 2), never a new empty database."""
     if not getattr(args, "orchestration", None):
         return None
     from homelabnext.orchestration.pages import OrchestrationSite
     from homelabnext.orchestration.store import TelemetryStore
 
-    return OrchestrationSite(TelemetryStore(args.orchestration, clock=clock), clock=clock)
+    store = TelemetryStore(args.orchestration, clock=clock, read_only=True)
+    return OrchestrationSite(store, clock=clock)
 
 
 def _projects_site(args, clock: Callable[[], float]):

@@ -22,6 +22,10 @@ rewrites the same rows.  A job's turns are re-read until it has been finished fo
 
 **Retention**: jobs finished, and turns started, more than ``retention_days`` ago are deleted
 when the store opens and on every write (with the injected clock).
+
+**Read-only** (``read_only=True``, the status hub's open): the file must already be a telemetry
+store; it is opened with SQLite's ``mode=ro``, so nothing is created (no directory, no file, no
+table), nothing is purged, the journal mode is not touched, and every write is refused.
 """
 
 from __future__ import annotations
@@ -70,9 +74,22 @@ class TelemetryStore:
         *,
         clock: Callable[[], float] = time.time,
         retention_days: float = DEFAULT_RETENTION_DAYS,
+        read_only: bool = False,
     ):
         self.path, self.clock = Path(path), clock
         self.retention_s = retention_days * 86400.0
+        if read_only:
+            if not self.path.is_file():
+                raise FileNotFoundError(f"no telemetry store at {self.path}")
+            self._db = functools.partial(transaction, self.path, read_only=True)
+            try:
+                with self._db() as db:
+                    names = {r[0] for r in db.execute("SELECT name FROM sqlite_master")}
+            except sqlite3.DatabaseError as exc:
+                raise ValueError(f"{self.path} is not a telemetry store ({exc})") from None
+            if not {"jobs", "turns"} <= names:
+                raise ValueError(f"{self.path} is not a telemetry store (no jobs or turns table)")
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._db = functools.partial(transaction, self.path)
         with self._db() as db:

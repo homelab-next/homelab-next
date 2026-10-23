@@ -151,8 +151,10 @@ orchestration`, views schema 1.9):
   counts and its gateway turns (model group, model, status, tokens, cache read, time to first
   token, duration, cost), with the gateway's token sums beside the usage file's.
 
-Filters (`profile`, `backend`, `lane`, `outcome`, `days` 1..90) narrow everything. The page
-reads the store only.
+Filters (`profile`, `backend`, `lane`, `outcome`, `days` 1..90) narrow everything. The hub
+opens the store read-only (SQLite `mode=ro`): it creates, migrates and purges nothing, and a path
+that is not an existing store stops `hnx status serve` at start (exit 2) instead of serving an
+empty page; `hnx orchestration` is the only writer.
 
 ## What the recommendation engine will consume
 

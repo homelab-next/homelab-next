@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import json
+import sqlite3
 import threading
 import urllib.request
 
@@ -15,6 +16,7 @@ from orch_helpers import KEY_ENV, NEVER, ROOT, T0, FakeSpendLogs, body, examples
 from homelabnext.orchestration import cli
 from homelabnext.orchestration.gateway import SpendLogReader, sync_turns
 from homelabnext.orchestration.pages import OrchestrationSite
+from homelabnext.orchestration.store import TelemetryStore
 from homelabnext.registry.model import load
 from homelabnext.status.model import iso
 from homelabnext.status.serve import make_server
@@ -197,6 +199,35 @@ def test_hnx_status_serve_builds_the_page_from_orchestration(tmp_path):
     from homelabnext.status import cli as status_cli
 
     assert status_cli._orchestration_site(argparse.Namespace(), lambda: T0) is None
+    TelemetryStore(tmp_path / "t.db", clock=lambda: T0)
     args = argparse.Namespace(orchestration=str(tmp_path / "t.db"))
     site = status_cli._orchestration_site(args, lambda: T0)
     assert isinstance(site, OrchestrationSite) and site.store.path == tmp_path / "t.db"
+
+
+def test_the_hub_opens_the_store_read_only_and_never_creates_one(tmp_path, capsys):
+    """The hub's open creates nothing (no directory, file or table), purges nothing and writes
+    nothing; a missing store is an error when the hub starts, not a new empty database."""
+    import argparse
+
+    from homelabnext.status import cli as status_cli
+
+    missing = tmp_path / "nowhere" / "t.db"
+    with pytest.raises(FileNotFoundError):
+        status_cli._orchestration_site(argparse.Namespace(orchestration=str(missing)), lambda: T0)
+    assert not missing.parent.exists()
+    argv = ["serve", "--orchestration", str(missing), "--port", "0"]
+    assert status_cli.main(argv) == 2 and "no telemetry store" in capsys.readouterr().err
+    assert not missing.parent.exists()
+    (tmp_path / "empty.db").write_bytes(b"")
+    with pytest.raises(ValueError, match="not a telemetry store"):
+        TelemetryStore(tmp_path / "empty.db", clock=lambda: T0, read_only=True)
+    assert (tmp_path / "empty.db").read_bytes() == b""  # no tables were created in it
+    db = tmp_path / "t.db"
+    TelemetryStore(db, clock=lambda: T0).consume(body(examples()[0]))
+    late = lambda: T0 + 400 * 86400  # noqa: E731  long past retention
+    site = status_cli._orchestration_site(argparse.Namespace(orchestration=str(db)), late)
+    assert site.store.job("run-0001") is not None  # the read-only open purged nothing
+    with pytest.raises(sqlite3.OperationalError, match="readonly"):
+        site.store.purge()
+    assert TelemetryStore(db, clock=lambda: T0).job("run-0001") is not None
