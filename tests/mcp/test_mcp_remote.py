@@ -136,6 +136,39 @@ def test_a_plain_hosted_url_path_is_accepted(path):
     assert _problems(_edit(transport__url="https://mcp.tracker.example.com" + path), REGISTRY) == []
 
 
+#: ordinary hosted paths: lower-case words, hyphenated words and versions, in any order
+_ORDINARY_PATHS = [
+    "/v1/mcp", "/v2/mcp/", "/api/v2/sse", "/api/v1/mcp/stream", "/mcp/stream", "/mcp/v2",
+    "/tenant-name/mcp", "/tenant-name/v3/sse", "/servers/issue-tracker/mcp",
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("path", _ORDINARY_PATHS)
+def test_an_ordinary_hosted_url_path_is_checked_and_rendered(path):
+    """The path-segment rule refuses a key-shaped segment, not an ordinary one: words, hyphenated
+    words and versions pass check and render as written."""
+    from homelabnext.mcp.credentials import plain_url_path
+
+    url = "https://mcp.tracker.example.com" + path
+    rec = _edit(transport__url=url)
+    assert plain_url_path(path)
+    assert _problems(rec, REGISTRY) == []
+    assert url in json.dumps(clients.definition(_inst({**rec, "status": "active"}), "claude-code"))
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        f"/tenant-name/{_PATH_KEYS[0]}/mcp",
+        f"/api/v2/{_PATH_KEYS[2]}/sse",
+        f"/mcp/stream/{_PATH_KEYS[1]}",
+    ],
+)
+def test_a_key_shaped_segment_among_ordinary_ones_is_still_refused(path):
+    rec = _edit(transport__url="https://mcp.tracker.example.com" + path)
+    assert any("URL path may carry a credential" in p for p in _problems(rec, REGISTRY))
+
+
 def test_a_lab_servers_transport_path_carries_no_credential_either():
     rec = yaml.safe_load((ROOT / "schemas/platform/examples/mcp_server.http.yml").read_text())
     assert _problems(rec, REGISTRY) == []
