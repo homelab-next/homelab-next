@@ -1,6 +1,6 @@
 # ADR-0028: Veritas: the single source of truth
 
-- **Status:** accepted (the name and the rule; see Consequences)
+- **Status:** accepted (the name and its two rules; see Consequences)
 - **Date:** 2026-10-23
 - **Related:** ADR-0001 (schemas, `_frozen/`), ADR-0002 (the registry), ADR-0005 (conformance),
   ADR-0011 and ADR-0021 (the public/private split), ADR-0018 (generated maps), ADR-0020
@@ -24,42 +24,66 @@ file.
 ## Decision
 
 1. **Veritas is the project's single source of truth**: the authored, reviewed files every other
-   copy is generated from or checked against. It has two tiers.
+   copy is generated from or checked against. Today it has two tiers, public and private
+   (decisions 3 and 4).
 2. **The rule for any file.** A file is part of Veritas when it is *authored* (no generator writes
-   it) and a generator or a gate reads it as an input or as the standard to check against.
+   it) and a generator or a gate reads it **as the standard, or as a source it copies from**, not
+   merely as the subject of a check. A linter reading a role, or a leak scan reading a page, does
+   not make the role or the page Veritas.
    - **Contracts and gates count even where they are code**: the capability protocols
-     (`conformance/protocols/`), the conformance suites (`conformance/suites/`), the gates in
-     `tools/` and the `--check` steps of `.github/workflows/ci.yml` and the `Makefile`. They define
-     what conforms, so they are the standard, not a reader of it.
-   - **All other code reads Veritas and is not part of it**: `homelabnext/` (apart from the data
-     files named below), the adapters, the Ansible roles. Where a generator also reads code (the
-     capability pages list adapters, the script catalog reads script headers), that code is an
-     input and the output is still derived.
+     (`conformance/protocols/`), the conformance suites (`conformance/suites/`), the schema
+     generators (`homelabnext/schemas/`, the one place the module schemas are written), the gates
+     in `tools/`, and the `--check` steps of `.github/workflows/ci.yml` and the `Makefile`. They
+     define what conforms, so they are the standard, not a reader of it. **A gate's configuration
+     counts as part of the gate**: `pyproject.toml` (its test policy, `skip_reasons` and budgets),
+     `.gitleaks.toml`, `tools/*.allow.yml` and the other gate allowlists and baselines,
+     `MANIFEST.in`, and `ansible/inventory/example/hosts.yml` as `role_lint --inventory` reads it.
+   - **All other code reads Veritas and is not part of it**: the rest of `homelabnext/`, the
+     adapters, the Ansible roles. Where a generator also reads code (the capability pages list
+     adapters, the script catalog reads script headers), that code is an input and the output is
+     still derived.
+   - **Tests.** A test module that is a drift check (decision 6 names them) is a gate. Everything
+     else under `tests/` is test data, not Veritas: fixtures are inputs made up for one test, and
+     goldens are generated snapshots that pin a renderer, regenerated when the renderer changes on
+     purpose. `conformance/targets/` (where a suite is aimed) is site configuration of the harness,
+     not Veritas; the fakes in `conformance/fakes/` are code.
    - **Prose is not Veritas** (ADRs, guides, this page), except where a generator reads it as data:
      the tables of `docs/build-order.md` and `docs/checklist.md` feed the roadmap map (ADR-0018).
    - **`schemas/_frozen/` is written once** by `tools/schema_check.py --freeze` and is then
      authoritative history: append-only, checked against the base by `--base`.
-3. **The public tier** is this repository's authored inputs. By the rule above it includes:
-   - the JSON Schemas under `schemas/` with `schemas/_frozen/` (ADR-0001), and `capabilities.yml`;
+3. **The public tier** is this repository's Veritas files. By the rule above it includes:
+   - the JSON Schemas under `schemas/` with `schemas/_frozen/` (ADR-0001), their authored examples
+     and negatives, and `capabilities.yml`. Excluded, because `homelabnext/schemas/` writes them:
+     `schemas/platform/module.schema.json`, `schemas/platform/lake_table.schema.json`,
+     `schemas/platform/examples/module.*` and `schemas/platform/negative/module.*`;
    - the shipped `profiles/`;
-   - the contracts and gates named in decision 2;
-   - the Sigma rules (`detections/sigma/`, ADR-0006);
-   - the workflow packs (`workflows/packs/`) and the StackStorm binding (`workflows/stackstorm.yml`);
-   - the prompt templates and the injection corpus (`homelabnext/agent/prompts/`), the terms source
+   - the contracts, gates and gate configuration named in decision 2;
+   - the detections (ADR-0006): the Sigma rules (`detections/sigma/`) with their fixtures
+     (`detections/fixtures/`) and the pinned ATT&CK snapshots (`detections/attack_snapshots/`), but
+     not the derived `detections/det_map.yml` and `detections/attack_coverage.json`;
+   - the workflow packs (`workflows/packs/`) and the StackStorm binding
+     (`workflows/stackstorm.yml`);
+   - the prompt templates (`homelabnext/agent/prompts/templates/`) and the injection corpus
+     (`homelabnext/agent/prompts/injection/corpus.yml`), the terms source
      (`homelabnext/agent/terms.md`) and the decision safety specs
      (`homelabnext/decide/safety_specs/`);
    - the fictional examples under `examples/`, which stand in for a site's private tier: the
-     registry, the role tables, gateway and serving specs (`examples/model-serving/gateway.yml`,
-     `serving.yml`, and the lab's `compose/lab-in-a-box/config/llm-gateway/gateway.yml`), the
-     keyring sources, the MCP catalog and its render specs, the status views, registers and
-     strategy records.
+     registry, the role tables, the model store, the gateway and serving specs
+     (`examples/model-serving/gateway.yml`, `serving.yml`, and the lab's
+     `compose/lab-in-a-box/config/llm-gateway/gateway.yml`; not the rendered `litellm/` and
+     `bifrost/` beside them), the keyring sources, the MCP catalog and its render specs, the
+     status views, registers and strategy records. The derived files under `examples/` are the
+     ones decision 6 lists.
 4. **The private tier** is one site's overlay repository (ADR-0021, `docs/private-overlay.md`):
    - under `lab/`: the service registry (`services.yml`), the site facts (`site.yml`), guests,
      registers, strategy records, customizations, the MCP catalog (`mcp/`), sealed files
      (`sealed/`, SOPS), and the module selection with its grants (`modules.yml`, ADR-0027, a draft
      schema);
-   - the Ansible inventory (`ansible/inventory/production/`), its confidential variables in
-     ansible-vault `vault.yml` files (ADR-0021 decision 3);
+   - the authored part of the Ansible inventory: `ansible/inventory/production/group_vars/`, with
+     confidential variables in ansible-vault `vault.yml` files (ADR-0021 decision 3). `hosts.yml`
+     and `host_vars/` are Veritas only where a site writes them by hand; a site that renders them
+     with `hnx guests render --target inventory` from `lab/guests/` holds a derived copy
+     (decision 6);
    - the deploy tools' pins, `locks/deploy.in` (the hash-locked `locks/deploy.txt` is compiled from
      it). The public commit a deploy uses, `HNX_REF`, is an Actions Environment variable, outside
      git;
@@ -70,27 +94,32 @@ file.
    derived, its `hnx:todo` blocks are authored (`docs/systems.md`). Some Veritas files are also
    checked against each other without either being derived (`examples/status/views.yml` against
    its schema and the registry, by `hnx status views check`).
-6. **The derived artifacts today, and what checks each** (only those that exist). A committed file
-   that marks itself generated ("generated by ... do not edit" in its first lines, or a
-   `generated_from` key) must appear here with its check: `tools/tests/test_generated_files_have_checks.py`
-   fails otherwise. Derived files with no room for a marker (JSON gateway outputs, module schemas)
-   and derived blocks inside authored files (Links blocks, `hnx:gen` blocks) are listed by hand.
+6. **The derived artifacts today, and what checks each** (only those that exist).
+   `tools/tests/test_generated_files_have_checks.py` is a heuristic backstop for this table: a
+   tracked file whose first lines carry a marker comment ("generated ... do not edit", or a
+   `generated_from` key) must match a row there that names a CI step or a CI-run test module.
+   It does not see a derived file without such a marker. Those are listed here by hand: the JSON
+   gateway outputs (`.../litellm/keys.json`, `.../bifrost/*.json`), the module schemas, examples
+   and negatives, `docs/scripts/catalog.json`, the golden reports
+   (`homelabnext/agent/prompts/injection/report.json`, `examples/model_roles.eval.json`,
+   `detections/attack_coverage.json`), and derived blocks inside authored files (Links blocks,
+   `hnx:gen` blocks).
 
    | Derived artifact | Generated from | Drift check |
    |---|---|---|
    | System SOP pages, `docs/systems/*.md` (generated blocks) | the registry | `hnx docs systems check examples/services.yml docs/systems` (CI) |
    | Capability reference pages, `docs/capabilities/` | contracts, suites, adapters | `hnx docs capabilities check` (CI) |
-   | Module schemas, examples and negatives (`platform/module` and kin) | `homelabnext.schemas` generators | `python -m homelabnext.schemas --check` (CI) |
+   | Module schemas, examples and negatives: `schemas/platform/{module,lake_table}.schema.json`, `schemas/platform/{examples,negative}/module.*` | `homelabnext/schemas/` and `examples/modules/` | `python -m homelabnext.schemas --check` (CI) |
    | MCP client configs, `examples/mcp/clients/*/` | the MCP catalog, the render specs `examples/mcp/clients/*.yml`, the profiles | `make mcp-check` (CI) |
    | Agent keyring, `examples/keyring/keyring.json` | the files `examples/keyring/sources.yml` names: the registry, the agent profiles, the broker manifest | `hnx agent keyring check` (CI) |
-   | LLM gateway config, `compose/lab-in-a-box/config/llm-gateway/` | role table, profiles, the lab's gateway spec | pytest `tests/generators/test_llm_gateway.py` (CI); `make gateway-check` (`make check`) |
-   | LLM gateway config, `examples/model-serving/gateway/` | role table, profiles, gateway and serving specs | pytest `tests/models/test_serving_plan.py` (CI); `make models-check` (`make check`) |
+   | LLM gateway config, `compose/lab-in-a-box/config/llm-gateway/{litellm,bifrost}/` | role table, profiles, the lab's `gateway.yml` | pytest `tests/generators/test_llm_gateway.py` (CI); `make gateway-check` (`make check`) |
+   | LLM gateway config, `examples/model-serving/gateway/{litellm,bifrost}/` | role table, profiles, gateway and serving specs | pytest `tests/models/test_serving_plan.py` (CI); `make models-check` (`make check`) |
    | vLLM instances, `examples/model-serving/vllm_server/instances.yml` | `examples/model-serving/serving.yml`, the model store, the role table | `hnx models serving check` (`make models-check`); pytest `tests/models/test_serving_plan.py` (CI) |
    | Register records' Links blocks | the records | `hnx registers links --check` (CI) |
    | Strategy index `docs/strategy/README.md` and Links blocks | the strategy records | `make strategy`; pytest `tests/strategy/` (CI) |
-   | Script catalog, `docs/scripts/catalog.md` | script headers | `hnx scripts catalog --check` (CI) |
-   | Detections ATT&CK map `detections/det_map.yml` and coverage report | the Sigma rules | `hnx detections map --check`, `coverage --check` (CI) |
-   | Injection and model-evaluation golden reports | templates, corpus, pins | `agent injection run --check`, `golden pins check` (CI) |
+   | Script catalog, `docs/scripts/catalog.md` and `catalog.json` | script headers | `hnx scripts catalog --check` (CI) |
+   | Detections ATT&CK map `detections/det_map.yml` and coverage report `detections/attack_coverage.json` | the Sigma rules and the ATT&CK snapshots | `hnx detections map --check`, `coverage --check` (CI) |
+   | Golden reports: injection `homelabnext/agent/prompts/injection/report.json`, model evaluation `examples/model_roles.eval.json` | templates and corpus; model pins and golden suites | `agent injection run --check`, `golden pins check` (CI) |
    | StackStorm pack, `workflows/stackstorm/` | workflow packs and the binding | `hnx workflows st2 check`; pytest `tests/workflows/` (CI) |
    | Status source catalog `docs/status/sources.md` | the registry's status sources | `hnx status catalog check` (`make gates`); pytest `tests/status/test_status_views.py` (CI) |
    | Terms page `docs/terms.md` | `homelabnext/agent/terms.md` | `hnx agent terms --check` (`make gates`); pytest `tests/agent/test_agent_terms.py` (CI) |
@@ -98,6 +127,7 @@ file.
    | Knowledge graph | the whole repository | never committed (`docs/graph.md`); `hnx graph check` checks integrity (CI) |
    | Maps (ADR-0018) | the site, guest, registry, dataflow models | never committed: rendered on request; goldens pin the renderer |
    | Registry artefacts (the registry's eleven generators: DNS zones, Caddy sites with the `hnx_forward_auth` snippet, scrape and probe targets, firewall matrix, ...) | the registry | never committed here: `hnx registry generate`, `hnx registry check REGISTRY DIR` compares an output directory; goldens in `tests/generators/golden/` |
+   | Guest renders (`hnx guests render`, nine targets: terraform-proxmox, libvirt, cloudinit, inventory, registry-hosts, backup-jobs, firewall-rules, baseline-playbook, tailscale-acl) | the guests (with their nodes, policies, keys and baselines) and the site | never committed here; a site that commits a render (for example its inventory) owns the drift check; goldens in `tests/compute/golden/` |
 
 7. **Records.** Strategy records are Veritas: ADR-0020 decision 5 makes "the strategy repository"
    their source of truth, which for a real lab is the overlay's `lab/strategy/` (ADR-0021; the
@@ -117,15 +147,16 @@ file.
 ## Consequences
 
 - A disagreement has one answer: the Veritas file wins, and the other copy is regenerated or
-  fixed. A generator added later names its Veritas inputs and gets a `--check` step; for a file
-  that marks itself generated, `tools/tests/test_generated_files_have_checks.py` fails until the
-  table in decision 6 lists it with a check that exists.
+  fixed. A generator added later names its Veritas inputs, gets a `--check` step and a row in
+  decision 6; if its output carries a marker comment, the backstop test fails until it has both.
 - Docs can say "Veritas" instead of re-explaining the split; `docs/glossary.md` carries the term.
-- **What acceptance covers.** This ADR accepts the **name** and the **rule** (decisions 1, 2 and 5).
-  The tier contents (decisions 3 and 4), the table (decision 6) and the records (decision 7)
-  describe what earlier ADRs decided, and every earlier ADR (0001 to 0027) is still proposed; those
-  parts follow them as they change, and the module selection is a draft schema. ADR-0027 withholds
-  its own acceptance until its loader and pilot have run; this ADR has no mechanism to run, and the
+- **What acceptance covers.** This ADR accepts the **name** (decision 1) and **two rules**: what
+  counts as Veritas (decision 2) and that every other copy is derived from it or checked against it
+  (decision 5). The examples inside those decisions, the tier lists (decisions 3 and 4), the table
+  (decision 6) and the records (decision 7) are descriptive: they restate ADR-0001 to ADR-0025 and
+  ADR-0027 (0026 is reserved and does not exist yet), every one of them still proposed, and they
+  follow those ADRs as they change; the module selection is a draft schema. ADR-0027 withholds its
+  own acceptance until its loader and pilot have run; this ADR has no mechanism to run, and the
   enforcement it lacks is stated in decision 8 rather than waited for.
 - `main` has no branch protection, so the CI checks in decision 6 are advisory until it does
   (ADR-0027 records the same limit).
