@@ -195,3 +195,13 @@ def test_export_replaces_its_output_whole_leaving_no_temporary_file(synced, tmp_
     assert cli.main(["export", "--db", str(synced.path), "--out", str(out)], clock=lambda: T0) == 0
     assert out.read_text(encoding="utf-8") == "".join(f"{x}\n" for x in export_lines(synced))
     assert [p.name for p in out.parent.iterdir()] == ["export.jsonl"]
+
+
+def test_hnx_help_names_export_and_import(capsys):
+    """``hnx --help`` is the only map of the subcommands: the orchestration line names them all."""
+    from homelabnext import cli as hnx
+
+    hnx.main(["--help"])
+    (line,) = [x for x in capsys.readouterr().out.splitlines() if "orchestration telemetry" in x]
+    for sub in ("consume", "ingest", "turns", "report", "export", "import"):
+        assert sub in line.split(":", 1)[1], sub

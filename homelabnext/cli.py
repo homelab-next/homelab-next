@@ -148,7 +148,8 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.identity.cli").main(a),
     ),
     "orchestration": (
-        "orchestration telemetry: consume|ingest|turns|report (docs/orchestration-telemetry.md)",
+        "orchestration telemetry: consume|ingest|turns|report|export|import "
+        "(docs/orchestration-telemetry.md)",
         lambda a: importlib.import_module("homelabnext.orchestration.cli").main(a),
     ),
     "reviews": (

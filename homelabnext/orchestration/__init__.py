@@ -13,7 +13,7 @@ orchestration controller cost and how it went, from two sources joined by a tag.
 * :mod:`.model` -- the rollup per profile, backend and lane (the Orchestration page and the
   recommendation engine's input, ``homelabnext.orchestration.rollup/1``);
 * :mod:`.pages` -- the hub's Orchestration page (``hnx status serve --orchestration DB``);
-* :mod:`.cli` -- ``hnx orchestration consume|ingest|turns|report``.
+* :mod:`.cli` -- ``hnx orchestration consume|ingest|turns|report|export|import``.
 
 Names and numbers only: nothing here ever holds a prompt, task text, tool input or output or
 model output, and the event schema and the turn mapping are both closed allow-lists.
