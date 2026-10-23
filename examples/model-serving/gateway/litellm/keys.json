@@ -1,4 +1,5 @@
 {
+  "managed_by": "model-serving-example",
   "keys": [
     {
       "key_alias": "chat-ui",
@@ -10,7 +11,7 @@
       "metadata": {
         "owner": "chat-ui",
         "data_tier": "local-only",
-        "hnx-managed": true
+        "hnx-managed": "model-serving-example"
       }
     }
   ]

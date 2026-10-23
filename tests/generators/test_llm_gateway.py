@@ -700,26 +700,65 @@ def test_provision_refuses_a_missing_key_and_plaintext_off_loopback():
 
 
 def test_provision_deletes_the_keys_of_profiles_removed_from_the_spec(monkeypatch):
-    """A profile dropped from the spec loses its key: every hnx-managed key the file no longer
-    declares is deleted (over every /key/list page), and a key nobody tagged is left alone."""
+    """A profile dropped from the spec loses its key: every key tagged with this gateway's name
+    that the file no longer declares is deleted (over every /key/list page); a key nobody tagged
+    is left alone and listed."""
     monkeypatch.setattr(gw, "_PAGE", 1)  # one key a page: the prune must follow total_pages
     api = FakeKeyAPI()
     try:
         doc, env = lab_keys()
-        assert all(k["metadata"][gw.MANAGED] is True for k in doc["keys"])
+        assert doc["managed_by"] == "lab-in-a-box"
+        assert all(k["metadata"][gw.MANAGED] == "lab-in-a-box" for k in doc["keys"])
         gw.provision_litellm(doc, api.url, "sk-fake-master", environ=env)
         api.keys[sha("sk-fake-by-hand")] = {"key_alias": "by-hand", "metadata": {}}
         reader_env = next(k["key_env"] for k in doc["keys"] if k["key_alias"] == "agent-reader")
-        fewer = {"keys": [k for k in doc["keys"] if k["key_alias"] != "agent-reader"]}
+        fewer = doc | {"keys": [k for k in doc["keys"] if k["key_alias"] != "agent-reader"]}
         kept = gw.provision_litellm(fewer, api.url, "sk-fake-master", environ=env, prune=False)
         assert api.valid(env[reader_env]) and not any("deleted" in ln for ln in kept)
-        lines = gw.provision_litellm(fewer, api.url, "sk-fake-master", environ=env)
-        assert "key agent-reader: deleted (no longer declared)" in lines
+        dry = gw.provision_litellm(fewer, api.url, "sk-fake-master", environ=env, dry_run=True)
+        assert "key agent-reader: would be deleted (no longer declared by lab-in-a-box)" in dry
+        assert api.valid(env[reader_env]), "a dry run deleted a key"
+        assert not [c for c, _ in api.calls[-6:] if c != "/key/list"], "a dry run wrote"
+        seen = []
+        lines = gw.provision_litellm(
+            fewer, api.url, "sk-fake-master", environ=env, emit=seen.append
+        )
+        assert seen == lines
+        assert "key agent-reader: deleted (no longer declared by lab-in-a-box)" in lines
+        assert any("untagged key(s)" in ln and "by-hand" in ln for ln in lines)
         assert not api.valid(env[reader_env]), "a removed profile's key still works"
         assert api.valid("sk-fake-by-hand"), "an untagged key was deleted"
         assert len(api.keys) == 3
         again = gw.provision_litellm(fewer, api.url, "sk-fake-master", environ=env)
-        assert not any("deleted" in ln for ln in again)  # idempotent
+        assert not any(": deleted" in ln for ln in again)  # idempotent
+    finally:
+        api.httpd.shutdown()
+
+
+def test_one_gateway_never_prunes_another_gateways_keys_and_an_empty_file_prunes_nothing():
+    """Two gateway specs on one proxy: each prunes only keys tagged with its own name.  A keys
+    file that declares nothing, or has no managed_by, deletes nothing; one that does not parse is
+    refused."""
+    api = FakeKeyAPI()
+    try:
+        lab, lab_env = lab_keys()
+        ex = json.loads((ROOT / "examples/model-serving/gateway/litellm/keys.json").read_text())
+        ex_env = {k["key_env"]: f"sk-fake-ex-{k['key_alias']}" for k in ex["keys"]}
+        gw.provision_litellm(lab, api.url, "sk-m", environ=lab_env)
+        lines = gw.provision_litellm(ex, api.url, "sk-m", environ=ex_env)
+        assert not any("deleted" in ln for ln in lines), lines
+        assert all(api.valid(lab_env[k["key_env"]]) for k in lab["keys"])
+        empty = gw.provision_litellm(lab | {"keys": []}, api.url, "sk-m", environ={})
+        assert any("prune refused" in ln for ln in empty)
+        unnamed = {"keys": lab["keys"][:1]}
+        assert any(
+            "prune skipped" in ln
+            for ln in gw.provision_litellm(unnamed, api.url, "sk-m", environ=lab_env)
+        )
+        assert len(api.keys) == 4  # nothing of either gateway was deleted
+        for bad in ({"keys": "x"}, [], {"nokeys": 1}, {"keys": [{"key_env": "E"}]}):
+            with pytest.raises(gw.GatewaySpecError, match="not an object with a list of keys"):
+                gw.provision_litellm(bad, api.url, "sk-m", environ={})
     finally:
         api.httpd.shutdown()
 
@@ -733,17 +772,29 @@ def test_check_fails_a_key_without_the_managed_tag_or_with_a_duplicate_alias(tmp
         k["metadata"].pop(gw.MANAGED)
     keys.write_text(json.dumps(on_disk, indent=2) + "\n")
     assert hnx(["gen", "gateway", "render", str(LAB_SPEC), str(out), "--check"]) == 1
-    assert "keys.json: key agent-reader is not tagged metadata.hnx-managed" in (
+    assert "keys.json: key agent-reader is not tagged metadata.hnx-managed='lab-in-a-box'" in (
         capsys.readouterr().err
     )
     doc, _ = lab_keys()
-    assert gw._audit_keys(json.dumps(doc)) == []
+    assert gw._audit_keys(json.dumps(doc), "lab-in-a-box") == []
     untagged = json.loads(json.dumps(doc))
     del untagged["keys"][0]["metadata"][gw.MANAGED]
-    twice = {"keys": [doc["keys"][0], doc["keys"][0]]}
-    (p,) = gw._audit_keys(json.dumps(untagged))
+    (p,) = gw._audit_keys(json.dumps(untagged), "lab-in-a-box")
     assert "not tagged metadata.hnx-managed" in p
-    assert gw._audit_keys(json.dumps(twice)) == [
+    other = json.loads(json.dumps(doc))
+    other["keys"][0]["metadata"][gw.MANAGED] = True
+    assert len(gw._audit_keys(json.dumps(other), "lab-in-a-box")) == 1
+    twice = doc | {"keys": [doc["keys"][0], doc["keys"][0]]}
+    assert gw._audit_keys(json.dumps(twice), "lab-in-a-box") == [
         f"key {doc['keys'][0]['key_alias']} is declared twice"
     ]
+    assert gw._audit_keys(json.dumps(doc), "elsewhere")[0].startswith("managed_by is")
     assert gw._audit_keys("[]") == ["not a JSON object with a keys list"]
+
+
+def test_a_spec_name_must_be_a_slug(tmp_path):
+    spec = LAB_SPEC.read_text().replace("name: lab-in-a-box", "name: Lab In A Box")
+    (tmp_path / "gateway.yml").write_text(spec)
+    with pytest.raises(gw.GatewaySpecError) as exc:
+        gw.spec_from_dict(yaml.safe_load(spec), base=LAB)
+    assert any("must be a lower-case slug" in p for p in exc.value.problems)

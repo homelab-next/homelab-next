@@ -47,13 +47,20 @@ It writes:
   (`/key/generate`), updates it in place by its token when the value is unchanged (`/key/update`),
   or, when the secret was rotated, deletes the old key by its token first, so the old value stops
   working, and creates the new one. Each key names the environment variable that holds its value, never the value.
-  Every key carries `metadata: {"hnx-managed": true}`. After the declared keys, `provision` lists
-  every key on the proxy (all `/key/list` pages) and deletes each tagged key whose alias the file
-  no longer declares, so a profile removed from the spec does not leave a working key behind; a
-  key without the tag (made by hand) is never touched, and `--keep-undeclared` skips the
-  deletion. A key provisioned before the tag existed gets it on its next `provision`; one whose
-  profile was removed before then must be deleted by hand once. `--check` fails a key without the
-  tag or an alias declared twice.
+  The spec's `name` (a slug) is the gateway's identity: `keys.json` carries it as `managed_by` and
+  every key as `metadata: {"hnx-managed": "<name>"}`. After the declared keys, `provision` lists
+  every key on the proxy (all `/key/list` pages) and deletes each key tagged with **this** name
+  whose alias the file no longer declares, so a profile removed from the spec does not leave a
+  working key behind. Keys tagged by another gateway spec on the same proxy (another site, staging
+  beside production) and keys without the tag are never touched. A file that declares no keys
+  refuses to prune, one that does not parse is refused outright, and an unnamed spec tags its keys
+  `true` and prunes nothing. `--dry-run` sends no write and prints what would change;
+  `--keep-undeclared` skips the deletion; each line is printed as it happens.
+  **One-time cleanup:** a key provisioned before the tag existed gets it on its next `provision`,
+  but one whose profile was removed before then carries no tag and is never deleted by
+  `provision`. Its alias is listed ("untagged key(s) ... left alone"): delete it by hand once
+  (`/key/delete` with its token). `--check` fails a key whose tag is not the spec's name, a
+  `managed_by` that differs from it, and an alias declared twice.
 - **`bifrost/config.json`**. There is one custom OpenAI-compatible provider per local backend
   (`hnx-<svc>`). Role → model id mappings are key `aliases`. The file also holds virtual keys
   (`env.HNX_SECRET_*`), per-role `model_configs` with rate limits and budgets, and routing rules
