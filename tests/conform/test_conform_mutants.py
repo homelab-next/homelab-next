@@ -140,3 +140,34 @@ def test_a_mutant_declaring_the_features_its_check_needs_counts(monkeypatch):
     # the CLI's broken:<mutant> runs with the mutant's features too
     run = run_capability("backup", "broken:declared")
     assert "verify-detects-corruption" in [r.check for r in run.failed_must]
+
+
+def test_a_mutant_declaring_a_feature_its_subject_lacks_does_not_count(monkeypatch):
+    """A declared feature the subject does not have makes the check fail with an AttributeError,
+    which is not the defect: the run must not count that as caught."""
+    from homelabnext.conform.core import Mutant
+
+    mod = load_module("backup")
+
+    class NoFaults(mod.FakeBackupStore):
+        features = frozenset()
+
+    monkeypatch.setitem(
+        mod.MUTANTS,
+        "pretends",
+        Mutant(NoFaults, "verify-detects-corruption", "x", features=frozenset({"fault-injection"})),
+    )
+    runs = {m.name: m for m in mutation_runs("backup")}
+    assert runs["pretends"].detected is False and "does not" in runs["pretends"].reason
+
+
+def test_only_broken_or_broken_colon_names_a_mutant_binding(monkeypatch):
+    from homelabnext.conform.core import Mutant
+    from homelabnext.conform.target import Binding, binding_features
+
+    mod = load_module("backup")
+    hooked = Mutant(mod.FakeBackupStore, "x", "x", features=frozenset({"fault-injection"}))
+    monkeypatch.setattr(mod, "MUTANTS", {"hooked": hooked})
+    assert binding_features(Binding("backup", builtin="broken")) == ("fault-injection",)
+    assert binding_features(Binding("backup", builtin="broken:hooked")) == ("fault-injection",)
+    assert binding_features(Binding("backup", builtin="brokenish")) == ()

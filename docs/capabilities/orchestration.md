@@ -29,8 +29,10 @@ the run as it stands when `timeout` runs out.
 a token or KV-cache reservation on a model backend.  The contract on every such hold (added
 additively, ADR-0001; the reasoning is ADR-0029):
 
-a. *Capacity is held only by live work.*  A hold exists only while the worker it was granted to
-   is alive.  A run in a terminal state holds nothing.  Holds are released on success, failure,
+a. *Capacity is held only by live work, and live work keeps it.*  A hold exists only while the
+   worker it was granted to is alive, and that worker keeps it until it ends: a hold that goes
+   away on its own while its run is still executing is a timer, not a release.  A run in a
+   terminal state holds nothing.  Holds are released on success, failure,
    cancel, deadline expiry, worker death and orchestrator restart -- never only by a TTL.  A TTL
    is a backstop for a defect in this contract, not the way holds end: a hold that outlives its
    worker until a timer fires is capacity taken from live work by dead work.
@@ -39,8 +41,9 @@ b. *Cancelling a running run stops it.*  `cancel` on a `running` run stops its w
    `CANCEL_GRACE_S`) and its holds are released, whether or not the job body cooperates.
    A result the stopped worker produces afterwards is discarded.
 c. *A restart reconciles.*  After the orchestrator restarts, no run is `running` without a live
-   worker: a run that was running is ended (`failed`) or requeued, and holds are rebuilt from
-   live workers only.  Queued runs survive and still run; idempotency keys survive, so a repeat
+   worker, and holds are rebuilt from live workers only.  A run that was executing is ended
+   (`failed`), never run a second time: its old worker may still be executing elsewhere, and
+   nothing it produces is recorded.  A run admitted but not yet executing may be requeued.  Queued runs survive and still run; idempotency keys survive, so a repeat
    submit after the restart returns the same run.
 d. *Capacity is observable* (product feature `admission`): `capacity()` returns a
    `Capacity` -- the limit (`None` when the implementation does not report one), the
@@ -51,7 +54,8 @@ e. *Faults can be injected* (test hook `fault-injection`): `kill(run_id)` makes 
    everything else, workers included.
 
 A per-run deadline is the product feature `deadline`: `submit(..., deadline_s=s)`; a run
-still unfinished `s` seconds after it was submitted ends `failed` and releases its holds.
+still unfinished `s` seconds after it was submitted ends `failed`, with an error that names
+the deadline, and releases its holds.
 
 ## How to use it
 
@@ -211,6 +215,7 @@ Defined in [`conformance.protocols.orchestration`](../../conformance/protocols/o
 | Name | Value |
 |---|---|
 | `CANCEL_GRACE_S` | `5.0` |
+| `MAX_CANCEL_GRACE_S` | `10.0` |
 | `TERMINAL` | `('succeeded', 'failed', 'cancelled')` |
 
 ### Errors
@@ -243,11 +248,11 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `cancel-finished-run-is-noop` | MUST | cancelling a finished run leaves it as it was |  |
 | `params-arrive-unchanged` | MUST | nested parameters reach the handler as submitted |  |
 | `failing-run-does-not-affect-others` | MUST | one failed run leaves another run unharmed |  |
-| `cancel-running-run-frees-capacity` | MUST | cancelling a running run stops it: it ends cancelled and its capacity is released at once | `admission` |
-| `killed-worker-fails-run-and-frees-capacity` | MUST | a run whose worker dies ends failed and its capacity is released | `admission`, `fault-injection` |
-| `deadline-expiry-frees-capacity` | MUST | a run past its deadline ends failed and releases its capacity without waiting for its body | `admission`, `deadline` |
-| `restart-reconciles-runs-and-capacity` | MUST | after a restart no run is running without a worker, no dead worker holds capacity, and queued runs and idempotency keys survive | `admission`, `fault-injection` |
-| `capacity-returns-to-zero-after-churn` | MUST | after runs that succeed, fail, retry and are cancelled queued or running, no hold remains | `admission` |
+| `cancel-running-run-frees-capacity` | MUST | cancelling a running run stops it: it ends cancelled, its capacity is released at once and admits new work, and its late result is discarded | `admission` |
+| `killed-worker-fails-run-and-frees-capacity` | MUST | a run whose worker dies ends failed, its capacity is released and admits new work, and nothing the dead worker produces lands | `admission`, `fault-injection` |
+| `deadline-expiry-frees-capacity` | MUST | a run past its deadline ends failed with an error naming the deadline, releases its capacity without waiting for its body, and its late result is discarded | `admission`, `deadline` |
+| `restart-reconciles-runs-and-capacity` | MUST | after a restart a run that was executing is ended (never run a second time), no dead worker holds capacity or reports a result, and queued runs and idempotency keys survive | `admission`, `fault-injection` |
+| `capacity-returns-to-zero-after-churn` | MUST | after runs that succeed, fail, retry and are cancelled queued or running, no hold remains and the capacity admits new work | `admission` |
 
 ### Features an adapter may declare
 
@@ -264,9 +269,14 @@ Each is a deliberately broken fake (`hnx conform run orchestration --target brok
 | Mutant | Must fail | Defect |
 |---|---|---|
 | `idempotency-ignored` | `idempotency-key-runs-once` | a repeated key starts a second run |
+| `late-result-lands` | `cancel-running-run-frees-capacity` | a stopped worker's result overwrites the cancelled run when its body returns |
 | `leak-on-cancel` | `cancel-running-run-frees-capacity` | cancelling a running run never returns its slot |
+| `leak-on-failure` | `capacity-returns-to-zero-after-churn` | a run that ends failed never returns its slot (only the success path releases) |
 | `leak-on-kill` | `killed-worker-fails-run-and-frees-capacity` | a dead worker's run fails but its slot is never returned |
+| `lying-capacity` | `cancel-running-run-frees-capacity` | a stopped run's slot leaks while capacity() reports only running holders |
 | `no-restart-reconcile` | `restart-reconciles-runs-and-capacity` | a restart leaves runs running and slots held by workers that no longer exist |
+| `restart-reruns-live-run` | `restart-reconciles-runs-and-capacity` | a restart requeues an executing run without stopping its old worker |
+| `ttl-release` | `cancel-running-run-frees-capacity` | holds end by a timer shorter than the grace, not by cancel, kill, deadline or restart |
 
 ## Implementations
 
@@ -283,7 +293,7 @@ Each is a deliberately broken fake (`hnx conform run orchestration --target brok
 The `orchestration` contract on the LLM orchestrator (the Go controller; pinned: `a52a1c4`).
 
 - Target file: [`conformance/targets/orchestration-llm-orchestrator-recorded.yml`](../../conformance/targets/orchestration-llm-orchestrator-recorded.yml) (target `orchestration-llm-orchestrator-recorded`)
-- Factory: `make(*, profiles_dir: str | None=None, recorded_fake: bool=False, fixes: list[str] | tuple[str, ...]=(), capability: str='orchestration', priority: int=50, poll: float=0.2, wait_floor: float=60.0) -> LLMOrchestrator`
+- Factory: `make(*, profiles_dir: str | None=None, recorded_fake: bool=False, fixes: list[str] | tuple[str, ...]=(), capability: str='orchestration', priority: int=50, poll: float=0.2, wait_floor: float=60.0) -> LLMOrchestrator | _Recorded`
 - Config in the target: `{recorded_fake: true}`
 
 <details><summary>Full adapter notes</summary>
@@ -321,9 +331,13 @@ The mapping (docs/orchestration-controller.md has the whole table):
 * `capacity` (feature `admission`) -> `GET /admin/backend-inflight` (the route landed after
   `a52a1c4`; `hermesagent.Policy.InFlightSnapshot`): `in_flight` summed over the backends,
   `holders` the union of their `reserved_runs`, `limit` `None` (the snapshot reports no
-  limit).  `admission` is declared only when that route answers, so on a controller without it
-  the capacity checks skip.  With API authentication on, the route needs an admin token, which
-  this adapter does not send.
+  limit).  `admission` is declared only when that route answers; a `404` means no route, so
+  the capacity checks skip, and any other answer (a 5xx, a timeout, a `401`) makes the run
+  unmeasured rather than skipped.  Without a limit the suite judges a release by the run leaving
+  `reserved_runs`: `in_flight` is a counter shared with any other traffic on the controller,
+  so it is never compared.  With API authentication on, the route needs an admin token, which
+  this adapter does not send.  The recorded stand-in is started only by the first contract call,
+  and its features come from `fixes`, so a check that skips never starts one.
 * `kill` / `restart` (test hook `fault-injection`) exist only on the recorded stand-in, which
   models the controller's process kill and restart reconciliation.  On a live controller the
   adapter has no honest way to kill one job's worker or restart the service, so it does not
@@ -345,7 +359,7 @@ races the next admission tick; the API has no authentication.
 The `orchestration` contract on the LLM orchestrator (the Go controller; pinned: `a52a1c4`).
 
 - Target file: [`conformance/targets/orchestration-llm-orchestrator.yml`](../../conformance/targets/orchestration-llm-orchestrator.yml) (target `orchestration-llm-orchestrator`)
-- Factory: `make(*, profiles_dir: str | None=None, recorded_fake: bool=False, fixes: list[str] | tuple[str, ...]=(), capability: str='orchestration', priority: int=50, poll: float=0.2, wait_floor: float=60.0) -> LLMOrchestrator`
+- Factory: `make(*, profiles_dir: str | None=None, recorded_fake: bool=False, fixes: list[str] | tuple[str, ...]=(), capability: str='orchestration', priority: int=50, poll: float=0.2, wait_floor: float=60.0) -> LLMOrchestrator | _Recorded`
 
 <details><summary>Full adapter notes</summary>
 
@@ -382,9 +396,13 @@ The mapping (docs/orchestration-controller.md has the whole table):
 * `capacity` (feature `admission`) -> `GET /admin/backend-inflight` (the route landed after
   `a52a1c4`; `hermesagent.Policy.InFlightSnapshot`): `in_flight` summed over the backends,
   `holders` the union of their `reserved_runs`, `limit` `None` (the snapshot reports no
-  limit).  `admission` is declared only when that route answers, so on a controller without it
-  the capacity checks skip.  With API authentication on, the route needs an admin token, which
-  this adapter does not send.
+  limit).  `admission` is declared only when that route answers; a `404` means no route, so
+  the capacity checks skip, and any other answer (a 5xx, a timeout, a `401`) makes the run
+  unmeasured rather than skipped.  Without a limit the suite judges a release by the run leaving
+  `reserved_runs`: `in_flight` is a counter shared with any other traffic on the controller,
+  so it is never compared.  With API authentication on, the route needs an admin token, which
+  this adapter does not send.  The recorded stand-in is started only by the first contract call,
+  and its features come from `fixes`, so a check that skips never starts one.
 * `kill` / `restart` (test hook `fault-injection`) exist only on the recorded stand-in, which
   models the controller's process kill and restart reconciliation.  On a live controller the
   adapter has no honest way to kill one job's worker or restart the service, so it does not
@@ -423,7 +441,7 @@ No service in `examples/services.yml` declares `capability: orchestration`.
    def make(**config) -> Orchestrator: ...
    ```
 
-   The factory this repository ships: `homelabnext.conform.adapters.llm_orchestrator:make` is `make(*, profiles_dir: str | None=None, recorded_fake: bool=False, fixes: list[str] | tuple[str, ...]=(), capability: str='orchestration', priority: int=50, poll: float=0.2, wait_floor: float=60.0) -> LLMOrchestrator`.
+   The factory this repository ships: `homelabnext.conform.adapters.llm_orchestrator:make` is `make(*, profiles_dir: str | None=None, recorded_fake: bool=False, fixes: list[str] | tuple[str, ...]=(), capability: str='orchestration', priority: int=50, poll: float=0.2, wait_floor: float=60.0) -> LLMOrchestrator | _Recorded`.
 
 3. **Describe the target** (YAML; `features` lists only what the product really offers; the test hooks `fault-injection` are for fakes; `waive:` takes SHOULD check ids with a reason, never a MUST):
 

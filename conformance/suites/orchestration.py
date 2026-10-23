@@ -12,12 +12,22 @@ from typing import Any
 
 from conformance.fakes.orchestrator import (
     FakeOrchestrator,
+    LateResultLandsOrchestrator,
     LeakOnCancelOrchestrator,
+    LeakOnFailureOrchestrator,
     LeakOnKillOrchestrator,
+    LyingCapacityOrchestrator,
     NoDedupeOrchestrator,
     NoRestartReconcileOrchestrator,
+    RestartRerunsLiveRunOrchestrator,
+    TTLReleaseOrchestrator,
 )
-from conformance.protocols.orchestration import CANCEL_GRACE_S, TERMINAL, UnknownJob
+from conformance.protocols.orchestration import (
+    CANCEL_GRACE_S,
+    MAX_CANCEL_GRACE_S,
+    TERMINAL,
+    UnknownJob,
+)
 from homelabnext.conform.core import Mutant, Suite
 
 from ._util import raises, uniq
@@ -158,43 +168,63 @@ def _(o):
 # ---------------------------------------------------------------- holds (clauses a-e)
 #: how long a check gives a submitted run to start executing its body
 START_S = 15.0
-#: how long a blocked job body waits for its release before giving up by itself: far beyond any
-#: grace, so a hold that is released only because the body returned is still caught
+#: how long a blocked job body waits for its release before giving up by itself: several times
+#: MAX_CANCEL_GRACE_S, so a hold that is released only because the body returned is still caught
 BODY_BACKSTOP_S = 60.0
+#: a live run must still hold its capacity this many graces after it was seen holding it, so a
+#: TTL (or any timer) standing in for the release is caught (clause a, ADR-0029 rule 3)
+HOLD_GRACES = 2
+#: the shortest wait for freed capacity to admit new runs (the bound is 4 graces, at least this)
+EFFECT_FLOOR_S = 0.3
+#: the shortest time a stopped run is watched for a late result after its body returned
+SETTLE_FLOOR_S = 0.1
 
 
 class _Gate:
-    """A job body that says it started and then blocks until the check releases it."""
+    """A job body that says it started and then blocks until the check releases it; ``returned``
+    is set once a body has come back (so a late result can be waited for, not raced)."""
 
     def __init__(self) -> None:
         self.started = threading.Event()
         self.release = threading.Event()
+        self.returned = threading.Event()
+        self._lock = threading.Lock()
         self.calls = 0
 
     def __call__(self, params: Any) -> str:
-        self.calls += 1
+        with self._lock:
+            self.calls += 1
         self.started.set()
-        self.release.wait(BODY_BACKSTOP_S)
+        try:
+            self.release.wait(BODY_BACKSTOP_S)
+        finally:
+            self.returned.set()
         return "late"
 
 
 def _grace(o: Any) -> float:
-    return float(getattr(o, "cancel_grace_s", CANCEL_GRACE_S))
+    g = float(getattr(o, "cancel_grace_s", CANCEL_GRACE_S))
+    assert 0 < g <= MAX_CANCEL_GRACE_S, (
+        f"cancel_grace_s {g} is outside (0, {MAX_CANCEL_GRACE_S}]: a longer grace would let a "
+        "hold released only when its body returns pass"
+    )
+    return g
 
 
-def _capacity(o: Any) -> tuple[int, frozenset[str]]:
-    _limit, in_flight, holders = o.capacity()
-    return int(in_flight), frozenset(holders)
+def _capacity(o: Any) -> tuple[int | None, int, frozenset[str]]:
+    limit, in_flight, holders = o.capacity()
+    return (None if limit is None else int(limit)), int(in_flight), frozenset(holders)
 
 
-def _until(pred: Callable[[], bool], seconds: float) -> bool:
+def _until(pred: Callable[[], bool], seconds: float, step: float = 0.01) -> bool:
+    """Poll ``pred`` every ``step`` seconds for up to ``seconds``."""
     end = time.monotonic() + seconds
     while True:
         if pred():
             return True
         if time.monotonic() >= end:
             return False
-        time.sleep(0.01)
+        time.sleep(step)
 
 
 def _drive(o: Any, run_id: str, seconds: float) -> threading.Thread:
@@ -210,84 +240,140 @@ def _drive(o: Any, run_id: str, seconds: float) -> threading.Thread:
     return t
 
 
-def _running_gate(o: Any) -> tuple[_Gate, str, threading.Thread, int]:
-    """A run whose body is executing and blocked, the thread driving it, and the in-flight count
-    before it was submitted.  The run must hold capacity while it runs: a check that never sees
-    the hold proves nothing about releasing it."""
-    base, _ = _capacity(o)
-    gate, name = _Gate(), uniq("job")
-    o.define(name, gate)
-    rid = o.submit(name, {}, idempotency_key=uniq("k"))
-    t = _drive(o, rid, START_S + _grace(o))
-    if not gate.started.wait(START_S):
-        gate.release.set()
-        raise AssertionError(f"the run never started within {START_S}s")
-    held = _until(lambda: rid in _capacity(o)[1], _grace(o))
-    if not held:
-        gate.release.set()
-        raise AssertionError(f"a running run holds no capacity: capacity() = {o.capacity()}")
-    return gate, rid, t, base
+def _step(o: Any) -> float:
+    """How often a check polls the subject: a twentieth of its grace, at least 10 ms (each poll of
+    a real adapter is a request)."""
+    return max(0.01, _grace(o) / 20)
 
 
 def _released(o: Any, rid: str, base: int) -> bool:
-    in_flight, holders = _capacity(o)
-    return rid not in holders and in_flight <= base
+    """``rid`` holds nothing.  With a limit the in-flight count is back to ``base`` too; without
+    one (a shared controller's counter moves with other traffic) only membership is judged."""
+    limit, in_flight, holders = _capacity(o)
+    return rid not in holders and (limit is None or in_flight <= base)
 
 
-def _finish(o: Any, gate: _Gate, t: threading.Thread) -> None:
-    """Release the body; give the driving wait a grace to return (it never returns while a
-    defective subject keeps a dead run ``running``, and it is a daemon)."""
+def _running_gate(o: Any, *, watch: bool = False) -> tuple[_Gate, str, threading.Thread, int]:
+    """A run whose body is executing and blocked, the thread driving it, and the in-flight count
+    before it was submitted.  The run must hold capacity while it runs: a check that never sees
+    the hold proves nothing about releasing it.  With ``watch`` it must also keep holding it for
+    :data:`HOLD_GRACES` graces: a hold that goes away on its own while the body still runs is a
+    timer, not a release (one check watches; a timer is not specific to one release path)."""
+    _, base, _ = _capacity(o)
+    gate, name, g = _Gate(), uniq("job"), _grace(o)
+    o.define(name, gate)
+    rid = o.submit(name, {}, idempotency_key=uniq("k"))
+    t = _drive(o, rid, START_S + g)
+    try:
+        assert gate.started.wait(START_S), f"the run never started within {START_S}s"
+        assert _until(lambda: rid in _capacity(o)[2], g, _step(o)), (
+            f"a running run holds no capacity: capacity() = {o.capacity()}"
+        )
+        dropped = watch and _until(lambda: rid not in _capacity(o)[2], HOLD_GRACES * g, g / 10)
+        assert not dropped, (
+            f"a live, still-blocked run lost its hold within {HOLD_GRACES} x {g}s: a timer is "
+            f"not a release ({o.capacity()})"
+        )
+    except BaseException:
+        gate.release.set()
+        raise
+    return gate, rid, t, base
+
+
+def _late_result_discarded(o: Any, rid: str, gate: _Gate, t: threading.Thread) -> None:
+    """Let the stopped body return, wait until it has, and require that the run it belonged to
+    does not change afterwards: a late result is discarded (clause b)."""
+    g = _grace(o)
+    before = o.wait(rid, timeout=g)
     gate.release.set()
-    t.join(_grace(o))
+    if gate.started.is_set():
+        assert gate.returned.wait(START_S), "the job body never returned after its release"
+
+        def changed() -> bool:
+            now = o.wait(rid, timeout=0)
+            return (now.state, now.result, now.error) != (before.state, before.result, before.error)
+
+        assert not _until(changed, max(g, SETTLE_FLOOR_S), _step(o)), (
+            f"a stopped worker's late result landed: {o.wait(rid, 0)}"
+        )
+    t.join(g)
+
+
+def _admits(o: Any) -> None:
+    """Capacity by effect, not by report: with a limit, ``limit`` new runs all start promptly.  A
+    ``capacity()`` that says the slots are free while admission still counts them fails here.
+    Without a limit (the controller reports none) only the report can be judged."""
+    limit, _, _ = _capacity(o)
+    if limit is None:
+        return
+    g = _grace(o)
+    bound = max(EFFECT_FLOOR_S, 4 * g)
+    gate, name = _Gate(), uniq("job")
+    o.define(name, gate)
+    rids = [o.submit(name, {}, idempotency_key=uniq("k")) for _ in range(limit)]
+    for rid in rids:
+        _drive(o, rid, bound + g)
+    try:
+        assert _until(lambda: gate.calls >= limit, bound), (
+            f"only {gate.calls} of {limit} new runs started within {bound}s although "
+            f"capacity() reports {o.capacity()}: freed capacity does not admit"
+        )
+    finally:
+        gate.release.set()
+    for rid in rids:
+        assert o.wait(rid, timeout=START_S).state == "succeeded"
 
 
 @SUITE.check(
     "cancel-running-run-frees-capacity",
-    "cancelling a running run stops it: it ends cancelled and its capacity is released at once",
+    "cancelling a running run stops it: it ends cancelled, its capacity is released at once and "
+    "admits new work, and its late result is discarded",
     requires=["admission"],
 )
 def _(o):
-    gate, rid, t, base = _running_gate(o)
+    gate, rid, t, base = _running_gate(o, watch=True)
     try:
         o.cancel(rid)
-        freed = _until(lambda: _released(o, rid, base), _grace(o))
+        freed = _until(lambda: _released(o, rid, base), _grace(o), _step(o))
         st = o.wait(rid, timeout=_grace(o))
         assert st.state == "cancelled", f"a cancelled running run is {st.state}"
         assert freed, (
             f"capacity still held {_grace(o)}s after cancel while the body runs: {o.capacity()}"
         )
+        _late_result_discarded(o, rid, gate, t)
     finally:
-        _finish(o, gate, t)
-    st = o.wait(rid, timeout=_grace(o))
-    assert st.state == "cancelled", f"the stopped worker's late result landed: {st}"
+        gate.release.set()
+    _admits(o)
 
 
 @SUITE.check(
     "killed-worker-fails-run-and-frees-capacity",
-    "a run whose worker dies ends failed and its capacity is released",
+    "a run whose worker dies ends failed, its capacity is released and admits new work, and "
+    "nothing the dead worker produces lands",
     requires=["admission", "fault-injection"],
 )
 def _(o):
     gate, rid, t, base = _running_gate(o)
     try:
         o.kill(rid)
-        freed = _until(lambda: _released(o, rid, base), _grace(o))
+        freed = _until(lambda: _released(o, rid, base), _grace(o), _step(o))
         st = o.wait(rid, timeout=_grace(o))
         assert st.state == "failed", f"a run whose worker died is {st.state}"
         assert freed, f"capacity still held {_grace(o)}s after the worker died: {o.capacity()}"
+        _late_result_discarded(o, rid, gate, t)
     finally:
-        _finish(o, gate, t)
-    st = o.wait(rid, timeout=_grace(o))
-    assert st.state == "failed", f"a dead worker's result landed: {st}"
+        gate.release.set()
+    _admits(o)
 
 
 @SUITE.check(
     "deadline-expiry-frees-capacity",
-    "a run past its deadline ends failed and releases its capacity without waiting for its body",
+    "a run past its deadline ends failed with an error naming the deadline, releases its capacity "
+    "without waiting for its body, and its late result is discarded",
     requires=["admission", "deadline"],
 )
 def _(o):
-    base, _ = _capacity(o)
+    _, base, _ = _capacity(o)
     gate, name, deadline = _Gate(), uniq("job"), 0.1
     o.define(name, gate)
     rid = o.submit(name, {}, idempotency_key=uniq("k"), deadline_s=deadline)
@@ -298,16 +384,18 @@ def _(o):
         st = o.wait(rid, timeout=deadline + START_S + _grace(o))
         assert st.state == "failed", f"a run past its deadline is {st.state}"
         assert "deadline" in (st.error or "").lower(), f"the error does not name it: {st.error!r}"
-        freed = _until(lambda: _released(o, rid, base), _grace(o))
+        freed = _until(lambda: _released(o, rid, base), _grace(o), _step(o))
         assert freed, f"capacity still held after the deadline: {o.capacity()}"
+        _late_result_discarded(o, rid, gate, t)
     finally:
-        _finish(o, gate, t)
+        gate.release.set()
+    _admits(o)
 
 
 @SUITE.check(
     "restart-reconciles-runs-and-capacity",
-    "after a restart no run is running without a worker, no dead worker holds capacity, and "
-    "queued runs and idempotency keys survive",
+    "after a restart a run that was executing is ended (never run a second time), no dead worker "
+    "holds capacity or reports a result, and queued runs and idempotency keys survive",
     requires=["admission", "fault-injection"],
 )
 def _(o):
@@ -318,33 +406,30 @@ def _(o):
         queued = o.submit(quick, {}, idempotency_key=key)
         o.restart()
         st = o.wait(rid, timeout=_grace(o))
-        rerun = st.state == "running" and gate.calls > 1  # requeued and given a new worker
-        assert st.state in ("queued", "failed", "cancelled") or rerun, (
-            f"run is {st.state} after a restart with no live worker"
+        assert st.state in ("failed", "cancelled"), (
+            f"a run that was executing is {st.state} after a restart: its old worker may still "
+            "be running, so it must be ended, not left running or run again"
         )
-        allowed = {rid} if rerun else set()
-        in_flight, holders = _capacity(o)
-        assert holders <= allowed and in_flight <= base + len(allowed), (
-            f"capacity held by dead workers after a restart: {o.capacity()}"
-        )
+        assert gate.calls == 1, f"the run's body executed {gate.calls} times across a restart"
+        assert _released(o, rid, base), f"a dead worker holds capacity: {o.capacity()}"
         again = o.submit(quick, {}, idempotency_key=key)
         assert again == queued, f"idempotency key lost on restart: {again} vs {queued}"
         st2 = o.wait(queued, timeout=START_S)
         assert st2.state == "succeeded", f"a run queued across the restart is {st2.state}"
+        _late_result_discarded(o, rid, gate, t)
     finally:
-        _finish(o, gate, t)
-    if gate.calls == 1:
-        late = o.wait(rid, timeout=_grace(o))
-        assert late.state == st.state, f"a pre-restart worker's result landed: {late}"
+        gate.release.set()
+    _admits(o)
 
 
 @SUITE.check(
     "capacity-returns-to-zero-after-churn",
-    "after runs that succeed, fail, retry and are cancelled queued or running, no hold remains",
+    "after runs that succeed, fail, retry and are cancelled queued or running, no hold remains "
+    "and the capacity admits new work",
     requires=["admission"],
 )
 def _(o):
-    base, _ = _capacity(o)
+    _, base, _ = _capacity(o)
     ok, bad, gate = uniq("job"), uniq("job"), _Gate()
 
     def boom(p):
@@ -352,13 +437,16 @@ def _(o):
 
     o.define(ok, lambda p: "ok")
     o.define(bad, boom, retries=1)
-    runs = [o.submit(ok, {"i": i}, idempotency_key=uniq("k")) for i in range(3)]
-    runs += [o.submit(bad, {"i": i}, idempotency_key=uniq("k")) for i in range(2)]
+    runs = [o.submit(ok, {"i": i}, idempotency_key=uniq("k")) for i in range(2)]
+    runs += [o.submit(bad, {"i": 0}, idempotency_key=uniq("k"))]
     never = o.submit(ok, {"i": "never"}, idempotency_key=uniq("k"))
     assert o.cancel(never).state == "cancelled"
     try:
-        for rid in runs:
+        for rid in runs:  # each finished run, failed or retried ones included, holds nothing
             assert o.wait(rid, timeout=START_S).state in TERMINAL, f"{rid} did not finish"
+            assert _until(lambda r=rid: _released(o, r, base), _grace(o), _step(o)), (
+                f"{rid} finished but its capacity is still held: {o.capacity()}"
+            )
         gate_name = uniq("job")
         o.define(gate_name, gate)
         running = o.submit(gate_name, {}, idempotency_key=uniq("k"))
@@ -367,11 +455,12 @@ def _(o):
         o.cancel(running)
         assert o.wait(running, timeout=_grace(o)).state == "cancelled"
         churned = {*runs, never, running}
-        assert _until(
-            lambda: not (_capacity(o)[1] & churned) and _capacity(o)[0] <= base, _grace(o)
-        ), f"holds left after churn: {o.capacity()} (in flight before: {base})"
+        assert _until(lambda: all(_released(o, r, base) for r in churned), _grace(o), _step(o)), (
+            f"holds left after churn: {o.capacity()} (in flight before: {base})"
+        )
     finally:
         gate.release.set()
+    _admits(o)
 
 
 def make_fake():
@@ -401,5 +490,35 @@ MUTANTS = {
         "restart-reconciles-runs-and-capacity",
         "a restart leaves runs running and slots held by workers that no longer exist",
         features=frozenset({"admission", "fault-injection"}),
+    ),
+    "ttl-release": Mutant(
+        TTLReleaseOrchestrator,
+        "cancel-running-run-frees-capacity",
+        "holds end by a timer shorter than the grace, not by cancel, kill, deadline or restart",
+        features=frozenset({"admission"}),
+    ),
+    "lying-capacity": Mutant(
+        LyingCapacityOrchestrator,
+        "cancel-running-run-frees-capacity",
+        "a stopped run's slot leaks while capacity() reports only running holders",
+        features=frozenset({"admission"}),
+    ),
+    "restart-reruns-live-run": Mutant(
+        RestartRerunsLiveRunOrchestrator,
+        "restart-reconciles-runs-and-capacity",
+        "a restart requeues an executing run without stopping its old worker",
+        features=frozenset({"admission", "fault-injection"}),
+    ),
+    "leak-on-failure": Mutant(
+        LeakOnFailureOrchestrator,
+        "capacity-returns-to-zero-after-churn",
+        "a run that ends failed never returns its slot (only the success path releases)",
+        features=frozenset({"admission"}),
+    ),
+    "late-result-lands": Mutant(
+        LateResultLandsOrchestrator,
+        "cancel-running-run-frees-capacity",
+        "a stopped worker's result overwrites the cancelled run when its body returns",
+        features=frozenset({"admission"}),
     ),
 }

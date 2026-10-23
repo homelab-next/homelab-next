@@ -20,20 +20,25 @@ none of them looked at capacity.
 
 ## Decision
 
-1. A hold exists only while the worker it was granted to is alive. A run in a terminal state
-   holds nothing.
+1. A hold exists only while the worker it was granted to is alive, and that worker keeps it until
+   it ends: a hold that disappears while its run is still executing is a timer, not a release. A
+   run in a terminal state holds nothing.
 2. Holds are released on success, failure, cancel, deadline expiry, worker death and orchestrator
    restart. Each of those is an event the orchestrator observes; none of them is "a timer
    expired".
 3. A TTL may exist, as a backstop for a defect in rules 1-2. It never counts as the release
    mechanism, and a hold that a TTL had to end is reported as a defect.
 4. Cancelling a running run stops its worker; it ends `cancelled` within the implementation's
-   cancel grace, whether or not the job body cooperates, and a late result is discarded.
+   cancel grace (at most 10 s), whether or not the job body cooperates, and a late result is
+   discarded.
 5. After a restart, no run is `running` without a live worker and holds are rebuilt from live
-   workers only; queued runs and idempotency keys survive.
+   workers only. A run that was executing is ended, never run a second time, because its old
+   worker may still be executing; queued runs and idempotency keys survive.
 6. The contract carries this additively (ADR-0001): clauses a-e in
    `conformance/protocols/orchestration.py`, the optional `capacity()` (feature `admission`), the
-   `kill`/`restart` test hooks, and five MUST checks that skip without `admission`. A check that
+   `kill`/`restart` test hooks, and five MUST checks that skip without `admission`. They judge
+   capacity by its effect where a limit is reported (freed slots admit new runs), not only by
+   what `capacity()` says. A check that
    needs a hook the target does not declare is `untested`, never a pass.
 
 ## Consequences

@@ -182,7 +182,8 @@ def adapter_origin(dotted: str, root: str | Path | None = None) -> str | None:
 def binding_features(binding: Binding, root: str | Path | None = None) -> tuple[str, ...]:
     """The features a run of ``binding`` declares: the target file's, or for a built-in
     ``broken:<mutant>`` the mutant's own :attr:`~homelabnext.conform.core.Mutant.features`."""
-    if not (binding.builtin or "").startswith("broken"):
+    builtin = binding.builtin or ""
+    if builtin != "broken" and not builtin.startswith("broken:"):
         return tuple(binding.features)
     mutants = load_module(binding.capability, root).MUTANTS
     _, _, name = (binding.builtin or "").partition(":")

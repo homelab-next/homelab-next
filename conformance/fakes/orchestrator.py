@@ -23,7 +23,7 @@ from conformance.protocols.orchestration import TERMINAL, Capacity, RunStatus, U
 
 class FakeOrchestrator:
     features = frozenset({"admission", "deadline", "fault-injection"})
-    cancel_grace_s = 0.2  # every release is synchronous here; this only bounds a leak's wait
+    cancel_grace_s = 0.05  # every release is synchronous here; this only bounds a leak's wait
 
     def __init__(self, slots: int = 2) -> None:
         if slots < 1:
@@ -137,6 +137,10 @@ class FakeOrchestrator:
     def _live(self, run_id: str, token: int) -> bool:
         return self._holds.get(run_id) == token and self._runs[run_id]["state"] == "running"
 
+    def _accepts(self, run_id: str, token: int) -> bool:
+        """Whether the worker ``token`` may still record what its body returned."""
+        return self._live(run_id, token)
+
     def _work(self, run_id: str, token: int) -> None:
         with self._cv:
             r = self._runs[run_id]
@@ -152,13 +156,13 @@ class FakeOrchestrator:
             except Exception as exc:
                 result, error = None, f"{type(exc).__name__}: {exc}"
             with self._cv:
-                if not self._live(run_id, token):
+                if not self._accepts(run_id, token):
                     return  # stopped while the body ran: its result is discarded
                 r["result"], r["error"] = result, error
                 if error is None:
                     break
         with self._cv:
-            if self._live(run_id, token):
+            if self._accepts(run_id, token):
                 r["state"] = "succeeded" if r["error"] is None else "failed"
                 self._release(run_id, "done")
             self._cv.notify_all()
@@ -226,3 +230,79 @@ class NoRestartReconcileOrchestrator(FakeOrchestrator):
         for run_id in self._holds:
             self._holds[run_id] = -1  # the worker is gone; its hold and its run state are not
         self._cv.notify_all()
+
+
+class TTLReleaseOrchestrator(FakeOrchestrator):
+    """Defect: holds end by a timer, not by events -- each slot is dropped a fixed time after it
+    was granted, whether the run is still executing or not, and cancel/kill/deadline/restart
+    release nothing.  The TTL is shorter than the grace, so every release looks prompt."""
+
+    TTL_S = 0.02
+
+    def _release(self, run_id: str, why: str) -> None:
+        if why == "done":
+            super()._release(run_id, why)
+
+    def _start(self, run_id: str) -> None:
+        super()._start(run_id)
+        token = self._holds[run_id]
+
+        def expire() -> None:
+            with self._cv:
+                if self._holds.get(run_id) == token:
+                    del self._holds[run_id]
+                    self._cv.notify_all()
+
+        timer = threading.Timer(self.TTL_S, expire)
+        timer.daemon = True
+        timer.start()
+
+
+class LyingCapacityOrchestrator(FakeOrchestrator):
+    """Defect: a stopped run's slot leaks, so admission stays blocked, but ``capacity()`` lists
+    only the holders whose run is still ``running``: the report looks clean, the effect is not."""
+
+    def _release(self, run_id: str, why: str) -> None:
+        if why == "done":
+            super()._release(run_id, why)
+        else:
+            self._holds[run_id] = -1
+
+    def capacity(self) -> Capacity:
+        with self._cv:
+            live = frozenset(r for r in self._holds if self._runs[r]["state"] == "running")
+            return Capacity(self.slots, len(live), live)
+
+
+class RestartRerunsLiveRunOrchestrator(FakeOrchestrator):
+    """Defect: a restart requeues the runs that were executing and clears the slots but never
+    stops their old workers, so a requeued run executes a second time beside its first worker,
+    and either may report."""
+
+    def _reconcile(self) -> None:
+        for r in self._runs.values():
+            if r["state"] == "running":
+                r["state"] = "queued"
+        self._holds.clear()
+        self._cv.notify_all()
+
+    def _live(self, run_id: str, token: int) -> bool:
+        return self._runs[run_id]["state"] == "running"
+
+
+class LateResultLandsOrchestrator(FakeOrchestrator):
+    """Defect: holds are released on time, but a stopped worker's result is still recorded when
+    its body returns (no compare-and-swap on the run's state)."""
+
+    def _accepts(self, run_id: str, token: int) -> bool:
+        return self._holds.get(run_id) in (token, None)
+
+
+class LeakOnFailureOrchestrator(FakeOrchestrator):
+    """Defect: only the success path releases; a run whose last attempt failed keeps its slot."""
+
+    def _release(self, run_id: str, why: str) -> None:
+        if why == "done" and self._runs[run_id]["state"] == "failed":
+            self._holds[run_id] = -1
+        else:
+            super()._release(run_id, why)

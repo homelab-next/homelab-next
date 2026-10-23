@@ -1,12 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """The in-memory orchestrator's holds: what the suite's capacity checks lean on, beyond them."""
 
+import itertools
 import threading
 
 import pytest
 
 from conformance.fakes.orchestrator import FakeOrchestrator
 from conformance.protocols.orchestration import Admission, Capacity, Deadlines, FaultInjection
+from conformance.suites import orchestration as suite
+from homelabnext.conform.core import run_checks
 
 
 def test_the_fake_offers_every_optional_part_of_the_contract():
@@ -65,3 +68,45 @@ def test_bad_submits_are_refused(kwargs, match):
         o.submit("j", {}, **{"idempotency_key": "k", **kwargs})
     with pytest.raises(ValueError, match="slots"):
         FakeOrchestrator(slots=0)
+
+
+HOLDS = [s.id for s in suite.SUITE.specs if "admission" in s.requires]
+
+
+class _SharedCounter(FakeOrchestrator):
+    """A controller-like target: no limit, and an in-flight counter that other traffic keeps
+    raising (one more foreign job each time it is read)."""
+
+    def __init__(self):
+        super().__init__()
+        self._others = itertools.count()
+
+    def capacity(self):
+        _, n, holders = super().capacity()
+        return Capacity(None, n + next(self._others), holders)
+
+
+class _NoisyLimited(_SharedCounter):
+    def capacity(self):
+        _, n, holders = super().capacity()
+        return Capacity(self.slots, n, holders)
+
+
+def test_without_a_limit_a_release_is_judged_by_membership_not_the_shared_counter():
+    """With no limit, ``in_flight`` is a counter other traffic moves (the live controller's), so
+    only the run's own membership in ``holders`` is judged; with a limit the count must return."""
+    res = run_checks(suite.SUITE, _SharedCounter, only=HOLDS)
+    assert {r.check: r.status for r in res} == dict.fromkeys(HOLDS, "pass")
+    (res,) = run_checks(suite.SUITE, _NoisyLimited, only=["cancel-running-run-frees-capacity"])
+    assert res.status == "fail" and "capacity still held" in res.evidence
+
+
+def test_a_grace_above_the_protocol_cap_fails_the_capacity_checks():
+    """A self-declared grace longer than MAX_CANCEL_GRACE_S would let a hold released only when
+    its body returns pass for one released on cancel."""
+
+    class Slow(FakeOrchestrator):
+        cancel_grace_s = 11.0
+
+    (res,) = run_checks(suite.SUITE, Slow, only=["cancel-running-run-frees-capacity"])
+    assert res.status == "fail" and "outside (0, 10.0]" in res.evidence

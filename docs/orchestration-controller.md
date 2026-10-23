@@ -28,7 +28,7 @@ controller runs only `hermes`. So a conformance run puts a stand-in on the contr
 | `wait(run_id)` | Polls `GET /jobs/{id}`. `done` maps to `succeeded`; `failed` and `budget_killed` map to `failed`. `result` is decoded from `response_body`; `error` is `local_failed_reason`. The timeout is at least `wait_floor` (60 s), because the controller admits on a 2 s tick (`cmd/controller/main.go:225`). |
 | `cancel(run_id)` | `POST /jobs/{id}/cancel`. A `409` (no longer cancellable) reads the run back unchanged, which is what the contract expects for a finished run. |
 | `RunStatus.attempts` | The `attempts` field, when the controller reports one. `a52a1c4` reports none, so the adapter falls back to the number of executions the handler host saw for that run. |
-| `capacity()` (feature `admission`) | `GET /admin/backend-inflight` (`internal/api/server.go`, `WithBackendInFlight`, which serves `hermesagent.Policy.InFlightSnapshot`; the route landed after `a52a1c4`): `in_flight` summed over the backends, `holders` the union of their `reserved_runs`, `limit` `None` (the snapshot reports none). The adapter declares `admission` only when the route answers. With API authentication on, the route needs an admin token, which the adapter does not send. |
+| `capacity()` (feature `admission`) | `GET /admin/backend-inflight` (`internal/api/server.go`, `WithBackendInFlight`, which serves `hermesagent.Policy.InFlightSnapshot`; the route landed after `a52a1c4`): `in_flight` summed over the backends, `holders` the union of their `reserved_runs`, `limit` `None` (the snapshot reports none). The adapter declares `admission` only when the route answers; a `404` means "no route" (the capacity checks skip), any other answer or none makes the run unmeasured. With no limit the checks judge a release by the run leaving `reserved_runs`, never by `in_flight`, which other traffic on a shared controller moves; and they cannot test capacity by its effect (admitting new runs into the freed slots), which they do wherever a limit is reported. With API authentication on, the route needs an admin token, which the adapter does not send. |
 | `kill(run_id)`, `restart()` (test hook `fault-injection`) | Only on the recorded stand-in, which models the hermes process dying (`signal: killed`) and a controller restart (`ReconcileOrphans`). On a live controller the adapter cannot kill one job's worker or restart the service honestly, so it never declares the hook. |
 
 The adapter never answers on the controller's behalf. It does not raise `UnknownJob` for a name it
@@ -53,7 +53,13 @@ checks hold an implementation to it: `cancel-running-run-frees-capacity`,
 `killed-worker-fails-run-and-frees-capacity`, `deadline-expiry-frees-capacity`,
 `restart-reconciles-runs-and-capacity` and `capacity-returns-to-zero-after-churn`. Each needs
 `admission`; the kill and restart ones also need `fault-injection`, and the deadline one
-`deadline`.
+`deadline`. Each one also requires that a live, still-blocked run keeps its hold for two graces
+(a timer standing in for the release fails), that a stopped worker's result never lands after
+its body returns, and, where a limit is reported, that the freed capacity admits `limit` new runs
+promptly (a `capacity()` that reports free slots admission still counts fails). A restart must end
+a run that was executing; it may not run it again, since its old worker may still be executing.
+An implementation's `cancel_grace_s` may not exceed `MAX_CANCEL_GRACE_S` (10 s): a longer grace
+would let "released when the body returned" pass for "released on cancel".
 
 | Controller | Result |
 |---|---|

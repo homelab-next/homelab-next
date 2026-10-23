@@ -10,8 +10,10 @@ the run as it stands when ``timeout`` runs out.
 a token or KV-cache reservation on a model backend.  The contract on every such hold (added
 additively, ADR-0001; the reasoning is ADR-0029):
 
-a. *Capacity is held only by live work.*  A hold exists only while the worker it was granted to
-   is alive.  A run in a terminal state holds nothing.  Holds are released on success, failure,
+a. *Capacity is held only by live work, and live work keeps it.*  A hold exists only while the
+   worker it was granted to is alive, and that worker keeps it until it ends: a hold that goes
+   away on its own while its run is still executing is a timer, not a release.  A run in a
+   terminal state holds nothing.  Holds are released on success, failure,
    cancel, deadline expiry, worker death and orchestrator restart -- never only by a TTL.  A TTL
    is a backstop for a defect in this contract, not the way holds end: a hold that outlives its
    worker until a timer fires is capacity taken from live work by dead work.
@@ -20,8 +22,9 @@ b. *Cancelling a running run stops it.*  ``cancel`` on a ``running`` run stops i
    :data:`CANCEL_GRACE_S`) and its holds are released, whether or not the job body cooperates.
    A result the stopped worker produces afterwards is discarded.
 c. *A restart reconciles.*  After the orchestrator restarts, no run is ``running`` without a live
-   worker: a run that was running is ended (``failed``) or requeued, and holds are rebuilt from
-   live workers only.  Queued runs survive and still run; idempotency keys survive, so a repeat
+   worker, and holds are rebuilt from live workers only.  A run that was executing is ended
+   (``failed``), never run a second time: its old worker may still be executing elsewhere, and
+   nothing it produces is recorded.  A run admitted but not yet executing may be requeued.  Queued runs survive and still run; idempotency keys survive, so a repeat
    submit after the restart returns the same run.
 d. *Capacity is observable* (product feature ``admission``): ``capacity()`` returns a
    :class:`Capacity` -- the limit (``None`` when the implementation does not report one), the
@@ -32,7 +35,8 @@ e. *Faults can be injected* (test hook ``fault-injection``): ``kill(run_id)`` ma
    everything else, workers included.
 
 A per-run deadline is the product feature ``deadline``: ``submit(..., deadline_s=s)``; a run
-still unfinished ``s`` seconds after it was submitted ends ``failed`` and releases its holds.
+still unfinished ``s`` seconds after it was submitted ends ``failed``, with an error that names
+the deadline, and releases its holds.
 """
 
 from __future__ import annotations
@@ -43,6 +47,7 @@ from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 __all__ = [
     "CANCEL_GRACE_S",
+    "MAX_CANCEL_GRACE_S",
     "TERMINAL",
     "Admission",
     "Capacity",
@@ -57,6 +62,9 @@ __all__ = [
 TERMINAL = ("succeeded", "failed", "cancelled")
 #: how long a cancel, kill, deadline or restart may take to end the run and release its holds
 CANCEL_GRACE_S = 5.0
+#: the most an implementation may declare as its ``cancel_grace_s``: a grace as long as a job body
+#: would let "released when the body returned" pass for "released on cancel"
+MAX_CANCEL_GRACE_S = 10.0
 
 
 class OrchestrationError(Exception):

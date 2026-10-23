@@ -32,9 +32,13 @@ The mapping (docs/orchestration-controller.md has the whole table):
 * ``capacity`` (feature ``admission``) -> ``GET /admin/backend-inflight`` (the route landed after
   ``a52a1c4``; ``hermesagent.Policy.InFlightSnapshot``): ``in_flight`` summed over the backends,
   ``holders`` the union of their ``reserved_runs``, ``limit`` ``None`` (the snapshot reports no
-  limit).  ``admission`` is declared only when that route answers, so on a controller without it
-  the capacity checks skip.  With API authentication on, the route needs an admin token, which
-  this adapter does not send.
+  limit).  ``admission`` is declared only when that route answers; a ``404`` means no route, so
+  the capacity checks skip, and any other answer (a 5xx, a timeout, a ``401``) makes the run
+  unmeasured rather than skipped.  Without a limit the suite judges a release by the run leaving
+  ``reserved_runs``: ``in_flight`` is a counter shared with any other traffic on the controller,
+  so it is never compared.  With API authentication on, the route needs an admin token, which
+  this adapter does not send.  The recorded stand-in is started only by the first contract call,
+  and its features come from ``fixes``, so a check that skips never starts one.
 * ``kill`` / ``restart`` (test hook ``fault-injection``) exist only on the recorded stand-in, which
   models the controller's process kill and restart reconciliation.  On a live controller the
   adapter has no honest way to kill one job's worker or restart the service, so it does not
@@ -70,7 +74,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from homelabnext._http import read_bounded, safe_urlopen, send_json
+from homelabnext._http import read_bounded, safe_opener, send_json
 
 from ._env import AdapterConfigError, resolve, run_token
 
@@ -233,6 +237,9 @@ class LLMOrchestrator:
         self._priority, self._poll, self._floor, self._timeout = priority, poll, wait_floor, timeout
         self._clock, self._sleep, self._on_close = clock, sleep, on_close
         self._host = _HandlerHost()
+        # one opener per subject: building one loads the CA bundle (tens of ms of CPU), and the
+        # capacity checks poll the controller many times a second
+        self._opener = safe_opener()
         self._written: list[Path] = []
         self._tokens: dict[str, str] = {}
         #: a cancel is a process kill plus a poll: generous for a live controller under load
@@ -250,7 +257,7 @@ class LLMOrchestrator:
         if data is not None:
             req.add_header("Content-Type", "application/json")
         try:
-            with safe_urlopen(req, timeout=self._timeout) as resp:
+            with self._opener.open(req, timeout=self._timeout) as resp:
                 return resp.status, read_bounded(resp)
         except urllib.error.HTTPError as exc:
             with contextlib.closing(exc):
@@ -279,14 +286,19 @@ class LLMOrchestrator:
     @property
     def features(self) -> frozenset[str]:
         """``admission`` when the controller serves its in-flight route, ``fault-injection``
-        only with a stand-in that can kill and restart (probed once per subject)."""
+        only with a stand-in that can kill and restart (probed once per subject).
+
+        Only ``404`` means "no route": any other answer, or no answer, raises
+        :class:`OrchestrationError`, so a transient fault makes the run unmeasured instead of
+        quietly skipping the capacity checks."""
         if self._features is None:
             feats = {"fault-injection"} if self._faults is not None else set()
-            try:
-                self._inflight()
+            status, raw = self._request("GET", "/admin/backend-inflight")
+            if status == 200:
+                self._parse_inflight(status, raw)
                 feats.add("admission")
-            except Exception:  # no route, or no controller: then nothing can be measured
-                pass
+            elif status != 404:
+                raise self._fail("backend in-flight (feature probe)", status, raw)
             self._features = frozenset(feats)
         return self._features
 
@@ -294,7 +306,13 @@ class LLMOrchestrator:
         status, raw = self._request("GET", "/admin/backend-inflight")
         if status != 200:
             raise self._fail("backend in-flight", status, raw)
-        doc = json.loads(raw)
+        return self._parse_inflight(status, raw)
+
+    def _parse_inflight(self, status: int, raw: bytes) -> dict[str, Any]:
+        try:
+            doc = json.loads(raw)
+        except ValueError:
+            doc = None
         backends = doc.get("backends") if isinstance(doc, dict) else None
         if not isinstance(backends, dict):
             raise self._fail("backend in-flight (no backends)", status, raw)
@@ -436,7 +454,7 @@ def make(
     priority: int = 50,
     poll: float = 0.2,
     wait_floor: float = 60.0,
-) -> LLMOrchestrator:
+) -> LLMOrchestrator | _Recorded:
     """An ``orchestration`` subject on a controller: the one ``HNX_ENDPOINT_<CAPABILITY>`` names,
     with its profiles directory, or (``recorded_fake``) a fresh loopback stand-in of its API,
     with ``fixes`` (``conformance/fakes/llm_orchestrator_api.py``) turned on."""
@@ -456,13 +474,71 @@ def make(
     )
 
 
-def _on_recorded_fake(fixes: tuple[str, ...], priority: int) -> LLMOrchestrator:
+class _Recorded:
+    """An :class:`LLMOrchestrator` on a stand-in that is started only when a contract call needs
+    it.  Its features are known from ``fixes`` without a probe, so a check that skips for a
+    missing feature never pays for a stand-in and a handler host."""
+
+    #: the stand-in kills and releases at once (a 10 ms poll), so a short grace keeps the checks'
+    #: hold-persistence and late-result windows cheap
+    cancel_grace_s = 0.5
+
+    def __init__(self, fixes: tuple[str, ...], priority: int) -> None:
+        self._fixes, self._priority = fixes, priority
+        self._real: LLMOrchestrator | None = None
+        admission = {"admission"} if "backend-inflight" in fixes else set()
+        self.features = frozenset({"fault-injection", *admission})
+
+    def __repr__(self) -> str:
+        return "LLMOrchestrator(<recorded stand-in>)"
+
+    def _o(self) -> LLMOrchestrator:
+        if self._real is None:
+            self._real = _start_recorded(self._fixes, self._priority, self.cancel_grace_s)
+        return self._real
+
+    def define(self, name, handler, *, retries=0):
+        return self._o().define(name, handler, retries=retries)
+
+    def submit(self, name, params, *, idempotency_key):
+        return self._o().submit(name, params, idempotency_key=idempotency_key)
+
+    def wait(self, run_id, timeout=5.0):
+        return self._o().wait(run_id, timeout)
+
+    def cancel(self, run_id):
+        return self._o().cancel(run_id)
+
+    def capacity(self):
+        return self._o().capacity()
+
+    def kill(self, run_id):
+        return self._o().kill(run_id)
+
+    def restart(self):
+        return self._o().restart()
+
+    def close(self) -> None:
+        if self._real is not None:
+            self._real.close()
+
+
+def _on_recorded_fake(fixes: tuple[str, ...], priority: int) -> _Recorded:
     try:
-        from conformance.fakes.llm_orchestrator_api import FakeController
+        from conformance.fakes.llm_orchestrator_api import FIXES, UPSTREAM
     except ImportError as exc:  # pragma: no cover - a wheel carries no conformance/
         raise AdapterConfigError(
             "recorded_fake needs a source checkout (conformance/fakes)"
         ) from exc
+    unknown = set(fixes) - FIXES - UPSTREAM
+    if unknown:
+        raise ValueError(f"unknown fixes {sorted(unknown)}")
+    return _Recorded(fixes, priority)
+
+
+def _start_recorded(fixes: tuple[str, ...], priority: int, grace: float) -> LLMOrchestrator:
+    from conformance.fakes.llm_orchestrator_api import FakeController
+
     directory = tempfile.mkdtemp(prefix="hnx-orch-profiles-")
     fake = FakeController(directory, fixes=fixes).start()
 
@@ -479,7 +555,7 @@ def _on_recorded_fake(fixes: tuple[str, ...], priority: int) -> LLMOrchestrator:
             wait_floor=10.0,
             on_close=stop,
             faults=fake,
-            cancel_grace_s=1.0,
+            cancel_grace_s=grace,
         )
     except BaseException:
         stop()

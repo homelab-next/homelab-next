@@ -20,8 +20,6 @@ from conformance.fakes import llm_orchestrator_api as api
 from conformance.fakes import llm_orchestrator_hermes as hermes
 from conformance.fakes.llm_orchestrator_api import FakeController
 from conformance.protocols.orchestration import (
-    Admission,
-    FaultInjection,
     OrchestrationError,
     Orchestrator,
 )
@@ -63,16 +61,55 @@ def test_recorded_target_fails_exactly_the_controller_gaps():
     assert "expected an error" in evidence["unknown-job-raises"]
 
 
-def test_proposed_controller_fixes_pass_the_whole_suite():
-    """With the fixes and the upstream in-flight route every check that can run passes: the
-    capacity ones against the stand-in's model of the controller (cancel kills the process, a
-    defer releases the slot, a restart runs ReconcileOrphans), which the fixes do not touch."""
+def test_proposed_controller_fixes_clear_the_gaps_and_the_capacity_checks_pass():
+    """With the fixes and the upstream in-flight route the three gaps pass, and so do the
+    capacity checks against the stand-in's model of the controller (cancel kills the process, a
+    defer releases the slot, a restart runs ReconcileOrphans).  The other checks do not depend on
+    the fixes and run in the recorded test above; the deadline one skips (no per-run deadline)."""
     fixes = (*FIXES, *api.UPSTREAM)
-    results = run_checks(suite.SUITE, lambda: lo.make(recorded_fake=True, fixes=fixes))
+    wanted = [*CONTROLLER_GAPS, *HOLDS, "deadline-expiry-frees-capacity"]
+    results = run_checks(suite.SUITE, lambda: lo.make(recorded_fake=True, fixes=fixes), only=wanted)
     assert _failing(results) == []
-    # the controller takes no per-run deadline: the one check that needs it is all that skips
     assert _skipped(results) == ["deadline-expiry-frees-capacity"]
-    assert len(results) == len(suite.SUITE.specs)
+
+
+def test_a_skipped_check_never_starts_the_stand_in(monkeypatch):
+    started = []
+    real = lo._start_recorded
+    monkeypatch.setattr(lo, "_start_recorded", lambda *a: started.append(a) or real(*a))
+    (res,) = run_checks(
+        suite.SUITE, lambda: lo.make(recorded_fake=True), only=["cancel-running-run-frees-capacity"]
+    )
+    assert res.status == "skip" and started == []
+    (res,) = run_checks(
+        suite.SUITE, lambda: lo.make(recorded_fake=True), only=["runs-job-and-returns-result"]
+    )
+    assert res.status == "pass" and len(started) == 1
+    with pytest.raises(ValueError, match="unknown fixes"):
+        lo.make(recorded_fake=True, fixes=["teleport"])
+
+
+class _FlakyRoute(FakeController):
+    def inflight(self):
+        return 503, "backend status unavailable"
+
+
+def test_the_feature_probe_skips_only_on_a_missing_route(tmp_path):
+    """404 is "no route" (the capacity checks skip); a 503 is a fault, which must make the run
+    unmeasured rather than turn five MUST checks into skips."""
+    flaky = _FlakyRoute(tmp_path, fixes=api.UPSTREAM).start()
+    o = lo.LLMOrchestrator(flaky.url, profiles_dir=tmp_path, on_close=flaky.stop)
+    try:
+        with pytest.raises(OrchestrationError, match="HTTP 503"):
+            o.features  # noqa: B018 - the probe is the property
+    finally:
+        o.close()
+    absent = FakeController(tmp_path).start()
+    o = lo.LLMOrchestrator(absent.url, profiles_dir=tmp_path, on_close=absent.stop)
+    try:
+        assert "admission" not in o.features
+    finally:
+        o.close()
 
 
 class _LeakOnCancel(FakeController):
@@ -163,8 +200,7 @@ def test_a_live_controller_declares_admission_by_its_route_and_never_the_fault_h
         fake = FakeController(tmp_path, fixes=fixes).start()
         o = lo.LLMOrchestrator(fake.url, profiles_dir=tmp_path, poll=0.01, wait_floor=5)
         try:
-            assert o.features == feats
-            assert isinstance(o, Admission) and isinstance(o, FaultInjection)
+            assert o.features == feats  # the methods always exist; the features say what works
             with pytest.raises(OrchestrationError, match="recorded stand-in"):
                 o.kill("any")
             with pytest.raises(OrchestrationError, match="recorded stand-in"):
@@ -359,3 +395,20 @@ def test_make_needs_an_endpoint_and_a_profiles_dir(monkeypatch, tmp_path):
         FakeController(tmp_path, fixes=["teleport"])
     with pytest.raises(ValueError, match="concurrency"):
         FakeController(tmp_path, concurrency=0)
+
+
+def test_one_subject_builds_one_opener(monkeypatch, tmp_path):
+    """Building an opener loads the CA bundle (tens of ms of CPU); the capacity checks poll the
+    controller many times a second, so a subject builds one and reuses it."""
+    built = []
+    real = lo.safe_opener
+    monkeypatch.setattr(lo, "safe_opener", lambda: built.append(1) or real())
+    fake = FakeController(tmp_path, fixes=api.UPSTREAM).start()
+    o = lo.LLMOrchestrator(fake.url, profiles_dir=tmp_path, on_close=fake.stop)
+    try:
+        for _ in range(5):
+            o.capacity()
+        assert built == [1]
+    finally:
+        o.close()
+    assert hermes._opener() is hermes._opener()
