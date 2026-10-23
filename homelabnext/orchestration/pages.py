@@ -19,10 +19,12 @@ every value is escaped anyway.  Each request reads the store; it never writes.
 
 from __future__ import annotations
 
+import re
+import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-from homelabnext.status.agents.pages import _chips, _href, _n, _q, _table
+from homelabnext.status.agents.pages import _chips, _href, _n, _table
 from homelabnext.status.render import _e, nav_html, shell_html
 
 from .model import NO_BACKEND, OUTCOMES, group_key, rollup
@@ -40,6 +42,22 @@ _CLASS = {"completed": "ok", "failed": "fail", "timeout": "fail", "cancelled": "
 _FILTERS = ("profile", "backend", "lane", "outcome")
 #: a job without gateway turns (a direct vLLM backend, a cloud provider): not zero, unknown
 NO_GATEWAY = '<span class="muted">no gateway data</span>'
+#: a query value: the characters of the job record's run_id and backend (agent.job.finished 1.0),
+#: which may start with a dot or a digit, so also the literal ``-`` (NO_BACKEND); profile ids,
+#: lanes, outcomes and ``days`` are inside it too
+_VALUE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+
+
+def _q(query: str) -> dict[str, str]:
+    """Single-valued, shape-checked query parameters (anything else is ignored).  Not the agent
+    pages' validator: theirs requires a letter or digit first, which refused ``backend=-`` and
+    every dotted backend or run id, so such a filter or link silently showed everything or no
+    job."""
+    out = {}
+    for k, vals in urllib.parse.parse_qs(query, keep_blank_values=False).items():
+        if len(vals) == 1 and _VALUE.fullmatch(vals[0]):
+            out[k] = vals[0]
+    return out
 
 
 def _badge(outcome: str) -> str:

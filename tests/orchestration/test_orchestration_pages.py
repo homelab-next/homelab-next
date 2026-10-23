@@ -4,6 +4,7 @@ backend, the trend, one job's turns; names and numbers only, served read-only by
 
 from __future__ import annotations
 
+import copy
 import json
 import threading
 import urllib.request
@@ -97,6 +98,22 @@ def test_an_unknown_sum_is_shown_as_unknown_never_as_zero(site):
     trend = _page(site, "/orchestration").split("<h3>Trend by day")[1].split("<h3>Latest")[0]
     assert '89000 <span class="muted">(1 unknown)</span>' in trend
     assert '$0.0000 <span class="muted">(2 unknown)</span>' in trend
+
+
+def test_filters_and_links_take_every_value_the_schema_allows(filled):
+    """``backend=-`` (no backend), a dotted backend and a run id that starts with a dot are
+    values the record allows: the filter narrows to them and the job link opens the job."""
+    ev = copy.deepcopy(examples()[0]) | {"id": "evt-dotted"}
+    ev["data"].update(run_id=".abc", gateway_tag=".abc", backend=".vllm-a")
+    assert filled.consume(body(ev)).status == "processed"
+    site = OrchestrationSite(filled, clock=lambda: T0)
+    assert "1 jobs" in _page(site, "/orchestration", "backend=-")  # run-0004 alone
+    dotted = _page(site, "/orchestration", "backend=.vllm-a")
+    assert "1 jobs" in dotted and "<b>.vllm-a</b>" in dotted
+    assert '<a href="/orchestration/job?run=.abc">' in dotted
+    job = _page(site, "/orchestration/job", "run=.abc")
+    assert "<h2>Job <code>.abc</code></h2>" in job and "no such job" not in job
+    assert "5 jobs" in _page(site, "/orchestration", "backend=a%0A")  # still shape-checked
 
 
 def test_one_job_shows_its_record_and_its_gateway_turns(site):
