@@ -23,6 +23,7 @@ from homelabnext.lake import (
     UnknownTable,
     load_schemas,
 )
+from homelabnext.lake.checkpoint import SourceState
 
 SCHEMAS = load_schemas()
 TABLE = "authentication"
@@ -151,6 +152,35 @@ def test_start_fast_forwards_the_checkpoint_to_what_the_lake_committed(make_lake
         src[20:], batch_id="s:20", position="30"
     )
     assert _count(make_lake()) == {"n": 30, "d": 30}
+
+
+@pytest.mark.parametrize("tail", ["empty", "duplicates"])
+def test_a_batch_that_commits_nothing_does_not_rewind_the_checkpoint(make_lake, tmp_path, tail):
+    # no fresh rows: the lake makes no commit and keeps its mark at the earlier batch; the next
+    # start() must resume from the reader's newer position, not fast-forward back to that mark
+    cp = Checkpoint(tmp_path / "cp.json")
+    src = synthetic.authentication(10)
+    Ingestor(make_lake(), cp, table=TABLE, source="s").ingest(src, batch_id="s:0", position="10")
+    rows = [] if tail == "empty" else src[:5]
+    res = Ingestor(make_lake(), cp, table=TABLE, source="s").ingest(
+        rows, batch_id="s:10", position="90"
+    )
+    assert res.rows_written == 0
+    assert Ingestor(make_lake(), cp, table=TABLE, source="s").start() == "90"
+    assert cp.get("s").position == "90"
+    assert _count(make_lake()) == {"n": 10, "d": 10}
+
+
+def test_a_checkpoint_naming_a_later_batch_at_the_marks_snapshot_is_not_rewound(
+    make_lake, tmp_path
+):
+    # a checkpoint saved by an older release after a no-op batch: later batch id, same snapshot
+    cp = Checkpoint(tmp_path / "cp.json")
+    src = synthetic.authentication(10)
+    Ingestor(make_lake(), cp, table=TABLE, source="s").ingest(src, batch_id="s:0", position="10")
+    snap = cp.get("s").snapshot_id
+    cp.save("s", SourceState("90", "s:10", snap))
+    assert Ingestor(make_lake(), cp, table=TABLE, source="s").start() == "90"
 
 
 def test_repeated_crashes_still_converge(make_lake, tmp_path):
