@@ -529,7 +529,29 @@ def test_compose_app_refuses_a_host_path_outside_the_bind_roots(tmp_path, vol):
         app_vars(tmp_path, spec(volumes=[vol]), compose_app_validate_with_docker=False),
     )
     assert r.returncode != 0
-    assert "mounts a host path outside the allowed roots" in r.stdout + r.stderr
+    assert "a host path outside the allowed roots" in r.stdout + r.stderr
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def refused_sources(r):
+    out = r.stdout + r.stderr
+    assert r.returncode != 0, out
+    return out.split("outside the allowed roots (", 1)[1].split(")", 1)[0].split()
+
+
+def test_compose_app_env_file_paths_follow_the_bind_source_rule(tmp_path):
+    """compose reads an env_file on the deploy host and hands it to the container: it used to be
+    any string, so /etc/shadow or another application's secrets were accepted."""
+    other = str(tmp_path / "other-app" / "secrets" / "db.env")
+    ok = ["app.env", "./conf/web.env", f"{tmp_path / 'app' / 'data'}/web.env"]
+    s = spec(env_file=[*ok, "/etc/shadow", other])
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, s, compose_app_validate_with_docker=False),
+    )
+    assert refused_sources(r) == ["env_file=/etc/shadow", f"env_file={other}"]
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 

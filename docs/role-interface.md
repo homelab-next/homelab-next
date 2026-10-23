@@ -129,13 +129,21 @@ membership change. `role_lint.py --playbook X --inventory Y` fails a playbook wh
   in `_FILE`). They go in `compose_app_secret_env`, which the role writes to
   `secrets/<service>.env` (mode 0600, `no_log`, no diff) and passes as an `env_file`.
 * Every value is written with `$` doubled (`$$`), so docker compose never interpolates the
-  deploy host's environment into the file, and a volume holding `$` or a source starting with `~`
+  deploy host's environment into `docker-compose.yml`, and a volume holding `$` or a source starting with `~`
   is refused outright (`${X:-/}:/host` is the host root once compose has read it).
 * Bind sources are an allow-list: a host path is mounted only under `compose_app_bind_roots`
   (the application's own directory and data directory by default; never a host-wide directory
   such as `/etc`, `/var` or `/srv`) or when it is listed on its own, with a reason, in
   `compose_app_bind_extra` (`[{path, reason}]`). A `./relative` source, a named volume and an
-  anonymous volume (a container path alone, `/var/lib/app`) need neither. Everything else (`/etc`, `/proc`, `/dev`, `/boot`, `/root`, `/run/systemd`, the D-Bus
+  anonymous volume (a container path alone, `/var/lib/app`) need neither.
+* An `env_file` is a host path as well: compose reads it on the deploy host, usually as root, and
+  hands its contents to the container. Its path follows the bind-source rule (relative to the
+  project directory, under `compose_app_bind_roots`, or listed in `compose_app_bind_extra`;
+  canonical, no `$`, no leading `~`), so `/etc/shadow` or another application's
+  `secrets/<service>.env` is refused. Its **contents are interpolated** from the deploy host's
+  environment, unlike `docker-compose.yml`: `A=${HOME}` and `A="$HOME"` both reach the container
+  as the deploy user's home. Single-quote a value (`A='${HOME}'`) or write `$$` to keep it literal,
+  as the role does for `compose_app_secret_env`. Everything else (`/etc`, `/proc`, `/dev`, `/boot`, `/root`, `/run/systemd`, the D-Bus
   and buildkitd sockets, another runtime's state) is refused.
 * A volume's bind source must be canonical (no `//`, no `.` or `..` component other than a
   leading `./`, no trailing `/`): compose passes `/.`, `//` and `/var//lib/docker` through
