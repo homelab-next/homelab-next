@@ -907,14 +907,57 @@ def test_a_package_with_test_files_must_report_a_test(tmp_path, capsys):
     assert run(tmp_path, lines, *forbid) == 0  # without the list
     assert run(tmp_path, lines, *forbid, "--expect-tests", str(tested)) == 1
     out = capsys.readouterr().out
-    assert (
-        f"FAIL {MOD}/internal/hidden: has test files (--expect-tests) but reported no test" in out
-    )
-    assert "internal/queue: has test files" not in out
+    assert f"FAIL {MOD}/internal/hidden: declares tests" in out
+    assert "internal/queue: declares tests" not in out
     # a package that failed to build is reported as that, not also as hiding its tests
     broken = [ev("start", "internal/hidden"), ev("fail", "internal/hidden", FailedBuild="x")]
     assert run(tmp_path, GREEN + broken, *forbid, "--expect-tests", str(tested)) == 1
-    assert "reported no test" not in capsys.readouterr().out
+    assert "declares tests" not in capsys.readouterr().out
+
+
+DECLARED = {
+    # verify5.md (v5/et): which test files make the binary run something
+    "unit": ("func TestX(t *testing.T) {}\n", True),
+    "bare Test": ("func Test(t *testing.T) {}\n", True),
+    "fuzz": ("func FuzzX(f *testing.F) { f.Add(1) }\n", True),
+    "example with output": ('func Example() {\n\tfmt.Println("hi")\n\t// Output: hi\n}\n', True),
+    "unordered output": ("func ExampleX() {\n\t// Unordered output:\n}\n", True),
+    "benchmarks only": ("func BenchmarkX(b *testing.B) {}\n", False),
+    "helpers only": ("func Testable(t *testing.T) {}\nfunc helper() {}\n", False),
+    "example without output": ('func Example() { fmt.Println("hi") }\n', False),
+    "a method named Test": ("func (s *suite) TestX(t *testing.T) {}\n", False),
+    "in a comment": ("// func TestX(t *testing.T) {}\n", False),
+}
+
+
+@pytest.mark.parametrize(("body", "runs"), DECLARED.values(), ids=DECLARED.keys())
+def test_which_test_files_declare_tests(tmp_path, body, runs):
+    (tmp_path / "x_test.go").write_text("package x\n\n" + body)
+    (tmp_path / "x.go").write_text("package x\n\nfunc TestNotInATestFile() {}\n")
+    assert policy.declares_tests(tmp_path) is runs
+
+
+def test_the_floor_expects_tests_only_where_they_are_declared(tmp_path, capsys):
+    # verify5.md (v5/et): benchmark-only and output-less example packages failed the floor
+    dirs = {}
+    for name, body in [
+        ("bench", DECLARED["benchmarks only"][0]),
+        ("hidden", DECLARED["unit"][0]),
+    ]:
+        dirs[name] = tmp_path / name
+        dirs[name].mkdir()
+        (dirs[name] / "x_test.go").write_text("package x\n\n" + body)
+    lines = (
+        GREEN + package("internal/bench", "pass") + package("internal/hidden", "pass")
+    )  # fmt: skip
+    tested = tmp_path / "tested.txt"
+    tested.write_text(
+        f"{MOD}/internal/bench {dirs['bench']}\n{MOD}/internal/hidden {dirs['hidden']}\n"
+    )
+    assert run(tmp_path, lines, "--forbid", "nothing", "--expect-tests", str(tested)) == 1
+    out = capsys.readouterr().out
+    assert f"FAIL {MOD}/internal/hidden: declares tests" in out
+    assert "internal/bench" not in out
 
 
 def test_an_event_is_one_line_even_with_a_next_line_character_in_its_output(tmp_path, capsys):

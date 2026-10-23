@@ -42,10 +42,13 @@ Reads the event stream of ``go test -json`` (one or more files) and fails on:
 * with ``--expect-packages FILE`` (``go list ./...``): a listed package with no events at all, so
   a stream cut exactly at a package boundary cannot pass on a quarantined failure's exit 1 (a
   package without test files still has events: its ``skip``);
-* with ``--expect-tests FILE`` (the packages ``go list`` gives test files): a listed package that
-  did not fail yet reported no test at all -- a floor under tests hidden from the run (an
-  ``os.Exit(0)`` before ``m.Run``, ``flag.Set("test.skip", ...)`` in ``TestMain``), which are not
-  skips.  A package whose test files hold only helpers or benchmarks fails it too, closed.
+* with ``--expect-tests FILE`` (``<import path> <dir>`` per package ``go list`` gives test files):
+  a package whose test files declare a ``Test`` or ``Fuzz`` function, or an ``Example`` with an
+  ``// Output:`` comment, that did not fail yet reported no test at all -- a floor under tests
+  hidden from the run by an ``os.Exit(0)`` before ``m.Run``, which is not a skip.  Test files with
+  only benchmarks, helpers or examples without output run nothing and are not expected to.  It is
+  a floor, not a guard: hiding some tests (``flag.Set("test.skip", ...)``), or a ``TestMain`` that
+  forges the events, still passes.
 
 The policy file (``skips.yml`` in the module's root)::
 
@@ -388,9 +391,9 @@ def judge(
     for pkg in sorted(set(expected_tests or ()) - tested):
         if pkg in run.packages and run.packages[pkg].action != "fail":
             problems.append(
-                f"FAIL {pkg}: has test files (--expect-tests) but reported no test at all: its "
-                "tests were hidden (an os.Exit before m.Run, a test.run or test.skip flag set in "
-                "TestMain) or it has no Test, Example or Fuzz function"
+                f"FAIL {pkg}: declares tests (a Test or Fuzz function, or an Example with an "
+                "// Output: comment; --expect-tests) but reported none: they were hidden from the "
+                "run, as by an os.Exit before m.Run in TestMain"
             )
 
     forbid_rx = [re.compile(f) for f in forbid]
@@ -688,6 +691,41 @@ def read_exits(path: str) -> dict[str, int]:
     return exits
 
 
+# a top-level function the test binary runs: TestXxx and FuzzXxx (Xxx not lowercase), or
+# ExampleXxx, which runs only when its body has an output comment
+_RUNS = re.compile(r"(?:Test|Fuzz)(?![a-z])\w*")
+_EXAMPLE = re.compile(r"Example\w*")
+_OUTPUT = re.compile(r"(?i)^//\s*(?:unordered )?output:")
+
+
+def declares_tests(directory: Path) -> bool:
+    """Whether the ``*_test.go`` files in ``directory`` declare a test the binary runs."""
+    examples = output = False
+    for path in sorted(directory.glob("*_test.go")):
+        toks = go_tokens(path.read_text(encoding="utf-8", errors="replace"))
+        output = output or any(t.kind == "comment" and _OUTPUT.match(t.text) for t in toks)
+        code = [t for t in toks if t.kind != "comment"]
+        for i in range(len(code) - 2):
+            if code[i].text != "func" or code[i + 1].kind != "ident" or code[i + 2].text != "(":
+                continue
+            name = code[i + 1].text
+            if _RUNS.fullmatch(name):
+                return True
+            examples = examples or bool(_EXAMPLE.fullmatch(name))
+    return examples and output
+
+
+def runnable(lines: list[str]) -> list[str]:
+    """The import paths of ``--expect-tests`` whose packages declare tests; a line without a
+    directory is taken as declaring them."""
+    out = []
+    for line in lines:
+        pkg, _, directory = line.partition(" ")
+        if not directory or declares_tests(Path(directory)):
+            out.append(pkg)
+    return out
+
+
 def _read_lines(path: str) -> list[str]:
     try:
         return [x.strip() for x in Path(path).read_text(encoding="utf-8").splitlines() if x.strip()]
@@ -746,7 +784,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--expect-tests",
         metavar="FILE",
-        help="the packages with test files, one import path a line: each needs a test event",
+        help="'<import path> <dir>' per package with test files: one that declares tests needs a "
+        "test event",
     )
     ap.add_argument("--list-privileged", action="store_true")
     ap.add_argument(
@@ -779,7 +818,7 @@ def main(argv: list[str] | None = None) -> int:
             raise PolicyError("--privileged-exit needs the root run's stream (--privileged)")
         exits = read_exits(args.privileged_exit) if args.privileged_exit else None
         expected = _read_lines(args.expect_packages) if args.expect_packages else None
-        tests = _read_lines(args.expect_tests) if args.expect_tests else None
+        tests = runnable(_read_lines(args.expect_tests)) if args.expect_tests else None
         problems, notes = judge(
             run,
             policy,

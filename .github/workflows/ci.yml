@@ -369,10 +369,11 @@ jobs:
           if [ -f "$pol/skips.yml" ]; then policy+=(--policy "$pol/skips.yml"); fi
           out="$res/go-test.json"
           # every package the run covers must show up in the stream, even one that has no tests,
-          # and one with test files must report a test (a floor under tests TestMain hides)
+          # and one whose test files declare tests must report one (a floor under tests TestMain
+          # hides)
           go list ./... | sudo tee "$res/go-packages.txt" > /dev/null
           sudo test -s "$res/go-packages.txt"
-          go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./... \
+          go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}} {{.Dir}}{{end}}' ./... \
             | sudo tee "$res/go-tested.txt" > /dev/null
           status=0
           # root opens the stream file, then drops to the runner user, which cannot sudo from there

@@ -155,7 +155,11 @@ and an entry that no longer excuses anything fails the lint.
   `t.SkipNow()`, `t.Skipf(...)` or a message built elsewhere, in a test or in a helper
   (`--check-sources` reads every `.go` file of the module, `testdata/` and `_*` directories
   included since a test can import a package there, and rejects those, because the stream
-  shows only the last line before `--- SKIP`). One limit of the stream: a parent test that fails
+  shows only the last line before `--- SKIP`). A package whose test files declare a `Test` or
+  `Fuzz` function, or an `Example` with an `// Output:` comment, must report at least one test in
+  the run (`--expect-tests`), so a `TestMain` that exits before `m.Run` fails; test files with
+  only benchmarks, helpers or examples without output run nothing and need not (an output-less
+  example still satisfies `component_tests`). One limit of the stream: a parent test that fails
   silently (`t.Fail()`) next to a quarantined subtest is tolerated with it, so fail with a message.
 - **Time budgets.** Each suite (a test file's first two directories, e.g. `tests/lake`) has a budget
   (`suite_budget_default`, `suite_budgets`); a suite over it fails the run. `pytest --suite-times`
