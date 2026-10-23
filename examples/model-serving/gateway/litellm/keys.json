@@ -9,7 +9,8 @@
       ],
       "metadata": {
         "owner": "chat-ui",
-        "data_tier": "local-only"
+        "data_tier": "local-only",
+        "hnx-managed": true
       }
     }
   ]

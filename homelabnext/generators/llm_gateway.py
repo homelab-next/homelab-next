@@ -12,7 +12,8 @@ which secret holds each key, and any extra non-agent keys.  From those three thi
   environment reference only;
 * ``litellm/keys.json``    - the virtual keys to create (``/key/generate`` bodies; LiteLLM keeps
   keys in Postgres, not in the config file), each naming the environment variable holding the
-  key, never the key;
+  key, never the key, and each tagged ``metadata["hnx-managed"]`` so provisioning can delete the
+  keys of profiles later removed from the spec;
 * ``bifrost/config.json``  - providers (one per backend, role -> model id as key aliases), virtual
   keys, per-role rate limits and budgets, routing rules for ordered bindings and fallbacks;
 * ``bifrost/pricing.json``, ``bifrost/model-parameters.json`` - empty local datasheets: Bifrost
@@ -41,7 +42,8 @@ Rules enforced at render time (a violation raises :class:`GatewaySpecError`, not
 
 :func:`audit` re-checks the *rendered* files (``hnx gen gateway --check`` runs it on what is on
 disk), so a hand edit that adds a cloud fallback to a local-only role fails the check even though
-the generator would never write it.
+the generator would never write it; it also fails a key in ``keys.json`` without the
+``hnx-managed`` tag or with a duplicate alias, since provisioning prunes by that tag.
 """
 
 from __future__ import annotations
@@ -86,6 +88,9 @@ ROLE_LIMIT_KEYS = ("max_requests", "max_tokens", "max_cost", "cost_per_1k_tokens
 HOST_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$")
 LOCALITIES = ("local", "cloud")
 DATA_TIERS = ("local-only", "cloud-allowed")
+#: the ``metadata`` tag on every key this generator declares: provisioning deletes a tagged key
+#: whose alias the spec no longer declares, and never touches an untagged one
+MANAGED = "hnx-managed"
 #: cloud providers the renderers know how to name (LiteLLM prefix == Bifrost provider name)
 CLOUD_PROVIDERS = ("anthropic", "openai", "gemini", "mistral")
 #: API domains of hosted model providers: no service domain or local host may sit under one, so a
@@ -811,7 +816,7 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
             "key_alias": k.name,
             "key_env": secret_env_name(k.secret),
             "models": sorted(_allowed(spec, k)),
-            "metadata": {"owner": k.owner or k.name, "data_tier": k.data_tier},
+            "metadata": {"owner": k.owner or k.name, "data_tier": k.data_tier, MANAGED: True},
             **(
                 {"rpm_limit": _per_minute(k.max_requests, k.window_s)}
                 if k.max_requests and k.window_s
@@ -1076,6 +1081,35 @@ def audit(files: Mapping[str, str], spec: Spec) -> list[str]:
     bf = files.get("bifrost/config.json")
     if bf is not None:
         problems += [f"bifrost/config.json: {p}" for p in _audit_bifrost(bf, hosts, strict, spec)]
+    kj = files.get("litellm/keys.json")
+    if kj is not None:
+        problems += [f"litellm/keys.json: {p}" for p in _audit_keys(kj)]
+    return problems
+
+
+def _audit_keys(text: str) -> list[str]:
+    """Every key is tagged ``hnx-managed`` (what provisioning prunes by) and aliases are unique."""
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        doc = None
+    keys = doc.get("keys") if isinstance(doc, dict) else None
+    if not isinstance(keys, list):
+        return ["not a JSON object with a keys list"]
+    problems, seen = [], set()
+    for k in keys:
+        alias = k.get("key_alias") if isinstance(k, Mapping) else None
+        if not alias:
+            problems.append("a key has no key_alias")
+            continue
+        if alias in seen:
+            problems.append(f"key {alias} is declared twice")
+        seen.add(alias)
+        if (k.get("metadata") or {}).get(MANAGED) is not True:
+            problems.append(
+                f"key {alias} is not tagged metadata.{MANAGED}: provisioning would never delete "
+                "it once its profile is removed"
+            )
     return problems
 
 
@@ -1190,6 +1224,10 @@ def _audit_bifrost(text: str, hosts: set[str], strict: Mapping[str, str], spec: 
 
 
 # ---------------------------------------------------------------------------- provisioning
+#: ``/key/list`` page size (LiteLLM's maximum)
+_PAGE = 100
+
+
 def provision_litellm(
     keys_doc: Mapping[str, Any],
     base_url: str,
@@ -1197,6 +1235,7 @@ def provision_litellm(
     *,
     environ: Mapping[str, str],
     allow_plaintext: bool = False,
+    prune: bool = True,
 ) -> list[str]:
     """Create, update or rotate every key of ``litellm/keys.json`` on a running LiteLLM proxy.
 
@@ -1210,6 +1249,12 @@ def provision_litellm(
     * the alias holds another value (the secret was rotated): the old key is deleted by token,
       so it stops working, and the new value is created;
     * the alias is unknown: the key is created.
+
+    Then (``prune``, the default) every key on the proxy tagged ``metadata["hnx-managed"]`` whose
+    alias ``keys_doc`` no longer declares is deleted: a profile removed from the spec must not
+    leave a working key behind.  Keys without the tag (made by hand, or by another tool) are never
+    touched.  A key created before the tag existed carries none until it is next provisioned, so
+    one removed before that is not found here.
 
     Idempotent.  Returns one line per key.
     """
@@ -1275,7 +1320,46 @@ def provision_litellm(
             ok(alias, "/key/generate", *call("/key/generate", params | {"key": value}))
             verb = "rotated" if stale else "created"
         out.append(f"key {alias}: {verb} ({', '.join(k['models'])})")
+    if prune:
+        declared = {k["key_alias"] for k in keys_doc.get("keys") or []}
+        for alias, tokens in sorted(_managed_keys(call, ok).items()):
+            if alias in declared:
+                continue
+            ok(alias, "/key/delete", *call("/key/delete", {"keys": sorted(tokens)}))
+            out.append(f"key {alias}: deleted (no longer declared)")
     return out
+
+
+def _managed_keys(call: Any, ok: Any) -> dict[str, set[str]]:
+    """Alias -> tokens of every key on the proxy tagged :data:`MANAGED`, over every page."""
+    import urllib.parse
+
+    found: dict[str, set[str]] = {}
+    page, pages = 1, 1
+    while page <= pages:
+        q = urllib.parse.urlencode({"return_full_object": "true", "page": page, "size": _PAGE})
+        status, text = call(f"/key/list?{q}")
+        ok("*", "/key/list", status, text)
+        try:
+            doc = json.loads(text)
+            listed = doc.get("keys") or []
+            pages = int(doc.get("total_pages") or 1)
+        except (ValueError, AttributeError, TypeError):
+            raise GatewaySpecError("/key/list: not a key list") from None
+        for item in listed:
+            if not isinstance(item, Mapping):
+                continue  # a bare token carries no metadata: not provably ours
+            meta = item.get("metadata")
+            if isinstance(meta, str):  # some versions return the JSON column as text
+                try:
+                    meta = json.loads(meta)
+                except ValueError:
+                    meta = None
+            token, alias = item.get("token"), item.get("key_alias")
+            if isinstance(meta, Mapping) and meta.get(MANAGED) is True and token and alias:
+                found.setdefault(str(alias), set()).add(str(token))
+        page += 1
+    return found
 
 
 # ---------------------------------------------------------------------------- CLI
@@ -1296,6 +1380,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     pv.add_argument(
         "--allow-plaintext", action="store_true", help="send the master key over http (lab only)"
     )
+    pv.add_argument(
+        "--keep-undeclared",
+        action="store_true",
+        help=f"do not delete {MANAGED} keys whose alias the file no longer declares",
+    )
     args = ap.parse_args(list(argv) if argv is not None else None)
     if args.cmd == "provision":
         import os
@@ -1307,7 +1396,12 @@ def main(argv: Iterable[str] | None = None) -> int:
         try:
             doc = json.loads(Path(args.keys).read_text(encoding="utf-8"))
             lines = provision_litellm(
-                doc, url, master, environ=os.environ, allow_plaintext=args.allow_plaintext
+                doc,
+                url,
+                master,
+                environ=os.environ,
+                allow_plaintext=args.allow_plaintext,
+                prune=not args.keep_undeclared,
             )
             for line in lines:
                 print(line)

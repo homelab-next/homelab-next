@@ -47,6 +47,13 @@ It writes:
   (`/key/generate`), updates it in place by its token when the value is unchanged (`/key/update`),
   or, when the secret was rotated, deletes the old key by its token first, so the old value stops
   working, and creates the new one. Each key names the environment variable that holds its value, never the value.
+  Every key carries `metadata: {"hnx-managed": true}`. After the declared keys, `provision` lists
+  every key on the proxy (all `/key/list` pages) and deletes each tagged key whose alias the file
+  no longer declares, so a profile removed from the spec does not leave a working key behind; a
+  key without the tag (made by hand) is never touched, and `--keep-undeclared` skips the
+  deletion. A key provisioned before the tag existed gets it on its next `provision`; one whose
+  profile was removed before then must be deleted by hand once. `--check` fails a key without the
+  tag or an alias declared twice.
 - **`bifrost/config.json`**. There is one custom OpenAI-compatible provider per local backend
   (`hnx-<svc>`). Role → model id mappings are key `aliases`. The file also holds virtual keys
   (`env.HNX_SECRET_*`), per-role `model_configs` with rate limits and budgets, and routing rules

@@ -8,7 +8,8 @@
       ],
       "metadata": {
         "owner": "profile:reader",
-        "data_tier": "local-only"
+        "data_tier": "local-only",
+        "hnx-managed": true
       }
     },
     {
@@ -20,7 +21,8 @@
       ],
       "metadata": {
         "owner": "profile:responder",
-        "data_tier": "local-only"
+        "data_tier": "local-only",
+        "hnx-managed": true
       }
     },
     {
@@ -31,7 +33,8 @@
       ],
       "metadata": {
         "owner": "conformance-throttle",
-        "data_tier": "local-only"
+        "data_tier": "local-only",
+        "hnx-managed": true
       },
       "rpm_limit": 3
     }

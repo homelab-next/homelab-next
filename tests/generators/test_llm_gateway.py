@@ -571,8 +571,9 @@ def sha(value):
 
 class FakeKeyAPI:
     """LiteLLM's key store as it behaves: keys are kept by token (sha256 of an sk- value), aliases
-    are unique, ``/key/update``'s ``key`` names the key to change (a value or its token), and a
-    deleted key stops authenticating."""
+    are unique, ``/key/update``'s ``key`` names the key to change (a value or its token), a
+    deleted key stops authenticating, and ``/key/list`` pages (``page``, ``size``,
+    ``total_pages``) and returns full objects, ``metadata`` included, on ``return_full_object``."""
 
     def __init__(self):
         self.keys: dict[str, dict] = {}  # token -> stored body (without the value)
@@ -596,13 +597,27 @@ class FakeKeyAPI:
             def do_GET(self):
                 url = urlsplit(self.path)
                 api.calls.append((url.path, self.headers.get("Authorization", "")))
-                alias = parse_qs(url.query).get("key_alias", [None])[0]
+                q = parse_qs(url.query)
+                alias = q.get("key_alias", [None])[0]
+                full = q.get("return_full_object", ["false"])[0] == "true"
+                page, size = int(q.get("page", ["1"])[0]), int(q.get("size", ["10"])[0])
                 rows = [
                     {"token": t, "key_alias": b["key_alias"]}
+                    | ({"metadata": b.get("metadata") or {}} if full else {})
                     for t, b in api.keys.items()
                     if alias is None or b["key_alias"] == alias
                 ]
-                self.reply(200, {"keys": rows, "total_count": len(rows)})
+                pages = max(1, -(-len(rows) // size))
+                shown = rows[(page - 1) * size : page * size]
+                self.reply(
+                    200,
+                    {
+                        "keys": shown,
+                        "total_count": len(rows),
+                        "current_page": page,
+                        "total_pages": pages,
+                    },
+                )
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -682,3 +697,53 @@ def test_provision_refuses_a_missing_key_and_plaintext_off_loopback():
     url = "http://gateway.example.internal:4000"  # no-raw-endpoint: allow refused, never called
     with pytest.raises(ValueError, match="plaintext"):
         gw.provision_litellm(doc, url, "m", environ={})
+
+
+def test_provision_deletes_the_keys_of_profiles_removed_from_the_spec(monkeypatch):
+    """A profile dropped from the spec loses its key: every hnx-managed key the file no longer
+    declares is deleted (over every /key/list page), and a key nobody tagged is left alone."""
+    monkeypatch.setattr(gw, "_PAGE", 1)  # one key a page: the prune must follow total_pages
+    api = FakeKeyAPI()
+    try:
+        doc, env = lab_keys()
+        assert all(k["metadata"][gw.MANAGED] is True for k in doc["keys"])
+        gw.provision_litellm(doc, api.url, "sk-fake-master", environ=env)
+        api.keys[sha("sk-fake-by-hand")] = {"key_alias": "by-hand", "metadata": {}}
+        reader_env = next(k["key_env"] for k in doc["keys"] if k["key_alias"] == "agent-reader")
+        fewer = {"keys": [k for k in doc["keys"] if k["key_alias"] != "agent-reader"]}
+        kept = gw.provision_litellm(fewer, api.url, "sk-fake-master", environ=env, prune=False)
+        assert api.valid(env[reader_env]) and not any("deleted" in ln for ln in kept)
+        lines = gw.provision_litellm(fewer, api.url, "sk-fake-master", environ=env)
+        assert "key agent-reader: deleted (no longer declared)" in lines
+        assert not api.valid(env[reader_env]), "a removed profile's key still works"
+        assert api.valid("sk-fake-by-hand"), "an untagged key was deleted"
+        assert len(api.keys) == 3
+        again = gw.provision_litellm(fewer, api.url, "sk-fake-master", environ=env)
+        assert not any("deleted" in ln for ln in again)  # idempotent
+    finally:
+        api.httpd.shutdown()
+
+
+def test_check_fails_a_key_without_the_managed_tag_or_with_a_duplicate_alias(tmp_path, capsys):
+    out = tmp_path / "out"
+    shutil.copytree(LAB, out)
+    keys = out / "litellm" / "keys.json"
+    on_disk = json.loads(keys.read_text())
+    for k in on_disk["keys"]:
+        k["metadata"].pop(gw.MANAGED)
+    keys.write_text(json.dumps(on_disk, indent=2) + "\n")
+    assert hnx(["gen", "gateway", "render", str(LAB_SPEC), str(out), "--check"]) == 1
+    assert "keys.json: key agent-reader is not tagged metadata.hnx-managed" in (
+        capsys.readouterr().err
+    )
+    doc, _ = lab_keys()
+    assert gw._audit_keys(json.dumps(doc)) == []
+    untagged = json.loads(json.dumps(doc))
+    del untagged["keys"][0]["metadata"][gw.MANAGED]
+    twice = {"keys": [doc["keys"][0], doc["keys"][0]]}
+    (p,) = gw._audit_keys(json.dumps(untagged))
+    assert "not tagged metadata.hnx-managed" in p
+    assert gw._audit_keys(json.dumps(twice)) == [
+        f"key {doc['keys'][0]['key_alias']} is declared twice"
+    ]
+    assert gw._audit_keys("[]") == ["not a JSON object with a keys list"]
