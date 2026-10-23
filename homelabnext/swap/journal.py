@@ -14,8 +14,10 @@ change is one record (one batch at most), never a rewrite of the whole queue:
 At open the journal is read, compacted (the live records only, written atomically) and then
 appended to.  A torn last line (a crash mid-append) is dropped; any other unreadable line refuses
 to open, rather than drop parked writes.  The file is ``0600``, and an exclusive ``flock`` on
-``<path>.lock`` is held for the journal's lifetime: a second backend on the same path is refused,
-so two writers can never overwrite each other's batches.  Stale temp files of a crashed compaction
+``<path>.lock`` (opened without following a symlink) is held for the journal's lifetime: a second
+backend on the same path is refused, so two writers can never overwrite each other's batches.
+``close()`` releases it, and so does a journal that is garbage-collected unclosed (a finalizer).
+An append after ``close()`` raises: parked batches are never kept in memory only by mistake.  Stale temp files of a crashed compaction
 are removed at open.
 """
 
@@ -25,6 +27,7 @@ import contextlib
 import json
 import os
 import re
+import weakref
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -72,21 +75,31 @@ class ParkedJournal:
     def __init__(self, path: str | os.PathLike):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock_fd = os.open(self.path.with_name(self.path.name + ".lock"), os.O_RDWR | os.O_CREAT, FILE_MODE)  # fmt: skip
+        try:
+            lock_fd = os.open(
+                self.path.with_name(self.path.name + ".lock"),
+                os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+                FILE_MODE,
+            )
+        except OSError as exc:  # a symlink planted at the lock path, among others
+            raise LakeError(f"cannot open the lock of {self.path}: {exc}") from None
         if fcntl is not None:
             try:
-                fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:
-                os.close(self._lock_fd)
+                os.close(lock_fd)
                 raise LakeError(
                     f"{self.path} is in use by another swap backend; refusing to share it"
                 ) from None
-        self._fh: Any = None
+        # what to release; the finalizer holds this, not the journal, so it can run at collection
+        self._res: dict[str, Any] = {"lock_fd": lock_fd, "fh": None}
+        self._finalizer = weakref.finalize(self, _release, self._res)
+        self.closed = False
         try:
             self._sweep()
             self.state = self._read()
             self._compact()
-            self._fh = open(self.path, "a", encoding="utf-8")  # noqa: SIM115 - held open
+            self._res["fh"] = open(self.path, "a", encoding="utf-8")  # noqa: SIM115 - held open
         except BaseException:
             self.close()
             raise
@@ -154,11 +167,12 @@ class ParkedJournal:
 
     # ------------------------------------------------------------ append
     def _append(self, rec: dict[str, Any]) -> None:
-        if self._fh is None:
+        fh = self._res["fh"]
+        if self.closed or fh is None:
             raise LakeError(f"the parked-batch journal {self.path} is closed")
-        self._fh.write(json.dumps(rec, sort_keys=True, default=json_value) + "\n")
-        self._fh.flush()
-        os.fsync(self._fh.fileno())
+        fh.write(json.dumps(rec, sort_keys=True, default=json_value) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
 
     def park(self, owed_to: str, p: Any) -> None:
         self._append({"op": "park", "owed_to": owed_to, **p.to_dict()})
@@ -173,14 +187,20 @@ class ParkedJournal:
         self._append({"op": "old", "down": bool(down)})
 
     def close(self) -> None:
-        if self._fh is not None:
-            with contextlib.suppress(OSError):
-                self._fh.close()
-            self._fh = None
-        if self._lock_fd is not None:
-            with contextlib.suppress(OSError):
-                os.close(self._lock_fd)  # closing the descriptor releases the lock
-            self._lock_fd = None  # type: ignore[assignment]
+        """Release the file and the lock (idempotent); later appends raise."""
+        self.closed = True
+        self._finalizer()
+
+
+def _release(res: dict[str, Any]) -> None:
+    fh, res["fh"] = res.get("fh"), None
+    if fh is not None:
+        with contextlib.suppress(OSError):
+            fh.close()
+    fd, res["lock_fd"] = res.get("lock_fd"), None
+    if fd is not None:
+        with contextlib.suppress(OSError):
+            os.close(fd)  # closing the descriptor releases the lock
 
 
 __all__ = ["JournalState", "ParkedJournal", "json_value"]

@@ -147,11 +147,16 @@ class LakeBackend(Backend):
         self.writer.journal = _WriterJournal(self)
 
     def close(self) -> None:
-        """Release the parked-batch journal (and its lock)."""
+        """Release the parked-batch journal (and its lock).  The writer keeps the closed journal,
+        so a batch parked after this raises rather than living in memory only."""
         if self.journal is not None:
             self.journal.close()
-            self.journal = None
-            self.writer.journal = None
+
+    def __enter__(self) -> LakeBackend:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     # ------------------------------------------------------------ conformance / shadow / mirror
     def conformance(self, role: str) -> Outcome:

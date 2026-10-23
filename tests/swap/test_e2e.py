@@ -545,3 +545,34 @@ def test_abandoned_writes_are_parked_again_when_their_evidence_cannot_be_written
     assert done["status"] == "rolled_back"
     body, _ = _abandon_evidence(sc, done)
     assert [g["idempotency_key"] for g in body["abandoned_parked"]] == ["k-poison"]
+
+
+def test_an_unclosed_backend_releases_its_journal_when_collected(tmp_path):
+    import gc
+
+    sc = Scenario(tmp_path)
+    path = tmp_path / "parked.jsonl"
+    b = _backend_like(sc, path)
+    del b
+    gc.collect()
+    _backend_like(sc, path).close()  # not refused for the rest of the process
+
+
+def test_the_backend_is_a_context_manager_and_a_park_after_close_raises(tmp_path):
+    sc = Scenario(tmp_path)
+    path = tmp_path / "parked.jsonl"
+    with _backend_like(sc, path) as b:
+        assert b.apply_route(AFTER).ok and b.stop_old().ok
+    with pytest.raises(LakeError, match="closed"):  # never parked in memory only
+        b.writer.write_batch("dns_activity", [dict(lakes.rows_for("dns_activity")[0], uid="late")], idempotency_key="late")  # fmt: skip
+    _backend_like(sc, path).close()  # the context released the lock
+
+
+def test_a_symlink_at_the_lock_path_is_not_followed(tmp_path):
+    sc = Scenario(tmp_path)
+    path = tmp_path / "parked.jsonl"
+    victim = tmp_path / "victim"
+    (tmp_path / "parked.jsonl.lock").symlink_to(victim)
+    with pytest.raises(LakeError, match="cannot open the lock"):
+        _backend_like(sc, path)
+    assert not victim.exists()
