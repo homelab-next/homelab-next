@@ -249,10 +249,10 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `params-arrive-unchanged` | MUST | nested parameters reach the handler as submitted |  |
 | `failing-run-does-not-affect-others` | MUST | one failed run leaves another run unharmed |  |
 | `cancel-running-run-frees-capacity` | MUST | cancelling a running run stops it: it ends cancelled, its capacity is released at once and admits new work, and its late result is discarded | `admission` |
-| `killed-worker-fails-run-and-frees-capacity` | MUST | a run whose worker dies ends failed, its capacity is released and admits new work, and nothing the dead worker produces lands | `admission`, `fault-injection` |
+| `killed-worker-fails-run-and-frees-capacity` | MUST | a run whose worker dies ends failed, its capacity is released, and nothing the dead worker produces lands | `admission`, `fault-injection` |
 | `deadline-expiry-frees-capacity` | MUST | a run past its deadline ends failed with an error naming the deadline, releases its capacity without waiting for its body, and its late result is discarded | `admission`, `deadline` |
 | `restart-reconciles-runs-and-capacity` | MUST | after a restart a run that was executing is ended (never run a second time), no dead worker holds capacity or reports a result, and queued runs and idempotency keys survive | `admission`, `fault-injection` |
-| `capacity-returns-to-zero-after-churn` | MUST | after runs that succeed, fail, retry and are cancelled queued or running, no hold remains and the capacity admits new work | `admission` |
+| `capacity-returns-to-zero-after-churn` | MUST | after runs that succeed, fail, retry and are cancelled queued or running, no hold remains | `admission` |
 
 ### Features an adapter may declare
 
@@ -269,9 +269,7 @@ Each is a deliberately broken fake (`hnx conform run orchestration --target brok
 | Mutant | Must fail | Defect |
 |---|---|---|
 | `idempotency-ignored` | `idempotency-key-runs-once` | a repeated key starts a second run |
-| `late-result-lands` | `cancel-running-run-frees-capacity` | a stopped worker's result overwrites the cancelled run when its body returns |
 | `leak-on-cancel` | `cancel-running-run-frees-capacity` | cancelling a running run never returns its slot |
-| `leak-on-failure` | `capacity-returns-to-zero-after-churn` | a run that ends failed never returns its slot (only the success path releases) |
 | `leak-on-kill` | `killed-worker-fails-run-and-frees-capacity` | a dead worker's run fails but its slot is never returned |
 | `lying-capacity` | `cancel-running-run-frees-capacity` | a stopped run's slot leaks while capacity() reports only running holders |
 | `no-restart-reconcile` | `restart-reconciles-runs-and-capacity` | a restart leaves runs running and slots held by workers that no longer exist |

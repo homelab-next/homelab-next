@@ -23,7 +23,7 @@ from conformance.protocols.orchestration import TERMINAL, Capacity, RunStatus, U
 
 class FakeOrchestrator:
     features = frozenset({"admission", "deadline", "fault-injection"})
-    cancel_grace_s = 0.05  # every release is synchronous here; this only bounds a leak's wait
+    cancel_grace_s = 0.01  # every release is synchronous here; this only bounds a leak's wait
 
     def __init__(self, slots: int = 2) -> None:
         if slots < 1:
@@ -237,7 +237,7 @@ class TTLReleaseOrchestrator(FakeOrchestrator):
     was granted, whether the run is still executing or not, and cancel/kill/deadline/restart
     release nothing.  The TTL is shorter than the grace, so every release looks prompt."""
 
-    TTL_S = 0.02
+    TTL_S = 0.005
 
     def _release(self, run_id: str, why: str) -> None:
         if why == "done":

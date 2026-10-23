@@ -6,7 +6,11 @@ import threading
 
 import pytest
 
-from conformance.fakes.orchestrator import FakeOrchestrator
+from conformance.fakes.orchestrator import (
+    FakeOrchestrator,
+    LateResultLandsOrchestrator,
+    LeakOnFailureOrchestrator,
+)
 from conformance.protocols.orchestration import Admission, Capacity, Deadlines, FaultInjection
 from conformance.suites import orchestration as suite
 from homelabnext.conform.core import run_checks
@@ -110,3 +114,22 @@ def test_a_grace_above_the_protocol_cap_fails_the_capacity_checks():
 
     (res,) = run_checks(suite.SUITE, Slow, only=["cancel-running-run-frees-capacity"])
     assert res.status == "fail" and "outside (0, 10.0]" in res.evidence
+
+
+@pytest.mark.parametrize(
+    ("defect", "check"),
+    [
+        (LateResultLandsOrchestrator, "cancel-running-run-frees-capacity"),
+        (LateResultLandsOrchestrator, "deadline-expiry-frees-capacity"),
+        (LeakOnFailureOrchestrator, "capacity-returns-to-zero-after-churn"),
+    ],
+    ids=["late-result-cancel", "late-result-deadline", "leak-on-failure"],
+)
+def test_more_defects_the_holds_checks_catch(defect, check, monkeypatch):
+    """Defects the checks catch that are not registered as mutants (each registered one costs a
+    full suite run in every mutation pass): a stopped worker's late result landing, and a slot
+    released only on success."""
+    # a longer grace than the fake's 10 ms, so the late write is always inside the watch
+    monkeypatch.setattr(defect, "cancel_grace_s", 0.2)
+    (res,) = run_checks(suite.SUITE, defect, only=[check])
+    assert res.status == "fail", res
