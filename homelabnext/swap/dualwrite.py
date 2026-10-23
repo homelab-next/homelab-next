@@ -9,6 +9,8 @@ Rules (each is a test):
 * The **secondary** write uses the *same* idempotency key. A secondary failure is caught,
   recorded as a :class:`Divergence` and parked in ``pending``; it never raises into the caller.
   :meth:`DualWriter.replay_pending` retries parked batches; the key makes replay safe.
+  Each parked batch remembers the component it was meant for, so a writer re-pointed with
+  :meth:`DualWriter.rerouted` (a route flip or a rollback) still replays it into that component.
 * A secondary that "succeeds" but wrote a different number of rows than the primary is a
   divergence too (``count_mismatch``), because that is how silent loss starts.
 * Divergences go to an optional JSON Lines file (one object per line) as well as memory.
@@ -57,6 +59,7 @@ class _Pending:
     idempotency_key: str
     source: str | None
     high_water: str | None
+    target: Any = None  # the component the batch is owed to; None means the current secondary
 
 
 @dataclass
@@ -88,6 +91,18 @@ class DualWriter:
         self.divergences: list[Divergence] = []
         self.pending: list[_Pending] = []
         self.stats = MirrorStats()
+
+    def rerouted(self, primary: Any, secondary: Any) -> DualWriter:
+        """A writer for a new direction that keeps this one's parked batches, divergences and stats.
+
+        A parked batch is still owed to the component it was parked for, whichever role that
+        component has now, so a rollback replays writes made while the old component was stopped.
+        """
+        new = DualWriter(primary, secondary, clock=self._clock, divergence_log=self._log)
+        new.pending = self.pending
+        new.divergences = self.divergences
+        new.stats = self.stats
+        return new
 
     # ------------------------------------------------------------ writes
     def write_batch(
@@ -125,7 +140,7 @@ class DualWriter:
             )
         except Exception as exc:  # the secondary must never break the primary
             self.stats.secondary_failures += 1
-            self.pending.append(_Pending(table, rows, key, source, high_water))
+            self.pending.append(_Pending(table, rows, key, source, high_water, self.secondary))
             self._record("secondary_error", table, key, f"{type(exc).__name__}: {exc}", len(rows))
             return
         if res.rows_written != primary_result.rows_written:
@@ -143,8 +158,9 @@ class DualWriter:
         still: list[_Pending] = []
         ok = 0
         for p in self.pending:
+            target = self.secondary if p.target is None else p.target
             try:
-                self.secondary.write_batch(
+                target.write_batch(
                     p.table,
                     p.rows,
                     idempotency_key=p.idempotency_key,

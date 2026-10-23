@@ -164,10 +164,12 @@ class LakeBackend(Backend):
         if not plan.empty:
             text = self.registry_path.read_text(encoding="utf-8")
             self.registry_path.write_text(flip_text(text, plan), encoding="utf-8")
+        # one writer state across flips: batches parked for a stopped component survive the
+        # flip and a rollback, and are replayed into that component when it starts again
         if target.get("host") == self.new_host:
-            self.writer = DualWriter(self.new, self.old)  # candidate is primary; old is mirrored
+            self.writer = self.writer.rerouted(self.new, self.old)  # candidate is primary
         else:
-            self.writer = DualWriter(self.old, self.new)
+            self.writer = self.writer.rerouted(self.old, self.new)
         return Outcome(True, plan.diff(), {"diff": plan.diff(), "plan": plan.to_dict()})
 
     def verify_route(self, target: dict[str, Any]) -> Outcome:

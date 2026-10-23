@@ -7,7 +7,7 @@ import json
 
 import lakes
 import pytest
-from scenario import AFTER, Scenario
+from scenario import AFTER, BEFORE, Scenario
 from support import check_example
 
 from homelabnext.swap import GateFailed, RollbackRefused, SwapError, record, retired_from_record
@@ -50,6 +50,40 @@ def test_shadow_parity_flip_rollback(tmp_path):
     with pytest.raises(SwapError):
         sc.runner.advance()
     check_example("rolled-back", record.dumps(d))
+
+
+def _count(lake, uid: str) -> int:
+    return lake.query("SELECT count(*) AS n FROM dns_activity WHERE uid = :u", {"u": uid})[0]["n"]
+
+
+def test_rollback_replays_writes_parked_while_the_old_component_was_stopped(tmp_path):
+    # the route flip and the rollback each re-point the writer; the batch parked for the stopped
+    # incumbent must survive both and land in the incumbent when it starts again
+    sc = Scenario(tmp_path)
+    sc.run_to_cutover()
+    row = dict(lakes.rows_for("dns_activity")[0], uid="written-while-old-stopped")
+    sc.backend.writer.write_batch("dns_activity", [row], idempotency_key="k-during-cutover")
+    assert sc.backend.writer.status()["pending"] == 1
+    sc.clock.advance(hours=5)
+    sc.runner.rollback("canary latency regression observed on the candidate")
+    assert _count(sc.old, row["uid"]) == 1  # the incumbent, primary again, holds the write
+    assert _count(sc.new, row["uid"]) == 1
+    assert sc.backend.writer.status()["pending"] == 0
+    assert sc.backend.writer.status()["replayed_ok"] == 1
+    actions = doc_of(sc)["rollback"]["actions"]
+    assert any("replayed 1 parked batches" in a for a in actions), actions
+
+
+def test_start_old_replays_into_the_old_component_after_the_route_is_restored(tmp_path):
+    sc = Scenario(tmp_path)
+    b = sc.backend
+    assert b.shadow_start().ok and b.start_mirror().ok
+    assert b.apply_route(AFTER).ok and b.stop_old().ok
+    row = dict(lakes.rows_for("dns_activity")[0], uid="parked-for-old")
+    b.writer.write_batch("dns_activity", [row], idempotency_key="k-parked")
+    assert b.apply_route(BEFORE).ok
+    assert "replayed 1 parked batches" in b.start_old().detail
+    assert _count(sc.old, row["uid"]) == 1
 
 
 def test_full_swap_to_decommission_and_close(tmp_path):
