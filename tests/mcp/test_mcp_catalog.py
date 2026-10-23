@@ -521,6 +521,84 @@ def test_known_acting_software_cannot_declare_its_tools_down(tmp_catalog, cls):
     assert any("helper.yml: is ssh software" in p for p in problems), problems
 
 
+def _floor_rec(rid: str, tools, package: str | None = None, **extra) -> dict:
+    """A plausible operator record of a third-party server (fictional package)."""
+    rec = yaml.safe_load((CATALOG / "fetch.yml").read_text())
+    package = package or f"@example/mcp-{rid}"
+    rec["origin"].update(package=package, bins=[package.rsplit("/", 1)[-1]])
+    rec.update(id=rid, tools=[{"name": n, "classes": c, "approval": False} for n, c in tools])
+    rec.update(extra)
+    return rec
+
+
+@pytest.mark.parametrize(
+    ("rec", "needle"),
+    [
+        # VERIFY1: a camelCase acting name (a hosted tracker's createIssue) classed egress
+        (
+            _floor_rec("tickets", [("createIssue", ["egress"]), ("searchIssues", ["egress"])]),
+            "tool createIssue writes",
+        ),
+        # browser interaction acts on the page it is on (a form submitted, a button pressed)
+        (
+            _floor_rec("pw", [("browser_navigate", ["egress"]), ("browser_click", ["egress"])]),
+            "tool browser_click acts by its name",
+        ),
+        (_floor_rec("ci", [("trigger_pipeline", ["egress"])]), "tool trigger_pipeline acts"),
+        # record-write needs a capability the class table classes record-write, not any label
+        (
+            _floor_rec("homeauto", [("set_state", ["record-write"])], capabilities=["cap:metrics"]),
+            "tool set_state writes",
+        ),
+        (
+            _floor_rec(
+                "dashops", [("update_dashboard", ["record-write"])], capabilities=["cap:dashboards"]
+            ),
+            "tool update_dashboard writes",
+        ),
+        (
+            _floor_rec(
+                "sqlhost", [("write_query", ["record-write"])], capabilities=["cap:records-db"]
+            ),
+            "tool write_query writes",
+        ),
+    ],
+)
+def test_a_plausible_record_cannot_declare_an_effect_down(rec, needle):
+    assert any(needle in p for p in servers.floor_problems(rec, f"{rec['id']}.yml")), rec
+
+
+@pytest.mark.parametrize(
+    "rec",
+    [
+        # VERIFY1 false positives: the author's id is a label, not what runs
+        _floor_rec(
+            "obsidian-vault",
+            [("search_notes", ["read"]), ("read_note", ["read"])],
+            package="@example/mcp-obsidian",
+        ),
+        _floor_rec("ssh-audit", [("audit_host", ["read"])], package="@example/mcp-host-audit"),
+        _floor_rec("mail-search", [("search_archive", ["read"])], package="@example/mcp-archive"),
+        # a name led by a read verb reads, whatever noun follows
+        _floor_rec(
+            "forge-read",
+            [
+                ("get_commit", ["read"]),
+                ("get_merge_request", ["read"]),
+                ("get_workflow_run", ["read"]),
+                ("list_open_alerts", ["read"]),
+                ("get_post", ["read"]),
+                ("get_last_update", ["read"]),
+            ],
+        ),
+        # record-write on a record fronting a record-write capability is the platform API's
+        _floor_rec("tracker", [("add_note", ["record-write"])], capabilities=["cap:cases"]),
+    ],
+)
+def test_a_read_only_record_is_not_floored(rec):
+    assert servers.floor_problems(rec, f"{rec['id']}.yml") == []
+
+
 def test_a_writing_tool_is_file_write_unless_a_platform_api_validates_it(tmp_catalog):
     """S1: record-write means "through a platform API that validates it"; a record that fronts no
     platform capability writes files. The shipped notes server writes through the records API."""

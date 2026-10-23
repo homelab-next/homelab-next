@@ -299,6 +299,15 @@ def table_capabilities(path: str | Path | None = None) -> list[str]:
     return sorted(caps or ())
 
 
+def table_capability_classes(path: str | Path | None = None) -> dict[str, list[str]]:
+    """The packaged table's classes of each ``cap:`` id it classifies."""
+    import yaml
+
+    doc = yaml.safe_load(Path(path or DEFAULT_CLASSES).read_text(encoding="utf-8")) or {}
+    caps = doc.get("capabilities") if isinstance(doc, Mapping) else None
+    return {str(k): list(v or ()) for k, v in (caps or {}).items()}
+
+
 def grant_problems(
     grants: Mapping[str, Any],
     classes: ToolClasses | None = None,
