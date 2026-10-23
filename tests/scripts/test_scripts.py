@@ -270,6 +270,18 @@ def test_m02_an_excluded_spec_is_not_this_trees_jobs_but_only_it(tmp_path):
     assert len(verdicts(root)[1]) == 1
 
 
+def test_m02_an_exclude_that_skips_no_spec_is_a_stale_entry(tmp_path):
+    """Negative: a fleet_unit_specs_exclude glob that matches no spec is stale, like every other
+    allowlist entry, so an exclusion cannot outlive the files it was written for."""
+    root = good_tree(tmp_path)
+    allow = {"fleet_unit_specs_exclude": ["examples/modules/**"]}
+    tree(root, {"tools/scripts.allow.yml": yaml.safe_dump(allow)})
+    assert verdicts(root)[1] == [
+        "tools/scripts.allow.yml: fleet_unit_specs_exclude examples/modules/** skips no "
+        "fleet_units spec (stale entry)"
+    ]
+
+
 def test_m02_uncalled_active_script_and_its_allowlist(tmp_path):
     root = good_tree(tmp_path)
     tree(root, {"tools/orphan.py": header(id="orphan")})

@@ -138,6 +138,8 @@ class Reality:
     unresolved_exec: list[tuple[str, str]] = field(default_factory=list)  # (caller, exec)
     criterion_ids: set[str] = field(default_factory=set)
     problems: list[str] = field(default_factory=list)  # sources that could not be read
+    #: fleet_unit_specs_exclude globs that skipped at least one spec (the rest are stale)
+    excludes_used: set[str] = field(default_factory=set)
 
 
 # ---- helpers ---------------------------------------------------------------------------------
@@ -381,7 +383,9 @@ def _fleet_units(real: Reality, idx: _Index, allow: Allow) -> None:
             continue
         if not any(_glob(rel, g) for g in allow.fleet_unit_specs):
             continue
-        if any(_glob(rel, g) for g in allow.fleet_unit_specs_exclude):
+        hit = [g for g in allow.fleet_unit_specs_exclude if _glob(rel, g)]
+        if hit:
+            real.excludes_used.update(hit)
             continue
         try:
             entries = _yaml(idx.root / rel) or []
@@ -551,6 +555,11 @@ def reality_problems(cat: Catalog, real: Reality, allow: Allow) -> list[str]:
     out += [
         f"{ALLOW_FILE}: external_exec {ex} matches no scheduled exec (stale entry)"
         for ex in sorted(set(allow.external_exec) - used_exec)
+    ]
+    out += [
+        f"{ALLOW_FILE}: fleet_unit_specs_exclude {g} skips no fleet_units spec (stale entry)"
+        for g in allow.fleet_unit_specs_exclude
+        if g not in real.excludes_used
     ]
     out += [p for p in cat.problems if "duplicate script id" in p]
     known = cat.by_id()
