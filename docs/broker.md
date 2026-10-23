@@ -70,6 +70,14 @@ content of the wrong shape or failing its schema (`lane-content-invalid`), a not
 agent (`lane-identity-mismatch`) or its own `created` (`lane-created-set`) and a per-actor lane with a caller that is not `profile:<slug>`
 (`lane-actor-invalid`). Lane roots live under the broker's **data root** (`--data-root`, default
 `<state>/lanes`); point it at the directory the agents' memory, findings and records live in.
+Run **one broker process, on one host, per data root and state directory.** The lane quotas, the
+shares and the write rates are counted under a `flock` on the lane directory, and on NFS or CIFS
+a `flock` is a local lock that other hosts never see (it does not fail; it just is not shared),
+so two brokers on two hosts over one data root can overshoot a quota together. Within one host,
+the pending-quota check and the open-page state are kept per process as well (the page state is
+also read from the notifier's store), so a second process over the same state directory (a `serve`
+plus an in-process CLI) can exceed `pending_per_actor` by one and page twice; it never loses a
+page or runs a request twice, since claims and approvals are exclusive files.
 
 Each lane directory has a quota (manifest 1.5): `max_files` (default 4096) and `max_total_bytes`
 (default 64 MiB, the new file included) for the directory a write lands in, the agent's own for a

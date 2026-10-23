@@ -335,7 +335,10 @@ class _Action:
 
 
 class BrokerService:
-    """See the module doc.  One instance per process; any number may share ``state_dir``."""
+    """See the module doc.  One instance per process.  Any number may share ``state_dir`` for
+    the exactly-once guarantees (claims, approvals); the pending quota and the open-page state
+    are per process, and the lane quotas' ``flock`` is per host: deploy one broker process, on
+    one host, per data root and state directory (``docs/broker.md``)."""
 
     features = frozenset()
 
