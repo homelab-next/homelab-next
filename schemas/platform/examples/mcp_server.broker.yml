@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# A server whose acting tools are broker calls (mcp_server 1.1, ADR-0030): the broker allowlists,
+# approves and audits each one, so a profile may hold it and an acting tool may need approval
+# (fictional).
+id: hnx-broker
+description: Named broker actions as the authenticated caller.
+owner: platform-team
+status: active
+origin:
+  kind: first-party
+  path: homelabnext/broker/mcp_tools.py
+transport:
+  type: stdio
+  bin: hnx
+  entry: broker-mcp
+  args: [--socket, /run/hnx-broker/broker.sock]
+runtime: agent-local
+egress: none
+data_tier: local-only
+tools:
+- {name: broker_actions, classes: [read], approval: false}
+- {name: broker_run, classes: [exec], approval: true}
+acts_via: broker
+author: agent:example-builder

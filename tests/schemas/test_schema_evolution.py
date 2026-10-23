@@ -55,6 +55,8 @@ NEWER_THAN_1_0 = {
     "site.tailnet-deploy.yml": "platform/site 1.2: tailnet.deploy",
     "decision.returned.agent-approved.json": "events/decision.returned 1.1: tier_used agent",
     "agent.job.failed.auto-retried.json": "events/agent.job.failed 1.1: auto_retry_scheduled",
+    "mcp_server.broker.yml": "platform/mcp_server 1.1: acts_via",
+    "mcp_server.direct.yml": "platform/mcp_server 1.1: acts_via, direct_reason",
 }
 
 
