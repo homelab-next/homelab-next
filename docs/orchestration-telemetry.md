@@ -159,7 +159,9 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
   job is settled ten minutes after it finished (a gateway may write its log in batches), as soon
   as the last window it overlaps has been read; a failed read stops the pass but keeps what was
   read and settled before it, and the next pass starts from the jobs still unsettled. A record
-  the source gives that is no turn record is dropped and counted (`N refused`, exit 1), and the
+  the source gives that is no turn record is dropped and counted (`N refused`, exit 3, where an
+  unreadable gateway is exit 1: under a oneshot unit both mark the pass failed, so an
+  `OnFailure=` alert can tell data loss from an outage by the code), and the
   rest of its window is stored and settled: failing the window would read the same record, and
   fail, on every later pass.
 - **Retention**: 90 days by default (`--retention-days`, a finite 1 to 3650: every read window is bounded by it), by finish time and turn start time. A

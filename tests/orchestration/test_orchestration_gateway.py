@@ -508,3 +508,27 @@ def test_an_option_the_adapter_declares_secret_takes_only_a_secret_name(site_ada
     assert "upstream_ref" in capsys.readouterr().err and not (site_adapters / "opts.json").exists()
     ok = ["--turn-source-option", "upstream_ref=secret:gw/ref"]
     assert _turns_cli(site_adapters, *spec, *ok) == 0
+
+
+def test_turns_exits_3_when_rows_were_refused_and_1_when_the_gateway_is_unreadable(
+    site_adapters, capsys, monkeypatch, filled
+):
+    """A refused row (data lost, nothing to fix on the host) and an unreadable gateway (an
+    outage) were both exit 1."""
+    from homelabnext.orchestration import cli
+
+    real = examples()[0]["data"]["gateway_tag"]
+    started = parse_iso(examples()[0]["data"]["finished_at"]) - 10
+    bad = _turn("req-bad", real, started) | {"model": "has spaces"}
+    monkeypatch.setattr(cli, "turn_source", lambda *a, **k: Source(lambda lo, hi, t: [bad]))
+    argv = ["turns", "--db", str(filled.path), "--turn-source", "x.y:z"]
+    assert cli.main(argv, clock=lambda: T0) == 3
+    assert "1 refused" in capsys.readouterr().out
+
+    def down(lo, hi, tags):
+        raise TurnSourceError("the gateway is unreachable")
+
+    monkeypatch.setattr(cli, "turn_source", lambda *a, **k: Source(down))
+    with filled._db() as db:
+        db.execute("UPDATE jobs SET turns_settled = NULL")
+    assert cli.main(argv, clock=lambda: T0) == 1

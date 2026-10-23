@@ -31,10 +31,10 @@ as its event, every turn as its record), reading it as the hub does (read-only, 
 bus consumer would refuse, so a store can be moved, rebuilt or swapped.
 
 Exit codes: 0 ok, 1 a record was refused (``ingest``, ``consume``, ``import``), the export
-holds records an import would refuse (``export``: it says how many), the turn source gave
-records that are no turn record (``turns``: dropped and counted, the rest stored and settled), the bus failed during the
+holds records an import would refuse (``export``: it says how many), the bus failed during the
 pass (``consume``: what was settled before stays settled) or the gateway could not be read
-(``turns``), 2 usage or configuration error (``consume``: the event schemas cannot be loaded, the bus
+(``turns``: an outage), 3 (``turns``) the turn source gave rows that are no turn record (dropped
+and counted, the rest stored and settled: data lost, nothing to fix on the host), 2 usage or configuration error (``consume``: the event schemas cannot be loaded, the bus
 configuration or the connect), or a store that cannot be opened, or (``consume``) cannot take a
 write before the bus is read (SQLite's own error, or two jobs
 holding one gateway tag in a store an earlier release wrote: the message says how to fix it).
@@ -62,6 +62,10 @@ from .model import CONTROLLER_SOURCE
 from .store import DEFAULT_RETENTION_DAYS, STORE_ERRORS, TelemetryStore
 
 TURN_SOURCE_ENV = "HNX_ORCHESTRATION_TURN_SOURCE"
+#: ``turns``' exit code when the source gave rows that are no turn record (dropped and counted,
+#: the rest stored and settled): data lost, nothing to fix on the host, unlike exit 1 (the
+#: gateway could not be read, an outage)
+REFUSED_ROWS = 3
 #: the site packages a turn source may come from, comma-separated, when no
 #: --turn-source-namespace is given; the shipped adapters' package is always allowed
 NAMESPACES_ENV = "HNX_ORCHESTRATION_TURN_SOURCE_NAMESPACES"
@@ -532,7 +536,7 @@ def _turns(a, store: TelemetryStore, clock: Callable[[], float]) -> int:
         f"orchestration turns: {got['turns']} turn(s) for {got['jobs']} job(s), "
         f"{got['settled']} settled, {got['refused']} refused (not a turn record: dropped)"
     )
-    return 1 if got["refused"] else 0
+    return REFUSED_ROWS if got["refused"] else 0
 
 
 def main(argv: Sequence[str] | None = None, *, clock: Callable[[], float] = time.time) -> int:
