@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import json
+from pathlib import Path
 
 import pytest
 from orch_helpers import BLANK, T0, FakeSpendLogs, body, examples, turn_source
@@ -340,3 +341,27 @@ def test_export_counts_a_stored_envelope_the_closed_rules_now_refuse(tmp_path, c
     out = tmp_path / "e.jsonl"
     assert cli.main(["export", "--db", str(store.path), "--out", str(out)], clock=lambda: T0) == 1
     assert "1 an import would refuse: 1 job(s)" in capsys.readouterr().err
+
+
+def test_every_export_line_validates_against_the_export_schema(synced):
+    """export/1 is checkable by a third party: schemas/status/orchestration_export.schema.json
+    (header, job or turn, each closed) accepts every line an export writes."""
+    from jsonschema import Draft202012Validator
+
+    from conformance.protocols.inference import LABEL_PATTERN, MODEL_PATTERN, TAG, TURN_ID
+    from homelabnext.events.envelope import _registry
+
+    root = Path(__file__).resolve().parents[2]
+    path = root / "schemas" / "status" / "orchestration_export.schema.json"
+    schema = json.loads(path.read_text(encoding="utf-8"))
+    validator = Draft202012Validator(schema, registry=_registry())
+    for line in export_lines(synced):
+        errors = sorted(e.message for e in validator.iter_errors(json.loads(line)))
+        assert errors == [], (line[:120], errors)
+    turn = schema["$defs"]["turn"]["properties"]
+    assert turn["model"]["pattern"] == f"^{MODEL_PATTERN}$(?!\\n)"
+    assert (
+        turn["model_role"]["pattern"] == turn["call_type"]["pattern"] == f"^{LABEL_PATTERN}$(?!\\n)"
+    )
+    assert turn["turn_id"]["pattern"] == f"^{TURN_ID.pattern}$(?!\\n)"
+    assert turn["gateway_tag"]["pattern"] == f"^{TAG.pattern}$(?!\\n)"

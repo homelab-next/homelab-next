@@ -1,0 +1,9 @@
+{
+  "schema": "homelabnext.orchestration.export/1",
+  "kind": "header",
+  "sources": [
+    "svc:evil\u001b[31m\nline2"
+  ],
+  "retention_days": 90,
+  "exported_at": "2026-01-01T06:00:00Z"
+}

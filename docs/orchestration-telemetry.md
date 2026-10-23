@@ -288,7 +288,8 @@ renamed over it), and is refused when it is the store itself under any spelling,
 {"schema": "homelabnext.orchestration.export/1", "kind": "turn", "turn": {...}}
 ```
 
-The first line is a header naming the store it came from: the job sources it took, its
+Each line validates against `schemas/status/orchestration_export.schema.json` (header, job or
+turn, each closed; the rollup has no schema yet, see below). The first line is a header naming the store it came from: the job sources it took, its
 retention and when it was exported. An import does not need it; it is only read to explain a job
 refused for its source (an export from a store with another `--source` is refused job by job,
 with both stores' sources in the reason). A header whose sources are not service ids, or whose

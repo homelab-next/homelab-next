@@ -71,6 +71,7 @@ EXPECTED = {
     "status/views.schema.json",
     "status/roster.schema.json",
     "status/last_run.schema.json",
+    "status/orchestration_export.schema.json",
 }
 
 

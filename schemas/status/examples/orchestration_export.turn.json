@@ -1,0 +1,21 @@
+{
+  "schema": "homelabnext.orchestration.export/1",
+  "kind": "turn",
+  "turn": {
+    "turn_id": "req-a1",
+    "gateway_tag": "run-0001",
+    "started_at": "2026-01-01T00:00:13Z",
+    "duration_ms": null,
+    "ttft_ms": null,
+    "model_role": "mdl:triage-large",
+    "model": "example-27b",
+    "call_type": "acompletion",
+    "status": "success",
+    "error_code": null,
+    "input_tokens": 20000,
+    "output_tokens": null,
+    "cache_read_tokens": null,
+    "cache_hit": null,
+    "cost_usd": 0.0
+  }
+}
