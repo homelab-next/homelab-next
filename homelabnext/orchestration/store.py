@@ -28,9 +28,22 @@ rewrites the same rows.  A job's turns are re-read until it has been finished fo
 **Retention**: jobs finished, and turns started, more than ``retention_days`` ago are deleted
 when the store opens and on every write (with the injected clock).
 
+**Files**: the database alone.  Writers use a rollback journal (``journal_mode=DELETE``, set on
+every open, so a database a WAL writer left is converted), not WAL: ``<db>-journal`` exists only
+while a write is in flight (or after a crash, until the next write rolls it back), and there is
+never a ``-wal`` or ``-shm``.  That is what lets the hub read the store as another user: a WAL
+reader must create ``-shm`` and ``-wal`` (it fails without write access to the directory, and
+with it leaves files the writer cannot open), a rollback-journal reader creates nothing.  The
+writers are one-shot timer passes with short transactions, so a reader that meets one waits for
+its lock (SQLite's busy timeout) instead of reading beside it, and loses nothing it needs.
+
 **Read-only** (``read_only=True``, the status hub's open): the file must already be a telemetry
 store; it is opened with SQLite's ``mode=ro``, so nothing is created (no directory, no file, no
-table), nothing is purged, the journal mode is not touched, and every write is refused.
+table, no journal), nothing is purged, the journal mode is not touched, and every write is
+refused.  It needs read access to the file and nothing else.  A file that is no SQLite database
+or holds no store is :class:`ValueError` (not a telemetry store); a store SQLite cannot open (a
+database still in WAL mode, a lock held past the timeout, a crash's journal only a writer can roll
+back) is :class:`ValueError` carrying SQLite's own message.
 """
 
 from __future__ import annotations
@@ -64,6 +77,8 @@ CREATE INDEX IF NOT EXISTS turns_tag ON turns(gateway_tag);
 CREATE INDEX IF NOT EXISTS turns_started ON turns(started);
 """
 DEFAULT_RETENTION_DAYS = 90
+#: the writers' journal: no -wal or -shm, so a reader as another user needs no write access
+JOURNAL_MODE = "DELETE"
 #: the store's own failures (the database, the disk): a caller retries these, never a record's
 STORE_ERRORS = (sqlite3.Error, OSError)
 #: (table, the time column retention is measured on)
@@ -90,13 +105,15 @@ class TelemetryStore:
             try:
                 with self._db() as db:
                     names = {r[0] for r in db.execute("SELECT name FROM sqlite_master")}
-            except sqlite3.DatabaseError as exc:
+            except sqlite3.OperationalError as exc:  # a store SQLite cannot open: say why
+                raise ValueError(f"cannot read the telemetry store {self.path}: {exc}") from None
+            except sqlite3.DatabaseError as exc:  # not a database at all
                 raise ValueError(f"{self.path} is not a telemetry store ({exc})") from None
             if not {"jobs", "turns"} <= names:
                 raise ValueError(f"{self.path} is not a telemetry store (no jobs or turns table)")
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = functools.partial(transaction, self.path)
+        self._db = functools.partial(transaction, self.path, journal_mode=JOURNAL_MODE)
         with self._db() as db:
             db.executescript(_SCHEMA)
             self._purge(db, None)
@@ -265,4 +282,4 @@ def _instants(data: Mapping[str, Any]) -> dict[str, float]:
     return out
 
 
-__all__ = ["DEFAULT_RETENTION_DAYS", "STORE_ERRORS", "TelemetryStore"]
+__all__ = ["DEFAULT_RETENTION_DAYS", "JOURNAL_MODE", "STORE_ERRORS", "TelemetryStore"]

@@ -166,6 +166,27 @@ opens the store read-only (SQLite `mode=ro`): it creates, migrates and purges no
 that is not an existing store stops `hnx status serve` at start (exit 2) instead of serving an
 empty page; `hnx orchestration` is the only writer.
 
+**Files and users.** The store is one file. Its writers (`hnx orchestration consume`, `ingest`,
+`turns`: one-shot timer passes) keep a rollback journal (`journal_mode=DELETE`, set on every
+open), not WAL: `<db>-journal` exists only while a write is in flight, or after a crashed write
+until the next pass rolls it back, and there is never a `-wal` or `-shm`. A WAL reader has to
+create `-wal` and `-shm` beside the database: without write access to the directory it cannot
+open the store at all, and with it the files it leaves are the reader's, which locks the writer
+out. A rollback-journal reader creates nothing, so the deployment is:
+
+- the writers run as one user that owns the store's directory (`0755`) and the database
+  (`0644`);
+- the hub runs as that user, or as another user that can read the database: in a group the file
+  belongs to (`0640`, the directory `0750` and setgid so a recreated store keeps the group), or
+  as world-readable above. The hub needs no write access to the file or the directory.
+
+A reader that arrives during a write waits for it (SQLite's busy timeout, 10 s; the passes'
+transactions are short). A store a WAL writer left (an earlier release) is refused by the hub
+with SQLite's reason rather than read, since reading it would create the files above; the next
+writer pass converts it. Any other SQLite failure at start (a lock held past the timeout, a crashed
+write's journal only a writer may roll back) is reported with SQLite's own message, also exit 2;
+"not a telemetry store" is kept for a file that is no SQLite database or has no store's tables.
+
 ## What the recommendation engine will consume
 
 `hnx orchestration report --db DB [--days N]` prints the rollup (`homelabnext.orchestration.rollup/1`,
