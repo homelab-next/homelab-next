@@ -183,3 +183,68 @@ class StaleSettleEventBus(FakeEventBus):
     from a crashed process swallows the new process's nack: the message is lost)."""
 
     consumer_class = _StaleSettlingConsumer
+
+
+class _StaleTermConsumer(FakeConsumer):
+    def _settle(self, msg: _Msg, delivery: Delivery, how: str, token: int) -> None:
+        if how == "term" and msg.seq in self._in_flight:  # term is routed by message
+            token = self._in_flight[msg.seq]
+        super()._settle(msg, delivery, how, token)
+
+
+class StaleTermEventBus(FakeEventBus):
+    """Defect: ``ack`` and ``nack`` settle per delivery, but ``term`` settles the message, so a
+    stale ``term`` from a crashed process dead-letters the live redelivery."""
+
+    consumer_class = _StaleTermConsumer
+
+
+class _StaleNackRequeuesConsumer(FakeConsumer):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._generation = 0
+
+    def _reopen(self) -> None:
+        self._generation += 1
+        super()._reopen()
+
+    def _deliver(self, msg: _Msg) -> Delivery:
+        d = super()._deliver(msg)
+        gen, live = self._generation, d._settle
+
+        def settle(how: str) -> None:
+            if gen != self._generation and how == "nack":
+                # "to be safe": requeue unless the message is in flight or queued already
+                queued = any(m.seq == msg.seq for m in self._redeliver)
+                if msg.seq not in self._in_flight and not queued:
+                    self._redeliver.append(msg)
+                return
+            live(how)  # type: ignore[misc]
+
+        d._settle = settle
+        return d
+
+
+class StaleNackRequeuesEventBus(FakeEventBus):
+    """Defect: a stale ``ack`` or ``term`` from before a reopen is ignored, but a stale ``nack``
+    is honoured "to be safe" and requeues the message - even after the live delivery was acked,
+    so an acked message is delivered again."""
+
+    consumer_class = _StaleNackRequeuesConsumer
+
+
+class _NackRequeuesConsumer(FakeConsumer):
+    def _settle(self, msg: _Msg, delivery: Delivery, how: str, token: int) -> None:
+        if how == "nack" and self._in_flight.get(msg.seq) != token:
+            queued = any(m.seq == msg.seq for m in self._redeliver)
+            if msg.seq not in self._in_flight and not queued:
+                self._redeliver.append(msg)
+            return
+        super()._settle(msg, delivery, how, token)
+
+
+class SettledNackRequeuesEventBus(FakeEventBus):
+    """Defect: a ``nack`` of a delivery that is no longer in flight still requeues the message
+    unless it is already queued, so a nack after an ack redelivers an acked message."""
+
+    consumer_class = _NackRequeuesConsumer

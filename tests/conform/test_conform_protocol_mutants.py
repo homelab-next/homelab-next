@@ -39,6 +39,9 @@ REVIEWED = {
         "double-settle",
         "stale-delivery-settles",
         "new-consumer-replays-history",
+        "stale-term-dead-letters-live",
+        "stale-nack-requeues-acked",
+        "settled-nack-requeues",
     },
     "records": {
         "completes-inbox-notes",

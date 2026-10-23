@@ -21,8 +21,10 @@ generated_by: hnx docs capabilities generate
 Contract for `events`: a durable pub/sub bus with at-least-once delivery and a DLQ.
 
 * `publish(subject, data, msg_id=)` is idempotent per `msg_id` (a repeat is dropped).
-* A *consumer* (durable, named) sees every matching message published after it was created, in
-  publish order per subject.  `*` matches one dotted token, `>` the rest.
+* A *consumer* (durable, named) sees every matching message published after it was created, and
+  nothing published before (a new consumer does not replay the history: JetStream's default
+  `DeliverPolicy.All` would), in publish order per subject.  `*` matches one dotted token,
+  `>` the rest.
 * `fetch` never blocks: it returns what is deliverable now (possibly nothing).
 * A delivery must be settled: `ack` (done), `nack` (redeliver, attempt + 1) or `term`
   (never redeliver).  After `max_deliver` failed attempts, or on `term`, the message goes to
@@ -31,7 +33,10 @@ Contract for `events`: a durable pub/sub bus with at-least-once delivery and a D
 * At least once: re-opening a durable consumer (`consumer()` with the same name, as a
   restarted process does) resumes where it left off.  Acked messages are not delivered again,
   messages published in between are, and every delivery that was fetched but never settled is
-  redelivered (attempt + 1).  A delivery handed out before the reopen can no longer be settled.
+  redelivered (attempt + 1).  A delivery handed out before the reopen can no longer be settled:
+  its `ack`, `nack` or `term` is a no-op, whether the live delivery is still in flight or
+  already settled (a stale `nack` does not requeue an acked message, a stale `term` does not
+  dead-letter the live one).
 
 ## How to use it
 
@@ -165,7 +170,7 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `unsettled-redelivered-on-reopen` | MUST | a message fetched but never settled is delivered again after the consumer restarts |  |
 | `durable-resumes-after-reopen` | MUST | a reopened durable consumer continues after its last ack, including messages sent meanwhile |  |
 | `settle-twice-is-noop` | MUST | only the first ack/nack/term of a delivery counts |  |
-| `stale-delivery-settles-nothing` | MUST | settling an earlier delivery, or one handed out before a reopen, leaves the live one alone |  |
+| `stale-delivery-settles-nothing` | MUST | no ack, nack or term of an earlier delivery, or of one handed out before a reopen, settles the live one or revives a settled message |  |
 | `new-consumer-starts-at-creation` | MUST | a new durable consumer sees what is published after it was created, not the history |  |
 | `star-wildcard-matches-one-token` | SHOULD | '*' matches exactly one token | `wildcards` |
 
@@ -186,7 +191,10 @@ Each is a deliberately broken fake (`hnx conform run events --target broken:<mut
 | `loses-unsettled-on-restart` | `unsettled-redelivered-on-reopen` | a message fetched but not settled is lost when the consumer restarts |
 | `new-consumer-replays-history` | `new-consumer-starts-at-creation` | a new durable consumer is handed every message published before it existed |
 | `restart-at-tail` | `durable-resumes-after-reopen` | reopening a durable consumer skips everything not yet delivered |
+| `settled-nack-requeues` | `settle-twice-is-noop` | a nack of a delivery no longer in flight requeues the message unless already queued |
 | `stale-delivery-settles` | `stale-delivery-settles-nothing` | a stale delivery settles the live redelivery of the same message |
+| `stale-nack-requeues-acked` | `stale-delivery-settles-nothing` | a stale nack from before a reopen requeues a message the live delivery acked |
+| `stale-term-dead-letters-live` | `stale-delivery-settles-nothing` | a stale term dead-letters the live redelivery (term is settled by message) |
 
 ## Implementations
 

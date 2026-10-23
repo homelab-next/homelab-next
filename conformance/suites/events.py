@@ -10,7 +10,10 @@ from conformance.fakes.event_bus import (
     LosesUnsettledEventBus,
     ReplayingEventBus,
     RestartsAtTailEventBus,
+    SettledNackRequeuesEventBus,
+    StaleNackRequeuesEventBus,
     StaleSettleEventBus,
+    StaleTermEventBus,
 )
 from homelabnext.conform.core import Mutant, Suite
 
@@ -175,33 +178,57 @@ def _(bus):
     assert list(c.fetch(5)) == [], "a second nack queued the message twice"
 
 
+SETTLE = ("ack", "nack", "term")
+
+
 @SUITE.check(
     "stale-delivery-settles-nothing",
-    "settling an earlier delivery, or one handed out before a reopen, leaves the live one alone",
+    "no ack, nack or term of an earlier delivery, or of one handed out before a reopen, settles "
+    "the live one or revives a settled message",
 )
 def _(bus):
-    # a consumer restarts; the old process's late ack lands after the new process's delivery
-    s, name = _subject(bus), uniq("c")
-    c = bus.consumer(name, s, max_deliver=5)
-    bus.publish(s, b"reopened")
-    (old,) = c.fetch(1)
-    c = bus.consumer(name, s, max_deliver=5)
-    (live,) = c.fetch(1)
-    old.ack()  # stale: must be a no-op
-    live.nack()  # the live delivery failed: the message must come back
-    got = [d.data for d in c.fetch(5)]
-    assert got == [b"reopened"], f"a stale ack settled the live delivery: redelivered {got}"
+    def settle(d, how):
+        getattr(d, how)()
+
+    def reopened(how_stale, live_first):
+        """A consumer restarts; the old process's late settlement lands before (or after) the
+        new process settles its own delivery."""
+        s, name = _subject(bus), uniq("c")
+        c = bus.consumer(name, s, max_deliver=5)
+        bus.publish(s, b"reopened")
+        (old,) = c.fetch(1)
+        c = bus.consumer(name, s, max_deliver=5)
+        (live,) = c.fetch(1)
+        if live_first:
+            live.ack()  # done: a stale settlement must neither requeue nor dead-letter it
+            settle(old, how_stale)
+        else:
+            settle(old, how_stale)  # stale: must be a no-op
+            live.nack()  # the live delivery failed: the message must come back
+        return c
+
+    for how in SETTLE:
+        c = reopened(how, live_first=False)
+        got = [d.data for d in c.fetch(5)]
+        assert got == [b"reopened"], f"a stale {how} settled the live delivery: redelivered {got}"
+        assert list(c.dead_letters()) == [], f"a stale {how} dead-lettered the live delivery"
+        c = reopened(how, live_first=True)
+        got = [d.data for d in c.fetch(5)]
+        assert got == [], f"a stale {how} after the live ack delivered the message again: {got}"
+        assert list(c.dead_letters()) == [], f"a stale {how} after the live ack dead-lettered it"
     # without a reopen: a second settlement of a delivery after its redelivery was fetched
-    s = _subject(bus)
-    c = bus.consumer(uniq("c"), s, max_deliver=5)
-    bus.publish(s, b"again")
-    (first,) = c.fetch(1)
-    first.nack()
-    (second,) = c.fetch(1)
-    first.ack()  # settled already: must not count, and must not touch ``second``
-    second.nack()
-    got = [d.data for d in c.fetch(5)]
-    assert got == [b"again"], f"a second settlement settled the redelivery: redelivered {got}"
+    for how in SETTLE:
+        s = _subject(bus)
+        c = bus.consumer(uniq("c"), s, max_deliver=5)
+        bus.publish(s, b"again")
+        (first,) = c.fetch(1)
+        first.nack()
+        (second,) = c.fetch(1)
+        settle(first, how)  # settled already: must not count, and must not touch ``second``
+        second.nack()
+        got = [d.data for d in c.fetch(5)]
+        assert got == [b"again"], f"a second {how} settled the redelivery: redelivered {got}"
+        assert list(c.dead_letters()) == [], f"a second {how} dead-lettered the redelivery"
 
 
 @SUITE.check(
@@ -255,6 +282,21 @@ MUTANTS = {
         StaleSettleEventBus,
         "stale-delivery-settles-nothing",
         "a stale delivery settles the live redelivery of the same message",
+    ),
+    "stale-term-dead-letters-live": Mutant(
+        StaleTermEventBus,
+        "stale-delivery-settles-nothing",
+        "a stale term dead-letters the live redelivery (term is settled by message)",
+    ),
+    "stale-nack-requeues-acked": Mutant(
+        StaleNackRequeuesEventBus,
+        "stale-delivery-settles-nothing",
+        "a stale nack from before a reopen requeues a message the live delivery acked",
+    ),
+    "settled-nack-requeues": Mutant(
+        SettledNackRequeuesEventBus,
+        "settle-twice-is-noop",
+        "a nack of a delivery no longer in flight requeues the message unless already queued",
     ),
     "new-consumer-replays-history": Mutant(
         ReplayingEventBus,
