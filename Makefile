@@ -288,7 +288,7 @@ changelog-check:
 #   M-03 no private notify/state/lake helpers outside the shared libraries, and no copy-paste
 #        beyond tools/dup_check.baseline.json (which only shrinks)
 #   F-07 no client with TLS certificate verification off (Python and YAML/JSON; RL013 does roles)
-#   F-23 the edge strips client identity headers before forward_auth and pins Caddy >= 2.11.2
+#   F-23 no Caddy config lets a client set its own identity headers; Caddy pinned >= 2.11.2
 #   F-17 no runtime config points at the admin workstation (runs beside X-01's endpoint gate)
 #   M-12 the generated keyring has 0 drift from its sources
 #   scripts write scratch output under their run directory (homelabnext.runs) or build/ only

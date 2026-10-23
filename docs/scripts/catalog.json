@@ -70,7 +70,7 @@
       "outputs": "one line per unprotected forward_auth, identity header set outside copy_headers, construct the lint cannot read, unread config, vulnerable Caddy pin or stale allowlist entry",
       "owner": "maintainers",
       "path": "tools/caddy_lint.py",
-      "purpose": "Fail when a Caddy config lets a client-sent identity header past forward_auth, or a Caddy pin is below 2.11.2.",
+      "purpose": "Fail when a Caddy config in the tree could let a client set its own identity header behind forward_auth, cannot be read, or a Caddy pin is below 2.11.2.",
       "status": "active",
       "trigger": [
         "ci:ci/schemas",

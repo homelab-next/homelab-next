@@ -3,7 +3,7 @@
 # hnx-script:
 #   id: caddy-lint
 #   kind: check
-#   purpose: Fail when a Caddy config lets a client-sent identity header past forward_auth, or a Caddy pin is below 2.11.2.
+#   purpose: Fail when a Caddy config in the tree could let a client set its own identity header behind forward_auth, cannot be read, or a Caddy pin is below 2.11.2.
 #   owner: maintainers
 #   trigger: [ci:ci/schemas, make:caddy-lint]
 #   invariant: [F-23]
@@ -17,9 +17,11 @@
 
 ``forward_auth`` copies the identity provider's answer (``copy_headers``) onto the request, and the
 service trusts those headers. Caddy 2.9.0 to 2.11.1 keep a header the *client* sent when the
-IdP's answer omits it, and every Caddy up to 2.11.1 passes the underscore spelling
-(``X_Authentik_Groups``), which a CGI-style upstream folds into the real header. So two things
-must hold, everywhere:
+IdP's answer omits it, and every Caddy up to 2.11.1 passes the underscore and mixed spellings
+(``X_Authentik_Groups``, ``X-Authentik_Groups``), which a CGI-style upstream folds into the real
+header. (2.11.2's fix deletes only the exact name it copies; 2.11.7's ``reverse_proxy`` was
+observed dropping every header with an ``_``, which is not a documented guarantee, so the strip
+is what covers those spellings.) So these must hold, everywhere:
 
   strip      every ``forward_auth`` sits directly inside a ``route`` block, and earlier in that
              same ``route`` a ``request_header -<name>`` (or a ``-*<part>*``, ``-<prefix>*`` or

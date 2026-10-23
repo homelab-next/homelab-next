@@ -114,7 +114,7 @@ jobs:
         run: python tools/dup_check.py .
       - name: TLS certificate verification never disabled (F-07)
         run: python tools/tls_verify_lint.py .
-      - name: forward_auth strips client identity headers first, Caddy pinned >= 2.11.2 (F-23)
+      - name: no Caddy config lets a client set its own identity headers, Caddy pinned >= 2.11.2 (F-23)
         run: python tools/caddy_lint.py .
       - name: nothing at runtime points at the workstation (F-17)
         run: python tools/workstation_refs.py .

@@ -276,7 +276,7 @@ criteria:
     Trust the internal CA instead of turning verification off; a client that skips verification
     accepts any certificate, so anyone on the path can read and change its traffic.
 - id: F-23
-  statement: The edge never trusts a client's identity headers.
+  statement: No Caddy config lets a client set its own identity headers.
   evidence: auto
   observable: >-
     python3 -c 'import yaml' 2>/dev/null || exit 100;
