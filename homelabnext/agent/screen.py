@@ -76,6 +76,8 @@ TYPES = (
     "phone",
 )
 _PRIORITY = {t: i for i, t in enumerate(TYPES)}
+# types whose overlapped remainder is still redacted (see Screener._find)
+_FILL_TYPES = frozenset({"private-key", "jwt", "token", "secret", "denylist"})
 LABEL_RE = re.compile(r"\[REDACTED:(?P<type>[a-z-]+):(?P<n>\d+)\]")
 
 # Ranges that ``redact_private_ips=False`` leaves in place: RFC 1918, CGNAT, loopback, link-local,
@@ -476,18 +478,41 @@ class Screener:
         for m in _IPV6_RE.finditer(text):
             self._ip(m, text, add)
 
-        # chosen spans never overlap, so they are kept sorted and each candidate is checked
-        # against its two neighbours only (a scan of every chosen span was quadratic)
+        # Candidates are taken by priority; chosen spans never overlap, so they are kept sorted
+        # and each candidate is checked against its neighbours only (a scan of every chosen span
+        # was quadratic).  A credential candidate (a key, token, secret or deny-list term) that
+        # overlaps a higher-priority span is not dropped: the parts of it no chosen span covers
+        # are redacted under its own label, so a credential a rule found never stays in clear
+        # because another rule matched next to it ("password=<value><letter>ghp_..." keeps the
+        # token's label and redacts the value).  Other types are dropped as before: the rest of
+        # an e-mail address whose local part is a token is a host name, not a secret.
         chosen: list[tuple[int, int, str, str]] = []
         starts: list[int] = []
-        for _, s, e, t, v in sorted(cands, key=lambda c: (c[0], c[1], -(c[2] - c[1]))):
+
+        def put(s: int, e: int, t: str, v: str) -> None:
             i = bisect.bisect_left(starts, s)
-            if i < len(chosen) and chosen[i][0] < e:
-                continue
-            if i and chosen[i - 1][1] > s:
-                continue
             starts.insert(i, s)
             chosen.insert(i, (s, e, t, v))
+
+        for _, s, e, t, v in sorted(cands, key=lambda c: (c[0], c[1], -(c[2] - c[1]))):
+            i = bisect.bisect_right(starts, s)
+            overlapped = (i and chosen[i - 1][1] > s) or (i < len(chosen) and chosen[i][0] < e)
+            if overlapped and t not in _FILL_TYPES:
+                continue
+            if i and chosen[i - 1][1] > s:
+                i -= 1  # the chosen span that covers s
+            pieces: list[tuple[int, int]] = []
+            pos = s
+            while i < len(chosen) and chosen[i][0] < e:
+                cs, ce = chosen[i][0], chosen[i][1]
+                if cs > pos:
+                    pieces.append((pos, cs))
+                pos = max(pos, ce)
+                i += 1
+            if pos < e:
+                pieces.append((pos, e))
+            for ps, pe in pieces:
+                put(ps, pe, t, v)
         return chosen
 
     def _ip(self, m: re.Match[str], text: str, add: Callable[[str, int, int, str], None]) -> None:

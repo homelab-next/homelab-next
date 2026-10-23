@@ -420,3 +420,21 @@ def test_word_boundaries_are_ascii_but_whitespace_stays_unicode():
     assert screen_text(f"password=FakeValue0123{ideo}rest") == (
         f"password=[REDACTED:secret:1]{ideo}rest"
     )
+
+
+@pytest.mark.parametrize("glue", ["µ", "़", "क़", "ж"])
+def test_a_credential_overlapped_by_a_higher_priority_span_is_still_redacted(glue):
+    """With ASCII boundaries a token right after a password's value is found; the password's
+    span overlapped it and was dropped by priority, leaving the value in clear.  The parts no
+    higher-priority span covers keep their own label."""
+    token = "gh" + "p_fake0123456789abcdefghijklmnopqrstuv"
+    out = screen_text(f"password=FakeValue0123{glue}{token}")
+    assert "FakeValue0123" not in out and token not in out
+    assert out.startswith("password=[REDACTED:secret:1]") and out.endswith("[REDACTED:token:1]")
+
+
+def test_the_rest_of_an_overlapped_email_is_not_redacted():
+    token = "gh" + "p_fake0123456789abcdefghijklmnopqrstuv"
+    assert screen_text(f"origin https://{token}@example.com/x.git") == (
+        "origin https://[REDACTED:token:1]@example.com/x.git"
+    )

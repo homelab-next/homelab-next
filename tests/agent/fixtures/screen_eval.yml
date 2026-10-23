@@ -460,6 +460,11 @@ positives:
     text: ["\u0e23\u0e2b\u0e31\u0e2a password=FakeValue0123\u0e02\u0e2d\u0e07\u0e40\u0e23\u0e32"]
     secrets: ["FakeValue0123"]
 
+  - id: secret-glued-to-a-token
+    type: secret
+    text: ["password=FakeValue0123\u00b5gh", "p_fake0123456789abcdefghijklmnopqrstuv"]
+    secrets: ["FakeValue0123", ["gh", "p_fake0123456789abcdefghijklmnopqrstuv"]]
+
 negatives:
   - {id: version-dotted-quad, text: "upgraded to v4.18.2.1 last week", keep: [v4.18.2.1]}
   - {id: version-word, text: "agent version 2.31.0.7 deployed", keep: [version 2.31.0.7]}

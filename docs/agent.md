@@ -234,7 +234,7 @@ pack, pack_hash = assemble_pack(manifest, {"sections": {...}, "pregates": {...}}
   CJK, Thai or Cyrillic letter (`用户alice@example.com已登录`) is found. The cost is the same rate of
   false positives that spaced text already has: a dotted quad glued to such letters
   (`バージョン192.0.2.4`) is redacted as an address, as `192.0.2.4` without a version context would
-  be. When two overlapping spans of one type are merged, the plain text's value labels them, so
+  be. A credential overlapped by a higher-priority span (a password's value glued to a token) keeps its own label for the parts the other span does not cover, so it is never left in clear. When two overlapping spans of one type are merged, the plain text's value labels them, so
   one value keeps one label. Every rule is linear in the length of the text, whatever the
   length of a key.
   Documentation values (`example.org`, the RFC 5737 ranges, 555 numbers) **are**
