@@ -41,15 +41,19 @@ same address appears in both alerts") without seeing the value.  Values are comp
 (e-mail case-folded, phone and card by digits, addresses canonicalised).
 
 Detection is regex plus validators; overlapping candidates are resolved by type priority (the
-order of the table), then position, then length.  It runs on a folded view of the text: format
-characters (Unicode category Cf: zero-width space, joiners, BOM, soft hyphen) are removed and
-every other character is NFKC-normalised (full-width and other Unicode digits become ASCII), so
-``alice<ZWSP>@corp`` or a full-width address is found; the redaction covers the original span.  Shapes shared with the publishing leak scanner
-come from :mod:`homelabnext.shapes`; unlike that scanner, nothing here exempts placeholders.
+order of the table), then position, then length.  It runs twice: on the text as given, and on a
+folded view in which format characters (Unicode category Cf: zero-width space, joiners, BOM, soft
+hyphen) are removed and every other character is NFKC-normalised (full-width and other Unicode
+digits become ASCII), so ``alice<ZWSP>@corp`` or a full-width address is found.  The redacted
+spans are the union of both passes, mapped back to the original text, with overlapping spans
+merged; folding can join a value to its neighbour and break a boundary, so the folded pass only
+ever adds to what the plain pass finds.  Shapes shared with the publishing leak scanner come from
+:mod:`homelabnext.shapes`; unlike that scanner, nothing here exempts placeholders.
 """
 
 from __future__ import annotations
 
+import bisect
 import ipaddress
 import re
 import unicodedata
@@ -211,6 +215,16 @@ _KEY_WORDS = (
 )
 
 
+# The key of a key=value rule, from its key word to the separator.  The words before the key
+# word ("db_" in db_password) are not matched: they never change the verdict (the not-a-secret
+# key test looks at the end of the key), and ``[\w.-]*`` on both sides of the key word
+# backtracked cubically over a run such as "token.token.token..." (a crafted 2 KB line took
+# seconds).  Every bound here keeps each rule linear in the length of the text.
+_KEY_SIDE = 64
+_KEY = rf"(?:{_KEY_WORDS})[\w.-]{{0,{_KEY_SIDE}}}"
+_FLAG_KEY = rf"[\w-]{{0,{_KEY_SIDE}}}?(?:{_KEY_WORDS})[\w-]{{0,{_KEY_SIDE}}}"
+
+
 def _r(type_: str, rx: str, group: str | int = 0, accept=None, flags: int = 0) -> _Rule:
     return _Rule(type_, re.compile(rx, flags), group, accept)
 
@@ -254,11 +268,11 @@ _RULES: tuple[_Rule, ...] = (
         _is_keyed_secret,
     ),
     # user:password@ in a URL
-    _r("secret", r"(?i)\b[a-z][a-z0-9+.-]*://[^\s:/@]+:(?P<v>[^\s@/]+)@", "v"),
+    _r("secret", r"(?i)[a-z][a-z0-9+.-]{0,31}://[^\s:/@]+:(?P<v>[^\s@/]+)@", "v"),
     # "key": "a quoted value", key: 'with spaces in it' (the whole quoted value)
     _r(
         "secret",
-        rf"(?i)(?<![\w-])(?P<k>[\w.-]*(?:{_KEY_WORDS})[\w.-]*)[\"']?\s*(?:[:=]|=>)\s*"
+        rf"(?i)(?P<k>{_KEY})[\"']?\s*(?:[:=]|=>)\s*"
         r"(?P<q>[\"'])(?P<v>(?:(?!(?P=q))[^\r\n\\]|\\.){1,512})(?P=q)",
         "v",
         _is_keyed_secret,
@@ -266,7 +280,7 @@ _RULES: tuple[_Rule, ...] = (
     # key=value, key: value, "key": "value", key => value
     _r(
         "secret",
-        rf"(?i)(?<![\w-])(?P<k>[\w.-]*(?:{_KEY_WORDS})[\w.-]*)[\"']?\s*(?:[:=]|=>)\s*[\"']?"
+        rf"(?i)(?P<k>{_KEY})[\"']?\s*(?:[:=]|=>)\s*[\"']?"
         r"(?P<v>[^\s\"',;)}\]]{3,})",
         "v",
         _is_keyed_secret,
@@ -274,7 +288,7 @@ _RULES: tuple[_Rule, ...] = (
     # --password value / --api-key=value
     _r(
         "secret",
-        rf"(?i)(?<![\w-])--?(?P<k>[\w-]*(?:{_KEY_WORDS})[\w-]*)[ =](?P<v>[^\s\"']{{3,}})",
+        rf"(?i)(?<![\w-])--?(?P<k>{_FLAG_KEY})[ =](?P<v>[^\s\"']{{3,}})",
         "v",
         _is_keyed_secret,
     ),
@@ -363,17 +377,21 @@ class Screener:
     # -- detection
     def find(self, text: str) -> list[tuple[int, int, str, str]]:
         """Non-overlapping ``(start, end, type, normalised value)`` spans of ``text``, by
-        position (found on the folded view, see the module doc)."""
+        position: the union of the plain and the folded pass, overlaps merged (module doc)."""
+        spans = self._find(text)
         folded, where = _fold(text)
-        spans = self._find(folded)
         if where is None:
             return spans
+        spans += [(where[s], where[e - 1] + 1, t, v) for s, e, t, v in self._find(folded)]
         out: list[tuple[int, int, str, str]] = []
-        for s, e, t, v in spans:
-            start, end = where[s], where[e - 1] + 1
-            if out and start < out[-1][1]:  # two folded spans from one original character
+        for s, e, t, v in sorted(spans, key=lambda x: (x[0], -x[1], _PRIORITY[x[2]])):
+            if out and s < out[-1][1]:
+                ps, pe, pt, pv = out[-1]
+                # one span covering both; it keeps the label of the higher-priority type
+                keep = (pt, pv) if _PRIORITY[pt] <= _PRIORITY[t] else (t, v)
+                out[-1] = (ps, max(pe, e), *keep)
                 continue
-            out.append((start, end, t, v))
+            out.append((s, e, t, v))
         return out
 
     def _find(self, text: str) -> list[tuple[int, int, str, str]]:
@@ -400,11 +418,19 @@ class Screener:
         for m in _IPV6_RE.finditer(text):
             self._ip(m, text, add)
 
+        # chosen spans never overlap, so they are kept sorted and each candidate is checked
+        # against its two neighbours only (a scan of every chosen span was quadratic)
         chosen: list[tuple[int, int, str, str]] = []
+        starts: list[int] = []
         for _, s, e, t, v in sorted(cands, key=lambda c: (c[0], c[1], -(c[2] - c[1]))):
-            if all(e <= cs or s >= ce for cs, ce, _, _ in chosen):
-                chosen.append((s, e, t, v))
-        return sorted(chosen)
+            i = bisect.bisect_left(starts, s)
+            if i < len(chosen) and chosen[i][0] < e:
+                continue
+            if i and chosen[i - 1][1] > s:
+                continue
+            starts.insert(i, s)
+            chosen.insert(i, (s, e, t, v))
+        return chosen
 
     def _ip(self, m: re.Match[str], text: str, add: Callable[[str, int, int, str], None]) -> None:
         raw = m.group(0)
@@ -415,7 +441,9 @@ class Screener:
         if addr.version == 4:
             if any(len(o) > 1 and o.startswith("0") for o in raw.split(".")):
                 return  # zero-padded octets: a date or version, not an address
-            ctx = shapes.VERSION_CONTEXT_RE.search(text[: m.start()])
+            # the context ends at the address: a short window keeps this linear (a search of
+            # the whole prefix per address was quadratic); longer padding only redacts more
+            ctx = shapes.VERSION_CONTEXT_RE.search(text[max(0, m.start() - 32) : m.start()])
             # the leak scanner's version context, except a lone "=": "src=<address>" is a value
             if ctx and ctx.group(0).strip() != "=":
                 return

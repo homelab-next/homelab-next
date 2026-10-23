@@ -223,8 +223,10 @@ pack, pack_hash = assemble_pack(manifest, {"sections": {...}, "pregates": {...}}
   keyed secrets (`password=`, `DB_PASS=`, `"token":`, a quoted value with spaces, `--password x`,
   "the password is x", `Cookie:`/`Set-Cookie:` values, `user:pass@` in URLs), deny-list terms, Luhn-checked card numbers with an issuer
   prefix, e-mail addresses, national-id shapes (SSN, NINO, keyed passport/tax ids), IP addresses
-  and phone numbers (an IPv4-mapped IPv6 address is one address). Matching ignores format
-  characters (zero-width space, BOM) and folds Unicode digits (NFKC), so neither hides a value.
+  and phone numbers (an IPv4-mapped IPv6 address is one address). Matching runs on the text and
+  again on a view without format characters (zero-width space, BOM) and with Unicode digits
+  folded (NFKC); the redaction is the union of both, so neither a hidden character nor folding
+  hides a value. Every rule is linear in the length of the text.
   Documentation values (`example.org`, the RFC 5737 ranges, 555 numbers) **are**
   redacted: the screener cannot tell a fixture from real data. Version numbers, dates, UUIDs,
   hashes and commit ids in prose, CVE and ATT&CK ids are not. Private, loopback, link-local and

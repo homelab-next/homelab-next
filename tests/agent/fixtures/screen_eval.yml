@@ -401,6 +401,30 @@ positives:
     text: ["token gh", "p_fake0123456789abcdef​ghijklmnopqrstuv end"]
     secrets: [["gh", "p_fake0123456789abcdef"], ghijklmnopqrstuv]
 
+  # folding must only add: a format character or a compatibility character that folds to a
+  # letter must not glue a value to its neighbour and hide it (each was missed by a folded-only
+  # pass); the last two spans meet inside one original character and are merged
+  - id: fold-boundary-aws-zwsp
+    type: token
+    text: ["key AKI", "AFAKE7EXAMPLE0KEY\u200bx"]
+    secrets: [["AKI", "AFAKE7EXAMPLE0KEY"]]
+  - id: fold-boundary-ip-soft-hyphen
+    type: ip
+    text: ["from 192.0.2.40\u00adx"]
+    secrets: ["192.0.2.40"]
+  - id: fold-boundary-email-trademark
+    type: email
+    text: ["mail alice.fake@example.com\u2122 today"]
+    secrets: ["alice.fake@example.com"]
+  - id: fold-boundary-ghp-word-joiner
+    type: token
+    text: ["x\u2060gh", "p_fake0123456789abcdefghijklmnopqrstuv"]
+    secrets: [["gh", "p_fake0123456789abcdefghijklmnopqrstuv"]]
+  - id: fold-merge-ip-into-email
+    type: email
+    text: ["192.0.2.4\u00bclice.fake@example.com"]
+    secrets: ["192.0.2.4", "lice.fake@example.com"]
+
 negatives:
   - {id: version-dotted-quad, text: "upgraded to v4.18.2.1 last week", keep: [v4.18.2.1]}
   - {id: version-word, text: "agent version 2.31.0.7 deployed", keep: [version 2.31.0.7]}
