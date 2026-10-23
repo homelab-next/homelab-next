@@ -171,7 +171,7 @@ MUTANTS = {
 }
 ```
 
-`hnx conform mutants` and `tests/conform/test_mutants.py` assert each mutant is caught **by that
+`hnx conform mutants` and `tests/conform/test_conform_mutants.py` assert each mutant is caught **by that
 check**, so a regression in a suite shows up as a named check, not as silence.  The named check
 must be a `must` that always executes (no `requires`, not `skippable`): a mutant caught only by a
 check that can skip proves nothing about a target on which it skips, and the report counts it as
