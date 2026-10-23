@@ -98,10 +98,17 @@ def test_could_not_measure_exits_100(tmp_path, capsys):
     assert "could not build subject" in capsys.readouterr().out
 
 
-def test_mutants_command(capsys):
+def test_mutants_command(capsys, monkeypatch):
+    # every registered mutant is proved by test_conform_mutants.py, and the report runs them all
+    # again (test_report_all_green_on_the_fakes): here only the command is under test, so 'all'
+    # walks two capabilities
+    import homelabnext.conform.cli as cli
+
+    monkeypatch.setattr(cli, "CAPABILITIES", ("secrets", "idp"))
     assert main(["mutants"]) == 0
     out = capsys.readouterr().out
-    assert out.count("caught") >= 16 and "MISSED" not in out
+    n = len(load_module("secrets").MUTANTS) + len(load_module("idp").MUTANTS)
+    assert out.count("caught") == n and "MISSED" not in out
     assert main(["mutants", "events", "--json"]) == 0
     doc = json.loads(capsys.readouterr().out)
     assert doc["mutants"][0]["detected"] is True
