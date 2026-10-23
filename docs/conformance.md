@@ -202,17 +202,43 @@ newest version, an identity provider that matched scopes as substrings, an objec
 * name the error a refusal raises, and check that each way in leaves the audit record the
   Protocol promises, refused or not;
 * a clause about concurrency (records: "a decision is atomic") is checked with
-  `conformance.suites._util.interleavings`, which stops one operation before chosen lines of the
-  subject's own code and runs the other to completion in between: the same schedule every run,
-  never a timing race that passes by luck.
+  `conformance.suites._util.interleavings`: an unpaused run finds the lines of the subject's own
+  package (wherever it is installed) and a few of the other source it calls; then, for each line,
+  one operation is stopped before it and the other runs whole in between.  The same schedules run
+  every time, and a wait only decides when to resume a paused operation, never a verdict.  It
+  catches a check-then-act window inside one operation; it cannot catch a race that needs both
+  operations preempted (a lock file taken by check-then-create), one behind a network call, or
+  one in code it does not trace, so such a check is a `should` that says so, and a run with
+  nothing to pause at is "could not judge", not a pass.
 
 A second review of the tightened suites found seventeen more (a broker that kept the caller's
 argument mapping and so ran what was changed after validation, a stale `term` that dead-lettered
 the live redelivery, a namesake that replaced an approved note, a secret history revived by a
 `put` after `delete`, a space-delimited scope claim that turned `"read admin"` into `admin`, a
-flat `bucket+key` namespace).  Each defect is registered in its suite's `MUTANTS`, the one table of
+flat `bucket+key` namespace), and a verify pass of those fixes thirteen more (WorkQueue retention,
+a dead-letter list in client memory, a crash loop the reference fake never dead-lettered, a
+cached lease shared between holders, a scope gate reading the unverified payload, form-decoded
+and case-folded keys, a dotted flat key space, redaction by a name guess, a refusal echoing the
+value it refused) plus six racy records deciders.  Each plausible defect is registered in its suite's `MUTANTS`, the one table of
 broken fake -> the check that must fail it; `tests/conform/test_conform_protocol_mutants.py`
 keeps the record, by name, of which ones review found.
+
+### How to review a suite
+
+A review writes subjects that break one clause of the Protocol each and runs them through the
+suite.  An escape is a finding, but not every escape is worth a check.  **The stopping rule:** an
+escaped mutant ranks above a nit only if it models a behaviour that a real adapter for that
+product class plausibly ships - name the product, the configuration or the common pattern it
+models (JetStream's WorkQueue retention, a case-insensitive filesystem under a directory store,
+an HTTP front end that form-decodes keys, a logging filter that redacts by name).  A contrived
+mutant - one that breaks the clause in a way no implementation would by accident - is a nit:
+note it, and do not grow the suite for it.  Only plausible mutants are registered in `MUTANTS`.
+
+Judged contrived in the verify pass, and so not registered: a provider that compares scopes after
+NFKC normalisation (the scope grammar is now printable ASCII, so `scope-enforced` refuses the
+fullwidth form anyway), and a `Denied` that carries the refused request as an attribute (already
+caught).  The records deciders it wrote are plausible, but `decide-is-atomic` is a `should`, so
+they are pinned by tests rather than as `must` mutants.
 
 The suites cover the protocol, not the handler behind it.  The broker's `ArgSpec` checks the
 shape of arguments, not their content: a validated `str` is still untrusted caller input, and the
