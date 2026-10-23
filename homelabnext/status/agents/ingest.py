@@ -52,7 +52,7 @@ from collections.abc import Callable, Iterable, Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from homelabnext._http import is_loopback
+from homelabnext._http import content_length, is_loopback
 
 from ..serve import LOOPBACK, LOOPBACK_NAMES, BoundedHTTPServer, host_allowed
 from .config import IngestSettings, Sender
@@ -280,15 +280,20 @@ def make_ingest_server(
                 )  # fmt: skip
             if not limiter.allow(sender.name):
                 return self._deny(429, "rate limited", headers={"Retry-After": "60"})
-            length = self.headers.get("Content-Length")
-            if length is None or not length.isdigit():
+            length = content_length(self.headers.get("Content-Length"))
+            if length is None:
+                if self.headers.get("Content-Length") is not None:
+                    _log.warning(
+                        "agent ingest refused sender %s: Content-Length is not ASCII digits",
+                        sender.name,
+                    )
                 return self._deny(411, "Content-Length is required")
-            if int(length) > settings.max_body_bytes:
+            if length > settings.max_body_bytes:
                 return self._deny(413, f"body larger than {settings.max_body_bytes} bytes")
             ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
             if ctype != "application/json":
                 return self._deny(415, "Content-Type must be application/json")
-            raw = self.rfile.read(int(length))
+            raw = self.rfile.read(length)
             try:
                 body = json.loads(raw.decode("utf-8"))
             except (UnicodeDecodeError, ValueError):

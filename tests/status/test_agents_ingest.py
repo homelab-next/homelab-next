@@ -54,6 +54,37 @@ def test_accepts_both_tiers_and_redacts_before_storage(ingest, tmp_path):
     assert post_json(base, {"summary": [summary(has_detail=True)]}, TOKEN)[0] == 200  # duplicate
 
 
+@pytest.mark.parametrize("length", ["\u00b2", "\uff11\uff12", "1_0", "+5"])
+def test_a_content_length_that_is_not_ascii_digits_is_411_and_logged(ingest, length, caplog):
+    import socket
+
+    base, store, *_ = ingest
+    u = urllib.parse.urlsplit(base)
+    head = (
+        f"POST /ingest/agent-activity HTTP/1.1\r\nHost: {u.hostname}\r\n"
+        f"Authorization: Bearer {TOKEN}\r\nContent-Type: application/json\r\n"
+        f"Content-Length: {length}\r\n\r\n"
+    )
+    with (
+        caplog.at_level("WARNING", logger="homelabnext.status.agents.ingest"),
+        socket.create_connection((u.hostname, u.port), timeout=5) as s,
+    ):
+        s.sendall(head.encode("utf-8"))
+        answer = s.recv(65536)
+    assert answer.startswith(b"HTTP/1.0 411 ") or answer.startswith(b"HTTP/1.1 411 "), answer
+    assert store.events() == []
+    assert any("Content-Length" in r.getMessage() for r in caplog.records)
+
+
+def test_content_length_takes_ascii_digits_only():
+    from homelabnext._http import content_length
+
+    assert [content_length(v) for v in ("0", "12", " 7 ", "007")] == [0, 12, 7, 7]
+    assert all(
+        content_length(v) is None for v in (None, "", "\u00b2", "\uff11", "1e3", "-1", "1 2")
+    )
+
+
 @pytest.mark.parametrize("token", [None, "", "fake-wrong-token", TOKEN + "x", TOKEN[:-1]])
 def test_missing_or_invalid_token_is_401(ingest, token):
     base, store, *_ = ingest

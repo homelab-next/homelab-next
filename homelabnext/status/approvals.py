@@ -64,6 +64,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Any
 
+from homelabnext._http import content_length
 from homelabnext.broker.state import is_id
 
 from .agents.auth import AccessLog, Decision, authorize
@@ -417,13 +418,13 @@ class ApprovalsSite:
         ctype = (headers.get("Content-Type") or "").split(";")[0].strip().lower()
         if ctype != "application/x-www-form-urlencoded":
             return refuse(415, "decide", "not a form")
-        length = headers.get("Content-Length")
-        if length is None or not length.strip().isdigit():
+        length = content_length(headers.get("Content-Length"))
+        if length is None:  # absent, or not ASCII digits: refused (and logged), never parsed
             return refuse(411, "decide", "no Content-Length")
-        if int(length) > MAX_FORM_BYTES:
+        if length > MAX_FORM_BYTES:
             return refuse(413, "decide", "form too large")
         try:
-            raw = read_body(int(length)).decode("utf-8")
+            raw = read_body(length).decode("utf-8")
             form = urllib.parse.parse_qs(raw, keep_blank_values=True, strict_parsing=bool(raw))
         except (UnicodeDecodeError, ValueError):
             return refuse(400, "decide", "malformed form")
