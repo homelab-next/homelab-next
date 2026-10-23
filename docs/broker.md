@@ -86,7 +86,19 @@ and broker-keyed tag only that actor's writes produce; a shared `files` lane kee
 name in an owner index. And a lane bounds each actor's writes in time: `max_writes_per_hour`
 (default 120 on a shared lane, none on a per-actor one), refused `lane-rate-exceeded`. The owner
 index and the write times live in `<state>/lanes-ledger/`, never in a lane directory, and are
-read and written under the lane directory's `flock`. Without
+read and written under the lane directory's `flock`.
+
+**Append-only lanes.** A lane nothing ever deletes from, such as `findings` (one note per run,
+even when clean), outgrows any file cap: 4096 files last about 22 months at 6 runs a day and under
+six for an hourly agent, and then every `finding.write` is refused, which under the Hermes rules
+reads exactly like a failed run. Give such a lane `max_files: null` (no file cap, manifest 1.6), a
+generous `max_total_bytes` and a `max_writes_per_hour`; `examples/broker/manifest.production.yml`
+sets `findings` so. Before pointing `--data-root` at an existing tree, look at what is already
+there: `hnx broker validate MANIFEST --data-root DIR` prints each lane directory's files and bytes
+against its quota and warns at 80%, and `hnx broker serve` logs the same at start. When a write
+is refused `lane-quota-exceeded`, the operator is notified once per actor and lane (through the
+broker's notifier: "Broker lane quota reached"), and again "cleared" when that actor's next write
+lands. Without
 the share, one looping agent filled the inbox's quota in under a minute and every other agent's
 proposal was refused `lane-quota-exceeded` until someone moved notes out.
 

@@ -35,7 +35,9 @@ Enforced on every write, each refusal with a machine reason (:class:`LaneError`)
 * ``lane-quota-exceeded`` - the write would leave the target directory (the actor's own for a
   ``per_actor`` lane, the lane's shared one otherwise) holding more than ``max_files`` files or
   more than ``max_total_bytes`` bytes (manifest 1.5; defaults :data:`DEFAULT_MAX_FILES` and
-  :data:`DEFAULT_MAX_TOTAL_BYTES`).  A replaced file (``overwrite``) is counted once.  The count
+  :data:`DEFAULT_MAX_TOTAL_BYTES`).  ``max_files: null`` (1.6) sets no file cap: an append-only
+  lane (``findings``: one note per run, never deleted) is bounded by its byte cap and its write
+  rate instead, since a file cap there is a retention limit in disguise.  A replaced file (``overwrite``) is counted once.  The count
   and the write happen under an exclusive ``flock`` on the directory, so concurrent writers --
   threads or processes -- cannot overshoot it together;
 * ``lane-quota-exceeded`` also when, in a shared lane (``per_actor: false``), the write would
@@ -98,6 +100,7 @@ __all__ = [
     "check_params",
     "name_tag",
     "template_marker",
+    "usage",
     "write",
 ]
 
@@ -112,6 +115,8 @@ DEFAULT_SHARE_DIVISOR = 8
 #: files one actor may write into a shared lane per hour when the manifest sets no rate
 DEFAULT_SHARED_WRITES_PER_HOUR = 120
 RATE_WINDOW_S = 3600.0
+#: the fraction of a lane directory's quota at which validate and serve warn
+USAGE_WARN = 0.8
 #: where a write's bookkeeping lives when the caller names no ledger directory
 DEFAULT_LEDGER = ".hnx-lane-ledger"
 _PROFILE_RE = re.compile(r"^profile:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)$")
@@ -159,7 +164,7 @@ class Lane:
     content_schema: str | None = None
     overwrite: bool = False
     note_types: tuple[str, ...] = ("proposal",)
-    max_files: int = DEFAULT_MAX_FILES
+    max_files: int | None = DEFAULT_MAX_FILES  # None: no file cap
     max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES
     max_files_per_actor: int | None = None
     max_bytes_per_actor: int | None = None
@@ -168,13 +173,16 @@ class Lane:
     @classmethod
     def from_doc(cls, doc: Mapping[str, Any]) -> Lane:
         shared = not bool(doc.get("per_actor", doc["kind"] == "files"))
-        max_files = int(doc.get("max_files", DEFAULT_MAX_FILES))
+        files = doc.get("max_files", DEFAULT_MAX_FILES)
+        max_files = None if files is None else int(files)
         max_total = int(doc.get("max_total_bytes", DEFAULT_MAX_TOTAL_BYTES))
 
-        def share(key: str, whole: int, least: int = 1) -> int | None:
+        def share(key: str, whole: int | None, least: int = 1) -> int | None:
             if key in doc:
                 return int(doc[key])
-            return max(least, whole // DEFAULT_SHARE_DIVISOR) if shared else None
+            if whole is None or not shared:
+                return None
+            return max(least, whole // DEFAULT_SHARE_DIVISOR)
 
         rate = doc.get("max_writes_per_hour", DEFAULT_SHARED_WRITES_PER_HOUR if shared else None)
         return cls(
@@ -221,7 +229,7 @@ class Lane:
             out.append(
                 f"lane {self.name}: max_bytes_per_actor is smaller than one file (max_bytes)"
             )
-        if (self.max_files_per_actor or 0) > self.max_files:
+        if self.max_files is not None and (self.max_files_per_actor or 0) > self.max_files:
             out.append(f"lane {self.name}: max_files_per_actor is larger than max_files")
         if (self.max_bytes_per_actor or 0) > self.max_total_bytes:
             out.append(f"lane {self.name}: max_bytes_per_actor is larger than max_total_bytes")
@@ -455,11 +463,59 @@ def _usage(dir_fd: int) -> dict[str, int]:
     return out
 
 
+def usage(lane: Lane, data_root: str | os.PathLike[str]) -> list[dict[str, Any]]:
+    """What each of the lane's directories holds against its quota (``hnx broker validate
+    --data-root``, ``hnx broker serve``): one row per directory -- each actor's for a per-actor
+    lane, the shared one otherwise -- with ``files``, ``bytes``, the quotas, ``used`` (the larger
+    fraction of the two quotas) and ``warn`` (``used`` at :data:`USAGE_WARN` or more)."""
+    base = Path(data_root, *lane.root.split("/"))
+    if lane.kind == "records-inbox":
+        dirs = [base / "inbox"]
+    elif lane.per_actor:
+        try:
+            dirs = sorted(
+                Path(e.path)
+                for e in os.scandir(base)
+                if e.is_dir(follow_symlinks=False) and not e.name.startswith(".")
+            )
+        except (FileNotFoundError, NotADirectoryError):
+            dirs = []
+    else:
+        dirs = [base]
+    rows = []
+    for d in dirs:
+        try:
+            fd = os.open(d, _DIR_FLAGS)
+        except OSError:
+            continue  # not there yet (or not a real directory: a write would refuse it)
+        try:
+            held = _usage(fd)
+        finally:
+            os.close(fd)
+        files, total = len(held), sum(held.values())
+        used = total / lane.max_total_bytes
+        if lane.max_files is not None:
+            used = max(used, files / lane.max_files)
+        rows.append(
+            {
+                "lane": lane.name,
+                "dir": d.relative_to(data_root).as_posix(),
+                "files": files,
+                "bytes": total,
+                "max_files": lane.max_files,
+                "max_total_bytes": lane.max_total_bytes,
+                "used": round(used, 4),
+                "warn": used >= USAGE_WARN,
+            }
+        )
+    return rows
+
+
 def _check_quota(lane: Lane, usage: Mapping[str, int], name: str, size: int) -> None:
     usage = dict(usage)
     if lane.overwrite:
         usage.pop(name, None)  # a replacement: the old file goes
-    if len(usage) + 1 > lane.max_files:
+    if lane.max_files is not None and len(usage) + 1 > lane.max_files:
         raise LaneError(
             "lane-quota-exceeded", f"lane {lane.name} holds its quota of {lane.max_files} files"
         )

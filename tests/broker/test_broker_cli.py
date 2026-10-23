@@ -34,6 +34,30 @@ def test_validate_unreadable_and_non_mapping(tmp_path, capsys):
     capsys.readouterr()
 
 
+def test_validate_shows_lane_usage_and_warns_near_the_quota(tmp_path, capsys):
+    """A lane at its quota refused the agent alone: nothing showed the operator a lane directory
+    filling up, nor one already over its quota on the day --data-root was pointed at it."""
+    own = tmp_path / "data" / "memory" / "triage"
+    own.mkdir(parents=True)
+    for i in range(3500):  # 85% of the default 4096 files
+        (own / f"n{i}.md").write_text("x")
+    assert main(["validate", str(EXAMPLE), "--data-root", str(tmp_path / "data")]) == 0
+    out = capsys.readouterr().out
+    assert "lane memory memory/triage: 3500/4096 files" in out and "WARNING: over 80%" in out
+    assert main(["validate", str(EXAMPLE), "--json", "--data-root", str(tmp_path / "data")]) == 0
+    [row] = json.loads(capsys.readouterr().out)["lane_usage"]
+    assert (row["lane"], row["files"], row["warn"]) == ("memory", 3500, True)
+
+
+def test_the_production_example_sets_its_append_only_findings_lane(capsys):
+    from homelabnext.broker.service import load_manifest
+
+    manifest, _ = load_manifest(EXAMPLE.parent / "manifest.production.yml")
+    [findings] = [ld for ld in manifest["lanes"] if ld["name"] == "findings"]
+    assert findings["max_files"] is None, "a file cap is a retention limit for append-only notes"
+    assert findings["max_total_bytes"] >= 1 << 30 and findings["max_writes_per_hour"] >= 1
+
+
 @pytest.fixture
 def broker(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HNX_BROKER_MANIFEST", str(EXAMPLE))

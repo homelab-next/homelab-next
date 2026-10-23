@@ -508,6 +508,30 @@ def test_one_agent_cannot_lock_every_other_out_of_the_proposals_inbox(tmp_path):
     svc.call("profile:reader", "proposal.file", {"note": dict(note, title="help"), "body": "x"})
 
 
+def test_the_operator_hears_once_that_a_lane_refuses_an_agent_for_its_quota(tmp_path):
+    """lane-quota-exceeded reached the agent alone: under the Hermes rules a finding that is never
+    written reads like a run that never happened, and nothing told the operator."""
+    sent = []
+    manifest, docs = load_manifest(EXAMPLE)
+    manifest["lanes"][0]["max_files"] = 1
+    svc = BrokerService(
+        tmp_path / "state", manifest, handler_docs=docs, base_dir=EXAMPLE.parent,
+        data_root=tmp_path / "data", clock=Clock(), notifier=_notifier(sent),
+    )  # fmt: skip
+    svc.call(AGENT, "memory.write", {"name": "a.md", "content": "x"})
+    for name in ("b.md", "c.md", "d.md"):
+        with pytest.raises(Denied):
+            svc.call(AGENT, "memory.write", {"name": name, "content": "x"})
+    [notice] = sent
+    assert notice.title == "Broker lane quota reached" and notice.level == "warn"
+    assert AGENT in notice.body and "memory" in notice.body
+    (tmp_path / "data" / "memory" / "triage" / "a.md").unlink()
+    svc.call(AGENT, "memory.write", {"name": "b.md", "content": "x"})
+    assert [m.title for m in sent] == ["Broker lane quota reached", "Broker lane quota cleared"]
+    svc.call(AGENT, "finding.write", {"name": "2026-01-15-x.md", "content": "x"})
+    assert len(sent) == 2, "a write that lands with nothing to clear sends nothing"
+
+
 def test_the_pending_quota_has_a_default(tmp_path):
     from homelabnext.broker.service import DEFAULT_PENDING_PER_ACTOR
 

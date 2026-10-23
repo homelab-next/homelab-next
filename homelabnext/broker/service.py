@@ -146,6 +146,9 @@ _APPROVAL_STATES = {
     "approval-denied": "denied",
 }
 APPROVAL_CLEARED = "Broker approval settled"
+#: the operator's notice that an agent's writes into a lane are being refused for its quota
+LANE_QUOTA_TITLE = "Broker lane quota reached"
+LANE_QUOTA_CLEARED = "Broker lane quota cleared"
 _SUMMARY_BYTES = 1024
 _SVC_RE = re.compile(r"^svc:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 #: the authenticated transport peer (``uid:<n>``) of the request being served on this thread, set
@@ -367,8 +370,10 @@ class BrokerService:
         self._paged: dict[str, str] = {}  # actor -> the request its open page is for
         self._paging: set[str] = set()  # actors a page is being sent for right now
         self._paged_lock = threading.Lock()
+        self._lane_full: set[str] = set()  # lane-quota keys this process reported
         if notifier is not None:
             notifier.register_pair(APPROVAL_TITLE, APPROVAL_CLEARED)
+            notifier.register_pair(LANE_QUOTA_TITLE, LANE_QUOTA_CLEARED)
 
     @classmethod
     def from_manifest(
@@ -664,9 +669,12 @@ class BrokerService:
                     ledger=self.state.root / "lanes-ledger",
                 )
             except _lanes.LaneError as exc:
+                if exc.reason == "lane-quota-exceeded":
+                    self._lane_quota(act.handler, request, str(exc))
                 raise _Refused(exc.outcome, exc.reason, str(exc)) from None
             except OSError:
                 raise _Refused("error", "lane-io-error", f"{act.name}: the write failed") from None
+            self._lane_quota(act.handler, request, None)
             if (
                 act.handler.kind == "records-inbox"
                 and args["note"].get("type", "proposal") == "proposal"
@@ -1391,16 +1399,47 @@ class BrokerService:
         if waiting:  # the page moves to the oldest still waiting (none open: one is due)
             self._page(waiting[0], waiting)
 
-    def _notify(self, key, state, msg) -> bool:
+    def _lane_quota(self, lane: _lanes.Lane, request: Mapping[str, Any], refusal: str | None):
+        """Tell the operator, once, that ``lane`` refuses an actor's writes for its quota (the
+        agent alone hears ``lane-quota-exceeded``, and a finding that is never written looks like
+        a run that never happened); the actor's next write that lands clears it.  State-diffed by
+        the notifier, so a looping agent's thousandth refusal sends nothing."""
+        if self.notifier is None:
+            return
+        from homelabnext.notify.core import Message
+
+        actor = request["actor"]
+        key = f"broker-lane-quota-{lane.name}-{re.sub(r'[^a-z0-9-]+', '-', actor.lower())}"
+        if refusal is None:
+            state_of = getattr(self.notifier, "state_of", None)
+            if key not in self._lane_full and (state_of is None or state_of(key) == "ok"):
+                return  # nothing was reported: nothing to clear (the common case, one read)
+            self._lane_full.discard(key)
+            body = f"{actor} writes to lane {lane.name} again"
+            msg = Message(key=key, title=LANE_QUOTA_CLEARED, body=body)
+            self._notify(key, "ok", msg, request_id=request["request_id"])
+            return
+        body = (
+            f"{actor}'s writes to lane {lane.name} are refused lane-quota-exceeded: {refusal}. "
+            "Raise the lane's quota in the manifest or clear the directory "
+            "(hnx broker validate --data-root shows its usage)."
+        )
+        msg = Message(key=key, title=LANE_QUOTA_TITLE, body=body, level="warn")
+        if self._notify(key, "lane-quota-exceeded", msg, request_id=request["request_id"]):
+            self._lane_full.add(key)
+
+    def _notify(self, key, state, msg, *, request_id: str | None = None) -> bool:
         """Whether the notifier sent ``msg``.  A notification is a courtesy: the event and the
         pending list already carry the request, so a failed send never fails the broker
         operation that triggered it."""
         try:
             return bool(self.notifier.report(key, state, msg))
         except Exception:
-            self._audit(
-                BROKER_SOURCE, "", "notify", "error", reason="notify-failed", request_id=key[16:]
-            )
+            rid = request_id or key.removeprefix("broker-approval-")
+            with contextlib.suppress(*_AUDIT_FAILURES):
+                self._audit(
+                    BROKER_SOURCE, "", "notify", "error", reason="notify-failed", request_id=rid
+                )
             return False
 
 

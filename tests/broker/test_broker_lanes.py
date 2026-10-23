@@ -437,3 +437,35 @@ def test_shared_lanes_have_a_default_rate_and_share():
     assert _lane(max_files_per_actor=3).problems(), "a share on a per-actor lane"
     assert _inbox(max_files=4, max_files_per_actor=5).problems(), "a share above the lane"
     assert _inbox().problems() == []
+
+
+# -- append-only lanes: no file cap, usage visible -----------------------------------------------
+
+
+def test_an_append_only_lane_can_have_no_file_cap(tmp_path):
+    """A findings lane (one note per run, never deleted) on the default 4096-file cap stops
+    taking notes after months, silently: the cap is a retention limit in disguise."""
+    lane = _lane(max_files=None, max_total_bytes=1000, max_writes_per_hour=100)
+    assert lane.max_files is None and lane.problems() == []
+    for i in range(10):
+        write(lane, tmp_path, ACTOR, {"name": f"n{i}.md", "content": "x"}, NOW)
+    for i in range(16):
+        write(lane, tmp_path, ACTOR, {"name": f"b{i}.md", "content": "x" * 60}, NOW)
+    # the byte cap still bounds it: 970 bytes held, 60 more would pass 1000
+    _refused(lane, tmp_path, {"name": "b16.md", "content": "x" * 60}, "lane-quota-exceeded")
+    assert len(_files(tmp_path / "memory")) == 26
+
+
+def test_lane_usage_reports_each_directory_and_warns_at_80_percent(tmp_path):
+    from homelabnext.broker.lanes import usage
+
+    lane = _lane(max_files=10, max_total_bytes=1000)
+    for i in range(8):
+        write(lane, tmp_path, ACTOR, {"name": f"n{i}.md", "content": "x"}, NOW)
+    write(lane, tmp_path, "profile:other", {"name": "a.md", "content": "x"}, NOW)
+    rows = {r["dir"]: r for r in usage(lane, tmp_path)}
+    assert rows["memory/triage"]["files"] == 8 and rows["memory/triage"]["warn"] is True
+    assert rows["memory/other"]["warn"] is False and rows["memory/other"]["used"] == 0.1
+    assert usage(_inbox(), tmp_path) == [], "nothing filed yet: no row"
+    no_cap = usage(_lane(max_files=None, max_total_bytes=10), tmp_path)
+    assert {r["dir"]: r["warn"] for r in no_cap} == {"memory/other": False, "memory/triage": True}

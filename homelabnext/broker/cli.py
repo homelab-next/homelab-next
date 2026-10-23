@@ -2,7 +2,11 @@
 """``hnx broker``: validate a manifest, serve the broker, and talk to it from a shell.
 
 ``validate MANIFEST`` checks the manifest schema, every handler document and its pinned digest,
-the lane configuration and the transport peers.
+the lane configuration and the transport peers.  With ``--data-root DIR`` (or
+``$HNX_BROKER_DATA_ROOT``) it also prints what each lane directory holds against its quota and
+warns at 80% (:func:`homelabnext.broker.lanes.usage`); ``serve`` logs the same at start.  A
+warning does not fail validation: an agent writing there is about to be refused
+``lane-quota-exceeded``, and this is how the operator hears it first.
 
 ``serve --socket PATH`` runs the broker on a Unix socket whose callers are authenticated by their
 peer credentials (:mod:`homelabnext.broker.server`); ``mcp --socket PATH`` runs the agent-facing
@@ -95,6 +99,11 @@ def _parser() -> argparse.ArgumentParser:
     v = sub.add_parser("validate", help="check a manifest, its handler digests, lanes and peers")
     v.add_argument("path")
     v.add_argument("--json", action="store_true")
+    v.add_argument(
+        "--data-root",
+        default=os.environ.get("HNX_BROKER_DATA_ROOT"),
+        help="also show each lane directory's usage against its quota (warn at 80%%)",
+    )
     srv = sub.add_parser("serve", help="serve the broker on a Unix socket (peer-authenticated)")
     _service_opts(srv)
     srv.add_argument(
@@ -198,16 +207,42 @@ def _validate(args) -> int:
         problems = [f"{path}: not a mapping"]
     else:
         _, problems = validate_manifest(manifest, path.parent)
+    rows = lane_usage(manifest, args.data_root) if args.data_root and not problems else []
     if args.json:
-        print(
-            json.dumps({"manifest": str(path), "ok": not problems, "problems": problems}, indent=2)
-        )
+        doc = {"manifest": str(path), "ok": not problems, "problems": problems}
+        if args.data_root:
+            doc["lane_usage"] = rows
+        print(json.dumps(doc, indent=2))
     elif problems:
         print("\n".join(f"{path}: {p}" for p in problems))
     else:
         actions = len(manifest["actions"])
         print(f"{path}: ok ({actions} actions, {len(manifest.get('lanes', []))} lanes)")
+        for row in rows:
+            print(_usage_line(row))
     return 1 if problems else 0
+
+
+def lane_usage(manifest: dict[str, Any], data_root: str | os.PathLike[str]) -> list[dict]:
+    """Every lane directory's usage row (:func:`homelabnext.broker.lanes.usage`)."""
+    from . import lanes
+
+    return [
+        r
+        for ld in manifest.get("lanes", [])
+        for r in lanes.usage(lanes.Lane.from_doc(ld), data_root)
+    ]
+
+
+def _usage_line(row: dict[str, Any]) -> str:
+    files = (
+        f"{row['files']}/{row['max_files']}" if row["max_files"] is not None else str(row["files"])
+    )
+    line = (
+        f"lane {row['lane']} {row['dir']}: {files} files, "
+        f"{row['bytes']}/{row['max_total_bytes']} bytes ({row['used']:.0%} of its quota)"
+    )
+    return line + ("  WARNING: over 80% of its quota" if row["warn"] else "")
 
 
 def _service(args) -> BrokerService:
@@ -440,8 +475,12 @@ def _serve(args) -> int:
         mode = int(args.socket_mode, 8)
     except ValueError:
         raise ValueError("--socket-mode is an octal mode such as 660") from None
+    svc = _service(args)
+    log = logging.getLogger("homelabnext.broker.cli")
+    for row in lane_usage(svc.manifest, svc.data_root):
+        (log.warning if row["warn"] else log.info)("%s", _usage_line(row))
     server = BrokerServer(
-        _service(args),
+        svc,
         args.socket,
         mode=mode,
         group=args.socket_group,
