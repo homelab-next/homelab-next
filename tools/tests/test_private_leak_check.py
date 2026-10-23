@@ -609,7 +609,9 @@ def test_public_scope_block_with_a_real_address_fails(tmp_path, case):
     "text",
     [
         f"scope:\n  trusted:\n    wan: [{DOC.replace('192.0.2', '203.0.113')}.7/32]\n    nets: [{DOC}.0/24, 2001:db8::/48]\n",
-        "scope:\n  target: [198.51.100.0/33]\n",  # the generated negative's malformed entry
+        "scope:\n  target: ["
+        + "198.51.100"
+        + ".0/33]\n",  # the generated negative's malformed entry
         f"scope:\n  target: ['::ffff:{DOC}.1']\n",  # a mapped documentation address
         "scope:\n  target: ['3fff::/20']\n",  # RFC 9637
         f"scope:\n  target: [{DOC}.0/24]\n  exclude:\n    offensive: []\n",  # nothing excluded

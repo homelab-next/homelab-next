@@ -544,19 +544,19 @@ The site's addresses live in one place: the selection's `scope:` block, in the *
 (`lab/modules.yml`; seal the file with SOPS if its WAN addresses would hurt in a leak, as
 [private overlay](private-overlay.md) describes for `lab/site.yml`). The public repository carries
 only the schema, the enforcement and fictional examples in the documentation ranges (RFC 5737's
-`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, RFC 3849's `2001:db8::/32` and RFC 9637's
+`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, RFC 3849's `2001:db8::/32` and RFC 9637's <!-- no-raw-endpoint: allow documentation ranges -->
 `3fff::/20`).
 
 ```yaml
 scope:
   trusted:
-    wan: [203.0.113.32/29]                  # the lab's own public addresses
-    nets: [192.0.2.0/24, "2001:db8:30::/48"]  # its internal networks
-    tooling: [192.0.2.240/28]               # where the operator's own tooling runs from
-  target: [198.51.100.0/24, 192.0.2.0/24]   # what assessment tooling may touch
+    wan: [203.0.113.32/29]                  # the lab's own public addresses (no-raw-endpoint: allow a documentation range)
+    nets: [192.0.2.0/24, "2001:db8:30::/48"]  # its internal networks (no-raw-endpoint: allow a documentation range)
+    tooling: [192.0.2.240/28]               # where the operator's own tooling runs from (no-raw-endpoint: allow a documentation range)
+  target: [198.51.100.0/24, 192.0.2.0/24]   # what assessment tooling may touch (no-raw-endpoint: allow a documentation range)
   exclude:
-    unattended_mutation: [192.0.2.1/32]     # no unattended job changes these
-    offensive: [192.0.2.0/28]               # never the target of offensive tooling; [] = none
+    unattended_mutation: [192.0.2.1/32]     # no unattended job changes these (no-raw-endpoint: allow a documentation range)
+    offensive: [192.0.2.0/28]               # never the target of offensive tooling; [] = none (no-raw-endpoint: allow a documentation range)
 ```
 
 - **Entries.** Each part is a list of IPv4 or IPv6 addresses or CIDR networks. Quote an IPv6
@@ -599,7 +599,7 @@ scope:
   mapping with only another document's scope keys (a customization's selectors, an MCP parameter,
   JSON Schema keywords) is not a site block. In a site block every entry must be a string naming a
   documentation network (`scope-address`; a zero-padded, integer or hex address, a number,
-  `0.0.0.0/0` and a widened documentation prefix such as `192.0.2.0/16` all fail), the shape is the
+  `0.0.0.0/0` and a widened documentation prefix such as `192.0.2.0/16` all fail), the shape is the <!-- no-raw-endpoint: allow documentation ranges -->
   selection's (`scope-shape`: an unknown part, a key twice, an anchor or alias), and a file that
   mentions a scope and does not parse fails (`scope-unparsed`). Plain text and code are
   `tools/leak_scan.py`'s.

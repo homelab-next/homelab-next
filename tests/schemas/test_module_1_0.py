@@ -1241,12 +1241,12 @@ SITE_DEFECTS.update(
         ),
         "a malformed CIDR in the scope": (
             "full",
-            lambda s, m: s["scope"]["target"].__setitem__(0, "198.51.100.0/33"),
-            "scope.target[0]: '198.51.100.0/33' is not a usable address or network",
+            lambda s, m: s["scope"]["target"].__setitem__(0, f"{D2}.0/33"),
+            f"scope.target[0]: '{D2}.0/33' is not a usable address or network",
         ),
         "a scope network with host bits set": (
             "full",
-            lambda s, m: s["scope"]["exclude"]["offensive"].__setitem__(0, "192.0.2.1/28"),
+            lambda s, m: s["scope"]["exclude"]["offensive"].__setitem__(0, f"{D1}.1/28"),
             "has host bits set",
         ),
         "a dynamic WAN source (specified, not implemented)": (
@@ -1261,7 +1261,7 @@ SITE_DEFECTS.update(
         ),
         "a scope network listed twice": (
             "small-lab",
-            lambda s, m: s["scope"]["trusted"]["tooling"].append("192.0.2.200/32"),
+            lambda s, m: s["scope"]["trusted"]["tooling"].append(f"{D1}.200/32"),
             "scope.trusted.tooling: a network is listed twice",
         ),
         "an address literal as a site config value": (
