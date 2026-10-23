@@ -219,10 +219,13 @@ pack, pack_hash = assemble_pack(manifest, {"sections": {...}, "pregates": {...}}
   `[REDACTED:<type>:<n>]`, stable across the pack (the same address is the same label in every
   section, compared normalised; numbers follow first appearance in pack order). Types: private
   keys, JWTs, vendor tokens (AWS, GitHub, GitLab, Slack, Google, npm, Hugging Face, Stripe-style,
-  `sk-` keys, bearer credentials), keyed secrets (`password=`, `"token":`, `--password x`, "the
-  password is x", `user:pass@` in URLs), deny-list terms, Luhn-checked card numbers with an issuer
+  `sk-` keys, `Authorization:` credentials of any scheme: Bearer, Basic, Digest, Token, ...),
+  keyed secrets (`password=`, `DB_PASS=`, `"token":`, a quoted value with spaces, `--password x`,
+  "the password is x", `Cookie:`/`Set-Cookie:` values, `user:pass@` in URLs), deny-list terms, Luhn-checked card numbers with an issuer
   prefix, e-mail addresses, national-id shapes (SSN, NINO, keyed passport/tax ids), IP addresses
-  and phone numbers. Documentation values (`example.org`, the RFC 5737 ranges, 555 numbers) **are**
+  and phone numbers (an IPv4-mapped IPv6 address is one address). Matching ignores format
+  characters (zero-width space, BOM) and folds Unicode digits (NFKC), so neither hides a value.
+  Documentation values (`example.org`, the RFC 5737 ranges, 555 numbers) **are**
   redacted: the screener cannot tell a fixture from real data. Version numbers, dates, UUIDs,
   hashes and commit ids in prose, CVE and ATT&CK ids are not. Private, loopback, link-local and
   CGNAT addresses are redacted unless the manifest sets `screen: {redact_private_ips: false}`.

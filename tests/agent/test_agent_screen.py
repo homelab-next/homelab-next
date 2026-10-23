@@ -262,3 +262,23 @@ def test_leak_scanner_and_screener_share_shapes():
     assert by_name["jwt"] == shapes.JWT
     assert by_name["email"] == shapes.EMAIL
     assert leak_scan.VERSION_CONTEXT_RE is shapes.VERSION_CONTEXT_RE
+
+
+def test_folded_matches_redact_the_original_span_and_share_a_label():
+    """Detection runs on a view without format characters and with Unicode digits folded; the
+    redaction covers the original characters and co-references the plain spelling."""
+    zw = chr(0x200B)
+    text = f"from fake.user{zw}@example.com and fake.user@example.com"
+    out, spans = Screener().screen(text)
+    assert out == "from [REDACTED:email:1] and [REDACTED:email:1]"
+    assert text[spans[0].start : spans[0].end] == f"fake.user{zw}@example.com"
+    wide = "".join(chr(0xFF10 + int(d)) if d.isdigit() else d for d in "192.0.2.44")
+    assert screen_text(f"host {wide}, again 192.0.2.44") == (
+        "host [REDACTED:ip:1], again [REDACTED:ip:1]"
+    )
+
+
+def test_an_ipv4_mapped_address_is_one_address_and_private_by_its_ipv4():
+    mapped = "::ffff:" + ".".join(["10", "20", "30", "40"])
+    assert screen_text(f"src {mapped} dst") == "src [REDACTED:ip:1] dst"
+    assert screen_text(f"src {mapped} dst", redact_private_ips=False) == f"src {mapped} dst"

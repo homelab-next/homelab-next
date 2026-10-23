@@ -347,6 +347,60 @@ positives:
     text: ["mallory@example.com committed gh", "o_fakeOAUTH0123456789abcdefghijklmnopqr"]
     secrets: [mallory@example.com, ["gh", "o_fakeOAUTH0123456789abcdefghijklmnopqr"]]
 
+  # -------------------------------------------------------------- shapes added from review
+  - id: json-password-with-spaces
+    type: secret
+    text: ["{\"password\": \"my fake horse battery\"}"]
+    secrets: [my fake horse battery]
+  - id: yaml-quoted-passphrase
+    type: secret
+    text: ["vault:\n  passphrase: 'fake correct horse staple'\n"]
+    secrets: [fake correct horse staple, horse staple]
+  - id: env-short-pass-key
+    type: secret
+    text: ["DB_PASS=Fake3Secret!\nSMTP_PW=fakeMail99\n"]
+    secrets: [Fake3Secret!, fakeMail99]
+  - id: authorization-basic
+    type: token
+    text: ["GET /api HTTP/1.1\nAuthorization: Basic ", "ZmFrZTpm", "YWtlcGFzc3dvcmQ=", "\n"]
+    secrets: [["ZmFrZTpm", "YWtlcGFzc3dvcmQ="]]
+  - id: authorization-token-scheme
+    type: token
+    text: ["curl -H \"Authorization: Token ", "fake0token0value\" https://api.example.com/"]
+    secrets: [fake0token0value]
+  - id: authorization-json-short-bearer
+    type: token
+    text: ["{\"Authorization\": \"Bearer ", "fake0short\"}"]
+    secrets: [fake0short]
+  - id: authorization-digest
+    type: token
+    text: ["Authorization: Digest username=\"fake\", response=\"fake0digest0response0\"\n"]
+    secrets: [fake0digest0response0]
+  - id: cookie-header
+    type: secret
+    text: ["Cookie: sessionid=fake0session0value0123; theme=dark\n"]
+    secrets: [fake0session0value0123]
+  - id: set-cookie-header
+    type: secret
+    text: ["HTTP/1.1 200 OK\nSet-Cookie: sid=fake0sid0value; Path=/; HttpOnly\n"]
+    secrets: [fake0sid0value]
+  - id: ipv4-mapped-ipv6
+    type: ip
+    text: ["src ::ffff:192.0.2.44 dst ::ffff:198.51.100.7"]
+    secrets: ["192.0.2.44", "198.51.100.7", "0.2.44", "51.100.7"]
+  - id: ipv4-fullwidth-digits
+    type: ip
+    text: ["host １９２.０.２.４４ replied"]
+    secrets: ["１９２.０.２.４４"]
+  - id: email-zero-width-split
+    type: email
+    text: ["mail fake.user​@example.com now"]
+    secrets: ["fake.user​@example.com", "fake.user"]
+  - id: github-token-zero-width-split
+    type: token
+    text: ["token gh", "p_fake0123456789abcdef​ghijklmnopqrstuv end"]
+    secrets: [["gh", "p_fake0123456789abcdef"], ghijklmnopqrstuv]
+
 negatives:
   - {id: version-dotted-quad, text: "upgraded to v4.18.2.1 last week", keep: [v4.18.2.1]}
   - {id: version-word, text: "agent version 2.31.0.7 deployed", keep: [version 2.31.0.7]}
@@ -393,3 +447,8 @@ negatives:
   - {id: seven-digit-no-keyword, text: "case 555-0100 opened", keep: [555-0100]}
   - {id: doc-mac, text: "MAC 00:00:5e:00:53:01 is out of scope", keep: ["00:00:5e:00:53:01"]}
   - {id: phone-like-range, text: "ports 100-200 and 300-400", keep: [100-200, 300-400]}
+  - {id: bypass-key, text: "bypass=all and compass_heading=270", keep: [bypass=all, compass_heading=270]}
+  - {id: pwm-and-passenger, text: "pwm_duty=40 passengers=12", keep: [pwm_duty=40, passengers=12]}
+  - {id: cookie-prose, text: "Cookie consent: accepted by the user", keep: ["Cookie consent: accepted by the user"]}
+  - {id: session-timeout, text: "session_timeout=30 session_count=4", keep: [session_timeout=30, session_count=4]}
+  - {id: fullwidth-version, text: "version ２.３１.０.７ shipped", keep: ["２.３１.０.７"]}

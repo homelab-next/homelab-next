@@ -8,10 +8,12 @@ What is redacted, by type (the type is part of the replacement):
 ``jwt``         a JSON web token
 ``token``       vendor credentials recognisable by shape: AWS access key ids, GitHub, GitLab,
                 Slack, Google, npm, Hugging Face, Stripe-style and ``sk-`` API keys, and the
-                credential of an ``Authorization: Bearer`` header
+                credential of an ``Authorization:`` header (Bearer, Basic, Digest, Token,
+                ApiKey, ...)
 ``secret``      the *value* of a password/secret/token/api-key style key (``key=value``,
-                ``key: value``, JSON, ``--password value``, "the password is ...") and the
-                password in a ``scheme://user:password@host`` URL
+                ``key: value``, JSON and YAML, a quoted value with spaces in it, ``DB_PASS=``,
+                ``--password value``, "the password is ..."), a ``Cookie:``/``Set-Cookie:``
+                header's value, and the password in a ``scheme://user:password@host`` URL
 ``denylist``    any term from a caller-supplied deny-list (literal word or ``re:`` regex)
 ``card``        a payment card number: 13-19 digits, a known issuer prefix and a valid Luhn digit
 ``email``       every e-mail address, documentation domains included
@@ -39,7 +41,10 @@ same address appears in both alerts") without seeing the value.  Values are comp
 (e-mail case-folded, phone and card by digits, addresses canonicalised).
 
 Detection is regex plus validators; overlapping candidates are resolved by type priority (the
-order of the table), then position, then length.  Shapes shared with the publishing leak scanner
+order of the table), then position, then length.  It runs on a folded view of the text: format
+characters (Unicode category Cf: zero-width space, joiners, BOM, soft hyphen) are removed and
+every other character is NFKC-normalised (full-width and other Unicode digits become ASCII), so
+``alice<ZWSP>@corp`` or a full-width address is found; the redaction covers the original span.  Shapes shared with the publishing leak scanner
 come from :mod:`homelabnext.shapes`; unlike that scanner, nothing here exempts placeholders.
 """
 
@@ -47,6 +52,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import unicodedata
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -170,13 +176,38 @@ def _is_prose_secret(m: re.Match[str], _text: str) -> bool:
 
 
 def _private(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if addr.version == 6 and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
     return any(addr.version == n.version and addr in n for n in _PRIVATE_NETS)
+
+
+def _fold(text: str) -> tuple[str, list[int] | None]:
+    """The text detection runs on, and for each of its characters the index in ``text`` it came
+    from (None when it is ``text`` itself): Cf characters dropped, the rest NFKC-normalised."""
+    if text.isascii():
+        return text, None
+    out: list[str] = []
+    where: list[int] = []
+    for i, c in enumerate(text):
+        if c.isascii():
+            out.append(c)
+            where.append(i)
+            continue
+        if unicodedata.category(c) == "Cf":
+            continue
+        for n in unicodedata.normalize("NFKC", c):
+            out.append(n)
+            where.append(i)
+    where.append(len(text))
+    return "".join(out), where
 
 
 # ---------------------------------------------------------------- rules
 _KEY_WORDS = (
     r"passw(?:or)?d|passwd|pwd|passphrase|secret|token|api[_-]?key|apikey|access[_-]?key"
     r"|private[_-]?key|auth[_-]?key|credential|client[_-]?secret|session[_-]?key"
+    # short words only as a whole part of the key (DB_PASS, db.pw, session-id; not bypass, pwm)
+    r"|(?<![a-z0-9])(?:pass|pw|sessid|session[_-]?id|cookie)(?![a-z0-9])"
 )
 
 
@@ -201,8 +232,37 @@ _RULES: tuple[_Rule, ...] = (
     _r("token", r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}"),
     _r("token", r"\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}"),
     _r("token", r"(?i)\bbearer\s+(?P<v>[A-Za-z0-9._~+/=-]{16,})", "v"),
+    # Authorization: <scheme> <credential> (header, JSON or YAML); Digest's parameters to the end
+    _r(
+        "token",
+        r"(?i)\b(?:proxy-)?authorization[\"']?\s*[:=]\s*[\"']?"
+        r"(?:basic|bearer|token|apikey|api-key|key|negotiate|ntlm|aws4-hmac-sha256)\s+"
+        r"(?P<v>[A-Za-z0-9._~+/=:,-]{3,})",
+        "v",
+    ),
+    _r(
+        "token",
+        r"(?i)\b(?:proxy-)?authorization[\"']?\s*[:=]\s*[\"']?digest\s+(?P<v>[^\r\n]+)",
+        "v",
+    ),
+    # Cookie: a=b; c=d / Set-Cookie: id=...; Path=/ -- the whole header value
+    _r(
+        "secret",
+        r"(?im)(?:^|(?<=[\"'\s]))(?P<k>(?:set-)?cookie)[\"']?[ \t]*:[ \t]*[\"']?"
+        r"(?P<v>[^\r\n\"']*=[^\r\n\"']*)",
+        "v",
+        _is_keyed_secret,
+    ),
     # user:password@ in a URL
     _r("secret", r"(?i)\b[a-z][a-z0-9+.-]*://[^\s:/@]+:(?P<v>[^\s@/]+)@", "v"),
+    # "key": "a quoted value", key: 'with spaces in it' (the whole quoted value)
+    _r(
+        "secret",
+        rf"(?i)(?<![\w-])(?P<k>[\w.-]*(?:{_KEY_WORDS})[\w.-]*)[\"']?\s*(?:[:=]|=>)\s*"
+        r"(?P<q>[\"'])(?P<v>(?:(?!(?P=q))[^\r\n\\]|\\.){1,512})(?P=q)",
+        "v",
+        _is_keyed_secret,
+    ),
     # key=value, key: value, "key": "value", key => value
     _r(
         "secret",
@@ -267,8 +327,10 @@ _RULES: tuple[_Rule, ...] = (
 )
 _IPV4_RE = re.compile(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w]|\.\d)")
 _IPV6_RE = re.compile(
-    r"(?<![\w:.])(?:(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}"
-    r"|(?=[0-9A-Fa-f:]*::)[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7})(?![\w:])"
+    # with an embedded IPv4 tail first (::ffff:a.b.c.d is one address, not "::ffff:a" and a rest)
+    r"(?<![\w:.])(?:(?:[0-9A-Fa-f]{0,4}:){2,6}\d{1,3}(?:\.\d{1,3}){3}(?![\w.:])"
+    r"|(?:(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}"
+    r"|(?=[0-9A-Fa-f:]*::)[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7})(?![\w:]|\.\d))"
 )
 
 
@@ -300,7 +362,21 @@ class Screener:
 
     # -- detection
     def find(self, text: str) -> list[tuple[int, int, str, str]]:
-        """Non-overlapping ``(start, end, type, normalised value)`` spans, by position."""
+        """Non-overlapping ``(start, end, type, normalised value)`` spans of ``text``, by
+        position (found on the folded view, see the module doc)."""
+        folded, where = _fold(text)
+        spans = self._find(folded)
+        if where is None:
+            return spans
+        out: list[tuple[int, int, str, str]] = []
+        for s, e, t, v in spans:
+            start, end = where[s], where[e - 1] + 1
+            if out and start < out[-1][1]:  # two folded spans from one original character
+                continue
+            out.append((start, end, t, v))
+        return out
+
+    def _find(self, text: str) -> list[tuple[int, int, str, str]]:
         cands: list[tuple[int, int, int, str, str]] = []
         on = set(self.types)
 

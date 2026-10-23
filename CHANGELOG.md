@@ -102,6 +102,7 @@ has no section below.
 - Handoff action parameters (G-04): `is_constrained` no longer accepts schemas that admit free text: an array with `prefixItems` (outside `items`), an object with `patternProperties` (keys that bypass `additionalProperties: false`), any `$ref` or combinator, and a "closed" pattern whose class lists everything (`[ -~]`, `[\u0000-\U0010FFFF]`), matches whitespace or has no length bound; such fields reached broker request params from a reader.
 - Context packs and prompt templates: a fake `instructions [stable]` header in untrusted text is escaped on every line boundary (CR, VT, FF, NEL, U+2028, U+2029, not only LF) and behind zero-width or BOM prefixes; the template lint and the injection eval's fake model read lines the same way, and the corpus (version 2) has four cases for it.
 - The agent-activity hook (`hooks/claude_code_activity.py --post`) follows no redirect (urllib copied the bearer token to whatever host a 302 named) and sends its token only to an `https://` URL, or plain `http://` to a loopback address.
+- The shared screener (context packs, the activity hook's spool tier) redacts credential shapes it missed: a quoted password-style value with spaces (JSON, YAML), `DB_PASS=`/`_PW=` style keys, `Authorization:` credentials of every scheme (Basic, Digest, Token, short Bearer), `Cookie:`/`Set-Cookie:` values and IPv4-mapped IPv6 addresses as one address; matching ignores zero-width and other format characters and folds Unicode digits.
 
 ### Added
 
