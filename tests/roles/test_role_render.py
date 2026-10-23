@@ -395,6 +395,13 @@ REJECTED = {
     "cap_add CAP_ALL": lambda s: s["services"]["web"].update(cap_add=["CAP_ALL"]),
     "user root": lambda s: s["services"]["web"].update(user="root"),
     "user 0:0": lambda s: s["services"]["web"].update(user="0:0"),
+    "user 00": lambda s: s["services"]["web"].update(user="00"),
+    "user 000:0": lambda s: s["services"]["web"].update(user="000:0"),
+    "user root:root": lambda s: s["services"]["web"].update(user="root:root"),
+    "user as the integer 0": lambda s: s["services"]["web"].update(user=0),
+    "group 0": lambda s: s["services"]["web"].update(user="1000:0"),
+    "group 000": lambda s: s["services"]["web"].update(user="1000:000"),
+    "group root": lambda s: s["services"]["web"].update(user="1000:root"),
     "bad mem_limit": lambda s: s["services"]["web"].update(mem_limit="lots"),
 }
 

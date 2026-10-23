@@ -133,9 +133,11 @@ membership change. `role_lint.py --playbook X --inventory Y` fails a playbook wh
   unchanged and the kernel reads them as `/` and docker's state.
 * A privileged container or a dangerous `cap_add`, a container-runtime socket or state
   directory (docker, containerd, podman, CRI-O; or host root, `/run`, `/var`) bind mount, and an
-  explicit root `user` are refused unless
+  explicit root `user` (the user or the group `root` or zero in any spelling: `0`, `00`,
+  `000:0`, `1000:0`, `root:root`) are refused unless
   `compose_app_allow_privileged`, `compose_app_allow_docker_socket` or
-  `compose_app_allow_root` is set.
+  `compose_app_allow_root` is set. A service with no `user:` runs as its image's default user,
+  often root: set `user:` to a non-root id.
 
 ## 7. Linter rules
 

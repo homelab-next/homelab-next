@@ -74,7 +74,9 @@
       - item.value.cap_add | default([]) | reject('match', '^[A-Z][A-Z_]*\Z') | list | length == 0
       - item.value.cap_add | default([]) | map('regex_replace', '^CAP_', '') | intersect(compose_app_dangerous_caps) | length == 0 or compose_app_allow_privileged | bool
       - item.value.user is not defined or (item.value.user | string) is match('^[A-Za-z0-9_][A-Za-z0-9_.-]*(:[A-Za-z0-9_][A-Za-z0-9_.-]*)?\Z')
-      - item.value.user is not defined or (item.value.user | string).split(':')[0] not in ['0', 'root'] or compose_app_allow_root | bool
+      # root in any spelling: the runtime reads a numeric user or group as a number (00, 000:0),
+      # so a zero, the name root, and root as the group are all refused
+      - item.value.user is not defined or compose_app_allow_root | bool or (item.value.user | string).split(':') | select('match', '^(?:root|0+)\Z') | list | length == 0
       - item.value.read_only | default(false) is boolean
       - item.value.mem_limit is not defined or (item.value.mem_limit | string) is match('^[0-9]+[bkmgBKMG]?\Z')
       - item.value.env_file | default([]) | reject('string') | list | length == 0
@@ -83,8 +85,8 @@
       belong in compose_app_secret_env (a *_FILE pointer is fine); ports must be host_ip:host_port:container_port;
       a volume source must be canonical (no //, no . or .. component, no trailing /); a container-runtime
       socket (docker, containerd, podman, CRI-O) or host-root mount needs compose_app_allow_docker_socket; privileged, or cap_add of
-      {{ compose_app_dangerous_caps }}, needs compose_app_allow_privileged; running as root needs
-      compose_app_allow_root; mem_limit looks like 256m
+      {{ compose_app_dangerous_caps }}, needs compose_app_allow_privileged; running as root (user or group root or
+      0, written any way) needs compose_app_allow_root; mem_limit looks like 256m
   loop: "{{ compose_app_spec.services | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
