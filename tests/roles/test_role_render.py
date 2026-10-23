@@ -260,6 +260,8 @@ def app_vars(tmp_path, s=None, **kw):
         "compose_app_group": GROUP,
         "compose_app_start": False,
         "compose_app_validate_with_docker": docker_compose_ok(),
+        # spec() mounts /srv/shared, outside the app's own directories: listed with its reason
+        "compose_app_bind_extra": [{"path": "/srv/shared", "reason": "fictional shared media"}],
     }
     d.update(kw)
     return d
@@ -473,27 +475,99 @@ def test_compose_app_writes_every_dollar_so_compose_reads_it_literally(tmp_path)
 
 
 def test_compose_app_accepts_ordinary_bind_sources(tmp_path):
-    """The canonical-source and runtime rules leave ordinary mounts alone (hidden directories,
-    /run/secrets, a journal socket directory, the project directory itself)."""
+    """Relative sources, named volumes, paths under the bind roots and a listed path (hidden
+    directories included) pass the allow-list, the canonical-source and the runtime rules."""
+    data = tmp_path / "app" / "data"
     vols = [
         ".:/src:ro",
         "./data/web:/var/lib/web",
-        "/srv/.config/app:/config:ro",
-        "/run/secrets/app:/run/secrets/app:ro",
+        f"{data}/.config/app:/config:ro",
+        f"{data}:/state",
+        "/srv/shared:/shared:ro",
         "/run/systemd/journal:/run/systemd/journal:ro",
-        "/var/log/app:/logs",
-        "/var/lib/app:/state",
         "named-volume:/cache",
     ]
-    s = spec(volumes=vols)
+    extra = [
+        {"path": "/srv/shared", "reason": "fictional shared media"},
+        {"path": "/run/systemd/journal", "reason": "the journal socket, read-only"},
+    ]
     r = run_role(
         tmp_path,
         "compose_app",
         "main",
-        app_vars(tmp_path, s, compose_app_validate_with_docker=False),
-    )
+        app_vars(
+            tmp_path, spec(volumes=vols), compose_app_validate_with_docker=False,
+            compose_app_bind_extra=extra,
+        ),
+    )  # fmt: skip
     assert r.returncode == 0, r.stdout + r.stderr
     assert services_of(tmp_path)["web"]["volumes"] == vols
+
+
+OUTSIDE_THE_ROOTS = [
+    "/etc:/host-etc",
+    "/proc:/host-proc",
+    "/dev:/host-dev",
+    "/boot:/b",
+    "/root:/r",
+    "/run/systemd:/s",
+    "/var/run/dbus/system_bus_socket:/d.sock",
+    "/run/buildkit/buildkitd.sock:/b.sock",
+    "/var/lib/rancher:/k3s",
+    "/var/log/app:/logs",
+    "/srv/other:/o",
+]
+
+
+@pytest.mark.parametrize("vol", OUTSIDE_THE_ROOTS)
+def test_compose_app_refuses_a_host_path_outside_the_bind_roots(tmp_path, vol):
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, spec(volumes=[vol]), compose_app_validate_with_docker=False),
+    )
+    assert r.returncode != 0
+    assert "mounts a host path outside the allowed roots" in r.stdout + r.stderr
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def test_compose_app_bind_root_is_a_directory_boundary(tmp_path):
+    # a sibling whose name only starts like the data root is outside it
+    vol = f"{tmp_path / 'app'}-other:/x"
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, spec(volumes=[vol]), compose_app_validate_with_docker=False),
+    )
+    assert r.returncode != 0
+    assert "outside the allowed roots" in r.stdout + r.stderr
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"compose_app_bind_roots": ["/var"]},
+        {"compose_app_bind_roots": ["/"]},
+        {"compose_app_bind_roots": ["/etc"]},
+        {"compose_app_bind_roots": ["relative/dir"]},
+        {"compose_app_bind_roots": ["/var/lib/docker"]},
+        {"compose_app_bind_extra": [{"path": "/srv/shared"}]},
+        {"compose_app_bind_extra": [{"path": "/srv/shared", "reason": "x"}]},
+        {"compose_app_bind_extra": [{"path": "/etc", "reason": "fictional, far too wide"}]},
+    ],
+    ids=["var", "root", "etc", "relative", "docker", "no reason", "short reason", "etc listed"],
+)
+def test_compose_app_refuses_a_bind_root_or_listing_that_is_too_wide(tmp_path, over):
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, compose_app_validate_with_docker=False, **over),
+    )
+    assert r.returncode != 0
+    assert "compose_app_bind_roots must be" in r.stdout + r.stderr
 
 
 def services_of(tmp_path):

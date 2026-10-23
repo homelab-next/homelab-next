@@ -106,6 +106,74 @@
   loop_control:
     label: "{{ item.key }}"
 
+# Bind sources are an allow-list: a host path is mounted only when it lies under one of
+# compose_app_bind_roots (the application's own directories by default) or is listed on its own,
+# with a reason, in compose_app_bind_extra. A relative source (./x) stays in the project directory
+# and a named volume is docker's; anything else on the host (/etc, /proc, /dev, /root, the
+# systemd and D-Bus sockets, another runtime's state) is refused, and the runtime sockets still
+# need compose_app_allow_docker_socket on top.
+- name: Validate the bind roots and listed bind sources
+  ansible.builtin.assert:
+    that:
+      - compose_app_bind_roots is sequence and compose_app_bind_roots is not string
+      - compose_app_bind_roots | reject('string') | list | length == 0
+      - compose_app_bind_roots | reject('match', '^/') | list | length == 0
+      - compose_app_bind_roots | select('search', compose_app_interpolated_volume_pattern) | list | length == 0
+      - compose_app_bind_roots | select('search', compose_app_noncanonical_source_pattern) | list | length == 0
+      - compose_app_bind_roots | select('match', compose_app_host_wide_pattern) | list | length == 0
+      - compose_app_bind_roots | select('search', compose_app_docker_socket_pattern) | list | length == 0
+      - compose_app_bind_extra is sequence and compose_app_bind_extra is not string
+      - compose_app_bind_extra | reject('mapping') | list | length == 0
+      - compose_app_bind_extra | rejectattr('path', 'defined') | list | length == 0
+      - compose_app_bind_extra | rejectattr('reason', 'defined') | list | length == 0
+      - compose_app_bind_extra | map(attribute='path') | reject('string') | list | length == 0
+      - compose_app_bind_extra | map(attribute='path') | reject('match', '^/') | list | length == 0
+      - compose_app_bind_extra | map(attribute='path') | select('search', compose_app_interpolated_volume_pattern) | list | length == 0
+      - compose_app_bind_extra | map(attribute='path') | select('search', compose_app_noncanonical_source_pattern) | list | length == 0
+      - compose_app_bind_extra | map(attribute='path') | select('match', compose_app_host_wide_pattern) | list | length == 0
+      - compose_app_bind_extra | map(attribute='reason') | map('string') | map('trim') | select('match', '^.{10,}') | list | length == compose_app_bind_extra | length
+    fail_msg: >-
+      compose_app_bind_roots must be a list of absolute, canonical directories, none of them a
+      host-wide directory (/, /etc, /proc, /sys, /dev, /boot, /root, /run, /var, /var/lib, /usr,
+      /home, /opt, /srv, /tmp ...) or a container-runtime path; compose_app_bind_extra must be a list
+      of {path, reason} with an absolute, canonical path and a reason of at least 10 characters
+
+- name: Validate each service (bind sources inside the allowed roots)
+  vars:
+    _compose_app_outside: >-
+      {%- set roots = compose_app_bind_roots | list -%}
+      {%- set listed = compose_app_bind_extra | map(attribute='path') | list -%}
+      {%- set out = [] -%}
+      {%- for v in item.value.volumes | default([]) -%}
+      {%-   set src = v | regex_replace('(?s):.*', '') -%}
+      {%-   set ns = namespace(ok=false) -%}
+      {%-   if src is match('^\./|^\.\Z') -%}
+      {%-     set ns.ok = true -%}
+      {%-   elif src is match('^[A-Za-z0-9][A-Za-z0-9_.-]*\Z') -%}
+      {%-     set ns.ok = true -%}
+      {%-   elif src is match('^/') -%}
+      {%-     if src in listed -%}{%- set ns.ok = true -%}{%- endif -%}
+      {%-     for r in roots -%}
+      {%-       if src == r or src.startswith(r ~ '/') -%}{%- set ns.ok = true -%}{%- endif -%}
+      {%-     endfor -%}
+      {%-     if compose_app_allow_docker_socket | bool and src is search(compose_app_docker_socket_pattern) -%}
+      {%-       set ns.ok = true -%}
+      {%-     endif -%}
+      {%-   endif -%}
+      {%-   if not ns.ok -%}{%- set _ = out.append(src) -%}{%- endif -%}
+      {%- endfor -%}
+      {{ out | join(' ') }}
+  ansible.builtin.assert:
+    that:
+      - _compose_app_outside | length == 0
+    fail_msg: >-
+      service '{{ item.key }}' mounts a host path outside the allowed roots ({{ _compose_app_outside }}):
+      a bind source must be ./relative, a named volume, under compose_app_bind_roots
+      ({{ compose_app_bind_roots | join(', ') }}) or listed with a reason in compose_app_bind_extra
+  loop: "{{ compose_app_spec.services | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
 # The values are never echoed: no_log hides the item, the label and the failure message alike.
 - name: Validate secret environment files
   ansible.builtin.assert:

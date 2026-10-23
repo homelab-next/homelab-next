@@ -131,6 +131,12 @@ membership change. `role_lint.py --playbook X --inventory Y` fails a playbook wh
 * Every value is written with `$` doubled (`$$`), so docker compose never interpolates the
   deploy host's environment into the file, and a volume holding `$` or a source starting with `~`
   is refused outright (`${X:-/}:/host` is the host root once compose has read it).
+* Bind sources are an allow-list: a host path is mounted only under `compose_app_bind_roots`
+  (the application's own directory and data directory by default; never a host-wide directory
+  such as `/etc`, `/var` or `/srv`) or when it is listed on its own, with a reason, in
+  `compose_app_bind_extra` (`[{path, reason}]`). A `./relative` source and a named volume need
+  neither. Everything else (`/etc`, `/proc`, `/dev`, `/boot`, `/root`, `/run/systemd`, the D-Bus
+  and buildkitd sockets, another runtime's state) is refused.
 * A volume's bind source must be canonical (no `//`, no `.` or `..` component other than a
   leading `./`, no trailing `/`): compose passes `/.`, `//` and `/var//lib/docker` through
   unchanged and the kernel reads them as `/` and docker's state.

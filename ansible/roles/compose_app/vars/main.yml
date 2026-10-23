@@ -20,6 +20,9 @@ compose_app_noncanonical_source_pattern: '//|(?:^|/)\.\.(?:/|\Z)|/\.(?:/|\Z)|./\
 # a volume compose would interpolate: any `$` (${X:-/}, $HOME) or a source starting with `~`; the
 # template writes `$` as `$$`, so this only keeps a spec from relying on interpolation at all
 compose_app_interpolated_volume_pattern: '\$|^~'
+# a directory too wide to be a bind root or a listed bind source: it holds the host's own
+# configuration, devices, kernel interfaces, users' homes or every other application's data
+compose_app_host_wide_pattern: '^/(?:etc|proc|sys|dev|boot|root|run|var|var/run|var/lib|var/log|usr|usr/local|home|opt|srv|mnt|media|tmp|lib|lib64|bin|sbin)?\Z'
 compose_app_sensitive_name_pattern: '(?i)(password|passwd|secret|token|api_?key|private_?key|credential)'
 # capabilities that amount to privileged: refused in cap_add unless compose_app_allow_privileged
 compose_app_dangerous_caps:
