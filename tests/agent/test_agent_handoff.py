@@ -371,6 +371,13 @@ def test_closed_patterns(pattern, closed):
         ({"type": "string", "pattern": "^[a-z]{1,63}$"}, True),
         ({"type": "string", "pattern": "^[a-z]+$"}, False),  # no length bound
         ({"type": "string", "pattern": "^[a-z]{1,}$"}, False),
+        # repeats are read on the parsed tree and capped
+        ({"type": "string", "pattern": "^[a-z]{0,4096}$"}, True),
+        ({"type": "string", "pattern": "^[a-z]{0,4097}$"}, False),
+        ({"type": "string", "pattern": "^[a-z]{0,4294967294}$"}, False),
+        ({"type": "string", "pattern": "^(?:[a-z]{1,9}){1,999}$"}, True),
+        ({"type": "string", "pattern": "^[a-z]{0,4294967294}$", "maxLength": 64}, True),
+        ({"type": "string", "pattern": "^[a-z]*+$"}, False),
         # items does not apply to the prefixItems positions (2020-12)
         ({"type": "array", "prefixItems": [{"type": "string"}], "items": {"enum": ["a"]}}, False),
         # keys matching a patternProperties pattern bypass additionalProperties: false

@@ -36,7 +36,6 @@ actor at its tier.
 from __future__ import annotations
 
 import copy
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -74,8 +73,8 @@ class HandoffRefused(AgentError):
 _CLASS_PUNCT = frozenset("-_.:/@+=,~%")
 # ranges a class may span: within one of these
 _CLASS_RANGES = (("0", "9"), ("a", "z"), ("A", "Z"))
-# a quantifier with no upper bound
-_UNBOUNDED = re.compile(r"(?<!\\)(?:\\\\)*(?:[*+]|\{\d*,\})")
+#: the largest repeat count a closed pattern may give without a ``maxLength``
+MAX_REPEAT = 4096
 
 
 def _narrow_char(c: str) -> bool:
@@ -203,12 +202,36 @@ def is_closed_pattern(pattern: str) -> bool:
     return _narrow_tree(tree, c) and not _can_lead_with(tree, "-", c)[0]
 
 
+def _repeats_bounded(sub: Any, c: Any) -> bool:
+    """Every repeat in the parsed pattern has an upper bound of at most :data:`MAX_REPEAT`."""
+    for op, av in sub:
+        if op in (c.MAX_REPEAT, c.MIN_REPEAT, getattr(c, "POSSESSIVE_REPEAT", None)):
+            if av[1] == c.MAXREPEAT or av[1] > MAX_REPEAT:
+                return False
+            children = [av[2]]
+        elif op is c.SUBPATTERN:
+            children = [av[-1]]
+        elif op is getattr(c, "ATOMIC_GROUP", None):
+            children = [av]
+        elif op is c.BRANCH:
+            children = list(av[1])
+        elif op in (c.ASSERT, c.ASSERT_NOT):
+            children = [av[1]]
+        else:
+            continue
+        if not all(_repeats_bounded(child, c) for child in children):
+            return False
+    return True
+
+
 def _length_bounded(schema: Mapping[str, Any]) -> bool:
-    """A string schema whose values have a bounded length: a ``maxLength``, or a pattern with no
-    unbounded quantifier (``*``, ``+``, ``{n,}``)."""
+    """A string schema whose values have a bounded length: a ``maxLength``, or a pattern whose
+    parsed repeats each have an upper bound of at most :data:`MAX_REPEAT` (read on the tree,
+    like the rest of the check: ``{0,4294967294}`` is not a bound)."""
     if isinstance(schema.get("maxLength"), int) and not isinstance(schema["maxLength"], bool):
         return True
-    return not _UNBOUNDED.search(str(schema.get("pattern")))
+    parsed = _parse(str(schema.get("pattern")))
+    return parsed is not None and _repeats_bounded(*parsed)
 
 
 # keywords that apply a schema to child values the checked keywords do not cover (prefixItems
