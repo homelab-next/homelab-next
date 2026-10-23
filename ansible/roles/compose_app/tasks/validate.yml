@@ -63,8 +63,10 @@
       # ports: an explicit host address, always
       - item.value.ports | default([]) | reject('string') | list | length == 0
       - item.value.ports | default([]) | reject('match', compose_app_port_pattern) | list | length == 0
-      # volumes: short syntax only; no docker socket and no host root or /run unless allowed
+      # volumes: short syntax only; every bind source canonical (the rule below matches text, the
+      # kernel resolves /. and // to /); no runtime socket and no host root or /run unless allowed
       - item.value.volumes | default([]) | reject('string') | list | length == 0
+      - item.value.volumes | default([]) | map('regex_replace', '(?s):.*', '') | select('search', compose_app_noncanonical_source_pattern) | list | length == 0
       - item.value.volumes | default([]) | select('search', compose_app_docker_socket_pattern) | list | length == 0 or compose_app_allow_docker_socket | bool
       # privilege
       - not (item.value.privileged | default(false) | bool) or compose_app_allow_privileged | bool
@@ -79,7 +81,8 @@
     fail_msg: >-
       service '{{ item.key }}' is refused: environment keys must be plain names and secret-looking ones
       belong in compose_app_secret_env (a *_FILE pointer is fine); ports must be host_ip:host_port:container_port;
-      a docker socket or host-root mount needs compose_app_allow_docker_socket; privileged, or cap_add of
+      a volume source must be canonical (no //, no . or .. component, no trailing /); a container-runtime
+      socket (docker, containerd, podman, CRI-O) or host-root mount needs compose_app_allow_docker_socket; privileged, or cap_add of
       {{ compose_app_dangerous_caps }}, needs compose_app_allow_privileged; running as root needs
       compose_app_allow_root; mem_limit looks like 256m
   loop: "{{ compose_app_spec.services | dict2items }}"

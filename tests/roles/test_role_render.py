@@ -355,6 +355,41 @@ REJECTED = {
     ),
     "docker socket via /run": lambda s: s["services"]["web"].update(volumes=["/run:/host-run"]),
     "host root": lambda s: s["services"]["web"].update(volumes=["/:/host:ro"]),
+    "host root as /.": lambda s: s["services"]["web"].update(volumes=["/.:/host"]),
+    "host root as //": lambda s: s["services"]["web"].update(volumes=["//:/host"]),
+    "host root as /./": lambda s: s["services"]["web"].update(volumes=["/./:/host"]),
+    "docker state with a doubled slash": lambda s: s["services"]["web"].update(
+        volumes=["/var//lib/docker:/d"]
+    ),
+    "docker state with a trailing slash": lambda s: s["services"]["web"].update(
+        volumes=["/var/lib/docker/:/d"]
+    ),
+    "docker state through ..": lambda s: s["services"]["web"].update(
+        volumes=["/var/lib/app/../docker:/d"]
+    ),
+    "host root through a relative ..": lambda s: s["services"]["web"].update(
+        volumes=["../../../../../..:/host"]
+    ),
+    "containerd socket": lambda s: s["services"]["web"].update(
+        volumes=["/run/containerd/containerd.sock:/c.sock"]
+    ),
+    "containerd state": lambda s: s["services"]["web"].update(volumes=["/var/lib/containerd:/c"]),
+    "podman socket": lambda s: s["services"]["web"].update(
+        volumes=["/run/podman/podman.sock:/p.sock"]
+    ),
+    "rootless podman socket": lambda s: s["services"]["web"].update(
+        volumes=["/run/user/1000/podman/podman.sock:/p.sock"]
+    ),
+    "rootless runtime directory": lambda s: s["services"]["web"].update(
+        volumes=["/run/user/1000:/u"]
+    ),
+    "cri-o socket": lambda s: s["services"]["web"].update(
+        volumes=["/var/run/crio/crio.sock:/c.sock"]
+    ),
+    "podman storage": lambda s: s["services"]["web"].update(
+        volumes=["/var/lib/containers/storage:/s"]
+    ),
+    "all of /var": lambda s: s["services"]["web"].update(volumes=["/var:/v"]),
     "privileged": lambda s: s["services"]["web"].update(privileged=True),
     "cap_add SYS_ADMIN": lambda s: s["services"]["web"].update(cap_add=["SYS_ADMIN"]),
     "cap_add CAP_ALL": lambda s: s["services"]["web"].update(cap_add=["CAP_ALL"]),
@@ -376,6 +411,30 @@ def test_compose_app_rejects_spec_violation(tmp_path, case):
     )
     assert r.returncode != 0, case
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def test_compose_app_accepts_ordinary_bind_sources(tmp_path):
+    """The canonical-source and runtime rules leave ordinary mounts alone (hidden directories,
+    /run/secrets, a journal socket directory, the project directory itself)."""
+    vols = [
+        ".:/src:ro",
+        "./data/web:/var/lib/web",
+        "/srv/.config/app:/config:ro",
+        "/run/secrets/app:/run/secrets/app:ro",
+        "/run/systemd/journal:/run/systemd/journal:ro",
+        "/var/log/app:/logs",
+        "/var/lib/app:/state",
+        "named-volume:/cache",
+    ]
+    s = spec(volumes=vols)
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, s, compose_app_validate_with_docker=False),
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert services_of(tmp_path)["web"]["volumes"] == vols
 
 
 def services_of(tmp_path):

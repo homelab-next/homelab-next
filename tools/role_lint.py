@@ -55,7 +55,7 @@ RULES = {
     "RL011": "a task references a secret-looking variable without no_log: true",
     "RL012": "a task uses the shell/raw module, or gives command a templated free-form string",
     "RL013": "a task or variable turns TLS certificate validation off (validate_certs: false)",
-    "RL014": "a privileged container or a docker.sock mount appears in defaults/vars/templates",
+    "RL014": "a privileged container or a container-runtime socket mount appears in defaults/vars/templates",
     "PB001": "a playbook targets a hostname instead of a capability group",
     "PB002": "a playbook has no hosts: pattern",
 }
@@ -435,7 +435,8 @@ def _check_tasks(role: Path, findings: list[Finding]) -> None:
 
 
 PRIVILEGED = re.compile(
-    r"(?:(?<![A-Za-z])privileged['\"]?\s*[:=]\s*['\"]?(?:true|yes|on|1)\b|--privileged\b|docker\.sock)",
+    r"(?:(?<![A-Za-z])privileged['\"]?\s*[:=]\s*['\"]?(?:true|yes|on|1)\b|--privileged\b"
+    r"|(?:docker|containerd|podman|crio|cri-dockerd)\.sock)",
     re.I,
 )
 

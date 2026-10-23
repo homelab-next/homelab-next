@@ -52,7 +52,8 @@ A hook that cannot be implemented yet still exists and says so explicitly
 * A task that uses a secret-looking variable carries `no_log: true` (RL011). No
   `shell` or `raw`, and no `command` given a templated free-form string: use `argv`
   (RL012). TLS validation is never turned off (RL013). No privileged container or
-  docker socket in `defaults/`, `vars/` or `templates/` (RL014).
+  container-runtime socket (docker, containerd, podman, CRI-O) in `defaults/`, `vars/` or
+  `templates/` (RL014).
 * Versions are pinned; in real use they come from the registry row.
 
 ## 4. Service names come from the registry
@@ -127,8 +128,12 @@ membership change. `role_lint.py --playbook X --inventory Y` fails a playbook wh
 * Secrets never go in `environment` (a secret-looking key is refused unless it ends
   in `_FILE`). They go in `compose_app_secret_env`, which the role writes to
   `secrets/<service>.env` (mode 0600, `no_log`, no diff) and passes as an `env_file`.
-* A privileged container or a dangerous `cap_add`, a docker socket (or host root,
-  `/run`) bind mount, and an explicit root `user` are refused unless
+* A volume's bind source must be canonical (no `//`, no `.` or `..` component other than a
+  leading `./`, no trailing `/`): compose passes `/.`, `//` and `/var//lib/docker` through
+  unchanged and the kernel reads them as `/` and docker's state.
+* A privileged container or a dangerous `cap_add`, a container-runtime socket or state
+  directory (docker, containerd, podman, CRI-O; or host root, `/run`, `/var`) bind mount, and an
+  explicit root `user` are refused unless
   `compose_app_allow_privileged`, `compose_app_allow_docker_socket` or
   `compose_app_allow_root` is set.
 
@@ -150,7 +155,7 @@ membership change. `role_lint.py --playbook X --inventory Y` fails a playbook wh
 | RL011 | secret-looking variable used in a task without `no_log: true` |
 | RL012 | `shell`/`raw`, or `command` with a templated free-form string |
 | RL013 | `validate_certs: false` |
-| RL014 | privileged container or docker socket in defaults/vars/templates |
+| RL014 | privileged container or container-runtime socket (docker, containerd, podman, CRI-O) in defaults/vars/templates |
 | PB001 | playbook targets a hostname instead of a capability group |
 | PB002 | play without `hosts:` |
 
