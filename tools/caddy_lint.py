@@ -1144,7 +1144,7 @@ def _is_auth(h: object) -> bool:
 
 def _proxy_dials(h: dict) -> list[str]:
     """Every string a ``reverse_proxy`` dials: its static upstreams and its dynamic ones."""
-    out = [str(u.get("dial", "")) for u in h.get("upstreams") or [] if isinstance(u, dict)]
+    out = [str(u.get("dial", "")).lower() for u in h.get("upstreams") or [] if isinstance(u, dict)]
     dyn = h.get("dynamic_upstreams")
     if isinstance(dyn, dict):
         out += [str(v) for v in dyn.values() if isinstance(v, (str, int))]

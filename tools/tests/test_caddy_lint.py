@@ -1768,7 +1768,7 @@ a.lab.example {
 	request_header -*authentik*
 	reverse_proxy /outpost.goauthentik.io/* authentik-server:9000
 	import hnx_forward_auth
-	reverse_proxy http://app:8080
+	reverse_proxy APP:8080
 }
 %s {
 	reverse_proxy app:8080
@@ -1913,3 +1913,9 @@ def test_a_comment_does_not_make_a_template_and_a_required_check_refuses_a_templ
 def test_live_round3_shapes(text, rules):
     doc, err = lint.Adapter(CADDY_BIN).adapt(text, None)
     assert err == "" and {rule for rule, _ in lint.judge_json(doc)} == rules
+
+
+def test_json_exposure_compares_dials_case_insensitively():
+    authed = _json_site(_del("*authentik*"), _fa(*IDS), _proxy("APP:8080"))
+    other = _json_site(_proxy("app:8080"), host="b.lab.example")
+    assert [r for r, _ in lint.judge_json(_config(authed, other))] == ["exposure"]
