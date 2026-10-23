@@ -199,6 +199,10 @@ def test_a_pytest_row_fails_when_its_tests_fail(tmp_path, monkeypatch):
     assert r["status"] == "fail"
 
 
+# loopback's discard port: a proxy that refuses every connection at once
+DEAD_PROXY = "http://127.0.0.1:9"  # no-raw-endpoint: allow a test proxy that nothing serves
+
+
 def test_q06_cannot_measure_without_the_network(monkeypatch):
     """pip-audit with no route to PyPI exits 1 with a ConnectionError traceback, which read as a
     FAIL of the security checks; an unreachable index is could-not-measure (exit 100)."""
@@ -208,7 +212,7 @@ def test_q06_cannot_measure_without_the_network(monkeypatch):
     # the observable's `python3` is this interpreter, which has ruff and pip-audit
     monkeypatch.setenv("PATH", f"{pathlib.Path(sys.executable).parent}:{os.environ['PATH']}")
     for var in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
-        monkeypatch.setenv(var, "http://127.0.0.1:9")  # the discard port: refused at once
+        monkeypatch.setenv(var, DEAD_PROXY)
     for var in ("NO_PROXY", "no_proxy"):
         monkeypatch.delenv(var, raising=False)
     r = _run(REPO, ["Q-06"])["Q-06"]
