@@ -50,7 +50,7 @@ from collections.abc import Collection, Iterable, Iterator, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from conformance.protocols.inference import ERROR_CODE, NAME, TURN_ID, TurnSourceError
+from conformance.protocols.inference import ERROR_CODE, TURN_ID, TurnSourceError, is_name
 from homelabnext._http import ResponseTooLarge, check_plaintext, credential_opener, read_bounded
 from homelabnext.registry import env_var_name
 from homelabnext.registry.model import secret_env_name
@@ -253,8 +253,11 @@ def _count(v: Any) -> int | None:
     return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
 
 
-def _name(v: Any) -> str | None:
-    return v if isinstance(v, str) and NAME.fullmatch(v) else None
+def _name(key: str, v: Any) -> str | None:
+    """``v`` when the turn record's ``key`` takes it (the one rule,
+    :func:`~conformance.protocols.inference.is_name`), else null: a gateway's odd name costs
+    that one field, never the turn."""
+    return v if is_name(key, v) else None
 
 
 def _cache_read(meta: Mapping[str, Any]) -> int | None:
@@ -295,9 +298,9 @@ def turn_from_row(row: Mapping[str, Any], tags: Iterable[str]) -> dict[str, Any]
         "started_at": iso(start),
         "duration_ms": _count(row.get("request_duration_ms")),
         "ttft_ms": round((first - start) * 1000) if first is not None and first >= start else None,
-        "model_role": _name(row.get("model_group")),  # LiteLLM's word for the role
-        "model": _name(row.get("model")),
-        "call_type": _name(row.get("call_type")),
+        "model_role": _name("model_role", row.get("model_group")),  # LiteLLM's word for it
+        "model": _name("model", row.get("model")),
+        "call_type": _name("call_type", row.get("call_type")),
         "status": row.get("status") if row.get("status") in ("success", "failure") else None,
         "error_code": code if ERROR_CODE.fullmatch(code) else None,
         "input_tokens": _count(row.get("prompt_tokens")),

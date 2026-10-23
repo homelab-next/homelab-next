@@ -76,11 +76,21 @@ as `agent.activity`'s summary tier ([status](status.md) ([[status]]) section 6):
   model role (the alias asked for, ADR-0007), model, call type, status, HTTP error code, token
   counts, cache-read tokens, cache hit, cost. The adapter reduces its product's row to it (for
   LiteLLM, `api_base`, `user`, `end_user`, the client address, the key hash, the rest of
-  `metadata` and any message or response column are dropped, and a name that is not name-shaped
-  is dropped rather than kept), and the store refuses any record with another field or a value of
+  `metadata` and any message or response column are dropped, and a name the record would refuse
+  is null rather than kept), and the store refuses any record with another field or a value of
   the wrong kind (`turn_problems`), so a new adapter cannot widen what is kept. `call_type` is the
   gateway's own name for the kind of call (LiteLLM: `acompletion` and so on): opaque, per
-  provider, for display and grouping only. The tests plant forbidden values (all fictional) and
+  provider, for display and grouping only. The names follow one rule, `is_name`, which the
+  record and every adapter share. `model` is up to 256 of `A-Za-z0-9._:/@+-`, and may start with
+  `/` (a vLLM path) or hold `//` (`hosted_vllm//models/x`), `@` before a version
+  (`model@v1.2`, `claude-sonnet@vertex.v2`) and `:` (`ollama:llama3`, a Bedrock ARN).
+  `model_role` and `call_type` are up to 128 of the same characters, start with a letter or a
+  digit, and never hold `//`. Neither ever holds whitespace, a control character, a URL scheme
+  (`:/`, so `https://` and `https:/x`), an IPv4 address, a `host:port/`, or a mail address (`@` and
+  a dotted domain whose last label is letters, `alice@example.com`). `alice@corp` is accepted: a
+  single label after `@` cannot be told from a deployment-qualified alias such as
+  `sonnet@vertex`. A pattern cannot refuse every disguise; it refuses what a careless source
+  emits. The tests plant forbidden values (all fictional) and
   check that neither the store file nor the page holds them.
 
 ## Data flow
@@ -138,7 +148,10 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
   first; keep the turns that carry a job's tag, and rewrite them by the call's id. A
   job is settled ten minutes after it finished (a gateway may write its log in batches), as soon
   as the last window it overlaps has been read; a failed read stops the pass but keeps what was
-  read and settled before it, and the next pass starts from the jobs still unsettled.
+  read and settled before it, and the next pass starts from the jobs still unsettled. A record
+  the source gives that is no turn record is dropped and counted (`N refused`, exit 1), and the
+  rest of its window is stored and settled: failing the window would read the same record, and
+  fail, on every later pass.
 - **Retention**: 90 days by default (`--retention-days`, a finite 1 to 3650: every read window is bounded by it), by finish time and turn start time. A
   record that arrives already older than that (a late replay, an old backfill) is counted
   `expired` by `consume` and `ingest`: acknowledged and not stored, neither processed nor poison.

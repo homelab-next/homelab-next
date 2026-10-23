@@ -11,7 +11,7 @@ import pytest
 from conformance.fakes.inference_target import FakeTurnSource, fake_turns
 from conformance.fakes.litellm_spend_log_api import KEY_ENV, NEVER, TAGS, WINDOW, FakeSpendLogs
 from conformance.fakes.litellm_spend_log_api import pages as fixture_pages
-from conformance.protocols.inference import TurnRecordsGateway, TurnSource, turn_problems
+from conformance.protocols.inference import TurnRecordsGateway, TurnSource, is_name, turn_problems
 from conformance.suites.inference import SUITE
 from homelabnext.conform.adapters.litellm_spend_log import (
     SpendLogError,
@@ -228,26 +228,67 @@ def test_every_spelling_of_the_master_key_is_refused(key):
         SpendLogReader("https://gateway.example.com", key)
 
 
+REAL_MODELS = [
+    "example-27b", "custom/hermes-agent", "llama3:8b", "ollama:llama3", "ollama/llama3.1:8b",
+    "meta-llama/Llama-3.1-8B-Instruct", "openrouter/x/y", "openrouter/meta-llama/llama-3:free",
+    "claude-3-5-sonnet-v2@20241022", "model@v1.2", "claude-sonnet@vertex.v2", "qwen2.5@q4.k_m",
+    "vertex_ai/gemini-1.5-pro@002", "hosted_vllm//models/x", "/models/Qwen2.5-72B-Instruct",
+    "/srv/models/example-27b", "hf.co/example/model-GGUF:Q4_K_M", "azure/gpt-4o",
+    "bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+    "arn:aws:bedrock:us-east-1:123456789012:inference-profile/"
+    "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/" + "a" * 150,
+]  # fmt: skip
+NOT_NAMES = [
+    "https://gateway.example.com/v1", "https:/gateway.example/v1", "ftp://x",
+    "s3://bucket/key", "alice@example.com", "ops@corp.example", "x@gateway.example.com/v1",
+    "has spaces", "tab\there", "new\nline", "nul\x00", "bell\x07", "", "-leading-dash",
+    "192.0.2.5", "192.0.2.5:8443", "gw.example:8443/v1", "a" * 257,  # no-raw-endpoint: allow refused names
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("value", REAL_MODELS)
+def test_a_real_model_name_is_a_name(value):
+    assert is_name("model", value), value
+
+
+@pytest.mark.parametrize("value", NOT_NAMES)
+@pytest.mark.parametrize("key", ["model", "model_role", "call_type"])
+def test_a_url_an_address_or_text_is_no_name(key, value):
+    from conformance.fakes.inference_target import fake_turns
+
+    assert not is_name(key, value)
+    assert f"{key} is not a name" in turn_problems(fake_turns()[0] | {key: value})
+
+
 @pytest.mark.parametrize(
-    "key, value, ok",
+    "value, model, label",
     [
-        ("model", "meta-llama/Llama-3.1-8B-Instruct", True),
-        ("model", "llama3:8b", True),
-        ("model", "claude-3-5-sonnet-v2@20241022", True),
-        ("model", "custom/hermes-agent", True),
-        ("model_role", "smart", True),
-        ("call_type", "acompletion", True),
-        ("model", "https://gateway.example.com/v1", False),
-        ("model", "gateway.example.com//v1", False),
-        ("model", "alice@example.com", False),
-        ("model_role", "smart@example", False),
-        ("call_type", "alice@example.com", False),
-        ("call_type", "http://x", False),
+        ("sonnet@vertex", True, True),  # a deployment-qualified alias, not a mailbox (documented)
+        ("alice@corp", True, True),  # the same shape: no dotted domain, so accepted
+        ("hosted_vllm//models/x", True, False),  # a provider prefix and a path: model only
+        ("/models/x", True, False),
+        ("mdl:triage-large", True, True),
+        ("acompletion", True, True),
+        ("x" * 128, True, True),
+        ("x" * 129, True, False),
     ],
 )
-def test_a_name_is_never_a_url_or_an_address(key, value, ok):
-    from conformance.fakes.inference_target import fake_turns
-    from conformance.protocols.inference import turn_problems
+def test_the_model_rule_and_the_label_rule_differ(value, model, label):
+    assert (is_name("model", value), is_name("model_role", value)) == (model, label)
+    assert is_name("call_type", value) == label
 
-    probs = turn_problems(fake_turns()[0] | {key: value})
-    assert probs == [] if ok else probs == [f"{key} is not a name"], probs
+
+def test_the_adapter_and_the_record_share_one_name_rule():
+    """The adapter maps a value the record would refuse to null, so a gateway's odd name costs
+    that one field, never the whole window (a refused turn wedged every later sync)."""
+    row = dict(ROWS[0])
+    for value in [*NOT_NAMES, "hosted_vllm//models/x", "sonnet@vertex.example.com"]:
+        for col, key in (
+            ("model", "model"),
+            ("model_group", "model_role"),
+            ("call_type", "call_type"),
+        ):
+            turn = turn_from_row(row | {col: value}, TAGS_SET)
+            assert turn_problems(turn) == [], (col, value)
+            assert turn[key] == (value if is_name(key, value) else None), (col, value)

@@ -149,7 +149,7 @@
      "messages": "fake prompt text that must never be stored",
      "response": "fake model output that must never be stored",
      "request_id": "req-b1",
-     "call_type": "acompletion",
+     "call_type": "ops@upstream.example.com",
      "spend": 0.0,
      "total_tokens": 9400,
      "prompt_tokens": 9000,
@@ -198,7 +198,7 @@
      "endTime": "2026-01-01T02:00:09Z",
      "completionStartTime": "2026-01-01T02:00:05.500000Z",
      "request_duration_ms": 4000,
-     "model": "example-4b",
+     "model": "https://upstream.example.com/v1/models/example-4b",
      "model_group": "mdl:triage-small",
      "cache_hit": "False",
      "request_tags": [

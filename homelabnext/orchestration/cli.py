@@ -31,7 +31,8 @@ as its event, every turn as its record), reading it as the hub does (read-only, 
 bus consumer would refuse, so a store can be moved, rebuilt or swapped.
 
 Exit codes: 0 ok, 1 a record was refused (``ingest``, ``consume``, ``import``), the export
-holds records an import would refuse (``export``: it says how many), the bus failed during the
+holds records an import would refuse (``export``: it says how many), the turn source gave
+records that are no turn record (``turns``: dropped and counted, the rest stored and settled), the bus failed during the
 pass (``consume``: what was settled before stays settled) or the gateway could not be read
 (``turns``), 2 usage or configuration error (``consume``: the event schemas cannot be loaded, the bus
 configuration or the connect), or a store that cannot be opened, or (``consume``) cannot take a
@@ -397,9 +398,9 @@ def _turns(a, store: TelemetryStore, clock: Callable[[], float]) -> int:
         return 1
     print(
         f"orchestration turns: {got['turns']} turn(s) for {got['jobs']} job(s), "
-        f"{got['settled']} settled"
+        f"{got['settled']} settled, {got['refused']} refused (not a turn record: dropped)"
     )
-    return 0
+    return 1 if got["refused"] else 0
 
 
 def main(argv: Sequence[str] | None = None, *, clock: Callable[[], float] = time.time) -> int:

@@ -46,6 +46,7 @@ __all__ = [
     "TurnRecordsGateway",
     "TurnSource",
     "TurnSourceError",
+    "is_name",
     "turn_problems",
 ]
 
@@ -108,13 +109,43 @@ TURN_FIELDS = (
 )  # fmt: skip
 #: used with ``fullmatch`` only (a ``$`` would let a trailing newline through)
 TURN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
-NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@-]{0,99}")
-#: what no name holds although NAME's characters allow it: a URL (``//``) or a mail address
-#: (``@`` then a dotted domain).  ``model`` may carry a version after ``@``
-#: (``claude-3-5-sonnet-v2@20241022``), so ``@`` alone is refused only in the role and call type
-NOT_A_NAME = re.compile(r"//|@[^@]*\.")
-#: the role alias and the call type: a name without ``@``
-_PLAIN = ("model_role", "call_type")
+#: what no name holds although its characters allow it, as lookaheads (used in both patterns
+#: below, and in ``agent.job.finished``'s ``model``): a URL (a scheme, ``:/``, as in
+#: ``https://`` or ``https:/x``), an IPv4 address, a ``host:port/``, or a mail address (``@``
+#: then a dotted domain whose last label is letters: ``alice@example.com``).  An ``@`` before
+#: a version (``model@v1.2``, ``claude-sonnet@vertex.v2``, ``...-v2@20241022``) is a name, and so
+#: is ``alice@corp``: a single label after ``@`` is indistinguishable from a deployment-qualified
+#: alias (``sonnet@vertex``), so it is accepted.  Whitespace and control characters are outside
+#: both character sets.  A pattern can never refuse every disguise; this refuses the shapes a
+#: careless source would emit
+NOT_URL_OR_ADDRESS = (
+    r"(?!.*:/)"
+    r"(?!(?:.*[^0-9])?[0-9]{1,3}(?:\.[0-9]{1,3}){3}(?![0-9]))"
+    r"(?!.*:[0-9]{2,5}/)"
+    r"(?!.*@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9._-]))"
+)
+#: ``model``, what served the call: up to 256 characters; a leading ``/`` (a vLLM model path)
+#: and ``//`` (a provider prefix before a path: ``hosted_vllm//models/x``) are allowed, ``@``
+#: carries a version, ``:`` a tag (``ollama:llama3``) or an ARN's parts
+MODEL_PATTERN = NOT_URL_OR_ADDRESS + r"[A-Za-z0-9/][A-Za-z0-9._:/@+-]{0,255}"
+#: ``model_role`` and ``call_type``, an alias or a kind of call: up to 128 characters, starting
+#: with a letter or a digit, never ``//``
+LABEL_PATTERN = NOT_URL_OR_ADDRESS + r"(?!.*//)[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}"
+_NAME_RULES = {
+    "model": re.compile(MODEL_PATTERN),
+    "model_role": re.compile(LABEL_PATTERN),
+    "call_type": re.compile(LABEL_PATTERN),
+}
+
+
+def is_name(key: str, value: Any) -> bool:
+    """Whether ``value`` may stand in the turn record's name field ``key`` (``model``,
+    ``model_role`` or ``call_type``): the one rule the record and every adapter use, so an
+    adapter maps a value the record would refuse to null instead of emitting it."""
+    rule = _NAME_RULES.get(key)
+    return rule is not None and isinstance(value, str) and rule.fullmatch(value) is not None
+
+
 ERROR_CODE = re.compile(r"[0-9]{3}")
 #: a gateway tag: the pattern of ``agent.job.finished``'s ``gateway_tag`` (never a comma)
 TAG = re.compile(r"[A-Za-z0-9._:/-]{0,64}[A-Za-z0-9._:-]{1,128}")
@@ -148,15 +179,6 @@ def _count(v: Any) -> bool:
     return v is None or (isinstance(v, int) and not isinstance(v, bool) and v >= 0)
 
 
-def _name(key: str, v: Any) -> bool:
-    return (
-        isinstance(v, str)
-        and NAME.fullmatch(v) is not None
-        and not NOT_A_NAME.search(v)
-        and not (key in _PLAIN and "@" in v)
-    )
-
-
 def turn_problems(turn: Any) -> list[str]:
     """Why ``turn`` is not a neutral turn record (empty when it is): exactly :data:`TURN_FIELDS`,
     each value of its kind.  A consumer refuses a record with problems, so no source can widen
@@ -182,7 +204,7 @@ def turn_problems(turn: Any) -> list[str]:
         probs.append("started_at is not an ISO 8601 UTC time")
     probs += [f"{k} is not a count" for k in _COUNTS if not _count(turn.get(k))]
     probs += [
-        f"{k} is not a name" for k in _NAMES if turn.get(k) is not None and not _name(k, turn[k])
+        f"{k} is not a name" for k in _NAMES if turn.get(k) is not None and not is_name(k, turn[k])
     ]
     if turn.get("status") not in (None, "success", "failure"):
         probs.append("status is not success, failure or null")

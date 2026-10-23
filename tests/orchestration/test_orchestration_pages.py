@@ -237,7 +237,7 @@ def test_cli_ingest_turns_and_report(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv(*next(iter(KEY_ENV.items())))
     with FakeSpendLogs() as gw:
         assert run("turns", "--turn-source", TURN_SOURCE, "--gateway-url", gw.url) == 0
-    assert "4 turn(s) for 4 job(s), 4 settled" in capsys.readouterr().out
+    assert "4 turn(s) for 4 job(s), 4 settled, 0 refused" in capsys.readouterr().out
     assert run("report", "--days", "7") == 0
     roll = json.loads(capsys.readouterr().out)
     assert roll["schema"] == "homelabnext.orchestration.rollup/1"

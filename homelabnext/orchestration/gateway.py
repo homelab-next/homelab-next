@@ -21,7 +21,7 @@ from collections import Counter
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from conformance.protocols.inference import TurnSource
+from conformance.protocols.inference import TurnSource, turn_problems
 from homelabnext.status.model import parse_iso
 
 from .store import TelemetryStore
@@ -89,23 +89,28 @@ def sync_turns(
     (:func:`_windows`), oldest first.  Each window's turns are stored as soon as it is read (a
     turn carrying a tag no job of the window asked for is dropped), and a job finished more than
     ``settle_s`` before ``now`` is settled as soon as the last window it overlaps is read.  A
-    failed read raises (:class:`~conformance.protocols.inference.TurnSourceError`), and a record
-    outside the turn shape is refused by the store (:class:`ValueError`); what was read and
-    settled before either stays, and the next run reads the jobs still unsettled."""
+    failed read raises (:class:`~conformance.protocols.inference.TurnSourceError`); what was
+    read and settled before stays, and the next run reads the jobs still unsettled.  A record
+    outside the turn shape (:func:`~conformance.protocols.inference.turn_problems`) is dropped
+    and counted (``refused``), never stored: failing the window instead read the same record,
+    and failed, on every later pass, so no job after it was ever settled."""
     pending = store.unsettled()
     windows = _windows(pending, now - store.retention_s)
     left = Counter(j["run_id"] for _, _, inside in windows for j in inside)
     seen: set[str] = set()  # a turn read by two adjacent windows is one turn
-    settled = 0
+    settled = refused = 0
     for lo, hi, inside in windows:
         if lo <= now:
             tags = sorted({j["gateway_tag"] for j in inside})
             asked = set(tags)
-            found = [
-                t
-                for t in source.turns(lo, min(hi, now), tags)
-                if isinstance(t, Mapping) and t.get("gateway_tag") in asked
-            ]
+            found = []
+            for t in source.turns(lo, min(hi, now), tags):
+                if not (isinstance(t, Mapping) and t.get("gateway_tag") in asked):
+                    continue
+                if turn_problems(t):  # the store would refuse it: drop it, keep the window
+                    refused += 1
+                    continue
+                found.append(t)
             store.add_turns(found)
             seen.update(t["turn_id"] for t in found)
         done = []
@@ -115,7 +120,7 @@ def sync_turns(
                 done.append(j["run_id"])
         store.settle(done, now)
         settled += len(done)
-    return {"jobs": len(pending), "turns": len(seen), "settled": settled}
+    return {"jobs": len(pending), "turns": len(seen), "settled": settled, "refused": refused}
 
 
 __all__ = ["MAX_WINDOW_S", "SETTLE_S", "SLACK_S", "sync_turns"]

@@ -40,7 +40,7 @@ def test_sync_joins_turns_by_tag_and_settles_only_finished_jobs(filled):
     just_after = parse_iso("2026-01-01T03:01:00Z")  # run-0004 finished a minute ago
     with FakeSpendLogs() as gw:
         got = sync_turns(filled, turn_source(gw), now=just_after)
-    assert got == {"jobs": 4, "turns": 4, "settled": 3}
+    assert got == {"jobs": 4, "turns": 4, "settled": 3, "refused": 0}
     # the four jobs sit within an hour of each other: read together from the first start time
     # (00:00:12, less the slack) to now, in windows of at most an hour
     assert sorted({(r["start_date"], r["end_date"]) for r in gw.requests}) == [
@@ -56,7 +56,8 @@ def test_sync_joins_turns_by_tag_and_settles_only_finished_jobs(filled):
     assert [j["run_id"] for j in filled.unsettled()] == ["run-0004"]
     with FakeSpendLogs() as gw:  # reading again rewrites the same rows; now run-0004 settles too
         again = sync_turns(filled, turn_source(gw), now=T0)
-    assert again == {"jobs": 1, "turns": 0, "settled": 1} and filled.unsettled() == []
+    assert again == {"jobs": 1, "turns": 0, "settled": 1, "refused": 0}
+    assert filled.unsettled() == []
     assert filled.turns() == turns
     stored = filled.path.read_bytes() + b"".join(
         p.read_bytes() for p in filled.path.parent.glob("*-wal")
@@ -149,7 +150,7 @@ def test_a_job_whose_times_are_reversed_is_still_read_and_settled():
     gateway = Source(read)
     asked = gateway.asked
     got = sync_turns(store, gateway, now=finished + 86400)
-    assert got == {"jobs": 1, "turns": 1, "settled": 1}
+    assert got == {"jobs": 1, "turns": 1, "settled": 1, "refused": 0}
     assert store.settled == [job["run_id"]] and [t["turn_id"] for t in store.turns] == ["req-r1"]
     assert asked[0][0] <= finished - SLACK_S and asked[-1][1] >= finished + 3 * 3600
 
@@ -203,13 +204,31 @@ def test_a_turn_with_a_tag_no_job_asked_for_is_not_joined(filled):
 )
 def test_the_store_refuses_a_turn_outside_the_neutral_record(filled, change, needle):
     """An adapter cannot widen what is stored: a record with another field, or a value of the
-    wrong kind, is refused before anything is written."""
+    wrong kind, is refused before anything is written.  A sync drops and counts it and keeps
+    the rest of the window: one bad record of a source must not stop every later pass (a
+    refused turn used to fail the window, which was then read again, and failed, forever)."""
+    tag = examples()[0]["data"]["gateway_tag"]
     started = parse_iso(examples()[0]["data"]["finished_at"]) - 10
-    bad = _turn("req-bad", examples()[0]["data"]["gateway_tag"], started) | change
-    gateway = Source(lambda lo, hi, tags: [bad])
+    bad = _turn("req-bad", tag, started) | change
     with pytest.raises(ValueError, match=needle):
-        sync_turns(filled, gateway, now=T0)
-    assert filled.turns() == {}
+        filled.add_turns([bad])
+    good = _turn("req-good", tag, started + 1)
+    gateway = Source(lambda lo, hi, tags: [bad, good] if tag in tags else [])
+    got = sync_turns(filled, gateway, now=T0)
+    assert got == {"jobs": 4, "turns": 1, "settled": 4, "refused": 1}
+    assert [t["turn_id"] for t in filled.turns()[tag]] == ["req-good"]
+    assert filled.unsettled() == []
+
+
+def test_a_gateway_row_with_an_odd_model_name_never_wedges_the_sync(filled):
+    """Regression: the adapter passed a model such as ``hosted_vllm//models/x`` that the record
+    then refused, so every pass failed on the same row and no job was ever settled.  The fixture
+    now holds a URL as a model and an address as a call type: both are mapped to null."""
+    with FakeSpendLogs() as gw:
+        got = sync_turns(filled, turn_source(gw), now=T0)
+    assert got == {"jobs": 4, "turns": 4, "settled": 4, "refused": 0}
+    turns = {t["turn_id"]: t for v in filled.turns().values() for t in v}
+    assert turns["req-c1"]["model"] is None and turns["req-b1"]["call_type"] is None
 
 
 # ----------------------------------------------------- which code --turn-source may name
