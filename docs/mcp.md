@@ -115,6 +115,9 @@ its tools *act*, through a running broker that authenticates the MCP process by 
 `broker_actions`, `broker_call`, `broker_submit`, `broker_status`, `broker_run`, `broker_cancel`,
 `broker_pending`, `memory_write`, `finding_write`, `proposal_file`. No tool takes an identity. It
 is the catalog record `examples/mcp/hnx-broker.yml` (each tool classed: `read`, `record-write`
-or `exec`; `broker_submit` and `broker_run` need approval): a profile grants it in `grants.mcp`,
-and the reader rule refuses it to any profile that reads untrusted content. Split such an agent into a reader (with `hnx-catalog`) and an
+or `exec`; `broker_submit` and `broker_run` need approval) with `acts_via: broker`: its acting
+tools are broker calls, so it is the one acting server any profile may hold without an exception
+(agents act only through the broker, [ADR-0030](adr/0030-agents-act-only-through-the-broker.md),
+[[agent]] G-13). A profile grants it in `grants.mcp`, with `cap:broker` for an `execute` or
+`privileged` tier, and the reader rule refuses it to any profile that reads untrusted content. Split such an agent into a reader (with `hnx-catalog`) and an
 actor (with `hnx-broker`).
