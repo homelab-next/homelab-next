@@ -16,7 +16,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from homelabnext.modules.scope import ENTRY_PATTERN, PART_DOCS, SCOPE_PARTS, scope_tree
+from homelabnext.modules.scope import (
+    DYNAMIC_PARTS,
+    EMPTY_ALLOWED,
+    ENTRY_PATTERN,
+    PART_DOCS,
+    SCOPE_PARTS,
+    scope_tree,
+)
 
 __all__ = [
     "RESERVED_IDS",
@@ -1232,9 +1239,27 @@ def scope_entry_schema() -> dict[str, Any]:
     }
 
 
+def scope_source_schema() -> dict[str, Any]:
+    """A dynamic source for a part's addresses (trusted.wan only): specified, not implemented."""
+    return obj(
+        {"source": pat(SLUG, "The name of the source that knows the current addresses.", 64)},
+        ["source"],
+        "A dynamic source instead of a literal network (a DHCP or CGNAT WAN, a delegated IPv6 prefix that changes). Specified, not implemented: the shape is fixed now so freezing it later is additive, and the loader refuses it until a reader exists (docs/modules.md).",
+    )
+
+
 def scope_schema() -> dict[str, Any]:
     """The selection's ``scope`` object, generated from ``SCOPE_PARTS`` (one source of truth)."""
-    part = lambda name: arr(ref("scope_entry"), PART_DOCS[name], 1)  # noqa: E731
+
+    def part(name: str) -> dict[str, Any]:
+        if name in EMPTY_ALLOWED:
+            desc = PART_DOCS[name] + " An explicit [] means nothing is excluded; absent is not."
+            return arr(ref("scope_entry"), desc)
+        if name in DYNAMIC_PARTS:
+            items = {"oneOf": [ref("scope_entry"), ref("scope_source")]}
+            return arr(items, PART_DOCS[name], 1)
+        return arr(ref("scope_entry"), PART_DOCS[name], 1)
+
     props: dict[str, Any] = {}
     for group, leaves in scope_tree().items():
         if leaves is None:
@@ -1408,7 +1433,7 @@ def module_selection_schema() -> dict[str, Any]:
             "grants": grants,
             "scope": scope,
         },
-        "$defs": {"scope_entry": scope_entry_schema()},
+        "$defs": {"scope_entry": scope_entry_schema(), "scope_source": scope_source_schema()},
     }
 
 

@@ -24,6 +24,9 @@ from homelabnext.ids.lint import DOCUMENTATION_NETS
 Doc = dict[str, Any]
 
 __all__ = [
+    "DYNAMIC_PARTS",
+    "EMBEDDED_V4",
+    "EMPTY_ALLOWED",
     "ENTRY_PATTERN",
     "PART_DOCS",
     "SCOPE_PARTS",
@@ -58,6 +61,14 @@ PART_DOCS = {
     "exclude.unattended_mutation": "Never changed by an unattended job: a human approves each change.",
     "exclude.offensive": "Never the target of offensive tooling, even inside target.",
 }
+#: parts an explicit empty list may fill, meaning "nothing excluded"; every other part is a
+#: non-empty list, and an absent part is always refused when a module requires it
+EMPTY_ALLOWED = frozenset({"exclude.unattended_mutation", "exclude.offensive"})
+#: parts that may also name a dynamic source (``{source: <name>}``) instead of a literal network:
+#: a WAN address from DHCP, CGNAT or a delegated IPv6 prefix that changes.  The shape is
+#: specified so freezing the schema later is not a breaking change; no reader exists yet, so the
+#: rules refuse it (docs/modules.md, "Specified, not implemented").
+DYNAMIC_PARTS = frozenset({"trusted.wan"})
 #: the broadest network a trusted part may hold, per IP version: trusting more than a /8 (IPv4)
 #: or a /32 (IPv6, one regional allocation) is no longer "the lab itself", it is a blind spot
 TRUSTED_FLOOR = {4: 8, 6: 32}
@@ -241,7 +252,13 @@ def parse_entry(value: Any, part: str) -> Network:
     Refused in every part: anything but a string matching :data:`ENTRY_PATTERN`, host bits, the
     whole address space (``/0``), a network touching a special-use block (:data:`SPECIAL_NETS`)
     or an IPv4-embedding IPv6 prefix (:data:`EMBEDDED_V4`).  In a ``trusted.*`` part, also a
-    network broader than :data:`TRUSTED_FLOOR`."""
+    network broader than :data:`TRUSTED_FLOOR`.  A dynamic source (``{source: <name>}``, in
+    :data:`DYNAMIC_PARTS` only) is specified, not implemented: refused with that reason."""
+    if isinstance(value, dict) and part in DYNAMIC_PARTS and set(value) == {"source"}:
+        raise ValueError(
+            f"a dynamic source ({value['source']!r}): dynamic WAN sources are specified, not "
+            "implemented; list the current WAN networks until a reader exists"
+        )
     if not isinstance(value, str):
         raise ValueError(f"not a string ({type(value).__name__})")
     if not _ENTRY.match(value):
@@ -270,9 +287,11 @@ def _scope_node(site: Doc, part: str) -> Any:
 def scope_networks(site: Doc, part: str) -> list[Network]:
     """The networks of one scope part (``trusted.wan``), parsed strictly.
 
-    The one reader of a selection's addresses: an absent, empty or malformed part raises
-    :class:`ScopeMissing`, never an empty list, so a module that excludes its trusted addresses
-    can never run as if there were none."""
+    The one reader of a selection's addresses: an absent or malformed part raises
+    :class:`ScopeMissing`, and so does an empty one unless it is an exclusion
+    (:data:`EMPTY_ALLOWED`), where an explicit ``[]`` means "nothing excluded".  So a module
+    that excludes its trusted addresses can never run as if there were none, and an absent
+    exclusion never reads as "nothing excluded"."""
     if part not in SCOPE_PARTS:
         raise ScopeMissing(f"scope.{part}: no such scope part")
     node = _scope_node(site, part)
@@ -280,8 +299,8 @@ def scope_networks(site: Doc, part: str) -> list[Network]:
         raise ScopeMissing(f"scope.{part}: missing")
     if not isinstance(node, list):
         raise ScopeMissing(f"scope.{part}: not a list ({type(node).__name__})")
-    if not node:
-        raise ScopeMissing(f"scope.{part}: empty")
+    if not node and part not in EMPTY_ALLOWED:
+        raise ScopeMissing(f"scope.{part}: empty (only an exclusion may be an explicit [])")
     out: list[Network] = []
     for i, v in enumerate(node):
         try:
@@ -295,7 +314,7 @@ def scope_networks(site: Doc, part: str) -> list[Network]:
 
 def scope_problems(site: Doc) -> list[str]:
     """The scope block itself: it and each group are mappings of known parts only, and every
-    present part is a non-empty list whose entries parse strictly (:func:`parse_entry`) and
+    present part is a list (non-empty unless an exclusion) whose entries parse strictly (:func:`parse_entry`) and
     name no network twice.  Which parts must be present is the needing modules' rule
     (``site_problems``).  The schema refuses the same shapes; this does not rely on it."""
     if "scope" not in site:

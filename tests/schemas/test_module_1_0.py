@@ -909,6 +909,21 @@ def test_the_schema_and_the_reader_agree_on_a_scope_entry(entry):
     assert (schema_ok, reader_ok) == SCOPE_ENTRIES[entry]
 
 
+def test_an_explicit_empty_exclusion_and_a_dynamic_wan_source_are_valid_shapes():
+    """S3: "nothing excluded" is an explicit [] (absent still fails closed), and trusted.wan may
+    name a dynamic source; the schema takes both, so freezing it later is not a breaking change.
+    The rules accept the empty exclusion and refuse the dynamic source until a reader exists."""
+    site = copy.deepcopy(SITES["full"])
+    site["scope"]["exclude"] = {"offensive": [], "unattended_mutation": []}
+    assert sc.errors_for(SELECTION, site, REG) == []
+    assert mr.site_problems(site, MODULES, SLOTS) == []
+    site["scope"]["trusted"]["wan"] = [{"source": "wan-dhcp"}]
+    assert sc.errors_for(SELECTION, site, REG) == []
+    assert any("specified, not implemented" in p for p in mr.site_problems(site, MODULES, SLOTS))
+    site["scope"]["trusted"]["nets"] = [{"source": "wan-dhcp"}]  # only trusted.wan has the form
+    assert any(e.startswith("scope/trusted/nets") for e in sc.errors_for(SELECTION, site, REG))
+
+
 def test_the_selection_schema_scope_is_generated_from_the_parts():
     """The schema's scope leaves are exactly SCOPE_PARTS, as is the manifest's requires.scope
     enum: adding a part to one cannot leave the other behind."""
@@ -1192,7 +1207,7 @@ SITE_DEFECTS.update(
         "a module requiring a scope part, with no scope block": (
             "single-box",
             lambda s, m: s.pop("scope"),
-            "external-collector: requires scope.trusted.wan, which the site leaves missing or empty",
+            "external-collector: requires scope.trusted.wan, which the site leaves missing",
         ),
         "a module requiring a scope part the block leaves out": (
             "full",
@@ -1213,6 +1228,16 @@ SITE_DEFECTS.update(
             "full",
             lambda s, m: s["scope"]["exclude"]["offensive"].__setitem__(0, "192.0.2.1/28"),
             "has host bits set",
+        ),
+        "a dynamic WAN source (specified, not implemented)": (
+            "full",
+            lambda s, m: s["scope"]["trusted"].__setitem__("wan", [{"source": "wan-dhcp"}]),
+            "dynamic WAN sources are specified, not implemented",
+        ),
+        "an empty trusted part (only an exclusion may be [])": (
+            "full",
+            lambda s, m: s["scope"]["trusted"].__setitem__("nets", []),
+            "scope.trusted.nets: empty (only an exclusion may be an explicit [])",
         ),
         "a scope network listed twice": (
             "small-lab",

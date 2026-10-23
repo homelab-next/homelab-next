@@ -63,6 +63,28 @@ def v6(*groups: str) -> str:
     return ":".join(groups)
 
 
+def test_an_exclusion_may_be_explicitly_empty_and_nothing_else_may():
+    """S3: an explicit [] means "nothing excluded" for an exclusion only; an absent exclusion
+    still fails closed, and an empty trusted part or target is still refused."""
+    site = {"scope": {"exclude": {"offensive": [], "unattended_mutation": []}, "target": []}}
+    assert ms.scope_networks(site, "exclude.offensive") == []
+    assert ms.scope_networks(site, "exclude.unattended_mutation") == []
+    with pytest.raises(ms.ScopeMissing, match="only an exclusion may be an explicit"):
+        ms.scope_networks(site, "target")
+    with pytest.raises(ms.ScopeMissing, match="missing"):
+        ms.scope_networks({"scope": {"target": [f"{D2}.0/24"]}}, "exclude.offensive")
+
+
+def test_a_dynamic_wan_source_is_specified_and_refused():
+    site = {"scope": {"trusted": {"wan": [{"source": "wan-dhcp"}], "nets": [{"source": "x"}]}}}
+    with pytest.raises(ms.ScopeMissing, match="dynamic WAN sources are specified, not implemented"):
+        ms.scope_networks(site, "trusted.wan")
+    with pytest.raises(ms.ScopeMissing, match=r"not a string \(dict\)"):
+        ms.scope_networks(site, "trusted.nets")  # only trusted.wan has a dynamic form
+    assert set(ms.SCOPE_PARTS) >= ms.DYNAMIC_PARTS
+    assert set(ms.SCOPE_PARTS) >= ms.EMPTY_ALLOWED
+
+
 #: entries no part may hold, with the reason the reader gives
 REFUSED_EVERYWHERE = [
     (v4(0, 0, 0, 0, plen=0), "whole address space"),

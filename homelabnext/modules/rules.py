@@ -596,8 +596,8 @@ def site_problems(
                 scope_networks(site, need["part"])
             except ScopeMissing:
                 out.append(
-                    f"{m['id']}: requires scope.{need['part']}, which the site leaves missing or "
-                    "empty (its reader fails closed)"
+                    f"{m['id']}: requires scope.{need['part']}, which the site leaves missing, "
+                    "empty or unusable (its reader fails closed)"
                 )
     authority = {s for s, d in slots.items() if d.get("privileged")} | set(AUTHORITY_SLOTS)
     authority |= {c["instance"] for cap, cs in ch.items() if cap[4:] in authority for c in cs}
