@@ -894,6 +894,7 @@ def test_a_random_literal_with_a_verb_or_layout_inside_is_still_judged(value: st
         "2006-1-2",
         "2006-1-2 3:4:5",
         "3:04PM Jan 2",
+        "3:04PM",  # time.Kitchen
     ],
 )
 def test_layouts_verbs_and_words_stay_text(value: str):

@@ -378,7 +378,7 @@ GO_WORDS_RE = re.compile(
 )
 GO_PUNCTUATION_RE = re.compile(r"[\s\-_.:/,;=()\[\]{}@#|<>'\"]*")
 GO_FMT_VERB_RE = re.compile(r"%[-+# 0-9.*\[\]]*[a-zA-Z%]")
-GO_TIME_LAYOUT_RE = re.compile(r"2006|15:04|Jan _?2|Mon Jan")
+GO_TIME_LAYOUT_RE = re.compile(r"2006|15:04|(?<!\d)3:04|Jan _?2|Mon Jan")
 GO_LAYOUT_ELEMENT_RE = re.compile(
     r"2006|January|Jan|Monday|Mon|MST|PM|pm|Z07:?00|-07:?00|15|0[1-6]|_2|\.[09]+"
     r"|(?<!\d)[1-5](?!\d)"  # unpadded month, day, hour, minute and second: "January 2, 2006"
