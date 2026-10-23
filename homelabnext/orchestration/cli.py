@@ -45,9 +45,12 @@ from conformance.protocols.events import EventsError
 from conformance.protocols.inference import TurnSource, TurnSourceError
 from homelabnext.events.envelope import EventError
 
+from .model import CONTROLLER_SOURCE
 from .store import DEFAULT_RETENTION_DAYS, STORE_ERRORS, TelemetryStore
 
 TURN_SOURCE_ENV = "HNX_ORCHESTRATION_TURN_SOURCE"
+#: the controller's service id(s), comma-separated, when --source is not given
+SOURCE_ENV = "HNX_ORCHESTRATION_SOURCE"
 REPLAY_S = 7 * 86400  # a new durable reads the last week, not only what arrives after it
 
 
@@ -58,6 +61,14 @@ def _parser() -> argparse.ArgumentParser:
     def store_opts(p: argparse.ArgumentParser) -> None:
         p.add_argument("--db", required=True, type=Path, help="the telemetry store (SQLite)")
         p.add_argument("--retention-days", type=float, default=DEFAULT_RETENTION_DAYS)
+        p.add_argument(
+            "--source",
+            action="append",
+            default=None,
+            metavar="svc:NAME",
+            help="the controller's service id, the only source of job records (repeatable; "
+            f"default: ${SOURCE_ENV}, else {CONTROLLER_SOURCE})",
+        )
 
     p = sub.add_parser("consume", help="drain agent.job.finished from the bus (one pass)")
     store_opts(p)
@@ -226,7 +237,10 @@ def _turns(a, store: TelemetryStore, clock: Callable[[], float]) -> int:
 def main(argv: Sequence[str] | None = None, *, clock: Callable[[], float] = time.time) -> int:
     a = _parser().parse_args(argv)
     try:
-        store = TelemetryStore(a.db, clock=clock, retention_days=a.retention_days)
+        sources = a.source or [
+            s.strip() for s in os.environ.get(SOURCE_ENV, CONTROLLER_SOURCE).split(",") if s.strip()
+        ]
+        store = TelemetryStore(a.db, clock=clock, retention_days=a.retention_days, sources=sources)
         if a.cmd == "ingest":
             return _ingest(a, store)
         if a.cmd == "consume":

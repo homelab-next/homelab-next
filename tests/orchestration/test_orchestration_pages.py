@@ -353,3 +353,22 @@ def test_the_hub_opens_the_store_read_only_and_never_creates_one(tmp_path, capsy
     with pytest.raises(sqlite3.OperationalError, match="readonly"):
         site.store.purge()
     assert TelemetryStore(db, clock=lambda: T0).job("run-0001") is not None
+
+
+def test_cli_takes_the_job_source_from_the_flag_or_the_environment(tmp_path, monkeypatch, capsys):
+    ev = json.loads(body(examples()[0])) | {"source": "svc:job-runner"}
+    events = tmp_path / "events.jsonl"
+    events.write_text(json.dumps(ev) + "\n", encoding="utf-8")
+
+    def run(db, *a):
+        argv = ["ingest", str(events), "--db", str(tmp_path / db), *a]
+        return cli.main(argv, clock=lambda: T0)
+
+    monkeypatch.delenv("HNX_ORCHESTRATION_SOURCE", raising=False)
+    assert run("a.db") == 1  # the default source is the example controller's
+    assert "not the controller's job record" in capsys.readouterr().err
+    assert run("b.db", "--source", "svc:job-runner") == 0
+    monkeypatch.setenv("HNX_ORCHESTRATION_SOURCE", "svc:other, svc:job-runner")
+    assert run("c.db") == 0
+    assert run("d.db", "--source", "not-a-service") == 2
+    assert "sources" in capsys.readouterr().err

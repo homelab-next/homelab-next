@@ -40,7 +40,9 @@ from typing import Any
 from homelabnext.status.model import iso, parse_iso
 
 FINISHED_EVENT = "homelabnext.agent.job.finished"
-#: the only publisher of job records: the orchestration controller
+#: the default publisher of job records: the orchestration controller's service id in the example
+#: lab.  Which service fills the orchestration slot is site configuration
+#: (``TelemetryStore(sources=...)``, ``hnx orchestration --source``); this is only the default
 CONTROLLER_SOURCE = "svc:llm-orchestrator"
 ROLLUP_SCHEMA = "homelabnext.orchestration.rollup/1"
 OUTCOMES = ("completed", "failed", "cancelled", "timeout")

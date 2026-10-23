@@ -504,3 +504,19 @@ def test_a_lone_surrogate_is_poison(store, where):
     with pytest.raises(EventError, match="lone surrogate"):
         store.consume(raw.encode())
     assert store.jobs() == []
+
+
+def test_the_job_source_is_configuration_and_every_other_source_is_refused(tmp_path):
+    """Which service fills the orchestration slot is a site fact: the store takes the source it
+    is given (the example's controller id is only the default) and refuses every other one."""
+    ev = copy.deepcopy(examples()[0]) | {"source": "svc:job-runner"}
+    default = TelemetryStore(tmp_path / "a.db", clock=lambda: T0)
+    with pytest.raises(EventError, match="only svc:llm-orchestrator reports jobs"):
+        default.consume(body(ev))
+    other = TelemetryStore(tmp_path / "b.db", clock=lambda: T0, sources=["svc:job-runner"])
+    assert other.consume(body(ev)).status == "processed"
+    with pytest.raises(EventError, match="only svc:job-runner reports jobs"):
+        other.consume(body(examples()[1]))  # the example controller's id is not configured here
+    for bad in ([], ["llm-orchestrator"], ["svc:Bad Name"], ["svc:x", ""]):
+        with pytest.raises(ValueError, match="sources"):
+            TelemetryStore(tmp_path / "c.db", clock=lambda: T0, sources=bad)

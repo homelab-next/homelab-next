@@ -3,8 +3,9 @@
 
 **Jobs** come only through :meth:`TelemetryStore.consume`, the consumer of
 ``homelabnext.agent.job.finished``: the body is decoded and validated against the envelope and
-the type's schema (:func:`homelabnext.events.consumer.decode_event`), its ``source`` must be the
-controller's (:data:`.model.CONTROLLER_SOURCE`), and it is idempotent the way
+the type's schema (:func:`homelabnext.events.consumer.decode_event`), its ``source`` must be one
+of the controller's service ids the store is configured with (``sources``, default
+:data:`.model.CONTROLLER_SOURCE`), and it is idempotent the way
 :class:`homelabnext.events.consumer.Consumer` is, but durably (the seen ids are the table):
 
 * the same event id with the same body is a ``duplicate`` (acknowledged, nothing written);
@@ -58,6 +59,7 @@ from __future__ import annotations
 import functools
 import itertools
 import json
+import re
 import shlex
 import sqlite3
 import time
@@ -105,6 +107,8 @@ def dedupe_sql(cutoff: float) -> str:
 
 
 DEFAULT_RETENTION_DAYS = 90
+#: a configured job source: a service id (``schemas/ids/logical-id.schema.json``'s ``svc_id``)
+_SOURCE = re.compile(r"svc:[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 #: the writers' journal: no -wal or -shm, so a reader as another user needs no write access
 JOURNAL_MODE = "DELETE"
 #: the store's own failures (the database, the disk): a caller retries these, never a record's
@@ -123,8 +127,14 @@ class TelemetryStore:
         clock: Callable[[], float] = time.time,
         retention_days: float = DEFAULT_RETENTION_DAYS,
         read_only: bool = False,
+        sources: Iterable[str] = (CONTROLLER_SOURCE,),
     ):
         self.path, self.clock = Path(path), clock
+        self.sources = tuple(sources)
+        if not self.sources or not all(
+            isinstance(s, str) and _SOURCE.fullmatch(s) for s in self.sources
+        ):
+            raise ValueError("sources: one or more service ids (svc:<name>), the controller's")
         self.retention_s = retention_days * 86400.0
         if read_only:
             if not self.path.is_file():
@@ -180,10 +190,10 @@ class TelemetryStore:
         """Store one ``homelabnext.agent.job.finished`` event (see the module docstring); raises
         :class:`EventError` for a body that must never be retried (poison)."""
         event = decode_event(body, types=[FINISHED_EVENT])
-        if event["source"] != CONTROLLER_SOURCE:
+        if event["source"] not in self.sources:
             raise EventError(
                 "not the controller's job record",
-                [f"source {event['source']!r}: only {CONTROLLER_SOURCE} reports jobs"],
+                [f"source {event['source']!r}: only {', '.join(self.sources)} reports jobs"],
             )
         eid, digest, data = event["id"], body_digest(event), event["data"]
         finished = _instants(data)["finished_at"]
