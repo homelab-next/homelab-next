@@ -32,8 +32,10 @@ For every schema under ``schemas/<dir>/`` (top level only):
    found by the ``$id`` name (``platform/guest``), never by file name, so renaming a file does not
    shed them; and ``x-draft`` cannot lift the additivity gate off a released schema **while its
    frozen baselines are kept**, which ``--base REF`` checks: every file under ``_frozen/`` at REF
-   still exists, byte-identical (append-only).  Without ``--base`` (no base commit) a deleted
-   baseline is not detected.
+   still exists, byte-identical and not a symlink (append-only).  ``--ci-base`` picks REF in CI
+   (:func:`ci_base`): a pull request's base, which must be readable, else a push's previous tip,
+   else ``HEAD^``.  Without a base a deleted baseline is not detected, and a symlink under
+   ``_frozen/`` is always refused.
 6. no two schema files carry one ``$id``, and every frozen ``$id`` name is still carried by a
    live schema (an orphaned baseline is a schema that was renamed or removed).
 
@@ -389,6 +391,18 @@ def is_draft(schema: dict) -> bool:
     return isinstance(schema.get("x-draft"), str) and bool(schema["x-draft"].strip())
 
 
+def frozen_symlinks(root: Path) -> list[Problem]:
+    """A frozen baseline is a regular file: a symlink would follow whatever it points at."""
+    base = root / "schemas" / "_frozen"
+    if not base.is_dir():
+        return []
+    return [
+        Problem(p.relative_to(root).as_posix(), "a frozen baseline is a symlink (copy the file)")
+        for p in sorted(base.rglob("*"))
+        if p.is_symlink()
+    ]
+
+
 def frozen_index(root: Path) -> dict[str, list[tuple[int, int, Path]]]:
     """Every frozen copy, keyed by its ``$id`` name (``platform/guest``): (major, minor, path)."""
     out: dict[str, list[tuple[int, int, Path]]] = {}
@@ -400,6 +414,8 @@ def frozen_index(root: Path) -> dict[str, list[tuple[int, int, Path]]]:
             continue
         a, b = (int(x) for x in vd.name.split("."))
         for f in sorted(vd.rglob("*.json")):
+            if f.is_symlink():
+                continue  # refused by frozen_symlinks, never a baseline
             try:
                 pid = parse_id(json.loads(f.read_text(encoding="utf-8")))
             except ValueError:
@@ -458,19 +474,57 @@ def frozen_lost(root: Path, base: str) -> list[Problem]:
         ).stdout
 
     try:
-        listing = git("ls-tree", "-r", base, "--", "schemas/_frozen")
+        listing = git("ls-tree", "-r", "-z", base, "--", "schemas/_frozen")
     except subprocess.CalledProcessError as exc:
         return [Problem("schemas/_frozen", f"cannot read base {base}: {exc.stderr.strip()}")]
     probs = []
-    for line in listing.splitlines():
-        meta, path = line.split("\t", 1)
+    for entry in filter(None, listing.split("\0")):
+        meta, path = entry.split("\t", 1)
         blob = meta.split()[2]
         f = root / path
-        if not f.is_file():
+        if f.is_symlink():
+            probs.append(
+                Problem(path, f"frozen at {base} and now a symlink (_frozen/ is append-only)")
+            )
+        elif not f.is_file():
             probs.append(Problem(path, f"frozen at {base} and removed (_frozen/ is append-only)"))
-        elif git("hash-object", "--", path).strip() != blob:
+        elif git("hash-object", "--no-filters", "--", path).strip() != blob:
             probs.append(Problem(path, f"frozen at {base} and changed (_frozen/ is append-only)"))
     return probs
+
+
+ZERO_SHA = "0" * 40
+
+
+def ci_base(root: Path, event: str, pr_base: str, before: str) -> tuple[str | None, str]:
+    """The commit CI checks ``_frozen/`` against, and why: a pull request's base (unreadable is an
+    error, raised as ValueError), else a push's previous tip, else ``HEAD^`` (a branch creation,
+    a force-push whose old tip is gone), else none (a root commit)."""
+
+    def commit(rev: str) -> str | None:
+        r = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"],
+            capture_output=True,
+            text=True,
+        )
+        return r.stdout.strip() if r.returncode == 0 else None
+
+    if event == "pull_request":
+        sha = commit(pr_base) if pr_base else None
+        if not sha:
+            raise ValueError(
+                f"the pull request's base {pr_base or '(unset)'} is not readable "
+                "(check out with fetch-depth: 0)"
+            )
+        return sha, "the pull request's base"
+    if before and before != ZERO_SHA and (sha := commit(before)):
+        return sha, "the push's previous tip"
+    if sha := commit("HEAD^"):
+        return (
+            sha,
+            f"HEAD^ (the push's previous tip {before or '(unset)'} is zero or not fetchable)",
+        )
+    return None, "none: HEAD has no parent and the push names no readable previous tip"
 
 
 # ---------------------------------------------------------------- repo check
@@ -568,7 +622,7 @@ def check_repo(
     """Every schema's checks, plus the cross-file ones (one file per ``$id``, no orphaned frozen
     name) and, with ``base``, append-only ``_frozen/`` against that commit."""
     registry = build_registry(root)
-    probs: list[Problem] = repo_problems(root)
+    probs: list[Problem] = repo_problems(root) + frozen_symlinks(root)
     index = frozen_index(root)
     for p in schema_files(root, dirs):
         if only is not None and p.relative_to(root / "schemas").as_posix() not in set(only):
@@ -642,11 +696,31 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--strict", action="store_true", help="missing baseline is an error")
     ap.add_argument("--dir", action="append", help="limit to schemas/<dir> (repeatable)")
-    ap.add_argument(
+    group = ap.add_mutually_exclusive_group()
+    group.add_argument(
         "--base",
         help="a commit: every file under schemas/_frozen there must still exist, unchanged",
     )
+    group.add_argument(
+        "--ci-base",
+        action="store_true",
+        help="pick --base from GITHUB_EVENT_NAME, HNX_PR_BASE and HNX_PUSH_BEFORE (see ci_base)",
+    )
     args = ap.parse_args(argv)
+    if args.ci_base:
+        import os
+
+        try:
+            args.base, why = ci_base(
+                args.root,
+                os.environ.get("GITHUB_EVENT_NAME", ""),
+                os.environ.get("HNX_PR_BASE", ""),
+                os.environ.get("HNX_PUSH_BEFORE", ""),
+            )
+        except ValueError as exc:
+            print(f"schema_check: {exc}", file=sys.stderr)
+            return 1
+        print(f"schema_check: append-only _frozen/ base: {args.base or '-'} ({why})")
     if args.freeze:
         for f in freeze(args.root):
             print(f"froze {f.relative_to(args.root)}")

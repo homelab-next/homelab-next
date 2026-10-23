@@ -97,16 +97,13 @@ jobs:
           python-version: "3.12"
           extras: dev
       - name: schema contracts (examples, negatives, additive evolution, frozen baselines, append-only _frozen/)
+        # a pull request's base must be readable (an error, never a skip); a push compares with
+        # its previous tip, or HEAD^ when that is zero (a new branch) or gone (a force-push); the
+        # step prints the base it used
         env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          set -euo pipefail
-          if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] \
-             && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
-            python tools/schema_check.py --strict --base "$BASE"
-          else
-            python tools/schema_check.py --strict
-          fi
+          HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HNX_PUSH_BEFORE: ${{ github.event.before }}
+        run: python tools/schema_check.py --strict --ci-base
       - name: generated module schemas, examples and negatives are current
         run: python -m homelabnext.schemas --check
       - name: no raw endpoints
@@ -271,13 +268,29 @@ jobs:
           extras: yaml  # the register tooling parses YAML
           install-project: "false"
       - name: no record vanished relative to the base, no key twice, every record has its uid
+        # the same base rule as the schemas job: a pull request's base must be readable; a push
+        # falls back to HEAD^ when its previous tip is zero or gone; the base used is printed
         env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] \
-             && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
-            make ids-check PY=python BASE="$BASE"
+          base=""
+          if [ "$EVENT" = "pull_request" ]; then
+            if ! base=$(git rev-parse --verify --quiet "${PR_BASE:-unset}^{commit}"); then
+              echo "::error::the pull request's base ${PR_BASE:-(unset)} is not readable"
+              exit 1
+            fi
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+               && base=$(git rev-parse --verify --quiet "$BEFORE^{commit}"); then
+            :
+          else
+            base=$(git rev-parse --verify --quiet "HEAD^^{commit}" || true)
+          fi
+          echo "register ids: base ${base:-none (no parent commit)}"
+          if [ -n "$base" ]; then
+            make ids-check PY=python BASE="$base"
           else
             make ids-check PY=python
           fi

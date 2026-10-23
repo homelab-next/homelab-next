@@ -404,3 +404,99 @@ def test_frozen_is_append_only_against_the_base(tmp_path):
     assert "changed" in probs["schemas/_frozen/1.0/platform/guest.schema.json"]
     assert len(probs) == 2
     assert sc.main(["--root", str(tmp_path), "--base", "HEAD"]) == 1
+
+
+def _git_repo(tmp_path):
+    import subprocess
+
+    def git(*a):
+        return subprocess.run(
+            [
+                "git",
+                "-C",
+                str(tmp_path),
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.invalid",
+                *a,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    git("init", "-q")
+    return git
+
+
+def test_ci_base_is_the_pr_base_or_the_push_tip_or_head_parent(tmp_path):
+    """A pull request's unreadable base is an error, never a skip; a push whose previous tip is
+    zero (a new branch) or gone (a force-push) falls back to HEAD^; a root commit has none."""
+    git = _git_repo(tmp_path)
+    (tmp_path / "a").write_text("1")
+    git("add", "a")
+    git("commit", "-qm", "one")
+    one = git("rev-parse", "HEAD")
+    assert sc.ci_base(tmp_path, "push", "", sc.ZERO_SHA)[0] is None
+    (tmp_path / "a").write_text("2")
+    git("commit", "-qam", "two")
+    assert sc.ci_base(tmp_path, "pull_request", one, "") == (one, "the pull request's base")
+    for bad in ("", "f" * 40):
+        with pytest.raises(ValueError, match="pull request's base"):
+            sc.ci_base(tmp_path, "pull_request", bad, "")
+    assert sc.ci_base(tmp_path, "push", "", one) == (one, "the push's previous tip")
+    for before in (sc.ZERO_SHA, "f" * 40, ""):
+        base, why = sc.ci_base(tmp_path, "push", "", before)
+        assert base == one and why.startswith("HEAD^"), why
+
+
+def test_ci_base_from_the_environment_prints_the_base_and_fails_a_bad_pr_base(
+    tmp_path, monkeypatch, capsys
+):
+    import shutil
+
+    shutil.copytree(ROOT / "schemas", tmp_path / "schemas")
+    git = _git_repo(tmp_path)
+    git("add", "schemas")
+    git("commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    (tmp_path / "schemas/_frozen/1.0/platform/capability.schema.json").unlink()
+    git("commit", "-qam", "drop capability's only frozen copy")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    monkeypatch.setenv("HNX_PUSH_BEFORE", sc.ZERO_SHA)  # a branch creation: HEAD^ instead
+    assert sc.main(["--root", str(tmp_path), "--ci-base"]) == 1
+    out = capsys.readouterr().out
+    assert f"append-only _frozen/ base: {base} (HEAD^" in out
+    assert "capability.schema.json: frozen at" in out and "removed" in out
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("HNX_PR_BASE", "f" * 40)
+    assert sc.main(["--root", str(tmp_path), "--ci-base"]) == 1
+    assert "is not readable" in capsys.readouterr().err
+
+
+def test_frozen_symlinks_and_byte_changes_are_refused(tmp_path):
+    """Negative: a symlinked baseline is refused; a CRLF rewrite that a text filter would hide is
+    still a change (hash-object --no-filters); a quoted (non-ASCII) frozen path is read exactly
+    (ls-tree -z), so an untouched one is not reported."""
+    import shutil
+
+    shutil.copytree(ROOT / "schemas", tmp_path / "schemas")
+    fz = tmp_path / "schemas/_frozen/1.0/platform"
+    (fz / "capabilité.json").write_text("{}")
+    (tmp_path / ".gitattributes").write_text("*.json text eol=crlf\n")
+    git = _git_repo(tmp_path)
+    git("add", ".")
+    git("commit", "-qm", "base")
+    assert sc.frozen_lost(tmp_path, "HEAD") == []
+    g = fz / "guest.schema.json"
+    g.write_bytes(g.read_bytes().replace(b"\n", b"\r\n"))
+    c = fz / "capability.schema.json"
+    c.unlink()
+    c.symlink_to(tmp_path / "schemas/platform/capability.schema.json")
+    probs = {p.where: p.message for p in sc.frozen_lost(tmp_path, "HEAD")}
+    assert "changed" in probs["schemas/_frozen/1.0/platform/guest.schema.json"]
+    assert "now a symlink" in probs["schemas/_frozen/1.0/platform/capability.schema.json"]
+    assert len(probs) == 2
+    probs = [p.message for p in sc.check_repo(tmp_path, strict=True)]
+    assert "a frozen baseline is a symlink (copy the file)" in probs
