@@ -1211,7 +1211,7 @@ def module_selection_schema() -> dict[str, Any]:
     """A site's module selection (docs/modules.md): hosts, slot choices, bindings and grants.
 
     Only the shape: every cross-reference (a provider fills the slot, an agent key exists, a grant
-    is allowed) is a loader rule (``tests/schemas/module_rules.py``, ``site_problems``)."""
+    is allowed) is a loader rule (``homelabnext/modules/rules.py``, ``site_problems``)."""
     mid = {
         "allOf": [pat(SLUG, None, 48), {"not": {"pattern": "-shadow$"}}],
         "description": "A module id.",

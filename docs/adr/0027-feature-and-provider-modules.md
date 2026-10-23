@@ -108,7 +108,7 @@ request's base (unreadable is an error), or a push's previous tip, or `HEAD^` wh
 or gone (a new branch, a force-push), so a push compared with `HEAD^` sees only its last commit;
 `main` has no branch protection, so these gates are advisory until it does), their generator (`python -m homelabnext.schemas`, checked in CI), the
 fictional examples, and the loader's rules as pure functions applied to those examples by the
-contract tests (`tests/schemas/module_rules.py`), each shown refusing a planted defect. There is no
+contract tests (`homelabnext/modules/rules.py`), each shown refusing a planted defect. There is no
 loader: nothing reads a manifest at deploy time.
 
 **Specified, not implemented** (described in [modules](../modules.md#specified-not-implemented-the-follow-ups),
