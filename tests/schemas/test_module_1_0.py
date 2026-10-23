@@ -18,12 +18,12 @@ import copy
 import json
 from pathlib import Path
 
-import module_rules as mr
 import pytest
 import schema_check as sc
 import yaml
 
 from homelabnext._yaml import UniqueKeyLoader
+from homelabnext.modules import rules as mr
 
 ROOT = Path(__file__).resolve().parents[2]
 REG = sc.build_registry(ROOT)
