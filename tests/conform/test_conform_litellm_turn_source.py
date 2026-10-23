@@ -290,7 +290,7 @@ def test_an_accepted_timeout_is_stored_as_a_plain_float(timeout):
 def test_page_size_and_max_pages_are_plain_ints_in_range(option):
     """max_pages=1e308 raised a TypeError inside range() on the first read and page_size=True was
     taken as 1; a lying int subclass passed the range check with any value."""
-    with pytest.raises(SpendLogError, match="page_size is 1..1000"):
+    with pytest.raises(SpendLogError, match=r"page_size is 1\.\.1000"):
         SpendLogReader("https://gateway.example.com", **option)
 
 
