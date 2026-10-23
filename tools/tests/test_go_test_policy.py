@@ -192,6 +192,18 @@ def test_a_quarantined_subtest_carries_its_parent(tmp_path):
     assert run(tmp_path, lines, policy_yaml=QUARANTINE.format(test="TestTable", until="2026-02-01")) == 0  # fmt: skip
 
 
+def test_a_quarantined_subtest_does_not_carry_its_parents_own_failure(tmp_path, capsys):
+    # TestParent runs t.Run("flaky", ...) (quarantined) and then fails an assertion of its own
+    lines = fixture("parent_own_failure.json")
+    sub = "quarantine:\n  - {test: TestParent/flaky, package: internal/p, owner: me, until: 2026-02-01, reason: flaky}\n"
+    assert run(tmp_path, lines, policy_yaml=sub) == 1
+    out = capsys.readouterr().out
+    assert "FAIL example.com/fixture/internal/p TestParent: fails with output of its own" in out
+    assert "parent's own real assertion" in out
+    # a quarantine naming the parent itself tolerates it
+    assert run(tmp_path, lines, policy_yaml=sub.replace("TestParent/flaky", "TestParent")) == 0
+
+
 @pytest.mark.parametrize(
     ("until", "why"),
     [

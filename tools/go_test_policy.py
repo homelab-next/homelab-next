@@ -17,7 +17,8 @@
 Reads the event stream of ``go test -json`` (one or more files) and fails on:
 
 * a failing test, unless a valid quarantine names it (or, for a parent test, every failing
-  subtest under it is quarantined);
+  subtest under it is quarantined and the parent wrote nothing of its own: a parent whose own
+  output has a line outside its subtests, its own ``t.Error`` say, needs an entry naming it);
 * a package that failed without a failing test: a build failure (``build-fail``), a panic in
   ``TestMain`` or ``init``, a timeout;
 * a skip whose reason (the last line the test wrote before ``--- SKIP``) matches none of the
@@ -293,11 +294,18 @@ def judge(
     for pkg, test in sorted(failing):
         e = quarantined(pkg, test)
         subs = [t for p, t in failing if p == pkg and t.startswith(test + "/")]
+        own = _own_lines(run.tests[(pkg, test)])
         if e:
             notes.append(f"quarantined failure {pkg} {test} (owner {e.owner}, until {e.until})")
         elif not subs:
             problems.append(f"FAIL {pkg} {test}")
-        # a parent fails with its subtests: they are judged (reported or quarantined) on their own
+        elif own:
+            # its own assertion failed too: a quarantined subtest must not carry it
+            problems.append(
+                f"FAIL {pkg} {test}: fails with output of its own, outside its subtests "
+                f"({_oneline(own)}); only a quarantine naming {test} tolerates that"
+            )
+        # otherwise a parent fails with its subtests: they are judged (reported or quarantined)
 
     reported_builds = set()
     for pkg, res in sorted(run.packages.items()):
@@ -351,6 +359,11 @@ def judge(
                 problems.append(f"FAIL (privileged run) {pkg} {test}")
         problems += [f"(privileged run) {b}" for b in privileged_run.bad_lines]
     return problems, notes
+
+
+def _own_lines(res: Result) -> list[str]:
+    """What a test wrote itself: its output minus test2json framing (subtests have their own)."""
+    return [line for line in res.output if line.strip() and not FRAMING.match(line)]
 
 
 def _oneline(lines: list[str], limit: int = 200) -> str:

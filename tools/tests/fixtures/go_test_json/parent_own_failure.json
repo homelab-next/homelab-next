@@ -1,0 +1,19 @@
+{"Time":"2026-10-23T01:09:19.834054977Z","Action":"start","Package":"example.com/fixture/internal/p"}
+{"Time":"2026-10-23T01:09:19.836181101Z","Action":"run","Package":"example.com/fixture/internal/p","Test":"TestParent"}
+{"Time":"2026-10-23T01:09:19.836548766Z","Action":"output","Package":"example.com/fixture/internal/p","Test":"TestParent","Output":"=== RUN   TestParent\n"}
+{"Time":"2026-10-23T01:09:19.836590758Z","Action":"run","Package":"example.com/fixture/internal/p","Test":"TestParent/flaky"}
+{"Time":"2026-10-23T01:09:19.836593191Z","Action":"output","Package":"example.com/fixture/internal/p","Test":"TestParent/flaky","Output":"=== RUN   TestParent/flaky\n"}
+{"Time":"2026-10-23T01:09:19.836596059Z","Action":"output","Package":"example.com/fixture/internal/p","Test":"TestParent/flaky","Output":"    p_test.go:4: flaky\n"}
+{"Time":"2026-10-23T01:09:19.836602482Z","Action":"output","Package":"example.com/fixture/internal/p","Test":"TestParent/flaky","Output":"--- FAIL: TestParent/flaky (0.00s)\n"}
+{"Time":"2026-10-23T01:09:19.836605239Z","Action":"fail","Package":"example.com/fixture/internal/p","Test":"TestParent/flaky","Elapsed":0}
+{"Time":"2026-10-23T01:09:19.836610827Z","Action":"output","Package":"example.com/fixture/internal/p","Test":"TestParent","Output":"    p_test.go:5: parent's own real assertion\n"}
+{"Time":"2026-10-23T01:09:19.83661423Z","Action":"output","Package":"example.com/fixture/internal/p","Test":"TestParent","Output":"--- FAIL: TestParent (0.00s)\n"}
+{"Time":"2026-10-23T01:09:19.836617548Z","Action":"fail","Package":"example.com/fixture/internal/p","Test":"TestParent","Elapsed":0}
+{"Time":"2026-10-23T01:09:19.836619794Z","Action":"run","Package":"example.com/fixture/internal/p","Test":"TestSkipLog"}
+{"Time":"2026-10-23T01:09:19.836621604Z","Action":"output","Package":"example.com/fixture/internal/p","Test":"TestSkipLog","Output":"=== RUN   TestSkipLog\n"}
+{"Time":"2026-10-23T01:09:19.836623894Z","Action":"output","Package":"example.com/fixture/internal/p","Test":"TestSkipLog","Output":"    p_test.go:7: backend not available\n"}
+{"Time":"2026-10-23T01:09:19.836626406Z","Action":"output","Package":"example.com/fixture/internal/p","Test":"TestSkipLog","Output":"--- SKIP: TestSkipLog (0.00s)\n"}
+{"Time":"2026-10-23T01:09:19.83662838Z","Action":"skip","Package":"example.com/fixture/internal/p","Test":"TestSkipLog","Elapsed":0}
+{"Time":"2026-10-23T01:09:19.836630456Z","Action":"output","Package":"example.com/fixture/internal/p","Output":"FAIL\n"}
+{"Time":"2026-10-23T01:09:19.836830191Z","Action":"output","Package":"example.com/fixture/internal/p","Output":"FAIL\texample.com/fixture/internal/p\t0.002s\n"}
+{"Time":"2026-10-23T01:09:19.836842574Z","Action":"fail","Package":"example.com/fixture/internal/p","Elapsed":0.003}
