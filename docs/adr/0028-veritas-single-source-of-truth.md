@@ -45,21 +45,32 @@ file.
    - **Tests.** A test module that is a drift check (decision 6 names them) is a gate. Everything
      else under `tests/` is test data, not Veritas: fixtures are inputs made up for one test, and
      goldens are generated snapshots that pin a renderer, regenerated when the renderer changes on
-     purpose. `conformance/targets/` (where a suite is aimed) is site configuration of the harness,
-     not Veritas; the fakes in `conformance/fakes/` are code.
+     purpose. The same holds for `conformance/fixtures/`. `conformance/targets/` (where a suite is
+     aimed) is site configuration of the harness, not Veritas; the fakes in `conformance/fakes/`
+     are code.
    - **Prose is not Veritas** (ADRs, guides, this page), except where a generator reads it as data:
      the tables of `docs/build-order.md` and `docs/checklist.md` feed the roadmap map (ADR-0018).
    - **`schemas/_frozen/` is written once** by `tools/schema_check.py --freeze` and is then
      authoritative history: append-only, checked against the base by `--base`.
-3. **The public tier** is this repository's Veritas files. By the rule above it includes:
+   - **Append-only events count as authored**, whoever appends them. A record's `<uid>.events/`
+     sidecar (ADR-0014) holds reviews, `value` readings appended by a tool and `transition` events
+     written only by the decider; each file is written once, never regenerated and never edited,
+     and the gates and the rollup read them as the record's history. They belong to the record's
+     tier. What is derived is the state computed from them (a record's current status, a rollup).
+3. **The public tier** is this repository's Veritas files. The lists below are examples of the
+   rule, not a closed inventory; by the rule it includes:
    - the JSON Schemas under `schemas/` with `schemas/_frozen/` (ADR-0001), their authored examples
-     and negatives, and `capabilities.yml`. Excluded, because `homelabnext/schemas/` writes them:
-     `schemas/platform/module.schema.json`, `schemas/platform/lake_table.schema.json`,
-     `schemas/platform/examples/module.*` and `schemas/platform/negative/module.*`;
+     and negatives, and `capabilities.yml`. Excluded: every file `python -m homelabnext.schemas`
+     writes, which is exactly
+     `schemas/platform/{module,lake_table,module_selection}.schema.json` and
+     `schemas/platform/{examples,negative}/{module,module_selection,lake_table}.*`
+     (`tools/tests/test_generated_files_have_checks.py` compares these globs with the generator's
+     own output list);
    - the shipped `profiles/`;
    - the contracts, gates and gate configuration named in decision 2;
    - the detections (ADR-0006): the Sigma rules (`detections/sigma/`) with their fixtures
-     (`detections/fixtures/`) and the pinned ATT&CK snapshots (`detections/attack_snapshots/`), but
+     (`detections/fixtures/`), the field mappings (`detections/mappings/`) and the pinned ATT&CK
+     snapshots (`detections/attack_snapshots/`), but
      not the derived `detections/det_map.yml` and `detections/attack_coverage.json`;
    - the workflow packs (`workflows/packs/`) and the StackStorm binding
      (`workflows/stackstorm.yml`);
@@ -72,8 +83,9 @@ file.
      (`examples/model-serving/gateway.yml`, `serving.yml`, and the lab's
      `compose/lab-in-a-box/config/llm-gateway/gateway.yml`; not the rendered `litellm/` and
      `bifrost/` beside them), the keyring sources, the MCP catalog and its render specs, the
-     status views, registers and strategy records. The derived files under `examples/` are the
-     ones decision 6 lists.
+     status views, the review policy (`examples/review-policy.yml`), registers and strategy
+     records with their `.events/` sidecars. The derived files under `examples/` are the ones
+     decision 6 lists.
 4. **The private tier** is one site's overlay repository (ADR-0021, `docs/private-overlay.md`):
    - under `lab/`: the service registry (`services.yml`), the site facts (`site.yml`), guests,
      registers, strategy records, customizations, the MCP catalog (`mcp/`), sealed files
@@ -97,10 +109,10 @@ file.
 6. **The derived artifacts today, and what checks each** (only those that exist).
    `tools/tests/test_generated_files_have_checks.py` is a heuristic backstop for this table: a
    tracked file whose first lines carry a marker comment ("generated ... do not edit", or a
-   `generated_from` key) must match a row there that names a CI step or a CI-run test module.
-   It does not see a derived file without such a marker. Those are listed here by hand: the JSON
-   gateway outputs (`.../litellm/keys.json`, `.../bifrost/*.json`), the module schemas, examples
-   and negatives, `docs/scripts/catalog.json`, the golden reports
+   `generated_from` key) must match a row there that names a CI step or a CI-run test module. It
+   does not see a derived file without such a marker. Those are listed here by hand: the JSON
+   gateway outputs (`.../litellm/keys.json`, `.../bifrost/*.json`), the schema generators'
+   output (decision 3), `docs/scripts/catalog.json`, the golden reports
    (`homelabnext/agent/prompts/injection/report.json`, `examples/model_roles.eval.json`,
    `detections/attack_coverage.json`), and derived blocks inside authored files (Links blocks,
    `hnx:gen` blocks).
@@ -109,7 +121,7 @@ file.
    |---|---|---|
    | System SOP pages, `docs/systems/*.md` (generated blocks) | the registry | `hnx docs systems check examples/services.yml docs/systems` (CI) |
    | Capability reference pages, `docs/capabilities/` | contracts, suites, adapters | `hnx docs capabilities check` (CI) |
-   | Module schemas, examples and negatives: `schemas/platform/{module,lake_table}.schema.json`, `schemas/platform/{examples,negative}/module.*` | `homelabnext/schemas/` and `examples/modules/` | `python -m homelabnext.schemas --check` (CI) |
+   | Module schemas, examples and negatives, every file `python -m homelabnext.schemas` writes: `schemas/platform/{module,lake_table,module_selection}.schema.json`, `schemas/platform/{examples,negative}/{module,module_selection,lake_table}.*` | `homelabnext/schemas/`, the example modules `examples/modules/*/module.yml`, the site profiles `examples/modules/sites/` and the module lake tables `examples/modules/*/lake/` | `python -m homelabnext.schemas --check` (CI) |
    | MCP client configs, `examples/mcp/clients/*/` | the MCP catalog, the render specs `examples/mcp/clients/*.yml`, the profiles | `make mcp-check` (CI) |
    | Agent keyring, `examples/keyring/keyring.json` | the files `examples/keyring/sources.yml` names: the registry, the agent profiles, the broker manifest | `hnx agent keyring check` (CI) |
    | LLM gateway config, `compose/lab-in-a-box/config/llm-gateway/{litellm,bifrost}/` | role table, profiles, the lab's `gateway.yml` | pytest `tests/generators/test_llm_gateway.py` (CI); `make gateway-check` (`make check`) |
