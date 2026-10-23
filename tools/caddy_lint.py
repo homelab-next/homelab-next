@@ -1860,7 +1860,7 @@ def _semantic(item: Pending, adapter: Adapter) -> tuple[list[Finding], bool]:
 
 
 def scan(
-    root: Path, allow: list[tuple[str, str]] | None = None, adapter: Adapter | None = None
+    root: Path, allow: list[AllowEntry] | None = None, adapter: Adapter | None = None
 ) -> tuple[list[Finding], dict[str, int | str]]:
     findings: list[Finding] = []
     counts: dict[str, int | str] = {
@@ -1875,6 +1875,7 @@ def scan(
     ctx = CaddyContext(root)
     unread: list[tuple[str, int]] = []  # files with a forward_auth the lint did not read
     pending: list[Pending] = []  # Caddyfiles for the semantic check
+    json_files: set[str] = set()  # Caddy JSON/YAML configs
     listed, counts["discovery"] = files(root)
     for p, rel in listed:
         name = p.name
@@ -1924,6 +1925,8 @@ def scan(
                 counts["caddy_configs"] += len(embedded)
                 judged, n = _json_configs(text, rel, p.suffix == ".json")
                 findings += judged
+                if n:
+                    json_files.add(rel)
                 counts["caddy_configs"] += n
                 counts["json_configs"] += n
                 if _is_registry(text):
@@ -1971,15 +1974,29 @@ def scan(
         got, judged = _semantic(item, adapter)
         findings += got
         counts["adapted" if judged else "text_only"] += 1
-    return apply_allowlist(findings, allow or []), counts
+    configs = set(ctx.parsed) | {i.rel.split(" (", 1)[0] for i in pending} | json_files
+    return apply_allowlist(findings, allow or [], configs), counts
 
 
 class AllowlistError(Exception):
     """The allowlist file is malformed (exit 2)."""
 
 
-def load_allowlist(path: Path | None) -> list[tuple[str, str]]:
-    """``(path glob, reason)`` entries from ``tools/caddy_lint.allow.yml``."""
+#: the rules an allowlist entry may excuse
+RULES = ("strip", "reset", "parse", "coverage", "generate", "pin", "semantic")
+
+
+class AllowEntry(NamedTuple):
+    """One reviewed exception: the findings of ``rules`` in the file(s) ``path`` names."""
+
+    path: str
+    reason: str
+    rules: tuple[str, ...]
+
+
+def load_allowlist(path: Path | None) -> list[AllowEntry]:
+    """The entries of ``tools/caddy_lint.allow.yml``: each a ``path`` (a file, or a glob that
+    names no Caddy config; never bare ``*``/``**``), a ``reason`` and the ``rules`` it excuses."""
     if path is None or not path.is_file():
         return []
     try:
@@ -1993,27 +2010,61 @@ def load_allowlist(path: Path | None) -> list[tuple[str, str]]:
     for i, e in enumerate(entries):
         fields = e if isinstance(e, dict) else {}
         glob, why = (str(fields.get(k) or "").strip() for k in ("path", "reason"))
-        problem = "needs a 'path' glob" if not glob else "has no 'reason'" if not why else ""
+        rules = fields.get("rules")
+        problem = ""
+        if not glob:
+            problem = "needs a 'path'"
+        elif not glob.replace("*", "").replace("/", ""):
+            problem = f"path {glob!r} matches every file: name the file"
+        elif not why:
+            problem = "has no 'reason'"
+        elif not isinstance(rules, list) or not rules:
+            problem = f"needs 'rules': a list of the rules it excuses ({', '.join(RULES)})"
+        elif unknown := [r for r in rules if r not in RULES]:
+            problem = f"names unknown rules {unknown} (known: {', '.join(RULES)})"
         if problem:
             raise AllowlistError(f"{path}: entry {i} {problem}")
-        out.append((glob, why))
+        out.append(AllowEntry(glob, why, tuple(dict.fromkeys(str(r) for r in rules))))
     return out
 
 
-def apply_allowlist(findings: list[Finding], allow: list[tuple[str, str]]) -> list[Finding]:
-    """The findings no entry excuses, plus one ``allowlist`` finding per entry that excuses
-    nothing (a stale entry would silently waive the next real finding in that file)."""
-    used: set[int] = set()
+def apply_allowlist(
+    findings: list[Finding], allow: list[AllowEntry], configs: set[str] | None = None
+) -> list[Finding]:
+    """The findings no entry excuses (an entry excuses only its own rules), plus an
+    ``allowlist`` finding for each rule of an entry that excuses nothing (a stale entry would
+    silently waive the next real finding in that file) and for each glob entry that names a
+    file the lint reads as a Caddy config (a config is excused file by file, by name)."""
+    used: set[tuple[int, str]] = set()
     kept = []
     for f in findings:
         rel = f.path.split(" (", 1)[0]
-        hit = [i for i, (g, _) in enumerate(allow) if fnmatch.fnmatchcase(rel, g)]
-        used.update(hit)
+        hit = [
+            i for i, e in enumerate(allow) if f.rule in e.rules and fnmatch.fnmatchcase(rel, e.path)
+        ]
+        used.update((i, f.rule) for i in hit)
         if not hit:
             kept.append(f)
-    for i, (g, _) in enumerate(allow):
-        if i not in used:
-            kept.append(Finding(DEFAULT_ALLOWLIST, 0, "allowlist", f"entry {g!r} excuses nothing"))
+    for i, e in enumerate(allow):
+        for rule in e.rules:
+            if (i, rule) not in used:
+                kept.append(
+                    Finding(
+                        DEFAULT_ALLOWLIST, 0, "allowlist", f"entry {e.path!r} excuses no {rule}"
+                    )
+                )
+        if GLOB.search(e.path):
+            named = sorted(c for c in configs or () if fnmatch.fnmatchcase(c, e.path))
+            if named:
+                kept.append(
+                    Finding(
+                        DEFAULT_ALLOWLIST,
+                        0,
+                        "allowlist",
+                        f"entry {e.path!r} is a glob that names the Caddy config {named[0]}: "
+                        "list a config by its own path",
+                    )
+                )
     return kept
 
 

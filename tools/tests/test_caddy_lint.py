@@ -4,6 +4,7 @@
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -491,21 +492,65 @@ def test_the_allowlist(tmp_path):
     (tmp_path / "other.yml").write_text("services:\n  edge:\n    image: caddy:2.9.0\n")
     allow = tmp_path / "allow.yml"
     allow.write_text(
-        "allow:\n  - path: compose.yml\n    reason: a fixture\n"
-        "  - path: gone/*.yml\n    reason: nothing there\n"
+        "allow:\n  - path: compose.yml\n    rules: [pin]\n    reason: a fixture\n"
+        "  - path: gone/*.yml\n    rules: [pin]\n    reason: nothing there\n"
     )
     found, _ = lint.scan(tmp_path, lint.load_allowlist(allow))
     assert [(f.path, f.rule) for f in found] == [
         ("other.yml", "pin"),
         ("tools/caddy_lint.allow.yml", "allowlist"),
     ]
-    assert "'gone/*.yml' excuses nothing" in found[1].detail
+    assert "'gone/*.yml' excuses no pin" in found[1].detail
     out, err = io.StringIO(), io.StringIO()
     assert lint.main([str(tmp_path), "--allowlist", str(allow)], out=out, err=err) == 1
-    allow.write_text("allow:\n  - path: compose.yml\n")
+    allow.write_text("allow:\n  - path: compose.yml\n    rules: [pin]\n")
     assert lint.main([str(tmp_path), "--allowlist", str(allow)], out=out, err=err) == 2
     assert "has no 'reason'" in err.getvalue()
     assert lint.main([str(tmp_path), "--allowlist", str(tmp_path / "no")], out=out, err=err) == 2
+
+
+@pytest.mark.parametrize(
+    ("entry", "error"),
+    [
+        # review SF7: path "*" waived an unprotected edge/Caddyfile, and was never stale
+        ("path: '*'\n    rules: [strip]", "path '*' matches every file"),
+        ("path: '**'\n    rules: [strip]", "path '**' matches every file"),
+        ("path: '**/*'\n    rules: [strip]", "path '**/*' matches every file"),
+        ("path: edge/Caddyfile", "needs 'rules'"),
+        ("path: edge/Caddyfile\n    rules: []", "needs 'rules'"),
+        ("path: edge/Caddyfile\n    rules: [all]", "names unknown rules ['all']"),
+    ],
+)
+def test_an_allowlist_entry_names_its_rules_and_a_bounded_path(tmp_path, entry, error):
+    allow = tmp_path / "allow.yml"
+    allow.write_text(f"allow:\n  - {entry}\n    reason: x\n")
+    with pytest.raises(lint.AllowlistError, match=re.escape(error)):
+        lint.load_allowlist(allow)
+
+
+def test_an_allowlist_entry_excuses_only_its_rules_and_never_a_config_by_glob(tmp_path):
+    (tmp_path / "edge").mkdir()
+    (tmp_path / "edge" / "Caddyfile").write_text(
+        "app.lab.example {\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Authentik-Username\n\t}\n}\n"
+    )
+    (tmp_path / "gen.py").write_text(
+        'SITE = """\nforward_auth idp:9443\n"""\nREG = {"edge": {"impl": "caddy", "version": "2.8.4"}}\n'
+    )
+    allow = tmp_path / "allow.yml"
+    allow.write_text(
+        "allow:\n  - path: gen.py\n    rules: [coverage]\n    reason: x\n"
+        "  - path: edge/*\n    rules: [strip]\n    reason: y\n"
+    )
+    found, _ = lint.scan(tmp_path, lint.load_allowlist(allow))
+    found = sorted(found)
+    assert [(f.path, f.rule) for f in found] == [
+        ("gen.py", "pin"),  # not waived: that entry excuses coverage only
+        ("tools/caddy_lint.allow.yml", "allowlist"),
+    ]
+    assert found[1].detail == (
+        "entry 'edge/*' is a glob that names the Caddy config edge/Caddyfile: list a config by "
+        "its own path"
+    )
 
 
 def test_markdown_blocks_and_files_in_the_tree(tmp_path):
