@@ -212,22 +212,28 @@ def _(b):
     assert calls == [{"name": "x"}], f"the handler got {calls}, not the arguments submitted"
 
 
-@SUITE.check(
-    "audit-redacts-secret-args",
-    "arguments the schema marks secret never appear in the audit trail or an error, any outcome, "
-    "called or deferred",
-)
-def _(b):
+def _secret_command(b):
+    """A command with a secret ``label``, allowed to a fresh caller; it fails (naming the secret in
+    its own error) when ``user`` is ``"fail"`` and returns ``"done"`` otherwise."""
     cmd, caller = uniq("cmd"), uniq("caller")
-    spec = {"user": ArgSpec("str"), "label": ArgSpec("str", secret=True)}
 
     def handler(**kw):
         if kw["user"] == "fail":
             raise RuntimeError(f"cannot use {kw['label']}")
         return "done"
 
-    b.register(cmd, handler, spec)
+    b.register(cmd, handler, {"user": ArgSpec("str"), "label": ArgSpec("str", secret=True)})
     b.allow(caller, [cmd])
+    return cmd, caller
+
+
+@SUITE.check(
+    "audit-redacts-secret-args",
+    "arguments the schema marks secret never appear in the audit trail or an error, any outcome, "
+    "called or deferred",
+)
+def _(b):
+    cmd, caller = _secret_command(b)
     before = len(b.audit())
     raised = []
 
@@ -302,16 +308,7 @@ def _(b):
     "running a request leaves exactly one record of its outcome, operation run, with its id",
 )
 def _(b):
-    cmd, caller = uniq("cmd"), uniq("caller")
-    spec = {"user": ArgSpec("str"), "label": ArgSpec("str", secret=True)}
-
-    def handler(**kw):
-        if kw["user"] == "fail":
-            raise RuntimeError("handler failed")
-        return "done"
-
-    b.register(cmd, handler, spec)
-    b.allow(caller, [cmd])
+    cmd, caller = _secret_command(b)
     for user, outcome in (("svc", "ok"), ("fail", "error")):
         rid = b.submit(caller, cmd, {"user": user, "label": SECRET})
         before = len(b.audit())
