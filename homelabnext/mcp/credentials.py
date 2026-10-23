@@ -402,17 +402,21 @@ def _short_value_credential(flag: str, value: str) -> bool:
 _USER_FLAGS = frozenset(
     ("--user", "--username", "--proxy-user", "--basic-auth", "--userpass", "-a")
 )
-#: a ``host:port`` listen address, which ``-a`` takes in other tools (``-a 0.0.0.0:8080``)
+#: a listen address, which ``-a`` takes in other tools (``-a 0.0.0.0:8080``): an IP, a
+#: bracketed IPv6 address, localhost or an empty host, then a port (a dotted name before a
+#: number may be a user and a numeric password: ``-a alice.smith:2024``)
 _HOST_PORT = re.compile(
-    r"(?:[0-9.]+|\[[0-9A-Fa-f:.]+\]|localhost|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)?:[0-9]{1,5}"
+    r"(?:[0-9]{1,3}(?:\.[0-9]{1,3}){3}|\[[0-9A-Fa-f:.]+\]|localhost)?:[0-9]{1,5}"
 )
 
 
 def _user_password(flag: str, value: str) -> bool:
     """``--user user:password`` / ``--user=user:password`` / ``-a user:password``: a password
     after the colon (a numeric ``uid:gid`` is not one, nor a ``host:port`` after ``-a``)."""
+    # the long flags in any case; a short flag is case-sensitive (curl's -A is a user agent)
+    known = (flag.lower() if flag.startswith("--") else flag) in _USER_FLAGS
     return (
-        flag.lower() in _USER_FLAGS
+        known
         and bool(re.search(r":.", value))
         and "://" not in value
         and not re.fullmatch(r"[0-9]+:[0-9]+", value)
@@ -420,12 +424,16 @@ def _user_password(flag: str, value: str) -> bool:
     )
 
 
-def _attached_user(arg: str) -> bool:
-    """``-uUSER:PASSWORD`` / ``-u=USER:PASSWORD`` (curl and kin): ``-u`` with its
-    ``user:password`` attached, read like ``-u user:password`` (a numeric ``uid:gid`` is not
-    one)."""
-    m = re.fullmatch(r"-u=?([^-=\s].*)", arg)
-    return bool(m) and _user_password("--user", m.group(1))
+def _attached_user(arg: str) -> str | None:
+    """The flag of ``-uUSER:PASSWORD`` / ``-u=USER:PASSWORD`` (curl and kin) or
+    ``-aUSER:PASSWORD`` / ``-a=USER:PASSWORD`` (httpie, argparse): a short user flag with its
+    ``user:password`` attached, read like the separate form (a numeric ``uid:gid`` is not one,
+    nor a listen address after ``-a``)."""
+    m = re.fullmatch(r"-([ua])=?([^-=\s].*)", arg)
+    if not m:
+        return None
+    flag = "-a" if m.group(1) == "a" else "--user"
+    return f"-{m.group(1)}" if _user_password(flag, m.group(2)) else None
 
 
 def _after_credential_flag(prev: str, value: str) -> bool:
@@ -511,8 +519,9 @@ def scan_args(args: Iterable[str]) -> list[Finding]:
         if _attached_password(a):
             out.append(Finding(i, "flag-value", "-p"))
             continue
-        if _attached_user(a):
-            out.append(Finding(i, "flag-value", "-u"))
+        attached = _attached_user(a)
+        if attached:
+            out.append(Finding(i, "flag-value", attached))
             continue
         if is_flag(a):
             continue  # a flag's own name
