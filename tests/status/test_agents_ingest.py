@@ -477,6 +477,20 @@ def test_the_listeners_have_a_listen_backlog_for_a_burst(tmp_path, clock):
         srv.server_close()
 
 
+@pytest.mark.parametrize("value", ["0", "-1", "four"])
+def test_the_ingest_cli_refuses_a_per_client_cap_below_one(value, capsys):
+    """--max-per-client 0 silently fell back to the default of 4."""
+    from pathlib import Path
+
+    from homelabnext.status.cli import main
+
+    root = Path(__file__).resolve().parents[2]
+    rc = main(["ingest", "--registry", str(root / "examples/services.yml"),
+               "--agents", str(root / "examples/status/agents.yml"),
+               "--max-per-client", value])  # fmt: skip
+    assert rc == 2 and "--max-per-client" in capsys.readouterr().err
+
+
 def test_the_default_bounds():
     from homelabnext.status.agents.ingest import DEFAULT_INGEST_CONNECTIONS, DEFAULT_TIMEOUT_S
 
