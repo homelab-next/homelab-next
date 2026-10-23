@@ -28,10 +28,13 @@ GOOD = """\
 }
 
 app.lab.example {
+	request_header -*Authentik*
 	import hnx_forward_auth
 	reverse_proxy app:8080
 }
 """
+# The site-level strip is spelled -*Authentik* (Caddy matches it case-insensitively) so that the
+# tests below that rewrite the route's -*authentik* leave it alone.
 
 
 def _strip(text: str) -> list[str]:
@@ -43,6 +46,13 @@ def _missed(header: str, *spellings: str) -> str:
         f"client-sent {header} is not deleted before forward_auth in the same route in every "
         f"spelling (missed: {', '.join(spellings)})"
     )
+
+
+def _site(fragment: str, *deletes: str) -> str:
+    """``fragment`` inside a site whose site-level strip deletes ``*Authentik*`` and ``deletes``,
+    so a test of the route-level rule sees that rule's findings only."""
+    strips = "".join(f"\trequest_header -{d}\n" for d in ("*Authentik*", *deletes))
+    return f"app.lab.example {{\n{strips}{textwrap.indent(textwrap.dedent(fragment), chr(9))}}}\n"
 
 
 ALL_USER = ("X-Authentik-Username", "X-Authentik_Username", "X_Authentik-Username",
@@ -60,7 +70,7 @@ def test_forward_auth_outside_a_route_fails():
 
 
 def test_a_bare_forward_auth_in_a_site_fails():
-    text = "app.lab.example {\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Authentik-Username\n\t}\n}\n"
+    text = "app.lab.example {\n\trequest_header -*authentik*\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Authentik-Username\n\t}\n}\n"
     assert _strip(text) == ["forward_auth is not directly inside a route block"]
 
 
@@ -128,7 +138,7 @@ def test_exact_names_cover_only_themselves():
         }
     }
     """
-    assert _strip(text) == [
+    assert _strip(_site(text)) == [
         _missed("X-Authentik-Email", "X-Authentik-Email", "X-Authentik_Email",
                 "X_Authentik-Email", "X_Authentik_Email")
     ]  # fmt: skip
@@ -145,7 +155,7 @@ def test_a_strip_in_another_route_does_not_count():
         }
     }
     """
-    assert len(_strip(text)) == 1
+    assert len(_strip(_site(text))) == 1
 
 
 def test_a_renamed_header_and_the_block_form_are_both_read():
@@ -161,6 +171,7 @@ def test_a_renamed_header_and_the_block_form_are_both_read():
         }
     }
     """
+    text = _site(text, "*remote*")
     assert _strip(text) == []
     assert _strip(text.replace("-*_User", "-*_Groups")) == [
         _missed("X-Remote-User", "X-Remote_User", "X_Remote_User")
@@ -194,7 +205,7 @@ def test_an_inline_allow_waives_only_its_own_forward_auth():
     allowed = GOOD.replace(
         "forward_auth idp:9443 {", "forward_auth idp:9443 {  # caddy-lint: allow x"
     )
-    unallowed = "other.lab.example {\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Authentik-Username\n\t}\n}\n"
+    unallowed = "other.lab.example {\n\trequest_header -*authentik*\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Authentik-Username\n\t}\n}\n"
     assert _strip(allowed + unallowed) == ["forward_auth is not directly inside a route block"]
 
 
@@ -441,12 +452,13 @@ def test_the_allowlist(tmp_path):
 def test_markdown_blocks_and_files_in_the_tree(tmp_path):
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "edge.md").write_text(
-        "Setup:\n\n   ```caddyfile\n   app.lab.example {\n   \tforward_auth idp:9443 {\n"
+        "Setup:\n\n   ```caddyfile\n   app.lab.example {\n   \trequest_header -*authentik*\n"
+        "   \tforward_auth idp:9443 {\n"
         "   \t\tcopy_headers X-Authentik-Username\n   \t}\n   }\n   ```\n"
     )
     (tmp_path / "Caddyfile.j2").write_text(GOOD)
     findings, counts = lint.scan(tmp_path)
-    assert [(f.path, f.line) for f in findings] == [("docs/edge.md", 5)]
+    assert [(f.path, f.line) for f in findings] == [("docs/edge.md", 6)]
     assert counts["caddy_configs"] == 2
 
 
@@ -493,10 +505,116 @@ def test_this_repo_pins_a_fixed_caddy_and_strips_before_forward_auth():
     assert doc["generated"] >= 6
 
 
+# ---------------------------------------------------------------- a path past the auth route
+
+PAST = """\
+app.lab.example {
+	%s
+	route%s {
+		request_header -*authentik*
+		forward_auth idp:9443 {
+			uri /outpost.goauthentik.io/auth/caddy
+			copy_headers X-Authentik-Username X-Authentik-Groups
+		}
+	}
+	%s
+	reverse_proxy app:8080
+}
+"""
+
+
+@pytest.mark.parametrize(
+    ("matcher", "beside"),
+    [
+        # Caddy sorts handle before route: /api/x never reaches forward_auth, and the client's
+        # X-Authentik-Groups reached the upstream live on 2.11.7 (review probe a02)
+        ("", "handle /api/* {\n\t\treverse_proxy api:8080\n\t}"),
+        # a matcher on the route: every other path skips it (a03)
+        (" /admin/*", ""),
+        ("", "handle_path /static/* {\n\t\treverse_proxy files:8080\n\t}"),
+    ],
+)
+def test_a_path_past_the_auth_route_needs_the_site_level_strip(matcher, beside):
+    found = lint.lint_caddy(PAST % ("", matcher, beside))
+    assert [(f.line, f.rule) for f in found] == [(1, "strip")]
+    assert found[0].detail.startswith(
+        "site app.lab.example runs forward_auth but has no matcherless site-level "
+        "request_header deleting *authentik*:"
+    )
+    # a site-level request_header runs before every handle and route (verified live on 2.11.1
+    # and 2.11.7: /api/x and / reach the upstream with no identity header, /admin/ with alice's)
+    assert lint.lint_caddy(PAST % ("request_header -*authentik*", matcher, beside)) == []
+
+
+@pytest.mark.parametrize(
+    "site",
+    [
+        "request_header /admin/* -*authentik*",  # a matcher: the other paths keep the headers
+        "request_header @api -*authentik*",
+        "request_header -X-Authentik-*",  # misses the _ and mixed spellings
+        "handle {\n\t\trequest_header -*authentik*\n\t}",  # not site level
+    ],
+)
+def test_only_a_matcherless_site_level_strip_of_every_spelling_counts(site):
+    found = lint.lint_caddy(PAST % (site, "", "handle /api/* {\n\t\treverse_proxy api:8080\n\t}"))
+    assert [f.rule for f in found] == ["strip"] and found[0].detail.startswith("site ")
+
+
+def test_the_site_level_strip_covers_a_renamed_copy_too():
+    text = (
+        (PAST % ("request_header -*authentik*", "", ""))
+        .replace(
+            "copy_headers X-Authentik-Username X-Authentik-Groups",
+            "copy_headers X-Authentik-Username>Remote-User",
+        )
+        .replace("\t\trequest_header -*authentik*", "\t\trequest_header -Remote*")
+    )
+    found = lint.lint_caddy(text)
+    assert [f.rule for f in found] == ["strip"]
+    assert "deleting Remote-User, Remote_User:" in found[0].detail
+    assert (
+        lint.lint_caddy(
+            text.replace(
+                "\trequest_header -*authentik*",
+                "\trequest_header -*authentik*\n\trequest_header -remote*",
+                1,
+            )
+        )
+        == []
+    )
+
+
+def test_a_named_route_runs_its_directives_in_order_and_its_invoker_needs_the_strip():
+    named = """\
+&(authed) {
+	request_header -*authentik*
+	forward_auth idp:9443 {
+		copy_headers X-Authentik-Username
+	}
+	reverse_proxy app:8080
+}
+app.lab.example {
+	%s
+	invoke authed
+}
+"""
+    found = lint.lint_caddy(named % "")
+    assert [(f.line, f.rule) for f in found] == [(8, "strip")]
+    assert lint.lint_caddy(named % "request_header -*authentik*") == []
+
+
+def test_the_generated_sites_need_their_site_level_strip():
+    golden = (REPO / "tests/generators/golden/caddy/sites.caddy").read_text(encoding="utf-8")
+    assert lint.lint_caddy(golden) == []
+    without = golden.replace("\trequest_header -*authentik*\n\timport", "\timport")
+    assert [(f.line, f.rule) for f in lint.lint_caddy(without)] == [(14, "strip"), (25, "strip")]
+
+
 # ---------------------------------------------------------------- an identity header set later
 
 AUTHED = """\
 app.lab.example {
+	request_header -*authentik*
 	route {
 		request_header -*authentik*
 		forward_auth idp:9443 {
@@ -529,18 +647,18 @@ def test_the_authed_shape_passes():
     ("route", "proxy", "site", "expected"),
     [
         # reverse_proxy sets it from a client header after forward_auth ran
-        ("", "header_up X-Authentik-Groups {http.request.header.X-Evil}", "", [(11, "header_up")]),
-        ("", "header_up +X-Authentik-Groups admins", "", [(11, "header_up")]),
-        ("", "header_up X-Authentik-Groups admins users", "", [(11, "header_up")]),
+        ("", "header_up X-Authentik-Groups {http.request.header.X-Evil}", "", [(12, "header_up")]),
+        ("", "header_up +X-Authentik-Groups admins", "", [(12, "header_up")]),
+        ("", "header_up X-Authentik-Groups admins users", "", [(12, "header_up")]),
         # set again inside the route, after forward_auth
-        ("request_header X-Authentik-Groups {http.request.header.X-Evil}", "", "", [(8, "request_header")]),
-        ("request_header +x_authentik_groups admins", "", "", [(8, "request_header")]),
+        ("request_header X-Authentik-Groups {http.request.header.X-Evil}", "", "", [(9, "request_header")]),
+        ("request_header +x_authentik_groups admins", "", "", [(9, "request_header")]),
         # a second route
-        ("", "", "route {\n\t\trequest_header X-Authentik-Username {header.X-Evil}\n\t}", [(14, "request_header")]),
+        ("", "", "route {\n\t\trequest_header X-Authentik-Username {header.X-Evil}\n\t}", [(15, "request_header")]),
         # copied from the client's own header into another one before the route runs
-        ("", "", "request_header X-Remote-User {http.request.header.X-Authentik-Username}", [(13, "request_header")]),
+        ("", "", "request_header X-Remote-User {http.request.header.X-Authentik-Username}", [(14, "request_header")]),
         # a header block
-        ("", "", "header {\n\t\t+X-Authentik_Groups admins\n\t}", [(14, "header")]),
+        ("", "", "header {\n\t\t+X-Authentik_Groups admins\n\t}", [(15, "header")]),
         # deletes are not a reset, and other headers are not identity headers
         ("request_header -X-Authentik-Groups", "header_up -X_Authentik_*", "header {\n\t\t-Server\n\t}", []),
         ("", "header_up Host {upstream_hostport}", "", []),
@@ -556,9 +674,12 @@ def test_a_renamed_target_is_an_identity_header_too():
         "copy_headers X-Authentik-Username>Remote-User",
     )
     findings = lint.lint_caddy(
-        text.replace("-*authentik*", "-*authentik*\n\t\trequest_header -Remote*")
+        text.replace("-*authentik*", "-*authentik*\n\trequest_header -Remote*", 1).replace(
+            "\t\trequest_header -*authentik*",
+            "\t\trequest_header -*authentik*\n\t\trequest_header -Remote*",
+        )
     )
-    assert [(f.line, f.rule) for f in findings] == [(12, "reset")]
+    assert [(f.line, f.rule) for f in findings] == [(14, "reset")]
     assert "Remote-User" in findings[0].detail
 
 
@@ -568,7 +689,7 @@ def test_the_authentik_uri_path_is_not_a_header():
 
 def test_an_inline_allow_waives_one_reset():
     proxy = "header_up X-Authentik-Groups admins  # caddy-lint: allow fixture"
-    assert _resets("request_header X-Authentik-Groups x", proxy) == [(8, "request_header")]
+    assert _resets("request_header X-Authentik-Groups x", proxy) == [(9, "request_header")]
 
 
 # ---------------------------------------------------------------- syntax the lint cannot model
@@ -592,6 +713,7 @@ def test_a_heredoc_fails_closed_and_hides_what_caddy_hides():
 def test_a_heredoc_line_cannot_open_a_phantom_block():
     text = """\
     app.lab.example {
+        request_header -*authentik*
         route {
             request_header -*authentik*
             vars note <<TXT
@@ -603,13 +725,13 @@ def test_a_heredoc_line_cannot_open_a_phantom_block():
         }
     }
     """
-    assert [(ln, r) for ln, r, _ in _rules(text)] == [(4, "parse"), (8, "strip")]
+    assert [(ln, r) for ln, r, _ in _rules(text)] == [(5, "parse"), (9, "strip")]
     assert "not directly inside a route" in _rules(text)[1][2]
 
 
 def test_a_quoted_token_spanning_lines_fails_closed():
-    text = 'app.lab.example {\n\troute {\n\t\trequest_header -*authentik*\n\t\tvars note "a {\n"\n\t}\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Authentik-Username\n\t}\n}\n'
-    assert [(ln, r) for ln, r, _ in _rules(text)] == [(4, "parse"), (7, "strip")]
+    text = 'app.lab.example {\n\trequest_header -*authentik*\n\troute {\n\t\trequest_header -*authentik*\n\t\tvars note "a {\n"\n\t}\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Authentik-Username\n\t}\n}\n'
+    assert [(ln, r) for ln, r, _ in _rules(text)] == [(5, "parse"), (8, "strip")]
 
 
 def test_an_unclosed_quote_fails_closed():
@@ -678,6 +800,7 @@ def test_a_snippet_import_is_expanded_in_place():
         request_header -*authentik*
     }
     app.lab.example {
+        request_header -*authentik*
         route {
             import strip
             forward_auth idp:9443 {
@@ -693,7 +816,11 @@ def test_a_snippet_import_is_expanded_in_place():
 def test_the_generated_snippet_resolves_where_it_is_not_defined():
     # a documented site imports the generated snippet without defining it
     assert (
-        _rules("app.lab.example {\n\timport hnx_forward_auth\n\treverse_proxy app:8080\n}\n") == []
+        _rules(
+            "app.lab.example {\n\trequest_header -*authentik*\n\timport hnx_forward_auth\n"
+            "\treverse_proxy app:8080\n}\n"
+        )
+        == []
     )
 
 
@@ -702,7 +829,7 @@ def test_a_file_import_is_followed_and_a_glob_fails_closed(tmp_path):
     (tmp_path / "conf.d" / "auth.conf").write_text(
         "forward_auth idp:9443 {\n\tcopy_headers X-Authentik-Username\n}\n"
     )
-    site = "app.lab.example {\n\timport %s\n\treverse_proxy app:8080\n}\n"
+    site = "app.lab.example {\n\trequest_header -*authentik*\n\timport %s\n\treverse_proxy app:8080\n}\n"
     ctx = lint.CaddyContext(tmp_path)
     found = lint.lint_caddy(site % "conf.d/auth.conf", "Caddyfile", base=tmp_path, ctx=ctx)
     assert [(f.path, f.line, f.rule) for f in found] == [("conf.d/auth.conf", 1, "strip")]
@@ -711,7 +838,7 @@ def test_a_file_import_is_followed_and_a_glob_fails_closed(tmp_path):
     (tmp_path / "conf.d" / "*.conf").write_text("reverse_proxy app:8080\n")
     for target in ("conf.d/*.conf", "missing.conf", "../outside.conf", "{$CONF}"):
         found = lint.lint_caddy(site % target, "Caddyfile", base=tmp_path, ctx=ctx)
-        assert [(f.line, f.rule) for f in found] == [(2, "parse")], target
+        assert [(f.line, f.rule) for f in found] == [(3, "parse")], target
         assert "cannot be followed" in found[0].detail
     # a markdown block has no directory to resolve a file against
     assert [f.rule for f in lint.lint_caddy(site % "conf.d/auth.conf")] == ["parse"]
@@ -725,7 +852,8 @@ def test_a_snippet_that_imports_itself_terminates():
 # ---------------------------------------------------------------- discovery and coverage
 
 BARE = (
-    "app.lab.example {\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Authentik-Username\n\t}\n}\n"
+    "app.lab.example {\n\trequest_header -*authentik*\n\tforward_auth idp:9443 {\n"
+    "\t\tcopy_headers X-Authentik-Username\n\t}\n}\n"
 )
 
 
@@ -826,7 +954,9 @@ def test_an_imported_file_is_read_as_a_config(tmp_path):
         "route {\n\trequest_header -*authentik*\n\tforward_auth idp:9443 {\n"
         "\t\tcopy_headers X-Authentik-Username\n\t}\n}\n"
     )
-    (tmp_path / "Caddyfile").write_text("app.lab.example {\n\timport conf.d/auth.conf\n}\n")
+    (tmp_path / "Caddyfile").write_text(
+        "app.lab.example {\n\trequest_header -*authentik*\n\timport conf.d/auth.conf\n}\n"
+    )
     assert _found(tmp_path) == []
 
 
@@ -835,7 +965,7 @@ def test_a_caddyfile_embedded_in_yaml_is_read(tmp_path):
         "- name: edge config\n  copy:\n    content: |\n"
         + "".join(f"      {ln}\n" for ln in BARE.splitlines())
     )
-    assert _found(tmp_path) == [("task.yml", 5, "strip")]
+    assert _found(tmp_path) == [("task.yml", 6, "strip")]
     (tmp_path / "task.yml").write_text("- name: forward_auth strips identity headers first\n")
     assert _found(tmp_path) == []
 

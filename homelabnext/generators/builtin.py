@@ -170,7 +170,13 @@ def caddy(reg: Registry) -> dict[str, str]:
     for s in reg.sorted_services():
         if not s.public_hostname:
             continue
-        auth_block = "\timport hnx_forward_auth\n" if (s.auth == "idp" and idp) else ""
+        auth_block = ""
+        if s.auth == "idp" and idp:
+            # the site-level strip runs before every handle and route of the site (Caddy sorts
+            # request_header first), so a path that never reaches the snippet's route (a handle
+            # added beside it, a matcher on a route) still reaches the service without the
+            # client's identity headers; the route-level strip in the snippet stays as well
+            auth_block = f"\trequest_header -*{IDENTITY_HEADER_MARK}*\n\timport hnx_forward_auth\n"
         proxy_block = ""
         if s.front_door and auth_block:
             # the shared secret that tells the service this request came through the edge (and

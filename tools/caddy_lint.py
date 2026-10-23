@@ -522,6 +522,119 @@ def _resets(root: Node, copied: set[str]) -> list[Finding]:
     return out
 
 
+#: a named route (Caddy 2.8+): ``&(name) { ... }``, run by ``invoke name``; its directives run in
+#: the order written, as a ``route``'s do
+NAMED_ROUTE = re.compile(r"^&\((?P<name>[^()]+)\)$")
+
+
+def _kind(node: Node) -> str:
+    """What a top-level block is: the ``global`` options, a ``snippet`` definition, a ``named``
+    route, or a ``site``; ``directive`` for a top-level line without a block."""
+    if not node.block:
+        return "directive"
+    if not node.tokens:
+        return "global"
+    if len(node.tokens) == 1 and SNIPPET.match(node.name):
+        return "snippet"
+    if len(node.tokens) == 1 and NAMED_ROUTE.match(node.name):
+        return "named"
+    return "site"
+
+
+def _covers_mark(pattern: str) -> bool:
+    """Whether ``request_header -<pattern>`` deletes every header whose name contains
+    ``authentik``, in any case and spelling: ``*authentik*``, or a shorter contains-wildcard."""
+    p = pattern.lower()
+    return p == "*" or (len(p) >= 2 and p[0] == p[-1] == "*" and p[1:-1] in "authentik")
+
+
+def _check_auth(node: Node) -> list[Finding]:
+    """One ``forward_auth``: no matcher, directly inside a ``route`` (or a named route), after
+    a delete of every spelling of every header its ``copy_headers`` sets."""
+    findings = []
+    line, where = node.line, node.path
+    if len(node.tokens) > 1 and node.tokens[1].startswith(("@", "/")):
+        findings.append(
+            Finding(
+                where,
+                line,
+                "strip",
+                f"forward_auth {node.tokens[1]}: a request its matcher skips is never "
+                "authenticated",
+            )
+        )
+    route = node.parent
+    if route is None or not (route.name == "route" or _kind(route) == "named"):
+        findings.append(
+            Finding(where, line, "strip", "forward_auth is not directly inside a route block")
+        )
+        return findings
+    before = route.children[: route.children.index(node)]
+    deleted = [
+        n.tokens[1][1:]
+        for n in before
+        if n.name == "request_header" and len(n.tokens) >= 2 and n.tokens[1].startswith("-")
+    ]
+    names, templated = _copied(node)
+    if templated is not None:
+        findings.append(
+            Finding(
+                where,
+                templated,
+                "strip",
+                "copy_headers is templated, so its strip cannot be checked: list the headers",
+            )
+        )
+    for h in names:
+        missed = [sp for sp in spellings(h) if not any(_covers(p, sp) for p in deleted)]
+        if missed:
+            findings.append(
+                Finding(
+                    where,
+                    line,
+                    "strip",
+                    f"client-sent {h} is not deleted before forward_auth in the same route "
+                    f"in every spelling (missed: {', '.join(missed)})",
+                )
+            )
+    return findings
+
+
+def _site_strip(site: Node, direct: list[Node], names: list[str], label: str) -> list[Finding]:
+    """A site that runs ``forward_auth`` anywhere deletes, at site level and with no matcher,
+    every header carrying ``authentik`` and every spelling of every header a ``copy_headers``
+    in it sets. Caddy sorts a site-level ``request_header`` before every ``handle`` and
+    ``route``, so a path that never reaches the auth route (a ``handle /api/*`` beside it, a
+    matcher on the route) cannot carry the client's identity headers to the upstream."""
+    deletes = [
+        n.tokens[1][1:]
+        for n in direct
+        if n.name == "request_header" and len(n.tokens) >= 2 and n.tokens[1].startswith("-")
+    ]
+    missing = [] if any(_covers_mark(p) for p in deletes) else ["*authentik*"]
+    for h in names:
+        if missing[:1] == ["*authentik*"] and "authentik" in h.lower():
+            continue  # already named by the missing *authentik*
+        missing += [
+            sp
+            for sp in spellings(h)
+            if sp not in missing and not any(_covers(p, sp) for p in deletes)
+        ]
+    if not missing:
+        return []
+    return [
+        Finding(
+            site.path,
+            site.line,
+            "strip",
+            f"site {label} runs forward_auth but has no matcherless site-level request_header "
+            f"deleting {', '.join(missing)}: a handle, or a matcher on the auth route, sends a "
+            "request past forward_auth with the client's identity headers (put "
+            "request_header -*authentik* first in the site, as the generator does)",
+        )
+    ]
+
+
 def lint_caddy(
     text: str,
     path: str = "<text>",
@@ -532,58 +645,42 @@ def lint_caddy(
     ctx = ctx or CaddyContext()
     root, findings = parse_caddyfile(text, path, line_offset)
     _expand(root, base, ctx, findings)
-    auths = [n for n in _walk(root) if n.name == "forward_auth"]
+    named = {
+        m.group("name"): c
+        for c in root.children
+        if _kind(c) == "named" and (m := NAMED_ROUTE.match(c.name))
+    }
+    # the sites (and named routes) of the file; top-level directives outside every block are
+    # one more site (a Caddyfile with a single site and no braces, or a fragment)
+    scopes: list[tuple[Node, str, list[Node], list[Node]]] = []
+    loose = [c for c in root.children if _kind(c) == "directive"]
+    if loose:
+        scopes.append((loose[0], "(top level)", loose, loose))
+    for c in root.children:
+        if _kind(c) in ("site", "named"):
+            label = " ".join(c.tokens) if _kind(c) == "site" else ""
+            scopes.append((c, label, list(_walk(c)), c.children))
     copied: set[str] = set()
+    auths = [n for n in _walk(root) if n.name == "forward_auth"]
     for node in auths:
         copied |= {_norm(h) for h in _copied(node)[0]}
     for node in auths:
-        if INLINE_ALLOW.search(node.raw):
-            continue
-        line, where = node.line, node.path
-        if len(node.tokens) > 1 and node.tokens[1].startswith(("@", "/")):
-            findings.append(
-                Finding(
-                    where,
-                    line,
-                    "strip",
-                    f"forward_auth {node.tokens[1]}: a request its matcher skips is never "
-                    "authenticated",
-                )
-            )
-        route = node.parent
-        if route is None or route.name != "route":
-            findings.append(
-                Finding(where, line, "strip", "forward_auth is not directly inside a route block")
-            )
-            continue
-        before = route.children[: route.children.index(node)]
-        deleted = [
-            n.tokens[1][1:]
-            for n in before
-            if n.name == "request_header" and len(n.tokens) >= 2 and n.tokens[1].startswith("-")
+        if not INLINE_ALLOW.search(node.raw):
+            findings += _check_auth(node)
+    for site, label, nodes, direct in scopes:
+        if not label or INLINE_ALLOW.search(site.raw):
+            continue  # a named route is checked where it is invoked
+        invoked = [
+            named[n.tokens[1]]
+            for n in nodes
+            if n.name == "invoke" and len(n.tokens) > 1 and n.tokens[1] in named
         ]
-        names, templated = _copied(node)
-        if templated is not None:
-            findings.append(
-                Finding(
-                    where,
-                    templated,
-                    "strip",
-                    "copy_headers is templated, so its strip cannot be checked: list the headers",
-                )
-            )
-        for h in names:
-            missed = [sp for sp in spellings(h) if not any(_covers(p, sp) for p in deleted)]
-            if missed:
-                findings.append(
-                    Finding(
-                        where,
-                        line,
-                        "strip",
-                        f"client-sent {h} is not deleted before forward_auth in the same route "
-                        f"in every spelling (missed: {', '.join(missed)})",
-                    )
-                )
+        site_auths = [n for n in nodes if n.name == "forward_auth"]
+        site_auths += [n for r in invoked for n in _walk(r) if n.name == "forward_auth"]
+        if not site_auths or all(INLINE_ALLOW.search(n.raw) for n in site_auths):
+            continue
+        names = list(dict.fromkeys(h for n in site_auths for h in _copied(n)[0]))
+        findings += _site_strip(site, direct, names, label)
     findings += _resets(root, copied)
     return list(dict.fromkeys(findings))
 

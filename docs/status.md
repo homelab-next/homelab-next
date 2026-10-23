@@ -573,6 +573,7 @@ The private pages and the `private` menu group exist only for a request that pas
    needs `auth: idp` and a `public_hostname`), and the generated Caddy site adds it:
    ```caddyfile
    status.lab.example {
+   	request_header -*authentik*
    	import hnx_forward_auth
    	reverse_proxy <the hub's capability alias and port> {
    		header_up X-Hnx-Front-Door {env.HNX_SECRET_STATUS_FRONT_DOOR_SECRET}
@@ -591,8 +592,9 @@ examples/status/agents.yml --bind <address> --allow-remote --allowed-host status
 **Check your edge** once: a request to the site with a forged `X-Authentik-Username` and no
 login must not reach the hub with that header. Run Caddy 2.11.2 or later (2.9.0 to 2.11.1 keep a
 client-sent header the IdP omits) with the generated snippet, which deletes every client-sent
-header whose name contains `authentik` (any case, `-` or `_`) inside the same `route` before
-`forward_auth`; `tools/caddy_lint.py` fails CI on a pin or a config that does not. Every private view is
+header whose name contains `authentik` (any case, `-` or `_`) twice: first in the site, so no
+path of the site reaches the hub with one, and again inside the `route` before `forward_auth`;
+`tools/caddy_lint.py` fails CI on a pin or a config that does not. Every private view is
 appended to the access log (`private.access_log`, JSONL, mode 0600: `at`, `user`, `view`,
 `session`, `event`), which is itself a private page. Detail content is rendered as escaped text
 only (never HTML or markdown) and nothing in this code feeds it back into an agent's context.

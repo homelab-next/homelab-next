@@ -236,6 +236,21 @@ def test_forward_auth_strips_every_client_sent_identity_header_first():
     assert snippet.count("{") == snippet.count("}") + 1  # balanced but for the snippet's own
 
 
+def test_every_forward_auth_site_strips_identity_headers_at_site_level_first():
+    """A path that never reaches the snippet's route (a handle beside it, a matcher on a route)
+    must not carry a client's identity headers either: Caddy sorts a site-level request_header
+    before every handle and route, so the site deletes them before anything else runs."""
+    from homelabnext.generators.builtin import IDENTITY_HEADER_MARK
+
+    text = generate(REG, ["caddy"])["caddy"]["caddy/sites.caddy"]
+    sites = [b for b in text.split("\n\n") if "import hnx_forward_auth" in b]
+    assert len(sites) == 2  # dashboards, status-hub
+    for site in sites:
+        lines = [ln.strip() for ln in site.splitlines()[1:] if not ln.strip().startswith("#")]
+        assert lines[0] == f"request_header -*{IDENTITY_HEADER_MARK}*", site
+        assert lines[1] == "import hnx_forward_auth"
+
+
 def test_docs_page_lists_dependants():
     md = generate(REG, ["service_docs"])["service_docs"]["docs/services.md"]
     assert "- Used by: `agent-runtime`" in md  # lake-query is used by agent-runtime

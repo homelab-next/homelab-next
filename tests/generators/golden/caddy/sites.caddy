@@ -13,6 +13,7 @@
 
 dashboards.lab.example {
 	# service dashboards (dashboards) owner=platform-team
+	request_header -*authentik*
 	import hnx_forward_auth
 	reverse_proxy http://dashboards.svc.example.internal:3000
 }
@@ -24,6 +25,7 @@ login.lab.example {
 
 status.lab.example {
 	# service status-hub (status-hub) owner=platform-team
+	request_header -*authentik*
 	import hnx_forward_auth
 	reverse_proxy http://status-hub.svc.example.internal:8099 {
 		header_up X-Hnx-Front-Door {env.HNX_SECRET_STATUS_FRONT_DOOR_SECRET}
