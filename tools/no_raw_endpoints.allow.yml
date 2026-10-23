@@ -89,5 +89,3 @@ allow:
     reason: fictional lab data in the documentation address ranges, used as audit fixtures
   - path: "docs/decommission.md"
     reason: prose example using a documentation address
-  - path: "orchestrator/**/*_test.go"
-    reason: Go tests of the orchestration controller bind httptest servers to loopback and name peers in the documentation ranges; production Go code and its examples take endpoints from config and stay scanned
