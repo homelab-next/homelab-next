@@ -14,7 +14,13 @@ import yaml
 
 from homelabnext.agent import grant_problems
 from homelabnext.agent.access import level_of
-from homelabnext.agent.readers import ToolClasses, default_classes, lint_paths, reader_problems
+from homelabnext.agent.readers import (
+    DEFAULT_CLASSES,
+    ToolClasses,
+    default_classes,
+    lint_paths,
+    reader_problems,
+)
 from homelabnext.mcp import servers
 from homelabnext.registry.model import load
 from homelabnext.reviews import load_policy
@@ -204,7 +210,13 @@ def test_grants_must_name_active_catalog_servers():
     assert "not in the MCP catalog" in grant_problems({"mcp": ["nothing"]}, table)[0]
     assert "is retired" in grant_problems({"mcp": ["puppeteer"]}, table)[0]
     assert "is a draft" in grant_problems({"mcp": ["web-search"]}, table)[0]
-    assert grant_problems({"mcp": ["bash"]}, table) == []  # deprecated: still grantable
+    # bash, exec and terminal were retired by ADR-0030 (agents run commands through the broker)
+    assert "is retired" in grant_problems({"mcp": ["bash"]}, table)[0]
+    meta = {**table.catalog, "ntfy": {**table.catalog["ntfy"], "status": "deprecated"}}
+    doc = yaml.safe_load(DEFAULT_CLASSES.read_text())
+    doc["mcp"] = {k: list(v) for k, v in table.table["mcp"].items()}
+    dep = ToolClasses(doc, catalog=meta)
+    assert grant_problems({"mcp": ["ntfy"]}, dep) == []  # deprecated: still grantable
 
 
 def test_local_only_data_never_reaches_a_cloud_profile():
@@ -333,3 +345,18 @@ def test_capabilities_are_checked_without_a_registry(tmp_catalog, capsys):
     out = capsys.readouterr()
     assert "capabilities names cap:telepathy" in out.out
     assert "note: registry: none beside the catalog" in out.err
+
+
+def test_job_submission_and_shell_commands_are_the_brokers():
+    """ADR-0030: the orchestrator's tool server only reads its queue (a job is submitted through
+    the broker action agent.job.submit, docs/stackstorm.md), and the duplicate shell servers are
+    retired, pointing at the broker's MCP front."""
+    import json
+
+    cat = servers.load(CATALOG)
+    assert [t["name"] for t in cat.get("agent-runtime")["tools"]] == ["queue_summary"]
+    manifest = json.loads((ROOT / "workflows" / "broker.manifest.json").read_text())
+    assert "agent.job.submit" in {a["action"] for a in manifest["actions"]}
+    for sid in ("bash", "exec", "terminal"):
+        assert cat.status(sid) == "retired", sid
+        assert cat.get(sid)["replaced_by"] == "hnx-broker", sid

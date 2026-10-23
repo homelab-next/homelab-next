@@ -469,18 +469,25 @@ def test_grantable_is_an_allowlist_and_a_data_tier_is_required():
     assert "whose data is local-only" in grant_problems({"mcp": ["ok"]}, table, "p", "public")[0]
 
 
-def test_a_deprecated_grant_is_reported_with_its_replacement(tmp_path, capsys):
+def test_a_deprecated_grant_is_reported_with_its_replacement(tmp_path, capsys, monkeypatch):
+    from homelabnext.agent import readers
     from homelabnext.agent.readers import grant_notes
 
-    notes = grant_notes({"mcp": ["bash", "shell"]})
-    assert len(notes) == 1 and "'bash', which is deprecated" in notes[0]
-    assert "grant 'shell' instead" in notes[0]
+    # the shipped catalog deprecates nothing since ADR-0030 retired bash, exec and terminal
+    d = _catalog_copy(tmp_path)
+    rec = yaml.safe_load((d / "ntfy.yml").read_text())
+    rec.update(status="deprecated", reason="moved to slack", replaced_by="slack")
+    (d / "ntfy.yml").write_text(yaml.safe_dump(rec))
+    monkeypatch.setattr(readers, "default_classes", lambda: ToolClasses.load(catalog=d))
+    notes = grant_notes({"mcp": ["ntfy", "slack"]})
+    assert len(notes) == 1 and "'ntfy', which is deprecated" in notes[0]
+    assert "grant 'slack' instead" in notes[0]
     p = tmp_path / "p.yml"
-    p.write_text(yaml.safe_dump({"id": "profile:x", "persona": "persona:a", "mcp": ["bash"],
+    p.write_text(yaml.safe_dump({"id": "profile:x", "persona": "persona:a", "mcp": ["ntfy"],
                                  "capabilities": [], "reads_untrusted": False}))  # fmt: skip
     assert cli.main(["agent", "lint", str(p)]) == 0  # a warning, not a refusal
     err = capsys.readouterr().err
-    assert "note:" in err and "grant 'shell' instead" in err
+    assert "note:" in err and "grant 'slack' instead" in err
     found: list[tuple[str, str]] = []
     lint_paths([p], None, found)
     assert found and "deprecated" in found[0][1]

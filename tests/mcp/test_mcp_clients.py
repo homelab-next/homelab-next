@@ -252,16 +252,23 @@ def test_the_grants_block_is_spliced_in_place():
 
 
 def test_a_deprecated_grant_renders_with_a_note(tmp_path):
+    # the shipped catalog deprecates nothing since ADR-0030 retired bash, exec and terminal
+    d = tmp_path / "mcp"
+    shutil.copytree(ROOT / "examples" / "mcp", d, ignore=shutil.ignore_patterns("clients"))
+    _lax_review_policy(tmp_path)
+    rec = yaml.safe_load((d / "ntfy.yml").read_text())
+    rec.update(status="deprecated", reason="moved to slack", replaced_by="slack")
+    (d / "ntfy.yml").write_text(yaml.safe_dump(rec))
     prof = tmp_path / "p.json"
     doc = json.loads(COLLECTOR.read_text())
-    doc["mcp"] = doc["mcp_ceiling"] = ["bash"]
+    doc["mcp"] = doc["mcp_ceiling"] = ["ntfy"]
     doc["reads_untrusted"] = False
     prof.write_text(json.dumps(doc))
     text, notes = clients.render_profile(
-        CATALOG, prof, "claude-code", policy=WIDE, npm_prefix=NPM_PREFIX
+        servers.load(d), prof, "claude-code", policy=WIDE, npm_prefix=NPM_PREFIX
     )
-    assert "bash" in json.loads(text)["mcpServers"]
-    assert any("deprecated" in n and "grant 'shell' instead" in n for n in notes)
+    assert "ntfy" in json.loads(text)["mcpServers"]
+    assert any("deprecated" in n and "grant 'slack' instead" in n for n in notes)
 
 
 def test_render_anchors_npx_at_an_absolute_npm_prefix(tmp_path):
@@ -270,7 +277,7 @@ def test_render_anchors_npx_at_an_absolute_npm_prefix(tmp_path):
     client's working directory."""
     prof = tmp_path / "p.json"
     doc = json.loads(COLLECTOR.read_text())
-    doc["mcp"] = doc["mcp_ceiling"] = ["bash"]
+    doc["mcp"] = doc["mcp_ceiling"] = ["ntfy"]
     doc["reads_untrusted"] = False
     prof.write_text(json.dumps(doc))
     with pytest.raises(clients.RenderError, match="npm_prefix is not given"):
@@ -280,7 +287,7 @@ def test_render_anchors_npx_at_an_absolute_npm_prefix(tmp_path):
     text, _ = clients.render_profile(
         CATALOG, prof, "claude-code", policy=WIDE, npm_prefix=NPM_PREFIX
     )
-    assert json.loads(text)["mcpServers"]["bash"]["args"][:2] == ["-y", f"--prefix={NPM_PREFIX}"]
+    assert json.loads(text)["mcpServers"]["ntfy"]["args"][:2] == ["-y", f"--prefix={NPM_PREFIX}"]
     spec = tmp_path / "spec.yml"
     spec.write_text(yaml.safe_dump({
         "client": "claude-code", "catalog": str(ROOT / "examples" / "mcp"), "policy": "pol.yml",
