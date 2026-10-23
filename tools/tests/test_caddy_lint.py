@@ -692,6 +692,134 @@ def test_an_inline_allow_waives_one_reset():
     assert _resets("request_header X-Authentik-Groups x", proxy) == [(9, "request_header")]
 
 
+# Authentik's own Caddy layout (its documentation's Caddy guide): the IdP's own site, the outpost
+# passthrough and a matcher named after it. None of these names a header the upstream receives.
+AUTHENTIK_LAYOUT = """\
+(hnx_forward_auth) {
+	route {
+		request_header -*authentik*
+		forward_auth http://authentik-server:9000 {
+			uri /outpost.goauthentik.io/auth/caddy
+			copy_headers X-Authentik-Username X-Authentik-Groups
+		}
+	}
+}
+
+authentik.lab.example {
+	reverse_proxy authentik-server:9000
+}
+
+app.lab.example {
+	request_header -*authentik*
+	reverse_proxy /outpost.goauthentik.io/* http://authentik-server:9000
+	import hnx_forward_auth
+	reverse_proxy app:8080
+}
+
+wiki.lab.example {
+	request_header -*authentik*
+	@authentik path /outpost.goauthentik.io/*
+	handle @authentik {
+		reverse_proxy authentik-outpost:9000
+	}
+	@admins header X-Authentik-Groups *admins*
+	@editors expression `{http.request.header.X-Authentik-Groups}.contains("editors")`
+	@authentik_api {
+		header X-Authentik-Username *
+		path /api/*
+	}
+	route {
+		request_header -*authentik*
+		forward_auth authentik-outpost:9000 {
+			uri /outpost.goauthentik.io/auth/caddy
+			copy_headers X-Authentik-Username X-Authentik-Groups
+		}
+	}
+	handle @admins {
+		reverse_proxy wiki-admin:8080
+	}
+	reverse_proxy wiki:8080
+}
+"""
+
+
+def test_authentiks_own_caddy_layout_passes():
+    """Review SF3: every token carrying authentik was a reset, so the IdP's own vhost, the
+    outpost passthrough, the default authentik-server service name and an @authentik matcher
+    were all refused; only header field names and header placeholders are judged now."""
+    assert lint.lint_caddy(AUTHENTIK_LAYOUT) == []
+
+
+def test_a_header_matcher_is_not_a_header_set_but_a_header_directive_still_is():
+    text = AUTHENTIK_LAYOUT.replace(
+        "\thandle @admins {", "\theader X-Authentik-Role admin\n\thandle @admins {"
+    )
+    assert [(f.rule, f.detail.split(" other ")[0]) for f in lint.lint_caddy(text)] == [
+        ("reset", "header names the identity header X-Authentik-Role")
+    ]
+
+
+def test_a_snippet_definition_is_judged_where_it_is_imported():
+    """Review SF4: a snippet holding the strip and forward_auth, imported inside a route, was a
+    strip finding at its definition (whose parent is the snippet, not a route)."""
+    text = """\
+(auth) {
+	request_header -*authentik*
+	forward_auth idp:9443 {
+		uri /outpost.goauthentik.io/auth/caddy
+		copy_headers X-Authentik-Username X-Authentik-Groups
+	}
+}
+
+app.lab.example {
+	request_header -*authentik*
+	route {
+		import auth
+	}
+	reverse_proxy app:8080
+}
+"""
+    assert lint.lint_caddy(text) == []
+    # imported outside a route, its copy is a finding where it lands (on the snippet's line)
+    found = lint.lint_caddy(text.replace("\troute {\n\t\timport auth\n\t}", "\timport auth"))
+    assert [(f.line, f.rule) for f in found] == [(3, "strip")]
+    # and an unused snippet is not judged at all: Caddy ignores it
+    assert lint.lint_caddy(text.split("app.lab.example")[0]) == []
+
+
+def test_a_copied_name_is_an_identity_header_only_in_its_own_site():
+    """Review N5: a copy_headers ...>Remote-User in one site made a basic_auth site's own
+    Remote-User a reset."""
+    text = """\
+app.lab.example {
+	request_header -*authentik*
+	request_header -remote*
+	route {
+		request_header -*authentik*
+		request_header -remote*
+		forward_auth idp:9443 {
+			copy_headers X-Authentik-Username>Remote-User
+		}
+	}
+	reverse_proxy app:8080
+}
+legacy.lab.example {
+	basic_auth {
+		bob $2a$14$Zkx19XLiW6VYouLHR5NmfOFU0z2GTNmpkT/5qqR7hx4IjWJPDhjvG
+	}
+	reverse_proxy legacy:8080 {
+		header_up Remote-User {http.auth.user.id}
+	}
+}
+"""
+    assert lint.lint_caddy(text) == []
+    same_site = text.replace(
+        "\treverse_proxy app:8080\n",
+        "\treverse_proxy app:8080 {\n\t\theader_up Remote-User bob\n\t}\n",
+    )
+    assert [(f.line, f.rule) for f in lint.lint_caddy(same_site)] == [(12, "reset")]
+
+
 # ---------------------------------------------------------------- syntax the lint cannot model
 
 

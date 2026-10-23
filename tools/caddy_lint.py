@@ -463,11 +463,12 @@ def spellings(header: str) -> list[str]:
     return out
 
 
-#: a header name that carries the identity provider's mark (``X-Authentik-Groups``,
-#: ``x_authentik_username``, ``*authentik*``), but not a word that merely contains it
-AUTH_NAME = re.compile(r"(?i)(?<![a-z0-9])(?:[a-z0-9]+[-_])*\*?authentik(?:[-_*][a-z0-9*]*)*")
-HEADER_WORD = re.compile(r"[A-Za-z0-9_-]+")
-#: directives whose ``-<field>`` deletes a header
+#: a placeholder that reads a request header: ``{http.request.header.X}``, its ``{header.X}``
+#: shorthand, and the ``{http.reverse_proxy.header.X}`` / ``{rp.header.X}`` of a proxied answer
+HEADER_PLACEHOLDER = re.compile(
+    r"(?i)\{(?:http\.request\.header|header|http\.reverse_proxy\.header|rp\.header)\.(?P<name>[^{}]+)\}"
+)
+#: directives whose arguments name a header field (and ``-<field>`` deletes it)
 HEADER_DIRECTIVES = {"request_header", "header", "header_up", "header_down"}
 
 
@@ -475,9 +476,35 @@ def _norm(name: str) -> str:
     return name.lower().replace("_", "-")
 
 
-def _is_delete(node: Node, tok: str) -> bool:
-    owner = node if node.name in HEADER_DIRECTIVES else node.parent
-    return tok.startswith("-") and owner is not None and owner.name in HEADER_DIRECTIVES
+def _in_matcher(node: Node) -> bool:
+    """Inside a named matcher (``@name ...`` or its block): a ``header`` there matches a
+    request, it does not set one."""
+    n: Node | None = node
+    while n is not None:
+        if n.name.startswith("@"):
+            return True
+        n = n.parent
+    return False
+
+
+def _header_args(node: Node) -> tuple[str, list[str]] | None:
+    """``(directive, [field, value...])`` when ``node`` sets, adds, replaces or deletes a header:
+    ``request_header``/``header`` after an optional matcher, ``header_up``/``header_down``, or a
+    line of a ``header`` block. None for anything else (a site address, an upstream, a
+    matcher), which never names a header the upstream receives."""
+    if _in_matcher(node):
+        return None
+    if node.name in ("request_header", "header"):
+        args = node.tokens[1:]
+        if args and (args[0].startswith(("@", "/")) or args[0] == "*"):
+            args = args[1:]
+        return node.name, args
+    if node.name in ("header_up", "header_down"):
+        return node.name, node.tokens[1:]
+    parent = node.parent
+    if parent is not None and parent.name == "header" and node.name not in ("defer", "match"):
+        return "header", node.tokens
+    return None
 
 
 def _in_forward_auth_copy(node: Node) -> bool:
@@ -492,33 +519,43 @@ def _in_forward_auth_copy(node: Node) -> bool:
     return False
 
 
-def _resets(root: Node, copied: set[str]) -> list[Finding]:
-    """Every directive that names an identity header other than to delete it: a later
-    ``request_header``/``header_up``/``header`` setting, adding or replacing one, or a
-    placeholder copying one into another header. Each would let a client choose the value
-    the service trusts, whatever the strip before ``forward_auth`` did."""
+def _resets(nodes: list[Node], copied: set[str]) -> list[Finding]:
+    """Every header directive that sets, adds or replaces an identity header (a field name
+    carrying ``authentik`` or one a ``copy_headers`` of the same site sets, in any spelling), or
+    copies one into another header through a placeholder. Each would let a client choose the
+    value the service trusts, whatever the strip before ``forward_auth`` did. Only header field
+    names and header placeholders are judged: a site address, an upstream host or a matcher
+    named after the IdP is not a header."""
+
+    def identity(name: str) -> bool:
+        return "authentik" in name.lower() or _norm(name) in copied
+
     out = []
-    for node in _walk(root):
+    for node in nodes:
         if _in_forward_auth_copy(node) or INLINE_ALLOW.search(node.raw):
             continue
-        for tok in node.tokens:
-            if _is_delete(node, tok):
-                continue
-            hits = [m.group(0) for m in AUTH_NAME.finditer(tok)]
-            hits += [w for w in HEADER_WORD.findall(tok) if _norm(w.lstrip("-")) in copied]
-            if hits:
-                parent = node.parent
-                label = parent.name if parent and parent.name in HEADER_DIRECTIVES else node.name
-                out.append(
-                    Finding(
-                        node.path,
-                        node.line,
-                        "reset",
-                        f"{label} names the identity header {hits[0]} other than to delete "
-                        "it: only forward_auth's copy_headers may set it",
-                    )
+        got = _header_args(node)
+        if not got or not got[1] or got[1][0].startswith("-"):
+            continue  # nothing named, or a delete
+        label, (field, *values) = got[0], got[1]
+        bare = field.lstrip("+?>")
+        hits = [bare] if identity(bare) else []
+        hits += [
+            m.group("name")
+            for v in values
+            for m in HEADER_PLACEHOLDER.finditer(v)
+            if identity(m.group("name"))
+        ]
+        if hits:
+            out.append(
+                Finding(
+                    node.path,
+                    node.line,
+                    "reset",
+                    f"{label} names the identity header {hits[0]} other than to delete "
+                    "it: only forward_auth's copy_headers may set it",
                 )
-                break
+            )
     return out
 
 
@@ -650,8 +687,10 @@ def lint_caddy(
         for c in root.children
         if _kind(c) == "named" and (m := NAMED_ROUTE.match(c.name))
     }
-    # the sites (and named routes) of the file; top-level directives outside every block are
-    # one more site (a Caddyfile with a single site and no braces, or a fragment)
+    # what is judged: each site, each named route, and the top-level directives outside every
+    # block (a Caddyfile with one site and no braces, or a fragment). A snippet definition is
+    # judged where it is imported (its expanded copy), never where it is defined: Caddy
+    # ignores an unused snippet, and a definition has no site around it.
     scopes: list[tuple[Node, str, list[Node], list[Node]]] = []
     loose = [c for c in root.children if _kind(c) == "directive"]
     if loose:
@@ -660,28 +699,27 @@ def lint_caddy(
         if _kind(c) in ("site", "named"):
             label = " ".join(c.tokens) if _kind(c) == "site" else ""
             scopes.append((c, label, list(_walk(c)), c.children))
-    copied: set[str] = set()
-    auths = [n for n in _walk(root) if n.name == "forward_auth"]
-    for node in auths:
-        copied |= {_norm(h) for h in _copied(node)[0]}
-    for node in auths:
-        if not INLINE_ALLOW.search(node.raw):
-            findings += _check_auth(node)
     for site, label, nodes, direct in scopes:
-        if not label or INLINE_ALLOW.search(site.raw):
-            continue  # a named route is checked where it is invoked
         invoked = [
             named[n.tokens[1]]
             for n in nodes
             if n.name == "invoke" and len(n.tokens) > 1 and n.tokens[1] in named
         ]
-        site_auths = [n for n in nodes if n.name == "forward_auth"]
-        site_auths += [n for r in invoked for n in _walk(r) if n.name == "forward_auth"]
-        if not site_auths or all(INLINE_ALLOW.search(n.raw) for n in site_auths):
-            continue
+        own = [n for n in nodes if n.name == "forward_auth"]
+        site_auths = own + [n for r in invoked for n in _walk(r) if n.name == "forward_auth"]
+        # the headers this site's forward_auth sets: identity headers here, not in other sites
         names = list(dict.fromkeys(h for n in site_auths for h in _copied(n)[0]))
-        findings += _site_strip(site, direct, names, label)
-    findings += _resets(root, copied)
+        for node in own:
+            if not INLINE_ALLOW.search(node.raw):
+                findings += _check_auth(node)
+        if (
+            label  # a named route is checked where it is invoked
+            and site_auths
+            and not INLINE_ALLOW.search(site.raw)
+            and not all(INLINE_ALLOW.search(n.raw) for n in site_auths)
+        ):
+            findings += _site_strip(site, direct, names, label)
+        findings += _resets(nodes, {_norm(h) for h in names})
     return list(dict.fromkeys(findings))
 
 
