@@ -89,7 +89,10 @@ and only while its marker says ``fictional: true``.  Findings:
                    attribute), which also reads what does not parse (Markdown prose and fences
                    of any kind, and each joined cell and textual output of a notebook).  Either
                    fails on an address-like token that is not a documentation address
-                   (RFC 5737, ``2001:db8::/32``, ``3fff::/20``).  Address-like: an IPv6
+                   (RFC 5737, ``2001:db8::/32``, ``3fff::/20``); the raw rule and the parse
+                   pass also let through loopback, unspecified (0/8) and link-local, and judge
+                   an IPv6 form inside ``::/96`` by its embedded IPv4 address (``::``, the
+                   ``[::-1]`` of a slice).  Address-like: an IPv6
                    address, a dotted form of four parts in any numeric spelling, an integer
                    (decimal, hex, octal, binary, underscored, float, sexagesimal) of 2**24 or
                    more, a short form that cannot be a version or a decimal (a hex part or a
@@ -1140,13 +1143,14 @@ def _numeric_offends(groups: tuple[str | None, ...], context: bool) -> bool:
     for net in nets:
         if plen is not None and len(plen) <= 3 and int(plen) <= 32:
             net = ipaddress.IPv4Network((int(net.network_address), int(plen)), strict=False)
-        if not _is_documentation(net):
+        if not _names_no_site(net):
             return True
     return False
 
 
 def _offending_tokens(region: str) -> list[str]:
-    """The address-like tokens of ``region`` that are not documentation addresses."""
+    """The address-like tokens of ``region`` that may name a site: not a documentation
+    address, and not loopback, unspecified or link-local (:func:`_names_no_site`)."""
     region = _ascii_digits(region)
     bad: list[str] = []
     masked = list(region)
@@ -1165,7 +1169,7 @@ def _offending_tokens(region: str) -> list[str]:
         if plen is not None:
             with contextlib.suppress(ValueError):
                 net6 = ipaddress.ip_network(f"{ip6}/{int(plen)}", strict=False)
-        if not _is_documentation(net6):
+        if not _names_no_site(net6):
             bad.append(m.group(0))
     region = "".join(masked)
     for m in _NUM_TOKEN.finditer(region):
@@ -1178,7 +1182,7 @@ def _offending_tokens(region: str) -> list[str]:
         for p in m.group(0).replace("_", "").split(":"):
             value = value * 60 + int(p)
         if value >= 1 << 24 and (
-            value >= 1 << 32 or not _is_documentation(ipaddress.IPv4Network(value))
+            value >= 1 << 32 or not _names_no_site(ipaddress.IPv4Network(value))
         ):
             bad.append(m.group(0))
     return bad
@@ -1424,6 +1428,29 @@ def _is_documentation(net: ipaddress.IPv4Network | ipaddress.IPv6Network) -> boo
     if net.version == 6 and net.prefixlen >= 96 and any(net.subnet_of(e) for e in _EMBEDDED_96):
         low = int(net.network_address) & 0xFFFFFFFF
         return is_documentation(ipaddress.ip_network((low, net.prefixlen - 96)))
+    return False
+
+
+def _special_use(net: ipaddress.IPv4Network | ipaddress.IPv6Network) -> bool:
+    """A network wholly inside a block that names no site, as ``address_literals`` reads it:
+    "this network" (IPv4 0/8, which holds the unspecified address), the unspecified IPv6
+    address, loopback and link-local, in both families."""
+    if net.version == 4 and int(net.broadcast_address) >> 24 == 0:
+        return True
+    return net.is_unspecified or net.is_loopback or net.is_link_local
+
+
+def _names_no_site(net: ipaddress.IPv4Network | ipaddress.IPv6Network) -> bool:
+    """What the raw rule lets through: a documentation network (:func:`_is_documentation`), a
+    special-use one (:func:`_special_use`: a bind address, a metadata endpoint), or a /96-layout
+    IPv6 form whose embedded IPv4 address is one of those.  So ``::``, ``::2`` and the ``::ba``
+    of ``Foo<T>::bar`` are judged by their low 32 bits, which fall in 0/8; the IPv4-compatible
+    or mapped form of a real address is still refused."""
+    if _is_documentation(net) or _special_use(net):
+        return True
+    if net.version == 6 and net.prefixlen >= 96 and any(net.subnet_of(e) for e in _EMBEDDED_96):
+        low = int(net.network_address) & 0xFFFFFFFF
+        return _names_no_site(ipaddress.ip_network((low, net.prefixlen - 96)))
     return False
 
 

@@ -535,6 +535,12 @@ SHORT_GLOBAL = "81.2." + str(69 * 256 + 142)
 SHORT_HEX = "0x51.0x" + format(2 * 65536 + 69 * 256 + 142, "x")
 SHORT_TWO = "81." + str(2 * 65536 + 69 * 256 + 142)
 #: an allowlisted path (SCOPE_BLOCK_PATHS): a site block there is parsed strictly
+#: special-use addresses that name no site (VERIFY4 SF2), assembled
+LOOPBACK = ".".join(("127", "0", "0", "1"))
+UNSPECIFIED = ".".join(("0",) * 4)
+METADATA = ".".join(("169", "254", "169", "254"))
+#: the public address in the deprecated IPv4-compatible form (::/96, no ffff)
+COMPAT_REAL = ":" * 2 + f"{int(PUBLIC_INT) >> 16:x}:{int(PUBLIC_INT) & 0xFFFF:x}"
 SITE = "examples/modules/sites/probe.yml"
 
 TQ = "'" * 3
@@ -642,6 +648,12 @@ ADDRESS_CASES = {
     "indented ini key": f"[site]\n  scope = {PADDED}/32\n",
     "indented ini value on the next deeper line": f"[site]\n  scope =\n      {PADDED}/32\n",
     "indented toml key": f'[site]\n  scope = ["{PRIVATE_NET}"]\n',
+    # VERIFY4 SF2: special-use addresses are let through, and never shield a real one
+    "ipv4-compatible real": f"scope:\n  target: ['{COMPAT_REAL}']\n",
+    "loopback beside a real address": f"scope:\n  bind: {LOOPBACK}\n  wan: [{PUBLIC_V4}]\n",
+    "mapped loopback beside a real address": (
+        f"scope:\n  bind: '::ffff:{LOOPBACK}'\n  wan: ['{PADDED}/32']\n"
+    ),
     # VERIFY2 B1: loader-valid layouts the raw locator alone missed (the parse pass reads them)
     "toml header, CRLF": f'[scope]\r\ntarget = ["{PRIVATE_NET}"]\r\n',
     "toml array of tables, CRLF": f'[[scope]]\r\ntarget = ["{PRIVATE_NET}"]\r\n',
@@ -824,6 +836,15 @@ PASSING_ELSEWHERE = [
     # its enclosing block (the column is the key's first character, not its line's start)
     "def f(x):\n    scope = x.scope\n    if scope:\n        pass\n    return 17" + "00000000\n",
     "[server]\n  scope = 'local'\n  since = 17" + "00000000\n",
+    # VERIFY4 SF2: loopback, unspecified and link-local name no site; `::` in code (a slice, a
+    # C++ or Ruby scope operator) is judged by its embedded IPv4 address, which is in 0/8
+    "scope = sorted(nets)[" + "::-1]\n",
+    'top = scope.get("nets", [])[' + "::2]\n",
+    "scope = Foo<T>" + "::bar()\nscope = " + ":" * 2 + "Account.find(1)\n",
+    f'scope = {{"type": "http", "client": ("{LOOPBACK}", 51234)}}\n',  # an ASGI test scope
+    f"scope:\n  bind: {LOOPBACK}\n  any: {UNSPECIFIED}:9090\n  metadata: {METADATA}\n"
+    + "  v6: '[" + ":" * 2 + "1]:9090'\n  wild: '[" + ":" * 2 + "]:80'\n  ll: 'fe80" + "::1%eth0'\n"
+    + f"  mapped: '::ffff:{LOOPBACK}'\n",
 ]
 
 
