@@ -67,8 +67,6 @@ _SETTING_KEY = re.compile(
     r"|LOCALE|FORMAT|TIMEOUT|LIMIT|ENABLED|DISABLED|READONLY|READ_ONLY|PREFIX|NAMESPACE"
     r"|WORKSPACE|PROJECT|BASE_URL|URL|ENDPOINT)$"
 )
-#: remote paths copied into transport.path; anything else may carry a token and is not copied
-_PLAIN_PATHS = re.compile(r"^/(?:mcp|sse|messages|v[0-9]+/mcp|api/mcp)?/?$")
 _SCHEMES = ("Bearer", "Basic", "Token")
 
 
@@ -98,15 +96,24 @@ def _var(value: str) -> str | None:
 
 def _plain_url(url: str) -> str:
     """A URL as the importer keeps it: scheme, host and port, and the path only when it is a
-    plain MCP path; never userinfo, a query or a fragment."""
+    plain MCP path (:data:`.credentials.MCP_URL_PATH`; check accepts no other path that could
+    carry a credential either); never userinfo, a query or a fragment."""
     try:
         parts = urlsplit(url)
         host = parts.hostname or ""
         port = f":{parts.port}" if parts.port else ""
     except ValueError:
         return ""
-    path = parts.path if _PLAIN_PATHS.fullmatch(parts.path or "/") else ""
-    return f"{parts.scheme}://{host}{port}{path}"
+    path = parts.path if credentials.MCP_URL_PATH.fullmatch(parts.path or "/") else ""
+    return f"{parts.scheme}://{_plain_host(host)}{port}{path}"
+
+
+def _plain_host(host: str) -> str:
+    """``host`` with every label that looks like a credential replaced by ``unknown``."""
+    labels = host.split(".")
+    for i in credentials.secret_host_labels(host):
+        labels[i] = "unknown"
+    return ".".join(labels)
 
 
 _URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s,]+")
@@ -300,11 +307,11 @@ def draft(
     kind = str(entry.get("type") or entry.get("transport") or "")
     if url:
         parts = urlsplit(str(url))
-        host = (parts.hostname or "unknown").split(".")[0]
+        host = _plain_host(parts.hostname or "unknown").split(".")[0]
         rec["origin"] = {"kind": "unknown", "hint": "a remote server: name the code it runs"}
         rec["transport"] = {"type": "sse" if kind == "sse" else "streamable-http",
                             "endpoint": f"svc:{_slug(host)}"}  # fmt: skip
-        if _PLAIN_PATHS.fullmatch(parts.path or "/"):
+        if credentials.MCP_URL_PATH.fullmatch(parts.path or "/"):
             rec["transport"]["path"] = parts.path.rstrip("/") or "/mcp"
         else:
             notes.append(

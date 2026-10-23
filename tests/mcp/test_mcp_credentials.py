@@ -83,6 +83,21 @@ FOUND = [
     (["\u2014token", "fakeabc"], {}),
     (["--key", "fake-k3y-0a1b"], {}),
     (["--auth", "Bearer fakeTokenAbc"], {}),
+    # the long forms of -u user:password
+    (["--user", "admin:fakeHunter13Pw"], {}),
+    (["--user=admin:fakeHunter13Pw"], {}),
+    (["--username", "admin:fakepw"], {}),
+    (["--proxy-user=admin:fakepw"], {}),
+    # attached -u and httpie's -a user:password
+    (["-uadmin:fakepw"], {}),
+    (["-u=admin:fakepw"], {}),
+    (["-a", "admin:fakepw"], {}),
+    (["-a", "admin:12345"], {}),
+    (["-aadmin:fakepw"], {}),
+    (["-a=admin:fakepw"], {}),
+    (["-a", "alice.smith:2024"], {}),  # a dotted user and a numeric password, not host:port
+    (["-a", "db.prod:65535"], {}),
+    (["-a", "alice:/Secr3tPw"], {}),  # a plain word before ":/" may be a user
 ]  # fmt: skip
 
 #: (args, settings) of a record: none of these is a credential
@@ -129,6 +144,21 @@ ACCEPTED = [
     (["--include", "^src/.*\\.(ts|tsx)$"], {}),
     (["--model", "qwen2.5-coder:32b-instruct-q4_K_M"], {}),
     (["-port", "8080"], {}),
+    (["--user", "1000:1000"], {}),  # uid:gid, not user:password
+    (["--user", "analyst"], {}),
+    (["-u1000:1000"], {}),  # uid:gid attached
+    (["-uanalyst"], {}),
+    (["-a", "0.0.0.0:8080"], {}),  # a listen address, not user:password
+    (["-a", "localhost:8080"], {}),  # no-raw-endpoint: allow a flag value under test, never dialled
+    (["-a", "[::1]:8080"], {}),
+    (["-a", ":8080"], {}),
+    (["-a"], {}),
+    (["-A", "Mozilla/5.0 (X11; rv:109.0) Gecko/20100101"], {}),  # curl's user agent
+    (["-A", "localhost:8080"], {}),  # no-raw-endpoint: allow a flag value under test, never dialled
+    (["-a", "LOCALHOST:8080"], {}),  # no-raw-endpoint: allow a flag value under test, never dialled
+    (["-a", "localhost.:8080"], {}),
+    (["-a", "backup.example.com:/data"], {}),  # rsync-style host:/path
+    (["-a", "C:/work/out"], {}),
     # round 3 (9): import keeps a reference, a URL list and a user agent as they are
     (["--header", "Authorization: Bearer secret:mcp/srv-token"], {}),
     (["--header=Authorization: Bearer secret:mcp/srv-token"], {}),
@@ -265,3 +295,39 @@ def test_looks_secret_both_ways():
     assert credentials.credential_name("DB_PASSWORD")
     assert not credentials.credential_name("--no-auth")
     assert not credentials.credential_name("--token-file")
+
+
+@pytest.mark.parametrize(
+    ("args", "flag"),
+    [
+        (["-uadmin:fakepw"], "-u"),
+        (["-u=admin:fakepw"], "-u"),
+        (["-a", "admin:fakepw"], "-a"),
+        (["--user", "admin:fakepw"], "--user"),
+        (["-aadmin:fakepw"], "-a"),
+        (["-a=admin:fakepw"], "-a"),
+        (["-a", "alice.smith:2024"], "-a"),
+    ],
+)
+def test_scan_args_finds_attached_and_short_user_password_forms(args, flag):
+    """curl's attached ``-uUSER:PW`` and httpie's ``-a USER:PW`` are ``--user USER:PW``."""
+    (finding,) = credentials.scan_args(args)
+    assert finding.flag == flag and finding.index == len(args) - 1
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["-u1000:1000"],
+        ["-a", "0.0.0.0:8080"],
+        ["-a127.0.0.1:8080"],
+        ["-uanalyst"],
+        ["-A", "Mozilla/5.0 (X11; rv:109.0) Gecko/20100101"],
+        ["-A", "localhost:8080"],  # no-raw-endpoint: allow a flag value under test, never dialled
+        ["-a", "Localhost.:8080"],
+        ["-a", "backup.example.com:/srv/data"],
+        ["-aC:/x"],
+    ],
+)
+def test_scan_args_leaves_uid_gid_and_listen_addresses(args):
+    assert credentials.scan_args(args) == []

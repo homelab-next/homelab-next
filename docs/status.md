@@ -351,7 +351,9 @@ the screener is not importable. In `~/.claude/settings.json` (or a project's
 }
 ```
 
-The token comes from `HNX_STATUS_INGEST_TOKEN` (`--token-env` names another variable). On the
+The token comes from `HNX_STATUS_INGEST_TOKEN` (`--token-env` names another variable). The hook
+sends it only to an `https://` URL (plain `http://` only to a loopback address) and follows no
+redirect, so a misconfigured hub or anything on the path cannot collect it. On the
 hub's own host use `--spool build/status/agent-spool` instead of `--post`. `--surface` overrides
 the local/cloud guess (`CLAUDE_CODE_REMOTE=true` reads as cloud); `--runtime codex` reports a
 CLI with the same hook shape; `--no-detail` never sends the private tier.

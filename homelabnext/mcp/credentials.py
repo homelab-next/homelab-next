@@ -259,6 +259,51 @@ def looks_secret(value: str) -> bool:
     return _entropy(v) >= 3.5
 
 
+#: the MCP paths endpoints use: the only paths the importer copies (anything else may carry a
+#: token), and plain to check
+MCP_URL_PATH = re.compile(r"^/(?:mcp|sse|messages|v[0-9]+/mcp|api/mcp)?/?$")
+#: a path segment that cannot be a credential: a lower-case word (hyphens allowed) or a version
+_PLAIN_SEGMENT = re.compile(r"^(?:[a-z]+(?:-[a-z]+)*|v[0-9]{1,3})$")
+
+
+def plain_url_path(path: str) -> bool:
+    """A URL path that cannot carry a credential, the only kind check accepts in a hosted
+    server's URL: an MCP path (:data:`MCP_URL_PATH`, which the importer copies), or segments that
+    are each a lower-case word or a version (``/servers/tracker/mcp``, written by a reviewer).
+    Hosted endpoints often put the key in the path (``/mcp/<key>/sse``); a record cannot hold a
+    ``secret:`` reference there, so such a URL is reshaped (the key goes in a header)."""
+    if MCP_URL_PATH.fullmatch(path or "/"):
+        return True
+    segments = (path or "/").removeprefix("/").removesuffix("/").split("/")
+    return all(
+        len(seg) <= 32 and _PLAIN_SEGMENT.fullmatch(seg) and not looks_secret(seg)
+        for seg in segments
+    )
+
+
+def _host_label_secret(label: str) -> bool:
+    """A host label that looks like a credential.  An IDN label (``xn--...``) is judged in its
+    decoded Unicode form: the ASCII encoding of an ordinary word in another script reads as
+    random letters and digits.  A label that does not decode is judged as it is written.  Any
+    error from the decoder counts as "does not decode": Python 3.13's punycode decoder raises
+    OverflowError on some labels, and a validator must refuse or accept, never crash."""
+    if label.lower().startswith("xn--"):
+        try:
+            return looks_secret(label.encode("ascii").decode("idna"))
+        except Exception:  # UnicodeError, ValueError, OverflowError (3.13)
+            pass
+    return looks_secret(label)
+
+
+def secret_host_labels(host: str) -> list[int]:
+    """Indexes of the labels of ``host`` that look like a credential: every label, the top-level
+    domain and a single-label host included, since a key can sit in a subdomain
+    (``<key>.mcp.vendor.example``), the second-level label or a bare search-domain name.  A real
+    top-level domain never looks like one (no digits, or too short)."""
+    labels = (host or "").rstrip(".").split(".")
+    return [i for i, label in enumerate(labels) if _host_label_secret(label)]
+
+
 def url_carries(value: str) -> bool:
     """A URL with a credential in it: userinfo (a password, or a user that is not a plain account
     name), a credential-named query parameter, or a path segment or query value that looks like a
@@ -367,10 +412,60 @@ def _short_value_credential(flag: str, value: str) -> bool:
     return False
 
 
+#: flags whose ``user:password`` value carries a password, like ``-u`` (curl and kin; ``-a`` is
+#: httpie's ``--auth``)
+_USER_FLAGS = frozenset(
+    ("--user", "--username", "--proxy-user", "--basic-auth", "--userpass", "-a")
+)
+#: a listen address, which ``-a`` takes in other tools (``-a 0.0.0.0:8080``): an IP, a
+#: bracketed IPv6 address, localhost (any case, a trailing dot allowed) or an empty host, then
+#: a port (a dotted name before a number may be a user and a numeric password:
+#: ``-a alice.smith:2024``)
+_HOST_PORT = re.compile(
+    r"(?:[0-9]{1,3}(?:\.[0-9]{1,3}){3}|\[[0-9A-Fa-f:.]+\]|(?i:localhost)\.?)?:[0-9]{1,5}"
+)
+#: a path after ``-a``: a host-shaped name (dotted, an IP, a bracketed IPv6 address or localhost)
+#: or a drive letter, then ``:/`` (rsync-style ``backup.example.com:/data``, ``C:/x``); a plain
+#: word before ``:/`` may be a user (``alice:/Secr3tPw``)
+_HOST_PATH = re.compile(
+    r"(?:[A-Za-z]|(?i:localhost)\.?|\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\.?)?:/"
+)
+
+
+def _user_password(flag: str, value: str) -> bool:
+    """``--user user:password`` / ``--user=user:password`` / ``-a user:password``: a password
+    after the colon (a numeric ``uid:gid`` is not one, nor a ``host:port`` after ``-a``)."""
+    # the long flags in any case; a short flag is case-sensitive (curl's -A is a user agent)
+    known = (flag.lower() if flag.startswith("--") else flag) in _USER_FLAGS
+    return (
+        known
+        and bool(re.search(r":.", value))
+        and "://" not in value
+        and not re.fullmatch(r"[0-9]+:[0-9]+", value)
+        # after -a, a listen address or a path (rsync-style host:/data, C:/x) is not one
+        and not (flag == "-a" and (_HOST_PORT.fullmatch(value) or _HOST_PATH.match(value)))
+    )
+
+
+def _attached_user(arg: str) -> str | None:
+    """The flag of ``-uUSER:PASSWORD`` / ``-u=USER:PASSWORD`` (curl and kin) or
+    ``-aUSER:PASSWORD`` / ``-a=USER:PASSWORD`` (httpie, argparse): a short user flag with its
+    ``user:password`` attached, read like the separate form (a numeric ``uid:gid`` is not one,
+    nor a listen address after ``-a``)."""
+    m = re.fullmatch(r"-([ua])=?([^-=\s].*)", arg)
+    if not m:
+        return None
+    flag = "-a" if m.group(1) == "a" else "--user"
+    return f"-{m.group(1)}" if _user_password(flag, m.group(2)) else None
+
+
 def _after_credential_flag(prev: str, value: str) -> bool:
-    """``value`` is the credential ``prev`` takes (``--token X``, ``-p X``, ``-u user:pw``)."""
+    """``value`` is the credential ``prev`` takes (``--token X``, ``-p X``, ``-u user:pw``,
+    ``--user user:pw``)."""
     if prev in ("-p", "-u", "-k"):
         return not is_path(value) and _short_value_credential(prev, value)
+    if _user_password(prev, value):
+        return True
     return (
         len(prev) > 2
         and prev[0] in _DASHES
@@ -439,13 +534,17 @@ def scan_args(args: Iterable[str]) -> list[Finding]:
         if is_flag(a) and eq:
             if flag in HEADER_FLAGS:
                 out.append(Finding(i, "header", flag))
-            elif name_value_credential(flag, val):
+            elif name_value_credential(flag, val) or _user_password(flag, val):
                 out.append(Finding(i, "flag-value", flag))
             elif carries(val):
                 out.append(Finding(i, "value", flag))
             continue
         if _attached_password(a):
             out.append(Finding(i, "flag-value", "-p"))
+            continue
+        attached = _attached_user(a)
+        if attached:
+            out.append(Finding(i, "flag-value", attached))
             continue
         if is_flag(a):
             continue  # a flag's own name

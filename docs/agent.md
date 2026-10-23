@@ -177,8 +177,14 @@ take, each with params that are literals or `$output.<path>` references (`$$` es
 - **Free text never becomes a parameter.** The actor does not choose params: `build_request`
   computes them from the declaration and the accepted output. A reference may name only a
   *constrained* field (`is_constrained`: `enum`/`const`, number, boolean, a checked `format` -
-  `date`, `ipv4`, `ipv6`, `uuid` - or a closed `pattern`: anchored at both ends, no top-level `|`,
-  no `.`, negated class or `\S`/`\W`/`\D`). `summary`, `unknowns`, cites, memory updates and
+  `date`, `ipv4`, `ipv6`, `uuid` - or a closed `pattern`, judged on the tree Python's `re` parses it to: anchored at both ends, no top-level `|`, no `(?#` comment,
+  and every character it can match - as a literal, an alternative or a class member - an ASCII
+  letter, digit or one of `-_.:/@+=,~%` (so no `.`, negated class, `\w`, `\d` or `\s`, which
+  Python matches against Unicode, and no whitespace), no inline flag such as `(?i)`, no match
+  that can start with `-` (an argv-fed handler would read it as an option; the handler's own
+  `params_schema` stays the real bound on a value), and a length bound (`maxLength`, or every repeat in the
+  parsed pattern bounded by at most 4096); arrays only through `items` and closed objects only through `properties`, so a
+  schema with `prefixItems`, `patternProperties`, `$ref` or a combinator counts as free text). `summary`, `unknowns`, cites, memory updates and
   any unconstrained string are free text; a declaration that binds one is refused. Bound strings
   are also refused if they hold a control character (`$` matches before a final newline). This is
   the workflows validator's `risky-params` rule, applied to every action, since everything an actor
@@ -216,10 +222,22 @@ pack, pack_hash = assemble_pack(manifest, {"sections": {...}, "pregates": {...}}
   `[REDACTED:<type>:<n>]`, stable across the pack (the same address is the same label in every
   section, compared normalised; numbers follow first appearance in pack order). Types: private
   keys, JWTs, vendor tokens (AWS, GitHub, GitLab, Slack, Google, npm, Hugging Face, Stripe-style,
-  `sk-` keys, bearer credentials), keyed secrets (`password=`, `"token":`, `--password x`, "the
-  password is x", `user:pass@` in URLs), deny-list terms, Luhn-checked card numbers with an issuer
+  `sk-` keys, `Authorization:` credentials of any scheme: Bearer, Basic, Digest, Token, ...),
+  keyed secrets (`password=`, `DB_PASS=`, `"token":`, a quoted value with spaces, `--password x`,
+  "the password is x", `Cookie:`/`Set-Cookie:` values, `user:pass@` in URLs), deny-list terms, Luhn-checked card numbers with an issuer
   prefix, e-mail addresses, national-id shapes (SSN, NINO, keyed passport/tax ids), IP addresses
-  and phone numbers. Documentation values (`example.org`, the RFC 5737 ranges, 555 numbers) **are**
+  and phone numbers (an IPv4-mapped IPv6 address is one address). Matching runs on the text and
+  again on a view without format characters (zero-width space, BOM) and with Unicode digits
+  folded (NFKC); the redaction is the union of both, so neither a hidden character nor folding
+  hides a value. Word boundaries are ASCII (`\w`, `\d` and `\b` in each rule mean
+  `[A-Za-z0-9_]`, `[0-9]` and an ASCII boundary; whitespace stays Unicode), so a value glued to a
+  CJK, Thai or Cyrillic letter (`用户alice@example.com已登录`) is found. The cost is the same rate of
+  false positives that spaced text already has: a dotted quad glued to such letters
+  (`バージョン192.0.2.4`) is redacted as an address, as `192.0.2.4` without a version context would <!-- no-raw-endpoint: allow RFC 5737 documentation address in an example -->
+  be. A value overlapped by a higher-priority span keeps its own label for the parts the other span does not cover, so no part of it is left in clear (`password=4111 1111 1111 1111` gives a secret and a card label; the cost is over-redaction, such as the host of an e-mail address whose local part is a token). A label already in the text is never redacted again, so screening screened text changes nothing, and a value split by another span is counted once. When two overlapping spans of one type are merged, the plain text's value labels them, so
+  one value keeps one label. Every rule is linear in the length of the text, whatever the
+  length of a key.
+  Documentation values (`example.org`, the RFC 5737 ranges, 555 numbers) **are**
   redacted: the screener cannot tell a fixture from real data. Version numbers, dates, UUIDs,
   hashes and commit ids in prose, CVE and ATT&CK ids are not. Private, loopback, link-local and
   CGNAT addresses are redacted unless the manifest sets `screen: {redact_private_ips: false}`.
@@ -237,7 +255,12 @@ pack, pack_hash = assemble_pack(manifest, {"sections": {...}, "pregates": {...}}
   `<delim> <name> [stable] <delim>`. Session and volatile sections are input, so their fences
   carry a per-pack nonce derived from the digest of that content
   (`<delim> <name> [<tier>] <nonce> <delim>` ... `<delim> end <name> <nonce> <delim>`), and any line
-  of their text that starts with the delimiter is prefixed `[escaped] `. Input therefore cannot
+  of their text that starts with the delimiter is prefixed `[escaped] `. A line is what any line
+  boundary ends (CR, VT, FF, NEL, U+2028 and U+2029 as well as LF), and the test reads the line
+  as a reader sees it: NFKC-folded (a full-width delimiter reads as the ASCII one), with format characters, combining
+  marks and blank fillers (U+3164, U+FFA0, U+115F, U+1160, U+2800) dropped wherever they are and
+  leading whitespace skipped; the template lint and the
+  injection eval's fake model read lines the same way. Input therefore cannot
   open a section of its own, least of all a stable one. This is a structural guarantee about the
   text, not about the model: a model can still be persuaded by data it reads, so the broker, not
   the pack, is what limits what an agent can do.

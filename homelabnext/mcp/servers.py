@@ -85,7 +85,8 @@ ORCH_DENIED_ENV = re.compile(
 #: TLS stack and the shell read to load code or redirect trust inside any of these processes are
 #: refused too: OpenSSL's configuration (OPENSSL_CONF loads an engine's shared object, so npx
 #: dlopens whatever it names) and certificate stores (OPENSSL_*, SSL_CERT_*, REQUESTS_CA_BUNDLE,
-#: CURL_CA_BUNDLE), every proxy (*_PROXY: HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, NO_PROXY, any
+#: CURL_CA_BUNDLE), the TLS key log (SSLKEYLOGFILE: Python's ssl, curl, NSS and Node write every
+#: session's keys to the file it names), every proxy (*_PROXY: HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, NO_PROXY, any
 #: case), glibc's module, locale, resolver and allocator knobs (GCONV_PATH, LOCPATH, NLSPATH,
 #: HOSTALIASES, RES_OPTIONS, LOCALDOMAIN, GLIBC_TUNABLES, MALLOC_*, TZDIR), the other
 #: interpreters' option and library variables (JAVA_TOOL_OPTIONS, _JAVA_OPTIONS,
@@ -98,7 +99,7 @@ DENIED_ENV = re.compile(
     r"|OPENSSL_|SSL_CERT_|MALLOC_|BASH_FUNC_).*"
     r"|DOCKER_(?:HOST|CONFIG|CERT_PATH|CONTEXT|API_VERSION|DEFAULT_PLATFORM|BUILDKIT"
     r"|CUSTOM_HEADERS)|PATH|HOME|SHELL|BASH_ENV|ENV|HERMES_HOME|NODE|NPM_TOKEN"
-    r"|\w*_PROXY|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|GCONV_PATH|LOCPATH|NLSPATH|HOSTALIASES"
+    r"|\w*_PROXY|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|SSLKEYLOGFILE|GCONV_PATH|LOCPATH|NLSPATH|HOSTALIASES"
     r"|RES_OPTIONS|LOCALDOMAIN|GLIBC_TUNABLES|TZDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS"
     r"|JDK_JAVA_OPTIONS|PERL5OPT|PERL5LIB|PERLLIB|RUBYOPT|RUBYLIB|SHELLOPTS|BASHOPTS|PS4",
     re.I,
@@ -436,14 +437,20 @@ def resolve_bin(origin: Mapping[str, Any], bin_: Any) -> tuple[str | None, str |
 #: real parser.
 HNX_ENTRIES: dict[str, tuple[tuple[str, ...], frozenset[str]]] = {
     # hnx mcp serve: the read-only catalog server (homelabnext/mcp/cli.py)
-    "mcp-serve": (("mcp", "serve"), frozenset({"--root", "--registry", "--scope-from-profile"})),
+    "mcp-serve": (
+        ("mcp", "serve"),
+        frozenset({"--root", "--registry", "--scope-from-profile", "--policy", "--lock"}),
+    ),
     # hnx broker mcp: the broker's agent-facing tools (homelabnext/broker/cli.py)
     "broker-mcp": (("broker", "mcp"), frozenset({"--socket"})),
 }
 #: the hnx entry flags that name a path the server reads (a checkout, a registry, the broker's
 #: socket): absolute, since a relative one resolves in the client's working directory, where the
 #: agent may write a checkout, registry or socket of its own
-HNX_PATH_FLAGS = frozenset({"--root", "--registry", "--socket"})
+HNX_PATH_FLAGS = frozenset({"--root", "--registry", "--socket", "--policy", "--lock"})
+#: flags an entry's flag needs beside it: a profile scopes ``hnx mcp serve`` only when it is
+#: verified against the policy and the lock (the file's own ceiling proves only self-consistency)
+HNX_FLAGS_NEED = {"--scope-from-profile": frozenset({"--policy", "--lock"})}
 
 
 def hnx_args_problems(entry: Any, args: Iterable[Any]) -> list[str]:
@@ -484,6 +491,9 @@ def hnx_args_problems(entry: Any, args: Iterable[Any]) -> list[str]:
             out.append(f"hnx entry {entry}: {flag} is given twice")
         seen.add(flag)
         i += 1
+    for flag, needs in HNX_FLAGS_NEED.items():
+        if flag in seen and not needs <= seen:
+            out.append(f"hnx entry {entry}: {flag} needs {' and '.join(sorted(needs))}")
     return out
 
 
@@ -749,8 +759,10 @@ def remote_problems(rec: Mapping[str, Any], where: str, registry: Any = None) ->
     """A third party's hosted server (``transport.type: remote``): a ``hosted`` origin and
     runtime, egress to the internet, ``data_tier: cloud-allowed``, and an https URL whose host is a public DNS name (not an
     IPv4 address in any notation, :func:`numeric_host`; not a private or test suffix; with a
-    registry, not one of the lab's hosts or its domain).  The URL's shape (https, a lower-case
-    host, no userinfo, query or fragment) is the schema's; its credentials can
+    registry, not one of the lab's hosts or its domain), no host label that looks like a credential
+    (:func:`.credentials.secret_host_labels`), and a path that cannot carry a credential
+    (:func:`.credentials.plain_url_path`, the importer's rule).  The URL's shape (https, a
+    lower-case host, no userinfo, query or fragment) is the schema's; its credentials can
     only be headers' ``secret:`` names (headers are the only place a remote record has)."""
     t, origin = rec.get("transport") or {}, rec.get("origin") or {}
     remote = t.get("type") == "remote"
@@ -774,6 +786,17 @@ def remote_problems(rec: Mapping[str, Any], where: str, registry: Any = None) ->
     host = (url.hostname or "").lower()
     if url.scheme != "https":
         out.append(f"{where}: a remote server's URL is https (never plaintext)")
+    if not credentials.plain_url_path(url.path):
+        out.append(
+            f"{where}: a remote server's URL path may carry a credential (only an MCP path or "
+            "lower-case words and versions): a key goes in a header as a secret: name, never in "
+            "the URL"
+        )
+    if credentials.secret_host_labels(host):
+        out.append(
+            f"{where}: a remote server's URL host may carry a credential in a label: a key goes "
+            "in a header as a secret: name, never in the URL"
+        )
     if (
         not host
         or "." not in host
@@ -894,6 +917,11 @@ def _literal_problems(rec: Mapping[str, Any], where: str) -> list[str]:
         f"{where}: argument {f.index + 1} " + _FINDING[f.kind].format(flag=f.flag)
         for f in credentials.scan_args(t.get("args") or ())
     ]
+    if isinstance(t.get("path"), str) and not credentials.plain_url_path(t["path"]):
+        out.append(
+            f"{where}: transport.path may carry a credential (only an MCP path or lower-case "
+            "words and versions): a key goes in a header as a secret: name"
+        )
     for k, v in (rec.get("settings") or {}).items():
         why = credentials.setting_problem(str(k), str(v))
         if why == "holds $ or secret:":

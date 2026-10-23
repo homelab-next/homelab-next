@@ -42,6 +42,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -334,6 +335,14 @@ def _url(inst: Instance, registry: Any) -> str:
     if t["type"] == servers.REMOTE:  # a hosted server: its reviewed https URL
         if not str(t.get("url", "")).startswith("https://"):
             raise RenderError([f"{inst.server}: a remote server's URL is https (never plaintext)"])
+        if not credentials.plain_url_path(urlsplit(str(t["url"])).path):
+            raise RenderError(
+                [f"{inst.server}: a remote server's URL path may carry a credential (check)"]
+            )
+        if credentials.secret_host_labels((urlsplit(str(t["url"])).hostname or "").lower()):
+            raise RenderError(
+                [f"{inst.server}: a remote server's URL host may carry a credential (check)"]
+            )
         return str(t["url"])
     if registry is None:
         raise RenderError([f"{inst.server}: an HTTP server needs the registry for its URL"])
@@ -739,12 +748,13 @@ def profile_refusals(
     present and matches, and with ``lock`` the reviewed digest); it is refused without a
     ``policy``, since its stored ceiling and digest are whatever edited it.  A lean one
     (``platform/agent_profile``): its schema, the same grant rules, ``mcp`` within
-    ``mcp_ceiling``, and ``mcp`` and ``capabilities`` within the policy's ceiling; it is refused
-    without a ``policy`` too (its own ``mcp_ceiling`` is whatever edited the file).  Rendering
+    ``mcp_ceiling``, ``mcp`` and ``capabilities`` within the policy's ceiling, and the reader rule
+    whenever the policy marks the id a reader (``reads_untrusted: false`` in the file does not turn
+    it off); it is refused without a ``policy`` too (its own ``mcp_ceiling`` is whatever edited the file).  Rendering
     never trusts a profile the compiler would not have produced."""
     from homelabnext.agent.compiler import verify_profile
     from homelabnext.agent.errors import AgentError, CeilingViolation
-    from homelabnext.agent.readers import ToolClasses, profile_problems
+    from homelabnext.agent.readers import ToolClasses, profile_problems, reader_problems
 
     try:
         classes = ToolClasses.from_catalog(cat)
@@ -777,6 +787,14 @@ def profile_refusals(
             "a lean profile is rendered against the ceiling policy too (spec policy:, --policy): "
             "its own mcp_ceiling is whatever last edited the file",
         ]
+    if policy.requires_reader(str(doc.get("id"))) and doc.get("reads_untrusted") is False:
+        # the policy owner, not the file, says whether this profile reads untrusted content
+        # (verify_profile's rule for a compiled one); judge it as the reader it is
+        problems.append(
+            f"{policy.source} marks {doc.get('id')} as reading untrusted content "
+            "but the profile says reads_untrusted: false"
+        )
+        problems += reader_problems(doc, classes, str(doc.get("id", "profile")))
     try:
         ceiling = policy.ceiling(str(doc.get("id")))
     except CeilingViolation as exc:

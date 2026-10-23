@@ -323,6 +323,29 @@ def test_render_refuses_a_profile_verify_would_refuse(tmp_path):
             clients.render_profile(CATALOG, f, "claude-code", policy=POLICY)
 
 
+def test_a_lean_profile_cannot_switch_off_the_reader_rule_its_policy_forces(tmp_path):
+    """The policy owner marks a profile a reader; ``reads_untrusted: false`` in the lean file
+    (whoever last edited it) does not turn the reader rule off, as it does not for a compiled
+    profile (verify_profile)."""
+    wide = WIDE.ceiling("profile:collector")
+    ceiling = {**wide, "reads_untrusted": True, "data_tier": "local-only"}
+    ceiling["internet_mcp"] = sorted(CATALOG.servers)
+    policy = CeilingPolicy.from_mapping(
+        {"ceilings": {"profile:collector": ceiling}}, source="the reader policy"
+    )
+    assert policy.requires_reader("profile:collector")
+    for flag in ({}, {"reads_untrusted": False}):
+        lean = _lean(tmp_path, mcp=["shell"], mcp_ceiling=["shell"], **flag)
+        with pytest.raises(clients.RenderError, match="readers cannot act"):
+            clients.render_profile(CATALOG, lean, "claude-code", policy=policy)
+    with pytest.raises(clients.RenderError, match="marks profile:collector as reading untrusted"):
+        clients.render_profile(CATALOG, lean, "claude-code", policy=policy)
+    # a policy that does not mark it a reader leaves the profile's own word standing
+    assert not WIDE.requires_reader("profile:collector")
+    ok = _lean(tmp_path, mcp=["notes"], mcp_ceiling=["notes"], reads_untrusted=False)
+    assert clients.render_profile(CATALOG, ok, "claude-code", policy=WIDE)
+
+
 def test_a_compiled_profile_is_judged_against_the_policy_and_the_lock(tmp_path):
     """A hand-edited compiled profile with a recomputed digest passes every check that reads only
     the file (its stored ceiling was edited with it): render needs the policy, and the lock."""

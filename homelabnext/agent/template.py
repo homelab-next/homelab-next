@@ -29,7 +29,14 @@ from typing import Any
 
 from .digest import digest_of
 from .errors import AgentError
-from .pack import DEFAULT_DELIMITER, PREGATE_PREFIX, assemble_pack
+from .pack import (
+    DEFAULT_DELIMITER,
+    ESCAPE_PREFIX,
+    PREGATE_PREFIX,
+    assemble_pack,
+    looks_like_fence,
+    split_lines,
+)
 
 TRUST_LEVELS = ("trusted", "untrusted")
 UNTRUSTED_TIERS = ("session", "volatile")
@@ -134,7 +141,9 @@ def _placeholders(text: str) -> tuple[list[str], list[str]]:
 
 
 def _fence_like(text: str, delims: tuple[str, ...]) -> list[str]:
-    return [ln for ln in text.split("\n") if ln.lstrip().startswith(delims)]
+    """Lines of ``text`` (split on every line boundary) that read as a fence or the escape
+    prefix, read as a reader sees the line (:func:`pack.looks_like_fence`)."""
+    return [ln for ln in split_lines(text) if looks_like_fence(ln, delims)]
 
 
 def lint_template(doc: Any, *, source: str = "") -> list[str]:
@@ -230,6 +239,12 @@ def fence_problems(tmpl: PromptTemplate, rendered: RenderedPrompt) -> list[str]:
         body = "\n".join(lines[lines.index(opener) + 1 : lines.index(closer)])
         if body != sec["text"]:
             problems.append(f"section {sec['name']!r}: fenced body differs from the pack section")
+        delims = tuple(sorted({tmpl.delimiter, DEFAULT_DELIMITER}))
+        if any(
+            looks_like_fence(ln, delims) and not ln.startswith(ESCAPE_PREFIX)
+            for ln in split_lines(body)
+        ):
+            problems.append(f"section {sec['name']!r}: holds an unescaped fence-looking line")
         if len(sec["text"]) >= 16 and sec["text"] in system:
             problems.append(
                 f"section {sec['name']!r}: untrusted text appears in the system message"
@@ -333,7 +348,7 @@ def _trusted_value_problems(value: Any, delims: tuple[str, ...]) -> list[str]:
     p = []
     if "{{" in value or "}}" in value:
         p.append("contains placeholder braces")
-    if _fence_like(value, delims) or any(ln.startswith("[escaped] ") for ln in value.split("\n")):
+    if _fence_like(value, delims):
         p.append("contains a fence-looking line")
     return p
 

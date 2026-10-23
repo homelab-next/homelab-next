@@ -8,10 +8,12 @@ What is redacted, by type (the type is part of the replacement):
 ``jwt``         a JSON web token
 ``token``       vendor credentials recognisable by shape: AWS access key ids, GitHub, GitLab,
                 Slack, Google, npm, Hugging Face, Stripe-style and ``sk-`` API keys, and the
-                credential of an ``Authorization: Bearer`` header
+                credential of an ``Authorization:`` header (Bearer, Basic, Digest, Token,
+                ApiKey, ...)
 ``secret``      the *value* of a password/secret/token/api-key style key (``key=value``,
-                ``key: value``, JSON, ``--password value``, "the password is ...") and the
-                password in a ``scheme://user:password@host`` URL
+                ``key: value``, JSON and YAML, a quoted value with spaces in it, ``DB_PASS=``,
+                ``--password value``, "the password is ..."), a ``Cookie:``/``Set-Cookie:``
+                header's value, and the password in a ``scheme://user:password@host`` URL
 ``denylist``    any term from a caller-supplied deny-list (literal word or ``re:`` regex)
 ``card``        a payment card number: 13-19 digits, a known issuer prefix and a valid Luhn digit
 ``email``       every e-mail address, documentation domains included
@@ -39,14 +41,22 @@ same address appears in both alerts") without seeing the value.  Values are comp
 (e-mail case-folded, phone and card by digits, addresses canonicalised).
 
 Detection is regex plus validators; overlapping candidates are resolved by type priority (the
-order of the table), then position, then length.  Shapes shared with the publishing leak scanner
-come from :mod:`homelabnext.shapes`; unlike that scanner, nothing here exempts placeholders.
+order of the table), then position, then length.  It runs twice: on the text as given, and on a
+folded view in which format characters (Unicode category Cf: zero-width space, joiners, BOM, soft
+hyphen) are removed and every other character is NFKC-normalised (full-width and other Unicode
+digits become ASCII), so ``alice<ZWSP>@corp`` or a full-width address is found.  The redacted
+spans are the union of both passes, mapped back to the original text, with overlapping spans
+merged; folding can join a value to its neighbour and break a boundary, so the folded pass only
+ever adds to what the plain pass finds.  Shapes shared with the publishing leak scanner come from
+:mod:`homelabnext.shapes`; unlike that scanner, nothing here exempts placeholders.
 """
 
 from __future__ import annotations
 
+import bisect
 import ipaddress
 import re
+import unicodedata
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -67,6 +77,11 @@ TYPES = (
 )
 _PRIORITY = {t: i for i, t in enumerate(TYPES)}
 LABEL_RE = re.compile(r"\[REDACTED:(?P<type>[a-z-]+):(?P<n>\d+)\]")
+# a label this screener could have written: a known type and a count it could reach.  Only these
+# are claimed as already screened; "[REDACTED:a:4111111111111111]" is a card in a label's clothes.
+_OWN_LABEL_RE = re.compile(
+    r"\[REDACTED:(?:" + "|".join(map(re.escape, TYPES)) + r"):[1-9][0-9]{0,5}\]"
+)
 
 # Ranges that ``redact_private_ips=False`` leaves in place: RFC 1918, CGNAT, loopback, link-local,
 # "this network", and IPv6 loopback, unspecified, unique-local and link-local.  The IPv4 ranges
@@ -92,6 +107,11 @@ class _Rule:
     regex: re.Pattern[str]
     group: str | int = 0  # the part of the match that is redacted
     accept: Callable[[re.Match[str], str], bool] | None = None
+    # search again from the last key-like run of the redacted value, not the end of the match:
+    # a keyed value can end in the next key ("pw=secret: <value>", "password=<value>secret:
+    # <value>"), which a match running on to the end would consume.  Only that last run can
+    # start a key whose value lies past this one, so each character is rescanned at most once.
+    rescan: bool = False
 
 
 @dataclass(frozen=True)
@@ -170,18 +190,120 @@ def _is_prose_secret(m: re.Match[str], _text: str) -> bool:
 
 
 def _private(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if addr.version == 6 and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
     return any(addr.version == n.version and addr in n for n in _PRIVATE_NETS)
+
+
+def _fold(text: str) -> tuple[str, list[int] | None]:
+    """The text detection runs on, and for each of its characters the index in ``text`` it came
+    from (None when it is ``text`` itself): Cf characters dropped, the rest NFKC-normalised."""
+    if text.isascii():
+        return text, None
+    out: list[str] = []
+    where: list[int] = []
+    for i, c in enumerate(text):
+        if c.isascii():
+            out.append(c)
+            where.append(i)
+            continue
+        if unicodedata.category(c) == "Cf":
+            continue
+        for n in unicodedata.normalize("NFKC", c):
+            out.append(n)
+            where.append(i)
+    where.append(len(text))
+    return "".join(out), where
 
 
 # ---------------------------------------------------------------- rules
 _KEY_WORDS = (
     r"passw(?:or)?d|passwd|pwd|passphrase|secret|token|api[_-]?key|apikey|access[_-]?key"
     r"|private[_-]?key|auth[_-]?key|credential|client[_-]?secret|session[_-]?key"
+    # short words only as a whole part of the key (DB_PASS, db.pw, session-id; not bypass, pwm)
+    r"|(?<![a-z0-9])(?:pass|pw|sessid|session[_-]?id|cookie)(?![a-z0-9])"
 )
 
 
-def _r(type_: str, rx: str, group: str | int = 0, accept=None, flags: int = 0) -> _Rule:
-    return _Rule(type_, re.compile(rx, flags), group, accept)
+# The key of a key=value rule: the whole run of key characters, matched once from its start
+# (one start per run, possessive, so nothing backtracks into it), with a lookahead that the run
+# holds a key word.  ``[\w.-]*`` on both sides of the key word backtracked cubically over a run
+# such as "token.token.token..." (a crafted 2 KB line took seconds); a bound on the key made it
+# linear but let a key word more than the bound before the separator hide the value.  The
+# lookahead scans each run once, so every rule stays linear in the length of the text, however
+# long the key.  (The key word is tested in the pattern rather than after the match: a match
+# refused afterwards would have consumed a later, real key in the same text.)
+_KEY = rf"(?<![\w.-])(?=[\w.-]*?(?:{_KEY_WORDS}))[\w.-]++"
+_FLAG_KEY = rf"(?=[\w-]*?(?:{_KEY_WORDS}))[\w-]++"
+
+
+def _ascii_bounds(rx: str) -> str:
+    """``rx`` with its word classes and boundaries made ASCII: ``\\w`` is ``[A-Za-z0-9_]``,
+    ``\\d`` is ``[0-9]``, ``\\W``/``\\D`` their complements and ``\\b`` an ASCII boundary
+    (``(?a:\\b)``).  Python's are Unicode, so a value glued to a CJK, Thai or Cyrillic letter
+    (``用户alice@corp.com已登录``) had no boundary and was not found.  ``\\s`` stays Unicode
+    (a value still ends at a no-break or ideographic space), which is why the whole pattern is
+    not compiled with ``re.ASCII``."""
+    out: list[str] = []
+    i, in_class = 0, False
+    while i < len(rx):
+        c = rx[i]
+        if c == "\\" and i + 1 < len(rx):
+            nxt = rx[i + 1]
+            if nxt == "w":
+                out.append("A-Za-z0-9_" if in_class else "[A-Za-z0-9_]")
+            elif nxt == "d":
+                out.append("0-9" if in_class else "[0-9]")
+            elif nxt == "W" and not in_class:
+                out.append("[^A-Za-z0-9_]")
+            elif nxt == "D" and not in_class:
+                out.append("[^0-9]")
+            elif nxt == "b" and not in_class:
+                out.append("(?a:\\b)")
+            else:
+                out.append(rx[i : i + 2])
+            i += 2
+            continue
+        if c == "[" and not in_class:
+            in_class = True
+            out.append(c)
+            i += 1
+            if rx[i : i + 1] == "^":
+                out.append("^")
+                i += 1
+            if rx[i : i + 1] == "]":  # a leading "]" is a member
+                out.append("]")
+                i += 1
+            continue
+        if c == "]" and in_class:
+            in_class = False
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _r(
+    type_: str, rx: str, group: str | int = 0, accept=None, flags: int = 0, rescan: bool = False
+) -> _Rule:
+    return _Rule(type_, re.compile(_ascii_bounds(rx), flags), group, accept, rescan)
+
+
+def _matches(rule: _Rule, text: str) -> Iterable[re.Match[str]]:
+    if not rule.rescan:
+        yield from rule.regex.finditer(text)
+        return
+    pos = 0
+    while (m := rule.regex.search(text, pos)) is not None:
+        yield m
+        end = m.end(rule.group)
+        while end > m.start(rule.group) and text[end - 1] in ":=>\"'":
+            end -= 1
+        start = end
+        while start > m.start(rule.group) and (
+            text[start - 1] in "._-" or (text[start - 1].isascii() and text[start - 1].isalnum())
+        ):
+            start -= 1
+        pos = max(start, m.start() + 1) if start < end else m.end()
 
 
 _RULES: tuple[_Rule, ...] = (
@@ -201,22 +323,53 @@ _RULES: tuple[_Rule, ...] = (
     _r("token", r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}"),
     _r("token", r"\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}"),
     _r("token", r"(?i)\bbearer\s+(?P<v>[A-Za-z0-9._~+/=-]{16,})", "v"),
+    # Authorization: <scheme> <credential> (header, JSON or YAML); Digest's parameters to the end
+    _r(
+        "token",
+        r"(?i)\b(?:proxy-)?authorization[\"']?\s*[:=]\s*[\"']?"
+        r"(?:basic|bearer|token|apikey|api-key|key|negotiate|ntlm|aws4-hmac-sha256)\s+"
+        r"(?P<v>[A-Za-z0-9._~+/=:,-]{3,})",
+        "v",
+    ),
+    _r(
+        "token",
+        r"(?i)\b(?:proxy-)?authorization[\"']?\s*[:=]\s*[\"']?digest\s+(?P<v>[^\r\n]+)",
+        "v",
+    ),
+    # Cookie: a=b; c=d / Set-Cookie: id=...; Path=/ -- the whole header value
+    _r(
+        "secret",
+        r"(?im)(?:^|(?<=[\"'\s]))(?P<k>(?:set-)?cookie)[\"']?[ \t]*:[ \t]*[\"']?"
+        r"(?P<v>[^\r\n\"']*=[^\r\n\"']*)",
+        "v",
+        _is_keyed_secret,
+    ),
     # user:password@ in a URL
-    _r("secret", r"(?i)\b[a-z][a-z0-9+.-]*://[^\s:/@]+:(?P<v>[^\s@/]+)@", "v"),
+    _r("secret", r"(?i)[a-z][a-z0-9+.-]{0,31}://[^\s:/@]+:(?P<v>[^\s@/]+)@", "v"),
+    # "key": "a quoted value", key: 'with spaces in it' (the whole quoted value)
+    _r(
+        "secret",
+        rf"(?i)(?P<k>{_KEY})[\"']?\s*(?:[:=]|=>)\s*"
+        r"(?P<q>[\"'])(?P<v>(?:(?!(?P=q))[^\r\n\\]|\\.){1,512})(?P=q)",
+        "v",
+        _is_keyed_secret,
+    ),
     # key=value, key: value, "key": "value", key => value
     _r(
         "secret",
-        rf"(?i)(?<![\w-])(?P<k>[\w.-]*(?:{_KEY_WORDS})[\w.-]*)[\"']?\s*(?:[:=]|=>)\s*[\"']?"
-        r"(?P<v>[^\s\"',;)}\]]{3,})",
+        rf"(?i)(?P<k>{_KEY})[\"']?\s*(?:[:=]|=>)\s*[\"']?"
+        rf"(?P<v>[^\s\"',;)}}\]]{{3,}})",
         "v",
         _is_keyed_secret,
+        rescan=True,
     ),
     # --password value / --api-key=value
     _r(
         "secret",
-        rf"(?i)(?<![\w-])--?(?P<k>[\w-]*(?:{_KEY_WORDS})[\w-]*)[ =](?P<v>[^\s\"']{{3,}})",
+        rf"(?i)(?<![\w-])--?(?P<k>{_FLAG_KEY})[ =](?P<v>[^\s\"']{{3,}})",
         "v",
         _is_keyed_secret,
+        rescan=True,
     ),
     # "the password is X" / "pin was X"
     _r(
@@ -265,10 +418,14 @@ _RULES: tuple[_Rule, ...] = (
         _digits_between(7, 15),
     ),
 )
-_IPV4_RE = re.compile(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w]|\.\d)")
+_IPV4_RE = re.compile(_ascii_bounds(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w]|\.\d)"))
 _IPV6_RE = re.compile(
-    r"(?<![\w:.])(?:(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}"
-    r"|(?=[0-9A-Fa-f:]*::)[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7})(?![\w:])"
+    _ascii_bounds(
+        # with an embedded IPv4 tail first (::ffff:a.b.c.d is one address, not "::ffff:a" and a rest)
+        r"(?<![\w:.])(?:(?:[0-9A-Fa-f]{0,4}:){2,6}\d{1,3}(?:\.\d{1,3}){3}(?![\w.:])"
+        r"|(?:(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}"
+        r"|(?=[0-9A-Fa-f:]*::)[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7})(?![\w:]|\.\d))"
+    )
 )
 
 
@@ -300,7 +457,34 @@ class Screener:
 
     # -- detection
     def find(self, text: str) -> list[tuple[int, int, str, str]]:
-        """Non-overlapping ``(start, end, type, normalised value)`` spans, by position."""
+        """Non-overlapping ``(start, end, type, normalised value)`` spans of ``text``, by
+        position: the union of the plain and the folded pass, overlaps merged (module doc)."""
+        plain = self._find(text)
+        folded, where = _fold(text)
+        if where is None:
+            return plain
+        # (start, end, priority, pass, type, value): pass 0 is the plain text, 1 the folded view
+        spans = [(s, e, _PRIORITY[t], 0, t, v) for s, e, t, v in plain]
+        spans += [
+            (where[s], where[e - 1] + 1, _PRIORITY[t], 1, t, v) for s, e, t, v in self._find(folded)
+        ]
+        out: list[tuple[int, int, str, str]] = []
+        rank: list[tuple[int, int]] = []  # (priority, pass) of the span each out entry labels
+        for s, e, pri, src, t, v in sorted(spans, key=lambda x: (x[0], -x[1], x[2], x[3])):
+            if out and s < out[-1][1]:
+                ps, pe, pt, pv = out[-1]
+                # one span covering both; it keeps the label of the higher-priority type, and of
+                # the plain pass on a tie, so one address keeps one label (an e-mail address next to a
+                # trade mark sign folds to the address plus "tm")
+                if (pri, src) < rank[-1]:
+                    pt, pv, rank[-1] = t, v, (pri, src)
+                out[-1] = (ps, max(pe, e), pt, pv)
+                continue
+            out.append((s, e, t, v))
+            rank.append((pri, src))
+        return out
+
+    def _find(self, text: str) -> list[tuple[int, int, str, str]]:
         cands: list[tuple[int, int, int, str, str]] = []
         on = set(self.types)
 
@@ -311,7 +495,7 @@ class Screener:
         for rule in _RULES:
             if rule.type not in on:
                 continue
-            for m in rule.regex.finditer(text):
+            for m in _matches(rule, text):
                 if rule.accept is not None and not rule.accept(m, text):
                     continue
                 s, e = m.span(rule.group)
@@ -324,11 +508,42 @@ class Screener:
         for m in _IPV6_RE.finditer(text):
             self._ip(m, text, add)
 
-        chosen: list[tuple[int, int, str, str]] = []
+        # Candidates are taken by priority; chosen spans never overlap, so they are kept sorted
+        # and each candidate is checked against its neighbours only (a scan of every chosen span
+        # was quadratic).  A candidate that overlaps a higher-priority span is not dropped: the
+        # parts of it no chosen span covers are redacted under its own label, so nothing a rule
+        # found stays in clear because another rule matched next to it ("password=4111 1111
+        # 1111 1111": the secret takes "4111", the card the rest).  The cost is over-redaction,
+        # such as the host of an e-mail address whose local part is a token.  A label already
+        # in the text ("[REDACTED:secret:1]") is taken first and never redacted again, so
+        # screening screened text changes nothing.
+        chosen: list[tuple[int, int, str, str]] = [
+            (m.start(), m.end(), "", "") for m in _OWN_LABEL_RE.finditer(text)
+        ]
+        starts: list[int] = [c[0] for c in chosen]
+
+        def put(s: int, e: int, t: str, v: str) -> None:
+            i = bisect.bisect_left(starts, s)
+            starts.insert(i, s)
+            chosen.insert(i, (s, e, t, v))
+
         for _, s, e, t, v in sorted(cands, key=lambda c: (c[0], c[1], -(c[2] - c[1]))):
-            if all(e <= cs or s >= ce for cs, ce, _, _ in chosen):
-                chosen.append((s, e, t, v))
-        return sorted(chosen)
+            i = bisect.bisect_right(starts, s)
+            if i and chosen[i - 1][1] > s:
+                i -= 1  # the chosen span that covers s
+            pieces: list[tuple[int, int]] = []
+            pos = s
+            while i < len(chosen) and chosen[i][0] < e:
+                cs, ce = chosen[i][0], chosen[i][1]
+                if cs > pos:
+                    pieces.append((pos, cs))
+                pos = max(pos, ce)
+                i += 1
+            if pos < e:
+                pieces.append((pos, e))
+            for ps, pe in pieces:
+                put(ps, pe, t, v)
+        return [c for c in chosen if c[2]]  # the labels already in the text are not spans
 
     def _ip(self, m: re.Match[str], text: str, add: Callable[[str, int, int, str], None]) -> None:
         raw = m.group(0)
@@ -339,7 +554,9 @@ class Screener:
         if addr.version == 4:
             if any(len(o) > 1 and o.startswith("0") for o in raw.split(".")):
                 return  # zero-padded octets: a date or version, not an address
-            ctx = shapes.VERSION_CONTEXT_RE.search(text[: m.start()])
+            # the context ends at the address: a short window keeps this linear (a search of
+            # the whole prefix per address was quadratic); longer padding only redacts more
+            ctx = shapes.VERSION_CONTEXT_RE.search(text[max(0, m.start() - 32) : m.start()])
             # the leak scanner's version context, except a lone "=": "src=<address>" is a value
             if ctx and ctx.group(0).strip() != "=":
                 return
@@ -366,11 +583,16 @@ class Screener:
         out: list[str] = []
         done: list[Redaction] = []
         pos = 0
+        chain: set[str] = set()  # labels of the run of adjacent spans ending at pos
         for s, e, t, v in self.find(text):
             lab = self.label(t, v)
             out += [text[pos:s], lab]
             done.append(Redaction(t, s, e, lab))
-            self.redactions[t] = self.redactions.get(t, 0) + 1
+            if s != pos or not done[:-1]:
+                chain = set()
+            if lab not in chain:  # a value split by another span is counted once
+                self.redactions[t] = self.redactions.get(t, 0) + 1
+                chain.add(lab)
             pos = e
         out.append(text[pos:])
         return "".join(out), done

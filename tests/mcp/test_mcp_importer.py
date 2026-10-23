@@ -137,6 +137,28 @@ def test_existing_records_are_kept_unless_forced(tmp_path):
     assert "keep: me" not in (out / "box.yml").read_text()
 
 
+def test_a_credential_in_a_url_host_is_not_copied(tmp_path):
+    key = "9f8e7d6c5b4a3928" + "1706f5e4d3c2b1a0"
+    doc = {"mcpServers": {"hosted": {"type": "http", "url": f"https://{key}.mcp.tracker.example.com/mcp"},
+                          "cli": {"command": "uvx", "args": ["example-mcp", "--url",
+                                                             f"https://{key}.tracker.example.com/mcp"]}}}  # fmt: skip
+    (tmp_path / "mcp.json").write_text(json.dumps(doc))
+    res = importer.import_configs([tmp_path / "mcp.json"])
+    dumped = json.dumps(res.records) + json.dumps(res.report)
+    assert key not in dumped
+    assert res.records["hosted"]["transport"]["endpoint"] == "svc:unknown"
+
+
+def test_a_credential_in_a_second_level_label_is_not_copied(tmp_path):
+    key = "sk-" + "ak-" + "9f8e7d6c5b4a3928" + "1706f5e4d3c2b1a0"
+    doc = {"mcpServers": {"hosted": {"type": "http", "url": f"https://{key}.com/mcp"}}}
+    (tmp_path / "mcp.json").write_text(json.dumps(doc))
+    res = importer.import_configs([tmp_path / "mcp.json"])
+    assert key not in json.dumps(res.records) + json.dumps(res.report)
+    rec = res.records["hosted"]
+    assert rec["transport"]["endpoint"] == "svc:unknown" and rec["runtime"]["host"] == "unknown"
+
+
 def test_looks_secret():
     assert importer.looks_secret(TOKEN)
     assert importer.looks_secret("postgres://user:fake-pw@db.lab.example/x")
@@ -251,3 +273,12 @@ def test_a_rendered_record_imports_back_to_the_same_server(tmp_path):
     assert back["timeout"] == 45
     assert {k: back["origin"][k] for k in ("package", "version")} == {
         "package": "@example/mcp-github", "version": "3.2.0"}  # fmt: skip
+
+
+def test_a_credential_as_a_single_label_host_is_not_copied(tmp_path):
+    key = "sk-" + "ak-" + "9f8e7d6c5b4a3928" + "1706f5e4d3c2b1a0"
+    doc = {"mcpServers": {"short": {"type": "http", "url": f"https://{key}/mcp"}}}
+    (tmp_path / "mcp.json").write_text(json.dumps(doc))
+    res = importer.import_configs([tmp_path / "mcp.json"])
+    assert key not in json.dumps(res.records) + json.dumps(res.report)
+    assert res.records["short"]["transport"]["endpoint"] == "svc:unknown"

@@ -262,3 +262,255 @@ def test_leak_scanner_and_screener_share_shapes():
     assert by_name["jwt"] == shapes.JWT
     assert by_name["email"] == shapes.EMAIL
     assert leak_scan.VERSION_CONTEXT_RE is shapes.VERSION_CONTEXT_RE
+
+
+def test_folded_matches_redact_the_original_span_and_share_a_label():
+    """Detection runs on a view without format characters and with Unicode digits folded; the
+    redaction covers the original characters and co-references the plain spelling."""
+    zw = chr(0x200B)
+    text = f"from fake.user{zw}@example.com and fake.user@example.com"
+    out, spans = Screener().screen(text)
+    assert out == "from [REDACTED:email:1] and [REDACTED:email:1]"
+    assert text[spans[0].start : spans[0].end] == f"fake.user{zw}@example.com"
+    wide = "".join(chr(0xFF10 + int(d)) if d.isdigit() else d for d in "192.0.2.44")
+    assert screen_text(f"host {wide}, again 192.0.2.44") == (
+        "host [REDACTED:ip:1], again [REDACTED:ip:1]"
+    )
+
+
+def test_an_ipv4_mapped_address_is_one_address_and_private_by_its_ipv4():
+    mapped = "::ffff:" + ".".join(["10", "20", "30", "40"])
+    assert screen_text(f"src {mapped} dst") == "src [REDACTED:ip:1] dst"
+    assert screen_text(f"src {mapped} dst", redact_private_ips=False) == f"src {mapped} dst"
+
+
+# Folding joins a value to its neighbour when it drops a format character or turns a
+# compatibility character into a letter; detection on the folded view alone then missed values
+# the plain text shows clearly.  The folded pass may only add.
+_FOLD_NEIGHBOURS = (
+    "\u200b",  # zero-width space (Cf, dropped)
+    "\u00ad",  # soft hyphen (Cf, dropped)
+    "\u2060",  # word joiner (Cf, dropped)
+    "\ufeff",  # BOM (Cf, dropped)
+)
+_FOLD_SECRETS = (
+    "alice.fake@example.com",
+    "192.0.2.40",
+    "AKI" + "AFAKE7EXAMPLE0KEY",
+    "gh" + "p_fake0123456789abcdefghijklmnopqrstuv",
+    "4111111111111111",
+    "2001:db8::1ff:fe23:4567:890a",
+)
+
+
+@pytest.mark.parametrize("c", _FOLD_NEIGHBOURS, ids=lambda c: f"U+{ord(c):04X}")
+def test_folding_never_hides_a_value_the_plain_text_shows(c):
+    for secret in _FOLD_SECRETS:
+        for text in (secret + c, c + secret, f"x {secret}{c}x tail", f"x{c}{secret} y"):
+            assert secret not in screen_text(text), (repr(text), screen_text(text))
+
+
+@pytest.mark.parametrize(
+    "text, secret",
+    [
+        ("mail alice.fake@example.com\u2122 today", "alice.fake@example.com"),  # TM -> "TM"
+        ("id AKI" + "AFAKE7EXAMPLE0KEY\u2122", "AKI" + "AFAKE7EXAMPLE0KEY"),
+    ],
+)
+def test_a_compatibility_neighbour_that_folds_to_letters_does_not_hide_a_value(text, secret):
+    assert secret not in screen_text(text)
+
+
+def test_spans_that_meet_inside_one_character_are_merged_not_dropped():
+    text = "192.0.2.4\u00bclice.fake@example.com"
+    out, spans = Screener().screen(text)
+    assert "lice.fake" not in out and "192.0.2" not in out
+    assert len(spans) == 1 and (spans[0].start, spans[0].end) == (0, len(text))
+
+
+def test_the_plain_and_the_folded_pass_share_one_label():
+    zw = "\u200b"
+    out = screen_text(f"a 192.0.2.40{zw}x and 192.0.2.40")
+    assert out == f"a [REDACTED:ip:1]{zw}x and [REDACTED:ip:1]"
+
+
+# Every rule is linear in the text: the key=value rules once had ``[\w.-]*`` on both sides of an
+# alternation (cubic over "token.token...", seconds at 2 KB), the URL rule a free-running scheme,
+# span selection a scan of every chosen span, and the IPv4 version test a search of the whole
+# prefix.  The bound is generous: a regression to quadratic or worse overshoots it many times.
+_CRAFTED = (
+    "token.",
+    "pass.",
+    "pw.",
+    "pass-",
+    "x.pw-",
+    "a.",
+    "--pass ",
+    "a://",
+    'password: "\\a',
+    "192.0.2.4 ",
+    "a@example.com ",
+    "token.\u200b",
+    "password_",
+    "Key.",
+    "--a-",
+    "a" * 200 + " ",
+    "pw=",  # each match's value runs to the end of the line: rescanned once, not per match
+    "--pw=",
+    "a=pw=",
+)
+
+
+@pytest.mark.parametrize("unit", _CRAFTED)
+def test_crafted_runs_screen_in_linear_time(unit):
+    import time
+
+    text = unit * (16384 // len(unit))
+    t0 = time.perf_counter()
+    screen_text(text)
+    assert time.perf_counter() - t0 < 5.0, f"{unit!r} x {len(text)} chars took too long"
+
+
+def test_a_long_key_still_matches_on_its_key_word():
+    out = screen_text("config." * 30 + "db_password=FakeValue0123 next")
+    assert "FakeValue0123" not in out and out.endswith("[REDACTED:secret:1] next")
+    assert screen_text("max_tokens=4096 token_count=12") == "max_tokens=4096 token_count=12"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "api_key_" + "a" * 65 + "=FakeValue0123xyz",
+        "password_" + "x" * 200 + "=FakeValue0123xyz",
+        '"api_key_' + "a" * 65 + '": "FakeValue0123xyz with space"',
+        "secret." + "a." * 40 + "value: FakeValue0123xyz",
+        "--" + "a" * 65 + "-password FakeValue0123xyz",
+        "--password-" + "a" * 65 + " FakeValue0123xyz",
+        "db_password_for_the_legacy_reporting_cluster_in_region_one_primary_replica: "
+        "FakeValue0123xyz",
+    ],
+)
+def test_a_key_word_any_distance_from_the_separator_still_redacts(text):
+    """A bound on the key kept the rules linear but hid a value whose key word sat more than
+    the bound before the separator; the whole key run is matched instead."""
+    assert "FakeValue0123xyz" not in screen_text(text)
+
+
+def test_a_rejected_key_does_not_swallow_a_later_real_one():
+    assert screen_text("x=abc password=FakeValue0123 y") == "x=abc password=[REDACTED:secret:1] y"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "from alice.fake@example.com\u2122 and later alice.fake@example.com",
+        "seen 192.0.2.4\u00b9 then 192.0.2.4",
+    ],
+)
+def test_a_merged_span_keeps_the_plain_value_so_one_value_keeps_one_label(text):
+    out = screen_text(text)
+    labels = LABEL_RE.findall(out)
+    assert len(labels) == 2 and labels[0] == labels[1], out
+
+
+def test_word_boundaries_are_ascii_but_whitespace_stays_unicode():
+    """A value glued to a CJK, Thai or Cyrillic letter has an ASCII boundary; a no-break or
+    ideographic space still ends a value."""
+    nbsp, ideo = "\u00a0", "\u3000"
+    assert screen_text(f"password=FakeValue0123{nbsp}and the rest") == (
+        f"password=[REDACTED:secret:1]{nbsp}and the rest"
+    )
+    assert screen_text(f"password=FakeValue0123{ideo}rest") == (
+        f"password=[REDACTED:secret:1]{ideo}rest"
+    )
+
+
+@pytest.mark.parametrize("glue", ["µ", "़", "क़", "ж"])
+def test_a_credential_overlapped_by_a_higher_priority_span_is_still_redacted(glue):
+    """With ASCII boundaries a token right after a password's value is found; the password's
+    span overlapped it and was dropped by priority, leaving the value in clear.  The parts no
+    higher-priority span covers keep their own label."""
+    token = "gh" + "p_fake0123456789abcdefghijklmnopqrstuv"
+    out = screen_text(f"password=FakeValue0123{glue}{token}")
+    assert "FakeValue0123" not in out and token not in out
+    assert out.startswith("password=[REDACTED:secret:1]") and out.endswith("[REDACTED:token:1]")
+
+
+def test_the_rest_of_an_overlapped_email_is_redacted_under_its_own_label():
+    """Every type's remainder is redacted, not only a credential's: the cost is the host of an
+    e-mail address whose local part is a token."""
+    token = "gh" + "p_fake0123456789abcdefghijklmnopqrstuv"
+    assert screen_text(f"origin https://{token}@example.com/x.git") == (
+        "origin https://[REDACTED:token:1][REDACTED:email:1]/x.git"
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "kwargs", "clear"),
+    [
+        ("password=4111 1111 1111 1111 ok", {}, "1111"),  # card digits after the secret
+        ("pwd=555 123 4567 call", {}, "4567"),  # the rest of a phone number
+        ("mail alice.fake@corp.example.com", {"denylist": ["corp"]}, "alice"),
+    ],
+)
+def test_a_lower_priority_value_is_not_left_partly_in_clear(text, kwargs, clear):
+    assert clear not in screen_text(text, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "password=FakeValue0123",
+        "password=fake" + "gh" + "p_fake0123456789abcdefghijklmnopqrstuv",
+        "password=FakeValue0123\u00b5" + "gh" + "p_fake0123456789abcdefghijklmnopqrstuv",
+        "token=abc.eyJ" + "hbGciOiJIUzI1NiJ9.eyJ" + "zdWIiOiJmYWtlIn0.fakeSignature_0123456789",
+        "from 192.0.2.4 to alice.fake@example.com, card 4111 1111 1111 1111",
+    ],
+)
+def test_screening_screened_text_changes_nothing(text):
+    once = screen_text(text)
+    assert once != text and screen_text(once) == once
+
+
+def test_a_value_split_by_another_span_is_counted_once():
+    token = "gh" + "p_fake0123456789abcdefghijklmnopqrstuv"
+    s = Screener()
+    out, spans = s.screen(f"api_key=pre\u00b5{token}\u00b5post")
+    assert out.count("[REDACTED:secret:1]") == 2 and len(spans) == 3
+    assert s.redactions == {"secret": 1, "token": 1}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "pw=secret: FakeValue0123 next",
+        "--password secret: FakeValue0123 next",
+        "pw=secret: x" + "AKI" + "AFAKE7EXAMPLE0KEYpw=x",
+    ],
+)
+def test_a_value_that_is_itself_the_next_key_does_not_hide_that_keys_value(text):
+    """A short key word ("pw") made "secret:" the value of "pw=", which consumed the real key
+    after it; a value that reads as a key is not taken as one."""
+    out = screen_text(text)
+    assert "FakeValue0123" not in out and "AFAKE7EXAMPLE0KEY" not in out
+    assert "[REDACTED:secret:1]" in out
+
+
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [
+        ("[REDACTED:a:4111111111111111]", "4111111111111111"),
+        ("call [REDACTED:phone:5551234567]", "5551234567"),
+        ("password=[REDACTED:hunter-two:1]", "hunter-two"),
+    ],
+)
+def test_only_a_label_this_screener_could_write_is_claimed(text, value):
+    """A label of an unknown type or an impossible count is text, so a value inside it is
+    screened like any other."""
+    assert value not in screen_text(text)
+
+
+def test_a_real_label_is_still_claimed():
+    assert screen_text("x [REDACTED:ip:12] y [REDACTED:national-id:3]") == (
+        "x [REDACTED:ip:12] y [REDACTED:national-id:3]"
+    )

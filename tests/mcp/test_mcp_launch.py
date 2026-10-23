@@ -76,8 +76,8 @@ GENERATED = [
      ["uvx", "--no-config", "--from",
       f"git+{GIT_PYPI['repo']}@{COMMIT}#subdirectory=packages/srv", "srv"]),
     (_rec(BROKER, FIRST, bin="hnx", entry="mcp-serve"), ["hnx", "mcp", "serve"]),
-    (_rec(BROKER, FIRST, bin="hnx", entry="mcp-serve", args=["--scope-from-profile", "/p.json"]),
-     ["hnx", "mcp", "serve", "--scope-from-profile", "/p.json"]),
+    (_rec(BROKER, FIRST, bin="hnx", entry="mcp-serve", args=["--scope-from-profile", "/p.json", "--policy", "/pol.yml", "--lock", "/lock.yml"]),
+     ["hnx", "mcp", "serve", "--scope-from-profile", "/p.json", "--policy", "/pol.yml", "--lock", "/lock.yml"]),
     (_rec(BROKER, FIRST, bin="hnx", entry="broker-mcp", args=["--socket=/run/b.sock"]),
      ["hnx", "broker", "mcp", "--socket=/run/b.sock"]),
     (_rec(BROKER, FIRST, bin="homelabnext/mcp/run.py"), [f"{CHECKOUT}/homelabnext/mcp/run.py"]),
@@ -272,8 +272,8 @@ IMPORTED = [
      {"bin": "srv"}),
     ("docker", ["run", "-i", f"registry.example:5000/mcp/docker@{D}"], {"bin": None}),
     ("uvx", ["--from", f"git+https://code.example/org/srv@{COMMIT}#subdirectory=../x", "srv"], None),
-    ("hnx", ["mcp", "serve", "--scope-from-profile", "/p.json"],
-     {"bin": "hnx", "args": ["--scope-from-profile", "/p.json"]}),
+    ("hnx", ["mcp", "serve", "--scope-from-profile", "/p.json", "--policy", "/pol.yml", "--lock", "/lock.yml"],
+     {"bin": "hnx", "args": ["--scope-from-profile", "/p.json", "--policy", "/pol.yml", "--lock", "/lock.yml"]}),
     ("hnx", ["invariants", "run", "--plugins-dir", "/tmp/x"], None),
     ("hnx", ["broker", "mcp", "--socket", "/s", "--notify-cmd", "id"], None),
     # not mapped at all: the draft keeps no origin, bin or argument
@@ -325,6 +325,44 @@ def test_the_importer_reads_the_origin_from_the_launch_position():
     assert launch.parse("/opt/x/sh", []).ecosystem is None
 
 
+#: a launch that installs one package and runs another: the pin check sees only the last spec
+PACKAGE_TWICE = [
+    ("npx", ["--package", GH_PIN, "--package", "evil-pkg", "mcp-github"]),
+    ("npx", ["-p", "evil-pkg", "-p", GH_PIN, "mcp-github"]),
+    ("npx", ["--package=evil-pkg", "-p", GH_PIN, "mcp-github"]),
+    ("uvx", ["--from", "example-notes-mcp==1.2.0", "--from", "evil", "notes-mcp"]),
+    ("uv", ["tool", "run", "--from", "evil", "--from", "example-notes-mcp==1.2.0", "notes-mcp"]),
+]
+
+
+@pytest.mark.parametrize(("command", "args"), PACKAGE_TWICE, ids=lambda v: " ".join(v)[:50])
+def test_a_launch_that_names_its_package_twice_is_refused(command, args):
+    """``npx --package unpinned --package pinned@1.2.3 bin`` takes the last spec, passes the pin
+    check on it, and still installs and runs the unpinned package (mutant M17 survived)."""
+    assert "names its package more than once" in " ".join(launch.parse(command, args).problems)
+    rec, _ = importer.draft("probe", {"command": command, "args": args}, "t.json")
+    assert rec["origin"]["kind"] == "unknown", rec  # the catalog never takes it as pinned
+    assert "evil" not in str(rec["origin"])
+
+
+@pytest.mark.parametrize(
+    ("command", "args", "why"),
+    [
+        ("npx", ["--package"], "npx --package: no value"),
+        ("uvx", ["--from"], "uvx --from: no value"),
+        ("uv", ["run", "example-notes-mcp"], "only `uv tool run` launches a pinned package"),
+        ("uv", ["pip", "install", "x"], "only `uv tool run`"),
+        ("pipx", ["install", "example-notes-mcp"], "only `pipx run` launches a pinned package"),
+        ("docker", ["exec", "-i", "box", "srv"], "docker: only `docker run` launches"),
+        ("podman", ["start", "box"], "podman: only `podman run` launches"),
+    ],
+)
+def test_the_launch_parser_refuses_what_it_cannot_read(command, args, why):
+    got = launch.parse(command, args)
+    assert any(why in p for p in got.problems), got.problems
+    assert got.spec is None  # nothing is taken as the package it launches
+
+
 def test_every_example_record_renders_its_generated_launch():
     cat = servers.load(CATALOG)
     for sid, rec in cat:
@@ -370,7 +408,7 @@ def test_no_setting_env_or_parameter_configures_the_launcher(key):
 #: round 5: what the C library, the TLS stack, the shell and other interpreters read to load code
 #: or redirect trust inside the launcher (OPENSSL_CONF's engine makes npx dlopen a shared object)
 RUNTIME_KEYS = ["OPENSSL_CONF", "OPENSSL_ENGINES", "OPENSSL_MODULES", "SSL_CERT_FILE",
-                "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "HTTP_PROXY",
+                "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "SSLKEYLOGFILE", "HTTP_PROXY",
                 "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "FTP_PROXY", "GCONV_PATH", "LOCPATH",
                 "NLSPATH", "HOSTALIASES", "RES_OPTIONS", "LOCALDOMAIN", "GLIBC_TUNABLES",
                 "MALLOC_CHECK_", "MALLOC_ARENA_MAX", "TZDIR", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS",
@@ -467,4 +505,20 @@ def test_an_absolute_hnx_path_flag_and_a_profile_file_template_pass():
     assert servers.hnx_args_problems("broker-mcp", ["--socket", "/run/hnx-broker/b.sock"]) == []
     assert servers.hnx_args_problems("mcp-serve", ["--root=/opt/hnx", "--registry",
                                                    "/opt/hnx/lab/services.yml",
-                                                   "--scope-from-profile", "{profile_file}"]) == []  # fmt: skip
+                                                   "--scope-from-profile", "{profile_file}",
+                                                   "--policy", "/etc/hnx/ceilings.yml",
+                                                   "--lock=/etc/hnx/profiles.lock.yml"]) == []  # fmt: skip
+
+
+@pytest.mark.parametrize("missing", [["--policy"], ["--lock"], ["--policy", "--lock"]])
+def test_a_profile_scoped_hnx_server_names_the_policy_and_the_lock(missing):
+    """A profile verified only against itself can widen the server's scope: the record that
+    passes --scope-from-profile passes the policy and the lock it is verified against too."""
+    flags = {"--policy": "/etc/hnx/ceilings.yml", "--lock": "/etc/hnx/profiles.lock.yml"}
+    args = ["--scope-from-profile", "{profile_file}"]
+    args += [x for f, v in flags.items() if f not in missing for x in (f, v)]
+    problems = servers.hnx_args_problems("mcp-serve", args)
+    assert any("--scope-from-profile needs --lock and --policy" in p for p in problems), problems
+    assert any("is not an absolute path" in p
+               for p in servers.hnx_args_problems("mcp-serve", [*args, *(
+                   x for f in missing for x in (f, "rel/x.yml"))]))  # fmt: skip

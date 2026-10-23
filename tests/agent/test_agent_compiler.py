@@ -225,6 +225,20 @@ def test_spec_cannot_raise_its_own_ceiling_past_the_policy():
     assert any("mcp outside ceiling: ['records']" in p for p in exc.value.problems)
 
 
+def test_spec_cannot_widen_its_budget_ceiling_past_the_policy():
+    s = spec()
+    s["ceiling"] = copy.deepcopy(POLICY["ceilings"]["profile:reader"])
+    s["ceiling"]["budgets"]["max_tool_calls"] = 10_000
+    s["budgets"]["max_tool_calls"] = 5_000
+    with pytest.raises(CeilingViolation, match=r"budgets\.max_tool_calls is not within 40"):
+        compile_profile(s, library(), policy=_policy())
+    del s["ceiling"]["budgets"]["max_runtime_s"]  # a missing key is wider too
+    s["ceiling"]["budgets"]["max_tool_calls"] = 40
+    s["budgets"]["max_tool_calls"] = 40
+    with pytest.raises(CeilingViolation, match="max_runtime_s"):
+        compile_profile(s, library(), policy=_policy())
+
+
 def test_only_the_policy_attests_local_only_and_the_model_role():
     """Round 4 design note: a spec could declare itself ``data_tier: local-only`` to receive
     local-only MCP servers.  The policy owner now attests ``data_tier`` (and ``model_role``): a

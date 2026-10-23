@@ -20,7 +20,9 @@ per-pack nonce, ``<delim> <name> [<tier>] <nonce> <delim>`` ... ``<delim> end <n
 <delim>``, where the nonce is derived from the digest of the fenced content (deterministic, so the
 pack stays a pure function, but not knowable to whoever wrote that content).  Any line of
 session or volatile text that starts with the delimiter (or the default one) is escaped with
-:data:`ESCAPE_PREFIX`, so input cannot open a fake section, stable or otherwise.
+:data:`ESCAPE_PREFIX`, so input cannot open a fake section, stable or otherwise.  A line is what
+any Unicode line boundary ends (CR, VT, FF, NEL, LS and PS as well as LF), and leading
+whitespace and format characters (zero-width space, BOM) do not hide a delimiter.
 
 Screening.  Before fencing, every section filled from input (``source: input``) is passed through
 :class:`~homelabnext.agent.screen.Screener`, which replaces secrets and PII with typed labels that
@@ -47,6 +49,8 @@ reason.  The ``knowledge-`` section prefix is reserved.
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -62,13 +66,61 @@ KNOWLEDGE_PREFIX = "knowledge-"
 ESCAPE_PREFIX = "[escaped] "
 
 
+#: every line boundary ``str.splitlines`` knows (CR, LF, CRLF, VT, FF, FS/GS/RS, NEL, LS, PS):
+#: a renderer or tokenizer that breaks a line on any of them must not see a fence escaping missed
+LINE_BREAK = re.compile("(\r\n|[\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029])")
+
+
+#: characters a reader does not see as ink: format characters (zero width space, BOM, joiners,
+#: bidi controls, tags), combining marks (a mark or variation selector before or inside a
+#: delimiter), and the blank letters and symbols that render as nothing (Hangul fillers, the
+#: braille blank)
+_INVISIBLE_CATEGORIES = frozenset({"Cf", "Mn", "Me"})
+_BLANK_FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
+
+
+def fence_key(line: str, width: int | None = None) -> str:
+    """What a fence test must look at: ``line`` as a reader sees it.  Every character is
+    NFKC-folded (a full-width delimiter reads as the ASCII one), invisible characters are
+    dropped wherever they are (:data:`_INVISIBLE_CATEGORIES`, :data:`_BLANK_FILLERS`), and
+    leading whitespace is skipped.  With ``width``, folding stops once that many characters are kept, so a very long
+    line costs no more than its start."""
+    out: list[str] = []
+    for ch in line:
+        for c in ch if ch.isascii() else unicodedata.normalize("NFKC", ch):
+            if not c.isascii() and (
+                c in _BLANK_FILLERS or unicodedata.category(c) in _INVISIBLE_CATEGORIES
+            ):
+                continue
+            if not out and c.isspace():
+                continue
+            out.append(c)
+        if width is not None and len(out) >= width:
+            break
+    return "".join(out)
+
+
+def looks_like_fence(line: str, delims: tuple[str, ...]) -> bool:
+    """True when ``line`` would read as a fence (or as the escape prefix) to a model."""
+    escape = ESCAPE_PREFIX.rstrip()
+    key = fence_key(line, max([len(escape), *map(len, delims)]))
+    return key.startswith(delims) or key.startswith(escape)
+
+
+def split_lines(text: str) -> list[str]:
+    """``text`` split on every line boundary (:data:`LINE_BREAK`), without the breaks."""
+    return LINE_BREAK.split(text)[::2]
+
+
 def _escape(text: str, delims: tuple[str, ...]) -> str:
-    """Prefix every line that looks like a fence so it reads as data, not structure."""
-    lines = text.split("\n")
-    return "\n".join(
-        ESCAPE_PREFIX + ln if ln.lstrip().startswith(delims) or ln.startswith(ESCAPE_PREFIX) else ln
-        for ln in lines
-    )
+    """Prefix every line that looks like a fence so it reads as data, not structure.  A line is
+    what any line boundary ends (not only LF), and the test looks at the line as a reader sees it
+    (:func:`fence_key`); the text's own line breaks are kept."""
+    parts = LINE_BREAK.split(text)  # line, break, line, break, ..., line
+    for i in range(0, len(parts), 2):
+        if looks_like_fence(parts[i], delims):
+            parts[i] = ESCAPE_PREFIX + parts[i]
+    return "".join(parts)
 
 
 def _marker(n: int) -> str:

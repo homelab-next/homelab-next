@@ -78,6 +78,71 @@ def test_a_hosted_server_is_https_public_internet_and_secret_headers_only(change
     assert any(phrase in p for p in problems), problems
 
 
+#: key-shaped path segments, assembled so the repository holds no token-shaped literal
+_PATH_KEYS = ["sk-" + "ak-" + "9f8e7d6c5b4a3928" + "1706f5e4d3c2b1a0", "gh" + "p_" + "fake0123456789" +
+              "abcdefghijklmnopqrstuv", "Fake" + "Key" + "9x8y7z"]  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "path", [f"/mcp/{_PATH_KEYS[0]}/sse", f"/{_PATH_KEYS[1]}/mcp", f"/v1/{_PATH_KEYS[2]}"]
+)
+def test_a_credential_in_a_hosted_urls_path_is_refused_and_never_rendered(path):
+    """Hosted endpoints often carry the key in the path; a record cannot hold a secret: name
+    there, so check refuses any path but an MCP path or plain words, and render refuses too."""
+    rec = _edit(transport__url="https://mcp.tracker.example.com" + path)
+    assert any("URL path may carry a credential" in p for p in _problems(rec, REGISTRY))
+    with pytest.raises(clients.RenderError, match="URL path may carry a credential"):
+        clients.definition(_inst({**rec, "status": "active"}), "claude-code")
+
+
+#: key-shaped host labels, assembled so the repository holds no token-shaped literal
+_HOST_KEYS = ["9f8e7d6c5b4a3928" + "1706f5e4d3c2b1a0", _PATH_KEYS[0]]
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        f"{_HOST_KEYS[0]}.mcp.tracker.example.com",
+        f"{_HOST_KEYS[1]}.tracker.example.com",
+        f"{_HOST_KEYS[1]}.com",  # the second-level label itself
+        f"mcp.{_HOST_KEYS[1]}",  # the top-level position
+    ],
+)
+def test_a_credential_in_a_hosted_urls_host_is_refused_and_never_rendered(host):
+    rec = _edit(transport__url=f"https://{host}/mcp")
+    assert any("URL host may carry a credential" in p for p in _problems(rec, REGISTRY))
+    with pytest.raises(clients.RenderError, match="URL host may carry a credential"):
+        clients.definition(_inst({**rec, "status": "active"}), "claude-code")
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "mcp.tracker.example.com",
+        "eu-west-3.mcp.tracker.example.com",
+        "api2.example.com",
+        # long IDN labels read as random letters and digits encoded; they are judged decoded
+        "mcp.xn--80aealotwbjpid2k.example.com",
+        "mcp.xn--3e0bx5e6xzftae3gxzpskhile.example.com",
+        "xn--ok-gzel-trke-alan-ad-20bl98bfa15k.example.com",
+    ],
+)
+def test_a_plain_hosted_url_host_is_accepted(host):
+    assert _problems(_edit(transport__url=f"https://{host}/mcp"), REGISTRY) == []
+
+
+@pytest.mark.parametrize("path", ["", "/", "/mcp", "/sse", "/v1/mcp", "/servers/tracker/mcp"])
+def test_a_plain_hosted_url_path_is_accepted(path):
+    assert _problems(_edit(transport__url="https://mcp.tracker.example.com" + path), REGISTRY) == []
+
+
+def test_a_lab_servers_transport_path_carries_no_credential_either():
+    rec = yaml.safe_load((ROOT / "schemas/platform/examples/mcp_server.http.yml").read_text())
+    assert _problems(rec, REGISTRY) == []
+    rec["transport"]["path"] = f"/mcp/{_PATH_KEYS[0]}"
+    assert any("transport.path may carry a credential" in p for p in _problems(rec, REGISTRY))
+
+
 @pytest.mark.parametrize(
     "host",
     [
@@ -184,3 +249,38 @@ def test_the_internet_exception_is_a_list_of_server_ids(bad):
     entry = {"mcp": [], "capabilities": [], "tier": "read", "internet_mcp": bad}
     with pytest.raises(SpecError, match="internet_mcp is a list of MCP server ids"):
         CeilingPolicy.from_mapping({"ceilings": {"profile:x": entry}})
+
+
+@pytest.mark.parametrize(
+    ("host", "labels"),
+    [
+        (_HOST_KEYS[1], [0]),  # a single-label host
+        (_HOST_KEYS[1] + ".", [0]),
+        (f"mcp.{_HOST_KEYS[1]}", [1]),  # the top-level position
+        ("localhost", []),
+        ("mcp", []),
+        ("xn--80aealotwbjpid2k.example", []),
+        # does not decode: judged as written (no digits here, so not a credential)
+        ("xn--zzzz-abcdefghij.example", []),
+        # does not decode, and reads as a key as written
+        ("xn--zzzz-a1b2c3d4e5f6g7h8i9j0.example", [0]),
+    ],
+)
+def test_every_host_label_is_checked_and_idn_labels_are_judged_decoded(host, labels):
+    from homelabnext.mcp import credentials
+
+    assert credentials.secret_host_labels(host) == labels
+
+
+#: a label Python 3.13's punycode decoder answers with OverflowError, not UnicodeError
+_OVERFLOW_LABEL = "xn--792ad84db474521944884823204797e8aeb26"
+
+
+def test_an_idn_label_the_decoder_crashes_on_is_judged_not_raised():
+    from homelabnext.mcp import credentials, importer
+
+    host = f"{_OVERFLOW_LABEL}.tracker.example.com"
+    assert credentials.secret_host_labels(host) == [0]  # read as written: key-shaped
+    rec = _edit(transport__url=f"https://{host}/mcp")
+    assert any("URL host may carry a credential" in p for p in _problems(rec, REGISTRY))
+    assert importer._plain_host(host) == "unknown.tracker.example.com"

@@ -138,8 +138,9 @@ entry N)`.
 - a **first-party** server runs this checkout's code: `bin: hnx` with an `entry` from a fixed
   allowlist in code (`servers.HNX_ENTRIES`: `mcp-serve` is `hnx mcp serve`, `broker-mcp` is `hnx
   broker mcp`, the subcommands that serve MCP on stdio), whose `args` may hold only that entry's
-  flags, each once and with a value (`--root`, `--registry`, `--scope-from-profile`; `--socket`; the
-  path flags `--root`, `--registry` and `--socket` absolute, since a relative one resolves in the
+  flags, each once and with a value (`--root`, `--registry`, `--scope-from-profile`, `--policy`,
+  `--lock`; `--socket`; `--scope-from-profile` only with `--policy` and `--lock`; the path flags
+  `--root`, `--registry`, `--policy`, `--lock` and `--socket` absolute, since a relative one resolves in the
   client's working directory), so no record reaches `invariants run --plugins-dir`, `--notify-cmd`,
   `broker run`, `workflows run`, `conform run` or `--out`; or a path bin under `origin.path`, which
   render writes absolute under the spec's `checkout_root:` (or `--checkout-root`; required,
@@ -149,7 +150,11 @@ entry N)`.
   verifies it when it fetches the package;
 - a **third party's hosted** server (`transport: {type: remote, url, protocol}`, `origin: {kind:
   hosted, provider}`, `runtime: hosted`, each only with the others): the URL is https with a DNS
-  host and no userinfo, query or fragment, never an IPv4 address in any notation (a host whose
+  host and no userinfo, query or fragment, a path that cannot carry a credential (an MCP path
+  such as `/mcp`, `/sse`, `/v1/mcp`, or lower-case words and versions; a key that a vendor puts
+  in the path goes in a header as a `secret:` name instead, and the same rule holds for a lab
+  server's `transport.path`), no host label that looks like a credential (any label, a single-label
+  host included: `<key>.mcp.vendor.example`, `<key>.example`; an IDN `xn--` label is judged decoded, and as written when it does not decode), never an IPv4 address in any notation (a host whose
   last label is a decimal, octal or `0x` number is one to a URL parser and to `getaddrinfo`:
   `0x7f.0x1`), never a private, test or lab host (`.local`, `.internal`, `.home.arpa`, the
   registry's domain or hosts: a lab server is reached by registry name), its egress names
@@ -168,7 +173,7 @@ entry N)`.
   (`key`, `auth`, `session`, `credentials`) takes one unless the value is a plain name, a path or
   an auth method (`--key id`, `--sort-key created_at`, `--session default`, `--auth oauth`,
   `GOOGLE_APPLICATION_CREDENTIALS=/etc/gcp/sa.json`). So a credential flag's value (`--token X`,
-  `--token ./x`, `--token=-x`, `-p X` or `-pX` unless a port, `-u user:pw`, a header after
+  `--token ./x`, `--token=-x`, `-p X` or `-pX` unless a port, `-u user:pw` and its long forms (`--user user:pw`, `--user=user:pw`, `--username`, `--proxy-user`, an attached `-uuser:pw`, and httpie's `-a user:pw`, `-auser:pw` and `-a=user:pw`; a numeric `uid:gid` is not one, nor an IP, `localhost` (any case, a trailing dot allowed) or empty host with a port after `-a`, nor a path after `-a` whose host is dotted, an IP, `localhost` or a drive letter (`backup.example.com:/data`, `C:/x`; `alice:/pw` is a credential); short flags are case-sensitive, so curl's `-A` user agent is not one), a header after
   `--header` or in `--header=`) is a `secret:` reference, nothing looks like a token (a token
   prefix such as `ghp_`, or a long, mixed, high-entropy value, `/`-separated base64 and
   dash-grouped random parts included), no URL carries one (userinfo, a credential-named query
@@ -196,7 +201,8 @@ entry N)`.
   well as the container). Another `DOCKER_` name, such as `DOCKER_CONTAINER` that an image reads
   inside the container, is the server's own setting. Also refused, because they load code or
   redirect trust inside the launcher (an `OPENSSL_CONF` engine makes `npx` load a shared object):
-  `OPENSSL_*`, `SSL_CERT_*`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, every `*_PROXY`
+  `OPENSSL_*`, `SSL_CERT_*`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `SSLKEYLOGFILE` (the TLS
+  stack writes every session's keys to it), every `*_PROXY`
   (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`), `GCONV_PATH`, `LOCPATH`, `NLSPATH`,
   `HOSTALIASES`, `RES_OPTIONS`, `LOCALDOMAIN`, `GLIBC_TUNABLES`, `MALLOC_*`, `TZDIR`,
   `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS`, `PERL5OPT`, `PERL5LIB`, `PERLLIB`,
@@ -316,7 +322,9 @@ digest), and it is refused without a ceiling policy (a spec's `policy:` and opti
 relative to the spec, or `--policy`/`--lock` with `--profile`): the ceiling and digest stored in
 the file are whatever last edited it, so a hand edit with a recomputed digest would otherwise
 render. A lean one (`platform/agent_profile`) must pass its schema, the same grant rules, `mcp`
-within `mcp_ceiling`, and `mcp` and `capabilities` within the policy's ceiling; it is refused
+within `mcp_ceiling`, `mcp` and `capabilities` within the policy's ceiling, and the reader rule
+whenever the policy marks the profile a reader (`reads_untrusted: true` in its entry; the file's
+own `reads_untrusted: false` does not turn it off, as for a compiled profile); it is refused
 without a policy too (its own `mcp_ceiling` proves only that it agrees with itself); anything
 else is refused. The policy also **attests** each profile's `data_tier` and `model_role`
 (optional keys of its entry): the profile must say the same, and only a profile whose entry says

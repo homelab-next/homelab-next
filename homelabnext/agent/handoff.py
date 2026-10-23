@@ -16,8 +16,9 @@ the broker actions the actor may take, each with its parameters bound to literal
 2. **Free text never becomes a parameter.**  The actor does not choose parameters: a request's
    params are computed from the declaration, and a reference may name only a *constrained*
    field of the output - an ``enum``/``const``, a number or boolean, or a string with a checked
-   ``format`` (:data:`CHECKED_FORMATS`) or a closed ``pattern`` (:func:`is_closed_pattern`), and
-   arrays/closed objects made only of those.  The report's ``summary``, ``unknowns``, cites and memory updates, and any
+   ``format`` (:data:`CHECKED_FORMATS`) or a closed, length-bounded ``pattern``
+   (:func:`is_closed_pattern`), and arrays (``items`` only, no ``prefixItems``) and closed objects
+   (no ``patternProperties``) made only of those.  The report's ``summary``, ``unknowns``, cites and memory updates, and any
    unconstrained string of the output, are free text: a model can be talked into writing
    anything there.  This is the same rule as the workflows validator's ``risky-params`` (a risky
    action takes no parameter from a prompt step's free text), applied to every action because
@@ -35,7 +36,6 @@ actor at its tier.
 from __future__ import annotations
 
 import copy
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -52,9 +52,6 @@ _SEAL = object()  # only accept() can build an Accepted
 # formats the stock jsonschema FormatChecker always checks, with no optional package, and that
 # admit no free text ("email" only checks for an "@"; "hostname" needs an optional package)
 CHECKED_FORMATS = frozenset({"date", "ipv4", "ipv6", "uuid"})
-# match-anything pieces: an unescaped "." (an even run of backslashes before it), a negated
-# class, or a negated shorthand
-_OPEN = re.compile(r"(?<!\\)(?:\\\\)*(?:\.|\[\^|\\[SWD])")
 
 
 class HandoffError(AgentError):
@@ -70,49 +67,199 @@ class HandoffRefused(AgentError):
 
 
 # ---------------------------------------------------------------- free text vs constrained
-def _top_level_alternation(pattern: str) -> bool:
-    depth, i, in_class = 0, 0, False
-    while i < len(pattern):
-        c = pattern[i]
-        if c == "\\":
-            i += 2
+# characters a pattern may match besides ASCII letters and digits, as a literal or a class
+# member: enough for names, hosts, paths and versions, never whitespace or shell/markup
+# punctuation
+_CLASS_PUNCT = frozenset("-_.:/@+=,~%")
+# ranges a class may span: within one of these
+_CLASS_RANGES = (("0", "9"), ("a", "z"), ("A", "Z"))
+#: the largest repeat count a closed pattern may give without a ``maxLength``
+MAX_REPEAT = 4096
+
+
+def _narrow_char(c: str) -> bool:
+    return (c.isascii() and c.isalnum()) or c in _CLASS_PUNCT
+
+
+def _parse(pattern: str) -> tuple[Any, Any] | None:
+    """The pattern as Python's ``re`` reads it (the validator's own engine) and the parser's
+    constants, or None when it cannot be read: the private modules missing (a future Python),
+    or a pattern ``re`` refuses.  Either way the pattern is not closed."""
+    try:
+        from re import _constants, _parser  # type: ignore[attr-defined]  # Python 3.11+
+
+        return _parser.parse(pattern), _constants
+    except Exception:  # an unreadable pattern is not closed
+        return None
+
+
+def _narrow_tree(sub: Any, c: Any) -> bool:
+    """Every character the parsed pattern can match is narrow (:func:`_narrow_char`), and no
+    piece of it changes how it is read: literals outside a class are checked like class members
+    (``(?:a|;|\\$)`` spells the class ``[a;$]``), ``\\w``/``\\d``/``\\s`` are wide (Python
+    matches them against Unicode), and an inline flag (``(?i:[a-z])`` matches the Kelvin sign)
+    is refused."""
+    for op, av in sub:
+        if op is c.LITERAL:
+            if not _narrow_char(chr(av)):
+                return False
+        elif op is c.IN:
+            for iop, iav in av:
+                if iop is c.LITERAL:
+                    if not _narrow_char(chr(iav)):
+                        return False
+                elif iop is c.RANGE:
+                    lo, hi = chr(iav[0]), chr(iav[1])
+                    if not any(a <= lo and hi <= b for a, b in _CLASS_RANGES):
+                        return False
+                else:  # NEGATE, CATEGORY (\w, \d, \s inside a class)
+                    return False
+        elif op is c.AT:
             continue
-        if in_class:
-            in_class = c != "]"
-        elif c == "[":
-            in_class = True
-        elif c == "(":
-            depth += 1
-        elif c == ")":
-            depth -= 1
-        elif c == "|" and depth == 0:
-            return True
-        i += 1
-    return False
+        elif op is c.BRANCH:
+            if not all(_narrow_tree(alt, c) for alt in av[1]):
+                return False
+        elif op is c.SUBPATTERN:
+            _gid, add_flags, del_flags, p = av
+            if add_flags or del_flags or not _narrow_tree(p, c):
+                return False
+        elif op in (c.MAX_REPEAT, c.MIN_REPEAT, getattr(c, "POSSESSIVE_REPEAT", None)):
+            if not _narrow_tree(av[2], c):
+                return False
+        elif op in (c.ASSERT, c.ASSERT_NOT):
+            if not _narrow_tree(av[1], c):
+                return False
+        elif op is getattr(c, "ATOMIC_GROUP", None):
+            if not _narrow_tree(av, c):
+                return False
+        elif op is c.GROUPREF:
+            continue  # repeats what a checked group matched
+        else:  # ANY, NOT_LITERAL, CATEGORY, GROUPREF_EXISTS and anything this does not read
+            return False
+    return True
+
+
+def _can_lead_with(sub: Any, ch: str, c: Any) -> tuple[bool, bool]:
+    """(whether a match of ``sub`` can begin with ``ch``, whether ``sub`` can match empty)."""
+    o = ord(ch)
+    for op, av in sub:
+        if op is c.LITERAL:
+            return av == o, False
+        if op is c.IN:
+            return any(
+                (iop is c.LITERAL and iav == o) or (iop is c.RANGE and iav[0] <= o <= iav[1])
+                for iop, iav in av
+            ), False
+        if op in (c.AT, c.ASSERT, c.ASSERT_NOT):
+            continue  # zero width
+        if op is c.BRANCH:
+            results = [_can_lead_with(alt, ch, c) for alt in av[1]]
+            if any(lead for lead, _ in results):
+                return True, False
+            if not any(empty for _, empty in results):
+                return False, False
+            continue
+        if op is c.SUBPATTERN or op is getattr(c, "ATOMIC_GROUP", None):
+            lead, empty = _can_lead_with(av[-1] if op is c.SUBPATTERN else av, ch, c)
+        elif op in (c.MAX_REPEAT, c.MIN_REPEAT, getattr(c, "POSSESSIVE_REPEAT", None)):
+            lead, empty = _can_lead_with(av[2], ch, c)
+            lead, empty = lead and av[1] > 0, empty or av[0] == 0
+        else:  # a back-reference, or anything else: assume the worst
+            return True, True
+        if lead:
+            return True, False
+        if not empty:
+            return False, False
+    return False, True
 
 
 def is_closed_pattern(pattern: str) -> bool:
-    """A pattern that cannot match free text: anchored at both ends with no top-level ``|``
-    (``^a$|.*`` is unanchored), and no ``.``, negated class or ``\\S``/``\\W``/``\\D``."""
-    return (
-        pattern.startswith("^")
-        and pattern.endswith("$")
-        and not pattern.endswith("\\$")
-        and not _top_level_alternation(pattern)
-        and not _OPEN.search(pattern)
-    )
+    """A pattern that cannot match free text, judged on the tree Python's ``re`` parses it to
+    (never on the text: ``(?#()`` is a comment whose ``(`` does not nest, so a text scan reads
+    the ``|`` after it as nested).  The top level starts with ``^`` and ends with ``$`` and is
+    not an alternation (``^a$|.*`` is unanchored); every character it can match, as a literal,
+    an alternative or a class member, is an ASCII letter, digit or one of ``-_.:/@+=,~%`` (so
+    no ``.``, negated class, ``\\w``, ``\\d`` or ``\\s``, which Python matches against
+    Unicode, nothing that matches whitespace, and no class such as ``[ -~]`` that lists
+    everything); no inline flag or comment; and no match can start with ``-`` (a value an
+    argv-fed handler would read as an option).  A pattern ``re`` cannot read is not closed."""
+    if "(?#" in pattern:
+        return False  # a comment: nothing a value needs, and it hides structure from a reader
+    parsed = _parse(pattern)
+    if parsed is None:
+        return False
+    tree, c = parsed
+    if tree.state.flags & ~c.SRE_FLAG_UNICODE:
+        return False  # a global inline flag: (?i), (?x), (?s), (?a), ...
+    top = list(tree)
+    if (
+        len(top) < 2
+        or top[0] != (c.AT, c.AT_BEGINNING)
+        or top[-1] != (c.AT, c.AT_END)
+        or any(op is c.BRANCH for op, _ in top)
+    ):
+        return False
+    return _narrow_tree(tree, c) and not _can_lead_with(tree, "-", c)[0]
+
+
+def _repeats_bounded(sub: Any, c: Any) -> bool:
+    """Every repeat in the parsed pattern has an upper bound of at most :data:`MAX_REPEAT`."""
+    for op, av in sub:
+        if op in (c.MAX_REPEAT, c.MIN_REPEAT, getattr(c, "POSSESSIVE_REPEAT", None)):
+            if av[1] == c.MAXREPEAT or av[1] > MAX_REPEAT:
+                return False
+            children = [av[2]]
+        elif op is c.SUBPATTERN:
+            children = [av[-1]]
+        elif op is getattr(c, "ATOMIC_GROUP", None):
+            children = [av]
+        elif op is c.BRANCH:
+            children = list(av[1])
+        elif op in (c.ASSERT, c.ASSERT_NOT):
+            children = [av[1]]
+        else:
+            continue
+        if not all(_repeats_bounded(child, c) for child in children):
+            return False
+    return True
+
+
+def _length_bounded(schema: Mapping[str, Any]) -> bool:
+    """A string schema whose values have a bounded length: a ``maxLength``, or a pattern whose
+    parsed repeats each have an upper bound of at most :data:`MAX_REPEAT` (read on the tree,
+    like the rest of the check: ``{0,4294967294}`` is not a bound)."""
+    if isinstance(schema.get("maxLength"), int) and not isinstance(schema["maxLength"], bool):
+        return True
+    parsed = _parse(str(schema.get("pattern")))
+    return parsed is not None and _repeats_bounded(*parsed)
+
+
+# keywords that apply a schema to child values the checked keywords do not cover (prefixItems
+# positions are outside ``items``; patternProperties keys bypass additionalProperties), or that
+# compose schemas this check does not follow: what cannot be shown to be constrained is not
+_UNFOLLOWED = frozenset(
+    {
+        "prefixItems", "additionalItems", "unevaluatedItems", "contains", "patternProperties",
+        "unevaluatedProperties", "dependentSchemas", "dependencies", "if", "then", "else",
+        "allOf", "anyOf", "oneOf", "not", "$ref", "$dynamicRef", "$recursiveRef",
+    }
+)  # fmt: skip
 
 
 def is_constrained(schema: Any) -> bool:
     """True when every value ``schema`` admits is constrained enough to be an action parameter.
 
-    Unknown or unsupported keywords (``$ref``, ``anyOf``, a missing ``type``) count as free text:
-    what cannot be shown to be constrained is not.
+    Unknown or unsupported keywords (``$ref``, ``anyOf``, ``prefixItems``, ``patternProperties``,
+    a missing ``type``) count as free text: what cannot be shown to be constrained is not.  A
+    string bound by a pattern must also be bounded in length (``maxLength`` or a pattern with no
+    unbounded quantifier).
     """
     if not isinstance(schema, Mapping):
         return False
     if "enum" in schema or "const" in schema:
         return True
+    if _UNFOLLOWED & set(schema):
+        return False
     kind = schema.get("type")
     if kind in ("integer", "number", "boolean"):
         return True
@@ -120,7 +267,7 @@ def is_constrained(schema: Any) -> bool:
         if schema.get("format") in CHECKED_FORMATS:
             return True
         pattern = schema.get("pattern")
-        return isinstance(pattern, str) and is_closed_pattern(pattern)
+        return isinstance(pattern, str) and is_closed_pattern(pattern) and _length_bounded(schema)
     if kind == "array":
         return is_constrained(schema.get("items"))
     if kind == "object":
@@ -238,7 +385,7 @@ def _shape_problems(doc: Mapping[str, Any]) -> list[str]:
             elif not is_constrained(sub):
                 out.append(
                     f"{name}: {ref!r} is a free-text field; constrain it (enum, a checked "
-                    "format, a closed pattern) or do not pass it to an action"
+                    "format, a closed pattern with a length bound) or do not pass it to an action"
                 )
     return out
 

@@ -2,10 +2,12 @@
 """``hnx mcp serve|tools|call`` and ``hnx mcp catalog ...`` (the MCP catalog:
 :mod:`.catalog_cli`, docs/mcp-catalog.md).
 
-* ``serve [--root CHECKOUT] [--registry FILE] [--scope-from-profile PROFILE.json]`` runs the
-  read-only MCP server on stdio (needs ``pip install 'homelabnext[mcp]'``); there is no network
-  transport.  With ``--scope-from-profile``, every tool but ``get_schema``,
-  ``invariants_status`` and ``terms`` is bounded by the compiled profile's grants (the profile must verify and be granted ``hnx-catalog``);
+* ``serve [--root CHECKOUT] [--registry FILE] [--scope-from-profile PROFILE.json --policy
+  POLICY --lock LOCK]`` runs the read-only MCP server on stdio (needs ``pip install
+  'homelabnext[mcp]'``); there is no network transport.  With ``--scope-from-profile``, every
+  tool but ``get_schema``, ``invariants_status`` and ``terms`` is bounded by the compiled
+  profile's grants (the profile must verify against the ceiling policy and the lock of reviewed
+  digests, both required, and be granted ``hnx-catalog``);
 * ``tools`` lists the tools and what each answers (no SDK needed);
 * ``call TOOL [--args JSON] [...]`` runs one tool in-process and prints its JSON result, the
   same handler the server calls (no SDK needed; for debugging and scripts).
@@ -33,7 +35,15 @@ def _catalog(args) -> Catalog:
         raise CatalogError("needs a homelabnext source checkout (run it from one or pass --root)")
     cat = Catalog(root, registry_path=args.registry)
     if args.scope_from_profile:
-        pid, scope = load_profile_scope(args.scope_from_profile, cat.registry)
+        from .clients import RenderError, load_lock, load_policy
+
+        try:
+            policy, lock = load_policy(args.policy), load_lock(args.lock)
+        except RenderError as exc:
+            raise ScopeError("; ".join(exc.problems)) from None
+        pid, scope = load_profile_scope(
+            args.scope_from_profile, cat.registry, policy=policy, lock=lock
+        )
         cat.scope, cat.scope_source = scope, pid
     return cat
 
@@ -60,12 +70,24 @@ def main(argv: list[str] | None = None) -> int:
         "--scope-from-profile",
         metavar="PROFILE",
         help="a compiled agent profile whose grants bound the tools (all but get_schema, "
-        "invariants_status and terms)",
+        "invariants_status and terms); needs --policy and --lock",
     )
+    ap.add_argument("--policy", help="the ceiling policy the profile is verified against")
+    ap.add_argument("--lock", help="reviewed digests: {profiles: {<profile id>: <digest>}}")
     try:
         args = ap.parse_args(argv)
     except SystemExit as exc:
         return 2 if exc.code else 0
+    if args.scope_from_profile and not (args.policy and args.lock):
+        print(
+            "hnx mcp: --scope-from-profile needs --policy and --lock (the profile file's own "
+            "ceiling and digest are whatever last edited it)",
+            file=sys.stderr,
+        )
+        return 2
+    if (args.policy or args.lock) and not args.scope_from_profile:
+        print("hnx mcp: --policy and --lock go with --scope-from-profile", file=sys.stderr)
+        return 2
     if args.cmd == "tools":
         for name, text in sorted(TOOLS.items()):
             print(f"{name}: {text}")

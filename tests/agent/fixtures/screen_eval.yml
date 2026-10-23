@@ -347,6 +347,134 @@ positives:
     text: ["mallory@example.com committed gh", "o_fakeOAUTH0123456789abcdefghijklmnopqr"]
     secrets: [mallory@example.com, ["gh", "o_fakeOAUTH0123456789abcdefghijklmnopqr"]]
 
+  # -------------------------------------------------------------- shapes added from review
+  - id: json-password-with-spaces
+    type: secret
+    text: ["{\"password\": \"my fake horse battery\"}"]
+    secrets: [my fake horse battery]
+  - id: yaml-quoted-passphrase
+    type: secret
+    text: ["vault:\n  passphrase: 'fake correct horse staple'\n"]
+    secrets: [fake correct horse staple, horse staple]
+  - id: env-short-pass-key
+    type: secret
+    text: ["DB_PASS=Fake3Secret!\nSMTP_PW=fakeMail99\n"]
+    secrets: [Fake3Secret!, fakeMail99]
+  - id: authorization-basic
+    type: token
+    text: ["GET /api HTTP/1.1\nAuthorization: Basic ", "ZmFrZTpm", "YWtlcGFzc3dvcmQ=", "\n"]
+    secrets: [["ZmFrZTpm", "YWtlcGFzc3dvcmQ="]]
+  - id: authorization-token-scheme
+    type: token
+    text: ["curl -H \"Authorization: Token ", "fake0token0value\" https://api.example.com/"]
+    secrets: [fake0token0value]
+  - id: authorization-json-short-bearer
+    type: token
+    text: ["{\"Authorization\": \"Bearer ", "fake0short\"}"]
+    secrets: [fake0short]
+  - id: authorization-digest
+    type: token
+    text: ["Authorization: Digest username=\"fake\", response=\"fake0digest0response0\"\n"]
+    secrets: [fake0digest0response0]
+  - id: cookie-header
+    type: secret
+    text: ["Cookie: sessionid=fake0session0value0123; theme=dark\n"]
+    secrets: [fake0session0value0123]
+  - id: set-cookie-header
+    type: secret
+    text: ["HTTP/1.1 200 OK\nSet-Cookie: sid=fake0sid0value; Path=/; HttpOnly\n"]
+    secrets: [fake0sid0value]
+  - id: ipv4-mapped-ipv6
+    type: ip
+    text: ["src ::ffff:192.0.2.44 dst ::ffff:198.51.100.7"]
+    secrets: ["192.0.2.44", "198.51.100.7", "0.2.44", "51.100.7"]
+  - id: ipv4-fullwidth-digits
+    type: ip
+    text: ["host １９２.０.２.４４ replied"]
+    secrets: ["１９２.０.２.４４"]
+  - id: email-zero-width-split
+    type: email
+    text: ["mail fake.user​@example.com now"]
+    secrets: ["fake.user​@example.com", "fake.user"]
+  - id: github-token-zero-width-split
+    type: token
+    text: ["token gh", "p_fake0123456789abcdef​ghijklmnopqrstuv end"]
+    secrets: [["gh", "p_fake0123456789abcdef"], ghijklmnopqrstuv]
+
+  # folding must only add: a format character or a compatibility character that folds to a
+  # letter must not glue a value to its neighbour and hide it (each was missed by a folded-only
+  # pass); the last two spans meet inside one original character and are merged
+  - id: fold-boundary-aws-zwsp
+    type: token
+    text: ["key AKI", "AFAKE7EXAMPLE0KEY\u200bx"]
+    secrets: [["AKI", "AFAKE7EXAMPLE0KEY"]]
+  - id: fold-boundary-ip-soft-hyphen
+    type: ip
+    text: ["from 192.0.2.40\u00adx"]
+    secrets: ["192.0.2.40"]
+  - id: fold-boundary-email-trademark
+    type: email
+    text: ["mail alice.fake@example.com\u2122 today"]
+    secrets: ["alice.fake@example.com"]
+  - id: fold-boundary-ghp-word-joiner
+    type: token
+    text: ["x\u2060gh", "p_fake0123456789abcdefghijklmnopqrstuv"]
+    secrets: [["gh", "p_fake0123456789abcdefghijklmnopqrstuv"]]
+  - id: fold-merge-ip-into-email
+    type: email
+    text: ["192.0.2.4\u00bclice.fake@example.com"]
+    secrets: ["192.0.2.4", "lice.fake@example.com"]
+
+  # glued to non-ASCII letters: Python's \w and \b are Unicode, so a CJK, Thai or Cyrillic
+  # letter next to a value was no boundary and nothing was redacted; boundaries are ASCII now
+  - id: glued-cjk-ipv4
+    type: ip
+    text: ["\u30b5\u30fc\u30d0\u30fc192.0.2.40\u306b\u63a5\u7d9a\u3057\u307e\u3057\u305f"]
+    secrets: ["192.0.2.40"]
+  - id: glued-cjk-email
+    type: email
+    text: ["\u7528\u6237alice.fake@example.com\u5df2\u767b\u5f55"]
+    secrets: ["alice.fake@example.com"]
+  - id: glued-cjk-github-token
+    type: token
+    text: ["\u30c8\u30fc\u30af\u30f3gh", "p_fake0123456789abcdefghijklmnopqrstuv\u3092\u767a\u884c"]
+    secrets: [["gh", "p_fake0123456789abcdefghijklmnopqrstuv"]]
+  - id: glued-cjk-aws-key
+    type: token
+    text: ["\u5bc6\u94a5AKI", "AFAKE7EXAMPLE0KEY\u5df2\u6cc4\u9732"]
+    secrets: [["AKI", "AFAKE7EXAMPLE0KEY"]]
+  - id: glued-cjk-card
+    type: card
+    text: ["\u30ab\u30fc\u30c94111111111111111\u3067\u6c7a\u6e08"]
+    secrets: ["4111111111111111"]
+  - id: glued-cyrillic-ipv4
+    type: ip
+    text: ["\u0430\u0434\u0440\u0435\u0441198.51.100.7\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d"]
+    secrets: ["198.51.100.7"]
+  - id: glued-cjk-ipv6
+    type: ip
+    text: ["\u4e3b\u673a2001:db8::1ff:fe23:4567:890a\u79bb\u7ebf"]
+    secrets: ["2001:db8::1ff:fe23:4567:890a"]
+  - id: glued-thai-secret
+    type: secret
+    text: ["\u0e23\u0e2b\u0e31\u0e2a password=FakeValue0123\u0e02\u0e2d\u0e07\u0e40\u0e23\u0e32"]
+    secrets: ["FakeValue0123"]
+
+  - id: secret-glued-to-a-token
+    type: secret
+    text: ["password=FakeValue0123\u00b5gh", "p_fake0123456789abcdefghijklmnopqrstuv"]
+    secrets: ["FakeValue0123", ["gh", "p_fake0123456789abcdefghijklmnopqrstuv"]]
+
+  # a lower-priority value overlapped by a higher-priority span keeps its own label for the rest
+  - id: secret-then-spaced-card
+    type: card
+    text: ["password=4111 1111 1111 1111 for the test account"]
+    secrets: ["4111 1111 1111 1111", "1111 1111 1111"]
+  - id: secret-then-spaced-phone
+    type: phone
+    text: ["pwd=555 123 4567 is the desk line"]
+    secrets: ["555 123 4567", "123 4567"]
+
 negatives:
   - {id: version-dotted-quad, text: "upgraded to v4.18.2.1 last week", keep: [v4.18.2.1]}
   - {id: version-word, text: "agent version 2.31.0.7 deployed", keep: [version 2.31.0.7]}
@@ -393,3 +521,8 @@ negatives:
   - {id: seven-digit-no-keyword, text: "case 555-0100 opened", keep: [555-0100]}
   - {id: doc-mac, text: "MAC 00:00:5e:00:53:01 is out of scope", keep: ["00:00:5e:00:53:01"]}
   - {id: phone-like-range, text: "ports 100-200 and 300-400", keep: [100-200, 300-400]}
+  - {id: bypass-key, text: "bypass=all and compass_heading=270", keep: [bypass=all, compass_heading=270]}
+  - {id: pwm-and-passenger, text: "pwm_duty=40 passengers=12", keep: [pwm_duty=40, passengers=12]}
+  - {id: cookie-prose, text: "Cookie consent: accepted by the user", keep: ["Cookie consent: accepted by the user"]}
+  - {id: session-timeout, text: "session_timeout=30 session_count=4", keep: [session_timeout=30, session_count=4]}
+  - {id: fullwidth-version, text: "version ２.３１.０.７ shipped", keep: ["２.３１.０.７"]}

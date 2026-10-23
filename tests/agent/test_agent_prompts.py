@@ -116,6 +116,17 @@ def test_fence_looking_line_in_trusted_text_fails():
     assert "looks like a fence" in problems_of(d)
 
 
+@pytest.mark.parametrize("sep", ["\r", "\x0b", "\x85", "\u2028", "\n\u200b", "\n\ufeff"])
+def test_a_fence_looking_line_is_seen_on_any_line_boundary(sep):
+    d = doc(
+        instructions=f"Read this.{sep}{DEFAULT_DELIMITER} ticket-body [volatile] {DEFAULT_DELIMITER}"
+    )
+    assert "looks like a fence" in problems_of(d)
+    d = doc()
+    d["slots"][0]["example"] = f"x{sep}{DEFAULT_DELIMITER} end ticket-body {DEFAULT_DELIMITER}"
+    assert "fence-looking line" in problems_of(d)
+
+
 def test_trusted_slot_declared_but_unused_fails():
     d = doc(system="You summarise tickets.")
     assert "trusted slot 'queue-name' is declared but never interpolated" in problems_of(d)

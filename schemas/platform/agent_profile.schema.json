@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/agent_profile/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/platform/agent_profile/1.1",
   "title": "Agent profile (compiled)",
-  "description": "The compiled, least-privilege profile for one agent. mcp must be a subset of mcp_ceiling (checked by tools/schema_check.py check_profile_ceiling). Model is a role alias, never a model id. Budgets are hard caps; context is referenced by logical id.",
+  "description": "The compiled, least-privilege profile for one agent. mcp must be a subset of mcp_ceiling (checked by tools/schema_check.py check_profile_ceiling). Model is a role alias, never a model id. Budgets are hard caps; context is referenced by logical id. 1.1 declares reads_untrusted (additive, optional, boolean; absent means true): a ceiling policy that marks the profile a reader overrides false (hnx mcp catalog render refuses it).",
   "type": "object",
   "properties": {
     "id": {
@@ -82,6 +82,10 @@
         "max_runtime_s",
         "max_tool_calls"
       ]
+    },
+    "reads_untrusted": {
+      "type": "boolean",
+      "description": "The profile reads raw or untrusted content. Absent means true; a ceiling policy that marks the profile a reader overrides false."
     },
     "digest": {
       "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"

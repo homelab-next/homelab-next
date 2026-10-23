@@ -293,6 +293,50 @@ def test_profiles_must_be_the_declared_ones():
         ("^[^;]+$", False),
         ("^\\S+$", False),
         ("^a\\$", False),
+        ("^[0-9a-f]{40}$", True),
+        ("^v[0-9]+\\.[0-9]+$", True),
+        ("^[\\x41-\\x5a]+$", True),
+        # a positive class that lists everything, or whitespace, admits sentences
+        ("^[\\u0000-\\U0010FFFF]*$", False),
+        ("^[ -~]*$", False),
+        ("^[A-z]+$", False),  # A-z spans [\\]^_` too
+        ("^[a-z ]+$", False),
+        ("^[a-z]+( [a-z]+)*$", False),
+        ("^[a-z]+\\s[a-z]+$", False),
+        ("^[a-z\\x20]+$", False),
+        ("^[a-z;|&]+$", False),
+        ("^[\\p{L}]+$", False),
+        # literals outside a class are checked like class members: an alternation can spell any
+        # class, so (?:a|;|\$) is [a;$]
+        ("^(?:[a-z0-9/]|;|\\$|\\(|\\)|`|\\||>|&){1,200}$", False),
+        ("^(?:[a-z]|\\u00a0){1,50}$", False),
+        ("^(?:[a-z]|\u3164){1,50}$", False),  # a Hangul filler (U+3164)
+        ("^[a-z\\040]{1,9}$", False),  # an octal escape for a space
+        # Python matches \w and \d against Unicode: \w admits "ignore<U+3164>all<U+3164>rules"
+        ("^\\w{1,200}$", False),
+        ("^\\d{1,3}$", False),
+        ("^[\\w.-]{1,64}$", False),
+        # an inline flag changes how the rest is read: (?i:[a-z]) matches the Kelvin sign
+        ("^(?i:[a-z]){1,20}$", False),
+        ("(?i)^[a-z]{1,20}$", False),
+        ("^(?x)[a-z]{1,20}$", False),
+        ("^(?s:[a-z]){1,20}$", False),
+        # a value an argv-fed handler would read as an option
+        ("^[a-zA-Z0-9/=,-]{1,64}$", False),
+        ("^-?[0-9]{1,3}$", False),
+        ("^(?:[a-z]{0,3})-x$", False),
+        ("^(?:x|-){1,3}$", False),
+        ("^x-[a-z]{1,9}$", True),  # a dash that cannot come first
+        ("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", True),
+        ("^[a-z.]{1,9}$", True),  # a dot in a class is a dot, not "anything"
+        ("^(?=x)[a-z]{1,9}$", True),
+        # anchoring and alternation are read on the parsed tree: a comment's "(" does not nest,
+        # so a text scan took the "|" after it for a nested one
+        ("^a$(?#()|b$", False),
+        ("^[a-z0-9][a-z0-9-]{0,62}$(?#()|x$", False),
+        ("^(?#)a$", False),
+        ("^xa$|^xb$", False),  # the parser hoists "^x"; the top level still ends in a branch
+        ("^a\\Z", False),
     ],
 )
 def test_closed_patterns(pattern, closed):
@@ -323,10 +367,56 @@ def test_closed_patterns(pattern, closed):
         ({"type": "object", "properties": {"a": {"type": "integer"}}}, False),
         ({"$ref": "#/$defs/x"}, False),
         ("string", False),
+        ({"type": "string", "pattern": "^[a-z]+$", "maxLength": 63}, True),
+        ({"type": "string", "pattern": "^[a-z]{1,63}$"}, True),
+        ({"type": "string", "pattern": "^[a-z]+$"}, False),  # no length bound
+        ({"type": "string", "pattern": "^[a-z]{1,}$"}, False),
+        # repeats are read on the parsed tree and capped
+        ({"type": "string", "pattern": "^[a-z]{0,4096}$"}, True),
+        ({"type": "string", "pattern": "^[a-z]{0,4097}$"}, False),
+        ({"type": "string", "pattern": "^[a-z]{0,4294967294}$"}, False),
+        ({"type": "string", "pattern": "^(?:[a-z]{1,9}){1,999}$"}, True),
+        ({"type": "string", "pattern": "^[a-z]{0,4294967294}$", "maxLength": 64}, True),
+        ({"type": "string", "pattern": "^[a-z]*+$"}, False),
+        # items does not apply to the prefixItems positions (2020-12)
+        ({"type": "array", "prefixItems": [{"type": "string"}], "items": {"enum": ["a"]}}, False),
+        # keys matching a patternProperties pattern bypass additionalProperties: false
+        (
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"k": {"enum": ["x"]}},
+                "patternProperties": {"^z": {}},
+            },
+            False,
+        ),
+        ({"type": "integer", "anyOf": [{"minimum": 1}]}, False),
+        ({"type": "string", "format": "uuid", "allOf": [{}]}, False),
     ],
 )
 def test_constrained_fields(schema, constrained):
     assert is_constrained(schema) is constrained
+
+
+def test_the_probe_shapes_are_free_text_and_their_declaration_is_refused():
+    """prefixItems, patternProperties and an all-covering class each let a reader's free text
+    reach a broker action's params; a declaration binding any of them is refused."""
+    shapes = {
+        "hosts": {"type": "array", "prefixItems": [{"type": "string"}], "items": {"enum": ["a"]}},
+        "tags": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"k": {"enum": ["x"]}},
+            "patternProperties": {"^z": {}},
+        },
+        "cmd": {"type": "string", "pattern": "^[\\u0000-\\U0010FFFF]*$"},
+        "line": {"type": "string", "maxLength": 80, "pattern": "^[ -~]*$"},
+    }
+    for name, shape in shapes.items():
+        d = _with_params(x=f"$output.{name}")
+        d["output_schema"]["properties"][name] = shape
+        with pytest.raises(HandoffError, match="free-text field"):
+            Handoff.from_mapping(d)
 
 
 def test_array_index_and_escaped_dollar_resolve(pack):
@@ -342,3 +432,44 @@ def test_array_index_and_escaped_dollar_resolve(pack):
     )
     req = build_request(acc, "records.annotate", request_id="r-5")
     assert req["params"] == {"first": 443, "lit": "$output.note"}
+
+
+def test_a_closed_looking_pattern_cannot_carry_a_shell_line_a_flag_or_a_unicode_sentence():
+    """The review's end-to-end probe: each field is refused at declaration, so none of these
+    values can reach a broker request's params."""
+    shapes = {
+        "cmd": {"type": "string", "pattern": r"^(?:[a-z0-9/]|;|\$|\(|\)|`|\||>|&){1,200}$"},
+        "arg": {"type": "string", "pattern": r"^[a-zA-Z0-9/=,-]{1,64}$"},
+        "sentence": {"type": "string", "pattern": r"^\w{1,200}$"},
+        "kelvin": {"type": "string", "pattern": r"^(?i:[a-z]){1,20}$"},
+    }
+    for name, shape in shapes.items():
+        assert not is_constrained(shape), name
+        d = _with_params(x=f"$output.{name}")
+        d["output_schema"]["properties"][name] = shape
+        with pytest.raises(HandoffError, match="free-text field"):
+            Handoff.from_mapping(d)
+
+
+def test_a_pattern_is_not_closed_when_the_regex_parser_cannot_be_imported(monkeypatch):
+    """The check reads patterns with CPython's private ``re`` parser; without it (a future
+    Python), every pattern fails closed instead of raising out of is_constrained."""
+    import re
+    import sys
+
+    assert is_closed_pattern("^[a-z]{1,9}$")
+    monkeypatch.delattr(re, "_constants")
+    monkeypatch.setitem(sys.modules, "re._constants", None)
+    assert not is_closed_pattern("^[a-z]{1,9}$")
+    assert not is_constrained({"type": "string", "pattern": "^[a-z]{1,9}$"})
+
+
+def test_a_comment_cannot_hide_a_free_text_alternative():
+    """The verify's end-to-end probe: the slug-looking pattern is refused at declaration."""
+    d = _with_params(x="$output.slug")
+    d["output_schema"]["properties"]["slug"] = {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]{0,62}$(?#()|x$",
+    }
+    with pytest.raises(HandoffError, match="free-text field"):
+        Handoff.from_mapping(d)

@@ -34,7 +34,9 @@ SubagentStop         subagent_stop         --
 ==================== ===================== ===================================================
 
 **Where it goes.**  ``--post URL`` sends it to the hub's push ingest with the bearer token from
-the environment variable ``--token-env`` names (the hub redacts and caps before storing).
+the environment variable ``--token-env`` names (the hub redacts and caps before storing); the URL
+must be ``https://`` (plain ``http://`` only to a loopback address) and a redirect is refused, so
+the token never reaches another host.
 ``--spool DIR`` writes one file per event (atomic rename, mode 0600) for the hub's
 ``agent-spool`` source; because that file is on disk, the detail tier is spooled **only** when
 the shared screener (``homelabnext.agent.screen``) is importable to redact secrets first --
@@ -49,12 +51,15 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import re
 import socket
 import sys
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -250,7 +255,42 @@ def write_spool(spool: Path, record: Mapping[str, Any], now: float) -> Path:
     return final
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: urllib would follow a 301/302/303 on a POST and copy the bearer
+    token to whatever host the ``Location`` names.  The ingest answers directly, never with one."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        raise urllib.error.HTTPError(req.full_url, code, f"refusing redirect ({msg})", headers, fp)
+
+
+def _loopback(host: str | None) -> bool:
+    if not host:
+        return False
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def post_url_problem(url: str) -> str | None:
+    """Why the bearer token may not be sent to ``url`` (None when it may): only ``https://``, or
+    plain ``http://`` to a loopback address, where nothing on the path can read it."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.username is not None or parts.password is not None:
+        return "the ingest URL may not carry credentials"
+    if parts.scheme == "https" and parts.hostname:
+        return None
+    if parts.scheme == "http" and _loopback(parts.hostname):
+        return None
+    return "the ingest URL must be https:// (plain http:// only to a loopback address)"
+
+
 def post(url: str, token: str, record: Mapping[str, Any], timeout: float = 3.0) -> int:
+    problem = post_url_problem(url)
+    if problem:
+        raise ValueError(problem)
     body = {"summary": [record["summary"]]}
     if record.get("detail"):
         body["detail"] = [record["detail"]]
@@ -260,7 +300,12 @@ def post(url: str, token: str, record: Mapping[str, Any], timeout: float = 3.0) 
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    handlers: list[urllib.request.BaseHandler] = [_NoRedirect()]
+    if urllib.parse.urlsplit(url).scheme == "http":
+        # plain http goes only to loopback: never through an http_proxy from the environment,
+        # which would receive the bearer token in cleartext
+        handlers.append(urllib.request.ProxyHandler({}))
+    with urllib.request.build_opener(*handlers).open(req, timeout=timeout) as resp:
         return resp.status
 
 
