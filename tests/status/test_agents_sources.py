@@ -167,6 +167,44 @@ def test_hook_never_follows_a_redirect_with_its_token():
             srv.server_close()
 
 
+def test_hook_never_sends_plain_http_through_an_environment_proxy(monkeypatch):
+    """With http_proxy set and no no_proxy, urllib would hand a loopback POST, bearer token and
+    all, to the proxy in cleartext; the hook goes direct."""
+    seen: list[tuple[str, str | None]] = []
+
+    def server(name):
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                seen.append((name, self.headers.get("Authorization")))
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+        return http.server.HTTPServer((LOOPBACK, 0), H)
+
+    hub, proxy = server("hub"), server("proxy")
+    for srv in (hub, proxy):
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        for k in ("no_proxy", "NO_PROXY", "all_proxy", "ALL_PROXY"):
+            monkeypatch.delenv(k, raising=False)
+        for k in ("http_proxy", "HTTP_PROXY"):
+            monkeypatch.setenv(k, f"http://{LOOPBACK}:{proxy.server_port}")
+        raw = json.dumps({**BASE, "hook_event_name": "SessionStart"}).encode()
+        url = f"http://{LOOPBACK}:{hub.server_port}/ingest/agent-activity"
+        env = {"HNX_STATUS_INGEST_TOKEN": FAKE_BEARER}
+        assert hook.main(["--post", url], stdin=raw, env=env, clock=lambda: T0) == 0
+        assert seen == [("hub", f"Bearer {FAKE_BEARER}")]
+    finally:
+        for srv in (hub, proxy):
+            srv.shutdown()
+            srv.server_close()
+
+
 @pytest.mark.parametrize(
     "url, ok",
     [

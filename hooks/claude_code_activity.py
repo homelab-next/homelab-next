@@ -300,7 +300,12 @@ def post(url: str, token: str, record: Mapping[str, Any], timeout: float = 3.0) 
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
         method="POST",
     )
-    with urllib.request.build_opener(_NoRedirect).open(req, timeout=timeout) as resp:
+    handlers: list[urllib.request.BaseHandler] = [_NoRedirect()]
+    if urllib.parse.urlsplit(url).scheme == "http":
+        # plain http goes only to loopback: never through an http_proxy from the environment,
+        # which would receive the bearer token in cleartext
+        handlers.append(urllib.request.ProxyHandler({}))
+    with urllib.request.build_opener(*handlers).open(req, timeout=timeout) as resp:
         return resp.status
 
 
