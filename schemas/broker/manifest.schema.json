@@ -319,7 +319,7 @@
     },
     "refusal_limit": {
       "type": "object",
-      "description": "1.4: the socket transport's per-peer limit on refused requests (Denied or InvalidArguments answers). Over max refusals within window_s seconds, the peer is answered rate-limited until the window ends, with one audit record per window. Absent: max 60, window_s 60.",
+      "description": "1.4: the socket transport's per-peer limit on refused requests (every answer but ok, whatever its kind, except the broker's own faults). Over max refusals within window_s seconds, the peer is answered rate-limited until the window ends, with one audit record per window. Absent: max 60, window_s 60.",
       "properties": {
         "max": {"type": "integer", "minimum": 1, "maximum": 100000},
         "window_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 86400}

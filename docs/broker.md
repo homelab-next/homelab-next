@@ -249,8 +249,10 @@ Bounds: one request per connection, at most 1 MiB (`--max-request-bytes`) read w
 kept for approval relays so agents cannot crowd out the hub; more get `busy`.
 
 Refusals are rate limited per peer: a caller or an unknown peer with more than
-`refusal_limit.max` refused requests (`Denied` or `InvalidArguments`: an unknown action, a
-malformed request, `unknown-caller`, ...) within `refusal_limit.window_s` seconds (manifest 1.4;
+`refusal_limit.max` refused requests (any answer but `ok`, whatever its kind: an unknown action,
+a malformed request, `unknown-caller`, `not-pending`, `too-many-pending`, a failed handler, ...;
+only the broker's own faults, `internal-error`, `busy`, `audit-unavailable` and
+`audit-incomplete`, are not counted) within `refusal_limit.window_s` seconds (manifest 1.4;
 default 60 per 60 s) is answered `rate-limited` for the rest of the window, without its request
 being parsed. The limit is audited **once per peer and window** (`operation: connect`,
 `reason: rate-limited`) and the number of requests it suppressed is logged when the window ends,

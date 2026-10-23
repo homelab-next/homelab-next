@@ -54,10 +54,12 @@ so agents holding every slot cannot keep the hub from approving or denying (more
 exactly-once across threads and processes.
 
 Refusals are rate limited per peer (:class:`RefusalLimiter`): a caller or an unknown peer that
-collects more than ``refusal_limit.max`` refusals (``Denied`` or ``InvalidArguments``: default
-deny, a malformed request, ``unknown-caller``, ...) within ``refusal_limit.window_s`` seconds
-(manifest 1.4; default :data:`DEFAULT_REFUSAL_LIMIT` per :data:`DEFAULT_REFUSAL_WINDOW_S` s) is
-answered ``rate-limited`` for the rest of that window without its request being looked at.  The
+collects more than ``refusal_limit.max`` refusals (every answer that is not ``ok``, whatever its
+kind: default deny, a malformed request, ``unknown-caller``, ``not-pending``, a failed handler,
+...; only the broker's own faults, :data:`NOT_REFUSALS`, are not counted) within
+``refusal_limit.window_s`` seconds (manifest 1.4; default :data:`DEFAULT_REFUSAL_LIMIT` per
+:data:`DEFAULT_REFUSAL_WINDOW_S` s) is answered ``rate-limited`` for the rest of that window
+without its request being looked at.  The
 limit is audited once per peer and window (operation ``connect``, reason ``rate-limited``), not
 once per request, so an agent probing the broker can fill neither the audit trail nor the disk;
 how many requests the window suppressed is logged when it ends.  Approval relays are exempt (a
@@ -116,6 +118,8 @@ MAX_AUDIT_TAIL = 500
 DEFAULT_REFUSAL_LIMIT = 60
 DEFAULT_REFUSAL_WINDOW_S = 60.0
 RATE_LIMITED = "rate-limited"
+#: failures of the broker itself, never counted as the peer's refusals
+NOT_REFUSALS = frozenset({"internal-error", "busy", "audit-unavailable", "audit-incomplete"})
 #: what an agent's process may ask, and the fields each operation takes (beyond ``v``, ``op``)
 CALLER_OPS: dict[str, frozenset[str]] = {
     "actions": frozenset(),
@@ -360,7 +364,13 @@ def handle_request(
             )
         else:
             response = _handle(svc, who, raw, problem)
-        if limited is not None and response.get("kind") in ("Denied", "InvalidArguments"):
+        # every refusal counts, whatever its class: not-pending is a plain BrokerError, and an
+        # agent looping run on a finished request must not write one audit record per try
+        if (
+            limited is not None
+            and not response.get("ok")
+            and response.get("error") not in NOT_REFUSALS
+        ):
             limited.refused(uid)
         return response
     finally:

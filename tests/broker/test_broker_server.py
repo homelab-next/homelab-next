@@ -515,6 +515,23 @@ def test_refusals_are_rate_limited_per_peer_and_audited_once_per_window(tmp_path
     assert len(_limited_records(svc)) == 2
 
 
+def test_every_refusal_counts_for_the_limit_whatever_its_class(tmp_path):
+    """not-pending is a plain BrokerError, not Denied or InvalidArguments, so an agent looping run
+    or cancel on a finished request wrote one audit record per try and was never limited."""
+    svc = _service(tmp_path)
+    peers = PeerMap(svc.manifest)
+    limiter = RefusalLimiter(3, 60, clock=_Clock())
+    rid = svc.submit("profile:triage", "service.status", {})
+    svc.cancel("profile:triage", rid)
+    before = len(svc.audit_documents())
+    errors = [
+        _ask(svc, peers, ME, limiter, op=op, request_id=rid)["error"]
+        for op in ("run", "cancel") * 10
+    ]
+    assert errors == ["not-pending"] * 3 + ["rate-limited"] * 17
+    assert len(svc.audit_documents()) == before + 4, "three refusals and one rate-limit record"
+
+
 def test_unknown_peers_are_rate_limited_too(tmp_path):
     svc = _service(tmp_path)
     peers = PeerMap(svc.manifest)
