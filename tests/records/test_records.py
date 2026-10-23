@@ -63,6 +63,12 @@ def test_slug_override_and_no_overwrite(rec):
     assert not list(p.parent.glob(".*.tmp"))
 
 
+def test_a_note_that_sets_a_key_twice_is_refused():
+    # PyYAML keeps the last value: the decider would act on `partial`, a reader sees `retired`
+    with pytest.raises(NoteError, match="duplicate key 'to'"):
+        parse_note("---\ntype: register-transition\nto: retired\nto: partial\n---\n")
+
+
 @pytest.mark.parametrize("decision", ["approve", "deny"])
 def test_a_name_already_decided_is_refused(rec, tree, decision):
     # the inbox is exclusive on its own; a decided note's name would collide when this one is

@@ -55,6 +55,7 @@ from typing import Any
 
 import yaml
 
+from homelabnext._yaml import UniqueKeyLoader
 from homelabnext.state import atomic_write_text
 
 __all__ = [
@@ -230,8 +231,8 @@ def read_events(d, problems: list[str], who: str = "") -> list[Event]:
             problems.append(f"{pre}{d.name}/{f.name}: an events directory holds *.yml files only")
             continue
         try:
-            data = yaml.safe_load(f.read_text(encoding="utf-8"))
-        except yaml.YAMLError as ex:
+            data = yaml.load(f.read_text(encoding="utf-8"), Loader=UniqueKeyLoader)
+        except yaml.YAMLError as ex:  # a duplicate key too: the reader and the file would differ
             problems.append(f"{pre}{d.name}/{f.name}: not YAML ({ex})".replace("\n", " "))
             continue
         bad = check_event(data, f.name)

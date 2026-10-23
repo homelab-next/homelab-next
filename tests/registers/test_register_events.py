@@ -137,6 +137,27 @@ def test_event_files_are_checked_by_name_and_schema(lab):
         load_register(lab / "lessons")
 
 
+def test_an_event_file_that_sets_a_key_twice_is_refused(lab):
+    d = lab / "lessons" / evd("LL-005")
+    (d / "20261020T093000Z-recurrence-agent-example-checker.yml").write_text(
+        "event: recurrence\nby: agent:example-checker\ndate: 2026-10-20\n"
+        "note: first\nnote: second\n"
+    )
+    with pytest.raises(RegisterError, match="duplicate key 'note'"):
+        load_register(lab / "lessons")
+
+
+def test_a_single_file_register_that_sets_a_key_twice_is_refused(tmp_path):
+    reg = tmp_path / "invariants.yml"
+    text = (REPO / "examples/registers/invariants.yml").read_text()
+    reg.write_text(
+        text.replace("\n  evidence: auto\n", "\n  evidence: manual\n  evidence: auto\n", 1)
+    )
+    assert reg.read_text() != text
+    with pytest.raises(RegisterError, match="duplicate key 'evidence'"):
+        load_register(reg, "invariants")
+
+
 # --- derived fields ---------------------------------------------------------------------------
 
 

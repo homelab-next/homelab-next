@@ -128,6 +128,8 @@ OTHER = "01a15e4e-0000-7000-8000-00000000000f"  # a valid uid no example record 
         ),
         ("LL-001", "---\n\n## Symptom", "---\nstray prose\n\n## Symptom", "before the first"),
         ("LL-001", "systems: [proxy, tls]", "systems: [proxy, tls\n", "not YAML"),
+        # a key set twice: the loader would keep the last value, a reader sees the first
+        ("LL-001", "status: controlled", "status: retired\nstatus: controlled", "duplicate key"),
     ],
 )
 def test_malformed_records_fail_validation(src, tmp_path, code, old, new, needle):

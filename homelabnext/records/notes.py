@@ -56,16 +56,13 @@ def _yaml():
 
 @lru_cache(maxsize=1)
 def _str_loader():
-    yaml = _yaml()
+    """Keeps timestamps as strings (JSON Schema has no timestamp type) and refuses a duplicate
+    key: PyYAML would keep the last value, the decider would act on it, and a person reading the
+    note would see the first."""
+    _yaml()
+    from homelabnext._yaml import UniqueKeyStrDateLoader
 
-    class _StrLoader(yaml.SafeLoader):
-        """Keeps timestamps as strings (JSON Schema has no timestamp type)."""
-
-    _StrLoader.yaml_implicit_resolvers = {
-        k: [(t, rx) for t, rx in v if t != "tag:yaml.org,2002:timestamp"]
-        for k, v in yaml.SafeLoader.yaml_implicit_resolvers.items()
-    }
-    return _StrLoader
+    return UniqueKeyStrDateLoader
 
 
 def slugify(text: str, *, max_len: int = MAX_SLUG) -> str:
@@ -187,7 +184,9 @@ def parse_note(text: str) -> tuple[dict[str, Any], str]:
     try:
         fm = _yaml().load(m.group(1), Loader=_str_loader())
     except Exception as exc:
-        raise NoteError(f"frontmatter is not valid YAML: {type(exc).__name__}") from exc
+        why = getattr(exc, "problem", None)
+        detail = f" ({why})" if isinstance(why, str) and why.startswith("duplicate key") else ""
+        raise NoteError(f"frontmatter is not valid YAML: {type(exc).__name__}{detail}") from exc
     if not isinstance(fm, dict):
         raise NoteError("frontmatter must be a mapping")
     return fm, text[m.end() :]
