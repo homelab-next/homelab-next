@@ -529,7 +529,7 @@ PATTERNS: tuple[Pattern, ...] = (
     _p(
         "keyed-secret",
         "secret",
-        r"(?i)(?<![\w.:/-])[\w-]*(?:passw|secret|token(?!iz))[\w-]*(?P<q1>[\"']?)\s*[:=]\s*(?P<q>[\"']?)(?P<val>[^\s\"',;)}\]]{6,})",
+        r"(?i)(?<![\w.:/-])[\w-]*(?:passw|secret|token(?!iz))[\w-]*(?P<q1>[\"']?)\s*(?::=|[:=])\s*(?P<q>[\"']?)(?P<val>[^\s\"',;)}\]]{6,})",
         "literal value assigned to a password/secret/token key",
         redact=True,
         accept=_is_hit_keyed_value,

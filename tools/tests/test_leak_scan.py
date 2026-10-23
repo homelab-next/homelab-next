@@ -696,6 +696,34 @@ def test_an_escape_sequence_never_hides_a_keyed_value(text: str, path: str):
     assert "keyed-secret" in _secret_hits(text, "<stdin>" if path == "-" else path)
 
 
+@pytest.mark.parametrize("path", ["orchestrator/internal/x/x.go", "notes.md"])
+def test_a_go_short_variable_declaration_is_a_keyed_value(path: str):
+    # Go's most idiomatic form: the separator is ":=", which used to leave the value at "="
+    for text in (
+        "func f() { dbPass" + 'word := "' + VAL_A + '" }',
+        "apiTok" + "en := " + VAL_B,
+        "secret_" + 'key:= "' + VAL_B + '"',
+    ):
+        assert "keyed-secret" in _secret_hits(text, path), text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'token := os.Getenv("X")',
+        "secret := cfg.Secret",
+        'token := r.Header.Get("Authorization")',
+        "apiToken := strings.TrimSpace(string(b))",
+        'password := ""',
+        "tokenizer := x",
+        'secretRef := "secret:llm-gateway/key"',
+        "maxTokens := 4096",
+    ],
+)
+def test_go_short_declarations_of_code_and_references_are_not_keyed_secrets(text: str):
+    assert "keyed-secret" not in _secret_hits(text, "orchestrator/internal/x/x.go")
+
+
 def test_history_reads_go_sum_by_the_path_of_the_diff(tmp_path):
     git = ["git", "-C", str(tmp_path), "-c", "user.email=t@example.org", "-c", "user.name=t"]
     subprocess.run([*git, "init", "-q"], check=True)
