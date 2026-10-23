@@ -69,6 +69,10 @@ class RecordError(Exception):
         super().__init__(message + "".join(f"\n  - {p}" for p in self.problems))
 
 
+class RecordUnreadable(RecordError):
+    """The record file cannot be read or is not JSON: an I/O error, not an invalid record."""
+
+
 def canonical(obj: Any) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
@@ -426,9 +430,9 @@ def load(path: str | Path, *, key: bytes | str | None = None) -> dict[str, Any]:
     try:
         doc = json.loads(p.read_text(encoding="utf-8"))
     except OSError as exc:
-        raise RecordError(f"cannot read swap record {p}: {exc}") from exc
+        raise RecordUnreadable(f"cannot read swap record {p}: {exc}") from exc
     except ValueError as exc:
-        raise RecordError(f"swap record {p} is not valid JSON: {exc}") from exc
+        raise RecordUnreadable(f"swap record {p} is not valid JSON: {exc}") from exc
     validate(doc, key=key)
     return doc
 

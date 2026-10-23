@@ -20,6 +20,10 @@ class SiteError(Exception):
         super().__init__(message + detail)
 
 
+class SiteUnreadable(SiteError):
+    """A site or registry file cannot be read, decrypted or parsed: bad input, not an invalid site."""
+
+
 def _yaml():
     try:
         import yaml
@@ -41,12 +45,12 @@ def parse_document(text: str, *, name: str = "<site>") -> Any:
         try:
             return json.loads(text)
         except ValueError as exc:
-            raise SiteError(f"{name}: not valid JSON: {exc}") from exc
+            raise SiteUnreadable(f"{name}: not valid JSON: {exc}") from exc
     yaml = _yaml()
     try:
         return yaml.load(text, Loader=_unique_loader())
     except yaml.YAMLError as exc:
-        raise SiteError(f"{name}: not valid YAML: {exc}") from exc
+        raise SiteUnreadable(f"{name}: not valid YAML: {exc}") from exc
 
 
 def load_site(path: str | Path) -> dict:
@@ -55,9 +59,9 @@ def load_site(path: str | Path) -> dict:
     try:
         text = sops.read_text(p)
     except OSError as exc:
-        raise SiteError(f"cannot read site file {p}: {exc}") from exc
+        raise SiteUnreadable(f"cannot read site file {p}: {exc}") from exc
     except sops.SopsError as exc:
-        raise SiteError(str(exc)) from exc
+        raise SiteUnreadable(str(exc)) from exc
     doc = parse_document(text, name=str(p))
     if not isinstance(doc, dict):
         raise SiteError(f"{p}: site root must be a mapping")
@@ -77,6 +81,8 @@ def load_registry(path: str | Path):
 
     try:
         return model.load(path)
+    except model.RegistryUnreadable as exc:
+        raise SiteUnreadable(f"registry {path}: {exc}") from exc
     except model.RegistryError as exc:
         raise SiteError(f"registry {path} is invalid", exc.problems or [str(exc)]) from exc
 

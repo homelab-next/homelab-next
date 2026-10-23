@@ -49,9 +49,10 @@ def test_default_registry_is_services_yml_next_to_the_site(tmp_path, site_path, 
     assert (code, out.strip()) == (0, "ok")
 
 
-def test_missing_registry_is_exit_1(tmp_path, site_path):
+def test_missing_registry_is_exit_2(tmp_path, site_path):
+    # bad input, not an invalid site: docs/interfaces.md's exit codes
     code, _, err = run(["validate", str(site_path), "--registry", str(tmp_path / "nope.yml")])
-    assert code == 1 and "cannot read registry" in err
+    assert code == 2 and "cannot read registry" in err
 
 
 def test_render_then_plan_is_a_no_op(site_path, registry_path, tmp_path):
