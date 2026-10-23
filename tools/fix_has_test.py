@@ -22,8 +22,16 @@ range must touch at least one test file (a ``test_*.py``/``*_test.py`` file, or 
 setting) says why in a ``No-regression-test: <reason>`` trailer; the gate lists every waiver.
 
 ``--prove`` also checks the "fails without the fix" half: for each fix, the commit's test files are
-put on top of its parent in a temporary worktree and the touched test modules are run there; they
-must fail.  A regression test that passes without the fix proves nothing and is reported.
+put on top of its parent in a temporary worktree and the touched test modules are run there; at
+least one collected test must FAIL there.  A regression test that passes without the fix proves
+nothing and is reported.  So is every case that cannot prove it, never counted as a pass:
+- a collection or import error on the parent (pytest exit 2): a test module that imports a name
+  the fix adds errors on the parent whatever its assertions check, so an error is not a failure;
+  the modules run with ``--continue-on-collection-errors`` and the junit report must show at
+  least one failed test (import a new name inside the test function to fail it);
+- a fix whose only test files are fixtures, ``conftest.py`` or other non-test files under
+  ``tests/``: nothing runnable shows the fix.  Such a fix says why in a ``No-regression-test:``
+  trailer, or adds a test module.
 
 Usage: python tools/fix_has_test.py [--range A..B] [--prove] [--allow-missing-base] [--repo DIR]
 Exit: 0 every fix has a test, 1 some fix has none (or, with --prove, a test passes without the
@@ -37,6 +45,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -111,8 +120,23 @@ def check(commits: list[Commit]) -> tuple[list[str], list[str]]:
     return problems, notes
 
 
+def failed_tests(report: Path) -> list[str]:
+    """The tests a junit report records as failed (an ``error``, such as a collection error, is
+    not a failure)."""
+    try:
+        root = ET.parse(report).getroot()
+    except (OSError, ET.ParseError):
+        return []
+    return [
+        f"{case.get('classname', '')}::{case.get('name', '')}"
+        for case in root.iter("testcase")
+        if case.find("failure") is not None
+    ]
+
+
 def prove(c: Commit, cwd: Path = REPO_ROOT, python: str = sys.executable) -> str | None:
-    """Run the fix's test modules against its parent; None when they fail there (good)."""
+    """Run the fix's test modules against its parent; None when at least one test fails there
+    (good), else why the fix is not proven."""
     tests = [
         f
         for f in test_files(c.files)
@@ -120,9 +144,17 @@ def prove(c: Commit, cwd: Path = REPO_ROOT, python: str = sys.executable) -> str
     ]  # deleted files are not staged
     modules = [f for f in tests if TEST_MODULE.search(f)]
     if not modules:
-        return None  # only fixtures changed: nothing runnable to prove with
+        if waiver(c.message):
+            return None  # it says why it has no regression test; check() lists the waiver
+        return (
+            f"{c.short}: cannot prove the fix: it changes no test module, only "
+            f"{', '.join(tests) or 'deleted test files'} (a fixture or a non-test file under "
+            "tests/ shows nothing on its own); add a test module that fails without the fix, or "
+            "a 'No-regression-test: <reason>' trailer"
+        )
     with tempfile.TemporaryDirectory() as tmp:
         wt = Path(tmp) / "parent"
+        report = Path(tmp) / "report.xml"
         try:
             _git("worktree", "add", "--detach", "--quiet", str(wt), f"{c.sha}^", cwd=cwd)
         except subprocess.CalledProcessError:
@@ -130,12 +162,16 @@ def prove(c: Commit, cwd: Path = REPO_ROOT, python: str = sys.executable) -> str
         try:
             _git("checkout", c.sha, "--", *tests, cwd=wt)
             run = subprocess.run(
-                [python, "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *modules],
+                [
+                    python, "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider",
+                    "--continue-on-collection-errors", f"--junitxml={report}", *modules,
+                ],
                 cwd=wt,
                 capture_output=True,
                 text=True,
                 check=False,
-            )
+            )  # fmt: skip
+            failed = failed_tests(report)
         except subprocess.CalledProcessError as exc:
             return f"{c.short}: could not stage its tests on the parent ({exc.stderr.strip()})"
         finally:
@@ -144,9 +180,15 @@ def prove(c: Commit, cwd: Path = REPO_ROOT, python: str = sys.executable) -> str
             )
     if run.returncode == 0:
         return f"{c.short}: its regression test passes WITHOUT the fix ({', '.join(modules)})"
-    if run.returncode not in (1, 2):  # 1 failed, 2 interrupted (e.g. the fixed name is missing)
-        return f"{c.short}: its tests could not run on the parent (pytest exit {run.returncode})"
-    return None
+    if run.returncode == 1 and failed:
+        return None  # a collected test fails without the fix: proven
+    if run.returncode in (1, 2):
+        return (
+            f"{c.short}: cannot prove the fix: no test failed on the parent (pytest exit "
+            f"{run.returncode}; a collection or import error is not a failing test -- import a "
+            f"name the fix adds inside the test function) ({', '.join(modules)})"
+        )
+    return f"{c.short}: its tests could not run on the parent (pytest exit {run.returncode})"
 
 
 def main(argv: list[str] | None = None) -> int:

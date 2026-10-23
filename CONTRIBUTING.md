@@ -159,7 +159,11 @@ whose message has a `Fixes: <issue or description>` trailer. Use one of them for
 the same commit add or change a test that **fails without the fix and passes with it** (write the
 test first and watch it fail). CI's `regression-tests` job (`tools/fix_has_test.py --prove`) checks
 both halves for every commit of a pull request: a fix must touch a test file, and its test modules,
-run on the fix's parent commit, must fail. `make fix-check` runs the first half locally
+run on the fix's parent commit, must have at least one failing test. A collection or import error
+there is not a failure (a module that imports a name the fix adds errors whatever it asserts:
+import the new name inside the test function), and a fix whose only test files are fixtures,
+`conftest.py` or other non-test files under `tests/` cannot be proven either; both are reported,
+never passed. `make fix-check` runs the first half locally
 (`make fix-check PROVE=1` both). A fix that cannot have a test (a documentation typo, a CI setting)
 says why in a trailer, `No-regression-test: <reason>`; the gate lists every waiver.
 

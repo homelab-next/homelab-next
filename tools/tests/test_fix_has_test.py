@@ -111,5 +111,62 @@ def test_end_to_end_on_a_scratch_repository(tmp_path):
     assert gate.main([*repo, "--range", "nope..HEAD", "--allow-missing-base"]) == 0
 
 
+def test_a_collection_error_on_the_parent_does_not_prove_a_fix(tmp_path):
+    """A test module that imports a name the fix adds errors on the parent (pytest exit 2) no
+    matter what it asserts: that is not a failing test, so it cannot prove the fix."""
+    r, commit = _repo(tmp_path)
+    commit("feat: clamp", **{"mod.py": "def clamp(x):\n    return x\n"})
+    vacuous = commit(
+        "fix: clamp to ten",
+        **{
+            "mod.py": "def clamp(x):\n    return min(x, 10)\n\ndef version():\n    return '2'\n",
+            "tests/test_mod.py": (
+                "import sys, pathlib\n"
+                "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))\n"
+                "from mod import version\n\n"
+                "def test_version():\n    assert version() == '2'\n"  # never touches clamp
+            ),
+        },
+    )
+    (c,) = gate.commits_in(f"{vacuous}^..{vacuous}", cwd=r)
+    problem = gate.prove(c, cwd=r)
+    assert problem and "cannot prove the fix: no test failed on the parent" in problem
+    # the same fix with the new name imported inside the test: a real failure on the parent
+    proven = commit(
+        "fix: clamp to nine",
+        **{
+            "mod.py": "def clamp(x):\n    return min(x, 9)\n\ndef version():\n    return '3'\n",
+            "tests/test_mod.py": (
+                "import sys, pathlib\n"
+                "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))\n\n"
+                "def test_clamp():\n    from mod import clamp\n    assert clamp(12) == 9\n"
+            ),
+        },
+    )
+    (c,) = gate.commits_in(f"{proven}^..{proven}", cwd=r)
+    assert gate.prove(c, cwd=r) is None
+
+
+@pytest.mark.parametrize(
+    "rel",
+    ["tests/fixtures/data.json", "tests/conftest.py", "tests/NOTES.txt", "pkg/tests/golden.txt"],
+)
+def test_a_fix_whose_only_test_files_are_not_test_modules_cannot_be_proven(tmp_path, rel):
+    r, commit = _repo(tmp_path)
+    base = commit("feat: f", **{"mod.py": "def f():\n    return 1\n"})
+    sha = commit("fix: change f", **{"mod.py": "def f():\n    return 2\n", rel: "x = 1\n"})
+    (c,) = gate.commits_in(f"{base}..{sha}", cwd=r)
+    assert gate.check([c]) == ([], [])  # it does touch a file under tests/...
+    problem = gate.prove(c, cwd=r)  # ...but nothing there can show the fix
+    assert problem and "cannot prove the fix: it changes no test module" in problem
+    assert gate.main(["--repo", str(r), "--range", f"{base}..{sha}", "--prove"]) == 1
+    waived = commit(
+        "fix: change f again\n\nNo-regression-test: the golden file is the whole change",
+        **{"mod.py": "def f():\n    return 3\n", rel: "x = 2\n"},
+    )
+    (c,) = gate.commits_in(f"{sha}..{waived}", cwd=r)
+    assert gate.prove(c, cwd=r) is None
+
+
 def test_this_repository_passes():
     assert gate.main(["--range", "HEAD", "--allow-missing-base"]) == 0
