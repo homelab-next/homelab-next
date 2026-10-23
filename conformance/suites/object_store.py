@@ -6,10 +6,13 @@ from __future__ import annotations
 from conformance.fakes.object_store import (
     BrokenEtagObjectStore,
     BrokenListObjectStore,
+    CaseFoldingObjectStore,
     DeleteEveryBucketObjectStore,
     DeleteMissingBucketObjectStore,
+    DottedFlatKeyspaceObjectStore,
     FakeObjectStore,
     FlatKeyspaceObjectStore,
+    FormDecodingObjectStore,
     HeadMissingIsEmptyObjectStore,
     ListsDeletedObjectStore,
     PathCollapsingObjectStore,
@@ -103,15 +106,22 @@ def _(store):
 
 @SUITE.check(
     "delete-is-idempotent",
-    "deleting a missing key is not an error; the key is gone and no longer listed",
+    "deleting a missing key is not an error; the key is gone",
 )
+def _(store):
+    b = _bucket(store)
+    store.put(b, "k", b"v")
+    store.delete(b, "k")
+    store.delete(b, "k")
+    raises(lambda: store.get(b, "k"), "get after delete", NoSuchKey)
+
+
+@SUITE.check("deleted-key-not-listed", "list names existing objects only: a deleted key is gone")
 def _(store):
     b = _bucket(store)
     store.put(b, "k", b"v")
     store.put(b, "kept", b"v")
     store.delete(b, "k")
-    store.delete(b, "k")
-    raises(lambda: store.get(b, "k"), "get after delete", NoSuchKey)
     for prefix in ("", "k"):
         keys = list(store.list(b, prefix).keys)
         assert keys == ["kept"], f"after delete, list({prefix!r}) names {keys}"
@@ -159,8 +169,7 @@ def _(store):
 
 @SUITE.check(
     "keys-never-escape-the-bucket",
-    "'..', '//' and './' keys are stored verbatim or refused; buckets never see or delete each "
-    "other's objects, even when one bucket's name extends another's",
+    "'..' keys are stored verbatim or refused; buckets never see or delete each other's objects",
 )
 def _(store):
     a, b = _bucket(store), _bucket(store)
@@ -190,25 +199,66 @@ def _(store):
         except (NoSuchKey, ValueError, ObjectStoreError):
             continue
         assert got != b"bucket-a", f"key {key!r} read another bucket's object"
-    # a bucket is a namespace, not a prefix: bucket X + key "1k" is not bucket X1 + key "k"
+
+
+@SUITE.check(
+    "buckets-are-namespaces",
+    "a bucket is its own namespace, not a prefix of one flat key space: no separator, '/' or '.', "
+    "makes one bucket's key another bucket's",
+)
+def _(store):
+    pairs = []
     x = _bucket(store)
-    x1 = x + "1"
+    x1 = x + "1"  # no separator: bucket X + key "1k" is not bucket X1 + key "k"
     store.create_bucket(x1)
-    store.put(x, "1k", b"x/1k")
-    store.put(x1, "k", b"x1/k")
-    assert store.get(x, "1k") == b"x/1k", "a key in one bucket was overwritten from another"
-    assert store.get(x1, "k") == b"x1/k", "a key in one bucket was overwritten from another"
-    assert list(store.list(x).keys) == ["1k"], f"{x!r} lists {list(store.list(x).keys)}"
+    pairs.append(((x, "1k"), (x1, "k")))
+    xy = x + ".y"  # an S3-legal dotted name: bucket X + key "y.k" is not bucket X.y + key "k"
+    try:
+        store.create_bucket(xy)  # a store may refuse dotted names (virtual-host TLS); not alias
+    except (ValueError, ObjectStoreError):
+        xy = None
+    else:
+        pairs.append(((x, "y.k"), (xy, "k")))
+    for (b1, k1), (b2, k2) in pairs:
+        store.put(b1, k1, f"{b1}|{k1}".encode())
+        store.put(b2, k2, f"{b2}|{k2}".encode())
+    for (b1, k1), (b2, k2) in pairs:
+        for b, k in ((b1, k1), (b2, k2)):
+            assert store.get(b, k) == f"{b}|{k}".encode(), (
+                f"bucket {b!r} key {k!r} reads another bucket's object"
+            )
+    mine = sorted(k1 for (_, k1), _ in pairs)  # every first member is a key of x
+    assert sorted(store.list(x).keys) == mine, f"{x!r} lists {list(store.list(x).keys)}"
     assert list(store.list(x1).keys) == ["k"], f"{x1!r} lists {list(store.list(x1).keys)}"
-    # keys are opaque: an empty or '.' segment is part of the key, not path syntax
-    store.put(b, "a/b", b"plain")
-    for key in ("a//b", "a/./b", "./a/b", "a/b/"):
-        try:
-            store.put(b, key, key.encode())
-        except (ValueError, ObjectStoreError):
-            continue  # refusing such a key is allowed; aliasing it is not
-        assert store.get(b, key) == key.encode(), f"key {key!r} read back another object"
-        assert store.get(b, "a/b") == b"plain", f"putting {key!r} overwrote 'a/b'"
+    if xy is not None:
+        assert list(store.list(xy).keys) == ["k"], f"{xy!r} lists {list(store.list(xy).keys)}"
+
+
+@SUITE.check(
+    "keys-are-opaque",
+    "a key is stored as exactly that text: no path syntax ('//', './'), no URL or form decoding "
+    "('+', '%2F') and no case folding - each is its own object or refused, never an alias",
+)
+def _(store):
+    b = _bucket(store)
+    plain = {"a/b": b"plain a/b", "a b": b"plain space", "report": b"plain lower"}
+    for key, data in plain.items():
+        store.put(b, key, data)
+    aliases = {
+        "a/b": ("a//b", "a/./b", "./a/b", "a/b/", "a%2Fb", "a%2fb"),
+        "a b": ("a+b", "a%20b"),
+        "report": ("Report", "REPORT"),
+    }
+    for original, keys in aliases.items():
+        for key in keys:
+            try:
+                store.put(b, key, key.encode())
+            except (ValueError, ObjectStoreError):
+                continue  # refusing such a key is allowed; aliasing it is not
+            assert store.get(b, key) == key.encode(), f"key {key!r} read back another object"
+            assert store.get(b, original) == plain[original], (
+                f"putting {key!r} overwrote {original!r}"
+            )
 
 
 @SUITE.check(
@@ -253,18 +303,33 @@ MUTANTS = {
     ),
     "flat-keyspace": Mutant(
         FlatKeyspaceObjectStore,
-        "keys-never-escape-the-bucket",
+        "buckets-are-namespaces",
         "objects live in one flat namespace keyed bucket+key, so b+'1k' is b1+'k'",
     ),
     "key-segments-collapsed": Mutant(
         PathCollapsingObjectStore,
-        "keys-never-escape-the-bucket",
+        "keys-are-opaque",
         "'a//b', 'a/./b' and './x' collapse to 'a/b' and 'x', so distinct keys share an object",
     ),
     "deleted-key-listed": Mutant(
         ListsDeletedObjectStore,
-        "delete-is-idempotent",
+        "deleted-key-not-listed",
         "delete leaves the key in the listing",
+    ),
+    "keys-form-decoded": Mutant(
+        FormDecodingObjectStore,
+        "keys-are-opaque",
+        "an HTTP-fronted store form-decodes keys: 'a+b' is 'a b' and 'a%2Fb' is 'a/b'",
+    ),
+    "keys-case-folded": Mutant(
+        CaseFoldingObjectStore,
+        "keys-are-opaque",
+        "a directory store on a case-insensitive filesystem: 'Report' is 'report'",
+    ),
+    "dotted-flat-keyspace": Mutant(
+        DottedFlatKeyspaceObjectStore,
+        "buckets-are-namespaces",
+        "one flat 'bucket.key' space: bucket x key 'y.k' is bucket 'x.y' key 'k'",
     ),
     "keys-resolved-as-paths": Mutant(
         PathResolvingObjectStore,

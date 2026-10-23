@@ -13,7 +13,7 @@ generated_by: hnx docs capabilities generate
 **Buckets of byte objects: put/get/head/delete and ordered, paginated listing.**
 
 - Contract: [`conformance.protocols.object_store`](../../conformance/protocols/object_store.py) (`conformance.protocols.object_store:ObjectStore`)
-- Conformance suite: [`conformance.suites.object_store`](../../conformance/suites/object_store.py) (12 checks: 11 MUST, 1 SHOULD)
+- Conformance suite: [`conformance.suites.object_store`](../../conformance/suites/object_store.py) (15 checks: 14 MUST, 1 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -23,10 +23,12 @@ Contract for `object-store`: S3-like blobs in buckets.
 Deliberately the common subset of S3, MinIO, Ceph and a directory on disk.  Keys are opaque text
 (`/` is just a character), values are bytes.  Keys are never resolved as paths: `../x` and
 `a/../../b` are either stored under exactly that key or refused (`ValueError` /
-`ObjectStoreError`), and `a//b`, `a/./b` and `./x` are keys of their own, never another
-name for `a/b` or `x`.  A bucket is its own namespace, not a prefix of one flat key space: no
-key reaches an object of another bucket, even when one bucket's name extends the other's
-(`b` + `1k` is not `b1` + `k`).  `list` is by prefix, ordered by key (code-point order of
+`ObjectStoreError`).  A key is stored as exactly that text - no path syntax, no URL or form
+decoding, no case folding: `a//b`, `a/./b`, `./x`, `a%2Fb`, `a+b` and `Report` are
+keys of their own (or refused), never another name for `a/b`, `x`, `a b` or `report`.  A
+bucket is its own namespace, not a prefix of one flat key space: no key reaches an object of
+another bucket, whatever the separator (`b` + `1k` is not `b1` + `k`; `x` + `y.k` is
+not `x.y` + `k`).  `list` is by prefix, ordered by key (code-point order of
 the UTF-8 bytes), paginated with an opaque `next` token, and names existing objects only: a
 deleted key is not listed.
 
@@ -199,11 +201,14 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `missing-bucket-raises` | MUST | operations on a missing bucket raise NoSuchBucket |  |
 | `overwrite-last-writer-wins` | MUST | a second put replaces the object |  |
 | `etag-tracks-content` | MUST | equal content has an equal etag; different content differs |  |
-| `delete-is-idempotent` | MUST | deleting a missing key is not an error; the key is gone and no longer listed |  |
+| `delete-is-idempotent` | MUST | deleting a missing key is not an error; the key is gone |  |
+| `deleted-key-not-listed` | MUST | list names existing objects only: a deleted key is gone |  |
 | `list-prefix-and-order` | MUST | listing filters by prefix and is ordered by key |  |
 | `list-pagination-complete` | MUST | paging visits every key exactly once, in order |  |
 | `unicode-and-slash-keys` | MUST | keys are opaque text: unicode and '/' work |  |
-| `keys-never-escape-the-bucket` | MUST | '..', '//' and './' keys are stored verbatim or refused; buckets never see or delete each other's objects, even when one bucket's name extends another's |  |
+| `keys-never-escape-the-bucket` | MUST | '..' keys are stored verbatim or refused; buckets never see or delete each other's objects |  |
+| `buckets-are-namespaces` | MUST | a bucket is its own namespace, not a prefix of one flat key space: no separator, '/' or '.', makes one bucket's key another bucket's |  |
+| `keys-are-opaque` | MUST | a key is stored as exactly that text: no path syntax ('//', './'), no URL or form decoding ('+', '%2F') and no case folding - each is its own object or refused, never an alias |  |
 | `user-metadata-preserved` | SHOULD | metadata supplied on put comes back from head | `metadata` |
 
 ### Features an adapter may declare
@@ -220,10 +225,13 @@ Each is a deliberately broken fake (`hnx conform run object-store --target broke
 |---|---|---|
 | `delete-missing-bucket-succeeds` | `missing-bucket-raises` | delete on a bucket that does not exist succeeds instead of NoSuchBucket |
 | `delete-reaches-every-bucket` | `keys-never-escape-the-bucket` | delete(bucket, key) removes key from every bucket |
-| `deleted-key-listed` | `delete-is-idempotent` | delete leaves the key in the listing |
-| `flat-keyspace` | `keys-never-escape-the-bucket` | objects live in one flat namespace keyed bucket+key, so b+'1k' is b1+'k' |
+| `deleted-key-listed` | `deleted-key-not-listed` | delete leaves the key in the listing |
+| `dotted-flat-keyspace` | `buckets-are-namespaces` | one flat 'bucket.key' space: bucket x key 'y.k' is bucket 'x.y' key 'k' |
+| `flat-keyspace` | `buckets-are-namespaces` | objects live in one flat namespace keyed bucket+key, so b+'1k' is b1+'k' |
 | `head-missing-is-empty` | `get-missing-key-raises` | head of a missing key returns a zero-size object instead of NoSuchKey |
-| `key-segments-collapsed` | `keys-never-escape-the-bucket` | 'a//b', 'a/./b' and './x' collapse to 'a/b' and 'x', so distinct keys share an object |
+| `key-segments-collapsed` | `keys-are-opaque` | 'a//b', 'a/./b' and './x' collapse to 'a/b' and 'x', so distinct keys share an object |
+| `keys-case-folded` | `keys-are-opaque` | a directory store on a case-insensitive filesystem: 'Report' is 'report' |
+| `keys-form-decoded` | `keys-are-opaque` | an HTTP-fronted store form-decodes keys: 'a+b' is 'a b' and 'a%2Fb' is 'a/b' |
 | `keys-resolved-as-paths` | `keys-never-escape-the-bucket` | bucket/key is normalised as a path, so '..' reaches other keys and buckets |
 | `pagination-drops-boundary-key` | `list-pagination-complete` | the last key of each truncated page is lost |
 | `weak-etag` | `etag-tracks-content` | etag depends on the size only |
@@ -340,4 +348,4 @@ Depended on by: [lake-catalog](../systems/lake-catalog.md) ([[systems/lake-catal
    hnx conform run object-store --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (11) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (14) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.

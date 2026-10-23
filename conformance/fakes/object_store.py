@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import urllib.parse
 from collections.abc import Mapping
 
 from conformance.protocols.object_store import ListPage, NoSuchBucket, NoSuchKey, ObjectInfo
@@ -212,3 +213,67 @@ class ListsDeletedObjectStore(FakeObjectStore):
             keys = [k for k in keys if k.encode("utf-8") > after.encode("utf-8")]
         page = keys[:limit]
         return ListPage(tuple(page), page[-1] if len(keys) > limit else None)
+
+
+class _KeyMappingObjectStore(FakeObjectStore):
+    """Base of the defects that map a key to a stored name before every operation."""
+
+    def _k(self, bucket: str, key: str) -> str:
+        raise NotImplementedError
+
+    def put(self, bucket, key, data, *, metadata=None):
+        info = super().put(bucket, self._k(bucket, key), data, metadata=metadata)
+        return ObjectInfo(key, info.size, info.etag, info.metadata)
+
+    def get(self, bucket, key):
+        return super().get(bucket, self._k(bucket, key))
+
+    def head(self, bucket, key):
+        return super().head(bucket, self._k(bucket, key))
+
+    def delete(self, bucket, key):
+        return super().delete(bucket, self._k(bucket, key))
+
+
+class FormDecodingObjectStore(_KeyMappingObjectStore):
+    """Defect: an HTTP-fronted store that form-decodes keys (``unquote_plus``), the classic S3
+    ``+``/space and ``%2F`` bug: ``a+b`` is ``a b`` and ``a%2Fb`` is ``a/b``."""
+
+    def _k(self, bucket, key):
+        return urllib.parse.unquote_plus(key)
+
+
+class CaseFoldingObjectStore(_KeyMappingObjectStore):
+    """Defect: a directory-backed store on a case-insensitive filesystem (the macOS and Windows
+    default): ``Report`` and ``report`` are one object."""
+
+    def _k(self, bucket, key):
+        for k in self._bucket(bucket):
+            if k.casefold() == key.casefold():
+                return k
+        return key
+
+
+class DottedFlatKeyspaceObjectStore(FakeObjectStore):
+    """Defect: one flat ``bucket.key`` space (NATS KV and Redis style): with an S3-legal dotted
+    bucket name, bucket ``x`` key ``y.k`` is bucket ``x.y`` key ``k``."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._flat: dict[str, tuple[bytes, dict[str, str]]] = {}
+
+    def put(self, bucket, key, data, *, metadata=None):
+        info = super().put(bucket, key, data, metadata=metadata)
+        self._flat[f"{bucket}.{key}"] = self._b[bucket][key]
+        return info
+
+    def get(self, bucket, key):
+        self._bucket(bucket)
+        try:
+            return self._flat[f"{bucket}.{key}"][0]
+        except KeyError:
+            raise NoSuchKey(key) from None
+
+    def delete(self, bucket, key):
+        super().delete(bucket, key)
+        self._flat.pop(f"{bucket}.{key}", None)

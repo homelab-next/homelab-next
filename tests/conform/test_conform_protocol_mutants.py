@@ -103,6 +103,9 @@ REVIEWED = {
         "flat-keyspace",
         "key-segments-collapsed",
         "deleted-key-listed",
+        "keys-form-decoded",
+        "keys-case-folded",
+        "dotted-flat-keyspace",
     },
 }
 
