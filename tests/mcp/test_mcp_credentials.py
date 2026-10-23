@@ -83,6 +83,11 @@ FOUND = [
     (["\u2014token", "fakeabc"], {}),
     (["--key", "fake-k3y-0a1b"], {}),
     (["--auth", "Bearer fakeTokenAbc"], {}),
+    # the long forms of -u user:password
+    (["--user", "admin:fakeHunter13Pw"], {}),
+    (["--user=admin:fakeHunter13Pw"], {}),
+    (["--username", "admin:fakepw"], {}),
+    (["--proxy-user=admin:fakepw"], {}),
 ]  # fmt: skip
 
 #: (args, settings) of a record: none of these is a credential
@@ -129,6 +134,8 @@ ACCEPTED = [
     (["--include", "^src/.*\\.(ts|tsx)$"], {}),
     (["--model", "qwen2.5-coder:32b-instruct-q4_K_M"], {}),
     (["-port", "8080"], {}),
+    (["--user", "1000:1000"], {}),  # uid:gid, not user:password
+    (["--user", "analyst"], {}),
     # round 3 (9): import keeps a reference, a URL list and a user agent as they are
     (["--header", "Authorization: Bearer secret:mcp/srv-token"], {}),
     (["--header=Authorization: Bearer secret:mcp/srv-token"], {}),

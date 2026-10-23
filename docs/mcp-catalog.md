@@ -171,7 +171,7 @@ entry N)`.
   (`key`, `auth`, `session`, `credentials`) takes one unless the value is a plain name, a path or
   an auth method (`--key id`, `--sort-key created_at`, `--session default`, `--auth oauth`,
   `GOOGLE_APPLICATION_CREDENTIALS=/etc/gcp/sa.json`). So a credential flag's value (`--token X`,
-  `--token ./x`, `--token=-x`, `-p X` or `-pX` unless a port, `-u user:pw`, a header after
+  `--token ./x`, `--token=-x`, `-p X` or `-pX` unless a port, `-u user:pw` and its long forms (`--user user:pw`, `--user=user:pw`, `--username`, `--proxy-user`; a numeric `uid:gid` is not one), a header after
   `--header` or in `--header=`) is a `secret:` reference, nothing looks like a token (a token
   prefix such as `ghp_`, or a long, mixed, high-entropy value, `/`-separated base64 and
   dash-grouped random parts included), no URL carries one (userinfo, a credential-named query

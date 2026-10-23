@@ -389,10 +389,28 @@ def _short_value_credential(flag: str, value: str) -> bool:
     return False
 
 
+#: flags whose ``user:password`` value carries a password, like ``-u`` (curl and kin)
+_USER_FLAGS = frozenset(("--user", "--username", "--proxy-user", "--basic-auth", "--userpass"))
+
+
+def _user_password(flag: str, value: str) -> bool:
+    """``--user user:password`` / ``--user=user:password``: a password after the colon (a
+    numeric ``uid:gid`` is not one)."""
+    return (
+        flag.lower() in _USER_FLAGS
+        and bool(re.search(r":.", value))
+        and "://" not in value
+        and not re.fullmatch(r"[0-9]+:[0-9]+", value)
+    )
+
+
 def _after_credential_flag(prev: str, value: str) -> bool:
-    """``value`` is the credential ``prev`` takes (``--token X``, ``-p X``, ``-u user:pw``)."""
+    """``value`` is the credential ``prev`` takes (``--token X``, ``-p X``, ``-u user:pw``,
+    ``--user user:pw``)."""
     if prev in ("-p", "-u", "-k"):
         return not is_path(value) and _short_value_credential(prev, value)
+    if _user_password(prev, value):
+        return True
     return (
         len(prev) > 2
         and prev[0] in _DASHES
@@ -461,7 +479,7 @@ def scan_args(args: Iterable[str]) -> list[Finding]:
         if is_flag(a) and eq:
             if flag in HEADER_FLAGS:
                 out.append(Finding(i, "header", flag))
-            elif name_value_credential(flag, val):
+            elif name_value_credential(flag, val) or _user_password(flag, val):
                 out.append(Finding(i, "flag-value", flag))
             elif carries(val):
                 out.append(Finding(i, "value", flag))
