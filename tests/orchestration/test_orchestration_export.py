@@ -168,3 +168,30 @@ def test_a_line_the_consumer_refuses_is_refused_not_a_crash(synced, tmp_path, li
     counts, refused = import_lines(other, [line, *good])
     assert counts["refused"] == 1 and refused[0][0] == 1 and needle in refused[0][1]
     assert counts[("job", "processed")] == 4 and counts[("turn", "processed")] == 4
+
+
+def test_export_never_writes_over_its_own_store_or_through_a_symlink(synced, tmp_path, capsys):
+    db = synced.path
+    before = db.read_bytes()
+    spelled = tmp_path / "sub" / ".." / db.name  # the store under another spelling
+    (tmp_path / "sub").mkdir()
+    for out in (db, spelled):
+        assert cli.main(["export", "--db", str(db), "--out", str(out)], clock=lambda: T0) == 2
+        assert "is the store itself" in capsys.readouterr().err
+    assert db.read_bytes() == before
+    target = tmp_path / "elsewhere.txt"
+    target.write_text("keep me\n", encoding="utf-8")
+    link = tmp_path / "link.jsonl"
+    link.symlink_to(target)
+    assert cli.main(["export", "--db", str(db), "--out", str(link)], clock=lambda: T0) == 2
+    assert "symlink" in capsys.readouterr().err
+    assert target.read_text(encoding="utf-8") == "keep me\n" and link.is_symlink()
+
+
+def test_export_replaces_its_output_whole_leaving_no_temporary_file(synced, tmp_path):
+    out = tmp_path / "out" / "export.jsonl"
+    out.parent.mkdir()
+    out.write_text("an older export\n", encoding="utf-8")
+    assert cli.main(["export", "--db", str(synced.path), "--out", str(out)], clock=lambda: T0) == 0
+    assert out.read_text(encoding="utf-8") == "".join(f"{x}\n" for x in export_lines(synced))
+    assert [p.name for p in out.parent.iterdir()] == ["export.jsonl"]

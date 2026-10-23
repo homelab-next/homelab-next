@@ -149,9 +149,30 @@ def _export(a, store: TelemetryStore) -> int:
     if a.out == "-":
         sys.stdout.writelines(lines)
     else:
-        Path(a.out).write_text("".join(lines), encoding="utf-8")
+        _write_whole(Path(a.out), "".join(lines), store.path)
     print(f"orchestration export: {len(lines)} record(s)", file=sys.stderr)
     return 0
+
+
+def _write_whole(out: Path, text: str, db: Path) -> None:
+    """Write ``text`` to ``out`` whole: a temporary file in its directory, then
+    :func:`os.replace`, so a reader never sees half an export and a failed write leaves the old
+    one.  :class:`ValueError` when ``out`` is the store itself (under any spelling) or a symlink
+    (replacing it would write wherever it points)."""
+    import tempfile
+
+    if out.is_symlink():
+        raise ValueError(f"--out {out} is a symlink: name the file itself")
+    if out.exists() and os.path.samefile(out, db):
+        raise ValueError(f"--out {out} is the store itself: name another file")
+    fd, tmp = tempfile.mkstemp(dir=out.parent, prefix=f".{out.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, out)
+    except BaseException:
+        os.unlink(tmp)
+        raise
 
 
 def _import(a, store: TelemetryStore) -> int:

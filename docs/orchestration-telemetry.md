@@ -253,7 +253,8 @@ write's journal only a writer may roll back) is reported with SQLite's own messa
 
 `hnx orchestration export --db DB [--out FILE]` writes the whole store as JSON lines,
 `homelabnext.orchestration.export/1`, reading it read-only as the hub does (nothing is created,
-migrated or purged):
+migrated or purged). `--out` is written whole (a temporary file beside it, mode `0600`, then
+renamed over it), and is refused when it is the store itself under any spelling, or a symlink:
 
 ```
 {"schema": "homelabnext.orchestration.export/1", "kind": "job", "event": {...}, "turns_settled_at": "2026-01-01T00:20:00Z"}
