@@ -585,7 +585,11 @@ AUTH = '"auth_tok' + 'en": '
     ],
 )
 def test_go_sum_lines_are_digests(text: str):
-    assert _secret_hits(text) == set()
+    assert _secret_hits(text, "orchestrator/go.sum") == set()
+    assert _secret_hits(text, "orchestrator/tools/go.sum") == set()
+    # only in a go.sum: the same line anywhere else is scanned like any other
+    for path in ("conf.yml", "orchestrator/go.mod", "notes/go.sum.txt", "<stdin>", "t"):
+        assert "high-entropy-string" in _secret_hits(text, path), path
 
 
 @pytest.mark.parametrize(
@@ -599,7 +603,7 @@ def test_go_sum_lines_are_digests(text: str):
     ],
 )
 def test_go_sum_allowance_is_only_the_hash_of_a_go_sum_line(text: str):
-    assert "high-entropy-string" in _secret_hits(text)
+    assert "high-entropy-string" in _secret_hits(text, "orchestrator/go.sum")
 
 
 @pytest.mark.parametrize(
@@ -682,6 +686,20 @@ ESCAPED = [
 @pytest.mark.parametrize("path", ["conf.yml", "x.py", "orchestrator/internal/x/x_test.go", "-"])
 def test_an_escape_sequence_never_hides_a_keyed_value(text: str, path: str):
     assert "keyed-secret" in _secret_hits(text, "<stdin>" if path == "-" else path)
+
+
+def test_history_reads_go_sum_by_the_path_of_the_diff(tmp_path):
+    git = ["git", "-C", str(tmp_path), "-c", "user.email=t@example.org", "-c", "user.name=t"]
+    subprocess.run([*git, "init", "-q"], check=True)
+    line = f"github.com/example/mod v1.0.1 h1:{H1}\n"
+    for name in ("go.sum", "conf.yml"):
+        (tmp_path / name).write_text(line)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "add"], check=True)
+    hits = leak_scan.scan_history("HEAD", leak_scan.PATTERNS, cwd=tmp_path)
+    assert [h.path.split(":", 1)[1] for h in hits if h.pattern == "high-entropy-string"] == [
+        "conf.yml"
+    ]
 
 
 def test_escape_segments_are_go_string_literals_only():

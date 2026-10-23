@@ -236,8 +236,9 @@ SESSION_TRAILER_RE = re.compile(
 
 
 # A go.sum line: ``<module> <version>[/go.mod] h1:<base64 SHA-256>=``.  The hash is a digest of
-# public module content, not a credential.  Only the whole-line shape counts, so the same value
-# anywhere else (or a go.sum-looking line with anything appended) is still scanned.
+# public module content, not a credential.  Only the whole-line shape in a file named go.sum
+# counts, so the same value anywhere else (another file, or a go.sum-looking line with anything
+# appended) is still scanned.
 GO_SUM_LINE_RE = re.compile(r"^\S+ v\S+ h1:(?P<hash>[A-Za-z0-9+/]{43}=)$")
 # A Go test, benchmark, fuzz or example function name (``TestSubmit_ReplayIs422``): CamelCase
 # words, so long and mixed-case enough to read as random.  A name is told from a token by its
@@ -254,10 +255,10 @@ def _is_go_test_name(token: str) -> bool:
     return bool(runs) and sum(map(len, runs)) / len(runs) >= GO_TEST_NAME_MIN_RUN
 
 
-def _is_hit_entropy(m: re.Match[str], line: str, _path: str = "") -> bool:
+def _is_hit_entropy(m: re.Match[str], line: str, path: str = "") -> bool:
     if SESSION_TRAILER_RE.match(line):
         return False
-    go_sum = GO_SUM_LINE_RE.match(line)
+    go_sum = GO_SUM_LINE_RE.match(line) if path.rsplit("/", 1)[-1] == "go.sum" else None
     if go_sum and go_sum.start("hash") == m.start("tok") and go_sum.end("hash") == m.end("tok"):
         return False
     token = m.group("tok")
