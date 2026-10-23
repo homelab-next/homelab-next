@@ -197,11 +197,22 @@ newest version, an identity provider that matched scopes as substrings, an objec
   gate the first one has;
 * probe the boundary values the type allows, not only the obvious bad one (version `0` and `-1`
   as well as `9`; a `nan` or `inf` ttl as well as `-5`);
-* write state twice before checking it is all gone, and change what the caller handed over after
-  the call.
+* write state twice before checking it is all gone, write it again after deleting it, and change
+  what the caller handed over after the call (and what a call handed back);
+* name the error a refusal raises, and check that each way in leaves the audit record the
+  Protocol promises, refused or not;
+* a clause about concurrency (records: "a decision is atomic") is checked with
+  `conformance.suites._util.interleavings`, which stops one operation before chosen lines of the
+  subject's own code and runs the other to completion in between: the same schedule every run,
+  never a timing race that passes by luck.
 
-`tests/conform/test_conform_protocol_mutants.py` keeps that review's defects as a table (broken
-fake -> the check that must fail it), each also registered in `MUTANTS`.
+A second review of the tightened suites found seventeen more (a broker that kept the caller's
+argument mapping and so ran what was changed after validation, a stale `term` that dead-lettered
+the live redelivery, a namesake that replaced an approved note, a secret history revived by a
+`put` after `delete`, a space-delimited scope claim that turned `"read admin"` into `admin`, a
+flat `bucket+key` namespace).  Each defect is registered in its suite's `MUTANTS`, the one table of
+broken fake -> the check that must fail it; `tests/conform/test_conform_protocol_mutants.py`
+keeps the record, by name, of which ones review found.
 
 The suites cover the protocol, not the handler behind it.  The broker's `ArgSpec` checks the
 shape of arguments, not their content: a validated `str` is still untrusted caller input, and the
