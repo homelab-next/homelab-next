@@ -211,7 +211,15 @@ class SpendLogTurnSource:
 
 #: the turn source factories this module declares (``hnx orchestration turns --turn-source``
 #: calls only a declared one); ``secrets``: the options that hold a secret name
-TURN_SOURCES = {"make": {"secrets": ["key"]}}
+TURN_SOURCES = {
+    "make": {
+        "secrets": ["key"],
+        "options": {
+            "base_url": "str", "key": "secret", "ca_file": "str", "allow_plaintext": "bool",
+            "timeout": "float", "page_size": "int", "max_pages": "int",
+        },
+    }
+}  # fmt: skip
 
 
 def make(

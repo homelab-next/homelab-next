@@ -180,17 +180,24 @@ source chosen later still reads the jobs inside retention), or an adapter factor
 `package.module:factory`, the `adapter:` form of a conformance target. The adapter options are
 `--gateway-url` (passed as `base_url`), `--key` (a `secret:` name), `--ca-file` and
 `--allow-plaintext`, and any other option an adapter takes is `--turn-source-option KEY=VALUE`
-(repeatable; `true`/`false` are booleans; a key naming a credential, such as `token`,
-`password`, `pwd`, `bearer`, `cookie`, `session`, `jwt`, `cert` or `dsn`, and any option the
-adapter declares secret, takes only a `secret:` name, and no value may be a URL with userinfo). Which adapter fills the slot is site configuration,
+(repeatable). Which adapter fills the slot is site configuration,
 but the code is not: the module must be under `homelabnext.conform.adapters` or a site package
 declared with `--turn-source-namespace PACKAGE` (repeatable, else
 `HNX_ORCHESTRATION_TURN_SOURCE_NAMESPACES`, comma-separated; none by default; never a
 standard-library package or `homelabnext`), checked before anything is imported, and any failure
 of the import is a configuration error (exit 2). The factory must be one the module declares in
-`TURN_SOURCES` (`{"make": {"secrets": ["key"]}}`: the factory names, and per factory the options
-that hold a secret name) and defines itself, so a helper an adapter imports (a URL opener, a
-secret reader) is never called from a flag. The factory returns a
+`TURN_SOURCES` and defines itself, so a helper an adapter imports (a URL opener, a secret
+reader) is never called from a flag. A declaration is `{"make": {"secrets": [...], "options":
+{name: type}}}`, both keys optional (anything else, or a malformed one, is exit 2). With
+`options`, the factory takes only those options, each converted to its type (`str`, `int`,
+`float`, `bool`: `true`/`false`, or `secret`: a `secret:` name only); the LiteLLM adapter types
+all of its own. Every option, the flags included, gets the same checks: no value may be a URL
+with userinfo (`--gateway-url` too); `key` (`--key`) and every option declared secret take only
+a `secret:` name; and an option the factory does not type whose name holds a credential stem as
+a whole `_` segment (`api_key`, `db_pwd`, `refresh_token`, `bearer`, `cookie`, `jwt`, `otp`,
+`sig`, `dsn`, `pem`, `pass`; `apikey` and `password` anywhere) takes only a `secret:` name too,
+and the error names the stem. `monkey`, `max_tokens`, `author`, `session_id` or `cert_path` are
+no credentials; an adapter that takes a plain option a stem would catch types it `str`. The factory returns a
 `TurnSource` (`turns(start, end, tags)`, neutral turn records), and the `inference` suite's
 `turn-records` checks prove an adapter: every turn is exactly the neutral record, carries only
 the tags asked for, started in the window, and keeps its id across reads. Swapping the gateway is

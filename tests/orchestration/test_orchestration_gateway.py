@@ -266,6 +266,9 @@ def site_adapters(tmp_path, monkeypatch):
     pkg.mkdir(parents=True)
     (pkg / "__init__.py").write_text("")
     (pkg / "turns.py").write_text(_SITE_ADAPTER)
+    for name, declaration in _SITE_DECLARATIONS.items():
+        body = _SITE_ADAPTER.replace(_SITE_DECLARED, f"TURN_SOURCES = {declaration}")
+        (pkg / f"{name}.py").write_text(body)
     mark = tmp_path / "imported"
     (tmp_path / "pkgs" / "sideeffect.py").write_text(
         f"open({str(mark)!r}, 'w').close()\ndef make(**k): return None\n"
@@ -274,6 +277,19 @@ def site_adapters(tmp_path, monkeypatch):
     monkeypatch.setenv("HNX_TEST_OPTS_OUT", str(tmp_path / "opts.json"))
     monkeypatch.delenv("HNX_ORCHESTRATION_TURN_SOURCE_NAMESPACES", raising=False)
     return tmp_path
+
+
+_SITE_DECLARED = 'TURN_SOURCES = {"make": {"secrets": ["upstream_ref"]}, "borrowed": {}}'
+#: more site modules: the adapter above under another declaration
+_SITE_DECLARATIONS = {
+    "plain": '{"make": {}}',
+    "typed": '{"make": {"options": {"timeout": "float", "page_size": "int", "verify": "bool",'
+    ' "region": "str", "session_id": "str", "upstream": "secret"}}}',
+    "secrets_str": '{"make": {"secrets": "key"}}',
+    "entry_str": '{"make": "secrets"}',
+    "bad_type": '{"make": {"options": {"timeout": "duration"}}}',
+    "extra_key": '{"make": {"secret": ["key"]}}',
+}
 
 
 def _turns_cli(tmp, *argv) -> int:
@@ -374,18 +390,45 @@ def test_the_shipped_adapter_declares_its_factory():
 
 
 @pytest.mark.parametrize(
-    "pair",
+    "key, stem",
     [
-        "pwd=fake-hunter2", "pass=x", "passphrase=x", "bearer=abc", "cookie=s=1", "session=abc",
-        "jwt=eyJfake", "otp=123456", "sig=abc", "private_pem=-----BEGIN", "client_cert=x",
-        "dsn=postgres://u:pw@db.example.com/db", "url=https://fake-token@gw.example.com/v1",
-        "api_key=abc", "apikey=abc", "auth_header=x",
+        ("pwd", "pwd"), ("pass", "pass"), ("passphrase", "passphrase"), ("bearer", "bearer"),
+        ("cookie", "cookie"), ("jwt", "jwt"), ("otp", "otp"), ("sig", "sig"), ("pem", "pem"),
+        ("private_pem", "pem"), ("client_key", "key"), ("dsn", "dsn"), ("api_key", "key"),
+        ("apikey", "key"), ("xpassword", "password"), ("auth_header", "auth"), ("db_password", "password"),
+        ("refresh_token", "token"), ("client_secret", "secret"), ("credentials", "credentials"),
     ],
 )  # fmt: skip
-def test_a_credential_option_takes_only_a_secret_name(pair):
+def test_a_credential_option_takes_only_a_secret_name_and_the_stem_is_named(key, stem):
+    from homelabnext.orchestration.cli import check_options
+
+    with pytest.raises(ValueError, match=f"stem {stem!r}"):
+        check_options({key: "fake-plain-value"}, {})
+    assert check_options({key: "secret:gw/x"}, {}) == {key: "secret:gw/x"}
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "monkey", "turkey", "hotkey", "keyspace", "keyword_filter", "tokenizer", "max_tokens",
+        "author", "authority", "oauth_scope", "session_id", "session_ttl", "cert_path",
+        "verify_cert", "certainty", "private_network", "passthrough", "sigma", "project",
+    ],
+)  # fmt: skip
+def test_an_ordinary_option_name_is_no_credential(key):
+    from homelabnext.orchestration.cli import check_options
+
+    assert check_options({key: "lab-1"}, {}) == {key: "lab-1"}
+
+
+@pytest.mark.parametrize(
+    "pair",
+    ["dsn=postgres://u:pw@db.example.com/db", "url=https://fake-token@gw.example.com/v1"],
+)
+def test_a_url_with_userinfo_is_refused_whatever_the_option(pair):
     from homelabnext.orchestration.cli import turn_source_options
 
-    with pytest.raises(ValueError, match=r"secret|userinfo"):
+    with pytest.raises(ValueError, match="userinfo"):
         turn_source_options([pair])
 
 
@@ -396,6 +439,65 @@ def test_options_that_are_no_credential_still_pass():
         ["project=lab-1", "region=us-east-1", "url=https://gw.example.com/v1"]
     )
     assert got == {"project": "lab-1", "region": "us-east-1", "url": "https://gw.example.com/v1"}
+
+
+def test_the_key_and_gateway_url_flags_get_the_same_checks(site_adapters, capsys):
+    """--key and --gateway-url were merged into the options unchecked: a site adapter that
+    declares no secrets got a plain key and a URL with a password."""
+    spec = ["--turn-source", "labsite.plain:make", "--turn-source-namespace", "labsite"]
+    assert _turns_cli(site_adapters, *spec, "--key", "fake-plain-key") == 2
+    assert "key" in capsys.readouterr().err
+    url = "https://u:fake-pw@gw.example.com"
+    assert _turns_cli(site_adapters, *spec, "--gateway-url", url) == 2
+    assert "userinfo" in capsys.readouterr().err
+    assert not (site_adapters / "opts.json").exists()
+    assert _turns_cli(site_adapters, *spec, "--key", "secret:gw/key") == 0
+    assert json.loads((site_adapters / "opts.json").read_text()) == {"key": "secret:gw/key"}
+
+
+@pytest.mark.parametrize("module", ["secrets_str", "entry_str", "bad_type", "extra_key"])
+def test_a_malformed_declaration_is_a_configuration_error(site_adapters, capsys, module):
+    spec = ["--turn-source", f"labsite.{module}:make", "--turn-source-namespace", "labsite"]
+    assert _turns_cli(site_adapters, *spec, "--key", "secret:gw/key") == 2
+    assert "TURN_SOURCES" in capsys.readouterr().err
+    assert not (site_adapters / "opts.json").exists()
+
+
+def test_declared_option_types_are_coerced_and_undeclared_options_refused(site_adapters, capsys):
+    spec = ["--turn-source", "labsite.typed:make", "--turn-source-namespace", "labsite"]
+    opt = lambda *pairs: [x for p in pairs for x in ("--turn-source-option", p)]  # noqa: E731
+    good = opt("timeout=2.5", "page_size=10", "verify=false", "region=us-1", "session_id=abc")
+    assert _turns_cli(site_adapters, *spec, *good, *opt("upstream=secret:gw/up")) == 0
+    got = json.loads((site_adapters / "opts.json").read_text())
+    assert got == {
+        "timeout": 2.5, "page_size": 10, "verify": False, "region": "us-1", "session_id": "abc",
+        "upstream": "secret:gw/up",
+    }  # fmt: skip
+    capsys.readouterr()
+    for bad, why in [
+        ("page_size=ten", "page_size"), ("timeout=nan", "timeout"), ("verify=yes", "verify"),
+        ("upstream=fake-plain", "secret"), ("env=x", "not an option"),
+    ]:  # fmt: skip
+        assert _turns_cli(site_adapters, *spec, *opt(bad)) == 2, bad
+        assert why in capsys.readouterr().err, bad
+
+
+def test_the_shipped_adapter_declares_and_types_its_options(monkeypatch, capsys, tmp_path):
+    """timeout=5 used to reach the reader as a string and fail every pass with a TypeError;
+    env, the adapter's test seam, was settable from the command line."""
+    from homelabnext.conform.adapters.litellm_spend_log import TURN_SOURCES
+    from homelabnext.orchestration.cli import turn_source
+
+    options = TURN_SOURCES["make"]["options"]
+    assert options["key"] == "secret" and options["timeout"] == "float" and "env" not in options
+    src = turn_source(
+        "homelabnext.conform.adapters.litellm_spend_log:make",
+        base_url="https://gw.example.com", key="secret:llm-gateway/key-x", timeout="5",
+        page_size="10",
+    )  # fmt: skip
+    assert src.reader.timeout == 5.0
+    with pytest.raises(ValueError, match="not an option"):
+        turn_source("homelabnext.conform.adapters.litellm_spend_log:make", env="x")
 
 
 def test_an_option_the_adapter_declares_secret_takes_only_a_secret_name(site_adapters, capsys):

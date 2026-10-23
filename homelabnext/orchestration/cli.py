@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -51,6 +52,7 @@ import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 from conformance.protocols.events import EventsError
 from conformance.protocols.inference import TurnSource, TurnSourceError
@@ -66,16 +68,24 @@ NAMESPACES_ENV = "HNX_ORCHESTRATION_TURN_SOURCE_NAMESPACES"
 #: the shipped adapters: a turn source is code from here or from a namespace the site declares
 ADAPTERS = "homelabnext.conform.adapters"
 #: an adapter module's declaration of its turn source factories: ``{name: {"secrets": [option,
-#: ...]}}``, ``secrets`` naming the options that hold a secret name (``secret:<name>``)
+#: ...], "options": {option: type}}}``.  ``secrets`` names the options that hold a secret name
+#: (``secret:<name>``); ``options``, when given, is every option the factory takes, each typed
+#: (:data:`OPTION_TYPES`): a value from the command line is converted to it, a ``secret`` takes
+#: only a secret name, and any other option is refused.  Both keys are optional; anything else
+#: in a declaration is a configuration error
 FACTORIES = "TURN_SOURCES"
+#: the types a declaration may give an option
+OPTION_TYPES = ("str", "int", "float", "bool", "secret")
 _DOTTED = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
 _OPTION_KEY = re.compile(r"[a-z][a-z0-9_]{0,63}")
-#: an option key naming a credential: its value is a secret name, never the secret.  A stem
-#: anywhere in the key, or a short one as a whole ``_`` segment (``pass``, ``db_pwd``, ``sig``);
-#: no pattern names every credential, so an adapter also declares its own (:data:`FACTORIES`)
+#: an option key naming a credential, for an option the factory does not type: its value is a
+#: secret name, never the secret.  A stem as a whole ``_`` segment (``api_key``, ``db_pwd``,
+#: ``refresh_token``; not ``monkey``, ``max_tokens``, ``author``), or ``apikey``/``password``
+#: anywhere.  It is the backstop: the factory's declaration (:data:`FACTORIES`) is the source of
+#: truth, and a factory that types an option as ``str`` takes it as plain text
 _CREDENTIAL = re.compile(
-    r"key|token|passw|secret|credential|auth|bearer|cookie|session|private|cert"
-    r"|(?:^|_)(?:pwd|pass|passphrase|jwt|otp|sig|dsn|pem)(?:_|$)"
+    r"(?:^|_)(?:api)?(?P<stem>key|token|secret|password|passwd|passphrase|credentials?|auth"
+    r"|bearer|cookie|jwt|otp|sig|dsn|pem|pwd|pass)(?:_|$)|(?P<any>apikey|password)"
 )
 #: a URL carrying userinfo (``scheme://user:password@host``, ``scheme://token@host``)
 _USERINFO = re.compile(r"://[^/?#]*@")
@@ -343,16 +353,10 @@ def turn_source(spec: str, namespaces: Sequence[str] = (), **config):
     factory = getattr(module, attr, None)
     if not callable(factory) or getattr(factory, "__module__", None) != mod:
         raise ValueError(f"--turn-source {spec!r:.120}: the factory is not defined in {mod}")
-    decl = declared[attr] if isinstance(declared[attr], Mapping) else {}
-    for name in decl.get("secrets", ()):
-        value = config.get(name)
-        if value not in (None, False) and not (
-            isinstance(value, str) and _SECRET_NAME.fullmatch(value)
-        ):
-            raise ValueError(
-                f"--turn-source {spec!r:.120}: option {name} is a secret the adapter declares: "
-                "a secret name (secret:<name>), never a value"
-            )
+    try:
+        config = check_options(config, _declaration(declared[attr]))
+    except ValueError as exc:
+        raise ValueError(f"--turn-source {spec!r:.120}: {exc}") from None
     try:
         source = factory(**config)
     except TypeError as exc:  # an option the adapter does not take
@@ -364,14 +368,106 @@ def turn_source(spec: str, namespaces: Sequence[str] = (), **config):
     return source
 
 
-def turn_source_options(pairs: Sequence[str]) -> dict[str, str | bool]:
-    """``--turn-source-option KEY=VALUE`` pairs as adapter options: ``true``/``false`` are
-    booleans; a key that names a credential (:data:`_CREDENTIAL`: key, token, password, secret,
-    pwd, bearer, cookie, session, jwt, cert, dsn, ...) takes only a secret name
-    (``secret:<name>``), and no value may be a URL with userinfo, so no secret value is ever on a
-    command line.  The options a factory declares secret are checked again in :func:`turn_source`.
-    :class:`ValueError` for a malformed pair, a repeated key or one a dedicated flag sets."""
-    out: dict[str, str | bool] = {}
+def _declaration(entry: Any) -> dict[str, Any]:
+    """A factory's entry in its module's :data:`FACTORIES`, checked: :class:`ValueError` for
+    one that is not a mapping, has another key, a ``secrets`` that is not a list of option names
+    or ``options`` that are not option names with a type of :data:`OPTION_TYPES`."""
+    where = f"its {FACTORIES} entry"
+    if not isinstance(entry, Mapping) or not set(entry) <= {"secrets", "options"}:
+        raise ValueError(f"{where} is a mapping of secrets and options, nothing else")
+    secrets = entry.get("secrets", [])
+    if not isinstance(secrets, list | tuple) or not all(
+        isinstance(s, str) and _OPTION_KEY.fullmatch(s) for s in secrets
+    ):
+        raise ValueError(f"{where}: secrets is a list of option names")
+    options = entry.get("options")
+    if options is not None and not (
+        isinstance(options, Mapping)
+        and all(
+            isinstance(k, str) and _OPTION_KEY.fullmatch(k) and t in OPTION_TYPES
+            for k, t in options.items()
+        )
+    ):
+        raise ValueError(f"{where}: options map option names to {', '.join(OPTION_TYPES)}")
+    return {"secrets": tuple(secrets), "options": None if options is None else dict(options)}
+
+
+def _secret_name(value: Any) -> bool:
+    return isinstance(value, str) and _SECRET_NAME.fullmatch(value) is not None
+
+
+def check_options(config: Mapping[str, Any], decl: Mapping[str, Any]) -> dict[str, Any]:
+    """The options for a factory whose (checked) declaration is ``decl``, from the command line
+    (``--turn-source-option`` strings and the dedicated flags): :class:`ValueError` naming the
+    option for a URL with userinfo, an option the factory does not take (when it types its
+    options), a value that is not of its declared type, or a credential given as a value.  A
+    credential is ``key`` (``--key``), an option the factory declares secret, and, for an option
+    it does not type, one whose name holds a credential stem (:data:`_CREDENTIAL`, named in the
+    error); each takes only ``secret:<name>``.  An untyped ``true``/``false`` is a boolean."""
+    options = decl.get("options")
+    secrets = set(decl.get("secrets", ())) | {"key"}
+    if options is not None:
+        secrets |= {k for k, t in options.items() if t == "secret"}
+    out: dict[str, Any] = {}
+    for key, value in config.items():
+        if isinstance(value, str) and _USERINFO.search(value):
+            raise ValueError(f"option {key}: a URL with userinfo carries a credential")
+        typ = None if options is None else options.get(key)
+        if options is not None and typ is None:
+            raise ValueError(f"option {key} is not an option the factory declares")
+        if key in secrets or typ == "secret":
+            if not _secret_name(value):
+                raise ValueError(
+                    f"option {key} is a credential: a secret name (secret:<name>), never a value"
+                )
+        elif typ is None:
+            m = _CREDENTIAL.search(key)
+            if m and not _secret_name(value):
+                raise ValueError(
+                    f"option {key} looks like a credential (stem {m['stem'] or m['any']!r}): a "
+                    "secret name (secret:<name>), never a value"
+                )
+            if isinstance(value, str) and value.startswith("secret:") and not _secret_name(value):
+                raise ValueError(f"option {key}: not a secret name (secret:<name>)")
+            value = (
+                {"true": True, "false": False}.get(value, value)
+                if isinstance(value, str)
+                else value
+            )
+        else:
+            value = _coerce(key, value, typ)
+        out[key] = value
+    return out
+
+
+def _coerce(key: str, value: Any, typ: str) -> Any:
+    if typ == "bool":
+        got = value if isinstance(value, bool) else {"true": True, "false": False}.get(value)
+        if got is None:
+            raise ValueError(f"option {key} is a bool: true or false")
+        return got
+    if not isinstance(value, str):
+        raise ValueError(f"option {key} is a {typ}")
+    if typ == "int":
+        if not re.fullmatch(r"-?[0-9]{1,18}", value):
+            raise ValueError(f"option {key} is an int")
+        return int(value)
+    if typ == "float":
+        try:
+            got = float(value)
+        except ValueError:
+            got = math.nan
+        if not math.isfinite(got):
+            raise ValueError(f"option {key} is a finite number")
+        return got
+    return value
+
+
+def turn_source_options(pairs: Sequence[str]) -> dict[str, str]:
+    """``--turn-source-option KEY=VALUE`` pairs as adapter options, as strings (the factory's
+    declaration types them: :func:`check_options`).  :class:`ValueError` for a malformed pair, a
+    repeated key, one a dedicated flag sets, or a URL with userinfo in a value."""
+    out: dict[str, str] = {}
     for pair in pairs:
         key, sep, value = pair.partition("=")
         if not sep or not _OPTION_KEY.fullmatch(key):
@@ -385,14 +481,7 @@ def turn_source_options(pairs: Sequence[str]) -> dict[str, str | bool]:
                 f"--turn-source-option {key}: a URL with userinfo carries a credential; give "
                 "the credential as its own option, by secret name"
             )
-        if (_CREDENTIAL.search(key) or value.startswith("secret:")) and not _SECRET_NAME.fullmatch(
-            value
-        ):
-            raise ValueError(
-                f"--turn-source-option {key}: a credential is a secret name (secret:<name>), "
-                "never a value"
-            )
-        out[key] = {"true": True, "false": False}.get(value, value)
+        out[key] = value
     return out
 
 
