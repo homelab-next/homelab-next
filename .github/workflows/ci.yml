@@ -423,6 +423,12 @@ jobs:
         with:
           python-version: "3.12"
           extras: test,ansible  # a fix to an ansible plugin proves its test like any other
+      # a Go fix proves its test with go test (no toolchain is "cannot prove", never a pass)
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        if: hashFiles('orchestrator/go.mod') != ''
+        with:
+          go-version-file: orchestrator/go.mod
+          cache-dependency-path: orchestrator/**/go.sum
       - name: every fix ships a regression test that fails without the fix
         # the same base rule as the schemas and register-ids jobs: a pull request's base must be
         # readable; a push falls back to HEAD^ when its previous tip is zero or gone; other events

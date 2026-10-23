@@ -248,6 +248,86 @@ def test_a_go_fix_whose_only_test_change_is_testdata_runs_its_package(tmp_path):
     )
 
 
+def _module_proxy(root: Path) -> str:
+    """A GOPROXY directory serving example.com/dep v1.0.0 (``func One() int { return 1 }``)."""
+    import zipfile
+
+    d = root / "example.com" / "dep" / "@v"
+    d.mkdir(parents=True)
+    mod = "module example.com/dep\n\ngo 1.21\n"
+    (d / "list").write_text("v1.0.0\n")
+    (d / "v1.0.0.info").write_text('{"Version":"v1.0.0"}\n')
+    (d / "v1.0.0.mod").write_text(mod)
+    with zipfile.ZipFile(d / "v1.0.0.zip", "w") as z:
+        z.writestr("example.com/dep@v1.0.0/go.mod", mod)
+        z.writestr("example.com/dep@v1.0.0/dep.go", "package dep\n\nfunc One() int { return 1 }\n")
+    return root.as_uri()
+
+
+@pytest.mark.parametrize(
+    ("err", "can_run"),
+    [
+        ("go: downloading example.com/dep v1.0.0\n--- FAIL: TestAdd\nFAIL\n", True),
+        ("FAIL\texample.com/fixture/internal/calc [setup failed]\n", False),
+        ("go: errors parsing go.mod:\n", False),
+        ("go: cannot find main module, but found .git/config\n", False),
+        ("go: updates to go.mod needed; to update it:\n", False),
+    ],
+)
+def test_go_setup_errors_are_told_from_progress_lines(err, can_run):
+    assert (gate.GO_SETUP_ERROR.search(err) is None) is can_run
+
+
+@needs_go
+def test_a_go_fix_with_a_dependency_is_proved_on_a_cold_module_cache(tmp_path, monkeypatch):
+    # go test prints "go: downloading ..." for every module it fetches: that is no setup error
+    monkeypatch.setenv("GOPROXY", _module_proxy(tmp_path / "proxy"))
+    monkeypatch.setenv("GOSUMDB", "off")
+    monkeypatch.setenv("GOFLAGS", "-modcacherw")  # so tmp_path can be removed
+    monkeypatch.setenv("GOTOOLCHAIN", "local")
+    monkeypatch.setenv("GOMODCACHE", str(tmp_path / "warm"))
+    r, commit = _repo(tmp_path)
+    mod = r / "orchestrator"
+    calc = 'package calc\n\nimport "example.com/dep"\n\nfunc Add(a, b int) int {{ return a {op} b * dep.One() }}\n'
+    (mod / "internal" / "calc").mkdir(parents=True)
+    (mod / "go.mod").write_text(GO_MOD + "\nrequire example.com/dep v1.0.0\n")
+    (mod / "internal" / "calc" / "calc.go").write_text(calc.format(op="-"))
+    subprocess.run(["go", "mod", "tidy"], cwd=mod, check=True, capture_output=True)
+    base = commit("feat: calc with a dependency")
+    fix = commit(
+        "fix: add adds",
+        **{GO + "calc.go": calc.format(op="+"), GO + "calc_test.go": CALC_TEST.format(extra=TEST_ADD)},
+    )  # fmt: skip
+    monkeypatch.setenv("GOMODCACHE", str(tmp_path / "cold"))  # nothing downloaded yet
+    (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
+    assert gate.prove(c, cwd=r) is None
+
+
+def test_the_regression_tests_job_has_a_go_toolchain_once_the_module_exists():
+    import yaml
+
+    root = Path(__file__).resolve().parents[2]
+    jobs = yaml.safe_load((root / ".github" / "workflows" / "ci.yml").read_text())["jobs"]
+    steps = jobs["regression-tests"]["steps"]
+    (go,) = [s for s in steps if s.get("uses", "").startswith("actions/setup-go@")]
+    (pinned,) = [
+        s
+        for s in jobs["orchestrator"]["steps"]
+        if s.get("uses", "").startswith("actions/setup-go@")
+    ]
+    assert go["uses"] == pinned["uses"]  # the same pinned commit as the orchestrator job
+    assert go["with"]["go-version-file"] == "orchestrator/go.mod"
+    assert (
+        go["with"].get("cache", True) is not False
+        and "go.sum" in go["with"]["cache-dependency-path"]
+    )
+    assert "orchestrator/go.mod" in go["if"]
+    names = [s.get("name") or s.get("uses") for s in steps]
+    assert names.index(go["uses"]) < next(
+        i for i, s in enumerate(steps) if "fix_has_test" in s.get("run", "")
+    )
+
+
 def test_go_fix_without_a_go_toolchain_cannot_be_proved(tmp_path):
     r, commit, base = _go_repo(tmp_path)
     fix = commit(

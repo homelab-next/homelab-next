@@ -61,6 +61,12 @@ TEST_MODULE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$")
 GO_TEST_FILE = re.compile(r"(^|/)[^/]+_test\.go$")
 # a top-level test or fuzz function; gofmt closes it with a ``}`` alone on a line
 GO_TEST_FUNC = re.compile(r"^func ((?:Test|Fuzz)\w*)\(", re.M)
+# go test output that means the tests never ran: not a failing test.  ``go: downloading ...`` (a
+# cold module cache) is progress, not an error.
+GO_SETUP_ERROR = re.compile(
+    r"\[setup failed\]|^go: (?:errors parsing|cannot find main module|updates to go\.mod needed)",
+    re.M,
+)
 
 
 @dataclass
@@ -199,7 +205,7 @@ def _prove_go(
         out = run.stdout + run.stderr
         if run.returncode == 0:
             problems.append(f"{c.short}: its regression test passes WITHOUT the fix ({what})")
-        elif run.returncode != 1 or "[setup failed]" in out or re.search(r"(?m)^go: ", out):
+        elif run.returncode != 1 or GO_SETUP_ERROR.search(out):
             # 1 is a failing test or a test package that does not build without the fix; a
             # setup or module error (missing go.mod, no network for a module) proves nothing
             problems.append(f"{c.short}: its Go tests could not run on the parent ({what})")
