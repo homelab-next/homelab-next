@@ -181,3 +181,28 @@ def test_the_release_workflow_emits_the_event():
     assert emit[0] < checksums  # the event is checksummed and attached with the SBOM
     release = " ".join(s.get("run", "") for s in wf["jobs"]["github-release"]["steps"])
     assert "deploy-changed.json" in release
+
+
+NEVER = "http://127.0.0.1:9"  # no-raw-endpoint: allow never contacted (refused while parsing)
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "0.5", "nan", "inf", "1e306", "soon"])
+def test_cli_refuses_a_retention_that_is_not_a_sane_number_of_hours(tmp_path, capsys, bad):
+    cl = tmp_path / "CHANGELOG.md"
+    cl.write_text(CHANGELOG)
+    out = tmp_path / "deploy.json"
+    with pytest.raises(SystemExit) as exc:  # refused while parsing: nothing written yet
+        main(["deploy-changed", "--component", "pkg:homelabnext", "--to", "0.2.0",
+              "--changelog", str(cl), "--source", "svc:release-pipeline", "--time", T,
+              "--out", str(out), "--forwarder", NEVER, "--state",
+              str(tmp_path / "st.json"), f"--retain-hours={bad}"])  # fmt: skip
+    assert exc.value.code == 2 and not out.exists()
+    assert "--retain-hours" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("bad", ["0", "nan", "inf", "0.01"])
+def test_status_ingest_refuses_the_same_retentions(tmp_path, capsys, bad):
+    from homelabnext.status.cli import main as status_main
+
+    rc = status_main(["ingest", "--agents", str(tmp_path / "agents.yml"), f"--publish-retain-hours={bad}"])  # fmt: skip
+    assert rc == 2 and "--publish-retain-hours" in capsys.readouterr().err

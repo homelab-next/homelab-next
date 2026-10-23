@@ -103,9 +103,11 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--out", help="write the event JSON here")
     d.add_argument("--forwarder", help="publish to this forwarder URL (needs --state)")
     d.add_argument("--state", help="publisher state file")
+    from .publisher import retain_hours  # here: the package imports this module
+
     d.add_argument(
         "--retain-hours",
-        type=float,
+        type=retain_hours,
         default=24.0,
         help="keep sent ids this long for de-duplication (at least the bus's duplicate window)",
     )

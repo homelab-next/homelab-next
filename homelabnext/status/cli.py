@@ -252,6 +252,8 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         "--publish-state", help="the publisher's state file (default: STORE.publish.json)"
     )
     p.add_argument("--publish-source", default="svc:status-hub", help="the events' source")
+    from homelabnext.events.publisher import retain_hours
+
     p.add_argument(
         "--max-per-client",
         type=_positive_int,
@@ -261,7 +263,7 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     )
     p.add_argument(
         "--publish-retain-hours",
-        type=float,
+        type=retain_hours,
         default=24.0,
         help="keep sent ids this long for de-duplication (at least the bus's duplicate window)",
     )

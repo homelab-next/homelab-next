@@ -50,6 +50,8 @@ class _Store(Protocol):
 
 #: how long a ``sent`` record is kept by default: the bus's default duplicate window (24 h)
 RETAIN_S = 86_400.0
+#: the shortest retention the command lines accept (below it de-duplication is mostly lost)
+MIN_RETAIN_HOURS = 1.0
 #: sends between two checks for expired ``sent`` records
 PRUNE_EVERY = 100
 
@@ -257,3 +259,19 @@ def _sent_at(rec: dict[str, Any]) -> float:
     except (TypeError, ValueError):
         return float("-inf")
     return t if math.isfinite(t) else float("-inf")
+
+
+def retain_hours(text: str) -> float:
+    """``argparse`` type of a retention in hours: a finite number of at least
+    :data:`MIN_RETAIN_HOURS` (an infinite one would never prune, a tiny one never de-duplicate)."""
+    import argparse
+
+    try:
+        hours = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number of hours: {text!r}") from None
+    if not math.isfinite(hours) or hours < MIN_RETAIN_HOURS or hours * 3600 > 1e9:
+        raise argparse.ArgumentTypeError(
+            f"retention must be a finite number of hours from {MIN_RETAIN_HOURS:g} up, got {text!r}"
+        )
+    return hours
