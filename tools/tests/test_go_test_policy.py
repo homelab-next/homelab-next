@@ -62,6 +62,7 @@ def run(tmp_path, lines, *args, policy_yaml: str | None = None, capsys=None):
     f.write_text("\n".join(lines) + "\n")
     extra = []
     if policy_yaml is not None:
+        (tmp_path / "go.mod").write_text(f"module {MOD}\n\ngo 1.24\n")
         (tmp_path / "skips.yml").write_text(policy_yaml)
         extra = ["--policy", str(tmp_path / "skips.yml")]
     return policy.main([*extra, "--today", TODAY, *args, str(f)])
@@ -256,12 +257,46 @@ def test_a_privileged_skip_needs_its_root_run_to_pass(tmp_path, capsys):
 
 def test_list_privileged_prints_one_run_per_package(tmp_path, capsys):
     text = PRIVILEGED + "  - {test: TestMount/race, package: pkg/safefs, reason: bind mounts}\n"
+    text += f"  - {{test: TestFull, package: {MOD}/pkg/safefs, reason: a full import path}}\n"
+    (tmp_path / "go.mod").write_text(f"module {MOD}\n")
     (tmp_path / "skips.yml").write_text(text)
     assert policy.main(["--policy", str(tmp_path / "skips.yml"), "--list-privileged"]) == 0
     assert capsys.readouterr().out.splitlines() == [
         "./internal/api ^(TestHardening)$",
-        "./pkg/safefs ^(TestMount)$",
+        "./pkg/safefs ^(TestFull|TestMount)$",
     ]
+
+
+@pytest.mark.parametrize(
+    ("entry_package", "event_package", "covered"),
+    [
+        ("internal/api", "internal/api", True),
+        ("internal/api", "cmd/x/internal/api", False),  # same suffix, another package
+        ("api", "internal/api", False),
+        (f"{MOD}/internal/api", "internal/api", True),  # the full import path
+        (".", "", True),  # the module root package
+    ],
+)
+def test_a_policy_entry_names_exactly_one_package(tmp_path, entry_package, event_package, covered):
+    pkg = event_package.strip("/")
+    lines = package(pkg, "fail", events_of(pkg, "TestStall", "fail", "stalled"))
+    lines = [line.replace(f'"{MOD}/"', f'"{MOD}"') for line in lines]  # the root package
+    text = QUARANTINE.format(test="TestStall", until="2026-02-01")
+    text = text.replace("package: internal/queue", f"package: {entry_package}")
+    assert run(tmp_path, lines, policy_yaml=text) == (0 if covered else 1)
+
+
+def test_the_module_path_comes_from_go_mod_or_module(tmp_path, capsys):
+    lines = FLAKY
+    (tmp_path / "run.json").write_text("\n".join(lines) + "\n")
+    (tmp_path / "skips.yml").write_text(QUARANTINE.format(test="TestStall", until="2026-02-01"))
+    args = ["--policy", str(tmp_path / "skips.yml"), "--today", TODAY, str(tmp_path / "run.json")]
+    assert policy.main(args) == 2  # no go.mod beside skips.yml, no --module
+    assert "no module path" in capsys.readouterr().err
+    assert policy.main(["--module", MOD, *args]) == 0
+    assert policy.main(["--module", "example.com/other", *args]) == 1
+    (tmp_path / "go.mod").write_text(f'module "{MOD}" // quoted\n')
+    assert policy.main(args) == 0
 
 
 @pytest.mark.parametrize(

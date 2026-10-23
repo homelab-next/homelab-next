@@ -36,8 +36,10 @@ The policy file (``orchestrator/skips.yml``)::
     privileged:          # needs root: skips in the normal run, must pass in the privileged run
       - {test: TestHardening, package: internal/api, reason: chowns a file to another user}
 
-``package`` is the import path relative to the module (a full import path ending in it matches);
-``test`` names a top-level test or a ``Parent/sub`` subtest, and a parent covers its subtests.
+``package`` is the import path relative to the module (``.`` for the module root) or the full
+import path; it names exactly that package, never one whose path merely ends the same way
+(``internal/api`` is not ``cmd/x/internal/api``).  The module path comes from the ``go.mod`` beside
+the policy file, or ``--module``.  ``test`` names a top-level test or a ``Parent/sub`` subtest, and a parent covers its subtests.
 A ``privileged`` test's skip is accepted only when ``--privileged FILE`` (the ``go test -json``
 output of the root run) shows it passed, so a missing root run fails instead of passing silently.
 ``--list-privileged`` prints ``./<package> <-run regex>`` lines for the CI step that runs them.
@@ -84,9 +86,17 @@ class Entry:
     reason: str
     owner: str = ""
     until: str = ""
+    module: str = ""  # the module path the relative ``package`` is resolved against
+
+    def import_path(self) -> str:
+        if self.package == ".":
+            return self.module
+        if self.package == self.module or self.package.startswith(self.module + "/"):
+            return self.package  # already a full import path
+        return f"{self.module}/{self.package}"
 
     def covers(self, package: str, test: str) -> bool:
-        pkg_ok = package == self.package or package.endswith("/" + self.package)
+        pkg_ok = package in (self.package, self.import_path())  # exact: no suffix matching
         return pkg_ok and (test == self.test or test.startswith(self.test + "/"))
 
 
@@ -113,7 +123,19 @@ class Run:
     bad_lines: list[str] = field(default_factory=list)
 
 
-def load_policy(path: Path | None) -> Policy:
+MODULE_LINE = re.compile(r"^module\s+\"?([^\s\"]+)\"?\s*(?://.*)?$", re.M)
+
+
+def module_path(go_mod: Path) -> str:
+    """The ``module`` directive of a go.mod; '' when the file is missing or has none."""
+    try:
+        m = MODULE_LINE.search(go_mod.read_text(encoding="utf-8"))
+    except OSError:
+        return ""
+    return m.group(1) if m else ""
+
+
+def load_policy(path: Path | None, module: str | None = None) -> Policy:
     if path is None:
         return Policy()
     if not path.is_file():
@@ -141,6 +163,15 @@ def load_policy(path: Path | None) -> Policy:
             if not values["test"] or not values["package"]:
                 raise PolicyError(f"{path}: {key}[{i}] needs test and package")
             getattr(policy, key).append(Entry(**values))
+    if policy.quarantine or policy.privileged:
+        module = module or module_path(path.parent / "go.mod")
+        if not module:
+            raise PolicyError(
+                f"{path}: no module path to resolve its packages against: "
+                "no go.mod beside it, and no --module"
+            )
+        for e in (*policy.quarantine, *policy.privileged):
+            e.module = module
     return policy
 
 
@@ -330,10 +361,15 @@ def list_privileged(policy: Policy) -> list[str]:
     by_pkg: dict[str, list[str]] = {}
     for e in policy.privileged:
         top = e.test.split("/", 1)[0]
-        by_pkg.setdefault(e.package, [])
-        if top not in by_pkg[e.package]:
-            by_pkg[e.package].append(top)
-    return [f"./{pkg} ^({'|'.join(sorted(ts))})$" for pkg, ts in sorted(by_pkg.items())]
+        full = e.import_path()
+        rel = "." if full == e.module else full.removeprefix(e.module + "/")
+        tests = by_pkg.setdefault(rel, [])
+        if top not in tests:
+            tests.append(top)
+    return [
+        f"{'.' if pkg == '.' else './' + pkg} ^({'|'.join(sorted(ts))})$"
+        for pkg, ts in sorted(by_pkg.items())
+    ]
 
 
 def _read(paths: list[str], run: Run | None = None) -> Run:
@@ -361,6 +397,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("results", nargs="*", help="go test -json output files ('-' = stdin)")
     ap.add_argument("--policy", type=Path, help="skips.yml (quarantine and privileged lists)")
+    ap.add_argument("--module", help="module path (default: the go.mod beside --policy)")
     ap.add_argument("--pyproject", type=Path, default=REPO_ROOT / "pyproject.toml")
     ap.add_argument("--privileged", action="append", default=[], metavar="FILE")
     ap.add_argument("--forbid", action="append", default=[], metavar="REGEX")
@@ -368,7 +405,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--list-privileged", action="store_true")
     args = ap.parse_args(argv)
     try:
-        policy = load_policy(args.policy)
+        policy = load_policy(args.policy, args.module)
         if args.list_privileged:
             print("\n".join(list_privileged(policy)))
             return EXIT_OK
