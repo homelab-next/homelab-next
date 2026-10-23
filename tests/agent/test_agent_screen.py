@@ -351,6 +351,10 @@ _CRAFTED = (
     "192.0.2.4 ",
     "a@example.com ",
     "token.\u200b",
+    "password_",
+    "Key.",
+    "--a-",
+    "a" * 200 + " ",
 )
 
 
@@ -368,3 +372,51 @@ def test_a_long_key_still_matches_on_its_key_word():
     out = screen_text("config." * 30 + "db_password=FakeValue0123 next")
     assert "FakeValue0123" not in out and out.endswith("[REDACTED:secret:1] next")
     assert screen_text("max_tokens=4096 token_count=12") == "max_tokens=4096 token_count=12"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "api_key_" + "a" * 65 + "=FakeValue0123xyz",
+        "password_" + "x" * 200 + "=FakeValue0123xyz",
+        '"api_key_' + "a" * 65 + '": "FakeValue0123xyz with space"',
+        "secret." + "a." * 40 + "value: FakeValue0123xyz",
+        "--" + "a" * 65 + "-password FakeValue0123xyz",
+        "--password-" + "a" * 65 + " FakeValue0123xyz",
+        "db_password_for_the_legacy_reporting_cluster_in_region_one_primary_replica: "
+        "FakeValue0123xyz",
+    ],
+)
+def test_a_key_word_any_distance_from_the_separator_still_redacts(text):
+    """A bound on the key kept the rules linear but hid a value whose key word sat more than
+    the bound before the separator; the whole key run is matched instead."""
+    assert "FakeValue0123xyz" not in screen_text(text)
+
+
+def test_a_rejected_key_does_not_swallow_a_later_real_one():
+    assert screen_text("x=abc password=FakeValue0123 y") == "x=abc password=[REDACTED:secret:1] y"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "from alice.fake@example.com\u2122 and later alice.fake@example.com",
+        "seen 192.0.2.4\u00b9 then 192.0.2.4",
+    ],
+)
+def test_a_merged_span_keeps_the_plain_value_so_one_value_keeps_one_label(text):
+    out = screen_text(text)
+    labels = LABEL_RE.findall(out)
+    assert len(labels) == 2 and labels[0] == labels[1], out
+
+
+def test_word_boundaries_are_ascii_but_whitespace_stays_unicode():
+    """A value glued to a CJK, Thai or Cyrillic letter has an ASCII boundary; a no-break or
+    ideographic space still ends a value."""
+    nbsp, ideo = "\u00a0", "\u3000"
+    assert screen_text(f"password=FakeValue0123{nbsp}and the rest") == (
+        f"password=[REDACTED:secret:1]{nbsp}and the rest"
+    )
+    assert screen_text(f"password=FakeValue0123{ideo}rest") == (
+        f"password=[REDACTED:secret:1]{ideo}rest"
+    )

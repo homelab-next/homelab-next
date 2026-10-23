@@ -425,6 +425,41 @@ positives:
     text: ["192.0.2.4\u00bclice.fake@example.com"]
     secrets: ["192.0.2.4", "lice.fake@example.com"]
 
+  # glued to non-ASCII letters: Python's \w and \b are Unicode, so a CJK, Thai or Cyrillic
+  # letter next to a value was no boundary and nothing was redacted; boundaries are ASCII now
+  - id: glued-cjk-ipv4
+    type: ip
+    text: ["\u30b5\u30fc\u30d0\u30fc192.0.2.40\u306b\u63a5\u7d9a\u3057\u307e\u3057\u305f"]
+    secrets: ["192.0.2.40"]
+  - id: glued-cjk-email
+    type: email
+    text: ["\u7528\u6237alice.fake@example.com\u5df2\u767b\u5f55"]
+    secrets: ["alice.fake@example.com"]
+  - id: glued-cjk-github-token
+    type: token
+    text: ["\u30c8\u30fc\u30af\u30f3gh", "p_fake0123456789abcdefghijklmnopqrstuv\u3092\u767a\u884c"]
+    secrets: [["gh", "p_fake0123456789abcdefghijklmnopqrstuv"]]
+  - id: glued-cjk-aws-key
+    type: token
+    text: ["\u5bc6\u94a5AKI", "AFAKE7EXAMPLE0KEY\u5df2\u6cc4\u9732"]
+    secrets: [["AKI", "AFAKE7EXAMPLE0KEY"]]
+  - id: glued-cjk-card
+    type: card
+    text: ["\u30ab\u30fc\u30c94111111111111111\u3067\u6c7a\u6e08"]
+    secrets: ["4111111111111111"]
+  - id: glued-cyrillic-ipv4
+    type: ip
+    text: ["\u0430\u0434\u0440\u0435\u0441198.51.100.7\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d"]
+    secrets: ["198.51.100.7"]
+  - id: glued-cjk-ipv6
+    type: ip
+    text: ["\u4e3b\u673a2001:db8::1ff:fe23:4567:890a\u79bb\u7ebf"]
+    secrets: ["2001:db8::1ff:fe23:4567:890a"]
+  - id: glued-thai-secret
+    type: secret
+    text: ["\u0e23\u0e2b\u0e31\u0e2a password=FakeValue0123\u0e02\u0e2d\u0e07\u0e40\u0e23\u0e32"]
+    secrets: ["FakeValue0123"]
+
 negatives:
   - {id: version-dotted-quad, text: "upgraded to v4.18.2.1 last week", keep: [v4.18.2.1]}
   - {id: version-word, text: "agent version 2.31.0.7 deployed", keep: [version 2.31.0.7]}
