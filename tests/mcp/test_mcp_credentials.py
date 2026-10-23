@@ -154,6 +154,10 @@ ACCEPTED = [
     (["-a"], {}),
     (["-A", "Mozilla/5.0 (X11; rv:109.0) Gecko/20100101"], {}),  # curl's user agent
     (["-A", "localhost:8080"], {}),
+    (["-a", "LOCALHOST:8080"], {}),
+    (["-a", "localhost.:8080"], {}),
+    (["-a", "backup.example.com:/data"], {}),  # rsync-style host:/path
+    (["-a", "C:/work/out"], {}),
     # round 3 (9): import keeps a reference, a URL list and a user agent as they are
     (["--header", "Authorization: Bearer secret:mcp/srv-token"], {}),
     (["--header=Authorization: Bearer secret:mcp/srv-token"], {}),
@@ -319,6 +323,9 @@ def test_scan_args_finds_attached_and_short_user_password_forms(args, flag):
         ["-uanalyst"],
         ["-A", "Mozilla/5.0 (X11; rv:109.0) Gecko/20100101"],
         ["-A", "localhost:8080"],
+        ["-a", "Localhost.:8080"],
+        ["-a", "host:/srv/data"],
+        ["-aC:/x"],
     ],
 )
 def test_scan_args_leaves_uid_gid_and_listen_addresses(args):

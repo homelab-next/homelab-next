@@ -417,10 +417,11 @@ _USER_FLAGS = frozenset(
     ("--user", "--username", "--proxy-user", "--basic-auth", "--userpass", "-a")
 )
 #: a listen address, which ``-a`` takes in other tools (``-a 0.0.0.0:8080``): an IP, a
-#: bracketed IPv6 address, localhost or an empty host, then a port (a dotted name before a
-#: number may be a user and a numeric password: ``-a alice.smith:2024``)
+#: bracketed IPv6 address, localhost (any case, a trailing dot allowed) or an empty host, then
+#: a port (a dotted name before a number may be a user and a numeric password:
+#: ``-a alice.smith:2024``)
 _HOST_PORT = re.compile(
-    r"(?:[0-9]{1,3}(?:\.[0-9]{1,3}){3}|\[[0-9A-Fa-f:.]+\]|localhost)?:[0-9]{1,5}"
+    r"(?:[0-9]{1,3}(?:\.[0-9]{1,3}){3}|\[[0-9A-Fa-f:.]+\]|(?i:localhost)\.?)?:[0-9]{1,5}"
 )
 
 
@@ -434,7 +435,8 @@ def _user_password(flag: str, value: str) -> bool:
         and bool(re.search(r":.", value))
         and "://" not in value
         and not re.fullmatch(r"[0-9]+:[0-9]+", value)
-        and not (flag == "-a" and _HOST_PORT.fullmatch(value))
+        # after -a, a listen address or a path (rsync-style host:/data, C:/x) is not one
+        and not (flag == "-a" and (_HOST_PORT.fullmatch(value) or ":/" in value))
     )
 
 
