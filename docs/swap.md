@@ -275,5 +275,5 @@ subclass instead; the interface is a dozen small methods returning `Outcome(ok, 
   loses that batch for the secondary: the primary's source mark has moved, so the reader does
   not send it again. Closing this window would need an intent record before the primary write.
 * Evidence files are `0600` and may hold rows (abandoned writes) and the rollback reason. Keep the
-  evidence directory (`<swap>.evidence/`, or the runner's `evidence_dir`) out of synced or
+  evidence directory (`<swap>.evidence/`, or `--evidence-dir`) out of synced or
   git-tracked directories; only its sha256 hashes belong in the record.
