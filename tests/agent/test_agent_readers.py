@@ -16,6 +16,7 @@ from agent_support import PARTS, library, spec
 
 from homelabnext import cli
 from homelabnext.agent import (
+    CatalogViolation,
     CeilingPolicy,
     ReaderViolation,
     SpecError,
@@ -26,7 +27,12 @@ from homelabnext.agent import (
     reader_problems,
     verify_profile,
 )
-from homelabnext.agent.readers import DEFAULT_CLASSES, manifest_problems, profile_problems
+from homelabnext.agent.readers import (
+    DEFAULT_CLASSES,
+    default_classes,
+    manifest_problems,
+    profile_problems,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 EXTRA_PARTS = {
@@ -56,6 +62,14 @@ def _lib():
     return library({**PARTS, **EXTRA_PARTS})
 
 
+def _table_doc() -> dict:
+    """The packaged table with its mcp section written out (derived from the MCP catalog), the
+    shape ToolClasses takes."""
+    doc = yaml.safe_load(DEFAULT_CLASSES.read_text())
+    doc["mcp"] = {k: list(v) for k, v in default_classes().table["mcp"].items()}
+    return doc
+
+
 def _with(s: dict, kind: str, name: str) -> dict:
     s = copy.deepcopy(s)
     if kind == "tier":
@@ -72,6 +86,8 @@ def _permissive_policy(s: dict) -> CeilingPolicy:
         "capabilities": sorted({*s["capabilities"], *s["ceiling"]["capabilities"]}),
         "tier": "privileged",
         "budgets": s["ceiling"]["budgets"],
+        "data_tier": s["data_tier"],
+        "internet_mcp": sorted(s["mcp"]),  # every internet exception too
     }
     return CeilingPolicy.from_mapping({"ceilings": {s["id"]: ceiling}})
 
@@ -98,7 +114,9 @@ def test_unclassified_grant_is_refused_for_a_reader():
         compile_profile(s, _lib())
     s = _with(spec(), "mcp", "mystery-server")
     s["ceiling"]["mcp"].append("mystery-server")
-    with pytest.raises(ReaderViolation, match="'mystery-server', which is not classified"):
+    with pytest.raises(
+        ReaderViolation, match=r"unknown mcp server \(mcp entry \d+\), which is not classified"
+    ):
         compile_profile(s, _lib())
 
 
@@ -145,7 +163,8 @@ def test_non_reader_actor_may_hold_acting_grants():
 def test_policy_can_force_a_reader_and_the_spec_cannot_undo_it():
     s = spec()
     s["reads_untrusted"] = False
-    doc = {"ceilings": {"profile:reader": {**s["ceiling"], "reads_untrusted": True}}}
+    doc = {"ceilings": {"profile:reader": {**s["ceiling"], "reads_untrusted": True,
+                                          "data_tier": s["data_tier"]}}}  # fmt: skip
     policy = CeilingPolicy.from_mapping(doc)
     with pytest.raises(ReaderViolation, match="may not declare reads_untrusted: false"):
         compile_profile({k: v for k, v in s.items() if k != "ceiling"}, library(), policy=policy)
@@ -270,15 +289,50 @@ def test_malformed_classification_is_refused(doc, match):
 
 
 def test_a_custom_table_changes_the_verdict(tmp_path):
-    doc = yaml.safe_load(DEFAULT_CLASSES.read_text())
+    doc = _table_doc()
     doc["mcp"]["lake"] = ["egress"]
     custom = ToolClasses(doc)
     assert reader_problems({"mcp": ["lake"]}) == []
     assert reader_problems({"mcp": ["lake"]}, custom)
+    # a --classes file changes the non-MCP classes; its mcp section is the catalog's
+    table = yaml.safe_load(DEFAULT_CLASSES.read_text())
+    table["capabilities"]["cap:lake-query"] = ["egress"]
     path = tmp_path / "classes.yml"
-    path.write_text(yaml.safe_dump(doc))
+    path.write_text(yaml.safe_dump(table))
     with pytest.raises(ReaderViolation):
         compile_profile(spec(), library(), classes=ToolClasses.load(path))
+
+
+def test_a_classes_file_cannot_reclass_an_mcp_server(tmp_path, capsys):
+    """A --classes table with its own mcp section used to replace the catalog's: shell classed
+    read passed the reader rule, and the catalog's status and data-tier rules were skipped."""
+    doc = _table_doc()
+    doc["mcp"]["shell"] = ["read"]
+    _write(tmp_path / "classes.yml", doc)
+    with pytest.raises(SpecError, match="classed only by the MCP catalog"):
+        ToolClasses.load(tmp_path / "classes.yml")
+    _write(tmp_path / "spec.yml", {**spec(), "mcp": ["shell"]})
+    args = ["agent", "lint", str(tmp_path / "spec.yml"), "--classes", str(tmp_path / "classes.yml")]
+    assert cli.main(args) == 1
+    assert "classed only by the MCP catalog" in capsys.readouterr().err
+
+
+def test_a_classes_file_cannot_narrow_the_reader_ban(tmp_path, capsys):
+    """A --classes table with reader_forbidden: [credential] let a reader hold exec, egress and
+    file-write grants; a table may add to the ban, never drop a packaged class from it."""
+    table = yaml.safe_load(DEFAULT_CLASSES.read_text())
+    table["reader_forbidden"] = ["credential"]
+    _write(tmp_path / "classes.yml", table)
+    with pytest.raises(SpecError, match=r"leaves out .*'egress'.*'exec'"):
+        ToolClasses.load(tmp_path / "classes.yml")
+    _write(tmp_path / "spec.yml", {**spec(), "mcp": ["shell"]})
+    args = ["agent", "lint", str(tmp_path / "spec.yml"), "--classes", str(tmp_path / "classes.yml")]
+    assert cli.main(args) == 1
+    assert "never less" in capsys.readouterr().err
+    table["reader_forbidden"] = [*yaml.safe_load(DEFAULT_CLASSES.read_text())["reader_forbidden"]]
+    table["reader_forbidden"].append("record-write")  # forbidding more is fine
+    _write(tmp_path / "classes.yml", table)
+    assert "record-write" in ToolClasses.load(tmp_path / "classes.yml").reader_forbidden
 
 
 # ---------------------------------------------------------------- lint
@@ -347,9 +401,9 @@ def test_cli_lint_exit_codes(tmp_path, capsys):
 
 def test_cli_lint_accepts_a_custom_table(tmp_path, capsys):
     doc = yaml.safe_load(DEFAULT_CLASSES.read_text())
-    doc["mcp"]["shell"] = ["read"]
+    doc["capabilities"]["cap:notify"] = ["read"]
     _write(tmp_path / "classes.yml", doc)
-    _write(tmp_path / "spec.yml", {**spec(), "mcp": ["shell"]})
+    _write(tmp_path / "spec.yml", {**spec(), "capabilities": ["cap:notify"]})
     assert (
         cli.main(
             [
@@ -362,3 +416,71 @@ def test_cli_lint_accepts_a_custom_table(tmp_path, capsys):
         )
         == 0
     )
+
+
+def test_the_compiler_refuses_an_actor_granted_a_retired_server():
+    s = copy.deepcopy(spec())
+    s["reads_untrusted"] = False
+    s["mcp"] = ["puppeteer"]
+    s["ceiling"]["mcp"] = ["puppeteer"]
+    with pytest.raises(CatalogViolation, match="retired"):
+        compile_profile(s, library())
+    s["mcp"] = s["ceiling"]["mcp"] = ["playwright"]
+    assert compile_profile(s, library())["grants"]["mcp"] == ["playwright"]
+
+
+# ------------------------------------------------- grants are judged against a sound catalog
+def _catalog_copy(tmp_path: Path) -> Path:
+    import shutil
+
+    d = tmp_path / "mcp"
+    shutil.copytree(ROOT / "examples" / "mcp", d, ignore=shutil.ignore_patterns("clients"))
+    return d
+
+
+def test_a_shadow_record_cannot_reclassify_a_server(tmp_path):
+    """A record whose id is not its file name, sorted before the real one, used to win the id
+    (first file wins) with a status the schema does not allow: shell became ``read``."""
+    d = _catalog_copy(tmp_path)
+    shadow = yaml.safe_load((d / "lake.yml").read_text())
+    shadow.update(id="shell", status="Active")
+    (d / "aa-shadow.yml").write_text(yaml.safe_dump(shadow))
+    with pytest.raises(SpecError, match="is not valid, so no grant can be judged"):
+        ToolClasses.load(catalog=d)
+
+
+def test_grantable_is_an_allowlist_and_a_data_tier_is_required():
+    from homelabnext.agent.readers import grant_problems
+
+    doc = yaml.safe_load(DEFAULT_CLASSES.read_text())
+    meta = {
+        "odd": {"status": "Active", "data_tier": "local-only"},
+        "untiered": {"status": "active", "data_tier": None},
+        "ok": {"status": "active", "data_tier": "cloud-allowed"},
+    }
+    table = ToolClasses({**doc, "mcp": {k: ["read"] for k in meta}}, catalog=meta)
+    odd = grant_problems({"mcp": ["odd"]}, table)
+    assert odd and "whose status 'Active' is not grantable" in odd[0]
+    assert "declares no known data_tier" in grant_problems({"mcp": ["untiered"]}, table)[0]
+    assert grant_problems({"mcp": ["ok"]}, table, "p", "cloud-allowed") == []
+    # an unknown profile tier is treated as one that may reach the cloud
+    local = {**meta, "ok": {"status": "active", "data_tier": "local-only"}}
+    table = ToolClasses({**doc, "mcp": {k: ["read"] for k in local}}, catalog=local)
+    assert "whose data is local-only" in grant_problems({"mcp": ["ok"]}, table, "p", "public")[0]
+
+
+def test_a_deprecated_grant_is_reported_with_its_replacement(tmp_path, capsys):
+    from homelabnext.agent.readers import grant_notes
+
+    notes = grant_notes({"mcp": ["bash", "shell"]})
+    assert len(notes) == 1 and "'bash', which is deprecated" in notes[0]
+    assert "grant 'shell' instead" in notes[0]
+    p = tmp_path / "p.yml"
+    p.write_text(yaml.safe_dump({"id": "profile:x", "persona": "persona:a", "mcp": ["bash"],
+                                 "capabilities": [], "reads_untrusted": False}))  # fmt: skip
+    assert cli.main(["agent", "lint", str(p)]) == 0  # a warning, not a refusal
+    err = capsys.readouterr().err
+    assert "note:" in err and "grant 'shell' instead" in err
+    found: list[tuple[str, str]] = []
+    lint_paths([p], None, found)
+    assert found and "deprecated" in found[0][1]

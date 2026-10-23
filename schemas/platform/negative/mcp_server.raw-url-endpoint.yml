@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# an endpoint is a registry name, never a URL
+id: lake
+description: SQL over the data lake through the query engine's MCP endpoint; read-only.
+owner: data-team
+status: active
+origin:
+  kind: image
+  image: registry.example/lab/lake-mcp:1.2.0
+  digest: sha256:520dff938bbea192813bfcf5ac3ae98ca3d7599429c2e20d5feca12635b3bbd1
+transport:
+  type: streamable-http
+  endpoint: https://lake-query.example/mcp
+  path: /mcp
+runtime:
+  host: lake-core
+  user: lake-mcp
+headers:
+  Authorization: Bearer secret:mcp/lake-token
+egress:
+- svc:lake-catalog
+- svc:object-store
+data_tier: local-only
+capabilities:
+- cap:lake-query
+tools:
+- name: describe_table
+  classes:
+  - read
+  approval: false
+- name: list_tables
+  classes:
+  - read
+  approval: false
+- name: query
+  classes:
+  - read
+  approval: false
+author: agent:example-builder

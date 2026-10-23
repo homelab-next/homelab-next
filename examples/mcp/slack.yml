@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: slack
+description: Posts messages to a chat workspace.
+owner: platform-team
+status: active
+origin:
+  kind: package
+  ecosystem: npm
+  package: '@example/mcp-slack'
+  version: 2.2.0
+  sha256: ab559534f4003dc4312933d7742becd2444843b2a7fa4bdf0883e109876cd3af
+  bins: [mcp-slack]
+transport:
+  type: stdio
+runtime: agent-local
+env:
+  SLACK_BOT_TOKEN: secret:mcp/slack-token
+egress: [internet]
+data_tier: local-only
+tools:
+- {name: post_message, classes: [egress], approval: true}
+author: agent:example-builder
+reviews:
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:f20fac63a87e'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:f20fac63a87e'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:f20fac63a87e'}

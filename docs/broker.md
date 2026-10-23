@@ -488,16 +488,32 @@ kind, parameters and whether it needs approval, derived from the manifest by `de
 (your own pending requests), and the lane shortcuts `memory_write`, `finding_write` and
 `proposal_file`. A refusal is a tool error `refused (REASON): MESSAGE`.
 
-An agent's MCP client configuration, started under the agent's own user:
+An agent's MCP client configuration, started under the agent's own user, is generated from the
+[MCP catalog](mcp-catalog.md) ([[mcp-catalog]]), never written by hand:
+`hnx mcp catalog render --spec examples/mcp/clients/claude-code.yml` writes
+`examples/mcp/clients/claude-code/broker-agent.mcp.json` for the example profile
+`profile:broker-agent` (granted `hnx-broker`, `hnx-catalog` and an instance of `notes`), and
+`make mcp-check` fails when it drifts. Its `hnx-broker` entry:
 
+<!-- hnx:mcp-render examples/mcp/clients/claude-code/broker-agent.mcp.json hnx-broker -->
 ```json
-{"mcpServers": {"hnx-broker": {"command": "hnx",
-  "args": ["broker", "mcp", "--socket", "/run/hnx-broker/broker.sock"]}}}
+{
+  "hnx-broker": {
+    "args": [
+      "broker",
+      "mcp",
+      "--socket",
+      "/run/hnx-broker/broker.sock"
+    ],
+    "command": "hnx",
+    "type": "stdio"
+  }
+}
 ```
 
-A compiled agent profile grants it as `hnx-broker` in `grants.mcp`;
-`homelabnext/agent/tool_classes.yml` classifies it `record-write` and `exec` (the worst a broker
-action can be), so a reader profile cannot hold it. What the agent may actually do is still the
+A compiled agent profile grants it as `hnx-broker` in `grants.mcp`; its catalog record
+(`examples/mcp/hnx-broker.yml`) classes each tool, `exec` being the worst a broker action can be,
+so a reader profile cannot hold it. What the agent may actually do is still the
 broker manifest's grant for its profile. See also [MCP server](mcp.md) ([[mcp]]).
 
 ### The CLI against a running broker

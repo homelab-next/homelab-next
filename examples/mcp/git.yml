@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: git
+description: Reads history and commits in local repositories.
+owner: platform-team
+status: active
+origin:
+  kind: package
+  ecosystem: pypi
+  package: example-git-mcp
+  version: 1.3.2
+  sha256: 1caefa50d0a295c3adda038a408225769f771836b5a7b59ab126002d54f2f440
+  bins: [git-mcp]
+transport:
+  type: stdio
+  bin: git-mcp
+runtime: agent-local
+egress: none
+data_tier: local-only
+tools:
+- {name: git_commit, classes: [file-write], approval: false}
+- {name: git_log, classes: [read], approval: false}
+author: agent:example-builder
+reviews:
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:144765f7874e'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:144765f7874e'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:144765f7874e'}

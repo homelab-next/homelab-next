@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: smtp
+description: Sends mail through the lab relay (smtp).
+owner: platform-team
+status: active
+origin:
+  kind: package
+  ecosystem: npm
+  package: '@example/mcp-smtp'
+  version: 1.0.0
+  sha256: a00a815302e85643d3e81a4e7ec33cf963bf2c682da68cffd72a8590031fdca4
+  bins: [mcp-smtp]
+transport:
+  type: stdio
+runtime: agent-local
+env:
+  SMTP_PASSWORD: secret:mcp/smtp-password
+egress: [internet]
+data_tier: local-only
+tools:
+- {name: send_email, classes: [egress], approval: true}
+author: agent:example-builder
+reviews:
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:19d4533cbb1f'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:19d4533cbb1f'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:19d4533cbb1f'}

@@ -25,6 +25,7 @@ from .digest import canonical_json, digest_of, sha256_text
 from .errors import (
     AgentError,
     BudgetError,
+    CatalogViolation,
     CeilingViolation,
     IncludeViolation,
     MissingPartError,
@@ -35,7 +36,7 @@ from .handoff import Accepted, Handoff, HandoffError, HandoffRefused
 from .keyring import build_keyring
 from .memory import MemoryAccessError, MemoryStore, MemoryUpdateError
 from .pack import TIERS, assemble_pack
-from .readers import ToolClasses, lint_paths, reader_problems
+from .readers import ToolClasses, grant_problems, lint_paths, reader_problems
 from .report import validate_report
 from .screen import Screener, screen_text
 from .terms import TERMS_SECTION, terms_text
@@ -49,6 +50,7 @@ __all__ = [
     "Accepted",
     "AgentError",
     "BudgetError",
+    "CatalogViolation",
     "CeilingPolicy",
     "CeilingViolation",
     "Handoff",
@@ -73,6 +75,7 @@ __all__ = [
     "check_ceiling",
     "compile_profile",
     "digest_of",
+    "grant_problems",
     "lint_paths",
     "profile_digest",
     "reader_problems",

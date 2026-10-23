@@ -87,3 +87,13 @@ requirements:
     answered: []
     expired: []
     no-find: []
+  # the MCP catalog (docs/mcp-catalog.md): a server is code that runs with an agent's grants, so
+  # making it grantable is a supply-chain decision a human approves after the agents' review
+  mcp-server:
+    draft: []       # imported or new: not grantable, never blocked
+    active:
+      - {role: check, kind: agent}
+      - {role: audit, kind: agent}
+      - {role: approve, kind: human}
+    deprecated: []  # still grantable while profiles move off it
+    retired: []     # not grantable

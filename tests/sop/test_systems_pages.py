@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from homelabnext.cli import COMMANDS
+from homelabnext.mcp import servers
 from homelabnext.registry.model import load
 from homelabnext.reviews import load_policy
 from homelabnext.sop import SECTIONS, check_pages, generate_pages, render_page, render_template
@@ -17,6 +18,7 @@ from homelabnext.sop.pages import page_digest, refresh_page
 
 ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = ROOT / "examples" / "services.yml"
+CATALOG = servers.load(ROOT / "examples" / "mcp")
 
 
 @pytest.fixture
@@ -102,8 +104,21 @@ def test_committed_template_is_the_rendered_template():
 
 
 def test_committed_example_pages_match_the_example_registry():
-    rep = check_pages(load(REGISTRY), ROOT / "docs" / "systems")
+    rep = check_pages(load(REGISTRY), ROOT / "docs" / "systems", catalog=CATALOG)
     assert rep.ok(), rep.lines()
+
+
+def test_the_mcp_line_comes_from_the_mcp_catalog(reg):
+    """With the catalog a service's MCP line names the catalog servers it serves (their classes,
+    owner, status and record); without one, the registry's own entry."""
+    page = render_page(reg, reg.services["lake-query"], CATALOG)
+    assert "- MCP server `lake` (streamable-http, `/mcp`): read; owner data-team; active" in page
+    assert "catalog record `mcp/lake.yml`" in page
+    assert "- MCP tool server `lake` (http, `/mcp`)" in render_page(reg, reg.services["lake-query"])
+    assert "- MCP: none" in render_page(reg, reg.services["dns"], CATALOG)
+    # a registry MCP entry no catalog record serves is said to be missing from the catalog
+    empty = servers.Catalog(ROOT / "examples" / "mcp")
+    assert "not in the MCP catalog" in render_page(reg, reg.services["lake-query"], empty)
 
 
 def test_pages_contain_only_example_data(reg):
@@ -165,7 +180,7 @@ def pages(reg, tmp_path):
 
 
 def test_the_committed_pages_are_drafts_that_list_their_missing_tiers(reg):
-    rep = check_pages(reg, ROOT / "docs" / "systems", POLICY)
+    rep = check_pages(reg, ROOT / "docs" / "systems", POLICY, CATALOG)
     assert rep.ok() and rep.review_problems == []
     assert set(rep.drafts) == {p.name for p in (ROOT / "docs/systems").glob("[!_]*.md")}
     assert rep.info() == [
@@ -174,7 +189,7 @@ def test_the_committed_pages_are_drafts_that_list_their_missing_tiers(reg):
 
 
 def test_a_fully_reviewed_page_passes(reg, pages):
-    rep = check_pages(reg, pages, POLICY)
+    rep = check_pages(reg, pages, POLICY, CATALOG)
     assert rep.ok(), rep.lines()
     assert "dns.md" not in rep.drafts
 
@@ -186,9 +201,9 @@ def test_sidecar_review_events_count_like_inline_reviews(reg, pages):
     p = pages / "dns.md"
     assert "reviews" not in p.read_text().split("---")[1]
     approve = sorted((pages / "dns.events").glob("*-review-human-*.yml"))
-    assert len(approve) == 1 and check_pages(reg, pages, POLICY).ok()
+    assert len(approve) == 1 and check_pages(reg, pages, POLICY, CATALOG).ok()
     approve[0].unlink()  # the same page without its human approve event
-    rep = check_pages(reg, pages, POLICY)
+    rep = check_pages(reg, pages, POLICY, CATALOG)
     assert any("dns.md: status reviewed needs human approve" in ln for ln in rep.lines())
 
 
@@ -198,7 +213,7 @@ def test_a_reviewed_page_missing_the_human_approve_fails(reg, pages):
     i = text.index("- {by: 'human:example-operator'")
     j = text.index("---", i)
     p.write_text(text[:i] + text[j:])
-    rep = check_pages(reg, pages, POLICY)
+    rep = check_pages(reg, pages, POLICY, CATALOG)
     assert not rep.ok()
     assert any("dns.md: status reviewed needs human approve" in ln for ln in rep.lines())
 
@@ -206,7 +221,7 @@ def test_a_reviewed_page_missing_the_human_approve_fails(reg, pages):
 def test_editing_a_human_block_invalidates_its_reviews(reg, pages):
     p = pages / "dns.md"
     p.write_text(p.read_text().replace("Resolves internal names", "Resolves most internal names"))
-    rep = check_pages(reg, pages, POLICY)
+    rep = check_pages(reg, pages, POLICY, CATALOG)
     assert not rep.ok()
     assert any("needs agent check, agent audit, human approve" in ln for ln in rep.lines())
     assert any("3 review(s) are of an earlier content" in ln for ln in rep.lines())
@@ -218,10 +233,10 @@ def test_regenerating_a_gen_block_keeps_the_reviews(reg, pages):
     stale = p.read_text().replace("- Owner: platform-team\n- Tags", "- Owner: someone-else\n- Tags")
     assert page_digest(stale) == before  # machine facts are not what a human reviewed
     p.write_text(stale)
-    assert check_pages(reg, pages, POLICY).stale == ["dns.md"]
-    generate_pages(reg, pages)
+    assert check_pages(reg, pages, POLICY, CATALOG).stale == ["dns.md"]
+    generate_pages(reg, pages, CATALOG)
     assert page_digest(p.read_text()) == before
-    rep = check_pages(reg, pages, POLICY)
+    rep = check_pages(reg, pages, POLICY, CATALOG)
     assert rep.ok(), rep.lines()
     assert "status: reviewed" in p.read_text() and "human:example-operator" in p.read_text()
 
@@ -232,21 +247,23 @@ def test_a_reviewed_page_with_todo_left_fails(reg, pages):
     p.write_text(text.replace("status: draft", "status: reviewed"))
     events = pages / "events.md"
     events.write_text(events.read_text().replace("status: draft", "status: reviewed"))
-    rep = check_pages(reg, pages, POLICY)
+    rep = check_pages(reg, pages, POLICY, CATALOG)
     assert any("events.md: status reviewed with TODO(human) left" in ln for ln in rep.lines())
 
 
 def test_page_reviews_follow_the_same_identity_rules(reg, pages):
     p = pages / "dns.md"
     p.write_text(p.read_text().replace("author: unknown", "author: 'human:example-operator'"))
-    rep = check_pages(reg, pages, POLICY)
+    rep = check_pages(reg, pages, POLICY, CATALOG)
     assert any("is the author; nobody reviews their own work" in ln for ln in rep.lines())
     p.write_text(
         p.read_text()
         .replace("author: 'human:example-operator'", "author: unknown")
         .replace("by: 'agent:example-auditor'", "by: 'agent:example-checker'")
     )
-    assert any("must be a different agent" in ln for ln in check_pages(reg, pages, POLICY).lines())
+    assert any(
+        "must be a different agent" in ln for ln in check_pages(reg, pages, POLICY, CATALOG).lines()
+    )
 
 
 def test_cli_prints_drafts_as_info_and_checks_reviewed_pages(reg, pages, capsys):

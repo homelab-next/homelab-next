@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: kubernetes
+description: Applies manifests to a cluster.
+owner: platform-team
+status: active
+origin:
+  kind: package
+  ecosystem: npm
+  package: '@example/mcp-kubernetes'
+  version: 1.8.0
+  sha256: faada1a8a091f14f6cf22a5875bdca4fe1b3252452aa739fd5ef4321bf336ef6
+  bins: [mcp-kubernetes]
+transport:
+  type: stdio
+runtime: agent-local
+env:
+  KUBECONFIG_DATA: secret:mcp/kubeconfig
+egress: none
+data_tier: local-only
+tools:
+- {name: apply_manifest, classes: [exec], approval: true}
+- {name: kubectl, classes: [exec], approval: true}
+author: agent:example-builder
+reviews:
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:4cfed22be9ca'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:4cfed22be9ca'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:4cfed22be9ca'}

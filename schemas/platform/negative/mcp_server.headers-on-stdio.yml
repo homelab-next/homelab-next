@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+# headers belong to a remote server
+id: notes
+description: 'A notes store, one instance per agent: each reads the store and writes only under its own
+  prefix.'
+owner: platform-team
+status: active
+origin:
+  kind: package
+  ecosystem: pypi
+  package: example-notes-mcp
+  version: 1.2.0
+  sha256: d32645f6a00baef003a63fa90cf423ccd29e2ec67381e2c3b93453335cc03e72
+transport:
+  type: stdio
+  bin: notes-mcp
+runtime: agent-local
+env:
+  NOTES_TOKEN: secret:mcp/notes-token
+settings:
+  NOTES_ROOT: /srv/notes
+timeout: 120
+parameters:
+  writable:
+    description: the prefix this instance may write under
+    env: NOTES_WRITABLE_PREFIX
+    pattern: '[a-z0-9/_-]+/'
+    default: agents/{profile}/
+  mode:
+    description: write in the real lane, read in the shadow lane
+    env: NOTES_MODE
+    enum:
+    - read
+    - write
+    default: write
+instance: notes-{profile}-{lane}
+egress: none
+data_tier: local-only
+tools:
+- name: read_note
+  classes:
+  - read
+  approval: false
+- name: write_note
+  classes:
+  - record-write
+  approval: false
+author: agent:example-builder
+headers:
+  Authorization: Bearer secret:mcp/x

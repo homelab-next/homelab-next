@@ -14,8 +14,11 @@ hnx mcp tools                           # what each tool answers (no SDK needed)
 hnx mcp call context_for --args '{"task_text": "...", "allowed": ["doc:docs/", "cap:"]}'
 ```
 
-A client configuration starts it as a subprocess, for example
-`{"command": "hnx", "args": ["mcp", "serve", "--scope-from-profile", "build/profile.json"]}`.
+A client configuration starts it as a subprocess. Do not write that configuration by hand: the
+server is the `hnx-catalog` record of the [MCP catalog](mcp-catalog.md) ([[mcp-catalog]]), and
+`hnx mcp catalog render --profile build/profile.json --client claude-code --policy policy.yml`
+writes the entry, with `--scope-from-profile` pointing at the profile (render refuses a profile
+`hnx agent verify --policy` would refuse, so the scope it points at is a verified one).
 `hnx mcp call` runs the same handler in-process, without the SDK, for scripts and debugging.
 
 ## Tools
@@ -84,12 +87,13 @@ $ hnx mcp call context_for --args '{"task_text": "add an adapter for the context
   capability reads like an unknown one. `get_schema`, `invariants_status` and `terms` describe the
   repository's public contracts and are not scoped. Without `--scope-from-profile` every tool
   sees everything, as before.
-* **Registered like any other MCP server.** `homelabnext/agent/tool_classes.yml` classifies
-  `hnx-catalog` as `read`, so a profile may grant it, a reader profile included, and the
-  compiler, `hnx agent verify` and `hnx agent lint` judge it like every other grant. It is not a
-  row in `examples/services.yml`: the registry describes network services with an address and a
-  port, and a stdio server has neither (a registry `mcp` entry would also give the access block
-  and the keyring an HTTP endpoint that does not exist).
+* **Registered like any other MCP server.** `hnx-catalog` is a record of the
+  [MCP catalog](mcp-catalog.md) (`examples/mcp/hnx-catalog.yml`): first-party origin, stdio,
+  every tool classed `read`, `implements: [cap:context]`. Its classes are derived from that
+  record, so a profile may grant it, a reader profile included, and the compiler,
+  `hnx agent verify` and `hnx agent lint` judge it like every other grant. A test holds the
+  record's tool list equal to `TOOLS`. It is not a row in `examples/services.yml`: the registry
+  describes network services with an address and a port, and a stdio server has neither.
 * **Untrusted text.** Tool outputs return repository content: what git holds is trusted-repo
   content, but it is still data, and a client should fence it like any other context. `task_text`
   is only split into words for matching; it is never interpreted, executed or used as a path, and
@@ -106,7 +110,7 @@ SDK plumbing (`homelabnext/mcp/server.py`: `new_server`, `hints`, `register`, `t
 its tools *act*, through a running broker that authenticates the MCP process by its uid:
 `broker_actions`, `broker_call`, `broker_submit`, `broker_status`, `broker_run`, `broker_cancel`,
 `broker_pending`, `memory_write`, `finding_write`, `proposal_file`. No tool takes an identity. It
-is registered in `homelabnext/agent/tool_classes.yml` as `hnx-broker`, classes `record-write`
-and `exec`: a profile grants it in `grants.mcp`, and the reader rule refuses it to any profile
-that reads untrusted content. Split such an agent into a reader (with `hnx-catalog`) and an
+is the catalog record `examples/mcp/hnx-broker.yml` (each tool classed: `read`, `record-write`
+or `exec`; `broker_submit` and `broker_run` need approval): a profile grants it in `grants.mcp`,
+and the reader rule refuses it to any profile that reads untrusted content. Split such an agent into a reader (with `hnx-catalog`) and an
 actor (with `hnx-broker`).

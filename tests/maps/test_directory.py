@@ -14,9 +14,10 @@ from pathlib import Path
 import pytest
 from test_maps import as_json, assert_safe, golden
 
+from homelabnext.mcp import servers
 from homelabnext.registry.model import load
 from homelabnext.status.cli import main
-from homelabnext.status.maps import MapSite, cadence, links, roster, schedule
+from homelabnext.status.maps import MapSite, cadence, links, mcp, roster, schedule
 from homelabnext.status.model import sources_from_registry
 from homelabnext.status.views import build_status, load_views
 
@@ -452,7 +453,7 @@ def _doc(maps=(), agents=None):
 
 def test_the_directory_pages_are_a_menu_group_available_only_when_configured():
     menu = {m["id"]: m for m in _doc({"links"})["menu"]}
-    for panel in ("links", "schedule", "roster"):
+    for panel in ("links", "schedule", "roster", "mcp-servers"):
         assert menu[panel]["group"] == "directory" and menu[panel]["href"] == f"/{panel}"
         assert menu[panel]["available"] is (panel == "links")
     site = MapSite(root=ROOT, registry=load(REGISTRY))
@@ -483,7 +484,7 @@ def test_serve_routes_the_directory_pages():
     host, port = srv.server_address[:2]
     try:
         for route, needle in (("/links", "svc:dashboards"), ("/schedule", "timer:aide/scan"),
-                              ("/roster", "profile:triage")):  # fmt: skip
+                              ("/roster", "profile:triage"), ("/mcp-servers", "mcp:hnx-broker")):  # fmt: skip
             url = f"http://{host}:{port}{route}"  # loopback
             with urllib.request.urlopen(url, timeout=10) as r:
                 csp, html = r.headers["Content-Security-Policy"], r.read().decode()
@@ -504,7 +505,7 @@ def test_render_writes_the_directory_pages(tmp_path):
             "--state", str(tmp_path / "s.json"), "--now", NOW, "--maps", str(ROOT),
             "--roster", str(FIX / "roster" / "roster.yml")]  # fmt: skip
     assert main(args) == 0
-    for name in ("links.html", "schedule.html", "roster.html"):
+    for name in ("links.html", "schedule.html", "roster.html", "mcp-servers.html"):
         page = (out / name).read_text()
         assert_safe(page)
         assert 'href="index.html#view-overview"' in page and "cannot build" not in page
@@ -529,3 +530,42 @@ def test_no_page_writes_an_endpoint_literal():
     for mod in (links, schedule, roster, cadence):
         path = Path(mod.__file__)
         assert scan_text(path.name, path.read_text(encoding="utf-8")) == []
+
+
+# --------------------------------------------------------------------------- mcp servers
+def test_mcp_servers_view_model_and_page_match_their_goldens():
+    profiles = [p["doc"] for p in roster.gather(FIX / "roster" / "roster.yml")["profiles"]]
+    vm = mcp.build(servers.load(FIX / "mcp"), profiles)
+    rows = {r["id"]: r for r in vm["servers"]}
+    assert rows["records"]["granted_to"] == ["profile:fixer"]
+    assert rows["records"]["approval"] == ["propose"] and rows["records"]["parameters"] == ["scope"]
+    assert rows["records"]["classes"] == ["read", "record-write"] and rows["records"]["pinned"]
+    assert rows["records"]["reviews"] == []  # its review is of another content
+    assert (rows["lake"]["pinned"], rows["lake"]["pin"], rows["lake"]["where"]) == (
+        False, "no digest", "svc:query/mcp")  # fmt: skip
+    assert rows["lake"]["granted_to"] == ["profile:watcher"]
+    assert rows["probe"]["origin"] == "unknown" and rows["probe"]["classes"] == []
+    assert vm["counts"] == {"servers": 3, "active": 1, "unpinned": 2, "granted": 2}
+    golden("mcp-servers.json", as_json(vm))
+    html = mcp.render(vm)
+    assert_safe(html)
+    assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in html
+    assert '<span class="s fail">no digest</span>' in html and "moving to a newer" in html
+    golden("mcp-servers.html", html)
+
+
+def test_a_grant_the_catalog_does_not_hold_is_listed():
+    vm = mcp.build(servers.load(FIX / "mcp"), [{"id": "profile:x", "mcp": ["ghost"]}])
+    assert vm["unknown_grants"] == [{"server": "ghost", "profiles": ["profile:x"]}]
+    assert "granted but not in the catalog" in mcp.render(vm)
+
+
+def test_the_example_catalog_page_lists_every_server_and_no_address(tmp_path):
+    site = MapSite(root=ROOT, registry=load(REGISTRY))
+    html = site.body("mcp-servers")
+    for f in (ROOT / "examples" / "mcp").glob("*.yml"):
+        assert f"mcp:{f.stem}" in html
+    assert "cannot build" not in html and "svc:lake-query/mcp" in html
+    assert not any(h.address in html for h in load(REGISTRY).hosts.values())
+    assert "mcp-servers" not in MapSite(root=tmp_path).available()  # no catalog: unavailable
+    assert "mcp-servers" in MapSite(root=tmp_path, mcp_catalog=FIX / "mcp").available()

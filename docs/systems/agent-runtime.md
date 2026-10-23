@@ -47,7 +47,7 @@ author: unknown
 
 <!-- hnx:gen:outputs -->
 - Metrics: `/metrics`
-- MCP tool server `agent_runtime` (sse, `/sse`)
+- MCP server `agent-runtime` (sse, `/sse`): exec, read; owner platform-team; active; catalog record `mcp/agent-runtime.yml`
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:outputs -->

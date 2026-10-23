@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+id: github
+description: Searches and changes repositories on a public code host (github).
+owner: platform-team
+status: active
+origin:
+  kind: package
+  ecosystem: npm
+  package: '@example/mcp-github'
+  version: 3.2.0
+  sha256: 4447f89b828e98eaa693b5abc9242687afe48f07fca3465e947cde4e07f429be
+  bins: [mcp-github]
+transport:
+  type: stdio
+runtime: agent-local
+env:
+  CODE_HOST_TOKEN: secret:mcp/github-token
+egress: [internet]
+data_tier: cloud-allowed
+tools:
+- {name: create_pull_request, classes: [egress, file-write], approval: true}
+- {name: search_code, classes: [egress], approval: false}
+author: agent:example-builder
+reviews:
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:3ba9691a0065'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:3ba9691a0065'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:3ba9691a0065'}

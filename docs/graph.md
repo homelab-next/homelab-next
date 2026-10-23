@@ -110,7 +110,7 @@ The registers are read through one function, `_register_entries(path)` in
 | `skill` | `skill:<name>` | a compiled profile's provenance (parts library) |
 | `persona` | `persona:<name>` | a compiled profile's provenance (parts library) |
 | `mdl` | `mdl:<role>` | examples/model_roles.json roles |
-| `mcp` | `mcp:<slug>` | tool_classes.yml mcp; registry mcp.name |
+| `mcp` | `mcp:<id>` | examples/mcp/&lt;id&gt;.yml (the [MCP catalog](mcp-catalog.md)); registry mcp.name |
 | `manifest` | `manifest:<id>` | context manifests found by the agent lint |
 | `broker` | `broker:<manifest_id>` | the keyring sources' broker manifest |
 | `action` | `action:<name>` | broker manifest actions |
@@ -137,7 +137,11 @@ The registers are read through one function, `_register_entries(path)` in
 | `depends_on` | svc | svc | registry upstreams |
 | `serves` | svc, req | zone, req | registry clients; requirement serves (FFIR, PIR) |
 | `exposes` | svc | mcp | registry mcp |
-| `implements` | adapter | cap | target binding, contract import, make_fake |
+| `implements` | adapter, mcp | cap | target binding, contract import, make_fake; MCP catalog implements |
+| `served_by` | mcp | svc | MCP catalog transport endpoint |
+| `reaches` | mcp | svc, host | MCP catalog egress |
+| `fronts` | mcp | cap | MCP catalog capabilities |
+| `replaced_by` | mcp | mcp | MCP catalog replaced_by |
 | `faked_by` | cap | adapter | suite make_fake |
 | `for` | adapter | product | a compose stack's target file + that stack's image |
 | `checked_by` | cap | check | suite specs |
@@ -180,7 +184,9 @@ The registers are read through one function, `_register_entries(path)` in
 | `tasked_to` | req, rfi | profile, human | tasked_to, where it names a known principal |
 
 `grants` edges carry `level` (and `approval` when the grant needs one); `runs` edges from services
-carry the registry `version`; `exposes` carries the MCP transport.
+carry the registry `version`; `exposes` carries the MCP transport. An `mcp` node carries its
+catalog record's `classes`, `owner`, `status`, `transport` and `data_tier`, and its record file is
+its path, so `include: from: mcp` packs carry the record itself.
 
 ## Not in the graph (yet)
 

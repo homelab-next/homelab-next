@@ -111,7 +111,7 @@ NEGATIVES = {
         "mcp requires",
     ),
     "duplicate-mcp-name": (
-        lambda d: d["services"]["agent-runtime"]["mcp"].update(name="lake_query"),
+        lambda d: d["services"]["agent-runtime"]["mcp"].update(name="lake"),
         "mcp name",
     ),
     "wrong-registry-version": (lambda d: d.update(registry_version=2), "registry_version"),
