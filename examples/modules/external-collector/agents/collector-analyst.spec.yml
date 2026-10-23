@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Profile spec for `hnx agent compile` (docs/agent.md). The ceiling is not here: it comes from the
+# separately owned ceiling policy in the site's overlay. It grants no MCP server by hand: the
+# grant of the module's own collector-probe record is generated from the agent block's tools once
+# the module loader (not built yet) adds the module's MCP records to the catalog.
+id: profile:collector-analyst
+persona: persona:collector-analyst
+model_role: mdl:main-reasoner
+capabilities: [cap:lake-query, cap:records]
+tier: read
+data_tier: local-only
+reads_untrusted: true
+budgets: {max_input_tokens: 48000, max_output_tokens: 3000, max_runtime_s: 900, max_tool_calls: 30}

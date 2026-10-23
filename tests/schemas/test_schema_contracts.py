@@ -58,6 +58,7 @@ EXPECTED = {
     "platform/script_header.schema.json",
     "platform/model_store.schema.json",
     "platform/mcp_server.schema.json",
+    "platform/module.schema.json",
     "platform/model_serving.schema.json",
     "ocsf/authentication.v1.json",
     "ocsf/detection_finding.v1.json",

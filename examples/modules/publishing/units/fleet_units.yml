@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# fleet_units spec (homelabnext.generators.fleet_units): the publishing run, gate first.
+- name: publish
+  description: Gate every publishable item and push what passes to static hosting
+  exec: /usr/local/libexec/homelabnext/publish --gate --push
+  on_calendar: "*-*-* 05:40:00 UTC"
+  read_write_paths: [/var/lib/homelabnext/publish]
+  pages_directly: true

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for the suite's two slots that have a contract.
+# The other two (siem-source, hot-index) are provisional: nothing to run them against yet.
+name: example-siem-suite
+capabilities:
+  detections:
+    adapter: hnx_modules.example_siem_suite.detections:make_engine
+  notify:
+    adapter: hnx_modules.example_siem_suite.notify:make_sender

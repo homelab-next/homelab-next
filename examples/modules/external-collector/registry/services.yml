@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Registry rows (platform/service, the services map) the external data collector contributes.
+# host names a module host role (requires.hosts); the site's placement maps it to a registry host.
+# Its status source, health check, metrics, topology node and dataflow edges all come from this row.
+services:
+  collector-receiver:
+    capability: external-collector
+    impl: external-collector
+    host: receiver
+    protocol: https
+    port: 8443
+    health: {kind: http, path: /healthz, expect_status: 200}
+    upstreams: [samples, lake-catalog]
+    owner: detection-team
+    version: "0.1.0"
+    tls: internal
+    tags: [detection, external]
+    status_sources:
+      - id: collector-freshness
+        kind: poll-file
+        target: {file: build/status/collector-freshness.json}
+        interval_s: 300
+        timeout_s: 10
+        mapping:
+          state: fresh
+          states: {"true": ok, "false": fail}
+        what: Whether new collector sessions landed in the lake within the table's own batch window.

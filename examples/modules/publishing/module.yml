@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: Apache-2.0
+# The publishing module (fictional values): the lab's ONLY egress path for published content. Every
+# module that has something to publish offers a publishable-output interface; this module reads all
+# of them, applies the gate (TLP filter, then the leak and deny-list scan) and pushes what passes to
+# the static-hosting slot, whose provider the site selects. No other module may require that slot.
+id: publishing
+kind: feature
+title: Publishing
+description: Gates and publishes every module's publishable output to the static-hosting slot; the
+  only module that sends published content off the lab.
+owner: platform-team
+status: draft
+version: 0.1.0
+requires:
+  capabilities:
+    - cap: cap:static-hosting
+      provisional: true
+      purpose: where gated content is pushed (no contract yet; a site picks the provider)
+    - cap: cap:object-store
+      version: "1.0"
+      purpose: reads the producers' publish/ prefixes
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the hosting deploy token and the deny-list are read by name
+    - cap: cap:notify
+      version: "1.0"
+      purpose: pages once when the gate blocks an item, once when it clears
+  hosts:
+    - role: publisher
+      kind: any
+      exposure: internal
+      footprint: {cpu: 0.5, memory_mb: 256, disk_gb: 5}
+      roles: [role:publish_gate]
+      purpose: runs the gate and the push; the only host with the hosting slot's deploy credential
+prefers:
+  interfaces:
+    - interface: publishable-output
+      version: "1.0"
+      cardinality: all
+      purpose: every selected module's publishable items, with their TLP sidecars
+      fallback:
+        behaviour: with no producer selected nothing is published
+contributes:
+  roles:
+    - file: roles/publish_gate
+  notify_pairs:
+    - problem: 'Publishing: an item was blocked by the gate'
+      recovery: 'Publishing: the gate passes every item again'
+      sender: roles/publish_gate/files/gate.py
+  scheduler_jobs:
+    - file: units/fleet_units.yml
+  preflight:
+    - {role: role:publish_gate, hook: readiness}
+  invariants:
+    - file: invariants/criteria.yml
+data:
+  - id: published-manifest
+    kind: state
+    description: what was published, when, from which producer, with each item's sha256 and TLP
+    export: {format: jsonl, via: role:publish_gate}
+    import: {format: jsonl, via: role:publish_gate}
+    retention: {keep: forever}
+config:
+  tlp_allowed:
+    type: enum
+    description: the most permissive TLP the gate lets out (red and amber never pass)
+    values: [clear, green]
+    default: clear
+    overlay: optional
+  deny_list:
+    type: secret
+    description: the site's deny-list of internal names and addresses, including its public ones
+    default: secret:publishing/deny-list
+    overlay: required
+  deploy_token:
+    type: secret
+    description: the static-hosting provider's deploy token
+    default: secret:publishing/deploy-token
+    overlay: required
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, secret-names, contributions]
+author: agent:example-builder

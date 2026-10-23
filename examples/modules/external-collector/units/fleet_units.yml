@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# fleet_units spec (homelabnext.generators.fleet_units): the freshness check the external data
+# collector owns. It ships with the module, not in a shared scheduler list.
+- name: collector-freshness
+  description: Check that collector sessions are landing in the lake
+  exec: /usr/local/libexec/homelabnext/collector-freshness --out /var/lib/homelabnext/status
+  on_calendar: "*-*-* *:07:00 UTC"
+  read_write_paths: [/var/lib/homelabnext/status]
+  pages_directly: false

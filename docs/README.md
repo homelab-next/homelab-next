@@ -64,6 +64,7 @@ relate.
   committed), and `hnx graph related <id|path>` lists what a task should pull in.
 - [MCP server](mcp.md) ([[mcp]]): `hnx mcp serve`, read-only structured answers for agents
 - [MCP catalog](mcp-catalog.md) ([[mcp-catalog]]): one record per MCP server; classes, graph, pages and every client config generated from it; import an existing lab
+- [Feature and provider modules](modules.md) ([[modules]]): draft (ADR-0025, proposed): the module manifest, slots and providers, `requires`/`prefers`, contributions instead of central lists, neutral export/import, site selection and the product-name lint
   (contracts, schemas, services, the graph, scoped context, review and invariant status) over
   stdio, scoped by a compiled agent profile.
 - [Glossary](glossary.md) ([[glossary]]).

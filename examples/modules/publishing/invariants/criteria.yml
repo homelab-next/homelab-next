@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# Criteria the publishing module contributes (registers/invariant shape; ids are an open question).
+criteria:
+- id: X-NEW
+  statement: Only the publishing module requires the static-hosting slot.
+  evidence: auto
+  observable: the module loader's check over the site's selection (not built yet)
+  expected: exactly one selected module requires cap:static-hosting, and it is publishing
+  remediation: >-
+    Remove the other module's requirement and have it offer a publishable-output interface instead;
+    a second egress path bypasses the TLP filter and the deny-list scan.

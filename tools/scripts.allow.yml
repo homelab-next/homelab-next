@@ -62,4 +62,10 @@ not_in_runner:
     of a running fleet; make check and CI run it, and an invariant would re-run the same AST pass
 
 # scheduled execs that are not scripts of this repository (product binaries); none yet
-external_exec: {}
+external_exec:
+  /usr/local/libexec/homelabnext/collector-freshness: >-
+    a fictional module example's job (examples/modules/external-collector, ADR-0025 draft): the
+    script ships with that module's code, which the draft names but does not include; the module
+    loader, not built yet, will catalogue a module's scripts from its manifest
+  /usr/local/libexec/homelabnext/publish: >-
+    a fictional module example's job (examples/modules/publishing, ADR-0025 draft): as above

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The ADR log: twenty-two records, five headings each, a status, sequential numbering."""
+"""The ADR log: twenty-five records, five headings each, a status, sequential numbering."""
 
 from __future__ import annotations
 

@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: Apache-2.0
+# Reference site profile 3 of 3 (fictional): the full pipeline. Two object-store providers serve
+# different instances (the swap in docs/modules.md moves `samples` from one to the other), the
+# sandbox takes the collector's sample handoff, and publishing is the only module that reaches the
+# static-hosting slot. A real lab of this shape selects it in its private overlay.
+profile: full
+hosts:
+  data-core: {kind: vm, cpu: 8, memory_mb: 32768, disk_gb: 8000, headroom_mb: 4096}
+  detect-core: {kind: vm, cpu: 8, memory_mb: 16384, disk_gb: 2000, headroom_mb: 2048}
+  sandbox-core: {kind: vm, cpu: 8, memory_mb: 16384, disk_gb: 500, headroom_mb: 2048}
+  runtime-core: {kind: vm, cpu: 4, memory_mb: 8192, disk_gb: 200, headroom_mb: 1024}
+  collector-edge: {kind: external, cpu: 1, memory_mb: 1024, disk_gb: 25, headroom_mb: 256}
+outside_examples:
+  [example-lake, example-log-pipeline, example-orchestrator, example-agent-runtime, example-records,
+   example-notify, example-secrets, example-detonation]
+slots:
+  secrets:
+    - {provider: example-secrets, instance: secrets}
+  object-store:
+    - {provider: example-object-store, instance: objects, placement: {store: data-core}}
+    - {provider: other-object-store, instance: samples, placement: {store: sandbox-core}}
+  lake-catalog:
+    - {provider: example-lake, instance: lake-catalog}
+  lake-query:
+    - {provider: example-lake, instance: lake-query}
+  log-pipeline:
+    - {provider: example-log-pipeline, instance: pipeline}
+  siem-source:
+    - {provider: example-siem-suite, instance: siem, placement: {suite: detect-core}}
+  hot-index:
+    - {provider: example-siem-suite, instance: siem, placement: {suite: detect-core}}
+  detections:
+    - {provider: example-siem-suite, instance: siem, placement: {suite: detect-core}}
+  notify:
+    - {provider: example-notify, instance: notify}
+  cases: none
+  exposure-management:
+    - {provider: example-detonation, instance: detonation}
+  orchestration:
+    - {provider: example-orchestrator, instance: orchestrator}
+  agent-runtime:
+    - {provider: example-agent-runtime, instance: runtime}
+  records:
+    - {provider: example-records, instance: records}
+  static-hosting:
+    - {provider: example-static-host, instance: public-site}
+features:
+  external-collector:
+    placement: {edge: collector-edge, receiver: data-core}
+    config: {edge_region: region-example-3, mode: full}
+  example-sandbox:
+    placement: {detonation: sandbox-core}
+  publishing:
+    placement: {publisher: runtime-core}

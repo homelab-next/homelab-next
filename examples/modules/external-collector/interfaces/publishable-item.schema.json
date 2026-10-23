@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/modules/external-collector/publishable-item/1.0",
+  "title": "Publishable item sidecar",
+  "description": "The JSON sidecar beside each object under publish/ (interface publishable-output 1.0): the item's TLP marking and what it is. The publishing module excludes red and amber and scans everything else before it leaves the lab.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tlp", "title", "media_type", "produced_at"],
+  "properties": {
+    "tlp": {"enum": ["clear", "green", "amber", "amber+strict", "red"]},
+    "title": {"type": "string", "minLength": 1, "maxLength": 200},
+    "media_type": {"enum": ["text/html", "text/markdown", "application/json", "image/svg+xml"]},
+    "produced_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"}
+  }
+}
