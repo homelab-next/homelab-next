@@ -926,3 +926,83 @@ def test_a_run_whose_process_died_reads_interrupted(tmp_path):
     alive = _restart(svc)
     svc.state.claim(alive, {"op": "run", "by": AGENT, "at": "2026-01-15T10:00:00Z", "pid": 1})
     assert svc.state.state_of(alive) == "running"
+
+
+# -- single use: run consumes its approval exactly once ------------------------------------------
+
+
+def test_a_run_consumes_its_approval_in_the_durable_store(tmp_path):
+    svc = _svc(tmp_path)
+    rid = _restart(svc)
+    appr = svc.approve(rid, APPROVER)
+    assert not svc.approvals.consumed(appr["approval_id"])
+    svc.run(AGENT, rid)
+    assert svc.approvals.consumed(appr["approval_id"])
+    durable = FileApprovalStore(tmp_path / "state" / "consumed")  # what another process sees
+    assert durable.consumed(appr["approval_id"])
+    assert svc.approval_state(rid, svc.state.get_request(rid)["request"]) == "consumed"
+
+
+def test_a_run_whose_approval_was_consumed_elsewhere_is_refused(tmp_path, monkeypatch):
+    """The approval-replayed refusal (an approval used outside this request's run, between the
+    decision and the claim) was never executed by any test, so a run that ignored consume()'s
+    answer, or never called it, passed the whole suite."""
+    svc = _svc(tmp_path)
+    rid = _restart(svc)
+    appr = svc.approve(rid, APPROVER)
+    consumed = []
+    real = svc.approvals.consume
+
+    def consume_elsewhere(aid):
+        consumed.append(aid)
+        real(aid)  # another process took it first
+        return real(aid)  # so this one gets False
+
+    monkeypatch.setattr(svc.approvals, "consume", consume_elsewhere)
+    with pytest.raises(Denied) as info:
+        svc.run(AGENT, rid)
+    assert info.value.reason == "approval-replayed"
+    assert consumed == [appr["approval_id"]], "consumed exactly once, after the claim"
+    assert svc.state.get_result(rid)["reason"] == "approval-replayed"
+    assert svc.state.state_of(rid) == "error"
+    [rec] = svc.audit_documents(reason="approval-replayed")
+    assert (rec["operation"], rec["outcome"], rec["approval_id"]) == (
+        "run", "denied", appr["approval_id"],
+    )  # fmt: skip
+    assert not svc.audit_documents(action="service.restart", outcome="ok", operation="run")
+    with pytest.raises(BrokerError) as again:
+        svc.run(AGENT, rid)
+    assert again.value.reason == "not-pending"
+
+
+# -- handler containment: a handler that resolves outside the base never runs --------------------
+
+
+def test_a_handler_symlinked_outside_the_base_fails_validation(tmp_path):
+    path = _copy_example(tmp_path)
+    handler = path.parent / "handlers" / "service-status.sh"
+    outside = tmp_path / "outside.sh"
+    shutil.copy2(handler, outside)  # identical bytes: the digest still matches
+    handler.unlink()
+    handler.symlink_to(outside)
+    problems = validate_manifest(load_yaml(path), path.parent)[1]
+    assert any("service-status.sh is missing or outside" in p for p in problems), problems
+
+
+def test_a_handler_swapped_for_a_symlink_after_load_is_refused_at_run(tmp_path):
+    path = _copy_example(tmp_path)
+    svc = BrokerService.from_manifest(
+        path, tmp_path / "state", data_root=tmp_path / "data", clock=Clock(),
+        resolve_secret={"DEMO_API_TOKEN": TOKEN}.__getitem__,
+    )  # fmt: skip
+    handler = path.parent / "handlers" / "service-restart.sh"
+    outside = tmp_path / "outside.sh"
+    shutil.copy2(handler, outside)
+    handler.unlink()
+    handler.symlink_to(outside)
+    rid = _restart(svc)
+    svc.approve(rid, APPROVER)
+    with pytest.raises(Denied) as info:
+        svc.run(AGENT, rid)
+    assert info.value.reason == "handler-path-escape"
+    assert svc.audit_documents(reason="handler-path-escape")
