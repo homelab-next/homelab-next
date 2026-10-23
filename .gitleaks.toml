@@ -16,3 +16,8 @@ regexes = ['''^zq7-opaque-4b1d-fake-DO-NOT-LOG$''', '''^tok-SECRET-123$''']
 description = "leak scanner tests (historical revision): the first half of a planted fake credential, split on purpose"
 regexTarget = "secret"
 regexes = ['''^Zx9Qw3Rt7Yp2$''']
+
+[[allowlists]]
+description = "MCP importer tests: the fake hex key planted in a hosted URL's host name to prove it is refused and never copied"
+regexTarget = "secret"
+regexes = ['''^9f8e7d6c5b4a3928$''']
