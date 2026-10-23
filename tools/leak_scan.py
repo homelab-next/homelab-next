@@ -54,6 +54,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import bisect
 import fnmatch
 import ipaddress
 import math
@@ -346,27 +347,6 @@ GO_ESCAPE_RE = re.compile(r"\\[nrt]")
 NEXT_KEY_RE = re.compile(r"^[a-z][a-z0-9_.-]*:$")
 
 
-def _in_go_string(line: str, pos: int) -> bool:
-    """Whether ``pos`` of a Go source line lies inside an interpreted ("...") string literal."""
-    state, i = "", 0  # "" code | '"' string | "`" raw string | "'" rune
-    while i < min(pos, len(line)):
-        ch = line[i]
-        if state in ('"', "'"):
-            if ch == "\\":
-                i += 1
-            elif ch == state:
-                state = ""
-        elif state == "`":
-            if ch == "`":
-                state = ""
-        elif line.startswith("//", i):
-            return False  # a comment: the rest of the line is not code
-        elif ch in "\"`'":
-            state = ch
-        i += 1
-    return state == '"'
-
-
 def _is_short_number(value: str) -> bool:
     cast = NUMBER_CAST_RE.match(value)
     if cast:
@@ -387,21 +367,82 @@ KEYED_PLACEHOLDER_RE = re.compile(r"(?i)secret|passw|token|hunter2|abc123|letmei
 # a Go expression assigned in code: an identifier with a selector, a call or an index after it
 # (base64.StdEncoding.EncodeToString(buf), sha256.Sum256([]byte(tok))); Go has no bare literals
 GO_CODE_VALUE_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\.[A-Za-z_]\w*|[\[(].*)$")
+# a string literal of letters only names something (a header, a flag, a field), it is no value
+GO_WORDS_RE = re.compile(r"[A-Za-z]+(?:[-_. ][A-Za-z]+)*")
 
 
-def _is_go_code_assignment(m: re.Match[str], line: str) -> bool:
-    """An unquoted Go expression on the right of ``:=`` or ``=``, not in an interpreted string."""
-    if m.group("q") or not GO_CODE_VALUE_RE.match(m.group("val")):
-        return False
-    separator = line[m.start() : m.start("val")].rstrip("\"' \t")
-    return separator.endswith("=") and not _in_go_string(line, m.start("val"))
+class GoSource:
+    """A Go file's tokens, so a position on a line can be told code, a literal or a comment from
+    the whole file: a line inside a multi-line raw string is text, not code."""
+
+    def __init__(self, text: str) -> None:
+        from tools.go_test_policy import go_tokens  # the same lexer as --check-sources
+
+        self.lines = text.splitlines(keepends=True)  # as scan_text numbers them
+        self.starts = [0]
+        for line in self.lines:
+            self.starts.append(self.starts[-1] + len(line))
+        self.tokens = go_tokens(text)
+        self.offsets = [t.pos for t in self.tokens]
+
+    def _index(self, lineno: int, col: int) -> int:
+        """The index of the first token that ends after this position."""
+        at = self.starts[lineno - 1] + col
+        i = bisect.bisect_right(self.offsets, at) - 1
+        return i if i >= 0 and at < self.offsets[i] + len(self.tokens[i].text) else i + 1
+
+    def kind_at(self, lineno: int, col: int) -> str:
+        """The kind of token at this position: ``code`` for an identifier, operator, number or
+        white space; ``string``, ``raw``, ``rune`` or ``comment`` for the rest."""
+        at = self.starts[lineno - 1] + col
+        i = self._index(lineno, col)
+        if i < len(self.tokens) and self.offsets[i] <= at:
+            kind = self.tokens[i].kind
+            return kind if kind in ("string", "raw", "rune", "comment") else "code"
+        return "code"
+
+    def literals_after(self, lineno: int, col: int) -> Iterator[str]:
+        """The bodies of the string literals that start after this position on its line, up to a
+        comment."""
+        end = self.starts[lineno]
+        for tok in self.tokens[self._index(lineno, col) :]:
+            if tok.pos >= end or tok.kind == "comment":
+                return
+            if tok.kind in ("string", "raw") and tok.pos >= self.starts[lineno - 1] + col:
+                yield tok.text[1:-1]
+
+
+# the Go file scan_text is on, and the line: (source, lineno), for the keyed-value judgement
+_GO_CONTEXT: list[tuple[GoSource, int]] = []
+
+
+def _go_where(line: str) -> tuple[GoSource, int]:
+    """The current Go file and line number, or this line alone outside scan_text."""
+    if _GO_CONTEXT:
+        src, lineno = _GO_CONTEXT[-1]
+        if src.lines[lineno - 1].rstrip("\r\n") == line.rstrip("\r\n"):
+            return src, lineno
+    return GoSource(line), 1
+
+
+class _Quoted:
+    """A keyed match stand-in for a string literal on the right-hand side: quoted, the literal
+    itself the whole match."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def group(self, name: str | int = 0) -> str:
+        return '"' if name == "q" else self.text
 
 
 def _is_hit_keyed_value(m: re.Match[str], line: str, path: str = "") -> bool:
     value = m.group("val")
-    if path.endswith(".go") and _is_go_code_assignment(m, line):
-        return False
-    if path.endswith(".go") and _in_go_string(line, m.start("val")):
+    if not path.endswith(".go"):
+        return _keyed_value_is_hit(m, value)
+    src, lineno = _go_where(line)
+    kind = src.kind_at(lineno, m.start("val"))
+    if kind == "string":
         segments = GO_ESCAPE_RE.split(value)
         kept = [seg for n, seg in enumerate(segments) if not (n and NEXT_KEY_RE.match(seg))]
         # each segment, and the value with its escapes (and next keys) taken out: short pieces
@@ -409,7 +450,21 @@ def _is_hit_keyed_value(m: re.Match[str], line: str, path: str = "") -> bool:
         return any(_keyed_value_is_hit(m, seg) for seg in kept) or _keyed_value_is_hit(
             m, "".join(kept)
         )
-    return _keyed_value_is_hit(m, value)
+    if kind != "code" or m.group("q"):
+        return _keyed_value_is_hit(m, value)  # a raw string, a comment: text, as in any file
+    # an unquoted value in code: after = or := an expression such as
+    # base64.StdEncoding.EncodeToString(buf) is never a literal, Go having no bare ones (after a
+    # key's ":" it is judged as before, so a cast of a long number there stays a finding); and every
+    # string literal after it in the statement is judged as a quoted value
+    # (prefix + "<literal>", fromHex("<literal>"), map[string]string{"k": "<literal>"})
+    separator = line[m.start() : m.start("val")].rstrip("\"' \t")
+    code = separator.endswith("=") and GO_CODE_VALUE_RE.match(value)
+    if not code and _keyed_value_is_hit(m, value):
+        return True
+    return any(
+        not GO_WORDS_RE.fullmatch(body) and _keyed_value_is_hit(_Quoted(body), body)
+        for body in src.literals_after(lineno, m.start("val"))
+    )
 
 
 def _keyed_value_is_hit(m: re.Match[str], value: str) -> bool:
@@ -682,32 +737,51 @@ def scan_text(
     path = label if path is None else path
     if path.startswith("<"):  # <stdin>: not a file
         path = ""
-    for lineno, line in enumerate(text.splitlines(), 1):
-        sup = SUPPRESS_RE.search(line)
-        cut = sup.start() if sup else len(line)
-        allowed: list[str] = []
-        for pat in pats:
-            for m in pat.regex.finditer(line):
-                if pat.accept is not None and not pat.accept(m, line, path):
-                    continue
-                hit = Hit(label, lineno, pat.name, _display(pat, m.group(0)))
-                # a reviewed line may waive what lies before its marker, never a credential
-                if sup and pat.group != "secret" and m.end() <= cut:
-                    allowed.append(pat.name)
-                else:
-                    hits.append(hit)
-        for idx, rx in denylist or []:
-            m = rx.search(line)
-            if m:
-                # deny-list terms are never waived: the list exists because they must not ship
-                hits.append(Hit(label, lineno, "denylist", f"term on deny-list line {idx}"))
-        if allowed and suppressed is not None:
-            names = ", ".join(sorted(set(allowed)))
-            suppressed.append(
-                f"{label}:{lineno}: suppressed {len(allowed)} hit(s) [{names}]: "
-                f"{sup.group('reason').strip()}"
-            )
+    go_src = GoSource(text) if path.endswith(".go") else None
+    try:
+        for lineno, line in enumerate(text.splitlines(), 1):
+            _GO_CONTEXT[:] = [(go_src, lineno)] if go_src else []
+            _scan_line(hits, label, lineno, line, pats, denylist, suppressed, path)
+    finally:
+        _GO_CONTEXT.clear()
     return hits
+
+
+def _scan_line(
+    hits: list[Hit],
+    label: str,
+    lineno: int,
+    line: str,
+    pats: list[Pattern],
+    denylist: list[tuple[int, re.Pattern[str]]] | None,
+    suppressed: list[str] | None,
+    path: str,
+) -> None:
+    """The hits of one line of ``scan_text``, appended to ``hits``."""
+    sup = SUPPRESS_RE.search(line)
+    cut = sup.start() if sup else len(line)
+    allowed: list[str] = []
+    for pat in pats:
+        for m in pat.regex.finditer(line):
+            if pat.accept is not None and not pat.accept(m, line, path):
+                continue
+            hit = Hit(label, lineno, pat.name, _display(pat, m.group(0)))
+            # a reviewed line may waive what lies before its marker, never a credential
+            if sup and pat.group != "secret" and m.end() <= cut:
+                allowed.append(pat.name)
+            else:
+                hits.append(hit)
+    for idx, rx in denylist or []:
+        m = rx.search(line)
+        if m:
+            # deny-list terms are never waived: the list exists because they must not ship
+            hits.append(Hit(label, lineno, "denylist", f"term on deny-list line {idx}"))
+    if allowed and suppressed is not None:
+        names = ", ".join(sorted(set(allowed)))
+        suppressed.append(
+            f"{label}:{lineno}: suppressed {len(allowed)} hit(s) [{names}]: "
+            f"{sup.group('reason').strip()}"
+        )
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[bytes]:

@@ -556,6 +556,7 @@ class GoToken:
     kind: str  # comment, raw, string, rune, number, ident or op; space is dropped
     text: str
     line: int
+    pos: int = 0  # its offset in the text
 
 
 def go_tokens(text: str) -> list[GoToken]:
@@ -564,7 +565,7 @@ def go_tokens(text: str) -> list[GoToken]:
     for m in _GO_TOKEN.finditer(text):
         kind = m.lastgroup or "op"
         if kind != "space":
-            out.append(GoToken(kind, m.group(), line))
+            out.append(GoToken(kind, m.group(), line, m.start()))
         line += m.group().count("\n")
     return out
 

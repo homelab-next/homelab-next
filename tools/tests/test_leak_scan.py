@@ -768,12 +768,75 @@ def test_escape_segments_are_go_string_literals_only():
     # in a Go comment or raw string the backslash is not an escape either
     assert "keyed-secret" in _secret_hits(f"// {line}", "x.go")
     assert "keyed-secret" in _secret_hits(f"x := `{line}`", "x.go")
-    for code, inside in [
-        ('a := "b\\"c" + `d"` + \'"\' + "e', True),  # past an escaped quote, a raw string, a rune
-        ('a := "b" + `"c', False),  # in a raw string
-        ('a := "b" // "c', False),  # in a comment
+
+
+# verify4.md (v4/leak/raw, raw1): a line inside a multi-line raw string is text, not code, so a
+# dotted or bracketed value there is judged like any other file's, not exempted as an expression
+SEC, TOK, PW = "sec" + "ret", "tok" + "en", "pass" + "word"
+RAW_CONFIG = (
+    "package r\n\nconst conf = `\n[auth]\n"
+    f"client_{SEC} = Zq8vT2.Kp4mW9xR7nB3\n"
+    f"api_{TOK} = Hx7Kq2.Lm9Wp4Zr8Tv6(\n"
+    f"admin_{PW} = Pr0dS3cr3t[V4lue]\n`\n"
+    f"var c = `db_{PW} = Sup3r.S3cr3tValue`\n"
+    f"func f() {{\n\t{SEC}Key := base64.StdEncoding.EncodeToString(buf)\n}}\n"
+)
+
+
+def test_a_raw_string_body_is_judged_as_text_with_the_whole_file_in_view():
+    hits = leak_scan.scan_text(RAW_CONFIG, "orchestrator/internal/x/c_test.go")
+    assert sorted(h.line for h in hits if h.pattern == "keyed-secret") == [5, 6, 7, 9]
+    # the same lines outside a raw string are code, and exempt as before
+    code = RAW_CONFIG.replace("`", "")
+    assert not [h for h in leak_scan.scan_text(code, "x.go") if h.pattern == "keyed-secret"]
+
+
+def test_go_source_tells_code_literals_and_comments_apart():
+    for code, kind in [
+        (
+            'a := "b\\"c" + `d"` + \'"\' + "e',
+            "string",
+        ),  # past an escaped quote, a raw string, a rune
+        ('a := "b" + `"c', "raw"),
+        ('a := "b" // "c', "comment"),
+        ('a := "b" + c', "code"),
     ]:
-        assert leak_scan._in_go_string(code, len(code)) is inside, code
+        assert leak_scan.GoSource(code).kind_at(1, len(code) - 1) == kind, code
+    src = leak_scan.GoSource('x := `a\nb = c.d` + "e" // "f"\n')
+    assert src.kind_at(2, 4) == "raw"
+    assert list(src.literals_after(2, 0)) == ["e"]
+
+
+# verify4.md (v4/leak/rhs): a literal elsewhere on the right-hand side of an unquoted Go value
+RHS_LITERALS = [
+    f'db{PW} := strings.TrimSpace("{VAL_A}")',
+    f'api{TOK} := cfg.Prefix + "{VAL_A}"',
+    f'client{SEC} = os.Getenv("X") + "{VAL_A}"',
+    f'auth{TOK} := tokens["{VAL_A}"]',
+    f'admin{PW} := fmt.Sprint("{VAL_A}")',
+    f'webhook{SEC} := map[string]string{{"k": "{VAL_A}"}}',
+    f"api{TOK} := prefix + `{VAL_A}`",
+    f'client{SEC} := fromHex("{"3272a1c9e8b7" + "f6d5c4b3a2f1"}")',
+]
+
+
+@pytest.mark.parametrize("text", RHS_LITERALS)
+def test_a_literal_after_an_unquoted_go_value_is_judged(text: str):
+    assert "keyed-secret" in _secret_hits(text, "orchestrator/internal/x/x.go"), text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f'{TOK} := r.Header.Get("Authorization")',  # letters only: a name, not a value
+        f'{TOK} := r.Header.Get("X-Api-Key")',
+        f'{TOK} := os.Getenv("HNX_API_KEY_FILE")',
+        f'{TOK} := prefix + x // "{VAL_A}" in a comment, not on the right-hand side',
+        f'{PW} := cfg.Get("db.{PW}")',
+    ],
+)
+def test_names_and_expressions_on_the_right_hand_side_are_not_secrets(text: str):
+    assert "keyed-secret" not in _secret_hits(text, "orchestrator/internal/x/x.go"), text
 
 
 def test_vault_prefixed_names_are_findings_whatever_product_uses_them():
