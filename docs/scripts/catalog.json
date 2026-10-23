@@ -332,10 +332,11 @@
     {
       "exit": {
         "0": "safe to start",
+        "3": "the compose configuration could not be resolved (nothing was run)",
         "4": "refused"
       },
       "id": "lab-bind-guard",
-      "inputs": "LAB_BIND and the credentials (environment, .env, .env.example)",
+      "inputs": "LAB_BIND and the credentials (environment, .env, .env.example), then the configuration docker compose resolves from them",
       "kind": "tool",
       "language": "shell",
       "outputs": "the refusal reason on stderr",
@@ -446,8 +447,8 @@
         "0": "all good",
         "1": "a service or check failed",
         "2": "usage",
-        "3": "docker or compose missing",
-        "4": "refused a non-loopback LAB_BIND"
+        "3": "docker or compose missing, or the compose configuration could not be resolved",
+        "4": "refused a non-loopback LAB_BIND or published port"
       },
       "id": "lab-smoke",
       "inputs": "compose/lab-in-a-box settings (.env.example, .env, environment)",

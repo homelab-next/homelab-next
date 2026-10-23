@@ -837,10 +837,16 @@ def stub_path(tmp_path, tools=("dirname", "mkdir")):
     return str(stub)
 
 
-def guard(lab, tmp_path, **env):
+def guard(lab, tmp_path, docker=False, **env):
+    """Run the guard with a PATH of only dirname and mkdir, or (``docker=True``) with docker and
+    python3 too, so its second pass can resolve the compose configuration."""
+    tools = ("dirname", "mkdir", "docker", "python3") if docker else ("dirname", "mkdir")
+    base = {"PATH": stub_path(tmp_path, tools)}
+    if docker and "HOME" in os.environ:
+        base["HOME"] = os.environ["HOME"]  # the docker CLI looks for its plugins there
     return subprocess.run(
         [shutil.which("bash"), str(lab / "bind_guard.sh")],
-        env={"PATH": stub_path(tmp_path), **env},
+        env={**base, **env},
         capture_output=True,
         text=True,
     )
@@ -850,13 +856,100 @@ def real_credentials():
     return {k: f"changed-{k.lower()}" for k in CREDENTIALS}
 
 
+@needs_docker
 @pytest.mark.parametrize("bind", [LOOPBACK, OTHER_LOOPBACK, "::1", "[::1]", ""])
 def test_guard_allows_loopback(lab_copy, tmp_path, bind):
-    assert guard(lab_copy, tmp_path, LAB_BIND=bind).returncode == 0
+    r = guard(lab_copy, tmp_path, docker=True, LAB_BIND=bind)
+    assert r.returncode == 0, r.stderr
 
 
+@needs_docker
 def test_guard_allows_the_shipped_defaults(lab_copy, tmp_path):
-    assert guard(lab_copy, tmp_path).returncode == 0
+    r = guard(lab_copy, tmp_path, docker=True)
+    assert r.returncode == 0, r.stderr
+
+
+def test_guard_fails_closed_when_it_cannot_resolve_the_configuration(lab_copy, tmp_path):
+    # the first pass is happy (loopback), but without docker compose the resolved configuration
+    # cannot be judged: exit 3, never a pass
+    r = guard(lab_copy, tmp_path)
+    assert r.returncode == 3, r.stderr
+    assert "cannot resolve the compose configuration" in r.stderr
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "export LAB_BIND=0.0.0.0",
+        "LAB_BIND = 0.0.0.0",
+        "LAB_BIND =0.0.0.0",
+        "  LAB_BIND=0.0.0.0",
+        "\tLAB_BIND=0.0.0.0",
+        "LAB_BIND: 0.0.0.0",
+    ],
+)
+def test_guard_refuses_a_dotenv_line_it_cannot_read(lab_copy, tmp_path, line):
+    # docker compose applies every one of these forms; a guard that skipped them fell back to the
+    # .env.example default (loopback) while compose published on all interfaces
+    (lab_copy / ".env").write_text(f"# a comment\n\n{line}\n")
+    r = guard(lab_copy, tmp_path)
+    assert r.returncode == 4, r.stderr
+    assert "line 3 is not a plain KEY=value line" in r.stderr
+
+
+@needs_docker
+@pytest.mark.parametrize(
+    "line",
+    ["export LAB_BIND=0.0.0.0", "LAB_BIND = 0.0.0.0", "  LAB_BIND=0.0.0.0", "LAB_BIND: 0.0.0.0"],
+)
+def test_docker_compose_applies_the_lines_the_guard_refuses(lab_copy, line):
+    """Why the first pass refuses them: compose resolves each to a published 0.0.0.0."""
+    (lab_copy / ".env").write_text(line + "\n")
+    proc = subprocess.run(
+        ["docker", "compose", "--env-file", str(lab_copy / ".env.example"), "--env-file",
+         str(lab_copy / ".env"), "-f", str(lab_copy / "docker-compose.yml"), "config",
+         "--format", "json"],
+        capture_output=True, text=True, timeout=120,
+        env={k: v for k, v in os.environ.items() if not k.startswith("LAB_")},
+    )  # fmt: skip
+    assert proc.returncode == 0, proc.stderr
+    ips = {p.get("host_ip") for s in json.loads(proc.stdout)["services"].values()
+           for p in s.get("ports", [])}  # fmt: skip
+    assert "0.0.0.0" in ips
+
+
+@needs_docker
+def test_guard_judges_the_ports_compose_resolves(lab_copy, tmp_path):
+    # LAB_BIND stays on loopback, but the compose file publishes one port on every interface
+    compose = lab_copy / "docker-compose.yml"
+    text = compose.read_text()
+    port = '"${LAB_BIND:-' + LOOPBACK + "}:${LAB_PORT_SECRETS"
+    assert port in text
+    compose.write_text(text.replace(port, '"0.0.0.0:${LAB_PORT_SECRETS', 1))
+    r = guard(lab_copy, tmp_path, docker=True)
+    assert r.returncode == 4, r.stderr
+    assert "secrets 0.0.0.0:" in r.stderr and "LAB_I_UNDERSTAND_UNAUTHENTICATED" in r.stderr
+
+
+@needs_docker
+def test_guard_judges_the_credentials_compose_resolves(lab_copy, tmp_path):
+    # every credential looks changed in .env, but one interpolates to its placeholder
+    placeholder = dict(
+        line.split("=", 1)
+        for line in ENV_EXAMPLE.read_text().splitlines()
+        if line.startswith("LAB_SECRETS_DEV_TOKEN=")
+    )["LAB_SECRETS_DEV_TOKEN"].split()[0]
+    creds = real_credentials()
+    creds["LAB_SECRETS_DEV_TOKEN"] = "${HNX_TEST_TOKEN_SOURCE}"
+    lines = [f"{k}={v}" for k, v in creds.items()]
+    (lab_copy / ".env").write_text(
+        "LAB_BIND=0.0.0.0\nLAB_I_UNDERSTAND_UNAUTHENTICATED=1\n" + "\n".join(lines) + "\n"
+    )
+    r = guard(lab_copy, tmp_path, docker=True, HNX_TEST_TOKEN_SOURCE=placeholder)
+    assert r.returncode == 4, r.stderr
+    assert "resolve to their .env.example placeholder: LAB_SECRETS_DEV_TOKEN" in r.stderr
+    r = guard(lab_copy, tmp_path, docker=True, HNX_TEST_TOKEN_SOURCE="changed-token")
+    assert r.returncode == 0, r.stderr
 
 
 @pytest.mark.parametrize("bind", ["0.0.0.0", ROUTABLE, LOOPBACK + ".5", "::", "localhost"])
@@ -874,10 +967,12 @@ def test_guard_refuses_while_any_credential_is_the_placeholder(lab_copy, tmp_pat
     assert "LAB_SECRETS_DEV_TOKEN" in r.stderr and "LAB_POSTGRES_PASSWORD" not in r.stderr
 
 
+@needs_docker
 def test_guard_allows_a_non_loopback_bind_once_acknowledged_and_changed(lab_copy, tmp_path):
     r = guard(
         lab_copy,
         tmp_path,
+        docker=True,
         LAB_BIND="0.0.0.0",
         LAB_I_UNDERSTAND_UNAUTHENTICATED="1",
         **real_credentials(),
@@ -886,6 +981,7 @@ def test_guard_allows_a_non_loopback_bind_once_acknowledged_and_changed(lab_copy
     assert "WARNING" in r.stderr
 
 
+@needs_docker
 def test_guard_reads_dot_env_and_the_environment_wins_over_it(lab_copy, tmp_path):
     lines = [f"{k}={v}" for k, v in real_credentials().items()]
     (lab_copy / ".env").write_text(
@@ -893,7 +989,7 @@ def test_guard_reads_dot_env_and_the_environment_wins_over_it(lab_copy, tmp_path
         + "\n".join(lines)
         + "\n"
     )
-    assert guard(lab_copy, tmp_path).returncode == 0
+    assert guard(lab_copy, tmp_path, docker=True).returncode == 0
     # .env sets a routable bind but keeps one placeholder: refused
     env_example_token = dict(
         line.split("=", 1)
@@ -906,7 +1002,7 @@ def test_guard_reads_dot_env_and_the_environment_wins_over_it(lab_copy, tmp_path
     r = guard(lab_copy, tmp_path)
     assert r.returncode == 4 and "LAB_SECRETS_DEV_TOKEN" in r.stderr
     # the environment overrides .env, exactly as docker compose interpolation does
-    assert guard(lab_copy, tmp_path, LAB_BIND=LOOPBACK).returncode == 0
+    assert guard(lab_copy, tmp_path, docker=True, LAB_BIND=LOOPBACK).returncode == 0
 
 
 def test_smoke_script_runs_the_guard_before_looking_for_docker(lab_copy, tmp_path):
@@ -930,6 +1026,9 @@ def test_smoke_script_keeps_the_environment_over_the_env_files(lab_copy, tmp_pat
     (lab_copy / ".env").write_text("LAB_BIND=0.0.0.0\n" + "\n".join(lines) + "\n")
     text = (lab_copy / "smoke.sh").read_text()
     probe = text.replace('eval "$from_env"', 'eval "$from_env"\necho "bind=$LAB_BIND"; exit 0', 1)
+    # no docker here: the guard's first pass only (its second pass would exit 3 without docker)
+    assert probe.count("lab_bind_guard\n") == 1
+    probe = probe.replace("lab_bind_guard\n", "_lab_bind_guard_values\n", 1)
     probe = probe.replace(
         "  exit 3\n", "  :  # no docker here; this probe stops before using it\n", 1
     )
