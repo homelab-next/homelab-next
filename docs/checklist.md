@@ -3,8 +3,8 @@
 
 Every row is a property that must be **continuously true**, with an observable that someone who has never seen the platform can run.
 
-- **PUBLIC-NOW**: decidable on a laptop or in CI with fakes, fixtures and goldens. Every one has a criterion in `examples/registers/invariants.yml` that the invariants runner (`python3 -m homelabnext.invariants run`) executes from this repository, except F-08: branch protection is a setting of the hosted repository, so its criterion is `manual` with a `why` and the command a maintainer runs (`tests/invariants/test_inv_example_register.py` holds every row to this).
-- **SERVER**: needs the running platform (hypervisors, network, real products). The row is documented; the interface and a fake exist where the plan calls for one; nothing here pretends to test it.
+- **PUBLIC-NOW**: decidable on a laptop or in CI with fakes, fixtures and goldens. Every one has a criterion in `examples/registers/invariants.yml` that the invariants runner (`python3 -m homelabnext.invariants run`) executes from this repository, with no exception (`tests/invariants/test_inv_example_register.py` holds every row to this).
+- **SERVER**: needs the running platform (hypervisors, network, real products, and the settings of the hosted repository, such as branch protection). The row is documented; the interface and a fake exist where the plan calls for one; nothing here pretends to test it.
 
 Criteria register in `invariants.yml` using the same shape as these rows (statement, observable, expected, remediation). Exit codes: 0 pass, 1 fail, >= 100 could not measure.
 Pillar X rows are implemented as runner plugins (`evidence: plugin`), except X-02, X-07 and X-08: they are SERVER rows with no check yet, registered as deferred `evidence: server` criteria with a `why`, so the runner neither runs nor counts them.
@@ -22,7 +22,7 @@ Platform-wide properties. Most need a running platform; the repository-level one
 | F-05 | Secrets are not in git | Secret scan of the tracked tree (`tools/leak_scan.py --groups secret`) and of the full history (CI's pinned `gitleaks git` over every fetched ref) reports 0 unaccepted findings | PUBLIC-NOW |
 | F-06 | Credentials are short-lived and rotated | Every inventoried secret is within its rotate-by date | SERVER |
 | F-07 | Internal TLS is verified | 0 clients with certificate verification disabled (lint over client config; RL013 for roles); endpoints present certificates from the internal CA (`tools/tls_verify_lint.py` over Python and YAML/JSON) | PUBLIC-NOW |
-| F-08 | The main branch is protected by CI | Branch protection requires passing checks (a repository setting: manual criterion, `gh api repos/OWNER/REPO/branches/main/protection`); CI runs tests, lint, secret scan on every change (Q-01, Q-06) | PUBLIC-NOW |
+| F-08 | The main branch is protected by CI | Branch protection on the hosted repository requires the ci.yml checks to pass before a merge (`gh api repos/OWNER/REPO/branches/main/protection`; a manual criterion). That CI runs tests, lint and the secret scan on every change is decided from the checkout by Q-01 and Q-06 | SERVER |
 | F-09 | Backups follow 3-2-1 with an immutable copy | Newest backup < 24 h; offsite or immutable copy < 7 days; a delete attempt with the automation identity fails | SERVER |
 | F-10 | Restores are proven | A full-system restore drill was completed <= 90 days ago and verified | SERVER |
 | F-11 | The monitoring is itself monitored | Stopping the alerting service raises an external dead-man alert within 15 minutes | SERVER |
@@ -305,4 +305,4 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 
 ---
 
-**Totals:** 182 criteria across 16 pillars; 99 PUBLIC-NOW, 83 SERVER.
+**Totals:** 182 criteria across 16 pillars; 98 PUBLIC-NOW, 84 SERVER.

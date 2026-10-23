@@ -61,10 +61,6 @@ def test_no_criterion_is_a_plugin_that_can_only_skip():
         assert by_id()[i]["evidence"] == "server" and by_id()[i]["deferred"] is True, i
 
 
-# PUBLIC-NOW rows whose answer lives outside the checkout: a manual criterion with a why
-MANUAL_PUBLIC = {"F-08"}
-
-
 def test_every_public_now_row_has_a_criterion_the_runner_executes():
     """docs/checklist.md: a PUBLIC-NOW row is decidable from this repository, so a row with no
     criterion is a claim nobody runs (23 such rows were found and given one)."""
@@ -72,12 +68,9 @@ def test_every_public_now_row_has_a_criterion_the_runner_executes():
     public = sorted(i for i, tag in checklist_tags().items() if tag == "PUBLIC-NOW")
     missing = [i for i in public if i not in crit]
     assert missing == []
-    for i in public:
+    for i in public:  # no exception: a row only a forge or a host can decide is SERVER
         c = crit[i]
-        if i in MANUAL_PUBLIC:
-            assert c["evidence"] == "manual" and c.get("deferred") and len(c["why"]) > 60, i
-        else:
-            assert c["evidence"] in ("auto", "plugin") and not c.get("deferred"), i
+        assert c["evidence"] in ("auto", "plugin") and not c.get("deferred"), i
 
 
 def test_a_server_row_is_never_run_as_if_it_were_public():

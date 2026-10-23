@@ -3,7 +3,8 @@
 
 Every push to main and every pull request starts ci.yml, whose jobs run the unit and contract
 tests over the whole tree, ruff, and both secret scans. Whether main is green, and whether a red
-run blocks a merge, live on the forge, not in the checkout (F-08 is a manual criterion).
+run blocks a merge, live on the forge, not in the checkout (F-08, a SERVER row with a manual
+criterion).
 
 Each rule is a function over the parsed workflow that returns its problems, so the negative
 self-tests below can feed it a workflow edited the ways a selection quietly shrinks (an
