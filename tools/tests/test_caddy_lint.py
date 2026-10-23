@@ -189,6 +189,15 @@ def test_an_inline_allow_waives_a_forward_auth():
     assert _strip(text) == []
 
 
+def test_an_inline_allow_waives_only_its_own_forward_auth():
+    """One allow anywhere in the file must not waive every other forward_auth in it."""
+    allowed = GOOD.replace(
+        "forward_auth idp:9443 {", "forward_auth idp:9443 {  # caddy-lint: allow x"
+    )
+    unallowed = "other.lab.example {\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Authentik-Username\n\t}\n}\n"
+    assert _strip(allowed + unallowed) == ["forward_auth is not directly inside a route block"]
+
+
 @pytest.mark.parametrize(
     ("version", "ok"),
     [
@@ -482,6 +491,235 @@ def test_this_repo_pins_a_fixed_caddy_and_strips_before_forward_auth():
     assert doc["generated"] >= 6
 
 
+# ---------------------------------------------------------------- an identity header set later
+
+AUTHED = """\
+app.lab.example {
+	route {
+		request_header -*authentik*
+		forward_auth idp:9443 {
+			uri /outpost.goauthentik.io/auth/caddy
+			copy_headers X-Authentik-Username X-Authentik-Groups
+		}
+		%s
+	}
+	reverse_proxy app:8080 {
+		%s
+	}
+	%s
+}
+"""
+
+
+def _resets(route: str = "", proxy: str = "", site: str = "") -> list[tuple[int, str]]:
+    return [
+        (f.line, f.detail.split(" names ")[0])
+        for f in lint.lint_caddy(AUTHED % (route, proxy, site))
+        if f.rule == "reset"
+    ]
+
+
+def test_the_authed_shape_passes():
+    assert lint.lint_caddy(AUTHED % ("", "", "")) == []
+
+
+@pytest.mark.parametrize(
+    ("route", "proxy", "site", "expected"),
+    [
+        # reverse_proxy sets it from a client header after forward_auth ran
+        ("", "header_up X-Authentik-Groups {http.request.header.X-Evil}", "", [(11, "header_up")]),
+        ("", "header_up +X-Authentik-Groups admins", "", [(11, "header_up")]),
+        ("", "header_up X-Authentik-Groups admins users", "", [(11, "header_up")]),
+        # set again inside the route, after forward_auth
+        ("request_header X-Authentik-Groups {http.request.header.X-Evil}", "", "", [(8, "request_header")]),
+        ("request_header +x_authentik_groups admins", "", "", [(8, "request_header")]),
+        # a second route
+        ("", "", "route {\n\t\trequest_header X-Authentik-Username {header.X-Evil}\n\t}", [(14, "request_header")]),
+        # copied from the client's own header into another one before the route runs
+        ("", "", "request_header X-Remote-User {http.request.header.X-Authentik-Username}", [(13, "request_header")]),
+        # a header block
+        ("", "", "header {\n\t\t+X-Authentik_Groups admins\n\t}", [(14, "header")]),
+        # deletes are not a reset, and other headers are not identity headers
+        ("request_header -X-Authentik-Groups", "header_up -X_Authentik_*", "header {\n\t\t-Server\n\t}", []),
+        ("", "header_up Host {upstream_hostport}", "", []),
+    ],
+)  # fmt: skip
+def test_an_identity_header_set_anywhere_but_copy_headers_fails(route, proxy, site, expected):
+    assert _resets(route, proxy, site) == expected
+
+
+def test_a_renamed_target_is_an_identity_header_too():
+    text = (AUTHED % ("", "header_up Remote-User alice", "")).replace(
+        "copy_headers X-Authentik-Username X-Authentik-Groups",
+        "copy_headers X-Authentik-Username>Remote-User",
+    )
+    findings = lint.lint_caddy(
+        text.replace("-*authentik*", "-*authentik*\n\t\trequest_header -Remote*")
+    )
+    assert [(f.line, f.rule) for f in findings] == [(12, "reset")]
+    assert "Remote-User" in findings[0].detail
+
+
+def test_the_authentik_uri_path_is_not_a_header():
+    assert lint.lint_caddy(AUTHED % ("", "", "redir /outpost.goauthentik.io/start /")) == []
+
+
+def test_an_inline_allow_waives_one_reset():
+    proxy = "header_up X-Authentik-Groups admins  # caddy-lint: allow fixture"
+    assert _resets("request_header X-Authentik-Groups x", proxy) == [(8, "request_header")]
+
+
+# ---------------------------------------------------------------- syntax the lint cannot model
+
+
+def _rules(text: str) -> list[tuple[int, str, str]]:
+    return [(f.line, f.rule, f.detail) for f in lint.lint_caddy(textwrap.dedent(text))]
+
+
+def test_a_heredoc_fails_closed_and_hides_what_caddy_hides():
+    # Caddy reads both deletes as the heredoc's text: on 2.11.1 every forged spelling passed
+    text = GOOD.replace(
+        "\t\trequest_header -*authentik*\n",
+        "\t\tvars note <<TXT\n\t\trequest_header -*authentik*\n\t\tTXT\n",
+    )
+    found = _rules(text)
+    assert found[0] == (4, "parse", "a heredoc (<<TXT) hides lines from the lint")
+    assert [r for _, r, _ in found].count("strip") == 2
+
+
+def test_a_heredoc_line_cannot_open_a_phantom_block():
+    text = """\
+    app.lab.example {
+        route {
+            request_header -*authentik*
+            vars note <<TXT
+            route {
+            TXT
+        }
+        forward_auth idp:9443 {
+            copy_headers X-Authentik-Username
+        }
+    }
+    """
+    assert [(ln, r) for ln, r, _ in _rules(text)] == [(4, "parse"), (8, "strip")]
+    assert "not directly inside a route" in _rules(text)[1][2]
+
+
+def test_a_quoted_token_spanning_lines_fails_closed():
+    text = 'app.lab.example {\n\troute {\n\t\trequest_header -*authentik*\n\t\tvars note "a {\n"\n\t}\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Authentik-Username\n\t}\n}\n'
+    assert [(ln, r) for ln, r, _ in _rules(text)] == [(4, "parse"), (7, "strip")]
+
+
+def test_an_unclosed_quote_fails_closed():
+    assert _rules('app.lab.example {\n\trespond "never closed\n}\n')[0][1:] == (
+        "parse",
+        "a quoted token is never closed",
+    )
+
+
+def test_a_brace_sharing_a_line_closes_the_block_as_caddy_does():
+    text = GOOD.replace("request_header -*authentik*\n", "request_header -*authentik* }\n\t")
+    found = _rules(text)
+    assert found[0] == (4, "parse", "a { or } shares its line with a directive")
+    assert any("not directly inside a route" in d for _, _, d in found)
+
+
+def test_quoted_braces_and_comments_are_not_blocks():
+    text = GOOD.replace(
+        "\t\tforward_auth", '\t\trespond "a { b }" 200 # } {\n\t\tvars x#y "}"\n\t\tforward_auth'
+    )
+    assert _rules(text) == []
+
+
+@pytest.mark.parametrize(
+    ("line", "detail"),
+    [
+        ("{$AUTH_DIRECTIVE}", "{$AUTH_DIRECTIVE} in directive position hides a directive"),
+        ("{{ auth_block }}", "{{ in directive position hides a directive"),
+        ("{args[0]} idp:9443", "{args[0]} in directive position hides a directive"),
+        ("respond ok \\", "a line ends in \\ (a continued line)"),
+    ],
+)
+def test_a_hidden_directive_fails_closed(line, detail):
+    assert (2, "parse", detail) in _rules(
+        f"app.lab.example {{\n\t{line}\n\treverse_proxy app:8080\n}}\n"
+    )
+
+
+def test_an_env_site_address_and_the_global_block_are_fine():
+    assert _rules("{\n\tadmin off\n}\n{$SITE} {\n\treverse_proxy app:8080\n}\n") == []
+
+
+@pytest.mark.parametrize(
+    ("text", "detail"),
+    [
+        ("app.lab.example {\n\treverse_proxy app:8080\n", "a block is never closed"),
+        ("app.lab.example\n}\n", "a } closes no block"),
+        ("app.lab.example\n{\n\treverse_proxy app:8080\n}\n", "a { on a line of its own"),
+    ],
+)
+def test_unbalanced_braces_fail_closed(text, detail):
+    assert detail in [d for _, r, d in _rules(text) if r == "parse"]
+
+
+def test_a_matcher_on_forward_auth_fails():
+    text = GOOD.replace("forward_auth idp:9443", "forward_auth @api idp:9443")
+    assert _strip(text) == ["forward_auth @api: a request its matcher skips is never authenticated"]
+
+
+# ---------------------------------------------------------------- import
+
+
+def test_a_snippet_import_is_expanded_in_place():
+    text = """\
+    (strip) {
+        request_header -*authentik*
+    }
+    app.lab.example {
+        route {
+            import strip
+            forward_auth idp:9443 {
+                copy_headers X-Authentik-Username
+            }
+        }
+    }
+    """
+    assert _rules(text) == []
+    assert len(_rules(text.replace("import strip", "import other"))) == 2  # unresolved + strip
+
+
+def test_the_generated_snippet_resolves_where_it_is_not_defined():
+    # a documented site imports the generated snippet without defining it
+    assert (
+        _rules("app.lab.example {\n\timport hnx_forward_auth\n\treverse_proxy app:8080\n}\n") == []
+    )
+
+
+def test_a_file_import_is_followed_and_a_glob_fails_closed(tmp_path):
+    (tmp_path / "conf.d").mkdir()
+    (tmp_path / "conf.d" / "auth.conf").write_text(
+        "forward_auth idp:9443 {\n\tcopy_headers X-Authentik-Username\n}\n"
+    )
+    site = "app.lab.example {\n\timport %s\n\treverse_proxy app:8080\n}\n"
+    ctx = lint.CaddyContext(tmp_path)
+    found = lint.lint_caddy(site % "conf.d/auth.conf", "Caddyfile", base=tmp_path, ctx=ctx)
+    assert [(f.path, f.line, f.rule) for f in found] == [("conf.d/auth.conf", 1, "strip")]
+    assert ctx.parsed == {"conf.d/auth.conf"}
+    # Caddy expands a glob: even a file literally named *.conf does not stand for what it matches
+    (tmp_path / "conf.d" / "*.conf").write_text("reverse_proxy app:8080\n")
+    for target in ("conf.d/*.conf", "missing.conf", "../outside.conf", "{$CONF}"):
+        found = lint.lint_caddy(site % target, "Caddyfile", base=tmp_path, ctx=ctx)
+        assert [(f.line, f.rule) for f in found] == [(2, "parse")], target
+        assert "cannot be followed" in found[0].detail
+    # a markdown block has no directory to resolve a file against
+    assert [f.rule for f in lint.lint_caddy(site % "conf.d/auth.conf")] == ["parse"]
+
+
+def test_a_snippet_that_imports_itself_terminates():
+    found = _rules("(a) {\n\timport a\n}\napp.lab.example {\n\timport a\n}\n")
+    assert found and {r for _, r, _ in found} == {"parse"}
+
+
 # ---------------------------------------------------------------- discovery and coverage
 
 BARE = (
@@ -633,3 +871,18 @@ def test_a_missing_dependency_exits_2(tmp_path, monkeypatch):
     monkeypatch.setattr(lint, "yaml", None)
     assert lint.main([str(tmp_path)], out=out, err=err) == 2
     assert "missing dependency: PyYAML" in err.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        # a matcher on the delete: the strip runs only for requests it matches (review probe p10)
+        (("request_header -*authentik*", "request_header @api -*authentik*"), ["strip", "strip"]),
+        # a value after a delete still deletes in Caddy (p14)
+        (("request_header -*authentik*", "request_header -*authentik* x"), []),
+        # a copy_headers taken from the environment cannot be checked (p12)
+        (("copy_headers X-Authentik-Username X-Authentik-Groups", "copy_headers {$IDENTITY}"), ["strip"]),
+    ],
+)  # fmt: skip
+def test_review_probes(change, expected):
+    assert [f.rule for f in lint.lint_caddy(GOOD.replace(*change))] == expected
