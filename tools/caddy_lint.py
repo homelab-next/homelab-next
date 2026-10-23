@@ -615,7 +615,8 @@ TEXT_KEY = re.compile(
 )
 #: other unambiguous Caddy pins: a build, a module requirement, a release download
 TEXT_PINS = (
-    re.compile(r"\bxcaddy\s+build(?:\s+(?P<v>v?\d\S*|\$\S+))?"),
+    # (a backticked `xcaddy build` is markdown prose naming the command, not a run of it)
+    re.compile(r"\bxcaddy\s+build(?![`\w])(?:\s+(?P<v>v?\d\S*|\$\S+))?"),
     re.compile(r"github\.com/caddyserver/caddy/v2(?:@|\s+)(?P<v>v\S+)"),
     re.compile(r"caddyserver/caddy/releases/download/(?P<v>[^/\s]+)/"),
     re.compile(r"\bcaddy_(?P<v>\d[\w.+-]*?)_(?:linux|darwin|windows|freebsd|openbsd|netbsd)_"),

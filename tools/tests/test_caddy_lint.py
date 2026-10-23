@@ -391,6 +391,8 @@ def test_dockerfile_pins(text, lines):
         ("services:\n  edge:\n    image: {{ caddy_image }}:2.8.4\n", [3]),  # a compose template
         ("Caddy is the edge; tools/caddy_lint.py:40 reads caddy configs.\n", []),  # prose
         ("pin `caddy:2.11.7` or later\n", []),
+        ("Dockerfile `FROM` and `xcaddy build` with ARG defaults\n", []),  # markdown prose
+        ("RUN xcaddy build\n", [1]),
     ],
 )
 def test_text_pins(text, lines):
