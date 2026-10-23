@@ -135,31 +135,37 @@ class FlatKeyspaceObjectStore(FakeObjectStore):
     """Defect: one flat namespace keyed ``bucket + key`` with no separator (a KV-backed store):
     bucket ``b`` key ``1k`` is bucket ``b1`` key ``k``, and listing ``b`` shows ``b1``'s keys."""
 
+    _sep = ""
+
     def __init__(self) -> None:
         super().__init__()
         self._flat: dict[str, tuple[bytes, dict[str, str]]] = {}
 
     def put(self, bucket, key, data, *, metadata=None):
         info = super().put(bucket, key, data, metadata=metadata)
-        self._flat[bucket + key] = self._b[bucket][key]
+        self._flat[bucket + self._sep + key] = self._b[bucket][key]
         return info
 
     def get(self, bucket, key):
         self._bucket(bucket)
         try:
-            return self._flat[bucket + key][0]
+            return self._flat[bucket + self._sep + key][0]
         except KeyError:
             raise NoSuchKey(key) from None
 
     def delete(self, bucket, key):
         self._bucket(bucket)
-        self._flat.pop(bucket + key, None)
+        self._flat.pop(bucket + self._sep + key, None)
         self._b[bucket].pop(key, None)
 
     def list(self, bucket, prefix="", *, limit=1000, after=None):
         self._bucket(bucket)
         keys = sorted(
-            (k[len(bucket) :] for k in self._flat if k.startswith(bucket + prefix)),
+            (
+                k[len(bucket + self._sep) :]
+                for k in self._flat
+                if k.startswith(bucket + self._sep + prefix)
+            ),
             key=lambda k: k.encode("utf-8"),
         )
         if after is not None:
@@ -254,26 +260,8 @@ class CaseFoldingObjectStore(_KeyMappingObjectStore):
         return key
 
 
-class DottedFlatKeyspaceObjectStore(FakeObjectStore):
+class DottedFlatKeyspaceObjectStore(FlatKeyspaceObjectStore):
     """Defect: one flat ``bucket.key`` space (NATS KV and Redis style): with an S3-legal dotted
     bucket name, bucket ``x`` key ``y.k`` is bucket ``x.y`` key ``k``."""
 
-    def __init__(self) -> None:
-        super().__init__()
-        self._flat: dict[str, tuple[bytes, dict[str, str]]] = {}
-
-    def put(self, bucket, key, data, *, metadata=None):
-        info = super().put(bucket, key, data, metadata=metadata)
-        self._flat[f"{bucket}.{key}"] = self._b[bucket][key]
-        return info
-
-    def get(self, bucket, key):
-        self._bucket(bucket)
-        try:
-            return self._flat[f"{bucket}.{key}"][0]
-        except KeyError:
-            raise NoSuchKey(key) from None
-
-    def delete(self, bucket, key):
-        super().delete(bucket, key)
-        self._flat.pop(f"{bucket}.{key}", None)
+    _sep = "."
