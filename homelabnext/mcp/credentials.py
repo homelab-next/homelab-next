@@ -282,11 +282,11 @@ def plain_url_path(path: str) -> bool:
 
 
 def secret_host_labels(host: str) -> list[int]:
-    """Indexes of the labels of ``host`` that look like a credential (:func:`looks_secret`),
-    below its registrable domain (the last two labels, which a review attests): a hosted endpoint
-    may put the key in a subdomain (``<key>.mcp.vendor.example``)."""
-    labels = (host or "").split(".")
-    return [i for i, label in enumerate(labels[:-2]) if looks_secret(label)]
+    """Indexes of the labels of ``host`` that look like a credential (:func:`looks_secret`):
+    every label but the top-level domain, since a hosted endpoint may put the key in a
+    subdomain (``<key>.mcp.vendor.example``) or in the second-level label itself."""
+    labels = (host or "").rstrip(".").split(".")
+    return [i for i, label in enumerate(labels[:-1]) if looks_secret(label)]
 
 
 def url_carries(value: str) -> bool:

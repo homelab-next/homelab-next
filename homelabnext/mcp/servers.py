@@ -759,8 +759,8 @@ def remote_problems(rec: Mapping[str, Any], where: str, registry: Any = None) ->
     """A third party's hosted server (``transport.type: remote``): a ``hosted`` origin and
     runtime, egress to the internet, ``data_tier: cloud-allowed``, and an https URL whose host is a public DNS name (not an
     IPv4 address in any notation, :func:`numeric_host`; not a private or test suffix; with a
-    registry, not one of the lab's hosts or its domain), no host label below the registrable domain
-    that looks like a credential, and a path that cannot carry a credential
+    registry, not one of the lab's hosts or its domain), no host label but the top-level domain that
+    looks like a credential, and a path that cannot carry a credential
     (:func:`.credentials.plain_url_path`, the importer's rule).  The URL's shape (https, a
     lower-case host, no userinfo, query or fragment) is the schema's; its credentials can
     only be headers' ``secret:`` names (headers are the only place a remote record has)."""

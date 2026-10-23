@@ -100,7 +100,12 @@ _HOST_KEYS = ["9f8e7d6c5b4a3928" + "1706f5e4d3c2b1a0", _PATH_KEYS[0]]
 
 
 @pytest.mark.parametrize(
-    "host", [f"{_HOST_KEYS[0]}.mcp.tracker.example.com", f"{_HOST_KEYS[1]}.tracker.example.com"]
+    "host",
+    [
+        f"{_HOST_KEYS[0]}.mcp.tracker.example.com",
+        f"{_HOST_KEYS[1]}.tracker.example.com",
+        f"{_HOST_KEYS[1]}.com",  # the second-level label itself
+    ],
 )
 def test_a_credential_in_a_hosted_urls_host_is_refused_and_never_rendered(host):
     rec = _edit(transport__url=f"https://{host}/mcp")

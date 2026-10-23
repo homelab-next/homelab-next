@@ -153,8 +153,8 @@ entry N)`.
   host and no userinfo, query or fragment, a path that cannot carry a credential (an MCP path
   such as `/mcp`, `/sse`, `/v1/mcp`, or lower-case words and versions; a key that a vendor puts
   in the path goes in a header as a `secret:` name instead, and the same rule holds for a lab
-  server's `transport.path`), no host label below the registrable domain that looks like a
-  credential (`<key>.mcp.vendor.example`), never an IPv4 address in any notation (a host whose
+  server's `transport.path`), no host label but the top-level domain that looks like a
+  credential (`<key>.mcp.vendor.example`, `<key>.example`), never an IPv4 address in any notation (a host whose
   last label is a decimal, octal or `0x` number is one to a URL parser and to `getaddrinfo`:
   `0x7f.0x1`), never a private, test or lab host (`.local`, `.internal`, `.home.arpa`, the
   registry's domain or hosts: a lab server is reached by registry name), its egress names
