@@ -208,8 +208,8 @@ def test_schema_id_accepts_every_shipped_event_schema(schema_id):
     assert sc.errors_for(SCHEMA, doc, REG) == []
 
 
-def test_fifteen_event_schemas_were_checked():
-    assert len(EVENT_IDS) == 15 and all("." in i.rsplit("/", 2)[1] for i in EVENT_IDS)
+def test_sixteen_event_schemas_were_checked():
+    assert len(EVENT_IDS) == 16 and all("." in i.rsplit("/", 2)[1] for i in EVENT_IDS)
 
 
 @pytest.mark.parametrize("name", sorted(NEGATIVES))

@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-10-23
 - **Related:** ADR-0002, ADR-0004, ADR-0005, ADR-0007, ADR-0008, ADR-0017, ADR-0018, ADR-0021,
-  ADR-0024, ADR-0025 (orchestration telemetry, open) and ADR-0026 (the orchestrator as a component,
+  ADR-0024, ADR-0025 (orchestration telemetry, merged) and ADR-0026 (the orchestrator as a component,
   planned): the manifest relies on the former's job record for the orchestration export and on the
   latter for the `agent-runtime` slot. `schemas/platform/module.schema.json` (draft),
   [modules](../modules.md), [swap kit](../swap.md), [conformance](../conformance.md),

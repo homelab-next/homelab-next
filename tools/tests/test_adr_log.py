@@ -17,7 +17,6 @@ ADRS = sorted(p for p in ADR_DIR.glob("[0-9][0-9][0-9][0-9]-*.md"))
 #: numbers held by open pull requests, so a later ADR does not take them (each reason names the
 #: holder); an entry goes when its ADR merges, and one whose ADR exists is an error
 RESERVED = {
-    25: "orchestration telemetry (pull request #38)",
     26: "the orchestrator as a component of this repository (planned with it)",
 }
 
