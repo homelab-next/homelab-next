@@ -21,3 +21,8 @@ regexes = ['''^Zx9Qw3Rt7Yp2$''']
 description = "MCP importer tests: the fake hex key planted in a hosted URL's host name to prove it is refused and never copied"
 regexTarget = "secret"
 regexes = ['''^9f8e7d6c5b4a3928$''']
+
+[[allowlists]]
+description = "Go test policy tests: an import path that only ends like a quarantined package, to prove a skips.yml entry does not cover it"
+regexTarget = "secret"
+regexes = ['''^cmd/x/internal/api$''']
