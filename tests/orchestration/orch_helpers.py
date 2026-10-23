@@ -1,16 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """Shared fixtures of the orchestration telemetry tests: the schema's own examples as the job
-records, a fixed clock, and a loopback fake of the gateway's spend-log API serving a recorded-shape
-page set (``fixtures/spend_logs_v2.json``, fictional)."""
+records, a fixed clock, and the first turn source adapter on a loopback fake of its gateway's
+per-call log (:mod:`conformance.fakes.litellm_spend_log_api`, a recorded-shape page set)."""
 
 from __future__ import annotations
 
-import http.server
 import json
-import threading
-import urllib.parse
 from pathlib import Path
 
+from conformance.fakes.litellm_spend_log_api import KEY_ENV, NEVER, FakeSpendLogs, pages
+from conformance.protocols.inference import TURN_FIELDS
+from homelabnext.conform.adapters.litellm_spend_log import make as make_turn_source
 from homelabnext.events.envelope import canonical_body
 from homelabnext.status.model import parse_iso
 
@@ -22,25 +22,19 @@ CONTROLLER_EXAMPLE = "agent.job.finished.controller.json"
 DOTTED_EXAMPLE = "agent.job.finished.dotted-backend.json"
 #: well after every example job finished (the last at 03:00)
 T0 = parse_iso("2026-01-01T06:00:00Z")
-VIEWER_KEY = "fake-viewer-key-0001"
-LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow the fake gateway binds loopback only
-KEY_ENV = {"HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER": VIEWER_KEY}
-#: every value in the spend-log fixture that the store and the page must never hold
-NEVER = (
-    "fake prompt text",
-    "fake model output",
-    "fake free text",
-    "fake upstream text",
-    "upstream.example.com",
-    "192.0.2.10",  # no-raw-endpoint: allow a planted client address the store must drop
-    "user-fake",
-    "end-user-fake",
-    "fake-key-hash",
-    "fake-cache-key",
-    "team-fake",
-    "fake-session",
-    "agent-triage",
-)
+#: a neutral turn record with every value unknown (``BLANK | {...}`` fills a test's turn)
+BLANK = dict.fromkeys(TURN_FIELDS)
+#: the turn source adapter, as ``--turn-source`` names it
+TURN_SOURCE = "homelabnext.conform.adapters.litellm_spend_log:make"
+__all__ = [
+    "BLANK", "KEY_ENV", "NEVER", "ROOT", "T0", "TURN_SOURCE", "FakeSpendLogs", "body", "examples", "pages",
+    "turn_source",
+]  # fmt: skip
+
+
+def turn_source(gw: FakeSpendLogs, **kw):
+    """The adapter's turn source on the fake gateway ``gw``, with the viewer key set."""
+    return make_turn_source(base_url=gw.url, env=KEY_ENV, **kw)
 
 
 def examples() -> list[dict]:
@@ -56,55 +50,3 @@ def examples() -> list[dict]:
 
 def body(event: dict) -> bytes:
     return canonical_body(event)
-
-
-def pages() -> list[dict]:
-    return json.loads((HERE / "fixtures" / "spend_logs_v2.json").read_text("utf-8"))["pages"]
-
-
-class FakeSpendLogs:
-    """``GET /spend/logs/v2`` on loopback: the fixture's pages by ``page``, 401 for any other key.
-    Records each request's query, so a test can see the window and paging it asked for."""
-
-    def __init__(self, pages_: list[dict] | None = None, *, status: int = 200):
-        self.pages = pages() if pages_ is None else pages_
-        self.status = status
-        self.requests: list[dict[str, str]] = []
-        fake = self
-
-        class Handler(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                path, _, query = self.path.partition("?")
-                q = {k: v[0] for k, v in urllib.parse.parse_qs(query).items()}
-                fake.requests.append({"path": path, **q})
-                if self.headers.get("Authorization") != f"Bearer {VIEWER_KEY}":
-                    return self._reply(401, {"error": "invalid key"})
-                if fake.status != 200:
-                    return self._reply(fake.status, {"error": "fake failure"})
-                n = int(q.get("page", "1"))
-                doc = fake.pages[n - 1] if n <= len(fake.pages) else {"data": [], "total_pages": 0}
-                return self._reply(200, doc)
-
-            def _reply(self, code, doc):
-                raw = json.dumps(doc).encode()
-                self.send_response(code)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(raw)))
-                self.end_headers()
-                self.wfile.write(raw)
-
-            def log_message(self, *a):
-                pass
-
-        self.server = http.server.ThreadingHTTPServer((LOOPBACK, 0), Handler)
-        self.url = f"http://{LOOPBACK}:{self.server.server_address[1]}"
-
-    def __enter__(self):
-        threading.Thread(
-            target=self.server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
-        ).start()
-        return self
-
-    def __exit__(self, *a):
-        self.server.shutdown()
-        self.server.server_close()

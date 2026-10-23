@@ -6,9 +6,10 @@ orchestration controller cost and how it went, from two sources joined by a tag.
   one event per run that reached a terminal state, published by the controller.  The hub
   consumes it from the bus into its store (:mod:`.store`, :func:`.bus.drain`), idempotent by event
   id and by run id.
-* **Per turn**: the LLM gateway's spend log (LiteLLM ``/spend/logs/v2``, read with a read-only
-  viewer key named by secret, :mod:`.gateway`); a turn belongs to the job whose ``gateway_tag``
-  it carries in ``request_tags``.  Only names, counts, times and costs are kept.
+* **Per turn**: the LLM gateway's per-call log, read through a turn source adapter (the
+  ``inference`` capability's ``turn-records`` feature, :mod:`.gateway`); a turn belongs to the job
+  whose ``gateway_tag`` it carries.  Only the neutral turn record is kept: names, counts, times
+  and costs.
 * :mod:`.model` -- the rollup per profile, backend and lane (the Orchestration page and the
   recommendation engine's input, ``homelabnext.orchestration.rollup/1``);
 * :mod:`.pages` -- the hub's Orchestration page (``hnx status serve --orchestration DB``);

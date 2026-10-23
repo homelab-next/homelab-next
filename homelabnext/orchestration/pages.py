@@ -46,7 +46,7 @@ MAX_DAYS = 90
 RECENT = 50
 _CLASS = {"completed": "ok", "failed": "fail", "timeout": "fail", "cancelled": "unknown"}
 _FILTERS = ("profile", "backend", "lane", "outcome")
-#: a job without gateway turns (a direct vLLM backend, a cloud provider): not zero, unknown
+#: a job without gateway turns (a direct backend, a cloud provider): not zero, unknown
 NO_GATEWAY = '<span class="muted">no gateway data</span>'
 #: a query value: the characters of the job record's run_id and backend (agent.job.finished 1.0),
 #: which may start with a dot or a digit, so also the literal ``-`` (NO_BACKEND); profile ids,
@@ -295,12 +295,12 @@ class OrchestrationSite:
         else:
             recon = (
                 f"<p>{NO_GATEWAY}: none of this job's requests went through the LLM gateway with "
-                "its tag (a direct backend, a cloud provider, or the gateway's spend log is not "
+                "its tag (a direct backend, a cloud provider, or the gateway's per-call log is not "
                 "read yet).</p>"
             )
         rows = [
             (
-                _e(t["started_at"]), f"<code>{_e(t['turn_id'])}</code>", _n(t.get("model_group")),
+                _e(t["started_at"]), f"<code>{_e(t['turn_id'])}</code>", _n(t.get("model_role")),
                 _n(t.get("model")), _n(t.get("call_type")), _n(t.get("status")),
                 _n(t.get("error_code")), _num(t.get("input_tokens")), _num(t.get("output_tokens")),
                 _num(t.get("cache_read_tokens")),
@@ -317,7 +317,7 @@ class OrchestrationSite:
             + "<h3>Tools</h3>" + tools
             + "<h3>Gateway turns</h3>" + recon
             + _table(
-                ("Started", "Request", "Model group", "Model", "Call", "Status", "Error",
+                ("Started", "Request", "Model role", "Model", "Call", "Status", "Error",
                  "In", "Out", "Cache read", "Cache", "TTFT", "Duration", "Cost"),
                 rows,
             )

@@ -6,8 +6,9 @@ from __future__ import annotations
 import re
 
 from conformance.fakes.inference_target import FakeInferenceClient, WrongModelClient
-from conformance.protocols.inference import InferenceError
+from conformance.protocols.inference import TURN_FIELDS, InferenceError, turn_problems
 from homelabnext.conform.core import Mutant, Suite
+from homelabnext.status.model import parse_iso
 
 from ._util import raises
 
@@ -165,6 +166,76 @@ def _(c):
     served, declared = sorted(c.models()), sorted(c.declared_models())
     assert declared, "the target declares no models"
     assert served == declared, f"/v1/models {served} != declared {declared}"
+
+
+# --- feature ``turn-records``: the gateway's per-call log as neutral turn records --------------
+#: a tag no request carries
+NO_SUCH_TAG = "conformance-no-such-tag-zz"
+
+
+def _turns(c):
+    source, start, end, tags = c.turn_records()
+    assert tags, "turn_records() names no tags"
+    return source, start, end, list(tags), list(source.turns(start, end, tags))
+
+
+@SUITE.check(
+    "turn-records-are-neutral",
+    "every turn of a window known to hold some is exactly the neutral turn record "
+    f"({len(TURN_FIELDS)} fields, each of its kind): nothing else of the gateway's log",
+    requires=["turn-records"],
+)
+def _(c):
+    *_, got = _turns(c)
+    assert got, "no turns in the window turn_records() names"
+    for t in got:
+        probs = turn_problems(t)
+        assert not probs, f"turn {t.get('turn_id') if isinstance(t, dict) else t!r}: {probs}"
+
+
+@SUITE.check(
+    "turn-records-only-the-asked-tags",
+    "every turn carries one of the tags asked for; a tag no request used gives no turns, and each "
+    "tag alone gives exactly that tag's turns",
+    requires=["turn-records"],
+)
+def _(c):
+    source, start, end, tags, got = _turns(c)
+    other = sorted({t["gateway_tag"] for t in got} - set(tags))
+    assert not other, f"turns of tags not asked for: {other}"
+    assert list(source.turns(start, end, [NO_SUCH_TAG])) == [], "turns for a tag nobody used"
+    for tag in tags:
+        alone = {t["turn_id"] for t in source.turns(start, end, [tag])}
+        want = {t["turn_id"] for t in got if t["gateway_tag"] == tag}
+        assert alone == want, f"{tag}: alone {sorted(alone)} != {sorted(want)}"
+
+
+@SUITE.check(
+    "turn-records-in-the-window",
+    "every turn started inside the window asked for (whole seconds), and a window before any "
+    "gives none",
+    requires=["turn-records"],
+)
+def _(c):
+    source, start, end, tags, got = _turns(c)
+    late = [t["turn_id"] for t in got if not start - 1 < parse_iso(t["started_at"]) < end + 1]
+    assert not late, f"turns outside [{start}, {end}]: {late}"
+    first = min(parse_iso(t["started_at"]) for t in got)
+    assert list(source.turns(first - 7200, first - 3600, tags)) == [], "turns before the window"
+
+
+@SUITE.check(
+    "turn-records-stable-ids",
+    "reading the same window twice gives the same turn ids, once each (a re-read rewrites, never "
+    "adds)",
+    requires=["turn-records"],
+)
+def _(c):
+    source, start, end, tags, got = _turns(c)
+    ids = [t["turn_id"] for t in got]
+    assert len(ids) == len(set(ids)), f"a turn id twice in one read: {ids}"
+    again = sorted(t["turn_id"] for t in source.turns(start, end, tags))
+    assert again == sorted(ids), f"a second read gave {again}, the first {sorted(ids)}"
 
 
 def make_fake():

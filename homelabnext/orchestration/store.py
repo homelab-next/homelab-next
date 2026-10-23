@@ -24,10 +24,13 @@ controller's (:data:`.model.CONTROLLER_SOURCE`), and it is idempotent the way
   :meth:`consume` derives from a record is computed before the database is touched, so the only other exceptions it raises are
   the store's own (:mod:`sqlite3`, the disk), which a caller may retry.
 
-**Turns** come from the gateway's spend log (:mod:`.gateway`), already reduced to the allow-listed
-names and numbers; a turn is keyed by the gateway's request id, so reading a window twice
-rewrites the same rows.  A job's turns are re-read until it has been finished for ``settle_s``
-(the gateway writes its spend log in batches), then the job is marked settled.
+**Turns** come from the gateway's per-call log through a turn source (:mod:`.gateway`), as
+neutral turn records (:data:`conformance.protocols.inference.TURN_FIELDS`): a record outside that
+shape (another field, a value of the wrong kind) is refused with :class:`ValueError` before
+anything is written, so no adapter can widen what is stored.  A turn is keyed by the gateway's
+id of the call, so reading a window twice rewrites the same rows.  A job's turns are re-read
+until it has been finished for ``settle_s`` (a gateway may write its log in batches), then the
+job is marked settled.
 
 **Retention**: jobs finished, and turns started, more than ``retention_days`` ago are deleted
 when the store opens and on every write (with the injected clock).
@@ -62,6 +65,7 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+from conformance.protocols.inference import turn_problems
 from homelabnext._sqlite import transaction
 from homelabnext.events.consumer import Delivery, decode_event
 from homelabnext.events.envelope import EventError, body_digest
@@ -211,7 +215,14 @@ class TelemetryStore:
         return Delivery(eid, "processed")
 
     def add_turns(self, turns: Iterable[Mapping[str, Any]]) -> int:
-        """Insert or rewrite gateway turns (keyed by ``turn_id``); returns how many were written."""
+        """Insert or rewrite gateway turns (keyed by ``turn_id``); returns how many were written.
+        :class:`ValueError` and nothing written when any is not a neutral turn record."""
+        turns = list(turns)
+        for t in turns:
+            probs = turn_problems(t)
+            if probs:
+                tid = t.get("turn_id") if isinstance(t, Mapping) else None
+                raise ValueError(f"not a turn record ({tid!r:.80}): {'; '.join(probs)}")
         rows = [
             (
                 t["turn_id"],

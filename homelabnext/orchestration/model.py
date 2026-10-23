@@ -87,8 +87,8 @@ def group_key(job: Mapping[str, Any]) -> tuple[str, str, str]:
 
 
 def _turns_block(jobs: Sequence[Mapping[str, Any]], turns: Mapping[str, Sequence[Mapping]]):
-    """The gateway's view of the jobs.  Only jobs routed through the LiteLLM gateway have turns
-    (not a direct vLLM backend or a cloud provider): with none, the sums are None (no gateway
+    """The gateway's view of the jobs.  Only jobs routed through a gateway whose turn source is read
+    have turns (not a direct backend or a cloud provider): with none, the sums are None (no gateway
     data), never 0."""
     mine = [list(turns.get(j["gateway_tag"], ())) for j in jobs]
     flat = [t for ts in mine for t in ts]

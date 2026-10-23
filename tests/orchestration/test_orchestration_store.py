@@ -10,7 +10,7 @@ import shlex
 import sqlite3
 
 import pytest
-from orch_helpers import CONTROLLER_EXAMPLE, DOTTED_EXAMPLE, EXAMPLES, T0, body, examples
+from orch_helpers import BLANK, CONTROLLER_EXAMPLE, DOTTED_EXAMPLE, EXAMPLES, T0, body, examples
 
 from homelabnext.events.envelope import EventError
 from homelabnext.orchestration import ROLLUP_SCHEMA, cli, percentile, rollup
@@ -136,7 +136,10 @@ def test_jobs_and_turns_past_retention_are_purged(tmp_path):
     store = TelemetryStore(tmp_path / "t.db", clock=lambda: now[0], retention_days=1)
     store.consume(body(examples()[0]))
     store.add_turns(
-        [{"turn_id": "req-a1", "gateway_tag": "run-0001", "started_at": "2026-01-01T00:00:13Z"}]
+        [
+            BLANK
+            | {"turn_id": "req-a1", "gateway_tag": "run-0001", "started_at": "2026-01-01T00:00:13Z"}
+        ]
     )
     assert store.job("run-0001") and store.turns()
     now[0] = parse_iso("2026-01-02T00:05:13Z")  # a day and a second after it finished
@@ -154,10 +157,10 @@ def test_percentile_is_nearest_rank_over_known_values():
 def test_rollup_per_profile_backend_and_lane(filled):
     filled.add_turns(
         [
-            {"turn_id": "t1", "gateway_tag": "run-0001", "started_at": "2026-01-01T00:00:13Z",
+            BLANK | {"turn_id": "t1", "gateway_tag": "run-0001", "started_at": "2026-01-01T00:00:13Z",
              "input_tokens": 20000, "output_tokens": 1500, "cache_read_tokens": 12000,
              "cost_usd": 0.0, "status": "success", "ttft_ms": 400, "duration_ms": 2100},
-            {"turn_id": "t2", "gateway_tag": "hnx-run-0002", "started_at": "2026-01-01T01:00:40Z",
+            BLANK | {"turn_id": "t2", "gateway_tag": "hnx-run-0002", "started_at": "2026-01-01T01:00:40Z",
              "input_tokens": 9000, "output_tokens": 400, "status": "failure"},
         ]
     )  # fmt: skip
@@ -316,7 +319,7 @@ def test_turns_of_many_jobs_do_not_bind_a_variable_per_tag(store, monkeypatch):
         ev["data"].update(run_id=f"run-m{n:03d}", gateway_tag=f"run-m{n:03d}")
         store.consume(body(ev))
     store.add_turns(
-        [{"turn_id": f"t{n}", "gateway_tag": f"run-m{n:03d}", "started_at": "2026-01-01T00:00:13Z",
+        [BLANK | {"turn_id": f"t{n}", "gateway_tag": f"run-m{n:03d}", "started_at": "2026-01-01T00:00:13Z",
           "input_tokens": 1} for n in range(150)]
     )  # fmt: skip
     monkeypatch.setattr(sqlite3, "connect", low_limit)

@@ -5,17 +5,21 @@
                               [--events-user U --events-password-secret secret:NAME]
                               [--events-ca-file F] [--events-allow-plaintext]
     hnx orchestration ingest --db FILE EVENTS.jsonl|-
-    hnx orchestration turns --db FILE [--gateway-url URL] [--key secret:NAME] [--ca-file F]
-                            [--allow-plaintext] [--settle-s N]
+    hnx orchestration turns --db FILE --turn-source none|MODULE:FACTORY [--gateway-url URL]
+                            [--key secret:NAME] [--ca-file F] [--allow-plaintext] [--settle-s N]
     hnx orchestration report --db FILE [--days N]
 
 ``consume`` drains ``homelabnext.agent.job.finished`` from the bus (``HNX_ENDPOINT_EVENTS``) into
 the store, one pass (a timer runs it); ``ingest`` stores events from a JSON-lines file (one event
 per line: a backfill, or a replay of the controller's outbox).  Both count a record that finished
 before the retention window as ``expired``: acknowledged, not stored, not an error.  ``turns`` reads the gateway's
-spend log (``--gateway-url``, else ``HNX_ENDPOINT_LLM_GATEWAY``) for every job whose turns are not
-settled, with the read-only viewer key named by ``--key`` (default: the secret store's
-``llm-gateway/key-telemetry-reader``, :data:`.gateway.DEFAULT_KEY`).  ``report`` prints the rollup as JSON
+per-call log for every job whose turns are not settled, through the turn source ``--turn-source``
+names (else ``$HNX_ORCHESTRATION_TURN_SOURCE``): ``none`` (no gateway data: read nothing, settle
+nothing) or an adapter factory ``package.module:factory``, the ``adapter:`` form of a conformance
+target, called with the adapter options given (``--gateway-url`` as ``base_url``, ``--key`` by
+secret name, ``--ca-file``, ``--allow-plaintext``) and returning a
+:class:`conformance.protocols.inference.TurnSource`.  Which adapter fills the slot is site
+configuration; ``docs/orchestration-telemetry.md`` lists the shipped ones.  ``report`` prints the rollup as JSON
 (``homelabnext.orchestration.rollup/1``: the recommendation engine's input).
 
 Exit codes: 0 ok, 1 a record was refused (``ingest``, ``consume``), the bus failed during the
@@ -38,11 +42,12 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from conformance.protocols.events import EventsError
+from conformance.protocols.inference import TurnSource, TurnSourceError
 from homelabnext.events.envelope import EventError
 
 from .store import DEFAULT_RETENTION_DAYS, STORE_ERRORS, TelemetryStore
 
-ENDPOINT_GATEWAY = "HNX_ENDPOINT_LLM_GATEWAY"
+TURN_SOURCE_ENV = "HNX_ORCHESTRATION_TURN_SOURCE"
 REPLAY_S = 7 * 86400  # a new durable reads the last week, not only what arrives after it
 
 
@@ -76,13 +81,18 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("events", help="the file, or - for stdin")
     p = sub.add_parser("turns", help="read the gateway's per-turn records of unsettled jobs")
     store_opts(p)
-    p.add_argument("--gateway-url", default=None, help=f"default: ${ENDPOINT_GATEWAY}")
-    p.add_argument("--key", default=None, help="the viewer key by secret name (secret:<name>)")
-    p.add_argument("--ca-file", default=None, help="CA bundle for a private CA")
+    p.add_argument(
+        "--turn-source",
+        default=None,
+        help=f"none, or the adapter as package.module:factory (default: ${TURN_SOURCE_ENV})",
+    )
+    p.add_argument("--gateway-url", default=None, help="adapter option base_url")
+    p.add_argument("--key", default=None, help="adapter option: the key by secret name")
+    p.add_argument("--ca-file", default=None, help="adapter option: CA bundle for a private CA")
     p.add_argument(
         "--allow-plaintext",
         action="store_true",
-        help="allow http to a host that is not loopback (the key would cross in clear)",
+        help="adapter option: allow http to a host that is not loopback (a key would cross in clear)",
     )
     p.add_argument("--settle-s", type=float, default=None, help="re-read a job's turns this long")
     p = sub.add_parser("report", help="the rollup as JSON (the recommendation engine's input)")
@@ -150,25 +160,60 @@ def _connect(nats_jetstream, a):
     )
 
 
-def _turns(a, store: TelemetryStore, clock: Callable[[], float]) -> int:
-    from .gateway import DEFAULT_KEY, SETTLE_S, GatewayError, SpendLogReader, sync_turns
+def turn_source(spec: str, **config):
+    """The :class:`~conformance.protocols.inference.TurnSource` that ``spec`` names, or None for
+    ``none``: ``package.module:factory`` called with ``config`` (the options that were given).
+    :class:`ValueError` for a spec that names no factory or a factory that gives no source."""
+    import importlib
 
-    url = a.gateway_url or os.environ.get(ENDPOINT_GATEWAY, "")
-    if not url:
-        print(f"hnx orchestration turns: --gateway-url or {ENDPOINT_GATEWAY}", file=sys.stderr)
+    if spec == "none":
+        return None
+    mod, sep, attr = spec.partition(":")
+    if not sep or not mod or not attr:
+        raise ValueError(f"--turn-source {spec!r}: none, or an adapter as package.module:factory")
+    try:
+        factory = getattr(importlib.import_module(mod), attr)
+    except (ImportError, AttributeError) as exc:
+        raise ValueError(f"--turn-source {spec!r} cannot be imported: {exc}") from None
+    try:
+        source = factory(**{k: v for k, v in config.items() if v not in (None, False)})
+    except TypeError as exc:  # an option the adapter does not take
+        raise ValueError(f"--turn-source {spec!r}: {exc}") from None
+    if not isinstance(source, TurnSource):
+        raise ValueError(f"--turn-source {spec!r} gave no turn source (no turns(start, end, tags))")
+    return source
+
+
+def _turns(a, store: TelemetryStore, clock: Callable[[], float]) -> int:
+    from .gateway import SETTLE_S, sync_turns
+
+    spec = a.turn_source or os.environ.get(TURN_SOURCE_ENV, "")
+    if not spec:
+        print(
+            f"hnx orchestration turns: --turn-source or {TURN_SOURCE_ENV} "
+            "(none, or an adapter as package.module:factory)",
+            file=sys.stderr,
+        )
         return 2
     try:
-        reader = SpendLogReader(
-            url, a.key or DEFAULT_KEY, ca_file=a.ca_file, allow_plaintext=a.allow_plaintext
+        source = turn_source(
+            spec,
+            base_url=a.gateway_url,
+            key=a.key,
+            ca_file=a.ca_file,
+            allow_plaintext=a.allow_plaintext,
         )
-    except GatewayError as exc:
+    except (TurnSourceError, ValueError) as exc:
         print(f"hnx orchestration turns: {exc}", file=sys.stderr)
         return 2
+    if source is None:
+        print("orchestration turns: no turn source (none): per-job data only, nothing read")
+        return 0
     try:
         got = sync_turns(
-            store, reader.rows, now=clock(), settle_s=SETTLE_S if a.settle_s is None else a.settle_s
+            store, source, now=clock(), settle_s=SETTLE_S if a.settle_s is None else a.settle_s
         )
-    except GatewayError as exc:
+    except TurnSourceError as exc:
         print(f"hnx orchestration turns: {exc}", file=sys.stderr)
         return 1
     print(

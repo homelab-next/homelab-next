@@ -11,10 +11,21 @@ import threading
 import urllib.request
 
 import pytest
-from orch_helpers import KEY_ENV, NEVER, ROOT, T0, FakeSpendLogs, body, examples
+from orch_helpers import (
+    BLANK,
+    KEY_ENV,
+    NEVER,
+    ROOT,
+    T0,
+    TURN_SOURCE,
+    FakeSpendLogs,
+    body,
+    examples,
+    turn_source,
+)
 
 from homelabnext.orchestration import cli
-from homelabnext.orchestration.gateway import SpendLogReader, sync_turns
+from homelabnext.orchestration.gateway import sync_turns
 from homelabnext.orchestration.pages import OrchestrationSite
 from homelabnext.orchestration.store import TelemetryStore
 from homelabnext.registry.model import load
@@ -43,7 +54,7 @@ def _doc(orchestration: bool = True) -> dict:
 @pytest.fixture
 def site(filled) -> OrchestrationSite:
     with FakeSpendLogs() as gw:
-        sync_turns(filled, SpendLogReader(gw.url, env=KEY_ENV).rows, now=T0)
+        sync_turns(filled, turn_source(gw), now=T0)
     return OrchestrationSite(filled, clock=lambda: T0)
 
 
@@ -138,9 +149,9 @@ def test_the_job_page_sums_each_turn_value_over_the_turns_that_report_it(filled)
     an unknown input and a known output vanished from it."""
     filled.add_turns(
         [
-            {"turn_id": "t-in", "gateway_tag": "run-0003", "started_at": "2026-01-01T02:00:20Z",
+            BLANK | {"turn_id": "t-in", "gateway_tag": "run-0003", "started_at": "2026-01-01T02:00:20Z",
              "input_tokens": 100, "output_tokens": None},
-            {"turn_id": "t-out", "gateway_tag": "run-0003", "started_at": "2026-01-01T02:00:30Z",
+            BLANK | {"turn_id": "t-out", "gateway_tag": "run-0003", "started_at": "2026-01-01T02:00:30Z",
              "input_tokens": None, "output_tokens": 50},
         ]
     )  # fmt: skip
@@ -214,10 +225,18 @@ def test_cli_ingest_turns_and_report(tmp_path, monkeypatch, capsys):
     out, err = capsys.readouterr()
     assert "4 processed, 1 duplicate, 0 expired, 1 refused" in out and "events.jsonl:6: " in err
     monkeypatch.delenv("HNX_ENDPOINT_LLM_GATEWAY", raising=False)
-    assert run("turns") == 2
+    monkeypatch.delenv("HNX_ORCHESTRATION_TURN_SOURCE", raising=False)
+    assert run("turns") == 2  # no turn source chosen
+    assert "--turn-source or HNX_ORCHESTRATION_TURN_SOURCE" in capsys.readouterr().err
+    assert run("turns", "--turn-source", TURN_SOURCE) == 2  # the adapter has no gateway URL
+    assert "HNX_ENDPOINT_LLM_GATEWAY" in capsys.readouterr().err
+    assert run("turns", "--turn-source", "no.such.module:make") == 2
+    assert run("turns", "--turn-source", "json:dumps") == 2  # a callable that is no source
+    assert run("turns", "--turn-source", "none") == 0  # a lab without gateway data
+    assert "no turn source (none)" in capsys.readouterr().out
     monkeypatch.setenv(*next(iter(KEY_ENV.items())))
     with FakeSpendLogs() as gw:
-        assert run("turns", "--gateway-url", gw.url) == 0
+        assert run("turns", "--turn-source", TURN_SOURCE, "--gateway-url", gw.url) == 0
     assert "4 turn(s) for 4 job(s), 4 settled" in capsys.readouterr().out
     assert run("report", "--days", "7") == 0
     roll = json.loads(capsys.readouterr().out)
