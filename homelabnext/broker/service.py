@@ -908,6 +908,7 @@ class BrokerService:
 
     # ---------------------------------------------------------------- the contract: calls
     def call(self, caller, command, args, *, target: str | None = None):
+        args = dict(args) if isinstance(args, Mapping) else args  # check and run one snapshot
         act, request, decision = self._admit(caller, command, args, "call", target)
         if not decision["enforced"]:
             return self._shadow(caller, act, request, decision, "call")
@@ -927,6 +928,9 @@ class BrokerService:
         return self._run_audited(caller, act, request, args, "call")
 
     def submit(self, caller, command, args, *, target: str | None = None):
+        # the copy that is checked is the copy that is kept: a caller's later change to its
+        # mapping never reaches the handler
+        args = dict(args) if isinstance(args, Mapping) else args
         act, request, decision = self._admit(caller, command, args, "submit", target)
         rid = request["request_id"]
         secret = {}

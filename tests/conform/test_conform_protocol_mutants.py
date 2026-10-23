@@ -1,65 +1,105 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Each suite fails a subject that breaks a clause its Protocol states.
+"""The record of the protocol violators that review found passing their suites.
 
-Every fake named here breaks one stated clause and used to pass its whole suite: the suites
-pinned only the defects their own mutants modelled.  The table is the regression record: a
-suite that loses one of these checks (or weakens it) lets the fake through again, and the test
-says which.  Each fake is also registered as a mutant, so ``hnx conform mutants`` keeps proving
-it.
+Each name below is a deliberately broken fake that breaks one clause of its Protocol docstring
+and used to pass its whole suite: the suites pinned only the defects their own mutants modelled.
+Every one is registered in its suite's ``MUTANTS``, which is the single table of what each fake
+breaks and which check must fail it; ``tests/conform/test_conform_mutants.py`` (and ``hnx conform
+mutants``) prove each is caught by that check.  This file only keeps the record: a mutant dropped
+from ``MUTANTS`` - and with it the proof - fails here by name.
 """
-
-import importlib
 
 import pytest
 
 from homelabnext.conform.core import run_checks
 from homelabnext.conform.registry import load_module
 
-#: (capability, fakes module, broken fake, the check that must fail it)
-CASES = [
-    ("broker", "command_broker", "SubmitSkipsAllowlistBroker", "caller-outside-allowlist-denied"),
-    ("broker", "command_broker", "SubmitSkipsArgsBroker", "invalid-args-never-reach-handler"),
-    ("broker", "command_broker", "DeferredClearAuditBroker", "audit-redacts-secret-args"),
-    ("events", "event_bus", "StaleSettleEventBus", "stale-delivery-settles-nothing"),
-    ("events", "event_bus", "ReplayingEventBus", "new-consumer-starts-at-creation"),
-    ("records", "records_target", "ReapprovingRecordsTarget", "decisions-are-final"),
-    ("records", "records_target", "RedenyingRecordsTarget", "decisions-are-final"),
-    ("secrets", "secret_store", "VersionZeroIsLatestSecretStore", "missing-secret-raises"),
-    ("secrets", "secret_store", "NegativeVersionSecretStore", "missing-secret-raises"),
-    ("secrets", "secret_store", "VersionErrorLeaksSecretStore", "errors-never-contain-values"),
-    ("secrets", "secret_store", "DeletesLatestOnlySecretStore", "delete-removes-all-versions"),
-    ("secrets", "secret_store", "AliasingSecretStore", "stored-data-is-a-copy"),
-    ("idp", "identity", "SubstringScopeIdentityProvider", "scope-enforced"),
-    ("idp", "identity", "ScopedSkipsRevocationIdentityProvider", "revoked-token-rejected"),
-    ("idp", "identity", "NonFiniteTtlIdentityProvider", "issue-validates-input"),
-    ("object-store", "object_store", "HeadMissingIsEmptyObjectStore", "get-missing-key-raises"),
-    ("object-store", "object_store", "DeleteMissingBucketObjectStore", "missing-bucket-raises"),
-    (
-        "object-store",
-        "object_store",
-        "DeleteEveryBucketObjectStore",
-        "keys-never-escape-the-bucket",
-    ),
-]
+#: capability -> the mutants each review round found (by their ``MUTANTS`` name)
+REVIEWED = {
+    "broker": {
+        # first round
+        "allowlist-per-caller-only",
+        "redacts-by-key-name",
+        "redacts-ok-calls-only",
+        "handler-error-passed-through",
+        "submit-skips-allowlist",
+        "submit-skips-arg-validation",
+        "deferred-audit-in-clear",
+        # second round
+        "run-audited-twice",
+        "run-error-passed-through",
+        "submit-keeps-caller-args",
+        "refused-submit-unaudited",
+        "submit-unaudited",
+    },
+    "events": {
+        "loses-unsettled-on-restart",
+        "restart-at-tail",
+        "double-settle",
+        "stale-delivery-settles",
+        "new-consumer-replays-history",
+    },
+    "records": {
+        "completes-inbox-notes",
+        "completes-denied-notes",
+        "partial-completion",
+        "decide-follows-traversal",
+        "read-follows-traversal",
+        "approve-overturns-denial",
+        "deny-withdraws-approval",
+    },
+    "secrets": {
+        "error-cause-leaks-value",
+        "lease-never-expires",
+        "unknown-lease-valid",
+        "negative-ttl-accepted",
+        "version-zero-is-latest",
+        "negative-version-indexes-from-end",
+        "version-error-leaks-value",
+        "delete-drops-latest-only",
+        "stores-caller-mapping",
+    },
+    "idp": {
+        "alg-none-accepted",
+        "empty-signature-accepted",
+        "exp-not-enforced",
+        "scope-matched-as-substring",
+        "revocation-skipped-when-scoped",
+        "non-finite-ttl-accepted",
+    },
+    "lake-query": {"interpolated-params"},
+    "object-store": {
+        "keys-resolved-as-paths",
+        "head-missing-is-empty",
+        "delete-missing-bucket-succeeds",
+        "delete-reaches-every-bucket",
+    },
+}
 
 
-def _factory(module, name):
-    return getattr(importlib.import_module(f"conformance.fakes.{module}"), name)
+@pytest.mark.parametrize("cap", sorted(REVIEWED))
+def test_every_reviewed_violator_is_a_registered_mutant(cap):
+    mutants = load_module(cap).MUTANTS
+    missing = sorted(REVIEWED[cap] - set(mutants))
+    assert not missing, f"{cap}: no longer registered (and so no longer proved): {missing}"
+    factories = [mutants[n].factory for n in REVIEWED[cap]]
+    assert len(set(factories)) == len(factories), f"{cap}: two names share one broken fake"
 
 
-@pytest.mark.parametrize(("cap", "module", "name", "check"), CASES)
-def test_the_suite_fails_the_protocol_violating_fake(cap, module, name, check):
-    results = run_checks(load_module(cap).SUITE, _factory(module, name))
-    failed = [r.check for r in results if r.status == "fail"]
-    assert failed, f"{cap}: {name} passed every check (the suite cannot see the defect)"
-    assert check in failed, f"{cap}: {name} failed {failed}, not {check!r}"
+def _check(cap, check, factory):
+    (result,) = run_checks(load_module(cap).SUITE, factory, only=[check])
+    return result
 
 
-@pytest.mark.parametrize(("cap", "module", "name", "check"), CASES)
-def test_the_fake_is_registered_as_a_mutant_of_that_check(cap, module, name, check):
-    factory = _factory(module, name)
-    named = [m.fails for m in load_module(cap).MUTANTS.values() if m.factory is factory]
-    assert named == [check], f"{cap}: {name} registered for {named}, expected [{check!r}]"
+def test_a_redaction_failure_means_redaction():
+    """``audit-redacts-secret-args`` once also asserted the deferred run's success, its audit
+    shape and the refusal count, so a broker whose run was merely audited twice, or whose submit
+    skipped validation, failed a check named for redaction.  Those are their own checks now."""
+    from conformance.fakes.command_broker import RunAuditedTwiceBroker, SubmitSkipsArgsBroker
+
+    for broken in (RunAuditedTwiceBroker, SubmitSkipsArgsBroker):
+        assert _check("broker", "audit-redacts-secret-args", broken).status == "pass", broken
+    assert _check("broker", "run-audited-once", RunAuditedTwiceBroker).status == "fail"
 
 
 def test_a_stale_delivery_never_settles_the_live_one_in_the_reference_bus():

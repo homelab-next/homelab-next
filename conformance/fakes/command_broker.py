@@ -67,14 +67,16 @@ class FakeBroker:
         return result
 
     def call(self, caller, command, args):
+        args = dict(args)  # checked and run as one snapshot
         handler, spec = self._admit(caller, command, args)
         return self._execute(caller, command, handler, spec, args)
 
     # ---- deferred requests: bound to the caller that submitted them
     def submit(self, caller, command, args):
+        args = dict(args)  # the copy that is checked is the copy that runs
         _, spec = self._admit(caller, command, args, operation="submit")
         rid = f"req-{next(self._seq)}"
-        self._reqs[rid] = {"caller": caller, "command": command, "args": dict(args)}
+        self._reqs[rid] = {"caller": caller, "command": command, "args": args}
         self._reqs[rid]["state"] = "pending"
         self._log(caller, command, "ok", spec, args, operation="submit", request_id=rid)
         return rid
@@ -240,3 +242,58 @@ class DeferredClearAuditBroker(FakeBroker):
             self._audit.append(AuditRecord(caller, command, outcome, dict(args), **extra))
             return
         super()._log(caller, command, outcome, spec, args, **extra)
+
+
+class RunAuditedTwiceBroker(FakeBroker):
+    """Defect: running a request leaves a ``started`` record and then its outcome, two records
+    for one operation."""
+
+    def _execute(self, caller, command, handler, spec, args, **extra):
+        if extra.get("operation") == "run":
+            self._log(caller, command, "started", spec, args, **extra)
+        return super()._execute(caller, command, handler, spec, args, **extra)
+
+
+class SubmitKeepsCallerArgsBroker(FakeBroker):
+    """Defect: ``submit`` checks the arguments and then keeps the caller's own mapping, so what
+    ``run`` hands the handler is whatever that mapping holds by then - never validated."""
+
+    def submit(self, caller, command, args):
+        rid = super().submit(caller, command, args)
+        self._reqs[rid]["args"] = args
+        return rid
+
+
+class RefusedSubmitUnauditedBroker(FakeBroker):
+    """Defect: a denied or invalid ``submit`` leaves no audit record (``call`` still does), so a
+    stranger can probe the allowlist through ``submit`` unseen."""
+
+    def _log(self, caller, command, outcome, spec, args, **extra):
+        if extra.get("operation") == "submit" and outcome in ("denied", "invalid"):
+            return
+        super()._log(caller, command, outcome, spec, args, **extra)
+
+
+class UnauditedSubmitBroker(FakeBroker):
+    """Defect: no ``submit`` is audited at all; only the later ``run`` leaves a record."""
+
+    def _log(self, caller, command, outcome, spec, args, **extra):
+        if extra.get("operation") == "submit":
+            return
+        super()._log(caller, command, outcome, spec, args, **extra)
+
+
+class RunChattyErrorBroker(FakeBroker):
+    """Defect: ``call`` contains a handler failure, but ``run`` passes the handler's own message
+    and cause through to the caller."""
+
+    def _execute(self, caller, command, handler, spec, args, **extra):
+        if extra.get("operation") != "run":
+            return super()._execute(caller, command, handler, spec, args, **extra)
+        try:
+            result = handler(**dict(args))
+        except Exception as exc:
+            self._log(caller, command, "error", spec, args, **extra)
+            raise BrokerError(f"{command} failed: {exc}") from exc
+        self._log(caller, command, "ok", spec, args, **extra)
+        return result

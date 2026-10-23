@@ -16,7 +16,12 @@ The handler is the trust boundary - it must treat every argument as hostile (no 
 building of commands or paths without its own allowlist or pattern).
 
 Deferred requests: ``submit(caller, command, args)`` runs the same allowlist and argument checks
-as ``call`` and returns a request id instead of running the handler.  A request is bound to the
+as ``call`` and returns a request id instead of running the handler.  Like a call, every submit
+leaves one audit record (operation ``submit``), accepted, denied or invalid.  ``submit`` checks
+and keeps its own copy of the arguments: changing the mapping it was given afterwards changes
+nothing that runs.  Running a request leaves one record of its outcome (operation ``run``).  A
+grant cannot be withdrawn (``allow`` only adds), so whether ``run`` re-checks the allowlist is not
+part of the contract yet.  A request is bound to the
 caller that submitted it: only that caller may ``status`` (read), ``run`` or ``cancel`` it.  Any
 other caller gets ``Denied`` with ``reason == "not-request-owner"`` - the same answer as for an id
 that does not exist, so a foreign request's existence is not disclosed - the request is left

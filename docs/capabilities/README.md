@@ -21,7 +21,7 @@ Each capability is a seam: a small contract (`conformance/protocols/`), a confor
 | [cases](cases.md) ([[capabilities/cases\|cases]]) | alerts, dismissal with a reason, promotion to cases, notes and the status machine | 8 | 12 | 0 | none yet | none |
 | [events](events.md) ([[capabilities/events\|events]]) | publish/consume with acknowledgement, bounded redelivery and dead letters | 4 | 14 | 1 | `nats_jetstream` | [events](../systems/events.md) ([[systems/events\|events]]) |
 | [orchestration](orchestration.md) ([[capabilities/orchestration\|orchestration]]) | named jobs: run once per idempotency key, retry a bounded number of times, cancel, isolate | 4 | 11 | 0 | `llm_orchestrator` | none |
-| [broker](broker.md) ([[capabilities/broker\|broker]]) | allowlisted command execution with argument validation, a redacted audit trail and caller-bound requests | 8 | 12 | 3 | none yet | none |
+| [broker](broker.md) ([[capabilities/broker\|broker]]) | allowlisted command execution with argument validation, a redacted audit trail and caller-bound requests | 8 | 15 | 3 | none yet | none |
 | [secrets](secrets.md) ([[capabilities/secrets\|secrets]]) | versioned key-value secrets with leases and redacted errors | 7 | 13 | 0 | `openbao` | [secrets](../systems/secrets.md) ([[systems/secrets\|secrets]]) |
 | [idp](idp.md) ([[capabilities/idp\|idp]]) | issue/verify short-lived bearer tokens; forged, expired, revoked and garbage tokens fail | 3 | 14 | 0 | none yet | [idp](../systems/idp.md) ([[systems/idp\|idp]]) |
 | [records](records.md) ([[capabilities/records\|records]]) | validated proposals in one agent lane; operator-only approve/deny/complete moves | 7 | 13 | 0 | none yet | none |

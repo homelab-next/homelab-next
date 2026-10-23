@@ -82,7 +82,12 @@ def _(store):  # the subject: any implementation of the Protocol
   hide behind a hook at all: token and lease expiry use `tick()` when the subject has it and
   otherwise wait in real time (a one-second ttl).  Skips never count as a pass of anything.
 * **Waivers.** A target may waive a `should` check with a written reason; the report shows it.
-* Each suite has 6 to 16 checks, at least six of them `must`.
+* Each suite has 6 to 24 checks, at least six of them `must`: one check per clause of the
+  Protocol docstring, so a suite says something and a failure names what broke.  The ceiling
+  keeps a suite one readable file and a run against a real service short; a contract with more
+  clauses than that is two capabilities.  Do not fold a second clause into an existing check to
+  stay under it: a check named for redaction that also fails when a deferred run is broken sends
+  the reader to the wrong place.
 * Errors are the Protocol's own exception types.  An adapter translates its client library's
   errors into them; that translation is part of what is being proved.
 
@@ -244,7 +249,7 @@ Set `HNX_CONFORM_TARGET` to run the invariant against a real target.
 2. **Fake.** Add `conformance/fakes/<name>.py`: an in-memory implementation with a `features`
    set, injected clocks, no network.  Add the broken twin(s) next to it.
 3. **Suite.** Add `conformance/suites/<name_with_underscores>.py` with `SUITE`, `make_fake()` and
-   `MUTANTS`: 6 to 16 checks, at least six `must`, each with an id (`kebab-case`), a one-line
+   `MUTANTS`: 6 to 24 checks, at least six `must`, each with an id (`kebab-case`), a one-line
    summary and a precise assertion message.  Test errors and negative cases, not only the happy
    path.
 4. **Wire it.** Add the name to `CAPABILITIES` (core, only by changing `docs/interfaces.md`) or to

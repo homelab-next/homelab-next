@@ -899,6 +899,21 @@ def test_secret_arguments_never_reach_disk(tmp_path):
     assert info.value.reason == "secret-args-lost"
 
 
+def test_submit_keeps_the_arguments_it_checked(tmp_path):
+    """The mapping a caller passed to submit is copied before it is checked: changing it
+    afterwards changes nothing that runs."""
+    svc = BrokerService(tmp_path / "state", clock=Clock())
+    got = []
+    svc.register("ops.echo", lambda **kw: got.append(kw) or "ok", {"name": ArgSpec("str")})
+    svc.allow("ops", ["ops.echo"])
+    given = {"name": "x"}
+    rid = svc.submit("ops", "ops.echo", given)
+    given["name"] = 5
+    given["extra"] = "--force"
+    assert svc.run("ops", rid) == "ok"
+    assert got == [{"name": "x"}], got
+
+
 def test_registering_over_a_manifest_action_is_refused(tmp_path):
     svc = _svc(tmp_path)
     with pytest.raises(ValueError):

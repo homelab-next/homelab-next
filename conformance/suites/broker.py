@@ -18,10 +18,15 @@ from conformance.fakes.command_broker import (
     KeyNameRedactingBroker,
     LoggingBroker,
     OkOnlyRedactingBroker,
+    RefusedSubmitUnauditedBroker,
+    RunAuditedTwiceBroker,
+    RunChattyErrorBroker,
     SharedRequestsBroker,
     SilentForeignAccessBroker,
+    SubmitKeepsCallerArgsBroker,
     SubmitSkipsAllowlistBroker,
     SubmitSkipsArgsBroker,
+    UnauditedSubmitBroker,
 )
 from conformance.protocols.broker import ArgSpec, BrokerError, Denied, InvalidArguments
 from homelabnext.conform.core import Mutant, Suite
@@ -96,9 +101,6 @@ def _(b):
             raises(lambda f=fn: f(caller, other, {"name": "x"}), f"{op}: not allowed", Denied)
     assert ran == [], "the handler of a command the caller is not allowed ran"
     assert b.call(caller, mine, {"name": "x"}) == {"ok": "x"}, "the allowed command broke"
-    assert b.run(caller, b.submit(caller, mine, {"name": "x"})) == {"ok": "x"}, (
-        "the allowed submit broke"
-    )
 
 
 @SUITE.check(
@@ -121,18 +123,24 @@ def _(b):
 
 @SUITE.check(
     "handler-error-contained",
-    "a failing handler surfaces as BrokerError carrying none of the handler's internal detail",
+    "a failing handler surfaces as BrokerError carrying none of the handler's internal detail, "
+    "called or run later",
 )
 def _(b):
     def boom(**kw):
         raise ZeroDivisionError(INTERNAL)
 
     cmd, caller, _ = _setup(b, boom)
-    exc = raises(lambda: b.call(caller, cmd, {"name": "x"}), "failing handler", BrokerError)
-    assert isinstance(exc, BrokerError)
-    assert INTERNAL not in exc_text(exc), (
-        "the handler's internal detail reached the caller (message, cause or context)"
-    )
+    rid = b.submit(caller, cmd, {"name": "x"})
+    for op, fn in (
+        ("call", lambda: b.call(caller, cmd, {"name": "x"})),
+        ("run", lambda: b.run(caller, rid)),
+    ):
+        exc = raises(fn, f"failing handler ({op})", BrokerError)
+        assert isinstance(exc, BrokerError), f"{op}: raised {type(exc).__name__}"
+        assert INTERNAL not in exc_text(exc), (
+            f"{op}: the handler's internal detail reached the caller (message, cause or context)"
+        )
 
 
 @SUITE.check("every-call-audited", "ok, denied, invalid and error calls each leave one record")
@@ -161,6 +169,48 @@ def _(b):
 
 
 @SUITE.check(
+    "every-submit-audited",
+    "ok, denied and invalid submits each leave one submit record, as calls do",
+)
+def _(b):
+    cmd, caller, _ = _setup(b)
+    stranger = uniq("stranger")
+    before = len(b.audit())
+    rid = b.submit(caller, cmd, {"name": "a"})
+    for fn in (
+        lambda: b.submit(stranger, cmd, {"name": "a"}),
+        lambda: b.submit(caller, cmd, {}),
+        lambda: b.submit(caller, uniq("nocmd"), {"name": "a"}),
+    ):
+        with contextlib.suppress(BrokerError):
+            fn()
+    new = list(b.audit())[before:]
+    got = [(r.operation, r.outcome, r.caller) for r in new]
+    want = [
+        ("submit", "ok", caller),
+        ("submit", "denied", stranger),
+        ("submit", "invalid", caller),
+        ("submit", "denied", caller),
+    ]
+    assert got == want, f"four submits (ok, stranger, invalid, unknown command) left {got}"
+    assert new[0].request_id == rid, f"the accepted submit's record names {new[0].request_id!r}"
+
+
+@SUITE.check(
+    "submit-keeps-its-own-copy",
+    "changing the mapping given to submit afterwards changes nothing that runs",
+)
+def _(b):
+    cmd, caller, calls = _setup(b)
+    given = {"name": "x"}
+    rid = b.submit(caller, cmd, given)
+    given["name"] = 5  # what was validated is a str: a later int must never reach the handler
+    given["evil"] = "--force"
+    assert b.run(caller, rid) == {"ok": "x"}, "the request ran with the caller's later changes"
+    assert calls == [{"name": "x"}], f"the handler got {calls}, not the arguments submitted"
+
+
+@SUITE.check(
     "audit-redacts-secret-args",
     "arguments the schema marks secret never appear in the audit trail or an error, any outcome, "
     "called or deferred",
@@ -180,6 +230,8 @@ def _(b):
     raised = []
 
     def attempt(fn):
+        # only what is written and raised is judged here: whether each attempt succeeds, and how
+        # many records it leaves, are other checks' business
         try:
             return fn()
         except BrokerError as exc:
@@ -193,32 +245,56 @@ def _(b):
         (caller, {"user": "fail", "label": SECRET}),  # error
     ):
         attempt(lambda w=who, a=args: b.call(w, cmd, a))
-    called = list(b.audit())[before:]
-    assert [r.outcome for r in called] == ["ok", "denied", "invalid", "error"], [
-        r.outcome for r in called
-    ]
-    assert called[0].args.get("user") == "svc", "non-secret arguments should stay visible"
-    # the same four outcomes on the deferred path: submit, status, run, cancel
-    mid = len(b.audit())
-    ok = b.submit(caller, cmd, {"user": "svc", "label": SECRET})
-    b.status(caller, ok)
-    assert b.run(caller, ok) == "done", "the deferred request did not run"
-    attempt(lambda: b.run(caller, b.submit(caller, cmd, {"user": "fail", "label": SECRET})))
+    # the same outcomes on the deferred path: submit, status, run, cancel
+    for args in ({"user": "svc", "label": SECRET}, {"user": "fail", "label": SECRET}):
+        rid = attempt(lambda a=args: b.submit(caller, cmd, a))
+        if rid is not None:
+            attempt(lambda r=rid: b.status(caller, r))
+            attempt(lambda r=rid: b.run(caller, r))
     attempt(lambda: b.submit(uniq("stranger"), cmd, {"user": "svc", "label": SECRET}))
     attempt(lambda: b.submit(caller, cmd, {"user": 7, "label": SECRET}))
-    b.cancel(caller, b.submit(caller, cmd, {"user": "svc", "label": SECRET}))
-    deferred = list(b.audit())[mid:]
-    for rec in called + deferred:
+    rid = attempt(lambda: b.submit(caller, cmd, {"user": "svc", "label": SECRET}))
+    if rid is not None:
+        attempt(lambda: b.cancel(caller, rid))
+    records = list(b.audit())[before:]
+    for rec in records:
         assert SECRET not in repr(rec) and SECRET not in repr(dict(rec.args)), (
             f"a secret argument was written to the audit trail on a {rec.outcome!r} "
-            f"{getattr(rec, 'operation', 'call')!r} record"
+            f"{rec.operation!r} record"
         )
-    assert len(raised) == 6 and not any(SECRET in t for t in raised), (
-        f"{len(raised)} of 6 refusals raised, or a secret argument appeared in an error"
+    assert not any(SECRET in t for t in raised), "a secret argument appeared in an error"
+    shown = [r for r in records if r.outcome == "ok" and r.operation == "call"]
+    assert shown and all(r.args.get("user") == "svc" for r in shown), (
+        "non-secret arguments should stay visible (redaction is per argument, not per record)"
     )
-    runs = [r for r in deferred if r.operation == "run" and r.request_id == ok]
-    assert [r.outcome for r in runs] == ["ok"], f"the deferred run's audit records: {runs}"
-    assert runs[0].args.get("user") == "svc", "non-secret arguments should stay visible"
+
+
+@SUITE.check(
+    "run-audited-once",
+    "running a request leaves exactly one record of its outcome, operation run, with its id",
+)
+def _(b):
+    cmd, caller = uniq("cmd"), uniq("caller")
+    spec = {"user": ArgSpec("str"), "label": ArgSpec("str", secret=True)}
+
+    def handler(**kw):
+        if kw["user"] == "fail":
+            raise RuntimeError("handler failed")
+        return "done"
+
+    b.register(cmd, handler, spec)
+    b.allow(caller, [cmd])
+    for user, outcome in (("svc", "ok"), ("fail", "error")):
+        rid = b.submit(caller, cmd, {"user": user, "label": SECRET})
+        before = len(b.audit())
+        with contextlib.suppress(BrokerError):
+            b.run(caller, rid)
+        new = list(b.audit())[before:]
+        got = [(r.operation, r.outcome, r.request_id, r.caller, r.command) for r in new]
+        assert got == [("run", outcome, rid, caller, cmd)], (
+            f"a run whose handler {'failed' if user == 'fail' else 'succeeded'} left {got}"
+        )
+        assert new[0].args.get("user") == user, "non-secret arguments should stay visible"
 
 
 @SUITE.check(
@@ -382,6 +458,11 @@ MUTANTS = {
         "handler-error-contained",
         "the handler's exception message and cause reach the caller",
     ),
+    "run-error-passed-through": Mutant(
+        RunChattyErrorBroker,
+        "handler-error-contained",
+        "run (not call) passes the handler's exception message and cause to the caller",
+    ),
     "requests-shared-between-callers": Mutant(
         SharedRequestsBroker,
         "requests-bound-to-caller",
@@ -401,6 +482,26 @@ MUTANTS = {
         DeferredClearAuditBroker,
         "audit-redacts-secret-args",
         "submit and run audit records carry secret arguments in the clear",
+    ),
+    "run-audited-twice": Mutant(
+        RunAuditedTwiceBroker,
+        "run-audited-once",
+        "running a request leaves a started record and then its outcome",
+    ),
+    "submit-keeps-caller-args": Mutant(
+        SubmitKeepsCallerArgsBroker,
+        "submit-keeps-its-own-copy",
+        "submit validates the arguments, then runs whatever the caller's mapping holds later",
+    ),
+    "refused-submit-unaudited": Mutant(
+        RefusedSubmitUnauditedBroker,
+        "every-submit-audited",
+        "a denied or invalid submit leaves no audit record",
+    ),
+    "submit-unaudited": Mutant(
+        UnauditedSubmitBroker,
+        "every-submit-audited",
+        "no submit leaves an audit record",
     ),
     "foreign-access-not-audited": Mutant(
         SilentForeignAccessBroker,

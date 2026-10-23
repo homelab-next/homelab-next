@@ -13,7 +13,7 @@ generated_by: hnx docs capabilities generate
 **Allowlisted command execution with argument validation, a redacted audit trail and caller-bound requests.**
 
 - Contract: [`conformance.protocols.broker`](../../conformance/protocols/broker.py) (`conformance.protocols.broker:Broker`)
-- Conformance suite: [`conformance.suites.broker`](../../conformance/suites/broker.py) (15 checks: 12 MUST, 3 SHOULD)
+- Conformance suite: [`conformance.suites.broker`](../../conformance/suites/broker.py) (18 checks: 15 MUST, 3 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -35,7 +35,12 @@ The handler is the trust boundary - it must treat every argument as hostile (no 
 building of commands or paths without its own allowlist or pattern).
 
 Deferred requests: `submit(caller, command, args)` runs the same allowlist and argument checks
-as `call` and returns a request id instead of running the handler.  A request is bound to the
+as `call` and returns a request id instead of running the handler.  Like a call, every submit
+leaves one audit record (operation `submit`), accepted, denied or invalid.  `submit` checks
+and keeps its own copy of the arguments: changing the mapping it was given afterwards changes
+nothing that runs.  Running a request leaves one record of its outcome (operation `run`).  A
+grant cannot be withdrawn (`allow` only adds), so whether `run` re-checks the allowlist is not
+part of the contract yet.  A request is bound to the
 caller that submitted it: only that caller may `status` (read), `run` or `cancel` it.  Any
 other caller gets `Denied` with `reason == "not-request-owner"` - the same answer as for an id
 that does not exist, so a foreign request's existence is not disclosed - the request is left
@@ -231,9 +236,12 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `caller-outside-allowlist-denied` | MUST | a registered command is refused to a caller not allowed it, called or submitted |  |
 | `allowlist-is-per-command` | MUST | a caller allowed one command is denied another, called or submitted; that handler never runs |  |
 | `invalid-args-never-reach-handler` | MUST | missing, unexpected and mistyped arguments are rejected first, called or submitted |  |
-| `handler-error-contained` | MUST | a failing handler surfaces as BrokerError carrying none of the handler's internal detail |  |
+| `handler-error-contained` | MUST | a failing handler surfaces as BrokerError carrying none of the handler's internal detail, called or run later |  |
 | `every-call-audited` | MUST | ok, denied, invalid and error calls each leave one record |  |
+| `every-submit-audited` | MUST | ok, denied and invalid submits each leave one submit record, as calls do |  |
+| `submit-keeps-its-own-copy` | MUST | changing the mapping given to submit afterwards changes nothing that runs |  |
 | `audit-redacts-secret-args` | MUST | arguments the schema marks secret never appear in the audit trail or an error, any outcome, called or deferred |  |
+| `run-audited-once` | MUST | running a request leaves exactly one record of its outcome, operation run, with its id |  |
 | `audit-trail-is-append-only` | SHOULD | editing the returned audit list does not change the trail |  |
 | `results-are-isolated` | SHOULD | mutating a returned result does not change later results |  |
 | `submitted-request-runs-for-its-owner` | MUST | submit defers; the owner reads it pending, runs it once, and reads it done |  |
@@ -259,9 +267,14 @@ Each is a deliberately broken fake (`hnx conform run broker --target broken:<mut
 | `handler-error-passed-through` | `handler-error-contained` | the handler's exception message and cause reach the caller |
 | `redacts-by-key-name` | `audit-redacts-secret-args` | redaction guesses from argument names instead of the schema's secret flag |
 | `redacts-ok-calls-only` | `audit-redacts-secret-args` | denied, invalid and failed calls are audited with secrets in the clear |
+| `refused-submit-unaudited` | `every-submit-audited` | a denied or invalid submit leaves no audit record |
 | `requests-shared-between-callers` | `requests-bound-to-caller` | any caller may read, run or cancel a request another caller submitted |
+| `run-audited-twice` | `run-audited-once` | running a request leaves a started record and then its outcome |
+| `run-error-passed-through` | `handler-error-contained` | run (not call) passes the handler's exception message and cause to the caller |
+| `submit-keeps-caller-args` | `submit-keeps-its-own-copy` | submit validates the arguments, then runs whatever the caller's mapping holds later |
 | `submit-skips-allowlist` | `caller-outside-allowlist-denied` | submit checks the arguments but not the allowlist, so anyone can queue any command |
 | `submit-skips-arg-validation` | `invalid-args-never-reach-handler` | submit checks the allowlist but not the arguments |
+| `submit-unaudited` | `every-submit-audited` | no submit leaves an audit record |
 
 ## Implementations
 
@@ -323,4 +336,4 @@ No service in `examples/services.yml` declares `capability: broker`.
    hnx conform run broker --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (12) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (15) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
