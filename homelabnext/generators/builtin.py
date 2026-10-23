@@ -124,6 +124,35 @@ def hosts_file(reg: Registry) -> dict[str, str]:
 
 
 # 3 ---------------------------------------------------------------- Caddy
+#: the identity headers forward_auth copies from the IdP's answer onto the request
+FORWARD_AUTH_HEADERS = ("X-Authentik-Username", "X-Authentik-Groups")
+#: the prefix every identity header of the IdP's carries: a client-sent one is always dropped
+IDENTITY_HEADER_PREFIX = "X-Authentik-"
+
+
+def _forward_auth_snippet(endpoint: str) -> str:
+    """The ``hnx_forward_auth`` snippet.  Before ``forward_auth`` runs, every identity header a
+    *client* sent is deleted: Caddy 2.9.0 to 2.11.1 keep a client-sent header that the IdP's
+    answer omits, so without the strip a client could name its own user or groups to the
+    service.  The deletes and ``forward_auth`` sit in one ``route``, which runs its directives in
+    the order written (``forward_auth`` otherwise sorts before ``request_header``, and the strip
+    would delete the IdP's own headers instead)."""
+    strip = "".join(f"\t\trequest_header -{h}\n" for h in FORWARD_AUTH_HEADERS)
+    return (
+        "(hnx_forward_auth) {\n"
+        "\troute {\n"
+        "\t\t# client-sent identity headers never reach the service, whatever the IdP answers\n"
+        f"\t\trequest_header -{IDENTITY_HEADER_PREFIX}*\n"
+        f"{strip}"
+        f"\t\tforward_auth {endpoint} {{\n"
+        "\t\t\turi /outpost.goauthentik.io/auth/caddy\n"
+        f"\t\t\tcopy_headers {' '.join(FORWARD_AUTH_HEADERS)}\n"
+        "\t\t}\n"
+        "\t}\n"
+        "}\n"
+    )
+
+
 @register(
     "caddy", "Caddyfile site snippets for services with a public hostname", "reverse proxy (edge)"
 )
@@ -132,11 +161,7 @@ def caddy(reg: Registry) -> dict[str, str]:
     parts = [_hdr(reg)]
     if idp:
         parts.append(
-            "(hnx_forward_auth) {\n"
-            f"\tforward_auth {checked(_endpoint_url(reg, idp), 'idp endpoint', 'caddy')} {{\n"
-            "\t\turi /outpost.goauthentik.io/auth/caddy\n"
-            "\t\tcopy_headers X-Authentik-Username X-Authentik-Groups\n"
-            "\t}\n}\n"
+            _forward_auth_snippet(checked(_endpoint_url(reg, idp), "idp endpoint", "caddy"))
         )
     for s in reg.sorted_services():
         if not s.public_hostname:
