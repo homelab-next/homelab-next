@@ -292,12 +292,38 @@ def test_one_line_per_connection_and_a_newline_terminates(broker):
     assert resp["ok"] is True
 
 
+class _Slots(threading.BoundedSemaphore):
+    """A server's slot pool that says when a slot is taken and when one is given back, so a test
+    waits for the server's state instead of sleeping and hoping the thread got there."""
+
+    def __init__(self, n: int) -> None:
+        super().__init__(n)
+        self.taken = threading.Event()
+        self.freed = threading.Event()
+
+    def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:
+        got = super().acquire(blocking, timeout)
+        if got:
+            self.taken.set()
+        return got
+
+    def release(self, n: int = 1) -> None:
+        super().release(n)
+        self.freed.set()
+
+
+def _watched(srv: BrokerServer, n: int = 1) -> _Slots:
+    srv.slots = _Slots(n)
+    return srv.slots
+
+
 def test_a_full_server_answers_busy(tmp_path):
     svc = _service(tmp_path)
     srv = BrokerServer(svc, tmp_path / "run" / "b.sock", max_connections=1, timeout_s=3)
+    slots = _watched(srv)
     with srv, socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as hold:
         hold.connect(str(srv.path))  # occupies the only slot until it times out
-        time.sleep(0.2)
+        assert slots.taken.wait(5), "the server never took the holding connection's slot"
         assert _raw(srv.path, b'{"op": "actions"}')["error"] == "busy"
 
 
@@ -369,21 +395,24 @@ def test_a_slow_sender_cannot_hold_a_connection_past_the_deadline(tmp_path):
 
 def test_an_unknown_peer_is_answered_without_holding_its_slot(tmp_path):
     srv = _server(tmp_path, max_connections=1, timeout_s=3)
+    slots = _watched(srv)
     with srv, socket.socket(socket.AF_UNIX) as stranger:
         srv.credentials = lambda conn: (0, STRANGER_UID, 0)
         stranger.settimeout(5)
         stranger.connect(str(srv.path))
         assert json.loads(stranger.recv(65536))["error"] == "unknown-caller"
         srv.credentials = peer_credentials  # the stranger keeps its connection open
-        time.sleep(0.2)
+        # its slot comes back well before the 3 s read deadline: it is never held for one
+        assert slots.freed.wait(2), "the answered stranger kept its slot"
         assert _raw(srv.path, b'{"op": "actions"}\n')["ok"] is True
 
 
 def test_agents_cannot_starve_the_approval_relay(tmp_path):
     srv = _server(tmp_path, max_connections=1, timeout_s=3)
+    slots = _watched(srv)
     with srv, socket.socket(socket.AF_UNIX) as hold:
         hold.connect(str(srv.path))  # an agent's connection holds every agent slot
-        time.sleep(0.2)
+        assert slots.taken.wait(5), "the server never took the holding connection's slot"
         assert _raw(srv.path, b'{"op": "actions"}\n')["error"] == "busy"
         srv.credentials = lambda conn: (0, RELAY_UID, 0)
         assert _raw(srv.path, b'{"op": "pending"}\n')["ok"] is True
