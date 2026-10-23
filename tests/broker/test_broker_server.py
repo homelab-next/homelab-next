@@ -724,15 +724,26 @@ def test_serve_command_runs_until_terminated(tmp_path):
         stderr=subprocess.PIPE,
     )
     try:
-        for _ in range(100):
-            if sock.exists():
-                break
-            time.sleep(0.1)
-        assert BrokerClient(sock).actions()["caller"] == "profile:triage"
+        assert _actions_once_serving(proc, sock)["caller"] == "profile:triage"
     finally:
         proc.terminate()
         assert proc.wait(timeout=10) == 0
     assert not sock.exists()
+
+
+def _actions_once_serving(proc, sock, deadline_s: float = 60.0) -> dict:
+    """``actions()`` from a broker started as ``proc``, once it accepts a connection.  The socket
+    file appears at bind, before listen, so a connect between the two is refused: waiting for the
+    file alone flaked with "Connection refused" on a loaded host."""
+    end = time.monotonic() + deadline_s
+    while True:
+        try:
+            return BrokerClient(sock).actions()
+        except BrokerError as exc:
+            if getattr(exc, "reason", None) != "transport-error" or time.monotonic() > end:
+                raise
+            assert proc.poll() is None, f"the broker exited: {proc.stderr.read().decode()}"
+            time.sleep(0.1)
 
 
 # -- the MCP server's registration -------------------------------------------------------------
