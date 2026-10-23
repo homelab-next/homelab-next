@@ -73,28 +73,38 @@ and only while its marker says ``fictional: true``.  Findings:
   sops-config      a ``.sops.yaml`` outside the skeleton;
   ciphertext       a SOPS-encrypted file (sealed real data does not belong in public git
                    either: it is one leaked key away from plain text);
-  scope-address    a site's network scope in public git: an entry of a site scope block that
-                   is not a documentation network (RFC 5737, ``2001:db8::/32``, ``3fff::/20``).
-                   Strict: every leaf counts, in any spelling (a zero-padded, integer or hex
-                   address, a YAML or JSON number, a tagged value, ``0.0.0.0/0``, a widened
-                   documentation prefix, free text); the one malformed shape let through is a
-                   documentation address with an out-of-range prefix length, which the
-                   generated negative plants (a /33).  Also an address under a
-                   ``scope`` key that is not a site block (``scope: [<address>]``);
-  scope-shape      a site scope block not in the selection's shape: a part outside
-                   ``SCOPE_PARTS`` (what it holds is still read), a part or ``scope`` key twice,
-                   an anchor or alias, a part that is not a list, a group that is not a mapping;
-  scope-unparsed   a file that mentions a scope (or could spell the key with an escape) and does
-                   not parse: a scope block nobody can read is refused, never skipped.
-                   A site scope block is the value of a ``scope`` key at any depth, in any case,
-                   in every document of a ``.yml``/``.yaml``/``.json``/``.toml`` file (template
-                   suffixes such as ``.j2`` and ``.example`` read as the format under them) and
-                   of a Markdown yaml, json or toml fence (an untagged fence when it parses),
-                   unless it holds only another document's scope keys
-                   (:data:`FOREIGN_SCOPE_KEYS`: a customization's selectors, an MCP parameter,
-                   JSON Schema keywords).  The real scope lives in the overlay's
-                   ``lab/modules.yml``.  :data:`SCOPE_EXEMPT` lets through one location of the
-                   generated misspelt-part negative;
+  scope-address    a site's network scope in public git.  Located, not parsed: in EVERY file
+                   the scanner reads (any suffix; Markdown prose and fences of any indent,
+                   length or info string included), the raw text under every ``scope`` key
+                   (any case, quoted or not, YAML/JSON ``scope:``, TOML ``scope =``,
+                   ``[scope]``/``[[scope]]`` headers, dotted ``scope.x`` keys, and the same
+                   after decoding YAML, JSON and TOML escapes, an escaped line break and HTML
+                   character references)
+                   holds an address-like token that is not a documentation address
+                   (RFC 5737, ``2001:db8::/32``, ``3fff::/20``).  Address-like: an IPv6
+                   address, a dotted form of four parts in any numeric spelling, an
+                   ``inet_aton`` short form or any integer (decimal, hex, octal, binary,
+                   underscored, float, sexagesimal) of 2**24 or more, a short form with a
+                   prefix length; an alias's anchor is read too, and a ``!!binary`` value is
+                   refused.  What a key "holds" is over-read: the rest of its line, every
+                   deeper-indented line after it (a TOML header: up to the next header), and
+                   any flow collection it opens, to its close.  Also, at an allowlisted path,
+                   an entry of the site block that is not a string naming a documentation
+                   network (the one malformed shape let through is a documentation address
+                   with a prefix length of at most three digits out of range, which the
+                   generated negative plants);
+  scope-shape      at an allowlisted path (:data:`SCOPE_BLOCK_PATHS`: the example site
+                   profiles and the generated selection examples and negatives), a scope block
+                   not in the selection's shape: a part outside ``SCOPE_PARTS`` (what it holds
+                   is still read), a part or ``scope`` key twice, an anchor or alias, a part
+                   that is not a list, a group that is not a mapping, or a scope key anywhere
+                   but the top level.  :data:`SCOPE_EXEMPT` lets through one exact location of
+                   the generated misspelt-part negative;
+  scope-unparsed   an allowlisted file the strict parse refuses: one that does not parse, or
+                   is larger than :data:`SCOPE_MAX_BYTES` or nested deeper than
+                   :data:`SCOPE_MAX_DEPTH` (checked before any parser sees it), or any file
+                   the check itself failed on.  Refused, never skipped.
+                   The real scope lives in the overlay's ``lab/modules.yml``.
   key-file         as above.
 
 Files are what ``tools/leak_scan.py`` scans: in a git work tree the tracked and untracked,
@@ -108,11 +118,15 @@ from __future__ import annotations
 
 import argparse
 import binascii
+import bisect
+import contextlib
 import fnmatch
+import functools
 import ipaddress
 import json
 import re
 import sys
+import unicodedata
 from base64 import b64decode
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -126,7 +140,8 @@ import leak_scan  # noqa: E402  (also puts the checkout on sys.path for homelabn
 
 from homelabnext import sops  # noqa: E402
 from homelabnext.modules.scope import (  # noqa: E402
-    embedded_ipv4,
+    EMBEDDED_V4,
+    WAN_NOT_PUBLIC,
     ipv4_readings,
     is_documentation,
     scope_tree,
@@ -688,52 +703,31 @@ def check_private(root: Path) -> list[Finding]:
 
 
 # ---- public: a site's network scope ------------------------------------------------------------
+#
+# Fail closed by LOCATION, not by format.  A site scope block may sit in public git only at the
+# paths of SCOPE_BLOCK_PATHS (the example site profiles and the generated selection examples and
+# negatives), where the file is parsed strictly and every leaf is judged.  Everywhere else, in
+# every file the scanner reads (any suffix, Markdown prose and fences of any kind included), the
+# raw text under every scope key is tokenised and any address-like token that is not a
+# documentation address is a finding.  Nothing outside the allowlist is parsed, so no format, no
+# parser and no "whose scope is this" heuristic decides what is read.
 
-#: suffixes stripped before the format is read (``site.yml.j2``, ``lab.yaml.example``)
-_TEMPLATE_SUFFIXES = (".j2", ".jinja", ".jinja2", ".example", ".sample", ".tmpl", ".template")
-#: the formats a scope block is read in, by (lower-case) suffix
-SCOPE_FORMATS = {
-    ".yml": "yaml",
-    ".yaml": "yaml",
-    ".json": "json",
-    ".toml": "toml",
-    ".md": "md",
-    ".markdown": "md",
-}
-#: keys a ``scope`` mapping has in other documents: a customization's selectors
-#: (platform/customization), an MCP server's parameter (platform/mcp_server, a parameter named
-#: ``scope``) and JSON Schema keywords (a schema's ``scope`` property).  A mapping
-#: holding only these is not a site's network scope; one with any other key is, so a misspelt
-#: part is read as a site scope block and refused, never skipped.
-FOREIGN_SCOPE_KEYS = frozenset(
-    {"capabilities", "services", "roles", "hosts"}
-    | {"env"}
-    | {
-        "$comment", "$ref", "additionalProperties", "allOf", "anyOf", "const", "default",
-        "deprecated", "description", "else", "enum", "examples", "format", "if", "items",
-        "maxItems", "maxLength", "maxProperties", "minItems", "minLength", "minProperties",
-        "not", "oneOf", "pattern", "patternProperties", "properties", "propertyNames",
-        "required", "then", "title", "type", "uniqueItems",
-    }
-)  # fmt: skip
+#: the only public paths a site scope block may sit in (fnmatch globs, ``*`` stays inside one
+#: directory): each is parsed strictly, in the selection's shape, every leaf judged
+SCOPE_BLOCK_PATHS = (
+    "examples/modules/sites/*.yml",
+    "schemas/platform/examples/module_selection.*.yml",
+    "schemas/platform/negative/module_selection.*.yml",
+)
+#: what the strict parse takes: larger or deeper is a finding (``scope-unparsed``) and is never
+#: handed to a parser (libyaml's C composer recurses per level and segfaults on deep nesting)
+SCOPE_MAX_BYTES = 256 * 1024
+SCOPE_MAX_DEPTH = 32
 _STR = "tag:yaml.org,2002:str"
 _NULL = "tag:yaml.org,2002:null"
-#: a fenced block in Markdown: its info string, its body
-_FENCE = re.compile(
-    r"^(?P<fence>`{3,}|~{3,})[ \t]*(?P<lang>[\w+-]*)[^\n]*\n(?P<body>.*?)^(?P=fence)[ \t]*$",
-    re.M | re.S,
-)
-_FENCE_FORMATS = {"yaml": "yaml", "yml": "yaml", "json": "json", "jsonc": "json", "toml": "toml"}
-#: a YAML or JSON escape that could spell the scope key without the word in the text
-_KEY_ESCAPE = re.compile(r"\\[xuU]")
 
-
-_DOTTED_ANY = re.compile(r"(?:0[xX][0-9A-Fa-f]+|[0-9]+)(?:\.(?:0[xX][0-9A-Fa-f]+|[0-9]+)){3}")
-_INT_ANY = re.compile(r"0[xX][0-9A-Fa-f]{1,8}|[0-9]{1,10}")
-
-
-#: (file, finding) pairs the public check lets through, each with its reason.  Narrow on
-#: purpose: one location in one generated file, and the entries under it are still read.
+#: (file, finding, location) the public check lets through, each with its reason.  Narrow on
+#: purpose: one exact location in one generated file, and what it holds is still read.
 SCOPE_EXEMPT = {
     (
         "schemas/platform/negative/module_selection.scope-unknown-part.yml",
@@ -742,75 +736,387 @@ SCOPE_EXEMPT = {
     ): "the generated negative for a misspelt part (homelabnext.schemas): it must be misspelt",
 }
 
+#: a ``scope`` key in any format the text can show: ``scope:`` (YAML, JSON, a flow mapping, an
+#: explicit ``? scope`` key, prose), ``scope =`` (TOML, INI), a dotted ``scope.trusted.wan``
+#: key, and a TOML table header naming it (``[scope]``, ``[[scope]]``, ``[site.scope]``).
+#: Quoted or not, any case (``re.I`` also folds the long s, U+017F); not part of a longer word.
+_SCOPE_KEY = re.compile(
+    r"""(?<![\w$-])["']?scope["'\]}]*\s*(?:[:=](?!:)|\.\s*["']?[A-Za-z_])""", re.I
+)
+#: a TOML table header line (``[a.b]``, ``[[a."b"]]``): the whole line, nothing after but a comment
+_TOML_HEADER = re.compile(
+    r"""^[ \t]*\[\[?[ \t]*(?P<path>[\w"' .-]+?)[ \t]*\]\]?[ \t]*(?:#[^\n]*)?$""", re.M
+)
+#: escapes that could spell the key (or a value) without its plain text: YAML/JSON/TOML ``\x``,
+#: ``\u``, ``\U``, a YAML escaped line break, and HTML character references (Markdown)
+_ESCAPES = re.compile(
+    r"\\x([0-9A-Fa-f]{2})|\\u([0-9A-Fa-f]{4})|\\U([0-9A-Fa-f]{8})|\\\r?\n[ \t]*|\\/"
+    r"|&#([0-9]{1,7});|&#[xX]([0-9A-Fa-f]{1,6});"
+)
+#: an IPv6 candidate (two or more colons; brackets, a zone and a prefix length around it)
+_V6_TOKEN = re.compile(
+    r"(?<![\w:.])\[?((?:[0-9A-Fa-f]{0,4}:){2,}[0-9A-Fa-f.:]*)(?:%[\w.~-]*)?\]?(?:/([0-9]+))?"
+)
+#: a numeric token: an integer in any YAML/TOML/C spelling, a dotted form of one to four parts
+#: (``inet_aton``), a float, and an optional prefix length.  Never part of a word.
+_NUM_TOKEN = re.compile(
+    r"(?<![\w.])"
+    r"(0[xX][0-9A-Fa-f_]+|0[bB][01_]+|0[oO][0-7_]+|[0-9][0-9_]*)"
+    r"((?:\.(?:0[xX][0-9A-Fa-f]+|[0-9]+))*)"
+    r"(\.?[eE][+-]?[0-9]+)?"
+    r"(?![\w])(?:/([0-9]+))?"
+)
+#: a YAML 1.1 sexagesimal integer (``190:20:30``)
+_SEXAGESIMAL = re.compile(r"(?<![\w:.])[0-9][0-9_]*(?::[0-5]?[0-9])+(?![\w:.])")
+_ALIAS = re.compile(r"(?:^|(?<=[\s\[{,:]))\*([^\s,\[\]{}]+)")
+_BINARY = re.compile(r"!!binary|tag:yaml\.org,2002:binary", re.I)
+
 
 class _Unreadable(Exception):
-    """A document that may hold a scope block and does not parse: a finding, never a skip."""
+    """An allowlisted file the strict parse cannot read: a finding, never a skip."""
 
 
-def scope_format(rel: str) -> str | None:
-    """The format a public file is read in for scope blocks, or None (not read)."""
-    name = rel.rsplit("/", 1)[-1].lower()
-    while name.endswith(_TEMPLATE_SUFFIXES):
-        name = name[: name.rfind(".")]
-    dot = name.rfind(".")
-    return SCOPE_FORMATS.get(name[dot:]) if dot > 0 else None
+def scope_block_path(rel: str) -> bool:
+    """True for a public path a site scope block may sit in (:data:`SCOPE_BLOCK_PATHS`)."""
+    return any(
+        fnmatch.fnmatchcase(rel, g) and rel.count("/") == g.count("/") for g in SCOPE_BLOCK_PATHS
+    )
 
 
-def _node(obj: object) -> object:
-    """A YAML node for a value parsed as JSON or TOML (so one walk reads every format); a JSON
-    object keeps its duplicate keys (``object_pairs_hook``)."""
+def _decoded(text: str) -> str:
+    """``text`` with every escape of :data:`_ESCAPES` replaced by what it spells."""
+
+    def one(m: re.Match[str]) -> str:
+        code = next((g for g in m.groups() if g), None)
+        if code is None:
+            return "/" if m.group(0) == "\\/" else ""
+        base = 10 if m.group(4) else 16
+        try:
+            return chr(int(code, base))
+        except (ValueError, OverflowError):
+            return m.group(0)
+
+    return _ESCAPES.sub(one, text)
+
+
+def _ascii_digits(text: str) -> str:
+    """NFKC (fullwidth digits, dots, colons) and every other Unicode decimal digit as ASCII: a
+    YAML int, ``int()`` and some resolvers read them."""
+    text = unicodedata.normalize("NFKC", text)
+    if text.isascii():
+        return text
+    return "".join(str(unicodedata.decimal(c)) if c.isdecimal() else c for c in text)
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" \t"))
+
+
+def _balanced_end(text: str, start: int) -> int:
+    """The end of the flow collection opening at ``text[start]`` (quotes and escapes respected),
+    or the end of the text when it never closes (over-reading is the safe direction)."""
+    depth, quote, i = 0, "", start
+    while i < len(text):
+        c = text[i]
+        if quote:
+            if c == "\\" and quote == '"':
+                i += 1
+            elif c == quote:
+                quote = ""
+        elif c in "\"'":
+            quote = c
+        elif c in "[{":
+            depth += 1
+        elif c in "]}":
+            depth -= 1
+            if depth <= 0:
+                return i + 1
+        i += 1
+    return len(text)
+
+
+def _span(
+    text: str,
+    key_start: int,
+    key_end: int,
+    header: bool,
+    flows: list[tuple[int, int]],
+    blocks: list[tuple[int, int, int]] | None = None,
+) -> tuple[int, int]:
+    """``(start, end)`` of the raw text a scope key holds, over-read rather than under-read: the
+    rest of the key's line; every following line indented deeper than the key's line (blank and
+    comment lines included, and a ``- `` item at the key's own indent, which YAML allows), or
+    for a TOML table header every line up to the next header; and any flow collection opened
+    there, to its close.  ``flows`` holds the flow spans already scanned: a flow opening inside
+    one closes inside it, so it is not scanned again.  ``blocks`` (keys in order) holds the
+    enclosing indented blocks: a key indented deeper inside one ends inside it, so its lines are
+    not walked again.  Each character is scanned about once, however the keys nest."""
+    line_start = text.rfind("\n", 0, key_start) + 1
+    first_nl = text.find("\n", key_end)
+    eol = len(text) if first_nl < 0 else first_nl
+    key_indent = _indent(text[line_start:eol])
+    end, pos, depth = eol, eol + 1, 0
+    while blocks and key_start >= blocks[-1][1]:
+        blocks.pop()
+    if blocks is not None and not header and blocks and key_indent > blocks[-1][2]:
+        end, pos = blocks[-1][1], len(text) + 1  # inside an enclosing block: it ends there
+    while pos <= len(text) and first_nl >= 0:
+        nl = text.find("\n", pos)
+        nl = len(text) if nl < 0 else nl
+        line = text[pos:nl]
+        stripped = line.strip()
+        if header:
+            # the next table ends this one's keys, unless an array is still open (a nested
+            # array's line can look like a header)
+            if depth <= 0 and _TOML_HEADER.fullmatch(line):
+                break
+            depth += sum(line.count(c) for c in "[{") - sum(line.count(c) for c in "]}")
+        elif (
+            stripped
+            and not stripped.startswith("#")
+            and _indent(line) <= key_indent
+            # YAML lets a block sequence sit at its key's own indent ("scope:" then "- x")
+            and not (_indent(line) == key_indent and re.match(r"-(?:[ \t]|$)", stripped))
+        ):
+            break
+        end, pos = nl, nl + 1
+    if blocks is not None and not header:
+        blocks.append((key_start, end, key_indent))
+    flow = re.search(r"[\[{]", text[key_end:eol])
+    if flow:
+        at = key_end + flow.start()
+        outer = next((f for f in flows if f[0] <= at < f[1]), None)
+        stop = outer[1] if outer else _balanced_end(text, at)
+        if outer is None:
+            flows.append((at, stop))
+        end = max(end, stop)
+    return key_end, end
+
+
+def _anchor_span(text: str, name: str, flows: list[tuple[int, int]]) -> tuple[int, int] | None:
+    """What a YAML anchor ``&name`` holds (its line's rest and deeper lines), or None."""
+    m = re.search(r"(?:^|(?<=[\s\[{,:]))&" + re.escape(name) + r"(?=[\s,\]}]|$)", text, re.M)
+    return None if m is None else _span(text, m.start(), m.end(), False, flows)
+
+
+def _merged(spans: list[tuple[int, int, int]]) -> list[tuple[int, int, int]]:
+    """Overlapping ``(start, end, line)`` spans merged (the first key's line kept): each
+    character is judged once, however many scope keys hold it."""
+    out: list[tuple[int, int, int]] = []
+    for start, end, line in sorted(spans):
+        if out and start <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], end), out[-1][2])
+        else:
+            out.append((start, end, line))
+    return out
+
+
+def _int_values(head: str) -> set[int]:
+    """Every value one numeric part can be read as: decimal (underscores allowed, as in YAML 1.1
+    and TOML), hex, binary, ``0o`` octal, and a leading-zero octal (YAML 1.1, ``inet_aton``)."""
+    clean, low = head.replace("_", ""), head.lower()
+    values: set[int] = set()
+    for base, prefix in ((16, "0x"), (2, "0b"), (8, "0o")):
+        if low.startswith(prefix):
+            with contextlib.suppress(ValueError):
+                values.add(int(clean[2:], base))
+    if clean.isdigit():
+        values.add(int(clean))
+        if len(clean) > 1 and clean[0] == "0" and set(clean) <= set("01234567"):
+            values.add(int(clean, 8))
+    return values
+
+
+def _is_internal(net: ipaddress.IPv4Network) -> bool:
+    """Private (RFC 1918) or shared (RFC 6598) space: a lab's internal network."""
+    return any(net.overlaps(n) for n in WAN_NOT_PUBLIC if n.version == 4)
+
+
+@functools.lru_cache(maxsize=65536)
+def _numeric_offends(groups: tuple[str | None, ...], context: bool) -> bool:
+    """A numeric token of :data:`_NUM_TOKEN` that names a non-documentation IPv4 address.
+
+    - four dotted parts, any spelling: every ``inet_aton`` reading is judged (strict);
+    - one part (an integer in any spelling, a float): judged when 2**24 or more (below that it
+      is in 0/8, which names no host: ``maxItems: 6`` is not an address);
+    - two or three parts (``10.20``, ``172.16.5``): ``inet_aton`` reads the octets 10, 0, 0, 20 and a
+      person reads the 10.20/16 prefix, but ``1.0`` and ``16.4`` are versions.  Judged strictly in an
+      address context (a prefix length, a port, after ``//`` or ``@``); otherwise only a reading
+      in private or shared space is refused.
+    """
+    head, dotted, exp, plen = groups
+    if head is None:
+        return False
+    parts = [head, *dotted[1:].split(".")] if dotted else [head]
+    nets: list[ipaddress.IPv4Network] = []
+    if exp or len(parts) == 2:  # a float (1359103374.0, 1.36e9) read as the integer it holds
+        try:
+            f = float((head + (dotted or "") + (exp or "")).replace("_", ""))
+        except ValueError:
+            f = -1.0
+        if f.is_integer() and 1 << 24 <= f < 1 << 32:
+            nets.append(ipaddress.IPv4Network(int(f)))
+    if exp:
+        pass
+    elif len(parts) == 1:
+        nets += [ipaddress.IPv4Network(v) for v in _int_values(head) if 1 << 24 <= v < 1 << 32]
+    elif "_" not in head and len(parts) <= 4:
+        readings = [ipaddress.IPv4Network(a) for a in ipv4_readings(parts)]
+        if len(parts) < 4:
+            filled = parts + ["0"] * (4 - len(parts))
+            readings += [ipaddress.IPv4Network(a) for a in ipv4_readings(filled)]
+            if not (context or plen is not None):
+                readings = [n for n in readings if _is_internal(n)]
+        nets += readings
+    if plen is not None and len(plen) > 2:  # "/1359103374" is no prefix length: an integer
+        nets += [ipaddress.IPv4Network(v) for v in _int_values(plen) if 1 << 24 <= v < 1 << 32]
+    for net in nets:
+        if plen is not None and len(plen) <= 3 and int(plen) <= 32:
+            net = ipaddress.IPv4Network((int(net.network_address), int(plen)), strict=False)
+        if not _is_documentation(net):
+            return True
+    return False
+
+
+def _offending_tokens(region: str) -> list[str]:
+    """The address-like tokens of ``region`` that are not documentation addresses."""
+    region = _ascii_digits(region)
+    bad: list[str] = []
+    masked = list(region)
+    for m in _V6_TOKEN.finditer(region):
+        # the numeric scan below must not read a hex group (``::1e8``) as a number; a dotted
+        # IPv4 tail (``::ffff:`` and a dotted quad) stays visible to it
+        tail = re.search(r"[0-9.]*$", m.group(1))
+        stop = m.start(1) + (tail.start() if tail and "." in tail.group(0) else len(m.group(1)))
+        masked[m.start() : stop] = " " * (stop - m.start())
+        addr, plen = m.group(1).rstrip("."), m.group(2)
+        try:
+            ip6 = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        net6: ipaddress.IPv4Network | ipaddress.IPv6Network = ipaddress.ip_network(ip6)
+        if plen is not None:
+            with contextlib.suppress(ValueError):
+                net6 = ipaddress.ip_network(f"{ip6}/{int(plen)}", strict=False)
+        if not _is_documentation(net6):
+            bad.append(m.group(0))
+    region = "".join(masked)
+    for m in _NUM_TOKEN.finditer(region):
+        before, after = region[max(0, m.start() - 2) : m.start()], region[m.end() : m.end() + 2]
+        context = before.endswith(("//", "@")) or re.match(r":[0-9]", after) is not None
+        if _numeric_offends(m.groups(), context):
+            bad.append(m.group(0))
+    for m in _SEXAGESIMAL.finditer(region):
+        value = 0
+        for p in m.group(0).replace("_", "").split(":"):
+            value = value * 60 + int(p)
+        if value >= 1 << 24 and (
+            value >= 1 << 32 or not _is_documentation(ipaddress.IPv4Network(value))
+        ):
+            bad.append(m.group(0))
+    return bad
+
+
+def _raw_findings(rel: str, text: str) -> list[Finding]:
+    """Every scope key in ``text`` (escapes decoded too): what it holds, as raw text, carries no
+    address-like token outside the documentation ranges, and no ``!!binary`` value.  An alias
+    under a scope key is followed to its anchor, whose value is judged too."""
+    texts = [text]
+    decoded = _decoded(text)
+    if decoded != text:
+        texts.append(decoded)
+    out: list[Finding] = []
+    seen: set[str] = set()
+    for t in texts:
+        if "scope" not in t.casefold():
+            continue
+        keys = [(m.start(), m.end(), False) for m in _SCOPE_KEY.finditer(t)]
+        keys += [
+            (m.start(), m.end(), True)
+            for m in _TOML_HEADER.finditer(t)
+            if any(p.strip(" \t\"'").casefold() == "scope" for p in m["path"].split("."))
+        ]
+        newlines = [i for i, c in enumerate(t) if c == "\n"]
+        flows: list[tuple[int, int]] = []
+        blocks: list[tuple[int, int, int]] = []
+        spans = []
+        for start, key_end, header in sorted(keys):
+            a, b = _span(t, start, key_end, header, flows, blocks)
+            spans.append((a, b, bisect.bisect_left(newlines, start) + 1))
+        spans = _merged(spans)
+        names: set[str] = set()
+        todo = [(a, b) for a, b, _ in spans]
+        while todo:  # an alias's anchor holds the value: judge it too (each anchor once)
+            a, b = todo.pop()
+            for alias in _ALIAS.finditer(t, a, b):
+                if alias.group(1) in names or len(names) >= 256:
+                    continue
+                names.add(alias.group(1))
+                got = _anchor_span(t, alias.group(1), flows)
+                if got is not None:
+                    spans.append((got[0], got[1], bisect.bisect_left(newlines, got[0]) + 1))
+                    todo.append(got)
+        for a, b, line in _merged(spans):
+            region = t[a:b]
+            detail = None
+            if _BINARY.search(region):
+                detail = f"line {line}: a !!binary value under a scope key cannot be judged"
+            else:
+                tokens = _offending_tokens(region)
+                if tokens:
+                    detail = (
+                        f"line {line}: {tokens[0]!r} under a scope key is not a documentation "
+                        "address (RFC 5737, 2001:db8::/32, 3fff::/20); the real scope is the "
+                        "private overlay's lab/modules.yml"
+                    )
+            if detail and detail not in seen:
+                seen.add(detail)
+                out.append(Finding(rel, "scope-address", detail))
+    return out
+
+
+# ---- the strict parse, for the allowlisted paths only ------------------------------------------
+
+
+def _too_deep(text: str) -> str | None:
+    """Why ``text`` is not handed to a parser, or None: larger than :data:`SCOPE_MAX_BYTES`, or
+    nested deeper than :data:`SCOPE_MAX_DEPTH` (flow brackets, indentation, or a run of block
+    indicators such as ``- - - -`` on one line)."""
+    if len(text.encode("utf-8", "replace")) > SCOPE_MAX_BYTES:
+        return f"larger than {SCOPE_MAX_BYTES // 1024} KiB"
+    depth = deepest = 0
+    for c in text:
+        if c in "[{":
+            depth += 1
+            deepest = max(deepest, depth)
+        elif c in "]}":
+            depth = max(0, depth - 1)
+    if deepest > SCOPE_MAX_DEPTH:
+        return f"flow collections nested deeper than {SCOPE_MAX_DEPTH}"
+    for line in text.splitlines():
+        if _indent(line) > 2 * SCOPE_MAX_DEPTH:
+            return f"indented deeper than {2 * SCOPE_MAX_DEPTH} columns"
+        if re.match(rf"[ \t]*(?:[-?:][ \t]+){{{SCOPE_MAX_DEPTH}}}", line):
+            return f"more than {SCOPE_MAX_DEPTH} block indicators on one line"
+    return None
+
+
+def _compose(text: str) -> tuple[list[object], set[int]]:
+    """``(documents as YAML nodes, ids of nodes an alias points at)``, with the pure-Python
+    loader (bounded first by :func:`_too_deep`).  Composing builds no Python objects: an unknown
+    tag is data, a merge key and a duplicate key stay visible, and an alias is a shared node,
+    never an expansion."""
     import yaml
 
-    if isinstance(obj, _Pairs | dict):
-        items = obj if isinstance(obj, _Pairs) else list(obj.items())
-        return yaml.MappingNode(
-            "tag:yaml.org,2002:map", [(yaml.ScalarNode(_STR, k), _node(v)) for k, v in items]
-        )
-    if isinstance(obj, list):
-        return yaml.SequenceNode("tag:yaml.org,2002:seq", [_node(v) for v in obj])
-    if obj is None:
-        return yaml.ScalarNode(_NULL, "")
-    if isinstance(obj, str):
-        return yaml.ScalarNode(_STR, obj)
-    kind = {bool: "bool", int: "int", float: "float"}.get(type(obj), "timestamp")
-    return yaml.ScalarNode(f"tag:yaml.org,2002:{kind}", str(obj))
-
-
-class _Pairs(list):
-    """A JSON object's key/value pairs, duplicates kept."""
-
-
-def _compose(text: str, fmt: str) -> tuple[list[object], set[int]]:
-    """``(documents as YAML nodes, ids of nodes an alias points at)``.  Composing builds no
-    Python objects: an unknown tag (``!vault``, ``!Ref``) is data, a merge key and a duplicate
-    key stay visible, and an alias is a shared node, never an expansion."""
-    import yaml
-
-    text = text.removeprefix("\ufeff")
-    if fmt == "toml":
-        import tomllib
-
-        try:
-            return [_node(tomllib.loads(text))], set()
-        except (tomllib.TOMLDecodeError, RecursionError) as exc:
-            raise _Unreadable(exc.__class__.__name__) from exc
-
-    if fmt == "json":
-        try:  # JSON's own parser first: fast, and it keeps duplicate keys (no aliases in JSON)
-            return [_node(json.loads(text, object_pairs_hook=_Pairs))], set()
-        except (ValueError, RecursionError):
-            pass  # JSON with comments, or not JSON: YAML may still read it
-    error: Exception | None = None
-    for loader in (getattr(yaml, "CSafeLoader", None), yaml.SafeLoader):
-        if loader is None:
-            continue
-        try:
-            docs = list(yaml.compose_all(text, Loader=loader))
-        except (yaml.YAMLError, RecursionError) as exc:
-            error = exc
-            continue
-        return docs, _aliased(docs)
-    raise _Unreadable(error.__class__.__name__)
+    text = text.removeprefix("﻿")
+    why = _too_deep(text)
+    if why:
+        raise _Unreadable(why)
+    try:
+        docs = list(yaml.compose_all(text, Loader=yaml.SafeLoader))
+    except (yaml.YAMLError, RecursionError, ValueError) as exc:
+        raise _Unreadable(exc.__class__.__name__) from exc
+    return docs, _aliased(docs)
 
 
 def _aliased(docs: list[object]) -> set[int]:
@@ -841,47 +1147,17 @@ def _aliased(docs: list[object]) -> set[int]:
     return {i for i, n in refs.items() if n > 1}
 
 
-def _networks(node: object) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
-    """Every network a scalar can be read as: strict text, a zone-id or zero-padded or hex
-    dotted quad (decimal and ``inet_aton`` readings), a ``0x`` or decimal integer string, or a
-    YAML or JSON integer.  Empty when it names no address."""
-    import yaml
-
-    if not isinstance(node, yaml.ScalarNode):
-        return []
-    value = node.value.strip()
-    if node.tag == "tag:yaml.org,2002:int":
-        try:
-            n = int(value.replace("_", ""), 0)
-        except ValueError:
-            return []
-        return [ipaddress.ip_network(n)] if 0 <= n < 1 << 128 else []
-    try:
-        return [ipaddress.ip_network(value.split("%", 1)[0], strict=False)]
-    except ValueError:
-        pass
-    host, _, plen = value.partition("/")
-    readings = []
-    if _DOTTED_ANY.fullmatch(host):
-        readings = ipv4_readings(host.split("."))
-    elif _INT_ANY.fullmatch(host):
-        n = int(host, 16) if host[:2].lower() == "0x" else int(host)
-        readings = [ipaddress.IPv4Address(n)] if n < 1 << 32 else []
-    out = []
-    for a in readings:
-        try:
-            out.append(ipaddress.ip_network(f"{a}/{plen}" if plen else a, strict=False))
-        except ValueError:
-            out.append(ipaddress.ip_network(a))
-    return out
+#: the IPv6 prefixes whose last 32 bits are the embedded IPv4 address (RFC 6052 /96 layout);
+#: the NAT64 local-use /48 places it elsewhere, so it is never read as documentation
+_EMBEDDED_96 = tuple(e for e in EMBEDDED_V4 if e.prefixlen == 96)
 
 
 def _is_documentation(net: ipaddress.IPv4Network | ipaddress.IPv6Network) -> bool:
-    """A documentation network, or an IPv6 form embedding one (IPv4-mapped): the
+    """A documentation network, or a /96-layout IPv6 form embedding one (IPv4-mapped): the
     reader refuses that form, but it leaks nothing."""
     if is_documentation(net):
         return True
-    if embedded_ipv4(net) and net.prefixlen >= 96:
+    if net.version == 6 and net.prefixlen >= 96 and any(net.subnet_of(e) for e in _EMBEDDED_96):
         low = int(net.network_address) & 0xFFFFFFFF
         return is_documentation(ipaddress.ip_network((low, net.prefixlen - 96)))
     return False
@@ -890,7 +1166,7 @@ def _is_documentation(net: ipaddress.IPv4Network | ipaddress.IPv6Network) -> boo
 def _documentation_leaf(node: object) -> bool:
     """A site scope entry public git may hold: a string naming a documentation network, nothing
     (null), or the one malformed shape the generated negatives plant (a documentation address
-    with an out-of-range prefix length, such as /33)."""
+    with an out-of-range prefix length of at most three digits, such as /33)."""
     import yaml
 
     if not isinstance(node, yaml.ScalarNode):
@@ -904,7 +1180,7 @@ def _documentation_leaf(node: object) -> bool:
     except ValueError:
         pass
     left, slash, right = node.value.rpartition("/")
-    if not (slash and right.isascii() and right.isdigit()):
+    if not (slash and right.isascii() and right.isdigit() and len(right) <= 3):
         return False
     try:
         return _is_documentation(ipaddress.ip_network(ipaddress.ip_address(left)))
@@ -920,6 +1196,8 @@ def _site_block(rel: str, block: object, where: str, aliased: set[int]) -> list[
     out: list[Finding] = []
 
     def shape(path: str, why: str) -> None:
+        if (rel, "scope-shape", path) in SCOPE_EXEMPT:
+            return
         out.append(
             Finding(
                 rel,
@@ -935,7 +1213,7 @@ def _site_block(rel: str, block: object, where: str, aliased: set[int]) -> list[
             if name is None or name not in allowed:
                 at = f"{path}.{getattr(k, 'value', '?')}"
                 shape(at, "not a scope part")
-                entries(v, at)  # what an unknown part holds is still read
+                entries(v, at)  # what an unknown part holds is still read (its key: the raw rule)
             elif name in seen:
                 shape(
                     f"{path}.{name}",
@@ -972,6 +1250,7 @@ def _site_block(rel: str, block: object, where: str, aliased: set[int]) -> list[
             return
         elif not isinstance(node, yaml.SequenceNode):
             shape(path, "not a list")
+            entries(node, path)
         else:
             for i, item in enumerate(node.value):
                 at = f"{path}[{i}]"
@@ -992,6 +1271,10 @@ def _site_block(rel: str, block: object, where: str, aliased: set[int]) -> list[
     if id(block) in aliased:
         shape(where, "an anchor or alias")
         return out
+    if not isinstance(block, yaml.MappingNode):
+        shape(where, "not a mapping")
+        entries(block, where)
+        return out
     for group, v in keys(block, tree, where):
         leaves = tree[group]
         at = f"{where}.{group}"
@@ -1004,6 +1287,7 @@ def _site_block(rel: str, block: object, where: str, aliased: set[int]) -> list[
                 part(pv, f"{at}.{leaf}")
         elif not (isinstance(v, yaml.ScalarNode) and v.tag == _NULL):
             shape(at, "not a mapping")
+            entries(v, at)
     return out
 
 
@@ -1021,128 +1305,79 @@ def _source(node: object) -> bool:
     )  # fmt: skip
 
 
-def _document_findings(rel: str, root: object, aliased: set[int]) -> list[Finding]:
-    """Every ``scope`` key at any depth, in any case: a mapping that is not a foreign scope
-    (:data:`FOREIGN_SCOPE_KEYS`) is a site block; a scalar or list under it may not name a
-    non-documentation address; a tagged value under it cannot be read and is refused."""
+def _strict_findings(rel: str, text: str) -> list[Finding]:
+    """An allowlisted file (:data:`SCOPE_BLOCK_PATHS`), parsed strictly: each document is a
+    mapping, its one ``scope`` key (exactly that spelling, at the top level) holds a block in the
+    selection's shape, and a scope key anywhere else, in any case, is refused."""
     import yaml
 
+    try:
+        docs, aliased = _compose(text)
+    except _Unreadable as exc:
+        return [
+            Finding(
+                rel,
+                "scope-unparsed",
+                f"a scope block's file that the strict parse refuses ({exc}): refused, never skipped",
+            )
+        ]
     out: list[Finding] = []
-    seen: set[int] = set()
-    stack: list[tuple[object, str]] = [(root, "$")]
-    while stack:  # iterative, each node once: an alias is never expanded
-        node, path = stack.pop()
-        if id(node) in seen:
+    for doc in docs:
+        if not isinstance(doc, yaml.MappingNode):
+            if not (isinstance(doc, yaml.ScalarNode) and doc.tag == _NULL):
+                out.append(Finding(rel, "scope-shape", "$: a document that is not a mapping"))
             continue
-        seen.add(id(node))
-        if isinstance(node, yaml.SequenceNode):
-            stack += [(v, f"{path}[{i}]") for i, v in enumerate(node.value)]
-            continue
-        if not isinstance(node, yaml.MappingNode):
-            continue
-        scopes = []
-        for k, v in node.value:
-            name = k.value if isinstance(k, yaml.ScalarNode) else None
-            if isinstance(name, str) and name.casefold() == "scope":
-                scopes.append((name, v))
-            else:
-                stack += [(k, path), (v, f"{path}.{name}")]
+        tops = [(k, v) for k, v in doc.value if isinstance(k, yaml.ScalarNode)]
+        scopes = [(k, v) for k, v in tops if k.value == "scope" and k.tag == _STR]
         if len(scopes) > 1:
-            out.append(
-                Finding(
-                    rel,
-                    "scope-shape",
-                    f"{path}: a scope key twice (a loader keeps one, a reader may see the other)",
-                )
-            )
-        for name, v in scopes:
-            at = f"{path}.{name}".removeprefix("$.")
-            keys_ = (
-                {k.value for k, _ in v.value if isinstance(k, yaml.ScalarNode)}
-                if isinstance(v, yaml.MappingNode)
-                else set()
-            )
-            if isinstance(v, yaml.MappingNode) and not (
-                keys_ and keys_ <= FOREIGN_SCOPE_KEYS and len(keys_) == len(v.value)
-            ):
-                out += _site_block(rel, v, at, aliased)
-                seen.add(id(v))
-            elif isinstance(v, yaml.MappingNode):
-                stack.append((v, at))  # a customization's scope or a schema property
-            elif (
-                isinstance(v, yaml.ScalarNode)
-                and v.tag not in (_STR, _NULL)
-                and not v.tag.startswith("tag:yaml.org,2002:")
-            ):
-                out.append(
-                    Finding(
-                        rel,
-                        "scope-shape",
-                        f"{at}: a tagged value ({v.tag}) under a scope key cannot be read",
-                    )
-                )
-            else:
-                items = v.value if isinstance(v, yaml.SequenceNode) else [v]
-                for item in items:
-                    if any(not _is_documentation(n) for n in _networks(item)):
+            out.append(Finding(rel, "scope-shape", "scope: the scope key twice"))
+        for _, v in scopes:
+            out += _site_block(rel, v, "scope", aliased)
+        skip = {id(v) for _, v in scopes}
+        stack: list[tuple[object, str, bool]] = [(doc, "$", True)]
+        seen: set[int] = set()
+        while stack:  # every other scope key, at any depth and in any case, is misplaced
+            node, path, top = stack.pop()
+            if id(node) in seen or id(node) in skip:
+                continue
+            seen.add(id(node))
+            if isinstance(node, yaml.SequenceNode):
+                stack += [(v, f"{path}[{i}]", False) for i, v in enumerate(node.value)]
+            elif isinstance(node, yaml.MappingNode):
+                for k, v in node.value:
+                    name = k.value if isinstance(k, yaml.ScalarNode) else None
+                    selection_scope = top and name == "scope" and k.tag == _STR
+                    if isinstance(k, yaml.CollectionNode) or (
+                        isinstance(name, str) and name.casefold() == "scope" and not selection_scope
+                    ):
                         out.append(
                             Finding(
                                 rel,
-                                "scope-address",
-                                f"{at}: an address outside the documentation ranges",
+                                "scope-shape",
+                                f"{path}.{name}: a scope key other than the selection's "
+                                "top-level scope, or a key the strict parse cannot read",
                             )
                         )
-                        break
-                    if not isinstance(item, yaml.ScalarNode):
-                        stack.append((item, at))
+                    stack += [(k, path, False), (v, f"{path}.{name}", False)]
     return out
 
 
-def scope_findings(rel: str, text: str, fmt: str | None = None) -> list[Finding]:
-    """A site's network scope in a public file: every ``scope`` key, at any depth and in any
-    case, in every document (YAML multi-document, JSON with or without duplicate keys, TOML,
-    and the yaml, json and toml fenced blocks of Markdown; template suffixes such as ``.j2`` and
-    ``.example`` are read as the format under them).  A document that may hold a scope key and
-    does not parse is a finding (``scope-unparsed``), never a skip."""
-    fmt = fmt or scope_format(rel)
-    if fmt is None:
-        return []
-    if fmt == "md":
-        out = []
-        for m in _FENCE.finditer(text):
-            lang = m.group("lang").lower()
-            sub = _FENCE_FORMATS.get(lang)
-            body = m.group("body")
-            line = text.count("\n", 0, m.start()) + 1
-            if sub is None and lang:
-                continue  # another language's block
-            if sub is None:  # an untagged block: read only when it parses (it may be shell)
-                try:
-                    _compose(body, "yaml")
-                except _Unreadable:
-                    continue
-                sub = "yaml"
-            out += scope_findings(f"{rel}:{line}", body, sub)
-        return out
-    mentions = "scope" in text.casefold()
-    if not (mentions or _KEY_ESCAPE.search(text)):
-        return []  # no document here can spell a scope key
+def scope_findings(rel: str, text: str) -> list[Finding]:
+    """A site's network scope in one public file: at an allowlisted path
+    (:data:`SCOPE_BLOCK_PATHS`), the strict parse; everywhere, the raw-text rule
+    (:func:`_raw_findings`).  It never raises: a check that crashed would read as clean to a
+    caller that catches, so any failure is itself a finding."""
     try:
-        docs, aliased = _compose(text, fmt)
-    except _Unreadable as exc:
-        if mentions or _KEY_ESCAPE.search(text):
-            return [
-                Finding(
-                    rel,
-                    "scope-unparsed",
-                    f"mentions a scope and does not parse as {fmt} ({exc}): a scope block nobody can read is refused, never skipped",
-                )
-            ]
-        return []
-    out = []
-    for doc in docs:
-        out += _document_findings(rel, doc, aliased)
-    return out
+        out = _strict_findings(rel, text) if scope_block_path(rel) else []
+        return out + _raw_findings(rel, text)
+    except Exception as exc:  # fail closed: the gate never crashes open
+        return [
+            Finding(
+                rel,
+                "scope-unparsed",
+                f"the scope check could not read it ({exc.__class__.__name__}): refused",
+            )
+        ]
 
 
 def check_public(root: Path) -> list[Finding]:
@@ -1169,17 +1404,13 @@ def check_public(root: Path) -> list[Finding]:
         hit = next((p for p in private_paths if rel.startswith(p)), None)
         if hit:
             out.append(Finding(rel, "overlay-path", f"under the private layout path {hit}"))
-        fmt = scope_format(rel)
-        if f.suffix in (".yml", ".yaml", ".json", ".env", ".ini") or fmt:
-            text = _text(f)
-            if text is not None and sops_format(text):
-                out.append(Finding(rel, "ciphertext", "a SOPS-encrypted file in public git"))
-            elif text is not None and fmt:
-                out += [
-                    x
-                    for x in scope_findings(rel, text, fmt)
-                    if (x.path, x.rule, x.detail.split(":", 1)[0]) not in SCOPE_EXEMPT
-                ]
+        text = _text(f)
+        if text is None:
+            continue
+        if f.suffix in (".yml", ".yaml", ".json", ".env", ".ini") and sops_format(text):
+            out.append(Finding(rel, "ciphertext", "a SOPS-encrypted file in public git"))
+            continue
+        out += scope_findings(rel, text)
     return out
 
 

@@ -517,151 +517,259 @@ PUBLIC_HEX = hex(int(PUBLIC_INT))
 #: zero-padded octets: a person reads decimal, inet_aton reads octal
 PADDED = ".".join(f"{int(o):03d}" for o in PUBLIC_V4.split("."))
 EVERYTHING = ".".join(("0",) * 4) + "/0"
+EVERYTHING_V6 = ":" * 2 + "/0"
 DOC = "192.0.2"  # a three-part documentation prefix (no four-part literal in this source)
+DOC3 = "203.0.113"
+#: the public address in the other spellings a YAML 1.1 loader, TOML or int() reads
+PUBLIC_FLOAT = PUBLIC_INT + ".0"
+PUBLIC_BIN = bin(int(PUBLIC_INT))
+PUBLIC_OCT = "0o" + oct(int(PUBLIC_INT))[2:]
+PUBLIC_UNDERSCORED = f"{int(PUBLIC_INT):_}"
+FULLWIDTH = "".join(chr(0xFF10 + int(c)) if c.isdigit() else c for c in PUBLIC_V4)
+#: inet_aton short form of a private address (the octets 10, 0, 0, 20; a person reads the 10.20/16 prefix)
+SHORT_PRIVATE = ".".join(("10", "20"))
+#: NAT64 local-use (RFC 6052 /48 layout) embedding the public address, with a documentation tail
+NAT64_LOCAL = ":".join(("64", "ff9b", "1", "5102", "45", "8e00", "c000", "201"))
+#: an allowlisted path (SCOPE_BLOCK_PATHS): a site block there is parsed strictly
+SITE = "examples/modules/sites/probe.yml"
 
-#: (file name, text): a public scope block that names a real address or network, in every
-#: shape the gate reads.  Each must fail; the review's probe rows are all here.
-FAILING_SCOPES = {
-    "plain": ("site.yml", f"scope:\n  trusted:\n    wan: [{PUBLIC_HOST}/32]\n"),
-    "private": ("site.yml", f"scope:\n  target: [{DOC}.0/24, {PRIVATE_NET}]\n"),
-    "everything": ("site.yml", f"scope:\n  target: ['{EVERYTHING}']\n"),
-    "everything v6": ("site.yml", "scope:\n  exclude:\n    offensive: ['::/0']\n"),
-    "widened": ("site.yml", f"scope:\n  target: [{DOC}.0/16]\n"),
-    "misspelt part": ("site.yml", f"scope:\n  trusted:\n    lan: [{PRIVATE_NET}]\n"),
-    "malformed real": ("site.yml", f"scope:\n  target: ['{PRIVATE_NET.replace('/16', '/33')}']\n"),
-    "json": ("site.json", f'{{"profile": "x", "scope": {{"target": ["{PRIVATE_NET}"]}}}}\n'),
-    # B1: spellings ipaddress refuses but a person and inet_aton read as an address
-    "zero-padded": ("site.yml", f"scope:\n  trusted:\n    wan: ['{PADDED}/32']\n"),
-    "integer string": ("site.yml", f"scope:\n  trusted:\n    wan: ['{PUBLIC_INT}']\n"),
-    "yaml int": ("site.yml", f"scope:\n  trusted:\n    wan: [{PUBLIC_INT}]\n"),
-    "hex string": ("site.yml", f"scope:\n  trusted:\n    wan: ['{PUBLIC_HEX}']\n"),
-    "yaml hex int": ("site.yml", f"scope:\n  trusted:\n    wan: [{PUBLIC_HEX}]\n"),
-    "not an address": ("site.yml", "scope:\n  target: [not-an-address]\n"),
-    "a bool": ("site.yml", "scope:\n  target: [true]\n"),
-    "a float": ("site.yml", "scope:\n  target: [1.5]\n"),
-    "space before prefix": ("site.yml", f"scope:\n  target: ['{PUBLIC_V4} /32']\n"),
-    "zone id": ("site.yml", "scope:\n  target: ['2001:db8::1%eth0']\n"),
-    "mapped real": ("site.yml", f"scope:\n  target: ['::ffff:{PUBLIC_V4}']\n"),
-    # S1: every YAML and JSON form of the key and the block
-    "flow style": ("site.yml", f"{{scope: {{target: ['{EVERYTHING}']}}}}\n"),
-    "single-quoted key": ("site.yml", f"'scope':\n  target: ['{EVERYTHING}']\n"),
-    "explicit key": ("site.yml", f"? scope\n: target: ['{EVERYTHING}']\n"),
-    "tab before colon": ("site.yml", f"scope\t:\n  target: ['{EVERYTHING}']\n"),
-    "byte-order mark": ("site.yml", f"\ufeffscope:\n  target: ['{EVERYTHING}']\n"),
-    "json escaped key": ("site.json", '{"\\u0073cope": {"target": ["' + EVERYTHING + '"]}}\n'),
-    "yaml escaped key": ("site.yml", f"\"\\x73cope\":\n  target: ['{EVERYTHING}']\n"),
-    "custom tag elsewhere": (
-        "site.yml",
-        f"x: !vault |\n  abc\nscope:\n  target: ['{EVERYTHING}']\n",
-    ),
-    "custom tag and padding": (
-        "site.yml",
-        f"x: !Ref y\nscope:\n  trusted:\n    wan: ['{PADDED}']\n",
-    ),
-    "tagged entry": ("site.yml", f"scope:\n  target: [!ip '{DOC}.0/24']\n"),
-    "merge key": ("site.yml", f"base: &b\n  scope:\n    target: ['{EVERYTHING}']\n<<: *b\n"),
+#: a non-documentation address under a scope key, in every shape and spelling: refused at
+#: EVERY path, whatever the file is called and whatever the block around it looks like
+ADDRESS_CASES = {
+    "plain": f"scope:\n  trusted:\n    wan: [{PUBLIC_HOST}/32]\n",
+    "private": f"scope:\n  target: [{DOC}.0/24, {PRIVATE_NET}]\n",
+    "everything": f"scope:\n  target: ['{EVERYTHING}']\n",
+    "everything v6": f"scope:\n  exclude:\n    offensive: ['{EVERYTHING_V6}']\n",
+    "widened": f"scope:\n  target: [{DOC}.0/16]\n",
+    "misspelt part": f"scope:\n  trusted:\n    lan: [{PRIVATE_NET}]\n",
+    "malformed real": f"scope:\n  target: ['{PRIVATE_NET.replace('/16', '/33')}']\n",
+    "json": f'{{"profile": "x", "scope": {{"target": ["{PRIVATE_NET}"]}}}}\n',
+    "zero-padded": f"scope:\n  trusted:\n    wan: ['{PADDED}/32']\n",
+    "integer string": f"scope:\n  trusted:\n    wan: ['{PUBLIC_INT}']\n",
+    "yaml int": f"scope:\n  trusted:\n    wan: [{PUBLIC_INT}]\n",
+    "hex string": f"scope:\n  trusted:\n    wan: ['{PUBLIC_HEX}']\n",
+    "yaml hex int": f"scope:\n  trusted:\n    wan: [{PUBLIC_HEX}]\n",
+    "yaml float": f"scope:\n  target: [{PUBLIC_FLOAT}]\n",
+    "yaml binary": f"scope:\n  target: [{PUBLIC_BIN}]\n",
+    "octal": f"scope:\n  target: [{PUBLIC_OCT}]\n",
+    "underscored": f"scope:\n  target: [{PUBLIC_UNDERSCORED}]\n",
+    "fullwidth digits": f"scope:\n  target: ['{FULLWIDTH}']\n",
+    "inet_aton short form, private": f"scope:\n  target: ['{SHORT_PRIVATE}']\n",
+    "short form in a url": f"scope: http://{SHORT_PRIVATE}.5/\n",
+    "space before prefix": f"scope:\n  target: ['{PUBLIC_V4} /32']\n",
+    "mapped real": f"scope:\n  target: ['::ffff:{PUBLIC_V4}']\n",
+    "nat64 local-use": f"scope:\n  target: ['{NAT64_LOCAL}']\n",  # N4
+    "prefix length that is an address": f"scope:\n  target: ['{DOC}.1/{PUBLIC_INT}']\n",  # N5
+    "flow style": f"{{scope: {{target: ['{EVERYTHING}']}}}}\n",
+    "single-quoted key": f"'scope':\n  target: ['{EVERYTHING}']\n",
+    "explicit key": f"? scope\n: target: ['{EVERYTHING}']\n",
+    "complex key": f"? [scope]\n: target: ['{PADDED}/32']\n",
+    "tab before colon": f"scope\t:\n  target: ['{EVERYTHING}']\n",
+    "byte-order mark": f"\ufeffscope:\n  target: ['{EVERYTHING}']\n",
+    "json escaped key": '{"\\u0073cope": {"target": ["' + EVERYTHING + '"]}}\n',
+    "yaml escaped key": f"\"\\x73cope\":\n  target: ['{EVERYTHING}']\n",
+    "escaped line break in the key": f"? \"sco\\\n  pe\"\n: trusted:\n    wan: ['{PADDED}/32']\n",  # N1
+    "escaped value": 'scope:\n  target: ["\\x38\\x31.'
+    + ".".join(PUBLIC_V4.split(".")[1:])
+    + '"]\n',
+    "html character reference": "scope: &#56;" + PUBLIC_V4[1:] + "\n",
+    "custom tag elsewhere": f"x: !vault |\n  abc\nscope:\n  target: ['{EVERYTHING}']\n",
+    "custom tag and padding": f"x: !Ref y\nscope:\n  trusted:\n    wan: ['{PADDED}']\n",
+    "a binary value": "scope:\n  target: [!" + "!binary 'UQJFjg==']\n",  # split: this source
+    "merge key": f"base: &b\n  scope:\n    target: ['{EVERYTHING}']\n<<: *b\n",
+    "alias to an anchor outside": f"x: &x ['{PADDED}/32']\nscope:\n  target: *x\n",
     "duplicate scope key": (
-        "site.yml",
-        f"scope:\n  target: ['{EVERYTHING}']\nscope:\n  target: [{DOC}.0/24]\n",
+        f"scope:\n  target: ['{EVERYTHING}']\nscope:\n  target: [{DOC}.0/24]\n"
     ),
-    "duplicate part": ("site.yml", f"scope:\n  target: [{DOC}.0/24]\n  target: [{PRIVATE_NET}]\n"),
+    "duplicate part": f"scope:\n  target: [{DOC}.0/24]\n  target: [{PRIVATE_NET}]\n",
     "json duplicate key": (
-        "site.json",
-        f'{{"scope": {{"target": ["{DOC}.0/24"], "target": ["{EVERYTHING}"]}}}}\n',
+        f'{{"scope": {{"target": ["{DOC}.0/24"], "target": ["{EVERYTHING}"]}}}}\n'
     ),
-    "json with comments": ("site.json", f'// c\n{{"scope": {{"target": ["{DOC}.0/24"]}}}}\n'),
-    "upper-case key": ("site.yml", f"Scope:\n  target: ['{EVERYTHING}']\n"),
-    "nested": ("site.yml", f"site:\n  scope:\n    target: ['{EVERYTHING}']\n"),
-    "misspelt top-level part": ("site.yml", f"scope:\n  targets: [{DOC}.0/24]\n"),
-    "a scope list": ("site.yml", f"scope: [{PRIVATE_NET}]\n"),
-    "second document": ("site.yml", f"a: 1\n---\nscope:\n  target: ['{EVERYTHING}']\n"),
-    "address as a key": ("site.yml", f"scope:\n  target:\n    '{PUBLIC_V4}': x\n"),
-    "unparseable": ("site.yml", "scope: [unclosed\n"),
-    "upper-case suffix": ("site.YML", f"scope:\n  target: ['{EVERYTHING}']\n"),
-    "a template": ("site.yml.j2", f"scope:\n  target: ['{EVERYTHING}']\n"),
-    "an example": ("lab.yaml.example", f"scope:\n  target: ['{EVERYTHING}']\n"),
-    "toml": ("site.toml", f'[scope]\ntarget = ["{EVERYTHING}"]\n'),
-    "markdown fence": ("guide.md", f"# x\n\n```yaml\nscope:\n  target: ['{EVERYTHING}']\n```\n"),
-    "markdown untagged fence": ("guide.md", f"```\nscope:\n  target: ['{EVERYTHING}']\n```\n"),
-    # S8: an alias in a scope block is refused, and never expanded
-    "self alias": ("site.yml", "scope:\n  target: &a [*a]\n"),
-    "alias into scope": ("site.yml", f"a: &x {{target: [{DOC}.0/24]}}\nscope: *x\n"),
+    "upper-case key": f"Scope:\n  target: ['{EVERYTHING}']\n",
+    "nested": f"site:\n  scope:\n    target: ['{EVERYTHING}']\n",
+    "a scope list": f"scope: [{PRIVATE_NET}]\n",
+    "second document": f"a: 1\n---\nscope:\n  target: ['{EVERYTHING}']\n",
+    "address as a key": f"scope:\n  target:\n    '{PUBLIC_V4}': x\n",
+    # SF1: under a scope key that is not a site block, at any depth
+    "schema examples": (
+        f"properties:\n  scope:\n    type: object\n    examples:\n    - target: ['{PADDED}/32']\n"
+    ),
+    "schema default": (
+        '{"properties": {"scope": {"type": "object", "default": {"trusted": {"wan": ["'
+        + PADDED
+        + '/32"]}}}}}\n'
+    ),
+    "schema const": f"scope:\n  const: '{PADDED}'\n",
+    "selectors' hosts": f"scope:\n  hosts: ['{PADDED}']\n",
+    "a parameter's env": f"scope:\n  env: {{WAN: '{PADDED}'}}\n",
+    "deep in another document's mapping": f"scope:\n  hosts:\n    a:\n      b: ['{PADDED}']\n",
+    "a list of blocks": f"scope:\n- target: ['{PADDED}/32']\n",
+    "a list of blocks, everything": f"scope:\n- target: ['{EVERYTHING}']\n",
+    "toml": f'[scope]\ntarget = ["{EVERYTHING}"]\n',
+    "toml array of tables": f'[[scope]]\ntarget = ["{PADDED}/32"]\n',
+    "toml dotted key": f'scope.trusted.wan = ["{PADDED}/32"]\n',
+    "free text": f"scope: 'wan is {PADDED}'\n",  # N9
+    # SF2: Markdown, judged on raw text: any fence, any indent, any info string, or none
+    "markdown fence": f"# x\n\n```yaml\nscope:\n  target: ['{EVERYTHING}']\n```\n",
+    "markdown untagged fence": f"```\nscope:\n  target: ['{EVERYTHING}']\n```\n",
+    "markdown indented fence": f"- step\n\n   ```yaml\n   scope:\n     target: ['{PADDED}/32']\n   ```\n",
+    "markdown longer closing fence": (
+        f"```\ntext\n`````\n\n```yaml\nscope:\n  target: ['{PADDED}/32']\n```\n"
+    ),
+    "markdown fence with a bad line": f"```\nscope:\n  target: ['{PADDED}/32']\n\tbad: [\n```\n",
+    "markdown text fence": f"```text\nscope:\n  target: ['{PADDED}/32']\n```\n",
+    "markdown tilde fence": f"~~~yaml\nscope:\n  target: ['{PADDED}/32']\n~~~\n",
+    "markdown html": f"<pre>\nscope:\n  target: ['{PADDED}/32']\n</pre>\n",
+    "markdown prose": f"The lab's scope: {PADDED} and nothing else.\n",
 }
+
+#: a site block in the wrong shape, holding documentation addresses only (or none): refused at
+#: an allowlisted path, where the strict parse judges every leaf; elsewhere it shows no address,
+#: so the location rule lets it through (a public page may show a scope block's shape)
+SHAPE_CASES = {
+    "not an address": "scope:\n  target: [not-an-address]\n",
+    "a bool": "scope:\n  target: [true]\n",
+    "a float": "scope:\n  target: [1.5]\n",
+    "tagged entry": f"scope:\n  target: [!ip '{DOC}.0/24']\n",
+    "json with comments": f'// c\n{{"scope": {{"target": ["{DOC}.0/24"]}}}}\n',
+    "misspelt top-level part": f"scope:\n  targets: [{DOC}.0/24]\n",
+    "upper-case key": f"Scope:\n  target: [{DOC}.0/24]\n",
+    "nested": f"site:\n  scope:\n    target: [{DOC}.0/24]\n",
+    "unparseable": "scope: [unclosed\n",
+    "self alias": "scope:\n  target: &a [*a]\n",
+    "alias into scope": f"a: &x {{target: [{DOC}.0/24]}}\nscope: *x\n",
+    "documentation address, prefix beyond three digits": f"scope:\n  target: ['{DOC}.1/0033']\n",
+    "too deep to parse": "scope:\n  target: " + "[" * 100 + "]" * 100 + "\n",  # N3
+}
+
+#: where a file holding a scope key may sit: every one is read (N2: any suffix, none at all)
+ANYWHERE = (
+    "examples/site.yml",
+    "examples/site.yml.tpl",
+    "examples/site.yaml.dist",
+    "examples/site.jsonc",
+    "examples/site.yml.bak",
+    "examples/modules",
+    "docs/guide.md",
+    "notes.txt",
+)
+
+
+def _plant(tmp_path: Path, rel: str, text: str) -> Path:
+    root = public_tree(tmp_path)
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+    return root
+
+
+SCOPE_RULES = {"scope-address", "scope-shape", "scope-unparsed"}
+
+
+@pytest.mark.parametrize("case", sorted(ADDRESS_CASES))
+def test_a_real_address_under_a_scope_key_fails_wherever_it_is(case):
+    """Negative: a non-documentation address under any scope key, in any spelling, fails in every
+    file at every path; at an allowlisted path the strict parse also judges it."""
+    text = ADDRESS_CASES[case]
+    for rel in ANYWHERE:
+        found = plc.scope_findings(rel, text)
+        assert "scope-address" in rules(found), (case, rel)
+        assert rules(found) <= SCOPE_RULES, (case, rel)
+    found = plc.scope_findings(SITE, text)
+    assert found and rules(found) <= SCOPE_RULES, case
 
 
 @needs_skeleton
-@pytest.mark.parametrize("case", sorted(FAILING_SCOPES))
-def test_public_scope_block_with_a_real_address_fails(tmp_path, case):
-    """Negative: a public scope block that names a real address or network, or that the gate
-    cannot read, fails in every shape the gate reads (no shape is silently skipped)."""
-    name, text = FAILING_SCOPES[case]
-    root = public_tree(tmp_path)
-    p = root / "examples" / name
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(text)
-    assert rules(plc.check_public(root)) <= {"scope-address", "scope-shape", "scope-unparsed"}
-    assert plc.check_public(root), case
+@pytest.mark.parametrize("case", ["zero-padded", "markdown indented fence", "schema examples"])
+@pytest.mark.parametrize("rel", ["notes.txt", "examples/modules", SITE])
+def test_the_public_check_reads_every_file(tmp_path, case, rel):
+    """N2: check_public hands every file the scanner reads to the scope check, any suffix."""
+    root = _plant(tmp_path, rel, ADDRESS_CASES[case])
+    assert "scope-address" in rules(plc.check_public(root))
     assert run("public", str(root)).returncode == 1
 
 
+@pytest.mark.parametrize("case", sorted(SHAPE_CASES))
+def test_a_wrong_shape_fails_at_an_allowlisted_path(case):
+    """Negative: at an allowlisted path every leaf is judged, any shape the strict parse cannot
+    judge is a finding, and a file too deep or too large is refused before any parser sees it."""
+    found = plc.scope_findings(SITE, SHAPE_CASES[case])
+    assert found and rules(found) <= SCOPE_RULES, case
+
+
+@pytest.mark.parametrize("case", sorted(SHAPE_CASES))
+def test_a_wrong_shape_without_an_address_is_not_judged_elsewhere(case):
+    """The location rule: outside the allowlist only addresses are judged, so a page showing a
+    block's shape with documentation addresses (or none) passes."""
+    for rel in ANYWHERE:
+        assert plc.scope_findings(rel, SHAPE_CASES[case]) == [], (case, rel)
+
+
+#: site blocks in the selection's shape with documentation networks only: pass everywhere
+PASSING_SITE_BLOCKS = [
+    f"scope:\n  trusted:\n    wan: [{DOC3}.7/32]\n    nets: [{DOC}.0/24, 2001:db8::/48]\n",
+    "scope:\n  target: [" + "198.51.100" + ".0/33]\n",  # the generated negative's malformed entry
+    f"scope:\n  target: ['::ffff:{DOC}.1']\n",  # a mapped documentation address
+    "scope:\n  target: ['3fff::/20']\n",  # RFC 9637
+    "scope:\n  target: ['2001:db8::1e8']\n",  # a hex group is not a number
+    f"scope:\n  target: [{DOC}.0/24]\n  exclude:\n    offensive: []\n",  # nothing excluded
+    "scope:\n  trusted:\n    wan: [{source: wan-dhcp}]\n",  # a dynamic source names nothing
+    "scope:\n  trusted:\n    wan:\n",  # null: no value
+]
+#: other documents' scope keys, and text near a scope key that names no address: pass outside
+#: the allowlist (at an allowlisted path a scope key is the selection's, so these are shapes)
+PASSING_ELSEWHERE = [
+    "scope: analyst\n",  # a record's scope
+    "scope:\n  capabilities: [cap:monitoring]\n",  # a customization's selectors
+    'scope: {"type": "object", "properties": {"target": {"type": "array"}}, "maxItems": 6}\n',
+    "parameters:\n  scope: {env: RECORDS_SCOPE, default: '{profile}'}\n",  # an MCP parameter
+    "scope: {since: 1.0, versions: [1.2, 16.4, 2.1.0]}\n",  # versions, not short forms
+    'note: "\\x38\\x31.' + PUBLIC_V4.split(".", 1)[1] + '"\n',  # an escape outside any scope
+    "x: !vault |\n  abc\ny: [broken\n",  # no scope here: hygiene's finding, not this one's
+    f"scope: x\nother: {PADDED}\n",  # a sibling of the scope key, not under it
+]
+
+
+@pytest.mark.parametrize("text", PASSING_SITE_BLOCKS)
+def test_a_site_block_with_documentation_ranges_passes_everywhere(text):
+    for rel in (SITE, *ANYWHERE):
+        assert plc.scope_findings(rel, text) == [], rel
+
+
+@pytest.mark.parametrize("text", PASSING_ELSEWHERE)
+def test_a_scope_key_naming_no_address_passes_outside_the_allowlist(text):
+    for rel in ANYWHERE:
+        assert plc.scope_findings(rel, text) == [], rel
+
+
 @needs_skeleton
-@pytest.mark.parametrize(
-    "text",
-    [
-        f"scope:\n  trusted:\n    wan: [{DOC.replace('192.0.2', '203.0.113')}.7/32]\n    nets: [{DOC}.0/24, 2001:db8::/48]\n",
-        "scope:\n  target: ["
-        + "198.51.100"
-        + ".0/33]\n",  # the generated negative's malformed entry
-        f"scope:\n  target: ['::ffff:{DOC}.1']\n",  # a mapped documentation address
-        "scope:\n  target: ['3fff::/20']\n",  # RFC 9637
-        f"scope:\n  target: [{DOC}.0/24]\n  exclude:\n    offensive: []\n",  # nothing excluded
-        "scope:\n  trusted:\n    wan: [{source: wan-dhcp}]\n",  # a dynamic source names nothing
-        "scope:\n  trusted:\n    wan:\n",  # null: no value
-        "scope: analyst\n",  # another document's scope (a record's)
-        "scope:\n  capabilities: [cap:monitoring]\n",  # a customization's selectors
-        'scope: {"type": "object", "properties": {"target": {"type": "array"}}}\n',  # a schema
-        "parameters:\n  scope: {env: RECORDS_SCOPE, default: '{profile}'}\n",  # an MCP parameter
-        'note: "\\x38\\x31.2.69.142"\n',  # an escape outside any scope block
-        "x: !vault |\n  abc\ny: [broken\n",  # no scope here: hygiene's finding, not this one's
-    ],
-)
-def test_public_scope_block_with_documentation_ranges_passes(tmp_path, text):
-    root = public_tree(tmp_path)
-    (root / "examples" / "site.yml").write_text(text)
+def test_a_public_tree_with_documentation_scope_blocks_passes(tmp_path):
+    root = _plant(tmp_path, SITE, PASSING_SITE_BLOCKS[0])
+    (root / "docs").mkdir()
+    (root / "docs" / "guide.md").write_text(PASSING_SITE_BLOCKS[0] + PASSING_ELSEWHERE[4])
     assert plc.check_public(root) == []
 
 
-@needs_skeleton
 @pytest.mark.parametrize(
-    ("name", "text"),
+    ("rel", "allowed"),
     [
-        ("guide.md", "```python\nscope = {'target': ['x']}\n```\n"),  # another language
-        ("guide.md", "```\nhnx scope check --target x: [y\n```\n"),  # shell, not YAML
-        ("notes.txt", f"scope:\n  target: ['{EVERYTHING}']\n"),  # not read: leak_scan's
+        ("examples/modules/sites/full.yml", True),
+        ("schemas/platform/examples/module_selection.full.yml", True),
+        ("schemas/platform/negative/module_selection.scope-empty-list.yml", True),
+        ("examples/modules/sites/sub/full.yml", False),
+        ("examples/modules/sites/full.yml.bak", False),
+        ("examples/modules/sites/full.yaml", False),
+        ("schemas/platform/examples/module.feature.yml", False),
+        ("lab/modules.yml", False),
     ],
 )
-def test_what_the_scope_gate_does_not_read(tmp_path, name, text):
-    root = public_tree(tmp_path)
-    (root / "examples" / name).write_text(text)
-    assert not any(f.rule.startswith("scope-") for f in plc.check_public(root))
+def test_the_allowlist_is_exact_paths(rel, allowed):
+    assert plc.scope_block_path(rel) is allowed
 
 
-@pytest.mark.parametrize(
-    ("rel", "fmt"),
-    [
-        ("a/site.yml", "yaml"),
-        ("a/site.YAML", "yaml"),
-        ("a/site.yml.j2", "yaml"),
-        ("a/site.yaml.example", "yaml"),
-        ("a/site.json", "json"),
-        ("a/site.toml", "toml"),
-        ("a/README.md", "md"),
-        ("a/site.py", None),
-        ("a/.yml", None),
-    ],
-)
-def test_scope_format_reads_through_template_suffixes(rel, fmt):
-    assert plc.scope_format(rel) == fmt
+def test_every_allowlist_entry_names_files_that_exist():
+    for glob in plc.SCOPE_BLOCK_PATHS:
+        assert list(ROOT.glob(glob)), glob
 
 
 def test_an_alias_shape_is_never_expanded(monkeypatch):
@@ -676,26 +784,75 @@ def test_an_alias_shape_is_never_expanded(monkeypatch):
         laughs += f"{cur}: &{cur} [" + ", ".join([f"*{prev}"] * 10) + "]\n"
     laughs += "scope:\n  target: [*i, *i]\n"
     for text in ("scope:\n  target: &a [*a]\n", laughs):
-        assert rules(plc.scope_findings("x.yml", text)) == {"scope-shape"}
+        assert "scope-shape" in rules(plc.scope_findings(SITE, text))
     assert len(calls) < 50
 
 
-def test_the_foreign_scope_vocabulary_matches_the_schemas_it_names():
-    """A scope mapping with only these keys is another document's scope; the set must hold the
-    customization selectors and the MCP parameter keys, or those files would read as site
-    scope blocks with misspelt parts."""
-    cust = json.loads((ROOT / "schemas/platform/customization.schema.json").read_text())
-    mcp = json.loads((ROOT / "schemas/platform/mcp_server.schema.json").read_text())
-    names = set(cust["properties"]["scope"]["properties"])
-    names |= set(mcp["$defs"]["parameter"]["properties"])
-    assert names <= plc.FOREIGN_SCOPE_KEYS
-    assert not plc.FOREIGN_SCOPE_KEYS & {"trusted", "target", "exclude"}
+@pytest.mark.parametrize(
+    "text",
+    [
+        "scope:\n  target: " + "[" * 100_000 + "]" * 100_000 + "\n",
+        "scope:\n" + "".join(" " * (2 * i) + "a:\n" for i in range(1, 80)),
+        "scope:\n  target:\n  " + "- " * 200 + "x\n",
+        "scope:\n  target: [" + ", ".join([f"{DOC}.1"] * 60_000) + "]\n",
+    ],
+    ids=["deep flow", "deep indent", "block indicators", "large"],
+)
+def test_a_deep_or_large_allowlisted_file_is_refused_before_parsing(text):
+    """N3: libyaml's C composer segfaults on deep nesting; the strict parse bounds depth and size
+    first and refuses what is over the limit, so no file can take the gate down."""
+    # in a child process: a parser crash (the segfault this guards against) fails this test
+    # instead of taking the whole test run down with it
+    code = (
+        "import sys; sys.path.insert(0, sys.argv[1]); import private_leak_check as plc; "
+        "print(sorted({f.rule for f in plc.scope_findings(sys.argv[2], sys.stdin.read())}))"
+    )
+    r = subprocess.run(
+        [sys.executable, "-c", code, str(TOOL.parent), SITE],
+        input=text,
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, (r.returncode, r.stderr[-300:])
+    assert "scope-unparsed" in r.stdout
 
 
 @needs_skeleton
-def test_the_one_exemption_is_one_location_in_one_file(tmp_path):
-    """The generated misspelt-part negative passes only at its own path and only for its own
-    misspelt key; what that key holds is still read."""
+def test_a_deeply_nested_file_fails_the_command_cleanly(tmp_path):
+    root = _plant(tmp_path, SITE, "scope:\n  target: " + "[" * 100_000 + "]" * 100_000 + "\n")
+    r = run("public", str(root))
+    assert r.returncode == 1, (r.returncode, r.stderr[-300:])
+    assert "scope-unparsed" in r.stdout
+
+
+def test_the_scope_check_never_crashes_open(monkeypatch):
+    def boom(*_a, **_k):
+        raise RecursionError
+
+    monkeypatch.setattr(plc, "_raw_findings", boom)
+    assert rules(plc.scope_findings("docs/x.md", "scope: x\n")) == {"scope-unparsed"}
+
+
+@pytest.mark.parametrize("size", [1_000, 10_000])
+def test_the_raw_rule_reads_each_character_about_once(size):
+    """Nested and unclosed keys reuse the spans already read: linear, not quadratic."""
+    import time
+
+    texts = [
+        "scope: [\n" * size,
+        "scope: [" * size + "]" * size + "\n",
+        "".join("  " * (i % 200) + "scope:\n" for i in range(size)),
+    ]
+    for text in texts:
+        t0 = time.perf_counter()
+        assert plc.scope_findings("x.yml", text) == []
+        assert time.perf_counter() - t0 < 10, text[:20]
+
+
+@needs_skeleton
+def test_the_one_exemption_is_one_exact_location_in_one_file(tmp_path):
+    """N6: the generated misspelt-part negative passes only at its own path and only for its own
+    misspelt key, matched exactly; what that key holds is still read."""
     rel = "schemas/platform/negative/module_selection.scope-unknown-part.yml"
     assert [k[0] for k in plc.SCOPE_EXEMPT] == [rel]
     text = (ROOT / rel).read_text()
@@ -703,22 +860,29 @@ def test_the_one_exemption_is_one_location_in_one_file(tmp_path):
     (root / rel).parent.mkdir(parents=True)
     (root / rel).write_text(text)
     assert plc.check_public(root) == []
-    (root / "examples" / "copy.yml").write_text(text)
+    copy = root / "examples" / "modules" / "sites" / "copy.yml"
+    copy.parent.mkdir(parents=True)
+    copy.write_text(text)
     assert rules(plc.check_public(root)) == {"scope-shape"}
-    (root / "examples" / "copy.yml").unlink()
+    copy.unlink()
+    (root / rel).write_text(text.replace("    lan:\n", "    'lan: x':\n"))
+    assert rules(plc.check_public(root)) == {"scope-shape"}
     (root / rel).write_text(text.replace(f"lan:\n    - {DOC}.0/24", f"lan:\n    - {PRIVATE_NET}"))
     assert rules(plc.check_public(root)) == {"scope-address"}
 
 
 def test_the_example_sites_carry_a_scope_block_the_check_reads():
-    """The check is not vacuous on this tree: every example site has a scope block it parses."""
+    """The check is not vacuous on this tree: every example site has a scope block it parses
+    strictly, and a planted non-documentation address fails it."""
     sites = sorted((ROOT / "examples" / "modules" / "sites").glob("*.yml"))
     assert sites
     for p in sites:
+        rel = p.relative_to(ROOT).as_posix()
         text = p.read_text()
-        assert plc.scope_findings(p.name, text) == []
+        assert plc.scope_block_path(rel)
+        assert plc.scope_findings(rel, text) == []
         planted = text.replace("203.0.113.", "198.18.0.", 1)
-        assert rules(plc.scope_findings(p.name, planted)) == {"scope-address"}, p
+        assert rules(plc.scope_findings(rel, planted)) == {"scope-address"}, p
 
 
 @needs_skeleton
