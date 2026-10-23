@@ -290,7 +290,13 @@ jobs:
                  && base=$(git rev-parse --verify --quiet "$BEFORE^{commit}"); then
                 :
               elif base=$(git rev-parse --verify --quiet "HEAD^^{commit}"); then
-                echo "the push's previous tip ${BEFORE:-(unset)} is zero or not fetchable: HEAD^"
+                # with fetch-depth: 0 an unreadable non-zero tip is a force-push; a shallow
+                # checkout of depth > 1 would also land here (latent: every job fetches in full)
+                if [ -z "$BEFORE" ] || [ "$BEFORE" = "$zero" ]; then
+                  echo "a new branch (the push's previous tip is zero): HEAD^"
+                else
+                  echo "a force-push (the push's previous tip $BEFORE is not fetchable): HEAD^"
+                fi
               elif [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
                 echo "::error::no base and the checkout is shallow (fetch-depth: 0)"
                 exit 1
@@ -346,7 +352,13 @@ jobs:
                  && base=$(git rev-parse --verify --quiet "$BEFORE^{commit}"); then
                 :
               elif base=$(git rev-parse --verify --quiet "HEAD^^{commit}"); then
-                echo "the push's previous tip ${BEFORE:-(unset)} is zero or not fetchable: HEAD^"
+                # with fetch-depth: 0 an unreadable non-zero tip is a force-push; a shallow
+                # checkout of depth > 1 would also land here (latent: every job fetches in full)
+                if [ -z "$BEFORE" ] || [ "$BEFORE" = "$zero" ]; then
+                  echo "a new branch (the push's previous tip is zero): HEAD^"
+                else
+                  echo "a force-push (the push's previous tip $BEFORE is not fetchable): HEAD^"
+                fi
               elif [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
                 echo "::error::no base and the checkout is shallow (fetch-depth: 0)"
                 exit 1

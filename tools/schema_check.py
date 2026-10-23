@@ -534,6 +534,9 @@ def ci_base(root: Path, event: str, pr_base: str, before: str) -> tuple[str | No
         if not before or before == ZERO_SHA
         else f"the push's previous tip {before} is not fetchable (a force-push)"
     )
+    # With fetch-depth: 0 (every CI job) an unreadable non-zero tip is a force-push.  A shallow
+    # checkout of depth > 1 would also reach HEAD^ here and be labelled a force-push; that is
+    # latent, and a depth-1 checkout (no HEAD^) is refused below.
     if sha := commit("HEAD^"):
         return sha, f"HEAD^ ({why})"
     if git("rev-parse", "--is-shallow-repository").stdout.strip() == "true":
