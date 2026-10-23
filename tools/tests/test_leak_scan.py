@@ -754,12 +754,14 @@ def test_escape_segments_are_go_string_literals_only():
         assert leak_scan._in_go_string(code, len(code)) is inside, code
 
 
-def test_orchestrator_config_key_names_are_product_names_but_values_are_scanned():
-    for line in ("vault_root: /srv/notes", "vault_scope: [findings]", "tools: [vault_write]"):
+def test_vault_prefixed_names_are_findings_whatever_product_uses_them():
+    # vault_* is the Ansible-vault secret convention secret-name exists to catch; a product's notes
+    # store keys are no exception (the orchestrator's are renamed notes_* rather than allowed)
+    for line in (
+        "vau" + "lt_root: /srv/notes",
+        "vau" + "lt_scope: [findings]",
+        "tools: [vau" + "lt_write]",
+    ):
+        assert "secret-name" in _secret_hits(line), line
+    for line in ("notes_root: /srv/notes", "notes_scope: [findings]", "tools: [notes_write]"):
         assert _secret_hits(line) == set(), line
-    # a longer name that only starts like one is still a finding
-    for name in ("vault_root" + "_password", "vault_scope" + "_token", "vau" + "lt_recent_index"):
-        assert "secret-name" in _secret_hits(f"key: {name}"), name
-    # the value next to an allowed name is still scanned
-    assert "high-entropy-string" in _secret_hits("vault_root: " + RANDOM)
-    assert "secret-name" in _secret_hits("vault_write: {{ vault" + "_db_password }}")

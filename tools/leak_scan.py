@@ -424,11 +424,6 @@ PRODUCT_SECRET_NAMES = frozenset(
     {
         "VLLM_API_KEY",  # vLLM's server key, written by the vllm_server role
         "IMAGES_OPENAI_API_KEY",  # an Open WebUI setting the open_webui role reserves
-        # the orchestration controller's config keys and notes-tool names (orchestrator/): its
-        # markdown notes store is called a vault; the values these keys carry are still scanned
-        "vault_root",  # where the notes store lives
-        "vault_scope",  # a profile's readable part of the notes store
-        "vault_write",  # a profile's writable lanes, and the tool that writes a note
     }
 )
 

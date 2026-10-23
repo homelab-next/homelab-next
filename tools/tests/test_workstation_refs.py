@@ -85,13 +85,13 @@ def test_scope_is_runtime_config_only():
 
 
 def test_orchestrator_examples_are_runtime_config(tmp_path, capsys):
-    _write(tmp_path, "orchestrator/examples/controller.yaml", "vault_root: /home/fake-user/notes\n")
+    _write(tmp_path, "orchestrator/examples/controller.yaml", "notes_root: /home/fake-user/notes\n")
     _write(tmp_path, "orchestrator/internal/config/config_test.go", "// see /home/fake-user\n")
     assert lint.main([str(tmp_path)]) == 1
     err = capsys.readouterr().err
     assert "orchestrator/examples/controller.yaml:1: [home-path]" in err
     assert "config_test.go" not in err
-    _write(tmp_path, "orchestrator/examples/controller.yaml", "vault_root: /srv/notes\n")
+    _write(tmp_path, "orchestrator/examples/controller.yaml", "notes_root: /srv/notes\n")
     assert lint.main([str(tmp_path)]) == 0
 
 
