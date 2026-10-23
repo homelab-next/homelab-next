@@ -11,9 +11,16 @@ Two sources, joined by a tag:
 | Source | Grain | How it reaches the hub |
 |---|---|---|
 | the controller (it sees the task input and the final answer) | one record per job | the event `homelabnext.agent.job.finished` on the bus |
-| the [LLM gateway](llm-gateway.md) ([[llm-gateway]]), LiteLLM's spend log | one record per model call (turn) | read from the gateway's API, joined by `gateway_tag` |
+| the [LLM gateway](llm-gateway.md) ([[llm-gateway]]), its own per-call log | one record per model call (turn) | read through a turn-source adapter, joined by `gateway_tag` |
 
 Per-tool-call records from first-party MCP servers may come later as a third source.
+
+**Requires and prefers.** The feature *requires* the events capability (the bus) and the
+orchestration controller emitting `agent.job.finished`. It *prefers* an inference gateway with a
+turn source (the `inference` capability's `turn-records` feature); without one
+(`--turn-source none`, or jobs on a direct backend) it shows per-job data only, and the page and
+the rollup say "no gateway data" instead of zeros. A later module manifest transcribes this as
+`requires:` and `prefers:`.
 
 ## The contract: `homelabnext.agent.job.finished` 1.0
 
@@ -22,8 +29,11 @@ Schema: `schemas/events/agent.job.finished.schema.json` (frozen baseline under
 consumer contract tests cover it like every type, [events](events.md) ([[events]])).
 
 The controller emits it once per job reaching a terminal state, through its durable outbox, in
-the same transaction as the terminal transition, with `source: svc:llm-orchestrator` and an `id`
-derived from the run id (a re-send is a duplicate). `agent.job.failed` is still emitted for
+the same transaction as the terminal transition, with `source` set to its service id and an `id`
+derived from the run id (a re-send is a duplicate). Which service id the hub accepts is
+configuration: `hnx orchestration --source svc:NAME` (repeatable) or `HNX_ORCHESTRATION_SOURCE`
+(comma-separated), default `svc:llm-orchestrator`, the example lab's controller; every other
+source is refused. `agent.job.failed` is still emitted for
 failures; `finished` is the usage record of every outcome.
 
 | Field | Type | Meaning |
@@ -61,13 +71,17 @@ as `agent.activity`'s summary tier ([status](status.md) ([[status]]) section 6):
   ride along; the negatives `carries-task-text`, `usage-carries-prompt` and `tool-carries-input`
   prove it;
 - sizes are byte counts, never content;
-- a gateway row is reduced to an allow-list before it is stored
-  (`homelabnext.orchestration.gateway.turn_from_row`): request id, matched tag, start time,
-  duration, time to first token, model group (the role asked for), model, call type, status,
-  HTTP error code, token counts, cache-read tokens, cache hit, cost. `api_base`, `user`,
-  `end_user`, the client address, the key hash, the rest of `metadata` and any message or response
-  column are dropped, and a name that is not name-shaped is dropped rather than kept. The tests
-  plant such values (all fictional) and check that neither the store file nor the page holds them.
+- a turn is the **neutral turn record** (`TURN_FIELDS` in `conformance/protocols/inference.py`):
+  the gateway's id of the call, the matched tag, start time, duration, time to first token,
+  model role (the alias asked for, ADR-0007), model, call type, status, HTTP error code, token
+  counts, cache-read tokens, cache hit, cost. The adapter reduces its product's row to it (for
+  LiteLLM, `api_base`, `user`, `end_user`, the client address, the key hash, the rest of
+  `metadata` and any message or response column are dropped, and a name that is not name-shaped
+  is dropped rather than kept), and the store refuses any record with another field or a value of
+  the wrong kind (`turn_problems`), so a new adapter cannot widen what is kept. `call_type` is the
+  gateway's own name for the kind of call (LiteLLM: `acompletion` and so on): opaque, per
+  provider, for display and grouping only. The tests plant forbidden values (all fictional) and
+  check that neither the store file nor the page holds them.
 
 ## Data flow
 
@@ -75,8 +89,9 @@ as `agent.activity`'s summary tier ([status](status.md) ([[status]]) section 6):
 controller ── outbox ──▶ bus: homelabnext.agent.job.finished
                               │  hnx orchestration consume   (durable pull, one pass per timer)
                               ▼
-                     telemetry store (SQLite) ◀── hnx orchestration turns ── gateway /spend/logs/v2
-                              │                    (jobs not yet settled, joined by gateway_tag)
+                     telemetry store (SQLite) ◀── hnx orchestration turns ── turn source (the gateway's
+                              │                    (jobs not yet settled,   per-call log, by adapter)
+                              │                     joined by gateway_tag)
                               ├──▶ hub page /orchestration      (hnx status serve --orchestration DB)
                               └──▶ hnx orchestration report     (rollup JSON: the engine's input)
 ```
@@ -84,7 +99,7 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
 - **Consume** (`homelabnext.orchestration.bus.drain`): a durable pull consumer
   (`hnx-orchestration-telemetry`) on the type's subject. Stored or a duplicate: `ack`. Poison (not
   JSON, which includes `NaN`, `Infinity` and a number no float holds such as `1e999`, a string
-  holding a lone surrogate such as `"\ud800"`, invalid, another type, a source other than `svc:llm-orchestrator`, an id reused with
+  holding a lone surrogate such as `"\ud800"`, invalid, another type, a source other than the configured controller's, an id reused with
   another body, a second record for a run under another id, a record whose `gateway_tag` another
   run already holds (the tag must name one job, or two jobs' turns would merge), a timestamp the pattern accepts but
   the calendar does not, such as `2026-02-30`, times out of order by more than a second (queued
@@ -109,12 +124,12 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
   `homelabnext.agent.job.>` stays the controller's alone.
 - **Ingest** (`hnx orchestration ingest FILE|-`): the same consumer over a JSON-lines file, for a
   backfill or a replay of the outbox.
-- **Turns** (`hnx orchestration turns`): for every job whose turns are not settled, read the
-  spend log over windows covering the jobs (from queue time less two minutes to finish time plus
+- **Turns** (`hnx orchestration turns --turn-source ...`): for every job whose turns are not
+  settled, read the turn source over windows covering the jobs (from queue time less two minutes to finish time plus
   two, merged when within an hour, but cut into windows of at most an hour so a week of replay
   or a backlog after an outage never becomes one window over all the gateway's traffic), oldest
-  first; keep the rows whose `request_tags` hold a job's tag, and rewrite them by request id. A
-  job is settled ten minutes after it finished (LiteLLM writes its spend log in batches), as soon
+  first; keep the turns that carry a job's tag, and rewrite them by the call's id. A
+  job is settled ten minutes after it finished (a gateway may write its log in batches), as soon
   as the last window it overlaps has been read; a failed read stops the pass but keeps what was
   read and settled before it, and the next pass starts from the jobs still unsettled.
 - **Retention**: 90 days by default (`--retention-days`), by finish time and turn start time. A
@@ -127,7 +142,28 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
   count, and the statement deletes any left; it never keeps an expired job, which the next open
   would purge, leaving the tag with none), rather than choosing which job to drop.
 
-### The gateway read path: the spend-log API with a viewer key
+### Turn sources: the slot and its adapters
+
+`hnx orchestration turns` reads through the turn source `--turn-source` names (else
+`HNX_ORCHESTRATION_TURN_SOURCE`): `none` (no gateway data: nothing is read or settled, so a
+source chosen later still reads the jobs inside retention), or an adapter factory
+`package.module:factory`, the `adapter:` form of a conformance target. The adapter options are
+`--gateway-url` (passed as `base_url`), `--key` (a `secret:` name), `--ca-file` and
+`--allow-plaintext`; which adapter fills the slot is site configuration. The factory returns a
+`TurnSource` (`turns(start, end, tags)`, neutral turn records), and the `inference` suite's
+`turn-records` checks prove an adapter: every turn is exactly the neutral record, carries only
+the tags asked for, started in the window, and keeps its id across reads. Swapping the gateway is
+a new adapter plus those checks, with no change to the hub.
+
+| Adapter (`--turn-source`) | Gateway | Read path |
+|---|---|---|
+| `homelabnext.conform.adapters.litellm_spend_log:make` | LiteLLM | `GET /spend/logs/v2` with a viewer key (below) |
+
+The adapter's checks run against a loopback fake of its API serving a recorded-shape fixture
+(`tests/conform/test_conform_litellm_turn_source.py`). The lab's gateway targets skip them for
+now: a lab run must first send a tagged call and name its window (a follow-up).
+
+#### LiteLLM: the spend-log API with a viewer key
 
 `GET /spend/logs/v2` (LiteLLM's paginated spend-log API), with a LiteLLM virtual key whose user has
 the `proxy_admin_viewer` role (sees all spend, cannot create keys, change settings or call models)
@@ -151,7 +187,7 @@ operator creates this one on the running gateway (`/user/new` with `user_role:
 proxy_admin_viewer`, then `/key/generate` for that user with the route restriction) and stores it
 under the secret name. Generating it from the gateway spec is a follow-up.
 
-### Enabling tagging on the gateway
+#### Enabling tagging on LiteLLM
 
 - The controller sends every model request of a job with the header `x-litellm-tags: <gateway_tag>`
   (the job-scoped hermes home's model config sets it). LiteLLM records it in
@@ -161,8 +197,8 @@ under the secret name. Generating it from the gateway spec is a follow-up.
 - `general_settings.reject_clientside_metadata_tags` must stay unset or false, or LiteLLM drops
   client tags; spend logs must stay on (`disable_spend_logs` unset). Prompt storage in the spend
   log is not needed and should stay off.
-- Only jobs routed through a LiteLLM gateway have turns. A job on a direct vLLM backend or a cloud
-  provider has none: the page shows **no gateway data**, never zeros, and the rollup's turn sums
+- Only jobs routed through a gateway whose turn source is read have turns. A job on a direct
+  backend or a cloud provider has none: the page shows **no gateway data**, never zeros, and the rollup's turn sums
   are null.
 
 ## The hub page
@@ -176,7 +212,7 @@ orchestration`, views schema 1.9):
   unknown)", never folded into a zero.
 - **Trend by day**: per day and profile, jobs, completed, not completed, wall p50, tokens, cost.
 - **Latest jobs**, each linking to `/orchestration/job?run=<run id>`: the job's record, its tool
-  counts and its gateway turns (model group, model, status, tokens, cache read, time to first
+  counts and its gateway turns (model role, model, status, tokens, cache read, time to first
   token, duration, cost), with the gateway's token sums beside the usage file's.
 
 Filters (`profile`, `backend`, `lane`, `outcome`, `days` 1..90) narrow everything. The hub
@@ -206,6 +242,29 @@ with SQLite's reason rather than read, since reading it would create the files a
 writer pass converts it. Any other SQLite failure at start (a lock held past the timeout, a crashed
 write's journal only a writer may roll back) is reported with SQLite's own message, also exit 2;
 "not a telemetry store" is kept for a file that is no SQLite database or has no store's tables.
+
+## Export and import
+
+`hnx orchestration export --db DB [--out FILE]` writes the whole store as JSON lines,
+`homelabnext.orchestration.export/1`, reading it read-only as the hub does (nothing is created,
+migrated or purged):
+
+```
+{"schema": "homelabnext.orchestration.export/1", "kind": "job", "event": {...}, "turns_settled_at": "2026-01-01T00:20:00Z"}
+{"schema": "homelabnext.orchestration.export/1", "kind": "turn", "turn": {...}}
+```
+
+A job line carries the `agent.job.finished` envelope as consumed (the store keeps it beside the
+record) and when its turns settled; a turn line carries the neutral turn record. Jobs come first,
+oldest finish first, then turns. `hnx orchestration import --db DB FILE|-` loads it through the
+same paths as the live writers: a job goes through the consumer, so the same id and body is a
+`duplicate` and a foreign, invalid, conflicting or non-finite record is refused as poison, and one
+older than retention is `expired`; a turn is refused unless it is exactly the neutral record, and
+the same record again is a `duplicate`. A refused line is reported with its line number (exit 1)
+and does not stop the rest. That makes a store movable (another host, a rebuilt hub) and keeps
+history across a swap of the gateway or the controller, since neither line names a product. A
+job that a store before exports kept without its envelope exports with `event: null`, which an
+import refuses rather than inventing one.
 
 ## What the recommendation engine will consume
 
