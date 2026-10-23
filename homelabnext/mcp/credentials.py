@@ -281,12 +281,26 @@ def plain_url_path(path: str) -> bool:
     )
 
 
+def _host_label_secret(label: str) -> bool:
+    """A host label that looks like a credential.  An IDN label (``xn--...``) is judged in its
+    decoded Unicode form: the ASCII encoding of an ordinary word in another script reads as
+    random letters and digits.  A label that does not decode is skipped (a key would have to be
+    valid punycode to hide there)."""
+    if label.lower().startswith("xn--"):
+        try:
+            label = label.encode("ascii").decode("idna")
+        except (UnicodeError, ValueError):
+            return False
+    return looks_secret(label)
+
+
 def secret_host_labels(host: str) -> list[int]:
-    """Indexes of the labels of ``host`` that look like a credential (:func:`looks_secret`):
-    every label but the top-level domain, since a hosted endpoint may put the key in a
-    subdomain (``<key>.mcp.vendor.example``) or in the second-level label itself."""
+    """Indexes of the labels of ``host`` that look like a credential: every label, the top-level
+    domain and a single-label host included, since a key can sit in a subdomain
+    (``<key>.mcp.vendor.example``), the second-level label or a bare search-domain name.  A real
+    top-level domain never looks like one (no digits, or too short)."""
     labels = (host or "").rstrip(".").split(".")
-    return [i for i, label in enumerate(labels[:-1]) if looks_secret(label)]
+    return [i for i, label in enumerate(labels) if _host_label_secret(label)]
 
 
 def url_carries(value: str) -> bool:

@@ -105,6 +105,7 @@ _HOST_KEYS = ["9f8e7d6c5b4a3928" + "1706f5e4d3c2b1a0", _PATH_KEYS[0]]
         f"{_HOST_KEYS[0]}.mcp.tracker.example.com",
         f"{_HOST_KEYS[1]}.tracker.example.com",
         f"{_HOST_KEYS[1]}.com",  # the second-level label itself
+        f"mcp.{_HOST_KEYS[1]}",  # the top-level position
     ],
 )
 def test_a_credential_in_a_hosted_urls_host_is_refused_and_never_rendered(host):
@@ -115,7 +116,16 @@ def test_a_credential_in_a_hosted_urls_host_is_refused_and_never_rendered(host):
 
 
 @pytest.mark.parametrize(
-    "host", ["mcp.tracker.example.com", "eu-west-3.mcp.tracker.example.com", "api2.example.com"]
+    "host",
+    [
+        "mcp.tracker.example.com",
+        "eu-west-3.mcp.tracker.example.com",
+        "api2.example.com",
+        # long IDN labels read as random letters and digits encoded; they are judged decoded
+        "mcp.xn--80aealotwbjpid2k.example.com",
+        "mcp.xn--3e0bx5e6xzftae3gxzpskhile.example.com",
+        "xn--ok-gzel-trke-alan-ad-20bl98bfa15k.example.com",
+    ],
 )
 def test_a_plain_hosted_url_host_is_accepted(host):
     assert _problems(_edit(transport__url=f"https://{host}/mcp"), REGISTRY) == []
@@ -239,3 +249,21 @@ def test_the_internet_exception_is_a_list_of_server_ids(bad):
     entry = {"mcp": [], "capabilities": [], "tier": "read", "internet_mcp": bad}
     with pytest.raises(SpecError, match="internet_mcp is a list of MCP server ids"):
         CeilingPolicy.from_mapping({"ceilings": {"profile:x": entry}})
+
+
+@pytest.mark.parametrize(
+    ("host", "labels"),
+    [
+        (_HOST_KEYS[1], [0]),  # a single-label host
+        (_HOST_KEYS[1] + ".", [0]),
+        (f"mcp.{_HOST_KEYS[1]}", [1]),  # the top-level position
+        ("localhost", []),
+        ("mcp", []),
+        ("xn--80aealotwbjpid2k.example", []),
+        ("xn--zzzz-a1b2c3d4e5f6g7h8i9j0.example", []),  # does not decode: skipped
+    ],
+)
+def test_every_host_label_is_checked_and_idn_labels_are_judged_decoded(host, labels):
+    from homelabnext.mcp import credentials
+
+    assert credentials.secret_host_labels(host) == labels

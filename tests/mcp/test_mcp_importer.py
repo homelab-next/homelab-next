@@ -273,3 +273,12 @@ def test_a_rendered_record_imports_back_to_the_same_server(tmp_path):
     assert back["timeout"] == 45
     assert {k: back["origin"][k] for k in ("package", "version")} == {
         "package": "@example/mcp-github", "version": "3.2.0"}  # fmt: skip
+
+
+def test_a_credential_as_a_single_label_host_is_not_copied(tmp_path):
+    key = "sk-" + "ak-" + "9f8e7d6c5b4a3928" + "1706f5e4d3c2b1a0"
+    doc = {"mcpServers": {"short": {"type": "http", "url": f"https://{key}/mcp"}}}
+    (tmp_path / "mcp.json").write_text(json.dumps(doc))
+    res = importer.import_configs([tmp_path / "mcp.json"])
+    assert key not in json.dumps(res.records) + json.dumps(res.report)
+    assert res.records["short"]["transport"]["endpoint"] == "svc:unknown"
