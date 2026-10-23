@@ -318,6 +318,34 @@ def test_check_lost_catches_a_deleted_record_file(repo):
     assert f"lost {lost}" in _tool(repo, "check-lost").stderr
 
 
+def test_check_lost_catches_a_deleted_event_file_and_a_deleted_sidecar(repo):
+    d = repo / "reg/lessons"
+    sidecar = d / f"{U['LL-001']}.events"
+    [first, *rest] = sorted(sidecar.iterdir())
+    first.unlink()  # one event gone, as a merge that kept one side's sidecar would leave it
+    r = _tool(repo, "check-lost")
+    assert r.returncode == 1, r.stderr
+    assert f"lost {U['LL-001']}.events/{first.name}" in r.stderr
+    assert "events are append-only" in r.stderr
+    shutil.rmtree(sidecar)  # the whole sidecar gone, the record kept
+    r = _tool(repo, "check-lost")
+    lost = ", ".join(f"{U['LL-001']}.events/{p.name}" for p in [first, *rest])
+    assert r.returncode == 1 and f"lost {lost}" in r.stderr, r.stderr
+    _git(repo, "checkout", "HEAD", "--", f"reg/lessons/{sidecar.name}")
+    assert _tool(repo, "check-lost").returncode == 0
+    new = sidecar / "20261022T000000Z-review-agent-example-checker.yml"
+    new.write_text((sidecar / rest[0].name).read_text())  # an added event is not a loss
+    assert _tool(repo, "check-lost").returncode == 0
+
+
+def test_a_deliberately_dropped_event_is_waived_by_name(repo, monkeypatch):
+    sidecar = repo / "reg/lessons" / f"{U['LL-001']}.events"
+    gone = sorted(sidecar.iterdir())[0]
+    gone.unlink()
+    monkeypatch.setenv("REGISTER_IDS_ALLOW_DROP", f"{U['LL-001']}.events/{gone.name}")
+    assert _tool(repo, "check-lost").returncode == 0
+
+
 def test_check_lost_reads_the_migration_commit_through_the_alias_map(tmp_path):
     """A base that still has LL-001.md: the migrated <uid>.md accounts for it through
     aliases.yml; a record dropped in the migration commit is reported by its old code."""

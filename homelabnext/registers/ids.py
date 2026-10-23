@@ -398,6 +398,9 @@ def check_lost(
     moved into the ``retired:`` mapping is still accounted for; removing that tombstone is not.
     A parent's legacy code (``LL-001``, before the uid migration) is accounted for when the
     tree's ``aliases.yml`` maps it to a uid that is present now, or retires it (a tombstone).
+
+    In a record directory each sidecar event a parent had must still be there too: a lost event
+    is reported as ``<uid>.events/<file>`` (waived by that string or by its record's uid).
     """
     root = pathlib.Path(root)
     spec = spec_for(relpath)
@@ -421,7 +424,71 @@ def check_lost(
     waived = set(allow or ()) | {
         s.strip() for s in os.environ.get("REGISTER_IDS_ALLOW_DROP", "").split(",") if s.strip()
     }
-    return sorted(parents - now - waived)
+    lost = sorted(parents - now - waived)
+    if spec.key == "uid" and is_record_dir(root / relpath):
+        # a lost record is reported as the record; its events go (or are waived) with it
+        skip = waived | set(lost)
+        lost += [e for e in _lost_events(root, relpath, revs) if e.split(".events/")[0] not in skip]
+        lost = [e for e in lost if e not in waived]
+    return lost
+
+
+EVENTS_SUFFIX = ".events"  # a record's sidecar directory (homelabnext.registers.events)
+
+
+def _event_names(paths, relpath: str) -> set[str]:
+    """``<stem>.events/<name>.yml`` for each event file among ``paths`` (relative to the repo)
+    that sits in a sidecar directly under the record directory ``relpath``."""
+    prefix = relpath.rstrip("/") + "/"
+    out = set()
+    for p in paths:
+        if not p.startswith(prefix):
+            continue
+        parts = p[len(prefix) :].split("/")
+        if len(parts) != 2 or parts[1].startswith("."):
+            continue
+        if parts[0].endswith(EVENTS_SUFFIX) and parts[1].endswith(".yml"):
+            out.add("/".join(parts))
+    return out
+
+
+def _lost_events(root: pathlib.Path, relpath: str, revs: tuple[str, ...]) -> list[str]:
+    """Sidecar event files a parent commit had that the working tree lacks.
+
+    Events are append-only and never renamed or deleted (they hold the reviews, recurrences,
+    verified runs and transitions), so any parent event that is gone is lost: losing a transition
+    silently reverts a record's status.  A sidecar named by a legacy code in a parent (before the
+    uid migration) is compared under the uid ``aliases.yml`` maps it to.
+    """
+    from homelabnext.identity.aliases import load_aliases
+
+    base = root / relpath
+    disk = (
+        [
+            str(p.relative_to(root))
+            for d in base.glob(f"*{EVENTS_SUFFIX}")
+            if d.is_dir()
+            for p in d.iterdir()
+        ]
+        if base.is_dir()
+        else []
+    )
+    now = _event_names(disk, relpath)
+    parents: set[str] = set()
+    for rev in revs:
+        if rev and _rev_exists(root, rev):
+            out = _git(root, "ls-tree", "-r", "-z", "--name-only", rev, "--", relpath + "/")
+            parents |= _event_names(out.stdout.split("\0"), relpath)
+    try:
+        codes = load_aliases(base.parent).codes
+    except ValueError as ex:
+        raise IdError(str(ex)) from ex
+
+    def canon(name: str) -> str:
+        stem, _, rest = name.partition(EVENTS_SUFFIX + "/")
+        return f"{codes.get(stem, stem)}{EVENTS_SUFFIX}/{rest}"
+
+    return sorted({canon(n) for n in parents} - {canon(n) for n in now})
 
 
 def duplicates(text: str, spec: RegisterSpec) -> list[str]:
