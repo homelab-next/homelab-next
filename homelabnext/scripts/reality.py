@@ -84,6 +84,9 @@ class AllowError(ValueError):
 class Allow:
     registers: list[str] = field(default_factory=lambda: list(DEFAULT_REGISTERS))
     fleet_unit_specs: list[str] = field(default_factory=lambda: list(DEFAULT_FLEET_SPECS))
+    #: globs under fleet_unit_specs that are not this tree's scheduled jobs (the fictional module
+    #: examples, whose code is named but not shipped); their own tests validate them instead
+    fleet_unit_specs_exclude: list[str] = field(default_factory=list)
     uncalled: dict[str, str] = field(default_factory=dict)
     not_in_runner: dict[str, str] = field(default_factory=dict)
     external_exec: dict[str, str] = field(default_factory=dict)
@@ -107,7 +110,7 @@ def load_allow(root: pathlib.Path, path: str | None = None) -> Allow:
     if unknown:
         raise AllowError(f"{p.name}: unknown key(s) {sorted(unknown)}")
     allow = Allow()
-    for key in ("registers", "fleet_unit_specs"):
+    for key in ("registers", "fleet_unit_specs", "fleet_unit_specs_exclude"):
         if key in doc:
             v = doc[key]
             if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
@@ -377,6 +380,8 @@ def _fleet_units(real: Reality, idx: _Index, allow: Allow) -> None:
         if rel.startswith(("tests/", "tools/tests/")):
             continue
         if not any(_glob(rel, g) for g in allow.fleet_unit_specs):
+            continue
+        if any(_glob(rel, g) for g in allow.fleet_unit_specs_exclude):
             continue
         try:
             entries = _yaml(idx.root / rel) or []

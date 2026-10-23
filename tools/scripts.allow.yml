@@ -11,6 +11,12 @@ registers:
 fleet_unit_specs:
   - "**/fleet_units.yml"
   - "**/fleet_units/*.yml"
+# fleet_units specs that are not this tree's jobs: the fictional module examples (ADR-0027 draft)
+# name module code the repository does not ship, so their execs resolve to nothing here; the
+# module contract tests validate them with fleet_units.validate and the module rules instead
+# (namespaced names, no root, no hardening opt-out, no direct paging)
+fleet_unit_specs_exclude:
+  - "examples/modules/**"
 
 # active scripts with no caller in the tree
 uncalled:
@@ -62,10 +68,4 @@ not_in_runner:
     of a running fleet; make check and CI run it, and an invariant would re-run the same AST pass
 
 # scheduled execs that are not scripts of this repository (product binaries); none yet
-external_exec:
-  /usr/local/libexec/homelabnext/collector-freshness: >-
-    a fictional module example's job (examples/modules/external-collector, ADR-0025 draft): the
-    script ships with that module's code, which the draft names but does not include; the module
-    loader, not built yet, will catalogue a module's scripts from its manifest
-  /usr/local/libexec/homelabnext/publish: >-
-    a fictional module example's job (examples/modules/publishing, ADR-0025 draft): as above
+external_exec: {}

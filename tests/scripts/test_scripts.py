@@ -251,6 +251,25 @@ def test_m02_scheduled_but_uncatalogued_and_its_allowlist(tmp_path):
     ]
 
 
+def test_m02_an_excluded_spec_is_not_this_trees_jobs_but_only_it(tmp_path):
+    """fleet_unit_specs_exclude skips the fictional module examples (their code is named, not
+    shipped, and their own tests validate them), and nothing else: a real spec beside them is
+    still checked, so the exclusion cannot hide an uncatalogued job."""
+    root = good_tree(tmp_path)
+    unit = """\
+        - name: example-job
+          exec: /usr/local/libexec/hnx-modules/example/run
+          on_calendar: "*-*-* 02:00:00 UTC"
+    """
+    tree(root, {"examples/modules/example/units/fleet_units.yml": unit})
+    assert len(verdicts(root)[1]) == 1
+    allow = {"fleet_unit_specs_exclude": ["examples/modules/**"]}
+    tree(root, {"tools/scripts.allow.yml": yaml.safe_dump(allow)})
+    assert verdicts(root)[1] == []
+    tree(root, {"deploy/fleet_units.yml": unit})
+    assert len(verdicts(root)[1]) == 1
+
+
 def test_m02_uncalled_active_script_and_its_allowlist(tmp_path):
     root = good_tree(tmp_path)
     tree(root, {"tools/orphan.py": header(id="orphan")})
