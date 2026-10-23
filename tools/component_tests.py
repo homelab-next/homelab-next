@@ -24,7 +24,8 @@ A component, and what counts as its tests (a test file is ``test_*.py`` under ``
 * a Go package: a directory holding a non-test ``.go`` file anywhere in a Go module (every
   ``go.mod`` is one, its root included, as tools/go_modules.py discovers them for CI; ``testdata``,
   ``_*`` and ``.*`` directories are not packages, as for the go tool, nor is a module's linters'
-  module ``tools/``)                                  -> the directory itself holds a ``*_test.go``.
+  module ``tools/``)                                  -> the directory itself holds a ``*_test.go``;
+  a ``.go`` file in a linters' module is reported itself, since no job would build or test it.
 
 Genuine exceptions go in ``ALLOW`` below, each with the reason, so they are reviewed in one place.
 An entry that names nothing, or a component that has since gained tests, is reported as stale.
@@ -37,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import posixpath
 import re
 import sys
 from pathlib import Path
@@ -88,21 +90,28 @@ def _walk(base: Path, root: Path):
         yield Path(d), files
 
 
-def _go_packages(root: Path) -> list[str]:
-    """Every directory of a Go module that holds a non-test ``.go`` file (the module's root too)."""
+def _go_tree(root: Path) -> tuple[list[str], list[str]]:
+    """``(packages, hidden)``: every directory of a Go module that holds a non-test ``.go`` file
+    (the module's root too), and the ``.go`` files of a linters' module, which no job runs."""
     go_mods = [
         (d / "go.mod").relative_to(root).as_posix() for d, f in _walk(root, root) if "go.mod" in f
     ]
-    out = []
+    mod_dirs = {posixpath.dirname(m) or "." for m in go_mods}
+    packages, hidden = [], []
     for mod in go_modules.modules(go_mods):
         base = root / mod.dir
         linters = base / go_modules.LINTERS_DIR if mod.tools else None
         for d, files in _walk(base, root):
             if linters and (d == linters or linters in d.parents):
-                continue  # the module's linters' module: tool pins, not a package of its own
+                # the module's linters' module: tool pins, not a package of its own, so Go
+                # source there (not in a module nested below it) would be in no job at all
+                rel = [(d / f).relative_to(root).as_posix() for f in files if f.endswith(".go")]
+                lint = linters.relative_to(root).as_posix()
+                hidden += [f for f in rel if go_modules._owner(f, mod_dirs) == lint]
+                continue
             if any(_is_go_source(Path(f)) for f in files):
-                out.append(d.relative_to(root).as_posix())
-    return sorted(set(out))
+                packages.append(d.relative_to(root).as_posix())
+    return sorted(set(packages)), sorted(hidden)
 
 
 def _is_go_source(p: Path) -> bool:
@@ -126,7 +135,7 @@ def components(root: Path) -> dict[str, str]:
             if p.name.startswith(("_", ".")) or p.name == "__pycache__":
                 continue
             found[p.relative_to(root).as_posix().rstrip("/")] = "named"
-    for d in _go_packages(root):
+    for d in _go_tree(root)[0]:
         found[d] = "go-package"
     return found
 
@@ -154,6 +163,10 @@ def problems(root: Path, allow: dict[str, str] = ALLOW) -> list[str]:
         elif not tested:
             out.append(f"{comp}: no tests ({_expect(comp, kind)})")
     out += [f"{a}: ALLOW entry names no component" for a in sorted(set(allow) - set(found))]
+    out += [
+        f"{f}: Go in a linters' module, which only pins tools: no job builds or tests it"
+        for f in _go_tree(root)[1]
+    ]
     return out
 
 

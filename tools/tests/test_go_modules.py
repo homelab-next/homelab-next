@@ -56,6 +56,10 @@ def test_every_go_mod_is_a_module_and_tools_belongs_to_its_module(files, expecte
         # the linters' module: its go.sum or Go file without tools/go.mod
         (["orchestrator/go.mod", "orchestrator/tools/go.sum"], [], "a go.sum with no go.mod beside it"),
         (["orchestrator/go.mod", "orchestrator/tools/tools.go"], [], "reserved for the linters' module"),
+        # verify3.md: Go in the linters' module itself is in no job (its go.mod hides it from ./...)
+        (["orchestrator/go.mod", "orchestrator/tools/go.mod", "orchestrator/tools/evil/evil.go"], [],
+         "Go source in the linters' module orchestrator/tools/"),
+        (["go.mod", "tools/go.mod", "tools/tools.go"], [], "Go source in the linters' module tools/"),
     ],
 )  # fmt: skip
 def test_go_that_no_module_covers_or_a_workspace_is_a_problem(files, links, why):
@@ -137,3 +141,30 @@ def test_no_go_is_a_no_op_and_untracked_go_is_not_a_module(tmp_path, capsys):
 def test_this_repository_has_no_go_outside_a_module():
     files, links = go_modules.tracked(ROOT)
     assert go_modules.problems(files, links) == []
+
+
+@git_missing
+def test_go_in_a_linters_module_fails_instead_of_running_in_no_job(tmp_path, capsys):
+    # verify3.md (v3/toolshide): the listing was [{"dir":"orchestrator","tools":true}] and exit 0,
+    # while go vet, build and test in orchestrator/ never saw tools/evil/
+    layout = {
+        "orchestrator/go.mod": GO_MOD,
+        "orchestrator/a/a.go": "package a\n",
+        "orchestrator/tools/go.mod": "module example.com/fixture/tools\n\ngo 1.24\n",
+        "orchestrator/tools/evil/evil.go": "package evil\n\nfunc F() int { return x }\n",
+        "orchestrator/tools/evil/evil_test.go": "package evil\n",
+    }
+    assert go_modules.main(["--repo", str(_repo(tmp_path, layout))]) == 1
+    out = capsys.readouterr().out
+    assert "::error::orchestrator/tools/evil/evil.go: Go source in the linters' module" in out
+    assert "::error::orchestrator/tools/evil/evil_test.go: Go source in the linters' module" in out
+    # a module nested below it is a module of its own, listed with its own job
+    del layout["orchestrator/tools/evil/evil.go"], layout["orchestrator/tools/evil/evil_test.go"]
+    layout["orchestrator/tools/own/go.mod"] = "module example.com/own\n\ngo 1.24\n"
+    layout["orchestrator/tools/own/own.go"] = "package own\n"
+    assert go_modules.main(["--repo", str(_repo(tmp_path / "b", layout))]) == 0
+    listed = json.loads(capsys.readouterr().out.splitlines()[0])
+    assert listed == [
+        {"dir": "orchestrator", "tools": True},
+        {"dir": "orchestrator/tools/own", "tools": False},
+    ]

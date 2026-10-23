@@ -310,7 +310,7 @@
     {
       "exit": {
         "0": "the modules are listed",
-        "1": "Go outside every module, a go.work, a go.mod that is not a regular file, or a linters' module without its go.mod",
+        "1": "Go outside every module or inside a linters' module, a go.work, a go.mod that is not a regular file, or a linters' module without its go.mod",
         "2": "the tracked files could not be read"
       },
       "id": "go-modules",

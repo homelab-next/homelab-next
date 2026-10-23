@@ -97,7 +97,6 @@ def test_every_go_package_of_every_module_holds_a_go_test_file(tmp_path):
     _touch(root, "orchestrator/internal/_scratch/x.go", "package x\n")
     _touch(root, "orchestrator/internal/onlytests/x_test.go", "package x\n")
     _touch(root, "orchestrator/tools/go.mod", "module example.com/fixture/tools\n")
-    _touch(root, "orchestrator/tools/tools.go", "package tools\n")
     _touch(root, "scratch/loose.go", "package loose\n")
     _touch(root, "build/go.mod", "module example.com/out\n")
     _touch(root, "build/out.go", "package out\n")
@@ -123,3 +122,28 @@ def test_every_go_package_of_every_module_holds_a_go_test_file(tmp_path):
     ):
         _touch(root, f"{d}/x_test.go", "package x\n")
     assert component_tests.problems(root, allow={}) == []
+
+
+def test_go_in_a_linters_module_is_reported_since_no_job_runs_it(tmp_path):
+    # verify3.md (v3/toolshide): ./... in orchestrator/ never enters tools/, whose go.mod makes it
+    # another module, and the linters run with -modfile on the main module's packages only, so
+    # tools/evil/ (which does not compile, and whose test fails) was in no job at all
+    root = tmp_path
+    _touch(root, "orchestrator/go.mod", "module example.com/fixture\n")
+    _touch(root, "orchestrator/a/a.go", "package a\n")
+    _touch(root, "orchestrator/a/a_test.go", "package a\n")
+    _touch(root, "orchestrator/tools/go.mod", "module example.com/fixture/tools\n")
+    _touch(root, "orchestrator/tools/go.sum")
+    _touch(root, "orchestrator/tools/evil/evil.go", "package evil\n\nfunc F() int { return x }\n")
+    _touch(root, "orchestrator/tools/evil/evil_test.go", "package evil\n")
+    # a module nested below the linters' module is a module of its own, with its own job
+    _touch(root, "orchestrator/tools/own/go.mod", "module example.com/own\n")
+    _touch(root, "orchestrator/tools/own/own.go", "package own\n")
+    _touch(root, "orchestrator/tools/own/own_test.go", "package own\n")
+    assert component_tests.problems(root, allow={}) == [
+        "orchestrator/tools/evil/evil.go: Go in a linters' module, which only pins tools: no job "
+        "builds or tests it",
+        "orchestrator/tools/evil/evil_test.go: Go in a linters' module, which only pins tools: no "
+        "job builds or tests it",
+    ]
+    assert component_tests.main(["--root", str(root)]) == 1

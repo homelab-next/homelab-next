@@ -10,7 +10,7 @@
 #   outputs: the modules as JSON on stdout; with --github-output, its `modules` and `present` lines; one line per problem
 #   exit:
 #     "0": the modules are listed
-#     "1": Go outside every module, a go.work, a go.mod that is not a regular file, or a linters' module without its go.mod
+#     "1": Go outside every module or inside a linters' module, a go.work, a go.mod that is not a regular file, or a linters' module without its go.mod
 #     "2": the tracked files could not be read
 """Discover the Go modules of the repository: every tracked ``go.mod`` is one.
 
@@ -22,12 +22,14 @@ One explicit rule: ``<module>/tools/go.mod`` is that module's **linters' module*
 govulncheck pinned as ``tool`` dependencies), run from the module's own job with
 ``go tool -modfile=tools/go.mod``.  It is not a module of its own in the list, and
 ``<module>/tools/`` holding Go without that go.mod is a problem, so deleting the file
-cannot silently turn the linters off.
+cannot silently turn the linters off.  Nor may the linters' module hold Go source of its own: it
+pins tools with ``tool`` directives and needs none, and no job would build, vet or test it.
 
 Problems (exit 1), each also an ``::error::`` line for the GitHub log:
 
 * a ``.go`` file or a ``go.sum`` in no module (a go.mod missing, renamed or moved), or a go.sum
   that is not beside a go.mod;
+* a ``.go`` file in a linters' module (``<module>/tools/``, not in a module nested below it);
 * a ``go.mod`` that is a symbolic link, or a path that runs through a directory named ``go.mod``;
 * a ``go.work`` or ``go.work.sum``: CI runs with ``GOWORK=off``, so a workspace would make a local
   build resolve modules differently from the one CI checked.
@@ -119,8 +121,13 @@ def problems(files: Iterable[str], symlinks: Iterable[str] = ()) -> list[str]:
             )
         elif name == "go.sum" and _dir(f) not in mod_dirs:
             out.append(f"{f}: a go.sum with no go.mod beside it")
-        elif name.endswith(".go") and _owner(f, mod_dirs) is None:
+        elif name.endswith(".go") and (owner := _owner(f, mod_dirs)) is None:
             out.append(f"{f}: Go source in no module (no go.mod in a directory above it)")
+        elif name.endswith(".go") and _linters_of(owner, mod_dirs):
+            out.append(
+                f"{f}: Go source in the linters' module {owner}/, which no job builds, vets or "
+                f"tests (it only pins tools); move it into {_dir(owner)}/ or a module of its own"
+            )
     for d in sorted(mod_dirs):
         linters = _join(d, LINTERS_DIR)
         if linters in mod_dirs:
