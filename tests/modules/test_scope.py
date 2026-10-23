@@ -22,13 +22,17 @@ D1, D2, D3 = "192.0.2", "198.51.100", "203.0.113"
 PRIVATE = ".".join(("10", "20", "0", "0"))
 
 
+#: a module that declares every part (the reader refuses an undeclared one)
+EVERY = {"id": "m", "requires": {"scope": [{"part": p} for p in ms.SCOPE_PARTS]}}
+
+
 def net(text: str) -> ipaddress.IPv4Network | ipaddress.IPv6Network:
     return ipaddress.ip_network(text)
 
 
 def test_a_scope_reader_returns_the_parts_networks():
     site = {"scope": {"trusted": {"wan": [f"{D3}.7/32", "2001:db8:1::/48"]}}}
-    nets = ms.scope_networks(site, "trusted.wan")
+    nets = ms.scope_networks(site, EVERY, "trusted.wan")
     assert [str(n) for n in nets] == [f"{D3}.7/32", "2001:db8:1::/48"]
     assert all(ms.is_documentation(n) for n in nets)
 
@@ -50,7 +54,7 @@ def test_a_scope_reader_returns_the_parts_networks():
 def test_a_scope_reader_fails_closed(site, part, why):
     """Negative: an absent, empty or malformed part never reads as "no addresses"."""
     with pytest.raises(ms.ScopeMissing, match=why):
-        ms.scope_networks(site, part)
+        ms.scope_networks(site, EVERY, part)
 
 
 def v4(*octets: int, plen: int = 32) -> str:
@@ -67,20 +71,20 @@ def test_an_exclusion_may_be_explicitly_empty_and_nothing_else_may():
     """S3: an explicit [] means "nothing excluded" for an exclusion only; an absent exclusion
     still fails closed, and an empty trusted part or target is still refused."""
     site = {"scope": {"exclude": {"offensive": [], "unattended_mutation": []}, "target": []}}
-    assert ms.scope_networks(site, "exclude.offensive") == []
-    assert ms.scope_networks(site, "exclude.unattended_mutation") == []
+    assert ms.scope_networks(site, EVERY, "exclude.offensive") == []
+    assert ms.scope_networks(site, EVERY, "exclude.unattended_mutation") == []
     with pytest.raises(ms.ScopeMissing, match="only an exclusion may be an explicit"):
-        ms.scope_networks(site, "target")
+        ms.scope_networks(site, EVERY, "target")
     with pytest.raises(ms.ScopeMissing, match="missing"):
-        ms.scope_networks({"scope": {"target": [f"{D2}.0/24"]}}, "exclude.offensive")
+        ms.scope_networks({"scope": {"target": [f"{D2}.0/24"]}}, EVERY, "exclude.offensive")
 
 
 def test_a_dynamic_wan_source_is_specified_and_refused():
     site = {"scope": {"trusted": {"wan": [{"source": "wan-dhcp"}], "nets": [{"source": "x"}]}}}
     with pytest.raises(ms.ScopeMissing, match="dynamic WAN sources are specified, not implemented"):
-        ms.scope_networks(site, "trusted.wan")
+        ms.scope_networks(site, EVERY, "trusted.wan")
     with pytest.raises(ms.ScopeMissing, match=r"not a string \(dict\)"):
-        ms.scope_networks(site, "trusted.nets")  # only trusted.wan has a dynamic form
+        ms.scope_networks(site, EVERY, "trusted.nets")  # only trusted.wan has a dynamic form
     assert set(ms.SCOPE_PARTS) >= ms.DYNAMIC_PARTS
     assert set(ms.SCOPE_PARTS) >= ms.EMPTY_ALLOWED
 
@@ -225,3 +229,106 @@ def test_the_entry_pattern_matches_exactly_the_strict_texts():
             text = f"{spelled}/{rnd.randint(0, 128)}"
             want = not ms.embedded_ipv4(ipaddress.ip_network(addr6))
         assert bool(pattern.match(text)) == want, text
+
+
+def reader(*parts: str, unattended: bool = False) -> dict:
+    m = {"id": "assess", "requires": {"scope": [{"part": p} for p in parts]}}
+    if unattended:
+        m["contributes"] = {"scheduler_jobs": [{"timer": "timer:assess/nightly"}]}
+    return m
+
+
+def test_a_module_reads_only_the_parts_it_declared():
+    """S5: requires.scope is an access list.  Reading an undeclared part raises (a subclass of
+    ScopeMissing, so a reader that fails closed on a missing part fails closed here too)."""
+    site = {"scope": {"trusted": {"wan": [f"{D3}.7/32"]}, "target": [f"{D2}.0/24"]}}
+    collector = reader("trusted.wan")
+    assert ms.scope_networks(site, collector, "trusted.wan") == [net(f"{D3}.7/32")]
+    with pytest.raises(ms.ScopeUndeclared, match=r"assess: reads scope\.target"):
+        ms.scope_networks(site, collector, "target")
+    assert issubclass(ms.ScopeUndeclared, ms.ScopeMissing)
+
+
+SITE = {
+    "scope": {
+        "target": [f"{D1}.0/24", f"{D2}.0/24", "2001:db8:30::/48"],
+        "exclude": {
+            "offensive": [f"{D1}.0/28", f"{D2}.128/25", "2001:db8:30:1::/64"],
+            "unattended_mutation": [f"{D1}.16/28"],
+        },
+    }
+}
+
+
+def test_effective_targets_subtract_the_exclusions():
+    """S4: an exclusion inside target is subtracted, per IP version."""
+    got = ms.effective_targets(SITE, reader("target", "exclude.offensive"))
+    left = {str(n) for n in got}
+    for excluded in (f"{D1}.1", f"{D1}.15", f"{D2}.128", f"{D2}.255", "2001:db8:30:1::1"):
+        assert not any(ipaddress.ip_address(excluded) in n for n in got), excluded
+    for kept in (f"{D1}.16", f"{D1}.255", f"{D2}.0", f"{D2}.127", "2001:db8:30:2::1"):
+        assert any(ipaddress.ip_address(kept) in n for n in got), kept
+    assert f"{D2}.0/25" in left
+
+
+def test_an_unattended_module_also_subtracts_the_mutation_exclusion():
+    assert any(
+        ipaddress.ip_address(f"{D1}.17") in n
+        for n in ms.effective_targets(SITE, reader("target", "exclude.offensive"))
+    )
+    got = ms.effective_targets(
+        SITE, reader("target", "exclude.offensive", "exclude.unattended_mutation", unattended=True)
+    )
+    assert not any(ipaddress.ip_address(f"{D1}.17") in n for n in got)
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        reader("target"),
+        reader("exclude.offensive"),
+        reader("target", "exclude.offensive", unattended=True),
+    ],
+)
+def test_effective_targets_needs_every_part_it_subtracts_declared(module):
+    with pytest.raises(ms.ScopeUndeclared):
+        ms.effective_targets(SITE, module)
+
+
+def test_effective_targets_fails_closed_on_an_absent_exclusion_and_takes_an_empty_one():
+    site = {"scope": {"target": [f"{D2}.0/24"]}}
+    with pytest.raises(ms.ScopeMissing, match=r"exclude\.offensive: missing"):
+        ms.effective_targets(site, reader("target", "exclude.offensive"))
+    site["scope"]["exclude"] = {"offensive": []}
+    assert ms.effective_targets(site, reader("target", "exclude.offensive")) == [net(f"{D2}.0/24")]
+
+
+def test_an_ipv6_written_exclusion_of_an_ipv4_range_fails_closed():
+    """S4: in ipaddress an IPv4 target is never inside an IPv6 network, so a mapped or NAT64
+    exclusion would subtract nothing.  It is refused, never silently ignored."""
+    for written in (v6("", "", "ffff", "c000", "200/120"), v6("64", "ff9b", "", "c000", "200/120")):
+        site = {"scope": {"target": [f"{D1}.0/24"], "exclude": {"offensive": [written]}}}
+        with pytest.raises(ms.ScopeMissing, match="embeds IPv4"):
+            ms.effective_targets(site, reader("target", "exclude.offensive"))
+
+
+@pytest.mark.parametrize(
+    ("parts", "unattended", "missing"),
+    [
+        (("target",), False, ["exclude.offensive"]),
+        (("target", "exclude.offensive"), False, []),
+        (("target", "exclude.offensive"), True, ["exclude.unattended_mutation"]),
+        (("target",), True, ["exclude.offensive", "exclude.unattended_mutation"]),
+        (("trusted.wan",), True, []),
+    ],
+)
+def test_a_module_acting_on_target_must_declare_the_exclusions(parts, unattended, missing):
+    problems = ms.manifest_scope_problems(reader(*parts, unattended=unattended))
+    assert [p.split(" without ", 1)[1].split(" ", 1)[0] for p in problems] == missing
+
+
+def test_an_agent_on_a_calendar_or_a_trigger_runs_unattended():
+    agent = {"key": "assess-analyst"}
+    assert not ms.runs_unattended({"contributes": {"agents": [agent]}})
+    for extra in ({"schedule": {"on_calendar": "daily UTC"}}, {"trigger": {"event": "x"}}):
+        assert ms.runs_unattended({"contributes": {"agents": [agent | extra]}})

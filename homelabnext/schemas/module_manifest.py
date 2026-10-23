@@ -401,7 +401,7 @@ def _defs() -> dict[str, Any]:
             {
                 "part": {
                     "enum": list(SCOPE_PARTS),
-                    "description": "A part of the site selection's scope block. The module reads the addresses from the selection, never from its own config: a selection that enables it with the part missing or empty is refused (loader), and its reader fails closed.",
+                    "description": "A part of the site selection's scope block. The module reads the addresses from the selection, never from its own config, and only the parts it declares here (homelabnext.modules.scope.scope_networks refuses any other): a selection that enables it with the part missing, empty (an exclusion may be an explicit []) or malformed is refused (loader), and its reader fails closed. A module that reads target also requires exclude.offensive, and exclude.unattended_mutation when it runs unattended (loader).",
                 },
                 "purpose": text(200),
             },

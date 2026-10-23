@@ -17,6 +17,7 @@ from homelabnext import paths
 from homelabnext.ids.lint import scan_text
 from homelabnext.modules.scope import (
     ScopeMissing,
+    manifest_scope_problems,
     scope_networks,
     scope_problems,
 )
@@ -149,6 +150,7 @@ def module_problems(
         out.append("kind core: a core module lives in the public modules/ tree")
     if doc.get("replaced_by") == mid:
         out.append("replaced_by names the module itself")
+    out += manifest_scope_problems(doc)
     roles = _roles(doc)
     for r in roles:
         if not _named(r[5:], mid, "_"):
@@ -593,7 +595,7 @@ def site_problems(
     for m in sel.values():
         for need in m["requires"].get("scope", []):
             try:
-                scope_networks(site, need["part"])
+                scope_networks(site, m, need["part"])
             except ScopeMissing:
                 out.append(
                     f"{m['id']}: requires scope.{need['part']}, which the site leaves missing, "

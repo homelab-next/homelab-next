@@ -401,6 +401,18 @@ def _ag(d):
 
 
 MODULE_DEFECTS = {
+    "a module acting on target without exclude.offensive": (
+        "external-collector",
+        lambda d: d["requires"]["scope"].append({"part": "target"}),
+        "requires.scope: target without exclude.offensive",
+    ),
+    "an unattended module acting on target without exclude.unattended_mutation": (
+        "external-collector",
+        lambda d: d["requires"]["scope"].extend(
+            [{"part": "target"}, {"part": "exclude.offensive"}]
+        ),
+        "requires.scope: target without exclude.unattended_mutation",
+    ),
     "another profile's id (ceiling takeover)": (
         "external-collector",
         lambda d: _ag(d).__setitem__("profile", "profile:staff-validator"),

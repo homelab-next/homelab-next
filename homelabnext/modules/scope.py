@@ -33,9 +33,14 @@ __all__ = [
     "TRUSTED_FLOOR",
     "Network",
     "ScopeMissing",
+    "ScopeUndeclared",
+    "declared_parts",
+    "effective_targets",
     "embedded_ipv4",
     "is_documentation",
+    "manifest_scope_problems",
     "parse_entry",
+    "runs_unattended",
     "scope_networks",
     "scope_problems",
     "scope_tree",
@@ -116,6 +121,12 @@ EMBEDDED_V4: tuple[Network, ...] = tuple(
 
 class ScopeMissing(ValueError):
     """A scope part a reader needs is absent, empty or malformed: the reader stops (fails closed)."""
+
+
+class ScopeUndeclared(ScopeMissing):
+    """A module read a scope part it did not declare in ``requires.scope``.  A subclass of
+    :class:`ScopeMissing`, so every reader that fails closed on a missing part fails closed on
+    an undeclared one too."""
 
 
 def scope_tree() -> dict[str, tuple[str, ...] | None]:
@@ -284,10 +295,11 @@ def _scope_node(site: Doc, part: str) -> Any:
     return node
 
 
-def scope_networks(site: Doc, part: str) -> list[Network]:
-    """The networks of one scope part (``trusted.wan``), parsed strictly.
+def _part_networks(site: Doc, part: str) -> list[Network]:
+    """The networks of one scope part (``trusted.wan``), parsed strictly, for any caller: the
+    low-level read under :func:`scope_networks`, which modules use.
 
-    The one reader of a selection's addresses: an absent or malformed part raises
+    The one parse of a selection's addresses: an absent or malformed part raises
     :class:`ScopeMissing`, and so does an empty one unless it is an exclusion
     (:data:`EMPTY_ALLOWED`), where an explicit ``[]`` means "nothing excluded".  So a module
     that excludes its trusted addresses can never run as if there were none, and an absent
@@ -338,10 +350,99 @@ def scope_problems(site: Doc) -> list[str]:
         if _scope_node(site, part) is None:
             continue
         try:
-            nets = scope_networks(site, part)
+            nets = _part_networks(site, part)
         except ScopeMissing as exc:
             out.append(str(exc))
             continue
         if len(set(nets)) != len(nets):
             out.append(f"scope.{part}: a network is listed twice")
     return out
+
+
+# ---- the module-facing reader -----------------------------------------------------------------
+
+
+def declared_parts(module: Doc) -> set[str]:
+    """The scope parts a module declares in ``requires.scope``."""
+    return {n["part"] for n in module.get("requires", {}).get("scope", [])}
+
+
+def scope_networks(site: Doc, module: Doc, part: str) -> list[Network]:
+    """The networks of one scope part, for ``module``: the only reader a module calls.
+
+    Raises :class:`ScopeUndeclared` when the module did not declare ``part`` in
+    ``requires.scope`` (so the declaration is an access list, not a presence check, and the
+    loader's "a required part is present" rule covers every part a module can read), and
+    :class:`ScopeMissing` when the part is absent, empty (unless an exclusion) or malformed."""
+    if part not in SCOPE_PARTS:
+        raise ScopeMissing(f"scope.{part}: no such scope part")
+    if part not in declared_parts(module):
+        raise ScopeUndeclared(
+            f"{module.get('id', '?')}: reads scope.{part}, which its requires.scope does not "
+            "declare"
+        )
+    return _part_networks(site, part)
+
+
+def runs_unattended(module: Doc) -> bool:
+    """True when the module does work no human starts: a scheduler job, or an agent on a
+    calendar or an event trigger."""
+    contributes = module.get("contributes", {})
+    if contributes.get("scheduler_jobs"):
+        return True
+    return any("schedule" in a or "trigger" in a for a in contributes.get("agents", []))
+
+
+def manifest_scope_problems(module: Doc) -> list[str]:
+    """What a module that acts on ``target`` must also declare.
+
+    The manifest has no "offensive" or "mutating" marker, so the rule is keyed on the
+    declarations it does have: a module that reads ``target`` acts on the addresses assessment
+    tooling may touch, so it requires ``exclude.offensive``; one that also runs unattended
+    (:func:`runs_unattended`) requires ``exclude.unattended_mutation`` too.  Both may be an
+    explicit ``[]`` in the selection, but neither may be absent."""
+    parts = declared_parts(module)
+    if "target" not in parts:
+        return []
+    need = ["exclude.offensive"]
+    if runs_unattended(module):
+        need.append("exclude.unattended_mutation")
+    return [
+        f"requires.scope: target without {p} (a module that acts on target subtracts it; "
+        "the selection may set it to [], never leave it out)"
+        for p in need
+        if p not in parts
+    ]
+
+
+def _subtract(nets: list[Network], minus: list[Network]) -> list[Network]:
+    out = list(nets)
+    for m in minus:
+        nxt: list[Network] = []
+        for n in out:
+            if n.version != m.version or not n.overlaps(m):
+                nxt.append(n)
+            elif not m.supernet_of(n):  # m is strictly inside n: keep what is left of n
+                nxt.extend(n.address_exclude(m))  # type: ignore[arg-type]
+        out = nxt
+    return out
+
+
+def effective_targets(site: Doc, module: Doc) -> list[Network]:
+    """``target`` minus ``exclude.offensive`` (and, for a module that runs unattended, minus
+    ``exclude.unattended_mutation``): the only addresses offensive or mutating tooling may act on.
+
+    Every part it reads must be declared by the module (:class:`ScopeUndeclared`) and present in
+    the selection (:class:`ScopeMissing`); an exclusion may be an explicit ``[]``.  Subtraction
+    is per IP version, and that is sound because an IPv4 range can only be excluded by an IPv4
+    entry: IPv6 forms that embed IPv4 (mapped, compatible, NAT64) are refused by
+    :func:`parse_entry`, so an exclusion written that way fails closed instead of silently
+    excluding nothing."""
+    targets = scope_networks(site, module, "target")
+    minus = scope_networks(site, module, "exclude.offensive")
+    if runs_unattended(module):
+        minus = minus + scope_networks(site, module, "exclude.unattended_mutation")
+    left = _subtract(targets, minus)
+    v4 = ipaddress.collapse_addresses(n for n in left if n.version == 4)
+    v6 = ipaddress.collapse_addresses(n for n in left if n.version == 6)
+    return [*v4, *v6]
