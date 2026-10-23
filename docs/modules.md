@@ -544,44 +544,76 @@ The site's addresses live in one place: the selection's `scope:` block, in the *
 (`lab/modules.yml`; seal the file with SOPS if its WAN addresses would hurt in a leak, as
 [private overlay](private-overlay.md) describes for `lab/site.yml`). The public repository carries
 only the schema, the enforcement and fictional examples in the documentation ranges (RFC 5737's
-`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, and `2001:db8::/32`).
+`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, RFC 3849's `2001:db8::/32` and RFC 9637's
+`3fff::/20`).
 
 ```yaml
 scope:
   trusted:
     wan: [203.0.113.32/29]                  # the lab's own public addresses
-    nets: [192.0.2.0/24, 2001:db8:30::/48]  # its internal networks
+    nets: [192.0.2.0/24, "2001:db8:30::/48"]  # its internal networks
     tooling: [192.0.2.240/28]               # where the operator's own tooling runs from
   target: [198.51.100.0/24, 192.0.2.0/24]   # what assessment tooling may touch
   exclude:
     unattended_mutation: [192.0.2.1/32]     # no unattended job changes these
-    offensive: [192.0.2.0/28]               # never the target of offensive tooling
+    offensive: [192.0.2.0/28]               # never the target of offensive tooling; [] = none
 ```
 
-- Each part is a non-empty list of IPv4 or IPv6 addresses or CIDR networks; the schema refuses an
-  empty list, a malformed entry and an unknown part. The loader rule (`scope_problems`) parses each
-  entry strictly (a network with host bits set is refused) and refuses a network listed twice.
-- A module **declares** the parts it reads (`requires.scope`): the external data collector needs
-  `trusted.wan`, so sessions from the lab's own addresses are dropped instead of being reported,
-  without keeping a list of its own. A selection that enables such a module with that part
-  missing or empty is refused. The one reader, `homelabnext.modules.rules.scope_networks(site,
-  part)`, **fails closed**: an absent, empty or malformed part raises `ScopeMissing`, never an
-  empty list, so a module can never run as if nothing were trusted or excluded.
-- Scope is the **only** place for addresses: a module config default refuses an address literal
-  (the schema), and so does a selection's config value (the loader), so an address cannot reach a
-  module around the scope block.
-- `tools/private_leak_check.py public` fails (`scope-address`) when a YAML or JSON document in the
-  public tree has a top-level `scope` block with an address or network outside the documentation
-  ranges anywhere under it (a misspelt part included, and a documentation address widened beyond
-  its range, `192.0.2.0/16`, too). It also catches what the leak scan does not flag, such as
-  `0.0.0.0/0` or `::/0`.
+- **Entries.** Each part is a list of IPv4 or IPv6 addresses or CIDR networks. Quote an IPv6
+  entry: YAML 1.1 reads an unquoted all-digit value such as `1:20:30` as a number. The schema and
+  the loader match one pattern (`ENTRY_PATTERN` in `homelabnext/modules/scope.py`, from which the
+  schema's `scope` object is generated): no zone id, no whitespace, no leading zeros, no IPv4
+  written inside or embedded in IPv6 (mapped, compatible, NAT64; an IPv4 target is never inside an
+  IPv6 network, so such an exclusion would exclude nothing), no IPv4 host bits. The loader
+  (`scope_problems`, `parse_entry`) adds what a pattern cannot say: IPv6 host bits, `/0`, any
+  network touching the unspecified, loopback, link-local, multicast or reserved blocks, a network
+  listed twice, and in `trusted.*` a network broader than **/8 (IPv4) or /32 (IPv6)**: trusting
+  more is a blind spot, not the lab. `target` has no floor. It reports a wrong-typed or unknown
+  part itself, without relying on the schema.
+- **Empty and absent.** A part is non-empty, except an exclusion: `exclude.*: []` means "nothing
+  excluded". An absent part is never read as empty: a module that requires it is refused.
+- **Declared reads.** A module declares the parts it reads (`requires.scope`), and
+  `homelabnext.modules.scope.scope_networks(site, module, part)`, the reader a module calls, raises
+  `ScopeUndeclared` for any other part; an absent, empty (unless an exclusion) or malformed part
+  raises `ScopeMissing`, never an empty list. The external data collector requires `trusted.wan`,
+  so sessions from the lab's own WAN are dropped instead of reported, without a list of its own.
+  It does not read `trusted.tooling`: the operator's own scanners and runners seen from outside are
+  recorded like any other source (a site that wants one dropped lists it under `trusted.wan`).
+- **Target readers.** The manifest has no "offensive" or "mutating" marker, so the loader keys the
+  rule on what a manifest declares: a module that requires `target` must also require
+  `exclude.offensive`, and one that also runs unattended (a scheduler job, or an agent on a
+  calendar or trigger) `exclude.unattended_mutation`. Such a module acts only on
+  `effective_targets(site, module)`: `target` minus those exclusions, per IP version.
+- **Addresses live here.** A module config default refuses an address literal (the schema's
+  pattern, a dotted quad or `::`). A selection's config value refuses a site address in any
+  spelling (`address_literals`): an IPv6, hex or zero-padded address, any IPv4 address with a
+  port, a prefix length or in a URL, and a plain dotted quad or integer only when it is private or
+  shared space (a plain global one reads the same as a four-part version and is let through). Never
+  refused: unspecified, loopback, link-local, multicast, reserved and documentation addresses (bind
+  addresses such as `0.0.0.0` and `[::]:8080`, labels such as `cafe::beef`). An **external
+  endpoint** (a public resolver, an NTP server) is a hostname or a `svc:` reference, never a
+  literal; it is not part of the scope.
+- **The public gate.** `tools/private_leak_check.py public` reads every `scope` key at any depth
+  and in any case, in every document of a `.yml`, `.yaml`, `.json` or `.toml` file (through
+  template suffixes such as `.j2` and `.example`) and of a Markdown yaml, json or toml fence. A
+  mapping with only another document's scope keys (a customization's selectors, an MCP parameter,
+  JSON Schema keywords) is not a site block. In a site block every entry must be a string naming a
+  documentation network (`scope-address`; a zero-padded, integer or hex address, a number,
+  `0.0.0.0/0` and a widened documentation prefix such as `192.0.2.0/16` all fail), the shape is the
+  selection's (`scope-shape`: an unknown part, a key twice, an anchor or alias), and a file that
+  mentions a scope and does not parse fails (`scope-unparsed`). Plain text and code are
+  `tools/leak_scan.py`'s.
 - This block is the site's **network** scope. It is not `homelabnext.scope` ([scope guard](scope.md)),
   which keeps writer tools off scratch targets by registry id.
 
-**Specified, not implemented**: what reads the exclusions. No module in the examples requires
-`target` or the `exclude` parts yet; the rule that an offensive or unattended-mutation reader
-requires them (and subtracts `exclude` from `target` before acting) lands with the first such
-module.
+**Specified, not implemented**:
+
+- **Dynamic WAN sources.** `trusted.wan` may list `{source: <name>}` instead of a network: a WAN
+  from DHCP or CGNAT, or a delegated IPv6 prefix that changes. The schema accepts it so freezing the
+  shape later is additive; the loader refuses it ("dynamic WAN sources are specified, not
+  implemented") until a reader resolves a source.
+- **A module that reads `target`.** No example module does yet; the rule above and
+  `effective_targets` are ready for the first one.
 
 ## What the loader checks
 
@@ -606,9 +638,9 @@ Specified here, applied to the examples by `homelabnext/modules/rules.py`:
    (the list above); no data prefix or records write prefix overlap.
 3. **Per site**: every selected module has a manifest (core included); each features, core and
    providers entry is a selected module of that kind and binds only agents it contributes; config
-   values are declared keys, carry no address literal, and a secret value is the module's own or
+   values are declared keys, carry no site address, and a secret value is the module's own or
    granted; the scope block parses strictly, and every part a selected module requires is present
-   and non-empty; required core slots
+   and non-empty (an exclusion may be `[]`); required core slots
    selected; instances unique; every hard requirement and instance satisfied; fallbacks selected
    and datasets moved with their data override; service upstreams follow the fallback; pass-through
    only where allowed and formats meet; interfaces provided, on instances their providers require;
