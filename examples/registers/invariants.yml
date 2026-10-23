@@ -426,13 +426,15 @@ criteria:
   evidence: auto
   observable: >-
     python3 -c 'import ruff, pip_audit' 2>/dev/null || exit 100;
+    python3 -c 'import requests; requests.head("https://pypi.org/simple/", timeout=10)' 2>/dev/null
+    || { echo pypi.org is unreachable, so pip-audit cannot measure; exit 100; };
     python3 -m ruff check . && python3 tools/leak_scan.py --groups secret . &&
     python3 -m pip_audit --strict --progress-spinner off --disable-pip --require-hashes
     -r constraints/ci.txt && echo security checks passed
   expected: >-
     exit 0: lint is clean, the secret scan finds nothing in the tracked tree, and pip-audit finds
-    no known vulnerability in the pinned CI dependencies (it needs the network); exit 100 when
-    ruff or pip-audit is not installed, which is could-not-measure
+    no known vulnerability in the pinned CI dependencies; exit 100 (could not measure) when ruff
+    or pip-audit is not installed or pypi.org, which pip-audit queries, cannot be reached
   expect_regex: security checks passed
   slow: true
   remediation: >-

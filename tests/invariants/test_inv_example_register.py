@@ -5,10 +5,12 @@ Its ids are docs/checklist.md row ids: an id that means something else than the 
 the same name (as F-01..F-03 once did) is how two documents drift apart while both look right.
 """
 
+import os
 import pathlib
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 import yaml
@@ -194,6 +196,22 @@ def test_a_pytest_row_fails_when_its_tests_fail(tmp_path, monkeypatch):
     )
     r = _run(tmp_path, ["L-08"])["L-08"]
     assert r["status"] == "fail"
+
+
+def test_q06_cannot_measure_without_the_network(monkeypatch):
+    """pip-audit with no route to PyPI exits 1 with a ConnectionError traceback, which read as a
+    FAIL of the security checks; an unreachable index is could-not-measure (exit 100)."""
+    pytest.importorskip("pip_audit")
+    pytest.importorskip("ruff")
+    monkeypatch.setenv("PYTHONPATH", str(REPO))
+    # the observable's `python3` is this interpreter, which has ruff and pip-audit
+    monkeypatch.setenv("PATH", f"{pathlib.Path(sys.executable).parent}:{os.environ['PATH']}")
+    for var in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.setenv(var, "http://127.0.0.1:9")  # the discard port: refused at once
+    for var in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    r = _run(REPO, ["Q-06"])["Q-06"]
+    assert r["status"] == "error" and "pypi.org is unreachable" in r["evidence"], r
 
 
 def test_m16_fails_on_a_record_without_its_uid(scratch):
