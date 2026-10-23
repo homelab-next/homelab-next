@@ -629,22 +629,33 @@ scope:
       under any key whose resolved value is `scope` in any case, at any depth. An alias-spelled key,
       `? scope` with a comment, a CRLF `[scope]` header and a flow dedented anywhere are ordinary
       mappings here;
-    - **the raw rule:** the raw text under every `scope` key (any case, quoted or not, `scope:`,
-      `scope =`, `[scope]`, `[[scope]]`, a dotted `scope.x` key, a comment before the colon; the
-      same after decoding `\x`, `\u`, `\U`, escaped line breaks and HTML character references)
-      is tokenised. It also reads what does not parse: Markdown prose and fences of any indent,
-      length or info string. What a key holds is over-read: the rest of its line, every deeper
-      line, a value on the first later line with content, a quoted scalar or flow collection
-      opened there through its close, and for a TOML header everything to the next header. A YAML
-      alias is followed to its anchor's last real definition (more than 256 aliases is itself a
-      finding), and a value tagged as YAML binary fails.
+    - **the raw rule:** the raw text under every `scope` key is tokenised. A key is `scope` in
+      any case, quoted or not: `scope:`, `[scope]`, `[[scope]]`, a dotted `scope.x` key, a
+      comment before the colon, the Markdown spellings `` `scope`: ``, `**scope**:`, `_scope_:`
+      and a table row whose first cell is `scope`, and `scope =` at a line's start (TOML, INI)
+      or spaced inside a TOML inline table. A call's keyword argument (`fixture(scope="module")`)
+      and an HTML or XML attribute (`<th scope="row">`) are never keys. Keys are found again after
+      decoding `\x`, `\u`, `\U`, escaped line breaks and HTML character references. The rule also
+      reads what does not parse: Markdown prose and fences of any indent, length or info string,
+      and each cell and textual output of a Jupyter notebook, joined from its per-line strings
+      (both rules run on it). What a key holds is over-read: the rest of its line, every line
+      indented deeper than the key's column, a value on the first later line with content, a
+      quoted scalar or flow collection opened there through its close, and for a TOML header
+      everything to the next header. A quoted or flow value on the key's line with nothing deeper
+      is exactly that value, so the rest of a minified line is another key's. A YAML alias is
+      followed to its anchor's last real definition (more than 256 aliases is itself a finding),
+      and a value tagged as YAML binary fails.
+    - **cost:** flow closers, anchors, TOML headers and line ends are indexed in one pass and no
+      line is re-read per key. `test_the_raw_rule_grows_linearly` times eight shapes (among them
+      the ones earlier versions were quadratic on) at n, 4n and 16n and allows at most 6x per 4x
+      step.
 
     An address-like token is an IPv6 address, a dotted quad in any numeric spelling, an integer
-    of 2^24 or more in any YAML, TOML or C spelling, an `inet_aton` short form that is no version
-    (a hex or leading-zero part, or a part over 255: `81.2.17806`, `0x51.0x2458e`) or that sits in
-    an address context (a prefix length, port or scheme), and a private or shared short form.
-    Only two or three plain decimal parts of at most 255 (`1.0`, `16.4`, `2.1.0`) read as a
-    version. A page may show a block's shape with documentation addresses, so a doc-only block
+    of 2^24 or more in any YAML, TOML or C spelling, and an `inet_aton` short form of two or three
+    parts that cannot be a version or a decimal: a hex part or a part over 255 (`81.2.17806`,
+    `0x51.0x2458e`, also `1.300` or `3.14159`), or one in an address context (a prefix length such
+    as `10.20/16`, a port, after `//` or `@`). Every other short form (`1.0`, `24.04`, `0.05`,
+    `1.0.3`, and a bare `10.20`) is ignored, and a reading inside 0/8 never counts. A page may show a block's shape with documentation addresses, so a doc-only block
     outside the allowlist is not judged for shape. A case variant of an allowlisted path is
     refused (`scope-shape`).
   - **Threat model.** The gate defends against an **accidental** commit of a real address in any
@@ -653,7 +664,15 @@ scope:
     obfuscating** author is out of scope for a text gate and is review's to catch. Known non-goals:
     a hostname that resolves to the address it spells (`81-2-69-142.sslip.io`, `*.nip.io`), <!-- no-raw-endpoint: allow a non-goal example -->
     percent-encoded or ideographic dots, named HTML entities, Markdown backslash escapes or
-    emphasis inside a number, and numbers spelt in words.
+    emphasis inside a number, and numbers spelt in words. Carriers no loader in this project
+    reads as a scope are non-goals too: environment variables (`SCOPE_TARGET=` in `.env` or a
+    shell), a CSV or TSV column headed `scope`, INI sections such as `[scope:lab]`, XML
+    `<scope>` and HCL `scope {` blocks, YAML behind `//` comments or `>` blockquotes, a Markdown
+    heading or bullet `scope` with the address on a later bullet, a TOML multi-line string inside
+    a Markdown fence, and a notebook output that prints a scope's value without its key.
+  - Parse-only layouts and the bounds. A few layouts only the parse pass reads (a YAML key
+    spelled by an alias); in a YAML file over 256 KiB, or one nested deeper than the bounds
+    anywhere, the parse pass does not run, so the raw rule alone judges it.
   - Not covered either: an address that is not under a scope key (a sibling key, plain prose) is
     `tools/leak_scan.py`'s, which ignores zero-padded and integer spellings; an integer below
     2^24 (it names no host); a version-like short form outside private space; a file the scanner
