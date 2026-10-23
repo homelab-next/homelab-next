@@ -1000,8 +1000,9 @@ def _span(
     - A TOML table header holds everything up to the next header.
     - Any other key holds the rest of its line and every following line indented deeper than
       the key's own column (blank and comment lines included, and a ``- `` item at that column,
-      which YAML allows).  The key's column, not its line's indent: for ``- scope:`` a sibling
-      ``- `` item ends the span.
+      which YAML allows).  The key's column (its first non-blank character), not its line's
+      indent: for ``- scope:`` a sibling ``- `` item ends the span, and an indented
+      ``scope = x`` holds only the lines deeper than itself.
     - A value that is not on the key's line (``"scope":`` then ``{...}`` on the next line, at
       any indent) holds the first non-blank, non-comment line after it, and the lines indented
       deeper than that one.
@@ -1015,7 +1016,9 @@ def _span(
     text = idx.text
     if header:
         return key_end, idx.next_header(key_end)
-    key_col = key_start - idx.line_start(key_start)
+    # the key's column is its first non-blank character's: ``scope =`` at a line's start matches
+    # from column 0, indent included, and would otherwise hold the rest of its enclosing block
+    key_col = _LINE_INDENT.match(text, key_start).end() - idx.line_start(key_start)
     eol = idx.line_end(key_end)
     while blocks and key_start >= blocks[-1][1]:
         blocks.pop()

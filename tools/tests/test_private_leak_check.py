@@ -638,6 +638,10 @@ ADDRESS_CASES = {
     "markdown tilde fence": f"~~~yaml\nscope:\n  target: ['{PADDED}/32']\n~~~\n",
     "markdown html": f"<pre>\nscope:\n  target: ['{PADDED}/32']\n</pre>\n",
     "markdown prose": f"The lab's scope: {PADDED} and nothing else.\n",
+    # VERIFY4 SF1: an indented `scope =` key still holds its value and its deeper lines
+    "indented ini key": f"[site]\n  scope = {PADDED}/32\n",
+    "indented ini value on the next deeper line": f"[site]\n  scope =\n      {PADDED}/32\n",
+    "indented toml key": f'[site]\n  scope = ["{PRIVATE_NET}"]\n',
     # VERIFY2 B1: loader-valid layouts the raw locator alone missed (the parse pass reads them)
     "toml header, CRLF": f'[scope]\r\ntarget = ["{PRIVATE_NET}"]\r\n',
     "toml array of tables, CRLF": f'[[scope]]\r\ntarget = ["{PRIVATE_NET}"]\r\n',
@@ -816,6 +820,10 @@ PASSING_ELSEWHERE = [
     + SHORT_PRIVATE
     + "\n",
     "The scope: we cut latency by 0." + "05 s.\n",
+    # VERIFY4 SF1: an indented `scope =` holds the lines deeper than the key, not the rest of
+    # its enclosing block (the column is the key's first character, not its line's start)
+    "def f(x):\n    scope = x.scope\n    if scope:\n        pass\n    return 17" + "00000000\n",
+    "[server]\n  scope = 'local'\n  since = 17" + "00000000\n",
 ]
 
 
