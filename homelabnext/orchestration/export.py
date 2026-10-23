@@ -36,7 +36,7 @@ from homelabnext.events.consumer import parse_json
 from homelabnext.events.envelope import EventError
 from homelabnext.status.model import iso, parse_iso
 
-from .store import _SOURCE, FUTURE_S, TelemetryStore
+from .store import _SOURCE, FUTURE_S, MAX_RETENTION_DAYS, MIN_RETENTION_DAYS, TelemetryStore
 
 EXPORT_SCHEMA = "homelabnext.orchestration.export/1"
 #: what an import counts, per kind
@@ -55,6 +55,8 @@ def _is_header(rec: Mapping[str, Any]) -> bool:
     if not all(isinstance(s, str) and _SOURCE.fullmatch(s) for s in sources):
         return False
     if isinstance(days, bool) or not isinstance(days, int | float) or not math.isfinite(days):
+        return False
+    if not MIN_RETENTION_DAYS <= days <= MAX_RETENTION_DAYS:
         return False
     try:
         return isinstance(at, str) and parse_iso(at) is not None

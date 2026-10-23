@@ -365,3 +365,29 @@ def test_every_export_line_validates_against_the_export_schema(synced):
     )
     assert turn["turn_id"]["pattern"] == f"^{TURN_ID.pattern}$(?!\\n)"
     assert turn["gateway_tag"]["pattern"] == f"^{TAG.pattern}$(?!\\n)"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"retention_days": 0},
+        {"retention_days": 1e9},
+        {"sources": ["svc:a\n"]},
+        {"exported_at": "2026-01-01T06:00:00Z\n"},
+    ],
+)
+def test_the_schema_and_the_import_refuse_the_same_headers(synced, tmp_path, change):
+    """The export schema and import disagreed at the edges: a retention outside 1..3650 passed
+    import, and a trailing newline passed the schema ($refs to ids/ patterns without (?!\\n))."""
+    from jsonschema import Draft202012Validator
+
+    from homelabnext.events.envelope import _registry
+
+    root = Path(__file__).resolve().parents[2]
+    path = root / "schemas" / "status" / "orchestration_export.schema.json"
+    validator = Draft202012Validator(json.loads(path.read_text("utf-8")), registry=_registry())
+    header = json.loads(next(iter(export_lines(synced)))) | change
+    assert not validator.is_valid(header)
+    other = TelemetryStore(tmp_path / "o.db", clock=lambda: T0)
+    _, refused = import_lines(other, [json.dumps(header)])
+    assert refused and "not a header" in refused[0][1]
