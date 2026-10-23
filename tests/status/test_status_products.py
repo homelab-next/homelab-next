@@ -84,6 +84,16 @@ def test_prometheus_query_names_items_by_label_and_judges_each_value():
     assert [d.item for d in again] == [d.item for d in drafts]
 
 
+@pytest.mark.parametrize("raw, state", [("+Inf", "warn"), ("-Inf", "ok"), ("NaN", "unknown")])
+def test_prometheus_query_a_non_finite_value_is_judged_but_never_carried(raw, state):
+    """Prometheus returns +Inf, -Inf and NaN as strings.  The state is still judged where it
+    can be, but the draft's value is None: a value that is not finite is no JSON number, and
+    publishing it fails the event's validation."""
+    payload = {"status": "success", "data": {"resultType": "scalar", "result": [0, raw]}}
+    (d,) = prometheus_query(payload, {"query": "q", "thresholds": {"warn": 3}}, "targets")
+    assert (d.state, d.value) == (state, None)
+
+
 def test_prometheus_query_scalar_empty_and_errors():
     m = {"query": "scalar(count(up))", "thresholds": {"warn": 3}}
     (d,) = prometheus_query(fixture("prometheus-query-scalar"), m, "targets")

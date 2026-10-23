@@ -377,3 +377,27 @@ def test_http_forwarder_refuses_credentials_over_plaintext():
 def test_http_forwarder_requires_http_url():
     with pytest.raises(ValueError):
         HttpForwarder("file:///etc/passwd")
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_a_non_finite_number_is_refused_by_the_producer_and_on_every_decode_path(bad):
+    """Regression: the producer validated and serialized ``NaN`` (``json.dumps`` allows it by
+    default), so an in-repo publisher could emit a body every consumer quarantines; and a body
+    handed to ``decode_event`` as a mapping skipped the parse hooks that refuse it on the wire."""
+    import json
+    from pathlib import Path
+
+    from homelabnext.events.consumer import decode_event
+    from homelabnext.events.envelope import canonical_body
+
+    root = Path(__file__).resolve().parents[2]
+    ev = json.loads((root / "schemas/events/examples/decision.returned.valid.json").read_text())
+    ev["data"]["confidence"] = bad
+    with pytest.raises(EventError, match="data/confidence: not a finite number"):
+        validate_event(ev)
+    with pytest.raises(ValueError):
+        canonical_body(ev)
+    with pytest.raises(EventError, match="not a finite number"):
+        decode_event(ev)  # the mapping path
+    with pytest.raises(EventError, match="not a finite number"):
+        decode_event({**ev, "data": {**ev["data"], "nested": [{"x": bad}]}})

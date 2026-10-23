@@ -1,0 +1,33 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0004",
+  "source": "svc:llm-orchestrator",
+  "type": "homelabnext.agent.job.finished",
+  "time": "2026-01-01T03:00:00Z",
+  "severity": "low",
+  "subject": "run-0004",
+  "data": {
+    "run_id": "run-0004",
+    "profile": "profile:triage",
+    "profile_revision": null,
+    "lane": "real",
+    "outcome": "cancelled",
+    "failure_class": "cancelled",
+    "retry_of_run_id": "run-0001",
+    "auto_retry_scheduled": false,
+    "local_attempts": 0,
+    "cloud_fallback_used": false,
+    "backend": null,
+    "model": null,
+    "queued_at": "2026-01-01T02:55:00Z",
+    "started_at": null,
+    "finished_at": "2026-01-01T03:00:00Z",
+    "queue_wait_s": null,
+    "wall_s": null,
+    "input_bytes": 512,
+    "output_bytes": null,
+    "usage": null,
+    "turn_exit_reason": null,
+    "gateway_tag": "run-0004"
+  }
+}

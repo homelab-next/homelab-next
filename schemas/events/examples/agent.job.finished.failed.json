@@ -1,0 +1,40 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0002",
+  "source": "svc:llm-orchestrator",
+  "type": "homelabnext.agent.job.finished",
+  "time": "2026-01-01T01:10:00Z",
+  "severity": "low",
+  "subject": "run-0002",
+  "data": {
+    "run_id": "run-0002",
+    "profile": "profile:triage",
+    "profile_revision": "r7",
+    "lane": "real",
+    "outcome": "failed",
+    "failure_class": "backend-down",
+    "retry_of_run_id": null,
+    "auto_retry_scheduled": true,
+    "local_attempts": 2,
+    "cloud_fallback_used": false,
+    "backend": "local-large",
+    "model": "mdl:triage-large",
+    "queued_at": "2026-01-01T01:00:00Z",
+    "started_at": "2026-01-01T01:00:30Z",
+    "finished_at": "2026-01-01T01:10:00Z",
+    "queue_wait_s": 30.0,
+    "wall_s": 570.0,
+    "input_bytes": 2048,
+    "output_bytes": null,
+    "usage": {
+      "input_tokens": 9000,
+      "output_tokens": 400,
+      "reasoning_tokens": 0,
+      "cache_read_tokens": null,
+      "api_calls": 3,
+      "cost_usd": null
+    },
+    "turn_exit_reason": "error",
+    "gateway_tag": "hnx-run-0002"
+  }
+}

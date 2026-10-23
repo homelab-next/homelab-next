@@ -92,6 +92,7 @@ def make_server(
     baselines: Any = None,
     projects: Any = None,
     approvals: Any = None,
+    orchestration: Any = None,
     maps: Any = None,
 ) -> ThreadingHTTPServer:
     """A server for ``document()`` (called once per request).  ``port=0`` picks a free port.
@@ -105,7 +106,8 @@ def make_server(
     :class:`homelabnext.status.approvals.ApprovalsSite` adds the Approvals page and its one
     ``POST`` route; ``maps``: a :class:`homelabnext.status.maps.MapSite` adds the generated maps
     (topology, dataflow, architecture, roadmap: ADR-0018); ``projects``: a
-    :class:`homelabnext.projects.pages.ProjectsSite` adds the Projects page."""
+    :class:`homelabnext.projects.pages.ProjectsSite` adds the Projects page; ``orchestration``: an
+    :class:`homelabnext.orchestration.pages.OrchestrationSite` adds the Orchestration page."""
     extra = frozenset(h.strip().lower().rstrip(".") for h in allowed_hosts if h.strip())
     if allow_remote and not extra:
         raise ValueError("allow_remote needs allowed_hosts: the hostnames clients will use")
@@ -166,6 +168,7 @@ def make_server(
                 (approvals, True),
                 (strategy, False),
                 (projects, False),
+                (orchestration, False),
                 (baselines, False),
                 (maps, False),
                 (agents, True),

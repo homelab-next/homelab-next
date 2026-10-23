@@ -53,7 +53,6 @@ import json
 import logging
 import os
 import re
-import ssl
 import threading
 import time
 import urllib.error
@@ -67,7 +66,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from homelabnext._http import ResponseTooLarge, check_plaintext, read_bounded
+from homelabnext._http import ResponseTooLarge, check_plaintext, credential_opener, read_bounded
 from homelabnext.events.consumer import decode_event
 from homelabnext.events.envelope import EventError, canonical_body
 from homelabnext.registry.model import secret_env_name
@@ -176,13 +175,6 @@ def load_bridge(path_or_doc: str | os.PathLike[str] | Mapping[str, Any]) -> Brid
 
 
 # ---------------------------------------------------------------- the webhook
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Never follow a redirect: the 3xx surfaces as an HTTPError (a failed POST)."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
-        return None
-
-
 class WebhookUnavailable(RuntimeError):
     """The POST did not get an HTTP answer (refused, timed out, TLS failed) or had no key."""
 
@@ -225,11 +217,8 @@ class Webhook:
         self.key_ref = api_key
         self._env = env
         self.timeout = timeout
-        ctx = ssl.create_default_context(cafile=str(ca_file) if ca_file else None)
-        # no proxy: the environment's HTTP(S)_PROXY would get the key (in clear for http)
-        self._opener = urllib.request.build_opener(
-            _NoRedirect, urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=ctx)
-        )
+        # no redirect, no proxy: the environment's HTTP(S)_PROXY would get the key
+        self._opener = credential_opener(str(ca_file) if ca_file else None)
 
     def __repr__(self) -> str:
         return f"Webhook({self.url!r}, key={self.key_ref!r})"

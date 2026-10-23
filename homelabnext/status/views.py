@@ -32,8 +32,9 @@ Requirements, Objectives, RFIs: :mod:`homelabnext.strategy.pages`) and the Basel
 configures ``approvals:``: :mod:`homelabnext.status.approvals`) and the generated maps
 (:data:`MAP_PANELS`: topology with ``--guests``, dataflow, architecture and roadmap with ``--maps``;
 :mod:`homelabnext.status.maps`, ADR-0018), the directory pages (:data:`DIRECTORY_PANELS`: Links,
-Schedule, Agent roster and MCP servers with ``--maps``) and the Projects page (with ``--projects``:
-:mod:`homelabnext.projects.pages`).  Their menu entries are
+Schedule, Agent roster and MCP servers with ``--maps``), the Projects page (with ``--projects``:
+:mod:`homelabnext.projects.pages`) and the Orchestration page (with ``--orchestration``:
+:mod:`homelabnext.orchestration.pages`).  Their menu entries are
 ``available`` only when that part is configured.  The private pages (:data:`PRIVATE_PANELS`, the
 ``private`` menu group) are never in the public ``status.json`` and render only for a request
 through the trusted front door.
@@ -90,6 +91,8 @@ PAGE_PANELS = {
     "mcp-servers": "/mcp-servers",
     # the Projects page (homelabnext.projects.pages), served with ``--projects DIR``
     "projects": "/projects",
+    # the Orchestration page (homelabnext.orchestration.pages), with ``--orchestration DB``
+    "orchestration": "/orchestration",
 }
 STRATEGY_PANELS = frozenset({"strategy", "requirements", "objectives", "rfis"})
 MAP_PANELS = frozenset({"topology", "dataflow", "architecture", "roadmap"})
@@ -307,6 +310,7 @@ def _page_available(
     approvals: bool,
     maps: frozenset[str] = frozenset(),
     projects: bool = False,
+    orchestration: bool = False,
 ) -> bool:
     if panel in GENERATED_PANELS:
         return panel in maps
@@ -318,6 +322,8 @@ def _page_available(
         return approvals
     if panel == "projects":
         return projects
+    if panel == "orchestration":
+        return orchestration
     return agents is not None
 
 
@@ -334,6 +340,7 @@ def build_status(
     approvals: bool = False,
     maps: Iterable[str] = (),
     projects: bool = False,
+    orchestration: bool = False,
 ) -> dict[str, Any]:
     """The ``status.json`` document (see the module docstring).  ``agents``: the summary tier's
     sessions (``{"sessions", "counts"}``) when an activity store is configured, else None.
@@ -341,7 +348,8 @@ def build_status(
     ``baselines``: the Baselines page is served (a guest directory is configured);
     ``approvals``: the Approvals page is served (``agents.yml`` configures it);
     ``maps``: the map and directory panels whose inputs are configured (:mod:`homelabnext.status.maps`);
-    ``projects``: the Projects page is served (a projects directory is configured)."""
+    ``projects``: the Projects page is served (a projects directory is configured);
+    ``orchestration``: the Orchestration page is served (a telemetry store is configured)."""
     if capability_pages is None:
         from homelabnext.conform.registry import CAPABILITIES
 
@@ -367,6 +375,7 @@ def build_status(
                     approvals=approvals,
                     maps=served_maps,
                     projects=projects,
+                    orchestration=orchestration,
                 ),
             }
             if v.get("group"):

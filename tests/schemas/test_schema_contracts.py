@@ -36,6 +36,7 @@ EXPECTED = {
     "events/agent.activity.schema.json",
     "events/project.changed.schema.json",
     "events/agent.job.failed.schema.json",
+    "events/agent.job.finished.schema.json",
     "events/schedule.fired.schema.json",
     "records/note.schema.json",
     "registers/lesson.schema.json",
@@ -70,6 +71,7 @@ EXPECTED = {
     "status/views.schema.json",
     "status/roster.schema.json",
     "status/last_run.schema.json",
+    "status/orchestration_export.schema.json",
 }
 
 
@@ -130,6 +132,7 @@ def test_event_schemas_cover_reaction_seam_types():
             "agent.activity",
             "project.changed",
             "agent.job.failed",
+            "agent.job.finished",
             "schedule.fired",
         )
     }

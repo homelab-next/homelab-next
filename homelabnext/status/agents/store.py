@@ -26,12 +26,13 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Callable, Iterable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from homelabnext._sqlite import transaction
 from homelabnext.agent.screen import Screener
 
 from ..model import parse_iso
@@ -162,16 +163,9 @@ class ActivityStore:
             db.executescript(_SCHEMA)
         self.purge()
 
-    @contextmanager
-    def _db(self) -> Iterator[sqlite3.Connection]:
-        db = sqlite3.connect(self.path, timeout=10)
-        try:
-            db.execute("PRAGMA journal_mode=WAL")
-            db.execute("PRAGMA secure_delete=ON")  # a purged row is overwritten, not left in a page
-            with db:
-                yield db
-        finally:
-            db.close()
+    def _db(self) -> AbstractContextManager[sqlite3.Connection]:
+        # secure_delete: a purged row is overwritten, not left in a page
+        return transaction(self.path, secure_delete=True)
 
     # ---------------------------------------------------------------- writes
     def purge(self, now: float | None = None) -> int:

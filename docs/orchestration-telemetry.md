@@ -1,0 +1,356 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+# Orchestration telemetry
+
+What each agent job of the [LLM orchestrator](orchestration-controller.md)
+([[orchestration-controller]]) cost and how it went, so orchestration can be tuned from real data:
+token and turn budgets, prompt ordering for cache hits, model routing, admission. The decision is
+[ADR-0025](adr/0025-orchestration-telemetry.md).
+
+Two sources, joined by a tag:
+
+| Source | Grain | How it reaches the hub |
+|---|---|---|
+| the controller (it sees the task input and the final answer) | one record per job | the event `homelabnext.agent.job.finished` on the bus |
+| the [LLM gateway](llm-gateway.md) ([[llm-gateway]]), its own per-call log | one record per model call (turn) | read through a turn-source adapter, joined by `gateway_tag` |
+
+Per-tool-call records from first-party MCP servers may come later as a third source.
+
+**Requires and prefers.** The feature *requires* the events capability (the bus) and the
+orchestration controller emitting `agent.job.finished`. It *prefers* an inference gateway with a
+turn source (the `inference` capability's `turn-records` feature); without one
+(`--turn-source none`, or jobs on a direct backend) it shows per-job data only, and the page and
+the rollup say "no gateway data" instead of zeros. A later module manifest transcribes this as
+`requires:` and `prefers:`.
+
+## The contract: `homelabnext.agent.job.finished` 1.0
+
+Schema: `schemas/events/agent.job.finished.schema.json` (frozen baseline under
+`schemas/_frozen/1.0/events/`, examples and negatives beside it; the generated publisher and
+consumer contract tests cover it like every type, [events](events.md) ([[events]])).
+
+The controller emits it once per job reaching a terminal state, through its durable outbox, in
+the same transaction as the terminal transition, with `source` set to its service id and an `id`
+derived from the run id (a re-send is a duplicate). Which service id the hub accepts is
+configuration: `hnx orchestration --source svc:NAME` (repeatable) or `HNX_ORCHESTRATION_SOURCE`
+(comma-separated), default `svc:llm-orchestrator`, the example lab's controller; every other
+source is refused. `agent.job.failed` is still emitted for
+failures; `finished` is the usage record of every outcome.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `run_id` | string | the controller's run id |
+| `profile` | `profile:<id>` | `profile:` + the run's agent key |
+| `profile_revision` | string or null | |
+| `lane` | `real` \| `shadow` | a shadow run's answer is recorded, never delivered |
+| `outcome` | `completed` \| `failed` \| `cancelled` \| `timeout` | `timeout` = a failure of class timeout, deadline or budget; a cancel is `cancelled` with class `cancelled`; everything else is `failed` |
+| `failure_class` | string or null | the controller's failure class; null exactly when `completed` |
+| `retry_of_run_id` | string or null | |
+| `auto_retry_scheduled` | boolean | as `agent.job.failed` 1.1 |
+| `local_attempts` | integer >= 0 | |
+| `cloud_fallback_used` | boolean | |
+| `backend` | string or null | the logical backend name as the controller emits it (1 to 64 of `A-Za-z0-9._-`; a leading dot or digit is fine); no `:` or `/`, so never a URL or host:port |
+| `model` | string or null | opaque: the usage file's model, else the request's (a vLLM model path is possible); the turn record's `model` rule (below): no whitespace, URL or mail address. The controller sends null when its value fails the rule |
+| `queued_at`, `finished_at` | date-time | |
+| `started_at` | date-time or null | null for a job that never started |
+| `queue_wait_s`, `wall_s` | number >= 0 or null | null for a job that never started |
+| `input_bytes` | integer >= 0 | size of the task description plus the request body |
+| `output_bytes` | integer >= 0 or null | size of the delivered result; null when empty |
+| `usage` | object or null | the usage file's `input_tokens`, `output_tokens`, `reasoning_tokens`, `cache_read_tokens`, `api_calls` (integers) and `cost_usd`; each null = unknown, which is not 0. Null when there is no usage file |
+| `turn_exit_reason` | string or null | from the usage file |
+| `tools` | array, optional | `[{name, calls}]` when the controller has them; omitted otherwise |
+| `gateway_tag` | string | an optional prefix (at most 64 of `A-Za-z0-9._:/-`, never a comma) followed by the run id |
+
+Every field but `tools` is always present (null when unknown). Evolution is additive.
+
+## The privacy rule: names and numbers, never text
+
+Neither source may carry a prompt, task text, tool input or output or model output, the same rule
+as `agent.activity`'s summary tier ([status](status.md) ([[status]]) section 6):
+
+- the event schema closes every object (`additionalProperties: false`), so a text field cannot
+  ride along; the negatives `carries-task-text`, `usage-carries-prompt` and `tool-carries-input`
+  prove it;
+- sizes are byte counts, never content;
+- a turn is the **neutral turn record** (`TURN_FIELDS` in `conformance/protocols/inference.py`):
+  the gateway's id of the call, the matched tag, start time, duration, time to first token,
+  model role (the alias asked for, ADR-0007), model, call type, status, HTTP error code, token
+  counts, cache-read tokens, cache hit, cost. The adapter reduces its product's row to it (for
+  LiteLLM, `api_base`, `user`, `end_user`, the client address, the key hash, the rest of
+  `metadata` and any message or response column are dropped, and a name the record would refuse
+  is null rather than kept), and the store refuses any record with another field or a value of
+  the wrong kind (`turn_problems`), so a new adapter cannot widen what is kept. `call_type` is the
+  gateway's own name for the kind of call (LiteLLM: `acompletion` and so on): opaque, per
+  provider, for display and grouping only. The names follow one rule, `is_name`, which the
+  record and every adapter share. `model` is up to 512 of `A-Za-z0-9._:/@-`, and may start with
+  `/` (a vLLM path), `./` (llama-server's `-m ./models/x.gguf`; never `..`) or a drive letter
+  (`C:/models/x.gguf`), or hold `//` (`hosted_vllm//models/x`), `@` before a version
+  (`model@v1.2`, `claude-sonnet@vertex.v2`) and `:` (`ollama:llama3`, a Bedrock ARN).
+  `model_role` and `call_type` are up to 128 of the same characters, start with a letter or a
+  digit, and never hold `//`. Neither ever holds whitespace, a control character, `+`, a URL
+  scheme (`:/` after two or more characters, so `https://` and `https:/x`), an IPv4 address as a
+  token of its own (a dotted quad alone or after `x:`; a version such as `v1.0.0.1` is fine), a
+  `host:port/`, or a mail address (`@` and a dotted domain whose last label is letters,
+  `alice@example.com`, `bob@example.com.`). `alice@corp` is accepted: a single label after `@`
+  cannot be told from a deployment-qualified alias such as `sonnet@vertex`. The job record's
+  `model` takes the same rule, so the controller sends `model: null` when its value fails it (the
+  record is kept and the name is unknown); a value that fails it is otherwise poison and costs the
+  whole record. A pattern cannot refuse every disguise; it refuses what a careless source
+  emits. What remains is an identifier-shaped channel: words joined by `_`, `.`, `-` or `/`
+  (`the_prompt_was_...`) pass, up to 512 characters per job and 768 per turn, as they do in
+  `run_id`, `gateway_tag` and `tools[].name`; refusing them would refuse real names
+  (`together_ai`, `Q4_K_M`, dotted versions). The producers are the pinned controller and the
+  operator's gateway, not an adversary. emits. The tests plant forbidden values (all fictional) and
+  check that neither the store file nor the page holds them.
+
+## Data flow
+
+```
+controller ── outbox ──▶ bus: homelabnext.agent.job.finished
+                              │  hnx orchestration consume   (durable pull, one pass per timer)
+                              ▼
+                     telemetry store (SQLite) ◀── hnx orchestration turns ── turn source (the gateway's
+                              │                    (jobs not yet settled,   per-call log, by adapter)
+                              │                     joined by gateway_tag)
+                              ├──▶ hub page /orchestration      (hnx status serve --orchestration DB)
+                              └──▶ hnx orchestration report     (rollup JSON: the engine's input)
+```
+
+- **Consume** (`homelabnext.orchestration.bus.drain`): a durable pull consumer
+  (`hnx-orchestration-telemetry`) on the type's subject. Stored or a duplicate: `ack`. Poison (not
+  JSON, which includes `NaN`, `Infinity` and a number no float holds such as `1e999`, a string
+  holding a lone surrogate such as `"\ud800"`, invalid, another type, an envelope attribute the
+  envelope schema does not declare (a CloudEvents extension, which would be free text beside the
+  closed `data`), a `subject` that is not the run id, or a `dataschema` other than the type's own `$id` (the schema pins it), a source other than the configured controller's, an id reused with
+  another body, a second record for a run under another id, a record whose `gateway_tag` another
+  run already holds (the tag must name one job, or two jobs' turns would merge), a timestamp the pattern accepts but
+  the calendar does not, such as `2026-02-30`, times out of order by more than a second (queued
+  after started or finished, started after finished: the controller stamps all three from one
+  clock, so only a wall-clock step between two stamps inverts them), a time before 2000 (a zero
+  time behind a parse error, not a job's), a time more than a day ahead of the store's clock (never
+  purged, and holding its tag for good), or a job queued more than the retention before it
+  finished (older than anything the store keeps)). A long job is not poison: the controller bounds
+  neither queue wait nor run time (no wall-clock ceiling; a queued job survives restarts and holds,
+  and one cancelled in the queue still reports)): `term`, so the bus's dead-letter stream is the
+  quarantine; only the id and the reason are logged. A body nested so deep that it parses but
+  cannot be re-encoded is poison too. Anything else (a store failure, SQLite or the disk, or the
+  environment: `jsonschema` missing, a schema file half-written by a deploy, a `$ref` that
+  resolves to nothing): `nack` and the pass stops. The event schemas are loaded and their `$ref`s
+  resolved, and the store must take a write (the exclusive lock a commit needs, which waits for
+  readers too, and a journal write, rolled back), before the first fetch, so a broken environment
+  or a store outage (locked for more than a second, by a writer or by a reader stuck in a
+  transaction: the probe waits 1 s, not the store's 10 s busy timeout, since hub reads queue
+  behind it while it waits; read-only, a disk that refuses the journal) fails `consume` up front (exit 2) with nothing
+  fetched. That is what keeps an outage from dead-lettering valid records: JetStream counts an
+  attempt for every delivery it hands out, so fetching into a dead store would spend one attempt of
+  every fetched record per pass, and the fifth such pass would dead-letter them all. An outage that
+  begins inside a pass costs only the batch in hand one attempt. `max_deliver` (5) stays finite:
+  the bus protocol takes a positive count, and poison is always `term`-ed, so it bounds retries
+  only. The consumer's NATS user needs the same pull-consumer grant shape as the
+  StackStorm bridge's, on `<prefix>.homelabnext.agent.job.finished`; publishing on
+  `homelabnext.agent.job.>` stays the controller's alone.
+- **Ingest** (`hnx orchestration ingest FILE|-`): the same consumer over a JSON-lines file, for a
+  backfill or a replay of the outbox.
+- **Turns** (`hnx orchestration turns --turn-source ...`): for every job whose turns are not
+  settled, read the turn source over windows covering the jobs (from start time less two minutes to finish
+  time plus two, since no turn happens while a job is queued, around the finish only for a job
+  that never started, and never earlier than the retention cutoff; merged when within an hour, but cut into windows of at most an hour so a week of replay
+  or a backlog after an outage never becomes one window over all the gateway's traffic), oldest
+  first; keep the turns that carry a job's tag, and rewrite them by the call's id. A
+  job is settled ten minutes after it finished (a gateway may write its log in batches), as soon
+  as the last window it overlaps has been read; a failed read stops the pass but keeps what was
+  read and settled before it, and the next pass starts from the jobs still unsettled. A record
+  the source gives that is no turn record is dropped and counted (`N refused`, exit 3, where an
+  unreadable gateway is exit 1: under a oneshot unit both mark the pass failed, so an
+  `OnFailure=` alert can tell data loss from an outage by the code), and the
+  rest of its window is stored and settled: failing the window would read the same record, and
+  fail, on every later pass.
+- **Retention**: 90 days by default (`--retention-days`, a finite 1 to 3650: every read window is bounded by it), by finish time and turn start time. A
+  record that arrives already older than that (a late replay, an old backfill) is counted
+  `expired` by `consume` and `ingest`: acknowledged and not stored, neither processed nor poison.
+- **One job per tag, on an older store**: the tag's index is unique. A store an earlier release
+  wrote may hold two jobs with one tag; every `hnx orchestration` command then refuses to open it
+  (exit 2), naming how many tags are shared and the statement that keeps, of each tag's jobs
+  inside retention, the one received first (expired jobs are purged, and committed, before the
+  count, and the statement deletes any left; it never keeps an expired job, which the next open
+  would purge, leaving the tag with none), rather than choosing which job to drop.
+
+### Turn sources: the slot and its adapters
+
+`hnx orchestration turns` reads through the turn source `--turn-source` names (else
+`HNX_ORCHESTRATION_TURN_SOURCE`): `none` (no gateway data: nothing is read or settled, so a
+source chosen later still reads the jobs inside retention), or an adapter factory
+`package.module:factory`, the `adapter:` form of a conformance target. The adapter options are
+`--gateway-url` (passed as `base_url`), `--key` (a `secret:` name), `--ca-file` and
+`--allow-plaintext`, and any other option an adapter takes is `--turn-source-option KEY=VALUE`
+(repeatable). Which adapter fills the slot is site configuration,
+but the code is not: the module must be under `homelabnext.conform.adapters` or a site package
+declared with `--turn-source-namespace PACKAGE` (repeatable, else
+`HNX_ORCHESTRATION_TURN_SOURCE_NAMESPACES`, comma-separated; none by default; never a
+standard-library package or `homelabnext`), checked before anything is imported, and any failure
+of the import is a configuration error (exit 2). The factory must be one the module declares in
+`TURN_SOURCES` and defines itself, so a helper an adapter imports (a URL opener, a secret
+reader) is never called from a flag. A declaration is `{"make": {"secrets": [...], "options":
+{name: type}}}`, both keys optional (anything else, or a malformed one, is exit 2). With
+`options`, the factory takes only those options, each converted to its type (`str`, `int`,
+`float`, `bool`: `true`/`false`, or `secret`: a `secret:` name only); the LiteLLM adapter types
+all of its own. Every option, the flags included, gets the same checks: no value may be a URL
+with userinfo (`--gateway-url` too); `key` (`--key`) and every option declared secret take only
+a `secret:` name; and an option the factory does not type whose name holds a credential stem as
+a whole `_` segment (`api_key`, `db_pwd`, `refresh_token`, `bearer`, `cookie`, `jwt`, `otp`,
+`sig`, `dsn`, `pem`, `pass`; `apikey` and `password` anywhere) takes only a `secret:` name too,
+and the error names the stem. `monkey`, `max_tokens`, `author`, `session_id` or `cert_path` are
+no credentials; an adapter that takes a plain option a stem would catch types it `str`. The factory returns a
+`TurnSource` (`turns(start, end, tags)`, neutral turn records), and the `inference` suite's
+`turn-records` checks prove an adapter: every turn is exactly the neutral record, carries only
+the tags asked for, started in the window, and keeps its id across reads. Swapping the gateway is
+a new adapter plus those checks, with no change to the hub.
+
+| Adapter (`--turn-source`) | Gateway | Read path |
+|---|---|---|
+| `homelabnext.conform.adapters.litellm_spend_log:make` | LiteLLM | `GET /spend/logs/v2` with a viewer key (below) |
+
+The adapter's checks run against a loopback fake of its API serving a recorded-shape fixture
+(`tests/conform/test_conform_litellm_turn_source.py`). The lab's gateway targets skip them for
+now: a lab run must first send a tagged call and name its window (a follow-up).
+
+#### LiteLLM: the spend-log API with a viewer key
+
+`GET /spend/logs/v2` (LiteLLM's paginated spend-log API), with a LiteLLM virtual key whose user has
+the `proxy_admin_viewer` role (sees all spend, cannot create keys, change settings or call models)
+and `allowed_routes: ["/spend/logs/v2"]`, named by secret: `secret:llm-gateway/key-telemetry-reader`,
+delivered as `HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER`. The reader refuses the master key (by
+the variable it is delivered in, so no other spelling of its name gets past), a literal value, credentials in the URL, plain http to anything but loopback (unless
+`--allow-plaintext`), redirects and proxies.
+
+Why not a read-only Postgres role on `LiteLLM_SpendLogs`:
+
+1. The API is LiteLLM's supported interface; the table is its ORM's internals, migrated by
+   releases on a fast-moving patch line ([LLM gateway](llm-gateway.md)).
+2. The list endpoint leaves out `messages`, `response` and `proxy_server_request`; a `SELECT` on
+   the table hands over prompts and answers whenever prompt storage is on, plus key hashes and
+   client addresses. Least privilege is the API.
+3. The schema belongs to the gateway's own role and is re-created by migrations, so a grant would
+   have to be redone after each one; the database also needs no network path from the hub.
+
+The key is not generated yet: `hnx gen gateway render` creates only model-calling keys, so the
+operator creates this one on the running gateway (`/user/new` with `user_role:
+proxy_admin_viewer`, then `/key/generate` for that user with the route restriction) and stores it
+under the secret name. Generating it from the gateway spec is a follow-up.
+
+#### Enabling tagging on LiteLLM
+
+- The controller sends every model request of a job with the header `x-litellm-tags: <gateway_tag>`
+  (the job-scoped hermes home's model config sets it). LiteLLM records it in
+  `LiteLLM_SpendLogs.request_tags` (LiteLLM's "request tags").
+- Tag tracking needs virtual keys and the database, which the supported LiteLLM shape already
+  requires ([LLM gateway](llm-gateway.md), "Running LiteLLM: the supported shape").
+- `general_settings.reject_clientside_metadata_tags` must stay unset or false, or LiteLLM drops
+  client tags; spend logs must stay on (`disable_spend_logs` unset). Prompt storage in the spend
+  log is not needed and should stay off.
+- Only jobs routed through a gateway whose turn source is read have turns. A job on a direct
+  backend or a cloud provider has none: the page shows **no gateway data**, never zeros, and the rollup's turn sums
+  are null.
+
+## The hub page
+
+`hnx status serve --orchestration DB` adds the Orchestration page (menu entry `panel:
+orchestration`, views schema 1.9):
+
+- **By profile and backend** (and lane): jobs, outcomes, p50/p95 wall time and queue wait, tokens
+  in/out, cache-read share, cost, retries and auto-retries, cloud fallbacks, input vs output size
+  (p50), gateway turns (or "no gateway data"). An unknown count or cost is shown as `?` or "(n
+  unknown)", never folded into a zero.
+- **Trend by day**: per day and profile, jobs, completed, not completed, wall p50, tokens, cost.
+- **Latest jobs**, each linking to `/orchestration/job?run=<run id>`: the job's record, its tool
+  counts and its gateway turns (model role, model, status, tokens, cache read, time to first
+  token, duration, cost), with the gateway's token sums beside the usage file's.
+
+Filters (`profile`, `backend`, `lane`, `outcome`, `days` 1..90) narrow everything. The hub
+opens the store read-only (SQLite `mode=ro`): it creates, migrates and purges nothing, and a path
+that is not an existing store stops `hnx status serve` at start (exit 2) instead of serving an
+empty page; `hnx orchestration` is the only writer. A request the store cannot answer once the
+hub is up (a lock held past the busy timeout, a record that cannot be encoded) is a 500 page naming
+the exception's type, never a dropped connection.
+
+**Files and users.** The store is one file. Its writers (`hnx orchestration consume`, `ingest`,
+`turns`: one-shot timer passes) keep a rollback journal (`journal_mode=DELETE`, set on every
+open), not WAL: `<db>-journal` exists only while a write is in flight, or after a crashed write
+until the next pass rolls it back, and there is never a `-wal` or `-shm`. A WAL reader has to
+create `-wal` and `-shm` beside the database: without write access to the directory it cannot
+open the store at all, and with it the files it leaves are the reader's, which locks the writer
+out. A rollback-journal reader creates nothing, so the deployment is:
+
+- the writers run as one user that owns the store's directory (`0755`) and the database
+  (`0644`);
+- the hub runs as that user, or as another user that can read the database: in a group the file
+  belongs to (`0640`, the directory `0750` and setgid so a recreated store keeps the group), or
+  as world-readable above. The hub needs no write access to the file or the directory.
+
+A reader that arrives during a write waits for it (SQLite's busy timeout, 10 s; the passes'
+transactions are short). A store a WAL writer left (an earlier release) is refused by the hub
+with SQLite's reason rather than read, since reading it would create the files above; the next
+writer pass converts it. Any other SQLite failure at start (a lock held past the timeout, a crashed
+write's journal only a writer may roll back) is reported with SQLite's own message, also exit 2;
+"not a telemetry store" is kept for a file that is no SQLite database or has no store's tables.
+
+## Export and import
+
+`hnx orchestration export --db DB [--out FILE]` writes the whole store as JSON lines,
+`homelabnext.orchestration.export/1`, reading it read-only as the hub does (nothing is created,
+migrated or purged). `--out` is written whole (a temporary file beside it, mode `0600`, then
+renamed over it), and is refused when it is the store itself under any spelling, or a symlink:
+
+```
+{"schema": "homelabnext.orchestration.export/1", "kind": "header", "sources": ["svc:llm-orchestrator"], "retention_days": 90, "exported_at": "2026-01-01T06:00:00Z"}
+{"schema": "homelabnext.orchestration.export/1", "kind": "job", "event": {...}, "turns_settled_at": "2026-01-01T00:20:00Z"}
+{"schema": "homelabnext.orchestration.export/1", "kind": "turn", "turn": {...}}
+```
+
+Each line validates against `schemas/status/orchestration_export.schema.json` (header, job or
+turn, each closed; the rollup has no schema yet, see below). The first line is a header naming the store it came from: the job sources it took, its
+retention and when it was exported. An import does not need it; it is only read to explain a job
+refused for its source (an export from a store with another `--source` is refused job by job,
+with both stores' sources in the reason). A header whose sources are not service ids, or whose
+retention or time is not one, is refused, so nothing of it is printed. A job line carries the `agent.job.finished` envelope as consumed (the store keeps it beside the
+record) and when its turns settled; a turn line carries the neutral turn record. Jobs come first,
+oldest finish first, then turns. `hnx orchestration import --db DB FILE|-` loads it through the
+same paths as the live writers: a job goes through the consumer, so the same id and body is a
+`duplicate` and a foreign, invalid, conflicting or non-finite record is refused as poison, and one
+older than retention is `expired`; a turn is refused unless it is exactly the neutral record and
+its tag joins a job already in the store (jobs come first, so the export's own jobs count), and
+the same record again is a `duplicate`, while the same `turn_id` with another body is refused:
+an import never rewrites a stored turn (its cost or its job). A turn start or a `turns_settled_at` more than a day
+ahead of the store's clock is refused too. A refused line is reported with its line number (exit 1)
+and does not stop the rest. That makes a store movable (another host, a rebuilt hub) and keeps
+history across a swap of the gateway or the controller, since neither line names a product. A
+job that a store before exports kept without its envelope exports with `event: null`, which an
+import refuses rather than inventing one; so is a turn written before the turn record's last
+rename, and an envelope an earlier build kept that the consumer now refuses (an extension, a
+free subject). The export still writes them, counts them on stderr and exits 1, so a move of a pilot
+store does not lose them silently.
+
+## What the recommendation engine will consume
+
+`hnx orchestration report --db DB [--days N]` prints the rollup (`homelabnext.orchestration.rollup/1`,
+`homelabnext.orchestration.model`): per profile, backend and lane, the job counts by outcome and
+failure class, distributions (p50, p95 and n) of wall time, queue wait, input and output tokens per
+job, API calls per job and gateway turns per job, token sums, cache-read share, cost, retries,
+fallbacks, sizes, and the per-turn latency figures; plus the per-day trend (by UTC day). Every sum
+(tokens, cost, output size, the gateway turns' tokens and cost, each day's tokens and cost) is over
+the known values only, carries its own count of the values left out (`jobs_unknown.<sum>`,
+`turns_unknown.<sum>`), and is `null` when no value is known: unknown is never folded into 0. The
+full shape is in `homelabnext.orchestration.model`'s docstring. Until the first release the shape
+of `rollup/1` may still change in place (nothing consumes it yet); after it, it evolves additively
+and an incompatible change takes `rollup/2`. The engine (`hnx orchestration recommend`, a later step) turns rules over that
+input into broker proposals (`proposal.created`) with the evidence attached:
+
+| Rule | Reads |
+|---|---|
+| per-profile token and turn budgets | `tokens_per_job.*.p95`, `api_calls_per_job.p95`, `turns.per_job.p95` |
+| prompt prefix ordering for cache hits | `cache_read_share`, per-turn `cache_read_tokens` |
+| model routing, checked against golden evals | outcomes and cost per backend and lane (shadow vs real) |
+| admission prediction | `queue_wait_s`, `wall_s` per profile and backend |
+| regression alarms | the `days` trend |
+
+Shadow first: the engine records what it would propose; filing proposals is an explicit config
+flip; nothing is ever applied automatically.

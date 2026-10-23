@@ -18,6 +18,12 @@ allow:
   - path: homelabnext/status/agents/store.py
     rule: lake
     reason: the status hub's agent activity store is a local SQLite file of agent events (both tiers, redacted before writing), not a client of the shared lake; nothing here queries the lake
+  - path: homelabnext/orchestration/store.py
+    rule: lake
+    reason: the status hub's orchestration telemetry store is a local SQLite file of job records and gateway turns (names and numbers only), not a client of the shared lake; nothing here queries the lake
+  - path: homelabnext/_sqlite.py
+    rule: lake
+    reason: the one-transaction SQLite connection the hub's two local stores (agent activity, orchestration telemetry) share; a local file, not a client of the shared lake
   - path: ansible/roles/last_run/files/hnx-last-run.py
     rule: state
     reason: the last-run writer is a standalone stdlib script installed on every guest, which has no homelabnext package to import; its record is a contract document (schemas/status/last_run.schema.json) the status hub reads, not checker state

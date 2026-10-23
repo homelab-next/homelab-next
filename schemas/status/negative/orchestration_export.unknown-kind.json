@@ -1,0 +1,5 @@
+{
+  "schema": "homelabnext.orchestration.export/1",
+  "kind": "secret",
+  "value": "x"
+}

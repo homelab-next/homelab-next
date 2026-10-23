@@ -214,7 +214,7 @@ def prometheus_query(payload: Any, mapping: Mapping[str, Any], fallback_item: st
                     item,
                     state,
                     clean_summary(summary + note),
-                    value=None if math.isnan(value) else value,
+                    value=value if math.isfinite(value) else None,  # +-Inf is no JSON number
                 ),
             )
         )

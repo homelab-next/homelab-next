@@ -16,6 +16,7 @@ import pytest
 
 from conformance.fakes.openai_server import FakeOpenAIServer
 from conformance.protocols.inference import GatewayClient
+from conformance.suites.inference import SUITE
 from homelabnext.conform import run_capability
 from homelabnext.conform.adapters import llm_gateway
 from homelabnext.conform.adapters._env import AdapterConfigError
@@ -102,9 +103,14 @@ def test_the_lab_targets_pass_every_check_against_a_conforming_gateway(monkeypat
     srv = gateway(monkeypatch, var=var)
     try:
         run = run_capability("inference", str(TARGETS / target))
-        assert failing(run) == []
+        assert run.error is None, run.error
+        assert sorted(r.check for r in run.results if not r.ok) == []
         assert {r.check for r in run.results} >= set(GATEWAY_CHECKS)
-        assert all(r.status == "pass" for r in run.results)  # nothing skipped
+        # nothing skipped but the turn-records checks: the lab targets name no window known to
+        # hold turns yet (follow-up: a recorded call per lab run, docs/orchestration-telemetry.md)
+        skipped = {r.check for r in run.results if r.status != "pass"}
+        assert {r.status for r in run.results if r.check in skipped} <= {"skip"}
+        assert skipped == {s.id for s in SUITE.specs if "turn-records" in s.requires}
     finally:
         srv.stop()
 

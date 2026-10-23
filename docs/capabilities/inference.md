@@ -13,7 +13,7 @@ generated_by: hnx docs capabilities generate
 **OpenAI-compatible /v1 chat, streaming and embeddings behind a role alias.**
 
 - Contract: [`conformance.protocols.inference`](../../conformance/protocols/inference.py) (`conformance.protocols.inference:InferenceClient`)
-- Conformance suite: [`conformance.suites.inference`](../../conformance/suites/inference.py) (12 checks: 10 MUST, 2 SHOULD)
+- Conformance suite: [`conformance.suites.inference`](../../conformance/suites/inference.py) (16 checks: 14 MUST, 2 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -31,6 +31,15 @@ A model *gateway* in front of the backends (LiteLLM, Bifrost; docs/llm-gateway.m
 feature `gateway` and adds `GatewayClient`'s three methods, so the suite can prove what
 the gateway is for: a bad key is a clean 401, a configured limit is a 429, and `/v1/models` is
 exactly the declared role aliases.
+
+A gateway that keeps a per-call log declares the feature `turn-records` as well: it offers a
+`TurnSource`, `turns(start, end, tags)`, that yields the calls (*turns*) started in a
+window and tagged with one of `tags`, each reduced to the neutral turn record
+(`TURN_FIELDS`, checked by `turn_problems`).  How a product logs a call, and how it
+receives the tag, is its adapter's business; orchestration telemetry
+(`docs/orchestration-telemetry.md`) reads only this record.  The subject's
+`TurnRecordsGateway.turn_records` names a window and tags known to hold turns, so the
+suite can check them.
 
 Errors are `InferenceError` with `.status` set for HTTP errors (and `.detail`, the
 server's own message).  The target config says
@@ -214,6 +223,46 @@ Inherited from `InferenceClient`.
 
 **Returns:** `list[list[float]]`
 
+### `TurnRecordsGateway` (Protocol)
+
+Defined in [`conformance.protocols.inference`](../../conformance/protocols/inference.py).
+
+Feature `turn-records`: the gateway's per-call log as a `TurnSource`.
+
+#### `TurnRecordsGateway.turn_records`
+
+```python
+def turn_records() -> tuple[TurnSource, float, float, list[str]]
+```
+
+**Returns:** `tuple[TurnSource, float, float, list[str]]`
+
+`(source, start, end, tags)`: a window and tags known to hold at least one turn.
+
+### `TurnSource` (Protocol)
+
+Defined in [`conformance.protocols.inference`](../../conformance/protocols/inference.py).
+
+#### `TurnSource.turns`
+
+```python
+def turns(start: float, end: float, tags: Collection[str]) -> Iterable[Mapping[str, Any]]
+```
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `start` | `float` | required | positional or keyword |
+| `end` | `float` | required | positional or keyword |
+| `tags` | `Collection[str]` | required | positional or keyword |
+
+**Returns:** `Iterable[Mapping[str, Any]]`
+
+The calls started in `[start, end]` (epoch seconds, whole seconds suffice) that carry
+one of `tags`, as neutral turn records (`TURN_FIELDS`); raises
+`TurnSourceError` when the log cannot be read.
+
+**Raises:** `TurnSourceError`
+
 ## Data shapes in and out
 
 ### `ChatResult` (dataclass, frozen)
@@ -229,6 +278,12 @@ Defined in [`homelabnext.conform.adapters.openai_compat`](../../homelabnext/conf
 | `completion_tokens` | `int \| None` | `None` |  |
 | `total_tokens` | `int \| None` | `None` |  |
 
+### Constants
+
+| Name | Value |
+|---|---|
+| `TURN_FIELDS` | `('turn_id', 'gateway_tag', 'started_at', 'duration_ms', 'ttft_ms', 'model_role', 'model', 'call_type', 'status', 'error_code', 'input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_hit', 'cost_usd')` |
+
 ### Errors
 
 Adapters raise these (never a bare product exception); a check that expects a rejection pins the type.
@@ -236,10 +291,16 @@ Adapters raise these (never a bare product exception); a check that expects a re
 | Exception | Base | Meaning | Named by |
 |---|---|---|---|
 | `InferenceError` | `Exception` | The server answered with an error or something that is not an OpenAI-shaped reply. |  |
+| `TurnSourceError` | `RuntimeError` | The turn source could not be read (configuration, transport, refusal, shape). | `TurnSource.turns` |
 
 ### JSON Schemas
 
-None: no module of this contract, its suite or its fake loads a schema from `schemas/`.
+Schemas the contract's own code loads (found in the source, not curated):
+
+| Schema | Loaded by |
+|---|---|
+| [`schemas/platform/service.json`](../../schemas/platform/service.json) | `homelabnext.registry.model` |
+| [`schemas/status/observation.schema.json`](../../schemas/status/observation.schema.json) | `homelabnext.status.model` |
 
 ## Behavioural contract
 
@@ -259,6 +320,10 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `gateway-rejects-bad-key` | MUST | a chat call with a wrong key and with no key is each a 401 that says so, never a 5xx or a store error | `gateway` |
 | `gateway-limit-throttles` | MUST | on a key limited to n requests, the first n chat calls are served and call n+1 is a 429 | `gateway` |
 | `gateway-models-match-roles` | MUST | /v1/models lists exactly the declared role aliases (no backend ids, no extras) | `gateway` |
+| `turn-records-are-neutral` | MUST | every turn of a window known to hold some is exactly the neutral turn record (15 fields, each of its kind): nothing else of the gateway's log | `turn-records` |
+| `turn-records-only-the-asked-tags` | MUST | every turn carries one of the tags asked for; a tag no request used gives no turns, and each tag alone gives exactly that tag's turns | `turn-records` |
+| `turn-records-in-the-window` | MUST | every turn started inside the window asked for (whole seconds), and a window before any gives none | `turn-records` |
+| `turn-records-stable-ids` | MUST | reading the same window twice gives the same turn ids, once each (a re-read rewrites, never adds) | `turn-records` |
 
 ### Features an adapter may declare
 
@@ -267,6 +332,7 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `embeddings` | product feature (checks skip without it) | `embeddings-fixed-dimension`, `embeddings-deterministic-and-distinct` |
 | `gateway` | product feature (checks skip without it) | `gateway-rejects-bad-key`, `gateway-limit-throttles`, `gateway-models-match-roles` |
 | `streaming` | product feature (checks skip without it) | `stream-matches-completion` |
+| `turn-records` | product feature (checks skip without it) | `turn-records-are-neutral`, `turn-records-only-the-asked-tags`, `turn-records-in-the-window`, `turn-records-stable-ids` |
 
 ### Defects the suite is proven to catch
 
@@ -388,6 +454,7 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
    from conformance.protocols.inference import (
        InferenceClient,
        InferenceError,
+       TurnSourceError,
    )
    ```
 
@@ -411,6 +478,7 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
        - embeddings
        - gateway
        - streaming
+       - turn-records
    ```
 
 4. **Prove it:**
@@ -420,4 +488,4 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
    hnx conform run inference --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (10) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (14) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.

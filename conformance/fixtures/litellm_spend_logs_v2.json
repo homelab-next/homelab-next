@@ -1,0 +1,225 @@
+{
+ "pages": [
+  {
+   "data": [
+    {
+     "api_key": "fake-key-hash-0001",
+     "api_base": "https://upstream.example.com/v1",
+     "user": "user-fake",
+     "end_user": "end-user-fake",
+     "requester_ip_address": "192.0.2.10",
+     "team_id": "team-fake",
+     "cache_key": "fake-cache-key",
+     "custom_llm_provider": "openai",
+     "model_id": "fake-deployment-id",
+     "litellm_call_id": "fake-call-id",
+     "session_id": "fake-session",
+     "messages": "fake prompt text that must never be stored",
+     "response": "fake model output that must never be stored",
+     "request_id": "req-a1",
+     "call_type": "acompletion",
+     "spend": 0.0,
+     "total_tokens": 21500,
+     "prompt_tokens": 20000,
+     "completion_tokens": 1500,
+     "startTime": "2026-01-01T00:00:13.000000Z",
+     "endTime": "2026-01-01T00:00:15.100000Z",
+     "completionStartTime": "2026-01-01T00:00:13.400000Z",
+     "request_duration_ms": 2100,
+     "model": "example-27b",
+     "model_group": "mdl:triage-large",
+     "cache_hit": "False",
+     "request_tags": [
+      "run-0001",
+      "profile:triage"
+     ],
+     "status": "success",
+     "metadata": {
+      "user_api_key_alias": "agent-triage",
+      "requester_metadata": {
+       "note": "fake free text never stored"
+      },
+      "usage_object": {
+       "prompt_tokens": 20000,
+       "prompt_tokens_details": {
+        "cached_tokens": 12000
+       }
+      }
+     }
+    },
+    {
+     "api_key": "fake-key-hash-0001",
+     "api_base": "https://upstream.example.com/v1",
+     "user": "user-fake",
+     "end_user": "end-user-fake",
+     "requester_ip_address": "192.0.2.10",
+     "team_id": "team-fake",
+     "cache_key": "fake-cache-key",
+     "custom_llm_provider": "openai",
+     "model_id": "fake-deployment-id",
+     "litellm_call_id": "fake-call-id",
+     "session_id": "fake-session",
+     "messages": "fake prompt text that must never be stored",
+     "response": "fake model output that must never be stored",
+     "request_id": "req-a2",
+     "call_type": "acompletion",
+     "spend": 0.0,
+     "total_tokens": 22700,
+     "prompt_tokens": 21000,
+     "completion_tokens": 1700,
+     "startTime": "2026-01-01T00:02:00",
+     "endTime": "2026-01-01T00:02:03",
+     "completionStartTime": "2026-01-01T00:02:00.250000",
+     "request_duration_ms": 3000,
+     "model": "example-27b",
+     "model_group": "mdl:triage-large",
+     "cache_hit": "True",
+     "request_tags": [
+      "run-0001"
+     ],
+     "status": "success",
+     "metadata": {
+      "user_api_key_alias": "agent-triage",
+      "requester_metadata": {
+       "note": "fake free text never stored"
+      },
+      "usage_object": {
+       "cache_read_input_tokens": 16000
+      }
+     }
+    },
+    {
+     "api_key": "fake-key-hash-0001",
+     "api_base": "https://upstream.example.com/v1",
+     "user": "user-fake",
+     "end_user": "end-user-fake",
+     "requester_ip_address": "192.0.2.10",
+     "team_id": "team-fake",
+     "cache_key": "fake-cache-key",
+     "custom_llm_provider": "openai",
+     "model_id": "fake-deployment-id",
+     "litellm_call_id": "fake-call-id",
+     "session_id": "fake-session",
+     "messages": "fake prompt text that must never be stored",
+     "response": "fake model output that must never be stored",
+     "request_id": "req-x9",
+     "call_type": "acompletion",
+     "spend": 0.5,
+     "total_tokens": 10,
+     "prompt_tokens": 5,
+     "completion_tokens": 5,
+     "startTime": "2026-01-01T00:30:00Z",
+     "endTime": "2026-01-01T00:30:01Z",
+     "completionStartTime": null,
+     "request_duration_ms": 1000,
+     "model": "example-4b",
+     "model_group": "mdl:fast-classifier",
+     "cache_hit": null,
+     "request_tags": [
+      "another-job"
+     ],
+     "status": "success",
+     "metadata": {
+      "user_api_key_alias": "agent-triage",
+      "requester_metadata": {
+       "note": "fake free text never stored"
+      }
+     }
+    }
+   ],
+   "total": 5,
+   "page": 1,
+   "page_size": 3,
+   "total_pages": 2
+  },
+  {
+   "data": [
+    {
+     "api_key": "fake-key-hash-0001",
+     "api_base": "https://upstream.example.com/v1",
+     "user": "user-fake",
+     "end_user": "end-user-fake",
+     "requester_ip_address": "192.0.2.10",
+     "team_id": "team-fake",
+     "cache_key": "fake-cache-key",
+     "custom_llm_provider": "openai",
+     "model_id": "fake-deployment-id",
+     "litellm_call_id": "fake-call-id",
+     "session_id": "fake-session",
+     "messages": "fake prompt text that must never be stored",
+     "response": "fake model output that must never be stored",
+     "request_id": "req-b1",
+     "call_type": "ops@upstream.example.com",
+     "spend": 0.0,
+     "total_tokens": 9400,
+     "prompt_tokens": 9000,
+     "completion_tokens": 400,
+     "startTime": "2026-01-01T01:00:40Z",
+     "endTime": "2026-01-01T01:00:45Z",
+     "completionStartTime": null,
+     "request_duration_ms": 5000,
+     "model": "example-27b",
+     "model_group": "mdl triage <large>",
+     "cache_hit": "",
+     "status": "failure",
+     "request_tags": "[\"hnx-run-0002\"]",
+     "metadata": {
+      "user_api_key_alias": "agent-triage",
+      "requester_metadata": {
+       "note": "fake free text never stored"
+      },
+      "error_information": {
+       "error_code": "503",
+       "error_message": "fake upstream text never stored"
+      }
+     }
+    },
+    {
+     "api_key": "fake-key-hash-0001",
+     "api_base": "https://upstream.example.com/v1",
+     "user": "user-fake",
+     "end_user": "end-user-fake",
+     "requester_ip_address": "192.0.2.10",
+     "team_id": "team-fake",
+     "cache_key": "fake-cache-key",
+     "custom_llm_provider": "openai",
+     "model_id": "fake-deployment-id",
+     "litellm_call_id": "fake-call-id",
+     "session_id": "fake-session",
+     "messages": "fake prompt text that must never be stored",
+     "response": "fake model output that must never be stored",
+     "request_id": "req-c1",
+     "call_type": "acompletion",
+     "spend": 0.0,
+     "total_tokens": 41000,
+     "prompt_tokens": 39000,
+     "completion_tokens": 2000,
+     "startTime": "2026-01-01T02:00:05Z",
+     "endTime": "2026-01-01T02:00:09Z",
+     "completionStartTime": "2026-01-01T02:00:05.500000Z",
+     "request_duration_ms": 4000,
+     "model": "https://upstream.example.com/v1/models/example-4b",
+     "model_group": "mdl:triage-small",
+     "cache_hit": "False",
+     "request_tags": [
+      "run-0003"
+     ],
+     "status": "success",
+     "metadata": {
+      "user_api_key_alias": "agent-triage",
+      "requester_metadata": {
+       "note": "fake free text never stored"
+      },
+      "usage_object": {
+       "cache_read_input_tokens": 31000
+      }
+     }
+    }
+   ],
+   "total": 5,
+   "page": 2,
+   "page_size": 3,
+   "total_pages": 2
+  }
+ ]
+}
