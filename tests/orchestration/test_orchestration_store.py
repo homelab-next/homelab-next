@@ -31,6 +31,10 @@ def test_each_example_is_stored_once_and_a_redelivery_is_a_duplicate(store):
     [
         (lambda e: e["data"].update(output_bytes=7), "already consumed with another body"),
         (lambda e: e.update(id="evt-other"), "already recorded under event 'evt-0001'"),
+        (
+            lambda e: e.update(id="evt-other") or e["data"].update(run_id="run-other"),
+            "gateway tag 'run-0001' already joins run 'run-0001'",
+        ),
         (lambda e: e.update(id="evt-other", source="svc:status-hub"), "only svc:llm-orchestrator"),
         (lambda e: e["data"].update(prompt="fake task text"), "invalid"),
         (lambda e: e.update(type="homelabnext.agent.job.failed"), ""),
@@ -69,6 +73,17 @@ def test_a_record_older_than_retention_is_expired_not_processed(tmp_path):
     ev = body(examples()[1])
     assert [store.consume(ev).status for _ in range(2)] == ["expired", "expired"]
     assert store.jobs() == []
+
+
+def test_the_database_refuses_a_second_job_with_the_same_tag(filled):
+    """The tag joins the gateway's turns to one job: two jobs sharing one would merge their
+    turns, so the store's schema refuses it even past consume()'s own check."""
+    with pytest.raises(sqlite3.IntegrityError), sqlite3.connect(filled.path) as db:
+        db.execute(
+            "INSERT INTO jobs SELECT 'run-x', 'evt-x', digest, profile, backend, lane, outcome,"
+            " finished, gateway_tag, received, turns_settled, doc FROM jobs WHERE run_id = ?",
+            ("run-0001",),
+        )
 
 
 def test_jobs_and_turns_past_retention_are_purged(tmp_path):
@@ -228,12 +243,13 @@ def test_a_backend_name_is_stored_as_the_controller_emits_it(store, backend):
     ev = json.loads((EXAMPLES / DOTTED_EXAMPLE).read_text())
     assert store.consume(body(ev)).status == "processed"
     ev = copy.deepcopy(ev) | {"id": f"evt-b-{len(backend)}"}
-    ev["data"].update(run_id=f"run-b-{len(backend)}", backend=backend)
+    run = f"run-b-{len(backend)}"
+    ev["data"].update(run_id=run, gateway_tag=run, backend=backend)
     assert store.consume(body(ev)).status == "processed"
     assert store.job(f"run-b-{len(backend)}")["backend"] == backend
     for bad in ("gw.example.com:8000", "https://gw.example.com/v1", "a" * 65, ""):
         ev = copy.deepcopy(ev) | {"id": "evt-bad"}
-        ev["data"].update(run_id="run-bad", backend=bad)
+        ev["data"].update(run_id="run-bad", gateway_tag="run-bad", backend=bad)
         with pytest.raises(EventError):
             store.consume(body(ev))
 

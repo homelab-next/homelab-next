@@ -11,8 +11,10 @@ controller's (:data:`.model.CONTROLLER_SOURCE`), and it is idempotent the way
 * a record that finished more than ``retention_days`` ago is ``expired``: valid, acknowledged and
   not stored, since retention would delete it in the same write (a late replay, a backfill of an
   old outbox); it is neither ``processed`` nor poison;
-* the same event id with a different body, or a second event for a run already recorded under
-  another id, is refused (:class:`homelabnext.events.envelope.EventError`): one run, one record;
+* the same event id with a different body, a second event for a run already recorded under
+  another id, or a record whose ``gateway_tag`` another run already holds, is refused
+  (:class:`homelabnext.events.envelope.EventError`): one run, one record, and one tag per run, so
+  the turns joined by a tag belong to exactly one job (a unique index enforces it too);
 * a value the schema's pattern accepts but that is not real (a timestamp of 2026-02-30, an hour
   24, an offset of 99 hours) is refused the same way: everything :meth:`consume` derives from a
   record is computed before the database is touched, so the only other exceptions it raises are
@@ -55,7 +57,7 @@ CREATE TABLE IF NOT EXISTS jobs(
   finished REAL NOT NULL, gateway_tag TEXT NOT NULL, received REAL NOT NULL,
   turns_settled REAL, doc TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS jobs_finished ON jobs(finished);
-CREATE INDEX IF NOT EXISTS jobs_tag ON jobs(gateway_tag);
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_gateway_tag ON jobs(gateway_tag);
 CREATE TABLE IF NOT EXISTS turns(
   turn_id TEXT PRIMARY KEY, gateway_tag TEXT NOT NULL, started REAL NOT NULL, doc TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS turns_tag ON turns(gateway_tag);
@@ -127,19 +129,18 @@ class TelemetryStore:
         if finished < now - self.retention_s:
             return Delivery(eid, "expired")
         with self._db() as db:
-            row = db.execute(
-                "SELECT event_id, digest FROM jobs WHERE event_id = ? OR run_id = ?",
-                (eid, data["run_id"]),
-            ).fetchone()
-            if row is not None:
-                if row[0] == eid and row[1] == digest:
+            rows = db.execute(
+                "SELECT event_id, digest, run_id FROM jobs"
+                " WHERE event_id = ? OR run_id = ? OR gateway_tag = ?",
+                (eid, data["run_id"], data["gateway_tag"]),
+            ).fetchall()
+            if rows:
+                if len(rows) == 1 and rows[0][:2] == (eid, digest):
                     return Delivery(eid, "duplicate")
-                why = (
-                    f"id {eid!r} was already consumed with another body"
-                    if row[0] == eid
-                    else f"run {data['run_id']!r} is already recorded under event {row[0]!r}"
+                raise EventError(
+                    "job record conflicts with a stored one",
+                    [_conflict(r, eid, data) for r in rows],
                 )
-                raise EventError("job record conflicts with a stored one", [why])
             db.execute(
                 "INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
@@ -229,6 +230,17 @@ class TelemetryStore:
         now = self.clock() if now is None else now
         since = now - days * 86400
         return rollup(self.jobs(since=since), self.turns(since=since), now=now, days=days)
+
+
+def _conflict(row: tuple[str, str, str], eid: str, data: Mapping[str, Any]) -> str:
+    if row[0] == eid:
+        return f"id {eid!r} was already consumed with another body"
+    if row[2] == data["run_id"]:
+        return f"run {data['run_id']!r} is already recorded under event {row[0]!r}"
+    return (
+        f"gateway tag {data['gateway_tag']!r} already joins run {row[2]!r}: "
+        "its turns cannot be told apart"
+    )
 
 
 #: the record's timestamps; each must name a real instant that UTC can represent
