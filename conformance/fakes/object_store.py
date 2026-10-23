@@ -128,3 +128,87 @@ class DeleteMissingBucketObjectStore(FakeObjectStore):
 
     def delete(self, bucket: str, key: str) -> None:
         self._b.get(bucket, {}).pop(key, None)
+
+
+class FlatKeyspaceObjectStore(FakeObjectStore):
+    """Defect: one flat namespace keyed ``bucket + key`` with no separator (a KV-backed store):
+    bucket ``b`` key ``1k`` is bucket ``b1`` key ``k``, and listing ``b`` shows ``b1``'s keys."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._flat: dict[str, tuple[bytes, dict[str, str]]] = {}
+
+    def put(self, bucket, key, data, *, metadata=None):
+        info = super().put(bucket, key, data, metadata=metadata)
+        self._flat[bucket + key] = self._b[bucket][key]
+        return info
+
+    def get(self, bucket, key):
+        self._bucket(bucket)
+        try:
+            return self._flat[bucket + key][0]
+        except KeyError:
+            raise NoSuchKey(key) from None
+
+    def delete(self, bucket, key):
+        self._bucket(bucket)
+        self._flat.pop(bucket + key, None)
+        self._b[bucket].pop(key, None)
+
+    def list(self, bucket, prefix="", *, limit=1000, after=None):
+        self._bucket(bucket)
+        keys = sorted(
+            (k[len(bucket) :] for k in self._flat if k.startswith(bucket + prefix)),
+            key=lambda k: k.encode("utf-8"),
+        )
+        if after is not None:
+            keys = [k for k in keys if k.encode("utf-8") > after.encode("utf-8")]
+        page = keys[:limit]
+        return ListPage(tuple(page), page[-1] if len(keys) > limit else None)
+
+
+class PathCollapsingObjectStore(FakeObjectStore):
+    """Defect: a directory-backed store that builds paths from keys: ``a//b``, ``a/./b`` and
+    ``./x`` collapse to ``a/b`` and ``x`` (``..`` is kept, so nothing escapes), and distinct keys
+    alias one object."""
+
+    @staticmethod
+    def _norm(key: str) -> str:
+        parts = [p for p in key.split("/") if p not in ("", ".")]
+        return "/".join(parts) if parts else key
+
+    def put(self, bucket, key, data, *, metadata=None):
+        return super().put(bucket, self._norm(key), data, metadata=metadata)
+
+    def get(self, bucket, key):
+        return super().get(bucket, self._norm(key))
+
+    def head(self, bucket, key):
+        return super().head(bucket, self._norm(key))
+
+    def delete(self, bucket, key):
+        return super().delete(bucket, self._norm(key))
+
+
+class ListsDeletedObjectStore(FakeObjectStore):
+    """Defect: ``delete`` removes the object but leaves its entry in the listing index."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._ghosts: dict[str, set[str]] = {}
+
+    def delete(self, bucket, key):
+        super().delete(bucket, key)
+        self._ghosts.setdefault(bucket, set()).add(key)
+
+    def put(self, bucket, key, data, *, metadata=None):
+        self._ghosts.get(bucket, set()).discard(key)
+        return super().put(bucket, key, data, metadata=metadata)
+
+    def list(self, bucket, prefix="", *, limit=1000, after=None):
+        known = {*self._bucket(bucket), *self._ghosts.get(bucket, ())}
+        keys = sorted((k for k in known if k.startswith(prefix)), key=lambda k: k.encode("utf-8"))
+        if after is not None:
+            keys = [k for k in keys if k.encode("utf-8") > after.encode("utf-8")]
+        page = keys[:limit]
+        return ListPage(tuple(page), page[-1] if len(keys) > limit else None)

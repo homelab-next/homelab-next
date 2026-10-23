@@ -89,6 +89,9 @@ REVIEWED = {
         "head-missing-is-empty",
         "delete-missing-bucket-succeeds",
         "delete-reaches-every-bucket",
+        "flat-keyspace",
+        "key-segments-collapsed",
+        "deleted-key-listed",
     },
 }
 

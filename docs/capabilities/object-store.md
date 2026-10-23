@@ -20,11 +20,15 @@ generated_by: hnx docs capabilities generate
 
 Contract for `object-store`: S3-like blobs in buckets.
 
-Deliberately the common subset of S3, MinIO, Ceph and a directory on disk.  Keys are text
+Deliberately the common subset of S3, MinIO, Ceph and a directory on disk.  Keys are opaque text
 (`/` is just a character), values are bytes.  Keys are never resolved as paths: `../x` and
 `a/../../b` are either stored under exactly that key or refused (`ValueError` /
-`ObjectStoreError`), and no key reaches an object of another bucket.  `list` is by prefix, ordered by key
-(code-point order of the UTF-8 bytes), paginated with an opaque `next` token.
+`ObjectStoreError`), and `a//b`, `a/./b` and `./x` are keys of their own, never another
+name for `a/b` or `x`.  A bucket is its own namespace, not a prefix of one flat key space: no
+key reaches an object of another bucket, even when one bucket's name extends the other's
+(`b` + `1k` is not `b1` + `k`).  `list` is by prefix, ordered by key (code-point order of
+the UTF-8 bytes), paginated with an opaque `next` token, and names existing objects only: a
+deleted key is not listed.
 
 ## How to use it
 
@@ -195,11 +199,11 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `missing-bucket-raises` | MUST | operations on a missing bucket raise NoSuchBucket |  |
 | `overwrite-last-writer-wins` | MUST | a second put replaces the object |  |
 | `etag-tracks-content` | MUST | equal content has an equal etag; different content differs |  |
-| `delete-is-idempotent` | MUST | deleting a missing key is not an error; the key is gone |  |
+| `delete-is-idempotent` | MUST | deleting a missing key is not an error; the key is gone and no longer listed |  |
 | `list-prefix-and-order` | MUST | listing filters by prefix and is ordered by key |  |
 | `list-pagination-complete` | MUST | paging visits every key exactly once, in order |  |
 | `unicode-and-slash-keys` | MUST | keys are opaque text: unicode and '/' work |  |
-| `keys-never-escape-the-bucket` | MUST | '..' keys are stored verbatim or refused; buckets never see or delete each other's objects |  |
+| `keys-never-escape-the-bucket` | MUST | '..', '//' and './' keys are stored verbatim or refused; buckets never see or delete each other's objects, even when one bucket's name extends another's |  |
 | `user-metadata-preserved` | SHOULD | metadata supplied on put comes back from head | `metadata` |
 
 ### Features an adapter may declare
@@ -216,7 +220,10 @@ Each is a deliberately broken fake (`hnx conform run object-store --target broke
 |---|---|---|
 | `delete-missing-bucket-succeeds` | `missing-bucket-raises` | delete on a bucket that does not exist succeeds instead of NoSuchBucket |
 | `delete-reaches-every-bucket` | `keys-never-escape-the-bucket` | delete(bucket, key) removes key from every bucket |
+| `deleted-key-listed` | `delete-is-idempotent` | delete leaves the key in the listing |
+| `flat-keyspace` | `keys-never-escape-the-bucket` | objects live in one flat namespace keyed bucket+key, so b+'1k' is b1+'k' |
 | `head-missing-is-empty` | `get-missing-key-raises` | head of a missing key returns a zero-size object instead of NoSuchKey |
+| `key-segments-collapsed` | `keys-never-escape-the-bucket` | 'a//b', 'a/./b' and './x' collapse to 'a/b' and 'x', so distinct keys share an object |
 | `keys-resolved-as-paths` | `keys-never-escape-the-bucket` | bucket/key is normalised as a path, so '..' reaches other keys and buckets |
 | `pagination-drops-boundary-key` | `list-pagination-complete` | the last key of each truncated page is lost |
 | `weak-etag` | `etag-tracks-content` | etag depends on the size only |

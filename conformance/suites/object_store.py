@@ -9,7 +9,10 @@ from conformance.fakes.object_store import (
     DeleteEveryBucketObjectStore,
     DeleteMissingBucketObjectStore,
     FakeObjectStore,
+    FlatKeyspaceObjectStore,
     HeadMissingIsEmptyObjectStore,
+    ListsDeletedObjectStore,
+    PathCollapsingObjectStore,
     PathResolvingObjectStore,
 )
 from conformance.protocols.object_store import NoSuchBucket, NoSuchKey, ObjectStoreError
@@ -98,13 +101,20 @@ def _(store):
     assert store.head(b, "x").etag == e1, "head etag differs from put etag"
 
 
-@SUITE.check("delete-is-idempotent", "deleting a missing key is not an error; the key is gone")
+@SUITE.check(
+    "delete-is-idempotent",
+    "deleting a missing key is not an error; the key is gone and no longer listed",
+)
 def _(store):
     b = _bucket(store)
     store.put(b, "k", b"v")
+    store.put(b, "kept", b"v")
     store.delete(b, "k")
     store.delete(b, "k")
     raises(lambda: store.get(b, "k"), "get after delete", NoSuchKey)
+    for prefix in ("", "k"):
+        keys = list(store.list(b, prefix).keys)
+        assert keys == ["kept"], f"after delete, list({prefix!r}) names {keys}"
 
 
 @SUITE.check("list-prefix-and-order", "listing filters by prefix and is ordered by key")
@@ -149,7 +159,8 @@ def _(store):
 
 @SUITE.check(
     "keys-never-escape-the-bucket",
-    "'..' keys are stored verbatim or refused; buckets never see or delete each other's objects",
+    "'..', '//' and './' keys are stored verbatim or refused; buckets never see or delete each "
+    "other's objects, even when one bucket's name extends another's",
 )
 def _(store):
     a, b = _bucket(store), _bucket(store)
@@ -179,6 +190,25 @@ def _(store):
         except (NoSuchKey, ValueError, ObjectStoreError):
             continue
         assert got != b"bucket-a", f"key {key!r} read another bucket's object"
+    # a bucket is a namespace, not a prefix: bucket X + key "1k" is not bucket X1 + key "k"
+    x = _bucket(store)
+    x1 = x + "1"
+    store.create_bucket(x1)
+    store.put(x, "1k", b"x/1k")
+    store.put(x1, "k", b"x1/k")
+    assert store.get(x, "1k") == b"x/1k", "a key in one bucket was overwritten from another"
+    assert store.get(x1, "k") == b"x1/k", "a key in one bucket was overwritten from another"
+    assert list(store.list(x).keys) == ["1k"], f"{x!r} lists {list(store.list(x).keys)}"
+    assert list(store.list(x1).keys) == ["k"], f"{x1!r} lists {list(store.list(x1).keys)}"
+    # keys are opaque: an empty or '.' segment is part of the key, not path syntax
+    store.put(b, "a/b", b"plain")
+    for key in ("a//b", "a/./b", "./a/b", "a/b/"):
+        try:
+            store.put(b, key, key.encode())
+        except (ValueError, ObjectStoreError):
+            continue  # refusing such a key is allowed; aliasing it is not
+        assert store.get(b, key) == key.encode(), f"key {key!r} read back another object"
+        assert store.get(b, "a/b") == b"plain", f"putting {key!r} overwrote 'a/b'"
 
 
 @SUITE.check(
@@ -220,6 +250,21 @@ MUTANTS = {
         DeleteEveryBucketObjectStore,
         "keys-never-escape-the-bucket",
         "delete(bucket, key) removes key from every bucket",
+    ),
+    "flat-keyspace": Mutant(
+        FlatKeyspaceObjectStore,
+        "keys-never-escape-the-bucket",
+        "objects live in one flat namespace keyed bucket+key, so b+'1k' is b1+'k'",
+    ),
+    "key-segments-collapsed": Mutant(
+        PathCollapsingObjectStore,
+        "keys-never-escape-the-bucket",
+        "'a//b', 'a/./b' and './x' collapse to 'a/b' and 'x', so distinct keys share an object",
+    ),
+    "deleted-key-listed": Mutant(
+        ListsDeletedObjectStore,
+        "delete-is-idempotent",
+        "delete leaves the key in the listing",
     ),
     "keys-resolved-as-paths": Mutant(
         PathResolvingObjectStore,
