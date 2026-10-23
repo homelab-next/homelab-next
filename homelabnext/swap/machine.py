@@ -599,18 +599,28 @@ class SwapRunner:
                 do("abandon parked writes", lambda: gone)
                 dropped = list(gone.data.get("discarded") or [])
                 if dropped:  # (also those dropped before the old component became unreachable)
-                    # the dropped rows are evidence at once, before any later step can fail
-                    fname = self._evidence(
-                        doc, step, "abandoned-parked", "abandon",
-                        {"swap_id": doc["swap_id"], "from_step": from_step, "reason": reason,
-                         "at": now, "abandoned_parked": dropped},
-                        f"{len(dropped)} parked writes abandoned for the rollback",
-                    )  # fmt: skip
-                    rec.append_transition(
-                        doc, at=now, event="note", step=from_step, actor=self.actor,
-                        note=f"rollback abandoned {len(dropped)} parked writes ({fname})",
-                    )  # fmt: skip
-                    rec.save(self.path, doc)
+                    # the dropped rows are evidence at once, before any later step can fail; if
+                    # the evidence cannot be written they are parked again, never lost
+                    try:
+                        fname = self._evidence(
+                            doc, step, "abandoned-parked", "abandon",
+                            {"swap_id": doc["swap_id"], "from_step": from_step, "reason": reason,
+                             "at": now, "abandoned_parked": dropped},
+                            f"{len(dropped)} parked writes abandoned for the rollback",
+                        )  # fmt: skip
+                    except OSError as exc:  # (the file is written before it is listed)
+                        problems.append(f"abandon evidence: {type(exc).__name__}: {exc}")
+                        actions.append(f"abandon evidence: FAILED ({type(exc).__name__}: {exc})")
+                        do(
+                            "park abandoned writes again",
+                            lambda: self.backend.restore_parked(dropped),
+                        )
+                    else:
+                        rec.append_transition(
+                            doc, at=now, event="note", step=from_step, actor=self.actor,
+                            note=f"rollback abandoned {len(dropped)} parked writes ({fname})",
+                        )  # fmt: skip
+                        rec.save(self.path, doc)
                 do("start old component", self.backend.start_old)
         else:
             do("start old component", self.backend.start_old)

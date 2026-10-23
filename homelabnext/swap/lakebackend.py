@@ -318,6 +318,20 @@ class LakeBackend(Backend):
             return Outcome(False, why, {"discarded": gone, "unreachable": True, "pending": left})
         return Outcome(True, f"discarded {len(gone)} parked batches: {keys}", {"discarded": gone})
 
+    def restore_parked(self, batches: list[dict[str, Any]]) -> Outcome:
+        back = [
+            _Pending(
+                b["table"], list(b["rows"]), b["idempotency_key"], b.get("source"),
+                b.get("high_water"), self.old, int(b["order"]),
+            )
+            for b in batches
+        ]  # fmt: skip
+        self.writer.pending[:] = sorted([*self.writer.pending, *back], key=lambda p: p.order)
+        if self.journal is not None:
+            for p in back:
+                self.journal.park("old", p)
+        return Outcome(True, f"parked {len(back)} batches again", {"pending": len(back)})
+
     def old_state(self) -> Outcome:
         return Outcome(True, "", {"state": "stopped" if self.old.down else "running"})
 

@@ -519,3 +519,29 @@ def test_an_abandon_drops_nothing_while_the_old_component_is_unreachable(tmp_pat
     assert [p.idempotency_key for p in b.writer.pending] == ["k0", "k1", "k2"]  # nothing dropped
     assert not any(e["kind"] == "abandoned-parked" for s in doc_of(sc)["steps"] for e in s["evidence"])  # fmt: skip
     assert b.old_state().data["state"] == "stopped" and doc_of(sc)["route"]["flipped"] is True
+
+
+def test_abandoned_writes_are_parked_again_when_their_evidence_cannot_be_written(tmp_path):
+    sc = _poisoned_rollback_scenario(tmp_path)
+    good = dict(lakes.rows_for("dns_activity")[0], uid="good")
+    sc.backend.writer.write_batch("dns_activity", [good], idempotency_key="k-good")  # queued
+    real = sc.runner._evidence
+
+    def no_space(doc, step, kind, *a, **kw):
+        if kind == "abandoned-parked":
+            raise OSError(28, "No space left on device")
+        return real(doc, step, kind, *a, **kw)
+
+    sc.runner._evidence = no_space
+    with pytest.raises(SwapError, match="rollback incomplete"):
+        sc.runner.rollback("canary regression; the old lake refuses k-poison", abandon_parked=True)
+    assert [p.idempotency_key for p in sc.backend.writer.pending] == ["k-poison"]  # kept
+    assert _count(sc.old, "good") == 1  # the good write behind it was replayed
+    d = doc_of(sc)
+    assert "abandon evidence: FAILED" in d["transitions"][-1]["note"]
+    assert sc.backend.old_state().data["state"] == "stopped" and d["route"]["flipped"] is True
+    sc.runner._evidence = real
+    done = sc.runner.rollback("retry once the evidence disk has room", abandon_parked=True)
+    assert done["status"] == "rolled_back"
+    body, _ = _abandon_evidence(sc, done)
+    assert [g["idempotency_key"] for g in body["abandoned_parked"]] == ["k-poison"]

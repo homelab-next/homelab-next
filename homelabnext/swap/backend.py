@@ -84,6 +84,11 @@ class Backend:
         --abandon-parked``); ``data['discarded']`` lists them, rows included, as evidence."""
         return self._missing("discard_parked")
 
+    def restore_parked(self, batches: list[dict[str, Any]]) -> Outcome:
+        """Park again batches :meth:`discard_parked` returned (their evidence could not be
+        written), in their write order."""
+        return self._missing("restore_parked")
+
     def decommission_scan(self) -> Outcome:
         return self._missing("decommission_scan")
 
