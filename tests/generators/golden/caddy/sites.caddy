@@ -4,6 +4,7 @@
 	route {
 		# client-sent identity headers never reach the service, whatever the IdP answers
 		request_header -X-Authentik-*
+		request_header -X_Authentik_*
 		request_header -X-Authentik-Username
 		request_header -X-Authentik-Groups
 		forward_auth https://idp.svc.example.internal:9443 {

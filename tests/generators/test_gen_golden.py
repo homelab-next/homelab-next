@@ -228,6 +228,8 @@ def test_forward_auth_strips_every_client_sent_identity_header_first():
     auth_at = next(i for i, ln in enumerate(lines) if ln.startswith("forward_auth "))
     strips = {ln.split()[1] for ln in lines[:auth_at] if ln.startswith("request_header -")}
     assert f"-{IDENTITY_HEADER_PREFIX}*" in strips
+    # and its underscore spelling, which Caddy <= 2.11.1 passes and CGI-style upstreams fold
+    assert f"-{IDENTITY_HEADER_PREFIX.replace('-', '_')}*" in strips
     assert {f"-{h}" for h in copied} <= strips, "every copied header is deleted before auth"
     # in one route, so they run in the order written (forward_auth sorts before request_header)
     route_at = lines.index("route {")

@@ -128,6 +128,10 @@ def hosts_file(reg: Registry) -> dict[str, str]:
 FORWARD_AUTH_HEADERS = ("X-Authentik-Username", "X-Authentik-Groups")
 #: the prefix every identity header of the IdP's carries: a client-sent one is always dropped
 IDENTITY_HEADER_PREFIX = "X-Authentik-"
+#: the same prefix spelled with underscores: Caddy up to 2.11.1 passes ``X_Authentik_Groups``
+#: through a strip of ``X-Authentik-*``, and a CGI-style upstream (PHP-FPM, WSGI ``environ``,
+#: Django ``META``) folds it into the same ``HTTP_X_AUTHENTIK_GROUPS`` as the real header
+IDENTITY_HEADER_PREFIX_UNDERSCORE = IDENTITY_HEADER_PREFIX.replace("-", "_")
 
 
 def _forward_auth_snippet(endpoint: str) -> str:
@@ -143,6 +147,7 @@ def _forward_auth_snippet(endpoint: str) -> str:
         "\troute {\n"
         "\t\t# client-sent identity headers never reach the service, whatever the IdP answers\n"
         f"\t\trequest_header -{IDENTITY_HEADER_PREFIX}*\n"
+        f"\t\trequest_header -{IDENTITY_HEADER_PREFIX_UNDERSCORE}*\n"
         f"{strip}"
         f"\t\tforward_auth {endpoint} {{\n"
         "\t\t\turi /outpost.goauthentik.io/auth/caddy\n"
