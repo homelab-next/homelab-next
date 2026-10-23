@@ -161,6 +161,14 @@ def test_fast_cli_gates_are_red_on_an_empty_checkout(tmp_path, monkeypatch):
     assert {i for i, r in res.items() if r["status"] not in ("fail", "error")} == set()
 
 
+def test_p14_accepts_zero_problems_only():
+    """`.*0 problem(s)` also matched "10 problem(s)": the count starts at a word boundary."""
+    rx = re.compile(by_id()["P-14"]["expect_regex"])
+    line = "hnx mcp catalog: 31 server(s), 10 profile(s), 2 manifest(s), {} problem(s)"
+    assert rx.search(line.format(0))
+    assert not rx.search(line.format(10))
+
+
 def test_pytest_rows_run_a_named_selection_and_refuse_a_partial_run():
     crit = by_id()
     for i in PYTEST_ROWS:

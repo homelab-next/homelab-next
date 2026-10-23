@@ -810,7 +810,7 @@ criteria:
   expected: >-
     exit 0: every catalog record is valid and reviewed, every grant names a catalog id, and every
     rendered example client config is current (`make mcp-check`)
-  expect_regex: 'hnx mcp catalog: \d+ server\(s\), .*0 problem\(s\)'
+  expect_regex: 'hnx mcp catalog: \d+ server\(s\), .*\b0 problem\(s\)'
   remediation: >-
     Fix the record, grant or render spec the check names, then `make mcp-render` and commit; an
     MCP server configured outside the catalog runs unreviewed code with an agent's grants.
