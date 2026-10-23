@@ -174,6 +174,14 @@ def test_a_sum_with_no_known_value_is_unknown_not_zero():
     assert g2["tokens"]["input"] is None and g2["tokens"]["jobs_unknown"]["input"] == 2
 
 
+def test_the_day_trend_buckets_by_the_utc_day_not_the_sent_offset():
+    """23:30 at -05:00 on Dec 31 is 04:30 UTC on Jan 1, the same day as a job sent in Z."""
+    late = copy.deepcopy(examples()[0]["data"]) | {"finished_at": "2025-12-31T23:30:00-05:00"}
+    utc = copy.deepcopy(examples()[1]["data"])  # finished 2026-01-01T01:...Z
+    (day,) = rollup([late, utc], {}, now=T0, days=7)["days"]
+    assert (day["day"], day["jobs"]) == ("2026-01-01", 2)
+
+
 def test_rollup_window_leaves_out_older_jobs():
     jobs = [e["data"] for e in examples()]
     assert rollup(jobs, {}, now=parse_iso("2026-01-01T02:59:00Z"), days=1)["days"][0]["jobs"] == 3

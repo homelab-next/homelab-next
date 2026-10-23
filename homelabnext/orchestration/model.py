@@ -168,7 +168,8 @@ def _group(
 def _days(jobs: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     by: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
     for j in jobs:
-        by.setdefault((j["finished_at"][:10], j["profile"]), []).append(j)
+        day = iso(parse_iso(j["finished_at"]))[:10]  # the UTC day, whatever offset was sent
+        by.setdefault((day, j["profile"]), []).append(j)
     rows = []
     for (day, profile), js in sorted(by.items(), key=lambda kv: (kv[0][0], kv[0][1])):
         done = sum(1 for j in js if j["outcome"] == "completed")
