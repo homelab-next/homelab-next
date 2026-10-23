@@ -97,6 +97,8 @@ jobs:
           extras: dev
       - name: schema contracts (examples, negatives, additive evolution, frozen baselines)
         run: python tools/schema_check.py --strict
+      - name: generated module schemas, examples and negatives are current
+        run: python -m homelabnext.schemas --check
       - name: no raw endpoints
         run: python tools/no_raw_endpoints.py .
       - name: helpers are shared, not copied (M-03)
