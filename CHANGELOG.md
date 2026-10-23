@@ -93,6 +93,7 @@ has no section below.
 - `make test` selects what CI's test job selects (`-m "not live"`, the coverage-floor test deselected), so it no longer fails a green tree on the tools/tests time budget; `make check` runs `make coverage` (the Q-07 floor) as a prerequisite instead, as CI runs its coverage job. `tools/tests/test_make_matches_ci.py` holds the two selections equal.
 - `hnx broker validate` reports a manifest that is not valid YAML (or not UTF-8) in one line with exit 2, as it already did for a missing file, instead of a `yaml.parser.ParserError` traceback.
 - A file that cannot be read or parsed is exit 2 (bad input), as docs/interfaces.md states, in `hnx registry` (every subcommand), `hnx site`, `hnx swap`, `hnx status views check` and `hnx models store` (malformed JSON; a missing file already was); they returned 1, the code for a failed check, which an invalid but readable document still gets. The loaders raise `RegistryUnreadable`, `SiteUnreadable`, `RecordUnreadable`, `ViewsUnreadable` and `StoreUnreadable`, subclasses of the existing errors, so library callers are unaffected. `tests/cli/test_cli_input_errors.py` holds the sibling commands to one rule.
+- `hnx conform run` prints `COULD NOT MEASURE` instead of `FAIL` on the line of a capability whose subject could not be built (exit 100), as docs/conformance.md describes it: neither a pass nor a failure.
 
 ### Security
 

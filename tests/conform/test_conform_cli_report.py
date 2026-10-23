@@ -95,7 +95,10 @@ def test_could_not_measure_exits_100(tmp_path, capsys):
         "    config: {nope: 1}\n"
     )
     assert main(["run", "events", "--target", str(t)]) == 100
-    assert "could not build subject" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "could not build subject" in out
+    # neither a pass nor a failure, in the text as in the exit code
+    assert out.startswith("COULD NOT MEASURE  events  target=") and "FAIL" not in out
 
 
 def test_mutants_command(capsys):
