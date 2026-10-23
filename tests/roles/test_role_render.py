@@ -16,6 +16,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.suite_policy import require_tool
+
 ROOT = Path(__file__).resolve().parents[2]
 ANSIBLE = ROOT / "ansible"
 GOLDEN = Path(__file__).parent / "golden"
@@ -275,8 +277,7 @@ def test_compose_app_renders_golden_byte_identical(tmp_path):
 
 
 def test_compose_app_output_passes_docker_compose_config(tmp_path):
-    if not docker_compose_ok():
-        pytest.skip("docker compose not available")
+    require_tool("docker", docker_compose_ok)
     r = run_role(tmp_path, "compose_app", "main", app_vars(tmp_path))
     assert r.returncode == 0, r.stdout + r.stderr
     c = subprocess.run(

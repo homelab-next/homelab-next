@@ -37,8 +37,10 @@
 #    published port must be on loopback and no service may use the host network; otherwise the
 #    acknowledgement and changed credentials are required, judged on what compose resolved (a
 #    placeholder is what compose resolves from .env.example alone). This is what compose will do,
-#    whatever the files look like. When it cannot be resolved (no docker compose, no python3, or
-#    config fails) the guard exits 3: it never passes a configuration it has not seen.
+#    whatever the files look like. When it cannot be resolved (no docker compose, a compose too old
+#    for `config --environment` (a recent Compose v2 has it), no python3, or config fails) the
+#    guard exits 3: it never passes a configuration it has not seen. `lab_bind_guard_pass1` runs
+#    the first pass alone.
 
 LAB_GUARD_DIR="${LAB_GUARD_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
@@ -117,10 +119,15 @@ _lab_is_loopback() {
 }
 
 lab_bind_guard() {
+  lab_bind_guard_pass1 || return $?
+  _lab_resolved_guard
+}
+
+# pass 1 alone (no docker): the dotenv syntax, then the values as written; 0 or 4
+lab_bind_guard_pass1() {
   _lab_env_file_syntax "$LAB_GUARD_DIR/.env.example" || return 4
   _lab_env_file_syntax "$LAB_GUARD_DIR/.env" || return 4
-  _lab_bind_guard_values || return $?
-  _lab_resolved_guard
+  _lab_bind_guard_values
 }
 
 # pass 1: the values as written (see the header)
@@ -161,6 +168,13 @@ _lab_resolved_guard() {
   if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
     echo "lab-in-a-box: cannot resolve the compose configuration: docker with the compose" \
       "plugin is required; nothing was run" >&2
+    return 3
+  fi
+  local help
+  help=$(docker compose config --help 2>/dev/null)
+  if [[ "$help" != *--environment* ]]; then
+    echo "lab-in-a-box: cannot resolve the compose configuration: this docker compose has no" \
+      "'config --environment' (a recent Compose v2 is required); nothing was run" >&2
     return 3
   fi
   if ! command -v python3 >/dev/null 2>&1; then

@@ -144,10 +144,11 @@ and an entry that no longer excuses anything fails the lint.
 - **No silent skips.** A skip's reason must match one of the `skip_reasons` patterns in
   `[tool.pytest.ini_options]` (an optional extra or external tool is absent, the platform cannot run
   the test). Anything else, including a bare `@pytest.mark.skip`, fails. Prefer
-  `pytest.importorskip("module")` for optional extras and `reason="<tool> not installed"` for tools.
+  `pytest.importorskip("module")` for optional extras, and `require_tool("<tool>")`
+  (`tests/suite_policy.py`) for an external tool: it returns the tool's path or skips with
+  "<tool> is not installed", and fails instead where `HNX_REQUIRE_TOOLS=<tool>,...` (or the older
+  `HNX_REQUIRE_GO=1`, for `go`) says the tool must be there; CI sets it where it installs tools.
   A genuinely new legitimate cause is a reviewed one-line addition to `skip_reasons`.
-  `HNX_REQUIRE_TOOLS=<tool>,...` turns a listed tool's "not installed"/"not available" skip
-  into a failure; CI's `external-tools` job sets it for the tools it installs.
 - **Quarantine, not deletion, for a flaky test:**
   `@pytest.mark.quarantine(owner="<team-or-handle>", until="YYYY-MM-DD", reason="<what is flaky>")`.
   The test still runs but cannot break the build; all three fields are required, the date may be at

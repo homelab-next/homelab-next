@@ -20,6 +20,8 @@ from typing import ClassVar
 import pytest
 import yaml
 
+from tests.suite_policy import require_tool
+
 ROOT = Path(__file__).resolve().parents[2]
 LAB = ROOT / "compose" / "lab-in-a-box"
 COMPOSE = LAB / "docker-compose.yml"
@@ -390,9 +392,13 @@ def docker_compose_available() -> bool:
         return False
 
 
-needs_docker = pytest.mark.skipif(
-    not docker_compose_available(), reason="docker with the compose plugin is not available"
-)
+@pytest.fixture
+def docker_compose():
+    """docker with the compose plugin (skips, or fails where HNX_REQUIRE_TOOLS names docker)."""
+    return require_tool("docker", docker_compose_available)
+
+
+needs_docker = pytest.mark.usefixtures("docker_compose")
 
 
 @needs_docker
@@ -856,6 +862,47 @@ def real_credentials():
     return {k: f"changed-{k.lower()}" for k in CREDENTIALS}
 
 
+def guard_pass1(lab, tmp_path, **env):
+    """Run only the guard's first pass (dotenv syntax and the values as written), which needs no
+    docker, with a PATH of only dirname and mkdir."""
+    return subprocess.run(
+        [shutil.which("bash"), "-c", '. "$1" && lab_bind_guard_pass1', "guard", str(lab / "bind_guard.sh")],
+        env={"PATH": stub_path(tmp_path), **env},
+        capture_output=True,
+        text=True,
+    )  # fmt: skip
+
+
+# the first pass's allow path, with no docker anywhere (the full guard then needs docker)
+@pytest.mark.parametrize("bind", [LOOPBACK, OTHER_LOOPBACK, "::1", "[::1]", ""])
+def test_pass1_allows_loopback(lab_copy, tmp_path, bind):
+    r = guard_pass1(lab_copy, tmp_path, LAB_BIND=bind)
+    assert r.returncode == 0, r.stderr
+
+
+def test_pass1_allows_the_shipped_defaults(lab_copy, tmp_path):
+    assert guard_pass1(lab_copy, tmp_path).returncode == 0
+
+
+def test_pass1_allows_a_non_loopback_bind_once_acknowledged_and_changed(lab_copy, tmp_path):
+    env = {"LAB_BIND": "0.0.0.0", "LAB_I_UNDERSTAND_UNAUTHENTICATED": "1", **real_credentials()}
+    assert guard_pass1(lab_copy, tmp_path, **env).returncode == 0
+    del env["LAB_I_UNDERSTAND_UNAUTHENTICATED"]
+    assert guard_pass1(lab_copy, tmp_path, **env).returncode == 4
+
+
+def test_pass1_reads_dot_env_and_the_environment_wins_over_it(lab_copy, tmp_path):
+    lines = [f"{k}={v}" for k, v in real_credentials().items()]
+    (lab_copy / ".env").write_text(
+        "LAB_BIND=0.0.0.0  # all interfaces\nLAB_I_UNDERSTAND_UNAUTHENTICATED=1\n"
+        + "\n".join(lines)
+        + "\nLAB_SECRETS_DEV_TOKEN=fake-dev-root-token-0000\n"  # scrub-allow: the placeholder
+    )
+    r = guard_pass1(lab_copy, tmp_path)
+    assert r.returncode == 4 and "LAB_SECRETS_DEV_TOKEN" in r.stderr
+    assert guard_pass1(lab_copy, tmp_path, LAB_BIND=LOOPBACK).returncode == 0
+
+
 @needs_docker
 @pytest.mark.parametrize("bind", [LOOPBACK, OTHER_LOOPBACK, "::1", "[::1]", ""])
 def test_guard_allows_loopback(lab_copy, tmp_path, bind):
@@ -1191,8 +1238,8 @@ def test_the_docs_acl_excerpts_are_exactly_what_the_lab_enforces(doc):
         assert {u["user"] for u in excerpt} == {"hnx-st2-bridge"}
 
 
-@pytest.mark.skipif(not shutil.which("nats-server"), reason="nats-server is not installed")
 def test_nats_server_accepts_the_lab_config(tmp_path, env_vars):
+    require_tool("nats-server")
     conf = tmp_path / "nats.conf"
     conf.write_text(NATS_CONF.read_text().replace('"/data"', json.dumps(str(tmp_path))))
     env = {**os.environ, **{v: env_vars[v] for v in nats_vars(conf.read_text())}}

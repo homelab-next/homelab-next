@@ -18,10 +18,16 @@ not anchored).  Each pattern names a legitimate, visible cause: an optional extr
 is absent, the platform cannot run the test.  Any other skip -- including one with no reason -- is
 turned into a failure.  ``xfail`` and ``-m`` deselection are not skips.
 
-**Required tools.**  ``HNX_REQUIRE_TOOLS`` (comma-separated names, e.g.
-``actionlint,zizmor,nats-server,docker``) turns a skip whose reason says a listed tool is not
-installed or not available into a failure.  CI sets it where it installs those tools, so a broken
-install fails the job instead of passing as a legitimate skip.
+**Required tools.**  A test that needs an external tool asks for it through one helper,
+:func:`require_tool` (``go_toolchain`` and the docker and linter checks use it): it returns the
+tool's path, or skips with ``"<tool> is not installed"`` (a registered skip reason).  Where the
+environment says the tool must be there, the helper fails the test instead of skipping, so a
+broken install cannot pass as a skip.  ``HNX_REQUIRE_TOOLS`` names the required tools
+(comma-separated, e.g. ``actionlint,zizmor,nats-server,docker,go``); ``HNX_REQUIRE_GO=1``, the
+older switch for Go, still means ``go``.  The decision is made by the helper from the tool's
+name, not by reading the wording of a skip afterwards: a test that skips for a tool on its own
+(its own ``skipif``, an early return) is outside the contract, so every such test goes through
+the helper (``tests/gates/test_suite_policy.py`` checks the tools CI requires).
 
 **Quarantine.**  ``@pytest.mark.quarantine(owner="team-or-handle", until="YYYY-MM-DD",
 reason="...")`` lets a known-flaky test keep running without breaking the build (it becomes a
@@ -35,7 +41,8 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Iterable
+import shutil
+from collections.abc import Callable, Iterable
 from datetime import date
 from pathlib import Path
 
@@ -138,33 +145,40 @@ def _state(config: pytest.Config) -> dict:
     return config.stash[_STATE]
 
 
-def required_tools(value: str | None) -> list[str]:
-    """The tool names of ``HNX_REQUIRE_TOOLS`` (comma-separated)."""
-    return [t.strip() for t in (value or "").split(",") if t.strip()]
+def required_tools(env: dict[str, str] | None = None) -> set[str]:
+    """The tools the environment requires: ``HNX_REQUIRE_TOOLS`` (comma-separated), plus ``go``
+    when ``HNX_REQUIRE_GO=1``."""
+    env = os.environ if env is None else env
+    tools = {t.strip() for t in env.get("HNX_REQUIRE_TOOLS", "").split(",") if t.strip()}
+    if env.get("HNX_REQUIRE_GO") == "1":
+        tools.add("go")
+    return tools
 
 
-def missing_required_tool(reason: str, tools: Iterable[str]) -> str | None:
-    """The required tool a skip reason says is missing (``<tool> ... not installed`` or
-    ``not available``), else None."""
-    for tool in tools:
-        rx = rf"(?<![\w-]){re.escape(tool)}(?![\w-]).*\bnot (?:installed|available)\b"
-        if re.search(rx, reason, re.IGNORECASE):
-            return tool
-    return None
+def require_tool(name: str, available: Callable[[], bool] | None = None) -> str:
+    """The path of the external tool ``name`` (or ``name`` when ``available`` decides instead of
+    PATH).  Missing: skip with ``"<name> is not installed"``, or fail when the environment
+    requires the tool (:func:`required_tools`)."""
+    path = shutil.which(name)
+    ok = (path is not None) if available is None else bool(path and available())
+    if ok:
+        return path or name
+    if name in required_tools():
+        switch = (
+            "HNX_REQUIRE_GO=1"
+            if name == "go" and os.environ.get("HNX_REQUIRE_GO") == "1"
+            else "HNX_REQUIRE_TOOLS"
+        )
+        pytest.fail(
+            f"{name} is not on PATH (or not usable), and {switch} requires it", pytrace=False
+        )
+    pytest.skip(f"{name} is not installed")
 
 
 def _silent_skip(config: pytest.Config, rep) -> None:
     if not rep.skipped or hasattr(rep, "wasxfail"):
         return
     reason = _reason(rep.longrepr)
-    tool = missing_required_tool(reason, required_tools(os.environ.get("HNX_REQUIRE_TOOLS")))
-    if tool:
-        rep.outcome = "failed"
-        rep.longrepr = (
-            f"required tool missing: {reason.strip()!r}, and HNX_REQUIRE_TOOLS names {tool!r}, "
-            "so this skip is a failure (the tool's install step did not put it on PATH)"
-        )
-        return
     if skip_reason_allowed(reason, _state(config)["skip_patterns"]):
         return
     rep.outcome = "failed"
