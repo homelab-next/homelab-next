@@ -35,8 +35,14 @@ def main(argv=None) -> int:
     r.add_argument("--baseline", action="store_true", help="record state without paging")
     ns = ap.parse_args(argv)
     reg_path = pathlib.Path(ns.register)
+    # a register that is missing or does not parse is bad input (2), never a failed fleet (1)
     try:
-        reg = validate_invariants(yaml.safe_load(reg_path.read_text()))
+        raw = yaml.safe_load(reg_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as ex:
+        print(f"[invariants] FATAL: cannot read register {reg_path}: {ex}", file=sys.stderr)
+        return 2
+    try:
+        reg = validate_invariants(raw)
     except RegisterError as ex:
         print(f"[invariants] FATAL: {ex}", file=sys.stderr)
         return 2

@@ -52,7 +52,7 @@ from typing import Any
 from homelabnext.registry.models import RoleTable, RoleTableError
 
 from . import store as store_mod
-from .store import Entry, ProblemsError, Store, StoreError
+from .store import Entry, ProblemsError, Store, StoreError, StoreUnreadable
 
 __all__ = [
     "ALLOWED_ARGS",
@@ -60,6 +60,7 @@ __all__ = [
     "Backend",
     "Plan",
     "ServingSpecError",
+    "ServingSpecUnreadable",
     "load_plan",
     "main",
     "plan_from_dict",
@@ -173,6 +174,11 @@ EXPOSURES = ("zone", "loopback")
 
 class ServingSpecError(ProblemsError):
     """The serving spec, the store or the role table break a rule.  ``problems`` lists all."""
+
+
+class ServingSpecUnreadable(ServingSpecError):
+    """The serving spec, the store or the role table cannot be read or parsed: bad input (exit 2),
+    not a spec that breaks a rule (exit 1)."""
 
 
 @dataclass(frozen=True)
@@ -324,18 +330,20 @@ def plan_from_dict(doc: Any, *, base: Path, source: str = "<serving>") -> Plan:
     roles_path = (base / doc["roles"]).resolve()
     try:
         store = store_mod.load(base / doc["store"])
+    except StoreUnreadable as exc:
+        raise ServingSpecUnreadable(f"{source}: cannot read the store: {exc}") from None
     except StoreError as exc:
         raise ServingSpecError(
             f"{source}: model store invalid", exc.problems or [str(exc)]
         ) from None
     except OSError as exc:
-        raise ServingSpecError(f"{source}: cannot read the store: {exc}") from None
+        raise ServingSpecUnreadable(f"{source}: cannot read the store: {exc}") from None
     try:
         table = RoleTable.load(roles_path)
     except RoleTableError as exc:
         raise ServingSpecError(f"{source}: role table invalid", exc.problems) from None
     except (OSError, ValueError) as exc:
-        raise ServingSpecError(f"{source}: cannot read the role table: {exc}") from None
+        raise ServingSpecUnreadable(f"{source}: cannot read the role table: {exc}") from None
     plan = Plan(source, store, table, roles_path, exposure=str(exposure))
 
     raw = doc.get("backends")
@@ -470,7 +478,10 @@ def load_plan(path: str | Path) -> Plan:
     from homelabnext._yaml import UniqueKeyLoader
 
     path = Path(path)
-    doc = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueKeyLoader)
+    try:
+        doc = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueKeyLoader)
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise ServingSpecUnreadable(f"cannot read {path.as_posix()}: {exc}") from None
     return plan_from_dict(doc, base=path.parent, source=path.as_posix())
 
 
@@ -501,6 +512,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = ap.parse_args(list(argv) if argv is not None else None)
     try:
         files = render(load_plan(args.spec))
+    except ServingSpecUnreadable as exc:  # docs/interfaces.md: bad input is 2
+        print(f"serving: {exc}", file=sys.stderr)
+        return 2
     except ServingSpecError as exc:
         print(f"serving: {exc}", file=sys.stderr)
         return 1

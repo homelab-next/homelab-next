@@ -108,3 +108,57 @@ def test_guests_with_an_invalid_but_readable_guest_is_a_failed_check(tmp_path, c
 def test_an_invalid_but_readable_registry_is_still_a_failed_check(tmp_path, capsys):
     (tmp_path / "services.yml").write_text("schema_version: '2.0'\nservices: 3\n")
     assert cli.main(["registry", "validate", str(tmp_path / "services.yml")]) == 1
+
+
+# commands that read a document named on the command line beside other arguments: each case is
+# (argv before the document, argv after it, files to write first, the readable control's exit)
+REGISTER_OK = (
+    "version: 1\ncriteria:\n- id: F-01\n  statement: A check that always holds.\n"
+    "  evidence: auto\n  observable: 'true'\n  expected: exit 0\n"
+    "  remediation: Nothing to do; this criterion always holds.\n"
+)
+SIBLINGS = {
+    "models serving check": (["models", "serving", "check"], ["out"], {}, '{"a": 1}\n', 1),
+    "invariants run": (
+        ["invariants", "run"],
+        ["--no-notify", "--out", "res.json"],
+        {},
+        REGISTER_OK,
+        0,
+    ),
+    "agent compile": (
+        ["agent", "compile", "--library", "lib.yml"],
+        [],
+        {"lib.yml": "parts: {a: a.md}\n"},
+        '{"id": "x"}\n',
+        1,
+    ),
+}
+
+
+def _sibling(tmp_path, monkeypatch, capsys, key, doc):
+    pre, post, files, _, _ = SIBLINGS[key]
+    monkeypatch.chdir(tmp_path)
+    for name, text in files.items():
+        (tmp_path / name).write_text(text)
+    rc = cli.main([*pre, doc, *post])
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    return rc, err
+
+
+@pytest.mark.parametrize("key", sorted(SIBLINGS))
+def test_a_sibling_with_a_readable_document_reaches_its_check(tmp_path, monkeypatch, capsys, key):
+    (tmp_path / "doc.yml").write_text(SIBLINGS[key][3])
+    assert _sibling(tmp_path, monkeypatch, capsys, key, "doc.yml")[0] == SIBLINGS[key][4]
+
+
+@pytest.mark.parametrize("name", ["nosuch.yml", *sorted(MALFORMED)])
+@pytest.mark.parametrize("key", sorted(SIBLINGS))
+def test_a_sibling_with_a_missing_or_malformed_document_is_exit_2(
+    tmp_path, monkeypatch, capsys, key, name
+):
+    if name in MALFORMED:
+        (tmp_path / name).write_bytes(MALFORMED[name])
+    rc, err = _sibling(tmp_path, monkeypatch, capsys, key, name)
+    assert rc == 2 and name in err
