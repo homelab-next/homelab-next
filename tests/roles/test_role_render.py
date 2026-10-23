@@ -476,11 +476,14 @@ def test_compose_app_writes_every_dollar_so_compose_reads_it_literally(tmp_path)
 
 
 def test_compose_app_accepts_ordinary_bind_sources(tmp_path):
-    """Relative sources, named volumes, paths under the bind roots and a listed path (hidden
-    directories included) pass the allow-list, the canonical-source and the runtime rules."""
+    """Relative sources, named and anonymous volumes, paths under the bind roots and listed paths
+    (hidden directories and the listed secrets directory included) pass the allow-list, the
+    canonical-source and the runtime rules."""
     data = tmp_path / "app" / "data"
     vols = [
-        ".:/src:ro",
+        "./secrets:/run/app-secrets:ro",
+        "./secretsx:/x",
+        "/var/lib/cache",
         "./data/web:/var/lib/web",
         f"{data}/.config/app:/config:ro",
         f"{data}:/state",
@@ -491,6 +494,7 @@ def test_compose_app_accepts_ordinary_bind_sources(tmp_path):
     extra = [
         {"path": "/srv/shared", "reason": "fictional shared media"},
         {"path": "/run/systemd/journal", "reason": "the journal socket, read-only"},
+        {"path": str(tmp_path / "app" / "secrets"), "reason": "fictional: reads its own env files"},
     ]
     r = run_role(
         tmp_path,
@@ -553,6 +557,21 @@ def test_compose_app_env_file_paths_follow_the_bind_source_rule(tmp_path):
     )
     assert refused_sources(r) == ["env_file=/etc/shadow", f"env_file={other}"]
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def test_compose_app_refuses_the_app_directory_and_its_secrets_unless_listed(tmp_path):
+    """`.` and secrets/ hold every service's 0600 env file: any service could mount them all."""
+    d = tmp_path / "app"
+    vols = [".:/src:ro", "./secrets:/s", f"{d}/secrets:/s2", f"{d}:/app", "./secrets/db.env:/e"]
+    s = spec(volumes=vols, env_file=["secrets/db.env", "./secrets/db.env"])
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, s, compose_app_validate_with_docker=False),
+    )
+    want = [".", "./secrets", f"{d}/secrets", str(d), "./secrets/db.env"]
+    assert refused_sources(r) == [*want, "env_file=secrets/db.env", "env_file=./secrets/db.env"]
 
 
 def test_compose_app_bind_root_is_a_directory_boundary(tmp_path):

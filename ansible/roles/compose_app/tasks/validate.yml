@@ -186,6 +186,17 @@
       {%-       set ns.ok = true -%}
       {%-     endif -%}
       {%-   endif -%}
+      {#-   the project directory itself and its secrets/ hold every service's 0600 env file and
+              the rendered compose file: never mounted or read wholesale unless listed -#}
+      {%-   if not (s.kind == 'volume' and src is match('^[A-Za-z0-9][A-Za-z0-9_.-]*\Z')) -%}
+      {%-     if src == '.' -%}{%- set path = compose_app_dir -%}
+      {%-     elif src is match('^\./') -%}{%- set path = compose_app_dir ~ src[1:] -%}
+      {%-     elif src is not match('^/') -%}{%- set path = compose_app_dir ~ '/' ~ src -%}
+      {%-     else -%}{%- set path = src -%}{%- endif -%}
+      {%-     if path not in listed and (path == compose_app_dir or path == compose_app_dir ~ '/secrets' or path.startswith(compose_app_dir ~ '/secrets/')) -%}
+      {%-       set ns.ok = false -%}
+      {%-     endif -%}
+      {%-   endif -%}
       {%-   if not ns.ok -%}{%- set _ = out.append(s.shown) -%}{%- endif -%}
       {%- endfor -%}
       {{ out | join(' ') }}
@@ -196,7 +207,8 @@
       service '{{ item.key }}' mounts or reads a host path outside the allowed roots ({{ _compose_app_outside }}):
       a bind source or env_file must be ./relative, a named volume (bind sources), under
       compose_app_bind_roots ({{ compose_app_bind_roots | join(', ') }}) or listed with a reason
-      in compose_app_bind_extra
+      in compose_app_bind_extra; the application directory itself ({{ compose_app_dir }}, `.`) and
+      its secrets/ directory need their own entry there
   loop: "{{ compose_app_spec.services | dict2items }}"
   loop_control:
     label: "{{ item.key }}"

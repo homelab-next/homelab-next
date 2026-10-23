@@ -135,7 +135,10 @@ membership change. `role_lint.py --playbook X --inventory Y` fails a playbook wh
   (the application's own directory and data directory by default; never a host-wide directory
   such as `/etc`, `/var` or `/srv`) or when it is listed on its own, with a reason, in
   `compose_app_bind_extra` (`[{path, reason}]`). A `./relative` source, a named volume and an
-  anonymous volume (a container path alone, `/var/lib/app`) need neither.
+  anonymous volume (a container path alone, `/var/lib/app`) need neither. The application
+  directory itself (`.`, `compose_app_dir`) and its `secrets/` directory are the exception: they
+  hold every service's 0600 env file and the rendered compose file, so mounting them (or reading
+  one as an `env_file`) needs their own `compose_app_bind_extra` entry.
 * An `env_file` is a host path as well: compose reads it on the deploy host, usually as root, and
   hands its contents to the container. Its path follows the bind-source rule (relative to the
   project directory, under `compose_app_bind_roots`, or listed in `compose_app_bind_extra`;
