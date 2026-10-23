@@ -17,7 +17,8 @@
 
 The fleet must keep running with the workstation switched off (F-16), so no runtime
 configuration may depend on it. This scans what ends up running on the fleet -- Ansible roles,
-playbooks and inventory, compose stacks, the example lab, the generator manifest and templates,
+playbooks and inventory, compose stacks, the example lab and the orchestrator's examples, the
+generator manifest and templates,
 conformance targets and the generated golden outputs under ``tests/**/golden/`` -- for:
 
   home-path         a personal home directory: ``/home/<user>``, ``~/``, ``~user/``, ``$HOME``,
@@ -62,6 +63,8 @@ SCOPE = (
     "ansible/**",
     "compose/**",
     "examples/**",
+    # the orchestration controller's example config, profiles and prompts (installed as-is)
+    "orchestrator/examples/**",
     "generators/**",
     "homelabnext/generators/templates/**",
     "conformance/targets/**",

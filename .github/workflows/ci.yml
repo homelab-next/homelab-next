@@ -18,6 +18,13 @@ concurrency:
 # sets persist-credentials: false, so no job leaves a token in .git/config for later steps.
 # Python packages come from constraints/ci.txt (hash-pinned) via .github/actions/python-deps.
 
+env:
+  # The Go of the jobs that have no module of their own to read it from (a Go module's job installs
+  # the version its go.mod names): the Python tools' Go tests and fix_has_test's Go proofs.  There
+  # may be no go.mod at all yet, so it is pinned here, exactly; Dependabot does not raise it: bump
+  # it by hand to a supported release (https://go.dev/doc/devel/release).
+  GO_VERSION: "1.26.9"
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -48,9 +55,11 @@ jobs:
       matrix:
         include:
           # the optional lake, mcp and ansible extras installed: the DuckDB/Iceberg, MCP SDK and
-          # lookup-plugin tests (which import ansible) run
+          # lookup-plugin tests (which import ansible) run; and Go, which the Go tools' tests
+          # then require (HNX_REQUIRE_GO), so they cannot skip with "go is not installed" here
           - python-version: "3.12"
             extras: "test,lake,mcp,ansible"
+            go: true
           # the extras absent: proves the lake and MCP SDK tests skip cleanly instead of failing
           - python-version: "3.11"
             extras: "test"
@@ -62,9 +71,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           extras: ${{ matrix.extras }}
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        if: matrix.go
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false  # the tests build throwaway modules: nothing worth caching
       # test_this_repo_meets_the_floor runs tools/coverage_floor.py, which the coverage job below
       # already runs on every push; here it only repeated the whole suite under coverage (~220s a job)
-      - run: >-
+      - env:
+          HNX_REQUIRE_GO: ${{ matrix.go && '1' || '' }}
+        run: >-
           python -m pytest -q -m "not live"
           --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
 
@@ -213,6 +229,230 @@ jobs:
       - name: invariants register, fast criteria
         run: make invariants PY=python
 
+  # Go: every tracked go.mod is a module (tools/go_modules.py; <module>/tools/go.mod is that
+  # module's linters, not a module of its own), and the go job runs once per module, so a second or
+  # nested module is checked without being listed anywhere.  With no module the go job is skipped
+  # and go-ok passes: a no-op.  Go outside every module, or a go.work, fails go-modules.
+  go-modules:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      modules: ${{ steps.discover.outputs.modules }}
+      present: ${{ steps.discover.outputs.present }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: discover the Go modules
+        id: discover
+        run: python tools/go_modules.py --github-output "$GITHUB_OUTPUT"
+
+  # One Go module.  Tests run as the runner user in a network namespace with only loopback (no
+  # network), race-enabled and shuffled; tests that need root run first, under sudo, and
+  # tools/go_test_policy.py judges both event streams: no failure, no build failure, no skip without
+  # a registered reason (skip_reasons in pyproject.toml), quarantines in the module's skips.yml
+  # bounded to 90 days.
+  #
+  # Trust: the handshake (the streams, each root-run binary's exit status, the policy that judges
+  # them) guards against accidents and casual tampering -- a TestMain that crashes after PASS, a
+  # race after the tests, a test that writes into the workspace or quarantines itself on the way
+  # out -- not against hostile pull-request code.  A job that runs the PR's code on a hosted runner
+  # cannot be made safe from that code from inside: the PR controls this file, root-run tests are
+  # root, and code that runs as the runner user can steer later steps through $GITHUB_ENV and
+  # $GITHUB_PATH.  Branch protection and human review are the boundary for hostile code.  Kept,
+  # because they are cheap: the results live in a fresh root-owned mktemp directory in /run that
+  # each step checks; the policy, its inputs and PyYAML (checked against its RECORD hashes) are
+  # copied there before any of the module's code runs; the judge is the image's root-owned
+  # /usr/bin/python3 -I, run with /usr/bin/sudo; the judge's step comes before any linter, vet or
+  # build, so the only module code that runs before it is the tests; and every runner-user run of
+  # module code is under no_new_privs (setpriv --no-new-privs), where sudo fails.
+  go:
+    needs: go-modules
+    if: needs.go-modules.outputs.present == 'true'
+    name: go (${{ matrix.module.dir }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.go-modules.outputs.modules) }}
+    env:
+      GOFLAGS: -mod=readonly  # go.mod and go.sum are inputs: a build never rewrites them
+      GOTOOLCHAIN: local  # the go setup-go installed from go.mod, never a download
+      GOWORK: "off"  # each module on its own: a go.work never changes how modules resolve
+    defaults:
+      run:
+        shell: bash  # bash --noprofile --norc -eo pipefail: a failing command in a pipe fails
+        working-directory: ${{ matrix.module.dir }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version-file: ${{ matrix.module.dir }}/go.mod
+          cache-dependency-path: ${{ matrix.module.dir }}/**/go.sum  # the module's and tools/'s
+      - uses: ./.github/actions/python-deps
+        with:
+          python-version: "3.12"
+          extras: yaml  # go_test_policy.py reads skips.yml
+          install-project: "false"
+      # before any of the module's code runs: a directory only root can write, for the streams and
+      # exit statuses, and in it a copy of the policy tool and its inputs, which judges them later
+      - name: a root-owned results directory with a copy of the policy, before any test runs
+        run: |
+          res=$(/usr/bin/sudo mktemp -d /run/go-results.XXXXXX)
+          /usr/bin/sudo chmod 0755 "$res"
+          pol="$res/policy"
+          /usr/bin/sudo install -d -m 0755 "$pol" "$pol/vendor"
+          /usr/bin/sudo install -m 0644 "$GITHUB_WORKSPACE/tools/go_test_policy.py" \
+            "$GITHUB_WORKSPACE/pyproject.toml" "$pol/"
+          if [ -f skips.yml ]; then /usr/bin/sudo install -m 0644 skips.yml go.mod "$pol/"; fi
+          # PyYAML for the isolated interpreter, if the image lacks it: python-deps' hash-pinned
+          # install, found by its metadata from / with -I (no module file can stand in for it),
+          # in site-packages, and copied with its RECORD, against which the judge checks every
+          # file before it imports one
+          paths=$(cd / && python -I -c 'import importlib.metadata as md, pathlib, site
+          d = md.distribution("PyYAML")
+          pkg = pathlib.Path(d.locate_file("yaml")).resolve()
+          sites = [pathlib.Path(s).resolve() for s in site.getsitepackages()]
+          assert pkg.parent in sites, f"{pkg} is not in {sites}"
+          rec = next(f for f in d.files if f.name == "RECORD")
+          print(pkg)
+          print(pathlib.Path(d.locate_file(rec)).resolve())')
+          /usr/bin/sudo cp -R --no-dereference "${paths%%$'\n'*}" "$pol/vendor/yaml"
+          /usr/bin/sudo find "$pol/vendor/yaml" -name __pycache__ -prune -exec rm -rf {} +
+          /usr/bin/sudo install -m 0644 "${paths#*$'\n'}" "$pol/vendor/RECORD"
+          echo "GO_RESULTS=$res" >> "$GITHUB_ENV"
+      - name: modules downloaded and verified against go.sum
+        run: go mod download && go mod verify
+      # the reason go_test_policy.py reads is the last line before --- SKIP: a skip says it in
+      # the call, on one line (no SkipNow or Skipf, whose reason is a logged or formatted line)
+      - name: every skip names its reason in the call
+        run: |
+          res="$GO_RESULTS"
+          # the directory the first step made: a later step's environment is writable by the
+          # runner user, so the path and its owner are checked, not trusted
+          case "$res" in /run/go-results.??????) ;; *) echo "::error::GO_RESULTS=$res"; exit 1;; esac
+          /usr/bin/sudo test -d "$res" -a ! -L "$res" -a -O "$res"
+          /usr/bin/sudo /usr/bin/python3 -I "$res/policy/go_test_policy.py" --check-sources .
+      - name: root-only tests (skips.yml privileged) under sudo, no network
+        run: |
+          res="$GO_RESULTS"
+          # the directory the first step made: a later step's environment is writable by the
+          # runner user, so the path and its owner are checked, not trusted
+          case "$res" in /run/go-results.??????) ;; *) echo "::error::GO_RESULTS=$res"; exit 1;; esac
+          /usr/bin/sudo test -d "$res" -a ! -L "$res" -a -O "$res"
+          pol="$res/policy"
+          out="$res/go-test-root.json"
+          exits="$res/go-test-root.exit"
+          /usr/bin/sudo install -m 0644 /dev/null "$out"
+          /usr/bin/sudo install -m 0644 /dev/null "$exits"
+          policy=()
+          if [ -f "$pol/skips.yml" ]; then policy=(--policy "$pol/skips.yml"); fi
+          /usr/bin/sudo /usr/bin/python3 -I "$pol/go_test_policy.py" "${policy[@]}" --list-privileged \
+            | /usr/bin/sudo tee "$res/privileged.txt" > /dev/null
+          while read -r pkg rx; do
+            [ -n "$pkg" ] || continue
+            bin="$res/privileged-$(echo "$pkg" | tr '/.' '__').test"
+            # go test -c on a package without test files writes nothing and exits 0: never run
+            # the previous package's binary in its place
+            rm -f "$RUNNER_TEMP/privileged.test"
+            go test -c -race -o "$RUNNER_TEMP/privileged.test" "$pkg"
+            if [ ! -f "$RUNNER_TEMP/privileged.test" ]; then
+              echo "::error::$pkg: no test binary built (no test files?) for skips.yml privileged"
+              exit 1
+            fi
+            /usr/bin/sudo install -m 0755 "$RUNNER_TEMP/privileged.test" "$bin"  # root's copy is the one run
+            imp=$(go list "$pkg")
+            # the verdict is go_test_policy.py's (next step): the stream, and this exit status,
+            # which test2json does not see (a TestMain panic after PASS still reads as a pass)
+            # only root writes the results (sudo tee); --no-new-privs, though root holds every
+            # privilege already, keeps both runs from gaining any through an exec
+            (cd "$pkg" && status=0 && { /usr/bin/sudo unshare --net -- \
+              sh -c 'ip link set lo up && exec setpriv --no-new-privs -- "$@"' \
+              sh "$bin" -test.run "$rx" -test.count=1 -test.v=test2json 2>&1 || status=$?; } \
+              && echo "$imp $status" | /usr/bin/sudo tee -a "$exits" > /dev/null) \
+              | go tool test2json -t -p "$imp" | /usr/bin/sudo tee -a "$out" > /dev/null
+          done < "$res/privileged.txt"
+      - name: tests (race, shuffled, no network) judged by go_test_policy.py
+        run: |
+          res="$GO_RESULTS"
+          # the directory the first step made: a later step's environment is writable by the
+          # runner user, so the path and its owner are checked, not trusted
+          case "$res" in /run/go-results.??????) ;; *) echo "::error::GO_RESULTS=$res"; exit 1;; esac
+          /usr/bin/sudo test -d "$res" -a ! -L "$res" -a -O "$res"
+          pol="$res/policy"
+          policy=(--pyproject "$pol/pyproject.toml")
+          if [ -f "$pol/skips.yml" ]; then policy+=(--policy "$pol/skips.yml"); fi
+          out="$res/go-test.json"
+          # every package the run covers must show up in the stream, even one that has no tests,
+          # and one whose test files declare tests must report one (a floor under tests TestMain
+          # hides)
+          go list ./... | /usr/bin/sudo tee "$res/go-packages.txt" > /dev/null
+          /usr/bin/sudo test -s "$res/go-packages.txt"
+          # (read before the tests run, so a test that rewrites its own files cannot change it)
+          # with -race, as the run below, so race-tagged files count as they will there; the file
+          # lists are joined with "/", which no file name contains
+          go list -race -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{"\t"}}{{.Dir}}{{"\t"}}{{join .TestGoFiles "/"}}{{"\t"}}{{join .XTestGoFiles "/"}}{{end}}' ./... \
+            | /usr/bin/sudo tee "$res/go-test-files.txt" > /dev/null
+          /usr/bin/sudo /usr/bin/python3 -I "$pol/go_test_policy.py" \
+            --declared-tests "$res/go-test-files.txt" | /usr/bin/sudo tee "$res/go-tested.txt" > /dev/null
+          status=0
+          # root opens the stream file, then drops to the runner user, which cannot sudo from there
+          /usr/bin/sudo env "PATH=$PATH" "HOME=$HOME" \
+            "GOFLAGS=$GOFLAGS" "GOTOOLCHAIN=$GOTOOLCHAIN" "GOWORK=$GOWORK" \
+            unshare --net -- \
+            sh -c 'ip link set lo up && exec setpriv --no-new-privs --reuid="$1" --regid="$2" \
+              --clear-groups -- go test -race -shuffle=on -count=1 -json ./... > "$3"' \
+            sh "$(id -u)" "$(id -g)" "$out" || status=$?
+          # go test exits 1 on a quarantined failure too: the policy tool judges the stream and
+          # go's own exit status together (any other status, or a 1 the stream does not explain,
+          # fails), so a stream cut short cannot pass while go test failed
+          /usr/bin/sudo /usr/bin/python3 -I "$pol/go_test_policy.py" "${policy[@]}" \
+            --privileged "$res/go-test-root.json" \
+            --privileged-exit "$res/go-test-root.exit" \
+            --forbid 'python3 not available' --go-exit "$status" \
+            --expect-packages "$res/go-packages.txt" --expect-tests "$res/go-tested.txt" "$out"
+
+      # Checks that run the module's code, or code it pins, come after the verdict: none of them
+      # can steer the judge's step through $GITHUB_ENV or $GITHUB_PATH
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::not gofmt-formatted:"; echo "$unformatted"; exit 1
+          fi
+      - name: go vet
+        run: setpriv --no-new-privs -- go vet ./...
+      - name: build every package and binary
+        run: setpriv --no-new-privs -- go build ./...
+      # Linters as Go tool dependencies: version and checksum pinned by tools/go.mod and go.sum.
+      # They run code the module pins, so like the tests they cannot sudo (no_new_privs).
+      - name: staticcheck and govulncheck (pinned in tools/go.mod)
+        if: matrix.module.tools
+        run: |
+          setpriv --no-new-privs -- go tool -modfile=tools/go.mod staticcheck ./...
+          setpriv --no-new-privs -- go tool -modfile=tools/go.mod govulncheck ./...
+  # One stable check name for branch protection, whatever the modules are called: the discovery
+  # passed, and every module's go job passed (or there was none to run).
+  go-ok:
+    needs: [go-modules, go]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: the Go modules were discovered and every one passed
+        env:
+          MODULES: ${{ needs.go-modules.result }}
+          GO: ${{ needs.go.result }}
+        run: |
+          echo "go-modules: $MODULES, go: $GO"
+          [ "$MODULES" = success ] && { [ "$GO" = success ] || [ "$GO" = skipped ]; }
+
   # Build the sdist and wheel exactly as a release would and leak-scan what they contain (the
   # path allowlist for both artefacts is tests/packaging/test_artifacts.py, run by `test`).
   packaging:
@@ -337,6 +577,7 @@ jobs:
   # Q-08: every bugfix commit of this push or pull request touches a test file, and that test fails
   # on the fix's parent (tools/fix_has_test.py --prove; CONTRIBUTING.md "Bug fixes").
   regression-tests:
+    needs: go-modules
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -348,6 +589,13 @@ jobs:
         with:
           python-version: "3.12"
           extras: test,ansible  # a fix to an ansible plugin proves its test like any other
+      # a Go fix proves its test with go test (no toolchain is "cannot prove", never a pass); the
+      # pinned GO_VERSION, which switches to a newer toolchain a module's go.mod asks for
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        if: needs.go-modules.outputs.present == 'true'
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: "**/go.sum"
       - name: every fix ships a regression test that fails without the fix
         # the same base rule as the schemas and register-ids jobs: a pull request's base must be
         # readable; a push falls back to HEAD^ when its previous tip is zero or gone; other events

@@ -162,6 +162,19 @@ and an entry that no longer excuses anything fails the lint.
   `@pytest.mark.quarantine(owner="<team-or-handle>", until="YYYY-MM-DD", reason="<what is flaky>")`.
   The test still runs but cannot break the build; all three fields are required, the date may be at
   most 90 days ahead, and on expiry the test fails until it is fixed or the quarantine is renewed.
+- **Go tests** follow the same rules through `tools/go_test_policy.py`, which CI's go job runs on
+  every Go module's `go test -json` stream: the same `skip_reasons`, quarantines and privileged
+  (root-only) tests listed in the module's `skips.yml` with the same fields and 90-day limit. A
+  skip states its reason in the call, on one line: `t.Skip("docker not available")`, never
+  `t.SkipNow()`, `t.Skipf(...)` or a message built elsewhere, in a test or in a helper
+  (`--check-sources` reads every `.go` file of the module, `testdata/` and `_*` directories
+  included since a test can import a package there, and rejects those, because the stream
+  shows only the last line before `--- SKIP`). A package whose test files declare a `Test` or
+  `Fuzz` function, or an `Example` with an `// Output:` comment, must report at least one test in
+  the run (`--expect-tests`), so a `TestMain` that exits before `m.Run` fails; test files with
+  only benchmarks, helpers or examples without output run nothing and need not (an output-less
+  example still satisfies `component_tests`). One limit of the stream: a parent test that fails
+  silently (`t.Fail()`) next to a quarantined subtest is tolerated with it, so fail with a message.
 - **Time budgets.** Each suite (a test file's first two directories, e.g. `tests/lake`) has a budget
   (`suite_budget_default`, `suite_budgets`); a suite over it fails the run. `pytest --suite-times`
   prints the table; `HNX_SUITE_BUDGET_SCALE=3` scales every budget on a slow machine.

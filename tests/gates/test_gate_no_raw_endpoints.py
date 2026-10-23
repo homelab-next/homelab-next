@@ -220,3 +220,25 @@ def test_compose_allowances_are_file_specific_not_blanket(tmp_path):
     assert rc == 1
     assert "fakes/server.py" in report and "other/stack.yml" in report
     assert "docker-compose.yml" not in report
+
+
+def test_go_sources_tests_included_are_scanned_with_no_blanket_allowance(tmp_path):
+    """No allowance for Go files ahead of the files themselves: a Go test's endpoint, like its
+    code's and its examples', needs an entry naming that file, added together with it."""
+    import shutil
+
+    shutil.copy(ROOT / "tools" / "no_raw_endpoints.allow.yml", tmp_path / "allow.yml")
+    plant(
+        tmp_path,
+        {
+            "orchestrator/internal/api/server_test.go": f'srv := "http://{IP_LOOP}:8080"\n',
+            "orchestrator/x_test.go": f'peer := "{IP_DOC}"\n',
+            "orchestrator/internal/api/server.go": f'const addr = "{IP_PRIV}"\n',
+            "orchestrator/examples/controller.yaml": f"listen: {IP_LOOP}:8080\n",
+        },
+    )
+    rc, out, err = run(tmp_path, "--allowlist", str(tmp_path / "allow.yml"))
+    report = out + err
+    assert rc == 1
+    for name in ("server_test.go:", "x_test.go:", "server.go:", "controller.yaml:"):
+        assert name in report, name
