@@ -817,7 +817,7 @@ AUTHENTIK_LAYOUT = """\
 (hnx_forward_auth) {
 	route {
 		request_header -*authentik*
-		forward_auth http://authentik-server:9000 {
+		forward_auth authentik-server:9000 {
 			uri /outpost.goauthentik.io/auth/caddy
 			copy_headers X-Authentik-Username X-Authentik-Groups
 		}
@@ -830,7 +830,7 @@ authentik.lab.example {
 
 app.lab.example {
 	request_header -*authentik*
-	reverse_proxy /outpost.goauthentik.io/* http://authentik-server:9000
+	reverse_proxy /outpost.goauthentik.io/* authentik-server:9000
 	import hnx_forward_auth
 	reverse_proxy app:8080
 }
