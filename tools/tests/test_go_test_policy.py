@@ -568,3 +568,74 @@ def test_go_exit_must_agree_with_the_stream(tmp_path, capsys, lines, status, ok,
     text = QUARANTINE.format(test="TestStall", until="2026-02-01")
     assert run(tmp_path, lines, "--go-exit", str(status), policy_yaml=text) == (0 if ok else 1)
     assert why in capsys.readouterr().out
+
+
+def run_presence_step(tmp_path, layout: dict[str, str]) -> tuple[int, dict[str, str], str]:
+    """The orchestrator job's module check on a scratch tree: (exit, outputs, log)."""
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    for rel, kind in layout.items():
+        p = tree / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if kind == "dir":
+            p.mkdir()
+        elif kind.startswith("->"):
+            p.symlink_to(kind[2:])
+        else:
+            p.write_text(kind)
+    out = tmp_path / "github-output"
+    out.write_text("")
+    (tmp_path / "step.sh").write_text(ci_step("is there a Go module yet"))
+    r = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(tmp_path / "step.sh")],
+        cwd=tree,
+        env={"PATH": "/usr/bin:/bin", "GITHUB_OUTPUT": str(out)},
+        capture_output=True,
+        text=True,
+    )
+    outputs = dict(line.split("=", 1) for line in out.read_text().splitlines() if "=" in line)
+    return r.returncode, outputs, r.stdout + r.stderr
+
+
+GO_MOD_TEXT = "module example.com/fixture\n\ngo 1.24\n"
+SRC = "// SPDX-License-Identifier: Apache-2.0\npackage api\n"
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    ("layout", "exit_code", "present", "tools"),
+    [
+        ({}, 0, "false", "false"),  # no orchestrator/ yet: a no-op
+        ({"orchestrator/README.md": "soon\n"}, 0, "false", "false"),
+        ({"orchestrator/go.mod": GO_MOD_TEXT, "orchestrator/internal/api/api.go": SRC}, 0, "true", "false"),
+        ({"orchestrator/go.mod": GO_MOD_TEXT, "orchestrator/tools/go.mod": GO_MOD_TEXT, "orchestrator/tools/tools.go": SRC}, 0, "true", "true"),
+        # Go without its module file: deleted, renamed, a directory, a dangling symlink
+        ({"orchestrator/internal/api/api.go": SRC}, 1, None, None),
+        ({"orchestrator/go.mod.bak": GO_MOD_TEXT, "orchestrator/main.go": SRC}, 1, None, None),
+        ({"orchestrator/go.mod": "dir", "orchestrator/main.go": SRC}, 1, None, None),
+        ({"orchestrator/go.mod": "->missing.mod", "orchestrator/main.go": SRC}, 1, None, None),
+        ({"orchestrator/go.mod": "->real.mod", "orchestrator/real.mod": GO_MOD_TEXT}, 1, None, None),
+        ({"orchestrator/go.sum": "x\n"}, 1, None, None),
+        # the linters' module: its go.sum or Go file without tools/go.mod
+        ({"orchestrator/go.mod": GO_MOD_TEXT, "orchestrator/tools/go.sum": "x\n"}, 1, "true", None),
+        ({"orchestrator/go.mod": GO_MOD_TEXT, "orchestrator/tools/tools.go": SRC}, 1, "true", None),
+        ({"orchestrator/go.mod": GO_MOD_TEXT, "orchestrator/tools/go.mod": "dir"}, 1, "true", None),
+    ],
+)  # fmt: skip
+def test_the_module_check_fails_when_go_has_no_go_mod(tmp_path, layout, exit_code, present, tools):
+    code, outputs, log = run_presence_step(tmp_path, layout)
+    assert code == exit_code, log
+    assert outputs.get("present") == present and outputs.get("tools") == tools, outputs
+    if exit_code:
+        assert "::error::" in log
+
+
+def test_every_later_step_waits_for_a_module_and_the_linters_for_theirs():
+    import yaml
+
+    steps = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"][
+        "orchestrator"
+    ]["steps"]
+    assert not any("hashFiles" in s.get("if", "") for s in steps)  # silent when the file is gone
+    (lint,) = [s for s in steps if "staticcheck" in s.get("run", "")]
+    assert "steps.module.outputs.tools == 'true'" in lint["if"]
