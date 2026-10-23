@@ -13,7 +13,7 @@ generated_by: hnx docs capabilities generate
 **Validated proposals in one agent lane; operator-only approve/deny/complete moves.**
 
 - Contract: [`conformance.protocols.records`](../../conformance/protocols/records.py) (`conformance.protocols.records:RecordsTarget`)
-- Conformance suite: [`conformance.suites.records`](../../conformance/suites/records.py) (14 checks: 14 MUST, 0 SHOULD)
+- Conformance suite: [`conformance.suites.records`](../../conformance/suites/records.py) (14 checks: 13 MUST, 1 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -30,8 +30,13 @@ then raises `FileExistsError`, so no namesake can be filed for a later decision 
 A decision is final and atomic.  `approve` and `deny` take a note from the inbox only: a note
 that is not there (unknown, or already approved, denied or completed) raises
 `FileNotFoundError` and nothing moves.  Of two decisions on one note, even concurrent ones,
-exactly one succeeds, the other raises `FileNotFoundError`, and the note ends in exactly one
-lane.  Subject = `RecordsTarget`, which the fake builds from `homelabnext.records` over a
+at most one succeeds and the note ends in exactly one lane (a loser of a real race raises
+`FileNotFoundError`).  The suite's `decide-is-atomic` (a SHOULD) can only race what runs in
+its own process, one preemption at a time: it stops one decision before a line of the adapter's
+own package and runs the other whole in between.  That finds a check-then-act window inside one
+decision (check, copy, unlink); it cannot find a race that needs both decisions preempted (a lock
+file taken by check-then-create), one inside the server behind a remote adapter, or one in code
+it does not trace.  This clause is the contract either way.  Subject = `RecordsTarget`, which the fake builds from `homelabnext.records` over a
 temporary directory.
 
 ## How to use it
@@ -176,7 +181,7 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `deny-moves-note` | MUST | deny moves the note to decided/denied |  |
 | `decide-unknown-note-rejected` | MUST | deciding a name not in the inbox fails; approve/deny/complete refuse '../' names |  |
 | `decisions-are-final` | MUST | approve or deny of a note already decided is refused and nothing moves |  |
-| `decide-is-atomic` | MUST | of an approve and a deny raced on one note, exactly one succeeds and the note ends in exactly one lane (a deterministic interleaving, not timing) |  |
+| `decide-is-atomic` | SHOULD | of an approve and a deny raced on one note, never both succeed and the note never ends in two lanes (single-preemption schedules, deterministic; evidence, not proof) |  |
 | `completion-moves-related-notes` | MUST | completing a request moves each related note to completed |  |
 | `completion-needs-existing-approved-notes` | MUST | a completion request naming a missing note or a path outside approved is refused |  |
 | `completion-only-of-approved-notes` | MUST | completing an inbox or denied note is refused and nothing moves (all-or-nothing) |  |
@@ -195,7 +200,6 @@ Each is a deliberately broken fake (`hnx conform run records --target broken:<mu
 | `approve-overturns-denial` | `decisions-are-final` | approve accepts a denied note and moves it to approved |
 | `completes-denied-notes` | `completion-only-of-approved-notes` | a completion request may name a denied note |
 | `completes-inbox-notes` | `completion-only-of-approved-notes` | a completion request for a note still in the inbox approves it on the agent path |
-| `decide-check-then-copy` | `decide-is-atomic` | a decision copies then unlinks, so a raced approve and deny both succeed |
 | `decide-follows-traversal` | `decide-unknown-note-rejected` | deny/complete join the name onto the lane without refusing '../' |
 | `deny-withdraws-approval` | `decisions-are-final` | deny accepts an approved note and moves it to denied |
 | `namesake-overwrites-decision` | `propose-never-overwrites` | a name is checked against the inbox only, so a namesake of an approved note replaces it |
@@ -250,4 +254,4 @@ No service in `examples/services.yml` declares `capability: records`.
    hnx conform run records --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (14) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (13) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.

@@ -60,7 +60,6 @@ REVIEWED = {
         "approve-overturns-denial",
         "deny-withdraws-approval",
         "namesake-overwrites-decision",
-        "decide-check-then-copy",
     },
     "secrets": {
         "error-cause-leaks-value",
@@ -221,7 +220,7 @@ def test_the_reference_broker_redacts_what_its_schema_does_not_name():
     ]
 
 
-# ---- the interleaving harness behind records' decide-is-atomic ----------------------------------
+# ---- the interleaving harness behind records' decide-is-atomic (a SHOULD) -----------------------
 
 
 class _Counter:
@@ -254,7 +253,7 @@ def _race(counter):
 
         return counter.bump, counter.bump, judge
 
-    return interleavings(counter, setup, blocked_after=0.2)
+    return interleavings(counter, setup, blocked_after=0.05)
 
 
 def test_the_interleaving_finds_a_lost_update_every_time():
@@ -265,7 +264,88 @@ def test_the_interleaving_finds_a_lost_update_every_time():
             _race(_Counter(lock=False))
 
 
-def test_a_subject_that_serialises_on_a_lock_passes_and_ends_early():
-    """Paused inside the lock, the second bump blocks: the first is resumed, the pair passes, and
-    no later point is tried (the unpaused run, then lines 1-2 before the lock, then line 3)."""
-    assert _race(_Counter(lock=True)) == 4
+def test_a_subject_that_serialises_on_a_lock_passes_at_every_point():
+    """Paused inside the lock, the second bump blocks: the first is resumed and the pair passes.
+    A blocked point no longer ends exploration (the window after a lock is still tried)."""
+    assert _race(_Counter(lock=True)) >= 5
+
+
+def _atomic(factory):
+    (result,) = run_checks(load_module("records").SUITE, factory, only=["decide-is-atomic"])
+    return result
+
+
+def test_decide_is_atomic_fails_a_copy_then_unlink_decider():
+    """The second review's racy decider (check, copy, unlink): an approve and a deny raced on one
+    note both succeed.  The check is a SHOULD (it explores single-preemption schedules only), so
+    the decider is pinned here rather than as a MUST mutant."""
+    from conformance.fakes.records_target import CheckThenCopyRecordsTarget
+
+    result = _atomic(CheckThenCopyRecordsTarget)
+    assert result.status == "fail" and "both succeeded" in result.evidence, result
+
+
+def test_decide_is_atomic_tries_the_window_after_a_lock():
+    """A decider that locks only its existence check, then copies and unlinks outside the lock,
+    passed: the first paused point inside the lock blocked the other decision, and a blocked
+    schedule ended the exploration before the window after the lock was tried."""
+    from conformance.fakes.records_target import FakeRecordsTarget
+
+    class LockedCheckOnly(FakeRecordsTarget):
+        def __init__(self) -> None:
+            super().__init__()
+            self._lock = threading.Lock()
+
+        def _decide(self, name, lane):
+            with self._lock:
+                self._decider._load("inbox", name)
+            src = self._dir / "inbox" / name
+            data = src.read_bytes()
+            (self._dir / lane / name).write_bytes(data)
+            src.unlink(missing_ok=True)
+
+        def approve(self, name):
+            self._decide(name, "decided/approved")
+
+        def deny(self, name, reason=None):
+            self._decide(name, "decided/denied")
+
+    assert _atomic(LockedCheckOnly).status == "fail"
+
+
+def test_decide_is_atomic_never_fails_a_correct_decider_whose_lock_times_out():
+    """A correct decider that waits at most 0.1s for its lock used to fail: the harness held the
+    lock paused for a second, and the loser's TimeoutError was judged.  A loser may fail any
+    way; only both succeeding, or the note leaving the inbox for the wrong lane, is wrong."""
+    from conformance.fakes.records_target import FakeRecordsTarget
+
+    class LockTimeoutRecords(FakeRecordsTarget):
+        def __init__(self) -> None:
+            super().__init__()
+            self._lock = threading.Lock()
+
+        def _decide(self, decide, *args):
+            if not self._lock.acquire(timeout=0.1):
+                raise TimeoutError("decision lock busy")
+            try:
+                decide(*args)
+            finally:
+                self._lock.release()
+
+        def approve(self, name):
+            self._decide(super().approve, name)
+
+        def deny(self, name, reason=None):
+            self._decide(super().deny, name, reason)
+
+    assert _atomic(LockTimeoutRecords).status == "pass"
+
+
+def test_a_subject_with_nothing_to_pause_at_is_not_judged():
+    from conformance.suites._util import Inconclusive, interleavings
+
+    class Opaque:
+        pass
+
+    with pytest.raises(Inconclusive):
+        interleavings(Opaque(), lambda: (int, int, lambda *_: None))

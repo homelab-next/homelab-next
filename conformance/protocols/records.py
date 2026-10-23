@@ -11,8 +11,13 @@ then raises ``FileExistsError``, so no namesake can be filed for a later decisio
 A decision is final and atomic.  ``approve`` and ``deny`` take a note from the inbox only: a note
 that is not there (unknown, or already approved, denied or completed) raises
 ``FileNotFoundError`` and nothing moves.  Of two decisions on one note, even concurrent ones,
-exactly one succeeds, the other raises ``FileNotFoundError``, and the note ends in exactly one
-lane.  Subject = :class:`RecordsTarget`, which the fake builds from ``homelabnext.records`` over a
+at most one succeeds and the note ends in exactly one lane (a loser of a real race raises
+``FileNotFoundError``).  The suite's ``decide-is-atomic`` (a SHOULD) can only race what runs in
+its own process, one preemption at a time: it stops one decision before a line of the adapter's
+own package and runs the other whole in between.  That finds a check-then-act window inside one
+decision (check, copy, unlink); it cannot find a race that needs both decisions preempted (a lock
+file taken by check-then-create), one inside the server behind a remote adapter, or one in code
+it does not trace.  This clause is the contract either way.  Subject = :class:`RecordsTarget`, which the fake builds from ``homelabnext.records`` over a
 temporary directory.
 """
 

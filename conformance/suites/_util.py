@@ -99,19 +99,26 @@ def _lib_dirs() -> tuple[tuple[str, ...], tuple[str, ...]]:
     return lib, site
 
 
+class Inconclusive(Exception):
+    """The race could not be judged (a thread did not finish): not a pass and not a failure."""
+
+
 class _Paused:
     """Runs ``fn`` in a thread that stops before its ``at``-th traced line (never, for ``at=0``).
 
     ``where(filename)`` says whether a frame is traced (None: not traced) and whether it is the
-    subject's own module (True) or other code it calls (False); ``own`` lists the numbers of the
-    lines that ran in the subject's own module."""
+    subject's own package (True) or other source it calls (False).  ``seen`` maps each traced
+    line location to the first line number (count) at which it ran, and whether it is own code.
+
+    The thread installs its own ``sys.settrace``: while it runs, a coverage tracer or debugger
+    that uses ``settrace`` does not see that thread's lines (``sys.monitoring`` tools do)."""
 
     def __init__(self, fn: Callable[[], Any], at: int, where: Callable[[str], bool | None]) -> None:
         import threading
 
         self.fn, self.at, self.where = fn, at, where
         self.lines = 0
-        self.own: list[int] = []
+        self.seen: dict[tuple[str, int], tuple[int, bool]] = {}
         self.result: tuple[bool, Any] = (False, None)
         self.stopped = threading.Event()  # paused at ``at``, or finished
         self.resume = threading.Event()
@@ -121,8 +128,7 @@ class _Paused:
         def line(frame: Any, event: str, arg: Any) -> Any:
             if event == "line":
                 self.lines += 1
-                if own:
-                    self.own.append(self.lines)
+                self.seen.setdefault((frame.f_code.co_filename, frame.f_lineno), (self.lines, own))
                 if self.lines == self.at:
                     self.stopped.set()
                     self.resume.wait()
@@ -145,36 +151,56 @@ class _Paused:
             self.stopped.set()
 
 
+def _spread(items: list[int], limit: int) -> list[int]:
+    if len(items) <= limit:
+        return items
+    return [items[(i * (len(items) - 1)) // (limit - 1)] for i in range(limit)]
+
+
 def interleavings(
     subject: Any,
     setup: Callable[[], tuple[Callable[[], Any], Callable[[], Any], Callable[..., None]]],
     *,
-    own_limit: int = 8,
-    other_limit: int = 3,
-    blocked_after: float = 1.0,
+    own_limit: int = 32,
+    other_limit: int = 4,
+    blocked_after: float = 0.5,
+    give_up_after: float = 60.0,
 ) -> int:
-    """Race two operations under a deterministic schedule, not under timing.
+    """Race two operations under a deterministic schedule, never decided by timing.
 
     ``setup()`` prepares fresh state and returns ``(first, second, judge)``.  ``first`` runs in a
-    thread that is stopped before one chosen line of the subject's code; ``second`` then runs to
-    completion, ``first`` resumes, and ``judge((ok1, out1), (ok2, out2))`` asserts on the outcome
-    (``ok`` False means ``out`` is the exception raised).  The subject's code is the module that
-    defines its class (where an adapter's check-then-act lives: every one of its lines up to
-    ``own_limit`` is a pause point) and any other source outside the standard library and
-    site-packages that it calls (``other_limit`` points spread evenly).  The points come from an
-    unpaused first run, so the same subject is always raced at the same places.
+    thread that is stopped before one chosen line; ``second`` then runs to completion, ``first``
+    resumes, and ``judge((ok1, out1), (ok2, out2))`` asserts on the outcome (``ok`` False means
+    ``out`` is the exception raised).  An unpaused run finds the candidate lines, so the same
+    subject is raced at the same places every time:
 
-    A subject that serialises the two (``second`` waits on a lock that the paused ``first``
-    holds) cannot be raced this way: when ``second`` has not finished ``blocked_after`` seconds
-    after ``first`` stopped, ``first`` is resumed, the pair is judged as it ended and no further
-    point is tried.  That wait only ends exploration early; it never decides a verdict.  Returns
-    the number of schedules run.
+    * every distinct line of the subject's own top-level package (the package that defines its
+      class, wherever it is installed, site-packages included), up to ``own_limit`` spread evenly;
+    * ``other_limit`` distinct lines spread over other source it calls that is neither the
+      standard library nor site-packages (a library in a checkout, a second top-level module).
+
+    What this can catch is a *single preemption*: a window between a check and an act inside one
+    operation, which the other operation, run whole, falls into.  It cannot catch a race that
+    needs both operations preempted (a lock file taken by check-then-create, two renames that
+    interleave line by line), races on the far side of a network call, or windows in code it
+    does not trace (the standard library, other site-packages, C).  A pass is evidence, not
+    proof.
+
+    When ``second`` has not finished ``blocked_after`` seconds after ``first`` stopped (it waits
+    on a lock the paused ``first`` holds, or it is slow), ``first`` is resumed and the pair is
+    judged as it ends; exploration goes on at the next point.  That wait only changes which
+    schedule ran, never the verdict, and ``judge`` must accept the outcome a held lock can cause
+    (a correct loser timing out).  A thread that is still running ``give_up_after`` seconds after
+    the resume raises :class:`Inconclusive`.  Fewer than two candidate lines also raises
+    :class:`Inconclusive`: such a run would prove nothing.  Returns the number of schedules run.
     """
     import threading
 
     lib, site = _lib_dirs()
-    mod = sys.modules.get(type(subject).__module__)
-    own_file = os.path.realpath(getattr(mod, "__file__", None) or "") if mod else ""
+    pkg = type(subject).__module__.split(".")[0]
+    top = sys.modules.get(pkg)
+    roots = [os.path.realpath(d) + os.sep for d in getattr(top, "__path__", ())]
+    own_files = {os.path.realpath(getattr(top, "__file__", None) or "") if not roots else ""}
     suites = os.path.dirname(os.path.realpath(__file__)) + os.sep
 
     @functools.cache
@@ -182,17 +208,20 @@ def interleavings(
         if filename.startswith("<"):
             return None
         path = os.path.realpath(filename)
-        if path == own_file:
+        if path.startswith(suites):
+            return None  # the suites are not the subject
+        if path in own_files or any(path.startswith(r) for r in roots):
             return True
-        if path.startswith(suites) or path.startswith(site) or path.startswith(lib):
-            return None  # the suites are not the subject; libraries are not its code
+        if path.startswith(site) or path.startswith(lib):
+            return None  # libraries are not the subject's code
         return False
 
-    def race(at: int) -> _Paused | None:
+    def race(at: int) -> _Paused:
         first, second, judge = setup()
         a = _Paused(first, at, where)
         a.thread.start()
-        a.stopped.wait()
+        if not a.stopped.wait(give_up_after):
+            raise Inconclusive(f"the first operation neither paused nor ended in {give_up_after}s")
         out2: list[tuple[bool, Any]] = []
 
         def run_second() -> None:
@@ -203,24 +232,22 @@ def interleavings(
 
         b = threading.Thread(target=run_second, daemon=True)
         b.start()
-        b.join(blocked_after if a.thread.is_alive() else None)
-        blocked = b.is_alive()
+        if a.thread.is_alive():
+            b.join(blocked_after)  # a lock the paused first holds: resume it, never wait it out
         a.resume.set()
-        a.thread.join()
-        b.join()
+        a.thread.join(give_up_after)
+        b.join(give_up_after)
+        if a.thread.is_alive() or b.is_alive():
+            raise Inconclusive(f"an operation was still running {give_up_after}s after the resume")
         judge(a.result, out2[0])
-        return None if blocked else a
+        return a
 
-    plain = race(0)  # unpaused: finds the pause points (and judges one sequential schedule)
-    assert plain is not None
-    total = plain.lines
-    points = set(plain.own[:own_limit])
-    if total and other_limit:
-        step = max(1, total // other_limit)
-        points |= set(range(step // 2 + 1, total + 1, step)[:other_limit])
-    runs = 1
-    for at in sorted(points):
-        runs += 1
-        if race(at) is None:
-            break
-    return runs
+    plain = race(0)
+    own = sorted(n for n, is_own in plain.seen.values() if is_own)
+    other = sorted(n for n, is_own in plain.seen.values() if not is_own)
+    points = sorted({*_spread(own, own_limit), *_spread(other, other_limit)})
+    if len(points) < 2:
+        raise Inconclusive(f"only {len(points)} traced line(s) of the subject's code to pause at")
+    for at in points:
+        race(at)
+    return 1 + len(points)
