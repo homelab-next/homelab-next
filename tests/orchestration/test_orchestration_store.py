@@ -6,12 +6,14 @@ from __future__ import annotations
 
 import copy
 import json
+import sqlite3
 
 import pytest
 from orch_helpers import CONTROLLER_EXAMPLE, DOTTED_EXAMPLE, EXAMPLES, T0, body, examples
 
 from homelabnext.events.envelope import EventError
 from homelabnext.orchestration import ROLLUP_SCHEMA, percentile, rollup
+from homelabnext.orchestration.pages import OrchestrationSite
 from homelabnext.orchestration.store import TelemetryStore
 from homelabnext.status.model import parse_iso
 
@@ -226,3 +228,31 @@ def test_a_backend_name_is_stored_as_the_controller_emits_it(store, backend):
         ev["data"].update(run_id="run-bad", backend=bad)
         with pytest.raises(EventError):
             store.consume(body(ev))
+
+
+def test_turns_of_many_jobs_do_not_bind_a_variable_per_tag(store, monkeypatch):
+    """Regression: the rollup bound one SQL variable per gateway tag, which fails past SQLite's
+    limit ("too many SQL variables"; 999 on an old build).  The limit is lowered to 100 here and
+    150 jobs are rolled up, on the store and on the page."""
+    real_connect = sqlite3.connect
+
+    def low_limit(*a, **kw):
+        conn = real_connect(*a, **kw)
+        conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 100)
+        return conn
+
+    template = examples()[0]
+    for n in range(150):
+        ev = copy.deepcopy(template) | {"id": f"evt-m{n:03d}"}
+        ev["data"].update(run_id=f"run-m{n:03d}", gateway_tag=f"run-m{n:03d}")
+        store.consume(body(ev))
+    store.add_turns(
+        [{"turn_id": f"t{n}", "gateway_tag": f"run-m{n:03d}", "started_at": "2026-01-01T00:00:13Z",
+          "input_tokens": 1} for n in range(150)]
+    )  # fmt: skip
+    monkeypatch.setattr(sqlite3, "connect", low_limit)
+    roll = store.rollup(days=7)
+    assert roll["groups"][0]["jobs"] == 150 and roll["groups"][0]["turns"]["input_tokens"] == 150
+    assert len(store.turns((f"run-m{n:03d}" for n in range(120)), since=T0 - 86400)) == 120
+    assert [t["turn_id"] for t in store.job_turns("run-m007")] == ["t7"]
+    assert "150 jobs" in OrchestrationSite(store, clock=lambda: T0)._overview({})

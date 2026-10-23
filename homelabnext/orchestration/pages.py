@@ -128,7 +128,8 @@ class OrchestrationSite:
         days = int(q["days"]) if q.get("days", "").isdigit() else DEFAULT_DAYS
         days = min(max(days, 1), MAX_DAYS)
         now = self.clock()
-        all_jobs = self.store.jobs(since=now - days * 86400)
+        since = now - days * 86400
+        all_jobs = self.store.jobs(since=since)
         jobs = [
             j
             for j in all_jobs
@@ -138,7 +139,7 @@ class OrchestrationSite:
                 if k in q
             )
         ]
-        turns = self.store.turns(j["gateway_tag"] for j in jobs)
+        turns = self.store.turns((j["gateway_tag"] for j in jobs), since=since)
         roll = rollup(jobs, turns, now=now, days=days)
         cur = {k: v for k, v in q.items() if k in (*_FILTERS, "days")}
         chips = "".join(
@@ -236,7 +237,7 @@ class OrchestrationSite:
                 '<h2>Orchestration job</h2><p class="muted">no such job '
                 f'<code>{_e(run or "")}</code></p><p><a href="/orchestration">all jobs</a></p>'
             )
-        turns = self.store.turns([job["gateway_tag"]]).get(job["gateway_tag"], [])
+        turns = self.store.job_turns(job["gateway_tag"])
         usage = job.get("usage") or {}
         facts = [
             ("Run", f"<code>{_e(job['run_id'])}</code>"),

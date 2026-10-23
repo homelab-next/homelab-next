@@ -196,27 +196,39 @@ class TelemetryStore:
             row = db.execute("SELECT doc FROM jobs WHERE run_id = ?", (run_id,)).fetchone()
             return json.loads(row[0]) if row else None
 
-    def turns(self, tags: Iterable[str] | None = None) -> dict[str, list[dict[str, Any]]]:
-        """gateway tag -> its turns, oldest first (every stored turn when ``tags`` is None)."""
+    def turns(
+        self, tags: Iterable[str] | None = None, *, since: float | None = None
+    ) -> dict[str, list[dict[str, Any]]]:
+        """gateway tag -> its turns, oldest first: the turns of the jobs finished at or after
+        ``since`` (joined in SQL), narrowed to ``tags`` when given; every stored turn when neither
+        is.  The tags are never bound one SQL variable each: a 90-day page of jobs would pass
+        SQLite's variable limit (999 on an old build, 32766 on a current one)."""
         sql, args = "SELECT gateway_tag, doc FROM turns", []
-        if tags is not None:
-            wanted = sorted(set(tags))
-            if not wanted:
-                return {}
-            sql += f" WHERE gateway_tag IN ({','.join('?' * len(wanted))})"
-            args = wanted
+        if since is not None:
+            sql += " WHERE gateway_tag IN (SELECT gateway_tag FROM jobs WHERE finished >= ?)"
+            args.append(since)
         sql += " ORDER BY started, turn_id"
+        wanted = None if tags is None else set(tags)
+        if wanted is not None and not wanted:
+            return {}
         out: dict[str, list[dict[str, Any]]] = {}
         with self._db() as db:
             for tag, doc in db.execute(sql, args):
-                out.setdefault(tag, []).append(json.loads(doc))
+                if wanted is None or tag in wanted:
+                    out.setdefault(tag, []).append(json.loads(doc))
         return out
+
+    def job_turns(self, tag: str) -> list[dict[str, Any]]:
+        """One job's turns (by its gateway tag), oldest first."""
+        sql = "SELECT doc FROM turns WHERE gateway_tag = ? ORDER BY started, turn_id"
+        with self._db() as db:
+            return [json.loads(r[0]) for r in db.execute(sql, (tag,))]
 
     def rollup(self, *, days: int = 7, now: float | None = None) -> dict[str, Any]:
         """:func:`.model.rollup` over the stored jobs of the last ``days`` and their turns."""
         now = self.clock() if now is None else now
-        jobs = self.jobs(since=now - days * 86400)
-        return rollup(jobs, self.turns(j["gateway_tag"] for j in jobs), now=now, days=days)
+        since = now - days * 86400
+        return rollup(self.jobs(since=since), self.turns(since=since), now=now, days=days)
 
 
 #: the record's timestamps; each must name a real instant that UTC can represent
