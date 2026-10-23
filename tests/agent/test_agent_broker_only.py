@@ -439,6 +439,26 @@ def test_the_brokers_front_with_stale_reviews_is_refused(tmp_path):
     assert broker_problems({"mcp": ["hnx-broker"]}, table, "profile:a") == []
 
 
+def test_a_server_below_its_class_floor_is_refused_at_grant_time(tmp_path):
+    """VERIFY1: a record whose tools are declared below their floor (a camelCase createIssue
+    classed egress) failed only the catalog check and the render; lint (so G-13), verify and
+    compile judged the grant on what the record declared, and passed it."""
+    d = _catalog_copy(tmp_path)
+    rec = yaml.safe_load((d / "fetch.yml").read_text())
+    rec.update(id="tickets", tools=[{"name": "createIssue", "classes": ["egress"],
+                                     "approval": False}])  # fmt: skip
+    _restamp(rec)
+    (d / "tickets.yml").write_text(yaml.safe_dump(rec, sort_keys=False))
+    table = ToolClasses.from_catalog(servers.load(d))
+    got = broker_problems({"mcp": ["tickets"]}, table, "profile:a")
+    assert got and "below their class floor" in got[0]
+    s = _actor(mcp=["tickets"], capabilities=[], tier="read")
+    with pytest.raises(BrokerViolation, match="below their class floor"):
+        compile_profile({k: v for k, v in s.items() if k != "ceiling"}, LIB, policy=_policy(s),
+                        classes=table)  # fmt: skip
+    assert broker_problems({"mcp": ["fetch"]}, table, "profile:a") == []
+
+
 def test_lint_walks_the_tree_once_for_both_rules(tmp_path, monkeypatch, capsys):
     """N1: the lint walked the repository once per rule (twice the scan)."""
     from homelabnext.agent import readers

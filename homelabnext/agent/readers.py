@@ -202,6 +202,9 @@ class ToolClasses:
                 "broker_front": rec.get("acts_via") == "broker"
                 and not servers.broker_front_problems(rec),
                 "reviewed": rec.get("acts_via") == "broker" and reviews_current(rec, review_policy),
+                # its declared classes are below their floor (servers.floor_problems): what it
+                # declares is not what it does, so no grant of it is judged on what it declares
+                "below_floor": bool(servers.floor_problems(rec, f"{sid}.yml")),
             }
             for sid, rec in cat
         }
@@ -440,6 +443,15 @@ def broker_problems(
     for _, name in _entries(grants.get("mcp")):
         got = classes.classify("mcp", name)
         acting = sorted(set(got or ()) & only)
+        record = (classes.catalog or {}).get(name) or {}
+        # a broker claim is judged by the broker front's own test below, not by the floor
+        if record.get("below_floor") and record.get("acts_via") != "broker":
+            problems.append(
+                f"{who} is granted MCP server {name!r}, whose record declares its tools below "
+                "their class floor (hnx mcp catalog check says which): agents act only through "
+                "the broker"
+            )
+            continue
         if not acting:
             continue
         meta = (classes.catalog or {}).get(name)
