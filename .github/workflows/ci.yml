@@ -274,6 +274,10 @@ jobs:
         run: |
           go tool -modfile=tools/go.mod staticcheck ./...
           go tool -modfile=tools/go.mod govulncheck ./...
+      # the reason go_test_policy.py reads is the last line before --- SKIP: a skip says it in
+      # the call, on one line (no SkipNow, whose reason would be whatever was logged last)
+      - name: every skip names its reason in the call
+        run: python "$GITHUB_WORKSPACE/tools/go_test_policy.py" --check-sources .
       - name: root-only tests (skips.yml privileged) under sudo, no network
         run: |
           out="$RUNNER_TEMP/go-test-root.json"

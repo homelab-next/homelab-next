@@ -759,3 +759,54 @@ def test_the_ci_step_lists_the_packages_and_requires_each_in_the_stream(tmp_path
     assert r.returncode == 1 and f"FAIL {MOD}/internal/fl: no events" in r.stdout, (
         r.stdout + r.stderr
     )
+
+
+# --- skip calls in the sources: the forms whose reason the stream cannot show --------------------
+
+SKIP_SOURCES = {
+    # verify.md: a logged line becomes the "reason" of SkipNow, the last line of a multi-line one
+    "internal/p/p_test.go": 'func TestSkipLog(t *testing.T) {\n\tt.Log("backend not available")\n\tt.SkipNow()\n}\n',
+    "internal/multi/m_test.go": 'func TestMulti(t *testing.T) { t.Skip("feature flag off\\ndocker not available") }\n',
+    "internal/bare/b_test.go": "func TestBare(t *testing.T) { t.Skip() }\nfunc TestVar(t *testing.T) { t.Skipf(msg) }\n",
+    "internal/raw/r_test.go": "func TestRaw(b *testing.B) { b.Skip(`one\ntwo`) }\n",
+    # accepted: a one-line literal (Skipf formats it), a comment, Skipped(), test data
+    "internal/ok/o_test.go": (
+        'func TestA(t *testing.T) { t.Skip("docker not available") }\n'
+        'func TestB(t *testing.T) { t.Skipf("%s not installed", "flock") }\n'
+        "func TestC(t *testing.T) { t.Skip(`dnsmasq not installed`) }\n"
+        "// t.SkipNow() would hide the reason\n"
+        "func TestD(t *testing.T) { if t.Skipped() { return } }\n"
+    ),
+    "internal/ok/testdata/x_test.go": "func TestX(t *testing.T) { t.SkipNow() }\n",
+    "internal/ok/ok.go": "func f(t T) { t.SkipNow() }\n",  # not a test file
+}
+
+
+def test_check_sources_rejects_skips_whose_reason_the_stream_cannot_show(tmp_path, capsys):
+    for rel, body in SKIP_SOURCES.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("package x\n\n" + body)
+    found = policy.check_sources(tmp_path)
+    assert [f.split(": ", 1)[0] for f in found] == [
+        "internal/bare/b_test.go:3",
+        "internal/bare/b_test.go:4",
+        "internal/multi/m_test.go:3",
+        "internal/p/p_test.go:5",
+        "internal/raw/r_test.go:3",
+    ]
+    assert "SkipNow() has no reason of its own" in found[3]
+    assert "reason spans lines" in found[2] and "reason spans lines" in found[4]
+    assert "needs a string literal reason" in found[0] and "needs a string literal" in found[1]
+    assert policy.main(["--check-sources", str(tmp_path)]) == 1
+    assert "SKIP CALL internal/p/p_test.go:5: t.SkipNow(...)" in capsys.readouterr().out
+    clean = tmp_path / "internal" / "ok"
+    assert policy.main(["--check-sources", str(clean)]) == 0
+    assert policy.main(["--check-sources", str(tmp_path / "missing")]) == 2
+
+
+def test_the_go_job_checks_the_skip_calls_before_the_tests():
+    names = [s.get("name", "") for s in go_job()["steps"]]
+    assert "--check-sources ." in ci_step("every skip names its reason")
+    assert names.index("every skip names its reason in the call") < next(
+        i for i, n in enumerate(names) if n.startswith("tests (race")
+    )

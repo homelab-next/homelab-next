@@ -23,6 +23,9 @@ Reads the event stream of ``go test -json`` (one or more files) and fails on:
   ``TestMain`` or ``init``, a timeout -- and one whose only failing tests are quarantined unless
   every test in it has a verdict and the package wrote nothing beyond its ``FAIL`` summary, so a
   quarantine cannot hide a hang, a race reported after the tests or a ``TestMain`` crash;
+* with ``--check-sources DIR`` (instead of a run): a ``SkipNow()``, or a ``Skip``/``Skipf`` whose
+  reason is not a one-line string literal, in a ``*_test.go`` under DIR -- the forms whose reason
+  the stream cannot show (see ``skip_reason``);
 * a skip whose reason (the last line the test wrote before ``--- SKIP``) matches none of the
   ``skip_reasons`` regular expressions of ``[tool.pytest.ini_options]`` in pyproject.toml, or one
   that ``--forbid`` names for this run (a reason that is legitimate elsewhere, such as a tool CI
@@ -243,8 +246,10 @@ SKIP_LINE = re.compile(r"^\s*--- SKIP:")
 def skip_reason(res: Result) -> str:
     """The message of ``t.Skip``: the last line the test wrote before its ``--- SKIP`` line.
 
-    Earlier ``t.Log`` lines are not the reason, so a logged phrase cannot make an unregistered
-    skip look registered (or trip ``--forbid``) on its own.
+    For ``t.Skip("<one line>")`` that is the message, and earlier ``t.Log`` lines are not taken
+    for it.  The stream cannot tell that apart from ``t.Log(...); t.SkipNow()`` (the logged line
+    becomes the reason) or from the last line of a multi-line message, so ``--check-sources``
+    rejects those forms in the test sources: a skip states its reason in the call, on one line.
     """
     out = res.output
     ends = [i for i, line in enumerate(out) if SKIP_LINE.match(line)]
@@ -496,6 +501,49 @@ def _oneline(lines: list[str], limit: int = 200) -> str:
     return " | ".join(line.strip() for line in lines[-5:] if line.strip())[:limit]
 
 
+# a skip call: t.Skip(...), t.Skipf(...), t.SkipNow() on any receiver (t, b, f, tb)
+SKIP_CALL = re.compile(r"\b\w+\.(SkipNow|Skipf?)\(")
+
+
+def check_sources(root: Path) -> list[str]:
+    """``--check-sources``: every skip in the ``*_test.go`` files under ``root`` names its reason.
+
+    Rejected: ``SkipNow()`` (its reason would be whatever the test logged last), and ``Skip`` or
+    ``Skipf`` whose first argument is not a string literal or whose literal spans lines (only its
+    last line would be read as the reason).  Lines that are ``//`` comments are not code.
+    """
+    out = []
+    for path in sorted(root.rglob("*_test.go")):
+        rel = path.relative_to(root)
+        if any(part == "testdata" or part.startswith(("_", ".")) for part in rel.parts[:-1]):
+            continue  # not a package, as for the go tool
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for m in SKIP_CALL.finditer(text):
+            line_start = text.rfind("\n", 0, m.start()) + 1
+            if "//" in text[line_start : m.start()]:
+                continue
+            why = _skip_call_problem(m.group(1), text[m.end() :])
+            if why:
+                line = text.count("\n", 0, m.start()) + 1
+                out.append(f"{rel.as_posix()}:{line}: {m.group(0)}...): {why}")
+    return out
+
+
+def _skip_call_problem(name: str, rest: str) -> str | None:
+    if name == "SkipNow":
+        return 'SkipNow() has no reason of its own: use Skip("<why>") on one line'
+    arg = rest.lstrip()
+    if not arg.startswith(('"', "`")):
+        return f"{name} needs a string literal reason as its first argument"
+    if arg[0] == "`":
+        literal = arg[1 : arg.find("`", 1)]
+        multi = "\n" in literal
+    else:
+        m = re.match(r'"((?:[^"\\\n]|\\.)*)"', arg)
+        multi = m is None or "\\n" in m.group(1)
+    return f"{name}'s reason spans lines: only its last line would be read" if multi else None
+
+
 def list_privileged(policy: Policy) -> list[str]:
     by_pkg: dict[str, list[str]] = {}
     for e in policy.privileged:
@@ -583,12 +631,26 @@ def main(argv: list[str] | None = None) -> int:
         help="the packages the run covers, one import path a line (go list ./...): each needs events",
     )
     ap.add_argument("--list-privileged", action="store_true")
+    ap.add_argument(
+        "--check-sources",
+        type=Path,
+        metavar="DIR",
+        help="check the skip calls of the *_test.go files under DIR instead of judging a run",
+    )
     args = ap.parse_args(argv)
     try:
         policy = load_policy(args.policy, args.module)
         if args.list_privileged:
             print("\n".join(list_privileged(policy)))
             return EXIT_OK
+        if args.check_sources:
+            if not args.check_sources.is_dir():
+                raise PolicyError(f"--check-sources: not a directory: {args.check_sources}")
+            found = check_sources(args.check_sources)
+            for f in found:
+                print(f"SKIP CALL {f}")
+            print(f"go_test_policy: {len(found)} skip call(s) without a one-line literal reason")
+            return EXIT_FAIL if found else EXIT_OK
         if not args.results:
             raise PolicyError("no go test -json input given")
         patterns, max_days = skip_reasons(args.pyproject)
