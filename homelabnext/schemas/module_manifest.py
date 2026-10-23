@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from homelabnext.modules.rules import SCOPE_PARTS
+from homelabnext.modules.scope import SCOPE_PARTS
 
 __all__ = [
     "RESERVED_IDS",

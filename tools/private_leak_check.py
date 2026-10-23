@@ -111,7 +111,7 @@ import leak_scan  # noqa: E402  (also puts the checkout on sys.path for homelabn
 
 from homelabnext import sops  # noqa: E402
 from homelabnext.ids.lint import scan_text  # noqa: E402
-from homelabnext.modules.rules import is_documentation  # noqa: E402
+from homelabnext.modules.scope import is_documentation  # noqa: E402
 
 EXIT_CLEAN, EXIT_HIT, EXIT_CONFIG = 0, 1, 2
 
