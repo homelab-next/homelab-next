@@ -227,13 +227,13 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | Check | Level | Asserts | Requires |
 |---|---|---|---|
 | `allowed-call-returns-result` | MUST | an allowlisted caller gets the handler's result |  |
-| `unknown-command-denied` | MUST | a command nobody registered is Denied |  |
-| `caller-outside-allowlist-denied` | MUST | a registered command is refused to a caller not allowed it |  |
-| `allowlist-is-per-command` | MUST | a caller allowed one command is denied another, and that handler never runs |  |
-| `invalid-args-never-reach-handler` | MUST | missing, unexpected and mistyped arguments are rejected first |  |
+| `unknown-command-denied` | MUST | a command nobody registered is Denied, called or submitted |  |
+| `caller-outside-allowlist-denied` | MUST | a registered command is refused to a caller not allowed it, called or submitted |  |
+| `allowlist-is-per-command` | MUST | a caller allowed one command is denied another, called or submitted; that handler never runs |  |
+| `invalid-args-never-reach-handler` | MUST | missing, unexpected and mistyped arguments are rejected first, called or submitted |  |
 | `handler-error-contained` | MUST | a failing handler surfaces as BrokerError carrying none of the handler's internal detail |  |
 | `every-call-audited` | MUST | ok, denied, invalid and error calls each leave one record |  |
-| `audit-redacts-secret-args` | MUST | arguments the schema marks secret never appear in the audit trail or an error, any outcome |  |
+| `audit-redacts-secret-args` | MUST | arguments the schema marks secret never appear in the audit trail or an error, any outcome, called or deferred |  |
 | `audit-trail-is-append-only` | SHOULD | editing the returned audit list does not change the trail |  |
 | `results-are-isolated` | SHOULD | mutating a returned result does not change later results |  |
 | `submitted-request-runs-for-its-owner` | MUST | submit defers; the owner reads it pending, runs it once, and reads it done |  |
@@ -254,11 +254,14 @@ Each is a deliberately broken fake (`hnx conform run broker --target broken:<mut
 |---|---|---|
 | `allowlist-per-caller-only` | `allowlist-is-per-command` | any allowlisted caller may run any registered command |
 | `audit-logs-secrets` | `audit-redacts-secret-args` | secret arguments are audited in the clear |
+| `deferred-audit-in-clear` | `audit-redacts-secret-args` | submit and run audit records carry secret arguments in the clear |
 | `foreign-access-not-audited` | `foreign-request-access-audited` | a refused access to another caller's request leaves no audit record |
 | `handler-error-passed-through` | `handler-error-contained` | the handler's exception message and cause reach the caller |
 | `redacts-by-key-name` | `audit-redacts-secret-args` | redaction guesses from argument names instead of the schema's secret flag |
 | `redacts-ok-calls-only` | `audit-redacts-secret-args` | denied, invalid and failed calls are audited with secrets in the clear |
 | `requests-shared-between-callers` | `requests-bound-to-caller` | any caller may read, run or cancel a request another caller submitted |
+| `submit-skips-allowlist` | `caller-outside-allowlist-denied` | submit checks the arguments but not the allowlist, so anyone can queue any command |
+| `submit-skips-arg-validation` | `invalid-args-never-reach-handler` | submit checks the allowlist but not the arguments |
 
 ## Implementations
 

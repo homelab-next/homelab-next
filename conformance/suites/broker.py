@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """``broker``: allowlisted commands, validated arguments, one audit record per call, and deferred
-requests bound to the caller that submitted them."""
+requests bound to the caller that submitted them.
+
+``submit`` is a call that runs later, so every gate on ``call`` - the allowlist, argument
+validation, redaction - is checked on ``submit`` (and its ``run``) too: a broker that gates only
+the immediate path lets anyone queue anything and then run it as the request's owner."""
 
 from __future__ import annotations
 
@@ -9,12 +13,15 @@ import contextlib
 from conformance.fakes.command_broker import (
     CallerOnlyBroker,
     ChattyErrorBroker,
+    DeferredClearAuditBroker,
     FakeBroker,
     KeyNameRedactingBroker,
     LoggingBroker,
     OkOnlyRedactingBroker,
     SharedRequestsBroker,
     SilentForeignAccessBroker,
+    SubmitSkipsAllowlistBroker,
+    SubmitSkipsArgsBroker,
 )
 from conformance.protocols.broker import ArgSpec, BrokerError, Denied, InvalidArguments
 from homelabnext.conform.core import Mutant, Suite
@@ -50,25 +57,33 @@ def _(b):
     assert len(calls) == 1
 
 
-@SUITE.check("unknown-command-denied", "a command nobody registered is Denied")
+def _ops(b):
+    """The two ways in: run now (``call``) and run later (``submit``, then the owner's ``run``)."""
+    return {"call": b.call, "submit": b.submit}
+
+
+@SUITE.check("unknown-command-denied", "a command nobody registered is Denied, called or submitted")
 def _(b):
     caller = uniq("caller")
     b.allow(caller, ["something-else"])
-    raises(lambda: b.call(caller, uniq("nocmd"), {}), "unknown command", Denied)
+    for op, fn in _ops(b).items():
+        raises(lambda f=fn: f(caller, uniq("nocmd"), {}), f"{op} of an unknown command", Denied)
 
 
 @SUITE.check(
-    "caller-outside-allowlist-denied", "a registered command is refused to a caller not allowed it"
+    "caller-outside-allowlist-denied",
+    "a registered command is refused to a caller not allowed it, called or submitted",
 )
 def _(b):
     cmd, _, calls = _setup(b)
-    raises(lambda: b.call(uniq("stranger"), cmd, {"name": "x"}), "stranger", Denied)
+    for op, fn in _ops(b).items():
+        raises(lambda f=fn: f(uniq("stranger"), cmd, {"name": "x"}), f"{op} by a stranger", Denied)
     assert calls == [], "handler ran for a denied caller"
 
 
 @SUITE.check(
     "allowlist-is-per-command",
-    "a caller allowed one command is denied another, and that handler never runs",
+    "a caller allowed one command is denied another, called or submitted; that handler never runs",
 )
 def _(b):
     mine, caller, _ = _setup(b)
@@ -76,26 +91,31 @@ def _(b):
     other = uniq("cmd")
     b.register(other, lambda **kw: ran.append(kw) or "wiped", ARGS)
     b.allow(uniq("admin"), [other])
-    for _attempt in range(2):
-        raises(lambda: b.call(caller, other, {"name": "x"}), "command not allowed", Denied)
+    for op, fn in _ops(b).items():
+        for _attempt in range(2):
+            raises(lambda f=fn: f(caller, other, {"name": "x"}), f"{op}: not allowed", Denied)
     assert ran == [], "the handler of a command the caller is not allowed ran"
     assert b.call(caller, mine, {"name": "x"}) == {"ok": "x"}, "the allowed command broke"
+    assert b.run(caller, b.submit(caller, mine, {"name": "x"})) == {"ok": "x"}, (
+        "the allowed submit broke"
+    )
 
 
 @SUITE.check(
     "invalid-args-never-reach-handler",
-    "missing, unexpected and mistyped arguments are rejected first",
+    "missing, unexpected and mistyped arguments are rejected first, called or submitted",
 )
 def _(b):
     cmd, caller, calls = _setup(b)
-    for bad in (
-        {},
-        {"name": "x", "evil": "rm"},
-        {"name": 5},
-        {"name": "x", "count": "3"},
-        {"name": "x", "count": True},
-    ):
-        raises(lambda a=bad: b.call(caller, cmd, a), f"args {bad}", InvalidArguments)
+    for op, fn in _ops(b).items():
+        for bad in (
+            {},
+            {"name": "x", "evil": "rm"},
+            {"name": 5},
+            {"name": "x", "count": "3"},
+            {"name": "x", "count": True},
+        ):
+            raises(lambda f=fn, a=bad: f(caller, cmd, a), f"{op} args {bad}", InvalidArguments)
     assert calls == [], "handler ran with invalid arguments"
 
 
@@ -142,7 +162,8 @@ def _(b):
 
 @SUITE.check(
     "audit-redacts-secret-args",
-    "arguments the schema marks secret never appear in the audit trail or an error, any outcome",
+    "arguments the schema marks secret never appear in the audit trail or an error, any outcome, "
+    "called or deferred",
 )
 def _(b):
     cmd, caller = uniq("cmd"), uniq("caller")
@@ -157,28 +178,47 @@ def _(b):
     b.allow(caller, [cmd])
     before = len(b.audit())
     raised = []
+
+    def attempt(fn):
+        try:
+            return fn()
+        except BrokerError as exc:
+            raised.append(exc_text(exc))
+            return None
+
     for who, args in (
         (caller, {"user": "svc", "label": SECRET}),  # ok
         (uniq("stranger"), {"user": "svc", "label": SECRET}),  # denied
         (caller, {"user": 7, "label": SECRET}),  # invalid
         (caller, {"user": "fail", "label": SECRET}),  # error
     ):
-        try:
-            b.call(who, cmd, args)
-        except BrokerError as exc:
-            raised.append(exc_text(exc))
-    new = list(b.audit())[before:]
-    assert [r.outcome for r in new] == ["ok", "denied", "invalid", "error"], [
-        r.outcome for r in new
+        attempt(lambda w=who, a=args: b.call(w, cmd, a))
+    called = list(b.audit())[before:]
+    assert [r.outcome for r in called] == ["ok", "denied", "invalid", "error"], [
+        r.outcome for r in called
     ]
-    for rec in new:
+    assert called[0].args.get("user") == "svc", "non-secret arguments should stay visible"
+    # the same four outcomes on the deferred path: submit, status, run, cancel
+    mid = len(b.audit())
+    ok = b.submit(caller, cmd, {"user": "svc", "label": SECRET})
+    b.status(caller, ok)
+    assert b.run(caller, ok) == "done", "the deferred request did not run"
+    attempt(lambda: b.run(caller, b.submit(caller, cmd, {"user": "fail", "label": SECRET})))
+    attempt(lambda: b.submit(uniq("stranger"), cmd, {"user": "svc", "label": SECRET}))
+    attempt(lambda: b.submit(caller, cmd, {"user": 7, "label": SECRET}))
+    b.cancel(caller, b.submit(caller, cmd, {"user": "svc", "label": SECRET}))
+    deferred = list(b.audit())[mid:]
+    for rec in called + deferred:
         assert SECRET not in repr(rec) and SECRET not in repr(dict(rec.args)), (
-            f"a secret argument was written to the audit trail on a {rec.outcome!r} call"
+            f"a secret argument was written to the audit trail on a {rec.outcome!r} "
+            f"{getattr(rec, 'operation', 'call')!r} record"
         )
-    assert len(raised) == 3 and not any(SECRET in t for t in raised), (
-        "a secret argument appeared in an error raised to the caller"
+    assert len(raised) == 6 and not any(SECRET in t for t in raised), (
+        f"{len(raised)} of 6 refusals raised, or a secret argument appeared in an error"
     )
-    assert new[0].args.get("user") == "svc", "non-secret arguments should stay visible"
+    runs = [r for r in deferred if r.operation == "run" and r.request_id == ok]
+    assert [r.outcome for r in runs] == ["ok"], f"the deferred run's audit records: {runs}"
+    assert runs[0].args.get("user") == "svc", "non-secret arguments should stay visible"
 
 
 @SUITE.check(
@@ -346,6 +386,21 @@ MUTANTS = {
         SharedRequestsBroker,
         "requests-bound-to-caller",
         "any caller may read, run or cancel a request another caller submitted",
+    ),
+    "submit-skips-allowlist": Mutant(
+        SubmitSkipsAllowlistBroker,
+        "caller-outside-allowlist-denied",
+        "submit checks the arguments but not the allowlist, so anyone can queue any command",
+    ),
+    "submit-skips-arg-validation": Mutant(
+        SubmitSkipsArgsBroker,
+        "invalid-args-never-reach-handler",
+        "submit checks the allowlist but not the arguments",
+    ),
+    "deferred-audit-in-clear": Mutant(
+        DeferredClearAuditBroker,
+        "audit-redacts-secret-args",
+        "submit and run audit records carry secret arguments in the clear",
     ),
     "foreign-access-not-audited": Mutant(
         SilentForeignAccessBroker,
