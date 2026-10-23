@@ -601,6 +601,11 @@ def site_problems(
         if reaches(m, STATIC_HOSTING) and m["id"] not in grants.get("publish", []):
             out.append(f"{m['id']}: reaches {STATIC_HOSTING} without the overlay's publish grant")
         granted = grants.get("egress", {}).get(m["id"], {})
+        if not isinstance(
+            granted, dict
+        ):  # the 1-role-list shape: refused by the schema, no grant here
+            out.append(f"grants.egress.{m['id']}: names {{<role>: [targets]}}, not a list of roles")
+            granted = {}
         for e in _egress(m):
             for t in e["to"]:
                 needs = t == "internet" or t.removeprefix("svc:") in authority

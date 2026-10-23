@@ -1170,6 +1170,19 @@ def test_a_granted_target_and_an_internet_facing_grant_are_accepted():
     assert sc.errors_for(SELECTION, site, REG) == []
 
 
+def test_an_egress_grant_listing_roles_only_grants_nothing():
+    """Negative: the old shape (a list of roles) grants no target; it is refused, never read as
+    granting every target of those roles."""
+    site = copy.deepcopy(SITES["full"])
+    site["grants"]["egress"]["external-collector"] = ["edge", "receiver"]
+    probs = mr.site_problems(site, MODULES, SLOTS, ROWS)
+    assert (
+        "grants.egress.external-collector: names {<role>: [targets]}, not a list of roles" in probs
+    )
+    assert any("host role edge is external" in p for p in probs)
+    assert sc.errors_for(SELECTION, site, REG)
+
+
 def test_an_egress_service_target_must_exist():
     site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
     mods["external-collector"]["egress"][0]["to"].append("svc:no-such-service")
