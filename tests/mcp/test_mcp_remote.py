@@ -95,6 +95,27 @@ def test_a_credential_in_a_hosted_urls_path_is_refused_and_never_rendered(path):
         clients.definition(_inst({**rec, "status": "active"}), "claude-code")
 
 
+#: key-shaped host labels, assembled so the repository holds no token-shaped literal
+_HOST_KEYS = ["9f8e7d6c5b4a3928" + "1706f5e4d3c2b1a0", _PATH_KEYS[0]]
+
+
+@pytest.mark.parametrize(
+    "host", [f"{_HOST_KEYS[0]}.mcp.tracker.example.com", f"{_HOST_KEYS[1]}.tracker.example.com"]
+)
+def test_a_credential_in_a_hosted_urls_host_is_refused_and_never_rendered(host):
+    rec = _edit(transport__url=f"https://{host}/mcp")
+    assert any("URL host may carry a credential" in p for p in _problems(rec, REGISTRY))
+    with pytest.raises(clients.RenderError, match="URL host may carry a credential"):
+        clients.definition(_inst({**rec, "status": "active"}), "claude-code")
+
+
+@pytest.mark.parametrize(
+    "host", ["mcp.tracker.example.com", "eu-west-3.mcp.tracker.example.com", "api2.example.com"]
+)
+def test_a_plain_hosted_url_host_is_accepted(host):
+    assert _problems(_edit(transport__url=f"https://{host}/mcp"), REGISTRY) == []
+
+
 @pytest.mark.parametrize("path", ["", "/", "/mcp", "/sse", "/v1/mcp", "/servers/tracker/mcp"])
 def test_a_plain_hosted_url_path_is_accepted(path):
     assert _problems(_edit(transport__url="https://mcp.tracker.example.com" + path), REGISTRY) == []

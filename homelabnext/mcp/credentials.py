@@ -281,6 +281,14 @@ def plain_url_path(path: str) -> bool:
     )
 
 
+def secret_host_labels(host: str) -> list[int]:
+    """Indexes of the labels of ``host`` that look like a credential (:func:`looks_secret`),
+    below its registrable domain (the last two labels, which a review attests): a hosted endpoint
+    may put the key in a subdomain (``<key>.mcp.vendor.example``)."""
+    labels = (host or "").split(".")
+    return [i for i, label in enumerate(labels[:-2]) if looks_secret(label)]
+
+
 def url_carries(value: str) -> bool:
     """A URL with a credential in it: userinfo (a password, or a user that is not a plain account
     name), a credential-named query parameter, or a path segment or query value that looks like a

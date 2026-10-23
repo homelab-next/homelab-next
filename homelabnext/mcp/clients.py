@@ -339,6 +339,10 @@ def _url(inst: Instance, registry: Any) -> str:
             raise RenderError(
                 [f"{inst.server}: a remote server's URL path may carry a credential (check)"]
             )
+        if credentials.secret_host_labels((urlsplit(str(t["url"])).hostname or "").lower()):
+            raise RenderError(
+                [f"{inst.server}: a remote server's URL host may carry a credential (check)"]
+            )
         return str(t["url"])
     if registry is None:
         raise RenderError([f"{inst.server}: an HTTP server needs the registry for its URL"])

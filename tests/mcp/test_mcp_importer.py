@@ -137,6 +137,18 @@ def test_existing_records_are_kept_unless_forced(tmp_path):
     assert "keep: me" not in (out / "box.yml").read_text()
 
 
+def test_a_credential_in_a_url_host_is_not_copied(tmp_path):
+    key = "9f8e7d6c5b4a3928" + "1706f5e4d3c2b1a0"
+    doc = {"mcpServers": {"hosted": {"type": "http", "url": f"https://{key}.mcp.tracker.example.com/mcp"},
+                          "cli": {"command": "uvx", "args": ["example-mcp", "--url",
+                                                             f"https://{key}.tracker.example.com/mcp"]}}}  # fmt: skip
+    (tmp_path / "mcp.json").write_text(json.dumps(doc))
+    res = importer.import_configs([tmp_path / "mcp.json"])
+    dumped = json.dumps(res.records) + json.dumps(res.report)
+    assert key not in dumped
+    assert res.records["hosted"]["transport"]["endpoint"] == "svc:unknown"
+
+
 def test_looks_secret():
     assert importer.looks_secret(TOKEN)
     assert importer.looks_secret("postgres://user:fake-pw@db.lab.example/x")

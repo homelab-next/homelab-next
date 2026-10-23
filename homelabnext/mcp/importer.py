@@ -105,7 +105,15 @@ def _plain_url(url: str) -> str:
     except ValueError:
         return ""
     path = parts.path if credentials.MCP_URL_PATH.fullmatch(parts.path or "/") else ""
-    return f"{parts.scheme}://{host}{port}{path}"
+    return f"{parts.scheme}://{_plain_host(host)}{port}{path}"
+
+
+def _plain_host(host: str) -> str:
+    """``host`` with every label that looks like a credential replaced by ``unknown``."""
+    labels = host.split(".")
+    for i in credentials.secret_host_labels(host):
+        labels[i] = "unknown"
+    return ".".join(labels)
 
 
 _URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s,]+")
@@ -299,7 +307,7 @@ def draft(
     kind = str(entry.get("type") or entry.get("transport") or "")
     if url:
         parts = urlsplit(str(url))
-        host = (parts.hostname or "unknown").split(".")[0]
+        host = _plain_host(parts.hostname or "unknown").split(".")[0]
         rec["origin"] = {"kind": "unknown", "hint": "a remote server: name the code it runs"}
         rec["transport"] = {"type": "sse" if kind == "sse" else "streamable-http",
                             "endpoint": f"svc:{_slug(host)}"}  # fmt: skip
