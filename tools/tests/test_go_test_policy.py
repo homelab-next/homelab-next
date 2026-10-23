@@ -450,6 +450,11 @@ def test_the_ci_job_is_pinned_and_a_no_op_without_the_module():
     assert gate["id"] == "module" and "orchestrator/go.mod" in gate["run"]
     assert all("steps.module.outputs.present == 'true'" in s.get("if", "") for s in steps[2:])
     runs = "\n".join(s.get("run", "") for s in steps)
+    assert job["env"] == {"GOFLAGS": "-mod=readonly", "GOTOOLCHAIN": "local"}
+    # sudo resets the environment: what go needs is passed through by name
+    assert '"GOFLAGS=$GOFLAGS" "GOTOOLCHAIN=$GOTOOLCHAIN"' in runs
+    (go,) = [s for s in steps if s.get("uses", "").startswith("actions/setup-go@")]
+    assert go["with"]["cache-dependency-path"].startswith("orchestrator/**/go.sum")
     assert "go test -race -shuffle=on -count=1 -json ./..." in runs
     assert "unshare --net" in runs and "tools/go_test_policy.py" in runs
 

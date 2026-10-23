@@ -202,6 +202,9 @@ jobs:
   orchestrator:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      GOFLAGS: -mod=readonly  # go.mod and go.sum are inputs: a build never rewrites them
+      GOTOOLCHAIN: local  # the go setup-go installed from go.mod, never a download
     defaults:
       run:
         working-directory: orchestrator
@@ -240,7 +243,7 @@ jobs:
         if: steps.module.outputs.present == 'true'
         with:
           go-version-file: orchestrator/go.mod
-          cache-dependency-path: orchestrator/go.sum
+          cache-dependency-path: orchestrator/**/go.sum  # the module's and tools/'s
       - uses: ./.github/actions/python-deps
         if: steps.module.outputs.present == 'true'
         with:
@@ -294,7 +297,8 @@ jobs:
           if [ -f skips.yml ]; then policy=(--policy skips.yml); fi
           out="$RUNNER_TEMP/go-test.json"
           status=0
-          sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" unshare --net -- \
+          sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" "GOTOOLCHAIN=$GOTOOLCHAIN" \
+            unshare --net -- \
             sh -c 'ip link set lo up && exec setpriv --reuid="$1" --regid="$2" --clear-groups -- \
               go test -race -shuffle=on -count=1 -json ./...' sh "$(id -u)" "$(id -g)" \
             > "$out" || status=$?
