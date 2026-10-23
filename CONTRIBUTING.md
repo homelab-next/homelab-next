@@ -133,7 +133,10 @@ and an entry that no longer excuses anything fails the lint.
   identity headers first at site level with no matcher (`request_header -*authentik*`, as the
   generator writes it), every `forward_auth` sits in a `route` that first deletes each header its
   `copy_headers` sets in every `-`/`_` spelling, with no matcher; no header directive sets, adds
-  or copies an identity header; what the lint cannot read (a heredoc, `{$ENV}` in directive
+  or copies an identity header, or rewrites one through a `*` field; no FastCGI `env` sets an
+  identity CGI variable or a client-chosen value; no `forward_auth` (or forward-auth site proxy)
+  dials a request placeholder (`dial`); no upstream behind `forward_auth` is proxied again
+  without it (`exposure`); what the lint cannot read (a heredoc, `{$ENV}` in directive
   position, a header name that is a placeholder, an import glob, a `forward_auth` in a `.conf`
   nothing imports or a Python string) fails closed; and every Caddy pin (registry `impl: caddy`,
   `caddy_*version` keys, any `.../caddy` image, Dockerfile `FROM`/`COPY --from` and `xcaddy
@@ -141,6 +144,8 @@ and an entry that no longer excuses anything fails the lint.
   (or `HNX_CADDY`) it also judges Caddy's own `caddy adapt` JSON; CI pins one and requires it,
   and a local run without one says what it skipped. Exceptions: `caddy-lint: allow <reason>` on
   the line, or `tools/caddy_lint.allow.yml` (a file path, the `rules` it excuses and a reason).
+  It guards against accidental misconfiguration: Caddy config authors are trusted and reviewed,
+  and deliberate obfuscation is left to review.
 - `tools/workstation_refs.py` (F-17): runtime configuration (roles, playbooks, inventory, compose,
   examples, generator templates, golden outputs) names no home directory, workstation path or
   host, and no role step runs on the Ansible control node. Allowlist:

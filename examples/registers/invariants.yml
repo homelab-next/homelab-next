@@ -285,7 +285,9 @@ criteria:
   expected: >-
     exit 0 (every site with forward_auth strips identity headers at site level first; every
     forward_auth deletes its copy_headers, every - and _ spelling, first in its route; no header
-    directive sets an identity header; nothing the lint cannot read; with a caddy binary, Caddy's
+    directive sets or rewrites an identity header, no FastCGI env sets an identity variable, no
+    forward_auth dial is chosen by the request, no protected upstream is served again without
+    forward_auth; nothing the lint cannot read; with a caddy binary, Caddy's
     own adapted JSON reaches no upstream with one undeleted; every Caddy pin 2.11.2 or later);
     exit 100 when the lint cannot run (a missing dependency or a bad allowlist), which is
     could-not-measure. A run without a caddy binary judges the Caddyfiles by text only and says
