@@ -235,3 +235,17 @@ def test_g13_fails_on_an_actor_that_acts_directly(tmp_path, monkeypatch):
     assert r["status"] == "fail" and "'shell' (exec)" in r["evidence"]
     # G-03 is about readers: an actor's direct tool is not its red
     assert _run(tmp_path, ["G-03"])["G-03"]["status"] == "pass"
+
+
+def test_g04_runs_the_broker_rule_before_its_tests(tmp_path, monkeypatch):
+    """R3.4: G-04's observable once ran one test file, so an actor holding a direct tool (not
+    limited to allowlisted actions at all) left it green; it now lints every profile first."""
+    monkeypatch.setenv("PYTHONPATH", str(REPO))
+    (tmp_path / "tests" / "agent").mkdir(parents=True)
+    for name in ("test_agent_handoff.py", "test_agent_broker_only.py"):
+        (tmp_path / "tests" / "agent" / name).write_text("def test_ok():\n    assert True\n")
+    (tmp_path / "actor.yml").write_text(yaml.safe_dump(_BROKER_ACTOR))
+    assert _run(tmp_path, ["G-04"])["G-04"]["status"] == "pass"
+    (tmp_path / "actor.yml").write_text(yaml.safe_dump(_DIRECT_ACTOR))
+    r = _run(tmp_path, ["G-04"])["G-04"]
+    assert r["status"] == "fail" and "'shell' (exec)" in r["evidence"]

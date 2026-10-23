@@ -604,17 +604,23 @@ criteria:
   evidence: auto
   observable: >-
     python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli agent lint --rule actors-act-via-broker &&
     python3 -m pytest -q -p no:cacheprovider tests/agent/test_agent_handoff.py
+    tests/agent/test_agent_broker_only.py
   expected: >-
     exit 0 with every selected test passed and none skipped (raw text and invalid reports refused,
-    free-text fields never become action parameters, undeclared or unlisted actions denied); exit
-    100 when a test dependency is not installed, which is could-not-measure
+    free-text fields never become action parameters, undeclared or unlisted actions denied), after
+    every profile and manifest of the repository passed the broker rule (an actor's only acting
+    grant is the broker, G-13); exit 100 when a test dependency is not installed, which is
+    could-not-measure
   expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
   slow: true
   remediation: >-
     Fix homelabnext/agent/handoff.py so an actor only accepts a validated report and binds action
-    parameters to constrained output fields; an actor driven by free text can be steered by
-    whatever its reader ingested.
+    parameters to constrained output fields, and take every acting grant but the broker off the
+    profiles `hnx agent lint --rule actors-act-via-broker` names; an actor driven by free text can
+    be steered by whatever its reader ingested, and one holding a direct tool is not limited to
+    allowlisted actions at all.
 - id: M-09
   statement: Agent memory is controlled.
   evidence: auto
