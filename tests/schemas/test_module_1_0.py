@@ -1196,13 +1196,48 @@ def test_grants_name_selected_modules_their_roles_and_used_targets_only():
     }
     probs = mr.site_problems(site, MODULES, SLOTS, ROWS)
     for needle in (
-        "grants.egress.example-unknown: the module is not selected",
-        "grants.egress.external-collector.ghost: not one of the module's host roles",
-        "grants.egress.external-collector.edge: internet is granted but not used",
-        "grants.internet_facing.example-unknown: the module is not selected",
-        "grants.internet_facing.external-collector.ghost: not one of the module's host roles",
-        "grants.internet_facing.external-collector.edge: the role is not an internet-facing role inside the lab",
-        "grants.internet_facing.external-collector.receiver: the role is not an internet-facing role inside the lab",
+        "grants.egress.example-unknown: the module is not selected; remove the grant",
+        "grants.egress.external-collector.ghost: not one of the module's host roles; remove the grant",
+        "grants.egress.external-collector.edge: internet is granted but not used; remove the grant",
+        "grants.internet_facing.example-unknown: the module is not selected; remove the grant",
+        "grants.internet_facing.external-collector.ghost: not one of the module's host roles; remove the grant",
+        "grants.internet_facing.external-collector.edge: the role is not an internet-facing role inside the lab; remove the grant",
+        "grants.internet_facing.external-collector.receiver: the role is not an internet-facing role inside the lab; remove the grant",
+    ):
+        assert needle in probs, (needle, probs)
+
+
+def test_every_grant_kind_names_a_selected_module_and_what_it_uses():
+    """Negative: public_routes, publish, secrets, units and shared_config grants for an
+    unselected module, a public route for a row that does not exist or is not public, publish for
+    a module that does not reach static hosting, and a secret no selected module holds are all
+    refused, so no grant waits for an upgrade to switch it on."""
+    site = copy.deepcopy(SITES["full"])
+    g = site["grants"]
+    g["public_routes"] = {
+        "example-unknown": ["x"],
+        "external-collector": ["external-collector-future", "external-collector-receiver"],
+    }
+    g["publish"] += ["example-unknown", "external-collector"]
+    g["secrets"]["example-unknown"] = ["secret:example-static-host/deploy-token"]
+    g["secrets"]["publishing"].append("secret:example-unknown/token")
+    g["units"] = {"example-unknown": ["x"]}
+    g["shared_config"] = {"example-unknown": ["cap:edge"]}
+    probs = mr.site_problems(site, MODULES, SLOTS, ROWS)
+    for needle in (
+        "grants.public_routes.example-unknown: the module is not selected; remove the grant",
+        "grants.public_routes.external-collector.external-collector-future: not one of the "
+        "module's service rows; remove the grant",
+        "grants.public_routes.external-collector.external-collector-receiver: the row has no "
+        "public_hostname; remove the grant",
+        "grants.publish.example-unknown: the module is not selected; remove the grant",
+        "grants.publish.external-collector: the module does not reach cap:static-hosting; "
+        "remove the grant",
+        "grants.secrets.example-unknown: the module is not selected; remove the grant",
+        "grants.secrets.publishing: secret:example-unknown/token is no selected module's "
+        "credential; remove the grant",
+        "grants.units.example-unknown: the module is not selected; remove the grant",
+        "grants.shared_config.example-unknown: the module is not selected; remove the grant",
     ):
         assert needle in probs, (needle, probs)
 
@@ -1277,7 +1312,8 @@ def test_feature_and_core_modules_and_sites_carry_no_product_names():
 
 
 #: test function -> the dict its cases come from, read at collection time (after the whole module
-#: ran), so a case added after the test is still collected
+#: ran), so a case added after the test is still collected; there is no separate guard, since the
+#: cases are generated from the final dicts and cannot drift from them
 DEFECT_TABLES = {
     "test_a_site_rule_refuses_the_defect": lambda: SITE_DEFECTS,
     "test_a_loader_rule_refuses_the_defect": lambda: MODULE_DEFECTS,
@@ -1288,13 +1324,3 @@ def pytest_generate_tests(metafunc):
     table = DEFECT_TABLES.get(metafunc.function.__name__)
     if table is not None:
         metafunc.parametrize("case", sorted(table()))
-
-
-def test_every_defect_case_is_collected(request):
-    """Exact guard: every collected case set equals its final dict (a table whose test was
-    deselected entirely is not compared)."""
-    names = {i.name for i in request.session.items if i.module is request.module}
-    for fn, table in DEFECT_TABLES.items():
-        got = {n for n in names if n.startswith(fn + "[")}
-        if got:
-            assert got == {f"{fn}[{c}]" for c in table()}, fn

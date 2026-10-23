@@ -548,7 +548,7 @@ def site_problems(
     ch = chosen(site)
     grants = site.get("grants", {})
     out += _binding_problems(site, mods, sel)
-    out += _grant_problems(grants, sel)
+    out += _grant_problems(grants, sel, rows)
     out += _config_problems(site, sel, grants)
     authority = {s for s, d in slots.items() if d.get("privileged")} | set(AUTHORITY_SLOTS)
     authority |= {c["instance"] for cap, cs in ch.items() if cap[4:] in authority for c in cs}
@@ -672,45 +672,66 @@ def _is_service(name: str, services: set[str], sel: dict[str, Doc], rows) -> boo
     )
 
 
-def _grant_problems(grants: Doc, sel: dict[str, Doc]) -> list[str]:
-    """Egress and internet-facing grants name a selected module, one of its host roles, and only
-    targets the manifest uses: a grant waiting for a role or target to appear would switch it on
-    with a placement line nobody reads as a grant."""
-    out = []
+def _grant_problems(grants: Doc, sel: dict[str, Doc], rows=None) -> list[str]:
+    """Every grant names a selected module and only what that module uses: an egress target its
+    entry lists (or external for an external role), an internet-facing role inside the lab, a
+    public row (with ``rows``), static hosting it reaches, a granted credential of a selected
+    module.  A grant waiting for a role, row or target to appear would switch it on with a
+    module upgrade or a placement line nobody reads as a grant."""
+    out: list[str] = []
+
+    def stale(where: str, why: str) -> None:
+        out.append(f"grants.{where}: {why}; remove the grant")
+
+    for kind in ("egress", "internet_facing", "public_routes", "secrets", "units", "shared_config"):
+        for mid in grants.get(kind, {}):
+            if mid not in sel:
+                stale(f"{kind}.{mid}", "the module is not selected")
     for mid, roles in grants.get("egress", {}).items():
         m = sel.get(mid)
-        if m is None:
-            out.append(f"grants.egress.{mid}: the module is not selected")
-            continue
-        if not isinstance(roles, dict):
-            continue  # the old list shape, reported by site_problems
+        if m is None or not isinstance(roles, dict):
+            continue  # unselected (above) or the old list shape (site_problems reports it)
         hosts = _hosts(m)
         for role, targets in roles.items():
             if role not in hosts:
-                out.append(f"grants.egress.{mid}.{role}: not one of the module's host roles")
+                stale(f"egress.{mid}.{role}", "not one of the module's host roles")
                 continue
             used = {t for e in _egress(m) if e["host"] == role for t in e["to"]}
             if hosts[role]["kind"] == "external":
                 used.add("external")
             for t in targets:
                 if t not in used:
-                    out.append(f"grants.egress.{mid}.{role}: {t} is granted but not used")
+                    stale(f"egress.{mid}.{role}", f"{t} is granted but not used")
     for mid, roles in grants.get("internet_facing", {}).items():
-        m = sel.get(mid)
-        if m is None:
-            out.append(f"grants.internet_facing.{mid}: the module is not selected")
-            continue
-        hosts = _hosts(m)
-        for role in roles:
+        hosts = _hosts(sel[mid]) if mid in sel else None
+        for role in roles if hosts is not None else []:
             h = hosts.get(role)
             if h is None:
-                out.append(
-                    f"grants.internet_facing.{mid}.{role}: not one of the module's host roles"
-                )
+                stale(f"internet_facing.{mid}.{role}", "not one of the module's host roles")
             elif h.get("exposure") != "internet-facing" or h["kind"] == "external":
-                out.append(
-                    f"grants.internet_facing.{mid}.{role}: the role is not an internet-facing role inside the lab"
+                stale(
+                    f"internet_facing.{mid}.{role}",
+                    "the role is not an internet-facing role inside the lab",
                 )
+    for mid, names in grants.get("public_routes", {}).items():
+        if mid not in sel or rows is None:
+            continue
+        mine = rows.get(mid, {})
+        for n in names:
+            if n not in mine:
+                stale(f"public_routes.{mid}.{n}", "not one of the module's service rows")
+            elif not mine[n].get("public_hostname"):
+                stale(f"public_routes.{mid}.{n}", "the row has no public_hostname")
+    for mid in grants.get("publish", []):
+        if mid not in sel:
+            stale(f"publish.{mid}", "the module is not selected")
+        elif not reaches(sel[mid], STATIC_HOSTING):
+            stale(f"publish.{mid}", f"the module does not reach {STATIC_HOSTING}")
+    owners = {c["secret"]: m["id"] for m in sel.values() for c in m.get("credentials", [])}
+    for mid, names in grants.get("secrets", {}).items():
+        for n in names if mid in sel else []:
+            if n not in owners and not n.startswith(f"secret:{mid}/"):
+                stale(f"secrets.{mid}", f"{n} is no selected module's credential")
     return out
 
 
