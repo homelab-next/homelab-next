@@ -390,6 +390,13 @@ REJECTED = {
         volumes=["/var/lib/containers/storage:/s"]
     ),
     "all of /var": lambda s: s["services"]["web"].update(volumes=["/var:/v"]),
+    # compose interpolation in a source: the text hides host root and the docker socket
+    "interpolated host root": lambda s: s["services"]["web"].update(volumes=["${X:-/}:/host"]),
+    "interpolated docker socket": lambda s: s["services"]["web"].update(
+        volumes=["${X:-/var/run/docker}.sock:/s.sock"]
+    ),
+    "home through $HOME": lambda s: s["services"]["web"].update(volumes=["$HOME:/home"]),
+    "home through ~": lambda s: s["services"]["web"].update(volumes=["~:/home"]),
     "privileged": lambda s: s["services"]["web"].update(privileged=True),
     "cap_add SYS_ADMIN": lambda s: s["services"]["web"].update(cap_add=["SYS_ADMIN"]),
     "cap_add CAP_ALL": lambda s: s["services"]["web"].update(cap_add=["CAP_ALL"]),
@@ -418,6 +425,51 @@ def test_compose_app_rejects_spec_violation(tmp_path, case):
     )
     assert r.returncode != 0, case
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+@pytest.mark.parametrize("vol", ["${X:-/}:/host", "~:/home"])
+def test_compose_app_names_the_interpolation_rule_when_it_refuses(tmp_path, vol):
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, spec(volumes=[vol]), compose_app_validate_with_docker=False),
+    )
+    assert r.returncode != 0
+    assert "has a refused bind source" in r.stdout + r.stderr
+
+
+def test_compose_app_writes_every_dollar_so_compose_reads_it_literally(tmp_path):
+    """compose interpolates `$` in every value from the environment of whoever runs `compose up`;
+    the template writes `$$`, so the container gets exactly the text of the spec."""
+    s = spec(
+        environment={"MODE": "${HOME}", "COUNT": "$X"},
+        command=["sh", "-c", "echo $PATH ${Y:-/}"],
+    )
+    s["services"]["web"]["healthcheck"]["test"] = ["CMD-SHELL", 'test -n "$HOSTNAME"']
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, s, compose_app_validate_with_docker=False),
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    web = services_of(tmp_path)["web"]
+    assert web["environment"] == {"COUNT": "$$X", "MODE": "$${HOME}"}
+    assert web["command"] == ["sh", "-c", "echo $$PATH $${Y:-/}"]
+    if not docker_compose_ok():
+        return
+    c = subprocess.run(
+        ["docker", "compose", "-f", str(tmp_path / "app" / "docker-compose.yml"), "config",
+         "--format", "json"],
+        capture_output=True, text=True, env={**os.environ, "HOME": "/root", "X": "/", "Y": "/"},
+    )  # fmt: skip
+    assert c.returncode == 0, c.stderr
+    # compose prints a literal `$` re-escaped as `$$`; an interpolated value would be /root or /
+    got = json.loads(c.stdout)["services"]["web"]
+    assert got["environment"] == {"COUNT": "$$X", "MODE": "$${HOME}"}
+    assert got["command"] == ["sh", "-c", "echo $$PATH $${Y:-/}"]
+    assert got["healthcheck"]["test"] == ["CMD-SHELL", 'test -n "$$HOSTNAME"']
 
 
 def test_compose_app_accepts_ordinary_bind_sources(tmp_path):

@@ -17,6 +17,9 @@ compose_app_docker_socket_pattern: '(?:docker|containerd|podman|crio|cri-dockerd
 # all host root or docker's state, and compose passes them through unchanged); matched against the
 # source alone, i.e. the volume up to its first `:`
 compose_app_noncanonical_source_pattern: '//|(?:^|/)\.\.(?:/|\Z)|/\.(?:/|\Z)|./\Z'
+# a volume compose would interpolate: any `$` (${X:-/}, $HOME) or a source starting with `~`; the
+# template writes `$` as `$$`, so this only keeps a spec from relying on interpolation at all
+compose_app_interpolated_volume_pattern: '\$|^~'
 compose_app_sensitive_name_pattern: '(?i)(password|passwd|secret|token|api_?key|private_?key|credential)'
 # capabilities that amount to privileged: refused in cap_add unless compose_app_allow_privileged
 compose_app_dangerous_caps:

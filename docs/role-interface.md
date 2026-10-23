@@ -128,6 +128,9 @@ membership change. `role_lint.py --playbook X --inventory Y` fails a playbook wh
 * Secrets never go in `environment` (a secret-looking key is refused unless it ends
   in `_FILE`). They go in `compose_app_secret_env`, which the role writes to
   `secrets/<service>.env` (mode 0600, `no_log`, no diff) and passes as an `env_file`.
+* Every value is written with `$` doubled (`$$`), so docker compose never interpolates the
+  deploy host's environment into the file, and a volume holding `$` or a source starting with `~`
+  is refused outright (`${X:-/}:/host` is the host root once compose has read it).
 * A volume's bind source must be canonical (no `//`, no `.` or `..` component other than a
   leading `./`, no trailing `/`): compose passes `/.`, `//` and `/var//lib/docker` through
   unchanged and the kernel reads them as `/` and docker's state.
@@ -157,7 +160,7 @@ membership change. `role_lint.py --playbook X --inventory Y` fails a playbook wh
 | RL011 | secret-looking variable used in a task without `no_log: true` |
 | RL012 | `shell`/`raw`, or `command` with a templated free-form string |
 | RL013 | `validate_certs: false` |
-| RL014 | privileged container or container-runtime socket (docker, containerd, podman, CRI-O) in defaults/vars/templates |
+| RL014 | privileged container, container-runtime socket (docker, containerd, podman, CRI-O) or a bind source spelled with compose interpolation (`$VAR`, `${VAR:-/}`, `~`) in defaults/vars/templates |
 | PB001 | playbook targets a hostname instead of a capability group |
 | PB002 | play without `hosts:` |
 
