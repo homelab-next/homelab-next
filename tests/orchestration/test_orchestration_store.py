@@ -605,3 +605,42 @@ def test_retention_inside_the_range_is_accepted(tmp_path, days):
     assert TelemetryStore(tmp_path / "t.db", clock=lambda: T0, retention_days=days).retention_s == (
         days * 86400.0
     )
+
+
+SCHEMA_ID = "https://schemas.example.internal/homelabnext/events/agent.job.finished/1.0"
+
+
+@pytest.mark.parametrize(
+    "attrs, data, needle",
+    [
+        ({"dataschema": "https://schemas.example.internal/homelabnext/ fake prompt text"}, {}, "dataschema"),
+        ({"dataschema": SCHEMA_ID + "x"}, {}, "dataschema"),
+        ({}, {"model": "fake prompt text: summarise the papers"}, "model"),
+        ({}, {"model": "https://gateway.example.com/v1"}, "model"),
+        ({}, {"model": "ops@gateway.example.com"}, "model"),
+    ],
+)
+def test_dataschema_and_the_job_model_carry_no_free_text(store, attrs, data, needle):
+    ev = examples()[0] | attrs
+    ev["data"] = ev["data"] | data
+    with pytest.raises(EventError) as exc:
+        store.consume(body(ev))
+    assert needle in "\n".join(exc.value.problems) and store.jobs() == []
+
+
+def test_dataschema_naming_the_type_and_a_real_model_name_are_accepted(store):
+    ev = examples()[0] | {"dataschema": SCHEMA_ID}
+    ev["data"] = ev["data"] | {"model": "hosted_vllm//models/Qwen2.5-72B"}
+    assert store.consume(body(ev)).status == "processed"
+
+
+def test_the_job_model_pattern_is_the_turn_records_model_rule():
+    from conformance.protocols.inference import MODEL_PATTERN
+
+    schema = json.loads(
+        (EXAMPLES.parent / "agent.job.finished.schema.json").read_text(encoding="utf-8")
+    )
+    model = schema["allOf"][1]["properties"]["data"]["properties"]["model"]
+    assert model["pattern"] == f"^{MODEL_PATTERN}$(?!\\n)"
+    frozen = EXAMPLES.parents[1] / "_frozen" / "1.0" / "events" / "agent.job.finished.schema.json"
+    assert json.loads(frozen.read_text(encoding="utf-8")) == schema

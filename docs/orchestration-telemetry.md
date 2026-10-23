@@ -49,7 +49,7 @@ failures; `finished` is the usage record of every outcome.
 | `local_attempts` | integer >= 0 | |
 | `cloud_fallback_used` | boolean | |
 | `backend` | string or null | the logical backend name as the controller emits it (1 to 64 of `A-Za-z0-9._-`; a leading dot or digit is fine); no `:` or `/`, so never a URL or host:port |
-| `model` | string or null | opaque: the usage file's model, else the request's (a vLLM model path is possible); no control characters |
+| `model` | string or null | opaque: the usage file's model, else the request's (a vLLM model path is possible); the turn record's `model` rule (below): no whitespace, URL or mail address |
 | `queued_at`, `finished_at` | date-time | |
 | `started_at` | date-time or null | null for a job that never started |
 | `queue_wait_s`, `wall_s` | number >= 0 or null | null for a job that never started |
@@ -111,7 +111,7 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
   JSON, which includes `NaN`, `Infinity` and a number no float holds such as `1e999`, a string
   holding a lone surrogate such as `"\ud800"`, invalid, another type, an envelope attribute the
   envelope schema does not declare (a CloudEvents extension, which would be free text beside the
-  closed `data`) or a `subject` that is not the run id, a source other than the configured controller's, an id reused with
+  closed `data`), a `subject` that is not the run id, or a `dataschema` other than the type's own `$id` (the schema pins it), a source other than the configured controller's, an id reused with
   another body, a second record for a run under another id, a record whose `gateway_tag` another
   run already holds (the tag must name one job, or two jobs' turns would merge), a timestamp the pattern accepts but
   the calendar does not, such as `2026-02-30`, times out of order by more than a second (queued

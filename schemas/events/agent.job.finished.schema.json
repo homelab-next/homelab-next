@@ -16,6 +16,10 @@
           "$ref": "#/$defs/run_id",
           "description": "the run id (as data.run_id), never free text"
         },
+        "dataschema": {
+          "const": "https://schemas.example.internal/homelabnext/events/agent.job.finished/1.0",
+          "description": "when sent, this schema's $id, never anything else"
+        },
         "data": {
           "type": "object",
           "additionalProperties": false,
@@ -72,8 +76,8 @@
               "type": ["string", "null"],
               "minLength": 1,
               "maxLength": 256,
-              "pattern": "^[^\\u0000-\\u001f\\u007f]*$(?!\\n)",
-              "description": "an opaque model name: the agent runtime's usage file's model, else the passthrough request's model (for a backend served without an alias this can be the model's path); not an alias by contract, no control characters"
+              "pattern": "^(?!.*:/)(?!(?:.*[^0-9])?[0-9]{1,3}(?:\\.[0-9]{1,3}){3}(?![0-9]))(?!.*:[0-9]{2,5}/)(?!.*@(?:[A-Za-z0-9-]+\\.)+[A-Za-z]{2,}(?![A-Za-z0-9._-]))[A-Za-z0-9/][A-Za-z0-9._:/@+-]{0,255}$(?!\\n)",
+              "description": "an opaque model name: the agent runtime's usage file's model, else the passthrough request's model (for a backend served without an alias this can be the model's path); not an alias by contract. The turn record's model rule (conformance/protocols/inference.py MODEL_PATTERN, a test keeps them equal): up to 256 of A-Za-z0-9._:/@+-, may start with / and hold //, never whitespace, a control character, a URL scheme, an IPv4 address, host:port/ or a mail address"
             },
             "queued_at": {
               "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
