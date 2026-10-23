@@ -24,8 +24,10 @@ change is a fixture or golden file has a test).  A fix that genuinely cannot hav
 setting) says why in a ``No-regression-test: <reason>`` trailer; the gate lists every waiver.
 
 ``--prove`` also checks the "fails without the fix" half: for each fix, the commit's test files are
-put on top of its parent in a temporary worktree and the tests it touched are run there.  At least
-one of them must FAIL there.  A regression test that passes without the fix proves nothing and is
+put on top of its parent in a temporary worktree and the tests it added or changed are run there
+(a Python test function or ``Test*`` method whose source, decorators included, differs; the
+whole module when only helpers changed; Go likewise, below).  At least one of them must FAIL
+there.  A regression test that passes without the fix proves nothing and is
 reported; so is every case that cannot prove it, never counted as a pass.
 
 One rule for Python and Go decides what a failure on the parent proves.  A test that fails there
@@ -58,6 +60,7 @@ fix), 2 the range could not be read.  See CONTRIBUTING.md "Bug fixes carry a reg
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import shutil
 import subprocess
@@ -353,6 +356,42 @@ def go_outcome(output: str, returncode: int, added: Added) -> Outcome:
     return out
 
 
+def _py_tests(text: str) -> dict[str, str]:
+    """The test functions of a Python test module (top level and in ``Test*`` classes) -> their
+    source, decorators included (a new parametrize case is a change)."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return {}
+    lines = text.splitlines()
+
+    def source(node: ast.AST) -> str:
+        first = min([d.lineno for d in node.decorator_list] + [node.lineno])
+        return "\n".join(lines[first - 1 : node.end_lineno])
+
+    out: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith(
+            "test"
+        ):
+            out[node.name] = source(node)
+        elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            for sub in node.body:
+                if isinstance(sub, ast.FunctionDef | ast.AsyncFunctionDef) and sub.name.startswith(
+                    "test"
+                ):
+                    out[f"{node.name}::{sub.name}"] = source(sub)
+    return out
+
+
+def changed_py_tests(c: Commit, path: str, cwd: Path = REPO_ROOT) -> list[str]:
+    """The pytest node ids of the tests in ``path`` that ``c`` added or changed; empty when it
+    changed none of them (helpers only: the whole module runs)."""
+    new = _py_tests(_show(cwd, c.sha, path) or "")
+    old = _py_tests(_show(cwd, f"{c.sha}^", path) or "")
+    return [f"{path}::{name}" for name, body in new.items() if old.get(name) != body]
+
+
 def _go_func_end(text: str, start: int) -> int:
     """The index just past the ``}`` closing the function declared at ``start``.
 
@@ -475,6 +514,16 @@ def _prove_go(
     return problems
 
 
+def _pytest(python: str, wt: Path, report: Path, targets: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [
+            python, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+            "--continue-on-collection-errors", f"--junitxml={report}", *targets,
+        ],
+        cwd=wt, capture_output=True, text=True, check=False,
+    )  # fmt: skip
+
+
 def prove(
     c: Commit, cwd: Path = REPO_ROOT, python: str = sys.executable, go: str = "go"
 ) -> str | None:
@@ -512,16 +561,14 @@ def prove(
         try:
             _git("checkout", c.sha, "--", *tests, cwd=wt)
             if modules:
-                run = subprocess.run(
-                    [
-                        python, "-m", "pytest", "-q", "-p", "no:cacheprovider",
-                        "--continue-on-collection-errors", f"--junitxml={report}", *modules,
-                    ],
-                    cwd=wt,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )  # fmt: skip
+                # like Go: the test functions the commit added or changed (the module whole when
+                # it changed only helpers), so the parent run is as narrow as the claim
+                targets = [t for m in modules for t in (changed_py_tests(c, m, cwd) or [m])]
+                run = _pytest(python, wt, report, targets)
+                if run.returncode == 4 and targets != modules:
+                    # a node id pytest cannot reach: its module does not collect on the parent;
+                    # run the modules whole so the collection error itself is judged
+                    run = _pytest(python, wt, report, modules)
                 if run.returncode == 0:
                     problems.append(
                         f"{c.short}: its regression test passes WITHOUT the fix "

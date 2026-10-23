@@ -211,6 +211,32 @@ def test_an_error_that_is_not_a_failing_test_cannot_prove_the_fix(tmp_path):
     assert problem and "an error that is not a failing test" in problem
 
 
+def test_only_the_python_tests_the_fix_adds_or_changes_run_on_the_parent(tmp_path):
+    # the module already holds a test that fails on the parent for another reason; the fix's
+    # own new test passes there, so the fix is not proven by its neighbour's failure
+    r, commit = _repo(tmp_path)
+    commit(
+        "feat: clamp",
+        **{
+            "mod.py": "def clamp(x):\n    return x\n",
+            "tests/test_mod.py": PY_PATH + "def test_old():\n    assert False\n",
+        },
+    )
+    sha = commit(
+        "fix: clamp",
+        **{
+            "mod.py": CLAMP.format(cap=10),
+            "tests/test_mod.py": PY_PATH
+            + "import pytest\n\ndef test_old():\n    assert False\n\n"
+            + "@pytest.mark.parametrize('x', [1])\ndef test_new(x):\n    assert x == 1\n",
+        },
+    )
+    (c,) = gate.commits_in(f"{sha}^..{sha}", cwd=r)
+    assert gate.changed_py_tests(c, "tests/test_mod.py", cwd=r) == ["tests/test_mod.py::test_new"]
+    problem = gate.prove(c, cwd=r)
+    assert problem and "passes WITHOUT the fix" in problem
+
+
 def test_a_real_failure_proves_the_fix(tmp_path):
     test = "def test_clamp():\n    from mod import clamp\n    assert clamp(12) == 10\n"
     r, c = _py_fix(tmp_path, CLAMP.format(cap=10), test)
