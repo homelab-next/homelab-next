@@ -98,6 +98,35 @@ says what selecting someone else's module grants it.
 - The schema stays a draft and may change without a version bump until the ADR is accepted; then it
   is frozen and evolves additively like every other.
 
+### What exists, and what is specified but not implemented
+
+**Exists in this draft:** the draft schemas `platform/module` 1.0, `platform/module_selection` 1.0
+and `platform/lake_table` 1.0 (`x-draft`; `tools/schema_check.py` refuses `x-draft` on any major
+that has a frozen baseline), their generator (`python -m homelabnext.schemas`, checked in CI), the
+fictional examples, and the loader's rules as pure functions applied to those examples by the
+contract tests (`tests/schemas/module_rules.py`), each shown refusing a planted defect. There is no
+loader: nothing reads a manifest at deploy time.
+
+**Specified, not implemented** (described in [modules](../modules.md#specified-not-implemented-the-follow-ups),
+with no schema, generator or check in any form):
+
+1. capability descriptor 1.1 (the slot registry; `examples/modules/slots.yml` is draft data only);
+2. swap record 1.2 (no schema; `legs`, `selection_diff` and the dependants report are undefined,
+   and no swap has been driven through it);
+3. `platform/interface` 1.0 as a record, and gate-interface ownership;
+4. the trust-tier grants not yet implemented: `grants.units`, upstream grants for broker, idp and
+   remote-admin, cloud-bound model roles, `grants.shared_config`, and the review-policy module kinds;
+5. the supply chain: `lab/modules.lock`, the tree digest and digest-keyed reviews;
+6. the egress generator (declared egress as host and unit network policy);
+7. import validation (no traversal, symlinks or oversize trees) as a protocol MUST with tests;
+8. footprint limits (`MemoryMax`, `CPUQuota` and disk quotas generated from footprints);
+9. the loader, with its two-way check against what runs, uniqueness against the core's own names
+   and the overlay-shadowing refusal;
+10. the product-name lint.
+
+These are the follow-ups. The ADR is not accepted, and the schemas are not frozen, until the loader
+and the collector pilot have run.
+
 ## Alternatives
 
 - **One module per VM.** Rejected: a host is placement, not a feature. One host runs several
