@@ -568,41 +568,75 @@ scope:
   (`scope_problems`, `parse_entry`) adds what a pattern cannot say: IPv6 host bits, `/0`, any
   network touching the unspecified, loopback, link-local, multicast or reserved blocks, a network
   listed twice, and in `trusted.*` a network broader than **/8 (IPv4) or /32 (IPv6)**: trusting
-  more is a blind spot, not the lab. `target` has no floor. It reports a wrong-typed or unknown
-  part itself, without relying on the schema.
+  more is a blind spot, not the lab. `target` has no floor. `trusted.wan` also refuses private,
+  shared (RFC 6598) and unique-local space: the internet never sees the lab as one of those, so it
+  is a typo for `trusted.nets`. It reports a wrong-typed or unknown part itself, without relying on
+  the schema.
 - **Empty and absent.** A part is non-empty, except an exclusion: `exclude.*: []` means "nothing
   excluded". An absent part is never read as empty: a module that requires it is refused.
 - **Declared reads.** A module declares the parts it reads (`requires.scope`), and
-  `homelabnext.modules.scope.scope_networks(site, module, part)`, the reader a module calls, raises
-  `ScopeUndeclared` for any other part; an absent, empty (unless an exclusion) or malformed part
-  raises `ScopeMissing`, never an empty list. The external data collector requires `trusted.wan`,
+  `homelabnext.modules.scope.scope_networks(site, module, part)`, the reader a module is meant to
+  call, raises `ScopeUndeclared` for any other part; an absent, empty (unless an exclusion) or
+  malformed part raises `ScopeMissing`, never an empty list. The API is **cooperative**: nothing
+  stops code from reading `site["scope"]` or the low-level `_part_networks` directly, or from
+  passing a module dict with an edited `requires`. What enforces the declaration today is review
+  of the module's code and the loader's rule that every declared part is present; there is no
+  sandbox between a module and the selection. The external data collector requires `trusted.wan`,
   so sessions from the lab's own WAN are dropped instead of reported, without a list of its own.
   It does not read `trusted.tooling`: the operator's own scanners and runners seen from outside are
   recorded like any other source (a site that wants one dropped lists it under `trusted.wan`).
-- **Target readers.** The manifest has no "offensive" or "mutating" marker, so the loader keys the
-  rule on what a manifest declares: a module that requires `target` must also require
-  `exclude.offensive`, and one that also runs unattended (a scheduler job, or an agent on a
-  calendar or trigger) `exclude.unattended_mutation`. Such a module acts only on
-  `effective_targets(site, module)`: `target` minus those exclusions, per IP version.
+- **Modules that read addresses.** The manifest has no "offensive", "mutating" or "acts on"
+  marker, so the loader keys the rule on what a manifest declares, and fails closed: a module that
+  requires any address part (`target` or any `trusted.*` part) must also require
+  `exclude.offensive`, and `exclude.unattended_mutation` too unless it is attended. A module is
+  **unattended unless every contribution kind it uses is inert** (`INERT_CONTRIBUTIONS`: docs,
+  detections, lake tables, status sources, notify pairs); a service, a workflow pack, an MCP
+  server, an invariant, an entry point, a preflight hook, a role, shared config, a scheduler job
+  and every agent (each has a calendar or a trigger) can run with no human present, and a test ties
+  the classification to the `platform/module` schema so a new kind counts as executable. The
+  external data collector only filters on `trusted.wan`, but the manifest cannot say so, so it
+  declares both exclusions and a site may set them to `[]`. A module acts only on
+  `effective_targets(site, module)`: `target` minus those exclusions, per IP version; when the
+  exclusions leave nothing it raises `ScopeMissing` ("nothing left after the exclusions"), never
+  an empty list, which a caller could read as "unrestricted".
 - **Addresses live here.** A module config default refuses an address literal (the schema's
-  pattern, a dotted quad or `::`). A selection's config value refuses a site address in any
-  spelling (`address_literals`): an IPv6, hex or zero-padded address, any IPv4 address with a
-  port, a prefix length or in a URL, and a plain dotted quad or integer only when it is private or
-  shared space (a plain global one reads the same as a four-part version and is let through). Never
-  refused: unspecified, loopback, link-local, multicast, reserved and documentation addresses (bind
-  addresses such as `0.0.0.0` and `[::]:8080`, labels such as `cafe::beef`). An **external
+  pattern, a dotted quad or `::`). A selection's string-valued config value (every type but
+  `integer`, `duration_s` and `boolean`) refuses a site address (`address_literals`): an IPv6, hex
+  or zero-padded address; any IPv4 address with a port, a prefix length, in brackets or in a URL,
+  including an `inet_aton` short form there (`http://10.1/` is the octets 10, 0, 0, 1 and <!-- no-raw-endpoint: allow inet_aton short forms -->
+  `10.20.5:8080` is 10, 20, 0, 5); and a plain dotted quad or 8 to 10 digit integer only when it is private or shared
+  space. Let through: a plain global dotted quad and a plain short form (they read the same as a
+  version), and unspecified, loopback, link-local, multicast, reserved and documentation addresses
+  (bind addresses such as `0.0.0.0` and `[::]:8080`, labels such as `cafe::beef`). **Not scanned:**
+  `integer`, `duration_s` and `boolean` keys. Their value is a number by schema, and any integer of
+  2^24 or more is also an IPv4 address, so scanning them would refuse ordinary sizes; a module
+  that reads an address out of an integer key is a defect in that module. An **external
   endpoint** (a public resolver, an NTP server) is a hostname or a `svc:` reference, never a
   literal; it is not part of the scope.
-- **The public gate.** `tools/private_leak_check.py public` reads every `scope` key at any depth
-  and in any case, in every document of a `.yml`, `.yaml`, `.json` or `.toml` file (through
-  template suffixes such as `.j2` and `.example`) and of a Markdown yaml, json or toml fence. A
-  mapping with only another document's scope keys (a customization's selectors, an MCP parameter,
-  JSON Schema keywords) is not a site block. In a site block every entry must be a string naming a
-  documentation network (`scope-address`; a zero-padded, integer or hex address, a number,
-  `0.0.0.0/0` and a widened documentation prefix such as `192.0.2.0/16` all fail), the shape is the <!-- no-raw-endpoint: allow documentation ranges -->
-  selection's (`scope-shape`: an unknown part, a key twice, an anchor or alias), and a file that
-  mentions a scope and does not parse fails (`scope-unparsed`). Plain text and code are
-  `tools/leak_scan.py`'s.
+- **The public gate.** `tools/private_leak_check.py public` places the rule by **location**, not
+  by format:
+  - A site scope block may sit only at `SCOPE_BLOCK_PATHS`: the example site profiles
+    (`examples/modules/sites/*.yml`) and the generated selection examples and negatives
+    (`schemas/platform/{examples,negative}/module_selection.*.yml`). There the file is parsed
+    strictly, after a size and depth bound (larger or deeper is refused before any parser sees
+    it), every entry must be a string naming a documentation network (`scope-address`), the shape
+    is the selection's with `scope` at the top level only (`scope-shape`: an unknown part, a key
+    twice, an anchor or alias), and a file the parse refuses fails (`scope-unparsed`).
+  - Everywhere else, in **every file** the scanner reads (any suffix, Markdown prose and fences of
+    any indent, length or info string), the raw text under every `scope` key (any case, quoted or
+    not, `scope:`, `scope =`, `[scope]`, `[[scope]]`, a dotted `scope.x` key; the same after
+    decoding `\x`, `\u`, `\U`, escaped line breaks and HTML character references) is tokenised,
+    and any address-like token that is not a documentation address fails (`scope-address`): an
+    IPv6 address, a dotted quad in any numeric spelling, an integer of 2^24 or more in any YAML,
+    TOML or C spelling, a private `inet_aton` short form, or a short form with a prefix length,
+    port or scheme. A YAML alias is followed to its anchor, and a `!!binary` value fails. What a
+    key holds is over-read: the rest of its line, every deeper line after it (a TOML header: up to
+    the next header) and any flow collection it opens. A page may show a block's shape with
+    documentation addresses, so a doc-only block outside the allowlist is not judged for shape.
+  - Not covered: an address that is not under a scope key (a sibling key, plain prose) is
+    `tools/leak_scan.py`'s, which ignores zero-padded and integer spellings; an integer below
+    2^24 (it names no host); a plain short form in a version range (`1.0`, `16.4`); a file the
+    scanner cannot read as text.
 - This block is the site's **network** scope. It is not `homelabnext.scope` ([scope guard](scope.md)),
   which keeps writer tools off scratch targets by registry id.
 
@@ -614,6 +648,9 @@ scope:
   implemented") until a reader resolves a source.
 - **A module that reads `target`.** No example module does yet; the rule above and
   `effective_targets` are ready for the first one.
+- **Acting on names.** A module that acts on hostnames or `svc:` references is outside the
+  network scope: the scope holds networks only, and the manifest cannot say a module acts on a
+  name (nor that it only filters on a part, an `acts_on` marker), so no rule here covers it.
 
 ## What the loader checks
 
