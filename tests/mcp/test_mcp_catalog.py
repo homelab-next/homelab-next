@@ -486,3 +486,41 @@ def test_a_send_is_an_effect_that_goes_through_the_broker():
     for sid in ("fetch", "web", "browser", "playwright"):
         rec = yaml.safe_load((CATALOG / f"{sid}.yml").read_text())
         assert all(t["classes"] == ["egress"] for t in rec["tools"]), sid
+
+
+# ---------------------------------------------------------------- classes cannot be declared down
+@pytest.mark.parametrize("cls", ["read", "record-write"])
+def test_known_acting_software_cannot_declare_its_tools_down(tmp_catalog, cls):
+    """S1 (P3, P3b): ssh_exec classed read or record-write, acts_via dropped and re-stamped, passed
+    every gate; a server of known acting software (by its id, package, image or bins) has a tool
+    in that class, and a tool whose name acts carries an acting class."""
+
+    def down(r):
+        r["tools"][0]["classes"] = [cls]
+        r.pop("acts_via")
+        r.pop("direct_reason")
+        _restamp(r)
+
+    problems = _check(_edit(tmp_catalog, "ssh", down))
+    assert any("ssh.yml: is ssh software, so a tool is classed exec" in p for p in problems)
+    assert any("ssh.yml: tool ssh_exec acts by its name" in p for p in problems)
+    # the same package under an innocent id is still ssh software (its package and bins)
+    rec = yaml.safe_load((CATALOG / "ssh.yml").read_text())
+    down(rec)
+    rec["id"] = "helper"
+    rec["tools"][0]["name"] = "do_it"
+    (tmp_catalog / "helper.yml").write_text(yaml.safe_dump(rec))
+    problems = servers.check(servers.load(tmp_catalog), registry=REGISTRY)
+    assert any("helper.yml: is ssh software" in p for p in problems), problems
+
+
+def test_a_writing_tool_is_file_write_unless_a_platform_api_validates_it(tmp_catalog):
+    """S1: record-write means "through a platform API that validates it"; a record that fronts no
+    platform capability writes files. The shipped notes server writes through the records API."""
+    notes = yaml.safe_load((CATALOG / "notes.yml").read_text())
+    assert notes["capabilities"] == ["cap:records"] and notes["egress"] == ["svc:records-db"]
+    cat = _edit(tmp_catalog, "notes", lambda r: [r.pop("capabilities"), _restamp(r)])
+    assert any("notes.yml: tool write_note writes" in p for p in _check(cat))
+    cat = _edit(tmp_catalog, "fetch", lambda r: r["tools"].append(
+        {"name": "upload_page", "classes": ["egress"], "approval": False}))  # fmt: skip
+    assert any("fetch.yml: tool upload_page writes" in p for p in _check(cat))

@@ -893,6 +893,101 @@ def broker_front_problems(rec: Mapping[str, Any]) -> list[str]:
     return out
 
 
+#: known acting software, by a word of the record's id, package, image or bins, and the class
+#: its tools must include: a record cannot declare it down to read or record-write (ADR-0030).
+#: Code, not data, like the broker front.
+ACTING_SOFTWARE = {
+    **dict.fromkeys(("ssh", "shell", "bash", "sh", "zsh", "exec", "terminal", "tmux"), "exec"),
+    **dict.fromkeys(
+        (
+            "kubernetes",
+            "kubectl",
+            "k8s",
+            "helm",
+            "ansible",
+            "docker",
+            "podman",
+            "terraform",
+            "opentofu",
+            "salt",
+            "puppet",
+            "systemd",
+        ),
+        "exec",
+    ),
+    **dict.fromkeys(("filesystem", "fs", "files", "git"), "file-write"),
+    **dict.fromkeys(("vault", "openbao", "secrets", "keychain", "keyring"), "credential"),
+    **dict.fromkeys(("slack", "email", "smtp", "mail", "ntfy", "sms", "teams", "discord"), "send"),
+}
+#: tool-name words that act: such a tool carries a broker_only class
+ACTING_VERBS = frozenset((
+    "run", "exec", "execute", "shell", "command", "cmd", "kubectl", "apply", "playbook",
+    "deploy", "delete", "remove", "destroy", "ssh", "push", "commit", "merge", "send", "post",
+    "publish", "kill", "restart", "stop", "start", "install", "upgrade",
+))  # fmt: skip
+#: tool-name words that write: such a tool carries a broker_only class, or record-write on a
+#: record that fronts a platform capability (its API validates what it writes)
+WRITING_VERBS = frozenset((
+    "write", "create", "update", "put", "upload", "add", "link", "propose", "annotate",
+    "set", "edit", "save", "open", "cancel",
+))  # fmt: skip
+
+
+def _words(*values: Any) -> set[str]:
+    out: set[str] = set()
+    for v in values:
+        for x in v if isinstance(v, (list, tuple)) else (v,):
+            if isinstance(x, str):
+                out |= set(re.split(r"[^a-z0-9]+", x.lower().rsplit("/", 1)[-1])) - {""}
+    return out
+
+
+def floor_problems(
+    rec: Mapping[str, Any], where: str, broker_only: Iterable[str] | None = None
+) -> list[str]:
+    """Tool classes are not only self-declared (ADR-0030, S1): a record of known acting software
+    (:data:`ACTING_SOFTWARE`, by a word of its id, package, image or bins) has a tool in that
+    class; a tool whose name acts (:data:`ACTING_VERBS`) carries a ``broker_only`` class; one whose
+    name writes (:data:`WRITING_VERBS`), and any ``record-write`` tool, writes either in a
+    ``broker_only`` class or as ``record-write`` on a record that fronts a platform capability
+    (``capabilities`` or ``implements``: an API that validates what it writes). The broker's own
+    front is judged by :func:`broker_front_problems` instead."""
+    if rec.get("acts_via") == "broker" and not broker_front_problems(rec):
+        return []
+    if broker_only is None:
+        from homelabnext.agent.readers import table_broker_only
+
+        broker_only = table_broker_only()
+    only = set(broker_only)
+    origin = rec.get("origin") if isinstance(rec.get("origin"), Mapping) else {}
+    t = rec.get("transport") if isinstance(rec.get("transport"), Mapping) else {}
+    words = _words(rec.get("id"), origin.get("package"), str(origin.get("image") or "").split(":")[0],
+                   origin.get("bins"), t.get("bin"))  # fmt: skip
+    tools = [x for x in rec.get("tools") or () if isinstance(x, Mapping)]
+    have = {c for x in tools for c in x.get("classes") or ()}
+    out = [
+        f"{where}: is {w} software, so a tool is classed {cls} (classes cannot be declared down)"
+        for w, cls in sorted(ACTING_SOFTWARE.items())
+        if w in words and cls not in have
+    ]
+    api = bool(rec.get("capabilities") or rec.get("implements"))
+    for x in tools:
+        name, cls = str(x.get("name")), set(x.get("classes") or ())
+        verbs = _words(name.replace("_", "-"))
+        if verbs & ACTING_VERBS and not cls & only:
+            out.append(f"{where}: tool {name} acts by its name, so it carries an acting class "
+                       f"({', '.join(sorted(only))})")  # fmt: skip
+        elif (
+            (verbs & WRITING_VERBS or "record-write" in cls)
+            and not cls & only
+            and not ("record-write" in cls and api)
+        ):
+            out.append(f"{where}: tool {name} writes, so it is file-write, or record-write on "
+                           "a record that fronts a platform capability (capabilities or "
+                           "implements)")  # fmt: skip
+    return out
+
+
 def acts_via_problems(
     rec: Mapping[str, Any], where: str, broker_only: Iterable[str] | None = None
 ) -> list[str]:
@@ -1319,6 +1414,7 @@ def check(
         out += path_bin_problems(rec, where, source_root)
         out += _tool_problems(rec, where, vocabulary)
         out += acts_via_problems(rec, where, broker_only)
+        out += floor_problems(rec, where, broker_only)
         out += _egress_problems(rec, where)
         out += remote_problems(rec, where, registry)
         out += _env_collision_problems(rec, where)

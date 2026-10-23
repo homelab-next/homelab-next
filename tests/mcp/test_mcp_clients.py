@@ -202,7 +202,7 @@ def test_llm_orchestrator_catalog_and_grants_are_its_format():
         "allowed_env": ["NOTES_MODE", "NOTES_WRITABLE_PREFIX"],
         "args": ["--no-config", "--from", "example-notes-mcp==1.2.0", "notes-mcp"],
         "command": "uvx",
-        "env": {"NOTES_ROOT": "/srv/notes", "NOTES_TOKEN": "${HNX_SECRET_MCP_NOTES_TOKEN}"},
+        "env": {"NOTES_ROOT": "notes/", "NOTES_TOKEN": "${HNX_SECRET_MCP_NOTES_TOKEN}"},
         "timeout": 120,
     }
     assert "lake" not in kinds and "hnx-catalog" not in kinds  # remote / per-instance args
