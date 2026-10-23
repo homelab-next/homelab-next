@@ -15,6 +15,11 @@ still ``pending``, so the event is sent again with the *same id*; the forwarder 
 ``duplicate`` and the publisher marks it ``sent``.  Delivery is at-least-once on the wire and
 exactly-once in effect, because the id is the idempotency key.  Publishing an id already ``sent``
 makes no call at all; the same id with a different body is refused (:class:`EventError`).
+
+The state is bounded: only the newest ``keep_sent`` ``sent`` records are kept (each is numbered
+when it is sent), and older ones are removed in one write once there are a tenth more than that.
+Pending and rejected records are never removed.  An id whose ``sent`` record was removed is sent
+again if published again; the forwarder's own de-duplication by id answers ``duplicate``.
 """
 
 from __future__ import annotations
@@ -32,6 +37,10 @@ class _Store(Protocol):
     def get(self, key: str, default: Any = None) -> Any: ...
     def put(self, key: str, value: Any) -> None: ...
     def keys(self) -> list[str]: ...
+
+
+#: ``sent`` records kept by default (the state file is rewritten on every write)
+KEEP_SENT = 1000
 
 
 @dataclass(frozen=True)
@@ -70,12 +79,18 @@ class Publisher:
         policy: RetryPolicy | None = None,
         sleep: Callable[[float], None] = time.sleep,
         namespace: str = "events",
+        keep_sent: int = KEEP_SENT,
     ) -> None:
+        if keep_sent < 1:
+            raise ValueError("keep_sent must be at least 1")
         self.forwarder = forwarder
         self.store = store
         self.policy = policy or RetryPolicy()
         self.sleep = sleep
         self.namespace = namespace
+        self.keep_sent = keep_sent
+        self._seq: int | None = None  # the last sent record's number, read on first use
+        self._sent = 0  # sent records in the store (as of the last scan, plus those since)
 
     def _k(self, event_id: str) -> str:
         return f"{self.namespace}/{event_id}"
@@ -84,15 +99,52 @@ class Publisher:
         rec = self.store.get(self._k(event_id))
         return rec["status"] if rec else None
 
-    def pending_ids(self) -> list[str]:
+    def _records(self) -> dict[str, dict[str, Any]]:
+        """Every record of this namespace by event id, in one read when the store allows it."""
         pre = f"{self.namespace}/"
-        out = []
-        for k in sorted(self.store.keys()):
-            if k.startswith(pre):
-                rec = self.store.get(k)
-                if rec and rec.get("status") == "pending":
-                    out.append(k[len(pre) :])
-        return out
+        items = getattr(self.store, "items", None)
+        if callable(items):
+            pairs = list(dict(items()).items())
+        else:
+            names = list(self.store.keys())  # the protocol has keys(), not iteration
+            pairs = [(k, self.store.get(k)) for k in names]
+        return {k[len(pre) :]: v for k, v in pairs if k.startswith(pre) and isinstance(v, dict)}
+
+    def pending_ids(self) -> list[str]:
+        return sorted(i for i, r in self._records().items() if r.get("status") == "pending")
+
+    def _scan(self) -> None:
+        sent = [r for r in self._records().values() if r.get("status") == "sent"]
+        self._seq = max((int(r.get("seq") or 0) for r in sent), default=0)
+        self._sent = len(sent)
+
+    def _next_seq(self) -> int:
+        if self._seq is None:
+            self._scan()
+        assert self._seq is not None
+        self._seq += 1
+        return self._seq
+
+    def _prune(self) -> None:
+        """Remove the oldest ``sent`` records beyond ``keep_sent``, in one write."""
+        if self._sent <= self.keep_sent + max(1, self.keep_sent // 10):
+            return
+        delete_many = getattr(self.store, "delete_many", None)
+        delete = getattr(self.store, "delete", None)
+        if delete_many is None and delete is None:
+            return  # a store that cannot delete keeps everything
+        sent = sorted(
+            (int(r.get("seq") or 0), i)
+            for i, r in self._records().items()
+            if r.get("status") == "sent"
+        )
+        old = [self._k(i) for _, i in sent[: max(0, len(sent) - self.keep_sent)]]
+        if delete_many is not None:
+            delete_many(old)
+        else:
+            for k in old:
+                delete(k)
+        self._sent = len(sent) - len(old)
 
     def publish(self, event: dict[str, Any]) -> PublishResult:
         validate_event(event)
@@ -161,4 +213,10 @@ class Publisher:
             "attempts": int(prev.get("attempts", 0)) + bump,
             "error": error,
         }
+        if status == "sent":
+            rec["seq"] = self._next_seq()  # the order the oldest are pruned in
         self.store.put(self._k(eid), rec)
+        if status == "sent":
+            if prev.get("status") != "sent":
+                self._sent += 1
+            self._prune()

@@ -401,3 +401,62 @@ def test_a_non_finite_number_is_refused_by_the_producer_and_on_every_decode_path
         decode_event(ev)  # the mapping path
     with pytest.raises(EventError, match="not a finite number"):
         decode_event({**ev, "data": {**ev["data"], "nested": [{"x": bad}]}})
+
+
+# ---------------------------------------------------------------- bounded state
+def test_the_state_keeps_only_the_newest_sent_records(store):
+    f = FakeForwarder()
+    p = pub(f, store, keep_sent=20, policy=RetryPolicy(max_attempts=1))
+    f.fail_next = 1  # one event stays pending; pending records are never pruned
+    held = task_event("held")
+    assert p.publish(held).status == "pending"
+    events = [task_event(f"k{i}") for i in range(100)]
+    for ev in events:
+        assert p.publish(ev).ok
+    sent = [k for k, v in store.items().items() if v["status"] == "sent"]
+    assert 20 <= len(sent) <= 22  # pruned in one write once a tenth over keep_sent
+    assert p.status_of(events[-1]["id"]) == "sent"
+    assert p.status_of(events[0]["id"]) is None
+    assert p.pending_ids() == [held["id"]]
+    again = p.publish(events[0])  # its record is gone: sent again, the forwarder de-duplicates
+    assert again.status == "duplicate" and len(f.accepted) == 100
+
+
+def test_the_state_file_stops_growing(tmp_path):
+    path = tmp_path / "pub.json"
+    p = pub(FakeForwarder(), StateStore(path), keep_sent=50)
+    sizes = []
+    for i in range(300):
+        p.publish(task_event(f"g{i}"))
+        if i % 100 == 99:
+            sizes.append(path.stat().st_size)
+    assert max(sizes) - min(sizes) < sizes[0] // 4, sizes
+
+
+def test_a_store_without_items_or_delete_still_works():
+    class Bare:
+        def __init__(self):
+            self.d = {}
+
+        def get(self, k, default=None):
+            return self.d.get(k, default)
+
+        def put(self, k, v):
+            self.d[k] = v
+
+        def keys(self):
+            return list(self.d)
+
+    s = Bare()
+    p = pub(FakeForwarder(), s, keep_sent=2)
+    for i in range(5):
+        assert p.publish(task_event(f"b{i}")).ok
+    assert len(s.d) == 5 and p.pending_ids() == []
+
+
+def test_delete_many_removes_in_one_write(tmp_path):
+    s = StateStore(tmp_path / "s.json")
+    for k in "abcd":
+        s.put(k, 1)
+    assert s.delete_many(["a", "c", "zz", "a"]) == 2
+    assert s.keys() == ["b", "d"]
