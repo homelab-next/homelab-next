@@ -1238,10 +1238,13 @@ TEXT_KEY = re.compile(
 #: other unambiguous Caddy pins: a build, a module requirement, a release download
 TEXT_PINS = (
     # (a backticked `xcaddy build` is markdown prose naming the command, not a run of it)
-    re.compile(r"\bxcaddy\s+build(?![`\w])(?:\s+(?P<v>v?\d\S*|\$\S+))?"),
+    re.compile(r"\bxcaddy\s+build(?![`\w])(?:\s+(?P<v>v?\d\S*|\$\S+|master|main|latest|HEAD)\b)?"),
     re.compile(r"github\.com/caddyserver/caddy/v2(?:@|\s+)(?P<v>v\S+)"),
     re.compile(r"caddyserver/caddy/releases/download/(?P<v>[^/\s]+)/"),
     re.compile(r"\bcaddy_(?P<v>\d[\w.+-]*?)_(?:linux|darwin|windows|freebsd|openbsd|netbsd)_"),
+    # a distro package pin (apk add caddy=2.8.4-r0, apt-get install caddy=2.8.4-1): its upstream
+    # version; the distro's own revision after it is not a pre-release
+    re.compile(r"(?<![\w.-])caddy=(?:\d+:)?(?P<v>\d+\.\d+(?:\.\d+)?)"),
 )
 
 
@@ -1268,26 +1271,61 @@ def tag_ok(tag: str) -> bool:
     return version_ok(VARIANT.sub("", tag))
 
 
-def resolve(value: str, env: dict[str, str | None] | None = None) -> str | None:
-    """``value`` with its ``${VAR}`` substituted from ``env`` or the expression's own default,
-    or None when one cannot be (no value, no default, ``${VAR:?}``, a Jinja expression)."""
-    env = env or {}
+def _substitute_vars(value: str, env: dict[str, str | None]) -> tuple[str, bool]:
+    """``value`` with each ``${NAME...}`` and ``$NAME`` replaced, nested defaults included
+    (``${A:-${B:-2.11.7}}``), and whether one could not be (no value and no default)."""
+    out: list[str] = []
     missing = False
+    i, n = 0, len(value)
+    while i < n:
+        c = value[i]
+        if c == "$" and value.startswith("${", i):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if value.startswith("${", j):
+                    depth, j = depth + 1, j + 2
+                    continue
+                depth -= value[j] == "}"
+                j += 1
+            if depth:
+                return value, True  # never closed
+            m = re.match(r"(\w+)(?:(:?[-=?+])(.*))?$", value[i + 2 : j - 1], re.S)
+            i = j
+            if not m:
+                missing = True
+                continue
+            name, op, default = m.group(1), m.group(2) or "", m.group(3) or ""
+            known = env.get(name)
+            if known is not None and not (op.startswith(":") and known == "" and "-" in op):
+                out.append(known)
+            elif op in (":-", "-", ":=", "="):
+                got, miss = _substitute_vars(default, env)
+                out.append(got)
+                missing |= miss
+            else:
+                missing = True
+            continue
+        if c == "$" and (m := re.match(r"\$(\w+)", value[i:])):
+            known = env.get(m.group(1))
+            if known is None:
+                missing = True
+            else:
+                out.append(known)
+            i += len(m.group(0))
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out), missing
 
-    def sub(m: re.Match[str]) -> str:
-        nonlocal missing
-        name = m.group("name") or m.group("bare")
-        op, default = m.group("op") or "", m.group("default") or ""
-        known = env.get(name)
-        if known is not None and not (op.startswith(":") and known == "" and "-" in op):
-            return known
-        if op in (":-", "-", ":=", "="):
-            return default
-        missing = True
-        return ""
 
-    out = VARIABLE.sub(sub, value)
-    return None if missing or "{{" in out or "{%" in out else out
+def resolve(value: str, env: dict[str, str | None] | None = None) -> str | None:
+    """``value`` with its ``${VAR}`` substituted from ``env`` or the expression's own default
+    (nested defaults to any depth), or None when one cannot be (no value, no default,
+    ``${VAR:?}``, a Jinja expression) or a ``$`` is left over."""
+    out, missing = _substitute_vars(value, env or {})
+    if missing or "{{" in out or "{%" in out or "$" in out:
+        return None
+    return out
 
 
 def _tagged_caddy(value: str) -> bool:
@@ -1435,26 +1473,61 @@ def lint_pins(text: str, path: str = "<text>") -> list[Finding]:
     return pins.findings
 
 
+#: an ``xcaddy build`` in a Dockerfile ``RUN``, shell or exec form (``"xcaddy", "build"``); its
+#: version is the first argument that is not a flag
+XCADDY_RUN = re.compile(
+    r"""\bxcaddy["']?\s*,?\s*["']?build\b["']?(?:[\s,]+(?P<v>["']?[^\s,"'\]]+["']?))?"""
+)
+#: ``CADDY_VERSION=...`` set for the command that follows it (``RUN CADDY_VERSION=v2.8.4 xcaddy``)
+INLINE_CADDY_VERSION = re.compile(r"""(?<![\w-])CADDY_VERSION=(?P<v>"[^"]*"|'[^']*'|[^\s;&|]+)""")
+
+
+def _dockerfile_lines(lines: list[str]) -> list[tuple[int, str]]:
+    """Logical instructions as ``(first line, text)``: continuation lines joined with the escape
+    character the ``# escape=`` parser directive names (default ``\\``)."""
+    escape = "\\"
+    for ln in lines:
+        m = re.match(r"^#\s*(\w+)\s*=\s*(\S+)\s*$", ln)
+        if not m:
+            break
+        if m.group(1).lower() == "escape":
+            escape = m.group(2)
+    out: list[tuple[int, str]] = []
+    buf, start = "", 0
+    for no, ln in enumerate(lines, 1):
+        if not buf:
+            start = no
+        if ln.rstrip().endswith(escape) and not ln.lstrip().startswith("#"):
+            buf += ln.rstrip()[: -len(escape)] + " "
+            continue
+        out.append((start, buf + ln))
+        buf = ""
+    if buf:
+        out.append((start, buf))
+    return out
+
+
 def lint_dockerfile(text: str, path: str = "<text>") -> list[Finding]:
-    """A Dockerfile: ``ARG``/``ENV`` defaults are resolved into ``FROM`` and ``xcaddy build``;
-    a ``FROM`` that cannot be resolved (no default) fails closed, since it could be Caddy."""
+    """A Dockerfile: ``ARG``/``ENV`` defaults are resolved into ``FROM``, ``COPY --from``,
+    ``RUN --mount=from=`` and ``xcaddy build`` (shell or exec form, quoted or not, a
+    ``CADDY_VERSION=`` set on the command itself included); a ``FROM`` that cannot be resolved
+    (no default) fails closed, since it could be Caddy; ``caddy=<version>`` package pins
+    (``apk add``, ``apt-get install``) are read as Caddy versions."""
     pins = _Pins(path, text)
     env: dict[str, str | None] = {}
     stages: set[str] = set()
     builder = False
-    logical: list[tuple[int, str]] = []
-    buf, start = "", 0
-    for no, ln in enumerate(pins.lines, 1):
-        if not buf:
-            start = no
-        if ln.rstrip().endswith("\\"):
-            buf += ln.rstrip()[:-1] + " "
-            continue
-        logical.append((start, buf + ln))
-        buf = ""
-    if buf:
-        logical.append((start, buf))
-    for no, ln in logical:
+
+    def other_image(no: int, ref: str) -> None:
+        """An image a ``COPY --from`` or ``RUN --mount`` reads from: unless it is a stage."""
+        got = resolve(ref.strip("\"'"), env)
+        if got is None:
+            pins.add(no, f"--from {ref} cannot be resolved: it could be Caddy; give the ARG a "
+                     "default")  # fmt: skip
+        elif got not in stages and not got.isdigit():
+            pins.image(no, got)
+
+    for no, ln in _dockerfile_lines(pins.lines):
         words = ln.split()
         if not words or words[0].startswith("#"):
             continue
@@ -1484,11 +1557,34 @@ def lint_dockerfile(text: str, path: str = "<text>") -> list[Finding]:
             )
             if len(args) >= 3 and args[1].lower() == "as":
                 stages.add(args[2])
+        elif op in ("COPY", "ADD"):
+            for w in words[1:]:
+                if w.startswith("--from="):
+                    other_image(no, w.split("=", 1)[1])
         elif op == "RUN":
-            for m in TEXT_PINS[0].finditer(ln):
-                v = m.group("v")
-                if v is None:
-                    if not (builder or env.get("CADDY_VERSION")):
+            flags = []
+            rest = ln.split(None, 1)[1] if len(words) > 1 else ""
+            while rest.startswith("--"):
+                flag, _, rest = rest.partition(" ")
+                flags.append(flag)
+                rest = rest.lstrip()
+            for flag in flags:
+                for m in re.finditer(r"(?:^--mount=|,)from=([^,\s]+)", flag):
+                    other_image(no, m.group(1))
+            if rest.startswith("["):
+                try:
+                    argv = json.loads(rest)
+                except ValueError:
+                    argv = None
+                if isinstance(argv, list):
+                    rest = " ".join(str(a) for a in argv)
+            inline = [m.group("v").strip("\"'") for m in INLINE_CADDY_VERSION.finditer(rest)]
+            for v in inline:
+                pins.version(no, "CADDY_VERSION", v, env)
+            for m in XCADDY_RUN.finditer(rest):
+                v = (m.group("v") or "").strip("\"'")
+                if not v or v.startswith("-") or v in ("&&", "||", ";", "|"):
+                    if not (builder or env.get("CADDY_VERSION") or inline):
                         pins.add(no, "xcaddy build without a version or CADDY_VERSION: pin "
                                  f"{MIN_CADDY_TEXT} or later")  # fmt: skip
                 else:

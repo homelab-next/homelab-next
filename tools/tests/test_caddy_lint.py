@@ -370,6 +370,62 @@ def test_a_dockerfile_from():
 @pytest.mark.parametrize(
     ("text", "lines"),
     [
+        # review SF5: COPY --from an image (the usual way to put Caddy on another base)
+        ("FROM alpine\nCOPY --from=caddy:2.8.4 /usr/bin/caddy /usr/bin/caddy\n", [2]),
+        ("FROM alpine\nCOPY --from=docker.io/library/caddy:2.8.4 /usr/bin/caddy /x\n", [2]),
+        ("FROM caddy:2.11.7-builder AS b\nFROM alpine\nCOPY --from=b /usr/bin/caddy /x\n", []),
+        ("FROM alpine\nCOPY --from=0 /x /x\n", []),
+        ("ARG IMG=caddy:2.8.4\nFROM alpine\nCOPY --from=${IMG} /x /x\n", [3]),
+        ("FROM alpine\nRUN --mount=type=bind,from=caddy:2.8.4,source=/usr/bin/caddy,target=/c cp /c /x\n", [2]),
+        # a CADDY_VERSION set on the command itself overrides the builder image's
+        ("FROM caddy:2.11.7-builder AS b\nRUN CADDY_VERSION=v2.8.4 xcaddy build --with example.test/x\n", [2]),
+        ("FROM golang:1.23\nRUN CADDY_VERSION=\"v2.11.7\" xcaddy build\n", []),
+        # a quoted version, the exec form, a branch name
+        ('FROM caddy:2.11.7-builder AS b\nRUN xcaddy build "v2.8.4"\n', [2]),
+        ("FROM caddy:2.11.7-builder AS b\nRUN xcaddy build 'v2.8.4'\n", [2]),
+        ('FROM caddy:2.11.7-builder AS b\nRUN ["xcaddy", "build", "v2.8.4"]\n', [2]),
+        ('FROM caddy:2.11.7-builder AS b\nRUN ["xcaddy", "build", "--with", "example.test/x"]\n', []),
+        ("FROM caddy:2.11.7-builder AS b\nRUN xcaddy build master\n", [2]),
+        ("FROM caddy:2.11.7-builder AS b\nRUN xcaddy build && cp caddy /x\n", []),
+        # review N2: distro packages, and the escape parser directive
+        ("FROM alpine\nRUN apk add caddy=2.8.4-r0\n", [2]),
+        ("FROM debian\nRUN apt-get install -y caddy=2.8.4-1 curl\n", [2]),
+        ("FROM alpine\nRUN apk add caddy=2.11.2-r0\n", []),
+        ("# escape=`\nFROM `\n  caddy:2.8.4\n", [2]),
+        # review N1: nested defaults, to any depth
+        ("FROM caddy:${A:-${B:-2.8.4}}\n", [1]),
+        ("FROM caddy:${A:-${B:-${C:-2.8.4}}}\n", [1]),
+        ("FROM caddy:${A:-${B:-${C:-2.11.7}}}\n", []),
+    ],
+)  # fmt: skip
+def test_review_dockerfile_pin_shapes(text, lines):
+    assert [f.line for f in lint.lint_dockerfile(text)] == lines
+
+
+@pytest.mark.parametrize(
+    ("value", "env", "got"),
+    [
+        ("caddy:${A:-${B:-2.8.4}}", {}, "caddy:2.8.4"),
+        ("caddy:${A:-${B:-${C:-2.8.4}}}", {"B": "2.11.7"}, "caddy:2.11.7"),
+        ("caddy:${A:-${B}}", {}, None),  # no value anywhere
+        ("caddy:${A:-$B}", {"B": "2.11.7"}, "caddy:2.11.7"),
+        ("caddy:${A", {}, None),  # never closed
+        ("caddy:$$A", {}, None),  # a $ left over
+    ],
+)
+def test_resolve_nested_defaults(value, env, got):
+    assert lint.resolve(value, env) == got
+
+
+def test_a_nested_default_in_compose():
+    doc = "services:\n  edge:\n    image: caddy:${A:-${B:-2.8.4}}\n"
+    assert [f.line for f in lint.lint_pins(doc)] == [3]
+    assert lint.lint_pins(doc.replace("2.8.4", "2.11.7")) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "lines"),
+    [
         # an ARG default resolves into FROM
         ("ARG V=2.8.4\nFROM caddy:${V}\n", [2]),
         ("ARG V=2.11.7\nFROM caddy:$V-alpine\n", []),
