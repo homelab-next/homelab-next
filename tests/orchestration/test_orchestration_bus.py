@@ -226,3 +226,36 @@ def test_a_stuck_reader_fails_the_pass_before_anything_is_fetched(store, monkeyp
         reader.rollback()
         reader.close()
     assert drain(bus, store, batch=4) == {"processed": 4} and len(store.jobs()) == 4
+
+
+def test_the_probe_gives_up_on_a_stuck_reader_in_about_a_second(store):
+    """BEGIN EXCLUSIVE holds a pending lock while it waits, and every hub read waits behind it:
+    with the store's own busy timeout (10 s) a stuck reader stalled the hub ~10 s on every pass.
+    The probe has its own short timeout, so the hub stalls ~1 s and the pass still fails."""
+    import threading
+    import time
+
+    reader = sqlite3.connect(store.path, isolation_level=None)
+    reader.execute("BEGIN")
+    reader.execute("SELECT count(*) FROM jobs").fetchall()
+    hub_wait: list[float] = []
+
+    def hub_read():
+        time.sleep(0.2)  # while the probe waits for the lock
+        t = time.monotonic()
+        store.jobs()
+        hub_wait.append(time.monotonic() - t)
+
+    hub = threading.Thread(target=hub_read)
+    try:
+        t0 = time.monotonic()
+        hub.start()
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            store.check_writable()
+        probe = time.monotonic() - t0
+        hub.join(15)
+    finally:
+        reader.rollback()
+        reader.close()
+    assert 0.5 <= probe < 3.0, probe
+    assert hub_wait and hub_wait[0] < 3.0, hub_wait

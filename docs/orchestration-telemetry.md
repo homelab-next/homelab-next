@@ -117,8 +117,9 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
   resolves to nothing): `nack` and the pass stops. The event schemas are loaded and their `$ref`s
   resolved, and the store must take a write (the exclusive lock a commit needs, which waits for
   readers too, and a journal write, rolled back), before the first fetch, so a broken environment
-  or a store outage (locked past the busy timeout, by a writer or by a reader stuck in a
-  transaction, read-only, a disk that refuses the journal) fails `consume` up front (exit 2) with nothing
+  or a store outage (locked for more than a second, by a writer or by a reader stuck in a
+  transaction: the probe waits 1 s, not the store's 10 s busy timeout, since hub reads queue
+  behind it while it waits; read-only, a disk that refuses the journal) fails `consume` up front (exit 2) with nothing
   fetched. That is what keeps an outage from dead-lettering valid records: JetStream counts an
   attempt for every delivery it hands out, so fetching into a dead store would spend one attempt of
   every fetched record per pass, and the fifth such pass would dead-letter them all. An outage that

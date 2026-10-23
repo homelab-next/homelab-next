@@ -115,6 +115,8 @@ DEFAULT_RETENTION_DAYS = 90
 _SOURCE = re.compile(r"svc:[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 #: the writers' journal: no -wal or -shm, so a reader as another user needs no write access
 JOURNAL_MODE = "DELETE"
+#: how long the write probe waits for its lock (ms); see :meth:`TelemetryStore.check_writable`
+PROBE_BUSY_MS = 1000
 #: the store's own failures (the database, the disk): a caller retries these, never a record's
 STORE_ERRORS = (sqlite3.Error, OSError)
 #: the envelope attributes a job record may carry: those ``schemas/events/envelope.schema.json``
@@ -193,11 +195,16 @@ class TelemetryStore:
         the lock a commit needs is taken (``BEGIN EXCLUSIVE``, waiting out SQLite's busy timeout:
         unlike ``IMMEDIATE`` it waits for readers too, so a reader stuck in a transaction fails
         the probe instead of every commit after it; held for microseconds) and a row is written,
-        so the journal is created and written, then everything is rolled back.
+        so the journal is created and written, then everything is rolled back.  The probe waits
+        :data:`PROBE_BUSY_MS` at most, not the store's busy timeout: while ``BEGIN EXCLUSIVE``
+        waits it holds a pending lock that every new reader (the hub) waits behind, so a reader
+        stuck in a transaction would otherwise stall the hub for the whole timeout every pass.
         A consumer runs this before it fetches (:func:`.bus.drain`): a delivery fetched into a
         store that cannot take it costs an attempt, and the bus dead-letters a record after
         ``max_deliver`` of them however valid it is."""
         with self._db() as db:
+            current = db.execute("PRAGMA busy_timeout").fetchone()[0]
+            db.execute(f"PRAGMA busy_timeout={min(int(current), PROBE_BUSY_MS)}")
             db.execute("BEGIN EXCLUSIVE")
             try:
                 db.execute("INSERT OR REPLACE INTO turns VALUES ('', '', 0, '')")
@@ -448,6 +455,7 @@ __all__ = [
     "EARLIEST",
     "ENVELOPE_ATTRIBUTES",
     "JOURNAL_MODE",
+    "PROBE_BUSY_MS",
     "STORE_ERRORS",
     "TelemetryStore",
     "dedupe_sql",
