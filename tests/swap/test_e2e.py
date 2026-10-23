@@ -74,16 +74,81 @@ def test_rollback_replays_writes_parked_while_the_old_component_was_stopped(tmp_
     assert any("replayed 1 parked batches" in a for a in actions), actions
 
 
-def test_start_old_replays_into_the_old_component_after_the_route_is_restored(tmp_path):
+def test_the_route_is_not_restored_to_a_stopped_old_component_that_is_owed_writes(tmp_path):
     sc = Scenario(tmp_path)
     b = sc.backend
     assert b.shadow_start().ok and b.start_mirror().ok
     assert b.apply_route(AFTER).ok and b.stop_old().ok
     row = dict(lakes.rows_for("dns_activity")[0], uid="parked-for-old")
     b.writer.write_batch("dns_activity", [row], idempotency_key="k-parked")
-    assert b.apply_route(BEFORE).ok
+    refused = b.apply_route(BEFORE)  # old is stopped: the batch owed to it cannot be replayed
+    assert not refused.ok and "1 parked batches" in refused.detail
+    assert sc.registry.read_text(encoding="utf-8") != sc.original_registry  # still flipped
     assert "replayed 1 parked batches" in b.start_old().detail
+    assert b.apply_route(BEFORE).ok
     assert _count(sc.old, row["uid"]) == 1
+
+
+class _Flaky:
+    """A component whose writes can be made to fail (it stays "running")."""
+
+    def __init__(self, inner):
+        self.inner, self.down = inner, False
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+    def write_batch(self, *a, **kw):
+        if self.down:
+            raise RuntimeError("component unavailable")
+        return self.inner.write_batch(*a, **kw)
+
+
+def test_a_batch_parked_for_the_candidate_is_replayed_before_it_becomes_primary(tmp_path):
+    # parked during the mirror, it must land before the candidate takes newer batches as primary,
+    # or a later replay moves the lake's source mark backwards
+    sc = Scenario(tmp_path)
+    b = sc.backend
+    assert b.shadow_start().ok and b.start_mirror().ok
+    flaky = _Flaky(sc.new)
+    b.new = flaky
+    b.writer = b.writer.rerouted(b.old, flaky)
+    base = lakes.rows_for("dns_activity")[0]
+    flaky.down = True
+    b.writer.write_batch("dns_activity", [dict(base, uid="r1")], idempotency_key="b1", source="src", high_water="100")  # fmt: skip
+    flaky.down = False
+    assert b.apply_route(AFTER).ok
+    assert b.writer.status()["pending"] == 0 and _count(sc.new, "r1") == 1
+    b.writer.write_batch("dns_activity", [dict(base, uid="r2")], idempotency_key="b2", source="src", high_water="200")  # fmt: skip
+    assert b.start_old().ok and b.apply_route(BEFORE).ok
+    mark = sc.new.describe("dns_activity").committed["src"]
+    assert (mark.batch_id, mark.high_water) == ("b2", "200")  # never rewound to b1
+
+
+def test_the_flip_is_refused_while_a_batch_owed_to_the_candidate_cannot_be_replayed(tmp_path):
+    sc = Scenario(tmp_path)
+    b = sc.backend
+    assert b.shadow_start().ok and b.start_mirror().ok
+    flaky = _Flaky(sc.new)
+    b.new = flaky
+    b.writer = b.writer.rerouted(b.old, flaky)
+    flaky.down = True
+    b.writer.write_batch("dns_activity", [dict(lakes.rows_for("dns_activity")[0], uid="r1")], idempotency_key="b1")  # fmt: skip
+    out = b.apply_route(AFTER)
+    assert not out.ok and out.data["pending"] == 1
+    assert sc.registry.read_text(encoding="utf-8") == sc.original_registry
+
+
+def test_start_old_fails_and_says_so_while_a_batch_stays_parked(tmp_path):
+    sc = Scenario(tmp_path)
+    b = sc.backend
+    assert b.shadow_start().ok and b.start_mirror().ok
+    assert b.apply_route(AFTER).ok and b.stop_old().ok
+    b.writer.write_batch("dns_activity", [dict(lakes.rows_for("dns_activity")[0], uid="p1")], idempotency_key="p1")  # fmt: skip
+    b.old._inner = _Flaky(b.old._inner)
+    b.old._inner.down = True  # running again, but its writes still fail
+    out = b.start_old()
+    assert not out.ok and "1 still parked" in out.detail and out.data["pending"] == 1
 
 
 def test_full_swap_to_decommission_and_close(tmp_path):

@@ -12,6 +12,8 @@ Behaviour worth knowing:
 * ``writer`` is the :class:`DualWriter` production code should write through. After the route is
   flipped the direction reverses (candidate primary, old component secondary), so a rollback
   loses no data; while the old component is stopped its writes are parked and replayed on restart.
+  A batch parked for a component is replayed into it before a route change makes it primary, and
+  the route is not changed while one cannot be; ``start_old`` fails while any stays parked.
 * ``stop_old`` makes the old client refuse requests (it is stopped, not destroyed).
 """
 
@@ -161,6 +163,19 @@ class LakeBackend(Backend):
 
     def apply_route(self, target: dict[str, Any]) -> Outcome:
         plan = self._plan(target)
+        incoming = self.new if target.get("host") == self.new_host else self.old
+        # a batch parked for the component that becomes primary is replayed into it first: once
+        # it is primary nothing else replays it, and replayed later it would land after newer
+        # batches (moving the lake's source mark backwards).  While one stays parked, no flip.
+        if self.writer.owed_to(incoming):
+            self.writer.replay_pending(owed_to=incoming)
+            left = self.writer.owed_to(incoming)
+            if left:
+                why = (
+                    f"route not changed: {left} parked batches owed to the incoming primary "
+                    "could not be replayed into it"
+                )
+                return Outcome(False, why, {"pending": left})
         if not plan.empty:
             text = self.registry_path.read_text(encoding="utf-8")
             self.registry_path.write_text(flip_text(text, plan), encoding="utf-8")
@@ -187,8 +202,14 @@ class LakeBackend(Backend):
 
     def start_old(self) -> Outcome:
         self.old.down = False
-        replayed = self.writer.replay_pending()
-        return Outcome(True, f"old component running; replayed {replayed} parked batches")
+        replayed = self.writer.replay_pending(owed_to=self.old)
+        left = self.writer.owed_to(self.old)
+        detail = f"old component running; replayed {replayed} parked batches"
+        if left:
+            return Outcome(
+                False, f"{detail}; {left} still parked (replay failed)", {"pending": left}
+            )
+        return Outcome(True, detail)
 
     def old_state(self) -> Outcome:
         return Outcome(True, "", {"state": "stopped" if self.old.down else "running"})

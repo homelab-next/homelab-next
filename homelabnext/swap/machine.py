@@ -332,8 +332,8 @@ def _cutover(ctx: _Ctx) -> list[Gate]:
         if stopped.ok:
             return gates
     # a failed post-condition: put the old route (and the old component) back at once
+    _safe(b.start_old)  # first, so the old component is running when it is primary again
     back = _safe(lambda: b.apply_route(before))
-    _safe(b.start_old)
     d["revert"] = {"ok": back.ok, "detail": back.detail}
     if back.ok:
         ctx.doc["route"]["flipped"] = False
@@ -571,9 +571,11 @@ class SwapRunner:
             if required and not o.ok:
                 problems.append(f"{label}: {o.detail}")
 
+        # start the old component first: its parked writes replay while it is still secondary,
+        # and it is never primary while stopped (a write in between would fail)
+        do("start old component", self.backend.start_old)
         if was_flipped:
             do("restore route", lambda: self.backend.apply_route(before))
-        do("start old component", self.backend.start_old)
         do("verify route", lambda: self.backend.verify_route(before))
         do("stop mirror", self.backend.stop_mirror, required=False)
         if problems:

@@ -153,12 +153,25 @@ class DualWriter:
                 len(rows),
             )
 
-    def replay_pending(self) -> int:
-        """Retry parked secondary batches; returns how many now succeeded."""
+    def owed_to(self, component: Any) -> int:
+        """How many parked batches are owed to ``component``."""
+        return sum(1 for p in self.pending if self._target(p) is component)
+
+    def _target(self, p: _Pending) -> Any:
+        return self.secondary if p.target is None else p.target
+
+    def replay_pending(self, owed_to: Any = None) -> int:
+        """Retry parked batches (only those owed to ``owed_to``, when given); returns how many
+        now succeeded.  Batches are retried oldest first and stop at the first failure for each
+        component, so a component never takes an older batch after a newer one."""
         still: list[_Pending] = []
         ok = 0
+        failed: list[Any] = []
         for p in self.pending:
-            target = self.secondary if p.target is None else p.target
+            target = self._target(p)
+            if (owed_to is not None and target is not owed_to) or any(target is f for f in failed):
+                still.append(p)
+                continue
             try:
                 target.write_batch(
                     p.table,
@@ -170,6 +183,7 @@ class DualWriter:
                 ok += 1
             except Exception as exc:
                 still.append(p)
+                failed.append(target)
                 self._record(
                     "replay_failed",
                     p.table,
