@@ -111,3 +111,32 @@ def test_the_fakes_satisfy_the_new_security_checks_and_their_mutants_are_caught(
         runs = {m.name: m for m in mutation_runs(cap)}
         for name in names:
             assert runs[name].detected, (cap, name, runs[name].reason, runs[name].failed)
+
+
+def test_a_mutant_declaring_the_features_its_check_needs_counts(monkeypatch):
+    """``Mutant.features``: a mutant whose factory supports a check's ``requires`` is run with
+    them declared and may name that check; the same mutant without them proves nothing."""
+    from homelabnext.conform.core import Mutant
+
+    mod = load_module("backup")
+
+    class NeverNoticesCorruption(mod.FakeBackupStore):
+        def verify(self, snapshot_id):
+            super().verify(snapshot_id)
+            return True
+
+    declared = Mutant(
+        NeverNoticesCorruption,
+        "verify-detects-corruption",
+        "verify ignores the bytes",
+        features=frozenset({"fault-injection"}),
+    )
+    bare = Mutant(NeverNoticesCorruption, "verify-detects-corruption", "verify ignores the bytes")
+    monkeypatch.setitem(mod.MUTANTS, "declared", declared)
+    monkeypatch.setitem(mod.MUTANTS, "bare", bare)
+    runs = {m.name: m for m in mutation_runs("backup")}
+    assert runs["declared"].detected, runs["declared"].reason
+    assert runs["bare"].detected is False and "can skip" in runs["bare"].reason
+    # the CLI's broken:<mutant> runs with the mutant's features too
+    run = run_capability("backup", "broken:declared")
+    assert "verify-detects-corruption" in [r.check for r in run.failed_must]

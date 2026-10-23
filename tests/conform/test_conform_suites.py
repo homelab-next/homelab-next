@@ -85,4 +85,4 @@ def test_mutants_name_checks_that_cannot_skip(cap):
     mod = load_module(cap)
     specs = {s.id: s for s in mod.SUITE.specs}
     for name, m in mod.MUTANTS.items():
-        assert not specs[m.fails].can_skip, f"{cap}/{name}: {m.fails} can skip"
+        assert not specs[m.fails].can_skip_with(m.features), f"{cap}/{name}: {m.fails} can skip"
