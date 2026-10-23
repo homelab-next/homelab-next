@@ -102,6 +102,11 @@ class _Rule:
     regex: re.Pattern[str]
     group: str | int = 0  # the part of the match that is redacted
     accept: Callable[[re.Match[str], str], bool] | None = None
+    # search again from the last key-like run of the redacted value, not the end of the match:
+    # a keyed value can end in the next key ("pw=secret: <value>", "password=<value>secret:
+    # <value>"), which a match running on to the end would consume.  Only that last run can
+    # start a key whose value lies past this one, so each character is rescanned at most once.
+    rescan: bool = False
 
 
 @dataclass(frozen=True)
@@ -272,8 +277,28 @@ def _ascii_bounds(rx: str) -> str:
     return "".join(out)
 
 
-def _r(type_: str, rx: str, group: str | int = 0, accept=None, flags: int = 0) -> _Rule:
-    return _Rule(type_, re.compile(_ascii_bounds(rx), flags), group, accept)
+def _r(
+    type_: str, rx: str, group: str | int = 0, accept=None, flags: int = 0, rescan: bool = False
+) -> _Rule:
+    return _Rule(type_, re.compile(_ascii_bounds(rx), flags), group, accept, rescan)
+
+
+def _matches(rule: _Rule, text: str) -> Iterable[re.Match[str]]:
+    if not rule.rescan:
+        yield from rule.regex.finditer(text)
+        return
+    pos = 0
+    while (m := rule.regex.search(text, pos)) is not None:
+        yield m
+        end = m.end(rule.group)
+        while end > m.start(rule.group) and text[end - 1] in ":=>\"'":
+            end -= 1
+        start = end
+        while start > m.start(rule.group) and (
+            text[start - 1] in "._-" or (text[start - 1].isascii() and text[start - 1].isalnum())
+        ):
+            start -= 1
+        pos = max(start, m.start() + 1) if start < end else m.end()
 
 
 _RULES: tuple[_Rule, ...] = (
@@ -328,9 +353,10 @@ _RULES: tuple[_Rule, ...] = (
     _r(
         "secret",
         rf"(?i)(?P<k>{_KEY})[\"']?\s*(?:[:=]|=>)\s*[\"']?"
-        r"(?P<v>[^\s\"',;)}\]]{3,})",
+        rf"(?P<v>[^\s\"',;)}}\]]{{3,}})",
         "v",
         _is_keyed_secret,
+        rescan=True,
     ),
     # --password value / --api-key=value
     _r(
@@ -338,6 +364,7 @@ _RULES: tuple[_Rule, ...] = (
         rf"(?i)(?<![\w-])--?(?P<k>{_FLAG_KEY})[ =](?P<v>[^\s\"']{{3,}})",
         "v",
         _is_keyed_secret,
+        rescan=True,
     ),
     # "the password is X" / "pin was X"
     _r(
@@ -463,7 +490,7 @@ class Screener:
         for rule in _RULES:
             if rule.type not in on:
                 continue
-            for m in rule.regex.finditer(text):
+            for m in _matches(rule, text):
                 if rule.accept is not None and not rule.accept(m, text):
                     continue
                 s, e = m.span(rule.group)

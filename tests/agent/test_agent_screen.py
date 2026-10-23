@@ -355,6 +355,9 @@ _CRAFTED = (
     "Key.",
     "--a-",
     "a" * 200 + " ",
+    "pw=",  # each match's value runs to the end of the line: rescanned once, not per match
+    "--pw=",
+    "a=pw=",
 )
 
 
@@ -475,3 +478,19 @@ def test_a_value_split_by_another_span_is_counted_once():
     out, spans = s.screen(f"api_key=pre\u00b5{token}\u00b5post")
     assert out.count("[REDACTED:secret:1]") == 2 and len(spans) == 3
     assert s.redactions == {"secret": 1, "token": 1}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "pw=secret: FakeValue0123 next",
+        "--password secret: FakeValue0123 next",
+        "pw=secret: x" + "AKI" + "AFAKE7EXAMPLE0KEYpw=x",
+    ],
+)
+def test_a_value_that_is_itself_the_next_key_does_not_hide_that_keys_value(text):
+    """A short key word ("pw") made "secret:" the value of "pw=", which consumed the real key
+    after it; a value that reads as a key is not taken as one."""
+    out = screen_text(text)
+    assert "FakeValue0123" not in out and "AFAKE7EXAMPLE0KEY" not in out
+    assert "[REDACTED:secret:1]" in out
