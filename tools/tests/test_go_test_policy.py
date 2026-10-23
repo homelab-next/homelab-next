@@ -434,29 +434,48 @@ def test_a_real_go_test_json_stream(tmp_path):
     ]
 
 
-def test_the_ci_job_is_pinned_and_a_no_op_without_the_module():
-    import re
-
+def go_job() -> dict:
     import yaml
 
-    job = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"][
-        "orchestrator"
-    ]
+    return yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"]["go"]
+
+
+def test_the_ci_job_is_pinned_and_runs_once_per_discovered_module():
+    import re
+
+    job = go_job()
     steps = job["steps"]
     for step in steps:
         if "uses" in step and not step["uses"].startswith("./"):
             assert re.fullmatch(r"[\w-]+/[\w-]+@[0-9a-f]{40}", step["uses"]), step["uses"]
-    gate = steps[1]
-    assert gate["id"] == "module" and "orchestrator/go.mod" in gate["run"]
-    assert all("steps.module.outputs.present == 'true'" in s.get("if", "") for s in steps[2:])
+    # a matrix over tools/go_modules.py's list, skipped (a no-op) when there is no module
+    assert job["needs"] == "go-modules"
+    assert job["if"] == "needs.go-modules.outputs.present == 'true'"
+    assert (
+        job["strategy"]["matrix"]["module"] == "${{ fromJSON(needs.go-modules.outputs.modules) }}"
+    )
+    assert job["defaults"]["run"]["working-directory"] == "${{ matrix.module.dir }}"
     runs = "\n".join(s.get("run", "") for s in steps)
-    assert job["env"] == {"GOFLAGS": "-mod=readonly", "GOTOOLCHAIN": "local"}
+    assert "orchestrator" not in json.dumps(job)  # no module is named: they are discovered
+    assert job["env"] == {"GOFLAGS": "-mod=readonly", "GOTOOLCHAIN": "local", "GOWORK": "off"}
     # sudo resets the environment: what go needs is passed through by name
-    assert '"GOFLAGS=$GOFLAGS" "GOTOOLCHAIN=$GOTOOLCHAIN"' in runs
+    assert '"GOFLAGS=$GOFLAGS" "GOTOOLCHAIN=$GOTOOLCHAIN" "GOWORK=$GOWORK"' in runs
     (go,) = [s for s in steps if s.get("uses", "").startswith("actions/setup-go@")]
-    assert go["with"]["cache-dependency-path"].startswith("orchestrator/**/go.sum")
+    assert go["with"]["go-version-file"] == "${{ matrix.module.dir }}/go.mod"
+    assert go["with"]["cache-dependency-path"].startswith("${{ matrix.module.dir }}/**/go.sum")
     assert "go test -race -shuffle=on -count=1 -json ./..." in runs
     assert "unshare --net" in runs and "tools/go_test_policy.py" in runs
+
+
+def test_discovery_gates_the_go_job_and_one_check_sums_it_up():
+    import yaml
+
+    jobs = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"]
+    (discover,) = [s for s in jobs["go-modules"]["steps"] if s.get("id") == "discover"]
+    assert "tools/go_modules.py --github-output" in discover["run"]
+    assert set(jobs["go-modules"]["outputs"]) == {"modules", "present"}
+    ok = jobs["go-ok"]
+    assert ok["needs"] == ["go-modules", "go"] and ok["if"] == "always()"
 
 
 # --- the CI step itself, run with stand-ins for sudo, unshare, ip, setpriv and go ----------------
@@ -471,12 +490,7 @@ FAKE_TOOLS = {
 
 
 def ci_step(name: str) -> str:
-    import yaml
-
-    job = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"][
-        "orchestrator"
-    ]
-    (step,) = [s for s in job["steps"] if s.get("name", "").startswith(name)]
+    (step,) = [s for s in go_job()["steps"] if s.get("name", "").startswith(name)]
     return step["run"]
 
 
@@ -502,6 +516,7 @@ def run_test_step(tmp_path, lines: list[str], go_exit: int) -> subprocess.Comple
         "PATH": f"{bin_dir}:{Path(sys.executable).parent}:/usr/bin:/bin",
         "HOME": str(tmp_path),
         "RUNNER_TEMP": str(rt),
+        "GITHUB_WORKSPACE": str(tmp_path),
         "HNX_TODAY": TODAY,
         "FAKE_STREAM": str(tmp_path / "stream.json"),
         "FAKE_EXIT": str(go_exit),
@@ -575,72 +590,8 @@ def test_go_exit_must_agree_with_the_stream(tmp_path, capsys, lines, status, ok,
     assert why in capsys.readouterr().out
 
 
-def run_presence_step(tmp_path, layout: dict[str, str]) -> tuple[int, dict[str, str], str]:
-    """The orchestrator job's module check on a scratch tree: (exit, outputs, log)."""
-    tree = tmp_path / "tree"
-    tree.mkdir()
-    for rel, kind in layout.items():
-        p = tree / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        if kind == "dir":
-            p.mkdir()
-        elif kind.startswith("->"):
-            p.symlink_to(kind[2:])
-        else:
-            p.write_text(kind)
-    out = tmp_path / "github-output"
-    out.write_text("")
-    (tmp_path / "step.sh").write_text(ci_step("is there a Go module yet"))
-    r = subprocess.run(
-        ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(tmp_path / "step.sh")],
-        cwd=tree,
-        env={"PATH": "/usr/bin:/bin", "GITHUB_OUTPUT": str(out)},
-        capture_output=True,
-        text=True,
-    )
-    outputs = dict(line.split("=", 1) for line in out.read_text().splitlines() if "=" in line)
-    return r.returncode, outputs, r.stdout + r.stderr
-
-
-GO_MOD_TEXT = "module example.com/fixture\n\ngo 1.24\n"
-SRC = "// SPDX-License-Identifier: Apache-2.0\npackage api\n"
-
-
-@needs_bash
-@pytest.mark.parametrize(
-    ("layout", "exit_code", "present", "tools"),
-    [
-        ({}, 0, "false", "false"),  # no orchestrator/ yet: a no-op
-        ({"orchestrator/README.md": "soon\n"}, 0, "false", "false"),
-        ({"orchestrator/go.mod": GO_MOD_TEXT, "orchestrator/internal/api/api.go": SRC}, 0, "true", "false"),
-        ({"orchestrator/go.mod": GO_MOD_TEXT, "orchestrator/tools/go.mod": GO_MOD_TEXT, "orchestrator/tools/tools.go": SRC}, 0, "true", "true"),
-        # Go without its module file: deleted, renamed, a directory, a dangling symlink
-        ({"orchestrator/internal/api/api.go": SRC}, 1, None, None),
-        ({"orchestrator/go.mod.bak": GO_MOD_TEXT, "orchestrator/main.go": SRC}, 1, None, None),
-        ({"orchestrator/go.mod": "dir", "orchestrator/main.go": SRC}, 1, None, None),
-        ({"orchestrator/go.mod": "->missing.mod", "orchestrator/main.go": SRC}, 1, None, None),
-        ({"orchestrator/go.mod": "->real.mod", "orchestrator/real.mod": GO_MOD_TEXT}, 1, None, None),
-        ({"orchestrator/go.sum": "x\n"}, 1, None, None),
-        # the linters' module: its go.sum or Go file without tools/go.mod
-        ({"orchestrator/go.mod": GO_MOD_TEXT, "orchestrator/tools/go.sum": "x\n"}, 1, "true", None),
-        ({"orchestrator/go.mod": GO_MOD_TEXT, "orchestrator/tools/tools.go": SRC}, 1, "true", None),
-        ({"orchestrator/go.mod": GO_MOD_TEXT, "orchestrator/tools/go.mod": "dir"}, 1, "true", None),
-    ],
-)  # fmt: skip
-def test_the_module_check_fails_when_go_has_no_go_mod(tmp_path, layout, exit_code, present, tools):
-    code, outputs, log = run_presence_step(tmp_path, layout)
-    assert code == exit_code, log
-    assert outputs.get("present") == present and outputs.get("tools") == tools, outputs
-    if exit_code:
-        assert "::error::" in log
-
-
-def test_every_later_step_waits_for_a_module_and_the_linters_for_theirs():
-    import yaml
-
-    steps = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"][
-        "orchestrator"
-    ]["steps"]
+def test_every_step_runs_in_the_module_and_the_linters_wait_for_theirs():
+    steps = go_job()["steps"]
     assert not any("hashFiles" in s.get("if", "") for s in steps)  # silent when the file is gone
     (lint,) = [s for s in steps if "staticcheck" in s.get("run", "")]
-    assert "steps.module.outputs.tools == 'true'" in lint["if"]
+    assert lint["if"] == "matrix.module.tools"

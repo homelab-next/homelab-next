@@ -309,12 +309,31 @@
     },
     {
       "exit": {
+        "0": "the modules are listed",
+        "1": "Go outside every module, a go.work, a go.mod that is not a regular file, or a linters' module without its go.mod",
+        "2": "the tracked files could not be read"
+      },
+      "id": "go-modules",
+      "inputs": "the tracked files (git ls-files) of the repository, or of --repo",
+      "kind": "check",
+      "language": "python",
+      "outputs": "the modules as JSON on stdout; with --github-output, its `modules` and `present` lines; one line per problem",
+      "owner": "maintainers",
+      "path": "tools/go_modules.py",
+      "purpose": "List the repository's Go modules for CI's Go job, and fail when Go code lies outside every module or a go.work would change how modules resolve.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/go-modules"
+      ]
+    },
+    {
+      "exit": {
         "0": "the run is trustworthy",
         "1": "a failure, a silent skip, a missing privileged run or an invalid quarantine",
         "2": "usage error, an unreadable file or a malformed policy"
       },
       "id": "go-test-policy",
-      "inputs": "go test -json output files (or - for stdin); orchestrator/skips.yml; skip_reasons and quarantine_max_days in pyproject.toml",
+      "inputs": "go test -json output files (or - for stdin); the module's skips.yml; skip_reasons and quarantine_max_days in pyproject.toml",
       "kind": "check",
       "language": "python",
       "outputs": "one line per problem, notes for tolerated skips and quarantined failures, a summary",
@@ -323,7 +342,7 @@
       "purpose": "Fail when a go test -json run has a failing test, a package that did not build, a skip without a registered reason or an invalid quarantine.",
       "status": "active",
       "trigger": [
-        "ci:ci/orchestrator"
+        "ci:ci/go"
       ]
     },
     {

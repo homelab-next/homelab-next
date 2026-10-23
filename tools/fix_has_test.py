@@ -27,7 +27,7 @@ put on top of its parent in a temporary worktree and the touched test modules ar
 must fail.  A regression test that passes without the fix proves nothing and is reported.
 
 A Go test file (``*_test.go``) is proved in its module (the nearest directory with a ``go.mod``,
-``orchestrator/`` in this repository): ``go test ./<pkg> -run '^(<Test funcs>)$'`` runs the test
+at any depth, so in any discovered module): ``go test ./<pkg> -run '^(<Test funcs>)$'`` runs the test
 and fuzz functions the commit added or changed (the whole package when only helpers changed) and
 must fail; a package that no longer builds without the fix counts as failing, like pytest's exit
 2.  The commit's ``testdata/`` files are staged on the parent with its tests (a test reading a

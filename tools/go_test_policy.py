@@ -5,8 +5,8 @@
 #   kind: check
 #   purpose: Fail when a go test -json run has a failing test, a package that did not build, a skip without a registered reason or an invalid quarantine.
 #   owner: maintainers
-#   trigger: [ci:ci/orchestrator]
-#   inputs: go test -json output files (or - for stdin); orchestrator/skips.yml; skip_reasons and quarantine_max_days in pyproject.toml
+#   trigger: [ci:ci/go]
+#   inputs: go test -json output files (or - for stdin); the module's skips.yml; skip_reasons and quarantine_max_days in pyproject.toml
 #   outputs: one line per problem, notes for tolerated skips and quarantined failures, a summary
 #   exit:
 #     "0": the run is trustworthy
@@ -36,7 +36,7 @@ Reads the event stream of ``go test -json`` (one or more files) and fails on:
   in the stream to explain it but quarantined failures, or a 0 next to a failure in the stream.
   So a stream that lost its failing part cannot pass while ``go test`` itself failed.
 
-The policy file (``orchestrator/skips.yml``)::
+The policy file (``skips.yml`` in the module's root)::
 
     quarantine:          # a known-flaky test keeps running; its failure or skip is tolerated
       - {test: TestStall, package: internal/hermesagent, owner: maintainers,

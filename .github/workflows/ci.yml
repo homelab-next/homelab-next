@@ -18,6 +18,13 @@ concurrency:
 # sets persist-credentials: false, so no job leaves a token in .git/config for later steps.
 # Python packages come from constraints/ci.txt (hash-pinned) via .github/actions/python-deps.
 
+env:
+  # The Go of the jobs that have no module of their own to read it from (a Go module's job installs
+  # the version its go.mod names): the Python tools' Go tests and fix_has_test's Go proofs.  There
+  # may be no go.mod at all yet, so it is pinned here, exactly; Dependabot does not raise it: bump
+  # it by hand to a supported release (https://go.dev/doc/devel/release).
+  GO_VERSION: "1.26.9"
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -193,93 +200,87 @@ jobs:
       - name: invariants register, fast criteria
         run: make invariants PY=python
 
-  # orchestrator/: the Go module of the orchestration controller.  Until orchestrator/go.mod exists
-  # the first step says so and every later step is skipped, so the job passes as a no-op.  Tests
-  # run as the runner user in a network namespace with only loopback (no network), race-enabled
-  # and shuffled; tests that need root run first, under sudo, and tools/go_test_policy.py judges
-  # both event streams: no failure, no build failure, no skip without a registered reason
-  # (skip_reasons in pyproject.toml), quarantines in skips.yml bounded to 90 days.
-  orchestrator:
+  # Go: every tracked go.mod is a module (tools/go_modules.py; <module>/tools/go.mod is that
+  # module's linters, not a module of its own), and the go job runs once per module, so a second or
+  # nested module is checked without being listed anywhere.  With no module the go job is skipped
+  # and go-ok passes: a no-op.  Go outside every module, or a go.work, fails go-modules.
+  go-modules:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      GOFLAGS: -mod=readonly  # go.mod and go.sum are inputs: a build never rewrites them
-      GOTOOLCHAIN: local  # the go setup-go installed from go.mod, never a download
-    defaults:
-      run:
-        working-directory: orchestrator
+    timeout-minutes: 5
+    outputs:
+      modules: ${{ steps.discover.outputs.modules }}
+      present: ${{ steps.discover.outputs.present }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      # No Go under orchestrator/ at all: a no-op until the module lands.  Once there is Go, a
-      # go.mod that is missing, renamed, a directory or a dangling symlink fails the job rather
-      # than skipping every check; the same for the linters' module, orchestrator/tools/.
-      - name: is there a Go module yet
-        id: module
-        working-directory: .
-        run: |
-          regular() { [ -f "$1" ] && [ ! -L "$1" ]; }
-          exists() { [ -e "$1" ] || [ -L "$1" ]; }
-          has_go() { [ -d "$1" ] && [ -n "$(find "$1" \( -name '*.go' -o -name go.sum \) -print -quit)" ]; }
-          if regular orchestrator/go.mod; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          elif has_go orchestrator || exists orchestrator/go.mod; then
-            echo "::error::orchestrator/ has Go but orchestrator/go.mod is not a regular file"
-            exit 1
-          else
-            echo "::notice::orchestrator/ has no Go module yet: nothing to build or test"
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          fi
-          if regular orchestrator/tools/go.mod; then
-            echo "tools=true" >> "$GITHUB_OUTPUT"
-          elif has_go orchestrator/tools || exists orchestrator/tools/go.mod; then
-            echo "::error::orchestrator/tools/ has Go but orchestrator/tools/go.mod is not a regular file"
-            exit 1
-          else
-            echo "tools=false" >> "$GITHUB_OUTPUT"
-          fi
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
-        if: steps.module.outputs.present == 'true'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          go-version-file: orchestrator/go.mod
-          cache-dependency-path: orchestrator/**/go.sum  # the module's and tools/'s
+          python-version: "3.12"
+      - name: discover the Go modules
+        id: discover
+        run: python tools/go_modules.py --github-output "$GITHUB_OUTPUT"
+
+  # One Go module.  Tests run as the runner user in a network namespace with only loopback (no
+  # network), race-enabled and shuffled; tests that need root run first, under sudo, and
+  # tools/go_test_policy.py judges both event streams: no failure, no build failure, no skip without
+  # a registered reason (skip_reasons in pyproject.toml), quarantines in the module's skips.yml
+  # bounded to 90 days.
+  go:
+    needs: go-modules
+    if: needs.go-modules.outputs.present == 'true'
+    name: go (${{ matrix.module.dir }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.go-modules.outputs.modules) }}
+    env:
+      GOFLAGS: -mod=readonly  # go.mod and go.sum are inputs: a build never rewrites them
+      GOTOOLCHAIN: local  # the go setup-go installed from go.mod, never a download
+      GOWORK: "off"  # each module on its own: a go.work never changes how modules resolve
+    defaults:
+      run:
+        working-directory: ${{ matrix.module.dir }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version-file: ${{ matrix.module.dir }}/go.mod
+          cache-dependency-path: ${{ matrix.module.dir }}/**/go.sum  # the module's and tools/'s
       - uses: ./.github/actions/python-deps
-        if: steps.module.outputs.present == 'true'
         with:
           python-version: "3.12"
           extras: yaml  # go_test_policy.py reads skips.yml
           install-project: "false"
       - name: modules downloaded and verified against go.sum
-        if: steps.module.outputs.present == 'true'
         run: go mod download && go mod verify
       - name: gofmt
-        if: steps.module.outputs.present == 'true'
         run: |
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
             echo "::error::not gofmt-formatted:"; echo "$unformatted"; exit 1
           fi
       - name: go vet
-        if: steps.module.outputs.present == 'true'
         run: go vet ./...
       - name: build every package and binary
-        if: steps.module.outputs.present == 'true'
         run: go build ./...
       # Linters as Go tool dependencies: version and checksum pinned by tools/go.mod and go.sum.
       - name: staticcheck and govulncheck (pinned in tools/go.mod)
-        if: steps.module.outputs.present == 'true' && steps.module.outputs.tools == 'true'
+        if: matrix.module.tools
         run: |
           go tool -modfile=tools/go.mod staticcheck ./...
           go tool -modfile=tools/go.mod govulncheck ./...
       - name: root-only tests (skips.yml privileged) under sudo, no network
-        if: steps.module.outputs.present == 'true'
         run: |
           out="$RUNNER_TEMP/go-test-root.json"
           : > "$out"
           policy=()
           if [ -f skips.yml ]; then policy=(--policy skips.yml); fi
-          python ../tools/go_test_policy.py "${policy[@]}" --list-privileged > "$RUNNER_TEMP/privileged.txt"
+          python "$GITHUB_WORKSPACE/tools/go_test_policy.py" "${policy[@]}" --list-privileged > "$RUNNER_TEMP/privileged.txt"
           while read -r pkg rx; do
             [ -n "$pkg" ] || continue
             bin="$RUNNER_TEMP/privileged-$(echo "$pkg" | tr '/.' '__').test"
@@ -291,13 +292,13 @@ jobs:
               | go tool test2json -t -p "$imp" >> "$out"
           done < "$RUNNER_TEMP/privileged.txt"
       - name: tests (race, shuffled, no network) judged by go_test_policy.py
-        if: steps.module.outputs.present == 'true'
         run: |
           policy=()
           if [ -f skips.yml ]; then policy=(--policy skips.yml); fi
           out="$RUNNER_TEMP/go-test.json"
           status=0
-          sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" "GOTOOLCHAIN=$GOTOOLCHAIN" \
+          sudo env "PATH=$PATH" "HOME=$HOME" \
+            "GOFLAGS=$GOFLAGS" "GOTOOLCHAIN=$GOTOOLCHAIN" "GOWORK=$GOWORK" \
             unshare --net -- \
             sh -c 'ip link set lo up && exec setpriv --reuid="$1" --regid="$2" --clear-groups -- \
               go test -race -shuffle=on -count=1 -json ./...' sh "$(id -u)" "$(id -g)" \
@@ -305,9 +306,25 @@ jobs:
           # go test exits 1 on a quarantined failure too: the policy tool judges the stream and
           # go's own exit status together (any other status, or a 1 the stream does not explain,
           # fails), so a stream cut short cannot pass while go test failed
-          python ../tools/go_test_policy.py "${policy[@]}" \
+          python "$GITHUB_WORKSPACE/tools/go_test_policy.py" "${policy[@]}" \
             --privileged "$RUNNER_TEMP/go-test-root.json" \
             --forbid 'python3 not available' --go-exit "$status" "$out"
+
+  # One stable check name for branch protection, whatever the modules are called: the discovery
+  # passed, and every module's go job passed (or there was none to run).
+  go-ok:
+    needs: [go-modules, go]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: the Go modules were discovered and every one passed
+        env:
+          MODULES: ${{ needs.go-modules.result }}
+          GO: ${{ needs.go.result }}
+        run: |
+          echo "go-modules: $MODULES, go: $GO"
+          [ "$MODULES" = success ] && { [ "$GO" = success ] || [ "$GO" = skipped ]; }
 
   # Build the sdist and wheel exactly as a release would and leak-scan what they contain (the
   # path allowlist for both artefacts is tests/packaging/test_artifacts.py, run by `test`).
@@ -433,6 +450,7 @@ jobs:
   # Q-08: every bugfix commit of this push or pull request touches a test file, and that test fails
   # on the fix's parent (tools/fix_has_test.py --prove; CONTRIBUTING.md "Bug fixes").
   regression-tests:
+    needs: go-modules
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -444,12 +462,13 @@ jobs:
         with:
           python-version: "3.12"
           extras: test,ansible  # a fix to an ansible plugin proves its test like any other
-      # a Go fix proves its test with go test (no toolchain is "cannot prove", never a pass)
+      # a Go fix proves its test with go test (no toolchain is "cannot prove", never a pass); the
+      # pinned GO_VERSION, which switches to a newer toolchain a module's go.mod asks for
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
-        if: hashFiles('orchestrator/go.mod') != ''
+        if: needs.go-modules.outputs.present == 'true'
         with:
-          go-version-file: orchestrator/go.mod
-          cache-dependency-path: orchestrator/**/go.sum
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: "**/go.sum"
       - name: every fix ships a regression test that fails without the fix
         # the same base rule as the schemas and register-ids jobs: a pull request's base must be
         # readable; a push falls back to HEAD^ when its previous tip is zero or gone; other events

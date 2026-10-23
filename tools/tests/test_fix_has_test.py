@@ -3,6 +3,7 @@
 and --prove catches a regression test that passes without the fix (pytest modules and Go
 packages, the latter on a fixture module when a Go toolchain is installed)."""
 
+import re
 import shutil
 import subprocess
 import sys
@@ -303,25 +304,24 @@ def test_a_go_fix_with_a_dependency_is_proved_on_a_cold_module_cache(tmp_path, m
     assert gate.prove(c, cwd=r) is None
 
 
-def test_the_regression_tests_job_has_a_go_toolchain_once_the_module_exists():
+def test_the_regression_tests_job_has_a_go_toolchain_once_a_module_exists():
     import yaml
 
     root = Path(__file__).resolve().parents[2]
-    jobs = yaml.safe_load((root / ".github" / "workflows" / "ci.yml").read_text())["jobs"]
+    ci = yaml.safe_load((root / ".github" / "workflows" / "ci.yml").read_text())
+    jobs = ci["jobs"]
     steps = jobs["regression-tests"]["steps"]
     (go,) = [s for s in steps if s.get("uses", "").startswith("actions/setup-go@")]
     (pinned,) = [
-        s
-        for s in jobs["orchestrator"]["steps"]
-        if s.get("uses", "").startswith("actions/setup-go@")
+        s for s in jobs["go"]["steps"] if s.get("uses", "").startswith("actions/setup-go@")
     ]
-    assert go["uses"] == pinned["uses"]  # the same pinned commit as the orchestrator job
-    assert go["with"]["go-version-file"] == "orchestrator/go.mod"
-    assert (
-        go["with"].get("cache", True) is not False
-        and "go.sum" in go["with"]["cache-dependency-path"]
-    )
-    assert "orchestrator/go.mod" in go["if"]
+    assert go["uses"] == pinned["uses"]  # the same pinned commit as the go job
+    # any discovered module, not one named directory; the workflow's pinned Go version
+    assert jobs["regression-tests"]["needs"] == "go-modules"
+    assert go["if"] == "needs.go-modules.outputs.present == 'true'"
+    assert go["with"]["go-version"] == "${{ env.GO_VERSION }}"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", ci["env"]["GO_VERSION"])
+    assert go["with"]["cache-dependency-path"] == "**/go.sum"
     names = [s.get("name") or s.get("uses") for s in steps]
     assert names.index(go["uses"]) < next(
         i for i, s in enumerate(steps) if "fix_has_test" in s.get("run", "")

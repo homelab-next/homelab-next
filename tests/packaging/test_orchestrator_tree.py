@@ -4,12 +4,15 @@ outputs are ignored, the module is owned and dependency-updated, and MANIFEST.in
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+import go_modules
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
@@ -43,13 +46,38 @@ def test_codeowners_own_the_go_module():
     assert any(line.split()[:1] == ["/orchestrator/"] and len(line.split()) > 1 for line in lines)
 
 
-def test_dependabot_updates_the_go_module_like_the_other_ecosystems():
+def _gomod_directories() -> list[str]:
+    updates = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text())["updates"]
+    return [d for u in updates if u["package-ecosystem"] == "gomod" for d in u["directories"]]
+
+
+def test_dependabot_updates_go_modules_like_the_other_ecosystems():
     updates = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text())["updates"]
     (go,) = [u for u in updates if u["package-ecosystem"] == "gomod"]
     pip = next(u for u in updates if u["package-ecosystem"] == "pip")
-    assert go["directories"] == ["/orchestrator", "/orchestrator/tools"]
     for key in ("schedule", "cooldown", "commit-message"):
         assert go[key] == pip[key], key
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+def test_every_discovered_go_module_has_a_dependabot_entry():
+    """Dependabot cannot glob for modules: its gomod directories are listed by hand, and every
+    module tools/go_modules.py discovers (and its linters' module) must be among them."""
+    files, _links = go_modules.tracked(ROOT)
+    wanted = go_modules.dependabot_directories(go_modules.modules(files))
+    assert sorted(set(wanted) - set(_gomod_directories())) == []
+
+
+def test_the_dependabot_check_names_each_module_and_its_linters():
+    mods = go_modules.modules(
+        ["orchestrator/go.mod", "orchestrator/tools/go.mod", "lab/go.mod", "go.mod"]
+    )
+    assert go_modules.dependabot_directories(mods) == [
+        "/",
+        "/lab",
+        "/orchestrator",
+        "/orchestrator/tools",
+    ]
 
 
 def test_manifest_prunes_the_go_module():
