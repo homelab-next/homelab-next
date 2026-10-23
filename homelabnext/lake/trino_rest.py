@@ -8,9 +8,11 @@ Who does what:
 * **metadata** (``list_tables``, ``describe``: schema check, row count, committed marks) comes
   from the REST catalog (Lakekeeper), the system of record for the Iceberg tables;
 * **writes** (``write_batch``) validate the whole batch first (the same rules as every adapter),
-  skip rows whose content key is already present, append the rest with **one** ``INSERT`` (one
-  Iceberg commit, done by Trino through the same catalog), then record the batch id and the
-  source's high-water mark as table properties through the REST catalog;
+  skip rows whose content key is already present, append the rest with ``INSERT`` statements
+  (an Iceberg commit each, done by Trino through the same catalog), as few as fit under
+  ``max_query_length`` characters (Trino refuses a longer query text: ``query.max-length``,
+  1,000,000 by default), then record the batch id and the source's high-water mark as table
+  properties through the REST catalog;
 * **setup** (``ensure_tables``) creates the namespace and the pinned tables with the generated
   Trino DDL and refuses an existing table whose schema differs (``SchemaMismatch``).
 
@@ -19,8 +21,10 @@ snapshot it commits, so the rows and the ledger entry are **two** commits, not o
 ``IcebergLake`` (snapshot summary) or ``FakeLake`` (one transaction).  A crash between them leaves
 the rows without their ledger entry; a retry of the same batch then writes nothing (every row is
 skipped by its content key) but is reported as ``replayed=False`` and the source mark stays at the
-previous batch.  No duplicate is ever written; only the replay flag and the mark lag.  The
-snapshot recorded is the one whose summary carries this INSERT's ``trino_query_id``.
+previous batch.  No duplicate is ever written; only the replay flag and the mark lag.  The same
+holds for a crash between the INSERTs of a batch split in several: the retry writes only the rows
+not yet present.  The snapshot recorded is the one whose summary carries the last INSERT's
+``trino_query_id``.
 One writer per ``(table, source)`` is assumed, as everywhere in the lake library.
 """
 
@@ -39,7 +43,7 @@ from .protocol import Mark, TableInfo, WriteResult
 from .rest_catalog import CommitConflict, RestCatalog, current_schema_fields, current_snapshot
 from .sqlparams import check_params, to_qmark
 from .tables import Column, TableSchema, column_diffs, load_schemas, table_name
-from .trino_http import Row, TrinoHTTP
+from .trino_http import Row, TrinoHTTP, execute_immediate, literal
 from .validate import content_key, normalize_rows
 
 __all__ = ["TrinoRestLake", "rest_schema_diffs"]
@@ -47,6 +51,8 @@ __all__ = ["TrinoRestLake", "rest_schema_diffs"]
 PROP_BATCH = "hnx.batch."
 PROP_MARK = "hnx.mark."
 KEY_CHUNK = 500
+#: the longest query text sent: safely below Trino's default ``query.max-length`` (1,000,000)
+MAX_QUERY_LENGTH = 900_000
 _NS = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 #: setups already done in this process: (catalog root, Trino catalog, namespace, schemas digest).
 #: Only the constructor's ``ensure=True`` consults it; an explicit ``ensure_tables()`` always runs.
@@ -114,9 +120,15 @@ class TrinoRestLake(AdapterBase):
         schemas: Iterable[TableSchema] | Mapping[str, TableSchema] | None = None,
         named_queries: Mapping[str, str] | None = None,
         ensure: bool = True,
+        max_query_length: int = MAX_QUERY_LENGTH,
     ):
         if not _NS.fullmatch(namespace):
             raise LakeError(f"namespace must be a lower-case identifier, got {namespace!r}")
+        if not isinstance(max_query_length, int) or max_query_length < 1024:
+            raise LakeError(
+                f"max_query_length must be an integer >= 1024, got {max_query_length!r}"
+            )
+        self.max_query_length = max_query_length
         if schemas is None:
             schemas = load_schemas()
         pool = schemas.values() if isinstance(schemas, Mapping) else schemas
@@ -285,13 +297,39 @@ class TrinoRestLake(AdapterBase):
                 fresh.append(r)
         if not fresh:  # nothing new: no commit (same as the other adapters)
             return WriteResult(len(norm), 0, len(norm), False, None)
+        query_id = ""
+        for sql, args in self._inserts(s, fresh):  # the ledger is written once, after the last
+            query_id = self._trino.execute(sql, args).query_id
+        snap_id = self._record(s, query_id, idempotency_key, source, high_water)
+        return WriteResult(len(norm), len(fresh), len(norm) - len(fresh), False, snap_id)
+
+    def _inserts(self, s: TableSchema, rows: list[dict[str, Any]]) -> list[tuple[str, list[Any]]]:
+        """``rows`` as INSERT statements whose query text (as sent: ``EXECUTE IMMEDIATE '<sql>'
+        USING <literals>``) stays within ``max_query_length``; refuses a row that alone exceeds it
+        before anything is sent."""
         cols = ", ".join(_qi(c.name) for c in s.columns)
         one = "(" + ", ".join(f"CAST(? AS {_trino_type(c)})" for c in s.columns) + ")"
-        sql = f"INSERT INTO {self._fq(s.name)} ({cols}) VALUES " + ", ".join(one for _ in fresh)
-        args = [self._value(c, r[c.name]) for r in fresh for c in s.columns]
-        res = self._trino.execute(sql, args)
-        snap_id = self._record(s, res.query_id, idempotency_key, source, high_water)
-        return WriteResult(len(norm), len(fresh), len(norm) - len(fresh), False, snap_id)
+        head = f"INSERT INTO {self._fq(s.name)} ({cols}) VALUES "
+        base = len(execute_immediate(head, [None]))  # the frame, the head and one ", " spare
+        out: list[tuple[str, list[Any]]] = []
+        n, args, size = 0, [], base
+        for r in rows:
+            vals = [self._value(c, r[c.name]) for c in s.columns]
+            # one more "(CAST(...), ...)" (with its ", ") in the quoted SQL, and its literals
+            cost = len(literal(one)) + sum(len(literal(v)) + 2 for v in vals)
+            if base + cost > self.max_query_length:
+                raise LakeError(
+                    f"a row of {s.name!r} needs {base + cost} characters of query text, more"
+                    f" than max_query_length ({self.max_query_length})"
+                )
+            if n and size + cost > self.max_query_length:
+                out.append((head + ", ".join(one for _ in range(n)), args))
+                n, args, size = 0, [], base
+            n, size = n + 1, size + cost
+            args.extend(vals)
+        if n:
+            out.append((head + ", ".join(one for _ in range(n)), args))
+        return out
 
     def _record(
         self,
