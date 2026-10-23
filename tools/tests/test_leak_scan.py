@@ -566,8 +566,9 @@ H1 = "Gz9kY7T5VNhEkwH0PVJ" + "gjzfXq1rhBrR7pRT3mDkpeCY="
 assert len(H1) == 44
 
 
-def _secret_hits(text: str) -> set[str]:
-    return {h.pattern for h in leak_scan.scan_text(text, "t") if h.pattern in SECRET_PATTERNS}
+def _secret_hits(text: str, path: str = "t") -> set[str]:
+    hits = leak_scan.scan_text(text, path)
+    return {h.pattern for h in hits if h.pattern in SECRET_PATTERNS}
 
 
 SECRET_PATTERNS = {p.name for p in leak_scan.PATTERNS if p.group == "secret"}
@@ -635,11 +636,12 @@ def test_go_test_name_allowance_stays_narrow(text: str):
         '"input_tokens": float64(435783), "cache_read_tokens": float64(0),',
         '"last_prompt_tokens": float64(61234), "max_tokens": float64(16384)',
         'map[string]any{"path": "docs/w.md", "max_tokens": math.MaxInt64 / 2}',
-        '[]byte("db_path: /x.db\\ntoken_weighted_admission: true\\nkv_budget_fraction: 0.7\\n")',
+        '[]byte("db_path: /x.db\\ntok'
+        + 'en_weighted_admission: true\\nkv_budget_fraction: 0.7\\n")',
     ],
 )
 def test_go_numeric_values_and_escaped_newlines_are_not_keyed_secrets(text: str):
-    assert "keyed-secret" not in _secret_hits(text)
+    assert "keyed-secret" not in _secret_hits(text, "orchestrator/internal/x/x_test.go")
 
 
 @pytest.mark.parametrize(
@@ -658,6 +660,44 @@ def test_go_numeric_values_and_escaped_newlines_are_not_keyed_secrets(text: str)
 )
 def test_go_numeric_and_escape_exemptions_stay_narrow(text: str):
     assert "keyed-secret" in _secret_hits(text)
+    assert "keyed-secret" in _secret_hits(text, "orchestrator/internal/x/x.go")
+
+
+# fictional credential-shaped values, assembled here so this file does not match itself
+VAL_A = "Wq7Ty2" + "Lm9Xc4Vb!"
+VAL_B = "h3Rd8" + "Kq6Zt1Np5"
+ESCAPED = [
+    # a value right after an escape sequence: on either side of an escape is still a value
+    "db_pass" + 'word: "\\t' + VAL_A + '"',
+    "api_tok" + 'en: "\\r' + VAL_B + '"',
+    'var d = "pass' + "word: \\t" + VAL_A + '"',
+    'var e = "db_pass' + "word=\\n" + VAL_B + '"',
+    # a value before the escape, and one after a harmless first segment
+    'var f = "secret_' + "key: " + VAL_B + '\\nnext: x"',
+    'var g = "pass' + "word: ab\\t" + VAL_A + '"',
+]
+
+
+@pytest.mark.parametrize("text", ESCAPED)
+@pytest.mark.parametrize("path", ["conf.yml", "x.py", "orchestrator/internal/x/x_test.go", "-"])
+def test_an_escape_sequence_never_hides_a_keyed_value(text: str, path: str):
+    assert "keyed-secret" in _secret_hits(text, "<stdin>" if path == "-" else path)
+
+
+def test_escape_segments_are_go_string_literals_only():
+    # outside a Go source, the value is the whole run, escapes and all: as on main
+    line = "db_path: /x.db\\ntok" + "en_weighted_admission: true\\nkv_budget_fraction: 0.7"
+    assert "keyed-secret" in _secret_hits(line, "conf.yml")
+    assert "keyed-secret" not in _secret_hits(f'x := "{line}"', "x.go")
+    # in a Go comment or raw string the backslash is not an escape either
+    assert "keyed-secret" in _secret_hits(f"// {line}", "x.go")
+    assert "keyed-secret" in _secret_hits(f"x := `{line}`", "x.go")
+    for code, inside in [
+        ('a := "b\\"c" + `d"` + \'"\' + "e', True),  # past an escaped quote, a raw string, a rune
+        ('a := "b" + `"c', False),  # in a raw string
+        ('a := "b" // "c', False),  # in a comment
+    ]:
+        assert leak_scan._in_go_string(code, len(code)) is inside, code
 
 
 def test_orchestrator_config_key_names_are_product_names_but_values_are_scanned():

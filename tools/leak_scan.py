@@ -142,7 +142,8 @@ class Pattern:
     regex: re.Pattern[str]
     why: str
     redact: bool = False
-    accept: Callable[[re.Match[str], str], bool] | None = None  # True => it IS a hit
+    # (match, line, path) -> True when it IS a hit; path is the scanned file's ('' for stdin)
+    accept: Callable[[re.Match[str], str, str], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -170,35 +171,35 @@ def _entropy(token: str) -> float:
 KEYED_RE = re.compile(r"(?i)(secret|token|passw|api[_-]?key|credential|auth|private)")
 
 
-def _is_hit_mac(m: re.Match[str], _line: str) -> bool:
+def _is_hit_mac(m: re.Match[str], _line: str, _path: str = "") -> bool:
     text = m.group(0).lower().replace("-", ":")
     return not text.startswith(DOC_MAC_PREFIX)
 
 
-def _is_hit_email(m: re.Match[str], _line: str) -> bool:
+def _is_hit_email(m: re.Match[str], _line: str, _path: str = "") -> bool:
     if m.group(0).lower() in ALLOWED_EMAIL_ADDRESSES:
         return False
     domain = m.group("domain").lower()
     return not any(domain == d or domain.endswith("." + d) for d in ALLOWED_EMAIL_DOMAINS)
 
 
-def _is_hit_tld(m: re.Match[str], _line: str) -> bool:
+def _is_hit_tld(m: re.Match[str], _line: str, _path: str = "") -> bool:
     # example.internal (and anything beneath it) is the documented placeholder.
     return not (m.group("tld") == "internal" and m.group("label").lower() == "example")
 
 
-def _is_hit_aws_account(m: re.Match[str], _line: str) -> bool:
+def _is_hit_aws_account(m: re.Match[str], _line: str, _path: str = "") -> bool:
     return m.group("num") != "123456789012"
 
 
-def _is_hit_rule_number(m: re.Match[str], _line: str) -> bool:
+def _is_hit_rule_number(m: re.Match[str], _line: str, _path: str = "") -> bool:
     return not m.group("num").startswith("9000")
 
 
 VERSION_CONTEXT_RE = shapes.VERSION_CONTEXT_RE
 
 
-def _is_hit_public_ipv4(m: re.Match[str], line: str) -> bool:
+def _is_hit_public_ipv4(m: re.Match[str], line: str, _path: str = "") -> bool:
     text = m.group(0)
     try:
         addr = ipaddress.IPv4Address(text)
@@ -211,7 +212,7 @@ def _is_hit_public_ipv4(m: re.Match[str], line: str) -> bool:
     return not VERSION_CONTEXT_RE.search(line[: m.start()])
 
 
-def _is_hit_ipv6_compressed(m: re.Match[str], _line: str) -> bool:
+def _is_hit_ipv6_compressed(m: re.Match[str], _line: str, _path: str = "") -> bool:
     text = m.group(0)
     groups = [g for g in text.split(":") if g]
     if len(groups) < 2 or all(g.isalpha() for g in groups):
@@ -253,7 +254,7 @@ def _is_go_test_name(token: str) -> bool:
     return bool(runs) and sum(map(len, runs)) / len(runs) >= GO_TEST_NAME_MIN_RUN
 
 
-def _is_hit_entropy(m: re.Match[str], line: str) -> bool:
+def _is_hit_entropy(m: re.Match[str], line: str, _path: str = "") -> bool:
     if SESSION_TRAILER_RE.match(line):
         return False
     go_sum = GO_SUM_LINE_RE.match(line)
@@ -273,7 +274,7 @@ def _is_hit_entropy(m: re.Match[str], line: str) -> bool:
     return _entropy(token) >= (4.0 if KEYED_RE.search(line) else 4.5)
 
 
-def _is_hit_lower_entropy(m: re.Match[str], line: str) -> bool:
+def _is_hit_lower_entropy(m: re.Match[str], line: str, _path: str = "") -> bool:
     token = m.group("tok")
     if re.fullmatch(r"[0-9a-f]+", token):  # hex digests: see hex-secret
         return False
@@ -288,7 +289,7 @@ def _is_hit_lower_entropy(m: re.Match[str], line: str) -> bool:
 DIGEST_CONTEXT_RE = re.compile(r"(?i)sha\d*|digest|checksum|commit|hash|\bref\b|@|fingerprint")
 
 
-def _is_hit_hex_secret(m: re.Match[str], line: str) -> bool:
+def _is_hit_hex_secret(m: re.Match[str], line: str, _path: str = "") -> bool:
     if not KEYED_RE.search(line) or DIGEST_CONTEXT_RE.search(line):
         return False
     return _entropy(m.group("tok")) >= 3.0  # rules out 000..., fade/face fillers
@@ -335,8 +336,33 @@ NUMBER_CAST_RE = re.compile(r"^(?:u?int|float|complex)(?:8|16|32|64|128)?\((?P<n
 GO_MATH_LIMIT_RE = re.compile(
     r"^math\.(?:Max|Min|SmallestNonzero)(?:Int|Uint|Float)(?:8|16|32|64)?$"
 )
-# An escape sequence ends a value written inside a string literal (``"key: v\nnext: w"``).
-ESCAPE_END_RE = re.compile(r"\\[nrt]")
+# An escape sequence separates values inside a Go string literal (``"key: v\nnext: w"``): each
+# segment is scanned on its own, so a value on either side of an escape is still found.  Only in a
+# Go source's interpreted string; any other file keeps the value whole.
+GO_ESCAPE_RE = re.compile(r"\\[nrt]")
+# a segment that is the next key of the literal (``\nnext_key:``), not a value
+NEXT_KEY_RE = re.compile(r"^[a-z][a-z0-9_.-]*:$")
+
+
+def _in_go_string(line: str, pos: int) -> bool:
+    """Whether ``pos`` of a Go source line lies inside an interpreted ("...") string literal."""
+    state, i = "", 0  # "" code | '"' string | "`" raw string | "'" rune
+    while i < min(pos, len(line)):
+        ch = line[i]
+        if state in ('"', "'"):
+            if ch == "\\":
+                i += 1
+            elif ch == state:
+                state = ""
+        elif state == "`":
+            if ch == "`":
+                state = ""
+        elif line.startswith("//", i):
+            return False  # a comment: the rest of the line is not code
+        elif ch in "\"`'":
+            state = ch
+        i += 1
+    return state == '"'
 
 
 def _is_short_number(value: str) -> bool:
@@ -356,9 +382,20 @@ def _is_short_number(value: str) -> bool:
 KEYED_PLACEHOLDER_RE = re.compile(r"(?i)secret|passw|token|hunter2|abc123|letmein|qwerty|123456")
 
 
-def _is_hit_keyed_value(m: re.Match[str], _line: str) -> bool:
-    value = ESCAPE_END_RE.split(m.group("val"), maxsplit=1)[0]
-    if len(value) < 6:  # the pattern's own minimum, once an escape has ended the value
+def _is_hit_keyed_value(m: re.Match[str], line: str, path: str = "") -> bool:
+    value = m.group("val")
+    if path.endswith(".go") and _in_go_string(line, m.start("val")):
+        segments = GO_ESCAPE_RE.split(value)
+        return any(
+            _keyed_value_is_hit(m, seg)
+            for n, seg in enumerate(segments)
+            if not (n and NEXT_KEY_RE.match(seg))
+        )
+    return _keyed_value_is_hit(m, value)
+
+
+def _keyed_value_is_hit(m: re.Match[str], value: str) -> bool:
+    if len(value) < 6:  # the pattern's own minimum, for a segment of a Go string literal
         return False
     quoted = bool(m.group("q"))
     if _is_store_ref(m.group(0)) or _is_short_number(value):
@@ -393,7 +430,7 @@ PRODUCT_SECRET_NAMES = frozenset(
 )
 
 
-def _is_hit_secret_name(m: re.Match[str], _line: str) -> bool:
+def _is_hit_secret_name(m: re.Match[str], _line: str, _path: str = "") -> bool:
     return m.group(0) not in PRODUCT_SECRET_NAMES
 
 
@@ -404,7 +441,7 @@ def _p(
     why: str,
     *,
     redact: bool = False,
-    accept: Callable[[re.Match[str], str], bool] | None = None,
+    accept: Callable[[re.Match[str], str, str], bool] | None = None,
     flags: int = 0,
 ) -> Pattern:
     return Pattern(name, group, re.compile(rx, flags), why, redact, accept)
@@ -624,16 +661,21 @@ def scan_text(
     patterns: Iterable[Pattern] = PATTERNS,
     denylist: list[tuple[int, re.Pattern[str]]] | None = None,
     suppressed: list[str] | None = None,
+    path: str | None = None,
 ) -> list[Hit]:
+    """Hits in ``text``; ``path`` (default: ``label``) is the file name some patterns read."""
     hits: list[Hit] = []
     pats = list(patterns)
+    path = label if path is None else path
+    if path.startswith("<"):  # <stdin>: not a file
+        path = ""
     for lineno, line in enumerate(text.splitlines(), 1):
         sup = SUPPRESS_RE.search(line)
         cut = sup.start() if sup else len(line)
         allowed: list[str] = []
         for pat in pats:
             for m in pat.regex.finditer(line):
-                if pat.accept is not None and not pat.accept(m, line):
+                if pat.accept is not None and not pat.accept(m, line, path):
                     continue
                 hit = Hit(label, lineno, pat.name, _display(pat, m.group(0)))
                 # a reviewed line may waive what lies before its marker, never a credential
@@ -792,7 +834,7 @@ def scan_history(
             m = HUNK_RE.match(raw)
             lineno = int(m.group(1)) if m else 0
         elif raw.startswith("+"):
-            for h in scan_text(raw[1:], f"{sha}:{path}", pats, denylist):
+            for h in scan_text(raw[1:], f"{sha}:{path}", pats, denylist, path=path):
                 hits.append(Hit(h.path, lineno, h.pattern, h.shown))
             lineno += 1
         elif raw.startswith(" "):
