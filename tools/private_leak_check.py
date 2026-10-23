@@ -81,16 +81,20 @@ and only while its marker says ``fictional: true``.  Findings:
                    ``scope``, at any depth (an alias-spelled key, ``? scope`` with comments,
                    a dedented flow, a CRLF header are just mappings here); (2) the raw rule:
                    the raw text under every ``scope`` key (any case, quoted or not, ``scope:``,
-                   ``scope =``, ``[scope]``/``[[scope]]`` headers, dotted ``scope.x`` keys, a
-                   comment before the colon, and the same after decoding YAML, JSON and TOML
-                   escapes, an escaped line break and HTML character references), which also
-                   reads what does not parse (Markdown prose and fences of any kind).  Either
+                   ``scope =`` at a line's start, ``[scope]``/``[[scope]]`` headers, dotted
+                   ``scope.x`` keys, a comment before the colon, Markdown `` `scope`: ``,
+                   ``**scope**:``, ``_scope_:`` and table rows, and the same after decoding
+                   YAML, JSON and TOML escapes, an escaped line break and HTML character
+                   references; never a call's ``scope=`` keyword argument or an HTML
+                   attribute), which also reads what does not parse (Markdown prose and fences
+                   of any kind, and each joined cell and textual output of a notebook).  Either
                    fails on an address-like token that is not a documentation address
                    (RFC 5737, ``2001:db8::/32``, ``3fff::/20``).  Address-like: an IPv6
                    address, a dotted form of four parts in any numeric spelling, an integer
                    (decimal, hex, octal, binary, underscored, float, sexagesimal) of 2**24 or
-                   more, a short form that is no version (a hex or leading-zero part, a part
-                   over 255) or sits in an address context, a private short form; an alias is
+                   more, a short form that cannot be a version or a decimal (a hex part or a
+                   part over 255) or sits in an address context (a prefix length, a port, a
+                   URL); other short forms (``1.0``, ``24.04``, ``0.05``) are ignored; an alias is
                    followed to its anchor's last real definition (more than
                    :data:`SCOPE_MAX_ALIASES` is a finding), and a ``!!binary`` value is
                    refused.  What a key "holds" (raw rule) is over-read: the rest of its line,
@@ -108,8 +112,10 @@ and only while its marker says ``fictional: true``.  Findings:
                    gate and is review's to catch; known non-goals: hostnames that resolve to
                    the address they spell (``81-2-69-142.sslip.io``, ``*.nip.io``),
                    percent-encoded or ideographic dots, named HTML entities, Markdown
-                   backslash escapes or emphasis inside a number, numbers spelt in words, and
-                   an address not under a scope key (``tools/leak_scan.py``'s);
+                   backslash escapes or emphasis inside a number, numbers spelt in words, an
+                   address not under a scope key (``tools/leak_scan.py``'s), and carriers no
+                   loader here reads as a scope (``.env``, CSV columns, INI ``[scope:x]``, XML,
+                   HCL, YAML in comments or blockquotes; docs/modules.md lists them);
   scope-shape      at an allowlisted path (:data:`SCOPE_BLOCK_PATHS`: the example site
                    profiles and the generated selection examples and negatives), a scope block
                    not in the selection's shape: a part outside ``SCOPE_PARTS`` (what it holds
@@ -758,8 +764,18 @@ SCOPE_EXEMPT = {
 #: explicit ``? scope`` key, prose), ``scope =`` (TOML, INI), a dotted ``scope.trusted.wan``
 #: key, and a TOML table header naming it (``[scope]``, ``[[scope]]``, ``[site.scope]``).
 #: Quoted or not, any case (``re.I`` also folds the long s, U+017F); not part of a longer word.
+#: Markdown spellings count (`` `scope`: ``, ``**scope**:``, ``_scope_:``, a table row whose first
+#: cell is ``scope``).  Never a key: a call's keyword argument (``fixture(scope="module")``,
+#: ``f(a, scope=x)``) or an HTML or XML attribute (``<th scope="row">``): ``scope =`` counts only
+#: at a line's start or, spaced, inside a TOML inline table.
 _SCOPE_KEY = re.compile(
-    r"""(?<![\w$-])["']?scope["'\]}]*\s*(?:[:=](?!:)|\.\s*["']?[A-Za-z_])""", re.I
+    r"""(?<![\w$-])[`*_"']*scope[`*_"'\]}]*"""  # Markdown `scope`, **scope**, _scope_, quotes
+    r"""(?:[ \t]*(?:\#[^\n]*)?\n)*[ \t]*"""  # comment lines and line breaks before the colon
+    r"""(?::(?!:)|\.[ \t]*["']?[A-Za-z_])"""  # scope: or a dotted scope.x key
+    r"""|^[ \t]*["']?scope["']?[ \t]*=(?!=)"""  # scope = at a line's start (TOML, INI)
+    r"""|(?<=[{,])[ \t]*["']?scope["']?[ \t]+=[ \t]"""  # in a TOML inline table, spaced
+    r"""|^[ \t]*\|[ \t]*[`*_]*scope(?:\.[\w.]+)?[`*_]*[ \t]*\|""",  # a Markdown table row
+    re.I | re.M,
 )
 #: a TOML table header line (``[a.b]``, ``[[a."b"]]``): the whole line, nothing after but a comment
 _TOML_HEADER = re.compile(
@@ -835,7 +851,7 @@ def _newlines_normalised(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
-_FLOW_CHARS = re.compile(r'[\[\]{}"\n#\\]')
+_FLOW_CHARS = re.compile(r"""[\[\]{}"\n#\\&']""")
 #: a YAML anchor definition (``&name``) where the text can hold one
 _ANCHOR = re.compile(r"(?:^|(?<=[\s\[{,:]))&([^\s,\[\]{}]+)(?=[\s,\]}]|$)", re.M)
 #: how many distinct aliases under scope keys one file may make the raw rule follow; more is a
@@ -852,20 +868,24 @@ class _Index:
       bracket inside a single-quoted string can pair wrongly: the parse pass reads such files.
     - ``headers``: the start of every TOML table header line, sorted.
     - ``anchors``: each anchor name mapped to the sorted positions of its real definitions
-      (not in a comment, not inside a quoted string on its line).
-    - ``newlines``: positions of every line break, for line numbers."""
+      (not in a comment, not inside a quoted string), found in the same pass.
+    - ``newlines``: positions of every line break, for line starts, ends and numbers.
+
+    Nothing here re-reads a line per key or per anchor, so the index is linear in the text."""
 
     def __init__(self, text: str) -> None:
         self.text = text
         self.newlines = [m.start() for m in re.finditer("\n", text)]
         self.close_of: dict[int, int] = {}
+        self.anchors: dict[str, list[int]] = {}
         stack: list[int] = []
         in_dq = in_comment = False
+        sq_open = False  # an odd number of single quotes so far on this line
         prev_end = 0
         for m in _FLOW_CHARS.finditer(text):
             c, i = m.group(0), m.start()
             if c == "\n":
-                in_comment = False
+                in_comment = sq_open = False
                 prev_end = i + 1
                 continue
             if in_comment:
@@ -876,6 +896,12 @@ class _Index:
                 continue
             if c == '"':
                 in_dq = True
+            elif c == "'":
+                sq_open = not sq_open
+            elif c == "&":
+                a = None if sq_open else _ANCHOR.match(text, i)
+                if a is not None:  # a real definition: not in a comment or a quoted string
+                    self.anchors.setdefault(a.group(1), []).append(i)
             elif c == "#" and (i == prev_end or text[i - 1] in " \t"):
                 in_comment = True
             elif c in "[{":
@@ -885,13 +911,15 @@ class _Index:
         for opener in stack:
             self.close_of[opener] = len(text)
         self.headers = [m.start() for m in _TOML_HEADER.finditer(text)]
-        self.anchors: dict[str, list[int]] = {}
-        for m in _ANCHOR.finditer(text):
-            line_start = text.rfind("\n", 0, m.start()) + 1
-            before = text[line_start : m.start()]
-            if re.search(r"(?:^|[ \t])#", before) or before.count("'") % 2 or before.count('"') % 2:
-                continue  # a comment or a quoted string, not an anchor
-            self.anchors.setdefault(m.group(1), []).append(m.start())
+
+    def line_start(self, pos: int) -> int:
+        i = bisect.bisect_left(self.newlines, pos)
+        return self.newlines[i - 1] + 1 if i else 0
+
+    def line_end(self, pos: int) -> int:
+        """The position of the line break ending the line that holds ``pos`` (or the text's end)."""
+        i = bisect.bisect_left(self.newlines, pos)
+        return self.newlines[i] if i < len(self.newlines) else len(self.text)
 
     def line_of(self, pos: int) -> int:
         return bisect.bisect_left(self.newlines, pos) + 1
@@ -936,6 +964,30 @@ def _quoted_end(text: str, start: int) -> int:
     return len(text)
 
 
+_LINE_INDENT = re.compile(r"[ \t]*")
+#: the rest of a line holding nothing (or a comment): the value starts on a later line
+_BLANK_REST = re.compile(r"[ \t]*(?:#[^\n]*)?(?=\n|\Z)")
+#: what precedes a value's first character: the separator, and any tags or anchors
+_VALUE_HEAD = re.compile(r"[ \t]*[:=]?[ \t]*(?:[!&]\S*[ \t]+)*")
+
+
+def _walk(idx: _Index, pos: int, indent: int, end: int) -> int:
+    """From the line starting at ``pos``, the end of every following line indented deeper than
+    ``indent`` (blank and comment lines included, and a ``- `` item at exactly ``indent``, which
+    YAML allows under a key); ``end`` if no line is taken.  Reads each line's indent only."""
+    text = idx.text
+    while pos < len(text):
+        j = _LINE_INDENT.match(text, pos).end()
+        nl = idx.line_end(pos)
+        c = text[j] if j < len(text) else "\n"
+        col = j - pos
+        item = col == indent and c == "-" and text[j + 1 : j + 2] in (" ", "\t", "\n", "")
+        if c not in "\n#" and col <= indent and not item:
+            break
+        end, pos = nl, nl + 1
+    return end
+
+
 def _span(
     idx: _Index,
     key_start: int,
@@ -946,70 +998,59 @@ def _span(
     """``(start, end)`` of the raw text a scope key holds, over-read rather than under-read.
 
     - A TOML table header holds everything up to the next header.
-    - Any other key holds the rest of its line and every following line indented deeper (blank
-      and comment lines included, and a ``- `` item at the key's own indent, which YAML allows).
+    - Any other key holds the rest of its line and every following line indented deeper than
+      the key's own column (blank and comment lines included, and a ``- `` item at that column,
+      which YAML allows).  The key's column, not its line's indent: for ``- scope:`` a sibling
+      ``- `` item ends the span.
     - A value that is not on the key's line (``"scope":`` then ``{...}`` on the next line, at
-      any indent) holds the first non-blank, non-comment line after it.
-    - A flow collection opened on the key's line or that first value line holds through its
-      close, however its lines are indented; a quoted scalar opened there holds through its
-      closing quote.
+      any indent) holds the first non-blank, non-comment line after it, and the lines indented
+      deeper than that one.
+    - A flow collection or a quoted scalar that the value starts with holds through its close,
+      however its lines are indented; when it is on the key's line and nothing deeper follows,
+      it is the whole value (the rest of a minified line after it is another key's).
 
     ``blocks`` (keys in order) holds the enclosing indented blocks: a key indented deeper inside
-    one ends inside it, so its lines are not walked again.  With the flow closers and headers
-    precomputed in ``idx``, each character is scanned about once, however the keys nest."""
+    one ends inside it, so its lines are not walked again.  Line starts and ends are bisected
+    from ``idx``; no line is sliced per key, so a long line with many keys stays linear."""
     text = idx.text
     if header:
         return key_end, idx.next_header(key_end)
-    line_start = text.rfind("\n", 0, key_start) + 1
-    first_nl = text.find("\n", key_end)
-    eol = len(text) if first_nl < 0 else first_nl
-    key_indent = _indent(text[line_start:eol])
-    end, pos = eol, eol + 1
+    key_col = key_start - idx.line_start(key_start)
+    eol = idx.line_end(key_end)
     while blocks and key_start >= blocks[-1][1]:
         blocks.pop()
-    if blocks is not None and blocks and key_indent > blocks[-1][2]:
-        end, pos = blocks[-1][1], len(text) + 1  # inside an enclosing block: it ends there
-    while pos <= len(text) and first_nl >= 0:
-        nl = text.find("\n", pos)
-        nl = len(text) if nl < 0 else nl
-        line = text[pos:nl]
-        stripped = line.strip()
-        if (
-            stripped
-            and not stripped.startswith("#")
-            and _indent(line) <= key_indent
-            # YAML lets a block sequence sit at its key's own indent ("scope:" then "- x")
-            and not (_indent(line) == key_indent and re.match(r"-(?:[ \t]|$)", stripped))
-        ):
-            break
-        end, pos = nl, nl + 1
+    # inside an enclosing block a deeper key ends where that block does: its lines are not
+    # walked again
+    inside = bool(blocks) and key_col > blocks[-1][2]  # type: ignore[index]
+    end = blocks[-1][1] if inside else _walk(idx, eol + 1, key_col, eol)  # type: ignore[index]
     if blocks is not None:
-        blocks.append((key_start, end, key_indent))
-    # where the value starts: on the key's line, or on the first line after it with content
-    value_at, value_eol = key_end, eol
-    rest = text[key_end:eol].strip()
-    if not rest or rest.startswith("#"):
+        blocks.append((key_start, end, key_col))
+    # where the value starts: on the key's line, or on the first later line with content
+    value_at = key_end
+    if _BLANK_REST.match(text, key_end):
         pos = eol + 1
         while pos < len(text):
-            nl = text.find("\n", pos)
-            nl = len(text) if nl < 0 else nl
-            s = text[pos:nl].strip()
-            if s and not s.startswith("#"):
-                value_at, value_eol = pos, nl
-                end = max(end, nl)
+            m = _BLANK_REST.match(text, pos)
+            nl = idx.line_end(pos)
+            if m is None:
+                value_at = pos
+                end = max(end, _walk(idx, nl + 1, _LINE_INDENT.match(text, pos).end() - pos, nl))
                 break
             pos = nl + 1
-    head = re.match(r"[ \t]*(?:[:=][ \t]*)?", text[value_at:value_eol])
-    first = value_at + (head.end() if head else 0)
+    head = _VALUE_HEAD.match(text, value_at)
+    first = head.end() if head else value_at
+    close = None
     if first < len(text) and text[first] in "\"'":
-        end = max(end, _quoted_end(text, first))
-    for flow in re.finditer(r"[\[{]", text[value_at:value_eol]):
-        # the first opener the index saw (one inside a string or a comment is not a flow)
-        close = idx.close_of.get(value_at + flow.start())
-        if close is not None:
-            end = max(end, close)
-            break
-    return key_end, end
+        close = _quoted_end(text, first)
+    elif first < len(text) and text[first] in "[{":
+        close = idx.close_of.get(first)
+    if close is None:
+        return key_end, end
+    if value_at == key_end and end == eol and not inside:
+        # a quoted or flow value on the key's line, nothing deeper: the value is exactly that,
+        # not the rest of a minified line ({"scope": "read", "iat": 1700000000})
+        return key_end, close
+    return key_end, max(end, close)
 
 
 def _merged(spans: list[tuple[int, int, int]]) -> list[tuple[int, int, int]]:
@@ -1046,9 +1087,9 @@ def _is_internal(net: ipaddress.IPv4Network) -> bool:
 
 
 def _version_like(parts: list[str]) -> bool:
-    """Two or three plain decimal parts, each 0 to 255 with no leading zero: ``1.0``, ``16.4``,
-    ``2.1.0``.  Anything else (a hex or leading-zero part, a part over 255) is no version."""
-    return all(p.isdigit() and (p == "0" or p[0] != "0") and int(p) <= 255 for p in parts)
+    """Two or three plain decimal parts, each 0 to 255 (leading zeros allowed): ``1.0``,
+    ``16.4``, ``24.04``, ``0.05``, ``1.0.3``.  A hex part or a part over 255 is no version."""
+    return all(p.isdigit() and int(p) <= 255 for p in parts)
 
 
 @functools.lru_cache(maxsize=65536)
@@ -1058,13 +1099,12 @@ def _numeric_offends(groups: tuple[str | None, ...], context: bool) -> bool:
     - four dotted parts, any spelling: every ``inet_aton`` reading is judged (strict);
     - one part (an integer in any spelling, a float): judged when 2**24 or more (below that it
       is in 0/8, which names no host: ``maxItems: 6`` is not an address);
-    - two or three parts (``10.20``, ``172.16.5``): ``inet_aton`` reads the octets 10, 0, 0, 20
-      and a person reads the 10.20/16 prefix, but ``1.0`` and ``16.4`` are versions.  A short
-      form is *version-like* only when every part is plain decimal (no ``0x``, no leading zero)
-      and at most 255 (:func:`_version_like`).  It is judged strictly (every reading) when it is
-      not version-like (``81.2.17806``, ``0x51.0x2458e``, ``081.2.17806``) or sits in an address
-      context (a prefix length, a port, after ``//`` or ``@``); a version-like one is refused
-      only when a reading is private or shared space (``10.20``, ``172.16.5``).
+    - two or three parts (an ``inet_aton`` short form: ``10.20`` is the octets 10, 0, 0, 20):
+      judged only when it cannot be a version or a decimal, that is when a part is hex or over
+      255 (``81.2.17806``, ``0x51.0x2458e``, ``1.300``), or when it sits in an address context
+      (a prefix length such as ``10.20/16``, a port, after ``//`` or ``@``).  Every other short
+      form (``1.0``, ``24.04``, ``0.05``, ``1.0.3``, and a bare ``10.20``) is ignored.  A
+      reading in 0/8 never counts.
     """
     head, dotted, exp, plen = groups
     if head is None:
@@ -1087,8 +1127,10 @@ def _numeric_offends(groups: tuple[str | None, ...], context: bool) -> bool:
         if len(parts) < 4:
             filled = parts + ["0"] * (4 - len(parts))
             readings += [ipaddress.IPv4Network(a) for a in ipv4_readings(filled)]
-            if not (context or plen is not None or not _version_like(parts)):
-                readings = [n for n in readings if _is_internal(n)]
+            if _version_like(parts) and not (context or plen is not None):
+                readings = []  # a version or a decimal, never judged as an address
+            # a short form in 0/8 names no host (0.300 reads as an address inside 0/8), as for an integer
+            readings = [n for n in readings if int(n.network_address) >= 1 << 24]
         nets += readings
     if plen is not None and len(plen) > 2:  # "/1359103374" is no prefix length: an integer
         nets += [ipaddress.IPv4Network(v) for v in _int_values(plen) if 1 << 24 <= v < 1 << 32]
@@ -1581,6 +1623,47 @@ def _strict_findings(rel: str, text: str) -> list[Finding]:
     return out
 
 
+def _joined(value: object) -> str | None:
+    """A notebook string field as one text: a list of line strings joined, or the string."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list) and all(isinstance(x, str) for x in value):
+        return "".join(value)
+    return None
+
+
+def _notebook_findings(rel: str, text: str) -> list[Finding]:
+    """A Jupyter notebook stores each cell's lines as separate JSON strings, so neither rule sees
+    a scope block inside one.  Each cell's ``source``, and each output's ``text`` and textual
+    ``data`` (``text/plain``, ``text/markdown``, ...), is joined into its text and run through
+    both rules as if it were a file of its own."""
+    if '"cells"' not in text:
+        return []
+    try:
+        nb = json.loads(text)
+    except (ValueError, RecursionError):
+        return []
+    cells = nb.get("cells") if isinstance(nb, dict) else None
+    if not isinstance(cells, list):
+        return []
+    out: list[Finding] = []
+    for n, cell in enumerate(cells):
+        if not isinstance(cell, dict):
+            continue
+        texts = [_joined(cell.get("source"))]
+        for o in cell.get("outputs") or []:
+            if isinstance(o, dict):
+                texts.append(_joined(o.get("text")))
+                data = o.get("data")
+                if isinstance(data, dict):
+                    texts += [_joined(v) for k, v in data.items() if str(k).startswith("text/")]
+        for t in texts:
+            if t and "scope" in t.casefold():
+                for f in _raw_findings(rel, t) + _parsed_findings(rel, t):
+                    out.append(Finding(rel, f.rule, f"notebook cell {n}: {f.detail}"))
+    return out
+
+
 def _allowlist_case_variant(rel: str) -> bool:
     """A path that matches :data:`SCOPE_BLOCK_PATHS` only when case is ignored: on a
     case-insensitive file system a loader globbing the allowlist would read it, so it is refused
@@ -1611,7 +1694,8 @@ def scope_findings(rel: str, text: str) -> list[Finding]:
                     "system would load it as a site profile; use the exact name",
                 )
             )
-        return out + _raw_findings(rel, text) + _parsed_findings(rel, text)
+        out += _raw_findings(rel, text) + _parsed_findings(rel, text)
+        return out + _notebook_findings(rel, text)
     except Exception as exc:  # fail closed: the gate never crashes open
         return [
             Finding(

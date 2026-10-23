@@ -537,6 +537,19 @@ SHORT_TWO = "81." + str(2 * 65536 + 69 * 256 + 142)
 #: an allowlisted path (SCOPE_BLOCK_PATHS): a site block there is parsed strictly
 SITE = "examples/modules/sites/probe.yml"
 
+TQ = "'" * 3
+
+
+def notebook(kind: str, source: list[str], outputs: list | None = None) -> str:
+    """A one-cell Jupyter notebook as written to disk (one JSON string per line)."""
+    cell = {"cell_type": kind, "metadata": {}, "source": source}
+    if kind == "code":
+        cell["outputs"] = outputs or []
+    return json.dumps(
+        {"cells": [cell], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}, indent=1
+    )
+
+
 #: a non-documentation address under a scope key, in every shape and spelling: refused at
 #: EVERY path, whatever the file is called and whatever the block around it looks like
 ADDRESS_CASES = {
@@ -558,7 +571,7 @@ ADDRESS_CASES = {
     "octal": f"scope:\n  target: [{PUBLIC_OCT}]\n",
     "underscored": f"scope:\n  target: [{PUBLIC_UNDERSCORED}]\n",
     "fullwidth digits": f"scope:\n  target: ['{FULLWIDTH}']\n",
-    "inet_aton short form, private": f"scope:\n  target: ['{SHORT_PRIVATE}']\n",
+    "inet_aton short form with a prefix": f"scope:\n  target: ['{SHORT_PRIVATE}/16']\n",
     "short form in a url": f"scope: http://{SHORT_PRIVATE}.5/\n",
     "space before prefix": f"scope:\n  target: ['{PUBLIC_V4} /32']\n",
     "mapped real": f"scope:\n  target: ['::ffff:{PUBLIC_V4}']\n",
@@ -656,6 +669,31 @@ ADDRESS_CASES = {
     "short form, a part over 255": f"scope:\n  target: ['{SHORT_GLOBAL}']\n",
     "short form, hex parts": f"scope:\n  target: ['{SHORT_HEX}']\n",
     "short form, two parts": f"scope:\n  target: ['{SHORT_TWO}']\n",
+    # VERIFY3 SF3: Markdown spellings of the key, and a CIDR short form leak_scan does not see
+    "markdown backtick key": f"- `scope`: `{PRIVATE_NET}`\n",
+    "markdown bold key": f"- **scope**: {SHORT_PRIVATE}/16\n",
+    "markdown underscore key": f"_scope_: {SHORT_PRIVATE}/16\n",
+    "markdown table row": f"| key | value |\n|---|---|\n| scope | {SHORT_PRIVATE}/16 |\n",
+    "markdown table row, code": f"| `scope` | `{SHORT_PRIVATE}/16` |\n",
+    # VERIFY3 SF4: a notebook stores each line of a cell as its own JSON string
+    "notebook code cell": notebook(
+        "code",
+        [
+            "x = yaml.safe_load(" + TQ + "\n",
+            "scope:\n",
+            "  target:\n",
+            f"  - {PADDED}/32\n",
+            TQ + ")\n",
+        ],
+    ),
+    "notebook markdown cell": notebook(
+        "markdown", ["```yaml\n", "scope:\n", "  target:\n", f"  - {SHORT_PRIVATE}/16\n", "```\n"]
+    ),
+    "notebook output": notebook(
+        "code",
+        ["print(sel)"],
+        [{"output_type": "stream", "text": ["{'scope':\n", f" {{'target': ['{PADDED}/32']}}}}\n"]}],
+    ),
 }
 
 #: a site block in the wrong shape, holding documentation addresses only (or none): refused at
@@ -762,6 +800,22 @@ PASSING_ELSEWHERE = [
     'note: "\\x38\\x31.' + PUBLIC_V4.split(".", 1)[1] + '"\n',  # an escape outside any scope
     "x: !vault |\n  abc\ny: [broken\n",  # no scope here: hygiene's finding, not this one's
     f"scope: x\nother: {PADDED}\n",  # a sibling of the scope key, not under it
+    # VERIFY3 SF2: a keyword argument or an HTML attribute is no scope key, and a bare short
+    # form that can be a version or a decimal is never an address (literals split: this source
+    # is scanned too)
+    "@pytest.fixture(scope='module', params=[0." + "05, 0.1])\n",
+    '@pytest.fixture(scope="module")\n' + '@pytest.fixture(scope="session")\n',
+    "run(scope='x', timeout=1." + "500)\n",
+    '        scope=g.raw.get("scope"),\n        timeout=0.' + "05,\n",
+    '<th scope="row">1.' + '300</th><th scope="col">24.' + "04</th>\n",
+    '{"scope": "read", "ratio": 0.' + '05, "iat": 1' + "700000000}\n",
+    "scope:\n  ubuntu: 24."
+    + "04\n  ratio: 0."
+    + "05\n  v: 1.0."
+    + "3\n  bare: "
+    + SHORT_PRIVATE
+    + "\n",
+    "The scope: we cut latency by 0." + "05 s.\n",
 ]
 
 
@@ -888,24 +942,102 @@ def test_the_scope_check_never_crashes_open(monkeypatch):
     assert rules(plc.scope_findings("docs/x.md", "scope: x\n")) == {"scope-unparsed"}
 
 
-@pytest.mark.parametrize("size", [1_000, 20_000])
-def test_the_raw_rule_reads_each_character_about_once(size):
-    """Nested and unclosed keys reuse the spans already read: linear, not quadratic."""
+#: (file, text at size n): every shape VERIFY2 and VERIFY3 found quadratic, and the earlier
+#: ones; each must grow about linearly
+LINEAR_SHAPES = {
+    "unclosed flows": ("x.yml", lambda n: "scope: [\n" * n),
+    "nested closed flows": ("x.yml", lambda n: "scope: [" * n + "]" * n + "\n"),
+    "indented keys": ("x.yml", lambda n: "".join("  " * (i % 20) + "scope:\n" for i in range(n))),
+    "one closed flow per line": ("x.yml", lambda n: "scope: [x]\n" * n),
+    "TOML tables leaving an array open": ("x.toml", lambda n: "[scope]\nx = [\n" * n),
+    "list items starting with the key": (
+        "x.yml",
+        lambda n: "".join(f"- scope: read\n  id: {i}\n" for i in range(n)),
+    ),
+    "minified JSON, one line": (
+        "x.json",
+        lambda n: "[" + ",".join(f'{{"scope":"a","id":{i}}}' for i in range(n)) + "]",
+    ),
+    "one-line HTML with entities": (
+        "x.html",
+        lambda n: "".join(
+            '<th scope="row">Tom &amp; Jerry</th><td>a &nbsp; b</td>' for _ in range(n)
+        ),
+    ),
+}
+
+
+class _CpuCap:
+    """Fail a call that uses more than ``seconds`` of this process's CPU time (``ITIMER_PROF``,
+    so other processes on a busy runner do not count): a superlinear rule fails in seconds
+    instead of running for minutes, as it would where this test runs against a quadratic parent
+    (``tools/fix_has_test.py --prove``).  The timer raises a ``BaseException`` so the gate's
+    fail-closed ``except Exception`` cannot swallow it, and leaving the block turns it into an
+    assertion.  A no-op without ``setitimer`` or off the main thread."""
+
+    class Exceeded(BaseException):
+        pass
+
+    def __init__(self, seconds: float, what: str) -> None:
+        import signal
+        import threading
+
+        self.signal, self.seconds, self.what = signal, seconds, what
+        self.armed = hasattr(signal, "setitimer") and (
+            threading.current_thread() is threading.main_thread()
+        )
+        self.old = None
+
+    def _stop(self, signum, frame):
+        raise _CpuCap.Exceeded
+
+    def __enter__(self) -> _CpuCap:
+        if self.armed:
+            self.old = self.signal.signal(self.signal.SIGPROF, self._stop)
+            self.signal.setitimer(self.signal.ITIMER_PROF, self.seconds)
+        return self
+
+    def __exit__(self, kind: object, *_: object) -> bool:
+        if self.armed:
+            self.signal.setitimer(self.signal.ITIMER_PROF, 0)
+            self.signal.signal(self.signal.SIGPROF, self.old)
+        if kind is _CpuCap.Exceeded:
+            raise AssertionError(f"{self.what}: more than {self.seconds:.2f} s of CPU in one call")
+        return False
+
+
+@pytest.mark.parametrize("shape", sorted(LINEAR_SHAPES))
+def test_the_raw_rule_grows_linearly(shape):
+    """VERIFY3 SF1: a ratio, not an absolute bound.  Time at n, 4n and 16n; each 4x step may
+    cost at most 6x (plus a small floor for timer noise), so a quadratic shape (16x a step)
+    fails."""
+    import gc
     import time
 
-    texts = [
-        ("x.yml", "scope: [\n" * size),
-        ("x.yml", "scope: [" * size + "]" * size + "\n"),
-        ("x.yml", "".join("  " * (i % 200) + "scope:\n" for i in range(size))),
-        # VERIFY2 SF1: one closed flow per line, and TOML tables each leaving an array open
-        ("x.yml", "scope: [x]\n" * (2 * size)),
-        ("x.json", '{"scope": {"a": 1}},\n' * (2 * size)),
-        ("x.toml", "[scope]\nx = [\n" * size),
-    ]
-    for rel, text in texts:
-        t0 = time.perf_counter()
-        assert plc.scope_findings(rel, text) == []
-        assert time.perf_counter() - t0 < 10, text[:20]
+    rel, make = LINEAR_SHAPES[shape]
+
+    def timed(n: int, cap: float) -> float:
+        text = make(n)
+        best = float("inf")
+        gc.collect()
+        gc.disable()  # the collector's full passes grow with live objects: noise, not the rule
+        try:
+            for _ in range(3):
+                t0 = time.perf_counter()
+                with _CpuCap(cap, f"{shape} at n={n}"):
+                    plc.scope_findings(rel, text)
+                best = min(best, time.perf_counter() - t0)
+        finally:
+            gc.enable()
+        return best
+
+    # each step is capped at a generous multiple of the last, so a superlinear shape fails at
+    # the first step it blows up instead of running the larger sizes
+    t1 = timed(2_000, 2.0)
+    t4 = timed(8_000, 20 * t1 + 1.0)
+    assert t4 <= 6 * t1 + 0.1, (shape, t1, t4)
+    t16 = timed(32_000, 20 * t4 + 1.0)
+    assert t16 <= 6 * t4 + 0.1, (shape, t4, t16)
 
 
 @needs_skeleton
