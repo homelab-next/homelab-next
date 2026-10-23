@@ -497,7 +497,10 @@ FAKE_TOOLS = {
       chmod +x "$2"; exit 0
     fi
     cat "$FAKE_STREAM"; exit "$FAKE_EXIT";;
-  list) if [ "$2" = ./... ]; then cat "$FAKE_PACKAGES"; else echo "$FAKE_MODULE/${2#./}"; fi;;
+  list)
+    if [ "$2" = -f ]; then cat "$FAKE_TESTED"
+    elif [ "$2" = ./... ]; then cat "$FAKE_PACKAGES"
+    else echo "$FAKE_MODULE/${2#./}"; fi;;
   tool) cat;;
 esac
 """,
@@ -517,13 +520,16 @@ def run_test_step(
     skips: str | None = None,
     privileged: tuple[list[str], int] | None = None,
     packages: list[str] | None = None,
+    tested: list[str] = (),
     tamper: str = "",
 ) -> subprocess.CompletedProcess:
     """The go job's root-only and test steps, in a scratch checkout, with go replaced by streams:
     ``lines`` and ``go_exit`` for go test, ``privileged`` = (stream, exit status) for the root
-    run's test binary; ``packages`` for go list ./... (default: the packages ``lines`` names);
-    ``tamper``, a shell command the main run's go test runs first, in the module.  The test step's
-    result, or the result of the first step that fails."""
+    run's test binary; ``packages`` for go list ./... (default: the packages ``lines`` names),
+    ``tested`` for the packages go list gives test files; ``tamper``, a shell command the main
+    run's go test runs first, in the module.  The steps' /run/ is moved under ``tmp_path`` and
+    $GITHUB_ENV carried from step to step as the runner does.  The test step's result, or the
+    result of the first step that fails."""
     bin_dir, mod, rt = tmp_path / "bin", tmp_path / "orchestrator", tmp_path / "runner-temp"
     for d in (bin_dir, mod, rt):
         d.mkdir(parents=True)
@@ -547,6 +553,10 @@ def run_test_step(
         events = [json.loads(x) for x in lines if x.strip().startswith("{")]
         packages = sorted({e["Package"] for e in events if e.get("Package")})
     (tmp_path / "packages.txt").write_text("".join(f"{x}\n" for x in packages))
+    (tmp_path / "tested.txt").write_text("".join(f"{x}\n" for x in tested))
+    (tmp_path / "run").mkdir()
+    github_env = tmp_path / "github-env"
+    github_env.write_text("")
     (tmp_path / "priv.json").write_text("\n".join(priv_lines) + "\n")
     env = {
         "PATH": f"{bin_dir}:{Path(sys.executable).parent}:/usr/bin:/bin",
@@ -560,10 +570,13 @@ def run_test_step(
         "FAKE_PRIV_EXIT": str(priv_exit),
         "FAKE_MODULE": MOD,
         "FAKE_PACKAGES": str(tmp_path / "packages.txt"),
+        "FAKE_TESTED": str(tmp_path / "tested.txt"),
         "FAKE_TAMPER": tamper,
+        "GITHUB_ENV": str(github_env),
     }
     for name in ("a root-owned results directory", "root-only tests", "tests (race"):
-        (tmp_path / "step.sh").write_text(ci_step(name))
+        step = ci_step(name).replace("/run/go-results", f"{tmp_path}/run/go-results")
+        (tmp_path / "step.sh").write_text(step)
         # GitHub runs a bash step as: bash --noprofile --norc -eo pipefail {0}
         r = subprocess.run(
             ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(tmp_path / "step.sh")],
@@ -574,6 +587,7 @@ def run_test_step(
         )
         if r.returncode:
             break
+        env.update(x.split("=", 1) for x in github_env.read_text().splitlines() if "=" in x)
     return r
 
 
@@ -734,7 +748,8 @@ def test_the_ci_steps_record_and_judge_each_privileged_binarys_exit_status(
     skips = HARD if "testmain" in priv_stream else RACE
     r = run_test_step(tmp_path, skip, 0, skips=skips, privileged=(fixture(priv_stream), priv_exit))
     assert (r.returncode == 0) is passes, r.stdout + r.stderr
-    exits = (tmp_path / "runner-temp" / "go-results" / "go-test-root.exit").read_text().split()
+    (res,) = (tmp_path / "run").glob("go-results.*")
+    exits = (res / "go-test-root.exit").read_text().split()
     assert exits[1] == str(priv_exit)
 
 
@@ -788,21 +803,30 @@ def test_the_policy_and_its_inputs_are_copied_before_any_test_can_change_them(tm
 
 
 def test_the_results_are_root_owned_and_the_tests_cannot_sudo():
-    steps = go_job()["steps"]
+    job = go_job()
+    steps = job["steps"]
     names = [s.get("name", "") for s in steps]
     snap = names.index(
         "a root-owned results directory with a copy of the policy, before any test runs"
     )
     assert snap < names.index("modules downloaded and verified against go.sum")
     copy = steps[snap]["run"]
-    assert 'sudo install -d -m 0755 "$RUNNER_TEMP/go-results" "$pol"' in copy
+    # verify4.md (v4/ren): a root-owned directory in the runner's RUNNER_TEMP could be renamed
+    # away and replaced; a fresh mktemp name in root-owned /run cannot
+    assert "res=$(sudo mktemp -d /run/go-results.XXXXXX)" in copy
     assert '"$GITHUB_WORKSPACE/tools/go_test_policy.py"' in copy and "pyproject.toml" in copy
     assert "sudo install -m 0644 skips.yml go.mod" in copy
+    assert 'sudo cp -R "$yaml" "$pol/vendor/yaml"' in copy
+    assert 'echo "GO_RESULTS=$res" >> "$GITHUB_ENV"' in copy
+    assert "RUNNER_TEMP" not in copy
     root, main = ci_step("root-only tests"), ci_step("tests (race")
     for run in (root, main, ci_step("every skip names its reason")):
-        # the policy runs from the copy, never from the workspace the tests could rewrite
-        assert "$GITHUB_WORKSPACE" not in run and "go-results" in run
-        assert "go_test_policy.py" in run
+        # the directory is checked, and the judge is the image's interpreter, isolated, as root
+        assert 'res="$GO_RESULTS"' in run and "/run/go-results.??????)" in run
+        assert 'sudo test -d "$res" -a ! -L "$res" -a -O "$res"' in run
+        assert "$GITHUB_WORKSPACE" not in run
+        calls = re.findall(r'(\S+ \S+ \S+) "\$\w+/(?:policy/)?go_test_policy\.py"', run)
+        assert calls and set(calls) == {"sudo /usr/bin/python3 -I"}, calls
     assert "exec setpriv --no-new-privs --reuid=" in main
     assert "exec setpriv --no-new-privs -- " in root
     # every write into the results directory is root's: sudo tee, or a file root opened
@@ -810,12 +834,103 @@ def test_the_results_are_root_owned_and_the_tests_cannot_sudo():
     assert '| sudo tee -a "$out" > /dev/null' in root
     assert """-json ./... > "$3"'""" in main and 'sh "$(id -u)" "$(id -g)" "$out"' in main
     assert '| sudo tee "$res/go-packages.txt" > /dev/null' in main
+    assert 'sudo test -s "$res/go-packages.txt"' in main
+    assert '--expect-tests "$res/go-tested.txt"' in main
     for run in (root, main):
         assert not re.search(r'>>? *"\$(out|exits|res)', run.replace("> /dev/null", ""))
+    # verify4.md (v4/pre): bash -e alone let a failing go list | tee pass
+    assert job["defaults"]["run"]["shell"] == "bash"
+    # the module's code that runs as the runner user cannot sudo either
+    for name in ("go vet", "build every package", "staticcheck"):
+        for line in ci_step(name).splitlines():
+            assert line.startswith("setpriv --no-new-privs -- go "), line
     # the limit is stated beside the job, and the job stays on a hosted runner
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
     assert "guards against accidents" in text and "not against hostile test code" in text
-    assert go_job()["runs-on"] == "ubuntu-latest" and "pull_request_target" not in text
+    assert "root-run tests are root" in text and "$GITHUB_ENV and $GITHUB_PATH" in text
+    assert job["runs-on"] == "ubuntu-latest" and "pull_request_target" not in text
+
+
+def test_the_policy_copy_finds_pyyaml_beside_it_under_an_isolated_interpreter(tmp_path):
+    # CI runs the copy as sudo /usr/bin/python3 -I, whose path holds neither the script's
+    # directory nor the venv; PyYAML is copied to vendor/ beside it (-S: no site-packages at all)
+    import yaml
+
+    pol = tmp_path / "policy"
+    shutil.copytree(Path(yaml.__file__).parent, pol / "vendor" / "yaml")
+    shutil.copy(ROOT / "tools" / "go_test_policy.py", pol)
+    (pol / "go.mod").write_text(f"module {MOD}\n\ngo 1.24\n")
+    (pol / "skips.yml").write_text(HARD)
+    cmd = [sys.executable, "-I", "-S", str(pol / "go_test_policy.py")]
+    r = subprocess.run([*cmd, "--policy", str(pol / "skips.yml"), "--list-privileged"],
+                       capture_output=True, text=True)  # fmt: skip
+    assert r.returncode == 0 and r.stdout == "./internal/hard ^(TestHard)$\n", r.stderr
+    shutil.rmtree(pol / "vendor")
+    r = subprocess.run([*cmd, "--policy", str(pol / "skips.yml"), "--list-privileged"],
+                       capture_output=True, text=True)  # fmt: skip
+    assert r.returncode != 0 and "No module named 'yaml'" in r.stderr
+
+
+@needs_bash
+def test_the_ci_step_requires_a_test_event_from_each_package_with_test_files(tmp_path):
+    lines = fixture("quarantined_only.json")
+    ok = f"{MOD}/internal/ok"
+    assert run_test_step(tmp_path / "a", lines, 1, tested=[ok]).returncode == 0
+    r = run_test_step(tmp_path / "b", lines, 1, packages=[ok, f"{MOD}/x"], tested=[ok, f"{MOD}/x"])
+    assert r.returncode == 1 and f"FAIL {MOD}/x: no events" in r.stdout, r.stdout + r.stderr
+
+
+@needs_bash
+def test_a_results_path_from_the_environment_is_checked_before_use(tmp_path):
+    # runner-user code can append GO_RESULTS=... to $GITHUB_ENV for the steps after it
+    step = ci_step("tests (race")
+    script = tmp_path / "s.sh"
+    script.write_text(step)
+    for forged in ("/tmp/forged", "/run/go-results.abcdefg/../x"):
+        r = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],
+            env={"PATH": "/usr/bin:/bin", "GO_RESULTS": forged},
+            capture_output=True,
+            text=True,
+        )
+        assert r.returncode == 1 and f"::error::GO_RESULTS={forged}" in r.stdout, r.stdout
+
+
+def test_a_package_with_test_files_must_report_a_test(tmp_path, capsys):
+    # verify4.md (v4/cs, HIDE_ALL): TestMain's os.Exit(0) before m.Run leaves the package "ok"
+    # with no test event at all, which no skip rule sees
+    hidden = package("internal/hidden", "pass")
+    lines = GREEN + hidden + package("internal/nofiles", "skip")
+    tested = tmp_path / "tested.txt"
+    tested.write_text(f"{MOD}/internal/queue\n{MOD}/internal/hidden\n")
+    forbid = ("--forbid", "nothing")
+    assert run(tmp_path, lines, *forbid) == 0  # without the list
+    assert run(tmp_path, lines, *forbid, "--expect-tests", str(tested)) == 1
+    out = capsys.readouterr().out
+    assert (
+        f"FAIL {MOD}/internal/hidden: has test files (--expect-tests) but reported no test" in out
+    )
+    assert "internal/queue: has test files" not in out
+    # a package that failed to build is reported as that, not also as hiding its tests
+    broken = [ev("start", "internal/hidden"), ev("fail", "internal/hidden", FailedBuild="x")]
+    assert run(tmp_path, GREEN + broken, *forbid, "--expect-tests", str(tested)) == 1
+    assert "reported no test" not in capsys.readouterr().out
+
+
+def test_an_event_is_one_line_even_with_a_next_line_character_in_its_output(tmp_path, capsys):
+    # verify4.md (v4/nel): a NEL (U+0085) in a skip message, which go's JSON encoder leaves
+    # unescaped, split the event under str.splitlines() into two "not a go test -json event" lines
+    lines = package(
+        "internal/queue",
+        "pass",
+        events_of("internal/queue", "TestNel", "skip", "flock(1) not\x85installed"),
+    )
+    lines = [json.dumps(json.loads(x), ensure_ascii=False) for x in lines]
+    assert any("\x85" in x for x in lines)
+    assert run(tmp_path, lines) == 1  # the reason is the whole line, which no pattern matches
+    out = capsys.readouterr().out
+    assert "not a go test -json event" not in out
+    assert "TestNel: silent skip, reason 'flock(1) not\\x85installed'" in out
 
 
 # --- skip calls in the sources: the forms whose reason the stream cannot show --------------------

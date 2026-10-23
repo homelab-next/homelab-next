@@ -236,14 +236,21 @@ jobs:
   # a registered reason (skip_reasons in pyproject.toml), quarantines in the module's skips.yml
   # bounded to 90 days.
   #
-  # Trust: the root run's handshake (its streams, each binary's exit status, the policy that judges
+  # Trust: the handshake (the streams, each root-run binary's exit status, the policy that judges
   # them) guards against accidents -- a TestMain that crashes after PASS, a race after the tests, a
-  # test that writes where it should not -- not against hostile test code.  Root-run tests are root
-  # and can rewrite anything in this job, the results and the policy copy included.  The main run's
-  # tests are the runner user under no_new_privs (setpriv --no-new-privs: no sudo), so they cannot
-  # write the root-owned results directory or the policy copied into it before any test ran, but
-  # the workspace, the toolchains and the caches are the runner user's.  Isolating the root run for
-  # real would take a job of its own that passes on nothing but its stream.
+  # test that writes where it should not -- not against hostile test code.  What holds:
+  # * the results directory is a fresh mktemp directory in root-owned /run, so the runner user can
+  #   neither write into it nor rename or replace it, and each step checks it is that directory;
+  # * the policy tool, its inputs and PyYAML are copied into it before any of the module's code
+  #   runs, and the judge is the image's root-owned /usr/bin/python3 -I (no environment, user site
+  #   or script directory on its path), run with sudo;
+  # * the module's code that runs as the runner user (the linters, the main run's tests) does so
+  #   under no_new_privs (setpriv --no-new-privs), where sudo fails.
+  # What does not: root-run tests are root and can rewrite anything in this job.  Runner-user code
+  # can write $GITHUB_ENV and $GITHUB_PATH, which steer the steps after it: the linters, which run
+  # the code tools/go.mod pins, precede the tests; the judge runs in the main run's own step, which
+  # its tests cannot steer.  The workspace, toolchains and caches are the runner user's.  Isolating
+  # the root run would take a job of its own that passes on nothing but its stream.
   go:
     needs: go-modules
     if: needs.go-modules.outputs.present == 'true'
@@ -260,6 +267,7 @@ jobs:
       GOWORK: "off"  # each module on its own: a go.work never changes how modules resolve
     defaults:
       run:
+        shell: bash  # bash --noprofile --norc -eo pipefail: a failing command in a pipe fails
         working-directory: ${{ matrix.module.dir }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -278,11 +286,17 @@ jobs:
       # exit statuses, and in it a copy of the policy tool and its inputs, which judges them later
       - name: a root-owned results directory with a copy of the policy, before any test runs
         run: |
-          pol="$RUNNER_TEMP/go-results/policy"
-          sudo install -d -m 0755 "$RUNNER_TEMP/go-results" "$pol"
+          res=$(sudo mktemp -d /run/go-results.XXXXXX)
+          sudo chmod 0755 "$res"
+          pol="$res/policy"
+          sudo install -d -m 0755 "$pol" "$pol/vendor"
           sudo install -m 0644 "$GITHUB_WORKSPACE/tools/go_test_policy.py" \
             "$GITHUB_WORKSPACE/pyproject.toml" "$pol/"
           if [ -f skips.yml ]; then sudo install -m 0644 skips.yml go.mod "$pol/"; fi
+          # PyYAML (hash-pinned by python-deps) for the isolated interpreter, if the image lacks it
+          yaml=$(python -c 'import os, yaml; print(os.path.dirname(yaml.__file__))')
+          sudo cp -R "$yaml" "$pol/vendor/yaml"
+          echo "GO_RESULTS=$res" >> "$GITHUB_ENV"
       - name: modules downloaded and verified against go.sum
         run: go mod download && go mod verify
       - name: gofmt
@@ -292,22 +306,33 @@ jobs:
             echo "::error::not gofmt-formatted:"; echo "$unformatted"; exit 1
           fi
       - name: go vet
-        run: go vet ./...
+        run: setpriv --no-new-privs -- go vet ./...
       - name: build every package and binary
-        run: go build ./...
+        run: setpriv --no-new-privs -- go build ./...
       # Linters as Go tool dependencies: version and checksum pinned by tools/go.mod and go.sum.
+      # They run code the module pins, so like the tests they cannot sudo (no_new_privs).
       - name: staticcheck and govulncheck (pinned in tools/go.mod)
         if: matrix.module.tools
         run: |
-          go tool -modfile=tools/go.mod staticcheck ./...
-          go tool -modfile=tools/go.mod govulncheck ./...
+          setpriv --no-new-privs -- go tool -modfile=tools/go.mod staticcheck ./...
+          setpriv --no-new-privs -- go tool -modfile=tools/go.mod govulncheck ./...
       # the reason go_test_policy.py reads is the last line before --- SKIP: a skip says it in
       # the call, on one line (no SkipNow or Skipf, whose reason is a logged or formatted line)
       - name: every skip names its reason in the call
-        run: python "$RUNNER_TEMP/go-results/policy/go_test_policy.py" --check-sources .
+        run: |
+          res="$GO_RESULTS"
+          # the directory the first step made: a later step's environment is writable by the
+          # runner user, so the path and its owner are checked, not trusted
+          case "$res" in /run/go-results.??????) ;; *) echo "::error::GO_RESULTS=$res"; exit 1;; esac
+          sudo test -d "$res" -a ! -L "$res" -a -O "$res"
+          sudo /usr/bin/python3 -I "$res/policy/go_test_policy.py" --check-sources .
       - name: root-only tests (skips.yml privileged) under sudo, no network
         run: |
-          res="$RUNNER_TEMP/go-results"
+          res="$GO_RESULTS"
+          # the directory the first step made: a later step's environment is writable by the
+          # runner user, so the path and its owner are checked, not trusted
+          case "$res" in /run/go-results.??????) ;; *) echo "::error::GO_RESULTS=$res"; exit 1;; esac
+          sudo test -d "$res" -a ! -L "$res" -a -O "$res"
           pol="$res/policy"
           out="$res/go-test-root.json"
           exits="$res/go-test-root.exit"
@@ -315,7 +340,8 @@ jobs:
           sudo install -m 0644 /dev/null "$exits"
           policy=()
           if [ -f "$pol/skips.yml" ]; then policy=(--policy "$pol/skips.yml"); fi
-          python "$pol/go_test_policy.py" "${policy[@]}" --list-privileged > "$RUNNER_TEMP/privileged.txt"
+          sudo /usr/bin/python3 -I "$pol/go_test_policy.py" "${policy[@]}" --list-privileged \
+            > "$RUNNER_TEMP/privileged.txt"
           while read -r pkg rx; do
             [ -n "$pkg" ] || continue
             bin="$RUNNER_TEMP/privileged-$(echo "$pkg" | tr '/.' '__').test"
@@ -333,13 +359,21 @@ jobs:
           done < "$RUNNER_TEMP/privileged.txt"
       - name: tests (race, shuffled, no network) judged by go_test_policy.py
         run: |
-          res="$RUNNER_TEMP/go-results"
+          res="$GO_RESULTS"
+          # the directory the first step made: a later step's environment is writable by the
+          # runner user, so the path and its owner are checked, not trusted
+          case "$res" in /run/go-results.??????) ;; *) echo "::error::GO_RESULTS=$res"; exit 1;; esac
+          sudo test -d "$res" -a ! -L "$res" -a -O "$res"
           pol="$res/policy"
           policy=(--pyproject "$pol/pyproject.toml")
           if [ -f "$pol/skips.yml" ]; then policy+=(--policy "$pol/skips.yml"); fi
           out="$res/go-test.json"
-          # every package the run covers must show up in the stream, even one that has no tests
+          # every package the run covers must show up in the stream, even one that has no tests,
+          # and one with test files must report a test (a floor under tests TestMain hides)
           go list ./... | sudo tee "$res/go-packages.txt" > /dev/null
+          sudo test -s "$res/go-packages.txt"
+          go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./... \
+            | sudo tee "$res/go-tested.txt" > /dev/null
           status=0
           # root opens the stream file, then drops to the runner user, which cannot sudo from there
           sudo env "PATH=$PATH" "HOME=$HOME" \
@@ -351,11 +385,11 @@ jobs:
           # go test exits 1 on a quarantined failure too: the policy tool judges the stream and
           # go's own exit status together (any other status, or a 1 the stream does not explain,
           # fails), so a stream cut short cannot pass while go test failed
-          python "$pol/go_test_policy.py" "${policy[@]}" \
+          sudo /usr/bin/python3 -I "$pol/go_test_policy.py" "${policy[@]}" \
             --privileged "$res/go-test-root.json" \
             --privileged-exit "$res/go-test-root.exit" \
             --forbid 'python3 not available' --go-exit "$status" \
-            --expect-packages "$res/go-packages.txt" "$out"
+            --expect-packages "$res/go-packages.txt" --expect-tests "$res/go-tested.txt" "$out"
 
   # One stable check name for branch protection, whatever the modules are called: the discovery
   # passed, and every module's go job passed (or there was none to run).
