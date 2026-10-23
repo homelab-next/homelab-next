@@ -630,8 +630,10 @@ scope:
       `? scope` with a comment, a CRLF `[scope]` header and a flow dedented anywhere are ordinary
       mappings here;
     - **the raw rule:** the raw text under every `scope` key is tokenised. A key is `scope` in
-      any case, quoted or not: `scope:`, `[scope]`, `[[scope]]`, a dotted `scope.x` key, a
-      comment before the colon, the Markdown spellings `` `scope`: ``, `**scope**:`, `_scope_:`
+      any case, quoted or not: `scope:`, `[scope]`, `[[scope]]`, a dotted `scope.x` key followed
+      by its own `:` or `=` (an attribute access or a call such as `scope.get(` is none), an
+      assignment to a Python subscript such as `site["scope"]["target"]` (never a `==`
+      comparison), a comment before the colon, the Markdown spellings `` `scope`: ``, `**scope**:`, `_scope_:`
       and a table row whose first cell is `scope`, and `scope =` at a line's start (TOML, INI)
       or spaced inside a TOML inline table. A call's keyword argument (`fixture(scope="module")`)
       and an HTML or XML attribute (`<th scope="row">`) are never keys. Keys are found again after
@@ -641,21 +643,29 @@ scope:
       (both rules run on it). What a key holds is over-read: the rest of its line, every line
       indented deeper than the key's column, a value on the first later line with content, a
       quoted scalar or flow collection opened there through its close, and for a TOML header
-      everything to the next header. A quoted or flow value on the key's line with nothing deeper
+      everything to the next header. A key's column is its first non-blank character, so an
+      indented `scope = x` holds only the lines deeper than itself. A quoted or flow value on the key's line with nothing deeper
       is exactly that value, so the rest of a minified line is another key's. A YAML alias is
       followed to its anchor's last real definition (more than 256 aliases is itself a finding),
       and a value tagged as YAML binary fails.
     - **cost:** flow closers, anchors, TOML headers and line ends are indexed in one pass and no
-      line is re-read per key. `test_the_raw_rule_grows_linearly` times eight shapes (among them
-      the ones earlier versions were quadratic on) at n, 4n and 16n and allows at most 6x per 4x
-      step.
+      line is re-read per key. `test_the_raw_rule_grows_linearly` times ten shapes (among them
+      the ones earlier versions were quadratic on) at n, 4n and 16n in CPU time
+      (`time.process_time`, best of five, so a busy runner's other processes do not count) and
+      allows at most 8x per 4x step; a quadratic shape grows 16x.
 
     An address-like token is an IPv6 address, a dotted quad in any numeric spelling, an integer
     of 2^24 or more in any YAML, TOML or C spelling, and an `inet_aton` short form of two or three
     parts that cannot be a version or a decimal: a hex part or a part over 255 (`81.2.17806`,
     `0x51.0x2458e`, also `1.300` or `3.14159`), or one in an address context (a prefix length such
     as `10.20/16`, a port, after `//` or `@`). Every other short form (`1.0`, `24.04`, `0.05`,
-    `1.0.3`, and a bare `10.20`) is ignored, and a reading inside 0/8 never counts. A page may show a block's shape with documentation addresses, so a doc-only block
+    `1.0.3`, and a bare `10.20`) is ignored, and a reading inside 0/8 never counts. Loopback,
+    unspecified and link-local addresses name no site and are let through in both families, and
+    an IPv6 form inside `::/96` is judged by its embedded IPv4 address, so `::` (a Python
+    `[::-1]` slice, a C++ `Foo::bar`) is in 0/8; an IPv4-compatible or mapped form of a real
+    address is still refused. The price of the integer and dotted-quad rules: an epoch, a byte
+    size or a `YYYYMMDD` integer of 2^24 or more, and a four-part version (`1.0.0.0`), under a
+    scope key are refused too. A page may show a block's shape with documentation addresses, so a doc-only block
     outside the allowlist is not judged for shape. A case variant of an allowlisted path is
     refused (`scope-shape`).
   - **Threat model.** The gate defends against an **accidental** commit of a real address in any
