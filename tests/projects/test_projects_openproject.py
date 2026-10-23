@@ -325,6 +325,50 @@ def test_an_edit_in_openproject_is_reverted_and_reported_and_the_repo_wins(op):
     assert now["_links"]["status"]["href"].endswith(f"/{st.statuses['Active']}")  # never closed
 
 
+def _closed(recs, status="achieved"):
+    so = by_code()["SO-001"].uid
+    return [type(r)(**{**r.__dict__, "status": status}) if r.uid == so else r for r in recs]
+
+
+def test_the_fake_applies_openprojects_default_open_only_filter(op):
+    # OpenProject API v3: a work-package collection requested with no filters parameter is
+    # filtered to open statuses; an explicit status "*" filter lists every status
+    c, cfg = client_for(op), cfg_for(op)
+    st = discover(c, cfg)
+    sync_strategy(c, cfg, st, _closed(records()), apply=True)
+    path = f"/api/v3/projects/{st.strategy_project}/work_packages"
+    default = {w[EXT_CF] for w in c.collect(path)}
+    every = {w[EXT_CF] for w in c.collect(path, filters='[{"status":{"operator":"*","values":[]}}]')}  # fmt: skip
+    so = by_code()["SO-001"].uid
+    assert so in every and so not in default and len(every) == len(records())
+
+
+def test_a_closed_strategy_record_is_not_created_again(op):
+    c, cfg = client_for(op), cfg_for(op)
+    st = discover(c, cfg)
+    recs = _closed(records())
+    first = sync_strategy(c, cfg, st, recs, apply=True)
+    assert first.problems == [] and len(first.created) == len(recs)
+    before = op.writes()
+    again = sync_strategy(c, cfg, st, recs, apply=True)
+    assert again.created == [] and again.writes == 0 and op.writes() == before
+    so = by_code()["SO-001"].uid
+    assert sum(1 for w in op.wps.values() if w.get(EXT_CF) == so) == 1
+    # links may name a closed strategy record
+    assert so in store_for(op).records()
+
+
+def test_a_closed_work_item_is_still_loaded(op):
+    seed_records(op)
+    s = store_for(op)
+    p = s.create("project", "Edge move")
+    t = s.create("task", "Rack it", project=p.uid)
+    done = s.update(t.uid, t.version, status="done", result="racked")
+    assert s.get(t.uid).status == "done" and s.get(t.uid).version == done.version
+    assert t.uid in {i.uid for i in s.list(status="done")}
+    s.update(t.uid, done.version, title="Rack it (renamed)")  # not NotFound once closed
+
+
 def test_a_repo_change_is_an_update_and_a_vanished_record_an_orphan(op):
     c, cfg = client_for(op), cfg_for(op)
     st = discover(c, cfg)

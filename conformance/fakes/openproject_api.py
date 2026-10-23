@@ -9,8 +9,11 @@ removes or alters an entry to stand for an instance an administrator has not fin
 Work packages and relations are stateful: ``POST``/``PATCH``/``GET`` work packages (``PATCH``
 needs the current ``lockVersion``, else 409), the collection filters the adapter sends
 (``type``, ``status``, ``customFieldN`` -- only on a field marked filterable, else 400 --
-``updatedAt <>d``) with ``sortBy`` and ``offset``/``pageSize`` paging, and relations (create,
-list by ``involved``, delete).  Times have second precision, like OpenProject; ``tick`` seconds
+``updatedAt <>d``; ``status`` takes ``=``, ``o`` open, ``c`` closed and ``*`` all) with ``sortBy`` and
+``offset``/``pageSize`` paging, and relations (create,
+list by ``involved``, delete).  Like OpenProject, a work-package collection requested with no
+``filters`` parameter at all applies the default ``[{"status":{"operator":"o"}}]``: open work
+packages only.  Times have second precision, like OpenProject; ``tick`` seconds
 pass per write (``tick=0`` keeps every write in one second, for cursor tests).  Requests need
 ``Authorization: Basic apikey:<token>`` (401 otherwise).  ``fail_next(n, status)`` answers the
 next ``n`` requests with ``status`` (retry tests); ``fail_after_next(n, status)`` applies the next
@@ -174,8 +177,11 @@ class FakeOpenProject:
                 raise _Error(400, "InvalidQuery", f"Filter {name} does not exist.")
             return op == "=" and str(wp.get(name) or "") in vals
         if name in ("type", "status"):
-            href = wp["_links"][name]["href"]
-            return op == "=" and href.rsplit("/", 1)[-1] in vals
+            ident = wp["_links"][name]["href"].rsplit("/", 1)[-1]
+            if name == "status" and op in ("o", "c", "*"):
+                closed = {str(st["id"]) for st in self.setup["statuses"] if st["isClosed"]}
+                return op == "*" or ((ident in closed) == (op == "c"))
+            return op == "=" and ident in vals
         if name == "updatedAt" and op == "<>d":
             lo, hi = ([*vals, "", ""])[:2]
             return (not lo or wp["updatedAt"] >= lo) and (not hi or wp["updatedAt"] <= hi)
@@ -237,7 +243,8 @@ class FakeOpenProject:
             p = self._project(parts[1])
             if method == "POST":
                 return 201, self._create(p, body)
-            fl = self._filters(q)
+            # OpenProject's default when no filters parameter is sent: open work packages only
+            fl = self._filters(q) if "filters" in q else [("status", "o", [])]
             for name, _op, _vals in fl:  # an unusable filter is refused even on no rows
                 spec = (
                     s["fields"].get(name)

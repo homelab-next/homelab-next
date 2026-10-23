@@ -41,7 +41,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from ..model import DEPENDENCY_RELATIONS, LINK_RELATIONS, Change, InvalidField, NotFound
-from .client import OpenProjectClient, filters
+from .client import OpenProjectClient, all_work_packages, filters
 from .setup import OpenProjectConfig, Setup
 
 __all__ = ["OpenProjectBackend", "wp_href", "wp_id"]
@@ -84,8 +84,15 @@ class OpenProjectBackend:
         return self._lock
 
     # ------------------------------------------------------------------ reading
-    def _work_packages(self, project: int, **params: Any) -> list[dict[str, Any]]:
-        return list(self.client.collect(f"{API}/projects/{project}/work_packages", **params))
+    def _work_packages(
+        self, project: int, where: Mapping[str, tuple[str, Any]] | None = None, **params: Any
+    ) -> list[dict[str, Any]]:
+        """Every work package of ``project`` matching ``where``, closed ones included.
+
+        OpenProject applies a default ``status: open`` filter to a collection requested without
+        ``filters``, so the status filter "all" is always sent explicitly.
+        """
+        return list(all_work_packages(self.client, project, where, **params))
 
     def strategy_uids(self) -> tuple[str, ...]:
         """The External keys of the Strategy project (what links may name)."""
@@ -279,9 +286,9 @@ class OpenProjectBackend:
             raise InvalidField(f"not a cursor of this store: {cursor!r}")
         seen = set(filter(None, seen_txt.split(",")))
         params = {"sortBy": json.dumps([["updatedAt", "asc"]])}
-        if since:  # an empty time: the store was empty, read from the beginning
-            params["filters"] = filters(updatedAt=("<>d", [since, ""]))
-        wps = self._work_packages(self.setup.work_project, **params)
+        # an empty time: the store was empty, read from the beginning
+        where = {"updatedAt": ("<>d", [since, ""])} if since else {}
+        wps = self._work_packages(self.setup.work_project, where, **params)
         docs = self.load() if wps else {}
         out = []
         for wp in wps:

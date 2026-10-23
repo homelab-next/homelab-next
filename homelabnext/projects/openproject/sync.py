@@ -32,7 +32,7 @@ from typing import Any
 
 from ..strategy import StrategyRecord
 from .backend import API, _link_id, _raw, wp_href, wp_id
-from .client import OpenProjectClient, filters
+from .client import OpenProjectClient, all_work_packages, filters
 from .setup import OpenProjectConfig, Setup
 
 __all__ = ["BANNER", "SyncReport", "sync_strategy"]
@@ -114,7 +114,7 @@ def sync_strategy(
     ext, state_cf = setup.fields["external_key"], setup.fields["state"]
     pid = setup.strategy_project
     existing: dict[str, dict[str, Any]] = {}
-    for wp in client.collect(f"{API}/projects/{pid}/work_packages"):
+    for wp in all_work_packages(client, pid):  # closed records too, or each sync re-creates them
         key = wp.get(ext)
         if key:
             existing[str(key)] = wp
