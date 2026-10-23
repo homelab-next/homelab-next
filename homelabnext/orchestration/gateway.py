@@ -105,7 +105,10 @@ def sync_turns(
             asked = set(tags)
             found = []
             for t in source.turns(lo, min(hi, now), tags):
-                if not (isinstance(t, Mapping) and t.get("gateway_tag") in asked):
+                if not (isinstance(t, Mapping) and isinstance(t.get("gateway_tag"), str)):
+                    refused += 1  # no record, or a tag that is no string (a list is unhashable)
+                    continue
+                if t["gateway_tag"] not in asked:
                     continue
                 if turn_problems(t):  # the store would refuse it: drop it, keep the window
                     refused += 1

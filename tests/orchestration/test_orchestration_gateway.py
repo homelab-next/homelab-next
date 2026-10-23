@@ -220,6 +220,19 @@ def test_the_store_refuses_a_turn_outside_the_neutral_record(filled, change, nee
     assert filled.unsettled() == []
 
 
+@pytest.mark.parametrize("tag", [["run-0001"], {"run-0001": 1}, None, 7])
+def test_a_turn_whose_tag_is_no_string_is_dropped_and_counted(filled, tag):
+    """A site adapter yielding a list or a dict as the tag raised TypeError (unhashable) before
+    the record check, on every pass: refused and counted like any record outside the shape."""
+    real = examples()[0]["data"]["gateway_tag"]
+    started = parse_iso(examples()[0]["data"]["finished_at"]) - 10
+    rows = [_turn("req-bad", real, started) | {"gateway_tag": tag}, _turn("req-ok", real, started)]
+    gateway = Source(lambda lo, hi, tags: rows if real in tags else [])
+    got = sync_turns(filled, gateway, now=T0)
+    assert got == {"jobs": 4, "turns": 1, "settled": 4, "refused": 1}
+    assert [t["turn_id"] for t in filled.turns()[real]] == ["req-ok"]
+
+
 def test_a_gateway_row_with_an_odd_model_name_never_wedges_the_sync(filled):
     """Regression: the adapter passed a model such as ``hosted_vllm//models/x`` that the record
     then refused, so every pass failed on the same row and no job was ever settled.  The fixture
