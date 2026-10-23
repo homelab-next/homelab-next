@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# Reviewed exemptions from tools/caddy_lint.py (checklist F-23). Each entry names a path glob and
+# why every finding in it is not a real Caddy config or pin. An entry that excuses nothing fails
+# the gate. A single line takes an inline `caddy-lint: allow <reason>` comment instead.
+allow:
+  - path: tools/caddy_lint.py
+    reason: the lint's own patterns, messages and docstrings name the pins and directives it looks for
+  - path: tools/tests/test_caddy_lint.py
+    reason: the lint's fixtures plant vulnerable pins and unprotected configs on purpose

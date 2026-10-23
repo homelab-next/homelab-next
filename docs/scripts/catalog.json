@@ -61,7 +61,7 @@
         "2": "usage error or a missing dependency"
       },
       "id": "caddy-lint",
-      "inputs": "the tracked tree (Caddyfiles, templates, markdown caddyfile blocks, registries) and the caddy generator",
+      "inputs": "the tracked tree (Caddyfiles, templates, markdown caddyfile blocks, registries, Dockerfiles, other pins), the caddy generator and tools/caddy_lint.allow.yml",
       "invariant": [
         "F-23"
       ],

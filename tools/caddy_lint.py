@@ -7,7 +7,7 @@
 #   owner: maintainers
 #   trigger: [ci:ci/schemas, make:caddy-lint]
 #   invariant: [F-23]
-#   inputs: the tracked tree (Caddyfiles, templates, markdown caddyfile blocks, registries) and the caddy generator
+#   inputs: the tracked tree (Caddyfiles, templates, markdown caddyfile blocks, registries, Dockerfiles, other pins), the caddy generator and tools/caddy_lint.allow.yml
 #   outputs: one line per unprotected forward_auth or vulnerable Caddy pin
 #   exit:
 #     "0": clean
@@ -44,23 +44,43 @@ must hold, everywhere:
              follow (a glob, a placeholder, a cycle, a file outside the tree; a snippet defined
              in the config, the generated ``hnx_forward_auth`` and a relative file are expanded
              in place, as Caddy does).
-  pin        every Caddy pin is 2.11.2 or later: a registry service with ``impl: caddy`` (its
-             ``version``), a ``caddy_version`` key, and a container image ``caddy:<tag>`` (an
-             untagged or floating ``caddy`` image is a finding too).
+  pin        every Caddy pin is 2.11.2 or later, by semver (``v2.11.2`` is fine,
+             ``2.11.2-rc.1`` is not, a floating ``2.11`` is not); each finding is reported on
+             its own line, and an inline allow waives that line only:
+             - YAML/JSON: a service with ``impl: caddy`` (its ``version``, missing included); a
+               ``caddy_*version``/``_tag``/``_release`` key; a ``caddy_*image`` key; an ``image``
+               or any string that is a tagged Caddy image; a split ``repository: caddy`` +
+               ``tag``;
+             - a Dockerfile: ``FROM`` and ``xcaddy build`` with ``ARG``/``ENV`` defaults
+               resolved (an ``ARG`` without a default fails closed, since it could be Caddy);
+             - Python: a dict literal with ``"impl": "caddy"`` (its ``version`` a literal);
+             - any other text (``.env``, ``go.mod``, templates): an ``image:`` line, a tagged
+               Caddy image, a ``caddy_*version`` assignment;
+             - everywhere: ``xcaddy build``, a ``caddyserver/caddy/v2`` module requirement and a
+               release download.
+             A Caddy image is any image whose last path segment is ``caddy``, behind any
+             registry or mirror prefix. An image whose last segment only starts with ``caddy``
+             (a third-party build) carries its own version, so it needs a reviewed allow. A
+             ``${VAR:-default}`` resolves to its default; a variable with none, or a template
+             expression, cannot be checked and fails closed.
 
 Caddy configs checked: every tracked ``Caddyfile*``, ``*.caddy``, ``*.caddyfile`` and their
 ``.j2``/``.tmpl`` templates; every ```` ```caddy ```` / ```` ```caddyfile ```` block in markdown;
 and the output of the ``caddy`` generator for every registry in the tree that loads (a registry
 that does not load, such as a schema negative, is skipped; its pins are still checked). A
-reviewed exception is an inline ``caddy-lint: allow <reason>`` comment on the offending line.
+reviewed exception is an inline ``caddy-lint: allow <reason>`` comment on the offending line, or
+an entry in ``tools/caddy_lint.allow.yml`` (a ``path`` glob and a ``reason``) for a whole file;
+an entry that excuses nothing is a finding.
 
-Usage: python tools/caddy_lint.py [ROOT] [--json]
+Usage: python tools/caddy_lint.py [ROOT] [--allowlist FILE] [--json]
 Exit: 0 clean, 1 a finding, 2 usage error.
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
+import fnmatch
 import json
 import re
 import sys
@@ -77,6 +97,7 @@ if str(REPO_ROOT) not in sys.path:
 #: the first release whose forward_auth drops a client-sent header the IdP's answer omits
 MIN_CADDY = (2, 11, 2)
 MIN_CADDY_TEXT = ".".join(map(str, MIN_CADDY))
+DEFAULT_ALLOWLIST = "tools/caddy_lint.allow.yml"
 INLINE_ALLOW = re.compile(r"caddy-lint:\s*allow\s+\S")
 SKIP_DIRS = {
     ".git",
@@ -92,12 +113,6 @@ SKIP_DIRS = {
 CADDY_NAME = re.compile(r"(^Caddyfile([.-].*)?$)|(\.(caddy|caddyfile)(\.(j2|tmpl))?$)", re.I)
 MD_FENCE = re.compile(r"^[ \t]*```(?:caddy|caddyfile)[ \t]*\n(.*?)^[ \t]*```", re.M | re.S | re.I)
 VERSION = re.compile(r"^v?(\d+)\.(\d+)(?:\.(\d+))?(?P<pre>-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
-#: a container image reference to the Caddy image: ``caddy``, ``library/caddy``,
-#: ``docker.io/library/caddy`` (``caddy:<tag>``, ``caddy@sha256:``), but not ``foo/caddy-x``
-IMAGE = re.compile(
-    r"(?<![\w./-])(?:(?:docker\.io|index\.docker\.io)/)?(?:library/)?caddy"
-    r"(?::(?P<tag>[\w.-]+))?(?:@sha256:[0-9a-f]{64})?(?![\w./:-])"
-)
 TEMPLATED = re.compile(r"\{\{|\{%|\$\{")
 
 
@@ -552,83 +567,315 @@ def lint_caddy(
 
 # ---------------------------------------------------------------- pins
 
+#: a key that pins a Caddy version: caddy_version, CADDY_VERSION, caddy_image_tag, caddy_release
+CADDY_VERSION_KEY = re.compile(r"(?i)^caddy(?:_\w+?)?_(?:version|tag|release)$")
+#: a key that names a Caddy image: caddy_image, CADDY_IMAGE, caddy_builder_image
+CADDY_IMAGE_KEY = re.compile(r"(?i)^caddy(?:_\w+?)?_image$")
+#: an image tag's variant: 2.11.7-alpine, 2.11.7-builder-alpine, 2.11.7-windowsservercore-ltsc2022
+VARIANT = re.compile(r"(?i)-(?:alpine|builder|windowsservercore|nanoserver)(?:[-.].*)?$")
+#: ``${NAME}``, ``${NAME:-default}`` (and ``-``, ``:=``, ``=``, ``:?``, ``?``, ``:+``, ``+``) or ``$NAME``
+VARIABLE = re.compile(r"\$\{(?P<name>\w+)(?:(?P<op>:?[-=?+])(?P<default>[^}]*))?\}|\$(?P<bare>\w+)")
+IMAGE_REF = re.compile(
+    r"^(?P<name>[a-z0-9][\w.-]*(?::\d+)?(?:/[\w.-]+)*)(?::(?P<tag>\w[\w.-]*))?"
+    r"(?:@(?P<digest>sha256:[0-9a-f]{64}))?$",
+    re.I,
+)
+#: a Caddy image reference in free text: the last path segment ``caddy`` or ``caddy-<word>``,
+#: followed by a tag or a digest (a bare ``caddy`` in prose is a word, not an image)
+TEXT_IMAGE = re.compile(
+    r"(?i)(?<![\w./:@$-])(?P<ref>(?:[a-z0-9][\w.-]*(?::\d+)?/)*caddy(?:-[a-z0-9]+)*"
+    r"(?::(?:\$\{[^}\s]*\}|\$\w+|\{\{[^}]*\}\}|[\w][\w.${}:-]*)|@sha256:[0-9a-f]{64})+)"
+)
+#: an ``image:`` line in a template or other text the YAML reader does not parse
+TEXT_IMAGE_LINE = re.compile(r"""^\s*-?\s*["']?image["']?\s*:\s*(?P<value>\S.*?)\s*(?:#.*)?$""")
+TEXT_KEY = re.compile(
+    r"""(?i)(?<![\w.])(?P<key>caddy(?:_\w+?)?_(?:version|tag|release|image))\b["']?\s*[:=]\s*"""
+    r"""["']?(?P<value>[^\s"',#]+)"""
+)
+#: other unambiguous Caddy pins: a build, a module requirement, a release download
+TEXT_PINS = (
+    re.compile(r"\bxcaddy\s+build(?:\s+(?P<v>v?\d\S*|\$\S+))?"),
+    re.compile(r"github\.com/caddyserver/caddy/v2(?:@|\s+)(?P<v>v\S+)"),
+    re.compile(r"caddyserver/caddy/releases/download/(?P<v>[^/\s]+)/"),
+    re.compile(r"\bcaddy_(?P<v>\d[\w.+-]*?)_(?:linux|darwin|windows|freebsd|openbsd|netbsd)_"),
+)
+
 
 def version_ok(version: str) -> bool:
+    """Whether a Caddy version is ``MIN_CADDY`` or later, by semver precedence: a ``v`` prefix is
+    fine, a pre-release sorts before its release (2.11.2-beta.1 < 2.11.2 < 2.12.0-beta.1), and a
+    floating 2.11 is whatever 2.11.x the pull finds."""
     m = VERSION.match(str(version).strip())
-    if not m or m.group(3) is None:  # a floating 2.11 is whatever 2.11.x the pull finds
+    if not m or m.group(3) is None:
         return False
     v = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
     return v > MIN_CADDY or (v == MIN_CADDY and not m.group("pre"))
 
 
-def _line_of(lines: list[str], needle: str, start: int = 0) -> int:
-    for i in range(start, len(lines)):
-        if needle in lines[i]:
-            return i + 1
-    return 0
+def tag_ok(tag: str) -> bool:
+    """A Caddy image tag: the version with its image variant (``-alpine``, ``-builder``) off."""
+    return version_ok(VARIANT.sub("", tag))
 
 
-def _image_findings(value: str, path: str, lines: list[str]) -> list[Finding]:
-    out = []
-    for m in IMAGE.finditer(value):
+def resolve(value: str, env: dict[str, str | None] | None = None) -> str | None:
+    """``value`` with its ``${VAR}`` substituted from ``env`` or the expression's own default,
+    or None when one cannot be (no value, no default, ``${VAR:?}``, a Jinja expression)."""
+    env = env or {}
+    missing = False
+
+    def sub(m: re.Match[str]) -> str:
+        nonlocal missing
+        name = m.group("name") or m.group("bare")
+        op, default = m.group("op") or "", m.group("default") or ""
+        known = env.get(name)
+        if known is not None and not (op.startswith(":") and known == "" and "-" in op):
+            return known
+        if op in (":-", "-", ":=", "="):
+            return default
+        missing = True
+        return ""
+
+    out = VARIABLE.sub(sub, value)
+    return None if missing or "{{" in out or "{%" in out else out
+
+
+def _tagged_caddy(value: str) -> bool:
+    """A string that is, as a whole, a Caddy image reference with a tag or digest."""
+    m = IMAGE_REF.match(value.strip())
+    return bool(m and (m.group("tag") or m.group("digest")) and _caddy_kind(m.group("name")))
+
+
+def _caddy_kind(name: str) -> str | None:
+    last = name.rsplit("/", 1)[-1].lower()
+    if last == "caddy":
+        return "caddy"
+    return "derived" if last.startswith("caddy") else None
+
+
+class _Pins:
+    """Collects ``pin`` findings for one file, each on its own line and waived only by an
+    inline allow on that line."""
+
+    def __init__(self, path: str, text: str):
+        self.path, self.lines, self.findings = path, text.splitlines(), []
+
+    def allowed(self, line: int) -> bool:
+        return 0 < line <= len(self.lines) and bool(INLINE_ALLOW.search(self.lines[line - 1]))
+
+    def add(self, line: int, detail: str) -> None:
+        f = Finding(self.path, line, "pin", detail)
+        if not self.allowed(line) and f not in self.findings:
+            self.findings.append(f)
+
+    def version(self, line: int, what: str, value: str, env=None) -> None:
+        got = resolve(str(value), env)
+        if got is None:
+            self.add(line, f"{what} {value!r} cannot be resolved: pin {MIN_CADDY_TEXT} or later")
+        elif not tag_ok(got):
+            self.add(line, f"{what} {got!r}: pin {MIN_CADDY_TEXT} or later")
+
+    def image(self, line: int, value: str, env=None, *, named: bool = False) -> None:
+        """A container image reference; ``named`` when its key or position says it runs Caddy
+        (an image under ``caddy_image``, a Dockerfile ``FROM``), so an unreadable one fails."""
+        got = resolve(value.strip(), env)
+        if got is None:
+            if named or "caddy" in value.lower():
+                self.add(line, f"image {value!r} cannot be resolved: pin a literal Caddy image")
+            return
+        m = IMAGE_REF.match(got.strip())
+        kind = _caddy_kind(m.group("name")) if m else None
+        if kind is None:
+            if named and got.strip().lower() != "scratch":
+                self.add(line, f"image {got!r} under a Caddy key is not the caddy image: "
+                         "the lint cannot tell which Caddy it runs")  # fmt: skip
+            return
         tag = m.group("tag")
-        base, _, variant = (tag or "").partition("-")  # 2.11.7-alpine, 2.11.7-builder
-        if version_ok(base) and not re.match(r"(alpha|beta|rc)", variant):
-            continue
-        ln = _line_of(lines, m.group(0))
-        if ln and INLINE_ALLOW.search(lines[ln - 1]):
-            continue
-        what = f"caddy image tag {tag!r}" if tag else "caddy image without a version tag"
-        out.append(Finding(path, ln, "pin", f"{what}: pin {MIN_CADDY_TEXT} or later"))
-    return out
+        if kind == "derived":
+            self.add(line, f"image {got!r} embeds Caddy and its tag is not Caddy's version: "
+                     "check the Caddy it ships and allow it with a reason")  # fmt: skip
+        elif tag is None:
+            self.add(line, f"caddy image {got!r} without a version tag: pin {MIN_CADDY_TEXT} "
+                     "or later")  # fmt: skip
+        elif not tag_ok(tag):
+            self.add(line, f"caddy image tag {tag!r}: pin {MIN_CADDY_TEXT} or later")
+
+    def text(self, *, images: bool = True, keys: bool = True, xcaddy: bool = True) -> None:
+        """The pins free text can carry, line by line: an image reference, a ``caddy_*version``
+        style assignment, ``xcaddy build``, a Go module requirement, a release download."""
+        for no, ln in enumerate(self.lines, 1):
+            self.line(no, ln, images=images, keys=keys, xcaddy=xcaddy)
+
+    def line(self, no: int, ln: str, *, images: bool, keys: bool, xcaddy: bool = True) -> None:
+        if images:
+            whole = TEXT_IMAGE_LINE.match(ln)
+            if whole:
+                self.image(no, whole.group("value").strip("\"'"))
+            for m in TEXT_IMAGE.finditer(ln):
+                self.image(no, m.group("ref"))
+        if keys:
+            for m in TEXT_KEY.finditer(ln):
+                if m.group("key").lower().endswith("image"):
+                    self.image(no, m.group("value"), named=True)
+                else:
+                    self.version(no, m.group("key"), m.group("value"))
+        for i, rx in enumerate(TEXT_PINS):
+            if i == 0 and not xcaddy:
+                continue
+            for m in rx.finditer(ln):
+                v = m.group("v")
+                if v is None:
+                    self.add(no, "xcaddy build without a version builds whatever "
+                             f"CADDY_VERSION says: pin {MIN_CADDY_TEXT} or later")  # fmt: skip
+                else:
+                    self.version(no, "caddy", v)
 
 
 def lint_pins(text: str, path: str = "<text>") -> list[Finding]:
-    """Caddy pins in a YAML/JSON document (every document, every nesting level)."""
-    findings: list[Finding] = []
-    lines = text.splitlines()
+    """Caddy pins in a YAML/JSON document (every document, every nesting level), each reported
+    on its own node's line: a registry service with ``impl: caddy`` (its ``version``), a
+    ``caddy_*version``/``_tag``/``_release`` key, a ``caddy_*image`` key, an ``image`` (or any
+    string that is a tagged Caddy image reference), a split ``repository: caddy`` + ``tag``, and
+    in any string the free-text pins (``xcaddy build``, a release download)."""
+    pins = _Pins(path, text)
 
-    def bad(needle: str, detail: str, then: str = "") -> None:
-        ln = _line_of(lines, needle)
-        if ln and then:  # the pin's own line under its key, when it has one
-            ln = _line_of(lines, then, ln - 1) or ln
-        if ln and INLINE_ALLOW.search(lines[ln - 1]):
-            return
-        findings.append(Finding(path, ln, "pin", f"{detail}: pin {MIN_CADDY_TEXT} or later"))
+    def line(node: yaml.Node) -> int:
+        return node.start_mark.line + 1
 
-    def walk(o, key: str = "") -> None:
-        if isinstance(o, dict):
-            if str(o.get("impl", "")).strip().lower() == "caddy":
-                v = o.get("version")
-                if v is None or not version_ok(str(v)):
-                    bad(
-                        f"{key}:" if key else "caddy",
-                        f"service {key or '?'} caddy {v!r}",
-                        "version" if v is not None else "",
-                    )
-            for k, v in o.items():
-                if str(k).lower() == "caddy_version" and not version_ok(str(v)):
-                    bad(str(k), f"caddy_version {v!r}")
-                walk(v, str(k))
-        elif isinstance(o, list):
-            for v in o:
+    def scalar(node: yaml.Node | None) -> str | None:
+        return str(node.value) if isinstance(node, yaml.ScalarNode) else None
+
+    def walk(node: yaml.Node, key: str = "") -> None:
+        if isinstance(node, yaml.MappingNode):
+            pairs = [(scalar(k), k, v) for k, v in node.value]
+            by = {k.lower(): (kn, v) for k, kn, v in pairs if k is not None}
+            impl = by.get("impl")
+            if impl and (scalar(impl[1]) or "").strip().lower() == "caddy":
+                ver = by.get("version")
+                if ver is None:
+                    pins.add(line(impl[1]), f"service {key or '?'} (impl: caddy) has no version")
+                else:
+                    pins.version(line(ver[1]), f"service {key or '?'} caddy", scalar(ver[1]) or "")
+            repo = by.get("repository")
+            if repo and scalar(repo[1]) and _caddy_kind(scalar(repo[1]) or ""):
+                tag = by.get("tag")
+                ref = f"{scalar(repo[1])}:{scalar(tag[1])}" if tag else scalar(repo[1]) or ""
+                pins.image(line(tag[1] if tag else repo[1]), ref, named=True)
+            for k, _kn, v in pairs:
+                if k is not None and isinstance(v, yaml.ScalarNode):
+                    if CADDY_VERSION_KEY.match(k):
+                        pins.version(line(v), k, v.value)
+                    elif CADDY_IMAGE_KEY.match(k):
+                        pins.image(line(v), v.value, named=True)
+                        continue
+                if k is None or k.lower() not in ("repository", "tag") or not repo:
+                    walk(v, k or key)
+        elif isinstance(node, yaml.SequenceNode):
+            for v in node.value:
                 walk(v, key)
-        elif isinstance(o, str) and (key == "image" or re.search(r"caddy[:@]", o)):
-            findings.extend(_image_findings(o, path, lines))
+        elif isinstance(node, yaml.ScalarNode) and isinstance(node.value, str):
+            v = node.value
+            if key.lower() == "image" or key.lower().endswith("_image") or _tagged_caddy(v):
+                pins.image(line(node), v)
 
-    for doc in yaml.safe_load_all(text):
-        walk(doc)
-    return findings
+    for doc in yaml.compose_all(text, Loader=yaml.SafeLoader):
+        if doc is not None:
+            walk(doc)
+    pins.text(images=False, keys=False)
+    return pins.findings
 
 
 def lint_dockerfile(text: str, path: str = "<text>") -> list[Finding]:
-    lines = text.splitlines()
-    out = []
-    for ln in lines:
-        m = re.match(r"\s*FROM\s+(?:--\S+\s+)*(\S+)", ln, re.I)
-        if m:
-            out += _image_findings(m.group(1), path, lines)
-    return out
+    """A Dockerfile: ``ARG``/``ENV`` defaults are resolved into ``FROM`` and ``xcaddy build``;
+    a ``FROM`` that cannot be resolved (no default) fails closed, since it could be Caddy."""
+    pins = _Pins(path, text)
+    env: dict[str, str | None] = {}
+    stages: set[str] = set()
+    builder = False
+    logical: list[tuple[int, str]] = []
+    buf, start = "", 0
+    for no, ln in enumerate(pins.lines, 1):
+        if not buf:
+            start = no
+        if ln.rstrip().endswith("\\"):
+            buf += ln.rstrip()[:-1] + " "
+            continue
+        logical.append((start, buf + ln))
+        buf = ""
+    if buf:
+        logical.append((start, buf))
+    for no, ln in logical:
+        words = ln.split()
+        if not words or words[0].startswith("#"):
+            continue
+        op = words[0].upper()
+        if op in ("ARG", "ENV"):
+            pairs = [w.split("=", 1) for w in words[1:]] if "=" in ln else [words[1:3]]
+            for pair in pairs:
+                name, value = pair[0], (pair[1].strip("\"'") if len(pair) > 1 else None)
+                env[name] = resolve(value, env) if value is not None else env.get(name)
+                if value is not None and CADDY_VERSION_KEY.match(name):
+                    pins.version(no, name, value, env)
+                elif value is not None and CADDY_IMAGE_KEY.match(name):
+                    pins.image(no, value, env, named=True)
+        elif op == "FROM":
+            args = [w for w in words[1:] if not w.startswith("--")]
+            if not args:
+                continue
+            got = resolve(args[0], env)
+            if got is None:
+                pins.add(no, f"FROM {args[0]} cannot be resolved (an ARG without a default): it "
+                         "could be Caddy; give the ARG a default")  # fmt: skip
+            elif got not in stages:
+                pins.image(no, got)
+            m = IMAGE_REF.match(got or "")
+            builder = bool(
+                m and _caddy_kind(m.group("name")) and "builder" in (m.group("tag") or "")
+            )
+            if len(args) >= 3 and args[1].lower() == "as":
+                stages.add(args[2])
+        elif op == "RUN":
+            for m in TEXT_PINS[0].finditer(ln):
+                v = m.group("v")
+                if v is None:
+                    if not (builder or env.get("CADDY_VERSION")):
+                        pins.add(no, "xcaddy build without a version or CADDY_VERSION: pin "
+                                 f"{MIN_CADDY_TEXT} or later")  # fmt: skip
+                else:
+                    pins.version(no, "xcaddy build", v, env)
+    pins.text(images=False, keys=False, xcaddy=False)
+    return pins.findings
+
+
+def lint_python(text: str, path: str = "<text>") -> list[Finding]:
+    """A registry built in Python (a dict literal with ``"impl": "caddy"``: its ``version``
+    must be a literal 2.11.2 or later), a string that is a tagged Caddy image, and the
+    free-text pins."""
+    pins = _Pins(path, text)
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as exc:
+        return [Finding(path, exc.lineno or 0, "parse", "cannot parse: SyntaxError")]
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            kv = {
+                k.value: v
+                for k, v in zip(node.keys, node.values, strict=True)
+                if isinstance(k, ast.Constant) and isinstance(k.value, str)
+            }
+            impl = kv.get("impl")
+            if isinstance(impl, ast.Constant) and str(impl.value).lower() == "caddy":
+                ver = kv.get("version")
+                if isinstance(ver, ast.Constant) and isinstance(ver.value, str):
+                    pins.version(ver.lineno, "a caddy service", ver.value)
+                else:
+                    pins.add(node.lineno, "a caddy service whose version is not a literal: pin "
+                             f"{MIN_CADDY_TEXT} or later")  # fmt: skip
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if _tagged_caddy(node.value):
+                pins.image(node.lineno, node.value)
+            for i, ln in enumerate(node.value.splitlines()):
+                pins.line(node.lineno + i, ln, images=False, keys=False)
+    return pins.findings
 
 
 # ---------------------------------------------------------------- the tree
@@ -648,8 +895,13 @@ def _generated(text: str) -> str | None:
     return out.get("caddy/sites.caddy")
 
 
-def _is_registry(doc: object) -> bool:
-    return isinstance(doc, dict) and "registry_version" in doc and "services" in doc
+def _is_registry(text: str) -> bool:
+    """One YAML document whose top level has ``registry_version`` and ``services``."""
+    docs = [d for d in yaml.compose_all(text, Loader=yaml.SafeLoader) if d is not None]
+    if len(docs) != 1 or not isinstance(docs[0], yaml.MappingNode):
+        return False
+    keys = {k.value for k, _ in docs[0].value if isinstance(k, yaml.ScalarNode)}
+    return {"registry_version", "services"} <= keys
 
 
 def _files(root: Path):
@@ -661,7 +913,51 @@ def _files(root: Path):
             yield p, rel
 
 
-def scan(root: Path) -> tuple[list[Finding], dict[str, int]]:
+class AllowlistError(Exception):
+    """The allowlist file is malformed (exit 2)."""
+
+
+def load_allowlist(path: Path | None) -> list[tuple[str, str]]:
+    """``(path glob, reason)`` entries from ``tools/caddy_lint.allow.yml``."""
+    if path is None or not path.is_file():
+        return []
+    try:
+        doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise AllowlistError(f"{path}: {exc.__class__.__name__}") from None
+    entries = doc.get("allow", []) if isinstance(doc, dict) else None
+    if not isinstance(entries, list):
+        raise AllowlistError(f"{path}: 'allow' must be a list")
+    out = []
+    for i, e in enumerate(entries):
+        if not isinstance(e, dict) or not str(e.get("path", "")).strip():
+            raise AllowlistError(f"{path}: entry {i} needs a 'path' glob")
+        if not str(e.get("reason", "")).strip():
+            raise AllowlistError(f"{path}: entry {i} ({e['path']}) has no 'reason'")
+        out.append((str(e["path"]), str(e["reason"]).strip()))
+    return out
+
+
+def apply_allowlist(findings: list[Finding], allow: list[tuple[str, str]]) -> list[Finding]:
+    """The findings no entry excuses, plus one ``allowlist`` finding per entry that excuses
+    nothing (a stale entry would silently waive the next real finding in that file)."""
+    used: set[int] = set()
+    kept = []
+    for f in findings:
+        rel = f.path.split(" (", 1)[0]
+        hit = [i for i, (g, _) in enumerate(allow) if fnmatch.fnmatchcase(rel, g)]
+        used.update(hit)
+        if not hit:
+            kept.append(f)
+    for i, (g, _) in enumerate(allow):
+        if i not in used:
+            kept.append(Finding(DEFAULT_ALLOWLIST, 0, "allowlist", f"entry {g!r} excuses nothing"))
+    return kept
+
+
+def scan(
+    root: Path, allow: list[tuple[str, str]] | None = None
+) -> tuple[list[Finding], dict[str, int]]:
     findings: list[Finding] = []
     counts = {"files": 0, "caddy_configs": 0, "generated": 0}
     ctx = CaddyContext(root)
@@ -687,22 +983,31 @@ def scan(root: Path) -> tuple[list[Finding], dict[str, int]]:
             ):
                 counts["files"] += 1
                 findings += lint_dockerfile(p.read_text(encoding="utf-8"), rel)
-            elif p.suffix in (".yml", ".yaml", ".json"):
+            else:
                 text = p.read_text(encoding="utf-8")
                 if "caddy" not in text.lower():
                     continue
                 counts["files"] += 1
-                findings += lint_pins(text, rel)
-                docs = list(yaml.safe_load_all(text))
-                if len(docs) == 1 and _is_registry(docs[0]):
-                    site = _generated(text)
-                    if site is not None:
-                        counts["generated"] += 1
-                        counts["caddy_configs"] += 1
-                        findings += lint_caddy(site, f"{rel} (caddy generator)", ctx=ctx)
-        except (UnicodeDecodeError, yaml.YAMLError) as exc:
+                if p.suffix in (".yml", ".yaml", ".json"):
+                    findings += lint_pins(text, rel)
+                    if _is_registry(text):
+                        site = _generated(text)
+                        if site is not None:
+                            counts["generated"] += 1
+                            counts["caddy_configs"] += 1
+                            findings += lint_caddy(site, f"{rel} (caddy generator)", ctx=ctx)
+                elif p.suffix == ".py":
+                    findings += lint_python(text, rel)
+                else:
+                    pins = _Pins(rel, text)
+                    pins.text()
+                    findings += pins.findings
+        except UnicodeDecodeError:
+            if CADDY_NAME.search(name) or p.suffix in (".yml", ".yaml", ".json", ".md"):
+                findings.append(Finding(rel, 0, "parse", "cannot parse: UnicodeDecodeError"))
+        except yaml.YAMLError as exc:
             findings.append(Finding(rel, 0, "parse", f"cannot parse: {exc.__class__.__name__}"))
-    return findings, counts
+    return apply_allowlist(findings, allow or []), counts
 
 
 def main(argv: list[str] | None = None, out=None, err=None) -> int:
@@ -710,6 +1015,7 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     parser = argparse.ArgumentParser(prog="caddy_lint", description=__doc__.splitlines()[0])
     parser.add_argument("root", nargs="?", default=".", help="the tree to check")
     parser.add_argument("--json", action="store_true", help="findings as JSON on stdout")
+    parser.add_argument("--allowlist", help=f"default: <root>/{DEFAULT_ALLOWLIST}")
     try:
         opts = parser.parse_args(argv)
     except SystemExit as exc:
@@ -718,7 +1024,16 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     if not root.is_dir():
         print(f"caddy_lint: {root} is not a directory", file=err)
         return 2
-    findings, counts = scan(root)
+    allow_path = Path(opts.allowlist) if opts.allowlist else root / DEFAULT_ALLOWLIST
+    if opts.allowlist and not allow_path.is_file():
+        print(f"caddy_lint: allowlist {allow_path} not found", file=err)
+        return 2
+    try:
+        allow = load_allowlist(allow_path)
+    except AllowlistError as exc:
+        print(f"caddy_lint: bad allowlist: {exc}", file=err)
+        return 2
+    findings, counts = scan(root, allow)
     if opts.json:
         doc = {**counts, "findings": [f._asdict() for f in findings]}
         print(json.dumps(doc, indent=2), file=out)
