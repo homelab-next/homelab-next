@@ -13,8 +13,10 @@ venv/
 /build/
 # Go build outputs in any module: test binaries (go test -c), profiles, coverage, delve's binary.
 # Binaries are built into /build/ (go build -o); a module whose own build drops them anywhere else
-# ignores them in its own .gitignore, so no component's binary names are listed here.
+# ignores them in its own .gitignore, so no component's binary names are listed here.  A
+# directory named *.test (.test is the RFC 6761 reserved TLD, a natural fixture name) is not one.
 *.test
+!*.test/
 *.prof
 coverage.out
 __debug_bin*

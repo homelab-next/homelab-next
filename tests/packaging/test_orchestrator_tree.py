@@ -39,6 +39,27 @@ def test_go_build_outputs_are_ignored_and_sources_are_not(path, ignored):
     assert (r.returncode == 0) is ignored
 
 
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+def test_a_directory_named_for_the_test_tld_is_not_ignored_like_a_test_binary(tmp_path):
+    # verify3.md: *.test also matched directories, so fixtures under a reserved-TLD name such as
+    # examples/zones/ca.test/ were silently left out of git (check-ignore needs them on disk to
+    # tell a directory from a file)
+    (tmp_path / ".gitignore").write_text((ROOT / ".gitignore").read_text())
+    files = [
+        "examples/zones/ca.test/zone.txt",
+        "orchestrator/internal/api/testdata/host.test/request.json",
+        "orchestrator/internal/api/api.test",  # go test -c: still ignored
+    ]
+    for rel in files:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("x\n")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    r = subprocess.run(
+        ["git", "check-ignore", *files], cwd=tmp_path, capture_output=True, text=True
+    )
+    assert r.stdout.splitlines() == ["orchestrator/internal/api/api.test"], r.stderr
+
+
 def test_the_root_gitignore_names_no_components_binaries():
     """A component's binary names belong to the component (its own .gitignore or /build/)."""
     lines = [x for x in (ROOT / ".gitignore").read_text().splitlines() if not x.startswith("#")]
