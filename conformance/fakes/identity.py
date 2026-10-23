@@ -46,9 +46,17 @@ class FakeIdentityProvider:
         if not math.isfinite(ttl) or ttl <= 0:
             raise ValueError("ttl must be a positive, finite number of seconds")
 
+    @staticmethod
+    def _check_scopes(scopes: Sequence[str]) -> None:
+        # opaque OAuth scope tokens: a space inside one would read back as two scopes
+        for s in scopes:
+            if not isinstance(s, str) or not s or any(c.isspace() for c in s):
+                raise ValueError("a scope is a non-empty string with no whitespace")
+
     def issue(self, subject: str, scopes: Sequence[str], ttl: float) -> str:
         if not subject:
             raise ValueError("subject is required")
+        self._check_scopes(scopes)
         self._check_ttl(ttl)
         self._n += 1
         now = self._clock()
@@ -190,3 +198,39 @@ class NonFiniteTtlIdentityProvider(FakeIdentityProvider):
     def _check_ttl(ttl: float) -> None:
         if ttl <= 0:
             raise ValueError("ttl must be positive")
+
+
+class EmptyScopeIsNoScopeIdentityProvider(FakeIdentityProvider):
+    """Defect: ``if required_scope:`` instead of ``is not None``, so ``required_scope=""`` (a
+    misconfigured route) accepts any valid token."""
+
+    def verify(self, token: str, required_scope: str | None = None) -> Claims:
+        return super().verify(token, required_scope or None)
+
+
+class CaseInsensitiveScopeIdentityProvider(FakeIdentityProvider):
+    """Defect: scopes are compared case-insensitively, so ``read`` satisfies ``READ``."""
+
+    def verify(self, token: str, required_scope: str | None = None) -> Claims:
+        claims = super().verify(token)
+        held = {s.lower() for s in claims.scopes}
+        if required_scope is not None and required_scope.lower() not in held:
+            raise Forbidden(f"missing scope {required_scope!r}")
+        return claims
+
+
+class SpaceDelimitedScopeIdentityProvider(FakeIdentityProvider):
+    """Defect: scopes are kept OAuth-style as one space-delimited claim and any scope is
+    accepted on issue, so a token issued for the one scope ``"read admin"`` grants ``admin``."""
+
+    @staticmethod
+    def _check_scopes(scopes: Sequence[str]) -> None:
+        return None
+
+    def verify(self, token: str, required_scope: str | None = None) -> Claims:
+        claims = super().verify(token)
+        held = tuple(" ".join(claims.scopes).split())
+        claims = Claims(claims.subject, held, claims.issued_at, claims.expires_at, claims.token_id)
+        if required_scope is not None and required_scope not in held:
+            raise Forbidden(f"missing scope {required_scope!r}")
+        return claims

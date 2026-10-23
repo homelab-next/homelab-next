@@ -9,11 +9,14 @@ import string
 
 from conformance.fakes.identity import (
     AlgNoneIdentityProvider,
+    CaseInsensitiveScopeIdentityProvider,
     DecodedSignatureIdentityProvider,
+    EmptyScopeIsNoScopeIdentityProvider,
     FakeIdentityProvider,
     NoExpiryIdentityProvider,
     NonFiniteTtlIdentityProvider,
     ScopedSkipsRevocationIdentityProvider,
+    SpaceDelimitedScopeIdentityProvider,
     SubstringScopeIdentityProvider,
     UnsignedIdentityProvider,
 )
@@ -65,7 +68,8 @@ def _splice(a: str, b: str) -> str:
 def _(p):
     who = uniq("user")
     claims = p.verify(p.issue(who, ["read", "write"], 60))
-    assert claims.subject == who and set(claims.scopes) == {"read", "write"}, f"claims {claims}"
+    # scopes are a set: order is free, but each comes back whole and exactly once
+    assert claims.subject == who and sorted(claims.scopes) == ["read", "write"], f"claims {claims}"
 
 
 @SUITE.check("tokens-are-unique", "two tokens for the same subject differ")
@@ -181,8 +185,9 @@ def _(p):
 def _(p):
     tok = p.issue(uniq("user"), ["read"], 60)
     assert p.verify(tok, required_scope="read").scopes == ("read",)
-    exc = raises(lambda: p.verify(tok, required_scope="admin"), "missing scope", Forbidden)
-    assert isinstance(exc, Forbidden)
+    for other in ("admin", "", "READ", "Read", " read", "read "):
+        exc = raises(lambda s=other: p.verify(tok, required_scope=s), f"scope {other!r}", Forbidden)
+        assert isinstance(exc, Forbidden), f"scope {other!r}: {type(exc).__name__}"
     # a scope is a whole name: neither part of a granted scope nor a run across two of them
     wide = p.issue(uniq("user"), ["readwrite", "admin"], 60)
     assert p.verify(wide, required_scope="readwrite").subject
@@ -209,10 +214,14 @@ def _(p):
 
 
 @SUITE.check(
-    "issue-validates-input", "empty subject and a non-positive or non-finite ttl are refused"
+    "issue-validates-input",
+    "an empty subject, an empty or whitespace-bearing scope, and a non-positive or non-finite "
+    "ttl are refused",
 )
 def _(p):
     raises(lambda: p.issue("", ["read"], 60), "empty subject", ValueError)
+    for scopes in (["read admin"], [""], ["read", "a\tb"], ["read\n"]):
+        raises(lambda s=scopes: p.issue(uniq("user"), s, 60), f"scopes {scopes!r}", ValueError)
     for ttl in (0, -5, float("nan"), float("inf"), float("-inf")):
         raises(lambda t=ttl: p.issue(uniq("user"), ["read"], t), f"ttl {ttl}", ValueError)
 
@@ -241,6 +250,21 @@ MUTANTS = {
         SubstringScopeIdentityProvider,
         "scope-enforced",
         "the required scope is matched as a substring, so readwrite satisfies read",
+    ),
+    "empty-scope-is-no-scope": Mutant(
+        EmptyScopeIsNoScopeIdentityProvider,
+        "scope-enforced",
+        "required_scope='' is read as no scope required, so any valid token passes",
+    ),
+    "scope-case-insensitive": Mutant(
+        CaseInsensitiveScopeIdentityProvider,
+        "scope-enforced",
+        "scopes are compared case-insensitively, so read satisfies READ",
+    ),
+    "space-delimited-scopes": Mutant(
+        SpaceDelimitedScopeIdentityProvider,
+        "issue-validates-input",
+        "a scope holding a space is accepted and split on verify, so 'read admin' grants admin",
     ),
     "revocation-skipped-when-scoped": Mutant(
         ScopedSkipsRevocationIdentityProvider,

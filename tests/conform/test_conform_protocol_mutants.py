@@ -79,6 +79,9 @@ REVIEWED = {
         "scope-matched-as-substring",
         "revocation-skipped-when-scoped",
         "non-finite-ttl-accepted",
+        "empty-scope-is-no-scope",
+        "scope-case-insensitive",
+        "space-delimited-scopes",
     },
     "lake-query": {"interpolated-params"},
     "object-store": {

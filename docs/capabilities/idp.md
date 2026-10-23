@@ -23,8 +23,18 @@ Contract for `idp`: issue and verify short-lived bearer tokens.
 `issue` returns an opaque string; `verify` returns the claims or raises.  Whatever the
 product (OIDC provider, signed JWTs, opaque introspection), a token that was altered, expired,
 revoked, empty or garbage is *always* `InvalidToken` - never a crash, never accepted, whether
-or not a scope is required.  `required_scope` names one scope exactly: it is granted only when it
-is one of the token's scopes, never by matching part of one.
+or not a scope is required.
+
+Scopes are opaque tokens - the grammar of an OAuth `scope` (RFC 6749 section 3.3), which a JWT
+carries space-delimited: each is a non-empty string with no whitespace, compared exactly and
+case-sensitively, and a token holds a set of them.  `issue` refuses an empty scope or one that
+contains whitespace (`"read admin"` would read back as two scopes, `admin` among them).
+`required_scope` names one scope exactly: it is granted only when it is one of the token's
+scopes - never by matching part of one, or another case of one - so `""`, `"READ"` for
+`read` and `"read admin"` are each `Forbidden` for every valid token.
+
+Expiry allows at most one second of leeway: a token must fail to verify once one second has
+passed beyond its ttl, so a JWT library's clock-skew allowance must be configured at or below 1s.
 
 ## How to use it
 
@@ -48,8 +58,9 @@ def issue(subject: str, scopes: Sequence[str], ttl: float) -> str
 
 **Returns:** `str`
 
-Raises ValueError for an empty subject, or a ttl that is not a positive, finite
-number of seconds (`nan` and `inf` included: either would never expire).
+Raises ValueError for an empty subject, a scope that is empty or contains whitespace,
+or a ttl that is not a positive, finite number of seconds (`nan` and `inf` included:
+either would never expire).
 
 **Raises:** `ValueError`
 
@@ -127,7 +138,7 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `scope-enforced` | MUST | a valid token without the required scope is Forbidden, not invalid; scopes match exactly |  |
 | `revoked-token-rejected` | MUST | a revoked token fails verification, with or without a scope |  |
 | `revoke-is-idempotent-and-total` | MUST | revoking twice or revoking garbage is harmless |  |
-| `issue-validates-input` | MUST | empty subject and a non-positive or non-finite ttl are refused |  |
+| `issue-validates-input` | MUST | an empty subject, an empty or whitespace-bearing scope, and a non-positive or non-finite ttl are refused |  |
 
 ### Features an adapter may declare
 
@@ -140,12 +151,15 @@ Each is a deliberately broken fake (`hnx conform run idp --target broken:<mutant
 | Mutant | Must fail | Defect |
 |---|---|---|
 | `alg-none-accepted` | `alg-none-rejected` | the token header is trusted, so alg=none disables the signature check |
+| `empty-scope-is-no-scope` | `scope-enforced` | required_scope='' is read as no scope required, so any valid token passes |
 | `empty-signature-accepted` | `unsigned-token-rejected` | the signature is compared only when present |
 | `exp-not-enforced` | `expired-token-rejected` | exp is issued but never checked |
 | `non-finite-ttl-accepted` | `issue-validates-input` | a nan or inf ttl mints a token that never expires |
 | `revocation-skipped-when-scoped` | `revoked-token-rejected` | revocation is checked only when no scope is required |
+| `scope-case-insensitive` | `scope-enforced` | scopes are compared case-insensitively, so read satisfies READ |
 | `scope-matched-as-substring` | `scope-enforced` | the required scope is matched as a substring, so readwrite satisfies read |
 | `signature-not-checked` | `payload-splice-rejected` | verify trusts the payload without checking the signature |
+| `space-delimited-scopes` | `issue-validates-input` | a scope holding a space is accepted and split on verify, so 'read admin' grants admin |
 
 ## Implementations
 

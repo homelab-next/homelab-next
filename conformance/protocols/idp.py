@@ -4,8 +4,18 @@
 ``issue`` returns an opaque string; ``verify`` returns the claims or raises.  Whatever the
 product (OIDC provider, signed JWTs, opaque introspection), a token that was altered, expired,
 revoked, empty or garbage is *always* ``InvalidToken`` - never a crash, never accepted, whether
-or not a scope is required.  ``required_scope`` names one scope exactly: it is granted only when it
-is one of the token's scopes, never by matching part of one.
+or not a scope is required.
+
+Scopes are opaque tokens - the grammar of an OAuth ``scope`` (RFC 6749 section 3.3), which a JWT
+carries space-delimited: each is a non-empty string with no whitespace, compared exactly and
+case-sensitively, and a token holds a set of them.  ``issue`` refuses an empty scope or one that
+contains whitespace (``"read admin"`` would read back as two scopes, ``admin`` among them).
+``required_scope`` names one scope exactly: it is granted only when it is one of the token's
+scopes - never by matching part of one, or another case of one - so ``""``, ``"READ"`` for
+``read`` and ``"read admin"`` are each ``Forbidden`` for every valid token.
+
+Expiry allows at most one second of leeway: a token must fail to verify once one second has
+passed beyond its ttl, so a JWT library's clock-skew allowance must be configured at or below 1s.
 """
 
 from __future__ import annotations
@@ -41,8 +51,9 @@ class Claims:
 @runtime_checkable
 class IdentityProvider(Protocol):
     def issue(self, subject: str, scopes: Sequence[str], ttl: float) -> str:
-        """Raises ValueError for an empty subject, or a ttl that is not a positive, finite
-        number of seconds (``nan`` and ``inf`` included: either would never expire)."""
+        """Raises ValueError for an empty subject, a scope that is empty or contains whitespace,
+        or a ttl that is not a positive, finite number of seconds (``nan`` and ``inf`` included:
+        either would never expire)."""
 
     def verify(self, token: str, required_scope: str | None = None) -> Claims: ...
 
