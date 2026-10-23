@@ -220,13 +220,16 @@ def main(argv: list[str]) -> int:
             notes: list[tuple[str, str]] = []
             rules = tuple(args.rule or RULES)
             policy = _policy(args.policy) if args.policy else None
-            problems: list[tuple[str, str]] = []
-            counts: dict[str, int] = {"profile": 0, "manifest": 0}
-            for rule in rules:  # one pass per rule, so each rule's own count is printed
-                got, counts = lint_paths(
-                    args.paths, classes, notes if rule == rules[0] else None,
-                    policy=policy, rules=(rule,),
-                )  # fmt: skip
+            by_rule: dict[str, list[tuple[str, str]]] = {}
+            problems, counts = lint_paths(
+                args.paths, classes, notes, policy=policy, rules=rules, by_rule=by_rule
+            )
+            judged = {x for got in by_rule.values() for x in got}
+            for where, prob in problems:  # a file that is not there or does not parse
+                if (where, prob) not in judged:
+                    print(f"hnx agent lint: {where}: {prob}", file=sys.stderr)
+            for rule in rules:  # each rule's own problems and count
+                got = by_rule.get(rule, [])
                 for where, prob in got:
                     print(f"hnx agent lint: {where}: {prob}", file=sys.stderr)
                 print(
@@ -234,7 +237,6 @@ def main(argv: list[str]) -> int:
                     f"{counts['manifest']} manifest(s), {len(got)} problem(s)",
                     file=sys.stderr,
                 )
-                problems += got
             for where, note in notes:
                 print(f"hnx agent lint: note: {where}: {note}", file=sys.stderr)
             print(

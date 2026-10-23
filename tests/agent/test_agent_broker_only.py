@@ -437,3 +437,19 @@ def test_the_brokers_front_with_stale_reviews_is_refused(tmp_path):
     assert got and "lacks current reviews" in got[0]
     table = ToolClasses.from_catalog(servers.load(_catalog_copy(tmp_path / "fresh")))
     assert broker_problems({"mcp": ["hnx-broker"]}, table, "profile:a") == []
+
+
+def test_lint_walks_the_tree_once_for_both_rules(tmp_path, monkeypatch, capsys):
+    """N1: the lint walked the repository once per rule (twice the scan)."""
+    from homelabnext.agent import readers
+
+    walks: list[Path] = []
+    real = readers._candidates
+    monkeypatch.setattr(readers, "_candidates", lambda p: walks.append(p) or real(p))
+    (tmp_path / "a.yml").write_text(yaml.safe_dump({**_actor(mcp=["lake"]), "id": "profile:a"}))
+    assert cli.main(["agent", "lint", str(tmp_path)]) == 0
+    assert len(walks) == 1
+    err = capsys.readouterr().err
+    assert (
+        "readers-cannot-act: 1 profile(s)" in err and "actors-act-via-broker: 1 profile(s)" in err
+    )

@@ -660,11 +660,13 @@ def lint_paths(
     *,
     policy: Any = None,
     rules: Iterable[str] = RULES,
+    by_rule: dict[str, list[tuple[str, str]]] | None = None,
 ) -> tuple[list[tuple[str, str]], dict[str, int]]:
     """Apply the reader rule and the broker rule (``rules``: :data:`RULES`) to every agent
     profile (spec, compiled or lean runtime view) and every context manifest found under
     ``paths`` (files, or directories searched through git); ``policy`` supplies each profile's
-    ``direct_mcp`` (without one no ``acts_via: direct`` server is allowed).
+    ``direct_mcp`` (without one no ``acts_via: direct`` server is allowed); ``by_rule``, when
+    given, receives each rule's problems (one walk of the tree serves every rule).
 
     Returns ``([(file, problem)], {"profile": n, "manifest": m})``; ``notes``, when given, receives
     ``(file, warning)`` for every deprecated grant (:func:`grant_notes`).  Schema negatives and frozen
@@ -675,6 +677,7 @@ def lint_paths(
 
     import yaml
 
+    rules = tuple(rules)
     problems: list[tuple[str, str]] = []
     counts = {"profile": 0, "manifest": 0}
     for raw in paths:
@@ -698,7 +701,11 @@ def lint_paths(
                     continue
                 counts[kind] += 1
                 check = profile_problems if kind == "profile" else manifest_problems
-                problems += [(str(f), p) for p in check(doc, classes, policy, rules)]
+                for rule in rules:  # one walk of the tree, each problem under its rule
+                    got = [(str(f), p) for p in check(doc, classes, policy, (rule,))]
+                    problems += got
+                    if by_rule is not None:
+                        by_rule.setdefault(rule, []).extend(got)
                 if notes is not None:
                     notes += [(str(f), n) for n in doc_notes(doc, classes)]
     return problems, counts
