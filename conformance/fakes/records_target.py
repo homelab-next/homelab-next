@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -124,3 +125,74 @@ class UnconfinedReadRecordsTarget(FakeRecordsTarget):
         self.list(lane)  # the lane name itself is still checked
         note = read_note(self._dir / lane / name, lane)
         return dict(note.frontmatter), note.body
+
+
+class ReapprovingRecordsTarget(FakeRecordsTarget):
+    """Defect: ``approve`` also accepts a note already in ``decided/denied`` and moves it to
+    approved, so an operator's denial is overturned."""
+
+    def approve(self, name: str) -> None:
+        if name in self.list("decided/denied"):
+            src = self._dir / "decided/denied" / name
+            src.rename(self._dir / "decided/approved" / name)
+            return
+        super().approve(name)
+
+
+class RedenyingRecordsTarget(FakeRecordsTarget):
+    """Defect: ``deny`` of a note already in ``decided/approved`` moves it to denied, so an
+    approval is quietly withdrawn."""
+
+    def deny(self, name: str, reason: str | None = None) -> None:
+        if name in self.list("decided/approved"):
+            src = self._dir / "decided/approved" / name
+            src.rename(self._dir / "decided/denied" / name)
+            return
+        super().deny(name, reason)
+
+
+class NamesakeRecordsTarget(FakeRecordsTarget):
+    """Defect: a name is checked against the inbox only, and a decision moves with an overwriting
+    rename (``os.replace``, or an object store's copy): re-proposing an approved note's name and
+    approving it replaces the operator's approved note."""
+
+    _DECIDED = ("decided/approved", "decided/denied", "decided/completed")
+
+    def propose(self, note: Mapping[str, Any], body: str = "") -> str:
+        hidden = []
+        for lane in self._DECIDED:  # the library checks every lane: hide the decided ones
+            for p in (self._dir / lane).glob("*.md"):
+                hide = p.with_name(p.name + ".hidden")
+                p.rename(hide)
+                hidden.append((hide, p))
+        try:
+            return super().propose(note, body)
+        finally:
+            for hide, p in hidden:
+                hide.rename(p)
+
+    def approve(self, name: str) -> None:
+        src, dest = self._dir / "inbox" / name, self._dir / "decided/approved" / name
+        if dest.exists() and src.is_file():
+            os.replace(src, dest)
+            return
+        super().approve(name)
+
+
+class CheckThenCopyRecordsTarget(FakeRecordsTarget):
+    """Defect: a decision checks the inbox, copies the note into the lane and then unlinks the
+    inbox copy (``missing_ok``): not one atomic move.  Sequentially it behaves like the library;
+    an approve and a deny raced on one note both succeed and the note lands in both lanes."""
+
+    def _decide(self, name: str, lane: str) -> None:
+        self._decider._load("inbox", name)  # the library's own name and existence checks
+        src = self._dir / "inbox" / name
+        data = src.read_bytes()
+        (self._dir / lane / name).write_bytes(data)
+        src.unlink(missing_ok=True)
+
+    def approve(self, name: str) -> None:
+        self._decide(name, "decided/approved")
+
+    def deny(self, name: str, reason: str | None = None) -> None:
+        self._decide(name, "decided/denied")
