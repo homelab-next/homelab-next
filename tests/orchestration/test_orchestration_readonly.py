@@ -20,6 +20,7 @@ from orch_helpers import ROOT, T0, body, examples
 from homelabnext._sqlite import is_wal
 from homelabnext.orchestration.store import JOURNAL_MODE, TelemetryStore
 from homelabnext.status import cli as status_cli
+from tests.suite_policy import skip_reason_allowed
 
 
 def _filled(path: Path) -> TelemetryStore:
@@ -74,11 +75,20 @@ else:
     print("wrote")
 """
 WRITER, HUB = 65533, 65534  # two unprivileged users; neither is the other
+#: the writer and the hub run as two other users; a registered cause (skip_reasons in
+#: pyproject.toml: a runtime facility is absent), so the suite policy does not fail the skip
+SWITCH_USERS = "switching to two other users (root with setpriv) is not available"
+
+
+def test_the_skip_names_a_registered_cause(request):
+    """An unregistered reason is a silent skip, which the suite policy turns into a failure: as
+    every CI runner is not root, the test below failed there instead of skipping."""
+    assert skip_reason_allowed(SWITCH_USERS, request.config.getini("skip_reasons"))
 
 
 @pytest.mark.skipif(
     not hasattr(os, "geteuid") or os.geteuid() != 0 or not shutil.which("setpriv"),
-    reason="runs the writer and the hub as two other users: needs root and setpriv",
+    reason=SWITCH_USERS,
 )
 @pytest.mark.parametrize("hub_can_write_dir", [False, True])
 def test_the_hub_reads_as_another_user_and_the_writer_keeps_writing(hub_can_write_dir):
