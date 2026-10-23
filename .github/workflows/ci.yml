@@ -638,11 +638,13 @@ jobs:
           fi
 
   # Q-08: every bugfix commit of this push or pull request touches a test file, and that test fails
-  # on the fix's parent (tools/fix_has_test.py --prove; CONTRIBUTING.md "Bug fixes").
+  # on the fix's parent (tools/fix_has_test.py --prove; CONTRIBUTING.md "Bug fixes"). 25 minutes:
+  # a push to main re-proves the whole merged range and is never cancelled, so a timeout there
+  # turns main red; a 17-fix range took about 4 minutes on CI.
   regression-tests:
     needs: go-modules
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

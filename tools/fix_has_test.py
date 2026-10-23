@@ -54,6 +54,12 @@ its tests (a test reading a fixture the parent lacks would otherwise "fail" for 
 alone), and a package whose ``testdata/`` the commit changed is run whole.  Without a Go toolchain
 on PATH the commit cannot be proved, which is a problem, not a pass.
 
+Known limits, each a false "cannot prove" or a missed selection, never a false pass: a re-export of
+an existing name (``from .calc import clamp`` in ``__init__``) is not a definition the fix adds; a
+new namespace subpackage (no ``__init__.py``) is not matched as an added module; a
+``unittest.TestCase`` subclass not named ``Test*`` is not selected; and added names are matched
+across the commit, not per module.
+
 Usage: python tools/fix_has_test.py [--range A..B] [--prove] [--allow-missing-base] [--repo DIR]
 Exit: 0 every fix has a test, 1 some fix has none (or, with --prove, a test passes without the
 fix), 2 the range could not be read.  See CONTRIBUTING.md "Bug fixes carry a regression test".

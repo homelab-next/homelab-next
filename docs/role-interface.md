@@ -130,7 +130,9 @@ membership change. `role_lint.py --playbook X --inventory Y` fails a playbook wh
   `secrets/<service>.env` (mode 0600, `no_log`, no diff) and passes as an `env_file`.
 * Every value is written with `$` doubled (`$$`), so docker compose never interpolates the
   deploy host's environment into `docker-compose.yml`, and a volume holding `$` or a source starting with `~`
-  is refused outright (`${X:-/}:/host` is the host root once compose has read it).
+  is refused outright (`${X:-/}:/host` is the host root once compose has read it). The spec is
+  the literal text the container gets: write `$HOME`, not compose's own escape `$$HOME`, which
+  the role writes as `$$$$HOME` and the container receives as `$$HOME`.
 * Bind sources are an allow-list: a host path is mounted only under `compose_app_bind_roots`
   (the application's own directory and data directory by default; never a host-wide directory
   such as `/etc`, `/var` or `/srv`) or when it is listed on its own, with a reason, in
@@ -151,6 +153,10 @@ membership change. `role_lint.py --playbook X --inventory Y` fails a playbook wh
 * A volume's bind source must be canonical (no `//`, no `.` or `..` component other than a
   leading `./`, no trailing `/`): compose passes `/.`, `//` and `/var//lib/docker` through
   unchanged and the kernel reads them as `/` and docker's state.
+* The bind checks read the text of a path; they do not resolve symlinks. A bind root that is
+  itself a symlink, or a symlink a container plants in its own data directory that another
+  service's spec later mounts by sub-path, is followed by docker at `up`. Keep the roots real
+  directories, and do not mount one service's data directory into another by sub-path.
 * A privileged container or a dangerous `cap_add`, a container-runtime socket or state
   directory (docker, containerd, podman, CRI-O; or host root, `/run`, `/var`) bind mount, and an
   explicit root `user` (the user or the group `root` or zero in any spelling: `0`, `00`,

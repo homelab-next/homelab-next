@@ -35,7 +35,6 @@ VERSION_CONTEXT_RE = re.compile(
 )
 
 
-#: what separates the words of a name: a plain deny-list term matches across any of them
 #: the separators inside a name: a plain deny-list term matches across any run of them, or none
 _NAME_SEPARATORS = re.compile(r"[-_.]+")
 
