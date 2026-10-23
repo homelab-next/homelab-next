@@ -696,7 +696,11 @@ def test_compose_app_placeholder_digest_allowed_only_when_flagged(tmp_path):
 
 
 def test_compose_app_backup_manifest_lists_bind_sources(tmp_path):
-    v = app_vars(tmp_path)
+    # an anonymous volume (a container path alone) has no host source: accepted, as on main
+    # before the bind allow-list, and not a path to back up
+    s = spec()
+    s["services"]["db"]["volumes"] = ["/var/lib/postgresql/data"]
+    v = app_vars(tmp_path, s)
     assert run_role(tmp_path, "compose_app", "main", v).returncode == 0
     r = run_role(tmp_path, "compose_app", "backup", v)
     assert r.returncode == 0, r.stdout + r.stderr

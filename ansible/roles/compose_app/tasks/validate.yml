@@ -96,7 +96,7 @@
     that:
       - item.value.volumes | default([]) | reject('string') | list | length == 0
       - item.value.volumes | default([]) | select('search', compose_app_interpolated_volume_pattern) | list | length == 0
-      - item.value.volumes | default([]) | map('regex_replace', '(?s):.*', '') | select('search', compose_app_noncanonical_source_pattern) | list | length == 0
+      - item.value.volumes | default([]) | select('search', ':') | map('regex_replace', '(?s):.*', '') | select('search', compose_app_noncanonical_source_pattern) | list | length == 0
       - item.value.volumes | default([]) | select('search', compose_app_docker_socket_pattern) | list | length == 0 or compose_app_allow_docker_socket | bool
     fail_msg: >-
       service '{{ item.key }}' has a refused bind source: volumes are short-syntax strings; no `$` and
@@ -111,8 +111,8 @@
 
 # Bind sources are an allow-list: a host path is mounted only when it lies under one of
 # compose_app_bind_roots (the application's own directories by default) or is listed on its own,
-# with a reason, in compose_app_bind_extra. A relative source (./x) stays in the project directory
-# and a named volume is docker's; anything else on the host (/etc, /proc, /dev, /root, the
+# with a reason, in compose_app_bind_extra. A relative source (./x) stays in the project directory,
+# and a named volume and an anonymous one (a container path alone, /var/lib/app) are docker's; anything else on the host (/etc, /proc, /dev, /root, the
 # systemd and D-Bus sockets, another runtime's state) is refused, and the runtime sockets still
 # need compose_app_allow_docker_socket on top. That flag lets through only the docker socket
 # itself (/var/run/docker.sock, /run/docker.sock), never host root, /var, /run or a path that
@@ -153,7 +153,10 @@
       {%- for v in item.value.volumes | default([]) -%}
       {%-   set src = v | regex_replace('(?s):.*', '') -%}
       {%-   set ns = namespace(ok=false) -%}
-      {%-   if src is match('^\./|^\.\Z') -%}
+      {%-   if v is not search(':') and v is match('^/') -%}
+      {#-     a container path alone: an anonymous volume, no host source -#}
+      {%-     set ns.ok = true -%}
+      {%-   elif src is match('^\./|^\.\Z') -%}
       {%-     set ns.ok = true -%}
       {%-   elif src is match('^[A-Za-z0-9][A-Za-z0-9_.-]*\Z') -%}
       {%-     set ns.ok = true -%}
