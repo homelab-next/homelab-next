@@ -7,7 +7,10 @@ registered with an argument schema; a caller may run only the commands its allow
 the handler runs; every call - allowed, denied, invalid, failed - leaves one audit record;
 arguments the schema marks ``secret`` never appear in any audit record, whatever the outcome, nor
 in anything ``call`` raises.  Redaction follows the schema's ``secret`` flag, not the argument's
-name.  A handler failure surfaces as ``BrokerError`` naming the command only: the handler's own
+name, and it is the default: an argument the schema does not name (a misspelt name, or any
+argument of a command nobody registered) is recorded by name only, its value redacted, because
+nothing says it is not a secret - whatever the name looks like - and no error ``call`` or
+``submit`` raises (message, attributes, cause) carries its value either.  A handler failure surfaces as ``BrokerError`` naming the command only: the handler's own
 exception (message, cause, context) is not passed to the caller.
 
 ``ArgSpec`` checks *shape* (presence and type), not *content*.  A value that passed validation is
@@ -16,7 +19,12 @@ The handler is the trust boundary - it must treat every argument as hostile (no 
 building of commands or paths without its own allowlist or pattern).
 
 Deferred requests: ``submit(caller, command, args)`` runs the same allowlist and argument checks
-as ``call`` and returns a request id instead of running the handler.  A request is bound to the
+as ``call`` and returns a request id instead of running the handler.  Like a call, every submit
+leaves one audit record (operation ``submit``), accepted, denied or invalid.  ``submit`` checks
+and keeps its own copy of the arguments: changing the mapping it was given afterwards changes
+nothing that runs.  Running a request leaves one record of its outcome (operation ``run``).  A
+grant cannot be withdrawn (``allow`` only adds), so whether ``run`` re-checks the allowlist is not
+part of the contract yet.  A request is bound to the
 caller that submitted it: only that caller may ``status`` (read), ``run`` or ``cancel`` it.  Any
 other caller gets ``Denied`` with ``reason == "not-request-owner"`` - the same answer as for an id
 that does not exist, so a foreign request's existence is not disclosed - the request is left

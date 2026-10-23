@@ -59,7 +59,10 @@ def test_secrets_page_has_signatures_fields_errors_and_checks(pages):
     # how to use it: every method, with a readable signature, its docstring and what it raises
     assert "def get(path: str, version: int | None = None) -> Secret" in page
     assert "| `version` | `int \\| None` | `None` | positional or keyword |" in page
-    assert "Latest (or given) version.  Raises SecretNotFound." in page
+    assert (
+        "Latest (or given) version.  Raises SecretNotFound, also for a version that was never"
+        in page
+    )
     assert "**Raises:** `SecretNotFound`, `LeaseError`" in page  # lease()
     for op in ("put", "get", "delete", "list", "lease", "lease_valid", "revoke"):
         assert f"#### `SecretStore.{op}`" in page
@@ -99,7 +102,7 @@ def test_index_is_the_tool_choice_matrix(pages):
     index = pages["README.md"]
     row = next(line for line in index.splitlines() if line.startswith("| [secrets]"))
     cells = [c.strip() for c in re.split(r"(?<!\\)\|", row)[1:-1]]
-    assert cells[2:5] == ["7", "12", "0"]  # operations, MUST, SHOULD
+    assert cells[2:5] == ["7", "15", "0"]  # operations, MUST, SHOULD
     assert cells[5] == "`openbao`"
     assert "| [dns](../systems/dns.md)" in index and "no conformance suite" in index
 
