@@ -460,6 +460,23 @@ def test_one_client_address_holds_at_most_so_many_connections(tmp_path, clock):
         srv.server_close()
 
 
+def test_the_listeners_have_a_listen_backlog_for_a_burst(tmp_path, clock):
+    """socketserver's backlog is 5: under a burst of connects the kernel dropped connects while
+    the accept loop was still fast, and each sender waited out its SYN retries."""
+    import socket
+
+    store = ActivityStore(tmp_path / "activity.db", clock=clock)
+    srv = make_ingest_server(store, SETTINGS, clock=clock)
+    try:
+        assert srv.request_queue_size == 128
+        # nothing accepts yet: the backlog alone holds a burst well past socketserver's 5
+        burst = [socket.create_connection(srv.server_address[:2], timeout=2) for _ in range(40)]
+        for s in burst:
+            s.close()
+    finally:
+        srv.server_close()
+
+
 def test_the_default_bounds():
     from homelabnext.status.agents.ingest import DEFAULT_INGEST_CONNECTIONS, DEFAULT_TIMEOUT_S
 

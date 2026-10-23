@@ -589,6 +589,12 @@ def test_the_brokers_own_faults_do_not_count_against_a_healthy_agent(tmp_path, m
     assert errors == [fault] * 10
 
 
+def test_the_broker_socket_has_a_listen_backlog_for_a_burst():
+    from homelabnext.broker.server import LISTEN_BACKLOG, _UnixServer
+
+    assert _UnixServer.request_queue_size == LISTEN_BACKLOG == 128
+
+
 def test_unknown_peers_are_rate_limited_too(tmp_path):
     svc = _service(tmp_path)
     peers = PeerMap(svc.manifest)

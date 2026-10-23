@@ -115,6 +115,8 @@ DEFAULT_MAX_REQUEST_BYTES = 1 << 20
 DEFAULT_TIMEOUT_S = 10.0
 DEFAULT_MAX_CONNECTIONS = 32
 DEFAULT_RELAY_CONNECTIONS = 4
+#: the socket's listen backlog
+LISTEN_BACKLOG = 128
 MAX_AUDIT_TAIL = 500
 DEFAULT_REFUSAL_LIMIT = 60
 DEFAULT_REFUSAL_WINDOW_S = 60.0
@@ -629,6 +631,7 @@ class _Handler(socketserver.BaseRequestHandler):
 class _UnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
     allow_reuse_address = False
+    request_queue_size = LISTEN_BACKLOG  # socketserver's default of 5 refuses a burst of agents
 
     def __init__(self, broker: BrokerServer) -> None:
         self.broker = broker  # before the base binds: server_bind reads the mode and group

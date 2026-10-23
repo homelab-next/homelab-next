@@ -42,6 +42,8 @@ LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow the read-only console binds loo
 LOOPBACK_NAMES = frozenset({LOOPBACK, "localhost", "::1"})
 #: connections the console serves at once; more are answered 503 at once (BoundedHTTPServer)
 DEFAULT_MAX_CONNECTIONS = 64
+#: the listen backlog of the hub's listeners
+LISTEN_BACKLOG = 128
 _BUSY = (
     b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain; charset=utf-8\r\n"
     b"Content-Length: 5\r\nConnection: close\r\nRetry-After: 5\r\n\r\nbusy\n"
@@ -98,6 +100,9 @@ class BoundedHTTPServer(ThreadingHTTPServer):
     (each handler's read timeout only bounds one read)."""
 
     daemon_threads = True
+    #: the listen backlog (socketserver's default is 5): a burst of connects waits in the kernel
+    #: for the fast accept loop instead of being dropped (SYN retries, seconds of delay)
+    request_queue_size = LISTEN_BACKLOG
 
     def __init__(
         self,
