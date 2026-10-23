@@ -507,6 +507,64 @@ def test_public_tree_with_private_material_fails(tmp_path, rel, text, rule):
     assert run("public", str(root)).returncode == 1
 
 
+#: non-documentation networks, assembled at run time so this file stays clean under the scanner
+PRIVATE_NET = ".".join(("10", "20", "0", "0")) + "/16"
+PUBLIC_HOST = ".".join(("8", "8", "4", "4"))
+
+
+@needs_skeleton
+@pytest.mark.parametrize(
+    "scope",
+    [
+        f"scope:\n  trusted:\n    wan: [{PUBLIC_HOST}/32]\n",
+        f"scope:\n  target: [198.51.100.0/24, {PRIVATE_NET}]\n",
+        "scope:\n  target: ['0.0.0.0/0']\n",  # everything: no address the scanner would flag
+        "scope:\n  exclude:\n    offensive: ['::/0']\n",
+        "scope:\n  target: [192.0.2.0/16]\n",  # a documentation address, widened beyond its range
+        f"scope:\n  trusted:\n    lan: [{PRIVATE_NET}]\n",  # a misspelt part still counts
+        f"scope:\n  target: ['{PRIVATE_NET.replace('/16', '/33')}']\n",  # malformed, real address
+        f'{{"profile": "x", "scope": {{"target": ["{PRIVATE_NET}"]}}}}\n',  # JSON
+    ],
+)
+def test_public_scope_block_with_a_real_address_fails(tmp_path, scope):
+    root = public_tree(tmp_path)
+    name = "site.json" if scope.startswith("{") else "site.yml"
+    p = root / "examples" / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(scope)
+    assert rules(plc.check_public(root)) == {"scope-address"}
+    assert run("public", str(root)).returncode == 1
+
+
+@needs_skeleton
+@pytest.mark.parametrize(
+    "text",
+    [
+        "scope:\n  trusted:\n    wan: [203.0.113.7/32]\n    nets: [192.0.2.0/24, 2001:db8::/48]\n",
+        "scope:\n  target: [198.51.100.0/33]\n",  # malformed, documentation: the schema's finding
+        "scope:\n  target: [not-an-address]\n",
+        f"scope: [{PRIVATE_NET}]\n",  # not a site scope block (no trusted, target or exclude)
+        f"other:\n  scope:\n    target: [{PRIVATE_NET}]\n",  # not top-level
+        "scope: [unclosed\n",  # unparseable: the hygiene job's finding
+    ],
+)
+def test_public_scope_block_with_documentation_ranges_passes(tmp_path, text):
+    root = public_tree(tmp_path)
+    (root / "examples" / "site.yml").write_text(text)
+    assert plc.check_public(root) == []
+
+
+def test_the_example_sites_carry_a_scope_block_the_check_reads():
+    """The check is not vacuous on this tree: every example site has a scope block it parses."""
+    sites = sorted((ROOT / "examples" / "modules" / "sites").glob("*.yml"))
+    assert sites
+    for p in sites:
+        text = p.read_text()
+        assert plc.scope_findings(p.name, text) == []
+        planted = text.replace("203.0.113.", "198.18.0.", 1)
+        assert rules(plc.scope_findings(p.name, planted)) == {"scope-address"}, p
+
+
 @needs_skeleton
 def test_skeleton_marker_must_stay_fictional(tmp_path):
     root = public_tree(tmp_path)

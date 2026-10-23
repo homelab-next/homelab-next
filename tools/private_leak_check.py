@@ -73,6 +73,13 @@ and only while its marker says ``fictional: true``.  Findings:
   sops-config      a ``.sops.yaml`` outside the skeleton;
   ciphertext       a SOPS-encrypted file (sealed real data does not belong in public git
                    either: it is one leaked key away from plain text);
+  scope-address    a site's network scope in public git: a YAML or JSON document whose top-level
+                   ``scope`` block (``trusted``, ``target``, ``exclude``: the module selection's,
+                   docs/modules.md) holds an address or network outside the documentation ranges
+                   (RFC 5737, ``2001:db8::/32``), anywhere under it, misspelt parts included.  The
+                   real scope lives in the overlay's ``lab/modules.yml``; a public example uses
+                   documentation ranges only.  A malformed entry that carries no address is the
+                   schema's to refuse, not this check's;
   key-file         as above.
 
 Files are what ``tools/leak_scan.py`` scans: in a git work tree the tracked and untracked,
@@ -87,6 +94,7 @@ from __future__ import annotations
 import argparse
 import binascii
 import fnmatch
+import ipaddress
 import json
 import re
 import sys
@@ -102,6 +110,8 @@ if str(TOOLS) not in sys.path:
 import leak_scan  # noqa: E402  (also puts the checkout on sys.path for homelabnext)
 
 from homelabnext import sops  # noqa: E402
+from homelabnext.ids.lint import scan_text  # noqa: E402
+from homelabnext.modules.rules import is_documentation  # noqa: E402
 
 EXIT_CLEAN, EXIT_HIT, EXIT_CONFIG = 0, 1, 2
 
@@ -157,6 +167,10 @@ _VAULT_HEADER_LINE = re.compile(
 )
 _HEX_ONLY = re.compile(r"^[0-9a-f]+$")
 _TOP_LEVEL = re.compile(r"^[^\s#]")
+#: a top-level ``scope`` key (YAML) or a ``"scope"`` key (JSON): the cheap test before parsing
+_SCOPE_KEY = re.compile(r'^scope\s*:|"scope"\s*:', re.M)
+#: the keys that make a top-level ``scope`` mapping a site's network scope
+SCOPE_KEYS = frozenset({"trusted", "target", "exclude"})
 
 
 class ConfigError(Exception):
@@ -658,6 +672,53 @@ def check_private(root: Path) -> list[Finding]:
     return out
 
 
+def _leaves(node: object, path: str) -> Iterable[tuple[str, str]]:
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield from _leaves(v, f"{path}.{k}")
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from _leaves(v, f"{path}[{i}]")
+    elif isinstance(node, str):
+        yield path, node
+
+
+def scope_findings(rel: str, text: str) -> list[Finding]:
+    """Non-documentation addresses in the top-level ``scope`` block of each document of ``text``."""
+    import yaml
+
+    if not _SCOPE_KEY.search(text):
+        return []
+    try:
+        docs = list(yaml.safe_load_all(text))
+    except yaml.YAMLError:
+        return []  # unparseable: the hygiene job's finding, and leak_scan still reads the text
+    out = []
+    for doc in docs:
+        block = doc.get("scope") if isinstance(doc, dict) else None
+        if not (isinstance(block, dict) and SCOPE_KEYS & set(block)):
+            continue
+        for where, value in _leaves(block, "scope"):
+            try:
+                net = ipaddress.ip_network(value.strip(), strict=False)
+            except ValueError:
+                net = None
+            if net is not None:
+                bad = not is_documentation(net)
+            else:  # malformed: refuse it only when it carries a real address
+                bad = any(v.code == "IP_LITERAL" for v in scan_text(value))
+            if bad:
+                out.append(
+                    Finding(
+                        rel,
+                        "scope-address",
+                        f"{where}: outside the documentation ranges (the real scope is the "
+                        "private overlay's lab/modules.yml)",
+                    )
+                )
+    return out
+
+
 def check_public(root: Path) -> list[Finding]:
     skeleton_marker = root / SKELETON / MARKER
     private_paths: list[str] = []
@@ -686,6 +747,8 @@ def check_public(root: Path) -> list[Finding]:
             text = _text(f)
             if text is not None and sops_format(text):
                 out.append(Finding(rel, "ciphertext", "a SOPS-encrypted file in public git"))
+            elif text is not None and f.suffix in (".yml", ".yaml", ".json"):
+                out += scope_findings(rel, text)
     return out
 
 
