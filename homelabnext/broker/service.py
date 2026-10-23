@@ -278,6 +278,7 @@ def validate_manifest(
         lane = _lanes.Lane.from_doc(ld)
         lanes[lane.name] = lane
         problems += lane.problems()
+    problems += _overlapping_lanes(list(lanes.values()))
     exec_actions = []
     for a in manifest["actions"]:
         if "lane" in a or a["handler"] == _lanes.LANE_HANDLER:
@@ -294,6 +295,21 @@ def validate_manifest(
     problems += check_manifest_handlers({"actions": exec_actions}, docs)
     problems += _peer_problems(manifest)
     return docs, problems
+
+
+def _overlapping_lanes(lanes: Sequence[_lanes.Lane]) -> list[str]:
+    """Two lanes whose roots are the same directory, or one inside the other, are refused: each
+    would keep its own quota, share and write rate over the same files (an actor writing through
+    both would get two of each), and one lane's actor directories could collide with the
+    other's (a profile slug ``inbox``)."""
+    out = []
+    for i, a in enumerate(lanes):
+        for b in lanes[i + 1 :]:
+            pa, pb = a.root.split("/"), b.root.split("/")
+            n = min(len(pa), len(pb))
+            if pa[:n] == pb[:n]:
+                out.append(f"lanes: {a.name} ({a.root}) and {b.name} ({b.root}) overlap")
+    return out
 
 
 def _peer_problems(manifest: Mapping[str, Any]) -> list[str]:

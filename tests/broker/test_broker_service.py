@@ -532,6 +532,18 @@ def test_the_operator_hears_once_that_a_lane_refuses_an_agent_for_its_quota(tmp_
     assert len(sent) == 2, "a write that lands with nothing to clear sends nothing"
 
 
+@pytest.mark.parametrize("root", ["memory", "memory/deeper", "findings/../x"])
+def test_lanes_over_one_directory_are_refused(root):
+    """Two lanes over one directory each kept their own ledger: an actor writing through both had
+    two shares and two write rates over the same files."""
+    manifest, _ = load_manifest(EXAMPLE)
+    manifest["lanes"].append(dict(manifest["lanes"][0], name="memory-two", root=root))
+    problems = validate_manifest(manifest, EXAMPLE.parent)[1]
+    assert any("overlap" in p or ".." in p for p in problems), problems
+    manifest["lanes"][-1]["root"] = "memory-two"  # a sibling, not an overlap
+    assert validate_manifest(manifest, EXAMPLE.parent)[1] == []
+
+
 def test_the_pending_quota_has_a_default(tmp_path):
     from homelabnext.broker.service import DEFAULT_PENDING_PER_ACTOR
 

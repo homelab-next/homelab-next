@@ -94,7 +94,9 @@ and broker-keyed tag only that actor's writes produce; a shared `files` lane kee
 name in an owner index. And a lane bounds each actor's writes in time: `max_writes_per_hour`
 (default 120 on a shared lane, none on a per-actor one), refused `lane-rate-exceeded`. The owner
 index and the write times live in `<state>/lanes-ledger/`, never in a lane directory, and are
-read and written under the lane directory's `flock`.
+read and written under the lane directory's `flock`. Two lanes whose roots are one directory, or one inside the other, are
+refused by `hnx broker validate`: each would keep its own quota, share and rate over the same
+files.
 
 **Append-only lanes.** A lane nothing ever deletes from, such as `findings` (one note per run,
 even when clean), outgrows any file cap: 4096 files last about 22 months at 6 runs a day and under
