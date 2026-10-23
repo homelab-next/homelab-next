@@ -35,13 +35,31 @@ VERSION_CONTEXT_RE = re.compile(
 )
 
 
+#: what separates the words of a name: a plain deny-list term matches across any of them
+_TERM_SEPARATORS = re.compile(r"[-_.\s]+")
+
+
+def _term(raw: str) -> str:
+    """The regex of a plain deny-list term (see :func:`compile_denylist`)."""
+    words = [re.escape(w) for w in _TERM_SEPARATORS.split(raw) if w]
+    if not words:
+        raise re.error(f"{raw!r} has no letters or digits")
+    # not after a letter or digit, not before a letter ("_" and "-" are separators here; a
+    # trailing number is a variant of the name: name2, name-03)
+    return r"(?<![^\W_])" + r"[-_. \t]*".join(words) + r"(?![^\W\d_])"
+
+
 def compile_denylist(lines: Iterable[str]) -> list[tuple[int, re.Pattern[str]]]:
     """Parse deny-list lines into ``[(line number, regex)]``.
 
-    One term per line; blank lines and ``#`` comments are skipped.  A plain term matches as a
-    whole word (``-`` counts as part of a word), case-insensitively; ``re:<regex>`` is a raw
-    case-insensitive regex.  Raises ``ValueError`` naming the line of a bad regex.  An empty
-    result is returned as is: whether an empty list is acceptable is the caller's decision.
+    One term per line; blank lines and ``#`` comments are skipped.  A plain term matches
+    case-insensitively wherever it is not part of a longer run of letters and digits: ``-``,
+    ``_`` and ``.`` are separators, not part of a word, so ``name`` also matches ``name-core``,
+    ``name_core``, ``name.example`` and ``name2``.  The separators inside a term match any run
+    of ``-``, ``_``, ``.``, spaces and tabs, or none, so ``some-name`` also matches
+    ``some_name``, ``some name`` and ``somename``.  ``re:<regex>`` is a raw case-insensitive
+    regex.  Raises ``ValueError`` naming the line of a bad regex.  An empty result is returned
+    as is: whether an empty list is acceptable is the caller's decision.
     """
     terms: list[tuple[int, re.Pattern[str]]] = []
     for lineno, raw in enumerate(lines, 1):
@@ -49,10 +67,7 @@ def compile_denylist(lines: Iterable[str]) -> list[tuple[int, re.Pattern[str]]]:
         if not raw or raw.startswith("#"):
             continue
         try:
-            if raw.startswith("re:"):
-                rx = re.compile(raw[3:], re.IGNORECASE)
-            else:
-                rx = re.compile(r"(?<![\w-])" + re.escape(raw) + r"(?![\w-])", re.IGNORECASE)
+            rx = re.compile(raw[3:] if raw.startswith("re:") else _term(raw), re.IGNORECASE)
         except re.error as exc:
             raise ValueError(f"deny-list line {lineno}: bad regex ({exc})") from exc
         terms.append((lineno, rx))

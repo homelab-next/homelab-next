@@ -172,6 +172,29 @@ def test_denylist_word_boundaries(tmp_path: Path):
     assert run_scan(str(f), env={"HNX_DENYLIST": str(deny)}).returncode == 0
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ssh ops@fabrikam-core",  # a host name built on the term
+        "fabrikam_core.example.test",
+        "see x.fabrikam.example",
+        "fabrikam2 and fabrikam-03",  # a numbered variant
+        "the blue_falcon agent",  # the term's own separator swapped
+        "the blue falcon agent",
+        "the bluefalcon agent",
+        "BLUE--FALCON",
+    ],
+)
+def test_denylist_terms_match_their_separator_variants(tmp_path: Path, text: str):
+    deny = tmp_path / "deny.txt"
+    deny.write_text("fabrikam\nblue-falcon\n")
+    f = tmp_path / "x.txt"
+    f.write_text(text + "\n")
+    r = run_scan(str(f), env={"HNX_DENYLIST": str(deny)})
+    assert r.returncode == 1, r.stdout
+    assert "[denylist]" in r.stdout
+
+
 @pytest.mark.parametrize("content", [None, ""])
 def test_bad_denylist_is_exit_2(tmp_path: Path, content):
     f = tmp_path / "x.txt"
