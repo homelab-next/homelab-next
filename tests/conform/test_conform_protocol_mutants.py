@@ -31,6 +31,7 @@ REVIEWED = {
         "submit-keeps-caller-args",
         "refused-submit-unaudited",
         "submit-unaudited",
+        "redacts-known-secrets-only",
     },
     "events": {
         "loses-unsettled-on-restart",
@@ -127,3 +128,21 @@ def test_the_reference_idp_refuses_a_ttl_that_never_ends():
     for ttl in (float("nan"), float("inf")):
         with pytest.raises(ValueError):
             p.issue("user", ["read"], ttl)
+
+
+def test_the_reference_broker_redacts_what_its_schema_does_not_name():
+    """The reference fake redacted by known key only: a misspelt secret argument, and any
+    argument of an unregistered command, were audited in the clear."""
+    from conformance.fakes.command_broker import FakeBroker
+    from conformance.protocols.broker import ArgSpec, BrokerError
+
+    b = FakeBroker()
+    b.register("rotate", lambda **kw: "ok", {"password": ArgSpec("str", secret=True)})
+    b.allow("u", ["rotate"])
+    for command, args in (("rotate", {"pasword": "typo-value"}), ("rotat", {"password": "x-1"})):
+        with pytest.raises(BrokerError):
+            b.call("u", command, args)
+    assert [dict(r.args) for r in b.audit()] == [
+        {"pasword": "<redacted>"},
+        {"password": "<redacted>"},
+    ]

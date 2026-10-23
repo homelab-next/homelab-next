@@ -37,8 +37,10 @@ class FakeBroker:
         self._allow.setdefault(caller, set()).update(commands)
 
     def _redact(self, spec: Mapping[str, ArgSpec], args: Mapping[str, Any]) -> dict[str, Any]:
+        # redact by default: only a value the schema names, and does not mark secret, is shown
+        # (a misspelt argument, or any argument of an unknown command, may well be a secret)
         return {
-            k: ("<redacted>" if spec.get(k, ArgSpec("str")).secret else v) for k, v in args.items()
+            k: (v if k in spec and not spec[k].secret else "<redacted>") for k, v in args.items()
         }
 
     def _log(self, caller, command, outcome, spec, args, **extra) -> None:
@@ -281,6 +283,16 @@ class UnauditedSubmitBroker(FakeBroker):
         if extra.get("operation") == "submit":
             return
         super()._log(caller, command, outcome, spec, args, **extra)
+
+
+class KnownSecretsOnlyBroker(FakeBroker):
+    """Defect: redaction is by known key only, so the value of a misspelt secret argument, or of
+    any argument of an unregistered command, is audited in the clear."""
+
+    def _redact(self, spec, args):
+        return {
+            k: ("<redacted>" if spec.get(k, ArgSpec("str")).secret else v) for k, v in args.items()
+        }
 
 
 class RunChattyErrorBroker(FakeBroker):

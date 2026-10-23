@@ -16,6 +16,7 @@ from conformance.fakes.command_broker import (
     DeferredClearAuditBroker,
     FakeBroker,
     KeyNameRedactingBroker,
+    KnownSecretsOnlyBroker,
     LoggingBroker,
     OkOnlyRedactingBroker,
     RefusedSubmitUnauditedBroker,
@@ -40,6 +41,7 @@ SUITE = Suite(
 )
 
 ARGS = {"name": ArgSpec("str"), "count": ArgSpec("int", required=False)}
+SPEC_SECRET = ArgSpec("str", secret=True)
 
 #: a secret value under an argument name that does not look secret: redaction must follow the
 #: schema's ``secret`` flag, so a broker that guesses from names leaks it
@@ -267,6 +269,32 @@ def _(b):
     assert shown and all(r.args.get("user") == "svc" for r in shown), (
         "non-secret arguments should stay visible (redaction is per argument, not per record)"
     )
+
+
+@SUITE.check(
+    "unknown-arguments-redacted",
+    "an argument the schema does not name - misspelt, or of an unknown command - is audited "
+    "without its value, called or submitted",
+)
+def _(b):
+    cmd, caller = uniq("cmd"), uniq("caller")
+    b.register(cmd, lambda **kw: "rotated", {"user": ArgSpec("str"), "password": SPEC_SECRET})
+    b.allow(caller, [cmd])
+    before = len(b.audit())
+    for fn in _ops(b).values():
+        for command, args in (
+            (cmd, {"user": "svc", "pasword": SECRET}),  # a typo of a secret argument's name
+            (uniq("nocmd"), {"password": SECRET}),  # a command nobody registered
+        ):
+            with contextlib.suppress(BrokerError):
+                fn(caller, command, args)
+    new = list(b.audit())[before:]
+    assert new, "four refused attempts left no audit record to judge (see every-call-audited)"
+    for rec in new:
+        assert SECRET not in repr(rec) and SECRET not in repr(dict(rec.args)), (
+            f"the value of an argument the schema does not name was audited on a "
+            f"{rec.outcome!r} {rec.operation!r} record"
+        )
 
 
 @SUITE.check(
@@ -502,6 +530,11 @@ MUTANTS = {
         UnauditedSubmitBroker,
         "every-submit-audited",
         "no submit leaves an audit record",
+    ),
+    "redacts-known-secrets-only": Mutant(
+        KnownSecretsOnlyBroker,
+        "unknown-arguments-redacted",
+        "a misspelt secret argument, or any argument of an unknown command, is audited in clear",
     ),
     "foreign-access-not-audited": Mutant(
         SilentForeignAccessBroker,

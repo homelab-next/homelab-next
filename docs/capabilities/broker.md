@@ -13,7 +13,7 @@ generated_by: hnx docs capabilities generate
 **Allowlisted command execution with argument validation, a redacted audit trail and caller-bound requests.**
 
 - Contract: [`conformance.protocols.broker`](../../conformance/protocols/broker.py) (`conformance.protocols.broker:Broker`)
-- Conformance suite: [`conformance.suites.broker`](../../conformance/suites/broker.py) (18 checks: 15 MUST, 3 SHOULD)
+- Conformance suite: [`conformance.suites.broker`](../../conformance/suites/broker.py) (19 checks: 16 MUST, 3 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -26,7 +26,9 @@ registered with an argument schema; a caller may run only the commands its allow
 the handler runs; every call - allowed, denied, invalid, failed - leaves one audit record;
 arguments the schema marks `secret` never appear in any audit record, whatever the outcome, nor
 in anything `call` raises.  Redaction follows the schema's `secret` flag, not the argument's
-name.  A handler failure surfaces as `BrokerError` naming the command only: the handler's own
+name, and it is the default: an argument the schema does not name (a misspelt name, or any
+argument of a command nobody registered) is recorded by name only, its value redacted, because
+nothing says it is not a secret.  A handler failure surfaces as `BrokerError` naming the command only: the handler's own
 exception (message, cause, context) is not passed to the caller.
 
 `ArgSpec` checks *shape* (presence and type), not *content*.  A value that passed validation is
@@ -241,6 +243,7 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `every-submit-audited` | MUST | ok, denied and invalid submits each leave one submit record, as calls do |  |
 | `submit-keeps-its-own-copy` | MUST | changing the mapping given to submit afterwards changes nothing that runs |  |
 | `audit-redacts-secret-args` | MUST | arguments the schema marks secret never appear in the audit trail or an error, any outcome, called or deferred |  |
+| `unknown-arguments-redacted` | MUST | an argument the schema does not name - misspelt, or of an unknown command - is audited without its value, called or submitted |  |
 | `run-audited-once` | MUST | running a request leaves exactly one record of its outcome, operation run, with its id |  |
 | `audit-trail-is-append-only` | SHOULD | editing the returned audit list does not change the trail |  |
 | `results-are-isolated` | SHOULD | mutating a returned result does not change later results |  |
@@ -266,6 +269,7 @@ Each is a deliberately broken fake (`hnx conform run broker --target broken:<mut
 | `foreign-access-not-audited` | `foreign-request-access-audited` | a refused access to another caller's request leaves no audit record |
 | `handler-error-passed-through` | `handler-error-contained` | the handler's exception message and cause reach the caller |
 | `redacts-by-key-name` | `audit-redacts-secret-args` | redaction guesses from argument names instead of the schema's secret flag |
+| `redacts-known-secrets-only` | `unknown-arguments-redacted` | a misspelt secret argument, or any argument of an unknown command, is audited in clear |
 | `redacts-ok-calls-only` | `audit-redacts-secret-args` | denied, invalid and failed calls are audited with secrets in the clear |
 | `refused-submit-unaudited` | `every-submit-audited` | a denied or invalid submit leaves no audit record |
 | `requests-shared-between-callers` | `requests-bound-to-caller` | any caller may read, run or cancel a request another caller submitted |
@@ -336,4 +340,4 @@ No service in `examples/services.yml` declares `capability: broker`.
    hnx conform run broker --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (15) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (16) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.

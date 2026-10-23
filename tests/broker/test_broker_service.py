@@ -899,6 +899,34 @@ def test_secret_arguments_never_reach_disk(tmp_path):
     assert info.value.reason == "secret-args-lost"
 
 
+def test_unnamed_argument_values_never_reach_the_audit_trail(tmp_path):
+    """Redaction is the default: a misspelt secret argument (refused as invalid) and any argument
+    of a command nobody registered (refused as denied) are audited by name only, called or
+    submitted.  The trail used to hold both values in the clear."""
+    svc = BrokerService(tmp_path / "state", clock=Clock())
+    secret = "fake-typo-value-7e3c"
+    spec = {"user": ArgSpec("str"), "password": ArgSpec("str", secret=True)}
+    svc.register("ops.rotate", lambda **kw: "ok", spec)
+    svc.allow("ops", ["ops.rotate"])
+    for op in (svc.call, svc.submit):
+        with pytest.raises(InvalidArguments):
+            op("ops", "ops.rotate", {"user": "svc", "pasword": secret})
+        with pytest.raises(Denied):
+            op("ops", "ops.rotat", {"password": secret})
+    docs = _audit_ok(svc)
+    assert [(d["operation"], d["outcome"]) for d in docs] == [
+        ("call", "invalid"),
+        ("call", "denied"),
+        ("submit", "invalid"),
+        ("submit", "denied"),
+    ]
+    assert docs[0]["args"] == {"user": "svc", "pasword": "<redacted>"}, docs[0]["args"]
+    assert docs[1]["args"] == {"password": "<redacted>"}, docs[1]["args"]
+    for p in (tmp_path / "state").rglob("*"):
+        if p.is_file():
+            assert secret not in p.read_text(), p
+
+
 def test_submit_keeps_the_arguments_it_checked(tmp_path):
     """The mapping a caller passed to submit is copied before it is checked: changing it
     afterwards changes nothing that runs."""

@@ -33,7 +33,8 @@ ran.  If the outcome record cannot be written afterwards (``audit-incomplete``),
 record is the evidence; a run then ends ``error`` (or reads ``interrupted`` when not even its
 result can be written, :mod:`homelabnext.broker.state`).  The contract view (:meth:`audit`)
 lists outcomes only, one per operation.  Arguments an ``ArgSpec`` marks ``secret`` are redacted in the
-audit trail and never written to disk; in the request (and so in its digest, which is persisted,
+audit trail and never written to disk (so is the value of an argument the ``ArgSpec`` does not name,
+or of any argument of an unknown command: redaction is the default); in the request (and so in its digest, which is persisted,
 audited and sent with events) each is replaced by ``hmac-sha256:<hex>``, a hash keyed with the
 state directory's ``digest.key``, so a low-entropy secret cannot be recovered from the digest by
 guessing, while the digest still changes with the value.
@@ -512,9 +513,14 @@ class BrokerService:
 
     # ---------------------------------------------------------------- audit
     def _summarize(self, args: Mapping[str, Any], spec: Mapping[str, ArgSpec] | None):
+        """The audit view of ``args``.  Under an argument schema (an in-process command, or ``{}``
+        for a command nobody registered) redaction is the default: only an argument the schema
+        names and does not mark secret is shown, so a misspelt secret argument, or any argument of
+        an unknown command, is recorded by name only.  ``None`` (a manifest action, whose params
+        its own schema validates) shows every argument."""
         out: dict[str, Any] = {}
         for k, v in args.items():
-            if spec is not None and spec.get(k, ArgSpec("str")).secret:
+            if spec is not None and (k not in spec or spec[k].secret):
                 out[k] = "<redacted>"
                 continue
             raw = json.dumps(v, sort_keys=True, ensure_ascii=False, default=repr)
@@ -659,7 +665,7 @@ class BrokerService:
         now = self._now()
         rid = new_id("req")
         act = self._action(action) if isinstance(action, str) else None
-        spec = act.spec if act else None
+        spec = act.spec if act else {}  # an unknown command: every argument value is redacted
         params = dict(args) if isinstance(args, Mapping) else {}
         if spec is not None:  # secret arguments enter the request, and its digest, keyed
             params = {

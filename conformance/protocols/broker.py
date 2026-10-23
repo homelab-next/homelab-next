@@ -7,7 +7,9 @@ registered with an argument schema; a caller may run only the commands its allow
 the handler runs; every call - allowed, denied, invalid, failed - leaves one audit record;
 arguments the schema marks ``secret`` never appear in any audit record, whatever the outcome, nor
 in anything ``call`` raises.  Redaction follows the schema's ``secret`` flag, not the argument's
-name.  A handler failure surfaces as ``BrokerError`` naming the command only: the handler's own
+name, and it is the default: an argument the schema does not name (a misspelt name, or any
+argument of a command nobody registered) is recorded by name only, its value redacted, because
+nothing says it is not a secret.  A handler failure surfaces as ``BrokerError`` naming the command only: the handler's own
 exception (message, cause, context) is not passed to the caller.
 
 ``ArgSpec`` checks *shape* (presence and type), not *content*.  A value that passed validation is
