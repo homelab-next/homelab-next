@@ -604,7 +604,8 @@ criteria:
   evidence: auto
   observable: >-
     python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
-    python3 -m homelabnext.cli agent lint --rule actors-act-via-broker &&
+    python3 -m homelabnext.cli agent lint --rule actors-act-via-broker
+    --policy examples/mcp/clients/policy/ceilings.yml &&
     python3 -m pytest -q -p no:cacheprovider tests/agent/test_agent_handoff.py
     tests/agent/test_agent_broker_only.py
   expected: >-
@@ -774,8 +775,11 @@ criteria:
   observable: >-
     python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
     python3 -m homelabnext.cli agent lint --rule actors-act-via-broker
+    --policy examples/mcp/clients/policy/ceilings.yml
   expected: >-
-    exit 0: no agent profile or context manifest, reader or not, holds an acting grant (exec,
+    exit 0 (judged with the ceiling policy, so a reviewed direct exception its direct_mcp lists
+    passes; a lab's register names its own policy): no agent profile or context manifest, reader
+    or not, holds an acting grant (exec,
     file-write, credential) other than through the broker: an acting MCP server says acts_via:
     broker or is a reviewed direct exception the ceiling policy lists for that profile, no acting
     capability but cap:broker, and an acting tier only with cap:broker

@@ -226,21 +226,32 @@ _DIRECT_ACTOR = {"id": "profile:actor", "persona": "persona:a", "mcp": ["shell"]
 _BROKER_ACTOR = {**_DIRECT_ACTOR, "mcp": ["hnx-broker"], "capabilities": ["cap:broker"]}
 
 
+def _no_exception_policy(root) -> None:
+    """The ceiling policy G-13 and G-04 lint with, listing no direct exception."""
+    pol = root / "examples" / "mcp" / "clients" / "policy" / "ceilings.yml"
+    pol.parent.mkdir(parents=True, exist_ok=True)
+    entry = {"mcp": ["shell"], "capabilities": [], "tier": "read"}
+    pol.write_text(yaml.safe_dump({"ceilings": {"profile:actor": entry}}))
+
+
 def test_g13_fails_on_an_actor_that_acts_directly(tmp_path, monkeypatch):
     monkeypatch.setenv("PYTHONPATH", str(REPO))
+    _no_exception_policy(tmp_path)
     (tmp_path / "actor.yml").write_text(yaml.safe_dump(_BROKER_ACTOR))
     assert _run(tmp_path, ["G-13"])["G-13"]["status"] == "pass"
     (tmp_path / "actor.yml").write_text(yaml.safe_dump(_DIRECT_ACTOR))
     r = _run(tmp_path, ["G-13"])["G-13"]
     assert r["status"] == "fail" and "'shell' (exec)" in r["evidence"]
-    # G-03 is about readers: an actor's direct tool is not its red
-    assert _run(tmp_path, ["G-03"])["G-03"]["status"] == "pass"
+    # G-03 is about readers: an actor's direct tool is not its red (the shipped shell is an
+    # unreviewed draft, which G-03's catalog rule reports, but not the broker rule)
+    assert "agents act only through the broker" not in _run(tmp_path, ["G-03"])["G-03"]["evidence"]
 
 
 def test_g04_runs_the_broker_rule_before_its_tests(tmp_path, monkeypatch):
     """R3.4: G-04's observable once ran one test file, so an actor holding a direct tool (not
     limited to allowlisted actions at all) left it green; it now lints every profile first."""
     monkeypatch.setenv("PYTHONPATH", str(REPO))
+    _no_exception_policy(tmp_path)
     (tmp_path / "tests" / "agent").mkdir(parents=True)
     for name in ("test_agent_handoff.py", "test_agent_broker_only.py"):
         (tmp_path / "tests" / "agent" / name).write_text("def test_ok():\n    assert True\n")
@@ -249,3 +260,38 @@ def test_g04_runs_the_broker_rule_before_its_tests(tmp_path, monkeypatch):
     (tmp_path / "actor.yml").write_text(yaml.safe_dump(_DIRECT_ACTOR))
     r = _run(tmp_path, ["G-04"])["G-04"]
     assert r["status"] == "fail" and "'shell' (exec)" in r["evidence"]
+
+
+def test_g13_honours_a_direct_exception_its_ceiling_policy_makes(tmp_path, monkeypatch):
+    """S4: G-13 linted without the ceiling policy, so a lab that made a sanctioned direct exception
+    (a reviewed acts_via: direct record and the policy's direct_mcp) had a standing red."""
+    import json as _json
+
+    from homelabnext.mcp import servers
+
+    ex = tmp_path / "examples"
+    shutil.copytree(REPO / "examples" / "mcp", ex / "mcp", ignore=shutil.ignore_patterns("clients"))
+    shutil.copy(REPO / "examples" / "review-policy.yml", ex / "review-policy.yml")
+    rec = yaml.safe_load((ex / "mcp" / "shell.yml").read_text())
+    rec["status"] = "active"  # the lab reviewed its shell
+    digest = servers.record_digest(rec)[:19]
+    rec["reviews"] = [
+        {"by": b, "kind": k, "role": r, "date": "2026-10-23", "verdict": "pass", "digest": digest}
+        for b, k, r in (("agent:example-checker", "agent", "check"),
+                        ("agent:example-auditor", "agent", "audit"),
+                        ("human:example-operator", "human", "approve"))
+    ]  # fmt: skip
+    (ex / "mcp" / "shell.yml").write_text(yaml.safe_dump(rec))
+    pol = ex / "mcp" / "clients" / "policy" / "ceilings.yml"
+    pol.parent.mkdir(parents=True)
+    entry = {"mcp": ["shell"], "capabilities": [], "tier": "read"}
+    pol.write_text(yaml.safe_dump({"ceilings": {"profile:actor": entry}}))
+    monkeypatch.setenv("PYTHONPATH", str(REPO))
+    monkeypatch.setenv("HNX_EXAMPLES_DIR", str(ex))
+    (tmp_path / "actor.json").write_text(_json.dumps(_DIRECT_ACTOR))
+    r = _run(tmp_path, ["G-13"])["G-13"]
+    assert r["status"] == "fail" and "direct_mcp entry" in r["evidence"]
+    pol.write_text(
+        yaml.safe_dump({"ceilings": {"profile:actor": {**entry, "direct_mcp": ["shell"]}}})
+    )
+    assert _run(tmp_path, ["G-13"])["G-13"]["status"] == "pass"
