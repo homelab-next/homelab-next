@@ -27,6 +27,10 @@ def checklist():
     return {m[1]: m[2] for line in CHECKLIST.read_text().splitlines() if (m := ROW.match(line))}
 
 
+def checklist_tags():
+    return {m[1]: m[4] for line in CHECKLIST.read_text().splitlines() if (m := ROW.match(line))}
+
+
 def register():
     return validate_invariants(yaml.safe_load(REGISTER.read_text()))
 
@@ -55,6 +59,37 @@ def test_no_criterion_is_a_plugin_that_can_only_skip():
         assert by_id()[i]["evidence"] == "server" and by_id()[i]["deferred"] is True, i
 
 
+# PUBLIC-NOW rows whose answer lives outside the checkout: a manual criterion with a why
+MANUAL_PUBLIC = {"F-08"}
+
+
+def test_every_public_now_row_has_a_criterion_the_runner_executes():
+    """docs/checklist.md: a PUBLIC-NOW row is decidable from this repository, so a row with no
+    criterion is a claim nobody runs (23 such rows were found and given one)."""
+    crit = by_id()
+    public = sorted(i for i, tag in checklist_tags().items() if tag == "PUBLIC-NOW")
+    missing = [i for i in public if i not in crit]
+    assert missing == []
+    for i in public:
+        c = crit[i]
+        if i in MANUAL_PUBLIC:
+            assert c["evidence"] == "manual" and c.get("deferred") and len(c["why"]) > 60, i
+        else:
+            assert c["evidence"] in ("auto", "plugin") and not c.get("deferred"), i
+
+
+def test_a_server_row_is_never_run_as_if_it_were_public():
+    tags = checklist_tags()
+    for c in register()["criteria"]:
+        if tags[c["id"]] == "SERVER":
+            assert c["evidence"] in ("server", "manual"), c["id"]
+
+
+def test_slow_criteria_have_room_to_finish():
+    # the runner's default is 120 s; the coverage floor runs the security suites under coverage
+    assert by_id()["Q-07"]["timeout"] >= 900
+
+
 def test_retired_ids_are_checklist_conflicts_with_a_live_replacement():
     reg = register()
     live = {c["id"] for c in reg["criteria"]}
@@ -65,10 +100,11 @@ def test_retired_ids_are_checklist_conflicts_with_a_live_replacement():
 # rows whose gate already runs in `make check`; each must be runnable from a checkout
 GATED = ["F-05", "F-18", "D-02", "D-07", "Q-04", "Q-07", "Q-09", "Q-10", "Q-11"]
 GATED += ["M-01", "M-02", "M-03", "M-04", "M-17", "L-06", "L-07", "F-07", "F-17", "Q-05", "Q-08"]
-GATED += ["F-21"]
+GATED += ["F-21", "Q-01", "Q-06"]
 # the CLI gates of `make check` and CI (fast: they run in `make invariants`)
 FAST_GATES = ["D-04", "T-07", "R-01", "R-03", "R-04", "R-07", "M-12", "G-01", "G-02", "G-03"]
 FAST_GATES += ["G-11", "K-02", "K-03", "K-04", "K-12", "K-15", "L-05", "F-19"]
+FAST_GATES += ["P-14", "R-09", "A-08", "A-10"]
 # the rows proven by named tests: the criterion runs that pytest selection (slow, like D-07)
 PYTEST_ROWS = ["T-02", "T-04", "S-06", "S-07", "O-08", "P-02", "P-03", "P-07", "A-03", "A-04"]
 PYTEST_ROWS += [
@@ -85,6 +121,8 @@ PYTEST_ROWS += [
     "M-08",
 ]
 PYTEST_ROWS += ["M-09", "M-14", "L-03", "L-08"]
+PYTEST_ROWS += ["F-15", "F-22", "O-05", "O-06", "O-07", "O-09", "O-10", "O-11"]
+PYTEST_ROWS += ["P-10", "P-11", "P-12", "P-13", "Q-02", "Q-03", "A-09", "A-11", "A-13"]
 GATED += FAST_GATES + PYTEST_ROWS + ["M-16"]
 
 

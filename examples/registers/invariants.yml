@@ -53,15 +53,28 @@ retired:
       (backups follow 3-2-1), not F-03 (SSO and MFA).
 criteria:
 - id: F-05
-  statement: Secrets are not in git or readable on disk.
+  statement: Secrets are not in git.
   evidence: auto
   observable: python3 tools/leak_scan.py --groups secret . && echo no secrets found
-  expected: exit 0 (covers the tracked tree; history is `make leak-scan-history`, perms are server-side)
+  expected: >-
+    exit 0: no secret in the tracked tree. The full history is scanned by CI's pinned gitleaks
+    (`gitleaks git`, every fetched ref) and the commits of a change by `make leak-scan-history`;
+    files on hosts are F-23 (SERVER)
   expect_regex: no secrets found
   slow: true
   remediation: >-
     Remove the secret, rotate it (it is burned once committed), and load it from the environment
     or the secrets store instead; a key in git is readable by everyone who ever cloned it.
+- id: F-23
+  statement: Secrets are not readable on disk.
+  evidence: server
+  observable: >-
+    on each host, `find` over the configuration and secret directories finds 0 files holding a
+    secret that are readable by other; the `config_leak_scan` role reports secret-looking values
+    outside its accepted paths (path, line and pattern, never the value)
+  remediation: >-
+    Restrict the file to its owner (mode 0600 or 0640 with a service group), or move the secret to
+    the secrets store; a secret any local account can read is one breach away from every account.
 - id: F-09
   statement: Backups follow 3-2-1 with an immutable copy.
   evidence: server
@@ -174,6 +187,7 @@ criteria:
   expected: exit 0 (exit 100 when pytest-cov is not installed, which is could-not-measure)
   expect_regex: coverage floor held
   slow: true
+  timeout: 1800
   remediation: >-
     Write tests for the unit the table shows below its floor (from its own test directory); a
     broker, scope guard or decision path nobody exercises is where a regression ships unseen.
@@ -286,6 +300,57 @@ criteria:
   remediation: >-
     Point the config at a registry alias or a fleet host instead of the workstation; a runtime that
     depends on the admin workstation stops when the laptop does.
+- id: F-08
+  statement: The main branch is protected by CI.
+  evidence: manual
+  deferred: true
+  why: >-
+    Branch protection is a setting of the hosted repository, not a file in it, so no command run on
+    a checkout can decide it. The other half of the row, that CI runs tests, lint and the secret
+    scan on every change, is decided from the checkout by Q-01 and Q-06.
+  observable: >-
+    with a token that may read the repository's settings:
+    gh api repos/OWNER/REPO/branches/main/protection --jq '.required_status_checks.contexts'
+    lists the ci.yml jobs (lint, test, coverage, schemas, secret-scan, ...); a 404 "Branch not
+    protected" is a fail
+  remediation: >-
+    In the repository settings, add a branch protection rule (or ruleset) for main that requires
+    the ci.yml checks to pass before a merge; without it every gate in CI is advisory, because a
+    red change can still be merged.
+- id: F-15
+  statement: Changes are versioned and visible.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 tools/check_changelog.py &&
+    python3 -m pytest -q -p no:cacheprovider tests/events/test_deploy.py
+  expected: >-
+    exit 0: CHANGELOG.md has an Unreleased section and one for the current version, and every
+    deploy-event test passes with none skipped (the `homelabnext.deploy.changed` event is built
+    from the version's changelog section and the release workflow emits it); exit 100 when a test
+    dependency is not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Add the version's changelog section, or fix the deploy-event builder or the release workflow
+    step the failing test names; a deploy nobody can tie to a list of changes is one nobody can
+    review or roll back with confidence.
+- id: F-22
+  statement: The CI deploy reaches only what the site declares.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/compute/test_tailnet_deploy.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (wildcard and unknown zones and
+    non-SSH ports without a reason are refused; the rendered tailnet policy gives the deploy tag
+    TCP 22 to the declared zones only and its tests hold); exit 100 when a test dependency is not
+    installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the site's `tailnet.deploy` block or the tailnet renderer the failing test names; a CI
+    deploy identity that can reach more than the site declares is a stolen CI token's reach.
 - id: Q-05
   statement: Every seam has a contract test.
   evidence: auto
@@ -309,6 +374,70 @@ criteria:
   remediation: >-
     Add a regression test to the fix that fails on its parent commit (or a reviewed
     `No-regression-test:` trailer); a fix without one is how the same bug ships twice.
+- id: Q-01
+  statement: Every repo's tests run on every change.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tools/tests/test_make_matches_ci.py
+    tools/tests/test_ci_runs_tests.py
+  expected: >-
+    exit 0: ci.yml runs on every push to main and every pull request, its test job runs the unit
+    and contract tests with the same selection as `make test`; exit 100 when a test dependency is
+    not installed. Whether main is green is the forge's record of the latest run
+    (`gh run list --branch main --workflow ci --limit 1`), not decidable from a checkout.
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Restore the trigger or the test step in .github/workflows/ci.yml; a change that CI never
+    tests reaches main on trust.
+- id: Q-02
+  statement: Test suites are trustworthy.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/gates/test_suite_policy.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (a suite over its budget fails the
+    session, an unregistered or reasonless skip fails, and a quarantine needs an owner and an
+    unexpired date); exit 100 when a test dependency is not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix tests/suite_policy.py where the failing test names; a suite that skips silently or runs
+    unbounded is one whose green means nothing.
+- id: Q-03
+  statement: Live-dependent tests are marked.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/gates/test_network_guard.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (an unmarked test that reaches a
+    non-loopback address fails, a `live` one is let through); exit 100 when a test dependency is
+    not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix tests/network_guard.py where the failing test names; a test that quietly reaches the
+    network passes in one place and fails in another, or leaks lab data.
+- id: Q-06
+  statement: Security tests run in CI.
+  evidence: auto
+  observable: >-
+    python3 -c 'import ruff, pip_audit' 2>/dev/null || exit 100;
+    python3 -m ruff check . && python3 tools/leak_scan.py --groups secret . &&
+    python3 -m pip_audit --strict --progress-spinner off --disable-pip --require-hashes
+    -r constraints/ci.txt && echo security checks passed
+  expected: >-
+    exit 0: lint is clean, the secret scan finds nothing in the tracked tree, and pip-audit finds
+    no known vulnerability in the pinned CI dependencies (it needs the network); exit 100 when
+    ruff or pip-audit is not installed, which is could-not-measure
+  expect_regex: security checks passed
+  slow: true
+  remediation: >-
+    Fix the lint finding, remove and rotate the secret, or upgrade the vulnerable pin
+    (`make constraints`); CI runs the same three in its lint, secret-scan and pip-audit jobs.
 - id: M-17
   statement: Register ids are never lost.
   evidence: auto
@@ -462,6 +591,104 @@ criteria:
   remediation: >-
     Fix homelabnext.notify's state diff so a standing state stays quiet and a recovery sends
     exactly once; a notifier that repeats itself trains everyone to mute it.
+- id: O-05
+  statement: The ops console shows exceptions only.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/status/test_status_views.py
+    -k "exceptions_first or never_read"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (healthy sources show only the green
+    count and live work, a failing item and a never-read source are attention items); exit 100
+    when a test dependency is not installed, which is could-not-measure. The live console is
+    measured on the server.
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the view the failing test names; a console that lists healthy things buries the one
+    exception the operator has to act on.
+- id: O-06
+  statement: A dead adapter reads as stale.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/status/test_status_hub.py -k "stale"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (a source that stops reporting goes
+    stale after its `stale_after_s`, against an injected clock); exit 100 when a test dependency
+    is not installed, which is could-not-measure. The live SLA is measured on the server.
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the staleness rule the failing test names; a dead adapter that keeps showing its last
+    green reading is a monitor that lies.
+- id: O-07
+  statement: A hung source cannot stall the console.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/status/test_status_hub.py
+    tests/status/test_status_views.py -k "hung_source or blackholed"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (a hung source does not delay the
+    others, and with one source blackholed the view still renders with that module stale);
+    exit 100 when a test dependency is not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Restore the per-source timeout in the collector scheduler the failing test names; one slow
+    product must never take the whole console down with it.
+- id: O-09
+  statement: The hub lists every service link, scheduled job and agent from repository data.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/maps/test_directory.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (the Links, Schedule and Agent roster
+    pages are built from the registry, timers, CI schedules, workflow packs, status sources and
+    profiles, and write no address); exit 100 when a test dependency is not installed, which is
+    could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the page builder or the source record the failing test names; a hub page typed by hand
+    drifts from what actually runs.
+- id: O-10
+  statement: Every role timer reports its runs.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/roles/test_last_run.py
+    tests/status/test_status_last_run.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (every role timer's service runs the
+    last-run writer, and the job-last-run mapping fails a failed run and warns on an overdue
+    one); exit 100 when a test dependency is not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  timeout: 600
+  remediation: >-
+    Give the timer's service the shared last-run writer (role `last_run`), or fix the mapping the
+    failing test names; a timer that never reports is one whose failures nobody sees.
+- id: O-11
+  statement: Every orchestration job's usage is recorded and shown, names and numbers only.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/orchestration/
+  expected: >-
+    exit 0 with every selected test passed and none skipped (job records are consumed
+    idempotently from the configured controller only, turns are joined by gateway tag, the store
+    exports and imports, and the Orchestration page shows "no gateway data" rather than zeros);
+    exit 100 when a test dependency is not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  timeout: 600
+  remediation: >-
+    Fix the consumer, store or page the failing test names; usage numbers that are silently zero
+    or carry prompt text are worse than none.
 - id: P-02
   statement: Default deny.
   evidence: auto
@@ -506,6 +733,85 @@ criteria:
   remediation: >-
     Fix the broker's request ownership check so a foreign read or cancel is refused and audited;
     one caller seeing another's request breaks the isolation every grant assumes.
+- id: P-10
+  statement: Agents cannot crowd the broker's records.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/broker/test_broker_lanes.py
+    tests/broker/test_broker_server.py tests/broker/test_broker_service.py
+    -k "slug_prefixes_another or rate_limited_per_peer or decisions_index or index_write_was_lost or template_markers"
+  expected: >-
+    exit 0 with the row's named tests passed and none skipped; exit 100 when a test dependency is
+    not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the broker path the failing test names; an agent that can claim another's proposal name
+    or flood the audit trail can hide or forge a request for approval.
+- id: P-11
+  statement: The broker's decisions reach the bus, in order, at least once.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/broker/test_broker_relay.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (emit order, a lost PubAck, a crash
+    between publish and mark, bus down then up, nothing secret logged); exit 100 when a test
+    dependency is not installed, which is could-not-measure. The lab's `bus-relay` step runs it
+    against a real bus.
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the relay behaviour the failing test names; a decision lost or reordered on the way to the
+    bus is an approval StackStorm never acts on, or acts on twice.
+- id: P-12
+  statement: Only the broker may publish the broker's decisions.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/compose/test_lab_in_a_box.py
+    -k "only_the_broker_may_publish or nobody_but_the_controller"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (in the lab bus configuration only
+    `hnx-broker` may publish decisions and proposals); exit 100 when a test dependency is not
+    installed, which is could-not-measure. The lab's `bus-acl` step checks the running bus.
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Narrow the bus user's publish allow-list in compose/lab-in-a-box/config/nats/nats.conf; any
+    other client that may publish a decision can forge an approval.
+- id: P-13
+  statement: The broker's outbox relay is ordered, bounded and least-privileged.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/broker/test_broker_outbox.py
+    tests/broker/test_broker_relay.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped; exit 100 when a test dependency is
+    not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the outbox or relay behaviour the failing test names; a relay that stalls on one bad
+    event, or holds more rights than reading the outbox, turns the bus seam into an outage or an
+    escalation path.
+- id: P-14
+  statement: Every MCP server comes from one reviewed catalog.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli mcp catalog check &&
+    for s in examples/mcp/clients/*.yml; do
+    python3 -m homelabnext.cli mcp catalog render --spec "$s" --check || exit 1; done
+  expected: >-
+    exit 0: every catalog record is valid and reviewed, every grant names a catalog id, and every
+    rendered example client config is current (`make mcp-check`)
+  expect_regex: 'hnx mcp catalog: \d+ server\(s\), .*0 problem\(s\)'
+  remediation: >-
+    Fix the record, grant or render spec the check names, then `make mcp-render` and commit; an
+    MCP server configured outside the catalog runs unreviewed code with an agent's grants.
 - id: R-01
   statement: Workflows are code.
   evidence: auto
@@ -555,6 +861,21 @@ criteria:
   remediation: >-
     Fix the pack or its fixture until the fixture events produce the expected action calls; a pack
     whose fixtures do not round-trip does something nobody wrote down.
+- id: R-09
+  statement: StackStorm is the when-engine for pinned packs.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli workflows st2 check
+  expected: >-
+    exit 0: the StackStorm pack rendered from workflows/stackstorm.yml, the deploy pins and the
+    packs is committed and current, and its rules, templates, sources and handlers pass the
+    st2 checks; the bridge and runtime behaviour is pinned by tests/workflows/test_workflows_st2.py
+    and tests/workflows/test_st2_bridge.py
+  expect_regex: 'workflows st2: \d+ file\(s\), 0 problem\(s\)'
+  remediation: >-
+    Re-render with `hnx workflows st2 render` and commit, or fix the binding the check names; a
+    StackStorm pack that is not the rendered one runs automation nobody reviewed.
 - id: M-06
   statement: No agent runs blind.
   evidence: auto
@@ -722,6 +1043,85 @@ criteria:
   remediation: >-
     Fix the cascade so a below-threshold answer moves to the next tier or a human and is never
     acted on; a low-confidence auto-action is a coin flip with side effects.
+- id: A-08
+  statement: Each model is on disk once, pinned.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli models store validate examples/model-serving/model_store.json
+    --roles examples/model-serving/model_roles.json
+  expected: >-
+    exit 0: the example store lists each (source, revision, quant) once at a 40-hex commit with a
+    sha256 and size per file, and every role binding resolves to an entry its engine may serve
+  expect_regex: 'models: [1-9]\d* store entries valid'
+  remediation: >-
+    Fix the store entry or role binding the validator names; a model pinned to a branch, or stored
+    twice, is one whose bytes nobody can vouch for.
+- id: A-09
+  statement: The store's bytes are the manifest's.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/models/test_model_store.py
+    tests/roles/test_serving_roles.py -k "model_store or store_check or check_disk"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (missing, resized, changed or unlisted
+    files fail the store check, and the model_store role fetches by commit and refuses a
+    mismatch, against a fake `hf`); exit 100 when a test dependency is not installed, which is
+    could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  timeout: 1800
+  remediation: >-
+    Fix the store check or the model_store role where the failing test names; a model file that
+    differs from the manifest is an unreviewed model.
+- id: A-10
+  statement: vLLM runs what the role table says.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli models serving check examples/model-serving/serving.yml
+    examples/model-serving
+  expected: >-
+    exit 0: the vllm_server instances rendered from the example store, role table and serving spec
+    are the committed ones (served name, context length, priority scheduling, one model, distinct
+    ports and GPUs); the role and its health hook are pinned by tests/models/test_serving_plan.py
+    and tests/roles/test_serving_roles.py
+  expect_regex: 'serving: \d+ file\(s\) match'
+  remediation: >-
+    Re-render with `make serving-render` and commit, or fix the plan the check names; a vLLM unit
+    that is not the rendered one serves a model the role table does not name.
+- id: A-11
+  statement: Chat goes through the gateway.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/roles/test_serving_roles.py -k "open_webui"
+  expected: >-
+    exit 0 with every selected test passed and none skipped (Open WebUI's only backend is the
+    gateway, resolved through the registry, with its own key by secret name; anything else is
+    refused); exit 100 when a test dependency is not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  timeout: 1800
+  remediation: >-
+    Fix the open_webui role where the failing test names; a chat UI pointed past the gateway skips
+    its keys, limits and the local-only rules.
+- id: A-13
+  statement: Served model bytes are pinned end to end.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/models tests/roles/test_serving_roles.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped; exit 100 when a test dependency is
+    not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  timeout: 3000
+  remediation: >-
+    Fix the store, serving plan or role the failing test names; a served model whose bytes are
+    not verified before every start can be swapped on disk unseen.
 - id: G-01
   statement: Untrusted content is delimited.
   evidence: auto

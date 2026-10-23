@@ -52,7 +52,7 @@ phases, so the public work is a prerequisite and not a duplicate.
 | Phase | Goal | Consumes | Checklist |
 |---|---|---|---|
 | S1 | Hardware bring-up: hypervisor, storage, network zones, sensor feed, recovery basics (escrow, break-glass, dead-man check, backup jobs) before anything runs | P5, checklist rows F-01, F-09-F-11 | F-01, F-02, F-09-F-11, F-13, F-14, C |
-| S2 | Foundation services in order: secrets, identity, edge, monitoring, DNS aliases pointing at the incumbents, then the staging slice running the P9.1 compose definitions | P2, P4, P9 | F-03, F-04, F-06, F-12, F-16 |
+| S2 | Foundation services in order: secrets, identity, edge, monitoring, DNS aliases pointing at the incumbents, then the staging slice running the P9.1 compose definitions | P2, P4, P9 | F-03, F-04, F-06, F-12, F-16, F-23 |
 | S3 | Data platform: object store, catalog, query engine; copy (not in-place swap) the data; first real swap rehearsal of `lake-query` in shadow | P3, P8 | S |
 | S4 | SIEM and detection: manager and rules compiled from the detection layout; writers consume the raw stream and the OCSF schemas; dual-write during the window | P1, P6 | D, T |
 | S5 | Reaction and control plane: event bus and forwarder, the broker with approvals bound to a request digest, the decision service, workflows deployed disabled and in shadow | P1, P3, P4 | P, R, K |

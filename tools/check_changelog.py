@@ -6,6 +6,7 @@
 #   purpose: Fail unless CHANGELOG.md keeps an Unreleased section and one for the current version.
 #   owner: maintainers
 #   trigger: [ci:ci/lint, make:changelog-check]
+#   invariant: [F-15]
 #   inputs: [CHANGELOG.md, homelabnext/_version.py]
 #   outputs: the reason on stderr when it fails
 #   exit:

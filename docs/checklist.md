@@ -3,7 +3,7 @@
 
 Every row is a property that must be **continuously true**, with an observable that someone who has never seen the platform can run.
 
-- **PUBLIC-NOW**: decidable on a laptop or in CI with fakes, fixtures and goldens. These are the rows the invariants runner (`python3 -m homelabnext.invariants run`) can execute from this repository.
+- **PUBLIC-NOW**: decidable on a laptop or in CI with fakes, fixtures and goldens. Every one has a criterion in `examples/registers/invariants.yml` that the invariants runner (`python3 -m homelabnext.invariants run`) executes from this repository, except F-08: branch protection is a setting of the hosted repository, so its criterion is `manual` with a `why` and the command a maintainer runs (`tests/invariants/test_inv_example_register.py` holds every row to this).
 - **SERVER**: needs the running platform (hypervisors, network, real products). The row is documented; the interface and a fake exist where the plan calls for one; nothing here pretends to test it.
 
 Criteria register in `invariants.yml` using the same shape as these rows (statement, observable, expected, remediation). Exit codes: 0 pass, 1 fail, >= 100 could not measure.
@@ -19,10 +19,10 @@ Platform-wide properties. Most need a running platform; the repository-level one
 | F-02 | Network segments are enforced | From a monitored-system segment, connections to management and AI-worker segments are refused; only listed flows succeed (reachability matrix) | SERVER |
 | F-03 | People authenticate with SSO and MFA | Every web UI redirects an unauthenticated request to SSO or demands its own MFA; 0 anonymous UIs | SERVER |
 | F-04 | Every service and agent has its own identity | Credential inventory: no credential shared by two consumers; no service or agent holds admin rights | SERVER |
-| F-05 | Secrets are not in git or readable on disk | Secret scan over full history reports 0 unaccepted findings; 0 secret files readable by other | PUBLIC-NOW |
+| F-05 | Secrets are not in git | Secret scan of the tracked tree (`tools/leak_scan.py --groups secret`) and of the full history (CI's pinned `gitleaks git` over every fetched ref) reports 0 unaccepted findings | PUBLIC-NOW |
 | F-06 | Credentials are short-lived and rotated | Every inventoried secret is within its rotate-by date | SERVER |
 | F-07 | Internal TLS is verified | 0 clients with certificate verification disabled (lint over client config; RL013 for roles); endpoints present certificates from the internal CA (`tools/tls_verify_lint.py` over Python and YAML/JSON) | PUBLIC-NOW |
-| F-08 | The main branch is protected by CI | Branch protection requires passing checks; CI runs tests, lint, secret scan on every change | PUBLIC-NOW |
+| F-08 | The main branch is protected by CI | Branch protection requires passing checks (a repository setting: manual criterion, `gh api repos/OWNER/REPO/branches/main/protection`); CI runs tests, lint, secret scan on every change (Q-01, Q-06) | PUBLIC-NOW |
 | F-09 | Backups follow 3-2-1 with an immutable copy | Newest backup < 24 h; offsite or immutable copy < 7 days; a delete attempt with the automation identity fails | SERVER |
 | F-10 | Restores are proven | A full-system restore drill was completed <= 90 days ago and verified | SERVER |
 | F-11 | The monitoring is itself monitored | Stopping the alerting service raises an external dead-man alert within 15 minutes | SERVER |
@@ -37,6 +37,7 @@ Platform-wide properties. Most need a running platform; the repository-level one
 | F-20 | Every machine says what powers it | With a site `power` section, the router, every switch and edge device, every hypervisor and physical host names a known UPS or `none` with a reason (or takes `power.default`), and every UPS feeds something (`hnx guests validate DIR --site SITE`; `homelabnext/power.py`); each UPS with `monitored_by: nut` and a `nut_name` is a live `poll-nut` status source generated from the site, on battery is warn and pages once naming the guests on it, low or replace battery is fail (`pytest tests/status/test_status_nut.py`, replaying recorded upsd 2.8.1 transcripts) | PUBLIC-NOW |
 | F-21 | The public tree carries no part of a private overlay | `tools/private_leak_check.py public .` exits 0: no overlay marker outside the fictional skeleton, no file under the skeleton's private layout paths, no `.sops.yaml`, no SOPS ciphertext, no key file; a private overlay's CI runs the same tool as `private ROOT` (no plaintext credential value after masking well-formed ciphertext only; every file under the pinned `lab/sealed/`, the marker's `sealed_paths` or a `.sops.yaml` rule SOPS-encrypted throughout, with real metadata, no key set twice, and every value a well-formed `ENC[]` token but the keys of the SOPS-default or marker-pinned `unencrypted_suffix` (a file's own other suffix is partial), never partially; a token is masked only in a SOPS file and only as a whole value or comment; a `.sops.yaml` that narrows that set is a finding; every vault file the bare header-plus-hex envelope; a file it cannot scan fails unless the marker's `allow_unscanned` names it; ADR-0021) | PUBLIC-NOW |
 | F-22 | The CI deploy reaches only what the site declares | With a site `tailnet.deploy`, `hnx site validate` refuses a wildcard (`*`, `any`) or unknown destination zone and a port beyond SSH without an `exceptions` entry and reason; `hnx guests render DIR --site SITE --target tailscale-acl` emits `tag:ci-deploy` in `tagOwners`, its TCP 22 rule to the declared zones only, and a policy `tests` block (accept the declared zones on 22, deny other ports, every other tag, and any zone tag back to the deploy tag) that holds against the rendered rules (`homelabnext/tailnet.py`, `tests/compute/test_tailnet_deploy.py`; ADR-0021) | PUBLIC-NOW |
+| F-23 | Secrets are not readable on disk | On every host, 0 files holding a secret are readable by other; the `config_leak_scan` role reports secret-looking values outside its accepted paths (path, line, pattern; never the value) | SERVER |
 
 ## C - Collection
 
@@ -155,7 +156,7 @@ Caught before deploy.
 
 | ID | Must be true | Observable / pass criterion | Tag |
 |---|---|---|---|
-| Q-01 | Every repo's tests run on every change | CI runs unit and contract tests on push and merge request; main is green | PUBLIC-NOW |
+| Q-01 | Every repo's tests run on every change | CI runs unit and contract tests on push and merge request (`tools/tests/test_ci_runs_tests.py`); main is green (the forge's latest run: `gh run list --branch main --workflow ci --limit 1`) | PUBLIC-NOW |
 | Q-02 | Test suites are trustworthy | Each suite within its time budget; 0 silent skips; quarantined tests have owner and unexpired date (`tests/suite_policy.py`: per-suite budgets, registered skip reasons, `quarantine` marker with owner and expiry) | PUBLIC-NOW |
 | Q-03 | Live-dependent tests are marked | Tests needing real systems carry the `live` marker and CI skips them; an unmarked test that reaches a non-loopback address fails (`tests/network_guard.py`) | PUBLIC-NOW |
 | Q-04 | Every component ships tests | CI fails a component directory with no tests (`tools/component_tests.py`, reviewed allowlist) | PUBLIC-NOW |
@@ -304,4 +305,4 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 
 ---
 
-**Totals:** 181 criteria across 16 pillars; 99 PUBLIC-NOW, 82 SERVER.
+**Totals:** 182 criteria across 16 pillars; 99 PUBLIC-NOW, 83 SERVER.

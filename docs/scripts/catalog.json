@@ -64,6 +64,9 @@
         "CHANGELOG.md",
         "homelabnext/_version.py"
       ],
+      "invariant": [
+        "F-15"
+      ],
       "kind": "check",
       "language": "python",
       "outputs": "the reason on stderr when it fails",
@@ -517,7 +520,8 @@
       "inputs": "paths, --history RANGE, --stdin or --check-authors RANGE; optional HNX_DENYLIST file",
       "invariant": [
         "F-05",
-        "F-18"
+        "F-18",
+        "Q-06"
       ],
       "kind": "check",
       "language": "python",
