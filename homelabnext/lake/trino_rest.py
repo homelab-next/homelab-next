@@ -25,6 +25,14 @@ previous batch.  No duplicate is ever written; only the replay flag and the mark
 holds for a crash between the INSERTs of a batch split in several: the retry writes only the rows
 not yet present.  The snapshot recorded is the one whose summary carries the last INSERT's
 ``trino_query_id``.
+
+The batch ledger is bounded: each table keeps the newest ``ledger_size`` batch entries (each
+numbered by a ``seq``), and the commit that records a batch removes older ones in the same
+catalog update.  Iceberg rewrites every property in each metadata file, so an unbounded ledger
+would make every commit, and every ``describe``, larger for good.  The per-source marks are one
+property each and are kept.  A batch replayed after its entry was dropped is written as nothing
+(every row is skipped by its content key) and reported as ``replayed=False``, exactly as in
+``IcebergLake`` once its snapshots have expired.
 One writer per ``(table, source)`` is assumed, as everywhere in the lake library.
 """
 
@@ -53,6 +61,8 @@ PROP_MARK = "hnx.mark."
 KEY_CHUNK = 500
 #: the longest query text sent: safely below Trino's default ``query.max-length`` (1,000,000)
 MAX_QUERY_LENGTH = 900_000
+#: batch ledger entries kept per table (older ones are removed when a batch is recorded)
+LEDGER_SIZE = 1000
 _NS = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 #: setups already done in this process: (catalog root, Trino catalog, namespace, schemas digest).
 #: Only the constructor's ``ensure=True`` consults it; an explicit ``ensure_tables()`` always runs.
@@ -121,6 +131,7 @@ class TrinoRestLake(AdapterBase):
         named_queries: Mapping[str, str] | None = None,
         ensure: bool = True,
         max_query_length: int = MAX_QUERY_LENGTH,
+        ledger_size: int = LEDGER_SIZE,
     ):
         if not _NS.fullmatch(namespace):
             raise LakeError(f"namespace must be a lower-case identifier, got {namespace!r}")
@@ -129,6 +140,9 @@ class TrinoRestLake(AdapterBase):
                 f"max_query_length must be an integer >= 1024, got {max_query_length!r}"
             )
         self.max_query_length = max_query_length
+        if not isinstance(ledger_size, int) or ledger_size < 1:
+            raise LakeError(f"ledger_size must be a positive integer, got {ledger_size!r}")
+        self.ledger_size = ledger_size
         if schemas is None:
             schemas = load_schemas()
         pool = schemas.values() if isinstance(schemas, Mapping) else schemas
@@ -350,11 +364,16 @@ class TrinoRestLake(AdapterBase):
                 None,
             ) or current_snapshot(meta)
             snap_id = None if snap is None else str(snap["snapshot-id"])
+            key = PROP_BATCH + _digest(batch_id, 32)
+            ledger = _ledger(meta.get("properties") or {}, exclude=key)
+            seq = max((n for n, _ in ledger), default=0) + 1
             props = {
-                PROP_BATCH + _digest(batch_id, 32): json.dumps(
-                    {"batch_id": batch_id, "snapshot_id": snap_id}, sort_keys=True
+                key: json.dumps(
+                    {"batch_id": batch_id, "snapshot_id": snap_id, "seq": seq}, sort_keys=True
                 )
             }
+            keep = self.ledger_size - 1  # the entry recorded now is the newest
+            removals = [k for _, k in ledger[: max(0, len(ledger) - keep)]]
             if source is not None:
                 props[PROP_MARK + _digest(source, 24)] = json.dumps(
                     {
@@ -367,10 +386,29 @@ class TrinoRestLake(AdapterBase):
                 )
             try:
                 self._rest.set_properties(
-                    self._ns, s.name, props, table_uuid=str(meta.get("table-uuid"))
+                    self._ns,
+                    s.name,
+                    props,
+                    table_uuid=str(meta.get("table-uuid")),
+                    removals=removals,
                 )
                 return snap_id
             except CommitConflict:
                 if attempt == 3:
                     raise
         return None  # pragma: no cover - the loop returns or raises
+
+
+def _ledger(props: Mapping[str, Any], *, exclude: str) -> list[tuple[int, str]]:
+    """The batch ledger entries of ``props`` (but ``exclude``) as ``(seq, key)``, oldest first;
+    an entry written before entries were numbered (or unreadable) counts as the oldest."""
+    out = []
+    for k, v in props.items():
+        if not k.startswith(PROP_BATCH) or k == exclude:
+            continue
+        try:
+            seq = int(json.loads(v).get("seq") or 0)
+        except (ValueError, TypeError, AttributeError):
+            seq = 0
+        out.append((seq, k))
+    return sorted(out)

@@ -493,6 +493,9 @@ class FakeLab:
                 for u in req["updates"]:
                     if u["action"] == "set-properties":
                         meta["properties"].update(u["updates"])
+                    elif u["action"] == "remove-properties":
+                        for k in u["removals"]:
+                            meta["properties"].pop(k, None)
             return self._json(
                 h, 200, {"metadata-location": "s3://lab-lake/x.json", "metadata": meta}
             )

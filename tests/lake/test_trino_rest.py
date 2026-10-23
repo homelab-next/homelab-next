@@ -297,6 +297,36 @@ def test_a_row_longer_than_the_limit_is_refused_before_anything_is_sent(lab):
     assert len(_inserts(lab)) == before
 
 
+def _ledger_keys(lab, ns="t_ns"):
+    meta = lab.tables[(ns, "authentication")]
+    return sorted(k for k in meta["properties"] if k.startswith("hnx.batch."))
+
+
+def test_the_batch_ledger_keeps_only_the_newest_entries(lab):
+    from conformance.suites._lake import auth_row
+
+    lake = _lake(lab, ledger_size=3)
+    for i in range(8):
+        lake.write_batch("authentication", [auth_row(f"l-{i}")], idempotency_key=f"b{i}", source="s")  # fmt: skip
+    assert len(_ledger_keys(lab)) == 3
+    assert lake.write_batch("authentication", [auth_row("l-7")], idempotency_key="b7").replayed
+    old = lake.write_batch("authentication", [auth_row("l-0")], idempotency_key="b0")
+    assert not old.replayed and old.rows_written == 0  # dropped entry: content-key dedup holds
+    assert lake.describe("authentication").committed["s"].batch_id == "b7"  # the mark is kept
+    assert lake.query("SELECT count(*) AS n FROM authentication") == [{"n": 8}]
+
+
+def test_unnumbered_ledger_entries_are_removed_first(lab):
+    from conformance.suites._lake import auth_row
+
+    lake = _lake(lab, ledger_size=2)
+    meta = lab.tables[("t_ns", "authentication")]
+    meta["properties"]["hnx.batch.legacy"] = '{"batch_id": "legacy", "snapshot_id": null}'
+    lake.write_batch("authentication", [auth_row("u-1")], idempotency_key="n1")
+    lake.write_batch("authentication", [auth_row("u-2")], idempotency_key="n2")
+    assert "hnx.batch.legacy" not in _ledger_keys(lab) and len(_ledger_keys(lab)) == 2
+
+
 def test_without_a_query_id_the_current_snapshot_is_recorded():
     from conformance.suites._lake import auth_row
 
