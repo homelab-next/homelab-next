@@ -15,6 +15,7 @@ OTHER = "01a15e4e-0000-7000-8000-00000000000f"  # a valid uid no example record 
 
 from homelabnext.records import Records, RecordsReader
 from homelabnext.records.decider import init_tree
+from homelabnext.records.notes import parse_note, render_note
 from homelabnext.registers import RegisterError, build_all, load_register, records
 from homelabnext.registers import events as ev
 from homelabnext.registers.__main__ import main as registers_main
@@ -710,3 +711,23 @@ def test_only_the_migration_writes_a_rekey(lab):
     with pytest.raises(RegisterError, match="'hnx:migrate' was expected"):
         write_event(rec, rekey)
     assert _files(ev.events_dir(rec)) == before
+
+
+def test_a_reused_intent_name_is_refused_before_anything_is_applied(lab, inbox):
+    n1 = _intent(inbox, "promote", record=U["LL-003"], **{"from": "open", "to": "partial"}, reason="x")  # fmt: skip
+    _give_ll_003_a_control(lab)
+    [o1] = _decider(lab, inbox).decide_all()
+    assert o1.result == "applied" and n1 in _lanes(inbox)["decided/completed"]
+    # the same agent, the same slug, the same day, another record: the name is already decided
+    with pytest.raises(FileExistsError):
+        _intent(inbox, "promote", record=U["RB-001"], superseded_by=U["RB-002"], reason="y", **{"from": "active", "to": "superseded"})  # fmt: skip
+    fm, _ = parse_note((inbox / "decided/completed" / n1).read_text(encoding="utf-8"))
+    fm.update({"record": U["RB-001"], "from": "active", "to": "superseded", "reason": "y"})
+    fm["superseded_by"] = U["RB-002"]
+    (inbox / "inbox" / n1).write_text(render_note(fm, ""), encoding="utf-8")  # past the API
+    for _ in range(2):  # denied once, then gone: the queue does not jam
+        out = _decider(lab, inbox).decide_all()
+        assert all(o.result != "error" for o in out), out
+    assert n1 not in _lanes(inbox)["inbox"] and n1 in _lanes(inbox)["decided/denied"]
+    rb = lab / "runbooks" / f("RB-001")
+    assert [e for e in ev.read_events(ev.events_dir(rb), []) if e.kind == "transition"] == []

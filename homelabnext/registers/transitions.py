@@ -58,7 +58,7 @@ from typing import Any
 
 from homelabnext.identity.uid import is_uid
 from homelabnext.records import RecordsReader, check_filename
-from homelabnext.records.decider import APPROVED, Decider
+from homelabnext.records.decider import APPROVED, DECIDED_LANES, DENIED, Decider
 from homelabnext.records.notes import NoteError, parse_note
 from homelabnext.state import file_lock
 
@@ -256,6 +256,14 @@ class TransitionDecider:
         bad = check_filename(name, fm)
         if bad:
             return self._deny(name, ident, "; ".join(bad), dry_run)
+        taken = [lane for lane in DECIDED_LANES if (self.records_root / lane / name).exists()]
+        if taken:  # a reused name: its event would cite the other note and its move would fail
+            why = (
+                f"a note named {name} is already in {', '.join(taken)}; file it under another slug"
+            )
+            if DENIED in taken:  # cannot be moved anywhere: leave it for its agent to withdraw
+                return Outcome(name, ident, "invalid", why)
+            return self._deny(name, ident, why, dry_run)
         path = self._record_path(ident)
         register = path.parent.name
         if not path.is_file():
