@@ -177,13 +177,15 @@ class TelemetryStore:
 
     def check_writable(self) -> None:
         """Raise the store's own error (:data:`STORE_ERRORS`) unless a write could commit now:
-        the write lock is taken (``BEGIN IMMEDIATE``, waiting out SQLite's busy timeout) and a
-        row is written, so the journal is created and written, then everything is rolled back.
+        the lock a commit needs is taken (``BEGIN EXCLUSIVE``, waiting out SQLite's busy timeout:
+        unlike ``IMMEDIATE`` it waits for readers too, so a reader stuck in a transaction fails
+        the probe instead of every commit after it; held for microseconds) and a row is written,
+        so the journal is created and written, then everything is rolled back.
         A consumer runs this before it fetches (:func:`.bus.drain`): a delivery fetched into a
         store that cannot take it costs an attempt, and the bus dead-letters a record after
         ``max_deliver`` of them however valid it is."""
         with self._db() as db:
-            db.execute("BEGIN IMMEDIATE")
+            db.execute("BEGIN EXCLUSIVE")
             try:
                 db.execute("INSERT OR REPLACE INTO turns VALUES ('', '', 0, '')")
             finally:

@@ -200,3 +200,29 @@ def test_the_write_probe_needs_the_write_lock_and_leaves_nothing(store, monkeypa
         holder.rollback()
         holder.close()
     store.check_writable()
+
+
+def test_a_stuck_reader_fails_the_pass_before_anything_is_fetched(store, monkeypatch):
+    """Regression: the probe took the write lock that readers coexist with (``BEGIN IMMEDIATE``),
+    so with a reader stuck in a transaction (an operator's ``sqlite3`` shell, a backup holding the
+    file) it passed, every commit then waited out the busy timeout and failed, and each pass spent
+    an attempt of every fetched record until all were dead-lettered.  The commit's lock is the
+    probe's lock now: the pass fails before it fetches, and nothing is dead-lettered."""
+    connect = sqlite3.connect
+    monkeypatch.setattr(
+        _sqlite.sqlite3, "connect", lambda *a, **k: connect(*a, **k | {"timeout": 0.05})
+    )
+    bus = _bus_with(*(body(e) for e in examples()))
+    durable = bus.consumer(DURABLE, FINISHED_EVENT)
+    reader = connect(store.path, isolation_level=None)
+    reader.execute("BEGIN")
+    reader.execute("SELECT count(*) FROM jobs").fetchall()  # holds a shared lock
+    try:
+        for _ in range(durable.max_deliver + 1):
+            with pytest.raises(sqlite3.OperationalError, match="locked"):
+                drain(bus, store, batch=4)
+        assert durable._attempts == {} and durable.dead_letters() == []
+    finally:
+        reader.rollback()
+        reader.close()
+    assert drain(bus, store, batch=4) == {"processed": 4} and len(store.jobs()) == 4
