@@ -182,12 +182,13 @@ class ParkedJournal:
 
     def park(self, owed_to: str, p: Any) -> None:
         rec = {"op": "park", "owed_to": owed_to, **p.to_dict()}
+        order = int(rec["order"])  # the record is the contract: ``p`` need only have to_dict()
         self._append(rec)
         st = self.state
-        st.parked = [r for r in st.parked if int(r["order"]) != int(p.order)]
+        st.parked = [r for r in st.parked if int(r["order"]) != order]
         st.parked.append(json.loads(json.dumps(rec, default=json_value)))
         st.parked.sort(key=lambda r: int(r["order"]))
-        st.last_order = max(st.last_order, int(p.order))
+        st.last_order = max(st.last_order, order)
 
     def settled(self, order: int) -> None:
         self._append({"op": "settled", "order": int(order)})
