@@ -185,3 +185,46 @@ def test_usage_errors(broker, monkeypatch, capsys):
     )
     assert main(["pending"]) == 2
     capsys.readouterr()
+
+
+def test_serve_pages_through_ntfy_with_a_token_by_secret_reference(tmp_path, monkeypatch):
+    """hnx broker serve built its service without a notifier: no approval page and no lane-quota
+    notice ever fired in the shipped CLI."""
+    import argparse
+
+    from homelabnext.broker.cli import _service, notifier_from_args
+    from homelabnext.notify import Message
+
+    override = "https://n.svc.example.internal:8443"  # no-raw-endpoint: allow override syntax
+    monkeypatch.setenv("HNX_ENDPOINT_NOTIFY", override)
+    monkeypatch.setenv("HNX_SECRET_BROKER_NTFY_TOKEN", "fake-ntfy-token-3c1")
+    args = argparse.Namespace(
+        manifest=str(EXAMPLE), state=str(tmp_path / "state"), data_root=None,
+        approvals_url=None, notify_topic="broker", notify_token="secret:broker/ntfy-token",
+        registry=None,
+    )  # fmt: skip
+    svc = _service(args)
+    assert svc.notifier is not None and svc._scoped, "per-agent budgets"
+    req = svc.notifier.sender.build_request(Message(key="k", title="t", body="b"))
+    assert req.full_url == f"{override}/broker"
+    assert req.get_header("Authorization") == "Bearer fake-ntfy-token-3c1"
+    assert "fake-ntfy-token-3c1" not in repr(vars(args))
+    with pytest.raises(ValueError, match="secret reference"):
+        notifier_from_args(argparse.Namespace(**{**vars(args), "notify_token": "fake-literal"}))
+    assert notifier_from_args(argparse.Namespace(**{**vars(args), "notify_topic": None})) is None
+
+
+def test_without_a_notifier_a_lane_quota_refusal_is_logged_once(tmp_path, caplog):
+    from homelabnext.broker.service import BrokerService, load_manifest
+
+    manifest, docs = load_manifest(EXAMPLE)
+    manifest["lanes"][0]["max_files"] = 1
+    svc = BrokerService(tmp_path / "s", manifest, handler_docs=docs, base_dir=EXAMPLE.parent,
+                        data_root=tmp_path / "d")  # fmt: skip
+    svc.call("profile:triage", "memory.write", {"name": "a.md", "content": "x"})
+    with caplog.at_level("WARNING", logger="homelabnext.broker.service"):
+        for name in ("b.md", "c.md", "d.md"):
+            with pytest.raises(Exception, match="quota"):
+                svc.call("profile:triage", "memory.write", {"name": name, "content": "x"})
+    hits = [r for r in caplog.records if "refuses its writes" in r.getMessage()]
+    assert len(hits) == 1 and hits[0].levelname == "WARNING"

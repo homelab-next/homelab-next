@@ -267,6 +267,16 @@ refusal_limit: {max: 60, window_s: 60}    # refused requests per peer per window
 quotas: {pending_per_actor: 20, notify_window_s: 300}   # accepted work per agent (the defaults)
 ```
 
+**Notifications from `serve`.** `hnx broker serve --notify-topic TOPIC` pages approval requests
+(see [Approvals](#approvals)) and the lane-quota notices through ntfy: the endpoint is the
+`notify` capability (`--registry services.yml`, else `HNX_ENDPOINT_NOTIFY`), never a literal; the
+access token is a secret reference, `--notify-token secret:broker/ntfy-token` (or
+`HNX_BROKER_NOTIFY_TOKEN`), whose value is read at send time from the environment variable it
+names (`HNX_SECRET_BROKER_NTFY_TOKEN`, from a systemd credential or env file); a literal token is
+refused. State lives in `<state>/notify.json`; at most 20 messages an hour, each agent on its own
+budget. Without `--notify-topic` there are no notifications, and a lane-quota refusal is logged
+at WARNING once per agent and lane instead.
+
 A peer is listed once, as a caller *or* a relay (`hnx broker validate` refuses a peer in both);
 user names are resolved when the service starts, and an unknown one stops it. Linux only: macOS
 and the BSDs have `getpeereid` instead, which Python does not expose portably, so the server

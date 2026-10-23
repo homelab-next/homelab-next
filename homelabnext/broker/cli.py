@@ -9,7 +9,9 @@ warning does not fail validation: an agent writing there is about to be refused
 ``lane-quota-exceeded``, and this is how the operator hears it first.
 
 ``serve --socket PATH`` runs the broker on a Unix socket whose callers are authenticated by their
-peer credentials (:mod:`homelabnext.broker.server`); ``mcp --socket PATH`` runs the agent-facing
+peer credentials (:mod:`homelabnext.broker.server`); with ``--notify-topic T`` (and
+``--notify-token secret:NAME``) it pages approval requests and lane-quota notices through ntfy
+(:func:`notifier_from_args`); ``mcp --socket PATH`` runs the agent-facing
 MCP tool server (stdio) against it (:mod:`homelabnext.broker.mcp_tools`).
 
 ``relay --state DIR --events-target FILE --stream S --subject-prefix P`` publishes the state
@@ -121,6 +123,21 @@ def _parser() -> argparse.ArgumentParser:
     srv.add_argument("--socket-group", help="group owning the socket (the agents' group)")
     srv.add_argument("--max-request-bytes", type=int, default=None)
     srv.add_argument("--timeout", type=float, default=None, help="seconds to read one request")
+    srv.add_argument(
+        "--notify-topic",
+        default=os.environ.get("HNX_BROKER_NOTIFY_TOPIC"),
+        help="page the approver (approval requests) and the operator (lane quotas) on this ntfy "
+        "topic; the endpoint is the notify capability (--registry, else HNX_ENDPOINT_NOTIFY)",
+    )
+    srv.add_argument(
+        "--notify-token",
+        default=os.environ.get("HNX_BROKER_NOTIFY_TOKEN"),
+        metavar="secret:NAME",
+        help="the ntfy access token, as a secret reference: its value is read at send time "
+        "from the environment variable it names (secret:broker/ntfy-token -> "
+        "HNX_SECRET_BROKER_NTFY_TOKEN), never from the command line",
+    )
+    srv.add_argument("--registry", help="services.yml: resolve the notify capability through it")
     rel = sub.add_parser("relay", help="publish the outbox to the event bus (at least once)")
     rel.add_argument("--state", default=os.environ.get("HNX_BROKER_STATE"))
     rel.add_argument(
@@ -267,6 +284,40 @@ def _usage_line(row: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def notifier_from_args(args) -> Any:
+    """The ntfy notifier ``serve`` pages through, or None without ``--notify-topic``: state-diffed
+    (``<state>/notify.json``), 20 sends an hour, each agent's messages on its own budget.  The
+    token is a ``secret:`` reference resolved at send time; a literal is refused, so no token
+    ever sits in a unit file, a shell history or ``ps``."""
+    topic = getattr(args, "notify_topic", None)
+    if not topic:
+        return None
+    from homelabnext.notify import Notifier, NtfySender, RateLimit
+    from homelabnext.registry.model import secret_env_name
+    from homelabnext.state import StateStore
+
+    ref = getattr(args, "notify_token", None)
+    auth = None
+    if ref:
+        if not ref.startswith("secret:") or len(ref) <= len("secret:"):
+            raise ValueError("--notify-token takes a secret reference (secret:NAME), not a token")
+        var = secret_env_name(ref)
+
+        def auth() -> str | None:
+            value = os.environ.get(var, "").strip()
+            return f"Bearer {value}" if value else None
+
+    resolver = None
+    if getattr(args, "registry", None):
+        from homelabnext.registry import load
+        from homelabnext.registry.resolver import Resolver
+
+        resolver = Resolver(load(args.registry))
+    sender = NtfySender(default_topic=topic, auth=auth, resolver=resolver)
+    store = StateStore(Path(args.state) / "notify.json")
+    return Notifier(sender, store, rate_limit=RateLimit(max_sends=20, window_s=3600.0))
+
+
 def _service(args) -> BrokerService:
     if not args.manifest or not args.state:
         raise SystemExit(
@@ -281,6 +332,7 @@ def _service(args) -> BrokerService:
         base_dir=Path(args.manifest).parent,
         data_root=data_root,
         approvals_url=args.approvals_url,
+        notifier=notifier_from_args(args),
     )
 
 

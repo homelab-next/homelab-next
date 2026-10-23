@@ -416,6 +416,7 @@ class BrokerService:
         self._scoped = _takes_scope(notifier)
         self._lane_full: set[str] = set()  # lane-quota keys this process reported
         self._lane_notice_at: dict[str, datetime] = {}  # lane-quota key -> its last notice
+        self._lane_logged: set[str] = set()  # lane-quota keys logged (no notifier)
         if notifier is not None:
             notifier.register_pair(APPROVAL_TITLE, APPROVAL_CLEARED)
             notifier.register_pair(LANE_QUOTA_TITLE, LANE_QUOTA_CLEARED)
@@ -1544,12 +1545,15 @@ class BrokerService:
         write that fits, and never two notices for one actor and lane within
         :data:`LANE_NOTICE_INTERVAL_S`.  State-diffed by the notifier, so a looping agent's
         thousandth refusal sends nothing, and its notices draw on its own budget."""
+        actor = request["actor"]
+        key = f"broker-lane-quota-{lane.name}-{re.sub(r'[^a-z0-9-]+', '-', actor.lower())}"
         if self.notifier is None:
+            if refusal is not None and key not in self._lane_logged:
+                self._lane_logged.add(key)  # no notifier: the log is the operator's signal
+                log.warning("%s: lane %s refuses its writes: %s", actor, lane.name, refusal)
             return
         from homelabnext.notify.core import Message
 
-        actor = request["actor"]
-        key = f"broker-lane-quota-{lane.name}-{re.sub(r'[^a-z0-9-]+', '-', actor.lower())}"
         now = self._now()
         last = self._lane_notice_at.get(key)
         recent = last is not None and (now - last).total_seconds() < LANE_NOTICE_INTERVAL_S
