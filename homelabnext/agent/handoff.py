@@ -53,9 +53,6 @@ _SEAL = object()  # only accept() can build an Accepted
 # formats the stock jsonschema FormatChecker always checks, with no optional package, and that
 # admit no free text ("email" only checks for an "@"; "hostname" needs an optional package)
 CHECKED_FORMATS = frozenset({"date", "ipv4", "ipv6", "uuid"})
-# match-anything pieces: an unescaped "." (an even run of backslashes before it), a negated
-# class, or a negated shorthand
-_OPEN = re.compile(r"(?<!\\)(?:\\\\)*(?:\.|\[\^|\\[SWD])")
 
 
 class HandoffError(AgentError):
@@ -92,98 +89,140 @@ def _top_level_alternation(pattern: str) -> bool:
     return False
 
 
-# characters a class may list besides ASCII letters and digits: enough for names, hosts, paths
-# and versions, never whitespace or shell/markup punctuation
+# characters a pattern may match besides ASCII letters and digits, as a literal or a class
+# member: enough for names, hosts, paths and versions, never whitespace or shell/markup
+# punctuation
 _CLASS_PUNCT = frozenset("-_.:/@+=,~%")
 # ranges a class may span: within one of these
 _CLASS_RANGES = (("0", "9"), ("a", "z"), ("A", "Z"))
-_ESC_HEX = re.compile(
-    r"x([0-9A-Fa-f]{2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|u\{([0-9A-Fa-f]{1,6})\}"
-)
 # a quantifier with no upper bound
 _UNBOUNDED = re.compile(r"(?<!\\)(?:\\\\)*(?:[*+]|\{\d*,\})")
-
-
-def _escape_at(pattern: str, i: int) -> tuple[str | None, int]:
-    """The literal character the escape at ``pattern[i] == "\\"`` stands for (None for a class
-    shorthand such as ``\\d``/``\\w``, or an escape this check does not read), and its end."""
-    m = _ESC_HEX.match(pattern, i + 1)
-    if m:
-        return chr(int(next(g for g in m.groups() if g), 16)), m.end()
-    nxt = pattern[i + 1 : i + 2]
-    if nxt.isalnum():
-        return None, i + 2
-    return nxt, i + 2
 
 
 def _narrow_char(c: str) -> bool:
     return (c.isascii() and c.isalnum()) or c in _CLASS_PUNCT
 
 
+def _parse(pattern: str) -> Any:
+    """The pattern as Python's ``re`` reads it (the validator's own engine), or None."""
+    try:
+        from re import _parser  # type: ignore[attr-defined]  # Python 3.11+
+
+        return _parser.parse(pattern)
+    except Exception:  # an unreadable pattern is not closed
+        return None
+
+
+def _narrow_tree(sub: Any, c: Any) -> bool:
+    """Every character the parsed pattern can match is narrow (:func:`_narrow_char`), and no
+    piece of it changes how it is read: literals outside a class are checked like class members
+    (``(?:a|;|\\$)`` spells the class ``[a;$]``), ``\\w``/``\\d``/``\\s`` are wide (Python
+    matches them against Unicode), and an inline flag (``(?i:[a-z])`` matches the Kelvin sign)
+    is refused."""
+    for op, av in sub:
+        if op is c.LITERAL:
+            if not _narrow_char(chr(av)):
+                return False
+        elif op is c.IN:
+            for iop, iav in av:
+                if iop is c.LITERAL:
+                    if not _narrow_char(chr(iav)):
+                        return False
+                elif iop is c.RANGE:
+                    lo, hi = chr(iav[0]), chr(iav[1])
+                    if not any(a <= lo and hi <= b for a, b in _CLASS_RANGES):
+                        return False
+                else:  # NEGATE, CATEGORY (\w, \d, \s inside a class)
+                    return False
+        elif op is c.AT:
+            continue
+        elif op is c.BRANCH:
+            if not all(_narrow_tree(alt, c) for alt in av[1]):
+                return False
+        elif op is c.SUBPATTERN:
+            _gid, add_flags, del_flags, p = av
+            if add_flags or del_flags or not _narrow_tree(p, c):
+                return False
+        elif op in (c.MAX_REPEAT, c.MIN_REPEAT, getattr(c, "POSSESSIVE_REPEAT", None)):
+            if not _narrow_tree(av[2], c):
+                return False
+        elif op in (c.ASSERT, c.ASSERT_NOT):
+            if not _narrow_tree(av[1], c):
+                return False
+        elif op is getattr(c, "ATOMIC_GROUP", None):
+            if not _narrow_tree(av, c):
+                return False
+        elif op is c.GROUPREF:
+            continue  # repeats what a checked group matched
+        else:  # ANY, NOT_LITERAL, CATEGORY, GROUPREF_EXISTS and anything this does not read
+            return False
+    return True
+
+
+def _can_lead_with(sub: Any, ch: str, c: Any) -> tuple[bool, bool]:
+    """(whether a match of ``sub`` can begin with ``ch``, whether ``sub`` can match empty)."""
+    o = ord(ch)
+    for op, av in sub:
+        if op is c.LITERAL:
+            return av == o, False
+        if op is c.IN:
+            return any(
+                (iop is c.LITERAL and iav == o) or (iop is c.RANGE and iav[0] <= o <= iav[1])
+                for iop, iav in av
+            ), False
+        if op in (c.AT, c.ASSERT, c.ASSERT_NOT):
+            continue  # zero width
+        if op is c.BRANCH:
+            results = [_can_lead_with(alt, ch, c) for alt in av[1]]
+            if any(lead for lead, _ in results):
+                return True, False
+            if not any(empty for _, empty in results):
+                return False, False
+            continue
+        if op is c.SUBPATTERN or op is getattr(c, "ATOMIC_GROUP", None):
+            lead, empty = _can_lead_with(av[-1] if op is c.SUBPATTERN else av, ch, c)
+        elif op in (c.MAX_REPEAT, c.MIN_REPEAT, getattr(c, "POSSESSIVE_REPEAT", None)):
+            lead, empty = _can_lead_with(av[2], ch, c)
+            lead, empty = lead and av[1] > 0, empty or av[0] == 0
+        else:  # a back-reference, or anything else: assume the worst
+            return True, True
+        if lead:
+            return True, False
+        if not empty:
+            return False, False
+    return False, True
+
+
 def _wide_or_spaced(pattern: str) -> bool:
-    """True when ``pattern`` can match whitespace (anywhere) or holds a character class wider
-    than ASCII letters, digits and a few name punctuation characters (``[ -~]``,
-    ``[\\u0000-\\U0010FFFF]``): such a pattern admits sentences however it is anchored."""
-    i, n = 0, len(pattern)
-    in_class, prev = False, None  # prev: the last literal class member, for a range
-    while i < n:
-        c = pattern[i]
-        if c == "\\":
-            lit, j = _escape_at(pattern, i)
-            if lit is None:
-                if pattern[i + 1 : i + 2] not in ("d", "w"):
-                    return True  # \s, \n, \t, \p{..} and other escapes this does not read
-                prev, i = None, j
-                continue
-            c, i = lit, j
-            if c.isspace():
-                return True
-            if in_class:
-                if not _narrow_char(c):
-                    return True
-                prev = c
-            continue
-        if c.isspace():
-            return True
-        if not in_class:
-            if c == "[":
-                in_class, prev = True, None
-                if pattern[i + 1 : i + 2] == "^":
-                    return True  # a negated class
-            i += 1
-            continue
-        if c == "]":
-            in_class = False
-        elif c == "-" and prev is not None and i + 1 < n and pattern[i + 1] != "]":
-            hi = pattern[i + 1]
-            j = i + 2
-            if hi == "\\":
-                hi, j = _escape_at(pattern, i + 1)
-                if hi is None:
-                    return True
-            if not any(a <= prev and hi <= b for a, b in _CLASS_RANGES):
-                return True
-            prev, i = None, j
-            continue
-        elif not _narrow_char(c):
-            return True
-        else:
-            prev = c
-        i += 1
-    return False
+    """True when ``pattern`` can match a character outside ASCII letters, digits and a few name
+    punctuation characters (whitespace, ``;``, ``$``, a Unicode letter, ``[ -~]``,
+    ``[\\u0000-\\U0010FFFF]``), wherever it is written, when it sets an inline flag, or when a
+    match can start with ``-`` (a value an argv-fed handler would read as an option).  A pattern
+    Python's ``re`` cannot read counts as wide."""
+    from re import _constants as c  # type: ignore[attr-defined]  # Python 3.11+
+
+    tree = _parse(pattern)
+    if tree is None:
+        return True
+    if tree.state.flags & ~c.SRE_FLAG_UNICODE:
+        return True  # a global inline flag: (?i), (?x), (?s), (?a), ...
+    if not _narrow_tree(tree, c):
+        return True
+    return _can_lead_with(tree, "-", c)[0]
 
 
 def is_closed_pattern(pattern: str) -> bool:
     """A pattern that cannot match free text: anchored at both ends with no top-level ``|``
-    (``^a$|.*`` is unanchored), no ``.``, negated class or ``\\S``/``\\W``/``\\D``, nothing
-    that matches whitespace, and character classes no wider than ASCII letters, digits and
-    ``-_.:/@+=,~%`` (a class such as ``[ -~]`` or ``[\\u0000-\\U0010FFFF]`` lists everything)."""
+    (``^a$|.*`` is unanchored), and every character it can match, as a literal or in a class,
+    an ASCII letter, digit or one of ``-_.:/@+=,~%`` (so no ``.``, negated class, ``\\w``,
+    ``\\d`` or ``\\s``, nothing that matches whitespace, and no class such as ``[ -~]`` or
+    ``[\\u0000-\\U0010FFFF]`` that lists everything); no inline flag; and no match that starts
+    with ``-``."""
     return (
         pattern.startswith("^")
         and pattern.endswith("$")
         and not pattern.endswith("\\$")
         and not _top_level_alternation(pattern)
-        and not _OPEN.search(pattern)
         and not _wide_or_spaced(pattern)
     )
 

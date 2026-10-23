@@ -178,9 +178,12 @@ take, each with params that are literals or `$output.<path>` references (`$$` es
   computes them from the declaration and the accepted output. A reference may name only a
   *constrained* field (`is_constrained`: `enum`/`const`, number, boolean, a checked `format` -
   `date`, `ipv4`, `ipv6`, `uuid` - or a closed `pattern`: anchored at both ends, no top-level `|`,
-  no `.`, negated class or `\S`/`\W`/`\D`, nothing that matches whitespace, classes no wider
-  than ASCII letters, digits and `-_.:/@+=,~%`, and a length bound (`maxLength` or no unbounded
-  quantifier); arrays only through `items` and closed objects only through `properties`, so a
+  and every character it can match - as a literal, an alternative or a class member - an ASCII
+  letter, digit or one of `-_.:/@+=,~%` (so no `.`, negated class, `\w`, `\d` or `\s`, which
+  Python matches against Unicode, and no whitespace), no inline flag such as `(?i)`, no match
+  that can start with `-` (an argv-fed handler would read it as an option; the handler's own
+  `params_schema` stays the real bound on a value), and a length bound (`maxLength` or no
+  unbounded quantifier); arrays only through `items` and closed objects only through `properties`, so a
   schema with `prefixItems`, `patternProperties`, `$ref` or a combinator counts as free text). `summary`, `unknowns`, cites, memory updates and
   any unconstrained string are free text; a declaration that binds one is refused. Bound strings
   are also refused if they hold a control character (`$` matches before a final newline). This is

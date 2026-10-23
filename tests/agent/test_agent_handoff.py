@@ -306,6 +306,30 @@ def test_profiles_must_be_the_declared_ones():
         ("^[a-z\\x20]+$", False),
         ("^[a-z;|&]+$", False),
         ("^[\\p{L}]+$", False),
+        # literals outside a class are checked like class members: an alternation can spell any
+        # class, so (?:a|;|\$) is [a;$]
+        ("^(?:[a-z0-9/]|;|\\$|\\(|\\)|`|\\||>|&){1,200}$", False),
+        ("^(?:[a-z]|\\u00a0){1,50}$", False),
+        ("^(?:[a-z]|\u3164){1,50}$", False),  # a Hangul filler (U+3164)
+        ("^[a-z\\040]{1,9}$", False),  # an octal escape for a space
+        # Python matches \w and \d against Unicode: \w admits "ignore<U+3164>all<U+3164>rules"
+        ("^\\w{1,200}$", False),
+        ("^\\d{1,3}$", False),
+        ("^[\\w.-]{1,64}$", False),
+        # an inline flag changes how the rest is read: (?i:[a-z]) matches the Kelvin sign
+        ("^(?i:[a-z]){1,20}$", False),
+        ("(?i)^[a-z]{1,20}$", False),
+        ("^(?x)[a-z]{1,20}$", False),
+        ("^(?s:[a-z]){1,20}$", False),
+        # a value an argv-fed handler would read as an option
+        ("^[a-zA-Z0-9/=,-]{1,64}$", False),
+        ("^-?[0-9]{1,3}$", False),
+        ("^(?:[a-z]{0,3})-x$", False),
+        ("^(?:x|-){1,3}$", False),
+        ("^x-[a-z]{1,9}$", True),  # a dash that cannot come first
+        ("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", True),
+        ("^[a-z.]{1,9}$", True),  # a dot in a class is a dot, not "anything"
+        ("^(?=x)[a-z]{1,9}$", True),
     ],
 )
 def test_closed_patterns(pattern, closed):
@@ -394,3 +418,20 @@ def test_array_index_and_escaped_dollar_resolve(pack):
     )
     req = build_request(acc, "records.annotate", request_id="r-5")
     assert req["params"] == {"first": 443, "lit": "$output.note"}
+
+
+def test_a_closed_looking_pattern_cannot_carry_a_shell_line_a_flag_or_a_unicode_sentence():
+    """The review's end-to-end probe: each field is refused at declaration, so none of these
+    values can reach a broker request's params."""
+    shapes = {
+        "cmd": {"type": "string", "pattern": r"^(?:[a-z0-9/]|;|\$|\(|\)|`|\||>|&){1,200}$"},
+        "arg": {"type": "string", "pattern": r"^[a-zA-Z0-9/=,-]{1,64}$"},
+        "sentence": {"type": "string", "pattern": r"^\w{1,200}$"},
+        "kelvin": {"type": "string", "pattern": r"^(?i:[a-z]){1,20}$"},
+    }
+    for name, shape in shapes.items():
+        assert not is_constrained(shape), name
+        d = _with_params(x=f"$output.{name}")
+        d["output_schema"]["properties"][name] = shape
+        with pytest.raises(HandoffError, match="free-text field"):
+            Handoff.from_mapping(d)
