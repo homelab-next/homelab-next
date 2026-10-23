@@ -316,7 +316,9 @@ digest), and it is refused without a ceiling policy (a spec's `policy:` and opti
 relative to the spec, or `--policy`/`--lock` with `--profile`): the ceiling and digest stored in
 the file are whatever last edited it, so a hand edit with a recomputed digest would otherwise
 render. A lean one (`platform/agent_profile`) must pass its schema, the same grant rules, `mcp`
-within `mcp_ceiling`, and `mcp` and `capabilities` within the policy's ceiling; it is refused
+within `mcp_ceiling`, `mcp` and `capabilities` within the policy's ceiling, and the reader rule
+whenever the policy marks the profile a reader (`reads_untrusted: true` in its entry; the file's
+own `reads_untrusted: false` does not turn it off, as for a compiled profile); it is refused
 without a policy too (its own `mcp_ceiling` proves only that it agrees with itself); anything
 else is refused. The policy also **attests** each profile's `data_tier` and `model_role`
 (optional keys of its entry): the profile must say the same, and only a profile whose entry says
