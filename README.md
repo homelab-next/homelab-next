@@ -81,7 +81,8 @@ editable install (`pip install -e .`) reads the same directories from the checko
 lookup goes through `homelabnext/paths.py`: an explicit override (`HNX_SCHEMAS_DIR`,
 `HNX_PROFILES_DIR`, `HNX_EXAMPLES_DIR`, or `HNX_DATA_DIR` for all three), then the packaged copy,
 then the source tree; a miss prints every place that was tried. The top-level `schemas/`,
-`profiles/` and `examples/` stay the single source of truth (the build copies them into the wheel,
+`profiles/` and `examples/` stay the single source of truth (part of Veritas,
+[ADR-0028](docs/adr/0028-veritas-single-source-of-truth.md); the build copies them into the wheel,
 and a test fails if the copy ever differs). The developer gates under `tools/` (`hnx schema-check`,
 `hnx new` linting) still need a checkout.
 
