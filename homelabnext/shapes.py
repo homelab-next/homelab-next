@@ -36,17 +36,26 @@ VERSION_CONTEXT_RE = re.compile(
 
 
 #: what separates the words of a name: a plain deny-list term matches across any of them
-_TERM_SEPARATORS = re.compile(r"[-_.\s]+")
+#: the separators inside a name: a plain deny-list term matches across any run of them, or none
+_NAME_SEPARATORS = re.compile(r"[-_.]+")
+
+
+def _words(part: str) -> str:
+    words = [re.escape(w) for w in _NAME_SEPARATORS.split(part) if w]
+    return r"[-_.]*".join(words)
 
 
 def _term(raw: str) -> str:
     """The regex of a plain deny-list term (see :func:`compile_denylist`)."""
-    words = [re.escape(w) for w in _TERM_SEPARATORS.split(raw) if w]
-    if not words:
+    parts = [_words(p) for p in raw.split() if _words(p)]
+    if not parts:
         raise re.error(f"{raw!r} has no letters or digits")
-    # not after a letter or digit, not before a letter ("_" and "-" are separators here; a
-    # trailing number is a variant of the name: name2, name-03)
-    return r"(?<![^\W_])" + r"[-_. \t]*".join(words) + r"(?![^\W\d_])"
+    # not after a letter or digit; not before a letter, and when the term itself ends in a digit
+    # (an address, a number) not before another digit either: name2 is a variant of name, but
+    # a longer number is not a variant of a number.  Whitespace matches only where the term
+    # itself has it.
+    end = r"(?![^\W_])" if raw.rstrip()[-1:].isdigit() else r"(?![^\W\d_])"
+    return r"(?<![^\W_])" + r"\s+".join(parts) + end
 
 
 def compile_denylist(lines: Iterable[str]) -> list[tuple[int, re.Pattern[str]]]:
@@ -55,9 +64,11 @@ def compile_denylist(lines: Iterable[str]) -> list[tuple[int, re.Pattern[str]]]:
     One term per line; blank lines and ``#`` comments are skipped.  A plain term matches
     case-insensitively wherever it is not part of a longer run of letters and digits: ``-``,
     ``_`` and ``.`` are separators, not part of a word, so ``name`` also matches ``name-core``,
-    ``name_core``, ``name.example`` and ``name2``.  The separators inside a term match any run
-    of ``-``, ``_``, ``.``, spaces and tabs, or none, so ``some-name`` also matches
-    ``some_name``, ``some name`` and ``somename``.  ``re:<regex>`` is a raw case-insensitive
+    ``name_core``, ``name.example`` and ``name2`` (a term ending in a digit is not extended by
+    more digits).  The ``-``, ``_`` and ``.`` inside a term match any run of those separators, or
+    none, so ``some-name`` also matches ``some_name`` and ``somename``; whitespace matches only
+    where the term itself has whitespace, so ``some-name`` does not match the phrase
+    ``some name``.  ``re:<regex>`` is a raw case-insensitive
     regex.  Raises ``ValueError`` naming the line of a bad regex.  An empty result is returned
     as is: whether an empty list is acceptable is the caller's decision.
     """
