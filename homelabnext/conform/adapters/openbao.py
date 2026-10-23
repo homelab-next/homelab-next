@@ -198,7 +198,9 @@ class OpenBaoStore:
             # so 0 and anything negative name a version that was never written.  Nothing else is
             # coerced into one: ``int()`` would read True as 1, 1.9 as 1 and "2" as 2, and raise
             # ValueError/OverflowError for nan/inf instead of the Protocol's error.
-            raise SecretNotFound(f"no secret at {path!r} version {version!r}")
+            # name the type, not the value: the version is an arbitrary caller object
+            shown = version if type(version) is int else f"of type {type(version).__name__}"
+            raise SecretNotFound(f"no secret at {path!r} version {shown}")
         q = "" if version is None else f"?version={version}"
         status, doc = self._call("GET", self._kv("data", path) + q)
         if status == 404:

@@ -84,7 +84,8 @@ class SecretStore(Protocol):
         """Paths only, sorted, never values; a deleted path is not listed under any prefix."""
 
     def lease(self, path: str, ttl: float) -> Lease:
-        """A time-limited read; ``data`` is a copy, like ``get``'s.  Raises SecretNotFound, or
+        """A time-limited read; ``data`` is the holder's own copy, like ``get``'s (of any
+        version): changing it reaches neither the store nor another lease.  Raises SecretNotFound, or
         LeaseError for a ttl that is not a positive, finite number of seconds (``nan`` and
         ``inf`` included: either would be a read that never expires), before anything is
         granted."""

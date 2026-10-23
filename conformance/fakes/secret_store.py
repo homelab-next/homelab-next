@@ -266,3 +266,30 @@ class CoercingVersionSecretStore(FakeSecretStore):
 
     def get(self, path: str, version: int | None = None) -> Secret:
         return super().get(path, None if version is None else int(version))
+
+
+class VersionedGetAliasingSecretStore(FakeSecretStore):
+    """Defect: ``get(path)`` copies, but ``get(path, version=N)`` returns the stored mapping, so
+    changing it rewrites that version."""
+
+    def get(self, path: str, version: int | None = None) -> Secret:
+        sec = super().get(path, version)
+        if version is None:
+            return sec
+        return Secret(sec.path, sec.version, self._v[path][sec.version - 1])
+
+
+class CachedLeaseSecretStore(FakeSecretStore):
+    """Defect: one lease per path is cached and handed to every caller while it is valid (saving a
+    token per read), so one holder's change to ``lease.data`` is what the next holder reads."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._cache: dict[str, Lease] = {}
+
+    def lease(self, path: str, ttl: float) -> Lease:
+        hit = self._cache.get(path)
+        if hit is not None and self.lease_valid(hit.id):
+            return hit
+        self._cache[path] = super().lease(path, ttl)
+        return self._cache[path]

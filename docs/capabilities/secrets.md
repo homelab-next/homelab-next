@@ -13,7 +13,7 @@ generated_by: hnx docs capabilities generate
 **Versioned key-value secrets with leases and redacted errors.**
 
 - Contract: [`conformance.protocols.secrets`](../../conformance/protocols/secrets.py) (`conformance.protocols.secrets:SecretStore`)
-- Conformance suite: [`conformance.suites.secrets`](../../conformance/suites/secrets.py) (13 checks: 13 MUST, 0 SHOULD)
+- Conformance suite: [`conformance.suites.secrets`](../../conformance/suites/secrets.py) (15 checks: 15 MUST, 0 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -112,7 +112,8 @@ def lease(path: str, ttl: float) -> Lease
 
 **Returns:** `Lease`
 
-A time-limited read; `data` is a copy, like `get`'s.  Raises SecretNotFound, or
+A time-limited read; `data` is the holder's own copy, like `get`'s (of any
+version): changing it reaches neither the store nor another lease.  Raises SecretNotFound, or
 LeaseError for a ttl that is not a positive, finite number of seconds (`nan` and
 `inf` included: either would be a read that never expires), before anything is
 granted.
@@ -192,8 +193,10 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `put-get-roundtrip` | MUST | the stored mapping is read back unchanged |  |
 | `versions-increase-and-stay-readable` | MUST | every put is a new version; old ones remain |  |
 | `missing-secret-raises` | MUST | an absent path or version raises SecretNotFound; versions are ints from 1 (0, -1, True, 1.0 and '2' name none) |  |
-| `delete-removes-all-versions` | MUST | after delete no version is readable, the path is not listed, deleting again raises, and a new put starts a fresh history |  |
-| `stored-data-is-a-copy` | MUST | changing the mapping given to put, or the one get returned, does not change the secret |  |
+| `delete-removes-all-versions` | MUST | after delete no version is readable and the path is not listed; deleting again raises |  |
+| `put-after-delete-starts-fresh` | MUST | writing a deleted path again starts a new history at version 1; no deleted version returns |  |
+| `list-omits-deleted-paths` | MUST | a deleted path is listed under no prefix: not its own, its parent's or the empty one |  |
+| `stored-data-is-a-copy` | MUST | changing the mapping given to put, or one get or lease returned, changes neither the secret nor what anyone else reads |  |
 | `invalid-paths-rejected` | MUST | empty segments and '..' are refused |  |
 | `errors-never-contain-values` | MUST | no error - message, repr, attributes, cause chain or traceback - includes a secret value |  |
 | `repr-is-redacted` | MUST | repr/str of a returned secret hides the value |  |
@@ -214,20 +217,22 @@ Each is a deliberately broken fake (`hnx conform run secrets --target broken:<mu
 | Mutant | Must fail | Defect |
 |---|---|---|
 | `delete-drops-latest-only` | `delete-removes-all-versions` | delete removes the latest version and leaves the older ones readable |
-| `deleted-path-listed-under-parent` | `delete-removes-all-versions` | a deleted path is still listed under its parent prefix |
+| `deleted-path-listed-under-parent` | `list-omits-deleted-paths` | a deleted path is still listed under its parent prefix |
 | `error-cause-leaks-value` | `errors-never-contain-values` | the invalid-path error is raised from an exception that carries the values |
 | `error-leaks-value` | `errors-never-contain-values` | the invalid-path error echoes the submitted values |
+| `lease-cached-per-path` | `stored-data-is-a-copy` | one cached lease per path is handed to every holder |
 | `lease-never-expires` | `lease-expires` | lease_valid ignores the expiry time |
 | `lease-shares-stored-mapping` | `stored-data-is-a-copy` | lease hands back the stored mapping, so changing lease.data rewrites the secret |
 | `negative-ttl-accepted` | `lease-ttl-must-be-positive` | only ttl == 0 is refused |
 | `negative-version-indexes-from-end` | `missing-secret-raises` | a negative version reads an older version through Python negative indexing |
 | `non-finite-lease-ttl-accepted` | `lease-ttl-must-be-positive` | a nan or inf lease ttl is accepted (the reference fake did this) |
-| `put-after-delete-revives-history` | `delete-removes-all-versions` | delete tombstones the path and a later put revives the deleted versions |
+| `put-after-delete-revives-history` | `put-after-delete-starts-fresh` | delete tombstones the path and a later put revives the deleted versions |
 | `stores-caller-mapping` | `stored-data-is-a-copy` | the caller's mapping is stored and returned by reference |
 | `unknown-lease-valid` | `unknown-lease-invalid` | any unknown lease id is valid |
 | `version-coerced` | `missing-secret-raises` | the version is coerced with int(): True reads 1, 1.9 reads 1, '2' reads 2 |
 | `version-error-leaks-value` | `errors-never-contain-values` | the no-such-version error of a path that holds a secret echoes the latest value |
 | `version-zero-is-latest` | `missing-secret-raises` | version 0 is read as no version, so it returns the latest |
+| `versioned-get-shares-stored-mapping` | `stored-data-is-a-copy` | get of an explicit version returns the stored mapping itself |
 
 ## Implementations
 
@@ -346,4 +351,4 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
    hnx conform run secrets --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (13) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (15) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.

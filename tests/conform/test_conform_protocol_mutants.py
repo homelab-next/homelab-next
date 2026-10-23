@@ -77,6 +77,8 @@ REVIEWED = {
         "deleted-path-listed-under-parent",
         "lease-shares-stored-mapping",
         "non-finite-lease-ttl-accepted",
+        "versioned-get-shares-stored-mapping",
+        "lease-cached-per-path",
     },
     "idp": {
         "alg-none-accepted",

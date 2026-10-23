@@ -268,9 +268,10 @@ def test_a_version_that_is_not_an_int_is_absent_not_coerced(openbao):
     s.put("a/x", {"k": "1"})
     s.put("a/x", {"k": "2"})
     sent = len(openbao.requests)
-    for v in (True, False, 1.0, 1.9, "2", float("nan"), float("inf")):
-        with pytest.raises(SecretNotFound):
+    for v in (True, False, 1.0, 1.9, "2", float("nan"), float("inf"), "zq-caller-object"):
+        with pytest.raises(SecretNotFound) as info:
             s.get("a/x", version=v)
+        assert "zq-caller-object" not in str(info.value), "the error echoed the caller's object"
     assert len(openbao.requests) == sent, "a version that is not an int reached the server"
     s.close()
 

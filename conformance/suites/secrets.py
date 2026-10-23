@@ -7,6 +7,7 @@ import contextlib
 
 from conformance.fakes.secret_store import (
     AliasingSecretStore,
+    CachedLeaseSecretStore,
     ChainedLeakSecretStore,
     CoercingVersionSecretStore,
     DeletesLatestOnlySecretStore,
@@ -20,6 +21,7 @@ from conformance.fakes.secret_store import (
     NonFiniteLeaseSecretStore,
     TombstoneSecretStore,
     UnknownLeaseValidSecretStore,
+    VersionedGetAliasingSecretStore,
     VersionErrorLeaksSecretStore,
     VersionZeroIsLatestSecretStore,
 )
@@ -81,8 +83,7 @@ def _(s):
 
 @SUITE.check(
     "delete-removes-all-versions",
-    "after delete no version is readable, the path is not listed, deleting again raises, and a "
-    "new put starts a fresh history",
+    "after delete no version is readable and the path is not listed; deleting again raises",
 )
 def _(s):
     p = _path(s)
@@ -92,19 +93,41 @@ def _(s):
     raises(lambda: s.get(p), "get after delete", SecretNotFound)
     for v in (1, 2):
         raises(lambda v=v: s.get(p, version=v), f"version {v} after delete", SecretNotFound)
-    parent = p.rsplit("/", 1)[0] + "/"
-    for prefix in (p, parent, ""):
-        assert p not in list(s.list(prefix)), f"a deleted path is still listed under {prefix!r}"
+    assert p not in list(s.list(p)), "a deleted path is still listed"
     raises(lambda: s.delete(p), "second delete", SecretNotFound)
-    # deleted for good: writing the path again starts over, it does not revive the old history
+
+
+@SUITE.check(
+    "put-after-delete-starts-fresh",
+    "writing a deleted path again starts a new history at version 1; no deleted version returns",
+)
+def _(s):
+    p = _path(s)
+    s.put(p, {"k": "one"})
+    s.put(p, {"k": "two"})
+    s.delete(p)
     assert s.put(p, {"k": "three"}) == 1, "a put after delete continued the deleted numbering"
     assert dict(s.get(p, version=1).data) == {"k": "three"}, "version 1 is the deleted secret"
     raises(lambda: s.get(p, version=2), "version 2 of the new history", SecretNotFound)
 
 
 @SUITE.check(
+    "list-omits-deleted-paths",
+    "a deleted path is listed under no prefix: not its own, its parent's or the empty one",
+)
+def _(s):
+    p = _path(s)
+    s.put(p, {"k": "one"})
+    s.delete(p)
+    parent = p.rsplit("/", 1)[0] + "/"
+    for prefix in (p, parent, ""):
+        assert p not in list(s.list(prefix)), f"a deleted path is still listed under {prefix!r}"
+
+
+@SUITE.check(
     "stored-data-is-a-copy",
-    "changing the mapping given to put, or the one get returned, does not change the secret",
+    "changing the mapping given to put, or one get or lease returned, changes neither the secret "
+    "nor what anyone else reads",
 )
 def _(s):
     p = _path(s)
@@ -117,9 +140,17 @@ def _(s):
     with contextlib.suppress(TypeError):  # a read-only mapping is fine too
         got.data["password"] = "rewritten-through-get"  # type: ignore[index]
     assert dict(s.get(p).data) == {"password": VALUE}, "a returned mapping is the stored one"
-    leased = s.lease(p, 300)
+    old = s.get(p, version=1)
     with contextlib.suppress(TypeError):
-        leased.data["password"] = "rewritten-through-lease"  # type: ignore[index]
+        old.data["password"] = "rewritten-through-a-version"  # type: ignore[index]
+    assert dict(s.get(p).data) == {"password": VALUE}, "get(version=1) returned the stored one"
+    # each lease holder has its own copy: one holder's change reaches neither the store nor the
+    # next holder (a store caching one lease per path hands every holder the same object)
+    first = s.lease(p, 300)
+    with contextlib.suppress(TypeError):
+        first.data["password"] = "rewritten-through-lease"  # type: ignore[index]
+    second = s.lease(p, 300)
+    assert dict(second.data) == {"password": VALUE}, "the next lease holder read another's change"
     assert dict(s.get(p).data) == {"password": VALUE}, "a lease's mapping is the stored one"
 
 
@@ -263,18 +294,28 @@ MUTANTS = {
     ),
     "put-after-delete-revives-history": Mutant(
         TombstoneSecretStore,
-        "delete-removes-all-versions",
+        "put-after-delete-starts-fresh",
         "delete tombstones the path and a later put revives the deleted versions",
     ),
     "deleted-path-listed-under-parent": Mutant(
         ListsDeletedSecretStore,
-        "delete-removes-all-versions",
+        "list-omits-deleted-paths",
         "a deleted path is still listed under its parent prefix",
     ),
     "lease-shares-stored-mapping": Mutant(
         LeaseAliasingSecretStore,
         "stored-data-is-a-copy",
         "lease hands back the stored mapping, so changing lease.data rewrites the secret",
+    ),
+    "versioned-get-shares-stored-mapping": Mutant(
+        VersionedGetAliasingSecretStore,
+        "stored-data-is-a-copy",
+        "get of an explicit version returns the stored mapping itself",
+    ),
+    "lease-cached-per-path": Mutant(
+        CachedLeaseSecretStore,
+        "stored-data-is-a-copy",
+        "one cached lease per path is handed to every holder",
     ),
     "non-finite-lease-ttl-accepted": Mutant(
         NonFiniteLeaseSecretStore,
