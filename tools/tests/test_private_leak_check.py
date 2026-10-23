@@ -1062,8 +1062,10 @@ class _CpuCap:
 @pytest.mark.parametrize("shape", sorted(LINEAR_SHAPES))
 def test_the_raw_rule_grows_linearly(shape):
     """VERIFY3 SF1: a ratio, not an absolute bound.  Time at n, 4n and 16n; each 4x step may
-    cost at most 6x (plus a small floor for timer noise), so a quadratic shape (16x a step)
-    fails."""
+    cost at most 8x (plus a small floor for timer noise), so a quadratic shape (16x a step)
+    fails.  VERIFY4 SF4: the time is this process's CPU time (``time.process_time``), best of
+    five, not wall clock: a busy runner's other processes and CPU steal moved wall-clock ratios
+    by 7x and failed this test on noise alone."""
     import gc
     import time
 
@@ -1075,11 +1077,11 @@ def test_the_raw_rule_grows_linearly(shape):
         gc.collect()
         gc.disable()  # the collector's full passes grow with live objects: noise, not the rule
         try:
-            for _ in range(3):
-                t0 = time.perf_counter()
+            for _ in range(5):
+                t0 = time.process_time()
                 with _CpuCap(cap, f"{shape} at n={n}"):
                     plc.scope_findings(rel, text)
-                best = min(best, time.perf_counter() - t0)
+                best = min(best, time.process_time() - t0)
         finally:
             gc.enable()
         return best
@@ -1088,9 +1090,9 @@ def test_the_raw_rule_grows_linearly(shape):
     # the first step it blows up instead of running the larger sizes
     t1 = timed(2_000, 2.0)
     t4 = timed(8_000, 20 * t1 + 1.0)
-    assert t4 <= 6 * t1 + 0.1, (shape, t1, t4)
+    assert t4 <= 8 * t1 + 0.1, (shape, t1, t4)
     t16 = timed(32_000, 20 * t4 + 1.0)
-    assert t16 <= 6 * t4 + 0.1, (shape, t4, t16)
+    assert t16 <= 8 * t4 + 0.1, (shape, t4, t16)
 
 
 @needs_skeleton
