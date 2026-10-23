@@ -2051,6 +2051,20 @@ app.lab.example {
         # h19 / k03b: no request header can set REMOTE_USER (live on 2.11.1, 2.11.2 and 2.11.7
         # with every spelling of Remote-User sent: REMOTE_USER = alice)
         ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv REMOTE_USER {http.request.header.X-Authentik-Username}\n\t}", []),
+        # e02 / e08: AUTH_USER and REDIRECT_REMOTE_USER held alice too, under php-fpm and php-cgi
+        # with every spelling and every Authorization scheme sent
+        ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv AUTH_USER {http.request.header.X-Authentik-Username}\n\t}", []),
+        ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv REDIRECT_REMOTE_USER {http.request.header.X-Authentik-Username}\n\t}", []),
+        # VERIFY5 SF1 (e01): PHP rebuilds PHP_AUTH_USER from the client's Authorization after it
+        # reads the FastCGI env (live, 2.11.7 php-fpm and php-cgi: admin from Basic admin:x)
+        ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv PHP_AUTH_USER {http.request.header.X-Authentik-Username}\n\t}", [("reset", 11)]),
+        # e12: the same through reverse_proxy's own fastcgi transport
+        ("request_header -*authentik*", "reverse_proxy app:9000 {\n\t\ttransport fastcgi {\n\t\t\tenv PHP_AUTH_USER {http.request.header.X-Authentik-Username}\n\t\t}\n\t}", [("reset", 12)]),
+        # PHP_AUTH_PW (Basic) and PHP_AUTH_DIGEST (Digest) are rebuilt the same way; AUTH_TYPE
+        # is outside the proven three, so it is refused
+        ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv PHP_AUTH_PW {http.request.header.X-Authentik-Username}\n\t}", [("reset", 11)]),
+        ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv PHP_AUTH_DIGEST {http.request.header.X-Authentik-Username}\n\t}", [("reset", 11)]),
+        ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv AUTH_TYPE {http.request.header.X-Authentik-Username}\n\t}", [("reset", 11)]),
         # not when the header is added beside a client's, nor read from the client's own header
         ("request_header -*authentik*", "reverse_proxy app:8080 {\n\t\theader_up +Remote-User {header.X-Authentik-Username}\n\t}", [("reset", 11)]),
         ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv REMOTE_USER {http.request.header.X-User}\n\t}", [("reset", 11)]),
@@ -2094,6 +2108,44 @@ def test_json_hands_the_idps_answer_on_only_through_a_variable_no_header_sets():
     assert "reset" in {
         r for r, _ in lint.judge_json(_config(_json_site(_fa(*IDS), fcgi("REMOTE_USER"))))
     }
+    # VERIFY5 SF1: an allowlist, not "any name without HTTP_" (PHP rebuilds PHP_AUTH_*)
+    for name in ("AUTH_USER", "REDIRECT_REMOTE_USER"):
+        assert (
+            lint.judge_json(_config(_json_site(_del("*authentik*"), _fa(*IDS), fcgi(name)))) == []
+        )
+    for name in ("PHP_AUTH_USER", "PHP_AUTH_PW", "PHP_AUTH_DIGEST", "AUTH_TYPE"):
+        found = lint.judge_json(_config(_json_site(_del("*authentik*"), _fa(*IDS), fcgi(name))))
+        assert [r for r, _ in found] == ["reset"], name
+
+
+#: VERIFY5 SF1 probes e01 (php_fastcgi) and e12 (reverse_proxy's fastcgi transport)
+E01 = H_SITE % ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv PHP_AUTH_USER {http.request.header.X-Authentik-Username}\n\t}")  # fmt: skip
+E12 = H_SITE % ("request_header -*authentik*", "reverse_proxy app:9000 {\n\t\ttransport fastcgi {\n\t\t\tenv PHP_AUTH_USER {http.request.header.X-Authentik-Username}\n\t\t}\n\t}")  # fmt: skip
+
+
+def test_php_auth_user_from_the_idp_is_a_reset_in_the_json_report(tmp_path):
+    (tmp_path / "e01").mkdir()
+    (tmp_path / "e01" / "Caddyfile").write_text(E01)
+    (tmp_path / "e12").mkdir()
+    (tmp_path / "e12" / "Caddyfile").write_text(E12)
+    out, err = io.StringIO(), io.StringIO()
+    # with a caddy binary the semantic check reports each one again, at line 0
+    caddy = ["--caddy", CADDY_BIN] if CADDY_BIN else []
+    assert lint.main([str(tmp_path), "--json", *caddy], out=out, err=err) == 1
+    found = json.loads(out.getvalue())["findings"]
+    text = sorted((f["path"], f["line"], f["rule"]) for f in found if f["line"])
+    assert text == [("e01/Caddyfile", 11, "reset"), ("e12/Caddyfile", 12, "reset")]
+    assert {(f["path"], f["rule"]) for f in found if not f["line"]} == (
+        {("e01/Caddyfile", "reset"), ("e12/Caddyfile", "reset")} if CADDY_BIN else set()
+    )
+    assert all("PHP_AUTH_USER" in f["detail"] for f in found)
+
+
+@live
+@pytest.mark.parametrize("text", [E01, E12])
+def test_live_php_auth_user_from_the_idp_is_a_semantic_reset(text):
+    doc, err = lint.Adapter(CADDY_BIN).adapt(text, None)
+    assert err == "" and {rule for rule, _ in lint.judge_json(doc)} == {"reset"}
 
 
 @live

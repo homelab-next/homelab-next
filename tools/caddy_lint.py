@@ -87,13 +87,20 @@ So these must hold, everywhere:
              X-Authentik-Username>Remote-User``: the lint then requires every spelling of the
              target stripped, which a ``header_up Remote-User {...}`` copy does not ensure (a
              client's ``Remote_User`` reaches a CGI-style upstream beside it, observed on
-             2.11.1 and 2.11.2). One copy is allowed: a FastCGI ``env`` of a variable without
-             the ``HTTP_`` prefix (``env REMOTE_USER {http.request.header.X-Authentik-Username}``)
-             whose value is exactly one request-header placeholder of an identity header the
-             site's matcherless site-level strip deletes. No request header can set such a
-             variable (observed on 2.11.1, 2.11.2 and 2.11.7 with every spelling sent), and the
-             source is read after the strip and ``forward_auth``. ``env HTTP_REMOTE_USER {...}``
-             is refused: the client's ``Remote-User`` overwrites it.
+             2.11.1 and 2.11.2). One copy is allowed: a FastCGI ``env`` of ``REMOTE_USER``,
+             ``AUTH_USER`` or ``REDIRECT_REMOTE_USER``
+             (``env REMOTE_USER {http.request.header.X-Authentik-Username}``) whose value is
+             exactly one request-header placeholder of an identity header the site's matcherless
+             site-level strip deletes. Neither a request header nor PHP can set those three
+             (observed on 2.11.1, 2.11.2 and 2.11.7 under php-fpm and php-cgi, with every
+             spelling and every ``Authorization`` scheme sent), and the source is read after the
+             strip and ``forward_auth``. Every other name is refused: ``env HTTP_REMOTE_USER``
+             because the client's ``Remote-User`` overwrites it, ``env PHP_AUTH_USER`` (and
+             ``PHP_AUTH_PW``, ``PHP_AUTH_DIGEST``, ``AUTH_TYPE``) because PHP rebuilds it from
+             the client's ``Authorization`` header. The env form still leaves the client's own
+             ``Remote-User`` reaching the app as ``HTTP_REMOTE_USER``; for an app that falls back
+             to it, strip it too, or use ``copy_headers X-Authentik-Username>Remote-User`` and
+             ``env REMOTE_USER {http.request.header.Remote-User}``.
   dial       a ``forward_auth`` whose upstream is a placeholder the request chooses (the client
              picks the IdP that vouches for it), and any proxy of a site that runs
              ``forward_auth`` whose upstream (argument, ``to``, ``dynamic``) is one (the IdP's
@@ -691,6 +698,11 @@ CGI_IDENTITY = {
     "REMOTE_USER", "REMOTE_IDENT", "AUTH_TYPE", "AUTH_USER", "AUTH_PASSWORD", "LOGON_USER",
     "PHP_AUTH_USER", "PHP_AUTH_PW", "PHP_AUTH_DIGEST", "REDIRECT_REMOTE_USER",
 }  # fmt: skip
+#: the FastCGI ``env`` names that may take the IdP's answer: no request header sets them (a
+#: header arrives as ``HTTP_<NAME>``) and PHP does not rebuild them from ``Authorization``, as it
+#: does ``PHP_AUTH_USER``/``PHP_AUTH_PW``/``PHP_AUTH_DIGEST`` (each observed live, php-fpm and
+#: php-cgi on 2.11.1, 2.11.2 and 2.11.7); an allowlist, so an unproven name is refused
+ENV_FROM_IDP = {"REMOTE_USER", "AUTH_USER", "REDIRECT_REMOTE_USER"}
 #: a sample identity header, to ask whether a wildcard field name matches one
 SAMPLE_IDENTITY = "X-Authentik-Username"
 
@@ -1042,10 +1054,10 @@ def _fastcgi_env(
         if n.name != "env" or not fastcgi or len(n.tokens) < 2 or INLINE_ALLOW.search(n.raw):
             continue
         name, values = n.tokens[1], n.tokens[2:]
-        if not name.upper().startswith("HTTP_") and _from_idp(values, site_deletes or [], copied):
+        if name.upper() in ENV_FROM_IDP and _from_idp(values, site_deletes or [], copied):
             # REMOTE_USER from the IdP's answer, after the site-level strip: a request header
-            # becomes HTTP_<NAME> and can never set a variable without that prefix (observed on
-            # 2.11.1, 2.11.2 and 2.11.7 with every spelling of Remote-User sent)
+            # becomes HTTP_<NAME>, and PHP rebuilds only PHP_AUTH_* from Authorization, so
+            # neither reaches these names (see ENV_FROM_IDP)
             continue
         if cgi_identity(name, copied) or any(CLIENT_PLACEHOLDER.search(v) for v in values):
             out.append(
@@ -1565,8 +1577,8 @@ class _Judge:
         if not isinstance(t, dict) or t.get("protocol") != "fastcgi":
             return
         for name, value in (t.get("env") or {}).items():
-            if not str(name).upper().startswith("HTTP_") and self.from_idp([str(value)], covered):
-                continue  # a variable no request header can set (see _fastcgi_env)
+            if str(name).upper() in ENV_FROM_IDP and self.from_idp([str(value)], covered):
+                continue  # a variable neither a request header nor PHP sets (see ENV_FROM_IDP)
             if cgi_identity(str(name), self.idents) or CLIENT_PLACEHOLDER.search(str(value)):
                 self.add("reset", f"{loc}/transport", f"fastcgi env {name}: an identity variable, "
                          "or one set from a value the client chooses")  # fmt: skip

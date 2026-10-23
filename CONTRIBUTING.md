@@ -136,7 +136,12 @@ and an entry that no longer excuses anything fails the lint.
   or in the route) of each header its `copy_headers` sets in every `-`/`_` spelling; no header directive sets, adds
   or copies an identity header (`copy_headers A>B` is the way to rename one), or rewrites one
   through a `*` field; no FastCGI `env` sets an
-  identity CGI variable or a client-chosen value; no `forward_auth` (or forward-auth site proxy)
+  identity CGI variable or a client-chosen value (only `REMOTE_USER`, `AUTH_USER` and
+  `REDIRECT_REMOTE_USER` may take the IdP's answer, after the site-level strip: PHP rebuilds
+  `PHP_AUTH_*` from the client's `Authorization`; and if the app falls back to the
+  `Remote-User` header, strip `Remote-User`/`Remote_User` too, or use
+  `copy_headers X-Authentik-Username>Remote-User` with
+  `env REMOTE_USER {http.request.header.Remote-User}`); no `forward_auth` (or forward-auth site proxy)
   dials a request placeholder (`dial`); what the lint cannot read (a heredoc, `{$ENV}` in
   directive position, a header name that is a placeholder, an import outside the tree, a
   `forward_auth` in a `.conf` nothing imports, a Python string or a caddy-docker-proxy label)
