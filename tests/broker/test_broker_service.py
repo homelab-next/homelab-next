@@ -4,6 +4,7 @@ approvals flow, durable single-use approvals across processes, and the audit tra
 
 from __future__ import annotations
 
+import contextlib
 import json
 import multiprocessing
 import re
@@ -897,6 +898,77 @@ def test_secret_arguments_never_reach_disk(tmp_path):
     with pytest.raises(BrokerError) as info:
         other.run("ops", rid2)
     assert info.value.reason == "secret-args-lost"
+
+
+def test_unnamed_argument_values_never_reach_the_audit_trail(tmp_path):
+    """Redaction is the default: a misspelt secret argument (refused as invalid) and any argument
+    of a command nobody registered (refused as denied) are audited by name only, called or
+    submitted.  The trail used to hold both values in the clear."""
+    svc = BrokerService(tmp_path / "state", clock=Clock())
+    secret = "fake-typo-value-7e3c"
+    spec = {"user": ArgSpec("str"), "password": ArgSpec("str", secret=True)}
+    svc.register("ops.rotate", lambda **kw: "ok", spec)
+    svc.allow("ops", ["ops.rotate"])
+    for op in (svc.call, svc.submit):
+        with pytest.raises(InvalidArguments):
+            op("ops", "ops.rotate", {"user": "svc", "pasword": secret})
+        with pytest.raises(Denied):
+            op("ops", "ops.rotat", {"password": secret})
+    docs = _audit_ok(svc)
+    assert [(d["operation"], d["outcome"]) for d in docs] == [
+        ("call", "invalid"),
+        ("call", "denied"),
+        ("submit", "invalid"),
+        ("submit", "denied"),
+    ]
+    assert docs[0]["args"] == {"user": "svc", "pasword": "<redacted>"}, docs[0]["args"]
+    assert docs[1]["args"] == {"password": "<redacted>"}, docs[1]["args"]
+    for p in (tmp_path / "state").rglob("*"):
+        if p.is_file():
+            assert secret not in p.read_text(), p
+
+
+def test_a_refused_request_digest_does_not_reveal_an_unnamed_argument(tmp_path):
+    """The audit view redacted an unnamed argument, but the request digest on the same record
+    hashed its clear value, unkeyed, next to every other input it covers (action, actor, the
+    argument's name): a wordlist recovered it.  The digest keys it like a declared secret."""
+    svc = BrokerService(tmp_path / "state", clock=Clock())
+    secret = "hunter2"
+    spec = {"user": ArgSpec("str"), "password": ArgSpec("str", secret=True)}
+    svc.register("ops.rotate", lambda **kw: "ok", spec)
+    svc.allow("ops", ["ops.rotate"])
+    for op, command, args in (
+        (svc.call, "ops.rotate", {"user": "svc", "pasword": secret}),
+        (svc.submit, "ops.rotat", {"password": secret}),
+        (svc.call, "ops.rotate", {"user": "svc", "password": secret}),
+    ):
+        with contextlib.suppress(BrokerError):
+            op("ops", command, args)
+    words = ["password", "letmein", "123456", secret, "qwerty"]
+    docs = _audit_ok(svc)
+    assert {d["outcome"] for d in docs} >= {"invalid", "denied", "ok"}
+    for d in docs:
+        if not d.get("request_digest"):
+            continue
+        for guess in words:
+            params = {k: (guess if v == "<redacted>" else v) for k, v in d["args"].items()}
+            req = {"action": d["action"], "actor": d["caller"], "params": params}
+            assert request_digest(req) != d["request_digest"], (d["outcome"], d["args"])
+
+
+def test_submit_keeps_the_arguments_it_checked(tmp_path):
+    """The mapping a caller passed to submit is copied before it is checked: changing it
+    afterwards changes nothing that runs."""
+    svc = BrokerService(tmp_path / "state", clock=Clock())
+    got = []
+    svc.register("ops.echo", lambda **kw: got.append(kw) or "ok", {"name": ArgSpec("str")})
+    svc.allow("ops", ["ops.echo"])
+    given = {"name": "x"}
+    rid = svc.submit("ops", "ops.echo", given)
+    given["name"] = 5
+    given["extra"] = "--force"
+    assert svc.run("ops", rid) == "ok"
+    assert got == [{"name": "x"}], got
 
 
 def test_registering_over_a_manifest_action_is_refused(tmp_path):

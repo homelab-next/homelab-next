@@ -85,7 +85,12 @@ def _(store):  # the subject: any implementation of the Protocol
   hide behind a hook at all: token and lease expiry use `tick()` when the subject has it and
   otherwise wait in real time (a one-second ttl).  Skips never count as a pass of anything.
 * **Waivers.** A target may waive a `should` check with a written reason; the report shows it.
-* Each suite has 6 to 16 checks, at least six of them `must`.
+* Each suite has 6 to 24 checks, at least six of them `must`: one check per clause of the
+  Protocol docstring, so a suite says something and a failure names what broke.  The ceiling
+  keeps a suite one readable file and a run against a real service short; a contract with more
+  clauses than that is two capabilities.  Do not fold a second clause into an existing check to
+  stay under it: a check named for redaction that also fails when a deferred run is broken sends
+  the reader to the wrong place.
 * Errors are the Protocol's own exception types.  An adapter translates its client library's
   errors into them; that translation is part of what is being proved.
 
@@ -174,13 +179,71 @@ MUTANTS = {
 }
 ```
 
-`hnx conform mutants` and `tests/conform/test_mutants.py` assert each mutant is caught **by that
-check**, so a regression in a suite shows up as a named check, not as silence.  The named check
+`hnx conform mutants` and `tests/conform/test_conform_mutants.py` assert each mutant is caught
+**by that check**, so a regression in a suite shows up as a named check, not as silence.  The named check
 must be a `must` that always executes against the mutant (not `skippable`, and every feature it
 `requires` declared by the mutant: `Mutant(..., features=frozenset({"admission"}))` says what the
 mutant's factory supports, and the mutant runs with those declared): a mutant caught only by a
 check that can skip proves nothing about a target on which it skips, and the report counts it as
 not caught.  Each conformance gap fixed in a suite ships with the mutant that reproduces it.
+
+**Model the Protocol's clauses, not only the defects you expect.**  A suite that pins only what
+its own mutants model passes anything else: a review wrote sixteen defects, each breaking one
+sentence of a Protocol docstring, and every one passed its suite - a broker whose `submit` skipped
+the allowlist (anyone could queue any command and run it as its owner), an event bus whose stale
+`ack` swallowed the live redelivery's `nack` (the reference fake itself did this), records whose
+`approve` overturned a denial, secrets that read version `0` as the latest or deleted only the
+newest version, an identity provider that matched scopes as substrings, an object store whose
+`delete` reached every bucket.  So, when writing or reviewing a suite:
+
+* walk the Protocol docstring sentence by sentence and name the check that fails a subject
+  breaking it;
+* a second way into the same operation (the broker's `submit`/`run` next to `call`) gets every
+  gate the first one has;
+* probe the boundary values the type allows, not only the obvious bad one (version `0` and `-1`
+  as well as `9`; a `nan` or `inf` ttl as well as `-5`);
+* write state twice before checking it is all gone, write it again after deleting it, and change
+  what the caller handed over after the call (and what a call handed back);
+* name the error a refusal raises, and check that each way in leaves the audit record the
+  Protocol promises, refused or not;
+* a clause about concurrency (records: "a decision is atomic") is checked with
+  `conformance.suites._util.interleavings`: an unpaused run finds the lines of the subject's own
+  package (wherever it is installed) and a few of the other source it calls; then, for each line,
+  one operation is stopped before it and the other runs whole in between.  The same schedules run
+  every time, and a wait only decides when to resume a paused operation, never a verdict.  It
+  catches a check-then-act window inside one operation; it cannot catch a race that needs both
+  operations preempted (a lock file taken by check-then-create), one behind a network call, or
+  one in code it does not trace, so such a check is a `should` that says so, and a run with
+  nothing to pause at is "could not judge", not a pass.
+
+A second review of the tightened suites found seventeen more (a broker that kept the caller's
+argument mapping and so ran what was changed after validation, a stale `term` that dead-lettered
+the live redelivery, a namesake that replaced an approved note, a secret history revived by a
+`put` after `delete`, a space-delimited scope claim that turned `"read admin"` into `admin`, a
+flat `bucket+key` namespace), and a verify pass of those fixes thirteen more (WorkQueue retention,
+a dead-letter list in client memory, a crash loop the reference fake never dead-lettered, a
+cached lease shared between holders, a scope gate reading the unverified payload, form-decoded
+and case-folded keys, a dotted flat key space, redaction by a name guess, a refusal echoing the
+value it refused) plus six racy records deciders.  Each plausible defect is registered in its suite's `MUTANTS`, the one table of
+broken fake -> the check that must fail it; `tests/conform/test_conform_protocol_mutants.py`
+keeps the record, by name, of which ones review found.
+
+### How to review a suite
+
+A review writes subjects that break one clause of the Protocol each and runs them through the
+suite.  An escape is a finding, but not every escape is worth a check.  **The stopping rule:** an
+escaped mutant ranks above a nit only if it models a behaviour that a real adapter for that
+product class plausibly ships - name the product, the configuration or the common pattern it
+models (JetStream's WorkQueue retention, a case-insensitive filesystem under a directory store,
+an HTTP front end that form-decodes keys, a logging filter that redacts by name).  A contrived
+mutant - one that breaks the clause in a way no implementation would by accident - is a nit:
+note it, and do not grow the suite for it.  Only plausible mutants are registered in `MUTANTS`.
+
+Judged contrived in the verify pass, and so not registered: a provider that compares scopes after
+NFKC normalisation (the scope grammar is now printable ASCII, so `scope-enforced` refuses the
+fullwidth form anyway), and a `Denied` that carries the refused request as an attribute (already
+caught).  The records deciders it wrote are plausible, but `decide-is-atomic` is a `should`, so
+they are pinned by tests rather than as `must` mutants.
 
 The suites cover the protocol, not the handler behind it.  The broker's `ArgSpec` checks the
 shape of arguments, not their content: a validated `str` is still untrusted caller input, and the
@@ -228,7 +291,7 @@ Set `HNX_CONFORM_TARGET` to run the invariant against a real target.
 2. **Fake.** Add `conformance/fakes/<name>.py`: an in-memory implementation with a `features`
    set, injected clocks, no network.  Add the broken twin(s) next to it.
 3. **Suite.** Add `conformance/suites/<name_with_underscores>.py` with `SUITE`, `make_fake()` and
-   `MUTANTS`: 6 to 16 checks, at least six `must`, each with an id (`kebab-case`), a one-line
+   `MUTANTS`: 6 to 24 checks, at least six `must`, each with an id (`kebab-case`), a one-line
    summary and a precise assertion message.  Test errors and negative cases, not only the happy
    path.
 4. **Wire it.** Add the name to `CAPABILITIES` (core, only by changing `docs/interfaces.md`) or to

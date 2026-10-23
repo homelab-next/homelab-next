@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import itertools
+import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -37,8 +38,10 @@ class FakeBroker:
         self._allow.setdefault(caller, set()).update(commands)
 
     def _redact(self, spec: Mapping[str, ArgSpec], args: Mapping[str, Any]) -> dict[str, Any]:
+        # redact by default: only a value the schema names, and does not mark secret, is shown
+        # (a misspelt argument, or any argument of an unknown command, may well be a secret)
         return {
-            k: ("<redacted>" if spec.get(k, ArgSpec("str")).secret else v) for k, v in args.items()
+            k: (v if k in spec and not spec[k].secret else "<redacted>") for k, v in args.items()
         }
 
     def _log(self, caller, command, outcome, spec, args, **extra) -> None:
@@ -67,14 +70,16 @@ class FakeBroker:
         return result
 
     def call(self, caller, command, args):
+        args = dict(args)  # checked and run as one snapshot
         handler, spec = self._admit(caller, command, args)
         return self._execute(caller, command, handler, spec, args)
 
     # ---- deferred requests: bound to the caller that submitted them
     def submit(self, caller, command, args):
+        args = dict(args)  # the copy that is checked is the copy that runs
         _, spec = self._admit(caller, command, args, operation="submit")
         rid = f"req-{next(self._seq)}"
-        self._reqs[rid] = {"caller": caller, "command": command, "args": dict(args)}
+        self._reqs[rid] = {"caller": caller, "command": command, "args": args}
         self._reqs[rid]["state"] = "pending"
         self._log(caller, command, "ok", spec, args, operation="submit", request_id=rid)
         return rid
@@ -199,3 +204,143 @@ class SilentForeignAccessBroker(FakeBroker):
 
     def _deny_foreign(self, caller, request_id, operation, req):
         return None
+
+
+class SubmitSkipsAllowlistBroker(FakeBroker):
+    """Defect: ``submit`` checks the arguments but not the allowlist, so a caller allowed
+    nothing can submit any registered command and then run it as the request's owner."""
+
+    def _admit(self, caller, command, args, **extra):
+        entry = self._cmds.get(command)
+        if extra.get("operation") == "submit" and entry is not None:
+            problems = arg_problems(entry[1], args)
+            if problems:
+                self._log(caller, command, "invalid", entry[1], args, **extra)
+                raise InvalidArguments("; ".join(problems))
+            return entry
+        return super()._admit(caller, command, args, **extra)
+
+
+class SubmitSkipsArgsBroker(FakeBroker):
+    """Defect: ``submit`` checks the allowlist but not the arguments, so the handler later runs
+    with missing, unexpected or mistyped arguments."""
+
+    def _admit(self, caller, command, args, **extra):
+        entry = self._cmds.get(command)
+        if (
+            extra.get("operation") == "submit"
+            and entry is not None
+            and command in self._allow.get(caller, set())
+        ):
+            return entry
+        return super()._admit(caller, command, args, **extra)
+
+
+class DeferredClearAuditBroker(FakeBroker):
+    """Defect: ``call`` is redacted, but the audit records of ``submit`` and ``run`` carry the
+    secret arguments in the clear."""
+
+    def _log(self, caller, command, outcome, spec, args, **extra):
+        if extra.get("operation") in ("submit", "run"):
+            self._audit.append(AuditRecord(caller, command, outcome, dict(args), **extra))
+            return
+        super()._log(caller, command, outcome, spec, args, **extra)
+
+
+class RunAuditedTwiceBroker(FakeBroker):
+    """Defect: running a request leaves a ``started`` record and then its outcome, two records
+    for one operation."""
+
+    def _execute(self, caller, command, handler, spec, args, **extra):
+        if extra.get("operation") == "run":
+            self._log(caller, command, "started", spec, args, **extra)
+        return super()._execute(caller, command, handler, spec, args, **extra)
+
+
+class SubmitKeepsCallerArgsBroker(FakeBroker):
+    """Defect: ``submit`` checks the arguments and then keeps the caller's own mapping, so what
+    ``run`` hands the handler is whatever that mapping holds by then - never validated."""
+
+    def submit(self, caller, command, args):
+        rid = super().submit(caller, command, args)
+        self._reqs[rid]["args"] = args
+        return rid
+
+
+class RefusedSubmitUnauditedBroker(FakeBroker):
+    """Defect: a denied or invalid ``submit`` leaves no audit record (``call`` still does), so a
+    stranger can probe the allowlist through ``submit`` unseen."""
+
+    def _log(self, caller, command, outcome, spec, args, **extra):
+        if extra.get("operation") == "submit" and outcome in ("denied", "invalid"):
+            return
+        super()._log(caller, command, outcome, spec, args, **extra)
+
+
+class UnauditedSubmitBroker(FakeBroker):
+    """Defect: no ``submit`` is audited at all; only the later ``run`` leaves a record."""
+
+    def _log(self, caller, command, outcome, spec, args, **extra):
+        if extra.get("operation") == "submit":
+            return
+        super()._log(caller, command, outcome, spec, args, **extra)
+
+
+class KnownSecretsOnlyBroker(FakeBroker):
+    """Defect: redaction is by known key only, so the value of a misspelt secret argument, or of
+    any argument of an unregistered command, is audited in the clear."""
+
+    def _redact(self, spec, args):
+        return {
+            k: ("<redacted>" if spec.get(k, ArgSpec("str")).secret else v) for k, v in args.items()
+        }
+
+
+class RunChattyErrorBroker(FakeBroker):
+    """Defect: ``call`` contains a handler failure, but ``run`` passes the handler's own message
+    and cause through to the caller."""
+
+    def _execute(self, caller, command, handler, spec, args, **extra):
+        if extra.get("operation") != "run":
+            return super()._execute(caller, command, handler, spec, args, **extra)
+        try:
+            result = handler(**dict(args))
+        except Exception as exc:
+            self._log(caller, command, "error", spec, args, **extra)
+            raise BrokerError(f"{command} failed: {exc}") from exc
+        self._log(caller, command, "ok", spec, args, **extra)
+        return result
+
+
+class GuessingRedactionBroker(FakeBroker):
+    """Defect: an argument the schema does not name is redacted only when its name looks secret
+    (``pass``, ``token``, ``key`` ...), the common logging-filter idiom: redaction by guess."""
+
+    _LOOKS = re.compile(r"(?i)pass|word|secret|token|key|cred|pwd")
+
+    def _redact(self, spec, args):
+        return {
+            k: (
+                ("<redacted>" if spec[k].secret else v)
+                if k in spec
+                else ("<redacted>" if self._LOOKS.search(k) else v)
+            )
+            for k, v in args.items()
+        }
+
+
+class EchoingRefusalBroker(FakeBroker):
+    """Defect: the audit trail is redacted, but ``InvalidArguments`` names each unexpected
+    argument with its value (``unexpected lable='...'``), as validation libraries' messages do."""
+
+    def _admit(self, caller, command, args, **extra):
+        entry = self._cmds.get(command)
+        if entry is not None and command in self._allow.get(caller, set()):
+            spec = entry[1]
+            problems = arg_problems(spec, args)
+            if problems:
+                self._log(caller, command, "invalid", spec, args, **extra)
+                shown = [p for p in problems if not p.startswith("unexpected")]
+                shown += [f"unexpected {k}={args[k]!r}" for k in args if k not in spec]
+                raise InvalidArguments("; ".join(shown))
+        return super()._admit(caller, command, args, **extra)

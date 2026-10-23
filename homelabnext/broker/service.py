@@ -33,7 +33,8 @@ ran.  If the outcome record cannot be written afterwards (``audit-incomplete``),
 record is the evidence; a run then ends ``error`` (or reads ``interrupted`` when not even its
 result can be written, :mod:`homelabnext.broker.state`).  The contract view (:meth:`audit`)
 lists outcomes only, one per operation.  Arguments an ``ArgSpec`` marks ``secret`` are redacted in the
-audit trail and never written to disk; in the request (and so in its digest, which is persisted,
+audit trail and never written to disk (so is the value of an argument the ``ArgSpec`` does not name,
+or of any argument of an unknown command: redaction is the default); in the request (and so in its digest, which is persisted,
 audited and sent with events) each is replaced by ``hmac-sha256:<hex>``, a hash keyed with the
 state directory's ``digest.key``, so a low-entropy secret cannot be recovered from the digest by
 guessing, while the digest still changes with the value.
@@ -370,6 +371,13 @@ class _Action:
     spec: Mapping[str, ArgSpec] | None = None
 
 
+def _hidden(spec: Mapping[str, ArgSpec], name: str) -> bool:
+    """Whether an argument's value is kept out of the audit trail and keyed in the request digest:
+    redaction is the default, so everything but an argument the schema names and does not mark
+    secret."""
+    return name not in spec or spec[name].secret
+
+
 class BrokerService:
     """See the module doc.  One instance per process.  Any number may share ``state_dir`` for
     the exactly-once guarantees (claims, approvals); the pending quota and the open-page state
@@ -512,9 +520,14 @@ class BrokerService:
 
     # ---------------------------------------------------------------- audit
     def _summarize(self, args: Mapping[str, Any], spec: Mapping[str, ArgSpec] | None):
+        """The audit view of ``args``.  Under an argument schema (an in-process command, or ``{}``
+        for a command nobody registered) redaction is the default: only an argument the schema
+        names and does not mark secret is shown, so a misspelt secret argument, or any argument of
+        an unknown command, is recorded by name only.  ``None`` (a manifest action, whose params
+        its own schema validates) shows every argument."""
         out: dict[str, Any] = {}
         for k, v in args.items():
-            if spec is not None and spec.get(k, ArgSpec("str")).secret:
+            if spec is not None and _hidden(spec, k):
                 out[k] = "<redacted>"
                 continue
             raw = json.dumps(v, sort_keys=True, ensure_ascii=False, default=repr)
@@ -659,13 +672,12 @@ class BrokerService:
         now = self._now()
         rid = new_id("req")
         act = self._action(action) if isinstance(action, str) else None
-        spec = act.spec if act else None
+        spec = act.spec if act else {}  # an unknown command: every argument value is redacted
         params = dict(args) if isinstance(args, Mapping) else {}
-        if spec is not None:  # secret arguments enter the request, and its digest, keyed
-            params = {
-                k: self._keyed(v) if spec.get(k, ArgSpec("str")).secret else v
-                for k, v in params.items()
-            }
+        if spec is not None:  # hidden arguments enter the request, and its digest, keyed: the
+            # same redact-by-default rule as the audit view, so a misspelt secret argument (or any
+            # argument of an unknown command) is not an unkeyed hash a wordlist can reverse
+            params = {k: self._keyed(v) if _hidden(spec, k) else v for k, v in params.items()}
         request: dict[str, Any] = {
             "request_id": rid,
             "action": str(action),
@@ -908,6 +920,7 @@ class BrokerService:
 
     # ---------------------------------------------------------------- the contract: calls
     def call(self, caller, command, args, *, target: str | None = None):
+        args = dict(args) if isinstance(args, Mapping) else args  # check and run one snapshot
         act, request, decision = self._admit(caller, command, args, "call", target)
         if not decision["enforced"]:
             return self._shadow(caller, act, request, decision, "call")
@@ -927,6 +940,9 @@ class BrokerService:
         return self._run_audited(caller, act, request, args, "call")
 
     def submit(self, caller, command, args, *, target: str | None = None):
+        # the copy that is checked is the copy that is kept: a caller's later change to its
+        # mapping never reaches the handler
+        args = dict(args) if isinstance(args, Mapping) else args
         act, request, decision = self._admit(caller, command, args, "submit", target)
         rid = request["request_id"]
         secret = {}
