@@ -33,7 +33,6 @@ requires:
   hosts:
     - role: publisher
       kind: any
-      exposure: internal
       footprint: {cpu: 0.5, memory_mb: 256, disk_gb: 5}
       roles: [role:publishing_gate]
       purpose: runs the gate and the push; the only identity granted the hosting credential
@@ -87,7 +86,6 @@ config:
     overlay: required
 lifecycle:
   install: {playbook: playbooks/install.yml}
-  upgrade: {playbook: playbooks/upgrade.yml}
   remove:
     playbook: playbooks/remove.yml
     export_first: true

@@ -16,6 +16,14 @@ from typing import Any
 Doc = dict[str, Any]
 
 RECORD_ROOTS = ("findings", "state", "proposals", "memory")
+REPO = Path(__file__).resolve().parents[2]
+#: where an in-tree module lives: the public modules/ tree and, for this draft's fictional
+#: examples, examples/modules/.  An overlay's lab/modules/ is never in-tree.
+PUBLIC_MODULE_ROOTS = (REPO / "modules", REPO / "examples" / "modules")
+#: slots whose service a module reaches only with an overlay grant (besides privileged slots)
+AUTHORITY_SLOTS = ("broker", "secrets", "idp", "edge", "remote-admin", "mcp-catalog")
+#: the site section that binds a module's agents and config, by kind
+SECTION = {"feature": "features", "core": "core", "provider": "providers"}
 SHARED_ADAPTERS = "homelabnext.conform.adapters."
 PRIVILEGED_SHARED_CONFIG = {"cap:edge", "cap:idp"}
 STATIC_HOSTING = "cap:static-hosting"
@@ -38,16 +46,67 @@ def _agents(doc: Doc) -> list[Doc]:
     return doc.get("contributes", {}).get("agents", [])
 
 
-def _own_write_prefix(p: str, mid: str) -> bool:
+def _own_write_prefix(p: str, mid: str, lane: str | None = None) -> bool:
+    """A records write under the module's own namespace: the real lane writes <root>/<id>/, the
+    shadow lane <root>/<id>-shadow/, and a lane-less write (a write scope, a records-prefix
+    dataset) either."""
     parts = p.split("/")
-    return len(parts) >= 3 and parts[0] in RECORD_ROOTS and parts[1] in (mid, mid + "-shadow")
+    own = {"real": (mid,), "shadow": (mid + "-shadow",)}.get(lane, (mid, mid + "-shadow"))
+    return len(parts) >= 3 and parts[0] in RECORD_ROOTS and parts[1] in own
 
 
-def module_problems(doc: Doc, mod_dir: Path, slots: dict[str, Doc], load) -> list[str]:
-    """Rules one manifest must meet on its own (``load(path)`` reads a contributed YAML file)."""
+def _caps(doc: Doc) -> list[Doc]:
+    """Every capability requirement and preference (each with cap, maybe instance)."""
+    return doc["requires"].get("capabilities", []) + doc.get("prefers", {}).get("capabilities", [])
+
+
+def _hosts(doc: Doc) -> dict[str, Doc]:
+    return {h["role"]: h for h in doc["requires"].get("hosts", [])}
+
+
+def _egress(doc: Doc) -> list[Doc]:
+    eg = doc.get("egress", "none")
+    return eg if isinstance(eg, list) else []
+
+
+def _mcp_ids(doc: Doc, mod_dir: Path, load) -> set[str]:
+    out = set()
+    for e in doc.get("contributes", {}).get("mcp_servers", []):
+        try:
+            out.add(load(mod_dir / e["file"])["id"])
+        except Exception:  # an unreadable record fails where module_problems loads it
+            continue
+    return out
+
+
+def _rows(doc: Doc, mod_dir: Path, load) -> dict[str, Doc]:
+    rows: dict[str, Doc] = {}
+    for e in doc.get("contributes", {}).get("services", []):
+        rows.update(load(mod_dir / e["file"])["services"])
+    return rows
+
+
+def module_problems(
+    doc: Doc,
+    mod_dir: Path,
+    slots: dict[str, Doc],
+    load,
+    public_roots: tuple[Path, ...] = PUBLIC_MODULE_ROOTS,
+) -> list[str]:
+    """Rules one manifest must meet on its own (``load(path)`` reads a contributed YAML file).
+
+    ``public_roots`` are the directories an in-tree module lives directly under."""
     mid, out = doc["id"], []
     if doc["id"] != mod_dir.name:
         out.append(f"id {mid} is not the directory name {mod_dir.name}")
+    in_public = mod_dir.resolve().parent in {r.resolve() for r in public_roots}
+    origin = doc["origin"]["kind"]
+    if origin == "in-tree" and not in_public:
+        out.append("origin in-tree: the module is not in the public modules/ tree")
+    if origin != "in-tree" and in_public:
+        out.append(f"origin {origin}: a module in the public modules/ tree is in-tree")
+    if doc["kind"] == "core" and not in_public:
+        out.append("kind core: a core module lives in the public modules/ tree")
     if doc.get("replaced_by") == mid:
         out.append("replaced_by names the module itself")
     roles = _roles(doc)
@@ -91,8 +150,22 @@ def module_problems(doc: Doc, mod_dir: Path, slots: dict[str, Doc], load) -> lis
     for s in secrets:
         if not s.startswith(f"secret:{mid}/"):
             out.append(f"{s}: a secret is in the module's own namespace secret:{mid}/")
-    # data, tables and prefixes bound to the module
+    # data, tables and prefixes bound to the module; via names a cap and instance it uses
+    caps = _caps(doc)
     for ds in doc.get("data", []):
+        via = ds.get("via")
+        if via:
+            entries = [r for r in caps if r["cap"] == via["cap"]]
+            if not entries:
+                out.append(
+                    f"data {ds['id']}: via {via['cap']}, which it neither requires nor prefers"
+                )
+            elif via.get("instance") and all(r.get("instance") != via["instance"] for r in entries):
+                out.append(
+                    f"data {ds['id']}: via instance {via['instance']}, which it does not require"
+                )
+            elif not via.get("instance") and any(r.get("instance") for r in entries):
+                out.append(f"data {ds['id']}: via names the instance it requires")
         if "table" in ds and ds["table"].split(":", 1)[1].split(".")[0] != us(mid):
             out.append(f"data {ds['id']}: table namespace is {us(mid)}")
         p = ds.get("prefix")
@@ -100,15 +173,46 @@ def module_problems(doc: Doc, mod_dir: Path, slots: dict[str, Doc], load) -> lis
             out.append(f"data {ds['id']}: records prefix is <root>/{mid}/")
         if p and ds["kind"] != "records-prefix" and not p.startswith(mid + "/"):
             out.append(f"data {ds['id']}: prefix starts with {mid}/")
+    data_ids = {ds["id"]: ds for ds in doc.get("data", [])}
+    for pref in doc.get("prefers", {}).get("capabilities", []):
+        fb = pref["fallback"]
+        to = fb.get("to", "").removeprefix("cap:")
+        for x in fb.get("data", []):
+            ds = data_ids.get(x["dataset"])
+            if ds is None:
+                out.append(f"fallback of {pref['cap']}: dataset {x['dataset']} does not exist")
+            elif ds.get("via", {}).get("cap") != pref["cap"]:
+                out.append(f"fallback of {pref['cap']}: dataset {x['dataset']} does not live in it")
+            allowed = set(slots.get(to, {}).get("export_formats", []))
+            if not set(x.get("formats", [])) <= allowed:
+                out.append(
+                    f"fallback of {pref['cap']}: dataset {x['dataset']} formats are not "
+                    f"{fb.get('to')}'s export formats {sorted(allowed)}"
+                )
     for i in doc.get("provides", {}).get("interfaces", []):
         p = i["via"].get("prefix")
         if p and not p.startswith(mid + "/"):
             out.append(f"interface {i['interface']}: prefix starts with {mid}/")
+    for i in doc.get("interfaces", []):
+        if "schema" in i:
+            try:
+                sid = str(load(mod_dir / i["schema"]).get("$id", ""))
+            except Exception as exc:
+                out.append(f"interface {i['id']}: schema unreadable ({exc.__class__.__name__})")
+                continue
+            if f"/modules/{mid}/" not in sid:
+                out.append(f"interface {i['id']}: schema $id is in .../modules/{mid}/")
+    # egress from the module's own host roles
+    hosts = _hosts(doc)
+    for e in _egress(doc):
+        if e["host"] not in hosts:
+            out.append(f"egress host {e['host']}: not one of the module's host roles")
     # config defaults
     for k, spec in doc.get("config", {}).items():
         if spec["type"] == "enum" and "default" in spec and spec["default"] not in spec["values"]:
             out.append(f"config {k}: enum default is not one of its values")
-    # agents: owned ids, lanes, scopes, the spec as the one source
+    # agents: owned ids, lanes, scopes, tools, the spec as the one source
+    mcp_ids = _mcp_ids(doc, mod_dir, load)
     for a in _agents(doc):
         key = a["key"]
         if not _named(key, mid):
@@ -118,14 +222,19 @@ def module_problems(doc: Doc, mod_dir: Path, slots: dict[str, Doc], load) -> lis
         lanes = {k for k in ("real", "shadow") if k in a["lanes"]}
         if set(a["prompts"]) != lanes:
             out.append(f"agent {key}: one prompt per lane")
-        if a["lanes"]["production"] not in lanes:
+        if a["lanes"].get("production", "real") not in lanes:
             out.append(f"agent {key}: the production lane is declared")
         for lane in lanes:
+            own = mid if lane == "real" else mid + "-shadow"
             for w in a["lanes"][lane]["writes"]:
-                if not _own_write_prefix(w, mid):
-                    out.append(
-                        f"agent {key}: lane {lane} writes {w} outside <root>/{mid}[-shadow]/"
-                    )
+                if not _own_write_prefix(w, mid, lane):
+                    out.append(f"agent {key}: lane {lane} writes {w} outside <root>/{own}/")
+        needed = {n["cap"].removeprefix("cap:") for n in a.get("needs", [])}
+        for t in a.get("tools", []):
+            if t.split(".", 1)[0] not in needed | mcp_ids:
+                out.append(
+                    f"agent {key}: tool {t} is not on a slot it needs or one of the module's MCP records"
+                )
         for n in a.get("needs", []):
             if n["access"] == "write":
                 for s in n["scope"]:
@@ -157,8 +266,14 @@ def module_problems(doc: Doc, mod_dir: Path, slots: dict[str, Doc], load) -> lis
     for e in c.get("invariants", []):
         for cr in load(mod_dir / e["file"])["criteria"]:
             out += [f"criterion {cr.get('id')}: {p}" for p in criterion_problems(cr, mid, plugins)]
-    hosts = {h["role"] for h in doc["requires"].get("hosts", [])}
     declared = set()
+    instances = {r["instance"] for r in caps if r.get("instance")}
+    reachable = {r["cap"].removeprefix("cap:") for r in caps}
+    reachable |= {
+        p["fallback"]["to"].removeprefix("cap:")
+        for p in doc.get("prefers", {}).get("capabilities", [])
+        if "to" in p["fallback"]
+    }
     for e in c.get("services", []):
         for name, row in load(mod_dir / e["file"])["services"].items():
             ok = (
@@ -174,6 +289,15 @@ def module_problems(doc: Doc, mod_dir: Path, slots: dict[str, Doc], load) -> lis
                 out.append(f"service {name}: host is one of the module's host roles")
             if row.get("public_hostname") and row.get("auth", "none") == "none":
                 out.append(f"service {name}: a public route needs auth")
+            for u in row.get("upstreams", []):
+                if u == "secrets":
+                    out.append(
+                        f"service {name}: upstream secrets: secrets are read by name, never an upstream"
+                    )
+                elif u not in reachable | instances:
+                    out.append(
+                        f"service {name}: upstream {u} is neither a slot it requires or prefers nor an instance it requires"
+                    )
             for s in row.get("status_sources", []):
                 if not _named(s["id"], mid):
                     out.append(f"status source {s['id']}: starts with {mid}")
@@ -184,9 +308,7 @@ def module_problems(doc: Doc, mod_dir: Path, slots: dict[str, Doc], load) -> lis
         if "file" in job:
             out += unit_problems(load(mod_dir / job["file"]), mid)
     # slot registry: declared slots, provisional only without a contract, privileged never
-    for r in doc["requires"].get("capabilities", []) + doc.get("prefers", {}).get(
-        "capabilities", []
-    ):
+    for r in caps:
         out += _slot_ref_problems(r["cap"], r.get("provisional", False), slots, "requirement")
     for slot, e in doc.get("provides", {}).get("slots", {}).items():
         out += _slot_ref_problems("cap:" + slot, e.get("provisional", False), slots, "provider")
@@ -268,14 +390,68 @@ def unit_problems(entries: list[Doc], mid: str) -> list[str]:
     return out
 
 
-def tree_problems(mods: dict[str, Doc]) -> list[str]:
-    """Rules across every available manifest (selected or not)."""
+def _owner(name: str, ids: set[str], sep: str) -> str | None:
+    """The module a bound name belongs to: the LONGEST module id it is named under, so module
+    ``external`` cannot claim ``external_collector_edge`` from ``external-collector``."""
+    hits = [i for i in ids if _named(name, i, sep)]
+    return max(hits, key=len) if hits else None
+
+
+def _bound_names(m: Doc, mod_dir: Path | None, load) -> list[tuple[str, str, str]]:
+    """(kind, name, separator) for every name the module binds to its id ('' = not id-bound)."""
+    c = m.get("contributes", {})
+    out = [("role", r[5:], "_") for r in sorted(_roles(m))]
+    out += [("entry point", e["name"], "_") for e in c.get("entry_points", [])]
+    out += [("agent", a["key"], "-") for a in _agents(m)]
+    out += [("profile", a["profile"], "") for a in _agents(m)]
+    out += [("status source", s.removeprefix("status:"), "-") for s in c.get("status_sources", [])]
+    out += [("table", d["table"], "") for d in m.get("data", []) if "table" in d]
+    out += [("identifier", f"{i['kind']}/{i['name']}", "") for i in m.get("identifiers", [])]
+    if mod_dir is None or load is None:
+        return out
+    for e in c.get("mcp_servers", []):
+        out.append(("MCP record", load(mod_dir / e["file"])["id"], "-"))
+    for e in c.get("detections", []):
+        out.append(
+            ("det id", str(load(mod_dir / e["file"]).get("det", "")).removeprefix("det:"), "-")
+        )
+    for job in c.get("scheduler_jobs", []):
+        if "file" in job:
+            out += [("unit", u.get("name", ""), "-") for u in load(mod_dir / job["file"])]
+    if m["kind"] != "provider":  # a provider's row is keyed by its slot, renamed to the instance
+        out += [("service row", n, "-") for n in _rows(m, mod_dir, load)]
+    return out
+
+
+def _write_prefixes(m: Doc) -> set[str]:
+    out = {d["prefix"] for d in m.get("data", []) if d.get("kind") == "records-prefix"}
+    for a in _agents(m):
+        for lane in ("real", "shadow"):
+            out |= set(a["lanes"].get(lane, {}).get("writes", []))
+        for n in a.get("needs", []):
+            if n["access"] == "write":
+                out |= {s for s in n["scope"] if not s.startswith("table:")}
+    return out
+
+
+def tree_problems(
+    mods: dict[str, Doc], dirs: dict[str, Path] | None = None, load=None
+) -> list[str]:
+    """Rules across every available manifest (selected or not).  With ``dirs`` (module id ->
+    directory) and ``load``, names held in contributed files (MCP ids, det ids, units, rows) are
+    compared too."""
     out: list[str] = []
-    defs: dict[tuple[str, str], list[str]] = {}
+    owners: dict[str, set[str]] = {}
+    versions: dict[str, set[str]] = {}
     for m in mods.values():
         for i in m.get("interfaces", []):
-            defs.setdefault((i["id"], i["version"]), []).append(m["id"])
-    out += [f"interface {k}: defined by {v}, one owner only" for k, v in defs.items() if len(v) > 1]
+            owners.setdefault(i["id"], set()).add(m["id"])
+            versions.setdefault(i["id"], set()).add(i["version"])
+    out += [
+        f"interface {k}: defined by {sorted(v)}, one owner per id (every version)"
+        for k, v in owners.items()
+        if len(v) > 1
+    ]
     for m in mods.values():
         used = [(i["interface"], i["version"]) for i in m.get("provides", {}).get("interfaces", [])]
         used += [
@@ -283,16 +459,29 @@ def tree_problems(mods: dict[str, Doc]) -> list[str]:
             for r in m["requires"].get("interfaces", [])
             + m.get("prefers", {}).get("interfaces", [])
         ]
-        out += [f"{m['id']}: interface {k} has no owner" for k in used if k not in defs]
-    seen: dict[str, str] = {}
+        out += [
+            f"{m['id']}: interface {k} has no owner"
+            for k in used
+            if k[1] not in versions.get(k[0], set())
+        ]
+    ids = set(mods)
+    seen: dict[tuple[str, str], str] = {}
     for m in mods.values():
-        names = [a["key"] for a in _agents(m)] + [a["profile"] for a in _agents(m)]
-        names += ["table:" + d["table"] for d in m.get("data", []) if "table" in d]
-        names += [f"prefix:{d['prefix']}" for d in m.get("data", []) if "prefix" in d]
-        for n in names:
-            if n in seen and seen[n] != m["id"]:
-                out.append(f"{n}: claimed by {seen[n]} and {m['id']}")
-            seen.setdefault(n, m["id"])
+        d = (dirs or {}).get(m["id"])
+        try:
+            names = _bound_names(m, d, load if d else None)
+        except Exception as exc:
+            out.append(f"{m['id']}: a contributed file is unreadable ({exc.__class__.__name__})")
+            names = _bound_names(m, None, None)
+        names += [("prefix", f"{x['prefix']}", "") for x in m.get("data", []) if "prefix" in x]
+        for kind, n, sep in names:
+            if sep:
+                own = _owner(n, ids, sep)
+                if own and own != m["id"]:
+                    out.append(f"{kind} {n}: named under module {own}, not {m['id']}")
+            if (kind, n) in seen and seen[(kind, n)] != m["id"]:
+                out.append(f"{kind} {n}: claimed by {seen[(kind, n)]} and {m['id']}")
+            seen.setdefault((kind, n), m["id"])
     prefixes = [
         (d["prefix"], m["id"]) for m in mods.values() for d in m.get("data", []) if "prefix" in d
     ]
@@ -300,6 +489,11 @@ def tree_problems(mods: dict[str, Doc]) -> list[str]:
         for b, mb in prefixes:
             if ma != mb and a != b and b.startswith(a):
                 out.append(f"prefix {a} ({ma}) contains {b} ({mb})")
+    writes = [(p, m["id"]) for m in mods.values() for p in sorted(_write_prefixes(m))]
+    for a, ma in writes:
+        for b, mb in writes:
+            if ma < mb and (a.startswith(b) or b.startswith(a)):
+                out.append(f"write prefix {a} ({ma}) overlaps {b} ({mb})")
     return out
 
 
@@ -325,7 +519,14 @@ def chosen(site: Doc) -> dict[str, list[Doc]]:
     return {"cap:" + s: c for s, c in site["slots"].items() if isinstance(c, list)}
 
 
-def site_problems(site: Doc, mods: dict[str, Doc], slots: dict[str, Doc]) -> list[str]:
+def site_problems(
+    site: Doc,
+    mods: dict[str, Doc],
+    slots: dict[str, Doc],
+    rows: dict[str, dict[str, Doc]] | None = None,
+) -> list[str]:
+    """Rules a site's selection must meet.  ``rows`` (module id -> its contributed service rows)
+    adds the row rules: public routes need grants.public_routes, upstreams follow the fallback."""
     out: list[str] = []
     try:
         sel = selected(site, mods)
@@ -333,6 +534,10 @@ def site_problems(site: Doc, mods: dict[str, Doc], slots: dict[str, Doc]) -> lis
         return [str(exc)]
     ch = chosen(site)
     grants = site.get("grants", {})
+    out += _binding_problems(site, mods, sel)
+    out += _config_problems(site, sel, grants)
+    authority = {s for s, d in slots.items() if d.get("privileged")} | set(AUTHORITY_SLOTS)
+    authority |= {c["instance"] for cap, cs in ch.items() if cap[4:] in authority for c in cs}
     for slot, d in slots.items():
         if d.get("required_in_core") and "cap:" + slot not in ch:
             out.append(f"{slot}: a required core slot has no provider")
@@ -378,12 +583,25 @@ def site_problems(site: Doc, mods: dict[str, Doc], slots: dict[str, Doc]) -> lis
                     )
         if reaches(m, STATIC_HOSTING) and m["id"] not in grants.get("publish", []):
             out.append(f"{m['id']}: reaches {STATIC_HOSTING} without the overlay's publish grant")
-        eg = m.get("egress", "none")
-        for e in eg if isinstance(eg, list) else []:
-            if "internet" in e["to"] and e["host"] not in grants.get("egress", {}).get(m["id"], []):
-                out.append(f"{m['id']}: host {e['host']} egresses to the internet without a grant")
+        granted = grants.get("egress", {}).get(m["id"], [])
+        for e in _egress(m):
+            for t in e["to"]:
+                needs = t == "internet" or t.removeprefix("svc:") in authority
+                if needs and e["host"] not in granted:
+                    out.append(f"{m['id']}: host {e['host']} egresses to {t} without a grant")
+        for role, h in _hosts(m).items():
+            if h["kind"] == "external" and role not in granted:
+                out.append(
+                    f"{m['id']}: host role {role} is external (outside the lab) without an egress grant"
+                )
+        for name, row in (rows or {}).get(m["id"], {}).items():
+            if row.get("public_hostname") and name not in grants.get("public_routes", {}).get(
+                m["id"], []
+            ):
+                out.append(f"{m['id']}: service {name} is public without grants.public_routes")
+            out += _upstream_problems(m, name, row, ch, slots)
         for a in _agents(m):
-            bind = site.get("features" if m["kind"] == "feature" else "core", {}).get(m["id"], {})
+            bind = site.get(SECTION[m["kind"]], {}).get(m["id"], {})
             lanes = bind.get("agents", {}).get(a["key"], {}).get("lanes", {})
             want = {k for k in ("real", "shadow") if k in a["lanes"]}
             if set(lanes) != want:
@@ -407,6 +625,85 @@ def site_problems(site: Doc, mods: dict[str, Doc], slots: dict[str, Doc]) -> lis
                 out.append(f"grants.secrets: {reader} may not read {n} (not a granted credential)")
     out += _interface_problems(sel, mods)
     out += placement_problems(site, sel)
+    return out
+
+
+def _binding_problems(site: Doc, mods: dict[str, Doc], sel: dict[str, Doc]) -> list[str]:
+    """Each features/core/providers entry names a selected module of that kind, and binds only
+    agents the module contributes."""
+    out = []
+    for kind, sec in SECTION.items():
+        for mid, b in site.get(sec, {}).items():
+            m = sel.get(mid) or mods.get(mid)
+            if m is None:
+                out.append(f"{sec}.{mid}: no such module")
+                continue
+            if m["kind"] != kind:
+                out.append(f"{sec}.{mid}: a {m['kind']} module is bound under {SECTION[m['kind']]}")
+            if mid not in sel:
+                out.append(f"{sec}.{mid}: the module is not selected")
+            keys = {a["key"] for a in _agents(m)}
+            for k in sorted(set(b.get("agents", {})) - keys):
+                out.append(f"{sec}.{mid}.agents.{k}: the module contributes no such agent")
+    return out
+
+
+def _config_problems(site: Doc, sel: dict[str, Doc], grants: Doc) -> list[str]:
+    """A selection's config values: declared keys only, and a secret-typed value is a secret in
+    the module's own namespace or one granted to it in grants.secrets (the same rule as a
+    manifest default, so an overlay value cannot read another module's secret)."""
+    places = [
+        (f"{sec}.{mid}", mid, b.get("config", {}))
+        for sec in SECTION.values()
+        for mid, b in site.get(sec, {}).items()
+    ]
+    places += [
+        (f"slots.{s}.{c['instance']}", c["provider"], c.get("config", {}))
+        for s, cs in site["slots"].items()
+        if isinstance(cs, list)
+        for c in cs
+    ]
+    out = []
+    for where, mid, cfg in places:
+        spec = sel.get(mid, {}).get("config", {})
+        for k, v in cfg.items():
+            if k not in spec:
+                out.append(f"{where}.config.{k}: the module declares no such key")
+                continue
+            secretish = isinstance(v, str) and v.lower().startswith("secret:")
+            if spec[k]["type"] != "secret":
+                if secretish:
+                    out.append(f"{where}.config.{k}: a secret reference in a non-secret key")
+                continue
+            if not (isinstance(v, str) and v.startswith("secret:")):
+                out.append(f"{where}.config.{k}: a secret key's value is a secret name")
+            elif not v.startswith(f"secret:{mid}/") and v not in grants.get("secrets", {}).get(
+                mid, []
+            ):
+                out.append(f"{where}.config.{k}: {v} is not {mid}'s own and not granted to it")
+    return out
+
+
+def _upstream_problems(m: Doc, name: str, row: Doc, ch, slots) -> list[str]:
+    """A row's upstream follows the module's fallback: a preferred slot the site does not select
+    resolves to its fallback slot, which must be selected; an instance must be selected."""
+    out = []
+    selected_instances = {c["instance"] for cs in ch.values() for c in cs}
+    for u in row.get("upstreams", []):
+        if u in slots:
+            if "cap:" + u in ch:
+                continue
+            pref = next(
+                (p for p in m.get("prefers", {}).get("capabilities", []) if p["cap"] == "cap:" + u),
+                None,
+            )
+            to = pref and pref["fallback"].get("to")
+            if not (to and to in ch):
+                out.append(
+                    f"{m['id']}: service {name} upstream {u} is not selected, nor a fallback for it"
+                )
+        elif u not in selected_instances:
+            out.append(f"{m['id']}: service {name} upstream {u} is not a selected instance")
     return out
 
 
@@ -478,9 +775,10 @@ def _placed(site, sel):
         for c in cs if isinstance(cs, list) else []:
             for role, host in c.get("placement", {}).items():
                 rows.append((c["provider"], c["instance"], role, host))
-    for name, f in site.get("features", {}).items():
-        for role, host in f.get("placement", {}).items():
-            rows.append((name, None, role, host))
+    for sec in ("features", "core"):
+        for name, f in site.get(sec, {}).items():
+            for role, host in f.get("placement", {}).items():
+                rows.append((name, None, role, host))
     out = []
     for mod, inst, role, host in sorted(set(rows), key=str):
         h = next((x for x in sel[mod]["requires"].get("hosts", []) if x["role"] == role), None)
@@ -503,7 +801,7 @@ def placement_problems(site: Doc, sel: dict[str, Doc]) -> list[str]:
             out.append(
                 f"{mod}/{role}: an external role lands only on an external host, and only it does"
             )
-        if (h["exposure"] == "isolated") != bool(sh.get("isolated")):
+        if (h.get("exposure", "internal") == "isolated") != bool(sh.get("isolated")):
             out.append(
                 f"{mod}/{role}: an isolated role lands only on an isolated host, and only it does"
             )
@@ -513,33 +811,37 @@ def placement_problems(site: Doc, sel: dict[str, Doc]) -> list[str]:
             want[(c["provider"], c["instance"])] = {
                 x["role"] for x in sel[c["provider"]]["requires"].get("hosts", [])
             }
-    for name in site.get("features", {}):
-        want[(name, None)] = {x["role"] for x in sel[name]["requires"].get("hosts", [])}
+    for name, m in sel.items():
+        if m["kind"] != "provider":  # features and every core module, selected or not by name
+            want[(name, None)] = {x["role"] for x in m["requires"].get("hosts", [])}
     got: dict[tuple, set] = {}
     for mod, inst, role, _, _ in placed:
         got.setdefault((mod, inst), set()).add(role)
     for k, roles in want.items():
         if roles and got.get(k, set()) != roles:
-            out.append(f"{k[0]} ({k[1] or 'feature'}): every host role is placed exactly once")
+            out.append(
+                f"{k[0]} ({k[1] or sel[k[0]]['kind']}): every host role is placed exactly once"
+            )
     return out + footprint_problems(site, placed)
 
 
 def footprint_problems(site: Doc, placed) -> list[str]:
-    """Every footprint on a host, summed over cpu, memory, disk and GPU memory, fits the host's
-    capacity less its headroom; exclusive resources fit the host's named resources of that kind."""
+    """Every footprint on a host, times its role's count, summed over cpu, memory, disk and GPU
+    memory, fits the host's capacity less its headroom.  Every resource claim names a kind the
+    host has; an exclusive claim takes one named resource to itself, and the shared claims of
+    that kind need one left over."""
     out = []
     use: dict[str, dict[str, float]] = {}
-    excl: dict[str, dict[str, int]] = {}
+    claims: dict[str, dict[str, list[bool]]] = {}
     for _, _, _, h, host in placed:
         if h is None or host not in site["hosts"]:
             continue
-        fp = h["footprint"]
+        fp, n = h["footprint"], h.get("count", 1)
         u = use.setdefault(host, {})
         for dim in ("cpu", "memory_mb", "disk_gb", "gpu_memory_mb"):
-            u[dim] = u.get(dim, 0) + fp.get(dim, 0)
+            u[dim] = u.get(dim, 0) + n * fp.get(dim, 0)
         for r in fp.get("resources", []):
-            if r["exclusive"]:
-                excl.setdefault(host, {})[r["kind"]] = excl.get(host, {}).get(r["kind"], 0) + 1
+            claims.setdefault(host, {}).setdefault(r["kind"], []).extend([r["exclusive"]] * n)
     for host, u in use.items():
         sh = site["hosts"][host]
         cap = dict(sh["capacity"])
@@ -548,9 +850,16 @@ def footprint_problems(site: Doc, placed) -> list[str]:
             if v > cap.get(dim, 0):
                 out.append(f"{host}: {dim} {v} exceeds {cap.get(dim, 0)}")
         have = [r["kind"] for r in sh.get("resources", [])]
-        for kind, n in excl.get(host, {}).items():
-            if n > have.count(kind):
-                out.append(f"{host}: {n} exclusive {kind} wanted, {have.count(kind)} named")
+        for kind, cl in claims.get(host, {}).items():
+            n, shared, named = cl.count(True), cl.count(False), have.count(kind)
+            if not named:
+                out.append(f"{host}: no {kind} named, {len(cl)} claim(s) on one")
+            elif n > named:
+                out.append(f"{host}: {n} exclusive {kind} wanted, {named} named")
+            elif shared and n >= named:
+                out.append(
+                    f"{host}: {shared} shared {kind} claim(s), but every {kind} is held exclusively"
+                )
     return out
 
 

@@ -34,7 +34,6 @@ requires:
   hosts:
     - role: lake
       kind: vm
-      exposure: internal
       footprint: {cpu: 4, memory_mb: 4096, disk_gb: 500}
       roles: [role:example_lake]
       purpose: runs Proseware Lake
@@ -51,7 +50,6 @@ provides:
         - {format: sql, version: portable-1}
       adapter: hnx_modules.example_lake.lake_query:make
       conformance: {target: conformance/target.yml}
-egress: none
 contributes:
   roles:
     - file: roles/example_lake
@@ -59,7 +57,6 @@ contributes:
     - {role: role:example_lake, hook: readiness}
 lifecycle:
   install: {playbook: playbooks/install.yml}
-  upgrade: {playbook: playbooks/upgrade.yml}
   remove:
     playbook: playbooks/remove.yml
     export_first: true

@@ -41,13 +41,16 @@ MANIFESTS = sorted(MODULES_DIR.glob("*/module.yml"))
 MODULES = {p.parent.name: load(p) for p in MANIFESTS}
 SLOTS = load(MODULES_DIR / "slots.yml")["slots"]
 SITES = {p.stem: load(p) for p in sorted((MODULES_DIR / "sites").glob("*.yml"))}
+DIRS = {n: MODULES_DIR / n for n in MODULES}
+ROWS = {n: mr._rows(m, DIRS[n], load) for n, m in MODULES.items()}
+SELECTION = json.loads((ROOT / "schemas/platform/module_selection.schema.json").read_text())
 
 # A negative's file name says which rule it breaks; an error must be at that place.
 NEGATIVES = {
     "adapter-any-callable": "provides/slots/object-store/adapter",
     "agent-ceiling": "contributes/agents/0",
     "agent-needs-an-authority-slot": "contributes/agents/0/needs/2/cap",
-    "agent-product-tool": "contributes/agents/0/tools/3",
+    "agent-tool-not-slot-named": "contributes/agents/0/tools/3",
     "agent-schedule-and-trigger": "contributes/agents/0",
     "agent-scope-everything": "contributes/agents/0/needs/0/scope/0",
     "agent-staff-code": "contributes/agents/0/roster",
@@ -60,7 +63,9 @@ NEGATIVES = {
     "config-path-absolute": "config/data_dir/default",
     "config-path-traversal": "config/data_dir/default",
     "control-plane-reader-builtin": "control_plane/0/reader",
+    "core-fetched": "origin/kind",
     "core-removable": "lifecycle",
+    "core-retired": "status",
     "core-with-product": "$",
     "credential-without-holder": "credentials/0",
     "dataset-prefix-dot": "data/1/prefix",
@@ -74,13 +79,16 @@ NEGATIVES = {
     "file-dot": "contributes/docs/1/file",
     "file-dot-git": "contributes/docs/1/file",
     "file-empty-segment": "contributes/docs/1/file",
+    "fallback-data-without-to": "prefers/capabilities/2/fallback",
     "file-escapes-module": "contributes/services/0/file",
     "host-without-footprint": "requires/hosts/0",
     "hosts-without-lifecycle": "$",
+    "interface-schema-not-json": "interfaces/0/schema",
     "interface-without-via": "provides/interfaces/0",
     "lake-table-dataset-without-table": "data/0",
     "lane-writes-dot": "contributes/agents/0/lanes/real/writes/2",
     "licence-kind-none": "licence/kind",
+    "origin-git-dot-segments": "origin",
     "origin-git-unpinned": "origin",
     "owned-data-native-format": "data/0/export/formats/0",
     "owned-data-without-export": "data/0",
@@ -101,7 +109,9 @@ NEGATIVES = {
     "reserved-id": "id",
     "retired-without-reason": "$",
     "reviews-inside-the-module": "$",
+    "shadow-suffix-id": "id",
     "shared-config-into-a-trust-root": "contributes/shared_config/0/target",
+    "slot-dataset-without-via": "data/0",
     "string-config-address-literal": "config/bind/default",
     "string-config-hides-reference": "config/edge_region/default",
     "string-config-hides-reference-uppercase": "config/edge_region/default",
@@ -132,6 +142,28 @@ def test_one_schema_three_kinds_strict():
     for name, d in SCHEMA["$defs"].items():
         if d.get("type") == "object" and "properties" in d:
             assert d.get("additionalProperties") is False, name
+
+
+def test_defaults_keep_the_common_case_short():
+    """upgrade defaults to install, exposure to internal, production to real, display to name,
+    egress to none; purpose is optional except on a soft dependency."""
+    d = SCHEMA["$defs"]
+    assert d["lifecycle"]["required"] == ["install"]
+    assert d["requirement_host"]["properties"]["exposure"]["default"] == "internal"
+    assert d["requirement_host"]["required"] == ["role", "kind", "footprint"]
+    assert d["lanes"]["properties"]["production"]["default"] == "real"
+    assert d["lanes"]["required"] == ["real"]
+    assert d["product"]["required"] == ["name", "version"]
+    assert d["egress"]["default"] == "none"
+    for name in ("requirement_capability", "requirement_model_role", "requirement_interface"):
+        assert "purpose" not in d[name]["required"], name
+    for name in ("preference_capability", "preference_interface"):
+        assert "purpose" in d[name]["required"], name
+    lean = copy.deepcopy(MODULES["example-inference"])
+    assert "egress" not in lean and "upgrade" not in lean["lifecycle"]
+    lean["product"].pop("display")
+    lean["requires"]["hosts"][0].pop("purpose")
+    assert sc.errors_for(SCHEMA, lean, REG) == []
 
 
 def test_deferred_fields_are_gone():
@@ -201,7 +233,7 @@ def test_example_modules_meet_the_loader_rules(name):
 
 
 def test_the_examples_meet_the_rules_across_modules():
-    assert mr.tree_problems(MODULES) == []
+    assert mr.tree_problems(MODULES, DIRS, load) == []
 
 
 def test_examples_cover_every_kind_a_swap_a_provisional_slot_and_an_event_agent():
@@ -488,6 +520,75 @@ MODULE_DEFECTS = {
         lambda d: _ag(d).__setitem__("trigger", {"interface": "publishable-output"}),
         "does not consume",
     ),
+    "egress from a host role it does not have": (
+        "external-collector",
+        lambda d: d["egress"].append({"host": "ghost", "to": ["svc:external-collector-receiver"]}),
+        "egress host ghost",
+    ),
+    "a dataset via a cap it neither requires nor prefers": (
+        "external-collector",
+        lambda d: d["data"][1].__setitem__("via", {"cap": "cap:hot-index"}),
+        "neither requires nor prefers",
+    ),
+    "a dataset via an instance it does not require": (
+        "external-collector",
+        lambda d: d["data"][1]["via"].__setitem__("instance", "objects"),
+        "via instance objects",
+    ),
+    "a dataset via a cap without the instance it requires": (
+        "external-collector",
+        lambda d: d["data"][1]["via"].pop("instance"),
+        "via names the instance it requires",
+    ),
+    "fallback data for a dataset that does not exist": (
+        "external-collector",
+        lambda d: d["prefers"]["capabilities"][0]["fallback"]["data"].append(
+            {"dataset": "nope", "retention": {"days": 1}}
+        ),
+        "dataset nope does not exist",
+    ),
+    "fallback data for a dataset living in another slot": (
+        "external-collector",
+        lambda d: d["prefers"]["capabilities"][0]["fallback"]["data"].append(
+            {"dataset": "samples", "retention": {"days": 1}}
+        ),
+        "dataset samples does not live in it",
+    ),
+    "fallback data formats outside the fallback slot's export formats": (
+        "external-collector",
+        lambda d: d["prefers"]["capabilities"][0]["fallback"]["data"][0].__setitem__(
+            "formats", ["zone-file"]
+        ),
+        "export formats ['jsonl']",
+    ),
+    "the shadow lane writing where consumers read": (
+        "external-collector",
+        lambda d: _ag(d)["lanes"]["shadow"]["writes"].append("findings/external-collector/"),
+        "lane shadow writes findings/external-collector/",
+    ),
+    "the real lane writing the shadow prefix": (
+        "external-collector",
+        lambda d: _ag(d)["lanes"]["real"]["writes"].append("findings/external-collector-shadow/"),
+        "lane real writes findings/external-collector-shadow/",
+    ),
+    "a tool on a slot the agent does not need": (
+        "external-collector",
+        lambda d: _ag(d)["tools"].append("broker.execute"),
+        "tool broker.execute",
+    ),
+    "a product-named tool": (
+        "external-collector",
+        lambda d: _ag(d)["tools"].append("northwind-objects.query"),
+        "tool northwind-objects.query",
+    ),
+    "a fetched origin on a module in the public tree": (
+        "external-collector",
+        lambda d: d.__setitem__(
+            "origin",
+            {"kind": "git", "url": "https://git.example.internal/m/c", "commit": "a" * 64},
+        ),
+        "a module in the public modules/ tree is in-tree",
+    ),
     "edge or idp config without a grant": (
         "example-object-store",
         lambda d: d["contributes"].__setitem__(
@@ -563,6 +664,60 @@ def test_spec_ceiling_and_unit_and_criterion_and_record_rules(tmp_path):
         assert needle in probs, needle
 
 
+def test_contributed_row_rules(tmp_path):
+    """Service rows: an upstream is never secrets, and is a slot the module uses or an instance it
+    requires."""
+    import shutil
+
+    mod = tmp_path / "external-collector"
+    shutil.copytree(MODULES_DIR / "external-collector", mod)
+    rows = load(mod / "registry/services.yml")
+    rows["services"]["external-collector-receiver"]["upstreams"] += ["secrets", "cases"]
+    (mod / "registry/services.yml").write_text(yaml.safe_dump(rows))
+    probs = "\n".join(
+        mr.module_problems(MODULES["external-collector"], mod, SLOTS, load, (tmp_path,))
+    )
+    assert "upstream secrets: secrets are read by name" in probs
+    assert "upstream cases is neither a slot it requires or prefers" in probs
+
+
+def test_interface_schema_is_the_owners_json_schema(tmp_path):
+    import shutil
+
+    mod = tmp_path / "publishing"
+    shutil.copytree(MODULES_DIR / "publishing", mod)
+    f = mod / "interfaces/publishable-item.schema.json"
+    s = json.loads(f.read_text())
+    s["$id"] = s["$id"].replace("/modules/publishing/", "/modules/external-collector/")
+    f.write_text(json.dumps(s))
+    probs = mr.module_problems(MODULES["publishing"], mod, SLOTS, load, (tmp_path,))
+    assert any("schema $id is in .../modules/publishing/" in p for p in probs), probs
+
+
+def test_origin_and_kind_core_are_bound_to_where_the_module_lives(tmp_path):
+    """Negative: a module copied out of the public tree (an overlay or a download) cannot call
+    itself in-tree, and a core module lives only in the public tree, so a third party's manifest
+    never becomes core (and auto-selected) by declaring it."""
+    import shutil
+
+    for name in ("external-collector", "core-staff"):
+        shutil.copytree(MODULES_DIR / name, tmp_path / name)
+    probs = mr.module_problems(
+        MODULES["external-collector"], tmp_path / "external-collector", SLOTS, load
+    )
+    assert "origin in-tree: the module is not in the public modules/ tree" in probs
+    probs = mr.module_problems(MODULES["core-staff"], tmp_path / "core-staff", SLOTS, load)
+    assert "kind core: a core module lives in the public modules/ tree" in probs
+    fetched = copy.deepcopy(MODULES["external-collector"])
+    fetched["origin"] = {
+        "kind": "git",
+        "url": "https://git.example.internal/m/c",
+        "commit": "b" * 64,
+    }
+    assert sc.errors_for(SCHEMA, fetched, REG) == [], "a sha256-format commit pins a module"
+    assert mr.module_problems(fetched, tmp_path / "external-collector", SLOTS, load) == []
+
+
 def test_cross_module_rules_refuse_two_owners_overlap_and_shared_ids():
     mods = copy.deepcopy(MODULES)
     mods["external-collector"]["interfaces"] = [copy.deepcopy(mods["publishing"]["interfaces"][0])]
@@ -573,9 +728,68 @@ def test_cross_module_rules_refuse_two_owners_overlap_and_shared_ids():
         copy.deepcopy(mods["external-collector"]["contributes"]["agents"][0])
     ]
     probs = "\n".join(mr.tree_problems(mods))
-    assert "one owner only" in probs
+    assert "one owner per id" in probs
     assert "contains external-collector/samples/" in probs
     assert "external-collector-analyst: claimed by" in probs
+
+
+def test_interface_ownership_is_per_id_not_per_version():
+    """Negative: a producer cannot define the next version of a consumer's interface."""
+    mods = copy.deepcopy(MODULES)
+    nxt = copy.deepcopy(mods["publishing"]["interfaces"][0])
+    nxt["version"] = "1.1"
+    mods["external-collector"]["interfaces"] = [nxt]
+    probs = mr.tree_problems(mods)
+    assert any("publishable-output: defined by" in p and "one owner per id" in p for p in probs)
+
+
+def test_a_name_belongs_to_the_longest_module_id_it_is_named_under():
+    """Negative: module `external` cannot claim `external-collector`'s roles, agent keys or MCP
+    ids just because `external_` is a prefix of them."""
+    mods = copy.deepcopy(MODULES)
+    mods["external"] = {
+        **copy.deepcopy(MODULES["core-modules"]),
+        "id": "external",
+        "kind": "feature",
+        "contributes": {"roles": [{"file": "roles/external_collector_edge"}]},
+    }
+    probs = mr.tree_problems(mods)
+    assert (
+        "role external_collector_edge: named under module external-collector, not external" in probs
+    )
+
+
+def test_names_in_contributed_files_are_compared_across_modules(tmp_path):
+    """With the module directories, MCP ids, det ids, units and rows join the uniqueness check."""
+    import shutil
+
+    sandbox = tmp_path / "example-sandbox"
+    shutil.copytree(MODULES_DIR / "example-sandbox", sandbox)
+    (sandbox / "mcp").mkdir()
+    shutil.copy(
+        MODULES_DIR / "external-collector/mcp/external-collector-probe.yml", sandbox / "mcp"
+    )
+    mods = copy.deepcopy(MODULES)
+    mods["example-sandbox"]["contributes"]["mcp_servers"] = [
+        {"file": "mcp/external-collector-probe.yml"}
+    ]
+    probs = "\n".join(mr.tree_problems(mods, {**DIRS, "example-sandbox": sandbox}, load))
+    assert "MCP record external-collector-probe: named under module external-collector" in probs
+    assert "MCP record external-collector-probe: claimed by" in probs
+
+
+def test_identifiers_and_write_prefixes_are_unique_across_modules():
+    mods = copy.deepcopy(MODULES)
+    mods["other-object-store"]["identifiers"] = [
+        {"kind": "dns-name", "name": "siem", "on_remove": "keep"}
+    ]
+    _ag(mods["example-sandbox"])["lanes"]["real"]["writes"].append("findings/external-collector/x/")
+    probs = "\n".join(mr.tree_problems(mods))
+    assert "identifier dns-name/siem: claimed by example-siem-suite and other-object-store" in probs
+    assert (
+        "write prefix findings/external-collector/x/ (example-sandbox) overlaps "
+        "findings/external-collector/ (external-collector)" in probs
+    )
 
 
 def test_an_interface_with_no_owner_is_refused():
@@ -587,7 +801,28 @@ def test_an_interface_with_no_owner_is_refused():
 # ------------------------------------------------------------------ site profiles
 @pytest.mark.parametrize("profile", sorted(SITES))
 def test_site_profile_meets_every_rule(profile):
-    assert mr.site_problems(SITES[profile], MODULES, SLOTS) == []
+    assert mr.site_problems(SITES[profile], MODULES, SLOTS, ROWS) == []
+
+
+@pytest.mark.parametrize("profile", sorted(SITES))
+def test_site_profile_validates_against_the_selection_schema(profile):
+    assert sc.is_draft(SELECTION)
+    assert sc.errors_for(SELECTION, SITES[profile], REG) == []
+
+
+SELECTION_NEGATIVES = {
+    "grants-misspelt": "$",
+    "unknown-grant-kind": "grants",
+    "choice-without-instance": "slots/notify",
+    "lane-binding-without-real": "features/external-collector/agents/external-collector-analyst/lanes",
+}
+
+
+@pytest.mark.parametrize("name", sorted(SELECTION_NEGATIVES))
+def test_each_selection_negative_fails_where_its_name_says(name):
+    path = ROOT / f"schemas/platform/negative/module_selection.{name}.yml"
+    errors = sc.errors_for(SELECTION, sc.load_instance(path), REG)
+    assert any(e.split(": ", 1)[0] == SELECTION_NEGATIVES[name] for e in errors), errors
 
 
 def _site(profile, mutate):
@@ -752,6 +987,141 @@ def test_a_site_rule_refuses_the_defect(case):
     assert needle in _site(profile, mutate)
 
 
+def _host(role, **fp):
+    return {
+        "role": role,
+        "kind": "any",
+        "footprint": {"cpu": 0.1, "memory_mb": 16, "disk_gb": 0, **fp},
+    }
+
+
+SITE_DEFECTS.update(
+    {
+        "egress to an authority service without a grant": (
+            "full",
+            lambda s, m: m["external-collector"]["egress"].append(
+                {"host": "receiver", "to": ["svc:secrets", "svc:broker"]}
+            ),
+            "host receiver egresses to svc:secrets without a grant",
+        ),
+        "an external host role without an egress grant": (
+            "full",
+            lambda s, m: s["grants"]["egress"].pop("external-collector"),
+            "host role edge is external",
+        ),
+        "a site config value naming another module's secret": (
+            "full",
+            lambda s, m: s["features"]["external-collector"]["config"].__setitem__(
+                "batch_signing", "secret:example-static-host/deploy-token"
+            ),
+            "is not external-collector's own and not granted to it",
+        ),
+        "a site config key the module does not declare": (
+            "single-box",
+            lambda s, m: s["features"]["external-collector"]["config"].__setitem__("moed", "full"),
+            "declares no such key",
+        ),
+        "a secret reference in a non-secret config key": (
+            "single-box",
+            lambda s, m: s["features"]["external-collector"]["config"].__setitem__(
+                "edge_region", "secret:external-collector/ingest-token"
+            ),
+            "a secret reference in a non-secret key",
+        ),
+        "a lane binding for an agent the module does not have": (
+            "full",
+            lambda s, m: s["features"]["external-collector"]["agents"].__setitem__(
+                "ghost-agent", {"lanes": {"real": "platform"}}
+            ),
+            "agents.ghost-agent: the module contributes no such agent",
+        ),
+        "a module bound under another kind's section": (
+            "full",
+            lambda s, m: s["core"].__setitem__("publishing", {}),
+            "core.publishing: a feature module is bound under features",
+        ),
+        "a core module's host left unplaced": (
+            "small-lab",
+            lambda s, m: m["core-staff"]["requires"].__setitem__("hosts", [_host("scorer")]),
+            "core-staff (core): every host role is placed",
+        ),
+        "a core module's footprint counted": (
+            "single-box",
+            lambda s, m: (
+                m["core-staff"]["requires"].__setitem__(
+                    "hosts", [_host("scorer", memory_mb=99999)]
+                ),
+                s["core"]["core-staff"].__setitem__("placement", {"scorer": "box"}),
+            ),
+            "box: memory_mb",
+        ),
+        "a shared user of a GPU held exclusively": (
+            "full",
+            lambda s, m: m["publishing"]["requires"]["hosts"][0]["footprint"].__setitem__(
+                "resources", [{"kind": "gpu", "exclusive": False}]
+            ),
+            "every gpu is held exclusively",
+        ),
+        "a resource kind the host does not have": (
+            "full",
+            lambda s, m: m["publishing"]["requires"]["hosts"][0]["footprint"].__setitem__(
+                "resources", [{"kind": "tpu", "exclusive": False}]
+            ),
+            "no tpu named",
+        ),
+        "count multiplies the footprint": (
+            "single-box",
+            lambda s, m: m["external-collector"]["requires"]["hosts"][1].__setitem__("count", 16),
+            "box: cpu",
+        ),
+    }
+)
+
+
+def test_a_provider_agent_is_bound_under_providers():
+    """A provider may contribute an agent; its lanes are bound under providers.<id>, not core."""
+    site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
+    a = copy.deepcopy(_ag(mods["external-collector"]))
+    a.update(key="example-lake-curator", profile="profile:example-lake-curator")
+    a["lanes"] = {"real": {"writes": ["findings/example-lake/"]}}
+    mods["example-lake"]["contributes"]["agents"] = [a]
+    probs = "\n".join(mr.site_problems(site, mods, SLOTS))
+    assert "example-lake-curator: each lane is bound to exactly one orchestration instance" in probs
+    site["providers"] = {
+        "example-lake": {"agents": {"example-lake-curator": {"lanes": {"real": "platform"}}}}
+    }
+    assert mr.site_problems(site, mods, SLOTS) == []
+    assert sc.errors_for(SELECTION, site, REG) == []
+
+
+def _rows_site(profile, mutate_rows, mutate_site=lambda s: None):
+    site, rows = copy.deepcopy(SITES[profile]), copy.deepcopy(ROWS)
+    mutate_rows(rows["external-collector"]["external-collector-receiver"])
+    mutate_site(site)
+    return "\n".join(mr.site_problems(site, MODULES, SLOTS, rows))
+
+
+def test_a_public_row_needs_grants_public_routes_whatever_its_auth():
+    public = lambda r: r.update(public_hostname="collector.example.org", auth="idp")  # noqa: E731
+    assert "is public without grants.public_routes" in _rows_site("full", public)
+    grant = lambda s: s["grants"].__setitem__(  # noqa: E731
+        "public_routes", {"external-collector": ["external-collector-receiver"]}
+    )
+    assert "public" not in _rows_site("full", public, grant)
+
+
+def test_an_upstream_follows_the_fallback():
+    """lake-catalog resolves to its fallback (hot-index) on single-box; with neither selected the
+    upstream is refused, and an instance upstream must be selected."""
+    assert _rows_site("single-box", lambda r: None) == ""
+    no_index = lambda s: s["slots"].__setitem__("hot-index", "none")  # noqa: E731
+    assert "upstream lake-catalog is not selected, nor a fallback" in _rows_site(
+        "single-box", lambda r: None, no_index
+    )
+    bulk = lambda r: r["upstreams"].append("bulk")  # noqa: E731
+    assert "upstream bulk is not a selected instance" in _rows_site("full", bulk)
+
+
 def test_a_swap_reports_core_and_feature_dependants():
     """Rule 2: the dependants re-check sees the core consumers (B3), not only features."""
     assert mr.dependants("cap:cases", MODULES) == {"core-staff": "prefers"}
@@ -766,7 +1136,7 @@ def test_feature_and_core_modules_and_sites_carry_no_product_names():
     for m in MODULES.values():
         if m["kind"] == "provider":
             p = m["product"]
-            names |= {p["name"], p["display"].lower(), *p.get("aliases", [])}
+            names |= {p["name"], p.get("display", p["name"]).lower(), *p.get("aliases", [])}
     paths = [
         f
         for n, m in MODULES.items()

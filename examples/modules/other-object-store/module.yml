@@ -42,7 +42,6 @@ requires:
   hosts:
     - role: store
       kind: vm
-      exposure: internal
       footprint: {cpu: 2, memory_mb: 1024, disk_gb: 200}
       roles: [role:other_object_store]
       purpose: runs the store
@@ -59,7 +58,6 @@ provides:
         formats: [object-tree]
         export: role:other_object_store
         import: role:other_object_store
-egress: none
 contributes:
   roles:
     - file: roles/other_object_store

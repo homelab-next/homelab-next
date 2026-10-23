@@ -39,4 +39,3 @@ provides:
     static-hosting:
       adapter: hnx_modules.example_static_host.adapter:make_site
       provisional: true
-egress: none

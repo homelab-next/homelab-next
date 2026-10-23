@@ -48,4 +48,6 @@ core:
   core-staff:
     agents:
       core-staff-scorecard: {lanes: {real: platform}}
-grants: {}
+grants:
+  egress:
+    external-collector: [edge]  # an external host is egress: it runs outside the lab

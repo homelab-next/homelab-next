@@ -40,7 +40,6 @@ requires:
   hosts:
   - role: suite
     kind: any
-    exposure: internal
     footprint:
       cpu: 4
       memory_mb: 3072
@@ -91,7 +90,6 @@ provides:
       adapter: hnx_modules.example_siem_suite.notify:make_sender
       conformance:
         target: conformance/target.yml
-egress: none
 contributes:
   roles:
   - file: roles/example_siem_suite
@@ -101,8 +99,6 @@ contributes:
 lifecycle:
   install:
     playbook: playbooks/install.yml
-  upgrade:
-    playbook: playbooks/upgrade.yml
   remove:
     playbook: playbooks/remove.yml
     export_first: true

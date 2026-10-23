@@ -54,7 +54,6 @@ requires:
     purpose: the collector itself, outside the lab; it sends only to the receiver
   - role: receiver
     kind: vm
-    exposure: internal
     footprint:
       cpu: 1
       memory_mb: 384
@@ -172,7 +171,6 @@ contributes:
     roster:
       recall: true
     lanes:
-      production: real
       real:
         writes:
         - findings/external-collector/
@@ -299,8 +297,6 @@ lifecycle:
   install:
     playbook: playbooks/install.yml
     note: the receiver first, then the edge
-  upgrade:
-    playbook: playbooks/upgrade.yml
   remove:
     playbook: playbooks/remove.yml
     export_first: true

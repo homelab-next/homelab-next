@@ -4,8 +4,9 @@
 # sandbox takes the collector's sample handoff on an isolated host, and publishing is the only
 # module granted the static-hosting slot. The collector's agent is mid-cutover between two
 # orchestration instances: its real lane still runs on the platform instance, its shadow lane
-# on the new orchestrator, and no lane is bound to both. Authority lives in grants: publishing's
-# egress, its read of the hosting credential, and the publish grant itself.
+# on the new orchestrator, and no lane is bound to both. Authority lives in grants: the egress of
+# the collector's external edge host and of publishing, publishing's read of the hosting
+# credential, and the publish grant itself.
 profile: full
 hosts:
   data-core:
@@ -77,5 +78,6 @@ grants:
   publish: [publishing]
   egress:
     publishing: [publisher]
+    external-collector: [edge]
   secrets:
     publishing: [secret:example-static-host/deploy-token]

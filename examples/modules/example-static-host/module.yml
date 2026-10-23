@@ -45,4 +45,3 @@ provides:
       provisional: true
       reason: static-hosting has no contract yet; the obvious standard is a directory of files
         published atomically at one site name, with a listing to compare against
-egress: none

@@ -16,7 +16,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
-__all__ = ["RESERVED_IDS", "lake_table_schema", "module_schema", "render"]
+__all__ = [
+    "RESERVED_IDS",
+    "lake_table_schema",
+    "module_schema",
+    "module_selection_schema",
+    "render",
+]
 
 G = "$(?!\\n)"
 BASE = "https://schemas.example.internal/homelabnext/"
@@ -105,14 +111,20 @@ SCHEMA_ID = "https://schemas\\.example\\.internal/homelabnext/[a-z0-9_/.-]+/[0-9
 OWN_CODE = "hnx_modules\\.[a-z_][a-z0-9_]*(?:\\.[a-z_][a-z0-9_]*)+:[A-Za-z_][A-Za-z0-9_]*"
 SHARED_ADAPTER = "homelabnext\\.conform\\.adapters\\.[a-z_][a-z0-9_]*:[A-Za-z_][A-Za-z0-9_]*"
 SECRET = "secret:" + SLUG + "(?:/[a-z][a-z0-9_-]*)+"
+#: an https URL whose path segments each start alphanumeric: no '.', '..' or dot-file segment
+URL = "https://[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)+"
 
 
 def _defs() -> dict[str, Any]:
     d: dict[str, Any] = {
         "slug": pat(SLUG, maxlen=64),
         "module_id": {
-            "allOf": [pat(SLUG, None, 48), {"not": {"enum": list(RESERVED_IDS)}}],
-            "description": "A module id: its directory name, never a reserved word. Every name the module claims (tables, det ids, units, roles, data prefixes, secrets, agent and profile ids, criteria) is bound to it; the loader checks the binding.",
+            "allOf": [
+                pat(SLUG, None, 48),
+                {"not": {"enum": list(RESERVED_IDS)}},
+                {"not": {"pattern": "-shadow$"}},
+            ],
+            "description": "A module id: its directory name, never a reserved word, never ending in -shadow (the suffix names an agent's shadow lane, <root>/<id>-shadow/). Every name the module claims (tables, det ids, units, roles, data prefixes, secrets, agent and profile ids, criteria) is bound to it; the loader checks the binding.",
         },
         "rel_path": pat(
             SEGMENT + "(?:/" + SEGMENT + ")*/?",
@@ -221,7 +233,7 @@ def _defs() -> dict[str, Any]:
                 ),
                 "purpose": text(200),
             },
-            ["cap", "purpose"],
+            ["cap"],
             "One slot the module cannot work without (hard); never a product.",
             allOf=[
                 {
@@ -233,7 +245,7 @@ def _defs() -> dict[str, Any]:
         ),
         "requirement_model_role": obj(
             {"role": ref("mdl_ref"), "purpose": text(200)},
-            ["role", "purpose"],
+            ["role"],
             "A model role alias (ADR-0007), never a model id.",
         ),
         "requirement_interface": obj(
@@ -246,14 +258,18 @@ def _defs() -> dict[str, Any]:
                 },
                 "purpose": text(200),
             },
-            ["interface", "version", "purpose"],
+            ["interface", "version"],
             "An interface another module provides; the requiring module never names it.",
         ),
         "fallback_data": obj(
             {
-                "dataset": ref("slug", "One of the module's own data ids."),
+                "dataset": ref(
+                    "slug", "One of the module's own data ids, living in this preference (loader)."
+                ),
                 "retention": ref("retention"),
-                "formats": ref("neutral_formats"),
+                "formats": ref(
+                    "neutral_formats", "A subset of the fallback slot's export formats (loader)."
+                ),
             },
             ["dataset"],
             "How an owned dataset changes when the fallback slot holds it instead (retention, export formats).",
@@ -271,6 +287,8 @@ def _defs() -> dict[str, Any]:
                 "data": arr(ref("fallback_data")),
             },
             ["behaviour"],
+            "Without the preferred slot: what stops working, optionally the lighter slot used instead (to) and how owned datasets change there (data, which needs a to: data cannot move nowhere).",
+            dependentRequired={"data": ["to"]},
         ),
         "preference_capability": obj(
             {
@@ -341,16 +359,23 @@ def _defs() -> dict[str, Any]:
                     "enum": ["vm", "lxc", "host", "external", "any"],
                     "description": "external: placement and footprint only; its compute model is deferred to the collector pilot.",
                 },
-                "count": {"type": "integer", "minimum": 1, "maximum": 16},
+                "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 16,
+                    "default": 1,
+                    "description": "Copies of this host role; the footprint and its resources count once per copy.",
+                },
                 "exposure": {
                     "enum": ["internal", "internet-facing", "isolated"],
-                    "description": "isolated: no route to the lab and no egress, enforced by the generated network policy; it lands only on a host the site marks isolated.",
+                    "default": "internal",
+                    "description": "Default internal. isolated: no route to the lab and no egress, enforced by the generated network policy; it lands only on a host the site marks isolated.",
                 },
                 "footprint": ref("footprint"),
                 "roles": arr(ref("role_ref"), "The module's own Ansible roles on this host."),
                 "purpose": text(200),
             },
-            ["role", "kind", "exposure", "footprint", "purpose"],
+            ["role", "kind", "footprint"],
             "A host or guest the module needs, by role, never by name.",
         ),
         "requires": obj(
@@ -422,8 +447,10 @@ def _defs() -> dict[str, Any]:
                     "description": "object-prefix: objects under a prefix of an object-store instance; event: an event type; lake-table: a table others read; service: a registry service's API.",
                 },
                 "formats": ref("formats"),
-                "schema": ref(
-                    "rel_path", "The JSON Schema of one item, in this (the owning) module."
+                "schema": pat(
+                    SEGMENT + "(?:/" + SEGMENT + ")*\\.json",
+                    "The JSON Schema of one item (a .json file), in this (the owning) module; the loader reads it as a JSON Schema whose $id is in .../modules/<owner>/.",
+                    256,
                 ),
                 "schema_id": ref("schema_id"),
                 "description": text(300),
@@ -467,7 +494,8 @@ def _defs() -> dict[str, Any]:
             desc="What the module offers: slots (provider only) and interfaces (any kind).",
         ),
         "egress": {
-            "description": "Where the module's hosts may connect beyond the slots they require: none, or per host role a list of registry services and internet. Enforced by the generated host and unit network policy; every internet entry needs an overlay grant (grants.egress).",
+            "description": "Where the module's hosts may connect beyond the slots they require: none (the default when absent), or per host role (one of the module's own) a list of registry services and internet. Every internet entry, every authority or privileged service (svc:secrets, svc:broker, ...) and every kind: external host role needs an overlay grant (grants.egress). Enforcement by a generated network policy is specified, not implemented.",
+            "default": "none",
             "oneOf": [
                 {"const": "none"},
                 arr(
@@ -477,7 +505,7 @@ def _defs() -> dict[str, Any]:
                             "to": arr({"oneOf": [ref("svc_ref"), {"const": "internet"}]}, None, 1),
                             "purpose": text(200),
                         },
-                        ["host", "to", "purpose"],
+                        ["host", "to"],
                     ),
                     None,
                     1,
@@ -515,7 +543,7 @@ def _defs() -> dict[str, Any]:
             {
                 "writes": arr(
                     pat(PREFIX, None, 200),
-                    "The records prefixes this lane writes, under <root>/<module id>[-shadow]/.",
+                    "The records prefixes this lane writes: the real lane under <root>/<module id>/, the shadow lane under <root>/<module id>-shadow/ (loader).",
                     1,
                 ),
                 "compare_to": {
@@ -530,12 +558,13 @@ def _defs() -> dict[str, Any]:
             {
                 "production": {
                     "enum": ["real", "shadow"],
-                    "description": "The lane consumers read. The selection binds each lane to exactly one orchestration instance.",
+                    "default": "real",
+                    "description": "The lane consumers read (default real). The selection binds each lane to exactly one orchestration instance.",
                 },
                 "real": ref("lane"),
                 "shadow": ref("lane"),
             },
-            ["production", "real"],
+            ["real"],
             "The agent's lanes. Each needs a prompt, and the selection binds each to one orchestration instance, so a cutover runs the real lane on the old instance and the shadow on the new one, never both on both.",
         ),
         "agent": obj(
@@ -728,7 +757,7 @@ def _defs() -> dict[str, Any]:
                 "via": obj(
                     {"cap": ref("cap_ref"), "instance": pat(SLUG, None, 64)},
                     ["cap"],
-                    desc="The requirement or preference it lives in; when the site resolves that slot to its fallback, the dataset moves there (with the fallback's data override).",
+                    desc="The requirement or preference it lives in (required for a dataset in a slot; files, database and state live on the module's own host). It names only a cap, and an instance, the module requires or prefers; when the site resolves that slot to its fallback, the dataset moves there (with the fallback's data override).",
                 ),
                 "description": text(300),
                 "export": ref(
@@ -759,6 +788,14 @@ def _defs() -> dict[str, Any]:
                 {
                     "if": {"properties": {"kind": {"enum": ["database", "state"]}}},
                     "then": {"allOf": _not_kind("table", "prefix")},
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "kind": {"enum": ["lake-table", "object-prefix", "records-prefix"]}
+                        }
+                    },
+                    "then": {"required": ["via"]},
                 },
             ],
         ),
@@ -871,8 +908,8 @@ def _defs() -> dict[str, Any]:
                     ],
                 ),
             },
-            ["install", "upgrade"],
-            "Playbooks in the module. Required when the module places anything on a host; a hosted or config-only provider needs none.",
+            ["install"],
+            "Playbooks in the module. Required when the module places anything on a host; a hosted or config-only provider needs none. upgrade defaults to install (roles are idempotent).",
         ),
         "origin": {
             "description": "Where the module comes from. in-tree: shipped in this repository (reviewed by its own pull requests). git or archive: fetched; the overlay pins its tree digest (sha256 over every file of the module directory, code and roles included) and keeps the reviews keyed by it, so an unpinned or changed module is not loadable.",
@@ -881,15 +918,19 @@ def _defs() -> dict[str, Any]:
                 obj(
                     {
                         "kind": {"const": "git"},
-                        "url": pat("https://[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+", None, 300),
-                        "commit": pat("[0-9a-f]{40}", None, 40),
+                        "url": pat(URL, None, 300),
+                        "commit": pat(
+                            "[0-9a-f]{40}(?:[0-9a-f]{24})?",
+                            "A full commit id: 40 hex (sha1 repositories) or 64 hex (sha256).",
+                            64,
+                        ),
                     },
                     ["kind", "url", "commit"],
                 ),
                 obj(
                     {
                         "kind": {"const": "archive"},
-                        "url": pat("https://[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+", None, 300),
+                        "url": pat(URL, None, 300),
                         "sha256": pat("[0-9a-f]{64}", None, 64),
                     },
                     ["kind", "url", "sha256"],
@@ -899,7 +940,7 @@ def _defs() -> dict[str, Any]:
         "product": obj(
             {
                 "name": ref("slug", "The product's name as the product-name lint matches it."),
-                "display": text(80),
+                "display": text(80, "Default: name."),
                 "aliases": arr(ref("slug"), "Other spellings the lint matches."),
                 "version": pat(
                     "[0-9A-Za-z][0-9A-Za-z.+_-]*",
@@ -907,7 +948,7 @@ def _defs() -> dict[str, Any]:
                     64,
                 ),
             },
-            ["name", "display", "version"],
+            ["name", "version"],
         ),
         "licence": obj(
             {
@@ -1072,7 +1113,7 @@ def module_schema() -> dict[str, Any]:
                     },
                     "required": ["requires"],
                 },
-                "then": {"required": ["lifecycle", "egress"]},
+                "then": {"required": ["lifecycle"]},
             },
             {
                 "if": {"properties": {"kind": {"const": "provider"}}, "required": ["kind"]},
@@ -1100,6 +1141,8 @@ def module_schema() -> dict[str, Any]:
                 "then": {
                     "properties": {
                         "id": {"pattern": "^core-"},
+                        "origin": {"properties": {"kind": {"const": "in-tree"}}},
+                        "status": {"not": {"const": "retired"}},
                         "provides": {"not": {"required": ["slots"]}},
                         "lifecycle": {"not": {"required": ["remove"]}},
                     },
@@ -1164,6 +1207,144 @@ def lake_table_schema() -> dict[str, Any]:
     }
 
 
+def module_selection_schema() -> dict[str, Any]:
+    """A site's module selection (docs/modules.md): hosts, slot choices, bindings and grants.
+
+    Only the shape: every cross-reference (a provider fills the slot, an agent key exists, a grant
+    is allowed) is a loader rule (``tests/schemas/module_rules.py``, ``site_problems``)."""
+    mid = {
+        "allOf": [pat(SLUG, None, 48), {"not": {"pattern": "-shadow$"}}],
+        "description": "A module id.",
+    }
+    by_module = lambda items, desc: {  # noqa: E731
+        "type": "object",
+        "propertyNames": mid,
+        "additionalProperties": arr(items, None, 1),
+        "description": desc,
+    }
+    role_map = {
+        "type": "object",
+        "propertyNames": pat(SLUG, None, 64),
+        "additionalProperties": pat(SLUG, None, 64),
+        "description": "<host role> -> <site host>.",
+    }
+    config = {
+        "type": "object",
+        "propertyNames": {"pattern": "^[a-z][a-z0-9_]{0,63}" + G},
+        "additionalProperties": {"type": ["string", "integer", "boolean"]},
+        "description": "Real values for the module's config keys; a secret-typed value is a secret name in the module's own namespace or one it is granted in grants.secrets (loader).",
+    }
+    agents = {
+        "type": "object",
+        "propertyNames": pat(SLUG, None, 64),
+        "additionalProperties": obj(
+            {
+                "lanes": obj(
+                    {"real": pat(SLUG, None, 64), "shadow": pat(SLUG, None, 64)},
+                    ["real"],
+                    "Each lane bound to exactly one orchestration instance.",
+                )
+            },
+            ["lanes"],
+        ),
+        "description": "Per agent key the module contributes (an unknown key is refused by the loader).",
+    }
+    binding = obj(
+        {"placement": role_map, "config": config, "agents": agents},
+        desc="One module's placement, real config values and lane bindings.",
+    )
+    capacity = obj(
+        {
+            "cpu": {"type": "number", "minimum": 0.1},
+            "memory_mb": {"type": "integer", "minimum": 16},
+            "disk_gb": {"type": "integer", "minimum": 0},
+            "gpu_memory_mb": {"type": "integer", "minimum": 0},
+        },
+        ["cpu", "memory_mb", "disk_gb"],
+    )
+    host = obj(
+        {
+            "kind": {"enum": ["vm", "lxc", "host", "external"]},
+            "isolated": {"type": "boolean"},
+            "capacity": capacity,
+            "resources": arr(
+                obj({"name": pat(SLUG, None, 32), "kind": pat(SLUG, None, 32)}, ["name", "kind"])
+            ),
+            "headroom": obj({"memory_mb": {"type": "integer", "minimum": 0}}),
+        },
+        ["kind", "capacity"],
+        "A site host; capacity stands in for its platform/guest resources.",
+    )
+    choice = obj(
+        {
+            "provider": mid,
+            "instance": pat(SLUG, None, 64),
+            "placement": role_map,
+            "config": config,
+        },
+        ["provider", "instance"],
+    )
+    grants = obj(
+        {
+            "publish": arr(
+                mid, "Modules that may require, prefer or fall back to cap:static-hosting."
+            ),
+            "egress": by_module(
+                pat(SLUG, None, 64),
+                "Host roles whose internet, authority-service or external egress the overlay grants.",
+            ),
+            "secrets": by_module(
+                pat(SECRET, None, 128), "Granted credentials (holder: granted) a module may read."
+            ),
+            "public_routes": by_module(
+                pat(SLUG, None, 64), "Service rows that may carry a public_hostname."
+            ),
+            "shared_config": by_module(
+                {"enum": ["cap:edge", "cap:idp"]},
+                "Privileged shared components a module may configure.",
+            ),
+            "units": by_module(
+                pat(SLUG, None, 64), "Units that may run as root or opt out of hardening."
+            ),
+        },
+        desc="Authority a module cannot give itself. A misspelt grant kind is refused, never read as no grant.",
+    )
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": BASE + "platform/module_selection/1.0",
+        "x-draft": "ADR-0027 (proposed): the shape only, no loader yet; not frozen",
+        "title": "Module selection",
+        "description": "A site's selection of modules (docs/modules.md): hosts, providers per slot with placement, feature, core and provider bindings, and the grants a module cannot give itself. In an overlay it is lab/modules.yml; the public example profiles are examples/modules/sites/.",
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["profile", "hosts", "slots"],
+        "properties": {
+            "profile": pat(SLUG, None, 64),
+            "hosts": {
+                "type": "object",
+                "propertyNames": pat(SLUG, None, 64),
+                "additionalProperties": host,
+            },
+            "slots": {
+                "type": "object",
+                "propertyNames": pat(SLUG, None, 64),
+                "additionalProperties": {
+                    "oneOf": [{"enum": ["none", "pass-through"]}, arr(choice, None, 1)]
+                },
+            },
+            "features": {"type": "object", "propertyNames": mid, "additionalProperties": binding},
+            "core": {"type": "object", "propertyNames": mid, "additionalProperties": binding},
+            "providers": {
+                "type": "object",
+                "propertyNames": mid,
+                "additionalProperties": obj({"agents": agents}),
+                "description": "Lane bindings for a selected provider's agents (its placement and config are per slot instance).",
+            },
+            "grants": grants,
+        },
+    }
+
+
 def _dump(doc: dict[str, Any]) -> str:
     return json.dumps(doc, indent=2) + "\n"
 
@@ -1173,4 +1354,5 @@ def render() -> dict[str, str]:
     return {
         "schemas/platform/module.schema.json": _dump(module_schema()),
         "schemas/platform/lake_table.schema.json": _dump(lake_table_schema()),
+        "schemas/platform/module_selection.schema.json": _dump(module_selection_schema()),
     }

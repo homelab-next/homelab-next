@@ -37,7 +37,7 @@ def orphans(root: Path) -> list[str]:
     plat = root / "schemas" / "platform"
     found = [
         p
-        for g in ("module", "lake_table")
+        for g in ("module", "module_selection", "lake_table")
         for d in ("negative", "examples")
         for p in plat.glob(f"{d}/{g}.*.yml")
     ]

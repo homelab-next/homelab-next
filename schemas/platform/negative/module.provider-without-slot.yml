@@ -38,7 +38,6 @@ requires:
   hosts:
   - role: store
     kind: vm
-    exposure: internal
     footprint:
       cpu: 2
       memory_mb: 1024
@@ -47,7 +46,6 @@ requires:
     - role:example_object_store
     purpose: runs the store
 provides: {}
-egress: none
 contributes:
   roles:
   - file: roles/example_object_store

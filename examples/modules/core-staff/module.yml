@@ -53,6 +53,5 @@ contributes:
       schedule: {on_calendar: 'Mon *-*-* 07:20:00 UTC'}
       roster: {recall: true}
       lanes:
-        production: real
         real:
           writes: [findings/core-staff/]

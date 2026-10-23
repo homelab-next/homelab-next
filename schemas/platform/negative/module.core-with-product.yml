@@ -60,7 +60,6 @@ contributes:
     roster:
       recall: true
     lanes:
-      production: real
       real:
         writes:
         - findings/core-staff/

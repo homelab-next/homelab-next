@@ -36,7 +36,6 @@ requires:
   hosts:
     - role: platform
       kind: vm
-      exposure: internal
       footprint: {cpu: 2, memory_mb: 3072, disk_gb: 200}
       roles: [role:example_platform]
       purpose: runs Fabrikam Platform
@@ -83,7 +82,6 @@ provides:
       adapter: hnx_modules.example_platform.orchestration:make
       conformance: {target: conformance/target.yml}
       migration: {formats: [jsonl], export: role:example_platform, import: role:example_platform}
-egress: none
 contributes:
   roles:
     - file: roles/example_platform
@@ -91,7 +89,6 @@ contributes:
     - {role: role:example_platform, hook: readiness}
 lifecycle:
   install: {playbook: playbooks/install.yml}
-  upgrade: {playbook: playbooks/upgrade.yml}
   remove:
     playbook: playbooks/remove.yml
     export_first: true

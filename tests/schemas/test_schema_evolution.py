@@ -19,7 +19,11 @@ SCHEMAS = [
 ]
 #: schemas still drafts (x-draft: proposed, no loader or pilot yet): no frozen baseline, free to
 #: change until their ADR is accepted; joining or leaving this set is a reviewed change
-DRAFTS = {"platform/module.schema.json", "platform/lake_table.schema.json"}
+DRAFTS = {
+    "platform/module.schema.json",
+    "platform/lake_table.schema.json",
+    "platform/module_selection.schema.json",
+}
 
 
 def _major(path) -> int:

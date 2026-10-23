@@ -14,7 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-__all__ = ["EXAMPLES", "NEGATIVES", "render"]
+__all__ = ["EXAMPLES", "NEGATIVES", "SELECTION_NEGATIVES", "render"]
 
 HDR = "# SPDX-License-Identifier: Apache-2.0\n"
 
@@ -137,6 +137,36 @@ NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
         ),
         "A core module is never removed.",
     ),
+    "core-retired": (
+        C,
+        lambda d: d.update(status="retired", reason="a core module is never retired"),
+        "A core module is never retired.",
+    ),
+    "core-fetched": (
+        C,
+        _set(
+            ("origin",),
+            {"kind": "git", "url": "https://git.example.internal/modules/core", "commit": "a" * 40},
+        ),
+        "A core module is in-tree: a fetched module never becomes core (and so is never auto-selected).",
+    ),
+    "shadow-suffix-id": (
+        F,
+        _set(("id",), "external-collector-shadow"),
+        "The -shadow suffix names an agent's shadow lane, never a module.",
+    ),
+    "origin-git-dot-segments": (
+        F,
+        _set(
+            ("origin",),
+            {
+                "kind": "git",
+                "url": "https://git.example.internal/modules/../../other",
+                "commit": "a" * 40,
+            },
+        ),
+        "A fetched module's URL has no '.' or '..' segment.",
+    ),
     "origin-git-unpinned": (
         F,
         _set(("origin",), {"kind": "git", "url": "https://git.example.internal/modules/collector"}),
@@ -256,6 +286,34 @@ NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
         lambda d: d["prefers"]["capabilities"][0].pop("fallback"),
         "A soft dependency states its fallback.",
     ),
+    "fallback-data-without-to": (
+        F,
+        lambda d: d["prefers"]["capabilities"][2]["fallback"].__setitem__(
+            "data", [{"dataset": "sessions", "retention": {"days": 1}}]
+        ),
+        "Fallback data moves to the fallback slot, so it needs a to.",
+    ),
+    "slot-dataset-without-via": (
+        F,
+        lambda d: d["data"][0].pop("via"),
+        "A dataset in a slot names the requirement it lives in, so a fallback can move it.",
+    ),
+    "interface-schema-not-json": (
+        F,
+        lambda d: d.__setitem__(
+            "interfaces",
+            [
+                {
+                    "id": "collector-batch",
+                    "version": "1.0",
+                    "kind": "object-prefix",
+                    "schema": "docs/external-collector.md",
+                    "description": "a batch of sessions",
+                }
+            ],
+        ),
+        "An interface's item schema is a JSON Schema file, never a Markdown page.",
+    ),
     "host-without-footprint": (
         F,
         lambda d: d["requires"]["hosts"][0].pop("footprint"),
@@ -328,14 +386,14 @@ NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
         lambda d: _agent(d)["prompts"].__setitem__("canary", "prompts/x.yml"),
         "Agent prompts are keyed by the lanes real and shadow only.",
     ),
-    "agent-product-tool": (
+    "agent-tool-not-slot-named": (
         F,
-        lambda d: _agent(d)["tools"].append("northwind_query"),
-        "Agent tools are slot-named (<slot>.<tool>).",
+        lambda d: _agent(d)["tools"].append("query"),
+        "Agent tools are slot-named (<slot>.<tool>); a product-named one is a loader rule (the tool's slot is one the agent needs).",
     ),
     "agent-staff-code": (
         F,
-        lambda d: _agent(d)["roster"].__setitem__("code", "J6"),
+        lambda d: _agent(d)["roster"].__setitem__("code", "X1"),
         "A staff code is the overlay roster's, never the manifest's.",
     ),
     "agent-ceiling": (
@@ -457,6 +515,37 @@ NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
 }
 
 
+def _rename(key: str, new: str) -> Callable[[Doc], None]:
+    return lambda d: d.__setitem__(new, d.pop(key))
+
+
+#: selection negative name -> (base site profile, mutation, comment)
+SELECTION_NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
+    "grants-misspelt": (
+        "full",
+        _rename("grants", "grant"),
+        "A misspelt grants key is refused, never read as no grants.",
+    ),
+    "unknown-grant-kind": (
+        "full",
+        lambda d: d["grants"].__setitem__("public_route", {"publishing": ["publishing-site"]}),
+        "A grant kind that does not exist is refused, never ignored.",
+    ),
+    "choice-without-instance": (
+        "single-box",
+        lambda d: d["slots"]["notify"][0].pop("instance"),
+        "A slot choice names its instance.",
+    ),
+    "lane-binding-without-real": (
+        "single-box",
+        lambda d: d["features"]["external-collector"]["agents"]["external-collector-analyst"][
+            "lanes"
+        ].pop("real"),
+        "Every agent's real lane is bound.",
+    ),
+}
+
+
 def _dump(doc: Doc, comment: str) -> str:
     import yaml
 
@@ -479,6 +568,18 @@ def render(root: Path) -> dict[str, str]:
         d = copy.deepcopy(base[mod])
         mutate(d)
         out[f"schemas/platform/negative/module.{name}.yml"] = _dump(d, comment)
+    sites = {
+        p.stem: yaml.safe_load(p.read_text(encoding="utf-8"))
+        for p in sorted((ex / "sites").glob("*.yml"))
+    }
+    for name, site in sites.items():
+        out[f"schemas/platform/examples/module_selection.{name}.yml"] = _dump(
+            site, f"Site profile {name}, as examples/modules/sites/{name}.yml."
+        )
+    for name, (profile, mutate, comment) in SELECTION_NEGATIVES.items():
+        d = copy.deepcopy(sites[profile])
+        mutate(d)
+        out[f"schemas/platform/negative/module_selection.{name}.yml"] = _dump(d, comment)
     lake = yaml.safe_load((ex / F / "lake" / "sessions.table.yml").read_text(encoding="utf-8"))
     out["schemas/platform/examples/lake_table.module-owned.yml"] = _dump(
         lake,

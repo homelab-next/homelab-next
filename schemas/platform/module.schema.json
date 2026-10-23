@@ -242,8 +242,7 @@
       },
       "then": {
         "required": [
-          "lifecycle",
-          "egress"
+          "lifecycle"
         ]
       }
     },
@@ -361,6 +360,18 @@
           "id": {
             "pattern": "^core-"
           },
+          "origin": {
+            "properties": {
+              "kind": {
+                "const": "in-tree"
+              }
+            }
+          },
+          "status": {
+            "not": {
+              "const": "retired"
+            }
+          },
           "provides": {
             "not": {
               "required": [
@@ -456,9 +467,14 @@
               "site"
             ]
           }
+        },
+        {
+          "not": {
+            "pattern": "-shadow$"
+          }
         }
       ],
-      "description": "A module id: its directory name, never a reserved word. Every name the module claims (tables, det ids, units, roles, data prefixes, secrets, agent and profile ids, criteria) is bound to it; the loader checks the binding."
+      "description": "A module id: its directory name, never a reserved word, never ending in -shadow (the suffix names an agent's shadow lane, <root>/<id>-shadow/). Every name the module claims (tables, det ids, units, roles, data prefixes, secrets, agent and profile ids, criteria) is bound to it; the loader checks the binding."
     },
     "rel_path": {
       "type": "string",
@@ -612,8 +628,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "cap",
-        "purpose"
+        "cap"
       ],
       "properties": {
         "cap": {
@@ -671,8 +686,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "role",
-        "purpose"
+        "role"
       ],
       "properties": {
         "role": {
@@ -691,8 +705,7 @@
       "additionalProperties": false,
       "required": [
         "interface",
-        "version",
-        "purpose"
+        "version"
       ],
       "properties": {
         "interface": {
@@ -725,13 +738,14 @@
       "properties": {
         "dataset": {
           "$ref": "#/$defs/slug",
-          "description": "One of the module's own data ids."
+          "description": "One of the module's own data ids, living in this preference (loader)."
         },
         "retention": {
           "$ref": "#/$defs/retention"
         },
         "formats": {
-          "$ref": "#/$defs/neutral_formats"
+          "$ref": "#/$defs/neutral_formats",
+          "description": "A subset of the fallback slot's export formats (loader)."
         }
       },
       "description": "How an owned dataset changes when the fallback slot holds it instead (retention, export formats)."
@@ -760,6 +774,12 @@
             "$ref": "#/$defs/fallback_data"
           }
         }
+      },
+      "description": "Without the preferred slot: what stops working, optionally the lighter slot used instead (to) and how owned datasets change there (data, which needs a to: data cannot move nowhere).",
+      "dependentRequired": {
+        "data": [
+          "to"
+        ]
       }
     },
     "preference_capability": {
@@ -933,9 +953,7 @@
       "required": [
         "role",
         "kind",
-        "exposure",
-        "footprint",
-        "purpose"
+        "footprint"
       ],
       "properties": {
         "role": {
@@ -957,7 +975,9 @@
         "count": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 16
+          "maximum": 16,
+          "default": 1,
+          "description": "Copies of this host role; the footprint and its resources count once per copy."
         },
         "exposure": {
           "enum": [
@@ -965,7 +985,8 @@
             "internet-facing",
             "isolated"
           ],
-          "description": "isolated: no route to the lab and no egress, enforced by the generated network policy; it lands only on a host the site marks isolated."
+          "default": "internal",
+          "description": "Default internal. isolated: no route to the lab and no egress, enforced by the generated network policy; it lands only on a host the site marks isolated."
         },
         "footprint": {
           "$ref": "#/$defs/footprint"
@@ -1167,8 +1188,10 @@
           "$ref": "#/$defs/formats"
         },
         "schema": {
-          "$ref": "#/$defs/rel_path",
-          "description": "The JSON Schema of one item, in this (the owning) module."
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9_][A-Za-z0-9._-]*)*\\.json$(?!\\n)",
+          "description": "The JSON Schema of one item (a .json file), in this (the owning) module; the loader reads it as a JSON Schema whose $id is in .../modules/<owner>/."
         },
         "schema_id": {
           "$ref": "#/$defs/schema_id"
@@ -1272,7 +1295,8 @@
       "description": "What the module offers: slots (provider only) and interfaces (any kind)."
     },
     "egress": {
-      "description": "Where the module's hosts may connect beyond the slots they require: none, or per host role a list of registry services and internet. Enforced by the generated host and unit network policy; every internet entry needs an overlay grant (grants.egress).",
+      "description": "Where the module's hosts may connect beyond the slots they require: none (the default when absent), or per host role (one of the module's own) a list of registry services and internet. Every internet entry, every authority or privileged service (svc:secrets, svc:broker, ...) and every kind: external host role needs an overlay grant (grants.egress). Enforcement by a generated network policy is specified, not implemented.",
+      "default": "none",
       "oneOf": [
         {
           "const": "none"
@@ -1285,8 +1309,7 @@
             "additionalProperties": false,
             "required": [
               "host",
-              "to",
-              "purpose"
+              "to"
             ],
             "properties": {
               "host": {
@@ -1427,7 +1450,7 @@
             "pattern": "^[a-z0-9][a-z0-9_-]*(?:/[a-z0-9][a-z0-9_.-]*)*/$(?!\\n)"
           },
           "minItems": 1,
-          "description": "The records prefixes this lane writes, under <root>/<module id>[-shadow]/."
+          "description": "The records prefixes this lane writes: the real lane under <root>/<module id>/, the shadow lane under <root>/<module id>-shadow/ (loader)."
         },
         "compare_to": {
           "enum": [
@@ -1446,7 +1469,6 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "production",
         "real"
       ],
       "properties": {
@@ -1455,7 +1477,8 @@
             "real",
             "shadow"
           ],
-          "description": "The lane consumers read. The selection binds each lane to exactly one orchestration instance."
+          "default": "real",
+          "description": "The lane consumers read (default real). The selection binds each lane to exactly one orchestration instance."
         },
         "real": {
           "$ref": "#/$defs/lane"
@@ -2069,7 +2092,7 @@
               "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
             }
           },
-          "description": "The requirement or preference it lives in; when the site resolves that slot to its fallback, the dataset moves there (with the fallback's data override)."
+          "description": "The requirement or preference it lives in (required for a dataset in a slot; files, database and state live on the module's own host). It names only a cap, and an instance, the module requires or prefers; when the site resolves that slot to its fallback, the dataset moves there (with the fallback's data override)."
         },
         "description": {
           "type": "string",
@@ -2159,6 +2182,24 @@
                   ]
                 }
               }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "lake-table",
+                  "object-prefix",
+                  "records-prefix"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "via"
             ]
           }
         }
@@ -2397,8 +2438,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "install",
-        "upgrade"
+        "install"
       ],
       "properties": {
         "install": {
@@ -2459,7 +2499,7 @@
           ]
         }
       },
-      "description": "Playbooks in the module. Required when the module places anything on a host; a hosted or config-only provider needs none."
+      "description": "Playbooks in the module. Required when the module places anything on a host; a hosted or config-only provider needs none. upgrade defaults to install (roles are idempotent)."
     },
     "origin": {
       "description": "Where the module comes from. in-tree: shipped in this repository (reviewed by its own pull requests). git or archive: fetched; the overlay pins its tree digest (sha256 over every file of the module directory, code and roles included) and keeps the reviews keyed by it, so an unpinned or changed module is not loadable.",
@@ -2491,12 +2531,13 @@
             "url": {
               "type": "string",
               "maxLength": 300,
-              "pattern": "^https://[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+$(?!\\n)"
+              "pattern": "^https://[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)+$(?!\\n)"
             },
             "commit": {
               "type": "string",
-              "maxLength": 40,
-              "pattern": "^[0-9a-f]{40}$(?!\\n)"
+              "maxLength": 64,
+              "pattern": "^[0-9a-f]{40}(?:[0-9a-f]{24})?$(?!\\n)",
+              "description": "A full commit id: 40 hex (sha1 repositories) or 64 hex (sha256)."
             }
           }
         },
@@ -2515,7 +2556,7 @@
             "url": {
               "type": "string",
               "maxLength": 300,
-              "pattern": "^https://[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+$(?!\\n)"
+              "pattern": "^https://[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)+$(?!\\n)"
             },
             "sha256": {
               "type": "string",
@@ -2531,7 +2572,6 @@
       "additionalProperties": false,
       "required": [
         "name",
-        "display",
         "version"
       ],
       "properties": {
@@ -2542,7 +2582,8 @@
         "display": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 80
+          "maxLength": 80,
+          "description": "Default: name."
         },
         "aliases": {
           "type": "array",

@@ -23,7 +23,6 @@ requires:
   hosts:
     - role: server
       kind: any
-      exposure: internal
       footprint: {cpu: 4, memory_mb: 5120, disk_gb: 60, gpu_memory_mb: 6144, resources: [{kind: gpu, exclusive: true}]}
       roles: [role:example_inference]
       purpose: runs Contoso Inference
@@ -34,7 +33,6 @@ provides:
         - {format: openai-compatible, version: v1}
       adapter: hnx_modules.example_inference.inference:make
       conformance: {target: conformance/target.yml}
-egress: none
 contributes:
   roles:
     - file: roles/example_inference
@@ -42,7 +40,6 @@ contributes:
     - {role: role:example_inference, hook: readiness}
 lifecycle:
   install: {playbook: playbooks/install.yml}
-  upgrade: {playbook: playbooks/upgrade.yml}
   remove:
     playbook: playbooks/remove.yml
     export_first: true

@@ -60,6 +60,7 @@ EXPECTED = {
     "platform/mcp_server.schema.json",
     "platform/module.schema.json",
     "platform/lake_table.schema.json",
+    "platform/module_selection.schema.json",
     "platform/model_serving.schema.json",
     "ocsf/authentication.v1.json",
     "ocsf/detection_finding.v1.json",

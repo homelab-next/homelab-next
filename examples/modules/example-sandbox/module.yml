@@ -64,7 +64,6 @@ prefers:
       purpose: files collected by other modules, with their sidecars
       fallback:
         behaviour: the sandbox only takes files a person submits
-egress: none
 contributes:
   roles:
     - file: roles/example_sandbox_guest
@@ -80,7 +79,6 @@ contributes:
         real: prompts/example-sandbox-analyst.real.yml
       trigger: {interface: sample-handoff}
       lanes:
-        production: real
         real:
           writes: [findings/example-sandbox/]
 data:
@@ -94,7 +92,6 @@ data:
     retention: {days: 365}
 lifecycle:
   install: {playbook: playbooks/install.yml}
-  upgrade: {playbook: playbooks/upgrade.yml}
   remove:
     playbook: playbooks/remove.yml
     audit: [inventory, playbooks, hv-config, hv-volumes, live-refs, contributions]
