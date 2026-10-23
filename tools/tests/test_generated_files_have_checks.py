@@ -1,12 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """Every committed file that marks itself generated has a drift check (ADR-0028 decision 6).
 
-A file is "marked" when its first lines say it is generated and must not be edited, or carry a
-``generated_from`` key.  Each marked file must match a row of ``DERIVED`` below, and each row names
-evidence that its check runs: a step in CI's workflow or a test module that CI's pytest runs.  A
-new generator that commits a marked file without a check, or a row whose files or evidence are
-gone, fails here.  Derived files with no room for a marker, and derived blocks inside authored
-files, are listed in the ADR by hand.
+A file is "marked" when one of its first lines is a comment or quote (``#``, ``//``, ``<!--``,
+``>``, or a ``"_generated"`` key) that says both "generated" and "do not edit" (or "do not modify",
+or "not this page"), or when it has a ``generated_from`` key.  Prose that merely quotes a marker
+(a changelog entry, a guide) does not count.  Each marked file must match a row of ``DERIVED``,
+and each row names evidence that its check runs: a CI ``run:`` line, or a CI-run test module with
+tests in it.  A new generator that commits a marked file without a check, or a row whose files or
+evidence are gone, fails here.
+
+This is a heuristic, not a proof: a derived file with no marker (JSON without a comment syntax, a
+marker past the first lines or in other words), or one whose marker was stripped while a sibling
+still matches its row, is not seen.  ADR-0028 lists those files by hand.
 """
 
 from __future__ import annotations
@@ -20,16 +25,20 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 CI = ROOT / ".github" / "workflows" / "ci.yml"
-HEAD_LINES = 15
+HEAD_LINES = 20
 
-#: code that only *writes* a marker, and test goldens, are not committed derived files
-SKIP_PREFIXES = ("tests/", "homelabnext/", "tools/", "conformance/")
+#: test data (goldens, fixtures) is not a committed derived file
+SKIP_PREFIXES = ("tests/",)
+#: code that only *writes* a marker string
+CODE_DIRS = ("homelabnext/", "tools/", "conformance/")
 
+_LEADER = re.compile(r'^\s*(?:#|//|<!--|>|"_generated"\s*:)')
 _GENERATED = re.compile(r"(?i)\bgenerated\b")
-_DO_NOT_EDIT = re.compile(r"(?i)do not edit|not this page")
-_FROM_KEY = re.compile(r'^\s*"generated_from"\s*:', re.M)
+_DO_NOT_EDIT = re.compile(r"(?i)\bdo not (?:edit|modify)\b|\bnot this page\b")
+_FROM_KEY = re.compile(r'^\s*"generated_from"\s*:')
 
-#: (glob of committed files, evidence the check runs: "ci:<text in ci.yml>" or "test:<path>")
+#: (glob of committed files, evidence the check runs: "ci:<text of a CI run line>" or
+#: "test:<path of a CI-run test module>")
 DERIVED: tuple[tuple[str, str], ...] = (
     ("docs/capabilities/*.md", "ci:docs capabilities check"),
     ("docs/scripts/catalog.md", "ci:scripts catalog --check"),
@@ -38,25 +47,32 @@ DERIVED: tuple[tuple[str, str], ...] = (
     ("docs/terms.md", "test:tests/agent/test_agent_terms.py"),
     ("detections/det_map.yml", "ci:homelabnext.detections map --check"),
     ("examples/keyring/keyring.json", "ci:agent keyring check"),
-    ("examples/mcp/clients/*", "ci:make mcp-check"),
-    ("compose/lab-in-a-box/config/llm-gateway/*", "test:tests/generators/test_llm_gateway.py"),
-    ("examples/model-serving/gateway/*", "test:tests/models/test_serving_plan.py"),
+    ("examples/mcp/clients/*/*", "ci:make mcp-check"),
+    (
+        "compose/lab-in-a-box/config/llm-gateway/litellm/*",
+        "test:tests/generators/test_llm_gateway.py",
+    ),
+    ("examples/model-serving/gateway/*/*", "test:tests/models/test_serving_plan.py"),
     ("examples/model-serving/vllm_server/*", "test:tests/models/test_serving_plan.py"),
     ("workflows/stackstorm/*", "test:tests/workflows/test_workflows_st2.py"),
 )
 
 
 def is_marked(text: str) -> bool:
-    head = "\n".join(text.splitlines()[:HEAD_LINES])
-    return bool(_GENERATED.search(head) and _DO_NOT_EDIT.search(head)) or bool(
-        _FROM_KEY.search(head)
-    )
+    for line in text.splitlines()[:HEAD_LINES]:
+        if _FROM_KEY.match(line):
+            return True
+        if _LEADER.match(line) and _GENERATED.search(line) and _DO_NOT_EDIT.search(line):
+            return True
+    return False
 
 
 def marked_files(root: Path, names: list[str]) -> list[str]:
     out = []
     for name in names:
         if not name or name.startswith(SKIP_PREFIXES):
+            continue
+        if name.startswith(CODE_DIRS) and name.endswith(".py"):
             continue
         try:
             text = (root / name).read_text(encoding="utf-8")
@@ -89,6 +105,15 @@ def test_every_marked_committed_file_has_a_listed_check():
     )
 
 
+def _ci_runs(ci: str, what: str) -> bool:
+    """``what`` appears on a line CI executes: not a comment, not a step name."""
+    for line in ci.splitlines():
+        bare = line.strip()
+        if what in bare and not bare.startswith(("#", "- name:", "name:")):
+            return True
+    return False
+
+
 def test_every_row_matches_a_file_and_its_check_exists():
     marked = marked_files(ROOT, _tracked())
     ci = CI.read_text(encoding="utf-8")
@@ -96,20 +121,46 @@ def test_every_row_matches_a_file_and_its_check_exists():
         assert any(fnmatch.fnmatch(f, glob) for f in marked), f"stale row: {glob} matches nothing"
         kind, _, what = evidence.partition(":")
         if kind == "ci":
-            assert what in ci, f"{glob}: CI has no step running '{what}'"
+            assert _ci_runs(ci, what), f"{glob}: CI has no step running '{what}'"
         else:
-            assert kind == "test" and (ROOT / what).is_file(), f"{glob}: no test {what}"
+            assert kind == "test", f"{glob}: unknown evidence {evidence}"
+            module = ROOT / what
+            assert module.is_file() and re.search(
+                r"^def test_", module.read_text(encoding="utf-8"), re.M
+            ), f"{glob}: no tests in {what}"
 
 
 def test_an_unlisted_generated_file_is_reported(tmp_path):
-    (tmp_path / "out").mkdir()
-    (tmp_path / "out" / "new.yml").write_text("# generated by hnx new-thing; do not edit\nx: 1\n")
-    (tmp_path / "out" / "keys.json").write_text('{\n  "generated_from": {"a": "sha256:0"}\n}\n')
-    (tmp_path / "authored.yml").write_text("# hand-written; generated pages read this\nx: 1\n")
-    (tmp_path / "tests").mkdir()
-    (tmp_path / "tests" / "golden.yml").write_text("# generated by hnx x; do not edit\n")
-    names = ["out/new.yml", "out/keys.json", "authored.yml", "tests/golden.yml"]
-    files = marked_files(tmp_path, names)
-    assert files == ["out/new.yml", "out/keys.json"]
+    files_ = {
+        "out/new.yml": "# generated by hnx new-thing; do not edit\nx: 1\n",
+        "out/keys.json": '{\n  "generated_from": {"a": "sha256:0"}\n}\n',
+        "out/page.md": "# Page\n\n> Generated by `hnx page`. Do not edit: regenerate.\n",
+        "out/mod.json": '{\n  "_generated": "generated by hnx x; do not modify"\n}\n',
+        "authored.yml": "# hand-written; generated pages read this\nx: 1\n",
+        # prose quoting a marker, as a changelog entry does: not a marker
+        "CHANGELOG.md": "## [Unreleased]\n\n- generated ones (`// Code generated ... DO NOT EDIT.`) exempt\n",
+        # a marker split over two lines is not one marker
+        "split.yml": "# generated by hnx x\n# and reviewed; do not edit by hand\n",
+        "tests/golden.yml": "# generated by hnx x; do not edit\n",
+        "homelabnext/gen.py": "# generated by hnx x; do not edit\nHEADER = 1\n",
+        "homelabnext/data.yml": "# generated by hnx x; do not edit\n",
+    }
+    for name, text in files_.items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(text)
+    files = marked_files(tmp_path, list(files_))
+    assert files == [
+        "out/new.yml",
+        "out/keys.json",
+        "out/page.md",
+        "out/mod.json",
+        "homelabnext/data.yml",
+    ]
     assert unlisted(files) == files
-    assert unlisted(files, rows=(("out/*", "ci:x"),)) == []
+    assert unlisted(files, rows=(("out/*", "ci:x"), ("homelabnext/*", "ci:x"))) == []
+
+
+def test_ci_evidence_must_be_a_run_line_not_a_name_or_comment():
+    ci = "      - name: docs capabilities check\n      # docs capabilities check\n"
+    assert not _ci_runs(ci, "docs capabilities check")
+    assert _ci_runs(ci + "        run: hnx docs capabilities check\n", "docs capabilities check")
