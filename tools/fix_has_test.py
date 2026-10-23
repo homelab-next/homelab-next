@@ -18,7 +18,8 @@
 A commit is a *fix* when its subject is a conventional-commit fix (``fix: ...``,
 ``fix(scope): ...``, ``fix!: ...``) or its message carries a ``Fixes:`` trailer.  Every fix in the
 range must touch at least one test file (a ``test_*.py``/``*_test.py``/``*_test.go`` file, or
-anything under a ``tests/`` or ``test/`` directory).  A fix that genuinely cannot have one (documentation, a CI
+anything under a ``tests/``, ``test/`` or Go ``testdata/`` directory: a fix whose only test
+change is a fixture or golden file has a test).  A fix that genuinely cannot have one (documentation, a CI
 setting) says why in a ``No-regression-test: <reason>`` trailer; the gate lists every waiver.
 
 ``--prove`` also checks the "fails without the fix" half: for each fix, the commit's test files are
@@ -29,7 +30,9 @@ A Go test file (``*_test.go``) is proved in its module (the nearest directory wi
 ``orchestrator/`` in this repository): ``go test ./<pkg> -run '^(<Test funcs>)$'`` runs the test
 and fuzz functions the commit added or changed (the whole package when only helpers changed) and
 must fail; a package that no longer builds without the fix counts as failing, like pytest's exit
-2.  Without a Go toolchain on PATH the commit cannot be proved, which is a problem, not a pass.
+2.  The commit's ``testdata/`` files are staged on the parent with its tests (a test reading a
+fixture the parent lacks would otherwise "fail" for that reason alone), and a package whose
+``testdata/`` the commit changed is run whole.  Without a Go toolchain on PATH the commit cannot be proved, which is a problem, not a pass.
 
 Usage: python tools/fix_has_test.py [--range A..B] [--prove] [--allow-missing-base] [--repo DIR]
 Exit: 0 every fix has a test, 1 some fix has none (or, with --prove, a test passes without the
@@ -51,7 +54,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 FIX_SUBJECT = re.compile(r"^fix(\([^)]*\))?!?:\s*\S", re.I)
 FIXES_TRAILER = re.compile(r"^Fixes:\s*\S", re.M | re.I)
 WAIVER = re.compile(r"^No-regression-test:[ \t]*(?P<why>\S.{7,})$", re.M | re.I)
-TEST_PATH = re.compile(r"(^|/)tests?/|(^|/)test_[^/]*\.py$|_test\.py$|_test\.go$")
+TEST_PATH = re.compile(r"(^|/)tests?/|(^|/)testdata/|(^|/)test_[^/]*\.py$|_test\.py$|_test\.go$")
+# Go's testdata directory: fixtures of the package in the directory that holds it
+GO_TESTDATA = re.compile(r"^(?P<pkg>(?:.*/)?)testdata/")
 TEST_MODULE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$")
 GO_TEST_FILE = re.compile(r"(^|/)[^/]+_test\.go$")
 # a top-level test or fuzz function; gofmt closes it with a ``}`` alone on a line
@@ -152,10 +157,27 @@ def _go_module(wt: Path, path: str) -> Path | None:
     return None
 
 
-def _prove_go(c: Commit, wt: Path, go: str, files: list[str], cwd: Path) -> list[str]:
+def _go_module_at(c: Commit, path: str, cwd: Path) -> bool:
+    """Whether ``path`` lies in a Go module (a go.mod in a directory above it) at commit ``c``."""
+    parts = path.split("/")[:-1]
+    for n in range(len(parts), -1, -1):
+        mod = "/".join([*parts[:n], "go.mod"])
+        if subprocess.run(["git", "cat-file", "-e", f"{c.sha}:{mod}"], cwd=cwd).returncode == 0:
+            return True
+    return False
+
+
+def _prove_go(
+    c: Commit, wt: Path, go: str, files: list[str], cwd: Path, data: list[str] | None = None
+) -> list[str]:
     """Run the Go tests ``c`` touched on the parent tree ``wt``; problems when they pass."""
     targets: dict[tuple[Path, str], set[str] | None] = {}
     problems = []
+    for f in data or []:  # testdata/: the package in the directory holding it, run whole
+        pkg_dir = wt / GO_TESTDATA.match(f).group("pkg")
+        mod = _go_module(wt, (pkg_dir / "testdata").relative_to(wt).as_posix())
+        if mod is not None:
+            targets[(mod, "./" + pkg_dir.relative_to(mod).as_posix())] = None
     for f in files:
         mod = _go_module(wt, f)
         if mod is None:
@@ -195,10 +217,12 @@ def prove(
     ]  # deleted files are not staged
     modules = [f for f in tests if TEST_MODULE.search(f)]
     go_files = [f for f in tests if GO_TEST_FILE.search(f)]
-    if not modules and not go_files:
-        return None  # only fixtures changed: nothing runnable to prove with
-    go_bin = shutil.which(go) if go_files else None
-    if go_files and go_bin is None:
+    # a Go package's fixtures: its tests run whole with them (and the tests' own changes)
+    go_data = [f for f in tests if GO_TESTDATA.match(f) and _go_module_at(c, f, cwd)]
+    if not modules and not go_files and not go_data:
+        return None  # only fixtures outside a Go package changed: nothing runnable to prove with
+    go_bin = shutil.which(go) if go_files or go_data else None
+    if (go_files or go_data) and go_bin is None:
         return f"{c.short}: cannot prove its Go tests: no Go toolchain ({go!r}) on PATH"
     problems: list[str] = []
     with tempfile.TemporaryDirectory() as tmp:
@@ -227,8 +251,8 @@ def prove(
                         f"{c.short}: its tests could not run on the parent "
                         f"(pytest exit {run.returncode})"
                     )
-            if go_files and go_bin:
-                problems += _prove_go(c, wt, go_bin, go_files, cwd)
+            if (go_files or go_data) and go_bin:
+                problems += _prove_go(c, wt, go_bin, go_files, cwd, data=go_data)
         except subprocess.CalledProcessError as exc:
             return f"{c.short}: could not stage its tests on the parent ({exc.stderr.strip()})"
         finally:

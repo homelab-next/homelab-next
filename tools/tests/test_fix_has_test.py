@@ -43,6 +43,10 @@ def test_test_files():
     go = ["orchestrator/internal/queue/queue_test.go", "orchestrator/internal/queue/queue.go"]
     assert gate.test_files(go) == go[:1]
     assert gate.test_files(["orchestrator/go.mod", "orchestrator/testing.go"]) == []
+    # Go fixtures and golden files are test files: staged with the tests, and a test change
+    data = ["orchestrator/internal/api/testdata/case.json", "testdata/golden.txt"]
+    assert gate.test_files(data) == data
+    assert gate.test_files(["orchestrator/internal/mytestdata/x.go"]) == []
 
 
 def test_check_classifies_commits():
@@ -190,6 +194,58 @@ def test_go_test_that_does_not_build_without_the_fix_counts_as_failing(tmp_path)
     )
     (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
     assert gate.prove(c, cwd=r) is None
+
+
+READS_FIXTURE = (
+    'package calc\n\nimport (\n\t"os"\n\t"testing"\n)\n\n'
+    "func TestCase(t *testing.T) {\n"
+    '\tif _, err := os.ReadFile("testdata/case.json"); err != nil {\n\t\tt.Fatal(err)\n\t}\n}\n'
+)
+
+
+@needs_go
+def test_go_fixtures_are_staged_on_the_parent_with_the_tests(tmp_path):
+    r, commit, base = _go_repo(tmp_path)
+    # the test only reads its new fixture: it fails on the parent only if the fixture is missing
+    vacuous = commit(
+        "fix: add adds",
+        **{
+            GO + "calc.go": CALC.format(op="+"),
+            GO + "case_test.go": READS_FIXTURE,
+            GO + "testdata/case.json": "{}\n",
+        },
+    )
+    (c,) = gate.commits_in(f"{base}..{vacuous}", cwd=r)
+    problem = gate.prove(c, cwd=r)
+    assert problem is not None and "passes WITHOUT the fix" in problem
+
+
+@needs_go
+def test_a_go_fix_whose_only_test_change_is_testdata_runs_its_package(tmp_path):
+    r, commit, base = _go_repo(tmp_path)
+    golden = (
+        'package calc\n\nimport (\n\t"os"\n\t"strconv"\n\t"strings"\n\t"testing"\n)\n\n'
+        "func TestGolden(t *testing.T) {\n"
+        '\tb, _ := os.ReadFile("testdata/add.golden")\n'
+        "\tif got := strconv.Itoa(Add(2, 2)); got != strings.TrimSpace(string(b)) {\n"
+        "\t\tt.Fatal(got)\n\t}\n}\n"
+    )
+    base = commit(
+        "test: a golden file",
+        **{GO + "golden_test.go": golden, GO + "testdata/add.golden": "0\n"},
+    )
+    fix = commit(
+        "fix: add adds", **{GO + "calc.go": CALC.format(op="+"), GO + "testdata/add.golden": "4\n"}
+    )
+    (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
+    assert gate.check([c]) == ([], [])  # the golden file is its test
+    assert gate.prove(c, cwd=r) is None  # the whole package fails on the parent: proven
+    vacuous = commit("fix: whitespace", **{GO + "testdata/add.golden": "4\n\n"})
+    (c,) = gate.commits_in(f"{fix}..{vacuous}", cwd=r)
+    problem = gate.prove(c, cwd=r)
+    assert (
+        problem is not None and "passes WITHOUT the fix" in problem and "./internal/calc" in problem
+    )
 
 
 def test_go_fix_without_a_go_toolchain_cannot_be_proved(tmp_path):
