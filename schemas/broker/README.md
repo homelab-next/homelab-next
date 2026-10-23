@@ -24,6 +24,9 @@ it executes, with an empty reason). Manifest 1.4 adds `refusal_limit` (`max` ref
 Manifest 1.5 adds `quotas` (`pending_per_actor`, default 20, and `notify_window_s`, default
 300 s: one approval page per actor and window) and a lane's `max_files` and `max_total_bytes`
 (default 4096 files and 64 MiB per lane directory).
+Manifest 1.6 adds a shared lane's per-actor share (`max_files_per_actor`, `max_bytes_per_actor`;
+default an eighth of the lane's quotas) and a lane's `max_writes_per_hour` (default 120 on a shared
+lane, none on a per-actor lane; refused `lane-rate-exceeded`).
 Reference service and walkthrough: `docs/broker.md`, ADR-0017.
 
 Table-driven fixtures: `tests/broker/fixtures/decision_table.yml` (manifest x tier x handler x

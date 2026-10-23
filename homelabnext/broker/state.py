@@ -40,6 +40,8 @@ the same file and nothing is ever rewritten in place.  State is *derived* from w
 ``digest.key``                   the broker-held key (hex) for the keyed hash of secret arguments in a
                                  request digest (created once, exclusively)
 ``runs/<rid>/``                  a run's private directory (handler copy, stdout, stderr)
+``lanes-ledger/``                the write lanes' bookkeeping: a shared lane's owner index and each
+                                 actor's recent write times (:mod:`homelabnext.broker.lanes`)
 
 A request's state: no claim -> ``pending``; claim ``cancel`` -> ``cancelled``; claim ``deny`` ->
 ``denied``; claim ``run`` -> the result's ``done`` / ``error``, or ``running`` while there is none.

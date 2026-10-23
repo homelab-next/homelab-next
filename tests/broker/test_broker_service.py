@@ -486,6 +486,28 @@ def test_a_lane_quota_from_the_manifest_refuses_the_write_and_audits_it(tmp_path
     assert svc.audit_documents(reason="lane-quota-exceeded")
 
 
+def test_one_agent_cannot_lock_every_other_out_of_the_proposals_inbox(tmp_path):
+    """The proposals inbox is one shared directory: one looping agent filled its quota in under
+    a minute, with no refusal on the way, and every other agent's proposal was then refused."""
+    manifest, docs = load_manifest(EXAMPLE)
+    manifest["grants"][1]["actions"].append("proposal.file")
+    manifest["grants"][1]["max_tier"] = "write"
+    svc = BrokerService(
+        tmp_path / "state", manifest, handler_docs=docs, base_dir=EXAMPLE.parent,
+        data_root=tmp_path / "data", clock=Clock(),
+    )  # fmt: skip
+    note = {"title": "t", "risk": "low", "rollback": "r", "type": "proposal"}
+    filed, why = 0, None
+    while why is None and filed < 5000:
+        try:
+            svc.call(AGENT, "proposal.file", {"note": note, "body": "A", "slug": f"s{filed}"})
+            filed += 1
+        except Denied as exc:
+            why = exc.reason
+    assert why in ("lane-rate-exceeded", "lane-quota-exceeded") and filed <= 512
+    svc.call("profile:reader", "proposal.file", {"note": dict(note, title="help"), "body": "x"})
+
+
 def test_the_pending_quota_has_a_default(tmp_path):
     from homelabnext.broker.service import DEFAULT_PENDING_PER_ACTOR
 

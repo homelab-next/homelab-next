@@ -368,3 +368,72 @@ def test_lane_quotas_have_defaults_and_are_checked():
     lane = _lane()
     assert (lane.max_files, lane.max_total_bytes) == (DEFAULT_MAX_FILES, DEFAULT_MAX_TOTAL_BYTES)
     assert _lane(max_total_bytes=10).problems(), "a quota smaller than one file"
+
+
+# -- shared lanes: each actor has a share, and a write rate --------------------------------------
+
+
+def test_one_actor_cannot_fill_a_shared_inbox_for_every_other(tmp_path):
+    """One looping agent filed proposals until the shared inbox's quota was spent, and every other
+    agent's proposal was then refused lane-quota-exceeded: the escalation channel, denied to all."""
+    lane = _inbox(max_files=16, max_writes_per_hour=1000)
+    assert lane.max_files_per_actor == 2, "an eighth of the lane by default"
+    for i in range(2):
+        write(lane, tmp_path, ACTOR, {"note": dict(NOTE), "slug": f"s{i}"}, NOW, key=KEY)
+    params = {"note": dict(NOTE), "slug": "s2"}
+    with pytest.raises(LaneError) as info:
+        write(lane, tmp_path, ACTOR, params, NOW, key=KEY)
+    assert info.value.reason == "lane-quota-exceeded" and "share" in str(info.value)
+    # another agent, even one whose slug the first one's prefixes, still files
+    for other in ("profile:reader", "profile:triage-lead"):
+        write(lane, tmp_path, other, {"note": dict(NOTE), "slug": "s0"}, NOW, key=KEY)
+    # a file that only looks like the actor's (no valid tag) does not count against it
+    (tmp_path / "records" / "inbox" / "2026-01-15-reader-forged-00000000.md").write_text("x")
+    write(lane, tmp_path, "profile:reader", {"note": dict(NOTE), "slug": "s1"}, NOW, key=KEY)
+
+
+def test_a_shared_inbox_has_a_byte_share(tmp_path):
+    lane = _inbox(max_total_bytes=8000, max_bytes_per_actor=4096, max_writes_per_hour=1000)
+    write(
+        lane, tmp_path, ACTOR, {"note": dict(NOTE), "body": "x" * 2500, "slug": "a"}, NOW, key=KEY
+    )
+    with pytest.raises(LaneError) as info:
+        write(lane, tmp_path, ACTOR, {"note": dict(NOTE), "body": "x" * 2500, "slug": "b"},
+              NOW, key=KEY)  # fmt: skip
+    assert info.value.reason == "lane-quota-exceeded"
+    write(lane, tmp_path, "profile:reader", {"note": dict(NOTE), "body": "x" * 2500}, NOW, key=KEY)
+
+
+def test_a_shared_files_lane_counts_each_actors_share_by_its_owner_index(tmp_path):
+    lane = _lane(per_actor=False, max_files=16)
+    for i in range(2):
+        write(lane, tmp_path, ACTOR, {"name": f"a{i}.md", "content": "x"}, NOW)
+    _refused(lane, tmp_path, {"name": "a2.md", "content": "x"}, "lane-quota-exceeded")
+    write(lane, tmp_path, "profile:b", {"name": "b0.md", "content": "x"}, NOW)
+    (tmp_path / "memory" / "a0.md").unlink()  # the decider moved one out: its place is free
+    write(lane, tmp_path, ACTOR, {"name": "a2.md", "content": "x"}, NOW)
+    assert _files(tmp_path / "memory") == ["a1.md", "a2.md", "b0.md"], "no bookkeeping in the lane"
+
+
+def test_an_actor_has_a_write_rate_per_lane(tmp_path):
+    lane = _lane(max_writes_per_hour=3)
+    t0 = 1_768_471_200.0
+    for i in range(3):
+        write(lane, tmp_path, ACTOR, {"name": f"n{i}.md", "content": "x"}, NOW, at=t0 + i)
+    with pytest.raises(LaneError) as info:
+        write(lane, tmp_path, ACTOR, {"name": "n3.md", "content": "x"}, NOW, at=t0 + 10)
+    assert info.value.reason == "lane-rate-exceeded"
+    write(lane, tmp_path, "profile:other", {"name": "n3.md", "content": "x"}, NOW, at=t0 + 10)
+    write(lane, tmp_path, ACTOR, {"name": "n3.md", "content": "x"}, NOW, at=t0 + 3600)
+
+
+def test_shared_lanes_have_a_default_rate_and_share():
+    from homelabnext.broker.lanes import DEFAULT_SHARED_WRITES_PER_HOUR
+
+    shared, own = _inbox(), _lane()
+    assert shared.max_writes_per_hour == DEFAULT_SHARED_WRITES_PER_HOUR
+    assert (shared.max_files_per_actor, shared.max_bytes_per_actor) == (512, 8 * 1024 * 1024)
+    assert (own.max_writes_per_hour, own.max_files_per_actor) == (None, None)
+    assert _lane(max_files_per_actor=3).problems(), "a share on a per-actor lane"
+    assert _inbox(max_files=4, max_files_per_actor=5).problems(), "a share above the lane"
+    assert _inbox().problems() == []

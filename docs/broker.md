@@ -78,6 +78,17 @@ write happen under an exclusive `flock` on the directory, so concurrent writers 
 it together. Without the quota an agent could add uniquely named files until the disk, by default
 the audit trail's disk, was full.
 
+A shared lane (`per_actor: false`, such as the proposals inbox every agent files into) also gives
+each actor a share of it (manifest 1.6): `max_files_per_actor` and `max_bytes_per_actor`, default
+an eighth of the lane's quotas. A records-inbox file is an actor's by its name, whose agent segment
+and broker-keyed tag only that actor's writes produce; a shared `files` lane keeps who wrote each
+name in an owner index. And a lane bounds each actor's writes in time: `max_writes_per_hour`
+(default 120 on a shared lane, none on a per-actor one), refused `lane-rate-exceeded`. The owner
+index and the write times live in `<state>/lanes-ledger/`, never in a lane directory, and are
+read and written under the lane directory's `flock`. Without
+the share, one looping agent filled the inbox's quota in under a minute and every other agent's
+proposal was refused `lane-quota-exceeded` until someone moved notes out.
+
 ## Exec handlers
 
 A handler document pins the file and says how to run it:
