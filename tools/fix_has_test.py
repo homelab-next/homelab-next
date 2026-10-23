@@ -23,24 +23,31 @@ change is a fixture or golden file has a test).  A fix that genuinely cannot hav
 setting) says why in a ``No-regression-test: <reason>`` trailer; the gate lists every waiver.
 
 ``--prove`` also checks the "fails without the fix" half: for each fix, the commit's test files are
-put on top of its parent in a temporary worktree and the touched test modules are run there; at
-least one collected test must FAIL there.  A regression test that passes without the fix proves
-nothing and is reported.  So is every case that cannot prove it, never counted as a pass:
-- a collection or import error on the parent (pytest exit 2): a test module that imports a name
-  the fix adds errors on the parent whatever its assertions check, so an error is not a failure;
-  the modules run with ``--continue-on-collection-errors`` and the junit report must show at
-  least one failed test;
-- a fix whose only test files are fixtures, ``conftest.py`` or other non-test files under
-  ``tests/`` (outside a Go package's ``testdata/``): nothing runnable shows the fix.  Such a fix
-  says why in a ``No-regression-test:`` trailer, or adds a test module.
+put on top of its parent in a temporary worktree and the tests it touched are run there.  At least
+one of them must FAIL there.  A regression test that passes without the fix proves nothing and is
+reported; so is every case that cannot prove it, never counted as a pass.
+
+One rule for Python and Go decides what a failure on the parent proves.  A test that fails there
+only because it does not build, collect or import counts as failing ONLY IF every such error names
+a symbol (function, class, type, method, module attribute or variable, or a module or package) that
+the fix's own diff adds; any other build, collection or import error, and any other error that is
+not a failing test, means the fix cannot be proven.  For Python the junit report of the parent run
+is read: an ``ImportError``/``ModuleNotFoundError``, an ``AttributeError`` on a module or a
+``NameError``, at collection or inside a test, is a missing name; for Go, the compiler's
+``undefined: X`` / ``has no field or method X`` errors and a missing package are.  The added
+symbols are the definitions in the commit's non-test files that its parent lacks.
+
+A fix whose only test files are fixtures, ``conftest.py`` or other non-test files (outside a Go
+package's ``testdata/``) cannot be proven either, in both languages, unless it carries a
+``No-regression-test:`` trailer saying why.
 
 A Go test file (``*_test.go``) is proved in its module (the nearest directory with a ``go.mod``,
 at any depth, so in any discovered module): ``go test ./<pkg> -run '^(<Test funcs>)$'`` runs the test
 and fuzz functions the commit added or changed (the whole package when only helpers changed) and
-must fail; a package that no longer builds without the fix counts as failing, like pytest's exit
-2.  The commit's ``testdata/`` files are staged on the parent with its tests (a test reading a
-fixture the parent lacks would otherwise "fail" for that reason alone), and a package whose
-``testdata/`` the commit changed is run whole.  Without a Go toolchain on PATH the commit cannot be proved, which is a problem, not a pass.
+must fail, under the rule above.  The commit's ``testdata/`` files are staged on the parent with
+its tests (a test reading a fixture the parent lacks would otherwise "fail" for that reason
+alone), and a package whose ``testdata/`` the commit changed is run whole.  Without a Go toolchain
+on PATH the commit cannot be proved, which is a problem, not a pass.
 
 Usage: python tools/fix_has_test.py [--range A..B] [--prove] [--allow-missing-base] [--repo DIR]
 Exit: 0 every fix has a test, 1 some fix has none (or, with --prove, a test passes without the
@@ -148,18 +155,203 @@ def check(commits: list[Commit]) -> tuple[list[str], list[str]]:
     return problems, notes
 
 
-def failed_tests(report: Path) -> list[str]:
-    """The tests a junit report records as failed (an ``error``, such as a collection error, is
-    not a failure)."""
+PY_DEF = re.compile(
+    r"^[ \t]*(?:async[ \t]+)?def[ \t]+([A-Za-z_]\w*)|^[ \t]*class[ \t]+([A-Za-z_]\w*)"
+    r"|^([A-Za-z_]\w*)[ \t]*(?::[^=\n]*)?=(?!=)",
+    re.M,
+)
+GO_DEF = re.compile(
+    r"^func[ \t]+(?:\([^)]*\)[ \t]*)?([A-Za-z_]\w*)|^(?:type|var|const)[ \t]+([A-Za-z_]\w*)", re.M
+)
+GO_BLOCK_START = re.compile(r"^(?:type|var|const)\b.*[({][ \t]*(?://.*)?$")
+GO_BLOCK_ENTRY = re.compile(r"^[ \t]+([A-Za-z_]\w*)\b")
+# the names a missing-name error is about (Python messages; Go compiler and go command errors)
+PY_MISSING = (
+    re.compile(r"cannot import name '([^']+)'"),
+    re.compile(r"module '[^']+' has no attribute '([^']+)'"),
+    re.compile(r"NameError: name '([^']+)' is not defined"),
+)
+PY_MISSING_MODULE = re.compile(r"No module named '([^']+)'")
+PY_IMPORT_ERROR = re.compile(r"\b(?:ImportError|ModuleNotFoundError|AttributeError|NameError)\b")
+GO_ERROR_LINE = re.compile(r"^(?:\S+\.go:\d+(?::\d+)?: |\S+\.go: )(?P<msg>.*)$", re.M)
+GO_MISSING = (
+    re.compile(r"undefined: (?:[A-Za-z_]\w*\.)?([A-Za-z_]\w*)"),
+    re.compile(r"has no field or method ([A-Za-z_]\w*)"),
+    re.compile(r"([A-Za-z_]\w*) not declared by package"),
+)
+GO_MISSING_PACKAGE = (
+    re.compile(r"no required module provides package ([^\s;]+)"),
+    re.compile(r"package ([^\s;]+) is not in (?:std|GOROOT)"),
+    re.compile(r'cannot find package "([^"]+)"'),
+    re.compile(r"could not import ([^\s;]+)"),
+)
+
+
+@dataclass
+class Added:
+    """What a commit's non-test files define that its parent does not."""
+
+    names: set[str] = field(default_factory=set)
+    modules: set[str] = field(default_factory=set)  # dotted Python modules, Go package dirs
+
+    def has_module(self, name: str) -> bool:
+        name = name.strip().rstrip("/")
+        return any(
+            m == name or m.endswith("." + name) or m.endswith("/" + name) or name.endswith("/" + m)
+            for m in self.modules
+        )
+
+
+def _show(cwd: Path, rev: str, path: str) -> str | None:
+    try:
+        return _git("show", f"{rev}:{path}", cwd=cwd)
+    except subprocess.CalledProcessError:
+        return None
+
+
+def _py_defs(text: str) -> set[str]:
+    return {next(g for g in m.groups() if g) for m in PY_DEF.finditer(text)}
+
+
+def _go_defs(text: str) -> set[str]:
+    names = {next(g for g in m.groups() if g) for m in GO_DEF.finditer(text)}
+    inside = False
+    for line in text.splitlines():
+        if not inside and (
+            GO_BLOCK_START.match(line) or re.match(r"^type\s+\w+\s+(?:struct|interface)\s*\{", line)
+        ):
+            inside = True
+            continue
+        if inside and re.match(r"^[)}]", line):
+            inside = False
+            continue
+        if inside:
+            m = GO_BLOCK_ENTRY.match(line)
+            if m:
+                names.add(m.group(1))
+    return names
+
+
+def added_symbols(c: Commit, cwd: Path = REPO_ROOT) -> Added:
+    """The symbols, modules and Go packages ``c``'s non-test files define and its parent lacks."""
+    out = Added()
+    test = set(test_files(c.files))
+    for f in c.files:
+        if f in test or not f.endswith((".py", ".go")):
+            continue
+        new, old = _show(cwd, c.sha, f), _show(cwd, f"{c.sha}^", f)
+        if new is None:
+            continue
+        defs = _py_defs if f.endswith(".py") else _go_defs
+        out.names |= defs(new) - (defs(old) if old is not None else set())
+        if old is None and f.endswith(".py"):
+            parts = f[: -len(".py")].split("/")
+            if parts[-1] == "__init__":
+                parts = parts[:-1]
+            out.modules |= {".".join(parts[i:]) for i in range(len(parts))}
+        if old is None and f.endswith(".go"):
+            pkg = f.rsplit("/", 1)[0] if "/" in f else "."
+            parent_has_go = (
+                any(
+                    p.endswith(".go")
+                    for p in _git("ls-tree", "--name-only", f"{c.sha}^", pkg + "/", cwd=cwd).split()
+                )
+                if pkg != "."
+                else True
+            )
+            if not parent_has_go:
+                out.modules.add(pkg)
+    return out
+
+
+@dataclass
+class Outcome:
+    """What the parent run of a fix's tests shows."""
+
+    failed: int = 0  # tests that failed (a missing name the fix adds included)
+    missing: set[str] = field(default_factory=set)  # names the errors are about, not added
+    errors: list[str] = field(default_factory=list)  # errors that are not a missing name
+
+    def verdict(self, c: Commit, what: str) -> str | None:
+        if self.missing:
+            return (
+                f"{c.short}: cannot prove the fix: on the parent its tests do not import, collect "
+                f"or build because of {', '.join(sorted(self.missing))}, which the fix does not "
+                f"add; a missing name counts as failing without the fix only when the fix's own "
+                f"diff adds it ({what})"
+            )
+        if self.errors:
+            return (
+                f"{c.short}: cannot prove the fix: on the parent its tests stop with an error that "
+                f"is not a failing test ({self.errors[0][:160]}) ({what})"
+            )
+        if not self.failed:
+            return f"{c.short}: cannot prove the fix: no test failed on the parent ({what})"
+        return None
+
+
+def _python_missing(text: str, added: Added) -> tuple[set[str], set[str]] | None:
+    """``(added names, not-added names)`` an error text is about, or None when it is not a
+    missing-name error."""
+    names = {m.group(1) for rx in PY_MISSING for m in rx.finditer(text)}
+    modules = {m.group(1) for m in PY_MISSING_MODULE.finditer(text)}
+    if not (names or modules) or not PY_IMPORT_ERROR.search(text):
+        return None
+    ok = {n for n in names if n in added.names} | {m for m in modules if added.has_module(m)}
+    return ok, (names | modules) - ok
+
+
+def python_outcome(report: Path, added: Added) -> Outcome:
+    """Read the junit report of the parent run under the one rule (see the module docstring)."""
+    out = Outcome()
     try:
         root = ET.parse(report).getroot()
     except (OSError, ET.ParseError):
-        return []
-    return [
-        f"{case.get('classname', '')}::{case.get('name', '')}"
-        for case in root.iter("testcase")
-        if case.find("failure") is not None
-    ]
+        out.errors.append("no junit report: pytest did not finish")
+        return out
+    for case in root.iter("testcase"):
+        for child in case:
+            if child.tag not in ("failure", "error"):
+                continue
+            text = f"{child.get('message') or ''}\n{child.text or ''}"
+            missing = _python_missing(text, added)
+            if missing is not None:
+                _, bad = missing
+                out.missing |= bad
+                out.failed += not bad
+            elif child.tag == "failure":
+                out.failed += 1
+            else:
+                first = (child.get("message") or child.text or "error").strip().splitlines()
+                out.errors.append(first[0] if first else "error")
+    return out
+
+
+def go_outcome(output: str, returncode: int, added: Added) -> Outcome:
+    """Read ``go test`` output of the parent run under the one rule."""
+    out = Outcome()
+    broken = "[build failed]" in output or "[setup failed]" in output
+    if not broken:
+        if GO_SETUP_ERROR.search(output) or returncode != 1:
+            out.errors.append(f"go test exit {returncode}, the tests did not run")
+        else:
+            out.failed = 1
+        return out
+    lines = [m.group("msg") for m in GO_ERROR_LINE.finditer(output)]
+    lines = [m for m in lines if not m.startswith("too many errors")]
+    if not lines:
+        out.errors.append("the package does not build and the error names nothing")
+    for msg in lines:
+        names = {m.group(1) for rx in GO_MISSING for m in rx.finditer(msg)}
+        pkgs = {m.group(1) for rx in GO_MISSING_PACKAGE for m in rx.finditer(msg)}
+        if not (names or pkgs):
+            out.errors.append(msg)
+            continue
+        out.missing |= {n for n in names if n not in added.names}
+        out.missing |= {p for p in pkgs if not added.has_module(p)}
+    if not out.missing and not out.errors:
+        out.failed = 1  # it fails to build only for symbols the fix adds
+    return out
 
 
 def _go_func_end(text: str, start: int) -> int:
@@ -240,7 +432,13 @@ def _go_module_at(c: Commit, path: str, cwd: Path) -> bool:
 
 
 def _prove_go(
-    c: Commit, wt: Path, go: str, files: list[str], cwd: Path, data: list[str] | None = None
+    c: Commit,
+    wt: Path,
+    go: str,
+    files: list[str],
+    cwd: Path,
+    data: list[str] | None = None,
+    added: Added | None = None,
 ) -> list[str]:
     """Run the Go tests ``c`` touched on the parent tree ``wt``; problems when they pass."""
     targets: dict[tuple[Path, str], set[str] | None] = {}
@@ -271,10 +469,10 @@ def _prove_go(
         out = run.stdout + run.stderr
         if run.returncode == 0:
             problems.append(f"{c.short}: its regression test passes WITHOUT the fix ({what})")
-        elif run.returncode != 1 or GO_SETUP_ERROR.search(out):
-            # 1 is a failing test or a test package that does not build without the fix; a
-            # setup or module error (missing go.mod, no network for a module) proves nothing
-            problems.append(f"{c.short}: its Go tests could not run on the parent ({what})")
+            continue
+        verdict = go_outcome(out, run.returncode, added or Added()).verdict(c, what)
+        if verdict:
+            problems.append(verdict)
     return problems
 
 
@@ -304,6 +502,7 @@ def prove(
     if (go_files or go_data) and go_bin is None:
         return f"{c.short}: cannot prove its Go tests: no Go toolchain ({go!r}) on PATH"
     problems: list[str] = []
+    added = added_symbols(c, cwd)
     with tempfile.TemporaryDirectory() as tmp:
         wt = Path(tmp) / "parent"
         report = Path(tmp) / "report.xml"
@@ -316,7 +515,7 @@ def prove(
             if modules:
                 run = subprocess.run(
                     [
-                        python, "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider",
+                        python, "-m", "pytest", "-q", "-p", "no:cacheprovider",
                         "--continue-on-collection-errors", f"--junitxml={report}", *modules,
                     ],
                     cwd=wt,
@@ -329,21 +528,17 @@ def prove(
                         f"{c.short}: its regression test passes WITHOUT the fix "
                         f"({', '.join(modules)})"
                     )
-                elif run.returncode in (1, 2) and not (
-                    run.returncode == 1 and failed_tests(report)
-                ):
-                    problems.append(
-                        f"{c.short}: cannot prove the fix: no test failed on the parent (pytest "
-                        f"exit {run.returncode}; a collection or import error is not a failing "
-                        f"test) ({', '.join(modules)})"
-                    )
-                elif run.returncode not in (1, 2):
+                elif run.returncode in (1, 2):
+                    verdict = python_outcome(report, added).verdict(c, ", ".join(modules))
+                    if verdict:
+                        problems.append(verdict)
+                else:
                     problems.append(
                         f"{c.short}: its tests could not run on the parent "
                         f"(pytest exit {run.returncode})"
                     )
             if (go_files or go_data) and go_bin:
-                problems += _prove_go(c, wt, go_bin, go_files, cwd, data=go_data)
+                problems += _prove_go(c, wt, go_bin, go_files, cwd, data=go_data, added=added)
         except subprocess.CalledProcessError as exc:
             return f"{c.short}: could not stage its tests on the parent ({exc.stderr.strip()})"
         finally:

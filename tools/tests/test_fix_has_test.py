@@ -133,39 +133,83 @@ def test_end_to_end_on_a_scratch_repository(tmp_path):
     assert gate.main([*repo, "--range", "nope..HEAD", "--allow-missing-base"]) == 0
 
 
-def test_a_collection_error_on_the_parent_does_not_prove_a_fix(tmp_path):
-    """A test module that imports a name the fix adds errors on the parent (pytest exit 2) no
-    matter what it asserts: that is not a failing test, so it cannot prove the fix."""
+PY_PATH = (
+    "import sys, pathlib\nsys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))\n"
+)
+CLAMP = "def clamp(x):\n    return min(x, {cap})\n"
+
+
+def _py_fix(tmp_path, mod: str, test: str, extra: dict | None = None):
+    """A scratch repository with clamp(), then one fix commit; the fix's Commit."""
     r, commit = _repo(tmp_path)
     commit("feat: clamp", **{"mod.py": "def clamp(x):\n    return x\n"})
-    vacuous = commit(
-        "fix: clamp to ten",
-        **{
-            "mod.py": "def clamp(x):\n    return min(x, 10)\n\ndef version():\n    return '2'\n",
-            "tests/test_mod.py": (
-                "import sys, pathlib\n"
-                "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))\n"
-                "from mod import version\n\n"
-                "def test_version():\n    assert version() == '2'\n"  # never touches clamp
-            ),
-        },
+    sha = commit(
+        "fix: clamp", **{"mod.py": mod, "tests/test_mod.py": PY_PATH + test, **(extra or {})}
     )
-    (c,) = gate.commits_in(f"{vacuous}^..{vacuous}", cwd=r)
+    (c,) = gate.commits_in(f"{sha}^..{sha}", cwd=r)
+    return r, c
+
+
+@pytest.mark.parametrize(
+    "test",
+    [
+        # module level: the module does not import on the parent
+        "from mod import VERSION\n\ndef test_v():\n    assert VERSION == '2'\n",
+        # inside the test: an ImportError in the test
+        "def test_v():\n    from mod import VERSION\n    assert VERSION == '2'\n",
+        # an attribute of the module
+        "import mod\n\ndef test_v():\n    assert mod.VERSION == '2'\n",
+    ],
+    ids=["module-level import", "in-function import", "module attribute"],
+)
+def test_a_missing_name_the_fix_adds_counts_as_failing(tmp_path, test):
+    """One rule (Python and Go): a test that fails on the parent only because a name is missing
+    proves the fix when the fix's own diff adds that name."""
+    r, c = _py_fix(tmp_path, CLAMP.format(cap=10) + "VERSION = '2'\n", test)
+    assert gate.added_symbols(c, cwd=r).names >= {"VERSION"}
+    assert gate.prove(c, cwd=r) is None
+
+
+@pytest.mark.parametrize(
+    "test, name",
+    [
+        ("from mod import helper\n\ndef test_v():\n    assert helper()\n", "helper"),
+        ("def test_v():\n    from mod import helper\n    assert helper()\n", "helper"),
+        ("import mod\n\ndef test_v():\n    assert mod.helper()\n", "helper"),
+        ("import nosuchmodule\n\ndef test_v():\n    assert True\n", "nosuchmodule"),
+        ("def test_v():\n    assert undefined_thing() == 1\n", "undefined_thing"),
+    ],
+    ids=["module-level import", "in-function import", "module attribute", "module", "NameError"],
+)
+def test_a_missing_name_the_fix_does_not_add_cannot_prove_it(tmp_path, test, name):
+    r, c = _py_fix(tmp_path, CLAMP.format(cap=10), test)
     problem = gate.prove(c, cwd=r)
-    assert problem and "cannot prove the fix: no test failed on the parent" in problem
-    # the same fix with the new name imported inside the test: a real failure on the parent
-    proven = commit(
-        "fix: clamp to nine",
-        **{
-            "mod.py": "def clamp(x):\n    return min(x, 9)\n\ndef version():\n    return '3'\n",
-            "tests/test_mod.py": (
-                "import sys, pathlib\n"
-                "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))\n\n"
-                "def test_clamp():\n    from mod import clamp\n    assert clamp(12) == 9\n"
-            ),
-        },
+    assert problem and "cannot prove the fix" in problem and name in problem
+    assert "which the fix does not add" in problem
+
+
+def test_a_new_module_the_fix_adds_counts_as_failing(tmp_path):
+    test = "from limits import CAP\n\ndef test_cap():\n    assert CAP == 10\n"
+    r, c = _py_fix(tmp_path, CLAMP.format(cap=10), test, {"limits.py": "CAP = 10\n"})
+    assert "limits" in gate.added_symbols(c, cwd=r).modules
+    assert gate.prove(c, cwd=r) is None
+
+
+def test_an_error_that_is_not_a_failing_test_cannot_prove_the_fix(tmp_path):
+    # a fixture that raises on the parent for a reason other than a missing name is an error
+    test = (
+        "import pytest\n\n"
+        "@pytest.fixture\ndef cfg():\n    raise RuntimeError('no config')\n\n"
+        "def test_v(cfg):\n    assert True\n"
     )
-    (c,) = gate.commits_in(f"{proven}^..{proven}", cwd=r)
+    r, c = _py_fix(tmp_path, CLAMP.format(cap=10), test)
+    problem = gate.prove(c, cwd=r)
+    assert problem and "an error that is not a failing test" in problem
+
+
+def test_a_real_failure_proves_the_fix(tmp_path):
+    test = "def test_clamp():\n    from mod import clamp\n    assert clamp(12) == 10\n"
+    r, c = _py_fix(tmp_path, CLAMP.format(cap=10), test)
     assert gate.prove(c, cwd=r) is None
 
 
@@ -252,7 +296,7 @@ def test_go_fix_is_proved_by_its_changed_test_functions(tmp_path):
 
 
 @needs_go
-def test_go_test_that_does_not_build_without_the_fix_counts_as_failing(tmp_path):
+def test_go_test_that_does_not_build_for_a_symbol_the_fix_adds_counts_as_failing(tmp_path):
     r, commit, base = _go_repo(tmp_path)
     test_sub = "\nfunc TestSub(t *testing.T) {\n\tif Sub(3, 1) != 2 {\n\t\tt.Fatal(1)\n\t}\n}\n"
     fix = commit(
@@ -264,6 +308,91 @@ def test_go_test_that_does_not_build_without_the_fix_counts_as_failing(tmp_path)
     )
     (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
     assert gate.prove(c, cwd=r) is None
+
+
+@needs_go
+@pytest.mark.parametrize(
+    "test_body, calc, name",
+    [
+        # Mul exists nowhere: the package does not build for a name the fix does not add
+        ("\tif Mul(3, 1) != 3 {\n\t\tt.Fatal(1)\n\t}\n", CALC.format(op="+"), "Mul"),
+        # a method the fix does not add
+        (
+            "\tvar x struct{ N int }\n\tif x.Size() != 0 {\n\t\tt.Fatal(1)\n\t}\n",
+            CALC.format(op="+"),
+            "Size",
+        ),
+    ],
+    ids=["function", "method"],
+)
+def test_go_test_that_does_not_build_for_another_symbol_cannot_prove_the_fix(
+    tmp_path, test_body, calc, name
+):
+    r, commit, base = _go_repo(tmp_path)
+    test = "\nfunc TestNew(t *testing.T) {\n" + test_body + "}\n"
+    fix = commit(
+        "fix: calc adds",
+        **{GO + "calc.go": calc, GO + "new_test.go": 'package calc\n\nimport "testing"\n' + test},
+    )
+    (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
+    problem = gate.prove(c, cwd=r)
+    assert problem and "cannot prove the fix" in problem and name in problem
+
+
+@needs_go
+def test_go_build_error_that_names_no_symbol_cannot_prove_the_fix(tmp_path):
+    # the fix changes Add's signature; the test calls the new one: "too many arguments", no
+    # missing name, so the parent's failure proves nothing about the behaviour
+    r, commit, base = _go_repo(tmp_path)
+    calc3 = "package calc\n\nfunc Add(a, b, c int) int {\n\treturn a + b + c\n}\n"
+    test = "\nfunc TestAdd3(t *testing.T) {\n\tif Add(1, 1, 1) != 3 {\n\t\tt.Fatal(1)\n\t}\n}\n"
+    fix = commit(
+        "fix: add takes three",
+        **{
+            GO + "calc.go": calc3,
+            GO + "calc_test.go": 'package calc\n\nimport "testing"\n' + test,
+        },
+    )
+    (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
+    problem = gate.prove(c, cwd=r)
+    assert problem and "an error that is not a failing test" in problem
+
+
+@needs_go
+def test_go_fixture_only_change_outside_a_go_package_cannot_prove_the_fix(tmp_path):
+    r, commit, base = _go_repo(tmp_path)
+    fix = commit(
+        "fix: add adds",
+        **{GO + "calc.go": CALC.format(op="+"), "orchestrator/tests/golden/add.txt": "4\n"},
+    )
+    (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
+    problem = gate.prove(c, cwd=r)
+    assert problem and "it changes no test module" in problem
+
+
+def test_go_outcome_reads_compiler_errors_under_the_rule():
+    added = gate.Added(names={"Sub"}, modules={"orchestrator/internal/newpkg"})
+    out = "# example.com/x/calc [example.com/x/calc.test]\n./sub_test.go:6:5: undefined: Sub\nFAIL\texample.com/x/calc [build failed]\n"
+    assert gate.go_outcome(out, 1, added).failed == 1
+    out2 = out.replace("undefined: Sub", "undefined: Mul")
+    assert gate.go_outcome(out2, 1, added).missing == {"Mul"}
+    out3 = (
+        "calc_test.go:4:2: no required module provides package example.com/x/internal/newpkg; to add it:\n"
+        "FAIL\texample.com/x/calc [setup failed]\n"
+    )
+    assert (
+        gate.go_outcome(
+            out3.replace(
+                "example.com/x/internal/newpkg", "example.com/x/orchestrator/internal/newpkg"
+            ),
+            1,
+            added,
+        ).failed
+        == 1
+    )
+    assert gate.go_outcome(out3, 1, added).missing == {"example.com/x/internal/newpkg"}
+    assert gate.go_outcome("--- FAIL: TestAdd\nFAIL\n", 1, added).failed == 1
+    assert gate.go_outcome("go: errors parsing go.mod:\n", 1, added).errors
 
 
 READS_FIXTURE = (
