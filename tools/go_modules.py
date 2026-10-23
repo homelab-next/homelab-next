@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: List the repository's Go modules for CI's Go job, and fail when Go code lies outside every module or a go.work would change how modules resolve.
 #   owner: maintainers
-#   trigger: [ci:ci/go-modules]
+#   trigger: [ci:ci/go-modules, script:component-tests]
 #   inputs: the tracked files (git ls-files) of the repository, or of --repo
 #   outputs: the modules as JSON on stdout; with --github-output, its `modules` and `present` lines; one line per problem
 #   exit:

@@ -323,7 +323,8 @@
       "purpose": "List the repository's Go modules for CI's Go job, and fail when Go code lies outside every module or a go.work would change how modules resolve.",
       "status": "active",
       "trigger": [
-        "ci:ci/go-modules"
+        "ci:ci/go-modules",
+        "script:component-tests"
       ]
     },
     {
