@@ -453,10 +453,14 @@ host role, which runs outside the lab and so is egress by itself. Because the gr
 not roles, a manifest change that adds a target to a granted role is refused until the overlay
 lists it too. A host role inside the lab may be `internet-facing` only with
 `grants.internet_facing.<module>: [<role>]`. **Every grant** (egress, internet_facing,
-public_routes, publish, secrets, units, shared_config) names a selected module and only what the
-manifest uses: an egress target its entry lists, `external` for an external role, an
-internet-facing role inside the lab, a row with a `public_hostname`, static hosting the module
-reaches, a credential a selected module holds. A grant waiting for a role, row or target to appear
+public_routes, publish, secrets, units, shared_config) names a selected module, and only what
+exists for it: an egress target its entry lists, `external` for an external role, an
+internet-facing role inside the lab, a row with a `public_hostname` (checked when the rows are
+read), static hosting the module reaches, one of its units (when the unit specs are read), a
+`shared_config` target it declares, and a credential another selected module holds (a grant of
+the module's own secret is redundant and refused). For secrets that is as far as the manifest
+goes: who actually reads a granted credential (an adapter, a gate's identity) is not visible in
+it, so an unused secrets grant is not detected. A grant waiting for a role, row or target to appear
 would switch it on with a module upgrade or a placement line nobody reads as a grant, so it is
 refused ("... remove the grant"). So **a grant lands in the same overlay change as the module
 version (its pin in the lock, or the checkout for an in-tree module) that first uses it, and is

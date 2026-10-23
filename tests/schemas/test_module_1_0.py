@@ -46,6 +46,7 @@ DIRS = {n: MODULES_DIR / n for n in MODULES}
 #: public root is modules/ alone, so a loader copying the default never makes them available
 ROOTS = (MODULES_DIR,)
 ROWS = {n: mr._rows(m, DIRS[n], load) for n, m in MODULES.items()}
+UNITS = {n: mr._units(m, DIRS[n], load) for n, m in MODULES.items()}
 SELECTION = json.loads((ROOT / "schemas/platform/module_selection.schema.json").read_text())
 
 # A negative's file name says which rule it breaks; an error must be at that place.
@@ -843,7 +844,7 @@ def test_an_interface_with_no_owner_is_refused():
 # ------------------------------------------------------------------ site profiles
 @pytest.mark.parametrize("profile", sorted(SITES))
 def test_site_profile_meets_every_rule(profile):
-    assert mr.site_problems(SITES[profile], MODULES, SLOTS, ROWS) == []
+    assert mr.site_problems(SITES[profile], MODULES, SLOTS, ROWS, UNITS) == []
 
 
 @pytest.mark.parametrize("profile", sorted(SITES))
@@ -1240,6 +1241,25 @@ def test_every_grant_kind_names_a_selected_module_and_what_it_uses():
         "grants.shared_config.example-unknown: the module is not selected; remove the grant",
     ):
         assert needle in probs, (needle, probs)
+
+
+def test_units_shared_config_and_secrets_grants_name_what_exists():
+    """Negative: a units grant for a unit the module does not ship, a shared_config grant for a
+    target the module declares none for, and a grant of the module's own secret (which needs
+    none) are refused; publishing's real unit is accepted."""
+    site = copy.deepcopy(SITES["full"])
+    g = site["grants"]
+    g["units"] = {"publishing": ["publishing-run", "publishing-gone"]}
+    g["shared_config"] = {"publishing": ["cap:edge"]}
+    g["secrets"]["publishing"].append("secret:publishing/deny-list")
+    probs = mr.site_problems(site, MODULES, SLOTS, ROWS, UNITS)
+    assert probs == [
+        "grants.secrets.publishing: secret:publishing/deny-list is the module's own secret, "
+        "which needs no grant; remove the grant",
+        "grants.units.publishing.publishing-gone: not one of the module's units; remove the grant",
+        "grants.shared_config.publishing: the module declares no shared_config for cap:edge; "
+        "remove the grant",
+    ], probs
 
 
 def test_an_egress_service_target_must_exist_without_rows_too():

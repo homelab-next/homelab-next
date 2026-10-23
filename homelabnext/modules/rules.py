@@ -94,6 +94,16 @@ def _mcp_ids(doc: Doc, mod_dir: Path, load) -> set[str]:
     return out
 
 
+def _units(doc: Doc, mod_dir: Path, load) -> set[str]:
+    """The unit names of the module's fleet_units specs (its scheduler_jobs files)."""
+    return {
+        u.get("name", "")
+        for job in doc.get("contributes", {}).get("scheduler_jobs", [])
+        if "file" in job
+        for u in load(mod_dir / job["file"])
+    }
+
+
 def _rows(doc: Doc, mod_dir: Path, load) -> dict[str, Doc]:
     rows: dict[str, Doc] = {}
     for e in doc.get("contributes", {}).get("services", []):
@@ -553,6 +563,7 @@ def site_problems(
     mods: dict[str, Doc],
     slots: dict[str, Doc],
     rows: dict[str, dict[str, Doc]] | None = None,
+    units: dict[str, set[str]] | None = None,
 ) -> list[str]:
     """Rules a site's selection must meet.  ``rows`` (module id -> its contributed service rows)
     adds the row rules: public routes need grants.public_routes, upstreams follow the fallback."""
@@ -564,7 +575,7 @@ def site_problems(
     ch = chosen(site)
     grants = site.get("grants", {})
     out += _binding_problems(site, mods, sel)
-    out += _grant_problems(grants, sel, rows)
+    out += _grant_problems(grants, sel, rows, units)
     out += _config_problems(site, sel, grants)
     authority = {s for s, d in slots.items() if d.get("privileged")} | set(AUTHORITY_SLOTS)
     authority |= {c["instance"] for cap, cs in ch.items() if cap[4:] in authority for c in cs}
@@ -688,7 +699,7 @@ def _is_service(name: str, services: set[str], sel: dict[str, Doc], rows) -> boo
     )
 
 
-def _grant_problems(grants: Doc, sel: dict[str, Doc], rows=None) -> list[str]:
+def _grant_problems(grants: Doc, sel: dict[str, Doc], rows=None, units=None) -> list[str]:
     """Every grant names a selected module and only what that module uses: an egress target its
     entry lists (or external for an external role), an internet-facing role inside the lab, a
     public row (with ``rows``), static hosting it reaches, a granted credential of a selected
@@ -746,8 +757,23 @@ def _grant_problems(grants: Doc, sel: dict[str, Doc], rows=None) -> list[str]:
     owners = {c["secret"]: m["id"] for m in sel.values() for c in m.get("credentials", [])}
     for mid, names in grants.get("secrets", {}).items():
         for n in names if mid in sel else []:
-            if n not in owners and not n.startswith(f"secret:{mid}/"):
+            if n.startswith(f"secret:{mid}/"):
+                stale(f"secrets.{mid}", f"{n} is the module's own secret, which needs no grant")
+            elif n not in owners:
                 stale(f"secrets.{mid}", f"{n} is no selected module's credential")
+    for mid, names in grants.get("units", {}).items():
+        if mid in sel and units is not None:
+            for n in names:
+                if n not in units.get(mid, set()):
+                    stale(f"units.{mid}.{n}", "not one of the module's units")
+    for mid, targets in grants.get("shared_config", {}).items():
+        if mid in sel:
+            declared = {
+                x["target"] for x in sel[mid].get("contributes", {}).get("shared_config", [])
+            }
+            for t in targets:
+                if t not in declared:
+                    stale(f"shared_config.{mid}", f"the module declares no shared_config for {t}")
     return out
 
 
