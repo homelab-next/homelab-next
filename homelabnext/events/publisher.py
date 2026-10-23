@@ -15,10 +15,24 @@ still ``pending``, so the event is sent again with the *same id*; the forwarder 
 ``duplicate`` and the publisher marks it ``sent``.  Delivery is at-least-once on the wire and
 exactly-once in effect, because the id is the idempotency key.  Publishing an id already ``sent``
 makes no call at all; the same id with a different body is refused (:class:`EventError`).
+
+The state is bounded by age: a ``sent`` record carries the time it was sent (``sent_at``, wall
+clock, injected) and is removed once it is older than ``retain_s`` (default 24 h, the bus's
+default duplicate window; a bus configured with a longer window, which NATS allows up to the
+stream's ``max_age``, should be given a ``retain_s`` at least that long).  Expired records are
+selected and removed under the store's lock, checked every ``PRUNE_EVERY`` sends.  So an id is
+never sent twice, and the same id with a different body is refused, for ``retain_s`` after it was
+sent, whichever process sent it: the age comes from the record, not from a per-process counter.
+Published again after that, the id is sent again, and the forwarder answers ``duplicate`` only
+within its own window.  A ``sent`` record without ``sent_at`` (written by an older release) is
+stamped with the current time when first seen, so it is kept for ``retain_s`` from then; one
+whose ``sent_at`` is not a finite number counts as expired.  A wall clock set far ahead keeps the
+records it stamps until real time passes them.  Pending and rejected records are never removed.
 """
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -32,6 +46,14 @@ class _Store(Protocol):
     def get(self, key: str, default: Any = None) -> Any: ...
     def put(self, key: str, value: Any) -> None: ...
     def keys(self) -> list[str]: ...
+
+
+#: how long a ``sent`` record is kept by default: the bus's default duplicate window (24 h)
+RETAIN_S = 86_400.0
+#: the shortest retention the command lines accept (below it de-duplication is mostly lost)
+MIN_RETAIN_HOURS = 1.0
+#: sends between two checks for expired ``sent`` records
+PRUNE_EVERY = 100
 
 
 @dataclass(frozen=True)
@@ -70,12 +92,19 @@ class Publisher:
         policy: RetryPolicy | None = None,
         sleep: Callable[[float], None] = time.sleep,
         namespace: str = "events",
+        retain_s: float = RETAIN_S,
+        clock: Callable[[], float] = time.time,
     ) -> None:
+        if not retain_s > 0:
+            raise ValueError("retain_s must be positive")
         self.forwarder = forwarder
         self.store = store
         self.policy = policy or RetryPolicy()
         self.sleep = sleep
         self.namespace = namespace
+        self.retain_s = float(retain_s)
+        self.clock = clock
+        self._until_prune = 0  # sends until the next check for expired records (0: at once)
 
     def _k(self, event_id: str) -> str:
         return f"{self.namespace}/{event_id}"
@@ -84,15 +113,67 @@ class Publisher:
         rec = self.store.get(self._k(event_id))
         return rec["status"] if rec else None
 
-    def pending_ids(self) -> list[str]:
+    def _records(self) -> dict[str, dict[str, Any]]:
+        """Every record of this namespace by event id, in one read when the store allows it."""
         pre = f"{self.namespace}/"
-        out = []
-        for k in sorted(self.store.keys()):
-            if k.startswith(pre):
-                rec = self.store.get(k)
-                if rec and rec.get("status") == "pending":
-                    out.append(k[len(pre) :])
-        return out
+        items = getattr(self.store, "items", None)
+        if callable(items):
+            pairs = list(dict(items()).items())
+        else:
+            names = list(self.store.keys())  # the protocol has keys(), not iteration
+            pairs = [(k, self.store.get(k)) for k in names]
+        return {k[len(pre) :]: v for k, v in pairs if k.startswith(pre) and isinstance(v, dict)}
+
+    def pending_ids(self) -> list[str]:
+        return sorted(i for i, r in self._records().items() if r.get("status") == "pending")
+
+    def prune(self) -> int:
+        """Remove the ``sent`` records older than ``retain_s``; returns how many.
+
+        On a store with ``rewrite`` (a :class:`~homelabnext.state.StateStore`) the records are
+        selected and deleted under one lock, each re-checked there, so a record another process
+        wrote in the meantime (a write-ahead ``pending`` for a republished id) is never removed.
+        """
+        now = float(self.clock())
+        cutoff = now - self.retain_s
+        pre = f"{self.namespace}/"
+
+        def sent(k: str, r: Any) -> bool:
+            return k.startswith(pre) and isinstance(r, dict) and r.get("status") == "sent"
+
+        def expired(k: str, r: Any) -> bool:
+            if not sent(k, r) or "sent_at" not in r:
+                return False  # an unstamped record is stamped, not pruned
+            return _sent_at(r) < cutoff
+
+        def stamp(r: dict[str, Any]) -> dict[str, Any]:
+            return {**r, "sent_at": now}
+
+        rewrite = getattr(self.store, "rewrite", None)
+        if callable(rewrite):
+            gone: list[str] = []
+
+            def drop(data: dict[str, Any]) -> bool:
+                unstamped = [k for k, r in data.items() if sent(k, r) and "sent_at" not in r]
+                for k in unstamped:
+                    data[k] = stamp(data[k])
+                gone.extend(k for k, r in data.items() if expired(k, r))
+                for k in gone:
+                    del data[k]
+                return bool(gone or unstamped)
+
+            rewrite(drop)
+            return len(gone)
+        delete = getattr(self.store, "delete", None)
+        n = 0
+        for i, r in self._records().items():  # not atomic: one key at a time, each re-read
+            k = self._k(i)
+            if sent(k, r) and "sent_at" not in r:
+                self.store.put(k, stamp(r))
+            elif delete is not None and expired(k, r) and expired(k, self.store.get(k)):
+                delete(k)
+                n += 1
+        return n
 
     def publish(self, event: dict[str, Any]) -> PublishResult:
         validate_event(event)
@@ -161,4 +242,36 @@ class Publisher:
             "attempts": int(prev.get("attempts", 0)) + bump,
             "error": error,
         }
+        if status == "sent":
+            rec["sent_at"] = float(self.clock())  # its age decides when it is pruned
         self.store.put(self._k(eid), rec)
+        if status == "sent":
+            self._until_prune -= 1
+            if self._until_prune <= 0:
+                self._until_prune = PRUNE_EVERY
+                self.prune()
+
+
+def _sent_at(rec: dict[str, Any]) -> float:
+    """A record's send time; one that is not a finite number counts as long expired."""
+    try:
+        t = float(rec.get("sent_at"))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return float("-inf")
+    return t if math.isfinite(t) else float("-inf")
+
+
+def retain_hours(text: str) -> float:
+    """``argparse`` type of a retention in hours: a finite number of at least
+    :data:`MIN_RETAIN_HOURS` (an infinite one would never prune, a tiny one never de-duplicate)."""
+    import argparse
+
+    try:
+        hours = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number of hours: {text!r}") from None
+    if not math.isfinite(hours) or hours < MIN_RETAIN_HOURS or hours * 3600 > 1e9:
+        raise argparse.ArgumentTypeError(
+            f"retention must be a finite number of hours from {MIN_RETAIN_HOURS:g} up, got {text!r}"
+        )
+    return hours

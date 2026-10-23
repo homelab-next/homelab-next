@@ -252,12 +252,20 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         "--publish-state", help="the publisher's state file (default: STORE.publish.json)"
     )
     p.add_argument("--publish-source", default="svc:status-hub", help="the events' source")
+    from homelabnext.events.publisher import retain_hours
+
     p.add_argument(
         "--max-per-client",
         type=_positive_int,
         default=None,
         help="connections one client address may hold at once (default 4; behind a proxy, "
         "raise it: every request comes from the proxy)",
+    )
+    p.add_argument(
+        "--publish-retain-hours",
+        type=retain_hours,
+        default=24.0,
+        help="keep sent ids this long for de-duplication (at least the bus's duplicate window)",
     )
     try:
         args = ap.parse_args(argv)
@@ -558,7 +566,10 @@ def _publisher(args, cfg):
 
     state = args.publish_state or f"{cfg.store}.publish.json"
     pub = Publisher(
-        HttpForwarder(args.publish_to), StateStore(state), policy=RetryPolicy(max_attempts=1)
+        HttpForwarder(args.publish_to),
+        StateStore(state),
+        policy=RetryPolicy(max_attempts=1),
+        retain_s=getattr(args, "publish_retain_hours", 24.0) * 3600,
     )
     with contextlib.suppress(Exception):  # an unreachable bus never stops the ingest
         pub.flush()

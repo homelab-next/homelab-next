@@ -112,3 +112,29 @@ def test_writer_alias_and_unwritable_log_do_not_break_writes(tmp_path):
     w = DualWriter(a, b, divergence_log=tmp_path / "missing-dir" / "x.jsonl")
     assert w.write("dns_activity", rows(3), batch_id="k") == 3
     assert len(w.divergences) == 1
+
+
+def test_a_late_replay_never_moves_a_components_source_mark_back():
+    # defence in depth: b1 is owed to B, B becomes primary and takes b2 with the mark first
+    a, b = FakeLake(), Flaky(FakeLake(), fail=1)
+    w = DualWriter(a, b)
+    r = rows(2)
+    w.write_batch("dns_activity", [r[0]], idempotency_key="b1", source="s", high_water="100")
+    assert len(w.pending) == 1
+    w2 = w.rerouted(b, a)  # B is primary now; nothing replayed b1 first
+    w2.write_batch("dns_activity", [r[1]], idempotency_key="b2", source="s", high_water="200")
+    assert w2.replay_pending(owed_to=b) == 1  # the rows land ...
+    mark = b.inner.describe("dns_activity").committed["s"]
+    assert (mark.batch_id, mark.high_water) == ("b2", "200")  # ... the mark stays on b2
+    assert b.inner.describe("dns_activity").row_count == 2
+
+
+def test_discard_pending_needs_a_reason_and_returns_the_batches():
+    a, b = FakeLake(), Flaky(FakeLake(), fail=1)
+    w = DualWriter(a, b)
+    w.write_batch("dns_activity", rows(2), idempotency_key="k1")
+    with pytest.raises(ValueError, match="reason"):
+        w.discard_pending(" ")
+    [gone] = w.discard_pending("refused for good", keys=["k1"])
+    assert gone["idempotency_key"] == "k1" and len(gone["rows"]) == 2 and w.pending == []
+    assert w.divergences[-1].kind == "discarded" and w.divergences[-1].detail == "refused for good"

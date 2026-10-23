@@ -104,6 +104,47 @@ gets the same idempotency key; a failure or a row-count mismatch becomes a recor
 safely. If the primary fails, the secondary is not touched, so the candidate can never hold data
 the incumbent lacks. After cutover the direction reverses so a rollback loses nothing.
 
+Parked batches keep their order. While any is parked for the secondary, a new batch is not sent
+past it: the parked ones are replayed first, and if one is still refused the new batch is parked
+behind it. Replays go oldest first and stop at a component's first failure, so each component
+takes its batches in write order and the lake's per-source mark never moves to an older batch (a
+replay into a component that has already taken a newer batch of the same source is sent without
+its mark, as a second guard). `mirror_status` (the `dual-write` and `soak` gates) retries the
+batches parked for the candidate, so a transient failure clears once the candidate takes them.
+
+A route change replays what is owed to the component that becomes primary, and **is refused**
+(`route not changed: N parked batches owed to the incoming primary ...`) while any cannot be
+replayed; `start_old` fails while a batch stays parked for the old component.
+
+In the reference `LakeBackend` the direction and the old component's state follow the registry at
+start (a flipped route: the candidate is primary and the old component stopped). The queue lives
+in memory unless `pending_path` is given: then each change (a park, a replay or discard, a
+write-order mark, a stop or start of the old component) is appended to that journal as one
+`0600` JSON line, so a park costs one batch on disk, never a rewrite of the queue; it is compacted
+and read back at start. An unreadable journal refuses to start rather than drop parked writes (a
+torn last line from a crash mid-append is dropped), a journal another backend holds is refused
+(an exclusive lock for the backend's lifetime; `close()` releases it), and stale temp files of a
+crashed compaction are removed.
+
+### Rollback and refused writes
+
+A rollback starts the old component first (its parked writes replay while it is still
+secondary), then restores the route. If a parked write is refused for good, the rollback stops
+with `rollback incomplete` and puts the old component back as cutover left it (stopped), so the
+forward path's `old-retained` gate still holds. The automatic revert of a failed cutover does the
+same and records the outcome of each step under `revert` in the cutover evidence.
+
+The escape hatch is explicit and recorded, and it is a library call, not a CLI flag (the CLI
+drives a `ManualBackend`, which parks nothing): `SwapRunner.rollback(reason, abandon_parked=True)`
+first tries to start the old component (that attempt is listed in the actions); if a parked write
+is refused, `Backend.discard_parked` drops **only the refused write**, replays the rest, and
+repeats, so a good write queued behind a refused one is replayed, not dropped. The dropped
+batches, rows included, are written at once as their own `abandoned-parked` evidence file
+(`0600`, hashed into the record with a note) before any later step runs, so they stay on record
+even when a later step fails the rollback. An incomplete rollback's note lists its actions,
+the abandon included. Use it only when the dropped rows are reconciled some other way;
+nothing else ever drops a parked batch.
+
 ## The registry flip
 
 Consumers resolve `<capability>.<svc_label>.<domain>`; the registry row says what answers. Cutover
@@ -230,3 +271,9 @@ subclass instead; the interface is a dozen small methods returning `Outcome(ok, 
 * The parity tools compare what you ask them to. A query set that misses a table is a gap in the
   swap test, not in the tool.
 * Real traffic mirroring, component start/stop and DNS propagation are SERVER and not implemented.
+* A crash after the primary committed a batch but before its park record reached the journal
+  loses that batch for the secondary: the primary's source mark has moved, so the reader does
+  not send it again. Closing this window would need an intent record before the primary write.
+* Evidence files are `0600` and may hold rows (abandoned writes) and the rollback reason. Keep the
+  evidence directory (`<swap>.evidence/`, or `--evidence-dir`) out of synced or
+  git-tracked directories; only its sha256 hashes belong in the record.

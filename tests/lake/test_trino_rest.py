@@ -240,6 +240,120 @@ def test_marks_and_ledger_survive_a_commit_conflict(lab):
     assert again.replayed and again.snapshot_id == res.snapshot_id
 
 
+def _example_rows(n):
+    import json
+
+    from homelabnext.lake import load_schemas
+
+    s = load_schemas()["authentication"]
+    doc = json.loads((ROOT / "schemas/ocsf/examples/authentication.v1.valid1.json").read_text())
+    return [dict({k: doc.get(k) for k in s.column_names}, uid=f"big-{i:05d}") for i in range(n)]
+
+
+def _inserts(lab):
+    return [t for t in lab.statements if "INSERT INTO" in t]
+
+
+def test_a_large_batch_is_split_into_inserts_under_the_query_length_limit():
+    with FakeLab(max_query_length=300_000) as lab:
+        lake = _lake(lab, max_query_length=250_000)
+        rows = _example_rows(1000)  # about 807,000 characters as one INSERT
+        lab.statements.clear()
+        res = lake.write_batch("authentication", rows, idempotency_key="big", source="s", high_water="1000")  # fmt: skip
+        assert (res.rows_written, res.rows_skipped) == (1000, 0)
+        sent = _inserts(lab)
+        assert len(sent) > 1 and all(len(t) <= 250_000 for t in sent)
+        assert lake.query("SELECT count(*) AS n FROM authentication") == [{"n": 1000}]
+        assert lake.describe("authentication").committed["s"].batch_id == "big"
+        assert lake.write_batch("authentication", rows, idempotency_key="big").replayed
+
+
+def test_the_default_limit_is_below_trinos_default_max_length():
+    with FakeLab() as lab:  # Trino's default query.max-length: 1,000,000 characters
+        lake = _lake(lab)
+        res = lake.write_batch("authentication", _example_rows(1300), idempotency_key="b")
+        assert res.rows_written == 1300
+        assert all(len(t) <= 1_000_000 for t in _inserts(lab))
+
+
+def test_a_retry_after_a_crash_between_inserts_writes_only_the_rest():
+    with FakeLab(max_query_length=60_000) as lab:
+        lake = _lake(lab, max_query_length=50_000)
+        rows = _example_rows(200)
+        first = rows[:80]  # the INSERTs that landed before the crash; no ledger entry
+        lake.write_batch("authentication", first, idempotency_key="other")
+        res = lake.write_batch("authentication", rows, idempotency_key="big")
+        assert (res.rows_written, res.rows_skipped) == (120, 80)
+        assert lake.query("SELECT count(*) AS n FROM authentication") == [{"n": 200}]
+
+
+def test_the_key_lookups_stay_under_the_query_length_limit_too():
+    with FakeLab(max_query_length=4096) as lab:
+        lake = _lake(lab, max_query_length=4096)
+        rows = [{**r, "message": "m"} for r in _example_rows(300)]
+        lab.statements.clear()
+        res = lake.write_batch("authentication", rows, idempotency_key="b")
+        assert res.rows_written == 300
+        selects = [t for t in lab.statements if "SELECT" in t and "IN (" in t]
+        assert len(selects) > 1 and all(len(t) <= 4096 for t in lab.statements)
+
+
+def test_composite_key_lookups_are_split_by_length():
+    import dataclasses
+
+    from homelabnext.lake import load_schemas
+    from homelabnext.lake.validate import normalize_rows
+
+    s = dataclasses.replace(load_schemas()["authentication"], key=("uid", "user_name"))
+    lake = object.__new__(TrinoRestLake)
+    lake._cat, lake._ns, lake.max_query_length = "iceberg", "t_ns", 5000
+    rows = normalize_rows(s, _example_rows(200))
+    chunks = lake._key_lookups(s, rows)
+    assert len(chunks) > 1 and sum(len(a) for _, a in chunks) == 400
+    assert all(len(execute_immediate(q, a)) <= 5000 for q, a in chunks)
+    assert all(" OR " in q for q, _ in chunks)
+
+
+def test_a_row_longer_than_the_limit_is_refused_before_anything_is_sent(lab):
+    lake = _lake(lab, max_query_length=2048)
+    [row] = _example_rows(1)
+    row["message"] = "x" * 4096
+    before = len(_inserts(lab))
+    with pytest.raises(LakeError, match="max_query_length"):
+        lake.write_batch("authentication", [row], idempotency_key="b")
+    assert len(_inserts(lab)) == before
+
+
+def _ledger_keys(lab, ns="t_ns"):
+    meta = lab.tables[(ns, "authentication")]
+    return sorted(k for k in meta["properties"] if k.startswith("hnx.batch."))
+
+
+def test_the_batch_ledger_keeps_only_the_newest_entries(lab):
+    from conformance.suites._lake import auth_row
+
+    lake = _lake(lab, ledger_size=3)
+    for i in range(8):
+        lake.write_batch("authentication", [auth_row(f"l-{i}")], idempotency_key=f"b{i}", source="s")  # fmt: skip
+    assert len(_ledger_keys(lab)) == 3
+    assert lake.write_batch("authentication", [auth_row("l-7")], idempotency_key="b7").replayed
+    old = lake.write_batch("authentication", [auth_row("l-0")], idempotency_key="b0")
+    assert not old.replayed and old.rows_written == 0  # dropped entry: content-key dedup holds
+    assert lake.describe("authentication").committed["s"].batch_id == "b7"  # the mark is kept
+    assert lake.query("SELECT count(*) AS n FROM authentication") == [{"n": 8}]
+
+
+def test_unnumbered_ledger_entries_are_removed_first(lab):
+    from conformance.suites._lake import auth_row
+
+    lake = _lake(lab, ledger_size=2)
+    meta = lab.tables[("t_ns", "authentication")]
+    meta["properties"]["hnx.batch.legacy"] = '{"batch_id": "legacy", "snapshot_id": null}'
+    lake.write_batch("authentication", [auth_row("u-1")], idempotency_key="n1")
+    lake.write_batch("authentication", [auth_row("u-2")], idempotency_key="n2")
+    assert "hnx.batch.legacy" not in _ledger_keys(lab) and len(_ledger_keys(lab)) == 2
+
+
 def test_without_a_query_id_the_current_snapshot_is_recorded():
     from conformance.suites._lake import auth_row
 

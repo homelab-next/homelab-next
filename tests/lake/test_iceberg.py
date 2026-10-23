@@ -9,7 +9,10 @@ The invariant under test is always the same: after any sequence of crashes and r
 
 from __future__ import annotations
 
+import datetime as dt
 import json
+import sys
+import types
 
 import pytest
 import synthetic
@@ -23,6 +26,7 @@ from homelabnext.lake import (
     UnknownTable,
     load_schemas,
 )
+from homelabnext.lake.checkpoint import SourceState
 
 SCHEMAS = load_schemas()
 TABLE = "authentication"
@@ -151,6 +155,89 @@ def test_start_fast_forwards_the_checkpoint_to_what_the_lake_committed(make_lake
         src[20:], batch_id="s:20", position="30"
     )
     assert _count(make_lake()) == {"n": 30, "d": 30}
+
+
+@pytest.mark.parametrize("tail", ["empty", "duplicates"])
+def test_a_batch_that_commits_nothing_does_not_rewind_the_checkpoint(make_lake, tmp_path, tail):
+    # no fresh rows: the lake makes no commit and keeps its mark at the earlier batch; the next
+    # start() must resume from the reader's newer position, not fast-forward back to that mark
+    cp = Checkpoint(tmp_path / "cp.json")
+    src = synthetic.authentication(10)
+    Ingestor(make_lake(), cp, table=TABLE, source="s").ingest(src, batch_id="s:0", position="10")
+    rows = [] if tail == "empty" else src[:5]
+    res = Ingestor(make_lake(), cp, table=TABLE, source="s").ingest(
+        rows, batch_id="s:10", position="90"
+    )
+    assert res.rows_written == 0
+    assert Ingestor(make_lake(), cp, table=TABLE, source="s").start() == "90"
+    assert cp.get("s").position == "90"
+    assert _count(make_lake()) == {"n": 10, "d": 10}
+
+
+def test_a_checkpoint_naming_a_later_batch_at_the_marks_snapshot_is_not_rewound(
+    make_lake, tmp_path
+):
+    # a checkpoint saved by an older release after a no-op batch: later batch id, same snapshot
+    cp = Checkpoint(tmp_path / "cp.json")
+    src = synthetic.authentication(10)
+    Ingestor(make_lake(), cp, table=TABLE, source="s").ingest(src, batch_id="s:0", position="10")
+    snap = cp.get("s").snapshot_id
+    cp.save("s", SourceState("90", "s:10", snap))
+    assert Ingestor(make_lake(), cp, table=TABLE, source="s").start() == "90"
+
+
+def test_a_uid_stored_at_another_time_is_skipped(make_lake):
+    # the content key is uid alone: a re-emitted row with a new time is a duplicate
+    lake = make_lake()
+    [row] = synthetic.authentication(1)
+    lake.write_batch(TABLE, [row], idempotency_key="b1")
+    later = dict(row, time=row["time"] + dt.timedelta(days=3))
+    res = lake.write_batch(TABLE, [later], idempotency_key="b2")
+    assert (res.rows_written, res.rows_skipped) == (0, 1)
+    assert _count(lake) == {"n": 1, "d": 1}
+
+
+class _Expr:
+    def __init__(self, op, *args):
+        self.op, self.args = op, args
+
+    def match(self, row):
+        a = self.args
+        if self.op == "and":
+            return a[0].match(row) and a[1].match(row)
+        if self.op == "in":
+            return row[a[0]] in a[1]
+        v = row[a[0]].isoformat()
+        return v >= a[1] if self.op == "ge" else v <= a[1]
+
+
+class _Table:
+    """Just enough of a pyiceberg table to evaluate the row filter the adapter builds."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def scan(self, row_filter, selected_fields):
+        got = [{k: r[k] for k in selected_fields} for r in self.rows if row_filter.match(r)]
+        return types.SimpleNamespace(to_arrow=lambda: types.SimpleNamespace(to_pylist=lambda: got))
+
+
+def test_iceberg_key_lookup_is_not_bounded_by_the_batch_time_range(monkeypatch):
+    # runs without pyiceberg: a stand-in expressions module evaluates the filter the adapter builds
+    from homelabnext.lake.iceberg import IcebergLake
+
+    exprs = types.ModuleType("pyiceberg.expressions")
+    exprs.And = lambda a, b: _Expr("and", a, b)
+    exprs.In = lambda c, v: _Expr("in", c, list(v))
+    exprs.GreaterThanOrEqual = lambda c, v: _Expr("ge", c, v)
+    exprs.LessThanOrEqual = lambda c, v: _Expr("le", c, v)
+    monkeypatch.setitem(sys.modules, "pyiceberg", types.ModuleType("pyiceberg"))
+    monkeypatch.setitem(sys.modules, "pyiceberg.expressions", exprs)
+    [row] = synthetic.authentication(1)
+    stored = _Table([row])
+    later = dict(row, time=row["time"] + dt.timedelta(days=3))
+    found = IcebergLake._existing_keys(None, stored, SCHEMAS[TABLE], [later])
+    assert found == {(row["uid"],)}
 
 
 def test_repeated_crashes_still_converge(make_lake, tmp_path):

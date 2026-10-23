@@ -100,11 +100,14 @@ class Ingestor:
         """Reconcile the checkpoint with the lake and return the position to resume from.
 
         If the lake holds a committed batch for this source that the checkpoint does not know
-        about (the crash window), the checkpoint is fast-forwarded to the lake's mark.
+        about (the crash window), the checkpoint is fast-forwarded to the lake's mark.  A
+        checkpoint that already records the mark's snapshot is not behind it, even when it names
+        a later batch: a batch with nothing new commits nothing, so the lake's mark stays put
+        while the checkpoint's position moves on, and fast-forwarding would rewind the reader.
         """
         state = self.checkpoint.get(self.source)
         mark = self.client.describe(self.table).committed.get(self.source)
-        if mark is not None and (state is None or state.batch_id != mark.batch_id):
+        if mark is not None and (state is None or not _knows(state, mark)):
             state = SourceState(mark.high_water, mark.batch_id, mark.snapshot_id)
             self.checkpoint.save(self.source, state)
         return None if state is None else state.position
@@ -120,14 +123,23 @@ class Ingestor:
         if self._hook is not None:
             self._hook()
         prev = self.checkpoint.get(self.source)
-        self.checkpoint.save(
-            self.source,
-            SourceState(
-                position,
-                batch_id,
-                res.snapshot_id
-                if res.snapshot_id is not None
-                else (prev.snapshot_id if prev else None),
-            ),
-        )
+        committed = res.snapshot_id is not None or res.replayed
+        if not committed and prev is not None:
+            # nothing new (an empty tail, or every row already present): the lake made no commit
+            # and kept its mark, so the checkpoint keeps the last committed batch and snapshot and
+            # only the reader's position moves on
+            state = SourceState(position, prev.batch_id, prev.snapshot_id)
+        else:
+            snap = res.snapshot_id
+            if snap is None and prev is not None:
+                snap = prev.snapshot_id
+            state = SourceState(position, batch_id, snap)
+        self.checkpoint.save(self.source, state)
         return res
+
+
+def _knows(state: SourceState, mark: Any) -> bool:
+    """Whether ``state`` already covers the lake's ``mark`` (the same batch, or its snapshot)."""
+    if state.batch_id == mark.batch_id:
+        return True
+    return state.snapshot_id is not None and state.snapshot_id == mark.snapshot_id

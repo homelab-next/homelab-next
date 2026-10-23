@@ -79,6 +79,18 @@ class Backend:
         """``data['state']`` is ``running``, ``stopped`` or ``destroyed``."""
         return self._missing("old_state")
 
+    def discard_parked(self, reason: str) -> Outcome:
+        """Drop, on purpose, the writes the old component refuses (``SwapRunner.rollback(...,
+        abandon_parked=True)``; a refused write only, not those queued behind it, and nothing
+        while the component is unreachable); ``data['discarded']`` lists them, rows included,
+        for the evidence."""
+        return self._missing("discard_parked")
+
+    def restore_parked(self, batches: list[dict[str, Any]]) -> Outcome:
+        """Park again batches :meth:`discard_parked` returned (their evidence could not be
+        written), in their write order."""
+        return self._missing("restore_parked")
+
     def decommission_scan(self) -> Outcome:
         return self._missing("decommission_scan")
 
@@ -154,6 +166,12 @@ class ManualBackend(Backend):
 
     def stop_mirror(self) -> Outcome:
         return Outcome(True, "mirror stop is recorded; stop the tee in the deployment")
+
+    def discard_parked(self, reason: str) -> Outcome:
+        return Outcome(
+            True, "this backend parks nothing (the deployment's tee is reconciled by hand)",
+            {"discarded": []},
+        )  # fmt: skip
 
     def parity(self) -> Outcome:
         o = self._attest("parity")

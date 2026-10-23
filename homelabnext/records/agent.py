@@ -28,6 +28,7 @@ from typing import Any
 from .notes import (
     AGENT_LANE,
     ALL_LANES,
+    DECIDED_LANES,
     Note,
     NoteError,
     agent_slug,
@@ -180,6 +181,13 @@ class Records:
         if lane_dir.resolve().parent != real_root or lane_dir.is_symlink():
             raise LaneViolation("inbox/ resolves outside the records root")
         final = lane_dir / name
+        # a name already decided would collide when the decider moves this note, and an audit
+        # link to decided/<lane>/<name> would then name the other note
+        for decided in DECIDED_LANES:
+            if (self.root / decided / name).exists():
+                raise FileExistsError(
+                    f"{decided}/{name} already exists; choose another slug for this note"
+                )
         tmp = lane_dir / f".{name}.{os.getpid()}.{os.urandom(4).hex()}.tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as fh:

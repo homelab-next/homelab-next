@@ -40,7 +40,7 @@ import logging
 import os
 import re
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -189,6 +189,25 @@ class StateStore:
             del data[key]
             self._write(data)
             return True
+
+    def rewrite(self, fn: Callable[[dict[str, Any]], bool]) -> None:
+        """Atomic read-modify-write of the whole map under the lock: ``fn`` changes the data in
+        place and returns whether it changed anything (only then is the file written)."""
+        with self._locked():
+            data = self._load()
+            if fn(data):
+                self._write(data)
+
+    def delete_many(self, keys: Iterable[str]) -> int:
+        """Delete every key of ``keys`` that exists in one write; returns how many went."""
+        with self._locked():
+            data = self._load()
+            gone = [k for k in dict.fromkeys(keys) if k in data]
+            for k in gone:
+                del data[k]
+            if gone:
+                self._write(data)
+            return len(gone)
 
     def update(self, key: str, fn: Callable[[Any], Any], default: Any = None) -> Any:
         """Atomic read-modify-write of one key under the lock; returns the new value."""

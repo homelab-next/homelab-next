@@ -401,3 +401,151 @@ def test_a_non_finite_number_is_refused_by_the_producer_and_on_every_decode_path
         decode_event(ev)  # the mapping path
     with pytest.raises(EventError, match="not a finite number"):
         decode_event({**ev, "data": {**ev["data"], "nested": [{"x": bad}]}})
+
+
+# ---------------------------------------------------------------- bounded state
+class Clock:
+    def __init__(self, t=1_800_000_000.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+
+def test_sent_records_are_kept_for_the_retention_and_then_pruned(store):
+    f, clock = FakeForwarder(), Clock()
+    p = pub(f, store, retain_s=3600, clock=clock, policy=RetryPolicy(max_attempts=1))
+    f.fail_next = 1  # a pending record is never pruned
+    held = task_event("held")
+    assert p.publish(held).status == "pending"
+    old = [task_event(f"o{i}") for i in range(150)]
+    for ev in old:
+        assert p.publish(ev).ok
+    clock.t += 1800  # inside the retention: every id is still de-duplicated here, at no call
+    calls = len(f.calls)
+    assert p.publish(old[0]).status == "duplicate" and len(f.calls) == calls
+    with pytest.raises(EventError, match="id reuse"):  # and its body still checked
+        p.publish({**old[0], "data": {**old[0]["data"], "x": 1}})
+    clock.t += 1801  # past it
+    assert p.prune() == 150
+    assert p.status_of(old[0]["id"]) is None and p.pending_ids() == [held["id"]]
+
+
+def test_pruning_runs_by_itself_and_the_file_stops_growing(tmp_path):
+    path, clock = tmp_path / "pub.json", Clock()
+    p = pub(FakeForwarder(), StateStore(path), retain_s=60, clock=clock)
+    sizes = []
+    for i in range(400):
+        clock.t += 1  # one event a second: about 60 records are ever live
+        p.publish(task_event(f"g{i}"))
+        if i % 100 == 99:
+            sizes.append(path.stat().st_size)
+    steady = sizes[1:]  # after the first retention period the file holds one window of records
+    assert max(steady) - min(steady) < steady[0] // 10, sizes
+    assert len(StateStore(path).keys()) < 60 + 100 + 1  # retention plus one check interval
+
+
+def test_another_process_writing_the_same_file_keeps_its_records(tmp_path):
+    # the age is in each record, not a per-process counter: one publisher never prunes the
+    # other's fresh records ahead of its own expired ones
+    path, clock = tmp_path / "pub.json", Clock()
+    a = pub(FakeForwarder(), StateStore(path), retain_s=600, clock=clock)
+    b = pub(FakeForwarder(), StateStore(path), retain_s=600, clock=clock)
+    mine = [task_event(f"a{i}") for i in range(5)]
+    for ev in mine:
+        a.publish(ev)
+    clock.t += 601
+    fresh = [task_event(f"b{i}") for i in range(5)]
+    for ev in fresh:
+        b.publish(ev)  # b's first send prunes what has expired: a's records, never its own
+    a.prune()
+    assert all(a.status_of(ev["id"]) is None for ev in mine)
+    assert all(a.status_of(ev["id"]) == "sent" for ev in fresh)
+
+
+def test_a_record_without_a_send_time_is_stamped_now_and_kept_for_the_retention(store):
+    # written by an older release: kept for retain_s from first sight, not dropped at once
+    clock = Clock()
+    p = pub(FakeForwarder(), store, retain_s=600, clock=clock)
+    store.put("events/evt-legacy", {"status": "sent", "digest": "d", "event": None, "attempts": 1})
+    assert p.prune() == 0
+    assert store.get("events/evt-legacy")["sent_at"] == clock.t
+    clock.t += 601
+    assert p.prune() == 1 and store.get("events/evt-legacy") is None
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), "soon"])
+def test_a_send_time_that_is_not_a_finite_number_counts_as_expired(store, bad):
+    p = pub(FakeForwarder(), store, retain_s=600, clock=Clock())
+    rec = {"status": "sent", "digest": "d", "event": None, "attempts": 1, "sent_at": bad}
+    store.put("events/evt-odd", rec)
+    assert p.prune() == 1
+
+
+def test_a_store_without_items_or_delete_still_works():
+    class Bare:
+        def __init__(self):
+            self.d = {}
+
+        def get(self, k, default=None):
+            return self.d.get(k, default)
+
+        def put(self, k, v):
+            self.d[k] = v
+
+        def keys(self):
+            return list(self.d)
+
+    s, clock = Bare(), Clock()
+    p = pub(FakeForwarder(), s, retain_s=1, clock=clock)
+    for i in range(5):
+        clock.t += 10
+        assert p.publish(task_event(f"b{i}")).ok
+    assert len(s.d) == 5 and p.pending_ids() == [] and p.prune() == 0
+
+
+def test_delete_many_removes_in_one_write(tmp_path):
+    s = StateStore(tmp_path / "s.json")
+    for k in "abcd":
+        s.put(k, 1)
+    assert s.delete_many(["a", "c", "zz", "a"]) == 2
+    assert s.keys() == ["b", "d"]
+
+
+def test_prune_selects_and_deletes_under_one_lock(tmp_path):
+    # another process prunes X and republishes it (a write-ahead pending) while this prune runs:
+    # whenever that write lands before the delete, the pending record must survive
+    store, clock = StateStore(tmp_path / "pub.json"), Clock()
+    a = pub(FakeForwarder(), store, retain_s=60, clock=clock)
+    x = task_event("x")
+    a.publish(x)
+    key = f"events/{x['id']}"
+    clock.t += 120
+    real_items, real_rewrite = store.items, store.rewrite
+
+    def other_process_writes():
+        store.put(key, {"status": "pending", "digest": "d", "event": x, "attempts": 0})
+
+    def items_then_write():  # a prune that reads, then deletes later, sees a stale snapshot
+        snap = real_items()
+        other_process_writes()
+        return snap
+
+    def write_then_rewrite(fn):  # a locked prune: the other write lands before the lock
+        other_process_writes()
+        return real_rewrite(fn)
+
+    store.items, store.rewrite = items_then_write, write_then_rewrite
+    a.prune()
+    store.items, store.rewrite = real_items, real_rewrite
+    assert store.get(key)["status"] == "pending"  # write-ahead record kept: flush() resends it
+
+
+def test_state_store_rewrite_is_one_locked_write(tmp_path):
+    s = StateStore(tmp_path / "s.json")
+    s.put("a", 1)
+    s.rewrite(lambda d: d.update(b=2) or True)
+    assert s.items() == {"a": 1, "b": 2}
+    before = (tmp_path / "s.json").stat().st_mtime_ns
+    s.rewrite(lambda d: False)  # no change: no write
+    assert (tmp_path / "s.json").stat().st_mtime_ns == before

@@ -43,7 +43,16 @@ def _construct_mapping(loader: yaml.SafeLoader, node: yaml.MappingNode, deep: bo
                 )
             continue
         key = loader.construct_object(key_node, deep=deep)
-        if key in seen:
+        try:
+            dup = key in seen
+        except TypeError:  # a list or mapping as a key: what SafeLoader reports, as a YAMLError
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                "found unhashable key",
+                key_node.start_mark,
+            ) from None
+        if dup:
             raise yaml.constructor.ConstructorError(
                 None, None, f"duplicate key {key!r}", key_node.start_mark
             )

@@ -30,6 +30,15 @@ def parse_timestamp(value: Any) -> datetime:
     return value.astimezone(UTC)
 
 
+INT64_MIN, INT64_MAX = -(2**63), 2**63 - 1
+
+
+def _size(value: int) -> str:
+    """An out-of-range int described by its size: str() of an int over 4300 digits raises."""
+    sign = "negative " if value < 0 else ""
+    return f"a {sign}{value.bit_length()}-bit integer"
+
+
 def _check(col: Column, value: Any, path: str, problems: list[str]) -> Any:
     if value is None:
         if col.required:
@@ -43,16 +52,21 @@ def _check(col: Column, value: Any, path: str, problems: list[str]) -> Any:
     if t == "long":
         if isinstance(value, bool) or not isinstance(value, int):
             problems.append(f"{path}: expected integer, got {type(value).__name__}")
+        elif not INT64_MIN <= value <= INT64_MAX:  # every engine stores a long in 64 bits
+            problems.append(f"{path}: {_size(value)} is outside the 64-bit range of a long")
         return value
     if t == "double":
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, int | float)
-            or not math.isfinite(value)
-        ):
+        try:  # an int too large for a float raises OverflowError in isfinite() and float()
+            ok = not isinstance(value, bool) and isinstance(value, int | float)
+            ok = ok and math.isfinite(value)
+            num = float(value) if ok else None
+        except OverflowError:
+            problems.append(f"{path}: {_size(value)} is outside the range of a double")
+            return value
+        if num is None:
             problems.append(f"{path}: expected finite number, got {value!r}")
             return value
-        return float(value)
+        return num
     if t == "boolean":
         if not isinstance(value, bool):
             problems.append(f"{path}: expected boolean, got {type(value).__name__}")

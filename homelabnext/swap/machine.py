@@ -332,14 +332,26 @@ def _cutover(ctx: _Ctx) -> list[Gate]:
         if stopped.ok:
             return gates
     # a failed post-condition: put the old route (and the old component) back at once
+    started = _safe(b.start_old)  # first, so the old component runs when it is primary again
     back = _safe(lambda: b.apply_route(before))
-    _safe(b.start_old)
-    d["revert"] = {"ok": back.ok, "detail": back.detail}
+    d["revert"] = {
+        "ok": back.ok,
+        "detail": back.detail,
+        "start_old": {"ok": started.ok, "detail": started.detail},
+    }
     if back.ok:
         ctx.doc["route"]["flipped"] = False
         ctx.details["reverted"] = True
+        if not started.ok:
+            gates.append(_g("post", "revert", False, f"old route restored, but {started.detail}"))
     else:
-        gates.append(_g("post", "revert", False, f"could not restore the old route: {back.detail}"))
+        # the route stays on the candidate: stop the old component again, as cutover left it
+        stopped = _safe(b.stop_old)
+        d["revert"]["stop_old"] = {"ok": stopped.ok, "detail": stopped.detail}
+        why = f"could not restore the old route: {back.detail}"
+        if not started.ok:
+            why += f"; {started.detail}"
+        gates.append(_g("post", "revert", False, why))
     return gates
 
 
@@ -542,7 +554,12 @@ class SwapRunner:
         }
 
     # ---------------------------------------------------------------- rollback / notes
-    def rollback(self, reason: str) -> dict[str, Any]:
+    def rollback(self, reason: str, *, abandon_parked: bool = False) -> dict[str, Any]:
+        """Restore the prior route.  Writes parked for the old component are replayed into it
+        first; while one is refused the rollback stops (and the old component is stopped again).
+        ``abandon_parked`` drops the refused writes on purpose: they are written at once, rows
+        included, to their own ``abandoned-parked`` evidence file (and parked again if that
+        write fails)."""
         doc = self.record()
         reason = (reason or "").strip()
         if doc["status"] != "active":
@@ -571,11 +588,53 @@ class SwapRunner:
             if required and not o.ok:
                 problems.append(f"{label}: {o.detail}")
 
+        # start the old component first: its parked writes replay while it is still secondary,
+        # and it is never primary while stopped (a write in between would fail)
+        from_step = doc["current_step"]
+        step = next(s for s in doc["steps"] if s["name"] == from_step)
+        if abandon_parked:
+            first = _safe(self.backend.start_old)
+            do("start old component", lambda: first, required=False)
+            if not first.ok:
+                gone = _safe(lambda: self.backend.discard_parked(reason))
+                do("abandon parked writes", lambda: gone)
+                dropped = list(gone.data.get("discarded") or [])
+                if dropped:  # (also those dropped before the old component became unreachable)
+                    # the dropped rows are evidence at once, before any later step can fail; if
+                    # the evidence cannot be written they are parked again, never lost
+                    try:
+                        fname = self._evidence(
+                            doc, step, "abandoned-parked", "abandon",
+                            {"swap_id": doc["swap_id"], "from_step": from_step, "reason": reason,
+                             "at": now, "abandoned_parked": dropped},
+                            f"{len(dropped)} parked writes abandoned for the rollback",
+                        )  # fmt: skip
+                    except OSError as exc:  # (the file is written before it is listed)
+                        problems.append(f"abandon evidence: {type(exc).__name__}: {exc}")
+                        actions.append(f"abandon evidence: FAILED ({type(exc).__name__}: {exc})")
+                        do(
+                            "park abandoned writes again",
+                            lambda: self.backend.restore_parked(dropped),
+                        )
+                    else:
+                        rec.append_transition(
+                            doc, at=now, event="note", step=from_step, actor=self.actor,
+                            note=f"rollback abandoned {len(dropped)} parked writes ({fname})",
+                        )  # fmt: skip
+                        rec.save(self.path, doc)
+                do("start old component", self.backend.start_old)
+        else:
+            do("start old component", self.backend.start_old)
+        restored = False
         if was_flipped:
+            before_n = len(problems)
             do("restore route", lambda: self.backend.apply_route(before))
-        do("start old component", self.backend.start_old)
+            restored = len(problems) == before_n
         do("verify route", lambda: self.backend.verify_route(before))
         do("stop mirror", self.backend.stop_mirror, required=False)
+        if problems and was_flipped and not restored:
+            # the route stays on the candidate: put the old component back as cutover left it
+            do("stop old component again", self.backend.stop_old, required=False)
         if problems:
             rec.append_transition(
                 doc,
@@ -583,12 +642,11 @@ class SwapRunner:
                 event="note",
                 step=doc["current_step"],
                 actor=self.actor,
-                note="rollback incomplete: " + "; ".join(problems),
+                # the actions first (an abandon among them), so the 500-character note keeps them
+                note="rollback incomplete; actions: " + "; ".join(actions),
             )
             rec.save(self.path, doc)
             raise SwapError("rollback incomplete, fix and retry: " + "; ".join(problems))
-        from_step = doc["current_step"]
-        step = next(s for s in doc["steps"] if s["name"] == from_step)
         body = {
             "swap_id": doc["swap_id"],
             "from_step": from_step,
@@ -596,19 +654,7 @@ class SwapRunner:
             "actions": actions,
             "at": now,
         }
-        text = json.dumps(body, indent=2, sort_keys=True) + "\n"
-        d = self._evidence_dir or self.path.parent / (doc["swap_id"] + ".evidence")
-        d.mkdir(parents=True, exist_ok=True)
-        fname = f"rollback.{len(doc['transitions']) + 1:03d}.json"
-        (d / fname).write_text(text, encoding="utf-8")
-        step["evidence"].append(
-            {
-                "kind": "rollback",
-                "ref": fname,
-                "sha256": rec.sha256_text(text),
-                "summary": f"rolled back from {from_step}",
-            }
-        )
+        self._evidence(doc, step, "rollback", "rollback", body, f"rolled back from {from_step}")
         doc["rollback"] = {
             "at": now,
             "from_step": from_step,
@@ -624,6 +670,29 @@ class SwapRunner:
         )
         rec.save(self.path, doc)
         return doc
+
+    def _evidence(
+        self,
+        doc: dict[str, Any],
+        step: dict[str, Any],
+        kind: str,
+        prefix: str,
+        body: dict[str, Any],
+        summary: str,
+    ) -> str:
+        """Write ``body`` as an evidence file (``0600``: it may hold rows) and hash it into
+        ``step``'s evidence; returns the file name."""
+        from homelabnext.state import atomic_write_text
+
+        text = json.dumps(body, indent=2, sort_keys=True) + "\n"
+        d = self._evidence_dir or self.path.parent / (doc["swap_id"] + ".evidence")
+        d.mkdir(parents=True, exist_ok=True)
+        fname = f"{prefix}.{len(doc['transitions']) + 1:03d}.json"
+        atomic_write_text(d / fname, text, mode=0o600)
+        step["evidence"].append(
+            {"kind": kind, "ref": fname, "sha256": rec.sha256_text(text), "summary": summary}
+        )
+        return fname
 
     def note(self, text: str) -> None:
         doc = self.record()

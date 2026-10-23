@@ -13,8 +13,8 @@
   "record_version": "1.0",
   "rollback": {
     "actions": [
+      "start old component: ok (old component running; replayed 1 parked batches)",
       "restore route: ok (flip lake-query (alias lake-query.svc.example.internal))",
-      "start old component: ok (old component running; replayed 0 parked batches)",
       "verify route: ok (alias lake-query.svc.example.internal -> lake-core:8443)",
       "stop mirror: ok (dual-write stopped (forward-only))"
     ],
@@ -246,7 +246,7 @@
         {
           "kind": "rollback",
           "ref": "rollback.008.json",
-          "sha256": "sha256:f9bfb35b72a31efe580d37bfa5762877a89f0c91bc81b49c0fe947d5ed9974d8",
+          "sha256": "sha256:494b7121e2beacfa605f06a2c573a9ba2f91e4a14332ff6f37fdca1e2d64b5f6",
           "summary": "rolled back from rollback-window"
         }
       ],
@@ -353,11 +353,11 @@
       "actor": "platform-team",
       "at": "2026-04-03T15:00:00Z",
       "event": "rolled-back",
-      "hash": "sha256:e0402e9f59c5f22516843f1b37e5c6e71210c8628a92d20cd3fa7e5cac997901",
+      "hash": "sha256:2f3bdcad2b6b866a1acc9d35d62f8ddb81c540328c863c36ea23b028ce94c6af",
       "note": "canary latency regression observed on the candidate",
       "prev": "sha256:002ecde1fb129b811a47b51b39e7c051a5afbbf30da4e35e1c9ad788424e3aa5",
       "seq": 8,
-      "state": "sha256:df81185450074c92c9d63a791532fe56358ae5a45b6cf837ece5912161b3621d",
+      "state": "sha256:1404a8dfa63c7736a9bbabbd2e1b6474b847eac0e3525680d86f6247c67c056f",
       "step": "rollback-window"
     }
   ],

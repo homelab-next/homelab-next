@@ -13,7 +13,10 @@ One server answers both APIs the adapter speaks:
   snapshot whose summary carries ``trino_query_id`` and ``total-records``.
 * the Iceberg REST catalog under ``/catalog/v1``: config (prefix), table listing with paging,
   table metadata (schema in Iceberg JSON with Trino's nullability: nested fields optional) and
-  ``set-properties`` commits guarded by ``assert-table-uuid``.
+  ``set-properties``/``remove-properties`` commits guarded by ``assert-table-uuid``.
+
+A statement longer than ``max_query_length`` (Trino's ``query.max-length``, 1,000,000 by default)
+fails with ``QUERY_TEXT_TOO_LARGE``, as Trino does.
 """
 
 from __future__ import annotations
@@ -199,8 +202,16 @@ def _ice(c: Column, ids, top: bool) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- state and server
 class FakeLab:
-    def __init__(self, *, page_size: int = 2, list_page: int = 2, trino_query_id: bool = True):
+    def __init__(
+        self,
+        *,
+        page_size: int = 2,
+        list_page: int = 2,
+        trino_query_id: bool = True,
+        max_query_length: int = 1_000_000,  # Trino's default query.max-length
+    ):
         self.schemas = load_schemas()
+        self.max_query_length = max_query_length
         self.page_size, self.list_page = page_size, list_page
         self.trino_query_id = trino_query_id
         self.lakes: dict[str, FakeLake] = {}
@@ -266,6 +277,12 @@ class FakeLab:
         ns = h.headers.get("X-Trino-Schema", "")
         assert h.headers.get("X-Trino-Time-Zone") == "UTC"
         try:
+            if len(text) > self.max_query_length:
+                raise _TrinoFail(
+                    f"Query text length ({len(text)}) exceeds the maximum length"
+                    f" ({self.max_query_length})",
+                    "QUERY_TEXT_TOO_LARGE",
+                )
             columns, rows, update = self._run(ns, text, qid)
             pages = [
                 {"columns": columns, "data": rows[i : i + self.page_size]}
@@ -476,6 +493,9 @@ class FakeLab:
                 for u in req["updates"]:
                     if u["action"] == "set-properties":
                         meta["properties"].update(u["updates"])
+                    elif u["action"] == "remove-properties":
+                        for k in u["removals"]:
+                            meta["properties"].pop(k, None)
             return self._json(
                 h, 200, {"metadata-location": "s3://lab-lake/x.json", "metadata": meta}
             )

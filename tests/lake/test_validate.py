@@ -48,6 +48,9 @@ def test_aware_non_utc_datetime_accepted():
         ({"src_endpoint": {"port": "80"}}, "src_endpoint.port: expected integer"),
         ({"metadata": {"product": "p"}}, "metadata.version: required"),
         ({"user_name": 5}, "user_name: expected string"),
+        ({"activity_id": 2**63}, "activity_id: a 64-bit integer is outside the 64-bit range"),
+        ({"activity_id": -(2**63) - 1}, "activity_id: a negative 64-bit integer is outside"),
+        ({"src_endpoint": {"port": 10**30}}, "src_endpoint.port: a 100-bit integer"),
     ],
 )
 def test_bad_rows_are_rejected_with_the_field_named(patch, needle):
@@ -72,3 +75,44 @@ def test_whole_batch_rejected_and_all_problems_reported():
     with pytest.raises(RowRejected) as ei:
         normalize_rows(S, [row(), row(uid=None), row(surprise=1)])
     assert len(ei.value.problems) == 2
+
+
+def test_the_64_bit_bounds_of_a_long_are_accepted():
+    for v in (2**63 - 1, -(2**63)):
+        assert normalize_rows(S, [row(activity_id=v)])[0]["activity_id"] == v
+
+
+def test_an_out_of_range_long_is_rejected_before_the_fake_lake_writes():
+    from homelabnext.lake import FakeLake
+
+    lake = FakeLake()
+    with pytest.raises(RowRejected):  # not an OverflowError from SQLite mid-transaction
+        lake.write_batch("authentication", [row(activity_id=2**64)], idempotency_key="b")
+    assert lake.query("SELECT count(*) AS n FROM authentication") == [{"n": 0}]
+
+
+def test_a_double_given_an_int_beyond_float_range_is_rejected():
+    v = get_schema("vulnerability_finding")
+    col = next(c.name for c in v.columns if c.type == "double")
+    doc = synthetic.vulnerability_finding(1)[0]
+    doc[col] = 10**400
+    with pytest.raises(
+        RowRejected, match=f"{col}: a 1329-bit integer is outside"
+    ):  # not an OverflowError
+        normalize_rows(v, [doc])
+    doc[col] = 7  # an int in range is still taken as a double
+    assert normalize_rows(v, [doc])[0][col] == 7.0
+
+
+@pytest.mark.parametrize("sign", [1, -1])
+def test_an_int_too_long_to_print_is_still_a_row_problem(sign):
+    # str() of an int over 4300 digits raises ValueError; the message never prints the value
+    huge = sign * 10**5000
+    v = get_schema("vulnerability_finding")
+    col = next(c.name for c in v.columns if c.type == "double")
+    doc = synthetic.vulnerability_finding(1)[0]
+    doc[col] = huge
+    with pytest.raises(RowRejected, match=rf"{col}: a .*16610-bit integer"):
+        normalize_rows(v, [doc])
+    with pytest.raises(RowRejected, match=r"activity_id: a .*16610-bit integer is outside"):
+        normalize_rows(S, [row(activity_id=huge)])

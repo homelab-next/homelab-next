@@ -8,9 +8,11 @@ Who does what:
 * **metadata** (``list_tables``, ``describe``: schema check, row count, committed marks) comes
   from the REST catalog (Lakekeeper), the system of record for the Iceberg tables;
 * **writes** (``write_batch``) validate the whole batch first (the same rules as every adapter),
-  skip rows whose content key is already present, append the rest with **one** ``INSERT`` (one
-  Iceberg commit, done by Trino through the same catalog), then record the batch id and the
-  source's high-water mark as table properties through the REST catalog;
+  skip rows whose content key is already present, append the rest with ``INSERT`` statements
+  (an Iceberg commit each, done by Trino through the same catalog), as few as fit under
+  ``max_query_length`` characters (Trino refuses a longer query text: ``query.max-length``,
+  1,000,000 by default), then record the batch id and the source's high-water mark as table
+  properties through the REST catalog;
 * **setup** (``ensure_tables``) creates the namespace and the pinned tables with the generated
   Trino DDL and refuses an existing table whose schema differs (``SchemaMismatch``).
 
@@ -19,8 +21,18 @@ snapshot it commits, so the rows and the ledger entry are **two** commits, not o
 ``IcebergLake`` (snapshot summary) or ``FakeLake`` (one transaction).  A crash between them leaves
 the rows without their ledger entry; a retry of the same batch then writes nothing (every row is
 skipped by its content key) but is reported as ``replayed=False`` and the source mark stays at the
-previous batch.  No duplicate is ever written; only the replay flag and the mark lag.  The
-snapshot recorded is the one whose summary carries this INSERT's ``trino_query_id``.
+previous batch.  No duplicate is ever written; only the replay flag and the mark lag.  The same
+holds for a crash between the INSERTs of a batch split in several: the retry writes only the rows
+not yet present.  The snapshot recorded is the one whose summary carries the last INSERT's
+``trino_query_id``.
+
+The batch ledger is bounded: each table keeps the newest ``ledger_size`` batch entries (each
+numbered by a ``seq``), and the commit that records a batch removes older ones in the same
+catalog update.  Iceberg rewrites every property in each metadata file, so an unbounded ledger
+would make every commit, and every ``describe``, larger for good.  The per-source marks are one
+property each and are kept.  A batch replayed after its entry was dropped is written as nothing
+(every row is skipped by its content key) and reported as ``replayed=False``, exactly as in
+``IcebergLake`` once its snapshots have expired.
 One writer per ``(table, source)`` is assumed, as everywhere in the lake library.
 """
 
@@ -39,7 +51,7 @@ from .protocol import Mark, TableInfo, WriteResult
 from .rest_catalog import CommitConflict, RestCatalog, current_schema_fields, current_snapshot
 from .sqlparams import check_params, to_qmark
 from .tables import Column, TableSchema, column_diffs, load_schemas, table_name
-from .trino_http import Row, TrinoHTTP
+from .trino_http import Row, TrinoHTTP, execute_immediate, literal
 from .validate import content_key, normalize_rows
 
 __all__ = ["TrinoRestLake", "rest_schema_diffs"]
@@ -47,6 +59,11 @@ __all__ = ["TrinoRestLake", "rest_schema_diffs"]
 PROP_BATCH = "hnx.batch."
 PROP_MARK = "hnx.mark."
 KEY_CHUNK = 500
+#: the longest query text sent (key lookups and INSERTs): safely below Trino's default
+#: ``query.max-length`` (1,000,000)
+MAX_QUERY_LENGTH = 900_000
+#: batch ledger entries kept per table (older ones are removed when a batch is recorded)
+LEDGER_SIZE = 1000
 _NS = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 #: setups already done in this process: (catalog root, Trino catalog, namespace, schemas digest).
 #: Only the constructor's ``ensure=True`` consults it; an explicit ``ensure_tables()`` always runs.
@@ -114,9 +131,19 @@ class TrinoRestLake(AdapterBase):
         schemas: Iterable[TableSchema] | Mapping[str, TableSchema] | None = None,
         named_queries: Mapping[str, str] | None = None,
         ensure: bool = True,
+        max_query_length: int = MAX_QUERY_LENGTH,
+        ledger_size: int = LEDGER_SIZE,
     ):
         if not _NS.fullmatch(namespace):
             raise LakeError(f"namespace must be a lower-case identifier, got {namespace!r}")
+        if not isinstance(max_query_length, int) or max_query_length < 1024:
+            raise LakeError(
+                f"max_query_length must be an integer >= 1024, got {max_query_length!r}"
+            )
+        self.max_query_length = max_query_length
+        if not isinstance(ledger_size, int) or ledger_size < 1:
+            raise LakeError(f"ledger_size must be a positive integer, got {ledger_size!r}")
+        self.ledger_size = ledger_size
         if schemas is None:
             schemas = load_schemas()
         pool = schemas.values() if isinstance(schemas, Mapping) else schemas
@@ -228,22 +255,49 @@ class TrinoRestLake(AdapterBase):
         )
 
     def _existing_keys(self, s: TableSchema, rows: list[dict[str, Any]]) -> set[tuple]:
-        keys = sorted({content_key(s, r) for r in rows}, key=repr)
         found: set[tuple] = set()
-        cols = ", ".join(_qi(k) for k in s.key)
-        for i in range(0, len(keys), KEY_CHUNK):
-            chunk = keys[i : i + KEY_CHUNK]
-            if len(s.key) == 1:
-                where = f"{_qi(s.key[0])} IN (" + ", ".join("?" for _ in chunk) + ")"
-                args: list[Any] = [k[0] for k in chunk]
-            else:
-                one = "(" + " AND ".join(f"{_qi(k)} = ?" for k in s.key) + ")"
-                where = " OR ".join(one for _ in chunk)
-                args = [v for k in chunk for v in k]
-            sql = f"SELECT {cols} FROM {self._fq(s.name)} WHERE {where}"
+        for sql, args in self._key_lookups(s, rows):
             for r in self._trino.execute(sql, args).rows:
                 found.add(tuple(r[k] for k in s.key))
         return found
+
+    def _key_lookups(self, s: TableSchema, rows: list[dict[str, Any]]) -> list[tuple[str, list]]:
+        """The content-key lookups for ``rows``: at most ``KEY_CHUNK`` keys each, and each
+        query text (as sent) within ``max_query_length``, like the INSERTs."""
+        keys = sorted({content_key(s, r) for r in rows}, key=repr)
+        cols = ", ".join(_qi(k) for k in s.key)
+        head = f"SELECT {cols} FROM {self._fq(s.name)} WHERE "
+        if len(s.key) == 1:
+            one, sep = "?", ", "
+            head += f"{_qi(s.key[0])} IN ("
+
+            def text(n: int) -> str:
+                return head + ", ".join("?" for _ in range(n)) + ")"
+        else:
+            one, sep = "(" + " AND ".join(f"{_qi(k)} = ?" for k in s.key) + ")", " OR "
+
+            def text(n: int) -> str:
+                return head + sep.join(one for _ in range(n))
+
+        base = len(execute_immediate(text(0), [None]))  # the frame and one spare separator
+        per = len(one) + len(sep)
+        out: list[tuple[str, list]] = []
+        n, args, size = 0, [], base
+        for k in keys:
+            cost = per + sum(len(literal(v)) + 2 for v in k)
+            if base + cost > self.max_query_length:
+                raise LakeError(
+                    f"a content key of {s.name!r} needs {base + cost} characters of query text,"
+                    f" more than max_query_length ({self.max_query_length})"
+                )
+            if n and (n >= KEY_CHUNK or size + cost > self.max_query_length):
+                out.append((text(n), args))
+                n, args, size = 0, [], base
+            n, size = n + 1, size + cost
+            args.extend(k)
+        if n:
+            out.append((text(n), args))
+        return out
 
     @staticmethod
     def _value(c: Column, v: Any) -> Any:
@@ -285,13 +339,39 @@ class TrinoRestLake(AdapterBase):
                 fresh.append(r)
         if not fresh:  # nothing new: no commit (same as the other adapters)
             return WriteResult(len(norm), 0, len(norm), False, None)
+        query_id = ""
+        for sql, args in self._inserts(s, fresh):  # the ledger is written once, after the last
+            query_id = self._trino.execute(sql, args).query_id
+        snap_id = self._record(s, query_id, idempotency_key, source, high_water)
+        return WriteResult(len(norm), len(fresh), len(norm) - len(fresh), False, snap_id)
+
+    def _inserts(self, s: TableSchema, rows: list[dict[str, Any]]) -> list[tuple[str, list[Any]]]:
+        """``rows`` as INSERT statements whose query text (as sent: ``EXECUTE IMMEDIATE '<sql>'
+        USING <literals>``) stays within ``max_query_length``; refuses a row that alone exceeds it
+        before anything is sent."""
         cols = ", ".join(_qi(c.name) for c in s.columns)
         one = "(" + ", ".join(f"CAST(? AS {_trino_type(c)})" for c in s.columns) + ")"
-        sql = f"INSERT INTO {self._fq(s.name)} ({cols}) VALUES " + ", ".join(one for _ in fresh)
-        args = [self._value(c, r[c.name]) for r in fresh for c in s.columns]
-        res = self._trino.execute(sql, args)
-        snap_id = self._record(s, res.query_id, idempotency_key, source, high_water)
-        return WriteResult(len(norm), len(fresh), len(norm) - len(fresh), False, snap_id)
+        head = f"INSERT INTO {self._fq(s.name)} ({cols}) VALUES "
+        base = len(execute_immediate(head, [None]))  # the frame, the head and one ", " spare
+        out: list[tuple[str, list[Any]]] = []
+        n, args, size = 0, [], base
+        for r in rows:
+            vals = [self._value(c, r[c.name]) for c in s.columns]
+            # one more "(CAST(...), ...)" (with its ", ") in the quoted SQL, and its literals
+            cost = len(literal(one)) + sum(len(literal(v)) + 2 for v in vals)
+            if base + cost > self.max_query_length:
+                raise LakeError(
+                    f"a row of {s.name!r} needs {base + cost} characters of query text, more"
+                    f" than max_query_length ({self.max_query_length})"
+                )
+            if n and size + cost > self.max_query_length:
+                out.append((head + ", ".join(one for _ in range(n)), args))
+                n, args, size = 0, [], base
+            n, size = n + 1, size + cost
+            args.extend(vals)
+        if n:
+            out.append((head + ", ".join(one for _ in range(n)), args))
+        return out
 
     def _record(
         self,
@@ -312,11 +392,16 @@ class TrinoRestLake(AdapterBase):
                 None,
             ) or current_snapshot(meta)
             snap_id = None if snap is None else str(snap["snapshot-id"])
+            key = PROP_BATCH + _digest(batch_id, 32)
+            ledger = _ledger(meta.get("properties") or {}, exclude=key)
+            seq = max((n for n, _ in ledger), default=0) + 1
             props = {
-                PROP_BATCH + _digest(batch_id, 32): json.dumps(
-                    {"batch_id": batch_id, "snapshot_id": snap_id}, sort_keys=True
+                key: json.dumps(
+                    {"batch_id": batch_id, "snapshot_id": snap_id, "seq": seq}, sort_keys=True
                 )
             }
+            keep = self.ledger_size - 1  # the entry recorded now is the newest
+            removals = [k for _, k in ledger[: max(0, len(ledger) - keep)]]
             if source is not None:
                 props[PROP_MARK + _digest(source, 24)] = json.dumps(
                     {
@@ -329,10 +414,29 @@ class TrinoRestLake(AdapterBase):
                 )
             try:
                 self._rest.set_properties(
-                    self._ns, s.name, props, table_uuid=str(meta.get("table-uuid"))
+                    self._ns,
+                    s.name,
+                    props,
+                    table_uuid=str(meta.get("table-uuid")),
+                    removals=removals,
                 )
                 return snap_id
             except CommitConflict:
                 if attempt == 3:
                     raise
         return None  # pragma: no cover - the loop returns or raises
+
+
+def _ledger(props: Mapping[str, Any], *, exclude: str) -> list[tuple[int, str]]:
+    """The batch ledger entries of ``props`` (but ``exclude``) as ``(seq, key)``, oldest first;
+    an entry written before entries were numbered (or unreadable) counts as the oldest."""
+    out = []
+    for k, v in props.items():
+        if not k.startswith(PROP_BATCH) or k == exclude:
+            continue
+        try:
+            seq = int(json.loads(v).get("seq") or 0)
+        except (ValueError, TypeError, AttributeError):
+            seq = 0
+        out.append((seq, k))
+    return sorted(out)

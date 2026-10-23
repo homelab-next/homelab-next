@@ -70,6 +70,7 @@ from collections.abc import Mapping
 
 import yaml
 
+from homelabnext._yaml import UniqueKeyLoader
 from homelabnext.identity.uid import is_uid
 
 from . import events as ev
@@ -262,8 +263,8 @@ def parse_record(
         problems.append(f"{name}: must start with a `---` YAML front-matter block")
         return None
     try:
-        fm = yaml.safe_load(m.group("fm")) if m.group("fm").strip() else None
-    except yaml.YAMLError as ex:
+        fm = yaml.load(m.group("fm"), Loader=UniqueKeyLoader) if m.group("fm").strip() else None
+    except yaml.YAMLError as ex:  # a duplicate key too: a reader would see the first value
         problems.append(f"{name}: front-matter is not YAML ({ex})".replace("\n", " "))
         return None
     if not isinstance(fm, dict):
@@ -393,7 +394,11 @@ def _load(p: pathlib.Path, kind: str | None) -> dict:
             raise RegisterError(kind, problems)
         return load_texts(texts, kind, events)
     if p.is_file():
-        return _canonical(yaml.safe_load(p.read_text()), kind)
+        try:
+            doc = yaml.load(p.read_text(), Loader=UniqueKeyLoader)
+        except yaml.YAMLError as ex:
+            raise RegisterError(kind, [f"{p}: not YAML ({ex})".replace("\n", " ")]) from None
+        return _canonical(doc, kind)
     raise RegisterError(kind, [f"{p}: no such register file or directory"])
 
 

@@ -408,3 +408,39 @@ def test_the_lake_factory_refuses_plaintext_by_the_shared_rule(monkeypatch):
     with pytest.raises(LakeError) as got:
         make_lake(domain="example.internal", warehouse="lab")
     assert str(rule.value) in str(got.value)
+
+
+def _dead_lettered(bodies):
+    wire = FakeJetStreamWire()
+    bus = nj.make(wire=wire, ack_wait=0.2, dlq_wait=0.2)
+    c = bus.consumer("c1", "a.b", max_deliver=5)
+    for body in bodies:
+        bus.publish("a.b", body)
+        (d,) = c.fetch(1)
+        d.term()
+    return wire, bus, c
+
+
+def test_dead_letters_skip_an_original_that_aged_out_of_the_stream():
+    # the advisory outlives its original (the main stream evicts first): the listing still works
+    wire, bus, c = _dead_lettered([b"old", b"new"])
+    st = wire.streams[bus.stream]
+    first = min(st.msgs)
+    del st.msgs[first]  # aged out (max_age, or max_bytes with discard old)
+    assert [d.data for d in c.dead_letters()] == [b"new"]
+    assert c.dead_evicted == [first]
+    bus.close()
+
+
+def test_dead_letters_read_on_from_where_the_last_call_stopped():
+    wire, bus, c = _dead_lettered([b"one", b"two"])
+    assert [d.data for d in c.dead_letters()] == [b"one", b"two"]
+    get = f"$JS.API.STREAM.MSG.GET.{bus.dlq_stream}"
+    before = [json.loads(p[1]) for p in wire.log if p[0] == get]
+    bus.publish("a.b", b"three")
+    (d,) = c.fetch(1)
+    d.term()
+    assert [d.data for d in c.dead_letters()] == [b"one", b"two", b"three"]
+    after = [json.loads(p[1]) for p in wire.log if p[0] == get][len(before) :]
+    assert after and all(q["seq"] > 2 for q in after), after  # never again from seq 1
+    bus.close()

@@ -37,7 +37,7 @@ from homelabnext.registry.model import secret_env_name
 
 from ..model import Conflict, NotFound, ProjectsError
 
-__all__ = ["ApiError", "OpenProjectClient", "filters"]
+__all__ = ["ApiError", "OpenProjectClient", "all_work_packages", "filters"]
 
 MAX_BYTES = 16 << 20
 PAGE_SIZE = 1000
@@ -58,6 +58,23 @@ def filters(**conds: tuple[str, Sequence[Any]]) -> str:
     """``filters(type=("=", ["3"]))`` -> the URL value of ``filters`` (AND of each condition)."""
     out = [{name: {"operator": op, "values": [str(v) for v in vals]}} for name, (op, vals) in conds.items()]  # fmt: skip
     return json.dumps(out, separators=(",", ":"))
+
+
+def all_work_packages(
+    client: OpenProjectClient,
+    project: int,
+    where: Mapping[str, tuple[str, Sequence[Any]]] | None = None,
+    **params: Any,
+) -> Iterator[dict[str, Any]]:
+    """Every work package of ``project`` matching ``where``, whatever its status.
+
+    A work-package collection requested without ``filters`` gets OpenProject's default filter
+    ``[{"status":{"operator":"o"}}]`` (open only), so closed work packages would be missing; the
+    status filter "all" (``*``) is always sent, ANDed with ``where``.
+    """
+    conds = {"status": ("*", []), **dict(where or {})}
+    path = f"/api/v3/projects/{project}/work_packages"
+    return client.collect(path, filters=filters(**conds), **params)
 
 
 class OpenProjectClient:

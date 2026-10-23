@@ -15,6 +15,7 @@ OTHER = "01a15e4e-0000-7000-8000-00000000000f"  # a valid uid no example record 
 
 from homelabnext.records import Records, RecordsReader
 from homelabnext.records.decider import init_tree
+from homelabnext.records.notes import parse_note, render_note
 from homelabnext.registers import RegisterError, build_all, load_register, records
 from homelabnext.registers import events as ev
 from homelabnext.registers.__main__ import main as registers_main
@@ -134,6 +135,60 @@ def test_event_files_are_checked_by_name_and_schema(lab):
     shutil.copytree(d, lab / "lessons" / f"{OTHER}.events")
     with pytest.raises(RegisterError, match=rf"{OTHER}\.events: no record file {OTHER}\.md"):
         load_register(lab / "lessons")
+
+
+def test_an_event_file_that_sets_a_key_twice_is_refused(lab):
+    d = lab / "lessons" / evd("LL-005")
+    (d / "20261020T093000Z-recurrence-agent-example-checker.yml").write_text(
+        "event: recurrence\nby: agent:example-checker\ndate: 2026-10-20\n"
+        "note: first\nnote: second\n"
+    )
+    with pytest.raises(RegisterError, match="duplicate key 'note'"):
+        load_register(lab / "lessons")
+
+
+def test_an_event_file_with_an_unhashable_key_is_a_problem_not_a_crash(lab):
+    d = lab / "lessons" / evd("LL-005")
+    (d / "20261020T093000Z-recurrence-agent-example-checker.yml").write_text("? [a]\n: 1\n")
+    problems = []
+    ev.read_events(d, problems)
+    assert any("found unhashable key" in p for p in problems), problems
+    with pytest.raises(RegisterError, match="found unhashable key"):
+        load_register(lab / "lessons")
+
+
+def test_a_record_with_an_unhashable_key_is_a_problem_not_a_crash():
+    problems = []
+    assert records.parse_record("---\n? [a]\n: 1\n---\nbody\n", "x.md", "lessons", problems) is None
+    assert any("found unhashable key" in p for p in problems), problems
+
+
+def test_a_single_file_register_with_an_unhashable_key_is_refused(tmp_path):
+    reg = tmp_path / "invariants.yml"
+    reg.write_text("? [a]\n: 1\n")
+    with pytest.raises(RegisterError, match="found unhashable key"):
+        load_register(reg, "invariants")
+
+
+def test_the_unique_key_loaders_report_an_unhashable_key_as_a_yaml_error():
+    import yaml
+
+    from homelabnext._yaml import UniqueKeyLoader, UniqueKeyStrDateLoader
+
+    for loader in (UniqueKeyLoader, UniqueKeyStrDateLoader):
+        with pytest.raises(yaml.YAMLError, match="found unhashable key"):
+            yaml.load("? [a]\n: 1\n", Loader=loader)
+
+
+def test_a_single_file_register_that_sets_a_key_twice_is_refused(tmp_path):
+    reg = tmp_path / "invariants.yml"
+    text = (REPO / "examples/registers/invariants.yml").read_text()
+    reg.write_text(
+        text.replace("\n  evidence: auto\n", "\n  evidence: manual\n  evidence: auto\n", 1)
+    )
+    assert reg.read_text() != text
+    with pytest.raises(RegisterError, match="duplicate key 'evidence'"):
+        load_register(reg, "invariants")
 
 
 # --- derived fields ---------------------------------------------------------------------------
@@ -710,3 +765,23 @@ def test_only_the_migration_writes_a_rekey(lab):
     with pytest.raises(RegisterError, match="'hnx:migrate' was expected"):
         write_event(rec, rekey)
     assert _files(ev.events_dir(rec)) == before
+
+
+def test_a_reused_intent_name_is_refused_before_anything_is_applied(lab, inbox):
+    n1 = _intent(inbox, "promote", record=U["LL-003"], **{"from": "open", "to": "partial"}, reason="x")  # fmt: skip
+    _give_ll_003_a_control(lab)
+    [o1] = _decider(lab, inbox).decide_all()
+    assert o1.result == "applied" and n1 in _lanes(inbox)["decided/completed"]
+    # the same agent, the same slug, the same day, another record: the name is already decided
+    with pytest.raises(FileExistsError):
+        _intent(inbox, "promote", record=U["RB-001"], superseded_by=U["RB-002"], reason="y", **{"from": "active", "to": "superseded"})  # fmt: skip
+    fm, _ = parse_note((inbox / "decided/completed" / n1).read_text(encoding="utf-8"))
+    fm.update({"record": U["RB-001"], "from": "active", "to": "superseded", "reason": "y"})
+    fm["superseded_by"] = U["RB-002"]
+    (inbox / "inbox" / n1).write_text(render_note(fm, ""), encoding="utf-8")  # past the API
+    for _ in range(2):  # denied once, then gone: the queue does not jam
+        out = _decider(lab, inbox).decide_all()
+        assert all(o.result != "error" for o in out), out
+    assert n1 not in _lanes(inbox)["inbox"] and n1 in _lanes(inbox)["decided/denied"]
+    rb = lab / "runbooks" / f("RB-001")
+    assert [e for e in ev.read_events(ev.events_dir(rb), []) if e.kind == "transition"] == []

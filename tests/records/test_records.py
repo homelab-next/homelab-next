@@ -63,6 +63,24 @@ def test_slug_override_and_no_overwrite(rec):
     assert not list(p.parent.glob(".*.tmp"))
 
 
+def test_a_note_that_sets_a_key_twice_is_refused():
+    # PyYAML keeps the last value: the decider would act on `partial`, a reader sees `retired`
+    with pytest.raises(NoteError, match="duplicate key 'to'"):
+        parse_note("---\ntype: register-transition\nto: retired\nto: partial\n---\n")
+
+
+@pytest.mark.parametrize("decision", ["approve", "deny"])
+def test_a_name_already_decided_is_refused(rec, tree, decision):
+    # the inbox is exclusive on its own; a decided note's name would collide when this one is
+    # moved, and an audit link to decided/<lane>/<name> would name the other note
+    p = rec.propose(proposal(), slug="auth-burst")
+    getattr(Decider(tree, decided_by="operator", clock=lambda: NOW), decision)(p.name)
+    with pytest.raises(FileExistsError, match="already exists"):
+        rec.propose(proposal(title="Another proposal"), slug="auth-burst")
+    assert list((tree / "inbox").glob("*.md")) == []
+    assert not list((tree / "inbox").glob(".*.tmp"))
+
+
 @pytest.mark.parametrize(
     ("patch", "field"),
     [

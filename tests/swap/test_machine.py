@@ -363,3 +363,44 @@ def test_tampering_with_the_record_is_detected(tmp_path):
     with pytest.raises(record.RecordError):
         record.save(tmp_path / "bad.json", t)
     assert not (tmp_path / "bad.json").exists()
+
+
+def test_a_refused_revert_stops_the_old_component_again_and_records_why(tmp_path):
+    import json
+
+    b = Stub()
+    r, _, clock = make(tmp_path, b)
+    advance_to(r, clock, "cutover")
+    b.fail |= {"canary", "revert"}
+    with pytest.raises(GateFailed):
+        r.advance()
+    ev = json.loads((r.evidence_dir / "cutover.01.json").read_text())
+    revert = ev["details"]["revert"]
+    assert revert["ok"] is False and revert["start_old"]["ok"] is True
+    assert revert["stop_old"]["ok"] is True
+    assert b.old == "stopped"  # the route stays on the candidate, as cutover left it
+    assert [c for c in b.calls if c[0] in ("start_old", "stop_old")][-2:] == [("start_old",), ("stop_old",)]  # fmt: skip
+
+
+def test_a_revert_records_a_failed_start_of_the_old_component(tmp_path):
+    import json
+
+    b = Stub()
+    r, _, clock = make(tmp_path, b)
+    advance_to(r, clock, "cutover")
+    b.fail |= {"canary", "start_old"}
+    with pytest.raises(GateFailed) as exc:
+        r.advance()
+    ev = json.loads((r.evidence_dir / "cutover.01.json").read_text())
+    assert ev["details"]["revert"]["start_old"]["ok"] is False
+    assert any(g.id == "revert" and not g.passed for g in exc.value.result.gates)
+
+
+def test_a_rollback_that_cannot_restore_the_route_stops_the_old_component_again(tmp_path):
+    b = Stub()
+    r, _, clock = make(tmp_path, b)
+    advance_to(r, clock, "rollback-window")
+    b.fail.add("revert")
+    with pytest.raises(SwapError, match="rollback incomplete"):
+        r.rollback("route will not restore on the first try")
+    assert b.old == "stopped" and r.record()["route"]["flipped"] is True

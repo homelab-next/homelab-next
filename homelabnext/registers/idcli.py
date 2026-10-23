@@ -41,6 +41,8 @@ tombstone check-lost counts as present.
 
 EXPLAIN_DIR = """{path} is a record directory: a deleted record file is restored with
 `git checkout HEAD -- {path}/<uid>.md` (or MERGE_HEAD), with its <uid>.events/ directory.
+A lost <uid>.events/<file> is an event (a review, a recurrence, a verified run, a transition):
+events are append-only and never deleted; restore it with `git checkout HEAD -- {path}/<file>`.
 """
 
 UIDS_HELP = """Every record is identified by a UUIDv7 in its front-matter `uid:` and lives in

@@ -128,6 +128,8 @@ OTHER = "01a15e4e-0000-7000-8000-00000000000f"  # a valid uid no example record 
         ),
         ("LL-001", "---\n\n## Symptom", "---\nstray prose\n\n## Symptom", "before the first"),
         ("LL-001", "systems: [proxy, tls]", "systems: [proxy, tls\n", "not YAML"),
+        # a key set twice: the loader would keep the last value, a reader sees the first
+        ("LL-001", "status: controlled", "status: retired\nstatus: controlled", "duplicate key"),
     ],
 )
 def test_malformed_records_fail_validation(src, tmp_path, code, old, new, needle):
@@ -316,6 +318,34 @@ def test_check_lost_catches_a_deleted_record_file(repo):
         shutil.rmtree(p) if p.is_dir() else p.unlink()
     lost = ", ".join(sorted(U[f"LL-00{n}"] for n in range(1, 6)))
     assert f"lost {lost}" in _tool(repo, "check-lost").stderr
+
+
+def test_check_lost_catches_a_deleted_event_file_and_a_deleted_sidecar(repo):
+    d = repo / "reg/lessons"
+    sidecar = d / f"{U['LL-001']}.events"
+    [first, *rest] = sorted(sidecar.iterdir())
+    first.unlink()  # one event gone, as a merge that kept one side's sidecar would leave it
+    r = _tool(repo, "check-lost")
+    assert r.returncode == 1, r.stderr
+    assert f"lost {U['LL-001']}.events/{first.name}" in r.stderr
+    assert "events are append-only" in r.stderr
+    shutil.rmtree(sidecar)  # the whole sidecar gone, the record kept
+    r = _tool(repo, "check-lost")
+    lost = ", ".join(f"{U['LL-001']}.events/{p.name}" for p in [first, *rest])
+    assert r.returncode == 1 and f"lost {lost}" in r.stderr, r.stderr
+    _git(repo, "checkout", "HEAD", "--", f"reg/lessons/{sidecar.name}")
+    assert _tool(repo, "check-lost").returncode == 0
+    new = sidecar / "20261022T000000Z-review-agent-example-checker.yml"
+    new.write_text((sidecar / rest[0].name).read_text())  # an added event is not a loss
+    assert _tool(repo, "check-lost").returncode == 0
+
+
+def test_a_deliberately_dropped_event_is_waived_by_name(repo, monkeypatch):
+    sidecar = repo / "reg/lessons" / f"{U['LL-001']}.events"
+    gone = sorted(sidecar.iterdir())[0]
+    gone.unlink()
+    monkeypatch.setenv("REGISTER_IDS_ALLOW_DROP", f"{U['LL-001']}.events/{gone.name}")
+    assert _tool(repo, "check-lost").returncode == 0
 
 
 def test_check_lost_reads_the_migration_commit_through_the_alias_map(tmp_path):
