@@ -367,18 +367,28 @@ KEYED_PLACEHOLDER_RE = re.compile(r"(?i)secret|passw|token|hunter2|abc123|letmei
 # a Go expression assigned in code: an identifier with a selector, a call or an index after it
 # (base64.StdEncoding.EncodeToString(buf), sha256.Sum256([]byte(tok))); Go has no bare literals
 GO_CODE_VALUE_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\.[A-Za-z_]\w*|[\[(].*)$")
-# A string literal on the right-hand side that is text, not a value: words (each maybe ending in
-# a digit or two) with spaces or punctuation between them ("Bearer ", "/oauth/token",
-# "-suffix-v2", "Authorization"), a format string ("%s-%s-tls") or a time layout ("2006-01-02")
-GO_WORDS_RE = re.compile(r"\s*[-_.:/ ]*[A-Za-z]+\d{0,2}(?:[-_. :/]+[A-Za-z]*\d{0,2})*[-_.:/ ]*\s*")
+# A string literal on the right-hand side that is text, not a value: words with spaces or
+# punctuation between them ("Bearer ", "/oauth/token", "-suffix-v2"; a word of at most three
+# letters may end in a digit or two, so "Battery-Staple42" is no word), once its format verbs
+# ("%s-%s-tls") and, in a time layout, its layout elements ("2006-01-02") are taken out.  Taken
+# out, not matched anywhere: "%2F" or "2006" inside a random value leaves the rest to be judged.
+GO_WORDS_RE = re.compile(
+    r"\s*[-_.:/ ]*(?:[A-Za-z]{1,3}\d{1,2}|[A-Za-z]+)(?:[-_. :/]+(?:[A-Za-z]{1,3}\d{1,2}|[A-Za-z]+))*"
+    r"[-_.:/ ]*\s*"
+)
+GO_PUNCTUATION_RE = re.compile(r"[\s\-_.:/,;=()\[\]{}@#|<>'\"]*")
 GO_FMT_VERB_RE = re.compile(r"%[-+# 0-9.*\[\]]*[a-zA-Z%]")
 GO_TIME_LAYOUT_RE = re.compile(r"2006|15:04|Jan _?2|Mon Jan")
+GO_LAYOUT_ELEMENT_RE = re.compile(
+    r"2006|January|Jan|Monday|Mon|MST|PM|pm|Z07:?00|-07:?00|15|0[1-6]|_2|\.[09]+"
+)
 
 
 def _is_go_text_literal(body: str) -> bool:
-    return bool(
-        GO_WORDS_RE.fullmatch(body) or GO_FMT_VERB_RE.search(body) or GO_TIME_LAYOUT_RE.search(body)
-    )
+    text = GO_FMT_VERB_RE.sub(" ", body)
+    if GO_TIME_LAYOUT_RE.search(text):
+        text = GO_LAYOUT_ELEMENT_RE.sub(" ", text)
+    return bool(GO_WORDS_RE.fullmatch(text) or GO_PUNCTUATION_RE.fullmatch(text))
 
 
 class GoSource:

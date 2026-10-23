@@ -865,6 +865,28 @@ def test_text_literals_on_the_right_hand_side_are_not_secrets(text: str):
     assert "keyed-secret" not in _secret_hits(text, "orchestrator/internal/x/x.go"), text
 
 
+# verify6.md (v6/lit): a verb or a layout year inside a random value, or a passphrase's trailing
+# digits, made the whole literal text
+RHS_RANDOM = [
+    "Correct-Horse-" + "Battery-Staple42",
+    "Zq8vT2Kp%2F" + "4mW9xR7nB3",
+    "Zq8vT2Kp2006" + "mW9xR7nB3",
+]
+
+
+@pytest.mark.parametrize("value", RHS_RANDOM)
+def test_a_random_literal_with_a_verb_or_layout_inside_is_still_judged(value: str):
+    text = f'api{TOK} := prefix + "{value}"'
+    assert "keyed-secret" in _secret_hits(text, "orchestrator/internal/x/x.go"), text
+
+
+@pytest.mark.parametrize(
+    "value", ["2006-01-02T15:04:05Z07:00", "Jan _2 15:04:05", "%s:%d", "X-Api-Key", "ipv6-only"]
+)
+def test_layouts_verbs_and_words_stay_text(value: str):
+    assert leak_scan._is_go_text_literal(value)
+
+
 # verify5.md (v5/colon/d.go): one rule for ":", "=" and ":=": an expression is code after each,
 # a cast of a long number stays a finding after each
 @pytest.mark.parametrize("sep", [": ", " = ", " := "])
