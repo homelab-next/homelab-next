@@ -215,6 +215,19 @@ def test_the_reader_refuses_an_unsafe_configuration_before_any_connection(url, k
         SpendLogReader(url, key)
 
 
+@pytest.mark.parametrize("timeout", [-1, 0, 0.0, 601, 1e308, float("nan"), float("inf"), True, "5"])
+def test_the_reader_refuses_a_timeout_outside_its_range_before_any_connection(timeout):
+    """-1 failed every read with a ValueError from the socket and 1e308 with an OverflowError,
+    neither of them a turn source error, so a typo in a unit file was a traceback each pass."""
+    with pytest.raises(SpendLogError, match="0 < timeout <= 600"):
+        SpendLogReader("https://gateway.example.com", timeout=timeout)
+
+
+@pytest.mark.parametrize("timeout", [0.5, 1, 15.0, 600])
+def test_the_reader_takes_a_timeout_inside_its_range(timeout):
+    assert SpendLogReader("https://gateway.example.com", timeout=timeout).timeout == timeout
+
+
 @pytest.mark.parametrize(
     "key",
     [

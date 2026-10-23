@@ -510,6 +510,20 @@ def test_an_option_the_adapter_declares_secret_takes_only_a_secret_name(site_ada
     assert _turns_cli(site_adapters, *spec, *ok) == 0
 
 
+@pytest.mark.parametrize("timeout", ["-1", "0", "601", "1e308"])
+def test_a_timeout_out_of_range_is_exit_2_at_startup_not_a_traceback(
+    timeout, capsys, monkeypatch, filled
+):
+    """The shipped adapter took any float, so a bad value failed at read time on every pass."""
+    from homelabnext.orchestration import cli
+
+    monkeypatch.setenv("HNX_ENDPOINT_LLM_GATEWAY", "https://gateway.example.com")
+    argv = ["turns", "--db", str(filled.path)]
+    argv += ["--turn-source", "homelabnext.conform.adapters.litellm_spend_log:make"]
+    assert cli.main([*argv, "--turn-source-option", f"timeout={timeout}"], clock=lambda: T0) == 2
+    assert "0 < timeout <= 600" in capsys.readouterr().err
+
+
 def test_turns_exits_3_when_rows_were_refused_and_1_when_the_gateway_is_unreadable(
     site_adapters, capsys, monkeypatch, filled
 ):

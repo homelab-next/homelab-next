@@ -59,6 +59,7 @@ from homelabnext.status.model import iso, parse_iso
 __all__ = [
     "DEFAULT_KEY",
     "MAX_PAGES",
+    "MAX_TIMEOUT",
     "PAGE_SIZE",
     "SPEND_LOGS_PATH",
     "TURN_SOURCES",
@@ -80,6 +81,8 @@ MAX_PAGE_BYTES = 8 << 20
 #: far more than the gateway of a lab serves
 PAGE_SIZE = 500
 MAX_PAGES = 200
+#: the longest a single page request may wait, in seconds (``timeout`` is 0 < t <= this)
+MAX_TIMEOUT = 600
 _SECRET_REF = re.compile(r"secret:[a-z0-9][a-z0-9/_.-]{0,127}")
 
 
@@ -122,6 +125,14 @@ class SpendLogReader:
             raise SpendLogError(str(exc)) from None
         if not 1 <= page_size <= 1000 or max_pages < 1:
             raise SpendLogError("page_size is 1..1000 and max_pages positive")
+        # a socket refuses a negative timeout and overflows on a huge one at read time, which
+        # failed every pass with a traceback instead of a configuration error at startup
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, int | float)
+            or not 0 < timeout <= MAX_TIMEOUT
+        ):
+            raise SpendLogError(f"timeout is seconds, 0 < timeout <= {MAX_TIMEOUT}")
         self.url = f"{parts.scheme}://{parts.netloc}{parts.path.rstrip('/')}{SPEND_LOGS_PATH}"
         self.key_ref, self._env, self.timeout = key, env, timeout
         self.page_size, self.max_pages = page_size, max_pages
