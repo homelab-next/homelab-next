@@ -73,33 +73,51 @@ and only while its marker says ``fictional: true``.  Findings:
   sops-config      a ``.sops.yaml`` outside the skeleton;
   ciphertext       a SOPS-encrypted file (sealed real data does not belong in public git
                    either: it is one leaked key away from plain text);
-  scope-address    a site's network scope in public git.  Located, not parsed: in EVERY file
-                   the scanner reads (any suffix; Markdown prose and fences of any indent,
-                   length or info string included), the raw text under every ``scope`` key
-                   (any case, quoted or not, YAML/JSON ``scope:``, TOML ``scope =``,
-                   ``[scope]``/``[[scope]]`` headers, dotted ``scope.x`` keys, and the same
-                   after decoding YAML, JSON and TOML escapes, an escaped line break and HTML
-                   character references)
-                   holds an address-like token that is not a documentation address
+  scope-address    a site's network scope in public git.  The union of two rules over EVERY
+                   file the scanner reads (any suffix; line ends CRLF or CR normalised first):
+                   (1) the parse pass: a file that parses as JSON, TOML or YAML (by content;
+                   YAML only within the size and depth bounds) has every scalar, keys
+                   included, judged under any key whose resolved value casefolds to
+                   ``scope``, at any depth (an alias-spelled key, ``? scope`` with comments,
+                   a dedented flow, a CRLF header are just mappings here); (2) the raw rule:
+                   the raw text under every ``scope`` key (any case, quoted or not, ``scope:``,
+                   ``scope =``, ``[scope]``/``[[scope]]`` headers, dotted ``scope.x`` keys, a
+                   comment before the colon, and the same after decoding YAML, JSON and TOML
+                   escapes, an escaped line break and HTML character references), which also
+                   reads what does not parse (Markdown prose and fences of any kind).  Either
+                   fails on an address-like token that is not a documentation address
                    (RFC 5737, ``2001:db8::/32``, ``3fff::/20``).  Address-like: an IPv6
-                   address, a dotted form of four parts in any numeric spelling, an
-                   ``inet_aton`` short form or any integer (decimal, hex, octal, binary,
-                   underscored, float, sexagesimal) of 2**24 or more, a short form with a
-                   prefix length; an alias's anchor is read too, and a ``!!binary`` value is
-                   refused.  What a key "holds" is over-read: the rest of its line, every
-                   deeper-indented line after it (a TOML header: up to the next header), and
-                   any flow collection it opens, to its close.  Also, at an allowlisted path,
-                   an entry of the site block that is not a string naming a documentation
-                   network (the one malformed shape let through is a documentation address
-                   with a prefix length of at most three digits out of range, which the
-                   generated negative plants);
+                   address, a dotted form of four parts in any numeric spelling, an integer
+                   (decimal, hex, octal, binary, underscored, float, sexagesimal) of 2**24 or
+                   more, a short form that is no version (a hex or leading-zero part, a part
+                   over 255) or sits in an address context, a private short form; an alias is
+                   followed to its anchor's last real definition (more than
+                   :data:`SCOPE_MAX_ALIASES` is a finding), and a ``!!binary`` value is
+                   refused.  What a key "holds" (raw rule) is over-read: the rest of its line,
+                   every deeper-indented line, a value on the first later line with content,
+                   a quoted scalar or flow collection opened there to its close, and for a TOML
+                   header everything up to the next header.  Also, at an allowlisted path, an
+                   entry of the site block that is not a string naming a documentation network
+                   (the one malformed shape let through is a documentation address with a
+                   prefix length of at most three digits out of range, which the generated
+                   negative plants).
+                   Threat model: the gate defends against an ACCIDENTAL commit of a real
+                   address in any ordinary format (YAML, JSON, TOML, Markdown; CRLF; escapes;
+                   integer, hex, zero-padded and short spellings) and fails closed on what it
+                   cannot read.  A deliberately obfuscating author is out of scope for a text
+                   gate and is review's to catch; known non-goals: hostnames that resolve to
+                   the address they spell (``81-2-69-142.sslip.io``, ``*.nip.io``),
+                   percent-encoded or ideographic dots, named HTML entities, Markdown
+                   backslash escapes or emphasis inside a number, numbers spelt in words, and
+                   an address not under a scope key (``tools/leak_scan.py``'s);
   scope-shape      at an allowlisted path (:data:`SCOPE_BLOCK_PATHS`: the example site
                    profiles and the generated selection examples and negatives), a scope block
                    not in the selection's shape: a part outside ``SCOPE_PARTS`` (what it holds
                    is still read), a part or ``scope`` key twice, an anchor or alias, a part
                    that is not a list, a group that is not a mapping, or a scope key anywhere
                    but the top level.  :data:`SCOPE_EXEMPT` lets through one exact location of
-                   the generated misspelt-part negative;
+                   the generated misspelt-part negative; or a case variant of an
+                   allowlisted path (a case-insensitive file system would load it);
   scope-unparsed   an allowlisted file the strict parse refuses: one that does not parse, or
                    is larger than :data:`SCOPE_MAX_BYTES` or nested deeper than
                    :data:`SCOPE_MAX_DEPTH` (checked before any parser sees it), or any file
@@ -812,66 +830,151 @@ def _indent(line: str) -> int:
     return len(line) - len(line.lstrip(" \t"))
 
 
-def _balanced_end(text: str, start: int) -> int:
-    """The end of the flow collection opening at ``text[start]`` (quotes and escapes respected),
-    or the end of the text when it never closes (over-reading is the safe direction)."""
-    depth, quote, i = 0, "", start
+def _newlines_normalised(text: str) -> str:
+    """CRLF and lone CR as LF: a Windows or old-Mac editor's line ends are not an obfuscation."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+_FLOW_CHARS = re.compile(r'[\[\]{}"\n#\\]')
+#: a YAML anchor definition (``&name``) where the text can hold one
+_ANCHOR = re.compile(r"(?:^|(?<=[\s\[{,:]))&([^\s,\[\]{}]+)(?=[\s,\]}]|$)", re.M)
+#: how many distinct aliases under scope keys one file may make the raw rule follow; more is a
+#: finding (the cap fails closed), never a silent stop
+SCOPE_MAX_ALIASES = 256
+
+
+class _Index:
+    """One linear pass over a text, so that no scope key re-reads what another already read.
+
+    - ``close_of``: each flow opener's position mapped to just past its closer (the end of the
+      text when it never closes).  Double-quoted strings and ``#`` comments are skipped; a
+      single quote is not (an apostrophe in prose would hide every bracket after it), so a
+      bracket inside a single-quoted string can pair wrongly: the parse pass reads such files.
+    - ``headers``: the start of every TOML table header line, sorted.
+    - ``anchors``: each anchor name mapped to the sorted positions of its real definitions
+      (not in a comment, not inside a quoted string on its line).
+    - ``newlines``: positions of every line break, for line numbers."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.newlines = [m.start() for m in re.finditer("\n", text)]
+        self.close_of: dict[int, int] = {}
+        stack: list[int] = []
+        in_dq = in_comment = False
+        prev_end = 0
+        for m in _FLOW_CHARS.finditer(text):
+            c, i = m.group(0), m.start()
+            if c == "\n":
+                in_comment = False
+                prev_end = i + 1
+                continue
+            if in_comment:
+                continue
+            if in_dq:
+                if c == '"' and _even_backslashes(text, i):
+                    in_dq = False
+                continue
+            if c == '"':
+                in_dq = True
+            elif c == "#" and (i == prev_end or text[i - 1] in " \t"):
+                in_comment = True
+            elif c in "[{":
+                stack.append(i)
+            elif c in "]}" and stack:
+                self.close_of[stack.pop()] = i + 1
+        for opener in stack:
+            self.close_of[opener] = len(text)
+        self.headers = [m.start() for m in _TOML_HEADER.finditer(text)]
+        self.anchors: dict[str, list[int]] = {}
+        for m in _ANCHOR.finditer(text):
+            line_start = text.rfind("\n", 0, m.start()) + 1
+            before = text[line_start : m.start()]
+            if re.search(r"(?:^|[ \t])#", before) or before.count("'") % 2 or before.count('"') % 2:
+                continue  # a comment or a quoted string, not an anchor
+            self.anchors.setdefault(m.group(1), []).append(m.start())
+
+    def line_of(self, pos: int) -> int:
+        return bisect.bisect_left(self.newlines, pos) + 1
+
+    def next_header(self, pos: int) -> int:
+        i = bisect.bisect_right(self.headers, pos)
+        return self.headers[i] if i < len(self.headers) else len(self.text)
+
+    def anchor_before(self, name: str, pos: int) -> int | None:
+        """The last real definition of ``&name`` before ``pos`` (YAML 1.2: a redefined anchor
+        names its latest definition), or the last one anywhere when none precedes it."""
+        found = self.anchors.get(name)
+        if not found:
+            return None
+        i = bisect.bisect_left(found, pos)
+        return found[i - 1] if i else found[-1]
+
+
+def _even_backslashes(text: str, i: int) -> bool:
+    """True when the backslashes right before ``text[i]`` escape one another (an even run)."""
+    n = 0
+    while i - n - 1 >= 0 and text[i - n - 1] == "\\":
+        n += 1
+    return n % 2 == 0
+
+
+def _quoted_end(text: str, start: int) -> int:
+    """Just past the quoted scalar opening at ``text[start]`` (``"`` with backslash escapes,
+    ``'`` with ``''``), however many lines it spans; the end of the text when it never closes."""
+    q, i = text[start], start + 1
     while i < len(text):
         c = text[i]
-        if quote:
-            if c == "\\" and quote == '"':
-                i += 1
-            elif c == quote:
-                quote = ""
-        elif c in "\"'":
-            quote = c
-        elif c in "[{":
-            depth += 1
-        elif c in "]}":
-            depth -= 1
-            if depth <= 0:
-                return i + 1
+        if q == '"' and c == "\\":
+            i += 2
+            continue
+        if c == q:
+            if q == "'" and text[i + 1 : i + 2] == "'":
+                i += 2
+                continue
+            return i + 1
         i += 1
     return len(text)
 
 
 def _span(
-    text: str,
+    idx: _Index,
     key_start: int,
     key_end: int,
     header: bool,
-    flows: list[tuple[int, int]],
     blocks: list[tuple[int, int, int]] | None = None,
 ) -> tuple[int, int]:
-    """``(start, end)`` of the raw text a scope key holds, over-read rather than under-read: the
-    rest of the key's line; every following line indented deeper than the key's line (blank and
-    comment lines included, and a ``- `` item at the key's own indent, which YAML allows), or
-    for a TOML table header every line up to the next header; and any flow collection opened
-    there, to its close.  ``flows`` holds the flow spans already scanned: a flow opening inside
-    one closes inside it, so it is not scanned again.  ``blocks`` (keys in order) holds the
-    enclosing indented blocks: a key indented deeper inside one ends inside it, so its lines are
-    not walked again.  Each character is scanned about once, however the keys nest."""
+    """``(start, end)`` of the raw text a scope key holds, over-read rather than under-read.
+
+    - A TOML table header holds everything up to the next header.
+    - Any other key holds the rest of its line and every following line indented deeper (blank
+      and comment lines included, and a ``- `` item at the key's own indent, which YAML allows).
+    - A value that is not on the key's line (``"scope":`` then ``{...}`` on the next line, at
+      any indent) holds the first non-blank, non-comment line after it.
+    - A flow collection opened on the key's line or that first value line holds through its
+      close, however its lines are indented; a quoted scalar opened there holds through its
+      closing quote.
+
+    ``blocks`` (keys in order) holds the enclosing indented blocks: a key indented deeper inside
+    one ends inside it, so its lines are not walked again.  With the flow closers and headers
+    precomputed in ``idx``, each character is scanned about once, however the keys nest."""
+    text = idx.text
+    if header:
+        return key_end, idx.next_header(key_end)
     line_start = text.rfind("\n", 0, key_start) + 1
     first_nl = text.find("\n", key_end)
     eol = len(text) if first_nl < 0 else first_nl
     key_indent = _indent(text[line_start:eol])
-    end, pos, depth = eol, eol + 1, 0
+    end, pos = eol, eol + 1
     while blocks and key_start >= blocks[-1][1]:
         blocks.pop()
-    if blocks is not None and not header and blocks and key_indent > blocks[-1][2]:
+    if blocks is not None and blocks and key_indent > blocks[-1][2]:
         end, pos = blocks[-1][1], len(text) + 1  # inside an enclosing block: it ends there
     while pos <= len(text) and first_nl >= 0:
         nl = text.find("\n", pos)
         nl = len(text) if nl < 0 else nl
         line = text[pos:nl]
         stripped = line.strip()
-        if header:
-            # the next table ends this one's keys, unless an array is still open (a nested
-            # array's line can look like a header)
-            if depth <= 0 and _TOML_HEADER.fullmatch(line):
-                break
-            depth += sum(line.count(c) for c in "[{") - sum(line.count(c) for c in "]}")
-        elif (
+        if (
             stripped
             and not stripped.startswith("#")
             and _indent(line) <= key_indent
@@ -880,23 +983,33 @@ def _span(
         ):
             break
         end, pos = nl, nl + 1
-    if blocks is not None and not header:
+    if blocks is not None:
         blocks.append((key_start, end, key_indent))
-    flow = re.search(r"[\[{]", text[key_end:eol])
-    if flow:
-        at = key_end + flow.start()
-        outer = next((f for f in flows if f[0] <= at < f[1]), None)
-        stop = outer[1] if outer else _balanced_end(text, at)
-        if outer is None:
-            flows.append((at, stop))
-        end = max(end, stop)
+    # where the value starts: on the key's line, or on the first line after it with content
+    value_at, value_eol = key_end, eol
+    rest = text[key_end:eol].strip()
+    if not rest or rest.startswith("#"):
+        pos = eol + 1
+        while pos < len(text):
+            nl = text.find("\n", pos)
+            nl = len(text) if nl < 0 else nl
+            s = text[pos:nl].strip()
+            if s and not s.startswith("#"):
+                value_at, value_eol = pos, nl
+                end = max(end, nl)
+                break
+            pos = nl + 1
+    head = re.match(r"[ \t]*(?:[:=][ \t]*)?", text[value_at:value_eol])
+    first = value_at + (head.end() if head else 0)
+    if first < len(text) and text[first] in "\"'":
+        end = max(end, _quoted_end(text, first))
+    for flow in re.finditer(r"[\[{]", text[value_at:value_eol]):
+        # the first opener the index saw (one inside a string or a comment is not a flow)
+        close = idx.close_of.get(value_at + flow.start())
+        if close is not None:
+            end = max(end, close)
+            break
     return key_end, end
-
-
-def _anchor_span(text: str, name: str, flows: list[tuple[int, int]]) -> tuple[int, int] | None:
-    """What a YAML anchor ``&name`` holds (its line's rest and deeper lines), or None."""
-    m = re.search(r"(?:^|(?<=[\s\[{,:]))&" + re.escape(name) + r"(?=[\s,\]}]|$)", text, re.M)
-    return None if m is None else _span(text, m.start(), m.end(), False, flows)
 
 
 def _merged(spans: list[tuple[int, int, int]]) -> list[tuple[int, int, int]]:
@@ -932,6 +1045,12 @@ def _is_internal(net: ipaddress.IPv4Network) -> bool:
     return any(net.overlaps(n) for n in WAN_NOT_PUBLIC if n.version == 4)
 
 
+def _version_like(parts: list[str]) -> bool:
+    """Two or three plain decimal parts, each 0 to 255 with no leading zero: ``1.0``, ``16.4``,
+    ``2.1.0``.  Anything else (a hex or leading-zero part, a part over 255) is no version."""
+    return all(p.isdigit() and (p == "0" or p[0] != "0") and int(p) <= 255 for p in parts)
+
+
 @functools.lru_cache(maxsize=65536)
 def _numeric_offends(groups: tuple[str | None, ...], context: bool) -> bool:
     """A numeric token of :data:`_NUM_TOKEN` that names a non-documentation IPv4 address.
@@ -939,10 +1058,13 @@ def _numeric_offends(groups: tuple[str | None, ...], context: bool) -> bool:
     - four dotted parts, any spelling: every ``inet_aton`` reading is judged (strict);
     - one part (an integer in any spelling, a float): judged when 2**24 or more (below that it
       is in 0/8, which names no host: ``maxItems: 6`` is not an address);
-    - two or three parts (``10.20``, ``172.16.5``): ``inet_aton`` reads the octets 10, 0, 0, 20 and a
-      person reads the 10.20/16 prefix, but ``1.0`` and ``16.4`` are versions.  Judged strictly in an
-      address context (a prefix length, a port, after ``//`` or ``@``); otherwise only a reading
-      in private or shared space is refused.
+    - two or three parts (``10.20``, ``172.16.5``): ``inet_aton`` reads the octets 10, 0, 0, 20
+      and a person reads the 10.20/16 prefix, but ``1.0`` and ``16.4`` are versions.  A short
+      form is *version-like* only when every part is plain decimal (no ``0x``, no leading zero)
+      and at most 255 (:func:`_version_like`).  It is judged strictly (every reading) when it is
+      not version-like (``81.2.17806``, ``0x51.0x2458e``, ``081.2.17806``) or sits in an address
+      context (a prefix length, a port, after ``//`` or ``@``); a version-like one is refused
+      only when a reading is private or shared space (``10.20``, ``172.16.5``).
     """
     head, dotted, exp, plen = groups
     if head is None:
@@ -965,7 +1087,7 @@ def _numeric_offends(groups: tuple[str | None, ...], context: bool) -> bool:
         if len(parts) < 4:
             filled = parts + ["0"] * (4 - len(parts))
             readings += [ipaddress.IPv4Network(a) for a in ipv4_readings(filled)]
-            if not (context or plen is not None):
+            if not (context or plen is not None or not _version_like(parts)):
                 readings = [n for n in readings if _is_internal(n)]
         nets += readings
     if plen is not None and len(plen) > 2:  # "/1359103374" is no prefix length: an integer
@@ -1018,61 +1140,158 @@ def _offending_tokens(region: str) -> list[str]:
 
 
 def _raw_findings(rel: str, text: str) -> list[Finding]:
-    """Every scope key in ``text`` (escapes decoded too): what it holds, as raw text, carries no
-    address-like token outside the documentation ranges, and no ``!!binary`` value.  An alias
-    under a scope key is followed to its anchor, whose value is judged too."""
+    """Every scope key in ``text`` (line ends normalised; escapes decoded too): what it holds,
+    as raw text, carries no address-like token outside the documentation ranges, and no
+    ``!!binary`` value.  An alias under a scope key is followed to its anchor's last real
+    definition before it, whose value is judged too; more than :data:`SCOPE_MAX_ALIASES`
+    distinct aliases is itself a finding."""
+    text = _newlines_normalised(text)
     texts = [text]
     decoded = _decoded(text)
     if decoded != text:
         texts.append(decoded)
     out: list[Finding] = []
     seen: set[str] = set()
+
+    def add(detail: str) -> None:
+        if detail not in seen:
+            seen.add(detail)
+            out.append(Finding(rel, "scope-address", detail))
+
     for t in texts:
         if "scope" not in t.casefold():
             continue
+        idx = _Index(t)
         keys = [(m.start(), m.end(), False) for m in _SCOPE_KEY.finditer(t)]
         keys += [
             (m.start(), m.end(), True)
             for m in _TOML_HEADER.finditer(t)
             if any(p.strip(" \t\"'").casefold() == "scope" for p in m["path"].split("."))
         ]
-        newlines = [i for i, c in enumerate(t) if c == "\n"]
-        flows: list[tuple[int, int]] = []
         blocks: list[tuple[int, int, int]] = []
         spans = []
         for start, key_end, header in sorted(keys):
-            a, b = _span(t, start, key_end, header, flows, blocks)
-            spans.append((a, b, bisect.bisect_left(newlines, start) + 1))
+            a, b = _span(idx, start, key_end, header, blocks)
+            spans.append((a, b, idx.line_of(start)))
         spans = _merged(spans)
         names: set[str] = set()
         todo = [(a, b) for a, b, _ in spans]
-        while todo:  # an alias's anchor holds the value: judge it too (each anchor once)
+        while todo:  # an alias's anchor holds the value: judge it too (each name once)
             a, b = todo.pop()
             for alias in _ALIAS.finditer(t, a, b):
-                if alias.group(1) in names or len(names) >= 256:
+                name = alias.group(1)
+                if name in names:
                     continue
-                names.add(alias.group(1))
-                got = _anchor_span(t, alias.group(1), flows)
-                if got is not None:
-                    spans.append((got[0], got[1], bisect.bisect_left(newlines, got[0]) + 1))
+                if len(names) >= SCOPE_MAX_ALIASES:
+                    add(
+                        f"line {idx.line_of(alias.start())}: more than {SCOPE_MAX_ALIASES} "
+                        "distinct aliases under scope keys: not followed, so refused"
+                    )
+                    todo = []
+                    break
+                names.add(name)
+                at = idx.anchor_before(name, alias.start())
+                if at is not None:
+                    got = _span(idx, at, at + 1 + len(name), False)
+                    spans.append((got[0], got[1], idx.line_of(got[0])))
                     todo.append(got)
         for a, b, line in _merged(spans):
             region = t[a:b]
-            detail = None
             if _BINARY.search(region):
-                detail = f"line {line}: a !!binary value under a scope key cannot be judged"
-            else:
-                tokens = _offending_tokens(region)
-                if tokens:
-                    detail = (
-                        f"line {line}: {tokens[0]!r} under a scope key is not a documentation "
-                        "address (RFC 5737, 2001:db8::/32, 3fff::/20); the real scope is the "
-                        "private overlay's lab/modules.yml"
-                    )
-            if detail and detail not in seen:
-                seen.add(detail)
-                out.append(Finding(rel, "scope-address", detail))
+                add(f"line {line}: a !!binary value under a scope key cannot be judged")
+                continue
+            tokens = _offending_tokens(region)
+            if tokens:
+                add(
+                    f"line {line}: {tokens[0]!r} under a scope key is not a documentation "
+                    "address (RFC 5737, 2001:db8::/32, 3fff::/20); the real scope is the "
+                    "private overlay's lab/modules.yml"
+                )
     return out
+
+
+class _Pairs(list):
+    """A JSON object's key/value pairs, duplicates kept."""
+
+
+def _judge_scalar(value: str) -> str | None:
+    tokens = _offending_tokens(value)
+    return tokens[0] if tokens else None
+
+
+def _parsed_findings(rel: str, text: str) -> list[Finding]:
+    """The parse pass, unioned with the raw rule: every file that parses as JSON, TOML or YAML
+    (by content, whatever its suffix; line ends normalised first; YAML composed only within
+    :func:`_too_deep`'s size and depth bounds) has every scalar judged, keys included,
+    under any mapping key whose resolved value casefolds to ``scope``, at any depth.  A key
+    spelled by an alias, an explicit ``? scope`` with comments, a CRLF TOML header and a flow
+    dedented anywhere are all just mappings here.  A file that does not parse is left to the
+    raw rule (outside the allowlist), never a finding by itself."""
+    import tomllib
+
+    import yaml
+
+    text = _newlines_normalised(text).removeprefix("﻿")
+    if "scope" not in text.casefold() and "scope" not in _decoded(text).casefold():
+        return []
+    bad: dict[str, str] = {}  # where -> token, first per location
+
+    def judge_tree(root: object, fmt: str) -> None:
+        stack: list[tuple[object, str, bool]] = [(root, "$", False)]
+        while stack:
+            node, path, under = stack.pop()
+            if isinstance(node, _Pairs | dict):
+                items = node if isinstance(node, _Pairs) else list(node.items())
+                for k, v in items:
+                    inside = under or (isinstance(k, str) and k.casefold() == "scope")
+                    if inside and isinstance(k, str) and (tok := _judge_scalar(k)):
+                        bad.setdefault(f"{fmt} {path}.{k}", tok)
+                    stack.append((v, f"{path}.{k}", inside))
+            elif isinstance(node, list):
+                stack += [(v, f"{path}[{i}]", under) for i, v in enumerate(node)]
+            elif under and not isinstance(node, bool) and node is not None:
+                if tok := _judge_scalar(str(node)):
+                    bad.setdefault(f"{fmt} {path}", tok)
+
+    with contextlib.suppress(ValueError, RecursionError):
+        judge_tree(json.loads(text, object_pairs_hook=_Pairs), "json")
+    with contextlib.suppress(tomllib.TOMLDecodeError, RecursionError, ValueError):
+        judge_tree(tomllib.loads(text), "toml")
+    if _too_deep(text) is None:
+        # within those bounds libyaml's composer is safe (its recursion is per nesting level)
+        loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+        try:
+            docs = list(yaml.compose_all(text, Loader=loader))
+        except (yaml.YAMLError, RecursionError, ValueError):
+            docs = []
+        seen: set[tuple[int, bool]] = set()
+        stack: list[tuple[object, str, bool]] = [(d, "$", False) for d in docs]
+        while stack:  # each composed node once: an alias is a shared node, never an expansion
+            node, path, under = stack.pop()
+            if (id(node), under) in seen:
+                continue
+            seen.add((id(node), under))
+            if isinstance(node, yaml.MappingNode):
+                for k, v in node.value:
+                    name = k.value if isinstance(k, yaml.ScalarNode) else None
+                    inside = under or (isinstance(name, str) and name.casefold() == "scope")
+                    stack += [(k, f"{path}.<key>", inside), (v, f"{path}.{name}", inside)]
+            elif isinstance(node, yaml.SequenceNode):
+                stack += [(v, f"{path}[{i}]", under) for i, v in enumerate(node.value)]
+            elif under and isinstance(node, yaml.ScalarNode):
+                if node.tag.endswith(":binary"):
+                    bad.setdefault(f"yaml {path}", "!!binary")
+                elif tok := _judge_scalar(node.value):
+                    bad.setdefault(f"yaml {path}", tok)
+    return [
+        Finding(
+            rel,
+            "scope-address",
+            f"{where.removesuffix('.<key>')}: {tok!r} under a scope key (parsed) is not a "
+            "documentation address",
+        )
+        for where, tok in sorted(bad.items())
+    ]
 
 
 # ---- the strict parse, for the allowlisted paths only ------------------------------------------
@@ -1362,14 +1581,37 @@ def _strict_findings(rel: str, text: str) -> list[Finding]:
     return out
 
 
+def _allowlist_case_variant(rel: str) -> bool:
+    """A path that matches :data:`SCOPE_BLOCK_PATHS` only when case is ignored: on a
+    case-insensitive file system a loader globbing the allowlist would read it, so it is refused
+    rather than left to the raw rule alone."""
+    low = rel.casefold()
+    return not scope_block_path(rel) and any(
+        fnmatch.fnmatchcase(low, g.casefold()) and rel.count("/") == g.count("/")
+        for g in SCOPE_BLOCK_PATHS
+    )
+
+
 def scope_findings(rel: str, text: str) -> list[Finding]:
-    """A site's network scope in one public file: at an allowlisted path
-    (:data:`SCOPE_BLOCK_PATHS`), the strict parse; everywhere, the raw-text rule
-    (:func:`_raw_findings`).  It never raises: a check that crashed would read as clean to a
-    caller that catches, so any failure is itself a finding."""
+    """A site's network scope in one public file, the union of three rules: at an allowlisted
+    path (:data:`SCOPE_BLOCK_PATHS`) the strict parse; everywhere the raw-text rule
+    (:func:`_raw_findings`) and the parse pass (:func:`_parsed_findings`).  It never raises: a
+    check that crashed would read as clean to a caller that catches, so any failure is itself a
+    finding."""
     try:
-        out = _strict_findings(rel, text) if scope_block_path(rel) else []
-        return out + _raw_findings(rel, text)
+        out: list[Finding] = []
+        if scope_block_path(rel):
+            out += _strict_findings(rel, text)
+        elif _allowlist_case_variant(rel):
+            out.append(
+                Finding(
+                    rel,
+                    "scope-shape",
+                    "a case variant of an allowlisted scope path: a case-insensitive file "
+                    "system would load it as a site profile; use the exact name",
+                )
+            )
+        return out + _raw_findings(rel, text) + _parsed_findings(rel, text)
     except Exception as exc:  # fail closed: the gate never crashes open
         return [
             Finding(

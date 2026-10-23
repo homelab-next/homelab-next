@@ -530,6 +530,10 @@ FULLWIDTH = "".join(chr(0xFF10 + int(c)) if c.isdigit() else c for c in PUBLIC_V
 SHORT_PRIVATE = ".".join(("10", "20"))
 #: NAT64 local-use (RFC 6052 /48 layout) embedding the public address, with a documentation tail
 NAT64_LOCAL = ":".join(("64", "ff9b", "1", "5102", "45", "8e00", "c000", "201"))
+#: the public address as inet_aton short forms no version takes (a part over 255, hex parts)
+SHORT_GLOBAL = "81.2." + str(69 * 256 + 142)
+SHORT_HEX = "0x51.0x" + format(2 * 65536 + 69 * 256 + 142, "x")
+SHORT_TWO = "81." + str(2 * 65536 + 69 * 256 + 142)
 #: an allowlisted path (SCOPE_BLOCK_PATHS): a site block there is parsed strictly
 SITE = "examples/modules/sites/probe.yml"
 
@@ -621,6 +625,37 @@ ADDRESS_CASES = {
     "markdown tilde fence": f"~~~yaml\nscope:\n  target: ['{PADDED}/32']\n~~~\n",
     "markdown html": f"<pre>\nscope:\n  target: ['{PADDED}/32']\n</pre>\n",
     "markdown prose": f"The lab's scope: {PADDED} and nothing else.\n",
+    # VERIFY2 B1: loader-valid layouts the raw locator alone missed (the parse pass reads them)
+    "toml header, CRLF": f'[scope]\r\ntarget = ["{PRIVATE_NET}"]\r\n',
+    "toml array of tables, CRLF": f'[[scope]]\r\ntarget = ["{PRIVATE_NET}"]\r\n',
+    "yaml, CR only": f"scope:\r  target:\r  - '{PRIVATE_NET}'\r",
+    "explicit key with a comment": (
+        f'? scope  # the lab\n: trusted:\n    nets: ["{PRIVATE_NET}"]\n'
+    ),
+    "flow continued dedented": f'site:\n  scope:\n    target: [\n "{PRIVATE_NET}"]\n',
+    "key spelled by an alias": f'labels: [&k scope]\n*k :\n  target: ["{PRIVATE_NET}"]\n',
+    "alias key, alias value": f"k: &k scope\nv: &v {{target: ['{PADDED}/32']}}\n*k : *v\n",
+    "json value on the next line": '{"scope":\n{"target": ["' + PADDED + '/32"]}}\n',
+    "json value dedented": '  {"scope":\n{"target": ["' + PADDED + '/32"]}}\n',
+    "flow mapping, key and value on later lines": f"{{\nscope\n:\n['{PADDED}/32']}}\n",
+    "double-quoted value continued at column 0": f'scope: "wan\n{PADDED}"\n',
+    # VERIFY2 B1/SF3: anchors are real definitions, the last one before the alias
+    "anchor redefined": f"d: &a ['{DOC}.0/24']\nr: &a ['{PADDED}/32']\nscope:\n  target: *a\n",
+    "anchor decoy in a comment": f"# see &a below\nr: &a ['{PADDED}/32']\nscope:\n  target: *a\n",
+    "anchor decoy in a string": f"n: 'x &a y'\nr: &a ['{PADDED}/32']\nscope:\n  target: *a\n",
+    "anchor decoy in a block scalar": (
+        f"n: |\n  &a\nr: &a ['{PADDED}/32']\nscope:\n  target: *a\n"
+    ),
+    "the 257th alias": (
+        "".join(f"d{i}: &a{i} 1\n" for i in range(260))
+        + f"real: &zz ['{PADDED}/32']\nscope:\n  target: ["
+        + ", ".join(f"*a{i}" for i in range(260))
+        + ", *zz]\n"
+    ),
+    # VERIFY2 SF2: inet_aton short forms that cannot be a version
+    "short form, a part over 255": f"scope:\n  target: ['{SHORT_GLOBAL}']\n",
+    "short form, hex parts": f"scope:\n  target: ['{SHORT_HEX}']\n",
+    "short form, two parts": f"scope:\n  target: ['{SHORT_TWO}']\n",
 }
 
 #: a site block in the wrong shape, holding documentation addresses only (or none): refused at
@@ -767,6 +802,26 @@ def test_the_allowlist_is_exact_paths(rel, allowed):
     assert plc.scope_block_path(rel) is allowed
 
 
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "examples/Modules/sites/full.yml",
+        "examples/modules/sites/full.YML",
+        "EXAMPLES/modules/sites/x.yml",
+    ],
+)
+def test_a_case_variant_of_an_allowlisted_path_is_refused(rel):
+    """N1: a case-insensitive file system would load it as a site profile."""
+    assert not plc.scope_block_path(rel)
+    assert "scope-shape" in rules(plc.scope_findings(rel, PASSING_SITE_BLOCKS[0]))
+
+
+@pytest.mark.parametrize("text", ["scope:\n  target: ['1." + "300']\n", "scope: [0x1." + "0x2]\n"])
+def test_a_short_form_that_is_no_version_is_judged_strictly(text):
+    """SF2: only plain decimal parts of at most 255 read as a version."""
+    assert "scope-address" in rules(plc.scope_findings("x.yml", text))
+
+
 def test_every_allowlist_entry_names_files_that_exist():
     for glob in plc.SCOPE_BLOCK_PATHS:
         assert list(ROOT.glob(glob)), glob
@@ -833,19 +888,23 @@ def test_the_scope_check_never_crashes_open(monkeypatch):
     assert rules(plc.scope_findings("docs/x.md", "scope: x\n")) == {"scope-unparsed"}
 
 
-@pytest.mark.parametrize("size", [1_000, 10_000])
+@pytest.mark.parametrize("size", [1_000, 20_000])
 def test_the_raw_rule_reads_each_character_about_once(size):
     """Nested and unclosed keys reuse the spans already read: linear, not quadratic."""
     import time
 
     texts = [
-        "scope: [\n" * size,
-        "scope: [" * size + "]" * size + "\n",
-        "".join("  " * (i % 200) + "scope:\n" for i in range(size)),
+        ("x.yml", "scope: [\n" * size),
+        ("x.yml", "scope: [" * size + "]" * size + "\n"),
+        ("x.yml", "".join("  " * (i % 200) + "scope:\n" for i in range(size))),
+        # VERIFY2 SF1: one closed flow per line, and TOML tables each leaving an array open
+        ("x.yml", "scope: [x]\n" * (2 * size)),
+        ("x.json", '{"scope": {"a": 1}},\n' * (2 * size)),
+        ("x.toml", "[scope]\nx = [\n" * size),
     ]
-    for text in texts:
+    for rel, text in texts:
         t0 = time.perf_counter()
-        assert plc.scope_findings("x.yml", text) == []
+        assert plc.scope_findings(rel, text) == []
         assert time.perf_counter() - t0 < 10, text[:20]
 
 
