@@ -228,6 +228,7 @@ Untrusted content cannot drive actions.
 | G-09 | Every AI action is auditable | Model and tool calls logged off-host tamper-evidently | SERVER |
 | G-10 | Rate and cost limits hold | Exceeding a limit throttles and alerts (test) (`homelabnext/registry/limits.py`) | PUBLIC-NOW |
 | G-11 | Model versions are pinned | Each model is pinned by version and hash; changes pass CI evaluation (`hnx golden pins check`) | PUBLIC-NOW |
+| G-13 | Agents act only through the broker | Any profile, reader or not, holds an acting grant (exec, file-write, credential) only through the broker: an acting MCP server says `acts_via: broker` in its catalog record or is a direct exception (a `direct_reason`, a current human approve review and the ceiling policy's `direct_mcp` entry for that profile), no acting capability but `cap:broker`, an acting tier only with `cap:broker` (`hnx agent lint --rule actors-act-via-broker`; the compiler, `verify`, the client render and the module rules refuse; ADR-0030) | PUBLIC-NOW |
 
 ## K - Fast classifiers and decision specs
 
@@ -304,4 +305,4 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 
 ---
 
-**Totals:** 181 criteria across 16 pillars; 99 PUBLIC-NOW, 82 SERVER.
+**Totals:** 182 criteria across 16 pillars; 100 PUBLIC-NOW, 82 SERVER.

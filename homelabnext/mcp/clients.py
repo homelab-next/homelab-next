@@ -750,8 +750,10 @@ def profile_refusals(
     (``platform/agent_profile``): its schema, the same grant rules, ``mcp`` within
     ``mcp_ceiling``, ``mcp`` and ``capabilities`` within the policy's ceiling, and the reader rule
     whenever the policy marks the id a reader (``reads_untrusted: false`` in the file does not turn
-    it off); it is refused without a ``policy`` too (its own ``mcp_ceiling`` is whatever edited the file).  Rendering
-    never trusts a profile the compiler would not have produced."""
+    it off); it is refused without a ``policy`` too (its own ``mcp_ceiling`` is whatever edited the file).  Both
+    shapes obey the broker rule (an acting grant only through the broker; a direct server only
+    with the policy's ``direct_mcp``, ADR-0030).  Rendering never trusts a profile the compiler
+    would not have produced."""
     from homelabnext.agent.compiler import verify_profile
     from homelabnext.agent.errors import AgentError, CeilingViolation
     from homelabnext.agent.readers import ToolClasses, profile_problems, reader_problems
@@ -777,7 +779,7 @@ def profile_refusals(
     )
     if problems:
         return [f"not a compiled or lean agent profile: {p}" for p in problems]
-    problems = profile_problems(doc, classes)
+    problems = profile_problems(doc, classes, policy)  # the broker rule's direct_mcp too
     over = sorted(set(doc.get("mcp") or ()) - set(doc.get("mcp_ceiling") or ()))
     if over:
         problems.append(f"mcp outside mcp_ceiling: {over}")

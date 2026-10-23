@@ -754,14 +754,32 @@ criteria:
   evidence: auto
   observable: >-
     python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
-    python3 -m homelabnext.cli agent lint
+    python3 -m homelabnext.cli agent lint --rule readers-cannot-act
   expected: >-
     exit 0: no profile or context manifest that reads untrusted content holds a shell, file-write,
-    egress or credential grant
+    egress or credential grant (how an actor acts is G-13's)
   expect_regex: '[1-9]\d* profile\(s\), \d+ manifest\(s\), 0 problem\(s\)'
   remediation: >-
     Split the agent: the reader keeps no acting grant and hands validated structured output to an
     actor; a reader that can act turns one injected sentence into an action.
+- id: G-13
+  statement: Agents act only through the broker.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli agent lint --rule actors-act-via-broker
+  expected: >-
+    exit 0: no agent profile or context manifest, reader or not, holds an acting grant (exec,
+    file-write, credential) other than through the broker: an acting MCP server says acts_via:
+    broker or is a reviewed direct exception the ceiling policy lists for that profile, no acting
+    capability but cap:broker, and an acting tier only with cap:broker
+  expect_regex: 'actors-act-via-broker: [1-9]\d* profile\(s\), \d+ manifest\(s\), 0 problem\(s\)'
+  remediation: >-
+    Grant hnx-broker and cap:broker and ask the broker for a named action instead of the acting
+    server or capability. A direct exception is a catalog record with acts_via: direct, a
+    direct_reason and a current human approve review, plus the ceiling policy's direct_mcp entry
+    for that one profile. An agent that acts outside the broker acts unallowlisted, unapproved and
+    unaudited (ADR-0030).
 - id: G-10
   statement: Rate and cost limits hold.
   evidence: auto

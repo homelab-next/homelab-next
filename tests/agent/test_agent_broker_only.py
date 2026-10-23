@@ -1,0 +1,305 @@
+# SPDX-License-Identifier: Apache-2.0
+"""G-13: actors act only through the broker (ADR-0030).
+
+Any profile, reader or not, may hold a grant in a ``broker_only`` class (exec, file-write,
+credential) only through the broker: an acting MCP server whose catalog record says ``acts_via:
+broker``, or an ``acts_via: direct`` one with a direct_reason, a current human approve review and
+the ceiling policy's ``direct_mcp`` entry for the profile; no acting capability but
+``cap:broker``; and an acting tier only with ``cap:broker``.  The compiler, ``verify``, ``hnx agent
+lint`` and the client render all refuse the rest.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import shutil
+from pathlib import Path
+
+import pytest
+import yaml
+from agent_support import PARTS, library, spec
+
+from homelabnext import cli
+from homelabnext.agent import (
+    BrokerViolation,
+    CeilingPolicy,
+    SpecError,
+    ToolClasses,
+    broker_problems,
+    compile_profile,
+    lint_paths,
+    profile_digest,
+    verify_profile,
+)
+from homelabnext.agent.readers import (
+    BROKER,
+    DEFAULT_CLASSES,
+    READERS,
+    default_classes,
+    manifest_problems,
+)
+from homelabnext.mcp import clients, servers
+
+ROOT = Path(__file__).resolve().parents[2]
+CATALOG = ROOT / "examples" / "mcp"
+LIB = library(
+    {
+        **PARTS,
+        "cap:broker": "Ask the broker for named actions.",
+        "cap:hypervisor": "Manage guests.",
+        "cap:secrets": "Read secrets.",
+        "cap:idp": "Manage identities.",
+        "cap:orchestration": "Run workflows.",
+        "cap:object-store": "Read and write objects.",
+        "cap:notify": "Send notifications.",
+    }
+)
+
+#: the actor of the front-door gap analysis (Rule 3): a privileged profile with four acting MCP
+#: servers and the hypervisor capability, which every gate passed before the broker rule
+ROGUE_CEILING = {
+    "mcp": ["ansible", "hnx-catalog", "kubernetes", "shell", "ssh"],
+    "capabilities": ["cap:broker", "cap:hypervisor"],
+    "tier": "privileged",
+    "data_tier": "local-only",
+    "model_role": "mdl:main-reasoner",
+    "budgets": {"max_input_tokens": 16000, "max_output_tokens": 2000, "max_runtime_s": 600,
+                "max_tool_calls": 20},
+}  # fmt: skip
+
+
+def _rogue() -> tuple[dict, CeilingPolicy]:
+    """The rogue actor as a compiled profile (the example actor, re-granted) and its policy."""
+    doc = json.loads((ROOT / "schemas/agent/examples/profile.actor.json").read_text())
+    doc["id"] = "profile:rogue-actor"
+    grants = {k: ROGUE_CEILING[k] for k in ("mcp", "capabilities", "tier")}
+    doc["grants"] = copy.deepcopy(grants)
+    doc["ceiling"] = {**copy.deepcopy(grants), "budgets": ROGUE_CEILING["budgets"]}
+    doc["digest"] = profile_digest(doc)
+    policy = CeilingPolicy.from_mapping({"ceilings": {"profile:rogue-actor": ROGUE_CEILING}})
+    return doc, policy
+
+
+def _actor(**grants) -> dict:
+    s = spec()
+    s.update(id="profile:actor", reads_untrusted=False, **grants)
+    return s
+
+
+def _policy(s: dict, **extra) -> CeilingPolicy:
+    """A policy whose ceiling allows every grant the spec asks for (only a rule can refuse)."""
+    entry = {"mcp": sorted(s["mcp"]), "capabilities": sorted(s["capabilities"]),
+             "tier": "privileged", "budgets": s["ceiling"]["budgets"],
+             "data_tier": s["data_tier"], "internet_mcp": sorted(s["mcp"]), **extra}  # fmt: skip
+    return CeilingPolicy.from_mapping({"ceilings": {s["id"]: entry}})
+
+
+def _compile(s: dict, **extra) -> dict:
+    policy = _policy(s, **extra)
+    return compile_profile({k: v for k, v in s.items() if k != "ceiling"}, LIB, policy=policy)
+
+
+def _catalog_copy(tmp_path: Path) -> Path:
+    d = tmp_path / "mcp"
+    shutil.copytree(CATALOG, d, ignore=shutil.ignore_patterns("clients"))
+    shutil.copy(ROOT / "examples" / "review-policy.yml", tmp_path / "review-policy.yml")
+    return d
+
+
+def _edit(d: Path, sid: str, fn) -> ToolClasses:
+    f = d / f"{sid}.yml"
+    rec = yaml.safe_load(f.read_text())
+    fn(rec)
+    f.write_text(yaml.safe_dump(rec, sort_keys=False))
+    return ToolClasses.from_catalog(servers.load(d))  # load(catalog=) caches per directory
+
+
+# ---------------------------------------------------------------- the gap analysis' rogue actor
+def test_the_rogue_actor_is_refused_by_verify_lint_and_render(tmp_path, capsys):
+    doc, policy = _rogue()
+    problems = "\n".join(verify_profile(doc, policy=policy))
+    for name in ("'ssh'", "'shell'", "'ansible'", "'kubernetes'", "'cap:hypervisor'"):
+        assert f"{name} (" in problems, name
+    assert "hnx-catalog" not in problems  # a read-only server is not an acting grant
+    path = tmp_path / "profile.rogue-actor.json"
+    path.write_text(json.dumps(doc))
+    found, counts = lint_paths([path], rules=(BROKER,))
+    assert counts["profile"] == 1 and len(found) == 5
+    assert cli.main(["agent", "lint", str(path)]) == 1
+    err = capsys.readouterr().err
+    assert "actors-act-via-broker: 1 profile(s), 0 manifest(s), 5 problem(s)" in err
+    assert "readers-cannot-act: 1 profile(s), 0 manifest(s), 0 problem(s)" in err
+    with pytest.raises(clients.RenderError, match="agents act only through the broker"):
+        clients.render_profile(
+            servers.load(CATALOG), path, "claude-code", policy=policy,
+            npm_prefix="/var/lib/hnx/npm-prefix",
+        )  # fmt: skip
+
+
+def test_the_rogue_actor_does_not_compile():
+    s = _actor(mcp=ROGUE_CEILING["mcp"], capabilities=ROGUE_CEILING["capabilities"],
+               tier="privileged", model_role="mdl:main-reasoner")  # fmt: skip
+    with pytest.raises(BrokerViolation) as exc:
+        _compile(s, model_role="mdl:main-reasoner")
+    assert len(exc.value.problems) == 5
+
+
+# ---------------------------------------------------------------- what an actor may hold
+def test_an_actor_acts_through_the_broker():
+    p = _compile(_actor(mcp=["hnx-broker", "lake"], capabilities=["cap:broker", "cap:lake-query"],
+                        tier="execute"))  # fmt: skip
+    assert p["grants"]["tier"] == "execute" and verify_profile(p) == []
+    # egress and record-write are not broker-only: a non-reader may hold them
+    p = _compile(_actor(mcp=["fetch"], capabilities=["cap:notify", "cap:records-propose"],
+                        tier="write", data_tier="cloud-allowed"))  # fmt: skip
+    assert verify_profile(p) == []
+
+
+@pytest.mark.parametrize(
+    ("kind", "name", "needle"),
+    [
+        ("mcp", "shell", "'shell' (exec)"),
+        ("mcp", "ssh", "'ssh' (exec)"),
+        ("mcp", "filesystem", "'filesystem' (file-write)"),
+        ("mcp", "git", "'git' (file-write)"),
+        ("mcp", "vault", "'vault' (credential)"),
+        ("capabilities", "cap:hypervisor", "'cap:hypervisor' (exec)"),
+        ("capabilities", "cap:secrets", "'cap:secrets' (credential)"),
+        ("capabilities", "cap:idp", "'cap:idp' (credential)"),
+        ("capabilities", "cap:orchestration", "'cap:orchestration' (exec)"),
+        ("capabilities", "cap:object-store", "'cap:object-store' (file-write)"),
+        ("tier", "execute", "tier 'execute' (exec) without cap:broker"),
+        ("tier", "privileged", "tier 'privileged' (credential, exec) without cap:broker"),
+    ],
+)
+def test_every_acting_grant_outside_the_broker_is_refused(kind, name, needle):
+    s = _actor()
+    if kind == "tier":
+        s["tier"] = name
+    else:
+        s[kind] = sorted({*s[kind], name})
+    with pytest.raises(BrokerViolation, match="agents act only through the broker") as exc:
+        _compile(s)
+    assert any(needle in p for p in exc.value.problems), exc.value.problems
+    # verify refuses a compiled profile edited into that state, whatever its ceiling says
+    p = _compile(_actor(mcp=["hnx-broker"], capabilities=["cap:broker"], tier="execute"))
+    grants = p["grants"]
+    if kind == "tier":
+        grants["tier"] = name
+        grants["capabilities"] = []
+    else:
+        grants[kind] = sorted({*grants[kind], name})
+    p["ceiling"] = {**copy.deepcopy(grants), "budgets": p["ceiling"]["budgets"]}
+    p["digest"] = profile_digest(p)
+    assert any(needle in x for x in verify_profile(p)), verify_profile(p)
+
+
+def test_a_reader_is_judged_by_both_rules():
+    s = spec()  # a reader (reads_untrusted defaults to true)
+    s["mcp"] = ["lake", "shell"]
+    problems = broker_problems({"mcp": s["mcp"]}, who=s["id"])
+    assert len(problems) == 1 and "'shell' (exec)" in problems[0]
+
+
+def test_a_manifest_tool_acts_only_through_the_broker():
+    doc = {"id": "m", "persona": "persona:a", "sections": [], "tools": ["shell", "hnx-broker"]}
+    problems = manifest_problems(doc)
+    assert len(problems) == 1 and "'shell' (exec)" in problems[0]
+    assert manifest_problems(doc, rules=(READERS,)) == []
+
+
+# ---------------------------------------------------------------- the direct exception
+def test_a_direct_server_needs_a_reason_a_human_approve_and_the_policy(tmp_path):
+    d = _catalog_copy(tmp_path)
+    table = ToolClasses.from_catalog(servers.load(d))
+    grants = {"mcp": ["shell"], "capabilities": [], "tier": "read"}
+    # the shipped shell: direct, with a reason and a current human approve review
+    assert "(none given)" in broker_problems(grants, table, "profile:a")[0]
+    assert "direct_mcp entry" in broker_problems(grants, table, "profile:a", ())[0]
+    assert broker_problems(grants, table, "profile:a", ["shell"]) == []
+    # the record edited after its review: the human approve no longer counts
+    table = _edit(d, "shell", lambda r: r.update(description="Runs anything."))
+    got = broker_problems(grants, table, "profile:a", ["shell"])
+    assert got and "a current human approve review" in got[0]
+    # an agent's approve is not a human's
+    table = _edit(d, "shell", lambda r: r.update(
+        description="Runs shell commands on the agent's host.",
+        reviews=[x for x in r["reviews"] if x["kind"] == "agent"]))  # fmt: skip
+    got = broker_problems(grants, table, "profile:a", ["shell"])
+    assert got and "a current human approve review" in got[0]
+    # no acts_via at all: never grantable
+    table = _edit(d, "shell", lambda r: [r.pop("acts_via"), r.pop("direct_reason")])
+    got = broker_problems(grants, table, "profile:a", ["shell"])
+    assert got and "does not say acts_via: broker" in got[0]
+
+
+def test_a_reviewed_direct_server_compiles_only_with_the_policy_listing():
+    s = _actor(mcp=["shell"])
+    with pytest.raises(BrokerViolation, match="direct_mcp entry"):
+        _compile(s)
+    p = _compile(s, direct_mcp=["shell"])
+    assert any("(none given)" in x for x in verify_profile(p))  # no policy, no exception
+    policy = _policy(s, direct_mcp=["shell"])
+    assert verify_profile(p, policy=policy) == []
+    assert any("direct_mcp entry" in x for x in verify_profile(p, policy=_policy(s)))
+
+
+def test_a_spec_ceiling_cannot_grant_a_direct_exception():
+    s = _actor(mcp=["shell"])
+    s["ceiling"]["mcp"] = [*s["ceiling"]["mcp"], "shell"]
+    s["ceiling"]["direct_mcp"] = ["shell"]  # not a ceiling key: only a policy makes the exception
+    with pytest.raises(BrokerViolation, match="none given"):
+        compile_profile(s, LIB)
+
+
+def test_direct_mcp_is_a_list_of_server_ids():
+    s = _actor()
+    for bad in ("shell", ["Shell"], [1]):
+        with pytest.raises(SpecError, match="direct_mcp is a list of MCP server ids"):
+            _policy(s, direct_mcp=bad)
+
+
+# ---------------------------------------------------------------- the table
+def test_the_table_lists_the_broker_only_classes():
+    table = default_classes()
+    assert table.broker_only == {"exec", "file-write", "credential"}
+    assert table.broker_only <= table.reader_forbidden  # a reader may hold none of them either
+
+
+def test_a_classes_file_cannot_narrow_broker_only(tmp_path, capsys):
+    doc = yaml.safe_load(DEFAULT_CLASSES.read_text())
+    doc["broker_only"] = ["credential"]
+    (tmp_path / "classes.yml").write_text(yaml.safe_dump(doc))
+    with pytest.raises(SpecError, match=r"broker_only leaves out \['exec', 'file-write'\]"):
+        ToolClasses.load(tmp_path / "classes.yml")
+    assert cli.main(["agent", "lint", str(ROOT / "schemas"), "--classes",
+                     str(tmp_path / "classes.yml")]) == 1  # fmt: skip
+    doc["broker_only"] = ["credential", "exec", "file-write", "egress"]  # more is fine
+    (tmp_path / "classes.yml").write_text(yaml.safe_dump(doc))
+    assert "egress" in ToolClasses.load(tmp_path / "classes.yml").broker_only
+    doc.pop("broker_only")
+    with pytest.raises(SpecError, match="'broker_only' is empty"):
+        ToolClasses({**doc, "mcp": {}})
+
+
+# ---------------------------------------------------------------- lint
+def test_lint_rules_and_policy(tmp_path, capsys):
+    prof = tmp_path / "actor.yml"
+    prof.write_text(yaml.safe_dump(_actor(mcp=["shell"])))
+    assert cli.main(["agent", "lint", str(prof), "--rule", READERS]) == 0
+    assert cli.main(["agent", "lint", str(prof), "--rule", BROKER]) == 1
+    pol = tmp_path / "policy.yml"
+    entry = {"mcp": ["lake", "records", "shell"], "capabilities": ["cap:lake-query"],
+             "tier": "read", "direct_mcp": ["shell"]}  # fmt: skip
+    pol.write_text(yaml.safe_dump({"ceilings": {"profile:actor": entry}}))
+    capsys.readouterr()
+    assert cli.main(["agent", "lint", str(prof), "--policy", str(pol)]) == 0
+    assert "actors-act-via-broker: 1 profile(s), 0 manifest(s), 0 problem(s)" in (
+        capsys.readouterr().err
+    )
+
+
+def test_every_profile_in_the_repository_acts_only_through_the_broker():
+    problems, counts = lint_paths([ROOT], rules=(BROKER,))
+    assert problems == [] and counts["profile"] >= 5

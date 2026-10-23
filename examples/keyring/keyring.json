@@ -4,7 +4,7 @@
     "classes": "sha256:4e45823e198f1345aacb2b20bb752de8fc67a20994a904765cef5f5b224cac73",
     "profiles": {
       "profile:reader": "sha256:b855f7d3bf4d947b92df54cdb815d2099722c7a62166abf05cd2af0c62837114",
-      "profile:responder": "sha256:ed744f7e5a9beed4c46712e50eb47055c08f9e7d0e51c4d7e45fa3b6ac30012d"
+      "profile:responder": "sha256:165cb64fbbf882c71e0697c3d2130f9f8bb7bf5217c42d0763c168f43e507d2e"
     },
     "registry": "81def9d1b96c48f45f71adc8d1c07ef8c381f9dee5987f230138151f843e5d61"
   },
@@ -374,7 +374,7 @@
           "endpoint": null,
           "kind": "mcp",
           "level": "execute",
-          "resource": "mcp:shell"
+          "resource": "mcp:hnx-broker"
         }
       ],
       "kind": "agent",
@@ -382,7 +382,7 @@
         "responder"
       ],
       "principal": "profile:responder",
-      "profile": "sha256:ed744f7e5a9beed4c46712e50eb47055c08f9e7d0e51c4d7e45fa3b6ac30012d",
+      "profile": "sha256:165cb64fbbf882c71e0697c3d2130f9f8bb7bf5217c42d0763c168f43e507d2e",
       "reads_untrusted": false
     },
     {

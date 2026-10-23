@@ -15,6 +15,16 @@
 # never assumed harmless).  The compiler refuses such a reader whatever the ceiling policy
 # allows, `hnx agent verify` refuses a hand-edited one, and `hnx agent lint` checks every profile
 # in the repository.  Adding an MCP server = adding a catalog record, in a reviewed change.
+#
+# Agents act only through the broker (checklist G-13, ADR-0030, docs/agent.md "Actors act only
+# through the broker"): ANY profile, reader or not, may hold a grant in a class listed under
+# broker_only only through the broker.  An MCP server with a broker_only tool is granted only when
+# its catalog record says `acts_via: broker` (its acting tools are broker calls), or `acts_via:
+# direct` with a direct_reason, a current human approve review and the ceiling policy's
+# direct_mcp entry for that profile; a broker_only capability other than cap:broker is never
+# granted; and a tier whose classes are broker_only (execute, privileged) needs cap:broker.  A
+# file passed with --classes may forbid more, never less (a table that leaves out a class listed
+# here is refused, as for reader_forbidden).
 
 classes:
   read: queries or fetches from a platform service; no effect outside the agent's own output
@@ -26,9 +36,6 @@ classes:
 
 reader_forbidden: [exec, file-write, egress, credential]
 
-# The acting classes (ADR-0030): a catalog server with a tool in one of them says how it acts
-# (acts_via), and only one that acts through the broker promises an approval (hnx mcp catalog
-# check).
 broker_only: [exec, file-write, credential]
 
 tiers:

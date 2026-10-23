@@ -253,6 +253,11 @@ def test_a_rendered_record_imports_back_to_the_same_server(tmp_path):
     _lax_review_policy(d.parent)
     gh = yaml.safe_load((d / "github.yml").read_text())
     gh["timeout"] = 45
+    # the round trip is about the launch, not the grant: keep the read tool only, so the server
+    # does not act and needs no direct exception (ADR-0030)
+    gh["tools"] = [t for t in gh["tools"] if t["name"] == "search_code"]
+    gh.pop("acts_via")
+    gh.pop("direct_reason")
     (d / "github.yml").write_text(yaml.safe_dump(gh))
     prof = tmp_path / "p.json"
     doc = json.loads((ROOT / "examples/mcp/clients/profile.collector.json").read_text())

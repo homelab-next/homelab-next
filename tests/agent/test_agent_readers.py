@@ -41,6 +41,7 @@ EXTRA_PARTS = {
     "cap:notify": "Send notifications.",
     "cap:secrets": "Read secrets.",
     "cap:made-up": "Not classified anywhere.",
+    "cap:broker": "Ask the broker for named actions.",
 }
 
 # one grant per forbidden class, through each kind of grant (MCP server, capability, tier)
@@ -148,15 +149,16 @@ def test_reader_is_the_default_fail_closed():
         compile_profile(s, _lib())
 
 
-def test_non_reader_actor_may_hold_acting_grants():
+def test_non_reader_actor_may_hold_acting_grants_through_the_broker():
+    # an actor acts, but only through the broker (G-13, ADR-0030): hnx-broker and cap:broker
     s = _with(
-        _with(_with(spec(), "mcp", "shell"), "capabilities", "cap:orchestration"), "tier", "execute"
+        _with(_with(spec(), "mcp", "hnx-broker"), "capabilities", "cap:broker"), "tier", "execute"
     )
     s["reads_untrusted"] = False
     policy = _permissive_policy(s)
     s.pop("ceiling")
     p = compile_profile(s, _lib(), policy=policy)
-    assert p["reads_untrusted"] is False and "shell" in p["grants"]["mcp"]
+    assert p["reads_untrusted"] is False and "hnx-broker" in p["grants"]["mcp"]
     assert verify_profile(p) == []
 
 
@@ -358,7 +360,7 @@ def test_lint_fails_on_a_reader_profile_and_on_a_reader_manifest(tmp_path):
     _write(tmp_path / "agent.json", bad)
     _write(
         tmp_path / "actor.yml",
-        {**spec(), "id": "profile:actor", "mcp": ["shell"], "reads_untrusted": False},
+        {**spec(), "id": "profile:actor", "mcp": ["hnx-broker"], "reads_untrusted": False},
     )
     lean = {"id": "profile:lean", "persona": "persona:a", "mcp": ["browser"], "capabilities": []}
     _write(tmp_path / "lean.yml", lean)
@@ -378,7 +380,7 @@ def test_lint_fails_on_a_reader_profile_and_on_a_reader_manifest(tmp_path):
 
 
 def test_manifest_without_input_sections_is_not_a_reader():
-    doc = {"id": "m", "tools": ["shell"], "sections": [{"name": "c", "source": "static"}]}
+    doc = {"id": "m", "tools": ["fetch"], "sections": [{"name": "c", "source": "static"}]}
     assert manifest_problems(doc) == []
 
 
