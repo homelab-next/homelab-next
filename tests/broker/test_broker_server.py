@@ -561,6 +561,34 @@ def test_every_refusal_counts_for_the_limit_whatever_its_class(tmp_path):
     assert len(svc.audit_documents()) == before + 4, "three refusals and one rate-limit record"
 
 
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "secret-unavailable",
+        "handler-spawn-failed",
+        "handler-timeout",
+        "handler-io-error",
+        "lane-io-error",
+    ],
+)
+def test_the_brokers_own_faults_do_not_count_against_a_healthy_agent(tmp_path, monkeypatch, fault):
+    """During a secret-store outage (or a full disk, or a host too loaded to start a handler)
+    every call of a healthy agent failed with a broker fault, and after the limit's worth of them
+    the agent was rate-limited for a fault that was never its own."""
+    from homelabnext.broker.service import _reasoned
+
+    svc = _service(tmp_path)
+    peers = PeerMap(svc.manifest)
+    limiter = RefusalLimiter(3, 60, clock=_Clock())
+
+    def failing(*a, **k):
+        raise _reasoned("the broker could not do it", fault)
+
+    monkeypatch.setattr(svc, "call", failing)
+    errors = [_ask(svc, peers, ME, limiter, action="service.status")["error"] for _ in range(10)]
+    assert errors == [fault] * 10
+
+
 def test_unknown_peers_are_rate_limited_too(tmp_path):
     svc = _service(tmp_path)
     peers = PeerMap(svc.manifest)

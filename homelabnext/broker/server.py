@@ -56,7 +56,8 @@ exactly-once across threads and processes.
 Refusals are rate limited per peer (:class:`RefusalLimiter`): a caller or an unknown peer that
 collects more than ``refusal_limit.max`` refusals (every answer that is not ``ok``, whatever its
 kind: default deny, a malformed request, ``unknown-caller``, ``not-pending``, a failed handler,
-...; only the broker's own faults, :data:`NOT_REFUSALS`, are not counted) within
+...; only the broker's own faults, :data:`NOT_REFUSALS` -- its audit trail, its secret store, a
+handler it could not start or that timed out, a disk error -- are not counted) within
 ``refusal_limit.window_s`` seconds (manifest 1.4; default :data:`DEFAULT_REFUSAL_LIMIT` per
 :data:`DEFAULT_REFUSAL_WINDOW_S` s) is answered ``rate-limited`` for the rest of that window
 without its request being looked at.  The
@@ -118,8 +119,21 @@ MAX_AUDIT_TAIL = 500
 DEFAULT_REFUSAL_LIMIT = 60
 DEFAULT_REFUSAL_WINDOW_S = 60.0
 RATE_LIMITED = "rate-limited"
-#: failures of the broker itself, never counted as the peer's refusals
-NOT_REFUSALS = frozenset({"internal-error", "busy", "audit-unavailable", "audit-incomplete"})
+#: failures of the broker itself (its trail, its secret store, its host), never counted as the
+#: peer's refusals: an outage of any of them must not rate-limit a healthy agent
+NOT_REFUSALS = frozenset(
+    {
+        "internal-error",
+        "busy",
+        "audit-unavailable",
+        "audit-incomplete",
+        "secret-unavailable",
+        "handler-spawn-failed",
+        "handler-timeout",
+        "handler-io-error",
+        "lane-io-error",
+    }
+)
 #: what an agent's process may ask, and the fields each operation takes (beyond ``v``, ``op``)
 CALLER_OPS: dict[str, frozenset[str]] = {
     "actions": frozenset(),
