@@ -101,6 +101,7 @@ has no section below.
 - A lean agent profile (`platform/agent_profile` 1.1, which now declares `reads_untrusted`) can no longer switch off the reader rule its ceiling policy forces: `hnx mcp catalog render` refused a reader holding a shell, exec or egress server only until the file said `reads_untrusted: false`; it now refuses that flag when the policy marks the profile a reader and judges the profile as one.
 - Handoff action parameters (G-04): `is_constrained` no longer accepts schemas that admit free text: an array with `prefixItems` (outside `items`), an object with `patternProperties` (keys that bypass `additionalProperties: false`), any `$ref` or combinator, and a "closed" pattern whose class lists everything (`[ -~]`, `[\u0000-\U0010FFFF]`), matches whitespace or has no length bound; such fields reached broker request params from a reader.
 - Context packs and prompt templates: a fake `instructions [stable]` header in untrusted text is escaped on every line boundary (CR, VT, FF, NEL, U+2028, U+2029, not only LF) and behind zero-width or BOM prefixes; the template lint and the injection eval's fake model read lines the same way, and the corpus (version 2) has four cases for it.
+- The agent-activity hook (`hooks/claude_code_activity.py --post`) follows no redirect (urllib copied the bearer token to whatever host a 302 named) and sends its token only to an `https://` URL, or plain `http://` to a loopback address.
 
 ### Added
 

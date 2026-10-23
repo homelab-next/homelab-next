@@ -5,7 +5,9 @@ agent-activity source on the hub's main page."""
 from __future__ import annotations
 
 import builtins
+import http.server
 import json
+import threading
 
 import pytest
 from agent_helpers import FAKE_BEARER, load_hook, summary
@@ -15,6 +17,7 @@ from homelabnext.status import CollectContext, Scheduler, SourceSpec
 from homelabnext.status.agents import ActivityStore, map_agentmetry, summary_problems
 from homelabnext.status.agents.model import detail_problems
 from homelabnext.status.agents.sources import drain_agentmetry, drain_spool
+from homelabnext.status.serve import LOOPBACK
 
 hook = load_hook()
 BASE = {"session_id": "6b1f0c2e-4d7a", "cwd": "/home/someone/work/homelab-next"}
@@ -109,6 +112,80 @@ def test_hook_posts_with_the_token_from_the_environment(monkeypatch):
     sent.clear()
     hook.main(["--post", url], stdin=raw, env={}, clock=lambda: T0)  # no token: nothing sent
     assert sent == []
+
+
+def _servers():
+    """A hub that answers every POST with a 302 to a second loopback origin, which records what
+    it is sent."""
+    seen: list[tuple[str, str | None]] = []
+
+    class Other(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            seen.append((self.command, self.headers.get("Authorization")))
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        do_POST = do_GET
+
+    other = http.server.HTTPServer((LOOPBACK, 0), Other)
+
+    class Hub(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            seen.append(("hub", self.headers.get("Authorization")))
+            self.send_response(302)
+            self.send_header("Location", f"http://{LOOPBACK}:{other.server_port}/elsewhere")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    hub = http.server.HTTPServer((LOOPBACK, 0), Hub)
+    for srv in (hub, other):
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return hub, other, seen
+
+
+def test_hook_never_follows_a_redirect_with_its_token():
+    """urllib follows a 302 on a POST and copies Authorization to the new host; the hook refuses
+    every redirect, so the token reaches the hub it was given and nothing else."""
+    hub, other, seen = _servers()
+    try:
+        raw = json.dumps({**BASE, "hook_event_name": "SessionStart"}).encode()
+        url = f"http://{LOOPBACK}:{hub.server_port}/ingest/agent-activity"
+        env = {"HNX_STATUS_INGEST_TOKEN": FAKE_BEARER}
+        assert hook.main(["--post", url], stdin=raw, env=env, clock=lambda: T0) == 0
+        assert seen == [("hub", f"Bearer {FAKE_BEARER}")]
+    finally:
+        for srv in (hub, other):
+            srv.shutdown()
+            srv.server_close()
+
+
+@pytest.mark.parametrize(
+    "url, ok",
+    [
+        ("https://status.example.invalid/ingest/agent-activity", True),
+        # the loopback forms plain http may use
+        ("http://127.0.0.1:8080/ingest/agent-activity", True),  # no-raw-endpoint: allow loopback form under test
+        ("http://[::1]:8080/ingest/agent-activity", True),  # no-raw-endpoint: allow loopback form under test
+        ("http://localhost:8080/ingest/agent-activity", True),  # no-raw-endpoint: allow loopback form under test
+        ("http://status.example.invalid/ingest/agent-activity", False),
+        ("http://192.0.2.10/ingest/agent-activity", False),  # no-raw-endpoint: allow RFC 5737 address, never contacted
+        ("ftp://status.example.invalid/ingest", False),
+        ("https://user@status.example.invalid/ingest/agent-activity", False),
+    ],
+)  # fmt: skip
+def test_hook_sends_its_token_only_over_https_or_to_loopback(url, ok):
+    assert (hook.post_url_problem(url) is None) is ok
+    if not ok:
+        with pytest.raises(ValueError):  # refused before any connection is made
+            hook.post(url, FAKE_BEARER, {"summary": {"kind": "stop"}})
 
 
 def test_hook_never_fails_the_agent(monkeypatch):
