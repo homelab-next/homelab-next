@@ -262,16 +262,23 @@ def looks_secret(value: str) -> bool:
 #: the MCP paths endpoints use: the only paths the importer copies (anything else may carry a
 #: token), and plain to check
 MCP_URL_PATH = re.compile(r"^/(?:mcp|sse|messages|v[0-9]+/mcp|api/mcp)?/?$")
-#: a path segment that cannot be a credential: a lower-case word (hyphens allowed) or a version
+#: a path segment that is not key-shaped: a lower-case word (hyphens allowed) or a version
 _PLAIN_SEGMENT = re.compile(r"^(?:[a-z]+(?:-[a-z]+)*|v[0-9]{1,3})$")
 
 
 def plain_url_path(path: str) -> bool:
-    """A URL path that cannot carry a credential, the only kind check accepts in a hosted
-    server's URL: an MCP path (:data:`MCP_URL_PATH`, which the importer copies), or segments that
-    are each a lower-case word or a version (``/servers/tracker/mcp``, written by a reviewer).
-    Hosted endpoints often put the key in the path (``/mcp/<key>/sse``); a record cannot hold a
-    ``secret:`` reference there, so such a URL is reshaped (the key goes in a header)."""
+    """A URL path that is not key-shaped, the only kind check accepts in a hosted server's URL:
+    an MCP path (:data:`MCP_URL_PATH`, which the importer copies), or segments that are each a
+    lower-case word or a version (``/servers/tracker/mcp``, written by a reviewer): no digits
+    outside a version, no upper case, no ``_``.  Hosted endpoints often put the key in the path
+    (``/mcp/<key>/sse``); a record cannot hold a ``secret:`` reference there, so such a URL is
+    reshaped (the key goes in a header).
+
+    This is a shape rule, not proof that the path holds no credential.  It cannot tell a
+    credential made only of lower-case letters from a word: a capability slug built of words
+    (``/mcp/correct-horse-battery-staple/sse``), a random letters-only run of up to 32
+    characters, or hex that happens to use only ``a-f`` all pass.  Whether such a segment is a
+    secret is the reviewer's call."""
     if MCP_URL_PATH.fullmatch(path or "/"):
         return True
     segments = (path or "/").removeprefix("/").removesuffix("/").split("/")

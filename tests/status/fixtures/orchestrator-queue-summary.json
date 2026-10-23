@@ -13,12 +13,12 @@
    "count": 1
   },
   {
-   "agent_key": "j6-lead",
+   "agent_key": "comms-lead",
    "state": "queued",
    "count": 3
   },
   {
-   "agent_key": "j6-lead",
+   "agent_key": "comms-lead",
    "state": "running",
    "count": 1
   }
