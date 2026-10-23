@@ -438,7 +438,10 @@ def test_ci_base_is_the_pr_base_or_the_push_tip_or_head_parent(tmp_path):
     git("add", "a")
     git("commit", "-qm", "one")
     one = git("rev-parse", "HEAD")
-    assert sc.ci_base(tmp_path, "push", "", sc.ZERO_SHA)[0] is None
+    assert sc.ci_base(tmp_path, "push", "", sc.ZERO_SHA) == (
+        None,
+        "none: a root commit (a new branch: the push's previous tip is zero)",
+    )
     (tmp_path / "a").write_text("2")
     git("commit", "-qam", "two")
     assert sc.ci_base(tmp_path, "pull_request", one, "") == (one, "the pull request's base")
@@ -446,9 +449,39 @@ def test_ci_base_is_the_pr_base_or_the_push_tip_or_head_parent(tmp_path):
         with pytest.raises(ValueError, match="pull request's base"):
             sc.ci_base(tmp_path, "pull_request", bad, "")
     assert sc.ci_base(tmp_path, "push", "", one) == (one, "the push's previous tip")
-    for before in (sc.ZERO_SHA, "f" * 40, ""):
-        base, why = sc.ci_base(tmp_path, "push", "", before)
-        assert base == one and why.startswith("HEAD^"), why
+    assert sc.ci_base(tmp_path, "push", "", sc.ZERO_SHA) == (
+        one,
+        "HEAD^ (a new branch: the push's previous tip is zero)",
+    )
+    assert sc.ci_base(tmp_path, "push", "", "f" * 40) == (
+        one,
+        f"HEAD^ (the push's previous tip {'f' * 40} is not fetchable (a force-push))",
+    )
+    for event in ("merge_group", "workflow_dispatch", "schedule", "pull_request_target", ""):
+        with pytest.raises(ValueError, match="only push and pull_request have a base rule"):
+            sc.ci_base(tmp_path, event, one, one)
+
+
+def test_ci_base_refuses_a_shallow_push_with_no_parent(tmp_path):
+    """Negative: in a depth-1 clone HEAD^ is missing because history was cut, not because HEAD is
+    a root commit, so a push there is an error rather than a pass with no base."""
+    import subprocess
+
+    src = tmp_path / "src"
+    src.mkdir()
+    git = _git_repo(src)
+    for n in ("1", "2"):
+        (src / "a").write_text(n)
+        git("add", "a")
+        git("commit", "-qm", n)
+    shallow = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", f"file://{src}", str(shallow)],
+        check=True,
+        capture_output=True,
+    )
+    with pytest.raises(ValueError, match="the checkout is shallow"):
+        sc.ci_base(shallow, "push", "", sc.ZERO_SHA)
 
 
 def test_ci_base_from_the_environment_prints_the_base_and_fails_a_bad_pr_base(
@@ -500,3 +533,15 @@ def test_frozen_symlinks_and_byte_changes_are_refused(tmp_path):
     assert len(probs) == 2
     probs = [p.message for p in sc.check_repo(tmp_path, strict=True)]
     assert "a frozen baseline is a symlink (copy the file)" in probs
+
+
+def test_a_symlinked_frozen_root_is_refused(tmp_path):
+    """Negative: schemas/_frozen itself as a symlink (to a copy that could be edited freely)."""
+    import shutil
+
+    shutil.copytree(ROOT / "schemas", tmp_path / "schemas")
+    real = tmp_path / "elsewhere"
+    (tmp_path / "schemas/_frozen").rename(real)
+    (tmp_path / "schemas/_frozen").symlink_to(real)
+    probs = [p.message for p in sc.check_repo(tmp_path, strict=True)]
+    assert "schemas/_frozen is a symlink (it is a directory)" in probs
