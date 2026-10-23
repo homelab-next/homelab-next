@@ -3,16 +3,16 @@
 # hnx-script:
 #   id: caddy-lint
 #   kind: check
-#   purpose: Fail when a Caddy config in the tree could let a client set its own identity header behind forward_auth, cannot be read, or a Caddy pin is below 2.11.2.
+#   purpose: Fail when a Caddy config in the tree could let a client set its own identity header behind forward_auth (judged on the Caddyfile text and, with a caddy binary, on Caddy's own adapted JSON), cannot be read, or a Caddy pin is below 2.11.2.
 #   owner: maintainers
 #   trigger: [ci:ci/schemas, make:caddy-lint]
 #   invariant: [F-23]
-#   inputs: the tracked tree (Caddyfiles, templates, markdown caddyfile blocks, registries, Dockerfiles, other pins), the caddy generator and tools/caddy_lint.allow.yml
-#   outputs: one line per unprotected forward_auth, identity header set outside copy_headers, construct the lint cannot read, unread config, vulnerable Caddy pin or stale allowlist entry
+#   inputs: the tracked tree (Caddyfiles, templates, markdown caddyfile blocks, Caddy JSON/YAML, registries, Dockerfiles, other pins), the caddy generator, tools/caddy_lint.allow.yml and a caddy binary when one is available (required in CI)
+#   outputs: one line per unprotected forward_auth or site, identity header set outside copy_headers, construct the lint cannot read, unread config, path Caddy's own JSON shows reaching an upstream unstripped, vulnerable Caddy pin or stale allowlist rule
 #   exit:
 #     "0": clean
-#     "1": a finding (strip, reset, parse, coverage, generate, pin or a stale allowlist entry)
-#     "2": usage error, a bad allowlist or a missing dependency
+#     "1": a finding (strip, reset, parse, coverage, generate, semantic, pin or allowlist)
+#     "2": usage error, a bad allowlist or a missing dependency (a caddy binary when HNX_CADDY_REQUIRED is set)
 """Gate: the edge never lets a client name its own identity to a service behind forward-auth.
 
 ``forward_auth`` copies the identity provider's answer (``copy_headers``) onto the request, and the
@@ -23,29 +23,66 @@ header. (2.11.2's fix deletes only the exact name it copies; 2.11.7's ``reverse_
 observed dropping every header with an ``_``, which is not a documented guarantee, so the strip
 is what covers those spellings.) So these must hold, everywhere:
 
-  strip      every ``forward_auth`` sits directly inside a ``route`` block, and earlier in that
-             same ``route`` a ``request_header -<name>`` (or a ``-*<part>*``, ``-<prefix>*`` or
-             ``-*<suffix>`` wildcard, matched case-insensitively as Caddy does) deletes every
-             header its ``copy_headers`` sets, in every spelling with ``-`` or ``_`` at each
-             separator (a CGI-style upstream folds both, so ``X-Authentik_Groups`` is the real
-             header too). (Outside a ``route``, Caddy's directive order runs
+  strip      every site that runs ``forward_auth`` (directly, or through ``invoke`` of a named
+             route) deletes at site level, with no matcher, every header carrying ``authentik``
+             and every header its ``copy_headers`` set, in every spelling
+             (``request_header -*authentik*`` first in the site, as the generator writes it):
+             Caddy sorts a site-level ``request_header`` before every ``handle`` and ``route``,
+             so a path that never reaches the auth route (a ``handle /api/*`` beside it, a
+             matcher on the route) cannot carry the client's identity headers either. And every
+             ``forward_auth`` sits directly inside a ``route`` block, and earlier in that same
+             ``route`` a ``request_header -<name>`` (or a ``-*<part>*``, ``-<prefix>*`` or
+             ``-*<suffix>`` wildcard, matched case-insensitively as Caddy does; any other ``*``
+             is literal) deletes every header its ``copy_headers`` sets, in every spelling with
+             ``-`` or ``_`` at each separator. (Outside a ``route``, Caddy's directive order runs
              ``forward_auth`` before ``request_header``, so the strip would delete the IdP's own
-             headers instead of the client's.) A ``copy_headers`` that is itself templated
-             cannot be checked and fails closed: list the headers literally. A
-             ``forward_auth @matcher`` is a finding too: a request it skips is never
+             headers instead of the client's; a named route ``&(name)`` is not a route: Caddy
+             2.11.1 and 2.11.7 adapt only its first directive.) A templated ``copy_headers``
+             fails closed, and so does a ``forward_auth @matcher``: a request it skips is never
              authenticated.
-  reset      no directive names an identity header (any name carrying ``authentik``, or any
-             header a ``copy_headers`` sets, in any spelling) other than to delete it:
-             ``request_header``/``header_up``/``header`` setting, adding or replacing one,
-             before or after ``forward_auth``, in any route, or a placeholder copying one into
-             another header. Only ``forward_auth``'s own ``copy_headers`` may set it.
+  reset      no header directive sets, adds or replaces an identity header (a field name carrying
+             ``authentik``, or one a ``copy_headers`` of the same site sets, in any spelling),
+             and none copies one into another header through a header placeholder
+             (``{http.request.header.*}``, ``{header.*}``, ``{http.reverse_proxy.header.*}``,
+             ``{rp.header.*}``): ``request_header``/``header`` after an optional matcher,
+             ``header_up``/``header_down``, a ``header`` block line. Only ``forward_auth``'s own
+             ``copy_headers`` may set it. Only header field names and header placeholders are
+             judged: a site address, an upstream host or a matcher named after the IdP is not a
+             header. A snippet definition is judged where it is imported, never where it is
+             defined.
   parse      the lint reads a Caddyfile with Caddy's own token rules and fails closed on what
              it cannot vouch for: a heredoc, a quoted token spanning lines, a ``{`` or ``}``
              sharing a line with a directive, a placeholder, ``{$ENV}`` or template in directive
-             position, a line ending in ``\\``, unbalanced braces, and an ``import`` it cannot
-             follow (a glob, a placeholder, a cycle, a file outside the tree; a snippet defined
-             in the config, the generated ``hnx_forward_auth`` and a relative file are expanded
-             in place, as Caddy does).
+             position, a header field name that is not literal (a placeholder, an environment
+             variable, a request value: it could name an identity header), a line ending in
+             ``\\``, unbalanced braces, a global ``order`` option moving a directive these rules
+             rely on, and an ``import`` it cannot follow (a glob, a placeholder, a cycle, a
+             snippet not defined above it, a file outside the tree, an argument that is itself a
+             placeholder, an argument range or an index past the arguments given). A snippet, the
+             generated ``hnx_forward_auth`` and a relative file are expanded in place, as Caddy
+             does: arguments substituted (``{args[N]}``), and an import's block put where the
+             snippet says ``{block}``.
+  semantic   Caddy's own reading, when a ``caddy`` binary is available (``--caddy``,
+             ``$HNX_CADDY`` or PATH; CI pins one and sets ``HNX_CADDY_REQUIRED=1``, which makes
+             a run without it exit 2): every Caddyfile read (but a template, which Caddy reads
+             once rendered) goes through ``caddy adapt`` with an empty environment, and its JSON
+             is judged in the order Caddy runs it. In a server with a forward-auth (a
+             ``reverse_proxy`` with ``handle_response``), every ``reverse_proxy`` a request
+             reaches, the auth one included, is reached with every header carrying ``authentik``
+             and every spelling of every copied header deleted on every path (a route with a
+             matcher, or in a ``handle`` group, may not run; an upstream's own ``header_up``
+             delete counts for it; ``handle_errors`` starts from what its site deleted first;
+             ``invoke`` follows a named route); a host-matched site with no forward-auth of its
+             own (the IdP's) is not held to it. Anywhere, a header set, added or replaced whose
+             name is not literal, carries ``authentik`` or is a copied one, or that copies one
+             through a placeholder, is a finding (``reset`` or ``semantic``), but in the auth
+             answer's own ``handle_response``, from the answer's headers. An unknown handler in
+             a forward-auth server fails closed. Caddy refusing a Caddyfile is a finding; a
+             markdown example it refuses is left to the text rules. Caddy JSON in the tree (and
+             the same structure in YAML) is judged the same way with no binary needed.
+             Without a binary the run says so and the text rules alone judge the Caddyfiles:
+             they do not see the handler order Caddy builds beyond the default directive order
+             they model, nor what a plugin directive does to headers.
   pin        every Caddy pin is 2.11.2 or later, by semver (``v2.11.2`` is fine,
              ``2.11.2-rc.1`` is not, a floating ``2.11`` is not); each finding is reported on
              its own line, and an inline allow waives that line only:
@@ -53,41 +90,52 @@ is what covers those spellings.) So these must hold, everywhere:
                ``caddy_*version``/``_tag``/``_release`` key; a ``caddy_*image`` key; an ``image``
                or any string that is a tagged Caddy image; a split ``repository: caddy`` +
                ``tag``;
-             - a Dockerfile: ``FROM`` and ``xcaddy build`` with ``ARG``/``ENV`` defaults
-               resolved (an ``ARG`` without a default fails closed, since it could be Caddy);
+             - a Dockerfile: ``FROM``, ``COPY``/``ADD --from`` and ``RUN --mount=from=`` images,
+               and ``xcaddy build`` (shell or exec form, quoted, with a ``CADDY_VERSION=`` set
+               on the command; a branch name is not a version), with ``ARG``/``ENV`` defaults
+               resolved and the ``# escape=`` directive honoured (an ``ARG`` without a default
+               fails closed, since it could be Caddy); ``caddy=<version>`` package pins;
              - Python: a dict literal with ``"impl": "caddy"`` (its ``version`` a literal);
              - any other text (``.env``, ``go.mod``, templates): an ``image:`` line, a tagged
                Caddy image, a ``caddy_*version`` assignment;
-             - everywhere: ``xcaddy build``, a ``caddyserver/caddy/v2`` module requirement and a
-               release download.
+             - everywhere: ``xcaddy build``, a ``caddyserver/caddy/v2`` module requirement, a
+               release download and a ``caddy=<version>`` package.
              A Caddy image is any image whose last path segment is ``caddy``, behind any
              registry or mirror prefix. An image whose last segment only starts with ``caddy``
              (a third-party build) carries its own version, so it needs a reviewed allow. A
-             ``${VAR:-default}`` resolves to its default; a variable with none, or a template
-             expression, cannot be checked and fails closed.
+             ``${VAR:-default}`` resolves to its default, nested defaults included; a variable
+             with none, a template expression or a ``$`` left over cannot be checked and fails
+             closed. Not read: a compose ``build.args`` override of a generically named ``ARG``,
+             and a tag paired with a digest of another release (the digest is not resolvable
+             offline).
 
 Which files: inside a git work tree, every file ``git ls-files`` reports (tracked, plus untracked
 files that are not ignored); outside one, every file under ROOT but VCS metadata, caches and
 virtualenvs, and the run says so. Caddy configs read: every ``Caddyfile*``, ``*.caddyfile*``,
 ``*.caddy`` and their ``.j2``/``.jinja``/``.tmpl``/``.tpl`` templates; every file one of them
 imports; every markdown fence (```, ~~~, any length, any info string) tagged ``caddy`` or
-``caddyfile`` or holding a ``forward_auth``; a Caddyfile embedded in a YAML/JSON string; and the
-output of the ``caddy`` generator for every registry in the tree that loads (a registry that
-does not load, such as a schema negative, is skipped, its pins still checked; a registry that
-loads but the generator fails on is a ``generate`` finding).
+``caddyfile`` or holding a ``forward_auth``; a Caddyfile embedded in a YAML/JSON string; Caddy
+JSON/YAML (``apps.http.servers``); and the output of the ``caddy`` generator for every registry
+in the tree that loads (a registry that does not load, such as a schema negative, is skipped,
+its pins still checked; a registry that loads but the generator fails on is a ``generate``
+finding).
 
   coverage   a file with a ``forward_auth`` in directive position (first on a line, in a string
-             literal, after an escaped newline or a ``{``) that the lint did not read as a Caddy
-             config (a ``.conf`` nothing imports, a ``.tmpl``, a Python string, an indented
-             markdown code block) is a finding: the lint cannot vouch for what it does not read.
+             literal, a list item or argument with the directive's argument, after an escaped
+             newline or a ``{``) that the lint did not read as a Caddy config (a ``.conf``
+             nothing imports, a ``.tmpl``, a Python string, an indented markdown code block), and
+             a Caddy JSON handler outside a full config, are findings: the lint cannot vouch for
+             what it does not read.
 
 A reviewed exception is an inline ``caddy-lint: allow <reason>`` comment on the offending line, or
-an entry in ``tools/caddy_lint.allow.yml`` (a ``path`` glob and a ``reason``) for a whole file;
-an entry that excuses nothing is a finding.
+an entry in ``tools/caddy_lint.allow.yml``: a ``path`` (one file, or a glob that names no Caddy
+config; never bare ``*``/``**``), the ``rules`` it excuses there and a ``reason``. A rule of an
+entry that excuses nothing is a finding.
 
-Usage: python tools/caddy_lint.py [ROOT] [--allowlist FILE] [--json]
-Exit: 0 clean, 1 a finding, 2 usage error, a bad allowlist or a missing dependency (PyYAML, or the
-homelabnext package the generated configs need): could not measure.
+Usage: python tools/caddy_lint.py [ROOT] [--allowlist FILE] [--caddy BINARY] [--json]
+Exit: 0 clean, 1 a finding, 2 usage error, a bad allowlist or a missing dependency (PyYAML, the
+homelabnext package the generated configs need, or a caddy binary when ``HNX_CADDY_REQUIRED``
+is set): could not measure.
 """
 
 from __future__ import annotations

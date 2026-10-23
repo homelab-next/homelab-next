@@ -283,16 +283,21 @@ criteria:
     python3 tools/caddy_lint.py; rc=$?; [ "$rc" -eq 2 ] && exit 100;
     [ "$rc" -eq 0 ] && echo edge strips identity headers; exit "$rc"
   expected: >-
-    exit 0 (every forward_auth deletes its copy_headers, every - and _ spelling, first in its
-    route; no other directive sets an identity header; nothing the lint cannot read; every Caddy
-    pin 2.11.2 or later); exit 100 when the lint cannot run (a missing dependency or a bad
-    allowlist), which is could-not-measure
+    exit 0 (every site with forward_auth strips identity headers at site level first; every
+    forward_auth deletes its copy_headers, every - and _ spelling, first in its route; no header
+    directive sets an identity header; nothing the lint cannot read; with a caddy binary, Caddy's
+    own adapted JSON reaches no upstream with one undeleted; every Caddy pin 2.11.2 or later);
+    exit 100 when the lint cannot run (a missing dependency or a bad allowlist), which is
+    could-not-measure. A run without a caddy binary judges the Caddyfiles by text only and says
+    so; CI's schemas job pins Caddy and requires it.
   expect_regex: edge strips identity headers
   remediation: >-
-    Put forward_auth in a route that first runs request_header -*authentik* (or deletes each
-    copied header in every - and _ spelling), as the generated hnx_forward_auth snippet does,
-    and pin Caddy 2.11.2 or later. Otherwise a client sends its own username or
-    groups, the identity provider's answer omits them, and the service trusts the forgery.
+    Put request_header -*authentik* first in every site that runs forward_auth, and forward_auth
+    in a route that first runs request_header -*authentik* (or deletes each copied header in
+    every - and _ spelling), as the generated sites and hnx_forward_auth snippet do, and pin
+    Caddy 2.11.2 or later. Otherwise a client sends its own username or groups, on a path that
+    skips the auth route or when the identity provider's answer omits them, and the service
+    trusts the forgery.
 - id: F-17
   statement: Nothing at runtime points at the workstation.
   evidence: auto
