@@ -239,6 +239,21 @@ def test_versions_reads_and_listing_map_onto_kv_v2(openbao):
     s.close()
 
 
+def test_version_zero_and_negative_versions_are_absent_not_latest(openbao):
+    """KV v2 answers ``?version=0`` with the latest version; the Protocol numbers versions from
+    1, so the adapter refuses 0 and negative versions itself, before any request."""
+    s = bao.make()
+    s.put("a/x", {"k": "1"})
+    s.put("a/x", {"k": "2"})
+    sent = len(openbao.requests)
+    for v in (0, -1, -2):
+        with pytest.raises(SecretNotFound):
+            s.get("a/x", version=v)
+    assert len(openbao.requests) == sent, "a non-positive version reached the server"
+    assert dict(s.get("a/x", version=1).data) == {"k": "1"}
+    s.close()
+
+
 def test_server_error_bodies_never_reach_the_exception(monkeypatch):
     value = "fake-value-DO-NOT-LEAK"  # scrub-allow: fake placeholder
     with FakeOpenBao(TOKEN, mounted=False, echo_errors=True) as srv:

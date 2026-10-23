@@ -8,9 +8,11 @@ request time so no object holds it.
 Mapping:
 
 * **Versioned values** are KV version 2 (``<mount>/data/<path>``).  ``put`` writes a version and
-  returns its number, ``get`` reads the latest or ``?version=N``, ``delete`` removes the metadata
-  (every version), ``list`` walks ``<mount>/metadata/...?list=true``.  Every path lives under a
-  namespace (``hnx-conform/<random>`` per subject in scratch mode, removed on ``close()``).
+  returns its number, ``get`` reads the latest or ``?version=N`` (N >= 1: KV v2 reads 0 as
+  "latest", so 0 and negative versions are refused as absent before any request), ``delete``
+  removes the metadata (every version), ``list`` walks ``<mount>/metadata/...?list=true``.
+  Every path lives under a namespace (``hnx-conform/<random>`` per subject in scratch mode,
+  removed on ``close()``).
   KV v2 answers 204 to deleting a path that is not there, so ``delete`` reads the metadata first
   to raise ``SecretNotFound``.
 * **Leases.**  KV v2 has no leases: its reads carry no lease id and nothing to revoke.  The
@@ -189,6 +191,10 @@ class OpenBaoStore:
 
     def get(self, path: str, version: int | None = None) -> Secret:
         _check_path(path)
+        if version is not None and int(version) < 1:
+            # KV v2 reads ``?version=0`` as "the latest"; the Protocol numbers versions from 1,
+            # so 0 and anything negative name a version that was never written
+            raise SecretNotFound(f"no secret at {path!r} version {int(version)}")
         q = "" if version is None else f"?version={int(version)}"
         status, doc = self._call("GET", self._kv("data", path) + q)
         if status == 404:
