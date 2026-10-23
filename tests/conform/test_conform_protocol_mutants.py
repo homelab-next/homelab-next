@@ -24,6 +24,11 @@ CASES = [
     ("events", "event_bus", "ReplayingEventBus", "new-consumer-starts-at-creation"),
     ("records", "records_target", "ReapprovingRecordsTarget", "decisions-are-final"),
     ("records", "records_target", "RedenyingRecordsTarget", "decisions-are-final"),
+    ("secrets", "secret_store", "VersionZeroIsLatestSecretStore", "missing-secret-raises"),
+    ("secrets", "secret_store", "NegativeVersionSecretStore", "missing-secret-raises"),
+    ("secrets", "secret_store", "VersionErrorLeaksSecretStore", "errors-never-contain-values"),
+    ("secrets", "secret_store", "DeletesLatestOnlySecretStore", "delete-removes-all-versions"),
+    ("secrets", "secret_store", "AliasingSecretStore", "stored-data-is-a-copy"),
 ]
 
 

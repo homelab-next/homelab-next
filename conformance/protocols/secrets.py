@@ -67,10 +67,13 @@ class Lease:
 @runtime_checkable
 class SecretStore(Protocol):
     def put(self, path: str, data: Mapping[str, str]) -> int:
-        """Write a new version (1, 2, ...).  Paths are ``a/b/c``: no empty segment, no ``..``."""
+        """Write a new version (1, 2, ...).  Paths are ``a/b/c``: no empty segment, no ``..``.
+        The store keeps its own copy: changing ``data`` afterwards changes nothing stored."""
 
     def get(self, path: str, version: int | None = None) -> Secret:
-        """Latest (or given) version.  Raises SecretNotFound."""
+        """Latest (or given) version.  Raises SecretNotFound, also for a version that was never
+        written: ``0`` and negative versions are absent, never "latest" or "counted from the
+        end"."""
 
     def delete(self, path: str) -> None:
         """Remove every version.  Raises SecretNotFound if absent."""

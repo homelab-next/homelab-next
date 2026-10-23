@@ -13,7 +13,7 @@ generated_by: hnx docs capabilities generate
 **Versioned key-value secrets with leases and redacted errors.**
 
 - Contract: [`conformance.protocols.secrets`](../../conformance/protocols/secrets.py) (`conformance.protocols.secrets:SecretStore`)
-- Conformance suite: [`conformance.suites.secrets`](../../conformance/suites/secrets.py) (12 checks: 12 MUST, 0 SHOULD)
+- Conformance suite: [`conformance.suites.secrets`](../../conformance/suites/secrets.py) (13 checks: 13 MUST, 0 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -46,6 +46,7 @@ def put(path: str, data: Mapping[str, str]) -> int
 **Returns:** `int`
 
 Write a new version (1, 2, ...).  Paths are `a/b/c`: no empty segment, no `..`.
+The store keeps its own copy: changing `data` afterwards changes nothing stored.
 
 #### `SecretStore.get`
 
@@ -60,7 +61,9 @@ def get(path: str, version: int | None = None) -> Secret
 
 **Returns:** `Secret`
 
-Latest (or given) version.  Raises SecretNotFound.
+Latest (or given) version.  Raises SecretNotFound, also for a version that was never
+written: `0` and negative versions are absent, never "latest" or "counted from the
+end".
 
 **Raises:** `SecretNotFound`
 
@@ -183,8 +186,9 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 |---|---|---|---|
 | `put-get-roundtrip` | MUST | the stored mapping is read back unchanged |  |
 | `versions-increase-and-stay-readable` | MUST | every put is a new version; old ones remain |  |
-| `missing-secret-raises` | MUST | an absent path or version raises SecretNotFound |  |
-| `delete-removes-all-versions` | MUST | after delete the path is gone; deleting again raises |  |
+| `missing-secret-raises` | MUST | an absent path or version raises SecretNotFound; versions start at 1 (0 and -1 are absent) |  |
+| `delete-removes-all-versions` | MUST | after delete no version is readable and the path is not listed; deleting again raises |  |
+| `stored-data-is-a-copy` | MUST | changing the mapping given to put, or the one get returned, does not change the secret |  |
 | `invalid-paths-rejected` | MUST | empty segments and '..' are refused |  |
 | `errors-never-contain-values` | MUST | no error - message, repr, attributes, cause chain or traceback - includes a secret value |  |
 | `repr-is-redacted` | MUST | repr/str of a returned secret hides the value |  |
@@ -204,11 +208,16 @@ Each is a deliberately broken fake (`hnx conform run secrets --target broken:<mu
 
 | Mutant | Must fail | Defect |
 |---|---|---|
+| `delete-drops-latest-only` | `delete-removes-all-versions` | delete removes the latest version and leaves the older ones readable |
 | `error-cause-leaks-value` | `errors-never-contain-values` | the invalid-path error is raised from an exception that carries the values |
 | `error-leaks-value` | `errors-never-contain-values` | the invalid-path error echoes the submitted values |
 | `lease-never-expires` | `lease-expires` | lease_valid ignores the expiry time |
 | `negative-ttl-accepted` | `lease-ttl-must-be-positive` | only ttl == 0 is refused |
+| `negative-version-indexes-from-end` | `missing-secret-raises` | a negative version reads an older version through Python negative indexing |
+| `stores-caller-mapping` | `stored-data-is-a-copy` | the caller's mapping is stored and returned by reference |
 | `unknown-lease-valid` | `unknown-lease-invalid` | any unknown lease id is valid |
+| `version-error-leaks-value` | `errors-never-contain-values` | the no-such-version error of a path that holds a secret echoes the latest value |
+| `version-zero-is-latest` | `missing-secret-raises` | version 0 is read as no version, so it returns the latest |
 
 ## Implementations
 
@@ -245,9 +254,11 @@ request time so no object holds it.
 Mapping:
 
 * **Versioned values** are KV version 2 (`<mount>/data/<path>`).  `put` writes a version and
-  returns its number, `get` reads the latest or `?version=N`, `delete` removes the metadata
-  (every version), `list` walks `<mount>/metadata/...?list=true`.  Every path lives under a
-  namespace (`hnx-conform/<random>` per subject in scratch mode, removed on `close()`).
+  returns its number, `get` reads the latest or `?version=N` (N >= 1: KV v2 reads 0 as
+  "latest", so 0 and negative versions are refused as absent before any request), `delete`
+  removes the metadata (every version), `list` walks `<mount>/metadata/...?list=true`.
+  Every path lives under a namespace (`hnx-conform/<random>` per subject in scratch mode,
+  removed on `close()`).
   KV v2 answers 204 to deleting a path that is not there, so `delete` reads the metadata first
   to raise `SecretNotFound`.
 * **Leases.**  KV v2 has no leases: its reads carry no lease id and nothing to revoke.  The
@@ -325,4 +336,4 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
    hnx conform run secrets --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (12) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (13) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
