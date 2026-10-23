@@ -16,10 +16,12 @@ from homelabnext._yaml import UniqueKeyStrDateLoader
 from homelabnext.generators.safe import control_char_paths
 
 from .baselines import BASELINES_FILE, load_baselines
-from .model import ComputeError, Fleet, Guest, Problem, ZoneFlow, ZoneLookup
+from .model import ComputeError, ComputeUnreadable, Fleet, Guest, Problem, ZoneFlow, ZoneLookup
 
 POLICIES_FILE = "_backup_policies.yml"
 NODES_FILE = "_nodes.yml"
+#: the problem text of a guest file that does not parse (bad input, see ComputeUnreadable)
+UNREADABLE = "unreadable YAML"
 
 
 # refuses duplicate keys; timestamps stay strings
@@ -56,7 +58,7 @@ def load_guests(directory: str | Path) -> tuple[list[Guest], list[Problem]]:
     """Parse every guest file.  Returns the guests that passed the schema and all problems."""
     d = Path(directory)
     if not d.is_dir():
-        raise ComputeError(f"not a directory: {d}")
+        raise ComputeUnreadable(f"not a directory: {d}")
     guests: list[Guest] = []
     problems: list[Problem] = []
     for path in guest_files(d):
@@ -64,7 +66,7 @@ def load_guests(directory: str | Path) -> tuple[list[Guest], list[Problem]]:
         try:
             doc = yaml.load(sops.read_text(path), Loader=_UniqueKeyLoader)
         except (OSError, yaml.YAMLError, sops.SopsError) as exc:
-            problems.append(Problem(where, f"unreadable YAML: {exc}"))
+            problems.append(Problem(where, f"{UNREADABLE}: {exc}"))
             continue
         # Python's re lets a schema pattern's "$" match before a trailing newline, and every
         # target writes line-oriented text: refuse control characters in any key or value first
@@ -87,7 +89,7 @@ def load_policies(path: str | Path) -> dict[str, Mapping[str, Any]]:
     try:
         doc = yaml.load(sops.read_text(p), Loader=_UniqueKeyLoader)
     except (OSError, yaml.YAMLError, sops.SopsError) as exc:
-        raise ComputeError(f"cannot read backup policies {p}: {exc}") from exc
+        raise ComputeUnreadable(f"cannot read backup policies {p}: {exc}") from exc
     pol = (doc or {}).get("policies") if isinstance(doc, dict) else None
     if not isinstance(pol, dict):
         raise ComputeError(f"{p}: expected a mapping with a 'policies' mapping")
@@ -102,7 +104,7 @@ def load_nodes(path: str | Path) -> dict[str, Mapping[str, Any]]:
     try:
         doc = yaml.load(sops.read_text(p), Loader=_UniqueKeyLoader)
     except (OSError, yaml.YAMLError, sops.SopsError) as exc:
-        raise ComputeError(f"cannot read nodes {p}: {exc}") from exc
+        raise ComputeUnreadable(f"cannot read nodes {p}: {exc}") from exc
     nodes = (doc or {}).get("nodes") if isinstance(doc, dict) else None
     if not isinstance(nodes, dict):
         raise ComputeError(f"{p}: expected a mapping with a 'nodes' mapping")
@@ -124,7 +126,7 @@ def load_keys(path: str | Path) -> dict[str, str]:
     try:
         doc = yaml.safe_load(sops.read_text(p))
     except (OSError, yaml.YAMLError, sops.SopsError) as exc:
-        raise ComputeError(f"cannot read keys {p}: {exc}") from exc
+        raise ComputeUnreadable(f"cannot read keys {p}: {exc}") from exc
     keys = (doc or {}).get("keys") if isinstance(doc, dict) else None
     if not isinstance(keys, dict):
         raise ComputeError(f"{p}: expected a mapping with a 'keys' mapping")
@@ -159,6 +161,9 @@ def load_fleet(
 
     d = Path(directory)
     guests, problems = load_guests(d)
+    unreadable = [p for p in problems if p.message.startswith(UNREADABLE + ":")]
+    if unreadable:  # a file that does not parse is bad input, not a guest that fails validation
+        raise ComputeUnreadable(f"unreadable guest files in {d}", unreadable)
     pol_path = Path(policies_path) if policies_path else d / POLICIES_FILE
     policies = load_policies(pol_path) if pol_path.is_file() else {}
     nodes_file = Path(nodes_path) if nodes_path else d / NODES_FILE
