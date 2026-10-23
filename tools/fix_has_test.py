@@ -59,8 +59,10 @@ TEST_PATH = re.compile(r"(^|/)tests?/|(^|/)testdata/|(^|/)test_[^/]*\.py$|_test\
 GO_TESTDATA = re.compile(r"^(?P<pkg>(?:.*/)?)testdata/")
 TEST_MODULE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$")
 GO_TEST_FILE = re.compile(r"(^|/)[^/]+_test\.go$")
-# a top-level test or fuzz function; gofmt closes it with a ``}`` alone on a line
-GO_TEST_FUNC = re.compile(r"^func ((?:Test|Fuzz)\w*)\(", re.M)
+# a top-level test or fuzz function: go test's rule, Test/Fuzz then nothing or a non-lowercase
+# character (``Testable`` is a helper); ``TestMain`` is the package's harness, not a test
+GO_TEST_FUNC = re.compile(r"^func ((?:Test|Fuzz)(?:[A-Z0-9_]\w*)?)\(", re.M)
+GO_NOT_A_TEST = frozenset({"TestMain"})
 # go test output that means the tests never ran: not a failing test.  ``go: downloading ...`` (a
 # cold module cache) is progress, not an error.
 GO_SETUP_ERROR = re.compile(
@@ -132,13 +134,48 @@ def check(commits: list[Commit]) -> tuple[list[str], list[str]]:
     return problems, notes
 
 
+def _go_func_end(text: str, start: int) -> int:
+    """The index just past the ``}`` closing the function declared at ``start``.
+
+    Counts braces, skipping string, raw-string and rune literals and comments, so a ``}`` inside
+    a literal (a raw-string JSON fixture, say) does not end the function early; ``len(text)``
+    when the source ends first.
+    """
+    depth, i, n = 0, start, len(text)
+    while i < n:
+        ch = text[i]
+        if text.startswith("//", i):
+            nl = text.find("\n", i)
+            i = n if nl < 0 else nl
+        elif text.startswith("/*", i):
+            close = text.find("*/", i + 2)
+            i = n if close < 0 else close + 2
+            continue
+        elif ch == "`":
+            close = text.find("`", i + 1)
+            i = n if close < 0 else close + 1
+            continue
+        elif ch in "\"'":
+            i += 1
+            while i < n and text[i] != ch and text[i] != "\n":
+                i += 2 if text[i] == "\\" else 1
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return n
+
+
 def _go_funcs(text: str) -> dict[str, str]:
     """Top-level test and fuzz functions of a Go file -> their source."""
-    out: dict[str, str] = {}
-    for m in GO_TEST_FUNC.finditer(text):
-        end = text.find("\n}\n", m.start())
-        out[m.group(1)] = text[m.start() : len(text) if end < 0 else end + 3]
-    return out
+    return {
+        m.group(1): text[m.start() : _go_func_end(text, m.start())]
+        for m in GO_TEST_FUNC.finditer(text)
+        if m.group(1) not in GO_NOT_A_TEST
+    }
 
 
 def changed_go_tests(c: Commit, path: str, cwd: Path = REPO_ROOT) -> list[str]:

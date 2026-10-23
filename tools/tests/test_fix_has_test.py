@@ -328,6 +328,41 @@ def test_the_regression_tests_job_has_a_go_toolchain_once_the_module_exists():
     )
 
 
+def test_go_test_functions_are_gos_own_rule_and_end_at_their_closing_brace():
+    src = (
+        'package calc\n\nimport "testing"\n\n'
+        "func TestMain(m *testing.M) { m.Run() }\n\n"
+        "func Testable(t *testing.T) {}\n\n"
+        "func Test(t *testing.T) {}\n\n"
+        "func TestJSON(t *testing.T) {\n"
+        "\twant := `{\n}\n`\n"  # a raw string with a } alone on a line
+        "\t/* } */ r := '}'\n"
+        '\ts := "}\\"{"\n'
+        "\t// }\n"
+        "\t_ = want + s + string(r)\n"
+        "}\n\n"
+        "func Fuzz_Parse(f *testing.F) {}\n"
+        "func TestLast(t *testing.T) {"  # no newline at the end of the file
+    )
+    funcs = gate._go_funcs(src)
+    assert sorted(funcs) == ["Fuzz_Parse", "Test", "TestJSON", "TestLast"]
+    assert funcs["TestJSON"].endswith("_ = want + s + string(r)\n}")
+    assert funcs["TestLast"] == "func TestLast(t *testing.T) {"
+
+
+@needs_go
+def test_a_go_fix_that_changes_only_testmain_runs_the_whole_package(tmp_path):
+    r, commit, base = _go_repo(tmp_path)
+    main = "\nfunc TestMain(m *testing.M) {\n\tif Add(2, 2) != 4 {\n\t\tpanic(Add(2, 2))\n\t}\n\tm.Run()\n}\n"
+    fix = commit(
+        "fix: add adds",
+        **{GO + "calc.go": CALC.format(op="+"), GO + "calc_test.go": CALC_TEST.format(extra=main)},
+    )  # fmt: skip
+    (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
+    assert gate.changed_go_tests(c, GO + "calc_test.go", cwd=r) == []  # a helper: run it all
+    assert gate.prove(c, cwd=r) is None
+
+
 def test_go_fix_without_a_go_toolchain_cannot_be_proved(tmp_path):
     r, commit, base = _go_repo(tmp_path)
     fix = commit(
