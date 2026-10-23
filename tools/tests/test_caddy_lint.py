@@ -39,23 +39,29 @@ app.lab.example {
 """
 # The site-level strip is spelled -*Authentik* (Caddy matches it case-insensitively) so that the
 # tests below that rewrite the route's -*authentik* leave it alone.
+#: GOOD without its site-level strip: the route-level rule on its own (the site-level strip
+#: covers a forward_auth in a route too, so with it the route-level rule has nothing to find)
+NOSITE = GOOD.replace("\trequest_header -*Authentik*\n", "")
 
 
 def _strip(text: str) -> list[str]:
-    return [f.detail for f in lint.lint_caddy(textwrap.dedent(text))]
+    """The findings but the site-level rule's (it has its own tests)."""
+    return [
+        f.detail for f in lint.lint_caddy(textwrap.dedent(text)) if not f.detail.startswith("site ")
+    ]
 
 
 def _missed(header: str, *spellings: str) -> str:
     return (
-        f"client-sent {header} is not deleted before forward_auth in the same route in every "
-        f"spelling (missed: {', '.join(spellings)})"
+        f"client-sent {header} is not deleted before forward_auth, in the same route or at site "
+        f"level, in every spelling (missed: {', '.join(spellings)})"
     )
 
 
 def _site(fragment: str, *deletes: str) -> str:
-    """``fragment`` inside a site whose site-level strip deletes ``*Authentik*`` and ``deletes``,
-    so a test of the route-level rule sees that rule's findings only."""
-    strips = "".join(f"\trequest_header -{d}\n" for d in ("*Authentik*", *deletes))
+    """``fragment`` inside a site whose site-level strip deletes ``deletes`` only, so a test of
+    the route-level rule sees that rule's findings (``_strip`` drops the site-level one)."""
+    strips = "".join(f"\trequest_header -{d}\n" for d in deletes)
     return f"app.lab.example {{\n{strips}{textwrap.indent(textwrap.dedent(fragment), chr(9))}}}\n"
 
 
@@ -91,7 +97,7 @@ def test_a_strip_after_forward_auth_does_not_count():
 
 
 def test_the_underscore_spelling_is_required():
-    text = GOOD.replace("-*authentik*", "-X-Authentik-*")
+    text = NOSITE.replace("-*authentik*", "-X-Authentik-*")
     assert _strip(text) == [
         _missed("X-Authentik-Username", *ALL_USER[1:]),
         _missed("X-Authentik-Groups", "X-Authentik_Groups", "X_Authentik-Groups",
@@ -103,7 +109,7 @@ def test_the_mixed_spellings_are_required():
     """The snippet main generated: a dash and an underscore prefix wildcard.  A CGI-style
     upstream folds X-Authentik_Groups into HTTP_X_AUTHENTIK_GROUPS too, and Caddy 2.11.1 passes
     it through both wildcards (observed live)."""
-    text = GOOD.replace("-*authentik*", "-X-Authentik-*\n\t\trequest_header -X_Authentik_*")
+    text = NOSITE.replace("-*authentik*", "-X-Authentik-*\n\t\trequest_header -X_Authentik_*")
     assert _strip(text) == [
         _missed("X-Authentik-Username", "X-Authentik_Username", "X_Authentik-Username"),
         _missed("X-Authentik-Groups", "X-Authentik_Groups", "X_Authentik-Groups"),
@@ -112,7 +118,7 @@ def test_the_mixed_spellings_are_required():
 
 @pytest.mark.parametrize("pattern", ["*authentik*", "*AUTHENTIK*", "*Authentik-*", "*thent*"])
 def test_a_contains_wildcard_covers_every_spelling_in_any_case(pattern):
-    text = GOOD.replace("*authentik*", pattern)
+    text = NOSITE.replace("*authentik*", pattern)
     if pattern == "*Authentik-*":  # a contains with a separator in it covers only that one
         assert len(_strip(text)) == 2
     else:
@@ -120,7 +126,7 @@ def test_a_contains_wildcard_covers_every_spelling_in_any_case(pattern):
 
 
 def test_header_names_match_case_insensitively():
-    text = GOOD.replace("-*authentik*", "-x-authentik-*\n\t\trequest_header -x_authentik_*")
+    text = NOSITE.replace("-*authentik*", "-x-authentik-*\n\t\trequest_header -x_authentik_*")
     text = text.replace("X-Authentik-Username X-Authentik-Groups", "X-AUTHENTIK-USER")
     assert _strip(text) == [_missed("X-AUTHENTIK-USER", "X-AUTHENTIK_USER", "X_AUTHENTIK-USER")]
 
@@ -175,7 +181,7 @@ def test_a_renamed_header_and_the_block_form_are_both_read():
         }
     }
     """
-    text = _site(text, "*remote*")
+    text = _site(text)
     assert _strip(text) == []
     assert _strip(text.replace("-*_User", "-*_Groups")) == [
         _missed("X-Remote-User", "X-Remote_User", "X_Remote_User")
@@ -582,15 +588,11 @@ def test_generated_configs_are_checked(tmp_path, monkeypatch):
     findings, counts = lint.scan(tmp_path)
     assert findings == [] and counts["generated"] == 1
 
-    original = builtin._forward_auth_snippet
-    monkeypatch.setattr(
-        builtin,
-        "_forward_auth_snippet",
-        lambda endpoint: original(endpoint).replace("-*authentik*", "-X-Authentik-*"),
-    )
+    # the generator's mark narrowed to a prefix: both strips (site and route) miss spellings
+    monkeypatch.setattr(builtin, "IDENTITY_HEADER_MARK", "x-authentik-")
     findings, _ = lint.scan(tmp_path)
     assert {f.path for f in findings} == {"services.yml (caddy generator)"}
-    assert all("X_Authentik_" in f.detail for f in findings) and len(findings) == 2
+    assert {f.rule for f in findings} == {"strip"} and len(findings) >= 2
 
 
 def test_main_reports_and_exits(tmp_path):
@@ -929,6 +931,8 @@ app.lab.example {
 	reverse_proxy app:8080
 }
 legacy.lab.example {
+	request_header -*authentik*
+	request_header -remote*
 	basic_auth {
 		bob $2a$14$examplehashexamplehashexamplehashexamplehash
 	}
@@ -954,13 +958,13 @@ def _rules(text: str) -> list[tuple[int, str, str]]:
 
 def test_a_heredoc_fails_closed_and_hides_what_caddy_hides():
     # Caddy reads both deletes as the heredoc's text: on 2.11.1 every forged spelling passed
-    text = GOOD.replace(
+    text = NOSITE.replace(
         "\t\trequest_header -*authentik*\n",
         "\t\tvars note <<TXT\n\t\trequest_header -*authentik*\n\t\tTXT\n",
     )
     found = _rules(text)
     assert found[0] == (4, "parse", "a heredoc (<<TXT) hides lines from the lint")
-    assert [r for _, r, _ in found].count("strip") == 2
+    assert [r for _, r, d in found if not d.startswith("site ")].count("strip") == 2
 
 
 def test_a_heredoc_line_cannot_open_a_phantom_block():
@@ -1063,7 +1067,8 @@ def test_a_snippet_import_is_expanded_in_place():
     }
     """
     assert _rules(text) == []
-    assert len(_rules(text.replace("import strip", "import other"))) == 2  # unresolved + strip
+    # unresolved; the site-level strip still covers the forward_auth's route (Caddy runs it first)
+    assert [r for _, r, _ in _rules(text.replace("import strip", "import other"))] == ["parse"]
 
 
 def test_the_generated_snippet_resolves_where_it_is_not_defined():
@@ -1087,9 +1092,11 @@ def test_a_file_import_is_followed_and_a_glob_fails_closed(tmp_path):
     found = lint.lint_caddy(site % "conf.d/auth.conf", "Caddyfile", base=tmp_path, ctx=ctx)
     assert [(f.path, f.line, f.rule) for f in found] == [("conf.d/auth.conf", 1, "strip")]
     assert ctx.parsed == {"conf.d/auth.conf"}
-    # Caddy expands a glob: even a file literally named *.conf does not stand for what it matches
-    (tmp_path / "conf.d" / "*.conf").write_text("reverse_proxy app:8080\n")
-    for target in ("conf.d/*.conf", "missing.conf", "../outside.conf", "{$CONF}"):
+    # a glob inside the tree is expanded as Caddy does (its matches in sorted order)
+    found = lint.lint_caddy(site % "conf.d/*.conf", "Caddyfile", base=tmp_path, ctx=ctx)
+    assert [(f.path, f.line, f.rule) for f in found] == [("conf.d/auth.conf", 1, "strip")]
+    (tmp_path.parent / f"{tmp_path.name}-outside.conf").write_text("reverse_proxy app:8080\n")
+    for target in ("missing.conf", "../outside.conf", "{$CONF}", f"../{tmp_path.name}-out*.conf"):
         found = lint.lint_caddy(site % target, "Caddyfile", base=tmp_path, ctx=ctx)
         assert [(f.line, f.rule) for f in found] == [(3, "parse")], target
         assert "cannot be followed" in found[0].detail
@@ -1372,7 +1379,8 @@ def test_a_missing_dependency_exits_2(tmp_path, monkeypatch):
     ],
 )  # fmt: skip
 def test_review_probes(change, expected):
-    assert [f.rule for f in lint.lint_caddy(GOOD.replace(*change))] == expected
+    found = lint.lint_caddy(NOSITE.replace(*change))
+    assert [f.rule for f in found if not f.detail.startswith("site ")] == expected
 
 
 # ---------------------------------------------------------------- Caddy's own JSON (semantic)
@@ -1475,7 +1483,9 @@ def test_every_upstream_is_reached_with_the_identity_headers_deleted(routes, exp
         ({"set": {"X-Authentik-Groups": ["{http.request.header.X-Evil}"]}}, "reset"),  # p04
         ({"add": {"x_authentik_groups": ["admins"]}}, "reset"),
         ({"replace": {"X-Authentik-Groups": [{"search_regexp": "^.*$", "replace": "admins"}]}}, "reset"),  # a08
-        ({"set": {"X-Remote-User": ["{header.X-Authentik-Username}"]}}, "reset"),
+        # the IdP's answer handed on under another name, after the site-level strip: VERIFY3 N1
+        ({"set": {"X-Remote-User": ["{header.X-Authentik-Username}"]}}, None),
+        ({"add": {"X-Remote-User": ["{header.X-Authentik-Username}"]}}, "reset"),
         ({"set": {"{http.request.header.X-Name}": ["{http.request.header.X-Evil}"]}}, "semantic"),  # a06b
         ({"set": {"{http.vars.a}{http.vars.b}": [""]}}, "semantic"),  # a04
         ({"set": {"Host": ["{upstream_hostport}"]}, "delete": ["X-Authentik-Groups"]}, None),
@@ -1507,17 +1517,22 @@ def test_only_the_auth_answer_may_set_an_identity_header_in_handle_response():
 def test_the_idps_own_site_and_another_sites_copied_name_are_not_held_to_the_rule():
     renamed = _route(_sub(_route(_del("*authentik*", "remote*")), _route(_sub(_route(_del("*authentik*", "remote*"), _fa("Remote-User")))), _route(_proxy())),
                      match=[{"host": ["app.lab.example"]}], terminal=True)  # fmt: skip
-    legacy = _route(_sub(_route(_proxy("legacy:8080", set={"Remote-User": ["{http.auth.user.id}"]}))),
+    legacy = _route(_sub(_route(_del("*authentik*", "remote*"), _proxy("legacy:8080", set={"Remote-User": ["{http.auth.user.id}"]}))),
                     match=[{"host": ["legacy.lab.example"]}], terminal=True)  # fmt: skip
     idp = _route(
-        _sub(_route(_proxy("authentik-server:9000"))),
+        _sub(_route(_proxy("idp:9443"))),  # every proxy dials the forward-auth's IdP
         match=[{"host": ["authentik.lab.example"]}],
         terminal=True,
     )
     assert lint.judge_json(_config(renamed, legacy, idp)) == []
     # without a host matcher keeping it apart, the legacy proxy is in the auth site
     legacy.pop("match")
-    assert {rule for rule, _ in lint.judge_json(_config(renamed, legacy))} == {"reset", "semantic"}
+    assert {rule for rule, _ in lint.judge_json(_config(renamed, legacy))} == {"reset"}
+    # a plain site beside a forward-auth one, with no strip of its own: VERIFY3 SF1/SF2
+    bare = _route(
+        _sub(_route(_proxy("legacy:8080"))), match=[{"host": ["b.lab.example"]}], terminal=True
+    )
+    assert {rule for rule, _ in lint.judge_json(_config(renamed, bare, idp))} == {"semantic"}
 
 
 def test_handle_errors_starts_from_what_the_site_deleted_first():
@@ -1777,33 +1792,37 @@ a.lab.example {
 
 
 @pytest.mark.parametrize(
-    ("site", "expected"),
+    ("site", "body", "expected"),
     [
-        # VERIFY2 SF6: the same app on another host or listener, without auth (live: the
-        # client's forged identity reached the upstream through b.test and through :19104)
-        ("b.lab.example", [("exposure", 20)]),
-        ("http://:8081", [("exposure", 20)]),
-        # a path-scoped block of the same host: Caddy 2.11.7 orders it first (more specific), so
-        # /api/ never reaches forward_auth
-        ("a.lab.example/api/*", [("exposure", 20)]),
+        # VERIFY2 SF6 / VERIFY3 SF1: the app again as an API host without auth (live on 2.11.7
+        # and 2.11.1: the client's forged identity reached it), and as another listener
+        ("b.lab.example", "reverse_proxy app:8080", [("strip", 19)]),
+        ("http://:8081", "reverse_proxy app:8080", [("strip", 19)]),
+        # VERIFY3 SF2: the same app under another name (the loopback name, a container
+        # name for the host IP): no spelling comparison can tell, so every proxying site counts
+        ("app-alias.lab.example", "reverse_proxy app-alias:8080", [("strip", 19)]),
+        ("a.lab.example/api/*", "reverse_proxy app:8080", [("strip", 19)]),
+        # the fix the lint asks for (h06c): live, no identity header reaches the app
+        ("b.lab.example", "request_header -*authentik*\n\treverse_proxy app:8080", []),
+        # a site that proxies nothing, and the IdP's own upstream, are not held to it
+        ("static.lab.example", "file_server", []),
+        ("login.lab.example", "reverse_proxy authentik-server:9000", []),
     ],
-)
-def test_an_authed_upstream_served_again_without_auth_is_exposure(site, expected):
-    assert [(f.rule, f.line) for f in lint.lint_caddy(EXPOSED % site)] == expected
-
-
-def test_exposure_is_excused_only_by_an_allowlist_entry_naming_it(tmp_path):
-    (tmp_path / "Caddyfile").write_text(EXPOSED % "b.lab.example")
-    allow = tmp_path / "allow.yml"
-    allow.write_text(
-        "allow:\n  - path: Caddyfile\n    rules: [exposure]\n    reason: b is a public status page\n"
+)  # fmt: skip
+def test_every_proxying_site_of_a_forward_auth_config_strips(site, body, expected):
+    found = lint.lint_caddy(
+        EXPOSED.replace("%s {\n\treverse_proxy app:8080", f"{site} {{\n\t{body}")
     )
-    assert lint.scan(tmp_path, lint.load_allowlist(allow))[0] == []
-    allow.write_text("allow:\n  - path: Caddyfile\n    rules: [reset]\n    reason: wrong rule\n")
-    assert {f.rule for f in lint.scan(tmp_path, lint.load_allowlist(allow))[0]} == {
-        "exposure",
-        "allowlist",
-    }
+    assert [(f.rule, f.line) for f in found] == expected
+    if found:  # the remedy is the strip, never an allowlist entry
+        assert found[0].detail.endswith("put request_header -*authentik* first in this site")
+
+
+def test_exposure_is_no_longer_an_allowlist_rule(tmp_path):
+    allow = tmp_path / "allow.yml"
+    allow.write_text("allow:\n  - path: Caddyfile\n    rules: [exposure]\n    reason: public\n")
+    with pytest.raises(lint.AllowlistError, match="unknown rules"):
+        lint.load_allowlist(allow)
 
 
 def _json_site(*handlers: dict, host: str = "app.lab.example") -> dict:
@@ -1830,9 +1849,15 @@ def test_json_wildcard_dial_fastcgi_and_exposure():
         r for r, _ in lint.judge_json(_config(_json_site(_del("*authentik*"), _fa(*IDS), fcgi)))
     ] == ["reset"]
     authed = _json_site(_del("*authentik*"), _fa(*IDS), _proxy("app:8080"))
-    other = _json_site(_proxy("app:8080"), host="b.lab.example")
     idp_site = _json_site(_proxy("idp:9443"), host="login.lab.example")
-    assert [r for r, _ in lint.judge_json(_config(authed, other, idp_site))] == ["exposure"]
+    # VERIFY3 SF1/SF2: any other proxying site, whatever it dials, carries the strip
+    for dial in ("app:8080", "app-alias:8080", "status:9000"):
+        other = _json_site(_proxy(dial), host="b.lab.example")
+        assert [r for r, _ in lint.judge_json(_config(authed, other, idp_site))] == ["semantic"]
+        stripped = _json_site(_del("*authentik*"), _proxy(dial), host="b.lab.example")
+        assert lint.judge_json(_config(authed, stripped, idp_site)) == []
+    static = _json_site({"handler": "file_server"}, host="static.lab.example")
+    assert lint.judge_json(_config(authed, static, idp_site)) == []
 
 
 def test_json_identity_sets_nested_in_handle_response_are_judged():
@@ -1906,8 +1931,9 @@ def test_a_comment_does_not_make_a_template_and_a_required_check_refuses_a_templ
         (ACCEL, set()),  # VERIFY2 fp f4
         (R3 % ("idp:9443", "reverse_proxy app:8080 {\n\t\theader_up * alice {http.request.header.X-Evil}\n\t}"), {"reset"}),
         (R3 % ("{http.request.header.X-Idp}", "reverse_proxy app:8080"), {"dial"}),
-        (EXPOSED % "b.lab.example", {"exposure"}),
-        (EXPOSED % "a.lab.example/api/*", {"exposure"}),
+        (EXPOSED % "b.lab.example", {"semantic"}),
+        (EXPOSED % "a.lab.example/api/*", {"semantic"}),
+        (EXPOSED.replace("%s {\n", "b.lab.example {\n\trequest_header -*authentik*\n"), set()),
     ],
 )  # fmt: skip
 def test_live_round3_shapes(text, rules):
@@ -1915,7 +1941,141 @@ def test_live_round3_shapes(text, rules):
     assert err == "" and {rule for rule, _ in lint.judge_json(doc)} == rules
 
 
-def test_json_exposure_compares_dials_case_insensitively():
-    authed = _json_site(_del("*authentik*"), _fa(*IDS), _proxy("APP:8080"))
-    other = _json_site(_proxy("app:8080"), host="b.lab.example")
-    assert [r for r, _ in lint.judge_json(_config(authed, other))] == ["exposure"]
+# ---------------------------------------------------------------- review round 4 (VERIFY3)
+
+MAIN = """\
+{
+	email admin@lab.example
+}
+(auth) {
+	route {
+		request_header -*authentik*
+		forward_auth authentik-server:9000 {
+			uri /outpost.goauthentik.io/auth/caddy
+			copy_headers X-Authentik-Username X-Authentik-Groups
+		}
+	}
+}
+authentik.lab.example {
+	reverse_proxy authentik-server:9000
+}
+%s
+"""
+SITE_FILE = (
+    "%s.lab.example {\n\trequest_header -*authentik*\n\timport auth\n\treverse_proxy %s:8080\n}\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("imports", "ext"),
+    [
+        ("import sites/app.caddy\nimport sites/wiki.caddy", "caddy"),
+        ("import sites/app.conf\nimport sites/wiki.conf", "conf"),
+        ("import sites/*.caddy", "caddy"),
+    ],
+)
+def test_site_files_imported_after_shared_snippets_pass(tmp_path, imports, ext):
+    """VERIFY3 SF3: a main Caddyfile defines (auth) and imports site files that use it (Caddy
+    2.11.7 adapts it): each site file was judged on its own, without the snippet, and the glob
+    was refused."""
+    (tmp_path / "Caddyfile").write_text(MAIN % imports)
+    (tmp_path / "sites").mkdir()
+    for name in ("app", "wiki"):
+        (tmp_path / "sites" / f"{name}.{ext}").write_text(SITE_FILE % (name, name))
+    findings, counts = lint.scan(tmp_path)
+    assert findings == [] and counts["caddy_configs"] >= 1
+    # what the site files carry is still judged, in the importer's context
+    (tmp_path / "sites" / f"wiki.{ext}").write_text(
+        SITE_FILE.replace("\trequest_header -*authentik*\n", "") % ("wiki", "wiki")
+    )
+    found, _ = lint.scan(tmp_path)
+    assert [(f.path, f.rule) for f in found] == [(f"sites/wiki.{ext}", "strip")]
+
+
+def test_a_glob_import_reaching_outside_the_tree_is_refused(tmp_path):
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tmp_path / "outside.caddy").write_text(SITE_FILE % ("x", "x"))
+    (tree / "Caddyfile").write_text(MAIN % "import ../*.caddy")
+    found, _ = lint.scan(tree)
+    assert [(f.rule, "cannot be followed" in f.detail) for f in found] == [("parse", True)]
+
+
+@pytest.mark.parametrize(
+    "compose",
+    [
+        "services:\n  whoami:\n    image: example/whoami:1.0\n    labels:\n      caddy: app.lab.example\n"
+        "      caddy.forward_auth: authentik-server:9000\n"
+        "      caddy.forward_auth.copy_headers: X-Authentik-Username\n",
+        "services:\n  whoami:\n    image: example/whoami:1.0\n    labels:\n      - caddy=app.lab.example\n"
+        "      - caddy_0.route.forward_auth=authentik-server:9000\n",
+    ],
+)
+def test_caddy_docker_proxy_forward_auth_labels_are_a_coverage_finding(tmp_path, compose):
+    """VERIFY3 SF4: the labels configure the vulnerable shape and the scan said nothing."""
+    (tmp_path / "docker-compose.yml").write_text(compose)
+    found, _ = lint.scan(tmp_path)
+    assert [(f.path, f.line, f.rule) for f in found] == [("docker-compose.yml", 6, "coverage")]
+    assert "caddy-docker-proxy labels is not judged" in found[0].detail
+
+
+H_SITE = """\
+app.lab.example {
+	request_header -*authentik*
+	route {
+		%s
+		forward_auth idp:9443 {
+			uri /outpost.goauthentik.io/auth/caddy
+			copy_headers X-Authentik-Username X-Authentik-Groups
+		}
+	}
+	%s
+}
+"""
+
+
+@pytest.mark.parametrize(
+    ("route", "rest", "expected"),
+    [
+        # VERIFY3 N2 (h13): the site-level strip runs before every route, so the route needs
+        # none of its own (live: alice/users only)
+        ("", "reverse_proxy app:8080", []),
+        # VERIFY3 N1 (h04, h19): the IdP's answer handed on under another name, at proxy time,
+        # after the site-level strip (live: Remote-User / REMOTE_USER = alice)
+        ("request_header -*authentik*", "reverse_proxy app:8080 {\n\t\theader_up Remote-User {http.request.header.X-Authentik-Username}\n\t}", []),
+        ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv REMOTE_USER {http.request.header.X-Authentik-Username}\n\t}", []),
+        # not when the header is added beside a client's, nor read from the client's own header
+        ("request_header -*authentik*", "reverse_proxy app:8080 {\n\t\theader_up +Remote-User {header.X-Authentik-Username}\n\t}", [("reset", 11)]),
+        ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv REMOTE_USER {http.request.header.X-User}\n\t}", [("reset", 11)]),
+    ],
+)  # fmt: skip
+def test_the_site_level_strip_covers_the_route_and_hands_the_idps_answer_on(route, rest, expected):
+    assert [(f.rule, f.line) for f in lint.lint_caddy(H_SITE % (route, rest))] == expected
+
+
+def test_without_the_site_level_strip_the_idps_answer_cannot_be_told_from_the_clients():
+    text = (H_SITE % ("request_header -*authentik*", "reverse_proxy app:8080 {\n\t\theader_up Remote-User {header.X-Authentik-Username}\n\t}")).replace(
+        "app.lab.example {\n\trequest_header -*authentik*\n", "app.lab.example {\n"
+    )  # fmt: skip
+    assert sorted(f.rule for f in lint.lint_caddy(text)) == ["reset", "strip"]
+
+
+def test_json_hands_the_idps_answer_on_only_after_the_strip():
+    up = _proxy(set={"Remote-User": ["{http.request.header.X-Authentik-Username}"]})
+    doc = _config(_json_site(_del("*authentik*"), _fa(*IDS), up))
+    assert lint.judge_json(doc) == []
+    doc = _config(_json_site(_fa(*IDS), up))
+    assert {r for r, _ in lint.judge_json(doc)} == {"reset", "semantic"}
+
+
+@live
+@pytest.mark.parametrize(
+    "imports", ["import sites/app.caddy\nimport sites/wiki.caddy", "import sites/*.caddy"]
+)
+def test_live_site_files_imported_after_shared_snippets_adapt_clean(tmp_path, imports):
+    (tmp_path / "Caddyfile").write_text(MAIN % imports)
+    (tmp_path / "sites").mkdir()
+    for name in ("app", "wiki"):
+        (tmp_path / "sites" / f"{name}.caddy").write_text(SITE_FILE % (name, name))
+    findings, counts = lint.scan(tmp_path, adapter=lint.Adapter(CADDY_BIN), required=True)
+    assert findings == [] and counts["adapted"] == 1

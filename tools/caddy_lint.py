@@ -11,7 +11,7 @@
 #   outputs: one line per unprotected forward_auth or site, identity header set outside copy_headers, construct the lint cannot read, unread config, path Caddy's own JSON shows reaching an upstream unstripped, vulnerable Caddy pin or stale allowlist rule
 #   exit:
 #     "0": clean
-#     "1": a finding (strip, reset, dial, exposure, parse, coverage, generate, semantic, pin or allowlist)
+#     "1": a finding (strip, reset, dial, parse, coverage, generate, semantic, pin or allowlist)
 #     "2": usage error, a bad allowlist or a missing dependency (a caddy binary when HNX_CADDY_REQUIRED is set)
 """Gate: the edge never lets a client name its own identity to a service behind forward-auth.
 
@@ -35,19 +35,29 @@ is not seen), plugins the lint does not know (refused in a forward-auth server w
 JSON is judged), a config deployed from outside the tree, services published by another proxy
 or port than this Caddy (the registry-driven front-door guarantee, that every human-facing
 service is reachable only through the authed front door, is the front-door work's job, Rule 1,
-not this lint's), and the pin forms listed under ``pin`` as not read.
+not this lint's), Caddy configured through caddy-docker-proxy labels (a ``caddy.*forward_auth``
+label is a ``coverage`` finding, never judged: render the Caddyfile and lint that), and the pin
+forms listed under ``pin`` as not read.
 
 So these must hold, everywhere:
 
-  strip      every site that runs ``forward_auth`` (directly, or through ``invoke`` of a named
-             route) deletes at site level, with no matcher, every header carrying ``authentik``
-             and every header its ``copy_headers`` set, in every spelling
-             (``request_header -*authentik*`` first in the site, as the generator writes it):
+  strip      in a config with a ``forward_auth`` anywhere, every site that proxies
+             (``reverse_proxy``, ``php_fastcgi``) or runs ``forward_auth`` (directly, or through
+             ``invoke`` of a named route) deletes at site level, with no matcher, every header
+             carrying ``authentik`` and every header a ``copy_headers`` sets, in every spelling
+             (``request_header -*authentik*`` first in the site, as the generator writes it).
              Caddy sorts a site-level ``request_header`` before every ``handle`` and ``route``,
              so a path that never reaches the auth route (a ``handle /api/*`` beside it, a
-             matcher on the route) cannot carry the client's identity headers either. And every
-             ``forward_auth`` sits directly inside a ``route`` block, and earlier in that same
-             ``route`` a ``request_header -<name>`` (or a ``-*<part>*``, ``-<prefix>*`` or
+             matcher on the route) cannot carry the client's identity headers either, and
+             neither can a site without ``forward_auth`` that reaches the same service, under
+             the same address or another (the loopback name for the loopback address, a
+             container name for the host's address): no comparison of upstream spellings can tell those apart, so
+             every proxying site carries the strip whatever it dials. The IdP's own site (every
+             proxy of it dials a ``forward_auth`` upstream) is the one exemption; a site that
+             proxies nothing is not held to it. And every ``forward_auth`` sits directly inside
+             a ``route`` block, after a delete of every spelling of every header its
+             ``copy_headers`` sets: the site-level strip (Caddy runs it before every ``route``),
+             or one earlier in that same ``route``: a ``request_header -<name>`` (or a ``-*<part>*``, ``-<prefix>*`` or
              ``-*<suffix>`` wildcard, matched case-insensitively as Caddy does; any other ``*``
              is literal) deletes every header its ``copy_headers`` sets, in every spelling with
              ``-`` or ``_`` at each separator. (Outside a ``route``, Caddy's directive order runs
@@ -72,44 +82,48 @@ So these must hold, everywhere:
              ``php_fastcgi``) that sets an identity variable (``HTTP_<identity header>``,
              ``REMOTE_USER``, ``AUTH_*`` and the other CGI user variables) or sets any variable
              from a value the client chooses: Caddy builds the CGI environment from ``env``
-             first, so a name no request header carries keeps the ``env`` value.
+             first, so a name no request header carries keeps the ``env`` value. One copy is
+             allowed: a ``header_up`` set (not ``+`` add) or a FastCGI ``env`` whose value is
+             exactly one request-header placeholder of an identity header the site's
+             matcherless site-level strip deletes (``header_up Remote-User
+             {http.request.header.X-Authentik-Username}``, ``env REMOTE_USER {...}``): read at
+             proxy time, after that strip and ``forward_auth``, it is the IdP's answer or empty
+             on every path, never the client's (``copy_headers X-Authentik-Username>Remote-User``
+             does the same for a request header).
   dial       a ``forward_auth`` whose upstream is a placeholder the request chooses (the client
              picks the IdP that vouches for it), and any proxy of a site that runs
              ``forward_auth`` whose upstream (argument, ``to``, ``dynamic``) is one (the IdP's
              identity headers go to a host the client picks). An operator's ``{$VAR}`` or
              ``{env.VAR}`` is not the client's.
-  exposure   an upstream that a site proxies behind ``forward_auth``, proxied again by a site
-             with no ``forward_auth`` (another host, another listener, a path-scoped block of
-             the same host, which Caddy orders first): a client reaches the same service there
-             with its own identity headers. The IdP's own upstream (a ``forward_auth`` dial) is
-             exempt. Meant-to-be-public cases take an allowlist entry with
-             ``rules: [exposure]`` and a reason.
   parse      the lint reads a Caddyfile with Caddy's own token rules and fails closed on what
              it cannot vouch for: a heredoc, a quoted token spanning lines, a ``{`` or ``}``
              sharing a line with a directive, a placeholder, ``{$ENV}`` or template in directive
              position, a header field name that is not literal (a placeholder, an environment
              variable, a request value: it could name an identity header), a line ending in
              ``\\``, unbalanced braces, a global ``order`` option moving a directive these rules
-             rely on, and an ``import`` it cannot follow (a glob, a placeholder, a cycle, a
-             snippet not defined above it, a file outside the tree, an argument that is itself a
-             placeholder, an argument range or an index past the arguments given). A snippet, the
-             generated ``hnx_forward_auth`` and a relative file are expanded in place, as Caddy
-             does: arguments substituted (``{args[N]}``), and an import's block put where the
-             snippet says ``{block}``.
+             rely on, and an ``import`` it cannot follow (a placeholder, a cycle, a snippet not
+             defined above it, a file or a glob match outside the tree, an argument that is
+             itself a placeholder, an argument range or an index past the arguments given). A
+             snippet, the generated ``hnx_forward_auth``, a relative file and an in-tree glob
+             (its matches in sorted order) are expanded in place, as Caddy does: arguments
+             substituted (``{args[N]}``), an import's block put where the snippet says
+             ``{block}``, and an imported file sees the snippets its importer defined above the
+             import. A Caddyfile another one imports is judged there, in its importer's context,
+             not on its own.
   semantic   Caddy's own reading, when a ``caddy`` binary is available (``--caddy``,
              ``$HNX_CADDY`` or PATH; CI pins one and sets ``HNX_CADDY_REQUIRED=1``, which makes
              a run without it exit 2): every Caddyfile read (but a template, which Caddy reads
              once rendered) goes through ``caddy adapt`` with an empty environment, and its JSON
-             is judged in the order Caddy runs it. In a server with a forward-auth (a
-             ``reverse_proxy`` with ``handle_response``), every ``reverse_proxy`` a request
-             reaches, the auth one included, is reached with every header carrying ``authentik``
+             is judged in the order Caddy runs it. In a config with a forward-auth (a
+             ``reverse_proxy`` with ``handle_response``) in any server, every ``reverse_proxy`` a
+             request reaches, in any server and site but the IdP's own, the auth one included,
+             is reached with every header carrying ``authentik``
              and every spelling of every copied header deleted on every path (a route with a
              matcher, or in a ``handle`` group, may not run; an upstream's own ``header_up``
              delete counts for it; ``handle_errors`` starts from what its site deleted first;
              ``invoke`` follows a named route; ``handle_response`` bodies, the subroutes and
              named routes they run, and ``intercept``'s are judged, ``intercept`` being no
-             pass-through); a host-matched site with no forward-auth of its own is not held to
-             it, but serving a forward-auth site's upstream there is ``exposure``. A
+             pass-through). A
              forward-auth is a ``reverse_proxy`` whose ``handle_response`` copies a header of
              the answer onto the request; a ``handle_response`` that serves a file
              (X-Accel-Redirect) is not one. A wildcard field, a placeholder dial and a FastCGI
@@ -509,30 +523,26 @@ def _substitute(nodes: list[Node], imp: Node) -> list[Node]:
     return walk(nodes, nodes[0].parent if nodes else imp)
 
 
-def _expand(root: Node, base: Path | None, ctx: CaddyContext, problems: list[Finding]) -> None:
+def _expand(
+    root: Node,
+    base: Path | None,
+    ctx: CaddyContext,
+    problems: list[Finding],
+    inherited: dict[str, Node] | None = None,
+) -> None:
     """Replace every ``import`` with what it imports, as Caddy does: a snippet defined earlier
-    in this config (Caddy refuses one used before its definition), a generated snippet, or a
-    file under the tree (no glob), with its arguments substituted and its block put where the
-    snippet says ``{block}``. Anything else is a ``parse`` finding: the lint cannot see what it
-    would add."""
-    snippets: dict[str, Node] = {}
+    in this config (Caddy refuses one used before its definition; an imported file sees the
+    snippets its importer defined above the import), a generated snippet, or a file under the
+    tree (a glob too: its matches in sorted order, every one inside the tree), with its
+    arguments substituted and its block put where the snippet says ``{block}``. Anything else
+    is a ``parse`` finding: the lint cannot see what it would add."""
+    snippets: dict[str, Node] = dict(inherited or {})
 
-    def resolve(node: Node) -> list[Node] | None:
-        target = node.tokens[1] if len(node.tokens) > 1 else ""
-        if target in snippets:
-            return snippets[target].children
-        external = _external_snippet(target)
-        if external is not None:
-            return external.children
-        if not target or GLOB.search(target):
-            return None
-        if base is None or ctx.tree is None:
-            return None
-        f = (base / target).resolve()
+    def read(f: Path) -> list[Node] | None:
         try:
-            rel = f.relative_to(ctx.tree).as_posix()
+            rel = f.relative_to(ctx.tree).as_posix()  # type: ignore[arg-type]
         except ValueError:
-            return None
+            return None  # outside the tree
         if not f.is_file() or ctx.depth > 8:
             return None
         sub = CaddyContext(ctx.tree, ctx.parsed, ctx.depth + 1, ctx.imported)
@@ -544,8 +554,31 @@ def _expand(root: Node, base: Path | None, ctx: CaddyContext, problems: list[Fin
         ctx.imported.add(rel)
         sub_root, sub_problems = parse_caddyfile(text, rel)
         problems.extend(sub_problems)
-        _expand(sub_root, f.parent, sub, problems)
+        _expand(sub_root, f.parent, sub, problems, snippets)
         return sub_root.children
+
+    def resolve(node: Node) -> list[Node] | None:
+        target = node.tokens[1] if len(node.tokens) > 1 else ""
+        if target in snippets:
+            return snippets[target].children
+        external = _external_snippet(target)
+        if external is not None:
+            return external.children
+        if not target or "{" in target or "}" in target:
+            return None  # a placeholder: unknown until run time
+        if base is None or ctx.tree is None:
+            return None
+        if GLOB.search(target):
+            if target.startswith("/"):
+                return None
+            out: list[Node] = []
+            for f in sorted(p.resolve() for p in base.glob(target)):
+                got = read(f)
+                if got is None:
+                    return None  # a match outside the tree, or unreadable: refuse the glob
+                out += got
+            return out
+        return read((base / target).resolve())
 
     def expand(nodes: list[Node], parent: Node, depth: int) -> list[Node]:
         out: list[Node] = []
@@ -566,9 +599,9 @@ def _expand(root: Node, base: Path | None, ctx: CaddyContext, problems: list[Fin
                         c.path,
                         c.line,
                         "parse",
-                        f"import {target} cannot be followed (a glob, a placeholder, a cycle, a "
-                        "snippet not defined above it, or no such file under the tree): the lint "
-                        "cannot see what it adds",
+                        f"import {target} cannot be followed (a placeholder, a cycle, a snippet "
+                        "not defined above it, a file or glob match outside the tree, or no such "
+                        "file): the lint cannot see what it adds",
                     )
                 )
                 continue
@@ -732,7 +765,32 @@ def _in_forward_auth_copy(node: Node) -> bool:
     return False
 
 
-def _resets(nodes: list[Node], copied: set[str]) -> list[Finding]:
+def _request_header_ref(values: list[str]) -> str | None:
+    """The header a value reads when it is exactly one request-header placeholder."""
+    m = HEADER_PLACEHOLDER.fullmatch(values[0]) if len(values) == 1 else None
+    if not m or not values[0].lower().startswith(("{http.request.header.", "{header.")):
+        return None
+    return m.group("name")
+
+
+def _from_idp(values: list[str], site_deletes: list[str], copied: set[str]) -> bool:
+    """Whether a value is exactly one identity-header placeholder that the site's matcherless
+    site-level strip deletes in every spelling: read at proxy time (``header_up``, a FastCGI
+    ``env``), after that strip and ``forward_auth`` ran, it is the IdP's answer or empty on
+    every path, never the client's."""
+    name = _request_header_ref(values) if site_deletes else None
+    if name is None:
+        return False
+    if not ("authentik" in name.lower() or _norm(name) in copied):
+        return False
+    if "authentik" in name.lower() and any(_covers_mark(p) for p in site_deletes):
+        return True
+    return all(any(_covers(p, sp) for p in site_deletes) for sp in spellings(name))
+
+
+def _resets(
+    nodes: list[Node], copied: set[str], site_deletes: list[str] | None = None
+) -> list[Finding]:
     """Every header directive that sets, adds or replaces an identity header (a field name
     carrying ``authentik`` or one a ``copy_headers`` of the same site sets, in any spelling), or
     copies one into another header through a placeholder. Each would let a client choose the
@@ -779,6 +837,13 @@ def _resets(nodes: list[Node], copied: set[str]) -> list[Finding]:
                 )
             )
             continue
+        if (
+            label == "header_up"
+            and not field.startswith("+")
+            and not identity(bare)
+            and _from_idp(values, site_deletes or [], copied)
+        ):
+            continue  # the IdP's own answer handed on under another name
         hits = [bare] if identity(bare) else []
         hits += [
             m.group("name")
@@ -830,9 +895,10 @@ def _covers_mark(pattern: str) -> bool:
     return p == "*" or (len(p) >= 2 and p[0] == p[-1] == "*" and p[1:-1] in "authentik")
 
 
-def _check_auth(node: Node) -> list[Finding]:
-    """One ``forward_auth``: no matcher, directly inside a ``route``, after
-    a delete of every spelling of every header its ``copy_headers`` sets."""
+def _check_auth(node: Node, site_deletes: list[str] | None = None) -> list[Finding]:
+    """One ``forward_auth``: no matcher, directly inside a ``route``, after a delete of every
+    spelling of every header its ``copy_headers`` sets, earlier in that ``route`` or at site
+    level (Caddy runs a site-level ``request_header`` before every ``route``)."""
     findings = []
     line, where = node.line, node.path
     if len(node.tokens) > 1 and node.tokens[1].startswith(("@", "/")):
@@ -856,7 +922,7 @@ def _check_auth(node: Node) -> list[Finding]:
         n.tokens[1][1:]
         for n in before
         if n.name == "request_header" and len(n.tokens) >= 2 and n.tokens[1].startswith("-")
-    ]
+    ] + list(site_deletes or [])
     names, templated = _copied(node)
     if templated is not None:
         findings.append(
@@ -875,24 +941,32 @@ def _check_auth(node: Node) -> list[Finding]:
                     where,
                     line,
                     "strip",
-                    f"client-sent {h} is not deleted before forward_auth in the same route "
-                    f"in every spelling (missed: {', '.join(missed)})",
+                    f"client-sent {h} is not deleted before forward_auth, in the same route or "
+                    f"at site level, in every spelling (missed: {', '.join(missed)})",
                 )
             )
     return findings
 
 
-def _site_strip(site: Node, direct: list[Node], names: list[str], label: str) -> list[Finding]:
+def _site_deletes(direct: list[Node]) -> list[str]:
+    """The patterns a site deletes at site level with no matcher: Caddy runs them before every
+    ``handle`` and ``route`` of the site."""
+    return [
+        n.tokens[1][1:]
+        for n in direct
+        if n.name == "request_header" and len(n.tokens) >= 2 and n.tokens[1].startswith("-")
+    ]
+
+
+def _site_strip(
+    site: Node, direct: list[Node], names: list[str], label: str, plain: bool = False
+) -> list[Finding]:
     """A site that runs ``forward_auth`` anywhere deletes, at site level and with no matcher,
     every header carrying ``authentik`` and every spelling of every header a ``copy_headers``
     in it sets. Caddy sorts a site-level ``request_header`` before every ``handle`` and
     ``route``, so a path that never reaches the auth route (a ``handle /api/*`` beside it, a
     matcher on the route) cannot carry the client's identity headers to the upstream."""
-    deletes = [
-        n.tokens[1][1:]
-        for n in direct
-        if n.name == "request_header" and len(n.tokens) >= 2 and n.tokens[1].startswith("-")
-    ]
+    deletes = _site_deletes(direct)
     missing = [] if any(_covers_mark(p) for p in deletes) else ["*authentik*"]
     for h in names:
         if missing[:1] == ["*authentik*"] and "authentik" in h.lower():
@@ -904,6 +978,18 @@ def _site_strip(site: Node, direct: list[Node], names: list[str], label: str) ->
         ]
     if not missing:
         return []
+    if plain:
+        return [
+            Finding(
+                site.path,
+                site.line,
+                "strip",
+                f"site {label} proxies, in a config that runs forward_auth, with no matcherless "
+                f"site-level request_header deleting {', '.join(missing)}: whatever service it "
+                "reaches (the same app under another name, too), a client sends it its own "
+                "identity headers here; put request_header -*authentik* first in this site",
+            )
+        ]
     return [
         Finding(
             site.path,
@@ -917,7 +1003,9 @@ def _site_strip(site: Node, direct: list[Node], names: list[str], label: str) ->
     ]
 
 
-def _fastcgi_env(nodes: list[Node], copied: set[str]) -> list[Finding]:
+def _fastcgi_env(
+    nodes: list[Node], copied: set[str], site_deletes: list[str] | None = None
+) -> list[Finding]:
     """A FastCGI ``env`` (``transport fastcgi``, ``php_fastcgi``) is the CGI environment the
     upstream reads, where an identity header arrives as ``HTTP_<NAME>`` and the user as
     ``REMOTE_USER``. Caddy sets ``env`` first and the request headers after, so a name no
@@ -932,6 +1020,8 @@ def _fastcgi_env(nodes: list[Node], copied: set[str]) -> list[Finding]:
         if n.name != "env" or not fastcgi or len(n.tokens) < 2 or INLINE_ALLOW.search(n.raw):
             continue
         name, values = n.tokens[1], n.tokens[2:]
+        if _from_idp(values, site_deletes or [], copied):
+            continue  # REMOTE_USER from the IdP's answer, after the site-level strip
         if cgi_identity(name, copied) or any(CLIENT_PLACEHOLDER.search(v) for v in values):
             out.append(
                 Finding(
@@ -1016,78 +1106,40 @@ def lint_caddy(
                         "Caddy's default order",
                     )
                 )
+    # the config's forward_auths (any site or named route), what they copy and whom they dial
+    config_auths = [n for _s, _l, nodes, _d in scopes for n in nodes if n.name == "forward_auth"]
+    config_names = list(dict.fromkeys(h for n in config_auths for h in _copied(n)[0]))
+    idp = {_dial(t) for n in config_auths for t in _upstreams(n)}
     for site, label, nodes, direct in scopes:
         invoked = [
             named[n.tokens[1]]
             for n in nodes
             if n.name == "invoke" and len(n.tokens) > 1 and n.tokens[1] in named
         ]
+        reach = nodes + [n for r in invoked for n in _walk(r)]
         own = [n for n in nodes if n.name == "forward_auth"]
-        site_auths = own + [n for r in invoked for n in _walk(r) if n.name == "forward_auth"]
+        site_auths = [n for n in reach if n.name == "forward_auth"]
         # the headers this site's forward_auth sets: identity headers here, not in other sites
         names = list(dict.fromkeys(h for n in site_auths for h in _copied(n)[0]))
+        # a named route is judged where it is invoked: no site-level strip of its own
+        deletes = _site_deletes(direct) if label else []
         for node in own:
             if not INLINE_ALLOW.search(node.raw):
-                findings += _check_auth(node)
-        if (
-            label  # a named route is checked where it is invoked
-            and site_auths
-            and not INLINE_ALLOW.search(site.raw)
-            and not all(INLINE_ALLOW.search(n.raw) for n in site_auths)
-        ):
-            findings += _site_strip(site, direct, names, label)
+                # a delete beside the forward_auth in the same block runs in Caddy's directive
+                # order, not before it: only a strip one level up counts as site level
+                findings += _check_auth(node, deletes if node.parent is not site else [])
+        proxies = [n for n in reach if n.name in PROXIES]
+        idp_only = bool(proxies) and all(_dial(t) in idp for n in proxies for t in _upstreams(n))
+        if label and not INLINE_ALLOW.search(site.raw):
+            if site_auths and not all(INLINE_ALLOW.search(n.raw) for n in site_auths):
+                findings += _site_strip(site, direct, names, label)
+            elif config_auths and proxies and not site_auths and not idp_only:
+                findings += _site_strip(site, direct, config_names, label, plain=True)
         copied = {_norm(h) for h in names}
-        findings += _resets(nodes, copied)
-        findings += _fastcgi_env(nodes, copied)
+        findings += _resets(nodes, copied, deletes)
+        findings += _fastcgi_env(nodes, copied, deletes)
         findings += _dials(nodes, bool(site_auths))
-    findings += _exposure(scopes, named)
     return list(dict.fromkeys(findings))
-
-
-def _exposure(scopes: list, named: dict) -> list[Finding]:
-    """An upstream a site serves behind ``forward_auth``, served again by a site (another host,
-    or another listener) with no ``forward_auth``: a client reaches the same service there with
-    its own identity headers. The IdP's own dials (a ``forward_auth`` upstream) are exempt,
-    since the IdP's site and the outpost passthrough serve them without auth by design."""
-    protected: dict[str, str] = {}
-    idp: set[str] = set()
-    plain: list[tuple[Node, str]] = []
-    for _site, label, nodes, _direct in scopes:
-        if not label:
-            continue  # a named route counts where it is invoked
-        invoked = [
-            named[n.tokens[1]]
-            for n in nodes
-            if n.name == "invoke" and len(n.tokens) > 1 and n.tokens[1] in named
-        ]
-        reach = nodes + [n for r in invoked for n in _walk(r)]
-        authed = any(n.name == "forward_auth" for n in reach)
-        for n in reach:
-            if n.name == "forward_auth":
-                idp |= {_dial(t) for t in _upstreams(n)}
-            elif n.name in PROXIES:
-                for t in _upstreams(n):
-                    if authed:
-                        protected.setdefault(_dial(t), label)
-                    else:
-                        plain.append((n, _dial(t)))
-    out = []
-    for n, dial in plain:
-        # a path-scoped block of the auth site's own host counts too: Caddy 2.11.7 orders it
-        # before the host's site (it is more specific), so its paths never reach forward_auth
-        if dial in protected and dial not in idp and not INLINE_ALLOW.search(n.raw):
-            out.append(
-                Finding(
-                    n.path,
-                    n.line,
-                    "exposure",
-                    f"{n.name} {dial} serves, with no forward_auth, the upstream site "
-                    f"{protected[dial]} puts behind forward_auth: a client reaches it here with "
-                    "its own identity headers (list it with rules: [exposure] and a reason if it "
-                    "is meant to be public)",
-                )
-            )
-    return out
 
 
 # ---------------------------------------------------------------- Caddy's own JSON
@@ -1163,25 +1215,61 @@ def _contains_auth(x: object, named: dict) -> bool:
     return False
 
 
+class _Config:
+    """What the whole config's forward-auths decide: whether there is one at all (then every
+    proxying site carries the identity strip), what they copy, and whom they dial (the IdP,
+    whose own site is the one exemption)."""
+
+    def __init__(self, servers: dict):
+        self.auth, self.copied, self.idp = False, [], set()
+        stack: list = list(servers.values())
+        while stack:
+            x = stack.pop()
+            if _is_auth(x):
+                self.auth = True
+                self.copied += _copies(x)
+                self.idp |= set(_proxy_dials(x))
+            if isinstance(x, dict):
+                stack += [v for v in x.values() if isinstance(v, (list, dict))]
+            elif isinstance(x, list):
+                stack += x
+        self.copied = list(dict.fromkeys(self.copied))
+
+
+def _route_dials(r: object) -> list[str]:
+    """Every dial of every ``reverse_proxy`` in a route."""
+    dials: list[str] = []
+    stack: list = [r]
+    while stack:
+        x = stack.pop()
+        if isinstance(x, dict):
+            if x.get("handler") == "reverse_proxy":
+                dials += _proxy_dials(x)
+            stack += [v for v in x.values() if isinstance(v, (list, dict))]
+        elif isinstance(x, list):
+            stack += x
+    return dials
+
+
 class _Judge:
     """Caddy's own JSON for one server, judged in the order Caddy runs it. A request walks the
     routes in order; a route with a matcher (or in a ``handle`` group) may or may not run, so a
-    header is known deleted after it only when it is deleted on both ways. In a server with a
-    ``forward_auth`` (a ``reverse_proxy`` with ``handle_response``), every ``reverse_proxy`` a
-    request reaches, the auth one included, must be reached with every header carrying
-    ``authentik`` and every spelling of every copied header deleted first; a host-matched
-    terminal site with no auth in it (the IdP's own site) is not held to that. Anywhere, a
+    header is known deleted after it only when it is deleted on both ways. In a config with a
+    forward-auth (a ``reverse_proxy`` whose ``handle_response`` copies the answer's headers) in
+    any server, every ``reverse_proxy`` a request reaches, the auth one included, must be
+    reached with every header carrying ``authentik`` and every spelling of every copied header
+    deleted first, in every site but the IdP's own (whose every proxy dials the IdP). Anywhere, a
     header set, added or replaced whose name is not literal, carries ``authentik`` or is a
     copied one, or that copies such a header through a placeholder, is a finding; only the auth
     answer's own ``handle_response`` may set those, from the answer's headers."""
 
-    def __init__(self, server: str, srv: dict, protected: frozenset = frozenset()):
+    def __init__(self, server: str, srv: dict, config: _Config | None = None):
         self.server, self.srv, self.out = server, srv, []
-        self.protected = protected  # upstreams some site of the config puts behind forward_auth
         self.named = srv.get("named_routes") if isinstance(srv.get("named_routes"), dict) else {}
         everything = [srv.get("routes"), (srv.get("errors") or {}).get("routes"), self.named]
         self.everything = everything
-        self.auth = _contains_auth(everything, self.named)
+        self.config = config or _Config({server: srv})
+        self.auth = self.config.auth
         self.depth = 0
         self.use(everything)
 
@@ -1205,7 +1293,13 @@ class _Judge:
         self.keys = {MARK} | {sp.lower() for c in copied for sp in spellings(c)}
 
     def site(self, r: dict) -> None:
-        self.use(r if r.get("match") and r.get("terminal") else self.everything)
+        apart = bool(r.get("match") and r.get("terminal"))  # a host-matched site of its own
+        if _contains_auth(r, self.named) or not apart:
+            self.use(r if apart else self.everything)
+        else:  # a site with no forward-auth of its own: no identity header of its own, but it
+            # deletes every header any forward-auth of the config copies before it proxies
+            self.idents = set()
+            self.keys = {MARK} | {sp.lower() for c in self.config.copied for sp in spellings(c)}
 
     def add(self, rule: str, where: str, detail: str) -> None:
         self.out.append((rule, f"{self.server} {where}: {detail}"))
@@ -1229,19 +1323,21 @@ class _Judge:
                 ]
                 starts = [self.prefix(p) for p in (same or primary) if isinstance(p, dict)]
                 start = frozenset.intersection(*starts) if starts else frozenset()
-                scope = (
-                    self.auth and any(_contains_auth(p, self.named) for p in same)
-                    if same
-                    else self.in_scope(r)
-                )
+                scope = any(self.in_scope(p) for p in same) if same else self.in_scope(r)
                 self.site(same[0] if same else r)
                 self.route(r, start, scope, f"errors[{i}]")
         return self.out
 
     def in_scope(self, r: dict) -> bool:
-        """A site with no forward_auth of its own beside one that has it (the IdP's site)."""
-        other_site = r.get("match") and r.get("terminal") and not _contains_auth(r, self.named)
-        return self.auth and not other_site
+        """In a config with a forward-auth anywhere, every route that proxies is held to the
+        identity strip, whatever upstream it dials (the same service may hide behind another
+        name): all but the IdP's own site, whose every proxy dials the IdP."""
+        if not self.auth:
+            return False
+        if _contains_auth(r, self.named):
+            return True
+        dials = _route_dials(r)
+        return not (dials and all(d in self.config.idp for d in dials))
 
     def prefix(self, r: dict) -> frozenset:
         """What a route deletes before anything else it does (headers handlers first in it,
@@ -1312,7 +1408,7 @@ class _Judge:
             return st
         if kind == "reverse_proxy":
             request = (h.get("headers") or {}).get("request")
-            self.fastcgi(h, loc)
+            self.fastcgi(h, loc, st)
             bad = [d for d in _proxy_dials(h) if CLIENT_PLACEHOLDER.search(d)]
             if bad and (scope or _is_auth(h)):
                 self.add("dial", loc, f"reverse_proxy dials {bad[0]}, a value the request "
@@ -1329,16 +1425,9 @@ class _Judge:
                         self.copy_routes(resp.get("routes"), f"{loc}/handle_response[{k}]")
                         self.depth -= 1
                 return st
-            local = self.headers(request, st, loc, copy=False)
+            local = self.headers(request, st, loc, copy=False, covered=st)
             if scope:
                 self.require(local, self.keys, loc, "the upstream")
-            if not scope and self.protected:
-                for d in _proxy_dials(h):
-                    if d in self.protected:
-                        self.add("exposure", loc, f"reverse_proxy {d} serves, with no "
-                                 "forward_auth, an upstream another site puts behind "
-                                 "forward_auth: a client reaches it here with its own identity "
-                                 "headers")  # fmt: skip
             # a handle_response that is not a forward-auth runs after the upstream answered
             for k, resp in enumerate(h.get("handle_response") or []):
                 if isinstance(resp, dict):
@@ -1387,14 +1476,22 @@ class _Judge:
                     self.handler(h, frozenset(), True, here)
                 self.depth -= 1
 
-    def headers(self, ops: object, st: frozenset | None, loc: str, copy: bool) -> frozenset | None:
+    def headers(
+        self,
+        ops: object,
+        st: frozenset | None,
+        loc: str,
+        copy: bool,
+        covered: frozenset | None = None,
+    ) -> frozenset | None:
         if not isinstance(ops, dict):
             return st
         for kind in ("add", "set", "replace"):
             for field_, vals in (ops.get(kind) or {}).items():
                 values = [v.get("replace", "") if isinstance(v, dict) else str(v)
                           for v in (vals if isinstance(vals, list) else [vals])]  # fmt: skip
-                self.judge_set(kind, str(field_), values, loc, copy and kind == "set")
+                idp = kind == "set" and self.from_idp(values, covered)
+                self.judge_set(kind, str(field_), values, loc, copy and kind == "set", idp)
         return None if st is None else self.deleted(ops, st)
 
     def deleted(self, ops: object, st: frozenset) -> frozenset:
@@ -1402,7 +1499,19 @@ class _Judge:
         deletes = [str(d) for d in ((ops.get("delete") if isinstance(ops, dict) else None) or [])]
         return st | {k for k in self.keys if any(_covers_key(p, k) for p in deletes)}
 
-    def judge_set(self, kind: str, field_: str, values: list[str], loc: str, copy: bool) -> None:
+    def from_idp(self, values: list[str], covered: frozenset | None) -> bool:
+        """A value that is exactly one request-header placeholder of an identity header the
+        state already deletes on every path: at proxy time it is the IdP's answer or empty."""
+        name = _request_header_ref(values) if covered is not None else None
+        if name is None:
+            return False
+        if "authentik" in name.lower():
+            return MARK in covered or all(sp.lower() in covered for sp in spellings(name))
+        return _norm(name) in self.idents and all(sp.lower() in covered for sp in spellings(name))
+
+    def judge_set(
+        self, kind: str, field_: str, values: list[str], loc: str, copy: bool, idp: bool = False
+    ) -> None:
         if "{" in field_ or "}" in field_:
             self.add("semantic", loc, f"headers {kind} {field_}: a header name taken from a "
                      "placeholder can name an identity header")  # fmt: skip
@@ -1421,6 +1530,8 @@ class _Judge:
             self.add("reset", loc, f"headers {kind} sets the identity header {field_}: only "
                      "forward_auth's copy_headers may set it")  # fmt: skip
             return
+        if idp:
+            return  # the IdP's own answer handed on under another name
         for v in values:
             for m in HEADER_PLACEHOLDER.finditer(v):
                 if identity(m.group("name")) and not (copy and RP_HEADER_VALUE.match(v)):
@@ -1428,12 +1539,14 @@ class _Judge:
                              f"{m.group('name')}")  # fmt: skip
                     return
 
-    def fastcgi(self, h: dict, loc: str) -> None:
+    def fastcgi(self, h: dict, loc: str, covered: frozenset | None = None) -> None:
         """A FastCGI transport's ``env`` is the CGI environment; see ``_fastcgi_env``."""
         t = h.get("transport")
         if not isinstance(t, dict) or t.get("protocol") != "fastcgi":
             return
         for name, value in (t.get("env") or {}).items():
+            if self.from_idp([str(value)], covered):
+                continue
             if cgi_identity(str(name), self.idents) or CLIENT_PLACEHOLDER.search(str(value)):
                 self.add("reset", f"{loc}/transport", f"fastcgi env {name}: an identity variable, "
                          "or one set from a value the client chooses")  # fmt: skip
@@ -1446,34 +1559,6 @@ class _Judge:
             self.add("semantic", loc, f"{what} is reached on a path where client-sent "
                      f"{', '.join(missing)} is not deleted first (a matcherless "
                      "request_header -*authentik* first in the site covers every path)")  # fmt: skip
-
-
-def _protected(servers: dict) -> frozenset:
-    """The upstreams a top-level route with a forward-auth proxies to (but the forward-auth
-    dials themselves, the IdP's): served elsewhere without auth, they are exposed."""
-    behind: set[str] = set()
-    idp: set[str] = set()
-
-    def walk(x: object, authed: bool, named: dict) -> None:
-        if isinstance(x, dict):
-            if x.get("handler") == "reverse_proxy":
-                (idp if _is_auth(x) else behind if authed else set()).update(_proxy_dials(x))
-            if x.get("handler") == "invoke" and x.get("name") in named:
-                walk(named[x["name"]], authed, {})
-            for v in x.values():
-                walk(v, authed, named)
-        elif isinstance(x, list):
-            for v in x:
-                walk(v, authed, named)
-
-    for srv in servers.values():
-        if not isinstance(srv, dict):
-            continue
-        named = srv.get("named_routes") if isinstance(srv.get("named_routes"), dict) else {}
-        for r in srv.get("routes") or []:
-            if _contains_auth(r, named):
-                walk(r, True, named)
-    return frozenset(behind - idp)
 
 
 def caddy_shape(doc: object) -> bool:
@@ -1489,10 +1574,10 @@ def judge_json(doc: object) -> list[tuple[str, str]]:
         return [("semantic", "not a Caddy config: no apps.http.servers")]
     out: list[tuple[str, str]] = []
     servers = doc["apps"]["http"]["servers"]  # type: ignore[index]
-    protected = _protected(servers)
+    config = _Config(servers)
     for name, srv in servers.items():
         if isinstance(srv, dict):
-            out += _Judge(str(name), srv, protected).run()
+            out += _Judge(str(name), srv, config).run()
     return list(dict.fromkeys(out))
 
 
@@ -2199,6 +2284,11 @@ def _json_configs(text: str, rel: str, json_file: bool) -> tuple[list[Finding], 
     return findings, n
 
 
+#: a caddy-docker-proxy label that configures forward_auth (``caddy.forward_auth``,
+#: ``caddy_0.route.forward_auth``, as a mapping key or a ``caddy...=`` list item)
+DOCKER_LABEL_AUTH = re.compile(
+    r"""(?m)^[ \t]*(?:-[ \t]*)?["']?caddy(?:_\d+)?(?:\.[\w-]+)*\.forward_auth(?:\.[\w-]+)*["']?[ \t]*[:=]"""
+)
 #: a Caddyfile that is a template still to be rendered: Caddy cannot read it yet
 TEMPLATE_NAME = re.compile(r"(?i)\.(j2|jinja2?|tmpl|tpl)$")
 TEMPLATE_TEXT = re.compile(r"\{\{|\{%|\$\{")
@@ -2278,6 +2368,7 @@ def scan(
     unread: list[tuple[str, int]] = []  # files with a forward_auth the lint did not read
     pending: list[Pending] = []  # Caddyfiles for the semantic check
     json_files: set[str] = set()  # Caddy JSON/YAML configs
+    standalone: dict[str, list[Finding]] = {}  # Caddyfiles judged on their own
     listed, counts["discovery"] = files(root)
     for p, rel in listed:
         name = p.name
@@ -2287,7 +2378,7 @@ def scan(
                 counts["files"] += 1
                 counts["caddy_configs"] += 1
                 ctx.parsed.add(rel)
-                findings += lint_caddy(text, rel, base=p.parent, ctx=ctx)
+                standalone[rel] = lint_caddy(text, rel, base=p.parent, ctx=ctx)
                 template = bool(TEMPLATE_NAME.search(name)) or _templated(text)
                 pending.append(Pending(rel, 0, None, p, template=template))
                 continue
@@ -2319,6 +2410,18 @@ def scan(
                 findings += pins.findings
             elif structured:
                 findings += lint_pins(text, rel)
+                label = DOCKER_LABEL_AUTH.search(text)
+                if label:
+                    findings.append(
+                        Finding(
+                            rel,
+                            text.count("\n", 0, label.start()) + 1,
+                            "coverage",
+                            "forward_auth configured through caddy-docker-proxy labels is not "
+                            "judged: render the Caddyfile the labels make and lint that, or list "
+                            f"the file in {DEFAULT_ALLOWLIST} with the reason it is covered",
+                        )
+                    )
                 found, embedded = _yaml_caddy(text, rel, ctx)
                 findings += found
                 pending += embedded
@@ -2353,6 +2456,11 @@ def scan(
                 findings.append(Finding(rel, 0, "parse", "cannot parse: UnicodeDecodeError"))
         except yaml.YAMLError as exc:
             findings.append(Finding(rel, 0, "parse", f"cannot parse: {exc.__class__.__name__}"))
+    # a Caddyfile another one imports is judged where it is imported, in the importer's scope
+    # (its snippets), as Caddy reads it, not on its own
+    for rel, got in standalone.items():
+        if rel not in ctx.imported:
+            findings += got
     for rel, line in unread:
         if rel not in ctx.parsed:
             findings.append(
@@ -2394,7 +2502,7 @@ class AllowlistError(Exception):
 
 
 #: the rules an allowlist entry may excuse
-RULES = ("strip", "reset", "parse", "coverage", "generate", "pin", "semantic", "dial", "exposure")
+RULES = ("strip", "reset", "parse", "coverage", "generate", "pin", "semantic", "dial")
 
 
 class AllowEntry(NamedTuple):
