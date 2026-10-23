@@ -101,6 +101,78 @@ def test_the_journal_is_append_only_and_its_names_strictly_grow(tmp_path):
         s.changes_since("not-a-cursor")
 
 
+class Crash(BaseException):
+    """The process dying at an exact point."""
+
+
+def _crash_after_the_item_write(monkeypatch):
+    """Die at the first journal step that follows an item file's replacement."""
+    from homelabnext.projects import markdown as md
+
+    real = md.atomic_write_text
+    wrote = []
+
+    def write(path, *a, **kw):
+        if wrote:
+            raise Crash
+        real(path, *a, **kw)
+        wrote.extend([path] if str(path).endswith(".md") else [])
+
+    def publish(*_a):
+        raise Crash
+
+    monkeypatch.setattr(md, "atomic_write_text", write)
+    monkeypatch.setattr(md, "_publish", publish, raising=False)
+
+
+def test_a_crash_after_the_item_write_still_journals_the_change(tmp_path, monkeypatch):
+    s = store(tmp_path)
+    t = s.create("task", "t")
+    cur = s.changes_since(None).cursor
+    with monkeypatch.context() as m:
+        _crash_after_the_item_write(m)
+        with pytest.raises(Crash):
+            s.update(t.uid, 1, title="renamed")
+    assert store(tmp_path).get(t.uid).version == 2  # the item changed ...
+    got = store(tmp_path).changes_since(cur)  # ... so a cursor reader sees the change
+    assert [(c.uid, c.version, c.title) for c in got.changes] == [(t.uid, 2, "renamed")]
+    assert not list((tmp_path / ".changes").glob("*.pending"))
+
+
+def test_a_crash_before_the_item_write_journals_nothing(tmp_path, monkeypatch):
+    from homelabnext.projects import markdown as md
+
+    s = store(tmp_path)
+    t = s.create("task", "t")
+    cur = s.changes_since(None).cursor
+    real = md.atomic_write_text
+
+    def write(path, *a, **kw):
+        if str(path).endswith(".md"):
+            raise Crash
+        real(path, *a, **kw)
+
+    with monkeypatch.context() as m:
+        m.setattr(md, "atomic_write_text", write)
+        with pytest.raises(Crash):
+            s.update(t.uid, 1, title="never")
+    again = store(tmp_path)
+    assert again.changes_since(cur).changes == ()  # no entry for a change that never happened
+    again.update(t.uid, 1, title="real")
+    got = again.changes_since(cur)
+    assert [(c.version, c.title) for c in got.changes] == [(2, "real")]
+
+
+def test_an_unreadable_journal_entry_is_reported(tmp_path):
+    s = store(tmp_path)
+    cur = s.changes_since(None).cursor
+    s.create("task", "t")
+    [entry] = sorted((tmp_path / ".changes").glob("*.json"))
+    entry.write_text("{not json")
+    assert s.changes_since(cur).changes == ()
+    assert s.backend.journal_problems == [f".changes/{entry.name}: not a journal entry (JSONDecodeError)"]  # fmt: skip
+
+
 def test_check_reports_every_rule_a_hand_edit_breaks(tmp_path):
     s = store(tmp_path)
     p = s.create("project", "P")

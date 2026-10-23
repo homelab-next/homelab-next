@@ -12,7 +12,15 @@ and only while its stored ``version`` is still the one the writer read, under a 
 exclusively (a hard link that fails when the name exists), so nothing is ever overwritten by a
 second writer.  Journal names are unique per ``(uid, version)``, so two clones that each record a
 change merge in git without a conflict; the stamp is monotonic within one working copy, which is
-what makes a cursor (the last journal name read) complete there.  After a ``git pull`` the cursor
+what makes a cursor (the last journal name read) complete there.
+
+An item write and its journal entries are paired crash-safely: each entry is first written as
+``.changes/<name>.pending``, then the items are replaced, then each entry is published under its
+final name.  The next :meth:`MarkdownBackend.write` or :meth:`MarkdownBackend.changes` (under the
+lock) finishes what a crash left: an intent whose item reached its version is published, one
+whose item did not is removed.  So no change is ever applied without its entry, and no entry
+names a change that was never applied.  A journal entry that cannot be read is listed in
+:attr:`MarkdownBackend.journal_problems` rather than skipped silently.  After a ``git pull`` the cursor
 of a consumer may predate entries that arrived with the pull: read from ``None`` (a snapshot) to
 resynchronise.
 
@@ -115,6 +123,7 @@ class MarkdownBackend:
         elif not self.root.is_dir():
             raise FileNotFoundError(f"no projects directory {self.root}")
         self.problems: list[str] = []
+        self.journal_problems: list[str] = []  # entries the last changes() could not read
 
     @property
     def journal(self) -> pathlib.Path:
@@ -170,18 +179,41 @@ class MarkdownBackend:
                 raise Conflict(f"{doc['uid']}: removed by another writer") from None
             if cur["version"] != expected:
                 raise Conflict(f"{doc['uid']}: changed by another writer")
-        for doc, expected in docs:
-            atomic_write_text(self._path(doc["uid"]), render_item(doc), exclusive=expected is None)
         self.journal.mkdir(exist_ok=True)
+        self._recover()
         last = self._entries()[-1:] or [""]
-        for ch in changes:
+        intents = []
+        for ch in changes:  # 1. the intent of every entry, before any item changes
             name = self._entry_name(ch, last[0])
+            pending = self.journal / (name + PENDING)
             atomic_write_text(
-                self.journal / name, json.dumps(_change_doc(ch), sort_keys=True) + "\n",
-                exclusive=True,
-            )  # fmt: skip
+                pending, json.dumps(_change_doc(ch), sort_keys=True) + "\n", exclusive=True
+            )
+            intents.append((pending, name))
             last = [name]
+        for doc, expected in docs:  # 2. the items
+            atomic_write_text(self._path(doc["uid"]), render_item(doc), exclusive=expected is None)
+        for pending, name in intents:  # 3. the entries, under their final names
+            _publish(pending, self.journal / name)
         return {d["uid"]: d for d, _ in docs}
+
+    def _recover(self) -> None:
+        """Finish or undo the entries a crashed :meth:`write` left as intents (under the lock)."""
+        if not self.journal.is_dir():
+            return
+        for pending in sorted(self.journal.glob("*" + PENDING)):
+            final = self.journal / pending.name[: -len(PENDING)]
+            try:
+                ch = json.loads(pending.read_text(encoding="utf-8"))
+                item = parse_item(self._path(ch["uid"]).read_text(encoding="utf-8"), "")
+                landed = int(item["version"]) >= int(ch["version"])
+            except (OSError, ValueError, KeyError, TypeError):
+                landed = False  # no readable item at that version: the write did not happen
+            if landed:
+                _publish(pending, final)
+            else:
+                with contextlib.suppress(FileNotFoundError):
+                    pending.unlink()
 
     def _entries(self) -> list[str]:
         if not self.journal.is_dir():
@@ -199,18 +231,35 @@ class MarkdownBackend:
         return f"{stamp.strftime(fmt)}-{ch.uid}-v{ch.version:06d}.json"
 
     def changes(self, cursor):
+        self._recover()
         names = self._entries()
         if cursor is None:
             return [], names[-1] if names else ""
         if cursor and not cursor.endswith(".json"):
             raise InvalidField(f"not a cursor of this store: {cursor!r}")
         out = []
+        self.journal_problems = []
         for n in names:
             if n <= cursor:
                 continue
-            with contextlib.suppress(OSError, ValueError, KeyError, TypeError):
+            try:
                 out.append(Change(**json.loads((self.journal / n).read_text(encoding="utf-8"))))
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                self.journal_problems.append(
+                    f"{CHANGES}/{n}: not a journal entry ({type(exc).__name__})"
+                )
         return out, names[-1] if names else cursor
+
+
+PENDING = ".pending"  # a journal entry written ahead of its item, not yet published
+
+
+def _publish(pending: pathlib.Path, final: pathlib.Path) -> None:
+    """Give an intent its final journal name (exclusively; an entry already there is kept)."""
+    with contextlib.suppress(FileExistsError):
+        os.link(pending, final)
+    with contextlib.suppress(FileNotFoundError):
+        pending.unlink()
 
 
 def _change_doc(ch: Change) -> dict[str, Any]:
