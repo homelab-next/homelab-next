@@ -24,7 +24,7 @@ Each capability is a seam: a small contract (`conformance/protocols/`), a confor
 | [broker](broker.md) ([[capabilities/broker\|broker]]) | allowlisted command execution with argument validation, a redacted audit trail and caller-bound requests | 8 | 12 | 3 | none yet | none |
 | [secrets](secrets.md) ([[capabilities/secrets\|secrets]]) | versioned key-value secrets with leases and redacted errors | 7 | 12 | 0 | `openbao` | [secrets](../systems/secrets.md) ([[systems/secrets\|secrets]]) |
 | [idp](idp.md) ([[capabilities/idp\|idp]]) | issue/verify short-lived bearer tokens; forged, expired, revoked and garbage tokens fail | 3 | 14 | 0 | none yet | [idp](../systems/idp.md) ([[systems/idp\|idp]]) |
-| [records](records.md) ([[capabilities/records\|records]]) | validated proposals in one agent lane; operator-only approve/deny/complete moves | 7 | 12 | 0 | none yet | none |
+| [records](records.md) ([[capabilities/records\|records]]) | validated proposals in one agent lane; operator-only approve/deny/complete moves | 7 | 13 | 0 | none yet | none |
 | [detections](detections.md) ([[capabilities/detections\|detections]]) | detection engine: shipped must-fire fixtures fire, must-not-fire fixtures stay silent | 1 | 9 | 0 | none yet | none |
 | [context](context.md) ([[capabilities/context\|context]]) | scoped retrieval for agents: relation before keywords, no inactive or stale hits, deterministic | 4 | 13 | 3 | none yet | none |
 | [projects](projects.md) ([[capabilities/projects\|projects]]) | projects, steps and one-off tasks under the board rules; uid links, versions, a change feed | 9 | 14 | 1 | `openproject` | none |

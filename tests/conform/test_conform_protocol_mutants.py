@@ -22,6 +22,8 @@ CASES = [
     ("broker", "command_broker", "DeferredClearAuditBroker", "audit-redacts-secret-args"),
     ("events", "event_bus", "StaleSettleEventBus", "stale-delivery-settles-nothing"),
     ("events", "event_bus", "ReplayingEventBus", "new-consumer-starts-at-creation"),
+    ("records", "records_target", "ReapprovingRecordsTarget", "decisions-are-final"),
+    ("records", "records_target", "RedenyingRecordsTarget", "decisions-are-final"),
 ]
 
 

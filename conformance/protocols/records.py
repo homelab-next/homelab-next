@@ -3,7 +3,9 @@
 
 Agents can write only into the ``inbox`` lane; only the decision maker moves notes into
 ``decided/approved|denied|completed``.  A completion request moves every note it names from
-approved to completed in one step (all-or-nothing).  Subject = :class:`RecordsTarget`, which the
+approved to completed in one step (all-or-nothing).  A decision is final: ``approve`` and ``deny``
+take a note from the inbox only, so a note already approved, denied or completed is refused and
+stays where it is.  Subject = :class:`RecordsTarget`, which the
 fake builds from ``homelabnext.records`` over a temporary directory.
 """
 

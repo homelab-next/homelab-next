@@ -13,7 +13,7 @@ generated_by: hnx docs capabilities generate
 **Validated proposals in one agent lane; operator-only approve/deny/complete moves.**
 
 - Contract: [`conformance.protocols.records`](../../conformance/protocols/records.py) (`conformance.protocols.records:RecordsTarget`)
-- Conformance suite: [`conformance.suites.records`](../../conformance/suites/records.py) (12 checks: 12 MUST, 0 SHOULD)
+- Conformance suite: [`conformance.suites.records`](../../conformance/suites/records.py) (13 checks: 13 MUST, 0 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -22,7 +22,9 @@ Contract for `records`: the propose -> decide -> complete lifecycle.
 
 Agents can write only into the `inbox` lane; only the decision maker moves notes into
 `decided/approved|denied|completed`.  A completion request moves every note it names from
-approved to completed in one step (all-or-nothing).  Subject = `RecordsTarget`, which the
+approved to completed in one step (all-or-nothing).  A decision is final: `approve` and `deny`
+take a note from the inbox only, so a note already approved, denied or completed is refused and
+stays where it is.  Subject = `RecordsTarget`, which the
 fake builds from `homelabnext.records` over a temporary directory.
 
 ## How to use it
@@ -158,6 +160,7 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `approve-moves-note` | MUST | approve takes the note out of the inbox into decided/approved |  |
 | `deny-moves-note` | MUST | deny moves the note to decided/denied |  |
 | `decide-unknown-note-rejected` | MUST | deciding a name not in the inbox fails; approve/deny/complete refuse '../' names |  |
+| `decisions-are-final` | MUST | approve or deny of a note already decided is refused and nothing moves |  |
 | `completion-moves-related-notes` | MUST | completing a request moves each related note to completed |  |
 | `completion-needs-existing-approved-notes` | MUST | a completion request naming a missing note or a path outside approved is refused |  |
 | `completion-only-of-approved-notes` | MUST | completing an inbox or denied note is refused and nothing moves (all-or-nothing) |  |
@@ -173,9 +176,11 @@ Each is a deliberately broken fake (`hnx conform run records --target broken:<mu
 
 | Mutant | Must fail | Defect |
 |---|---|---|
+| `approve-overturns-denial` | `decisions-are-final` | approve accepts a denied note and moves it to approved |
 | `completes-denied-notes` | `completion-only-of-approved-notes` | a completion request may name a denied note |
 | `completes-inbox-notes` | `completion-only-of-approved-notes` | a completion request for a note still in the inbox approves it on the agent path |
 | `decide-follows-traversal` | `decide-unknown-note-rejected` | deny/complete join the name onto the lane without refusing '../' |
+| `deny-withdraws-approval` | `decisions-are-final` | deny accepts an approved note and moves it to denied |
 | `overwrites-existing-note` | `propose-never-overwrites` | a repeated proposal silently replaces the first |
 | `partial-completion` | `completion-only-of-approved-notes` | complete() moves notes one by one and stops halfway on a missing one |
 | `read-follows-traversal` | `unknown-lane-rejected` | read() joins the name onto the lane without refusing '../' |
@@ -227,4 +232,4 @@ No service in `examples/services.yml` declares `capability: records`.
    hnx conform run records --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (12) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (13) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.

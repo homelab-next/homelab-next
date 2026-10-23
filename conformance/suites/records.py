@@ -9,6 +9,8 @@ from conformance.fakes.records_target import (
     InboxCompletingRecordsTarget,
     OverwritingRecordsTarget,
     PartialCompleteRecordsTarget,
+    ReapprovingRecordsTarget,
+    RedenyingRecordsTarget,
     TraversingRecordsTarget,
     UnconfinedReadRecordsTarget,
 )
@@ -128,6 +130,36 @@ def _(r):
     ):
         raises(lambda f=fn, n=name: f(n), f"{verb} {name!r}", PermissionError, ValueError)
     assert _snapshot(r) == before, "a traversal name moved a note"
+
+
+@SUITE.check(
+    "decisions-are-final",
+    "approve or deny of a note already decided is refused and nothing moves",
+)
+def _(r):
+    approved, denied = r.propose(_note()), r.propose(_note())
+    r.approve(approved)
+    r.deny(denied, "no")
+    done = r.propose(_note())
+    r.approve(done)
+    r.complete(r.completion_request([done], "Done.", agent="triage"))
+    before = _snapshot(r)
+    for verb, fn, name in (
+        ("approve", r.approve, denied),
+        ("deny", lambda n: r.deny(n, "changed my mind"), approved),
+        ("approve", r.approve, approved),
+        ("deny", lambda n: r.deny(n, "again"), denied),
+        ("approve", r.approve, done),
+        ("deny", lambda n: r.deny(n, "too late"), done),
+    ):
+        raises(
+            lambda f=fn, n=name: f(n),
+            f"{verb} of decided note {name!r}",
+            FileNotFoundError,
+            PermissionError,
+            ValueError,
+        )
+        assert _snapshot(r) == before, f"{verb} re-decided {name!r}"
 
 
 @SUITE.check(
@@ -255,6 +287,16 @@ MUTANTS = {
         PartialCompleteRecordsTarget,
         "completion-only-of-approved-notes",
         "complete() moves notes one by one and stops halfway on a missing one",
+    ),
+    "approve-overturns-denial": Mutant(
+        ReapprovingRecordsTarget,
+        "decisions-are-final",
+        "approve accepts a denied note and moves it to approved",
+    ),
+    "deny-withdraws-approval": Mutant(
+        RedenyingRecordsTarget,
+        "decisions-are-final",
+        "deny accepts an approved note and moves it to denied",
     ),
     "decide-follows-traversal": Mutant(
         TraversingRecordsTarget,
