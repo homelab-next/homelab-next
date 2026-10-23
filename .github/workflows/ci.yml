@@ -300,6 +300,8 @@ jobs:
           policy=()
           if [ -f skips.yml ]; then policy=(--policy skips.yml); fi
           out="$RUNNER_TEMP/go-test.json"
+          # every package the run covers must show up in the stream, even one that has no tests
+          go list ./... > "$RUNNER_TEMP/go-packages.txt"
           status=0
           sudo env "PATH=$PATH" "HOME=$HOME" \
             "GOFLAGS=$GOFLAGS" "GOTOOLCHAIN=$GOTOOLCHAIN" "GOWORK=$GOWORK" \
@@ -313,7 +315,8 @@ jobs:
           python "$GITHUB_WORKSPACE/tools/go_test_policy.py" "${policy[@]}" \
             --privileged "$RUNNER_TEMP/go-test-root.json" \
             --privileged-exit "$RUNNER_TEMP/go-test-root.exit" \
-            --forbid 'python3 not available' --go-exit "$status" "$out"
+            --forbid 'python3 not available' --go-exit "$status" \
+            --expect-packages "$RUNNER_TEMP/go-packages.txt" "$out"
 
   # One stable check name for branch protection, whatever the modules are called: the discovery
   # passed, and every module's go job passed (or there was none to run).

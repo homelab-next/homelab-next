@@ -34,7 +34,10 @@ Reads the event stream of ``go test -json`` (one or more files) and fails on:
   run was killed or its output only partly captured;
 * with ``--go-exit N`` (``go test``'s own exit status): any status but 0 and 1, a 1 with nothing
   in the stream to explain it but quarantined failures, or a 0 next to a failure in the stream.
-  So a stream that lost its failing part cannot pass while ``go test`` itself failed.
+  So a stream that lost its failing part cannot pass while ``go test`` itself failed;
+* with ``--expect-packages FILE`` (``go list ./...``): a listed package with no events at all, so
+  a stream cut exactly at a package boundary cannot pass on a quarantined failure's exit 1 (a
+  package without test files still has events: its ``skip``).
 
 The policy file (``skips.yml`` in the module's root)::
 
@@ -282,6 +285,7 @@ def judge(
     privileged_exit: dict[str, int] | None = None,
     forbid: Iterable[str] = (),
     go_exit: int | None = None,
+    expected_packages: Iterable[str] | None = None,
 ) -> tuple[list[str], list[str]]:
     """``(problems, notes)`` for one run against the policy."""
     problems = list(run.bad_lines)
@@ -348,6 +352,11 @@ def judge(
         problems.append(f"BUILD FAIL {path}: {_oneline(run.build_output.get(path, []))}")
 
     problems += _cut_off(run)
+    for pkg in sorted(set(expected_packages or ()) - set(run.packages)):
+        problems.append(
+            f"FAIL {pkg}: no events: --expect-packages lists it, the stream never mentions it "
+            "(lost from a partly captured stream)"
+        )
 
     forbid_rx = [re.compile(f) for f in forbid]
     priv_passed = {
@@ -520,6 +529,13 @@ def read_exits(path: str) -> dict[str, int]:
     return exits
 
 
+def _read_lines(path: str) -> list[str]:
+    try:
+        return [x.strip() for x in Path(path).read_text(encoding="utf-8").splitlines() if x.strip()]
+    except OSError as exc:
+        raise PolicyError(f"cannot read {path}: {exc.strerror}") from exc
+
+
 def _read(paths: list[str], run: Run | None = None) -> Run:
     run = run or Run()
     for p in paths:
@@ -561,6 +577,11 @@ def main(argv: list[str] | None = None) -> int:
         metavar="N",
         help="go test's exit status: 0, or 1 when only quarantined failures explain it",
     )
+    ap.add_argument(
+        "--expect-packages",
+        metavar="FILE",
+        help="the packages the run covers, one import path a line (go list ./...): each needs events",
+    )
     ap.add_argument("--list-privileged", action="store_true")
     args = ap.parse_args(argv)
     try:
@@ -577,6 +598,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.privileged_exit and privileged is None:
             raise PolicyError("--privileged-exit needs the root run's stream (--privileged)")
         exits = read_exits(args.privileged_exit) if args.privileged_exit else None
+        expected = _read_lines(args.expect_packages) if args.expect_packages else None
         problems, notes = judge(
             run,
             policy,
@@ -587,6 +609,7 @@ def main(argv: list[str] | None = None) -> int:
             privileged_exit=exits,
             forbid=forbid,
             go_exit=args.go_exit,
+            expected_packages=expected,
         )
     except (PolicyError, re.error) as exc:
         print(f"go_test_policy: {exc}", file=sys.stderr)

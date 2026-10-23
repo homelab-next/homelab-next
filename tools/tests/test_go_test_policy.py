@@ -495,7 +495,7 @@ FAKE_TOOLS = {
       chmod +x "$2"; exit 0
     fi
     cat "$FAKE_STREAM"; exit "$FAKE_EXIT";;
-  list) echo "$FAKE_MODULE/${2#./}";;
+  list) if [ "$2" = ./... ]; then cat "$FAKE_PACKAGES"; else echo "$FAKE_MODULE/${2#./}"; fi;;
   tool) cat;;
 esac
 """,
@@ -514,13 +514,15 @@ def run_test_step(
     *,
     skips: str | None = None,
     privileged: tuple[list[str], int] | None = None,
+    packages: list[str] | None = None,
 ) -> subprocess.CompletedProcess:
     """The go job's root-only and test steps, in a scratch checkout, with go replaced by streams:
     ``lines`` and ``go_exit`` for go test, ``privileged`` = (stream, exit status) for the root
-    run's test binary.  The test step's result, or the root-only step's when that fails."""
+    run's test binary; ``packages`` for go list ./... (default: the packages ``lines`` names).  The
+    test step's result, or the root-only step's when that fails."""
     bin_dir, mod, rt = tmp_path / "bin", tmp_path / "orchestrator", tmp_path / "runner-temp"
     for d in (bin_dir, mod, rt):
-        d.mkdir()
+        d.mkdir(parents=True)
     for name, body in FAKE_TOOLS.items():
         (bin_dir / name).write_text("#!/bin/sh\n" + body)
         (bin_dir / name).chmod(0o755)
@@ -536,6 +538,10 @@ def run_test_step(
         (mod / "internal" / pkg).mkdir(parents=True)
     (tmp_path / "stream.json").write_text("\n".join(lines) + "\n")
     priv_lines, priv_exit = privileged or ([], 0)
+    if packages is None:
+        events = [json.loads(x) for x in lines if x.strip().startswith("{")]
+        packages = sorted({e["Package"] for e in events if e.get("Package")})
+    (tmp_path / "packages.txt").write_text("".join(f"{x}\n" for x in packages))
     (tmp_path / "priv.json").write_text("\n".join(priv_lines) + "\n")
     env = {
         "PATH": f"{bin_dir}:{Path(sys.executable).parent}:/usr/bin:/bin",
@@ -548,6 +554,7 @@ def run_test_step(
         "FAKE_PRIV_STREAM": str(tmp_path / "priv.json"),
         "FAKE_PRIV_EXIT": str(priv_exit),
         "FAKE_MODULE": MOD,
+        "FAKE_PACKAGES": str(tmp_path / "packages.txt"),
     }
     for name in ("root-only tests", "tests (race"):
         (tmp_path / "step.sh").write_text(ci_step(name))
@@ -723,3 +730,32 @@ def test_the_ci_steps_record_and_judge_each_privileged_binarys_exit_status(
     assert (r.returncode == 0) is passes, r.stdout + r.stderr
     exits = (tmp_path / "runner-temp" / "go-test-root.exit").read_text().split()
     assert exits[1] == str(priv_exit)
+
+
+def test_every_package_go_list_names_needs_events_in_the_stream(tmp_path, capsys):
+    # verify.md: one package with a quarantined failure, another with a real one whose events
+    # were lost at the package boundary; go test's exit 1 is "explained" by the quarantine
+    text = QUARANTINE.format(test="TestStall", until="2026-02-01")
+    expected = tmp_path / "packages.txt"
+    expected.write_text(f"{MOD}/internal/queue\n{MOD}/internal/fl\n")
+    assert run(tmp_path, FLAKY, "--go-exit", "1", policy_yaml=text) == 0  # the stream alone
+    args = ("--go-exit", "1", "--expect-packages", str(expected))
+    assert run(tmp_path, FLAKY, *args, policy_yaml=text) == 1
+    out = capsys.readouterr().out
+    assert f"FAIL {MOD}/internal/fl: no events" in out
+    assert "internal/queue: no events" not in out
+    expected.write_text(f"{MOD}/internal/queue\n")
+    assert run(tmp_path, FLAKY, *args, policy_yaml=text) == 0
+    assert run(tmp_path, FLAKY, "--expect-packages", str(tmp_path / "missing")) == 2
+
+
+@needs_bash
+def test_the_ci_step_lists_the_packages_and_requires_each_in_the_stream(tmp_path):
+    lines = fixture("quarantined_only.json")
+    assert run_test_step(tmp_path / "a", lines, 1).returncode == 0
+    r = run_test_step(
+        tmp_path / "b", lines, 1, packages=[f"{MOD}/internal/ok", f"{MOD}/internal/fl"]
+    )
+    assert r.returncode == 1 and f"FAIL {MOD}/internal/fl: no events" in r.stdout, (
+        r.stdout + r.stderr
+    )
