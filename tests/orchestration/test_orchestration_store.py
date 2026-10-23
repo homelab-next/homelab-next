@@ -468,3 +468,18 @@ def test_the_printed_fix_quotes_a_path_the_shell_would_split(tmp_path, capsys):
         conn.execute(fix)
     conn.close()
     assert _run_ids(db) == ["r1"]
+
+
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity", "1e999"])
+def test_a_non_finite_number_is_poison_not_a_nan_in_the_rollup(store, literal):
+    """Python's parser takes NaN, Infinity and 1e999 (an infinity); the schema's minimum: 0 does
+    not reject NaN, so the record was stored and the rollup emitted NaN: not JSON."""
+    ev = copy.deepcopy(examples()[0])
+    raw = json.dumps(ev).replace(
+        f'"wall_s": {json.dumps(ev["data"]["wall_s"])}', f'"wall_s": {literal}'
+    )
+    assert literal in raw
+    with pytest.raises(EventError, match="not JSON"):
+        store.consume(raw)
+    assert store.jobs() == []
+    json.dumps(store.rollup(now=T0), allow_nan=False)

@@ -83,7 +83,7 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
 
 - **Consume** (`homelabnext.orchestration.bus.drain`): a durable pull consumer
   (`hnx-orchestration-telemetry`) on the type's subject. Stored or a duplicate: `ack`. Poison (not
-  JSON, invalid, another type, a source other than `svc:llm-orchestrator`, an id reused with
+  JSON, which includes `NaN`, `Infinity` and a number no float holds such as `1e999`, invalid, another type, a source other than `svc:llm-orchestrator`, an id reused with
   another body, a second record for a run under another id, a record whose `gateway_tag` another
   run already holds (the tag must name one job, or two jobs' turns would merge), a timestamp the pattern accepts but
   the calendar does not, such as `2026-02-30`, times out of order by more than a second (queued

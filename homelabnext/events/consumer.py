@@ -14,6 +14,7 @@ with a different body is refused (an id collision, never "processed").
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -23,13 +24,27 @@ from .envelope import EventError, body_digest, validate_event
 Handler = Callable[[dict[str, Any]], None]
 
 
+def _no_constant(name: str) -> Any:
+    raise ValueError(f"{name} is not a JSON number")
+
+
+def _finite(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):  # 1e999: JSON, but no number a consumer can compute or re-emit
+        raise ValueError(f"{text} is not a finite number")
+    return value
+
+
 def decode_event(
     body: bytes | str | Mapping[str, Any], *, types: Iterable[str] | None = None
 ) -> dict[str, Any]:
-    """Parse and validate a received event; raise :class:`EventError` on any defect."""
+    """Parse and validate a received event; raise :class:`EventError` on any defect.  ``NaN``,
+    ``Infinity`` and a number too large for a float (``1e999``) are refused at the parse: Python's
+    parser accepts them, a schema's ``minimum`` does not reject ``NaN``, and a consumer that kept
+    one would emit invalid JSON (or ``nan`` in a page) downstream."""
     if isinstance(body, bytes | str):
         try:
-            event = json.loads(body)
+            event = json.loads(body, parse_constant=_no_constant, parse_float=_finite)
         except ValueError as exc:
             raise EventError("event body is not JSON", [str(exc)]) from None
         except RecursionError:  # nested deeper than the parser's stack: never a valid envelope
