@@ -271,3 +271,9 @@ subclass instead; the interface is a dozen small methods returning `Outcome(ok, 
 * The parity tools compare what you ask them to. A query set that misses a table is a gap in the
   swap test, not in the tool.
 * Real traffic mirroring, component start/stop and DNS propagation are SERVER and not implemented.
+* A crash after the primary committed a batch but before its park record reached the journal
+  loses that batch for the secondary: the primary's source mark has moved, so the reader does
+  not send it again. Closing this window would need an intent record before the primary write.
+* Evidence files are `0600` and may hold rows (abandoned writes) and the rollback reason. Keep the
+  evidence directory (`<swap>.evidence/`, or the runner's `evidence_dir`) out of synced or
+  git-tracked directories; only its sha256 hashes belong in the record.

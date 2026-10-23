@@ -80,8 +80,10 @@ class Backend:
         return self._missing("old_state")
 
     def discard_parked(self, reason: str) -> Outcome:
-        """Drop the writes parked for the old component on purpose (``rollback
-        --abandon-parked``); ``data['discarded']`` lists them, rows included, as evidence."""
+        """Drop, on purpose, the writes the old component refuses (``SwapRunner.rollback(...,
+        abandon_parked=True)``; a refused write only, not those queued behind it, and nothing
+        while the component is unreachable); ``data['discarded']`` lists them, rows included,
+        for the evidence."""
         return self._missing("discard_parked")
 
     def restore_parked(self, batches: list[dict[str, Any]]) -> Outcome:

@@ -557,8 +557,9 @@ class SwapRunner:
     def rollback(self, reason: str, *, abandon_parked: bool = False) -> dict[str, Any]:
         """Restore the prior route.  Writes parked for the old component are replayed into it
         first; while one is refused the rollback stops (and the old component is stopped again).
-        ``abandon_parked`` drops those writes on purpose: they are listed, rows included, in the
-        rollback evidence."""
+        ``abandon_parked`` drops the refused writes on purpose: they are written at once, rows
+        included, to their own ``abandoned-parked`` evidence file (and parked again if that
+        write fails)."""
         doc = self.record()
         reason = (reason or "").strip()
         if doc["status"] != "active":
