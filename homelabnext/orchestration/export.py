@@ -35,12 +35,9 @@ from homelabnext.events.consumer import parse_json
 from homelabnext.events.envelope import EventError
 from homelabnext.status.model import iso, parse_iso
 
-from .store import TelemetryStore
+from .store import FUTURE_S, TelemetryStore
 
 EXPORT_SCHEMA = "homelabnext.orchestration.export/1"
-#: how far ahead of the store's clock an imported time may be: clock skew between hosts, not a
-#: forged time (a turn started in 2099 would outlive retention; a job settled in 2099 is never read)
-FUTURE_S = 86400.0
 #: what an import counts, per kind
 STATUSES = ("processed", "duplicate", "expired")
 

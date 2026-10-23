@@ -116,7 +116,7 @@ def test_an_unknown_sum_is_shown_as_unknown_never_as_zero(site):
 def test_filters_and_links_take_every_value_the_schema_allows(filled):
     """``backend=-`` (no backend), a dotted backend and a run id that starts with a dot are
     values the record allows: the filter narrows to them and the job link opens the job."""
-    ev = copy.deepcopy(examples()[0]) | {"id": "evt-dotted"}
+    ev = copy.deepcopy(examples()[0]) | {"id": "evt-dotted", "subject": ".abc"}
     ev["data"].update(run_id=".abc", gateway_tag=".abc", backend=".vllm-a")
     assert filled.consume(body(ev)).status == "processed"
     site = OrchestrationSite(filled, clock=lambda: T0)

@@ -117,7 +117,8 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
   the calendar does not, such as `2026-02-30`, times out of order by more than a second (queued
   after started or finished, started after finished: the controller stamps all three from one
   clock, so only a wall-clock step between two stamps inverts them), a time before 2000 (a zero
-  time behind a parse error, not a job's), or a job queued more than the retention before it
+  time behind a parse error, not a job's), a time more than a day ahead of the store's clock (never
+  purged, and holding its tag for good), or a job queued more than the retention before it
   finished (older than anything the store keeps)). A long job is not poison: the controller bounds
   neither queue wait nor run time (no wall-clock ceiling; a queued job survives restarts and holds,
   and one cancelled in the queue still reports)): `term`, so the bus's dead-letter stream is the

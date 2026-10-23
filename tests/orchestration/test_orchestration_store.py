@@ -34,7 +34,10 @@ def test_each_example_is_stored_once_and_a_redelivery_is_a_duplicate(store):
         (lambda e: e["data"].update(output_bytes=7), "already consumed with another body"),
         (lambda e: e.update(id="evt-other"), "already recorded under event 'evt-0001'"),
         (
-            lambda e: e.update(id="evt-other") or e["data"].update(run_id="run-other"),
+            lambda e: (
+                e.update(id="evt-other", subject="run-other")
+                or e["data"].update(run_id="run-other")
+            ),
             "gateway tag 'run-0001' already joins run 'run-0001'",
         ),
         (lambda e: e.update(id="evt-other", source="svc:status-hub"), "only svc:llm-orchestrator"),
@@ -289,9 +292,11 @@ CONTROLLER_EVENT = (
 )
 
 
-def test_the_controllers_own_event_is_accepted_as_sent(store):
+def test_the_controllers_own_event_is_accepted_as_sent(tmp_path):
     """The controller side's test event validates unchanged and is stored; the schema's
-    ``controller`` example is the same event, so the contract tests publish and consume it too."""
+    ``controller`` example is the same event, so the contract tests publish and consume it too.
+    (A store whose clock is after it: a job more than a day ahead of the store is poison.)"""
+    store = TelemetryStore(tmp_path / "t.db", clock=lambda: parse_iso("2026-10-23T00:00:00Z"))
     assert (EXAMPLES / CONTROLLER_EXAMPLE).read_text().strip() == CONTROLLER_EVENT
     assert store.consume(CONTROLLER_EVENT).status == "processed"
     assert store.job("run-c1")["model"] == "custom/hermes-agent"
@@ -312,8 +317,8 @@ def test_a_backend_name_is_stored_as_the_controller_emits_it(store, backend):
     A ':' or '/' (a host:port or a URL) is still refused."""
     ev = json.loads((EXAMPLES / DOTTED_EXAMPLE).read_text())
     assert store.consume(body(ev)).status == "processed"
-    ev = copy.deepcopy(ev) | {"id": f"evt-b-{len(backend)}"}
     run = f"run-b-{len(backend)}"
+    ev = copy.deepcopy(ev) | {"id": f"evt-b-{len(backend)}", "subject": run}
     ev["data"].update(run_id=run, gateway_tag=run, backend=backend)
     assert store.consume(body(ev)).status == "processed"
     assert store.job(f"run-b-{len(backend)}")["backend"] == backend
@@ -337,7 +342,7 @@ def test_turns_of_many_jobs_do_not_bind_a_variable_per_tag(store, monkeypatch):
 
     template = examples()[0]
     for n in range(150):
-        ev = copy.deepcopy(template) | {"id": f"evt-m{n:03d}"}
+        ev = copy.deepcopy(template) | {"id": f"evt-m{n:03d}", "subject": f"run-m{n:03d}"}
         ev["data"].update(run_id=f"run-m{n:03d}", gateway_tag=f"run-m{n:03d}")
         store.consume(body(ev))
     store.add_turns(
@@ -566,9 +571,10 @@ def test_the_envelope_is_closed_an_extension_or_a_free_text_subject_is_poison(st
     assert records == []  # nothing of it is stored, so nothing is exported
 
 
-def test_every_envelope_attribute_an_example_sends_is_allowed(store):
+def test_every_envelope_attribute_an_example_sends_is_allowed(tmp_path):
     """The attributes the controller sends (subject as the run id, severity, correlationid) are
     the schema's own: closing the envelope refuses none of them."""
+    store = TelemetryStore(tmp_path / "t.db", clock=lambda: parse_iso("2026-10-23T00:00:00Z"))
     ev = json.loads((EXAMPLES / CONTROLLER_EXAMPLE).read_text(encoding="utf-8"))
     assert store.consume(body(ev)).status == "processed"
     _header, line = export_lines(store)
@@ -648,3 +654,28 @@ def test_the_job_model_pattern_is_the_turn_records_model_rule():
     assert model["pattern"] == f"^{MODEL_PATTERN}$(?!\\n)"
     frozen = EXAMPLES.parents[1] / "_frozen" / "1.0" / "events" / "agent.job.finished.schema.json"
     assert json.loads(frozen.read_text(encoding="utf-8")) == schema
+
+
+@pytest.mark.parametrize("subject", ["run-9999", "the.prompt.was.summarise-the-papers"])
+def test_a_subject_other_than_the_run_id_is_poison(store, subject):
+    ev = examples()[0] | {"subject": subject}
+    with pytest.raises(EventError) as exc:
+        store.consume(body(ev))
+    assert "subject" in "\n".join(exc.value.problems) and store.jobs() == []
+
+
+def test_a_job_finished_more_than_a_day_ahead_is_poison(store):
+    """Never purged (retention counts back from now) and holding its tag for good."""
+    from homelabnext.orchestration.store import FUTURE_S
+
+    ev = copy.deepcopy(examples()[0])
+    ahead = T0 + FUTURE_S + 60
+    for key in ("queued_at", "started_at", "finished_at"):
+        ev["data"][key] = iso(ahead)
+    with pytest.raises(EventError, match="invalid event") as exc:
+        store.consume(body(ev))
+    assert "in the future" in "\n".join(exc.value.problems)
+    near = copy.deepcopy(examples()[0])
+    for key in ("queued_at", "started_at", "finished_at"):
+        near["data"][key] = iso(T0 + 3600)  # an hour of clock skew is a record
+    assert store.consume(body(near)).status == "processed"

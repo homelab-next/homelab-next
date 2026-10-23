@@ -21,6 +21,8 @@ of the controller's service ids the store is configured with (``sources``, defau
 * an envelope attribute the envelope schema does not declare (a CloudEvents extension, which
   would be free text beside the closed ``data``: :data:`ENVELOPE_ATTRIBUTES`) is refused the same
   way, so the stored and exported envelope is names and numbers only;
+* a ``subject`` other than the record's run id, or a time more than :data:`FUTURE_S` ahead of
+  the store's clock, is refused the same way;
 * a value the schema's pattern accepts but that is not real (a timestamp of 2026-02-30, an hour
   24, an offset of 99 hours), or timestamps out of order (queued after started or finished,
   started after finished, by more than :data:`ORDER_SLACK_S`), a time before :data:`EARLIEST`
@@ -236,14 +238,16 @@ class TelemetryStore:
                 "invalid event",
                 [f"envelope attribute {k!r:.40}: not one the envelope declares" for k in extra],
             )
+        if event.get("subject", event["data"]["run_id"]) != event["data"]["run_id"]:
+            raise EventError("invalid event", ["subject: not the record's run id (data.run_id)"])
         if event["source"] not in self.sources:
             raise EventError(
                 "not the controller's job record",
                 [f"source {event['source']!r}: only {', '.join(self.sources)} reports jobs"],
             )
         eid, digest, data = event["id"], body_digest(event), event["data"]
-        finished = _instants(data, self.retention_s)["finished_at"]
         now = self.clock()
+        finished = _instants(data, self.retention_s, now + FUTURE_S)["finished_at"]
         if finished < now - self.retention_s:
             return Delivery(eid, "expired")
         with self._db() as db:
@@ -429,13 +433,16 @@ ORDER_SLACK_S = 1.0
 #: error the controller ignored), not a job.  The controller bounds neither queue wait nor run
 #: time, so the span between the times is not bounded here; only an instant no job has is refused
 EARLIEST = parse_iso("2000-01-01T00:00:00Z")
+#: how far ahead of the store's clock a job's time, or an imported time, may be: clock skew
+#: between hosts, not a record (a job finished in 2099 would never be purged and hold its tag)
+FUTURE_S = 86400.0
 
 
-def _instants(data: Mapping[str, Any], retention_s: float) -> dict[str, float]:
+def _instants(data: Mapping[str, Any], retention_s: float, latest: float) -> dict[str, float]:
     """The record's timestamps as epoch seconds; :class:`EventError` (poison) for one that matches
     the schema's pattern but is no real date and time, falls outside what UTC can express, is
-    before :data:`EARLIEST`, or is more than ``retention_s`` before the finish (older than
-    anything the store keeps)."""
+    before :data:`EARLIEST`, after ``latest`` (the store's clock plus :data:`FUTURE_S`), or is
+    more than ``retention_s`` before the finish (older than anything the store keeps)."""
     out: dict[str, float] = {}
     for key in _TIMES:
         value = data.get(key)
@@ -448,6 +455,11 @@ def _instants(data: Mapping[str, Any], retention_s: float) -> dict[str, float]:
             raise EventError(
                 "invalid event", [f"data.{key}: {value!r} is not a real date and time ({exc})"]
             ) from None
+        if out[key] > latest:
+            raise EventError(
+                "invalid event",
+                [f"data.{key}: {value!r} is in the future (more than a day ahead of the store)"],
+            )
         if out[key] < EARLIEST:
             raise EventError(
                 "invalid event", [f"data.{key}: {value!r} is before 2000: a zero time, not a job's"]
@@ -475,6 +487,7 @@ __all__ = [
     "DEFAULT_RETENTION_DAYS",
     "EARLIEST",
     "ENVELOPE_ATTRIBUTES",
+    "FUTURE_S",
     "JOURNAL_MODE",
     "MAX_RETENTION_DAYS",
     "MIN_RETENTION_DAYS",

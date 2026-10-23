@@ -76,7 +76,7 @@ def _a_week_of_jobs(store, every_s: float = 1800.0) -> list[str]:
     template, runs = examples()[0], []
     start = T0 - 7 * 86400
     for n in range(int(7 * 86400 // every_s)):
-        ev = copy.deepcopy(template) | {"id": f"evt-w{n:04d}"}
+        ev = copy.deepcopy(template) | {"id": f"evt-w{n:04d}", "subject": f"run-w{n:04d}"}
         q = start + n * every_s
         ev["data"].update(
             run_id=f"run-w{n:04d}", gateway_tag=f"run-w{n:04d}", queued_at=iso(q),
