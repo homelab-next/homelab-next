@@ -82,14 +82,18 @@ So these must hold, everywhere:
              ``php_fastcgi``) that sets an identity variable (``HTTP_<identity header>``,
              ``REMOTE_USER``, ``AUTH_*`` and the other CGI user variables) or sets any variable
              from a value the client chooses: Caddy builds the CGI environment from ``env``
-             first, so a name no request header carries keeps the ``env`` value. One copy is
-             allowed: a ``header_up`` set (not ``+`` add) or a FastCGI ``env`` whose value is
-             exactly one request-header placeholder of an identity header the site's
-             matcherless site-level strip deletes (``header_up Remote-User
-             {http.request.header.X-Authentik-Username}``, ``env REMOTE_USER {...}``): read at
-             proxy time, after that strip and ``forward_auth``, it is the IdP's answer or empty
-             on every path, never the client's (``copy_headers X-Authentik-Username>Remote-User``
-             does the same for a request header).
+             first, so a name no request header carries keeps the ``env`` value. To hand the
+             IdP's answer on under another header name, use ``copy_headers
+             X-Authentik-Username>Remote-User``: the lint then requires every spelling of the
+             target stripped, which a ``header_up Remote-User {...}`` copy does not ensure (a
+             client's ``Remote_User`` reaches a CGI-style upstream beside it, observed on
+             2.11.1 and 2.11.2). One copy is allowed: a FastCGI ``env`` of a variable without
+             the ``HTTP_`` prefix (``env REMOTE_USER {http.request.header.X-Authentik-Username}``)
+             whose value is exactly one request-header placeholder of an identity header the
+             site's matcherless site-level strip deletes. No request header can set such a
+             variable (observed on 2.11.1, 2.11.2 and 2.11.7 with every spelling sent), and the
+             source is read after the strip and ``forward_auth``. ``env HTTP_REMOTE_USER {...}``
+             is refused: the client's ``Remote-User`` overwrites it.
   dial       a ``forward_auth`` whose upstream is a placeholder the request chooses (the client
              picks the IdP that vouches for it), and any proxy of a site that runs
              ``forward_auth`` whose upstream (argument, ``to``, ``dynamic``) is one (the IdP's
@@ -555,6 +559,11 @@ def _expand(
         sub_root, sub_problems = parse_caddyfile(text, rel)
         problems.extend(sub_problems)
         _expand(sub_root, f.parent, sub, problems, snippets)
+        # the file's snippets are in scope from here on, as Caddy splices the file in place: the
+        # next match of the same glob sees them too
+        for c in sub_root.children:
+            if _kind(c) == "snippet":
+                snippets[SNIPPET.match(c.name).group("name")] = c  # type: ignore[union-attr]
         return sub_root.children
 
     def resolve(node: Node) -> list[Node] | None:
@@ -594,14 +603,20 @@ def _expand(
             target = c.tokens[1] if len(c.tokens) > 1 else ""
             got = resolve(c) if depth < 16 else None
             if got is None:
+                snippet_like = target and not GLOB.search(target) and not set("/.") & set(target)
+                snippet_like = snippet_like and not (base is not None and (base / target).exists())
                 problems.append(
                     Finding(
                         c.path,
                         c.line,
                         "parse",
-                        f"import {target} cannot be followed (a placeholder, a cycle, a snippet "
-                        "not defined above it, a file or glob match outside the tree, or no such "
-                        "file): the lint cannot see what it adds",
+                        f"import {target}: no snippet ({target}) is defined before this import (in "
+                        "this file, a file imported earlier, or an earlier match of the same glob) "
+                        "and no such file exists: the lint cannot see what it adds"
+                        if snippet_like
+                        else f"import {target} cannot be followed (a placeholder, a cycle, a file "
+                        "or glob match outside the tree, or no such file): the lint cannot see "
+                        "what it adds",
                     )
                 )
                 continue
@@ -775,9 +790,9 @@ def _request_header_ref(values: list[str]) -> str | None:
 
 def _from_idp(values: list[str], site_deletes: list[str], copied: set[str]) -> bool:
     """Whether a value is exactly one identity-header placeholder that the site's matcherless
-    site-level strip deletes in every spelling: read at proxy time (``header_up``, a FastCGI
-    ``env``), after that strip and ``forward_auth`` ran, it is the IdP's answer or empty on
-    every path, never the client's."""
+    site-level strip deletes in every spelling: read at proxy time (a FastCGI ``env``), after
+    that strip and ``forward_auth`` ran, the source is the IdP's answer or empty. The caller
+    also decides whether the client can set the target itself (here: an ``HTTP_*`` variable)."""
     name = _request_header_ref(values) if site_deletes else None
     if name is None:
         return False
@@ -837,20 +852,27 @@ def _resets(
                 )
             )
             continue
-        if (
-            label == "header_up"
-            and not field.startswith("+")
-            and not identity(bare)
-            and _from_idp(values, site_deletes or [], copied)
-        ):
-            continue  # the IdP's own answer handed on under another name
         hits = [bare] if identity(bare) else []
-        hits += [
+        copies = [
             m.group("name")
             for v in values
             for m in HEADER_PLACEHOLDER.finditer(v)
             if identity(m.group("name"))
         ]
+        if copies and not hits:
+            out.append(
+                Finding(
+                    node.path,
+                    node.line,
+                    "reset",
+                    f"{label} copies the identity header {copies[0]} into {bare}: a client can "
+                    f"send {bare} (or another spelling of it) itself; use copy_headers "
+                    f"{copies[0]}>{bare} in forward_auth, which the lint then requires to strip "
+                    f"every spelling of {bare}",
+                )
+            )
+            continue
+        hits += copies
         if hits:
             out.append(
                 Finding(
@@ -1020,8 +1042,11 @@ def _fastcgi_env(
         if n.name != "env" or not fastcgi or len(n.tokens) < 2 or INLINE_ALLOW.search(n.raw):
             continue
         name, values = n.tokens[1], n.tokens[2:]
-        if _from_idp(values, site_deletes or [], copied):
-            continue  # REMOTE_USER from the IdP's answer, after the site-level strip
+        if not name.upper().startswith("HTTP_") and _from_idp(values, site_deletes or [], copied):
+            # REMOTE_USER from the IdP's answer, after the site-level strip: a request header
+            # becomes HTTP_<NAME> and can never set a variable without that prefix (observed on
+            # 2.11.1, 2.11.2 and 2.11.7 with every spelling of Remote-User sent)
+            continue
         if cgi_identity(name, copied) or any(CLIENT_PLACEHOLDER.search(v) for v in values):
             out.append(
                 Finding(
@@ -1425,7 +1450,7 @@ class _Judge:
                         self.copy_routes(resp.get("routes"), f"{loc}/handle_response[{k}]")
                         self.depth -= 1
                 return st
-            local = self.headers(request, st, loc, copy=False, covered=st)
+            local = self.headers(request, st, loc, copy=False)
             if scope:
                 self.require(local, self.keys, loc, "the upstream")
             # a handle_response that is not a forward-auth runs after the upstream answered
@@ -1482,7 +1507,6 @@ class _Judge:
         st: frozenset | None,
         loc: str,
         copy: bool,
-        covered: frozenset | None = None,
     ) -> frozenset | None:
         if not isinstance(ops, dict):
             return st
@@ -1490,8 +1514,7 @@ class _Judge:
             for field_, vals in (ops.get(kind) or {}).items():
                 values = [v.get("replace", "") if isinstance(v, dict) else str(v)
                           for v in (vals if isinstance(vals, list) else [vals])]  # fmt: skip
-                idp = kind == "set" and self.from_idp(values, covered)
-                self.judge_set(kind, str(field_), values, loc, copy and kind == "set", idp)
+                self.judge_set(kind, str(field_), values, loc, copy and kind == "set")
         return None if st is None else self.deleted(ops, st)
 
     def deleted(self, ops: object, st: frozenset) -> frozenset:
@@ -1509,9 +1532,7 @@ class _Judge:
             return MARK in covered or all(sp.lower() in covered for sp in spellings(name))
         return _norm(name) in self.idents and all(sp.lower() in covered for sp in spellings(name))
 
-    def judge_set(
-        self, kind: str, field_: str, values: list[str], loc: str, copy: bool, idp: bool = False
-    ) -> None:
+    def judge_set(self, kind: str, field_: str, values: list[str], loc: str, copy: bool) -> None:
         if "{" in field_ or "}" in field_:
             self.add("semantic", loc, f"headers {kind} {field_}: a header name taken from a "
                      "placeholder can name an identity header")  # fmt: skip
@@ -1530,13 +1551,12 @@ class _Judge:
             self.add("reset", loc, f"headers {kind} sets the identity header {field_}: only "
                      "forward_auth's copy_headers may set it")  # fmt: skip
             return
-        if idp:
-            return  # the IdP's own answer handed on under another name
         for v in values:
             for m in HEADER_PLACEHOLDER.finditer(v):
                 if identity(m.group("name")) and not (copy and RP_HEADER_VALUE.match(v)):
                     self.add("reset", loc, f"headers {kind} {field_} copies the identity header "
-                             f"{m.group('name')}")  # fmt: skip
+                             f"{m.group('name')}: use copy_headers {m.group('name')}>{field_} in "
+                             "forward_auth instead")  # fmt: skip
                     return
 
     def fastcgi(self, h: dict, loc: str, covered: frozenset | None = None) -> None:
@@ -1545,8 +1565,8 @@ class _Judge:
         if not isinstance(t, dict) or t.get("protocol") != "fastcgi":
             return
         for name, value in (t.get("env") or {}).items():
-            if self.from_idp([str(value)], covered):
-                continue
+            if not str(name).upper().startswith("HTTP_") and self.from_idp([str(value)], covered):
+                continue  # a variable no request header can set (see _fastcgi_env)
             if cgi_identity(str(name), self.idents) or CLIENT_PLACEHOLDER.search(str(value)):
                 self.add("reset", f"{loc}/transport", f"fastcgi env {name}: an identity variable, "
                          "or one set from a value the client chooses")  # fmt: skip

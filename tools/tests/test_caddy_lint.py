@@ -760,7 +760,7 @@ app.lab.example {
 
 def _resets(route: str = "", proxy: str = "", site: str = "") -> list[tuple[int, str]]:
     return [
-        (f.line, f.detail.split(" names ")[0])
+        (f.line, f.detail.split(" ")[0])
         for f in lint.lint_caddy(AUTHED % (route, proxy, site))
         if f.rule == "reset"
     ]
@@ -1483,8 +1483,9 @@ def test_every_upstream_is_reached_with_the_identity_headers_deleted(routes, exp
         ({"set": {"X-Authentik-Groups": ["{http.request.header.X-Evil}"]}}, "reset"),  # p04
         ({"add": {"x_authentik_groups": ["admins"]}}, "reset"),
         ({"replace": {"X-Authentik-Groups": [{"search_regexp": "^.*$", "replace": "admins"}]}}, "reset"),  # a08
-        # the IdP's answer handed on under another name, after the site-level strip: VERIFY3 N1
-        ({"set": {"X-Remote-User": ["{header.X-Authentik-Username}"]}}, None),
+        # the IdP's answer under another name: a client sends X-Remote-User (or X_Remote_User)
+        # itself; copy_headers X-Authentik-Username>X-Remote-User is the supported form (VERIFY4)
+        ({"set": {"X-Remote-User": ["{header.X-Authentik-Username}"]}}, "reset"),
         ({"add": {"X-Remote-User": ["{header.X-Authentik-Username}"]}}, "reset"),
         ({"set": {"{http.request.header.X-Name}": ["{http.request.header.X-Evil}"]}}, "semantic"),  # a06b
         ({"set": {"{http.vars.a}{http.vars.b}": [""]}}, "semantic"),  # a04
@@ -2040,9 +2041,15 @@ app.lab.example {
         # VERIFY3 N2 (h13): the site-level strip runs before every route, so the route needs
         # none of its own (live: alice/users only)
         ("", "reverse_proxy app:8080", []),
-        # VERIFY3 N1 (h04, h19): the IdP's answer handed on under another name, at proxy time,
-        # after the site-level strip (live: Remote-User / REMOTE_USER = alice)
-        ("request_header -*authentik*", "reverse_proxy app:8080 {\n\t\theader_up Remote-User {http.request.header.X-Authentik-Username}\n\t}", []),
+        # VERIFY4 SF1 (k01, k02): header_up hands the IdP's answer on under another name but
+        # leaves the target's other spellings to the client (live on 2.11.2 and 2.11.1: the
+        # client's Remote_User reached the upstream beside it); copy_headers A>B is the form
+        ("request_header -*authentik*", "reverse_proxy app:8080 {\n\t\theader_up Remote-User {http.request.header.X-Authentik-Username}\n\t}", [("reset", 11)]),
+        # VERIFY4 SF1 (k03): a request header becomes HTTP_<NAME> and overwrites the env (live on
+        # the CI-required 2.11.7: HTTP_REMOTE_USER = the client's Remote-User)
+        ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv HTTP_REMOTE_USER {http.request.header.X-Authentik-Username}\n\t}", [("reset", 11)]),
+        # h19 / k03b: no request header can set REMOTE_USER (live on 2.11.1, 2.11.2 and 2.11.7
+        # with every spelling of Remote-User sent: REMOTE_USER = alice)
         ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv REMOTE_USER {http.request.header.X-Authentik-Username}\n\t}", []),
         # not when the header is added beside a client's, nor read from the client's own header
         ("request_header -*authentik*", "reverse_proxy app:8080 {\n\t\theader_up +Remote-User {header.X-Authentik-Username}\n\t}", [("reset", 11)]),
@@ -2060,12 +2067,33 @@ def test_without_the_site_level_strip_the_idps_answer_cannot_be_told_from_the_cl
     assert sorted(f.rule for f in lint.lint_caddy(text)) == ["reset", "strip"]
 
 
-def test_json_hands_the_idps_answer_on_only_after_the_strip():
+def test_json_hands_the_idps_answer_on_only_through_a_variable_no_header_sets():
     up = _proxy(set={"Remote-User": ["{http.request.header.X-Authentik-Username}"]})
-    doc = _config(_json_site(_del("*authentik*"), _fa(*IDS), up))
-    assert lint.judge_json(doc) == []
-    doc = _config(_json_site(_fa(*IDS), up))
-    assert {r for r, _ in lint.judge_json(doc)} == {"reset", "semantic"}
+    found = lint.judge_json(_config(_json_site(_del("*authentik*"), _fa(*IDS), up)))
+    assert [r for r, _ in found] == ["reset"] and "use copy_headers" in found[0][1]
+
+    def fcgi(name: str) -> dict:
+        h = _proxy("app:9000")
+        h["transport"] = {
+            "protocol": "fastcgi",
+            "env": {name: "{http.request.header.X-Authentik-Username}"},
+        }
+        return h
+
+    assert (
+        lint.judge_json(_config(_json_site(_del("*authentik*"), _fa(*IDS), fcgi("REMOTE_USER"))))
+        == []
+    )
+    assert [
+        r
+        for r, _ in lint.judge_json(
+            _config(_json_site(_del("*authentik*"), _fa(*IDS), fcgi("HTTP_REMOTE_USER")))
+        )
+    ] == ["reset"]
+    # without the strip, the source itself is the client's
+    assert "reset" in {
+        r for r, _ in lint.judge_json(_config(_json_site(_fa(*IDS), fcgi("REMOTE_USER"))))
+    }
 
 
 @live
@@ -2079,3 +2107,45 @@ def test_live_site_files_imported_after_shared_snippets_adapt_clean(tmp_path, im
         (tmp_path / "sites" / f"{name}.caddy").write_text(SITE_FILE % (name, name))
     findings, counts = lint.scan(tmp_path, adapter=lint.Adapter(CADDY_BIN), required=True)
     assert findings == [] and counts["adapted"] == 1
+
+
+CONFD = {
+    "Caddyfile": "{\n\temail admin@lab.example\n}\nimport conf.d/*.caddy\n",
+    "conf.d/00-snippets.caddy": (
+        "(sso) {\n\trequest_header -*authentik*\n\troute {\n\t\tforward_auth idp:9443 {\n"
+        "\t\t\turi /outpost.goauthentik.io/auth/caddy\n"
+        "\t\t\tcopy_headers X-Authentik-Username X-Authentik-Groups\n\t\t}\n\t}\n}\n"
+    ),
+    "conf.d/app.caddy": "app.lab.example {\n\timport sso\n\treverse_proxy app:8080\n}\n",
+    "conf.d/lan.caddy": "lan.lab.example {\n\trequest_header -*authentik*\n\treverse_proxy lan:8080\n}\n",
+}
+
+
+def _tree(root: Path, files: dict[str, str]) -> Path:
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text)
+    return root
+
+
+def test_a_glob_match_sees_the_snippets_of_the_matches_before_it(tmp_path):
+    """VERIFY4 SF2 (r05e): conf.d/00-snippets.caddy defines (sso) and conf.d/app.caddy imports
+    it through the same `import conf.d/*.caddy`; Caddy 2.11.7 adapts it (live: alice/users),
+    the lint said the snippet was not defined above the import."""
+    assert lint.scan(_tree(tmp_path, CONFD))[0] == []
+    # a match sorted before the snippets file does not see them, in Caddy either
+    (tmp_path / "conf.d" / "00-snippets.caddy").rename(tmp_path / "conf.d" / "zz-snippets.caddy")
+    found, _ = lint.scan(tmp_path)
+    assert [(f.path, f.rule) for f in found] == [("conf.d/app.caddy", "parse")]
+    assert found[0].detail.startswith("import sso: no snippet (sso) is defined before this import")
+
+
+@live
+def test_live_a_glob_match_sees_the_snippets_of_the_matches_before_it(tmp_path):
+    found, counts = lint.scan(
+        _tree(tmp_path, CONFD), adapter=lint.Adapter(CADDY_BIN), required=True
+    )
+    assert found == [] and counts["adapted"] == 1
+    (tmp_path / "conf.d" / "00-snippets.caddy").rename(tmp_path / "conf.d" / "zz-snippets.caddy")
+    found, _ = lint.scan(tmp_path, adapter=lint.Adapter(CADDY_BIN), required=True)
+    assert {f.rule for f in found} == {"parse", "semantic"}  # Caddy refuses it too
