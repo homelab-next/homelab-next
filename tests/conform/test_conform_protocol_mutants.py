@@ -66,6 +66,7 @@ REVIEWED = {
         "version-error-leaks-value",
         "delete-drops-latest-only",
         "stores-caller-mapping",
+        "version-coerced",
         "put-after-delete-revives-history",
         "deleted-path-listed-under-parent",
         "lease-shares-stored-mapping",

@@ -191,11 +191,15 @@ class OpenBaoStore:
 
     def get(self, path: str, version: int | None = None) -> Secret:
         _check_path(path)
-        if version is not None and int(version) < 1:
+        if version is not None and (
+            not isinstance(version, int) or isinstance(version, bool) or version < 1
+        ):
             # KV v2 reads ``?version=0`` as "the latest"; the Protocol numbers versions from 1,
-            # so 0 and anything negative name a version that was never written
-            raise SecretNotFound(f"no secret at {path!r} version {int(version)}")
-        q = "" if version is None else f"?version={int(version)}"
+            # so 0 and anything negative name a version that was never written.  Nothing else is
+            # coerced into one: ``int()`` would read True as 1, 1.9 as 1 and "2" as 2, and raise
+            # ValueError/OverflowError for nan/inf instead of the Protocol's error.
+            raise SecretNotFound(f"no secret at {path!r} version {version!r}")
+        q = "" if version is None else f"?version={version}"
         status, doc = self._call("GET", self._kv("data", path) + q)
         if status == 404:
             raise SecretNotFound(f"no secret at {path!r}" + (f" version {version}" if q else ""))

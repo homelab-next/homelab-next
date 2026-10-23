@@ -73,7 +73,8 @@ class SecretStore(Protocol):
     def get(self, path: str, version: int | None = None) -> Secret:
         """Latest (or given) version.  Raises SecretNotFound, also for a version that was never
         written: ``0`` and negative versions are absent, never "latest" or "counted from the
-        end"."""
+        end".  A version is an ``int``: anything else (``True``, ``1.0``, ``"2"``, ``nan``,
+        ``inf``) names no version and raises SecretNotFound too - it is never coerced."""
 
     def delete(self, path: str) -> None:
         """Remove every version, for good: a later ``put`` starts a fresh history at version 1,

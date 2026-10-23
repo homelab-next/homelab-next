@@ -254,6 +254,21 @@ def test_version_zero_and_negative_versions_are_absent_not_latest(openbao):
     s.close()
 
 
+def test_a_version_that_is_not_an_int_is_absent_not_coerced(openbao):
+    """``int(version)`` read True as 1, 1.9 as 1 and "2" as 2 (one request each), and raised a
+    raw ValueError/OverflowError for nan/inf.  Anything but an int is refused as absent, before
+    any request, as the reference fake does."""
+    s = bao.make()
+    s.put("a/x", {"k": "1"})
+    s.put("a/x", {"k": "2"})
+    sent = len(openbao.requests)
+    for v in (True, False, 1.0, 1.9, "2", float("nan"), float("inf")):
+        with pytest.raises(SecretNotFound):
+            s.get("a/x", version=v)
+    assert len(openbao.requests) == sent, "a version that is not an int reached the server"
+    s.close()
+
+
 def test_a_lease_ttl_that_never_ends_is_refused_before_any_policy_is_written(openbao):
     """``lease(path, inf)`` raised a raw OverflowError from ``math.ceil`` after the lease ACL
     policy was already written; ``nan`` was refused only by accident of comparison."""

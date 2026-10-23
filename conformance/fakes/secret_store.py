@@ -15,6 +15,11 @@ from conformance.protocols.secrets import (
 )
 
 
+def is_version(version: object) -> bool:
+    """A version is an ``int`` (``bool`` is not one): nothing else is coerced into one."""
+    return isinstance(version, int) and not isinstance(version, bool)
+
+
 class FakeSecretStore:
     features = frozenset({"clock-control"})
 
@@ -47,7 +52,7 @@ class FakeSecretStore:
         if not versions:
             raise SecretNotFound(f"no secret at {path!r}")
         v = len(versions) if version is None else version
-        if not self._written(v, len(versions)):
+        if not is_version(v) or not self._written(v, len(versions)):
             raise SecretNotFound(f"no version {v} at {path!r}")
         return Secret(path, v, dict(versions[v - 1]))
 
@@ -167,7 +172,7 @@ class VersionErrorLeaksSecretStore(FakeSecretStore):
 
     def get(self, path: str, version: int | None = None) -> Secret:
         versions = self._v.get(path)
-        if versions and version is not None and not 1 <= version <= len(versions):
+        if versions and is_version(version) and not 1 <= version <= len(versions):
             raise SecretNotFound(f"no version {version} at {path!r}; latest is {versions[-1]}")
         return super().get(path, version)
 
@@ -253,3 +258,11 @@ class ListsDeletedSecretStore(FakeSecretStore):
         return sorted(
             p for p in self._index if p.startswith(prefix) and (p in self._v or p != prefix)
         )
+
+
+class CoercingVersionSecretStore(FakeSecretStore):
+    """Defect: the version is coerced with ``int()`` (as the OpenBao adapter did): ``True``
+    reads version 1, ``1.9`` reads version 1 and ``"2"`` reads version 2."""
+
+    def get(self, path: str, version: int | None = None) -> Secret:
+        return super().get(path, None if version is None else int(version))

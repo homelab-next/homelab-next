@@ -8,6 +8,7 @@ import contextlib
 from conformance.fakes.secret_store import (
     AliasingSecretStore,
     ChainedLeakSecretStore,
+    CoercingVersionSecretStore,
     DeletesLatestOnlySecretStore,
     FakeSecretStore,
     LeakyErrorSecretStore,
@@ -63,7 +64,8 @@ def _(s):
 
 @SUITE.check(
     "missing-secret-raises",
-    "an absent path or version raises SecretNotFound; versions start at 1 (0 and -1 are absent)",
+    "an absent path or version raises SecretNotFound; versions are ints from 1 (0, -1, True, 1.0 "
+    "and '2' name none)",
 )
 def _(s):
     p = _path(s)
@@ -72,6 +74,9 @@ def _(s):
     s.put(p, {"k": "two"})
     for v in (3, 9, 0, -1, -2):
         raises(lambda v=v: s.get(p, version=v), f"absent version {v}", SecretNotFound)
+    # not an int: never coerced into one (True is 1, 1.9 truncates to 1, "2" parses to 2)
+    for v in (True, False, 1.0, 1.9, "2", float("nan"), float("inf")):
+        raises(lambda v=v: s.get(p, version=v), f"version {v!r}", SecretNotFound)
 
 
 @SUITE.check(
@@ -250,6 +255,11 @@ MUTANTS = {
         AliasingSecretStore,
         "stored-data-is-a-copy",
         "the caller's mapping is stored and returned by reference",
+    ),
+    "version-coerced": Mutant(
+        CoercingVersionSecretStore,
+        "missing-secret-raises",
+        "the version is coerced with int(): True reads 1, 1.9 reads 1, '2' reads 2",
     ),
     "put-after-delete-revives-history": Mutant(
         TombstoneSecretStore,

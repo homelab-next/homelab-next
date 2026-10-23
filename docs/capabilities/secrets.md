@@ -63,7 +63,8 @@ def get(path: str, version: int | None = None) -> Secret
 
 Latest (or given) version.  Raises SecretNotFound, also for a version that was never
 written: `0` and negative versions are absent, never "latest" or "counted from the
-end".
+end".  A version is an `int`: anything else (`True`, `1.0`, `"2"`, `nan`,
+`inf`) names no version and raises SecretNotFound too - it is never coerced.
 
 **Raises:** `SecretNotFound`
 
@@ -190,7 +191,7 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 |---|---|---|---|
 | `put-get-roundtrip` | MUST | the stored mapping is read back unchanged |  |
 | `versions-increase-and-stay-readable` | MUST | every put is a new version; old ones remain |  |
-| `missing-secret-raises` | MUST | an absent path or version raises SecretNotFound; versions start at 1 (0 and -1 are absent) |  |
+| `missing-secret-raises` | MUST | an absent path or version raises SecretNotFound; versions are ints from 1 (0, -1, True, 1.0 and '2' name none) |  |
 | `delete-removes-all-versions` | MUST | after delete no version is readable, the path is not listed, deleting again raises, and a new put starts a fresh history |  |
 | `stored-data-is-a-copy` | MUST | changing the mapping given to put, or the one get returned, does not change the secret |  |
 | `invalid-paths-rejected` | MUST | empty segments and '..' are refused |  |
@@ -224,6 +225,7 @@ Each is a deliberately broken fake (`hnx conform run secrets --target broken:<mu
 | `put-after-delete-revives-history` | `delete-removes-all-versions` | delete tombstones the path and a later put revives the deleted versions |
 | `stores-caller-mapping` | `stored-data-is-a-copy` | the caller's mapping is stored and returned by reference |
 | `unknown-lease-valid` | `unknown-lease-invalid` | any unknown lease id is valid |
+| `version-coerced` | `missing-secret-raises` | the version is coerced with int(): True reads 1, 1.9 reads 1, '2' reads 2 |
 | `version-error-leaks-value` | `errors-never-contain-values` | the no-such-version error of a path that holds a secret echoes the latest value |
 | `version-zero-is-latest` | `missing-secret-raises` | version 0 is read as no version, so it returns the latest |
 
