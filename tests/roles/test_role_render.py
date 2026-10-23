@@ -609,6 +609,17 @@ def test_compose_app_escape_hatches_need_their_explicit_flag(tmp_path, over, fla
         assert web[k] == v
 
 
+@pytest.mark.parametrize(
+    ("user", "ok"), [("1000:0", True), ("1000:root", True), ("0:0", False), ("00", False)]
+)
+def test_compose_app_root_group_alone_has_its_own_flag(tmp_path, user, ok):
+    v = app_vars(
+        tmp_path, spec(user=user), compose_app_validate_with_docker=False,
+        compose_app_allow_root_group=True,
+    )  # fmt: skip
+    assert (run_role(tmp_path, "compose_app", "main", v).returncode == 0) is ok
+
+
 def test_compose_app_dropping_no_new_privileges_needs_the_flag(tmp_path):
     r = run_role(tmp_path, "compose_app", "main", app_vars(tmp_path, compose_app_security_opt=[]))
     assert r.returncode != 0

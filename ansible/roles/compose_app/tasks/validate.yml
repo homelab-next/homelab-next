@@ -70,8 +70,10 @@
       - item.value.cap_add | default([]) | map('regex_replace', '^CAP_', '') | intersect(compose_app_dangerous_caps) | length == 0 or compose_app_allow_privileged | bool
       - item.value.user is not defined or (item.value.user | string) is match('^[A-Za-z0-9_][A-Za-z0-9_.-]*(:[A-Za-z0-9_][A-Za-z0-9_.-]*)?\Z')
       # root in any spelling: the runtime reads a numeric user or group as a number (00, 000:0),
-      # so a zero, the name root, and root as the group are all refused
-      - item.value.user is not defined or compose_app_allow_root | bool or (item.value.user | string).split(':') | select('match', '^(?:root|0+)\Z') | list | length == 0
+      # so a zero or the name root is refused as the user (compose_app_allow_root) and as the group
+      # (compose_app_allow_root_group, or compose_app_allow_root, which covers both)
+      - item.value.user is not defined or compose_app_allow_root | bool or (item.value.user | string).split(':')[0] is not match('^(?:root|0+)\Z')
+      - item.value.user is not defined or compose_app_allow_root | bool or compose_app_allow_root_group | bool or (item.value.user | string).split(':')[1:] | select('match', '^(?:root|0+)\Z') | list | length == 0
       - item.value.read_only | default(false) is boolean
       - item.value.mem_limit is not defined or (item.value.mem_limit | string) is match('^[0-9]+[bkmgBKMG]?\Z')
       - item.value.env_file | default([]) | reject('string') | list | length == 0
@@ -79,8 +81,8 @@
       service '{{ item.key }}' is refused: environment keys must be plain names and secret-looking ones
       belong in compose_app_secret_env (a *_FILE pointer is fine); ports must be host_ip:host_port:container_port;
       privileged, or cap_add of
-      {{ compose_app_dangerous_caps }}, needs compose_app_allow_privileged; running as root (user or group root or
-      0, written any way) needs compose_app_allow_root; mem_limit looks like 256m
+      {{ compose_app_dangerous_caps }}, needs compose_app_allow_privileged; running as root (user root or 0, written
+      any way) needs compose_app_allow_root, and the root group compose_app_allow_root_group; mem_limit looks like 256m
   loop: "{{ compose_app_spec.services | dict2items }}"
   loop_control:
     label: "{{ item.key }}"

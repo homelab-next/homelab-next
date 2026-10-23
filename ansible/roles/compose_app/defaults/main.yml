@@ -24,6 +24,8 @@ compose_app_bind_extra: []
 compose_app_allow_privileged: false
 compose_app_allow_docker_socket: false
 compose_app_allow_root: false
+# the root group alone (user 1000:0, for images built to run as an arbitrary uid in group 0)
+compose_app_allow_root_group: false
 compose_app_allow_placeholder_digest: false
 compose_app_validate_with_docker: true
 compose_app_start: true

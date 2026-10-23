@@ -90,7 +90,13 @@ argument_specs:
         default: false
       compose_app_allow_root:
         type: bool
-        description: Permit an explicit user of root or 0.
+        description: Permit an explicit user (or group) of root or 0, in any spelling.
+        default: false
+      compose_app_allow_root_group:
+        type: bool
+        description: >-
+          Permit the root group alone (user 1000:0), for images built to run as an arbitrary uid
+          in group 0; the user itself must still not be root.
         default: false
       compose_app_log_max_size:
         type: str
