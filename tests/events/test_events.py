@@ -497,3 +497,42 @@ def test_delete_many_removes_in_one_write(tmp_path):
         s.put(k, 1)
     assert s.delete_many(["a", "c", "zz", "a"]) == 2
     assert s.keys() == ["b", "d"]
+
+
+def test_prune_selects_and_deletes_under_one_lock(tmp_path):
+    # another process prunes X and republishes it (a write-ahead pending) while this prune runs:
+    # whenever that write lands before the delete, the pending record must survive
+    store, clock = StateStore(tmp_path / "pub.json"), Clock()
+    a = pub(FakeForwarder(), store, retain_s=60, clock=clock)
+    x = task_event("x")
+    a.publish(x)
+    key = f"events/{x['id']}"
+    clock.t += 120
+    real_items, real_rewrite = store.items, store.rewrite
+
+    def other_process_writes():
+        store.put(key, {"status": "pending", "digest": "d", "event": x, "attempts": 0})
+
+    def items_then_write():  # a prune that reads, then deletes later, sees a stale snapshot
+        snap = real_items()
+        other_process_writes()
+        return snap
+
+    def write_then_rewrite(fn):  # a locked prune: the other write lands before the lock
+        other_process_writes()
+        return real_rewrite(fn)
+
+    store.items, store.rewrite = items_then_write, write_then_rewrite
+    a.prune()
+    store.items, store.rewrite = real_items, real_rewrite
+    assert store.get(key)["status"] == "pending"  # write-ahead record kept: flush() resends it
+
+
+def test_state_store_rewrite_is_one_locked_write(tmp_path):
+    s = StateStore(tmp_path / "s.json")
+    s.put("a", 1)
+    s.rewrite(lambda d: d.update(b=2) or True)
+    assert s.items() == {"a": 1, "b": 2}
+    before = (tmp_path / "s.json").stat().st_mtime_ns
+    s.rewrite(lambda d: False)  # no change: no write
+    assert (tmp_path / "s.json").stat().st_mtime_ns == before

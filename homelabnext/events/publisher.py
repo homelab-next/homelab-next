@@ -121,25 +121,44 @@ class Publisher:
         return sorted(i for i, r in self._records().items() if r.get("status") == "pending")
 
     def prune(self) -> int:
-        """Remove the ``sent`` records older than ``retain_s``, in one write; returns how many.
-        Only expired records are named, so a record another process just wrote is never one."""
-        delete_many = getattr(self.store, "delete_many", None)
-        delete = getattr(self.store, "delete", None)
-        if delete_many is None and delete is None:
-            return 0  # a store that cannot delete keeps everything
+        """Remove the ``sent`` records older than ``retain_s``; returns how many.
+
+        On a store with ``rewrite`` (a :class:`~homelabnext.state.StateStore`) the records are
+        selected and deleted under one lock, each re-checked there, so a record another process
+        wrote in the meantime (a write-ahead ``pending`` for a republished id) is never removed.
+        """
         cutoff = self.clock() - self.retain_s
-        old = [
-            self._k(i)
-            for i, r in self._records().items()
-            if r.get("status") == "sent" and _sent_at(r) < cutoff
-        ]
-        if not old:
-            return 0
-        if delete_many is not None:
-            return int(delete_many(old))
-        for k in old:
-            delete(k)
-        return len(old)
+        pre = f"{self.namespace}/"
+
+        def expired(k: str, r: Any) -> bool:
+            return (
+                k.startswith(pre)
+                and isinstance(r, dict)
+                and r.get("status") == "sent"
+                and _sent_at(r) < cutoff
+            )
+
+        rewrite = getattr(self.store, "rewrite", None)
+        if callable(rewrite):
+            gone: list[str] = []
+
+            def drop(data: dict[str, Any]) -> bool:
+                gone.extend(k for k, r in data.items() if expired(k, r))
+                for k in gone:
+                    del data[k]
+                return bool(gone)
+
+            rewrite(drop)
+            return len(gone)
+        delete = getattr(self.store, "delete", None)
+        if delete is None:
+            return 0  # a store that cannot delete keeps everything
+        n = 0
+        for i, r in self._records().items():  # not atomic: one key at a time, each re-read
+            if expired(self._k(i), r) and expired(self._k(i), self.store.get(self._k(i))):
+                delete(self._k(i))
+                n += 1
+        return n
 
     def publish(self, event: dict[str, Any]) -> PublishResult:
         validate_event(event)

@@ -190,6 +190,14 @@ class StateStore:
             self._write(data)
             return True
 
+    def rewrite(self, fn: Callable[[dict[str, Any]], bool]) -> None:
+        """Atomic read-modify-write of the whole map under the lock: ``fn`` changes the data in
+        place and returns whether it changed anything (only then is the file written)."""
+        with self._locked():
+            data = self._load()
+            if fn(data):
+                self._write(data)
+
     def delete_many(self, keys: Iterable[str]) -> int:
         """Delete every key of ``keys`` that exists in one write; returns how many went."""
         with self._locked():
