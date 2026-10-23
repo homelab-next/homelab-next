@@ -75,7 +75,7 @@ equals a shipped one is an **error**, never a silent override. The loader puts o
 
 ## The manifest at a glance
 
-```yaml
+```text
 manifest_version: "1.0"           # the schema version (const)
 id: external-collector            # == directory name; never a reserved id; core-* only for kind core
 kind: feature                     # provider | feature | core
@@ -514,7 +514,7 @@ fills the slot, an agent key exists, a grant is allowed, a config value is the m
 loader rule. Its own schema, beside the site model (profiles validate without a network model, and the selection
 changes far more often than the site). Shape, as in the three profiles:
 
-```yaml
+```text
 profile: full
 hosts:      {<name>: {kind, isolated, capacity: {cpu, memory_mb, disk_gb, gpu_memory_mb}, resources: [{name: gpu0, kind: gpu}], headroom: {memory_mb}}}
 slots:      {<slot>: [{provider, instance, placement: {<host role>: <host>}}] | none | pass-through}

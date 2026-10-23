@@ -510,29 +510,97 @@ def test_public_tree_with_private_material_fails(tmp_path, rel, text, rule):
 #: non-documentation networks, assembled at run time so this file stays clean under the scanner
 PRIVATE_NET = ".".join(("10", "20", "0", "0")) + "/16"
 PUBLIC_HOST = ".".join(("8", "8", "4", "4"))
+PUBLIC_V4 = ".".join(("81", "2", "69", "142"))
+#: the same public address as an integer and in hex (what inet_aton also reads)
+PUBLIC_INT = str(int.from_bytes(bytes(int(o) for o in PUBLIC_V4.split(".")), "big"))
+PUBLIC_HEX = hex(int(PUBLIC_INT))
+#: zero-padded octets: a person reads decimal, inet_aton reads octal
+PADDED = ".".join(f"{int(o):03d}" for o in PUBLIC_V4.split("."))
+EVERYTHING = ".".join(("0",) * 4) + "/0"
+DOC = "192.0.2"  # a three-part documentation prefix (no four-part literal in this source)
+
+#: (file name, text): a public scope block that names a real address or network, in every
+#: shape the gate reads.  Each must fail; the review's probe rows are all here.
+FAILING_SCOPES = {
+    "plain": ("site.yml", f"scope:\n  trusted:\n    wan: [{PUBLIC_HOST}/32]\n"),
+    "private": ("site.yml", f"scope:\n  target: [{DOC}.0/24, {PRIVATE_NET}]\n"),
+    "everything": ("site.yml", f"scope:\n  target: ['{EVERYTHING}']\n"),
+    "everything v6": ("site.yml", "scope:\n  exclude:\n    offensive: ['::/0']\n"),
+    "widened": ("site.yml", f"scope:\n  target: [{DOC}.0/16]\n"),
+    "misspelt part": ("site.yml", f"scope:\n  trusted:\n    lan: [{PRIVATE_NET}]\n"),
+    "malformed real": ("site.yml", f"scope:\n  target: ['{PRIVATE_NET.replace('/16', '/33')}']\n"),
+    "json": ("site.json", f'{{"profile": "x", "scope": {{"target": ["{PRIVATE_NET}"]}}}}\n'),
+    # B1: spellings ipaddress refuses but a person and inet_aton read as an address
+    "zero-padded": ("site.yml", f"scope:\n  trusted:\n    wan: ['{PADDED}/32']\n"),
+    "integer string": ("site.yml", f"scope:\n  trusted:\n    wan: ['{PUBLIC_INT}']\n"),
+    "yaml int": ("site.yml", f"scope:\n  trusted:\n    wan: [{PUBLIC_INT}]\n"),
+    "hex string": ("site.yml", f"scope:\n  trusted:\n    wan: ['{PUBLIC_HEX}']\n"),
+    "yaml hex int": ("site.yml", f"scope:\n  trusted:\n    wan: [{PUBLIC_HEX}]\n"),
+    "not an address": ("site.yml", "scope:\n  target: [not-an-address]\n"),
+    "a bool": ("site.yml", "scope:\n  target: [true]\n"),
+    "a float": ("site.yml", "scope:\n  target: [1.5]\n"),
+    "space before prefix": ("site.yml", f"scope:\n  target: ['{PUBLIC_V4} /32']\n"),
+    "zone id": ("site.yml", "scope:\n  target: ['2001:db8::1%eth0']\n"),
+    "mapped real": ("site.yml", f"scope:\n  target: ['::ffff:{PUBLIC_V4}']\n"),
+    # S1: every YAML and JSON form of the key and the block
+    "flow style": ("site.yml", f"{{scope: {{target: ['{EVERYTHING}']}}}}\n"),
+    "single-quoted key": ("site.yml", f"'scope':\n  target: ['{EVERYTHING}']\n"),
+    "explicit key": ("site.yml", f"? scope\n: target: ['{EVERYTHING}']\n"),
+    "tab before colon": ("site.yml", f"scope\t:\n  target: ['{EVERYTHING}']\n"),
+    "byte-order mark": ("site.yml", f"\ufeffscope:\n  target: ['{EVERYTHING}']\n"),
+    "json escaped key": ("site.json", '{"\\u0073cope": {"target": ["' + EVERYTHING + '"]}}\n'),
+    "yaml escaped key": ("site.yml", f"\"\\x73cope\":\n  target: ['{EVERYTHING}']\n"),
+    "custom tag elsewhere": (
+        "site.yml",
+        f"x: !vault |\n  abc\nscope:\n  target: ['{EVERYTHING}']\n",
+    ),
+    "custom tag and padding": (
+        "site.yml",
+        f"x: !Ref y\nscope:\n  trusted:\n    wan: ['{PADDED}']\n",
+    ),
+    "tagged entry": ("site.yml", f"scope:\n  target: [!ip '{DOC}.0/24']\n"),
+    "merge key": ("site.yml", f"base: &b\n  scope:\n    target: ['{EVERYTHING}']\n<<: *b\n"),
+    "duplicate scope key": (
+        "site.yml",
+        f"scope:\n  target: ['{EVERYTHING}']\nscope:\n  target: [{DOC}.0/24]\n",
+    ),
+    "duplicate part": ("site.yml", f"scope:\n  target: [{DOC}.0/24]\n  target: [{PRIVATE_NET}]\n"),
+    "json duplicate key": (
+        "site.json",
+        f'{{"scope": {{"target": ["{DOC}.0/24"], "target": ["{EVERYTHING}"]}}}}\n',
+    ),
+    "json with comments": ("site.json", f'// c\n{{"scope": {{"target": ["{DOC}.0/24"]}}}}\n'),
+    "upper-case key": ("site.yml", f"Scope:\n  target: ['{EVERYTHING}']\n"),
+    "nested": ("site.yml", f"site:\n  scope:\n    target: ['{EVERYTHING}']\n"),
+    "misspelt top-level part": ("site.yml", f"scope:\n  targets: [{DOC}.0/24]\n"),
+    "a scope list": ("site.yml", f"scope: [{PRIVATE_NET}]\n"),
+    "second document": ("site.yml", f"a: 1\n---\nscope:\n  target: ['{EVERYTHING}']\n"),
+    "address as a key": ("site.yml", f"scope:\n  target:\n    '{PUBLIC_V4}': x\n"),
+    "unparseable": ("site.yml", "scope: [unclosed\n"),
+    "upper-case suffix": ("site.YML", f"scope:\n  target: ['{EVERYTHING}']\n"),
+    "a template": ("site.yml.j2", f"scope:\n  target: ['{EVERYTHING}']\n"),
+    "an example": ("lab.yaml.example", f"scope:\n  target: ['{EVERYTHING}']\n"),
+    "toml": ("site.toml", f'[scope]\ntarget = ["{EVERYTHING}"]\n'),
+    "markdown fence": ("guide.md", f"# x\n\n```yaml\nscope:\n  target: ['{EVERYTHING}']\n```\n"),
+    "markdown untagged fence": ("guide.md", f"```\nscope:\n  target: ['{EVERYTHING}']\n```\n"),
+    # S8: an alias in a scope block is refused, and never expanded
+    "self alias": ("site.yml", "scope:\n  target: &a [*a]\n"),
+    "alias into scope": ("site.yml", f"a: &x {{target: [{DOC}.0/24]}}\nscope: *x\n"),
+}
 
 
 @needs_skeleton
-@pytest.mark.parametrize(
-    "scope",
-    [
-        f"scope:\n  trusted:\n    wan: [{PUBLIC_HOST}/32]\n",
-        f"scope:\n  target: [198.51.100.0/24, {PRIVATE_NET}]\n",
-        "scope:\n  target: ['0.0.0.0/0']\n",  # everything: no address the scanner would flag
-        "scope:\n  exclude:\n    offensive: ['::/0']\n",
-        "scope:\n  target: [192.0.2.0/16]\n",  # a documentation address, widened beyond its range
-        f"scope:\n  trusted:\n    lan: [{PRIVATE_NET}]\n",  # a misspelt part still counts
-        f"scope:\n  target: ['{PRIVATE_NET.replace('/16', '/33')}']\n",  # malformed, real address
-        f'{{"profile": "x", "scope": {{"target": ["{PRIVATE_NET}"]}}}}\n',  # JSON
-    ],
-)
-def test_public_scope_block_with_a_real_address_fails(tmp_path, scope):
+@pytest.mark.parametrize("case", sorted(FAILING_SCOPES))
+def test_public_scope_block_with_a_real_address_fails(tmp_path, case):
+    """Negative: a public scope block that names a real address or network, or that the gate
+    cannot read, fails in every shape the gate reads (no shape is silently skipped)."""
+    name, text = FAILING_SCOPES[case]
     root = public_tree(tmp_path)
-    name = "site.json" if scope.startswith("{") else "site.yml"
     p = root / "examples" / name
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(scope)
-    assert rules(plc.check_public(root)) == {"scope-address"}
+    p.write_text(text)
+    assert rules(plc.check_public(root)) <= {"scope-address", "scope-shape", "scope-unparsed"}
+    assert plc.check_public(root), case
     assert run("public", str(root)).returncode == 1
 
 
@@ -540,18 +608,104 @@ def test_public_scope_block_with_a_real_address_fails(tmp_path, scope):
 @pytest.mark.parametrize(
     "text",
     [
-        "scope:\n  trusted:\n    wan: [203.0.113.7/32]\n    nets: [192.0.2.0/24, 2001:db8::/48]\n",
-        "scope:\n  target: [198.51.100.0/33]\n",  # malformed, documentation: the schema's finding
-        "scope:\n  target: [not-an-address]\n",
-        f"scope: [{PRIVATE_NET}]\n",  # not a site scope block (no trusted, target or exclude)
-        f"other:\n  scope:\n    target: [{PRIVATE_NET}]\n",  # not top-level
-        "scope: [unclosed\n",  # unparseable: the hygiene job's finding
+        f"scope:\n  trusted:\n    wan: [{DOC.replace('192.0.2', '203.0.113')}.7/32]\n    nets: [{DOC}.0/24, 2001:db8::/48]\n",
+        "scope:\n  target: [198.51.100.0/33]\n",  # the generated negative's malformed entry
+        f"scope:\n  target: ['::ffff:{DOC}.1']\n",  # a mapped documentation address
+        "scope:\n  target: ['3fff::/20']\n",  # RFC 9637
+        f"scope:\n  target: [{DOC}.0/24]\n  exclude:\n    offensive: []\n",  # nothing excluded
+        "scope:\n  trusted:\n    wan: [{source: wan-dhcp}]\n",  # a dynamic source names nothing
+        "scope:\n  trusted:\n    wan:\n",  # null: no value
+        "scope: analyst\n",  # another document's scope (a record's)
+        "scope:\n  capabilities: [cap:monitoring]\n",  # a customization's selectors
+        'scope: {"type": "object", "properties": {"target": {"type": "array"}}}\n',  # a schema
+        "parameters:\n  scope: {env: RECORDS_SCOPE, default: '{profile}'}\n",  # an MCP parameter
+        'note: "\\x38\\x31.2.69.142"\n',  # an escape outside any scope block
+        "x: !vault |\n  abc\ny: [broken\n",  # no scope here: hygiene's finding, not this one's
     ],
 )
 def test_public_scope_block_with_documentation_ranges_passes(tmp_path, text):
     root = public_tree(tmp_path)
     (root / "examples" / "site.yml").write_text(text)
     assert plc.check_public(root) == []
+
+
+@needs_skeleton
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        ("guide.md", "```python\nscope = {'target': ['x']}\n```\n"),  # another language
+        ("guide.md", "```\nhnx scope check --target x: [y\n```\n"),  # shell, not YAML
+        ("notes.txt", f"scope:\n  target: ['{EVERYTHING}']\n"),  # not read: leak_scan's
+    ],
+)
+def test_what_the_scope_gate_does_not_read(tmp_path, name, text):
+    root = public_tree(tmp_path)
+    (root / "examples" / name).write_text(text)
+    assert not any(f.rule.startswith("scope-") for f in plc.check_public(root))
+
+
+@pytest.mark.parametrize(
+    ("rel", "fmt"),
+    [
+        ("a/site.yml", "yaml"),
+        ("a/site.YAML", "yaml"),
+        ("a/site.yml.j2", "yaml"),
+        ("a/site.yaml.example", "yaml"),
+        ("a/site.json", "json"),
+        ("a/site.toml", "toml"),
+        ("a/README.md", "md"),
+        ("a/site.py", None),
+        ("a/.yml", None),
+    ],
+)
+def test_scope_format_reads_through_template_suffixes(rel, fmt):
+    assert plc.scope_format(rel) == fmt
+
+
+def test_an_alias_shape_is_never_expanded(monkeypatch):
+    """S8: a self-alias and a billion-laughs shape (10**9 leaves by value) are answered from one
+    pass over the composed nodes: the leaf check runs a handful of times, not once per leaf."""
+    calls = []
+    real = plc._documentation_leaf
+    monkeypatch.setattr(plc, "_documentation_leaf", lambda n: calls.append(1) or real(n))
+    laughs = "a: &a [x, x, x, x, x, x, x, x, x, x]\n"
+    for i in range(1, 9):
+        prev, cur = chr(96 + i), chr(97 + i)
+        laughs += f"{cur}: &{cur} [" + ", ".join([f"*{prev}"] * 10) + "]\n"
+    laughs += "scope:\n  target: [*i, *i]\n"
+    for text in ("scope:\n  target: &a [*a]\n", laughs):
+        assert rules(plc.scope_findings("x.yml", text)) == {"scope-shape"}
+    assert len(calls) < 50
+
+
+def test_the_foreign_scope_vocabulary_matches_the_schemas_it_names():
+    """A scope mapping with only these keys is another document's scope; the set must hold the
+    customization selectors and the MCP parameter keys, or those files would read as site
+    scope blocks with misspelt parts."""
+    cust = json.loads((ROOT / "schemas/platform/customization.schema.json").read_text())
+    mcp = json.loads((ROOT / "schemas/platform/mcp_server.schema.json").read_text())
+    names = set(cust["properties"]["scope"]["properties"])
+    names |= set(mcp["$defs"]["parameter"]["properties"])
+    assert names <= plc.FOREIGN_SCOPE_KEYS
+    assert not plc.FOREIGN_SCOPE_KEYS & {"trusted", "target", "exclude"}
+
+
+@needs_skeleton
+def test_the_one_exemption_is_one_location_in_one_file(tmp_path):
+    """The generated misspelt-part negative passes only at its own path and only for its own
+    misspelt key; what that key holds is still read."""
+    rel = "schemas/platform/negative/module_selection.scope-unknown-part.yml"
+    assert [k[0] for k in plc.SCOPE_EXEMPT] == [rel]
+    text = (ROOT / rel).read_text()
+    root = public_tree(tmp_path)
+    (root / rel).parent.mkdir(parents=True)
+    (root / rel).write_text(text)
+    assert plc.check_public(root) == []
+    (root / "examples" / "copy.yml").write_text(text)
+    assert rules(plc.check_public(root)) == {"scope-shape"}
+    (root / "examples" / "copy.yml").unlink()
+    (root / rel).write_text(text.replace(f"lan:\n    - {DOC}.0/24", f"lan:\n    - {PRIVATE_NET}"))
+    assert rules(plc.check_public(root)) == {"scope-address"}
 
 
 def test_the_example_sites_carry_a_scope_block_the_check_reads():

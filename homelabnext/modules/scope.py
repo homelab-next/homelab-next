@@ -38,6 +38,7 @@ __all__ = [
     "declared_parts",
     "effective_targets",
     "embedded_ipv4",
+    "ipv4_readings",
     "is_documentation",
     "manifest_scope_problems",
     "parse_entry",
@@ -475,7 +476,7 @@ def _special(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return any(addr in d for d in DOCUMENTATION_NETS)
 
 
-def _readings(parts: list[str]) -> list[ipaddress.IPv4Address]:
+def ipv4_readings(parts: list[str]) -> list[ipaddress.IPv4Address]:
     """A dotted quad with hex or zero-padded parts, as a person reads it (decimal) and as
     ``inet_aton`` does (octal after a leading zero, hex after 0x)."""
     out = []
@@ -500,8 +501,8 @@ def _flag_v4(host: str, context: bool) -> bool:
     if _DOTTED.fullmatch(host):
         parts = host.split(".")
         if any(p[:2].lower() == "0x" or (len(p) > 1 and p[0] == "0") for p in parts):
-            return any(not _special(a) for a in _readings(parts))
-        return any(not _special(a) and (context or not a.is_global) for a in _readings(parts))
+            return any(not _special(a) for a in ipv4_readings(parts))
+        return any(not _special(a) and (context or not a.is_global) for a in ipv4_readings(parts))
     if _HEX_INT.fullmatch(host):
         return not _special(ipaddress.IPv4Address(int(host, 16)))
     if _BARE_INT.fullmatch(host) and int(host) < 1 << 32:
