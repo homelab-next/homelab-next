@@ -45,7 +45,7 @@ from homelabnext._schema_text import safe_message
 from homelabnext._yaml import UniqueKeyStrDateLoader
 from homelabnext.generators.safe import control_char_paths
 
-from .model import ComputeError, ComputeUnreadable, Guest, Problem, allowed_groups
+from .model import ComputeUnreadable, Guest, Problem, allowed_groups
 
 BASELINES_FILE = "_baselines.yml"
 #: how a control's role reaches a guest (baseline set 1.1): on the guest, or on a central host
