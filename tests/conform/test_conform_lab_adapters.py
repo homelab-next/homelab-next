@@ -53,7 +53,13 @@ def test_events_suite_passes_over_the_jetstream_wire():
 
 def test_events_suite_catches_a_server_that_drops_dlq_advisories():
     results = run_checks(events_suite.SUITE, lambda: _bus(FakeJetStreamWire(drop_advisories=True)))
-    assert _failing(results) == ["dlq-after-max-deliver", "term-dead-letters-immediately"]
+    # every check that reads the dead letters: the advisory is the only way a dead letter is seen
+    assert sorted(_failing(results)) == [
+        "dead-letters-survive-reopen",
+        "dlq-after-max-deliver",
+        "term-dead-letters-immediately",
+        "unsettled-deliveries-count-toward-max-deliver",
+    ]
 
 
 def test_bus_maps_onto_streams_consumers_and_acked_settlements():

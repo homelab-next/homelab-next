@@ -9,7 +9,13 @@
 * ``fetch`` never blocks: it returns what is deliverable now (possibly nothing).
 * A delivery must be settled: ``ack`` (done), ``nack`` (redeliver, attempt + 1) or ``term``
   (never redeliver).  After ``max_deliver`` failed attempts, or on ``term``, the message goes to
-  the consumer's dead-letter list and is never delivered again.
+  the consumer's dead-letter list and is never delivered again.  A delivery that is never settled
+  (its consumer crashed and was reopened) is a failed attempt too, as JetStream counts every
+  delivery against ``MaxDeliver``: a poison message that kills its consumer each time ends in the
+  dead letters, not in an endless redelivery loop.  The dead letters are durable state of the
+  consumer: a reopened consumer still has them.
+* Durables are independent: a message one consumer acked is still delivered to every other
+  (no work-queue retention).
 * Only the first settlement of a delivery counts; settling it again is a no-op.
 * At least once: re-opening a durable consumer (``consumer()`` with the same name, as a
   restarted process does) resumes where it left off.  Acked messages are not delivered again,

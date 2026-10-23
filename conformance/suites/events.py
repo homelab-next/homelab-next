@@ -5,8 +5,10 @@ from __future__ import annotations
 
 from conformance.fakes.event_bus import (
     BrokenDlqEventBus,
+    CrashLoopEventBus,
     DoubleSettleEventBus,
     FakeEventBus,
+    InMemoryDlqEventBus,
     LosesUnsettledEventBus,
     ReplayingEventBus,
     RestartsAtTailEventBus,
@@ -14,6 +16,7 @@ from conformance.fakes.event_bus import (
     StaleNackRequeuesEventBus,
     StaleSettleEventBus,
     StaleTermEventBus,
+    WorkQueueEventBus,
 )
 from homelabnext.conform.core import Mutant, Suite
 
@@ -94,6 +97,43 @@ def _(bus):
     assert [x.data for x in c.dead_letters()] == [b"bad"]
 
 
+@SUITE.check(
+    "dead-letters-survive-reopen",
+    "a dead-lettered message is still in the consumer's dead letters after it is reopened",
+)
+def _(bus):
+    s, name = _subject(bus), uniq("c")
+    c = bus.consumer(name, s, max_deliver=5)
+    bus.publish(s, b"bad")
+    (d,) = c.fetch(1)
+    d.term()
+    assert [x.data for x in c.dead_letters()] == [b"bad"], "term did not dead-letter"
+    c = bus.consumer(name, s, max_deliver=5)
+    got = [x.data for x in c.dead_letters()]
+    assert got == [b"bad"], f"after a reopen the dead letters are {got}"
+    assert list(c.fetch(5)) == [], "a dead-lettered message was delivered after a reopen"
+
+
+@SUITE.check(
+    "unsettled-deliveries-count-toward-max-deliver",
+    "a delivery never settled (the consumer crashed on it) counts as an attempt: after "
+    "max_deliver of them the message is dead-lettered",
+)
+def _(bus):
+    s, name = _subject(bus), uniq("c")
+    c = bus.consumer(name, s, max_deliver=3)
+    bus.publish(s, b"poison")
+    attempts = []
+    for _ in range(5):  # the process dies holding the message, five times
+        got = list(c.fetch(1))
+        if not got:
+            break
+        attempts.append(got[0].attempt)
+        c = bus.consumer(name, s, max_deliver=3)
+    assert attempts == [1, 2, 3], f"delivered at attempts {attempts} with max_deliver=3"
+    assert [x.data for x in c.dead_letters()] == [b"poison"], "the crash-loop message is not dead"
+
+
 @SUITE.check("publish-dedups-on-msg-id", "a repeated msg_id is published once")
 def _(bus):
     s = _subject(bus)
@@ -105,12 +145,20 @@ def _(bus):
     assert len(list(c.fetch(10))) == 1, "duplicate msg_id delivered twice"
 
 
-@SUITE.check("durables-are-independent", "two consumers each receive every message")
+@SUITE.check(
+    "durables-are-independent",
+    "two consumers each receive every message, even one the other has already acked",
+)
 def _(bus):
     s = _subject(bus)
     c1, c2 = bus.consumer(uniq("c"), s), bus.consumer(uniq("c"), s)
     bus.publish(s, b"x")
-    assert len(list(c1.fetch(5))) == 1 and len(list(c2.fetch(5))) == 1
+    got = list(c1.fetch(5))
+    assert len(got) == 1, f"the first durable got {len(got)} messages"
+    got[0].ack()  # settled by one durable: still undelivered to the other (no work-queue retention)
+    assert [d.data for d in c2.fetch(5)] == [b"x"], (
+        "a message one durable acked is gone for another"
+    )
 
 
 @SUITE.check("only-matching-subjects-delivered", "a consumer sees its subject and nothing else")
@@ -277,6 +325,21 @@ MUTANTS = {
         RestartsAtTailEventBus,
         "durable-resumes-after-reopen",
         "reopening a durable consumer skips everything not yet delivered",
+    ),
+    "work-queue-retention": Mutant(
+        WorkQueueEventBus,
+        "durables-are-independent",
+        "a message one durable acked is removed for every other (WorkQueue retention)",
+    ),
+    "dead-letters-in-client-memory": Mutant(
+        InMemoryDlqEventBus,
+        "dead-letters-survive-reopen",
+        "the dead-letter list lives in process memory and is empty after a reopen",
+    ),
+    "crash-loop-never-dead-letters": Mutant(
+        CrashLoopEventBus,
+        "unsettled-deliveries-count-toward-max-deliver",
+        "an unsettled delivery does not count against max_deliver (the reference fake did this)",
     ),
     "stale-delivery-settles": Mutant(
         StaleSettleEventBus,

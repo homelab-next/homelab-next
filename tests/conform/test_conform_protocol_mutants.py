@@ -47,6 +47,9 @@ REVIEWED = {
         "stale-term-dead-letters-live",
         "stale-nack-requeues-acked",
         "settled-nack-requeues",
+        "work-queue-retention",
+        "dead-letters-in-client-memory",
+        "crash-loop-never-dead-letters",
     },
     "records": {
         "completes-inbox-notes",
@@ -138,6 +141,25 @@ def test_a_stale_delivery_never_settles_the_live_one_in_the_reference_bus():
     old.ack()
     live.nack()
     assert [d.data for d in c.fetch(5)] == [b"m"]
+
+
+def test_the_reference_bus_dead_letters_a_message_its_consumer_keeps_crashing_on():
+    """The reference fake counted only nacks against ``max_deliver``: a poison message whose
+    consumer died before settling it came back at attempts 1, 2, 3, 4, ... for ever, while
+    JetStream counts every delivery and dead-letters it."""
+    from conformance.fakes.event_bus import FakeEventBus
+
+    bus = FakeEventBus()
+    c = bus.consumer("c", "s.x", max_deliver=3)
+    bus.publish("s.x", b"poison")
+    seen = []
+    for _ in range(5):
+        got = c.fetch(1)
+        if not got:
+            break
+        seen.append(got[0].attempt)
+        c = bus.consumer("c", "s.x", max_deliver=3)
+    assert seen == [1, 2, 3] and [d.data for d in c.dead_letters()] == [b"poison"]
 
 
 def test_the_reference_idp_refuses_a_ttl_that_never_ends():

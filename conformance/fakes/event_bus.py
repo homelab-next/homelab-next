@@ -78,11 +78,21 @@ class FakeConsumer:
         return list(self._dead)
 
     def _reopen(self) -> None:
-        """A restart: whatever was fetched but not settled becomes deliverable again."""
+        """A restart: whatever was fetched but not settled becomes deliverable again - unless that
+        delivery was its last allowed attempt: an unsettled delivery counts against
+        ``max_deliver`` like a nack (JetStream counts every delivery), so a message whose
+        consumer crashes on it every time is dead-lettered, not delivered forever."""
         pending = sorted(self._in_flight)
         self._in_flight.clear()
         by_seq = {m.seq: m for m in self._redeliver}
-        by_seq.update({s: self.bus._log[s - 1] for s in pending})
+        for s in pending:
+            msg = self.bus._log[s - 1]
+            if self._attempts.get(s, 0) >= self.max_deliver:
+                self._dead_letter(
+                    Delivery(msg.seq, msg.subject, msg.data, msg.msg_id, self._attempts[s])
+                )
+            else:
+                by_seq[s] = msg
         self._redeliver = [by_seq[s] for s in sorted(by_seq)]
 
 
@@ -248,3 +258,58 @@ class SettledNackRequeuesEventBus(FakeEventBus):
     unless it is already queued, so a nack after an ack redelivers an acked message."""
 
     consumer_class = _NackRequeuesConsumer
+
+
+class _CrashLoopConsumer(FakeConsumer):
+    def _reopen(self) -> None:  # every unsettled delivery comes back, however many attempts it had
+        pending = sorted(self._in_flight)
+        self._in_flight.clear()
+        by_seq = {m.seq: m for m in self._redeliver}
+        by_seq.update({s: self.bus._log[s - 1] for s in pending})
+        self._redeliver = [by_seq[s] for s in sorted(by_seq)]
+
+
+class CrashLoopEventBus(FakeEventBus):
+    """Defect (the reference fake did this): only a nack counts against ``max_deliver``, so a
+    poison message whose consumer crashes before settling it is redelivered forever."""
+
+    consumer_class = _CrashLoopConsumer
+
+
+class _WorkQueueConsumer(FakeConsumer):
+    def _settle(self, msg: _Msg, delivery: Delivery, how: str, token: int) -> None:
+        if how == "ack" and self._in_flight.get(msg.seq) == token:
+            self.bus._acked_once.add(msg.seq)  # gone for every consumer
+        super()._settle(msg, delivery, how, token)
+
+    def fetch(self, n: int = 1) -> list[Delivery]:
+        out = []
+        for d in super().fetch(n):
+            if d.seq in self.bus._acked_once:
+                self._in_flight.pop(d.seq, None)
+                continue
+            out.append(d)
+        return out
+
+
+class WorkQueueEventBus(FakeEventBus):
+    """Defect: a stream with WorkQueue retention (one word in a JetStream stream config): a
+    message one durable acked is removed for every other durable."""
+
+    consumer_class = _WorkQueueConsumer
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._acked_once: set[int] = set()
+
+
+class _ForgetfulDlqConsumer(FakeConsumer):
+    def _reopen(self) -> None:
+        super()._reopen()
+        self._dead = []  # the dead-letter list lived in the crashed process's memory
+
+
+class InMemoryDlqEventBus(FakeEventBus):
+    """Defect: the dead-letter list is client memory, so a reopened durable reports none."""
+
+    consumer_class = _ForgetfulDlqConsumer

@@ -13,7 +13,7 @@ generated_by: hnx docs capabilities generate
 **Publish/consume with acknowledgement, bounded redelivery and dead letters.**
 
 - Contract: [`conformance.protocols.events`](../../conformance/protocols/events.py) (`conformance.protocols.events:EventBus`)
-- Conformance suite: [`conformance.suites.events`](../../conformance/suites/events.py) (15 checks: 14 MUST, 1 SHOULD)
+- Conformance suite: [`conformance.suites.events`](../../conformance/suites/events.py) (17 checks: 16 MUST, 1 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -28,7 +28,13 @@ Contract for `events`: a durable pub/sub bus with at-least-once delivery and a D
 * `fetch` never blocks: it returns what is deliverable now (possibly nothing).
 * A delivery must be settled: `ack` (done), `nack` (redeliver, attempt + 1) or `term`
   (never redeliver).  After `max_deliver` failed attempts, or on `term`, the message goes to
-  the consumer's dead-letter list and is never delivered again.
+  the consumer's dead-letter list and is never delivered again.  A delivery that is never settled
+  (its consumer crashed and was reopened) is a failed attempt too, as JetStream counts every
+  delivery against `MaxDeliver`: a poison message that kills its consumer each time ends in the
+  dead letters, not in an endless redelivery loop.  The dead letters are durable state of the
+  consumer: a reopened consumer still has them.
+* Durables are independent: a message one consumer acked is still delivered to every other
+  (no work-queue retention).
 * Only the first settlement of a delivery counts; settling it again is a no-op.
 * At least once: re-opening a durable consumer (`consumer()` with the same name, as a
   restarted process does) resumes where it left off.  Acked messages are not delivered again,
@@ -164,8 +170,10 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `nack-redelivers-with-attempt-count` | MUST | a nacked message returns with attempt + 1 |  |
 | `dlq-after-max-deliver` | MUST | after max_deliver failed attempts the message is dead-lettered |  |
 | `term-dead-letters-immediately` | MUST | term sends the message to the DLQ without retries |  |
+| `dead-letters-survive-reopen` | MUST | a dead-lettered message is still in the consumer's dead letters after it is reopened |  |
+| `unsettled-deliveries-count-toward-max-deliver` | MUST | a delivery never settled (the consumer crashed on it) counts as an attempt: after max_deliver of them the message is dead-lettered |  |
 | `publish-dedups-on-msg-id` | MUST | a repeated msg_id is published once |  |
-| `durables-are-independent` | MUST | two consumers each receive every message |  |
+| `durables-are-independent` | MUST | two consumers each receive every message, even one the other has already acked |  |
 | `only-matching-subjects-delivered` | MUST | a consumer sees its subject and nothing else |  |
 | `unsettled-redelivered-on-reopen` | MUST | a message fetched but never settled is delivered again after the consumer restarts |  |
 | `durable-resumes-after-reopen` | MUST | a reopened durable consumer continues after its last ack, including messages sent meanwhile |  |
@@ -186,6 +194,8 @@ Each is a deliberately broken fake (`hnx conform run events --target broken:<mut
 
 | Mutant | Must fail | Defect |
 |---|---|---|
+| `crash-loop-never-dead-letters` | `unsettled-deliveries-count-toward-max-deliver` | an unsettled delivery does not count against max_deliver (the reference fake did this) |
+| `dead-letters-in-client-memory` | `dead-letters-survive-reopen` | the dead-letter list lives in process memory and is empty after a reopen |
 | `dlq-drops-messages` | `dlq-after-max-deliver` | exhausted messages vanish instead of being dead-lettered |
 | `double-settle` | `settle-twice-is-noop` | a delivery can be settled more than once |
 | `loses-unsettled-on-restart` | `unsettled-redelivered-on-reopen` | a message fetched but not settled is lost when the consumer restarts |
@@ -195,6 +205,7 @@ Each is a deliberately broken fake (`hnx conform run events --target broken:<mut
 | `stale-delivery-settles` | `stale-delivery-settles-nothing` | a stale delivery settles the live redelivery of the same message |
 | `stale-nack-requeues-acked` | `stale-delivery-settles-nothing` | a stale nack from before a reopen requeues a message the live delivery acked |
 | `stale-term-dead-letters-live` | `stale-delivery-settles-nothing` | a stale term dead-letters the live redelivery (term is settled by message) |
+| `work-queue-retention` | `durables-are-independent` | a message one durable acked is removed for every other (WorkQueue retention) |
 
 ## Implementations
 
@@ -344,4 +355,4 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
    hnx conform run events --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (14) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (16) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
