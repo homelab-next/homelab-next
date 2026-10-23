@@ -341,7 +341,7 @@ jobs:
           policy=()
           if [ -f "$pol/skips.yml" ]; then policy=(--policy "$pol/skips.yml"); fi
           sudo /usr/bin/python3 -I "$pol/go_test_policy.py" "${policy[@]}" --list-privileged \
-            > "$RUNNER_TEMP/privileged.txt"
+            | sudo tee "$res/privileged.txt" > /dev/null
           while read -r pkg rx; do
             [ -n "$pkg" ] || continue
             bin="$RUNNER_TEMP/privileged-$(echo "$pkg" | tr '/.' '__').test"
@@ -356,7 +356,7 @@ jobs:
               sh "$bin" -test.run "$rx" -test.count=1 -test.v=test2json 2>&1 || status=$?; } \
               && echo "$imp $status" | sudo tee -a "$exits" > /dev/null) \
               | go tool test2json -t -p "$imp" | sudo tee -a "$out" > /dev/null
-          done < "$RUNNER_TEMP/privileged.txt"
+          done < "$res/privileged.txt"
       - name: tests (race, shuffled, no network) judged by go_test_policy.py
         run: |
           res="$GO_RESULTS"
