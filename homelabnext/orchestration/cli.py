@@ -86,7 +86,12 @@ def _parser() -> argparse.ArgumentParser:
 
     def store_opts(p: argparse.ArgumentParser) -> None:
         p.add_argument("--db", required=True, type=Path, help="the telemetry store (SQLite)")
-        p.add_argument("--retention-days", type=float, default=DEFAULT_RETENTION_DAYS)
+        p.add_argument(
+            "--retention-days",
+            type=float,
+            default=DEFAULT_RETENTION_DAYS,
+            help="keep jobs and turns this many days, 1 to 3650 (default: %(default)s)",
+        )
         p.add_argument(
             "--source",
             action="append",

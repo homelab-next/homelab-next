@@ -63,6 +63,7 @@ from __future__ import annotations
 import functools
 import itertools
 import json
+import math
 import re
 import shlex
 import sqlite3
@@ -111,6 +112,10 @@ def dedupe_sql(cutoff: float) -> str:
 
 
 DEFAULT_RETENTION_DAYS = 90
+#: the retention a store takes: every read window is bounded by it (a 10,000-day retention let a
+#: job started in 2001 be read as 225,697 one-hour windows), and nan, inf or 0 would make every
+#: age comparison meaningless
+MIN_RETENTION_DAYS, MAX_RETENTION_DAYS = 1, 3650
 #: a configured job source: a service id (``schemas/ids/logical-id.schema.json``'s ``svc_id``)
 _SOURCE = re.compile(r"svc:[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 #: the writers' journal: no -wal or -shm, so a reader as another user needs no write access
@@ -151,6 +156,16 @@ class TelemetryStore:
             isinstance(s, str) and _SOURCE.fullmatch(s) for s in self.sources
         ):
             raise ValueError("sources: one or more service ids (svc:<name>), the controller's")
+        if (
+            isinstance(retention_days, bool)
+            or not isinstance(retention_days, int | float)
+            or not math.isfinite(retention_days)
+            or not MIN_RETENTION_DAYS <= retention_days <= MAX_RETENTION_DAYS
+        ):
+            raise ValueError(
+                f"retention_days {retention_days!r:.40}: a number of days, "
+                f"{MIN_RETENTION_DAYS} to {MAX_RETENTION_DAYS}"
+            )
         self.retention_s = retention_days * 86400.0
         if read_only:
             if not self.path.is_file():
@@ -455,6 +470,8 @@ __all__ = [
     "EARLIEST",
     "ENVELOPE_ATTRIBUTES",
     "JOURNAL_MODE",
+    "MAX_RETENTION_DAYS",
+    "MIN_RETENTION_DAYS",
     "PROBE_BUSY_MS",
     "STORE_ERRORS",
     "TelemetryStore",

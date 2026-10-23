@@ -139,7 +139,7 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
   job is settled ten minutes after it finished (a gateway may write its log in batches), as soon
   as the last window it overlaps has been read; a failed read stops the pass but keeps what was
   read and settled before it, and the next pass starts from the jobs still unsettled.
-- **Retention**: 90 days by default (`--retention-days`), by finish time and turn start time. A
+- **Retention**: 90 days by default (`--retention-days`, a finite 1 to 3650: every read window is bounded by it), by finish time and turn start time. A
   record that arrives already older than that (a late replay, an old backfill) is counted
   `expired` by `consume` and `ingest`: acknowledged and not stored, neither processed nor poison.
 - **One job per tag, on an older store**: the tag's index is unique. A store an earlier release

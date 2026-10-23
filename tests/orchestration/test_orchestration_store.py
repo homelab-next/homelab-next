@@ -584,3 +584,24 @@ def test_the_allowed_envelope_attributes_are_the_envelope_schemas_own():
         (EXAMPLES.parents[0] / "envelope.schema.json").read_text(encoding="utf-8")
     )
     assert set(envelope["properties"]) == ENVELOPE_ATTRIBUTES
+
+
+@pytest.mark.parametrize("days", [float("nan"), float("inf"), -5, 0, 0.5, 3651, 10_000, True, "90"])
+def test_retention_is_a_finite_number_of_days_from_1_to_3650(tmp_path, days, capsys):
+    """Every read window is bounded by retention: 10,000 days let a job started in 2001 be read as
+    225,697 windows; nan, inf, 0 and a negative make every comparison meaningless."""
+    with pytest.raises(ValueError, match="1 to 3650"):
+        TelemetryStore(tmp_path / "t.db", clock=lambda: T0, retention_days=days)
+    assert not (tmp_path / "t.db").exists()  # refused before anything is created
+    if isinstance(days, str | bool):
+        return
+    argv = ["report", "--db", str(tmp_path / "t.db"), "--retention-days", str(days)]
+    assert cli.main(argv, clock=lambda: T0) == 2
+    assert "1 to 3650" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("days", [1, 1.5, 90, 3650])
+def test_retention_inside_the_range_is_accepted(tmp_path, days):
+    assert TelemetryStore(tmp_path / "t.db", clock=lambda: T0, retention_days=days).retention_s == (
+        days * 86400.0
+    )
