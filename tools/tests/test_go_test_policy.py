@@ -7,6 +7,7 @@ test also runs a real ``go test -json`` when a Go toolchain is installed.
 """
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -489,6 +490,7 @@ FAKE_TOOLS = {
     # go test prints FAKE_STREAM and exits FAKE_EXIT; go tool test2json passes its input through
     "go": """case "$1" in
   test)
+    [ -z "$FAKE_TAMPER" ] || [ "$2" = -c ] || sh -c "$FAKE_TAMPER"
     if [ "$2" = -c ]; then
       while [ "$1" != -o ]; do shift; done
       printf '#!/bin/sh\\ncat "$FAKE_PRIV_STREAM"; exit "$FAKE_PRIV_EXIT"\\n' > "$2"
@@ -515,11 +517,13 @@ def run_test_step(
     skips: str | None = None,
     privileged: tuple[list[str], int] | None = None,
     packages: list[str] | None = None,
+    tamper: str = "",
 ) -> subprocess.CompletedProcess:
     """The go job's root-only and test steps, in a scratch checkout, with go replaced by streams:
     ``lines`` and ``go_exit`` for go test, ``privileged`` = (stream, exit status) for the root
-    run's test binary; ``packages`` for go list ./... (default: the packages ``lines`` names).  The
-    test step's result, or the root-only step's when that fails."""
+    run's test binary; ``packages`` for go list ./... (default: the packages ``lines`` names);
+    ``tamper``, a shell command the main run's go test runs first, in the module.  The test step's
+    result, or the result of the first step that fails."""
     bin_dir, mod, rt = tmp_path / "bin", tmp_path / "orchestrator", tmp_path / "runner-temp"
     for d in (bin_dir, mod, rt):
         d.mkdir(parents=True)
@@ -527,6 +531,7 @@ def run_test_step(
         (bin_dir / name).write_text("#!/bin/sh\n" + body)
         (bin_dir / name).chmod(0o755)
     (tmp_path / "tools").symlink_to(ROOT / "tools")
+    (tmp_path / "pyproject.toml").symlink_to(ROOT / "pyproject.toml")
     (mod / "go.mod").write_text(f"module {MOD}\n\ngo 1.24\n")
     (mod / "skips.yml").write_text(
         skips
@@ -555,8 +560,9 @@ def run_test_step(
         "FAKE_PRIV_EXIT": str(priv_exit),
         "FAKE_MODULE": MOD,
         "FAKE_PACKAGES": str(tmp_path / "packages.txt"),
+        "FAKE_TAMPER": tamper,
     }
-    for name in ("root-only tests", "tests (race"):
+    for name in ("a root-owned results directory", "root-only tests", "tests (race"):
         (tmp_path / "step.sh").write_text(ci_step(name))
         # GitHub runs a bash step as: bash --noprofile --norc -eo pipefail {0}
         r = subprocess.run(
@@ -728,7 +734,7 @@ def test_the_ci_steps_record_and_judge_each_privileged_binarys_exit_status(
     skips = HARD if "testmain" in priv_stream else RACE
     r = run_test_step(tmp_path, skip, 0, skips=skips, privileged=(fixture(priv_stream), priv_exit))
     assert (r.returncode == 0) is passes, r.stdout + r.stderr
-    exits = (tmp_path / "runner-temp" / "go-test-root.exit").read_text().split()
+    exits = (tmp_path / "runner-temp" / "go-results" / "go-test-root.exit").read_text().split()
     assert exits[1] == str(priv_exit)
 
 
@@ -759,6 +765,57 @@ def test_the_ci_step_lists_the_packages_and_requires_each_in_the_stream(tmp_path
     assert r.returncode == 1 and f"FAIL {MOD}/internal/fl: no events" in r.stdout, (
         r.stdout + r.stderr
     )
+
+
+@needs_bash
+def test_the_policy_and_its_inputs_are_copied_before_any_test_can_change_them(tmp_path):
+    # verify3.md: the policy step read skips.yml (and the tool) from the workspace after the tests
+    # ran as the user who owns it, so a test could quarantine its own failure on the way out
+    lines = fixture("quarantined_only.json")
+    quarantine = QUARANTINE.format(test="TestFlaky", until="2026-02-01").replace(
+        "internal/queue", "internal/ok"
+    )
+    none = "privileged: []\n"
+    assert run_test_step(tmp_path / "a", lines, 1, skips=none).returncode == 1
+    tamper = f"printf '%s' '{quarantine}' > skips.yml"
+    r = run_test_step(tmp_path / "b", lines, 1, skips=none, tamper=tamper)
+    assert "quarantine:" in (tmp_path / "b" / "orchestrator" / "skips.yml").read_text()
+    assert r.returncode == 1 and f"FAIL {MOD}/internal/ok TestFlaky" in r.stdout, (
+        r.stdout + r.stderr
+    )
+    # the same file in place from the start is the quarantine it looks like
+    assert run_test_step(tmp_path / "c", lines, 1, skips=quarantine).returncode == 0
+
+
+def test_the_results_are_root_owned_and_the_tests_cannot_sudo():
+    steps = go_job()["steps"]
+    names = [s.get("name", "") for s in steps]
+    snap = names.index(
+        "a root-owned results directory with a copy of the policy, before any test runs"
+    )
+    assert snap < names.index("modules downloaded and verified against go.sum")
+    copy = steps[snap]["run"]
+    assert 'sudo install -d -m 0755 "$RUNNER_TEMP/go-results" "$pol"' in copy
+    assert '"$GITHUB_WORKSPACE/tools/go_test_policy.py"' in copy and "pyproject.toml" in copy
+    assert "sudo install -m 0644 skips.yml go.mod" in copy
+    root, main = ci_step("root-only tests"), ci_step("tests (race")
+    for run in (root, main, ci_step("every skip names its reason")):
+        # the policy runs from the copy, never from the workspace the tests could rewrite
+        assert "$GITHUB_WORKSPACE" not in run and "go-results" in run
+        assert "go_test_policy.py" in run
+    assert "exec setpriv --no-new-privs --reuid=" in main
+    assert "exec setpriv --no-new-privs -- " in root
+    # every write into the results directory is root's: sudo tee, or a file root opened
+    assert '| sudo tee -a "$exits" > /dev/null' in root
+    assert '| sudo tee -a "$out" > /dev/null' in root
+    assert """-json ./... > "$3"'""" in main and 'sh "$(id -u)" "$(id -g)" "$out"' in main
+    assert '| sudo tee "$res/go-packages.txt" > /dev/null' in main
+    for run in (root, main):
+        assert not re.search(r'>>? *"\$(out|exits|res)', run.replace("> /dev/null", ""))
+    # the limit is stated beside the job, and the job stays on a hosted runner
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    assert "guards against accidents" in text and "not against hostile test code" in text
+    assert go_job()["runs-on"] == "ubuntu-latest" and "pull_request_target" not in text
 
 
 # --- skip calls in the sources: the forms whose reason the stream cannot show --------------------

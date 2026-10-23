@@ -235,6 +235,15 @@ jobs:
   # tools/go_test_policy.py judges both event streams: no failure, no build failure, no skip without
   # a registered reason (skip_reasons in pyproject.toml), quarantines in the module's skips.yml
   # bounded to 90 days.
+  #
+  # Trust: the root run's handshake (its streams, each binary's exit status, the policy that judges
+  # them) guards against accidents -- a TestMain that crashes after PASS, a race after the tests, a
+  # test that writes where it should not -- not against hostile test code.  Root-run tests are root
+  # and can rewrite anything in this job, the results and the policy copy included.  The main run's
+  # tests are the runner user under no_new_privs (setpriv --no-new-privs: no sudo), so they cannot
+  # write the root-owned results directory or the policy copied into it before any test ran, but
+  # the workspace, the toolchains and the caches are the runner user's.  Isolating the root run for
+  # real would take a job of its own that passes on nothing but its stream.
   go:
     needs: go-modules
     if: needs.go-modules.outputs.present == 'true'
@@ -265,6 +274,15 @@ jobs:
           python-version: "3.12"
           extras: yaml  # go_test_policy.py reads skips.yml
           install-project: "false"
+      # before any of the module's code runs: a directory only root can write, for the streams and
+      # exit statuses, and in it a copy of the policy tool and its inputs, which judges them later
+      - name: a root-owned results directory with a copy of the policy, before any test runs
+        run: |
+          pol="$RUNNER_TEMP/go-results/policy"
+          sudo install -d -m 0755 "$RUNNER_TEMP/go-results" "$pol"
+          sudo install -m 0644 "$GITHUB_WORKSPACE/tools/go_test_policy.py" \
+            "$GITHUB_WORKSPACE/pyproject.toml" "$pol/"
+          if [ -f skips.yml ]; then sudo install -m 0644 skips.yml go.mod "$pol/"; fi
       - name: modules downloaded and verified against go.sum
         run: go mod download && go mod verify
       - name: gofmt
@@ -284,18 +302,20 @@ jobs:
           go tool -modfile=tools/go.mod staticcheck ./...
           go tool -modfile=tools/go.mod govulncheck ./...
       # the reason go_test_policy.py reads is the last line before --- SKIP: a skip says it in
-      # the call, on one line (no SkipNow, whose reason would be whatever was logged last)
+      # the call, on one line (no SkipNow or Skipf, whose reason is a logged or formatted line)
       - name: every skip names its reason in the call
-        run: python "$GITHUB_WORKSPACE/tools/go_test_policy.py" --check-sources .
+        run: python "$RUNNER_TEMP/go-results/policy/go_test_policy.py" --check-sources .
       - name: root-only tests (skips.yml privileged) under sudo, no network
         run: |
-          out="$RUNNER_TEMP/go-test-root.json"
-          exits="$RUNNER_TEMP/go-test-root.exit"
-          : > "$out"
-          : > "$exits"
+          res="$RUNNER_TEMP/go-results"
+          pol="$res/policy"
+          out="$res/go-test-root.json"
+          exits="$res/go-test-root.exit"
+          sudo install -m 0644 /dev/null "$out"
+          sudo install -m 0644 /dev/null "$exits"
           policy=()
-          if [ -f skips.yml ]; then policy=(--policy skips.yml); fi
-          python "$GITHUB_WORKSPACE/tools/go_test_policy.py" "${policy[@]}" --list-privileged > "$RUNNER_TEMP/privileged.txt"
+          if [ -f "$pol/skips.yml" ]; then policy=(--policy "$pol/skips.yml"); fi
+          python "$pol/go_test_policy.py" "${policy[@]}" --list-privileged > "$RUNNER_TEMP/privileged.txt"
           while read -r pkg rx; do
             [ -n "$pkg" ] || continue
             bin="$RUNNER_TEMP/privileged-$(echo "$pkg" | tr '/.' '__').test"
@@ -303,33 +323,39 @@ jobs:
             imp=$(go list "$pkg")
             # the verdict is go_test_policy.py's (next step): the stream, and this exit status,
             # which test2json does not see (a TestMain panic after PASS still reads as a pass)
-            (cd "$pkg" && status=0 && { sudo unshare --net -- sh -c 'ip link set lo up && exec "$@"' \
+            # only root writes the results (sudo tee); --no-new-privs, though root holds every
+            # privilege already, keeps both runs from gaining any through an exec
+            (cd "$pkg" && status=0 && { sudo unshare --net -- \
+              sh -c 'ip link set lo up && exec setpriv --no-new-privs -- "$@"' \
               sh "$bin" -test.run "$rx" -test.count=1 -test.v=test2json 2>&1 || status=$?; } \
-              && echo "$imp $status" >> "$exits") \
-              | go tool test2json -t -p "$imp" >> "$out"
+              && echo "$imp $status" | sudo tee -a "$exits" > /dev/null) \
+              | go tool test2json -t -p "$imp" | sudo tee -a "$out" > /dev/null
           done < "$RUNNER_TEMP/privileged.txt"
       - name: tests (race, shuffled, no network) judged by go_test_policy.py
         run: |
-          policy=()
-          if [ -f skips.yml ]; then policy=(--policy skips.yml); fi
-          out="$RUNNER_TEMP/go-test.json"
+          res="$RUNNER_TEMP/go-results"
+          pol="$res/policy"
+          policy=(--pyproject "$pol/pyproject.toml")
+          if [ -f "$pol/skips.yml" ]; then policy+=(--policy "$pol/skips.yml"); fi
+          out="$res/go-test.json"
           # every package the run covers must show up in the stream, even one that has no tests
-          go list ./... > "$RUNNER_TEMP/go-packages.txt"
+          go list ./... | sudo tee "$res/go-packages.txt" > /dev/null
           status=0
+          # root opens the stream file, then drops to the runner user, which cannot sudo from there
           sudo env "PATH=$PATH" "HOME=$HOME" \
             "GOFLAGS=$GOFLAGS" "GOTOOLCHAIN=$GOTOOLCHAIN" "GOWORK=$GOWORK" \
             unshare --net -- \
-            sh -c 'ip link set lo up && exec setpriv --reuid="$1" --regid="$2" --clear-groups -- \
-              go test -race -shuffle=on -count=1 -json ./...' sh "$(id -u)" "$(id -g)" \
-            > "$out" || status=$?
+            sh -c 'ip link set lo up && exec setpriv --no-new-privs --reuid="$1" --regid="$2" \
+              --clear-groups -- go test -race -shuffle=on -count=1 -json ./... > "$3"' \
+            sh "$(id -u)" "$(id -g)" "$out" || status=$?
           # go test exits 1 on a quarantined failure too: the policy tool judges the stream and
           # go's own exit status together (any other status, or a 1 the stream does not explain,
           # fails), so a stream cut short cannot pass while go test failed
-          python "$GITHUB_WORKSPACE/tools/go_test_policy.py" "${policy[@]}" \
-            --privileged "$RUNNER_TEMP/go-test-root.json" \
-            --privileged-exit "$RUNNER_TEMP/go-test-root.exit" \
+          python "$pol/go_test_policy.py" "${policy[@]}" \
+            --privileged "$res/go-test-root.json" \
+            --privileged-exit "$res/go-test-root.exit" \
             --forbid 'python3 not available' --go-exit "$status" \
-            --expect-packages "$RUNNER_TEMP/go-packages.txt" "$out"
+            --expect-packages "$res/go-packages.txt" "$out"
 
   # One stable check name for branch protection, whatever the modules are called: the discovery
   # passed, and every module's go job passed (or there was none to run).
