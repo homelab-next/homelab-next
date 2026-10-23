@@ -27,6 +27,7 @@ from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
+from homelabnext.events.consumer import parse_json
 from homelabnext.events.envelope import EventError
 from homelabnext.status.model import iso, parse_iso
 
@@ -55,19 +56,13 @@ def export_lines(store: TelemetryStore) -> Iterator[str]:
         yield json.dumps({"schema": EXPORT_SCHEMA, "kind": kind, **rec}, sort_keys=True)
 
 
-def _no_constant(name: str) -> None:
-    raise ImportRefused(f"not JSON: {name}")
-
-
 def import_line(store: TelemetryStore, line: str) -> tuple[str, str]:
     """Import one export line: ``(kind, status)`` with status one of :data:`STATUSES`;
     :class:`ImportRefused` (or :class:`EventError` for a job record) when it is refused."""
     try:
-        rec = json.loads(line, parse_constant=_no_constant)
+        rec = parse_json(line)  # the consumer's own parse: every failure is a ValueError
     except ValueError as exc:
-        if isinstance(exc, ImportRefused):
-            raise
-        raise ImportRefused(f"not JSON ({exc.msg})") from None
+        raise ImportRefused(f"not JSON ({str(exc).splitlines()[0]:.200})") from None
     if not isinstance(rec, dict):
         raise ImportRefused("a line is an object")
     if rec.get("schema") != EXPORT_SCHEMA:

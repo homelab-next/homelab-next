@@ -101,7 +101,7 @@ def test_an_import_refuses_what_the_consumer_refuses_and_keeps_the_rest(synced, 
     assert "not the controller's job record" in reasons[0]
     assert "conflicts with a stored one" in reasons[2]
     assert "fields outside the turn record: api_base" in reasons[4]
-    assert "not JSON: NaN" in reasons[8]
+    assert "not JSON (NaN is not a JSON number)" in reasons[8]
     assert "upstream.example.com" not in other.path.read_bytes().decode("latin-1")
 
 
@@ -149,3 +149,22 @@ def test_an_older_store_without_envelopes_exports_jobs_an_import_refuses(tmp_pat
     assert json.loads(line)["event"] is None
     counts, refused = import_lines(TelemetryStore(tmp_path / "o.db", clock=lambda: T0), [line])
     assert counts == {"refused": 1} and "carries its event" in refused[0][1]
+
+
+@pytest.mark.parametrize(
+    "line, needle",
+    [
+        ('{"schema":' + "[" * 100_000 + "]" * 100_000 + "}", "nested too deeply"),
+        ('{"schema": 1' + "0" * 5000 + "}", "not JSON"),
+        ('{"schema": 1e999}', "not a finite number"),
+    ],
+    ids=["deep", "bigint", "inf"],
+)
+def test_a_line_the_consumer_refuses_is_refused_not_a_crash(synced, tmp_path, line, needle):
+    """A parser bomb or an integer past Python's digit limit is one refused line with its
+    number, as the bus consumer refuses it, and the lines after it are still imported."""
+    good = list(export_lines(synced))
+    other = TelemetryStore(tmp_path / "other.db", clock=lambda: T0)
+    counts, refused = import_lines(other, [line, *good])
+    assert counts["refused"] == 1 and refused[0][0] == 1 and needle in refused[0][1]
+    assert counts[("job", "processed")] == 4 and counts[("turn", "processed")] == 4

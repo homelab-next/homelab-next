@@ -36,6 +36,17 @@ def _finite(text: str) -> float:
     return value
 
 
+def parse_json(body: bytes | str) -> Any:
+    """``body`` parsed as a consumer parses it: :class:`ValueError` (its message says why) for
+    text that is not JSON, ``NaN``/``Infinity``, a number no float holds (``1e999``), an integer
+    past Python's digit limit, or nesting deeper than the parser's stack (never a
+    :class:`RecursionError`)."""
+    try:
+        return json.loads(body, parse_constant=_no_constant, parse_float=_finite)
+    except RecursionError:  # nested deeper than the parser's stack: never a valid document
+        raise ValueError("nested too deeply") from None
+
+
 _SURROGATE = re.compile(r"[\ud800-\udfff]")
 
 
@@ -71,11 +82,9 @@ def decode_event(
     finite in :func:`~homelabnext.events.envelope.validate_event` (which a producer runs too)."""
     if isinstance(body, bytes | str):
         try:
-            event = json.loads(body, parse_constant=_no_constant, parse_float=_finite)
+            event = parse_json(body)
         except ValueError as exc:
             raise EventError("event body is not JSON", [str(exc)]) from None
-        except RecursionError:  # nested deeper than the parser's stack: never a valid envelope
-            raise EventError("event body is not JSON", ["nested too deeply"]) from None
     else:
         event = dict(body)
     if not isinstance(event, dict):
