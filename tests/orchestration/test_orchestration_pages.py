@@ -216,6 +216,29 @@ def test_cli_consume_without_a_bus_is_a_configuration_error(tmp_path, monkeypatc
     assert "hnx orchestration consume:" in capsys.readouterr().err
 
 
+def test_cli_consume_maps_a_bus_failure_mid_pass_to_exit_1(tmp_path, monkeypatch, capsys):
+    """A fetch that fails on a connected bus is the documented exit 1, not a traceback."""
+    from conformance.protocols.events import EventsError
+
+    class DeadConsumer:
+        def fetch(self, n):
+            raise EventsError("fetch timed out: the connection was closed")
+
+    class DeadBus:
+        closed = False
+
+        def consumer(self, *a, **kw):
+            return DeadConsumer()
+
+        def close(self):
+            DeadBus.closed = True
+
+    monkeypatch.setattr(cli, "_connect", lambda *a: DeadBus())
+    argv = ["consume", "--db", str(tmp_path / "t.db"), "--stream", "S", "--subject-prefix", "p"]
+    assert cli.main(argv, clock=lambda: T0) == 1
+    assert "the bus failed: fetch timed out" in capsys.readouterr().err and DeadBus.closed
+
+
 def test_hnx_status_serve_builds_the_page_from_orchestration(tmp_path):
     """``hnx status serve --orchestration DB`` gives the site and marks the menu entry served."""
     import argparse

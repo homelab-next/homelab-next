@@ -18,8 +18,9 @@ settled, with the read-only viewer key named by ``--key`` (default: the secret s
 ``llm-gateway/key-telemetry-reader``, :data:`.gateway.DEFAULT_KEY`).  ``report`` prints the rollup as JSON
 (``homelabnext.orchestration.rollup/1``: the recommendation engine's input).
 
-Exit codes: 0 ok, 1 a record was refused (``ingest``, ``consume``) or the gateway could not be
-read (``turns``), 2 usage or configuration error.
+Exit codes: 0 ok, 1 a record was refused (``ingest``, ``consume``), the bus failed during the
+pass (``consume``: what was settled before stays settled) or the gateway could not be read
+(``turns``), 2 usage or configuration error (``consume``: the bus configuration or the connect).
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from conformance.protocols.events import EventsError
 from homelabnext.events.envelope import EventError
 
 from .store import DEFAULT_RETENTION_DAYS, TelemetryStore
@@ -116,6 +118,9 @@ def _consume(a, store: TelemetryStore) -> int:
         return 2
     try:
         counts = drain(bus, store, durable=a.durable or DURABLE)
+    except EventsError as exc:  # a fetch or a settle on a bus that went away mid-pass
+        print(f"hnx orchestration consume: the bus failed: {exc}", file=sys.stderr)
+        return 1
     finally:
         bus.close()
     keys = ("processed", "duplicate", "expired", "quarantined", "retried")
