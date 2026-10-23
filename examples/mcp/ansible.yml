@@ -19,9 +19,11 @@ runtime: agent-local
 egress: ['host:runtime-core']
 data_tier: local-only
 tools:
-- {name: run_playbook, classes: [exec], approval: true}
+- {name: run_playbook, classes: [exec], approval: false}
+acts_via: direct
+direct_reason: 'Runs playbooks itself; no shipped profile holds it: a deploy is a broker action whose handler runs the playbook (ADR-0030).'
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:ab2b98be9823'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:ab2b98be9823'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:ab2b98be9823'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:94c9413d2c65'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:94c9413d2c65'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:94c9413d2c65'}

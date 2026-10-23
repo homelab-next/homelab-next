@@ -20,9 +20,11 @@ env:
 egress: ['host:runtime-core', 'host:mon-core']
 data_tier: local-only
 tools:
-- {name: ssh_exec, classes: [exec], approval: true}
+- {name: ssh_exec, classes: [exec], approval: false}
+acts_via: direct
+direct_reason: 'Runs commands on lab hosts itself with its own key; no shipped profile holds it: agents act on hosts through the broker''s named actions (ADR-0030).'
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:acceb1403855'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:acceb1403855'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:acceb1403855'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:dd6a8c90aec5'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:dd6a8c90aec5'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:dd6a8c90aec5'}

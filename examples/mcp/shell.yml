@@ -18,9 +18,11 @@ runtime: agent-local
 egress: none
 data_tier: local-only
 tools:
-- {name: run_command, classes: [exec], approval: true}
+- {name: run_command, classes: [exec], approval: false}
+acts_via: direct
+direct_reason: 'Runs commands on the agent''s own host itself; no shipped profile holds it: agents run commands through the broker''s named actions (ADR-0030).'
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:7651e90d228c'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:7651e90d228c'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:7651e90d228c'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:a1d9e110974b'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:a1d9e110974b'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:a1d9e110974b'}

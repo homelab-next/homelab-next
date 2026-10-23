@@ -26,6 +26,11 @@ classes:
 
 reader_forbidden: [exec, file-write, egress, credential]
 
+# The acting classes (ADR-0030): a catalog server with a tool in one of them says how it acts
+# (acts_via), and only one that acts through the broker promises an approval (hnx mcp catalog
+# check).
+broker_only: [exec, file-write, credential]
+
 tiers:
   read: [read]
   write: [record-write]

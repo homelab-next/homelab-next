@@ -20,10 +20,12 @@ env:
 egress: [internet]
 data_tier: cloud-allowed
 tools:
-- {name: create_pull_request, classes: [egress, file-write], approval: true}
+- {name: create_pull_request, classes: [egress, file-write], approval: false}
 - {name: search_code, classes: [egress], approval: false}
+acts_via: direct
+direct_reason: 'Opens pull requests on a public code host itself; no shipped profile holds it: a repository change goes through the broker (ADR-0030).'
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:bc788b99e0ed'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:bc788b99e0ed'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:bc788b99e0ed'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:dbe6857d2cb6'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:dbe6857d2cb6'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:dbe6857d2cb6'}

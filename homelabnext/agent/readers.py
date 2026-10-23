@@ -191,6 +191,14 @@ def table_vocabulary(path: str | Path | None = None) -> list[str]:
     return sorted((doc.get("classes") or {}) if isinstance(doc, Mapping) else ())
 
 
+def table_broker_only(path: str | Path | None = None) -> list[str]:
+    """The classes ``tool_classes.yml`` lets a profile hold only through the broker."""
+    import yaml
+
+    doc = yaml.safe_load(Path(path or DEFAULT_CLASSES).read_text(encoding="utf-8")) or {}
+    return sorted((doc.get("broker_only") or ()) if isinstance(doc, Mapping) else ())
+
+
 def table_capabilities(path: str | Path | None = None) -> list[str]:
     """The ``cap:`` ids ``tool_classes.yml`` classifies."""
     import yaml

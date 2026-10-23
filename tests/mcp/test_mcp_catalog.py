@@ -347,6 +347,64 @@ def test_capabilities_are_checked_without_a_registry(tmp_catalog, capsys):
     assert "note: registry: none beside the catalog" in out.err
 
 
+# ---------------------------------------------------------------- acts_via (ADR-0030)
+def test_an_acting_server_says_how_it_acts(tmp_catalog):
+    """R3.3: an active or deprecated server with an acting tool (exec, file-write, credential)
+    declares acts_via; a draft or retired one is not granted, so it need not."""
+    cat = _edit(tmp_catalog, "shell", lambda r: [r.pop("acts_via"), r.pop("direct_reason")])
+    assert any("tool(s) run_command act" in p and "does not say how" in p for p in _check(cat))
+    cat = _edit(tmp_catalog, "shell", lambda r: r.update(status="deprecated", reason="r",
+                                                         replaced_by="hnx-broker"))  # fmt: skip
+    assert any("does not say how" in p for p in servers.check(cat, registry=REGISTRY))
+    cat = _edit(tmp_catalog, "shell", lambda r: r.update(status="retired"))
+    assert not any("does not say how" in p for p in servers.check(cat, registry=REGISTRY))
+    # a server that does not act needs no acts_via
+    assert "acts_via" not in yaml.safe_load((CATALOG / "lake.yml").read_text())
+
+
+def test_only_a_server_that_acts_through_the_broker_promises_an_approval(tmp_catalog):
+    """R3.2: only the broker grants an approval; a client's prompt is not one."""
+    cat = _edit(tmp_catalog, "ssh", lambda r: r["tools"][0].update(approval=True))
+    got = [p for p in _check(cat) if "approval: true" in p]
+    assert len(got) == 1 and "ssh_exec" in got[0] and "acts_via: broker" in got[0]
+    # the broker's own tools may need one
+    broker = yaml.safe_load((CATALOG / "hnx-broker.yml").read_text())
+    assert broker["acts_via"] == "broker"
+    assert any(t["approval"] for t in broker["tools"] if "exec" in t["classes"])
+
+
+def test_the_schema_says_only_the_broker_grants_an_approval():
+    import json
+
+    schema = json.loads((ROOT / "schemas/platform/mcp_server.schema.json").read_text())
+    text = schema["$defs"]["tool"]["properties"]["approval"]["description"]
+    assert "the client" not in text and "Only the broker grants one" in text
+    assert schema["properties"]["acts_via"]["enum"] == ["broker", "direct"]
+
+
+def test_every_shipped_acting_server_is_broker_only_or_a_reviewed_direct_one():
+    """The catalog decisions of ADR-0030: the broker's MCP front acts via the broker; every other
+    server with an acting tool acts directly, says why, and no shipped profile holds it."""
+    from homelabnext.agent.readers import table_broker_only
+
+    cat = servers.load(CATALOG)
+    only = set(table_broker_only())
+    acting = {
+        sid: rec.get("acts_via")
+        for sid, rec in cat
+        if rec["status"] in servers.GRANTABLE
+        and any(set(t["classes"]) & only for t in rec["tools"])
+    }
+    assert acting == {
+        "hnx-broker": "broker", "ssh": "direct", "shell": "direct", "ansible": "direct",
+        "kubernetes": "direct", "vault": "direct", "filesystem": "direct", "git": "direct",
+        "github": "direct", "gitlab": "direct",
+    }  # fmt: skip
+    for sid, via in acting.items():
+        if via == "direct":
+            assert cat.get(sid)["direct_reason"], sid
+
+
 def test_job_submission_and_shell_commands_are_the_brokers():
     """ADR-0030: the orchestrator's tool server only reads its queue (a job is submitted through
     the broker action agent.job.submit, docs/stackstorm.md), and the duplicate shell servers are

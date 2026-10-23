@@ -2,7 +2,7 @@
 """The MCP catalog: one record per MCP server, the single source of truth (ADR-0024).
 
 A catalog is a directory of YAML records, ``<catalog>/<id>.yml``, each one
-``schemas/platform/mcp_server.schema.json`` (1.0).  The example lab's is ``examples/mcp/``; a real
+``schemas/platform/mcp_server.schema.json`` (1.1: ``acts_via``, ADR-0030).  The example lab's is ``examples/mcp/``; a real
 lab's lives in its private overlay beside its registry (``lab/mcp/``), found the same way the other
 example data is (``HNX_EXAMPLES_DIR``, ``HNX_DATA_DIR``; ``docs/private-overlay.md``).
 
@@ -27,8 +27,10 @@ typed, no setting, secret or parameter env key configures the process or its lau
 (:data:`DENIED_ENV`) and no parameter env key is shared, templates name only
 builtins and parameters, endpoints and hosts resolve in the registry and every registry ``mcp``
 entry resolves to a catalog server, a retired or deprecated server says why, ``replaced_by`` names
-an active server, ``implements`` names a capability contract, and an active server carries the
-reviews the review policy asks of ``mcp-server.active``.
+an active server, ``implements`` names a capability contract, an active or deprecated server
+with an acting tool (a ``broker_only`` class of the capability-class table) says how it acts
+(``acts_via``, :func:`acts_via_problems`) and only a broker one marks such a tool ``approval: true``,
+and an active server carries the reviews the review policy asks of ``mcp-server.active``.
 """
 
 from __future__ import annotations
@@ -840,6 +842,41 @@ def _tool_problems(rec: Mapping[str, Any], where: str, vocabulary: Iterable[str]
     return out
 
 
+def acts_via_problems(
+    rec: Mapping[str, Any], where: str, broker_only: Iterable[str] | None = None
+) -> list[str]:
+    """ADR-0030 for one record a profile may be granted (active or deprecated): a server with an
+    acting tool (a class in ``broker_only``, default the packaged table's) declares ``acts_via``
+    (R3.3), and ``approval: true`` on an acting tool needs ``acts_via: broker`` (R3.2): only the
+    broker grants an approval, so a server that acts directly cannot promise one."""
+    if rec.get("status") not in GRANTABLE:
+        return []
+    if broker_only is None:
+        from homelabnext.agent.readers import table_broker_only
+
+        broker_only = table_broker_only()
+    only = set(broker_only)
+    acting = [t for t in rec.get("tools") or () if set(t.get("classes") or ()) & only]
+    if not acting:
+        return []
+    via = rec.get("acts_via")
+    out: list[str] = []
+    if via is None:
+        out.append(
+            f"{where}: tool(s) {', '.join(sorted(str(t.get('name')) for t in acting))} act "
+            f"({', '.join(sorted(only))} classes) but the record does not say how (acts_via: "
+            "broker when each is a broker call, else direct with a direct_reason)"
+        )
+    for t in acting:
+        if t.get("approval") is True and via != "broker":
+            out.append(
+                f"{where}: tool {t.get('name')} says approval: true but the server does not act "
+                "through the broker (acts_via: broker): only the broker grants an approval, a "
+                "client's prompt is not one (say approval: false)"
+            )
+    return out
+
+
 def _egress_problems(rec: Mapping[str, Any], where: str) -> list[str]:
     egress = rec.get("egress")
     classes = {c for t in rec.get("tools") or () for c in t.get("classes") or ()}
@@ -1202,6 +1239,9 @@ def check(
 
         vocabulary = table_vocabulary()
     vocabulary = list(vocabulary)
+    from homelabnext.agent.readers import table_broker_only
+
+    broker_only = table_broker_only()
     keep = None if only is None else set(only)
     out = list(cat.problems) if keep is None else [
         p for p in cat.problems if p.split(":", 1)[0] in {f"{s}.yml" for s in keep}
@@ -1224,6 +1264,7 @@ def check(
         out += launch_problems(rec, where)
         out += path_bin_problems(rec, where, source_root)
         out += _tool_problems(rec, where, vocabulary)
+        out += acts_via_problems(rec, where, broker_only)
         out += _egress_problems(rec, where)
         out += remote_problems(rec, where, registry)
         out += _env_collision_problems(rec, where)

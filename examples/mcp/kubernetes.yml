@@ -20,10 +20,12 @@ env:
 egress: none
 data_tier: local-only
 tools:
-- {name: apply_manifest, classes: [exec], approval: true}
-- {name: kubectl, classes: [exec], approval: true}
+- {name: apply_manifest, classes: [exec], approval: false}
+- {name: kubectl, classes: [exec], approval: false}
+acts_via: direct
+direct_reason: 'Applies manifests with its own cluster credential; no shipped profile holds it: cluster changes are broker actions (ADR-0030).'
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:4cfed22be9ca'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:4cfed22be9ca'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:4cfed22be9ca'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:cd9979d4673e'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:cd9979d4673e'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:cd9979d4673e'}
