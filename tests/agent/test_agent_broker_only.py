@@ -298,3 +298,49 @@ def test_lint_rules_and_policy(tmp_path, capsys):
     assert "actors-act-via-broker: 1 profile(s), 0 manifest(s), 0 problem(s)" in (
         capsys.readouterr().err
     )
+
+
+# ---------------------------------------------------------------- every capability is classed
+def _named_capabilities() -> dict[str, str]:
+    """Every capability the repository names: registry services, the conformance contracts, the
+    capability list and the module slots, each with where it was found."""
+    from homelabnext.conform.registry import CAPABILITIES, EXTENDED
+    from homelabnext.registry.model import load
+
+    out = {
+        f"cap:{s.capability}": f"registry svc:{n}"
+        for n, s in load(ROOT / "examples" / "services.yml").services.items()
+        if s.capability
+    }
+    out |= {f"cap:{c}": "conformance" for c in (*CAPABILITIES, *EXTENDED)}
+    out |= {
+        f"cap:{c}": "capabilities.yml"
+        for c in yaml.safe_load((ROOT / "capabilities.yml").read_text())["capabilities"]
+    }
+    slots = yaml.safe_load((ROOT / "examples" / "modules" / "slots.yml").read_text())["slots"]
+    out |= {f"cap:{c}": "module slot" for c in slots}
+    return out  # fmt: skip
+
+
+def test_every_capability_the_repository_names_is_classed():
+    """B1: the broker rule fails closed on an unclassified capability, so every capability an
+    agent could be granted is classed (a registry alias such as cap:automation, StackStorm, or
+    cap:records-db, the raw database, would otherwise be unjudged authority)."""
+    table = default_classes()
+    missing = {c: w for c, w in _named_capabilities().items()
+               if table.classify("capabilities", c) is None}  # fmt: skip
+    assert missing == {}
+    for cap in ("cap:automation", "cap:agent-runtime", "cap:records-db", "cap:dns", "cap:backup"):
+        assert set(table.classify("capabilities", cap)) & table.broker_only, cap
+
+
+def test_an_unclassified_capability_is_refused():
+    s = _actor(capabilities=["cap:made-up-thing"])
+    got = broker_problems({"capabilities": s["capabilities"]}, who=s["id"])
+    assert got == [
+        f"profile:actor holds an unknown capability (capabilities entry 1), which is not "
+        f"classified in {default_classes().source} (unknown is never assumed not to act)"
+    ]
+    for cap in ("cap:automation", "cap:agent-runtime", "cap:records-db", "cap:dns"):
+        got = broker_problems({"capabilities": [cap], "tier": "privileged"}, who="profile:a")
+        assert any(f"{cap!r} (" in p for p in got), (cap, got)

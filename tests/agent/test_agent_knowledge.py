@@ -25,6 +25,7 @@ from homelabnext.agent import (
     verify_profile,
 )
 from homelabnext.agent.knowledge import explain, select_knowledge, subjects
+from homelabnext.agent.readers import DEFAULT_CLASSES
 from homelabnext.graph import Edge, Graph, Node
 from homelabnext.graph.sources import _provenance
 from homelabnext.identity.aliases import load_aliases
@@ -556,13 +557,19 @@ def test_cli_explain_on_the_repository_graph(tmp_path, capsys):
     )
     s["ceiling"].update(capabilities=["cap:backup"], mcp=[])
     (tmp_path / "spec.yml").write_text(yaml.safe_dump(s))
+    # cap:backup acts (G-13 refuses it to every profile); this test is about linked knowledge,
+    # so it compiles against a site table that classes the backup capability read-only
+    table = yaml.safe_load(DEFAULT_CLASSES.read_text())
+    table["capabilities"]["cap:backup"] = ["read"]
+    (tmp_path / "classes.yml").write_text(yaml.safe_dump(table))
     m = manifest()
     m["budget_chars"] = 20000
     (tmp_path / "manifest.json").write_text(json.dumps(m))
     (tmp_path / "inputs.json").write_text(json.dumps(inputs()))
     prof = tmp_path / "profile.json"
     assert cli.main(["agent", "compile", str(tmp_path / "spec.yml"), "--library",
-                     str(tmp_path / "library.yml"), "--out", str(prof)]) == 0  # fmt: skip
+                     str(tmp_path / "library.yml"), "--out", str(prof),
+                     "--classes", str(tmp_path / "classes.yml")]) == 0  # fmt: skip
     argv = [
         "agent", "pack", str(tmp_path / "manifest.json"), "--inputs", str(tmp_path / "inputs.json"),
         "--profile", str(prof), "--registry", str(REPO / "examples" / "services.yml"),

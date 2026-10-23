@@ -65,4 +65,23 @@ capabilities:
   cap:hypervisor: [exec]
   cap:secrets: [credential]
   cap:idp: [credential]
+  # every other capability the registry, the conformance contracts and the module slots name
+  # (G-13 fails closed: a capability this table does not class is refused for every profile)
+  cap:metrics: [read]
+  cap:uptime: [read]
+  cap:dashboards: [read]
+  cap:status-hub: [read]
+  cap:agent-audit: [read]
+  cap:hot-index: [read]
+  cap:siem-source: [read]
+  cap:automation: [exec]
+  cap:agent-runtime: [exec]
+  cap:dataflow: [exec]
+  cap:log-pipeline: [exec]
+  cap:dns: [exec]
+  cap:edge-proxy: [exec]
+  cap:backup: [exec]
+  cap:exposure-management: [exec]
+  cap:records-db: [file-write]
+  cap:static-hosting: [file-write]
 

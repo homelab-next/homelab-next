@@ -447,13 +447,16 @@ def broker_problems(
                 "through the broker"
             )
     caps = set(_names(grants.get("capabilities")))
-    for _, name in _entries(grants.get("capabilities")):
+    for at, name in _entries(grants.get("capabilities")):
         if name == BROKER_CAPABILITY:
             continue
-        # a capability the table does not class (a conformance or overlay capability) is not
-        # judged here: the reader rule refuses it for a reader, and classing it in the table
-        # brings it under this rule
-        got = classes.classify("capabilities", name) or ()
+        got = classes.classify("capabilities", name)
+        if got is None:  # unknown is never assumed not to act (the tier rule's own wording)
+            problems.append(
+                f"{who} holds an unknown capability (capabilities entry {at}), which is not "
+                f"classified in {classes.source} (unknown is never assumed not to act)"
+            )
+            continue
         acting = sorted(set(got) & only)
         if acting:
             problems.append(
