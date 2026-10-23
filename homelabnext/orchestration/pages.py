@@ -14,11 +14,15 @@
 ======================== ========================================================================
 
 Names and numbers only: the store holds no text to show (:mod:`.store`, :mod:`.gateway`), and
-every value is escaped anyway.  Each request reads the store; it never writes.
+every value is escaped anyway.  Each request reads the store; it never writes.  A request the
+store cannot answer (a lock held past the busy timeout, a record that cannot be encoded) is a
+500 page naming the exception's type, the way the Approvals page answers for its broker, never
+a dropped connection.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
@@ -31,6 +35,8 @@ from .model import NO_BACKEND, OUTCOMES, _total, group_key, rollup
 from .store import TelemetryStore
 
 __all__ = ["ROUTES", "OrchestrationSite"]
+
+log = logging.getLogger(__name__)
 
 Response = tuple[int, str, bytes]
 HTML = "text/html; charset=utf-8"
@@ -116,12 +122,24 @@ class OrchestrationSite:
         if route not in ROUTES:
             return None
         q = _q(query)
-        if route == "/orchestration/job":
-            title, main = self._job(q)
-        else:
-            title, main = "Orchestration", self._overview(q)
-        html = shell_html(doc, title, main, nav=nav_html(doc, live=True))
-        return 200, HTML, html.encode("utf-8")
+        try:
+            if route == "/orchestration/job":
+                title, main = self._job(q)
+            else:
+                title, main = "Orchestration", self._overview(q)
+            return 200, HTML, self._shell(doc, title, main)
+        except Exception as exc:  # the store or a record: say so, never drop the connection
+            log.error("orchestration page %s failed (%s)", route, type(exc).__name__)
+            main = (
+                "<h2>Orchestration</h2>"
+                f'<p class="fail">The telemetry store could not be shown ({_e(type(exc).__name__)}).'
+                "</p>"
+            )
+            return 500, HTML, self._shell(doc, "Orchestration", main)
+
+    @staticmethod
+    def _shell(doc: Mapping[str, Any], title: str, main: str) -> bytes:
+        return shell_html(doc, title, main, nav=nav_html(doc, live=True)).encode("utf-8")
 
     # ---------------------------------------------------------------- overview
     def _overview(self, q: Mapping[str, str]) -> str:

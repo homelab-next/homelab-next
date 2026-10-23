@@ -483,3 +483,21 @@ def test_a_non_finite_number_is_poison_not_a_nan_in_the_rollup(store, literal):
         store.consume(raw)
     assert store.jobs() == []
     json.dumps(store.rollup(now=T0), allow_nan=False)
+
+
+@pytest.mark.parametrize("where", ["model", "extension", "key"])
+def test_a_lone_surrogate_is_poison(store, where):
+    """The model's pattern admits a lone surrogate (an escaped half pair, "\\ud800"): no Unicode
+    text, so the record was stored and its job page failed to encode, dropping the connection."""
+    ev = copy.deepcopy(examples()[0])
+    if where == "model":
+        ev["data"]["model"] = "mdl:triage-\ud800"
+    elif where == "extension":
+        ev["zz"] = ["\udfff"]
+    else:
+        ev["zz"] = {"\ud800": 1}
+    raw = json.dumps(ev)
+    assert "\\ud" in raw  # escaped, as a sender's encoder writes it
+    with pytest.raises(EventError, match="lone surrogate"):
+        store.consume(raw.encode())
+    assert store.jobs() == []

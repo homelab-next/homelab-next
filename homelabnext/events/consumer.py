@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -35,13 +36,37 @@ def _finite(text: str) -> float:
     return value
 
 
+_SURROGATE = re.compile(r"[\ud800-\udfff]")
+
+
+def _has_lone_surrogate(value: Any) -> bool:
+    """True when a key or string anywhere in ``value`` holds a surrogate code point.  The parser
+    joins an escaped pair (``\\ud83d\\ude00``) into one character, so what is left is a lone
+    half (``\\ud800``): a ``str`` that no UTF-8 encoder accepts, so a consumer that stored it
+    fails later, wherever it writes it out (a page, a log).  Walked without recursion: the body
+    parsed, so it may be nested as deep as the parser's own stack."""
+    stack = [value]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, str):
+            if _SURROGATE.search(v):
+                return True
+        elif isinstance(v, dict):
+            stack.extend(v.keys())
+            stack.extend(v.values())
+        elif isinstance(v, list):
+            stack.extend(v)
+    return False
+
+
 def decode_event(
     body: bytes | str | Mapping[str, Any], *, types: Iterable[str] | None = None
 ) -> dict[str, Any]:
     """Parse and validate a received event; raise :class:`EventError` on any defect.  ``NaN``,
     ``Infinity`` and a number too large for a float (``1e999``) are refused at the parse: Python's
     parser accepts them, a schema's ``minimum`` does not reject ``NaN``, and a consumer that kept
-    one would emit invalid JSON (or ``nan`` in a page) downstream."""
+    one would emit invalid JSON (or ``nan`` in a page) downstream.  So is a string holding a lone
+    surrogate (``"\\ud800"``), which is no Unicode text and fails whatever encodes it later."""
     if isinstance(body, bytes | str):
         try:
             event = json.loads(body, parse_constant=_no_constant, parse_float=_finite)
@@ -53,6 +78,8 @@ def decode_event(
         event = dict(body)
     if not isinstance(event, dict):
         raise EventError("invalid event", ["event must be a JSON object"])
+    if _has_lone_surrogate(event):
+        raise EventError("invalid event", ["a string holds a lone surrogate (not Unicode text)"])
     validate_event(event)
     if types is not None:
         allowed = set(types)

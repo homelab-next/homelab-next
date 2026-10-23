@@ -83,7 +83,8 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
 
 - **Consume** (`homelabnext.orchestration.bus.drain`): a durable pull consumer
   (`hnx-orchestration-telemetry`) on the type's subject. Stored or a duplicate: `ack`. Poison (not
-  JSON, which includes `NaN`, `Infinity` and a number no float holds such as `1e999`, invalid, another type, a source other than `svc:llm-orchestrator`, an id reused with
+  JSON, which includes `NaN`, `Infinity` and a number no float holds such as `1e999`, a string
+  holding a lone surrogate such as `"\ud800"`, invalid, another type, a source other than `svc:llm-orchestrator`, an id reused with
   another body, a second record for a run under another id, a record whose `gateway_tag` another
   run already holds (the tag must name one job, or two jobs' turns would merge), a timestamp the pattern accepts but
   the calendar does not, such as `2026-02-30`, times out of order by more than a second (queued
@@ -181,7 +182,9 @@ orchestration`, views schema 1.9):
 Filters (`profile`, `backend`, `lane`, `outcome`, `days` 1..90) narrow everything. The hub
 opens the store read-only (SQLite `mode=ro`): it creates, migrates and purges nothing, and a path
 that is not an existing store stops `hnx status serve` at start (exit 2) instead of serving an
-empty page; `hnx orchestration` is the only writer.
+empty page; `hnx orchestration` is the only writer. A request the store cannot answer once the
+hub is up (a lock held past the busy timeout, a record that cannot be encoded) is a 500 page naming
+the exception's type, never a dropped connection.
 
 **Files and users.** The store is one file. Its writers (`hnx orchestration consume`, `ingest`,
 `turns`: one-shot timer passes) keep a rollback journal (`journal_mode=DELETE`, set on every

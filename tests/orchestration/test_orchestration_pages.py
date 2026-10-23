@@ -166,6 +166,44 @@ def test_the_hub_serves_the_page_read_only(site):
         srv.server_close()
 
 
+def _get(srv, path: str) -> int:
+    host, port = srv.server_address[:2]
+    try:
+        with urllib.request.urlopen(f"http://{host}:{port}{path}", timeout=5) as r:
+            return r.status
+    except urllib.error.HTTPError as err:
+        return err.code
+
+
+def test_a_page_the_store_cannot_answer_is_a_500_not_a_dropped_connection(filled, monkeypatch):
+    """A record an earlier release stored with a lone surrogate failed to encode, and a store
+    locked past the busy timeout raised; either dropped the connection with no answer."""
+    run = examples()[0]["data"]["run_id"]
+    with sqlite3.connect(filled.path) as db:
+        doc = json.loads(db.execute("SELECT doc FROM jobs WHERE run_id = ?", (run,)).fetchone()[0])
+        doc["model"] = "mdl:triage-\ud800"
+        db.execute("UPDATE jobs SET doc = ? WHERE run_id = ?", (json.dumps(doc), run))
+    db.close()
+    site = OrchestrationSite(filled, clock=lambda: T0)
+    srv = make_server(_doc, orchestration=site)
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
+    try:
+        assert _get(srv, f"/orchestration/job?run={run}") == 500
+        code, _, raw = site.handle("/orchestration/job", f"run={run}", _doc())
+        assert code == 500 and b"could not be shown (UnicodeEncodeError)" in raw
+        assert _get(srv, "/orchestration") == 200
+
+        def locked(*a, **k):
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr(filled, "_db", locked)
+        assert _get(srv, "/orchestration") == 500
+        assert _get(srv, f"/orchestration/job?run={run}") == 500
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 # ------------------------------------------------------------------------------ the CLI
 def test_cli_ingest_turns_and_report(tmp_path, monkeypatch, capsys):
     db, events = tmp_path / "t.db", tmp_path / "events.jsonl"
