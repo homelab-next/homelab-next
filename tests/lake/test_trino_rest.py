@@ -287,6 +287,33 @@ def test_a_retry_after_a_crash_between_inserts_writes_only_the_rest():
         assert lake.query("SELECT count(*) AS n FROM authentication") == [{"n": 200}]
 
 
+def test_the_key_lookups_stay_under_the_query_length_limit_too():
+    with FakeLab(max_query_length=4096) as lab:
+        lake = _lake(lab, max_query_length=4096)
+        rows = [{**r, "message": "m"} for r in _example_rows(300)]
+        lab.statements.clear()
+        res = lake.write_batch("authentication", rows, idempotency_key="b")
+        assert res.rows_written == 300
+        selects = [t for t in lab.statements if "SELECT" in t and "IN (" in t]
+        assert len(selects) > 1 and all(len(t) <= 4096 for t in lab.statements)
+
+
+def test_composite_key_lookups_are_split_by_length():
+    import dataclasses
+
+    from homelabnext.lake import load_schemas
+    from homelabnext.lake.validate import normalize_rows
+
+    s = dataclasses.replace(load_schemas()["authentication"], key=("uid", "user_name"))
+    lake = object.__new__(TrinoRestLake)
+    lake._cat, lake._ns, lake.max_query_length = "iceberg", "t_ns", 5000
+    rows = normalize_rows(s, _example_rows(200))
+    chunks = lake._key_lookups(s, rows)
+    assert len(chunks) > 1 and sum(len(a) for _, a in chunks) == 400
+    assert all(len(execute_immediate(q, a)) <= 5000 for q, a in chunks)
+    assert all(" OR " in q for q, _ in chunks)
+
+
 def test_a_row_longer_than_the_limit_is_refused_before_anything_is_sent(lab):
     lake = _lake(lab, max_query_length=2048)
     [row] = _example_rows(1)

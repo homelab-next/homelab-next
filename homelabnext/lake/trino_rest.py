@@ -59,7 +59,8 @@ __all__ = ["TrinoRestLake", "rest_schema_diffs"]
 PROP_BATCH = "hnx.batch."
 PROP_MARK = "hnx.mark."
 KEY_CHUNK = 500
-#: the longest query text sent: safely below Trino's default ``query.max-length`` (1,000,000)
+#: the longest query text sent (key lookups and INSERTs): safely below Trino's default
+#: ``query.max-length`` (1,000,000)
 MAX_QUERY_LENGTH = 900_000
 #: batch ledger entries kept per table (older ones are removed when a batch is recorded)
 LEDGER_SIZE = 1000
@@ -254,22 +255,49 @@ class TrinoRestLake(AdapterBase):
         )
 
     def _existing_keys(self, s: TableSchema, rows: list[dict[str, Any]]) -> set[tuple]:
-        keys = sorted({content_key(s, r) for r in rows}, key=repr)
         found: set[tuple] = set()
-        cols = ", ".join(_qi(k) for k in s.key)
-        for i in range(0, len(keys), KEY_CHUNK):
-            chunk = keys[i : i + KEY_CHUNK]
-            if len(s.key) == 1:
-                where = f"{_qi(s.key[0])} IN (" + ", ".join("?" for _ in chunk) + ")"
-                args: list[Any] = [k[0] for k in chunk]
-            else:
-                one = "(" + " AND ".join(f"{_qi(k)} = ?" for k in s.key) + ")"
-                where = " OR ".join(one for _ in chunk)
-                args = [v for k in chunk for v in k]
-            sql = f"SELECT {cols} FROM {self._fq(s.name)} WHERE {where}"
+        for sql, args in self._key_lookups(s, rows):
             for r in self._trino.execute(sql, args).rows:
                 found.add(tuple(r[k] for k in s.key))
         return found
+
+    def _key_lookups(self, s: TableSchema, rows: list[dict[str, Any]]) -> list[tuple[str, list]]:
+        """The content-key lookups for ``rows``: at most ``KEY_CHUNK`` keys each, and each
+        query text (as sent) within ``max_query_length``, like the INSERTs."""
+        keys = sorted({content_key(s, r) for r in rows}, key=repr)
+        cols = ", ".join(_qi(k) for k in s.key)
+        head = f"SELECT {cols} FROM {self._fq(s.name)} WHERE "
+        if len(s.key) == 1:
+            one, sep = "?", ", "
+            head += f"{_qi(s.key[0])} IN ("
+
+            def text(n: int) -> str:
+                return head + ", ".join("?" for _ in range(n)) + ")"
+        else:
+            one, sep = "(" + " AND ".join(f"{_qi(k)} = ?" for k in s.key) + ")", " OR "
+
+            def text(n: int) -> str:
+                return head + sep.join(one for _ in range(n))
+
+        base = len(execute_immediate(text(0), [None]))  # the frame and one spare separator
+        per = len(one) + len(sep)
+        out: list[tuple[str, list]] = []
+        n, args, size = 0, [], base
+        for k in keys:
+            cost = per + sum(len(literal(v)) + 2 for v in k)
+            if base + cost > self.max_query_length:
+                raise LakeError(
+                    f"a content key of {s.name!r} needs {base + cost} characters of query text,"
+                    f" more than max_query_length ({self.max_query_length})"
+                )
+            if n and (n >= KEY_CHUNK or size + cost > self.max_query_length):
+                out.append((text(n), args))
+                n, args, size = 0, [], base
+            n, size = n + 1, size + cost
+            args.extend(k)
+        if n:
+            out.append((text(n), args))
+        return out
 
     @staticmethod
     def _value(c: Column, v: Any) -> Any:
