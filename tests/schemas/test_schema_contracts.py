@@ -182,3 +182,36 @@ def test_lint_catches_product_locator_in_example(tmp_path):
     f.write_text(json.dumps(d))
     msgs = [p.message for p in sc.check_repo(tmp_path, ["platform"])]
     assert any("PRODUCT_URI" in m for m in msgs) and any("IP_LITERAL" in m for m in msgs)
+
+
+def test_a_memoised_parse_hands_out_a_private_copy(tmp_path):
+    """The YAML parse is memoised on the file's text (a copied tree repeats it per test case):
+    two reads of one text are equal but separate, so a caller editing its document cannot change
+    what the next read returns, and an edited file is parsed afresh."""
+    f = tmp_path / "x.yml"
+    f.write_text("a: [1, 2]\nwhen: 2026-01-02\n")
+    first = sc.load_instance(f)
+    first["a"].append(3)
+    second = sc.load_instance(f)
+    assert second == {"a": [1, 2], "when": "2026-01-02"} and second is not first
+    md = tmp_path / "x.md"
+    md.write_text("---\na: [1]\n---\nbody\n")
+    fm, _ = sc.split_markdown(md.read_text())
+    fm["a"].clear()
+    assert sc.load_instance(md) == {"a": [1]}
+    f.write_text("a: changed\n")
+    assert sc.load_instance(f) == {"a": "changed"}
+
+
+def test_an_invalid_schema_is_reported_every_time_it_is_checked(tmp_path):
+    """The metaschema verdict is memoised on the schema's text: a second check of the same broken
+    schema reports it again, and a schema whose text changed is judged afresh."""
+    p = tmp_path / "schemas/platform/broken.schema.json"
+    p.parent.mkdir(parents=True)
+    p.write_text(json.dumps({"$id": "x", "type": 7}))
+    reg = sc.build_registry(tmp_path)
+    for _ in range(2):
+        [prob] = sc.check_schema(tmp_path, p, reg)
+        assert prob.message.startswith("invalid JSON Schema: 7 is not valid")
+    p.write_text(json.dumps({"$id": "x", "type": "object"}))
+    assert not any("invalid JSON Schema" in x.message for x in sc.check_schema(tmp_path, p, reg))

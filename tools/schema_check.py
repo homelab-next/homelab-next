@@ -50,6 +50,8 @@ Usage: ``python tools/schema_check.py [--root DIR] [--freeze] [--strict] [--base
 from __future__ import annotations
 
 import argparse
+import copy
+import functools
 import json
 import re
 import shutil
@@ -97,6 +99,19 @@ _StrLoader.yaml_implicit_resolvers = {
 }
 
 
+@functools.lru_cache(maxsize=4096)
+def _parse_yaml(text: str) -> Any:
+    """The parsed document of ``text``, memoised on the exact text: a check of a copied tree (the
+    schema tests copy ``schemas/`` once per case) re-reads hundreds of byte-identical files, and
+    the pure-Python parser is most of a repository check's time.  A parse error is not cached."""
+    return yaml.load(text, Loader=_StrLoader)
+
+
+def _load_yaml(text: str) -> Any:
+    # a private copy: the caller may edit the document it gets back
+    return copy.deepcopy(_parse_yaml(text))
+
+
 def load_instance(path: Path) -> Any:
     text = path.read_text(encoding="utf-8")
     if path.suffix == ".json":
@@ -105,15 +120,15 @@ def load_instance(path: Path) -> Any:
         m = re.match(r"\A---\n(.*?)\n---\s*(?:\n|\Z)", text, re.S)
         if not m:
             raise ValueError(f"{path}: no YAML frontmatter")
-        return yaml.load(m.group(1), Loader=_StrLoader)
-    return yaml.load(text, Loader=_StrLoader)
+        return _load_yaml(m.group(1))
+    return _load_yaml(text)
 
 
 def split_markdown(text: str) -> tuple[dict, str]:
     m = re.match(r"\A---\n(.*?)\n---\s*(?:\n|\Z)", text, re.S)
     if not m:
         raise ValueError("no YAML frontmatter")
-    return yaml.load(m.group(1), Loader=_StrLoader), text[m.end() :]
+    return _load_yaml(m.group(1)), text[m.end() :]
 
 
 def schema_files(root: Path, dirs: Iterable[str] | None = None) -> list[Path]:
@@ -545,6 +560,18 @@ def ci_base(root: Path, event: str, pr_base: str, before: str) -> tuple[str | No
 
 
 # ---------------------------------------------------------------- repo check
+@functools.lru_cache(maxsize=1024)
+def _metaschema_error(text: str) -> str | None:
+    """Why the schema in ``text`` is not a valid 2020-12 schema, or None; memoised on the exact
+    text, since checking against the metaschema is a third of a repository check and a copied
+    tree (one per schema test case) repeats it for byte-identical files."""
+    try:
+        Draft202012Validator.check_schema(json.loads(text))
+    except Exception as exc:
+        return str(exc)
+    return None
+
+
 def check_schema(
     root: Path,
     schema_path: Path,
@@ -554,11 +581,10 @@ def check_schema(
 ) -> list[Problem]:
     rel = schema_path.relative_to(root).as_posix()
     probs: list[Problem] = []
-    schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    try:
-        Draft202012Validator.check_schema(schema)
-    except Exception as exc:
-        return [Problem(rel, f"invalid JSON Schema: {exc}")]
+    text = schema_path.read_text(encoding="utf-8")
+    schema = json.loads(text)
+    if (bad := _metaschema_error(text)) is not None:
+        return [Problem(rel, f"invalid JSON Schema: {bad}")]
     if schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
         probs.append(Problem(rel, "$schema must be the 2020-12 dialect"))
     pid = parse_id(schema)
@@ -570,9 +596,11 @@ def check_schema(
         probs.append(Problem(rel, "no example (examples/<stem>.<label>.<ext>)"))
     if not negs and not schema.get("x-defs-only"):
         probs.append(Problem(rel, "no negative (negative/<stem>.<label>.<ext>)"))
+    loaded: dict[Path, Any] = {}  # each example is read once, for its validation and its lint
     for f in exs:
         try:
-            errs = errors_for(schema, load_instance(f), registry)
+            loaded[f] = load_instance(f)
+            errs = errors_for(schema, loaded[f], registry)
         except Exception as exc:
             errs = [f"unreadable: {exc}"]
         for e in errs:
@@ -588,11 +616,9 @@ def check_schema(
                 Problem(f.relative_to(root).as_posix(), "negative was ACCEPTED by the schema")
             )
     for f in exs:
-        try:
-            doc = load_instance(f)
-        except Exception:
+        if f not in loaded:  # unreadable: already reported above
             continue
-        for v in scan_document(doc):
+        for v in scan_document(loaded[f]):
             probs.append(Problem(f.relative_to(root).as_posix(), f"lint {v}"))
     if "x-draft" in schema and not is_draft(schema):
         probs.append(
