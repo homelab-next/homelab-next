@@ -155,7 +155,13 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
 source chosen later still reads the jobs inside retention), or an adapter factory
 `package.module:factory`, the `adapter:` form of a conformance target. The adapter options are
 `--gateway-url` (passed as `base_url`), `--key` (a `secret:` name), `--ca-file` and
-`--allow-plaintext`; which adapter fills the slot is site configuration. The factory returns a
+`--allow-plaintext`, and any other option an adapter takes is `--turn-source-option KEY=VALUE`
+(repeatable; `true`/`false` are booleans; a key naming a credential, such as `token` or
+`password`, takes only a `secret:` name). Which adapter fills the slot is site configuration,
+but the code is not: the module must be under `homelabnext.conform.adapters` or a site package
+declared with `--turn-source-namespace PACKAGE` (repeatable, else
+`HNX_ORCHESTRATION_TURN_SOURCE_NAMESPACES`, comma-separated; none by default), checked before
+anything is imported, and any failure of the import is a configuration error (exit 2). The factory returns a
 `TurnSource` (`turns(start, end, tags)`, neutral turn records), and the `inference` suite's
 `turn-records` checks prove an adapter: every turn is exactly the neutral record, carries only
 the tags asked for, started in the window, and keeps its id across reads. Swapping the gateway is

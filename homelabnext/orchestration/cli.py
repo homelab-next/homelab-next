@@ -7,6 +7,7 @@
     hnx orchestration ingest --db FILE EVENTS.jsonl|-
     hnx orchestration turns --db FILE --turn-source none|MODULE:FACTORY [--gateway-url URL]
                             [--key secret:NAME] [--ca-file F] [--allow-plaintext] [--settle-s N]
+                            [--turn-source-namespace PACKAGE]... [--turn-source-option K=V]...
     hnx orchestration report --db FILE [--days N]
     hnx orchestration export --db FILE [--out FILE|-]
     hnx orchestration import --db FILE EXPORT.jsonl|-
@@ -18,8 +19,9 @@ before the retention window as ``expired``: acknowledged, not stored, not an err
 per-call log for every job whose turns are not settled, through the turn source ``--turn-source``
 names (else ``$HNX_ORCHESTRATION_TURN_SOURCE``): ``none`` (no gateway data: read nothing, settle
 nothing) or an adapter factory ``package.module:factory``, the ``adapter:`` form of a conformance
-target, called with the adapter options given (``--gateway-url`` as ``base_url``, ``--key`` by
-secret name, ``--ca-file``, ``--allow-plaintext``) and returning a
+target, under ``homelabnext.conform.adapters`` or a site package ``--turn-source-namespace``
+declares (checked before the import), called with the adapter options given (``--gateway-url`` as ``base_url``, ``--key`` by
+secret name, ``--ca-file``, ``--allow-plaintext``, any other as ``--turn-source-option``) and returning a
 :class:`conformance.protocols.inference.TurnSource`.  Which adapter fills the slot is site
 configuration; ``docs/orchestration-telemetry.md`` lists the shipped ones.  ``report`` prints the rollup as JSON
 (``homelabnext.orchestration.rollup/1``: the recommendation engine's input).  ``export`` writes
@@ -41,6 +43,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from collections import Counter
@@ -55,6 +58,23 @@ from .model import CONTROLLER_SOURCE
 from .store import DEFAULT_RETENTION_DAYS, STORE_ERRORS, TelemetryStore
 
 TURN_SOURCE_ENV = "HNX_ORCHESTRATION_TURN_SOURCE"
+#: the site packages a turn source may come from, comma-separated, when no
+#: --turn-source-namespace is given; the shipped adapters' package is always allowed
+NAMESPACES_ENV = "HNX_ORCHESTRATION_TURN_SOURCE_NAMESPACES"
+#: the shipped adapters: a turn source is code from here or from a namespace the site declares
+ADAPTERS = "homelabnext.conform.adapters"
+_DOTTED = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
+_OPTION_KEY = re.compile(r"[a-z][a-z0-9_]{0,63}")
+#: an option key naming a credential: its value is a secret name, never the secret
+_CREDENTIAL = re.compile(r"key|token|passw|secret|credential|auth", re.I)
+_SECRET_NAME = re.compile(r"secret:[a-z0-9][a-z0-9/_.-]{0,127}")
+#: the options the dedicated flags give
+_FLAG_OPTIONS = {
+    "base_url": "--gateway-url",
+    "key": "--key",
+    "ca_file": "--ca-file",
+    "allow_plaintext": "--allow-plaintext",
+}
 #: the controller's service id(s), comma-separated, when --source is not given
 SOURCE_ENV = "HNX_ORCHESTRATION_SOURCE"
 REPLAY_S = 7 * 86400  # a new durable reads the last week, not only what arrives after it
@@ -102,6 +122,22 @@ def _parser() -> argparse.ArgumentParser:
         "--turn-source",
         default=None,
         help=f"none, or the adapter as package.module:factory (default: ${TURN_SOURCE_ENV})",
+    )
+    p.add_argument(
+        "--turn-source-namespace",
+        action="append",
+        default=None,
+        metavar="PACKAGE",
+        help="a site package whose adapters --turn-source may name, besides "
+        f"{ADAPTERS} (repeatable; default: ${NAMESPACES_ENV}, comma-separated, else none)",
+    )
+    p.add_argument(
+        "--turn-source-option",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="another adapter option (repeatable; true/false are booleans; a key naming a "
+        "credential takes only secret:<name>)",
     )
     p.add_argument("--gateway-url", default=None, help="adapter option base_url")
     p.add_argument("--key", default=None, help="adapter option: the key by secret name")
@@ -231,28 +267,74 @@ def _connect(nats_jetstream, a):
     )
 
 
-def turn_source(spec: str, **config):
+def turn_source(spec: str, namespaces: Sequence[str] = (), **config):
     """The :class:`~conformance.protocols.inference.TurnSource` that ``spec`` names, or None for
-    ``none``: ``package.module:factory`` called with ``config`` (the options that were given).
-    :class:`ValueError` for a spec that names no factory or a factory that gives no source."""
+    ``none``: ``package.module:factory`` called with ``config`` (the options, as given).
+    The module must be in :data:`ADAPTERS` or in one of ``namespaces`` (the site's own packages),
+    checked before anything is imported, so a flag never runs other code.  :class:`ValueError`
+    for a spec outside them, a module whose import fails in any way, a factory that is missing,
+    takes other options, or gives no source."""
     import importlib
 
     if spec == "none":
         return None
+    for ns in namespaces:
+        if not _DOTTED.fullmatch(ns):
+            raise ValueError(f"--turn-source-namespace {ns!r:.80}: a package name (a.b.c)")
     mod, sep, attr = spec.partition(":")
-    if not sep or not mod or not attr:
-        raise ValueError(f"--turn-source {spec!r}: none, or an adapter as package.module:factory")
+    if not sep or not _DOTTED.fullmatch(mod) or not attr.isidentifier():
+        raise ValueError(
+            f"--turn-source {spec!r:.120}: none, or an adapter as package.module:factory "
+            f"under {ADAPTERS} or a declared site package"
+        )
+    allowed = (ADAPTERS, *namespaces)
+    if not any(mod.startswith(f"{ns}.") for ns in allowed):
+        raise ValueError(
+            f"--turn-source {spec!r:.120}: a module under {' or '.join(allowed)} "
+            f"(declare a site package with --turn-source-namespace or ${NAMESPACES_ENV})"
+        )
     try:
         factory = getattr(importlib.import_module(mod), attr)
-    except (ImportError, AttributeError) as exc:
-        raise ValueError(f"--turn-source {spec!r} cannot be imported: {exc}") from None
+    except Exception as exc:  # any failure of the import (its top level ran) is configuration
+        raise ValueError(
+            f"--turn-source {spec!r:.120} cannot be imported: {type(exc).__name__}: {exc}"
+        ) from None
+    if not callable(factory):
+        raise ValueError(f"--turn-source {spec!r:.120} cannot be imported: not a factory")
     try:
-        source = factory(**{k: v for k, v in config.items() if v not in (None, False)})
+        source = factory(**config)
     except TypeError as exc:  # an option the adapter does not take
-        raise ValueError(f"--turn-source {spec!r}: {exc}") from None
+        raise ValueError(f"--turn-source {spec!r:.120}: {exc}") from None
     if not isinstance(source, TurnSource):
-        raise ValueError(f"--turn-source {spec!r} gave no turn source (no turns(start, end, tags))")
+        raise ValueError(
+            f"--turn-source {spec!r:.120} gave no turn source (no turns(start, end, tags))"
+        )
     return source
+
+
+def turn_source_options(pairs: Sequence[str]) -> dict[str, str | bool]:
+    """``--turn-source-option KEY=VALUE`` pairs as adapter options: ``true``/``false`` are
+    booleans; a key that names a credential (key, token, password, secret, ...) takes only a
+    secret name (``secret:<name>``), so no secret value is ever on a command line.
+    :class:`ValueError` for a malformed pair, a repeated key or one a dedicated flag sets."""
+    out: dict[str, str | bool] = {}
+    for pair in pairs:
+        key, sep, value = pair.partition("=")
+        if not sep or not _OPTION_KEY.fullmatch(key):
+            raise ValueError(f"--turn-source-option {pair[:40]!r}: key=value, key a-z0-9_")
+        if key in _FLAG_OPTIONS:
+            raise ValueError(f"--turn-source-option {key}: give it as {_FLAG_OPTIONS[key]}")
+        if key in out:
+            raise ValueError(f"--turn-source-option {key}: given twice")
+        if (_CREDENTIAL.search(key) or value.startswith("secret:")) and not _SECRET_NAME.fullmatch(
+            value
+        ):
+            raise ValueError(
+                f"--turn-source-option {key}: a credential is a secret name (secret:<name>), "
+                "never a value"
+            )
+        out[key] = {"true": True, "false": False}.get(value, value)
+    return out
 
 
 def _turns(a, store: TelemetryStore, clock: Callable[[], float]) -> int:
@@ -266,13 +348,24 @@ def _turns(a, store: TelemetryStore, clock: Callable[[], float]) -> int:
             file=sys.stderr,
         )
         return 2
+    namespaces = a.turn_source_namespace or [
+        n.strip() for n in os.environ.get(NAMESPACES_ENV, "").split(",") if n.strip()
+    ]
     try:
         source = turn_source(
             spec,
-            base_url=a.gateway_url,
-            key=a.key,
-            ca_file=a.ca_file,
-            allow_plaintext=a.allow_plaintext,
+            namespaces,
+            **turn_source_options(a.turn_source_option),
+            **{
+                k: v
+                for k, v in (
+                    ("base_url", a.gateway_url),
+                    ("key", a.key),
+                    ("ca_file", a.ca_file),
+                    ("allow_plaintext", a.allow_plaintext),
+                )
+                if v not in (None, False)  # a flag not given is the adapter's default
+            },
         )
     except (TurnSourceError, ValueError) as exc:
         print(f"hnx orchestration turns: {exc}", file=sys.stderr)

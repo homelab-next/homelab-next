@@ -210,3 +210,97 @@ def test_the_store_refuses_a_turn_outside_the_neutral_record(filled, change, nee
     with pytest.raises(ValueError, match=needle):
         sync_turns(filled, gateway, now=T0)
     assert filled.turns() == {}
+
+
+# ----------------------------------------------------- which code --turn-source may name
+_SITE_ADAPTER = """
+import json, os
+class Src:
+    def __init__(self, opts): self.opts = opts
+    def turns(self, start, end, tags): return []
+def make(**opts):
+    with open(os.environ["HNX_TEST_OPTS_OUT"], "w") as f: json.dump(opts, f)
+    return Src(opts)
+"""
+
+
+@pytest.fixture
+def site_adapters(tmp_path, monkeypatch):
+    """A site's own adapter package (``labsite.turns:make``) and a module whose import alone
+    leaves a mark (``sideeffect``), both importable; the adapter writes the options it got."""
+    pkg = tmp_path / "pkgs" / "labsite"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "turns.py").write_text(_SITE_ADAPTER)
+    mark = tmp_path / "imported"
+    (tmp_path / "pkgs" / "sideeffect.py").write_text(
+        f"open({str(mark)!r}, 'w').close()\ndef make(**k): return None\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path / "pkgs"))
+    monkeypatch.setenv("HNX_TEST_OPTS_OUT", str(tmp_path / "opts.json"))
+    monkeypatch.delenv("HNX_ORCHESTRATION_TURN_SOURCE_NAMESPACES", raising=False)
+    return tmp_path
+
+
+def _turns_cli(tmp, *argv) -> int:
+    from homelabnext.orchestration import cli
+
+    return cli.main(["turns", "--db", str(tmp / "t.db"), *argv], clock=lambda: T0)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "builtins:print",
+        "os:system",
+        "sideeffect:make",
+        ".x:make",
+        "homelabnext.conform.adaptersx:make",
+        "homelabnext.conform:target",
+        "labsite.turns:make",  # a site namespace, but not declared
+    ],
+)
+def test_a_turn_source_outside_the_allowed_namespaces_is_never_imported(
+    site_adapters, capsys, spec
+):
+    assert _turns_cli(site_adapters, "--turn-source", spec) == 2
+    out, err = capsys.readouterr()
+    assert "--turn-source" in err and "homelabnext.conform.adapters" in err and out == ""
+    assert not (site_adapters / "imported").exists()  # the module never ran
+
+
+def test_a_declared_site_namespace_gets_its_options_and_secrets_only_by_name(
+    site_adapters, capsys, monkeypatch
+):
+    spec = ["--turn-source", "labsite.turns:make"]
+    opts = ["--turn-source-option", "project=lab-1", "--turn-source-option", "token=secret:gw/tok"]
+    assert _turns_cli(site_adapters, *spec, "--turn-source-namespace", "labsite", *opts) == 0
+    got = json.loads((site_adapters / "opts.json").read_text())
+    assert got == {"project": "lab-1", "token": "secret:gw/tok"}
+    capsys.readouterr()
+    monkeypatch.setenv("HNX_ORCHESTRATION_TURN_SOURCE_NAMESPACES", "other, labsite")
+    assert _turns_cli(site_adapters, *spec, "--turn-source-option", "verify=false") == 0
+    assert json.loads((site_adapters / "opts.json").read_text()) == {"verify": False}
+    for bad, why in [
+        ("token=plain-value", "secret:"),
+        ("api_key=abc", "secret:"),
+        ("password=secret:", "secret:"),
+        ("no-equals", "key=value"),
+        ("Bad Key=x", "key=value"),
+        ("base_url=http://x", "--gateway-url"),
+    ]:
+        assert _turns_cli(site_adapters, *spec, "--turn-source-option", bad) == 2
+        assert why in capsys.readouterr().err
+
+
+def test_a_turn_source_whose_import_fails_any_way_is_exit_2(site_adapters, capsys):
+    pkg = site_adapters / "pkgs" / "labsite"
+    (pkg / "broken.py").write_text("raise TypeError('at import')\n")
+    for spec in ("labsite.broken:make", "labsite.turns:nothing", "labsite.missing:make"):
+        assert (
+            _turns_cli(site_adapters, "--turn-source", spec, "--turn-source-namespace", "labsite")
+            == 2
+        )
+        assert "cannot be imported" in capsys.readouterr().err
+    assert _turns_cli(site_adapters, "--turn-source", "x:y", "--turn-source-namespace", "a..b") == 2
+    assert "namespace" in capsys.readouterr().err
