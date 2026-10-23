@@ -612,7 +612,10 @@ def test_this_repo_pins_a_fixed_caddy_and_strips_before_forward_auth():
     out, err = io.StringIO(), io.StringIO()
     assert lint.main([str(REPO), "--json"], out=out, err=err) == 0, out.getvalue()
     doc = json.loads(out.getvalue())
-    assert doc["findings"] == [] and doc["discovery"] == "git"
+    # a git checkout lists its files with git; an export (sdist, git archive) is walked
+    assert doc["findings"] == [] and doc["discovery"] == (
+        "git" if (REPO / ".git").exists() else "walk"
+    )
     assert doc["generated"] >= 6
 
 
