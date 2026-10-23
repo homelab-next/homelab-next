@@ -1001,6 +1001,69 @@ def test_a_run_whose_process_died_reads_interrupted(tmp_path):
     assert svc.state.state_of(alive) == "running"
 
 
+def test_an_io_error_inside_an_approved_run_ends_it_in_error(tmp_path, monkeypatch):
+    """An OSError on the way to the handler (ENOSPC writing its copy, EMFILE) left the claimed
+    run reading running until the broker restarted, with no outcome record."""
+    import errno
+
+    from homelabnext.broker import service as service_mod
+
+    def enospc(*a, **k):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    svc = _svc(tmp_path)
+    rid = _restart(svc)
+    svc.approve(rid, APPROVER)
+    with monkeypatch.context() as m:
+        m.setattr(service_mod._exec, "run_handler", enospc)
+        with pytest.raises(BrokerError) as info:
+            svc.run(AGENT, rid)
+    assert info.value.reason == "handler-io-error"
+    assert svc.state.state_of(rid) == "error"
+    assert svc.state.get_result(rid)["reason"] == "handler-io-error"
+    outcomes = [(r["operation"], r["outcome"]) for r in svc.audit_documents(request_id=rid)]
+    assert outcomes[-2:] == [("run", "started"), ("run", "error")]
+    _audit_ok(svc)
+
+
+def test_any_exception_inside_a_run_still_records_how_it_ended(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    rid = _restart(svc)
+    svc.approve(rid, APPROVER)
+
+    def boom(*a, **k):
+        raise RuntimeError("a bug")
+
+    monkeypatch.setattr(svc, "_execute", boom)
+    with pytest.raises(RuntimeError):
+        svc.run(AGENT, rid)
+    assert svc.state.get_result(rid) == {
+        "state": "error",
+        "at": "2026-01-15T10:00:00Z",
+        "reason": "internal-error",
+    }
+
+
+def test_a_filed_proposal_whose_event_cannot_be_queued_is_still_filed(tmp_path, monkeypatch):
+    import errno
+
+    svc = _svc(tmp_path)
+
+    def enospc(*a, **k):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(svc.state, "put_outbox", enospc)
+    note = {"title": "t", "risk": "low", "rollback": "r", "type": "proposal"}
+    out = svc.call(AGENT, "proposal.file", {"note": note, "body": "x"})
+    assert (tmp_path / "data" / out["path"]).is_file()
+    assert [r["outcome"] for r in svc.audit_documents(action="proposal.file")] == [
+        "started",
+        "error",
+        "ok",
+    ]
+    assert svc.audit_documents(reason="outbox-failed")
+
+
 # -- single use: run consumes its approval exactly once ------------------------------------------
 
 

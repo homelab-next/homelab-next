@@ -298,11 +298,16 @@ def run_handler(
             raise ExecError("secret-unavailable", f"secret {name} could not be resolved") from None
     exe = run / ("handler" + Path(path).suffix)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
-    fd = os.open(exe, flags, 0o700)
-    with os.fdopen(fd, "wb") as fh:
-        fh.write(content)
     tmp = run / "tmp"
-    tmp.mkdir(mode=0o700, exist_ok=True)
+    try:  # the private copy: a full disk or a descriptor limit here is an error, not a crash
+        fd = os.open(exe, flags, 0o700)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(content)
+        tmp.mkdir(mode=0o700, exist_ok=True)
+    except OSError:
+        raise ExecError(
+            "handler-io-error", "the handler's private copy cannot be written"
+        ) from None
     child_env = {"PATH": SAFE_PATH, "LANG": "C.UTF-8", "HOME": str(run), "TMPDIR": str(tmp)}
     child_env.update(env or {})
     child_env.update(values)
@@ -337,8 +342,11 @@ def run_handler(
     secret_values = list(values.values())
     stdout = _redact(bytes(out.kept), secret_values, truncated=out.total > max_output)
     stderr = _redact(bytes(err.kept), secret_values, truncated=err.total > max_output)
-    (run / "stdout").write_bytes(stdout)
-    (run / "stderr").write_bytes(stderr)
+    try:
+        (run / "stdout").write_bytes(stdout)
+        (run / "stderr").write_bytes(stderr)
+    except OSError:
+        raise ExecError("handler-io-error", "the handler ran; its output cannot be kept") from None
     return ExecResult(
         exit_code=proc.returncode,
         stdout=stdout,

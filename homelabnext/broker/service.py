@@ -62,6 +62,7 @@ lane's directory has its own file and byte quota (:mod:`homelabnext.broker.lanes
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import hashlib
 import hmac
@@ -670,7 +671,15 @@ class BrokerService:
                 act.handler.kind == "records-inbox"
                 and args["note"].get("type", "proposal") == "proposal"
             ):
-                self._proposal_created(request, args["note"], written["path"])
+                try:  # the note is filed: its event is a courtesy that must not undo that
+                    self._proposal_created(request, args["note"], written["path"])
+                except Exception as exc:
+                    log.error("%s: proposal.created not emitted (%s)", act.name, type(exc).__name__)
+                    with contextlib.suppress(*_AUDIT_FAILURES):
+                        self._audit(
+                            BROKER_SOURCE, act.name, "notify", "error", reason="outbox-failed",
+                            request_id=request["request_id"],
+                        )  # fmt: skip
             return written
         return self._run_exec(act, request, args)
 
@@ -695,7 +704,10 @@ class BrokerService:
         path = _inside(self.base_dir, doc["handler"])
         if path is None:
             raise _Refused("denied", "handler-path-escape", f"{act.name}: handler outside the base")
-        rd = run_dir(request["request_id"], self.state.root, env={})
+        try:
+            rd = run_dir(request["request_id"], self.state.root, env={})
+        except OSError:
+            raise _Refused("error", "handler-io-error", f"{act.name}: no run directory") from None
         env = {
             "HNX_BROKER_ACTION": act.name,
             "HNX_BROKER_REQUEST_ID": request["request_id"],
@@ -771,7 +783,10 @@ class BrokerService:
         if not started:
             self._started(caller, act, request, args, operation)
         try:
-            result = self._execute(act, request, args)
+            try:
+                result = self._execute(act, request, args)
+            except OSError:  # an environment fault on the way (ENOSPC, EMFILE): still an outcome
+                raise _Refused("error", "handler-io-error", f"{act.name}: an I/O error") from None
         except _Refused as exc:
             self._outcome(
                 caller,
@@ -1032,10 +1047,9 @@ class BrokerService:
             )
         try:
             result = self._run_audited(caller, act, req, args, "run", started=True)
-        except BrokerError as exc:
-            self._finish(
-                request_id, {"state": "error", "at": now, "reason": getattr(exc, "reason", "")}
-            )
+        except Exception as exc:  # whatever ends the run, it ends: never "running" forever
+            reason = getattr(exc, "reason", "") or "internal-error"
+            self._finish(request_id, {"state": "error", "at": now, "reason": reason})
             raise
         finally:
             self._secret_args.pop(request_id, None)

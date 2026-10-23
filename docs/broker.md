@@ -59,7 +59,8 @@ file `<date>-triage-lead-weekly-report.md` first and leave `triage-lead`'s own p
 `lane-exists`; with it, every agent's names are its own, and the same caller filing the same slug
 the same day gets the same name again (`lane-exists`), so a retry files nothing twice. A caller's
 `slug` is at most 51 characters (the tag takes the rest of the records convention's 60). A filed
-proposal emits `proposal.created`.
+proposal emits `proposal.created`, best effort: the note is filed first, and an event that
+cannot be queued is audited `outbox-failed` (operation `notify`) without failing the call.
 
 What a lane refuses, each with its audit reason: a name that is not one plain segment or does not
 match the pattern (`lane-name-invalid`), a symlinked or non-directory component on the way
@@ -107,8 +108,11 @@ from `<state>/runs/<request id>/` as `[handler, *argv]`, with the params as JSON
 environment of only `PATH`, `LANG`, `HOME`/`TMPDIR` (the run directory), `HNX_BROKER_ACTION`,
 `HNX_BROKER_REQUEST_ID`, `HNX_BROKER_ACTOR`, `HNX_BROKER_TARGET` and the declared secrets. The
 timeout kills the handler's process group; stdout and stderr are kept up to the cap in the run
-directory. A non-zero exit is `handler-failed`, a timeout `handler-timeout`; the caller gets the
-reason, never the handler's own error text. JSON on stdout is the action's result.
+directory. A non-zero exit is `handler-failed`, a timeout `handler-timeout`, and an I/O error on
+the way (the run directory, the private copy, the kept output: a full disk, a descriptor limit)
+`handler-io-error`; each is the run's outcome record and its result, so an approved run never
+reads `running` after it has ended. The caller gets the reason, never the handler's own error
+text. JSON on stdout is the action's result.
 
 **Secrets** are named, never passed. The default resolver reads `HNX_BROKER_SECRET_<NAME>` from the
 *broker's* environment and hands the value to that one handler as `<NAME>`; an embedding program
