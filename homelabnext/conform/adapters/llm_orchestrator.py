@@ -29,6 +29,17 @@ The mapping (docs/orchestration-controller.md has the whole table):
   run.  The timeout is at least ``wait_floor`` seconds: the controller admits on a 2 s tick.
 * ``cancel`` -> ``POST /jobs/{id}/cancel``; ``409`` (a run that may no longer be cancelled) reads
   the run back unchanged, which is the contract for a finished run.
+* ``capacity`` (feature ``admission``) -> ``GET /admin/backend-inflight`` (the route landed after
+  ``a52a1c4``; ``hermesagent.Policy.InFlightSnapshot``): ``in_flight`` summed over the backends,
+  ``holders`` the union of their ``reserved_runs``, ``limit`` ``None`` (the snapshot reports no
+  limit).  ``admission`` is declared only when that route answers, so on a controller without it
+  the capacity checks skip.  With API authentication on, the route needs an admin token, which
+  this adapter does not send.
+* ``kill`` / ``restart`` (test hook ``fault-injection``) exist only on the recorded stand-in, which
+  models the controller's process kill and restart reconciliation.  On a live controller the
+  adapter has no honest way to kill one job's worker or restart the service, so it does not
+  declare the hook: there the checks needing it are ``untested`` (a MUST cannot be skipped by
+  leaving a hook out), unless the controller lacks ``admission`` too, in which case they skip.
 
 The adapter never answers for the controller: it does not raise ``UnknownJob`` for a name it was
 not given and does not retry a failed run itself, so the suite sees what the controller does.
@@ -200,8 +211,6 @@ class _HandlerHost:
 
 
 class LLMOrchestrator:
-    features = frozenset()
-
     def __init__(
         self,
         base_url: str,
@@ -214,6 +223,8 @@ class LLMOrchestrator:
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         on_close: Callable[[], None] | None = None,
+        faults: Any = None,
+        cancel_grace_s: float = 10.0,
     ):
         self._url = base_url.rstrip("/")
         self._profiles = Path(profiles_dir)
@@ -224,6 +235,10 @@ class LLMOrchestrator:
         self._host = _HandlerHost()
         self._written: list[Path] = []
         self._tokens: dict[str, str] = {}
+        #: a cancel is a process kill plus a poll: generous for a live controller under load
+        self.cancel_grace_s = cancel_grace_s
+        self._faults = faults  # an object with kill(run_id) and restart(): the recorded stand-in
+        self._features: frozenset[str] | None = None
 
     def __repr__(self) -> str:
         return "LLMOrchestrator(<endpoint>)"
@@ -260,6 +275,30 @@ class LLMOrchestrator:
             raise AdapterConfigError("the controller has no profile reload (no scheduler wired)")
         if status != 200:
             raise self._fail("reload profiles", status, raw)
+
+    @property
+    def features(self) -> frozenset[str]:
+        """``admission`` when the controller serves its in-flight route, ``fault-injection``
+        only with a stand-in that can kill and restart (probed once per subject)."""
+        if self._features is None:
+            feats = {"fault-injection"} if self._faults is not None else set()
+            try:
+                self._inflight()
+                feats.add("admission")
+            except Exception:  # no route, or no controller: then nothing can be measured
+                pass
+            self._features = frozenset(feats)
+        return self._features
+
+    def _inflight(self) -> dict[str, Any]:
+        status, raw = self._request("GET", "/admin/backend-inflight")
+        if status != 200:
+            raise self._fail("backend in-flight", status, raw)
+        doc = json.loads(raw)
+        backends = doc.get("backends") if isinstance(doc, dict) else None
+        if not isinstance(backends, dict):
+            raise self._fail("backend in-flight (no backends)", status, raw)
+        return backends
 
     # ---------------------------------------------------------------- contract
     def define(self, name, handler, *, retries=0):
@@ -352,6 +391,29 @@ class LLMOrchestrator:
             raise self._fail(f"cancel {run_id}", status, raw)
         return self._status(run_id, self._get(run_id))
 
+    def capacity(self):
+        """``(limit, in_flight, holders)`` from ``GET /admin/backend-inflight``."""
+        from conformance.protocols.orchestration import Capacity
+
+        in_flight, holders = 0, set()
+        for entry in self._inflight().values():
+            if isinstance(entry, dict):
+                in_flight += int(entry.get("in_flight") or 0)
+                holders.update(str(r) for r in entry.get("reserved_runs") or ())
+        return Capacity(None, in_flight, frozenset(holders))
+
+    def kill(self, run_id: str) -> None:
+        if self._faults is None:
+            orch_error, _, _ = _protocol()
+            raise orch_error("kill needs the recorded stand-in: a live worker cannot be killed")
+        self._faults.kill(run_id)
+
+    def restart(self) -> None:
+        if self._faults is None:
+            orch_error, _, _ = _protocol()
+            raise orch_error("restart needs the recorded stand-in: a live controller is not ours")
+        self._faults.restart()
+
     def close(self) -> None:
         try:
             for path in self._written:
@@ -416,6 +478,8 @@ def _on_recorded_fake(fixes: tuple[str, ...], priority: int) -> LLMOrchestrator:
             poll=0.02,
             wait_floor=10.0,
             on_close=stop,
+            faults=fake,
+            cancel_grace_s=1.0,
         )
     except BaseException:
         stop()

@@ -28,6 +28,8 @@ controller runs only `hermes`. So a conformance run puts a stand-in on the contr
 | `wait(run_id)` | Polls `GET /jobs/{id}`. `done` maps to `succeeded`; `failed` and `budget_killed` map to `failed`. `result` is decoded from `response_body`; `error` is `local_failed_reason`. The timeout is at least `wait_floor` (60 s), because the controller admits on a 2 s tick (`cmd/controller/main.go:225`). |
 | `cancel(run_id)` | `POST /jobs/{id}/cancel`. A `409` (no longer cancellable) reads the run back unchanged, which is what the contract expects for a finished run. |
 | `RunStatus.attempts` | The `attempts` field, when the controller reports one. `a52a1c4` reports none, so the adapter falls back to the number of executions the handler host saw for that run. |
+| `capacity()` (feature `admission`) | `GET /admin/backend-inflight` (`internal/api/server.go`, `WithBackendInFlight`, which serves `hermesagent.Policy.InFlightSnapshot`; the route landed after `a52a1c4`): `in_flight` summed over the backends, `holders` the union of their `reserved_runs`, `limit` `None` (the snapshot reports none). The adapter declares `admission` only when the route answers. With API authentication on, the route needs an admin token, which the adapter does not send. |
+| `kill(run_id)`, `restart()` (test hook `fault-injection`) | Only on the recorded stand-in, which models the hermes process dying (`signal: killed`) and a controller restart (`ReconcileOrphans`). On a live controller the adapter cannot kill one job's worker or restart the service honestly, so it never declares the hook. |
 
 The adapter never answers on the controller's behalf. It does not raise `UnknownJob` for a name it
 was never given, and it does not resubmit a failed run itself.
@@ -42,6 +44,28 @@ Two target files ship with it:
 
 `tests/conform/test_conform_orchestration_controller.py` runs the whole suite through the adapter
 on that stand-in, both as recorded and with the proposed fixes turned on.
+
+## Holds: capacity is held only by live work
+
+The contract requires that a slot, lease or token reservation lives only as long as the worker it
+was granted to (clauses a-e in `conformance/protocols/orchestration.py`, ADR-0029). Five MUST
+checks hold an implementation to it: `cancel-running-run-frees-capacity`,
+`killed-worker-fails-run-and-frees-capacity`, `deadline-expiry-frees-capacity`,
+`restart-reconciles-runs-and-capacity` and `capacity-returns-to-zero-after-churn`. Each needs
+`admission`; the kill and restart ones also need `fault-injection`, and the deadline one
+`deadline`.
+
+| Controller | Result |
+|---|---|
+| `a52a1c4` as recorded | No in-flight route, so no `admission`: all five skip (a missing product feature skips a check even when its hook is missing too). |
+| the stand-in with the upstream in-flight route (`fixes: [backend-inflight]`) | The four that need no `deadline` pass. A cancel cancels the job's context, which kills the `hermes` process; a defer releases the slot on every exit path (`scheduler.go:409-435`); a restart runs `ReconcileOrphans` (`running` becomes `failed`, `admitted` becomes `queued`) and starts with empty counters. |
+| a live controller with the route | `admission` is declared; the kill and restart checks are `untested` (the adapter has no honest hook), which fails the capability until a controller-side hook exists. `deadline-expiry-frees-capacity` skips: the API takes no per-run deadline. |
+
+The stand-in models slots only. The live controller also keeps token-weighted reservations and
+exclusive leases. The 2026-10-23 review found that its stale-reservation reaper returns the slot
+but not the token reservation, and that an exclusive lease is never recorded as a reservation, so
+`reserved_runs` does not show it. A live run of these checks, with a kill and restart hook on the
+controller host, is what would prove those paths.
 
 ## Result: three MUST checks fail at `a52a1c4`
 
@@ -172,7 +196,8 @@ so the in-memory fake and a StackStorm-backed adapter can skip the checks.
 | Feature | Field / call | What a check would prove |
 |---|---|---|
 | `priority` | `submit(..., priority: int)`, 1 = first | Among queued runs, a lower number starts first (SHOULD: ordering can only be observed when a single slot is used). |
-| `deadline` | `submit(..., deadline_s: float)` | A run still unfinished at its deadline ends `failed`, its error names the deadline, and it is not retried (the job deadline, LL-369). |
+| `admission` | `capacity() -> (limit, in_flight, holders)` | **Built** (see "Holds" above): capacity is held only by live work and is released on success, failure, cancel, deadline, worker death and restart. |
+| `deadline` | `submit(..., deadline_s: float)` | **Built in the contract and the fake** (`deadline-expiry-frees-capacity`): a run still unfinished at its deadline ends `failed`, its error names the deadline, and its capacity is released. The controller's API takes no per-run deadline, so the check skips there. |
 | `shadow` | `submit(..., shadow: bool)` | A shadow run uses the shadow lane and never the real one, and the controller allows one unfinished shadow run per job (`429` otherwise). |
 | `constraints` | `define(..., constraints={"require_tags": [...], "min_context": int, "exclusive": bool})` | A run whose constraints no backend satisfies is rejected or stays queued, and does not run on a backend that violates them. |
 | `local-only` | `define(..., local_only: bool)` | A local-only run that fails is never re-run on cloud. |
