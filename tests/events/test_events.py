@@ -404,33 +404,69 @@ def test_a_non_finite_number_is_refused_by_the_producer_and_on_every_decode_path
 
 
 # ---------------------------------------------------------------- bounded state
-def test_the_state_keeps_only_the_newest_sent_records(store):
-    f = FakeForwarder()
-    p = pub(f, store, keep_sent=20, policy=RetryPolicy(max_attempts=1))
-    f.fail_next = 1  # one event stays pending; pending records are never pruned
+class Clock:
+    def __init__(self, t=1_800_000_000.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+
+def test_sent_records_are_kept_for_the_retention_and_then_pruned(store):
+    f, clock = FakeForwarder(), Clock()
+    p = pub(f, store, retain_s=3600, clock=clock, policy=RetryPolicy(max_attempts=1))
+    f.fail_next = 1  # a pending record is never pruned
     held = task_event("held")
     assert p.publish(held).status == "pending"
-    events = [task_event(f"k{i}") for i in range(100)]
-    for ev in events:
+    old = [task_event(f"o{i}") for i in range(150)]
+    for ev in old:
         assert p.publish(ev).ok
-    sent = [k for k, v in store.items().items() if v["status"] == "sent"]
-    assert 20 <= len(sent) <= 22  # pruned in one write once a tenth over keep_sent
-    assert p.status_of(events[-1]["id"]) == "sent"
-    assert p.status_of(events[0]["id"]) is None
-    assert p.pending_ids() == [held["id"]]
-    again = p.publish(events[0])  # its record is gone: sent again, the forwarder de-duplicates
-    assert again.status == "duplicate" and len(f.accepted) == 100
+    clock.t += 1800  # inside the retention: every id is still de-duplicated here, at no call
+    calls = len(f.calls)
+    assert p.publish(old[0]).status == "duplicate" and len(f.calls) == calls
+    with pytest.raises(EventError, match="id reuse"):  # and its body still checked
+        p.publish({**old[0], "data": {**old[0]["data"], "x": 1}})
+    clock.t += 1801  # past it
+    assert p.prune() == 150
+    assert p.status_of(old[0]["id"]) is None and p.pending_ids() == [held["id"]]
 
 
-def test_the_state_file_stops_growing(tmp_path):
-    path = tmp_path / "pub.json"
-    p = pub(FakeForwarder(), StateStore(path), keep_sent=50)
+def test_pruning_runs_by_itself_and_the_file_stops_growing(tmp_path):
+    path, clock = tmp_path / "pub.json", Clock()
+    p = pub(FakeForwarder(), StateStore(path), retain_s=60, clock=clock)
     sizes = []
-    for i in range(300):
+    for i in range(400):
+        clock.t += 1  # one event a second: about 60 records are ever live
         p.publish(task_event(f"g{i}"))
         if i % 100 == 99:
             sizes.append(path.stat().st_size)
-    assert max(sizes) - min(sizes) < sizes[0] // 4, sizes
+    steady = sizes[1:]  # after the first retention period the file holds one window of records
+    assert max(steady) - min(steady) < steady[0] // 10, sizes
+    assert len(StateStore(path).keys()) < 60 + 100 + 1  # retention plus one check interval
+
+
+def test_another_process_writing_the_same_file_keeps_its_records(tmp_path):
+    # the age is in each record, not a per-process counter: one publisher never prunes the
+    # other's fresh records ahead of its own expired ones
+    path, clock = tmp_path / "pub.json", Clock()
+    a = pub(FakeForwarder(), StateStore(path), retain_s=600, clock=clock)
+    b = pub(FakeForwarder(), StateStore(path), retain_s=600, clock=clock)
+    mine = [task_event(f"a{i}") for i in range(5)]
+    for ev in mine:
+        a.publish(ev)
+    clock.t += 601
+    fresh = [task_event(f"b{i}") for i in range(5)]
+    for ev in fresh:
+        b.publish(ev)  # b's first send prunes what has expired: a's records, never its own
+    a.prune()
+    assert all(a.status_of(ev["id"]) is None for ev in mine)
+    assert all(a.status_of(ev["id"]) == "sent" for ev in fresh)
+
+
+def test_a_record_without_a_send_time_counts_as_expired(store):
+    p = pub(FakeForwarder(), store, clock=Clock())
+    store.put("events/evt-legacy", {"status": "sent", "digest": "d", "event": None, "attempts": 1})
+    assert p.prune() == 1
 
 
 def test_a_store_without_items_or_delete_still_works():
@@ -447,11 +483,12 @@ def test_a_store_without_items_or_delete_still_works():
         def keys(self):
             return list(self.d)
 
-    s = Bare()
-    p = pub(FakeForwarder(), s, keep_sent=2)
+    s, clock = Bare(), Clock()
+    p = pub(FakeForwarder(), s, retain_s=1, clock=clock)
     for i in range(5):
+        clock.t += 10
         assert p.publish(task_event(f"b{i}")).ok
-    assert len(s.d) == 5 and p.pending_ids() == []
+    assert len(s.d) == 5 and p.pending_ids() == [] and p.prune() == 0
 
 
 def test_delete_many_removes_in_one_write(tmp_path):

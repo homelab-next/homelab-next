@@ -16,10 +16,14 @@ still ``pending``, so the event is sent again with the *same id*; the forwarder 
 exactly-once in effect, because the id is the idempotency key.  Publishing an id already ``sent``
 makes no call at all; the same id with a different body is refused (:class:`EventError`).
 
-The state is bounded: only the newest ``keep_sent`` ``sent`` records are kept (each is numbered
-when it is sent), and older ones are removed in one write once there are a tenth more than that.
-Pending and rejected records are never removed.  An id whose ``sent`` record was removed is sent
-again if published again; the forwarder's own de-duplication by id answers ``duplicate``.
+The state is bounded by age: a ``sent`` record carries the time it was sent (``sent_at``, from
+the injected clock) and is removed once it is older than ``retain_s`` (default 24 h, the longest
+duplicate window the event bus allows); expired records go in one write, checked every
+``PRUNE_EVERY`` sends.  So an id is never sent twice, and the same id with a different body is
+refused, for ``retain_s`` after it was sent, whichever process sent it: the age comes from the
+record, not from a per-process counter.  Published again after that, the id is sent again, and
+the forwarder answers ``duplicate`` only within its own window.  A ``sent`` record written
+before ``sent_at`` existed counts as expired.  Pending and rejected records are never removed.
 """
 
 from __future__ import annotations
@@ -39,8 +43,10 @@ class _Store(Protocol):
     def keys(self) -> list[str]: ...
 
 
-#: ``sent`` records kept by default (the state file is rewritten on every write)
-KEEP_SENT = 1000
+#: how long a ``sent`` record is kept by default: the longest bus duplicate window (24 h)
+RETAIN_S = 86_400.0
+#: sends between two checks for expired ``sent`` records
+PRUNE_EVERY = 100
 
 
 @dataclass(frozen=True)
@@ -79,18 +85,19 @@ class Publisher:
         policy: RetryPolicy | None = None,
         sleep: Callable[[float], None] = time.sleep,
         namespace: str = "events",
-        keep_sent: int = KEEP_SENT,
+        retain_s: float = RETAIN_S,
+        clock: Callable[[], float] = time.time,
     ) -> None:
-        if keep_sent < 1:
-            raise ValueError("keep_sent must be at least 1")
+        if not retain_s > 0:
+            raise ValueError("retain_s must be positive")
         self.forwarder = forwarder
         self.store = store
         self.policy = policy or RetryPolicy()
         self.sleep = sleep
         self.namespace = namespace
-        self.keep_sent = keep_sent
-        self._seq: int | None = None  # the last sent record's number, read on first use
-        self._sent = 0  # sent records in the store (as of the last scan, plus those since)
+        self.retain_s = float(retain_s)
+        self.clock = clock
+        self._until_prune = 0  # sends until the next check for expired records (0: at once)
 
     def _k(self, event_id: str) -> str:
         return f"{self.namespace}/{event_id}"
@@ -113,38 +120,26 @@ class Publisher:
     def pending_ids(self) -> list[str]:
         return sorted(i for i, r in self._records().items() if r.get("status") == "pending")
 
-    def _scan(self) -> None:
-        sent = [r for r in self._records().values() if r.get("status") == "sent"]
-        self._seq = max((int(r.get("seq") or 0) for r in sent), default=0)
-        self._sent = len(sent)
-
-    def _next_seq(self) -> int:
-        if self._seq is None:
-            self._scan()
-        assert self._seq is not None
-        self._seq += 1
-        return self._seq
-
-    def _prune(self) -> None:
-        """Remove the oldest ``sent`` records beyond ``keep_sent``, in one write."""
-        if self._sent <= self.keep_sent + max(1, self.keep_sent // 10):
-            return
+    def prune(self) -> int:
+        """Remove the ``sent`` records older than ``retain_s``, in one write; returns how many.
+        Only expired records are named, so a record another process just wrote is never one."""
         delete_many = getattr(self.store, "delete_many", None)
         delete = getattr(self.store, "delete", None)
         if delete_many is None and delete is None:
-            return  # a store that cannot delete keeps everything
-        sent = sorted(
-            (int(r.get("seq") or 0), i)
+            return 0  # a store that cannot delete keeps everything
+        cutoff = self.clock() - self.retain_s
+        old = [
+            self._k(i)
             for i, r in self._records().items()
-            if r.get("status") == "sent"
-        )
-        old = [self._k(i) for _, i in sent[: max(0, len(sent) - self.keep_sent)]]
+            if r.get("status") == "sent" and _sent_at(r) < cutoff
+        ]
+        if not old:
+            return 0
         if delete_many is not None:
-            delete_many(old)
-        else:
-            for k in old:
-                delete(k)
-        self._sent = len(sent) - len(old)
+            return int(delete_many(old))
+        for k in old:
+            delete(k)
+        return len(old)
 
     def publish(self, event: dict[str, Any]) -> PublishResult:
         validate_event(event)
@@ -214,9 +209,17 @@ class Publisher:
             "error": error,
         }
         if status == "sent":
-            rec["seq"] = self._next_seq()  # the order the oldest are pruned in
+            rec["sent_at"] = float(self.clock())  # its age decides when it is pruned
         self.store.put(self._k(eid), rec)
         if status == "sent":
-            if prev.get("status") != "sent":
-                self._sent += 1
-            self._prune()
+            self._until_prune -= 1
+            if self._until_prune <= 0:
+                self._until_prune = PRUNE_EVERY
+                self.prune()
+
+
+def _sent_at(rec: dict[str, Any]) -> float:
+    try:
+        return float(rec.get("sent_at"))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return float("-inf")  # written before records carried their time: expired
