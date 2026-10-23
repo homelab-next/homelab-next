@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import go_test_policy as policy
 
 ROOT = Path(__file__).resolve().parents[2]
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "go_test_json"
 MOD = "example.com/fixture"
 TODAY = "2026-01-10"
 
@@ -122,6 +123,29 @@ def test_a_failing_subtest_is_reported_and_its_parent_not_twice(tmp_path, capsys
     assert run(tmp_path, lines) == 1
     problems = [line for line in capsys.readouterr().out.splitlines() if line.startswith("FAIL")]
     assert problems == ["FAIL example.com/fixture/internal/queue TestTable/bad"]
+
+
+def fixture(name: str) -> list[str]:
+    """A real ``go test -json`` stream (Go 1.24, module example.com/fixture)."""
+    return (FIXTURES / name).read_text().splitlines()
+
+
+def test_a_failure_is_sticky_when_the_same_test_runs_again(tmp_path, capsys):
+    # go test -count=2: the first run fails, the second passes; the package fails
+    assert run(tmp_path, fixture("count2_fail_then_pass.json")) == 1
+    out = capsys.readouterr().out
+    assert "FAIL example.com/fixture/internal/fl TestFlip\n" in out
+    # a quarantined failure elsewhere in the package must not hide the flip's first failure
+    pkg = "internal/queue"
+    lines = package(
+        pkg,
+        "fail",
+        events_of(pkg, "TestFlip", "fail", "first run"),
+        events_of(pkg, "TestFlip", "pass"),
+        events_of(pkg, "TestStall", "fail", "stalled"),
+    )
+    assert run(tmp_path, lines, policy_yaml=QUARANTINE.format(test="TestStall", until="2026-02-01")) == 1  # fmt: skip
+    assert "FAIL example.com/fixture/internal/queue TestFlip\n" in capsys.readouterr().out
 
 
 def test_forbid_rejects_a_reason_that_is_legitimate_elsewhere(tmp_path, capsys):

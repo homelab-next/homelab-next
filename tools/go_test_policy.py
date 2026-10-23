@@ -185,7 +185,9 @@ def parse(lines: Iterable[str], run: Run | None = None) -> Run:
             res = run.packages.setdefault(pkg, Result())
         if action == "output":
             res.output.append(ev.get("Output", ""))
-        elif action in ("pass", "fail", "skip"):
+        elif action in ("pass", "fail", "skip") and res.action != "fail":
+            # a failure is sticky: with -count=N (or a test name run twice) a later pass of the
+            # same test must not erase an earlier failure
             res.action = action
             res.failed_build = ev.get("FailedBuild") or ""
     return run
