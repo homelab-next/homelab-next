@@ -338,7 +338,8 @@ GO_MATH_LIMIT_RE = re.compile(
     r"^math\.(?:Max|Min|SmallestNonzero)(?:Int|Uint|Float)(?:8|16|32|64)?$"
 )
 # An escape sequence separates values inside a Go string literal (``"key: v\nnext: w"``): each
-# segment is scanned on its own, so a value on either side of an escape is still found.  Only in a
+# segment is scanned on its own, so a value on either side of an escape is still found, and so is
+# the value with the escapes and next keys taken out (pieces each too short to judge).  Only in a
 # Go source's interpreted string; any other file keeps the value whole.
 GO_ESCAPE_RE = re.compile(r"\\[nrt]")
 # a segment that is the next key of the literal (``\nnext_key:``), not a value
@@ -387,10 +388,11 @@ def _is_hit_keyed_value(m: re.Match[str], line: str, path: str = "") -> bool:
     value = m.group("val")
     if path.endswith(".go") and _in_go_string(line, m.start("val")):
         segments = GO_ESCAPE_RE.split(value)
-        return any(
-            _keyed_value_is_hit(m, seg)
-            for n, seg in enumerate(segments)
-            if not (n and NEXT_KEY_RE.match(seg))
+        kept = [seg for n, seg in enumerate(segments) if not (n and NEXT_KEY_RE.match(seg))]
+        # each segment, and the value with its escapes (and next keys) taken out: short pieces
+        # split by escapes are still the value they make together, as in any other file
+        return any(_keyed_value_is_hit(m, seg) for seg in kept) or _keyed_value_is_hit(
+            m, "".join(kept)
         )
     return _keyed_value_is_hit(m, value)
 

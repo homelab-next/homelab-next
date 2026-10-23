@@ -682,6 +682,14 @@ ESCAPED = [
 ]
 
 
+# verify.md: a word segment then a short tail, and segments each under the 6-character minimum;
+# a .txt copy and the scanner before Go escapes were split both flag them
+ESCAPED += [
+    'var s3 = "pass' + "word: abcdef\\nQ9x" + '!z"',
+    'var s4 = "pass' + "word: Zx9K\\tq2Lm" + '\\n7Wp4"',
+]
+
+
 @pytest.mark.parametrize("text", ESCAPED)
 @pytest.mark.parametrize("path", ["conf.yml", "x.py", "orchestrator/internal/x/x_test.go", "-"])
 def test_an_escape_sequence_never_hides_a_keyed_value(text: str, path: str):
