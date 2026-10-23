@@ -77,6 +77,11 @@ TYPES = (
 )
 _PRIORITY = {t: i for i, t in enumerate(TYPES)}
 LABEL_RE = re.compile(r"\[REDACTED:(?P<type>[a-z-]+):(?P<n>\d+)\]")
+# a label this screener could have written: a known type and a count it could reach.  Only these
+# are claimed as already screened; "[REDACTED:a:4111111111111111]" is a card in a label's clothes.
+_OWN_LABEL_RE = re.compile(
+    r"\[REDACTED:(?:" + "|".join(map(re.escape, TYPES)) + r"):[1-9][0-9]{0,5}\]"
+)
 
 # Ranges that ``redact_private_ips=False`` leaves in place: RFC 1918, CGNAT, loopback, link-local,
 # "this network", and IPv6 loopback, unspecified, unique-local and link-local.  The IPv4 ranges
@@ -513,7 +518,7 @@ class Screener:
         # in the text ("[REDACTED:secret:1]") is taken first and never redacted again, so
         # screening screened text changes nothing.
         chosen: list[tuple[int, int, str, str]] = [
-            (m.start(), m.end(), "", "") for m in LABEL_RE.finditer(text)
+            (m.start(), m.end(), "", "") for m in _OWN_LABEL_RE.finditer(text)
         ]
         starts: list[int] = [c[0] for c in chosen]
 

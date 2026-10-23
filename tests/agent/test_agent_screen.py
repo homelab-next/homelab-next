@@ -494,3 +494,23 @@ def test_a_value_that_is_itself_the_next_key_does_not_hide_that_keys_value(text)
     out = screen_text(text)
     assert "FakeValue0123" not in out and "AFAKE7EXAMPLE0KEY" not in out
     assert "[REDACTED:secret:1]" in out
+
+
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [
+        ("[REDACTED:a:4111111111111111]", "4111111111111111"),
+        ("call [REDACTED:phone:5551234567]", "5551234567"),
+        ("password=[REDACTED:hunter-two:1]", "hunter-two"),
+    ],
+)
+def test_only_a_label_this_screener_could_write_is_claimed(text, value):
+    """A label of an unknown type or an impossible count is text, so a value inside it is
+    screened like any other."""
+    assert value not in screen_text(text)
+
+
+def test_a_real_label_is_still_claimed():
+    assert screen_text("x [REDACTED:ip:12] y [REDACTED:national-id:3]") == (
+        "x [REDACTED:ip:12] y [REDACTED:national-id:3]"
+    )
