@@ -103,6 +103,7 @@ has no section below.
 - Context packs and prompt templates: a fake `instructions [stable]` header in untrusted text is escaped on every line boundary (CR, VT, FF, NEL, U+2028, U+2029, not only LF) and behind zero-width or BOM prefixes; the template lint and the injection eval's fake model read lines the same way, and the corpus (version 2) has four cases for it.
 - The agent-activity hook (`hooks/claude_code_activity.py --post`) follows no redirect (urllib copied the bearer token to whatever host a 302 named) and sends its token only to an `https://` URL, or plain `http://` to a loopback address.
 - The shared screener (context packs, the activity hook's spool tier) redacts credential shapes it missed: a quoted password-style value with spaces (JSON, YAML), `DB_PASS=`/`_PW=` style keys, `Authorization:` credentials of every scheme (Basic, Digest, Token, short Bearer), `Cookie:`/`Set-Cookie:` values and IPv4-mapped IPv6 addresses as one address; matching ignores zero-width and other format characters and folds Unicode digits.
+- `hnx mcp catalog check` refuses a hosted server URL (and a lab server's `transport.path`) whose path could carry a credential (anything but an MCP path or lower-case words and versions, the importer's rule), and render refuses one too: a key in `/mcp/<key>/sse` was written verbatim into the committed client config.
 
 ### Added
 

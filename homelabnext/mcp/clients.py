@@ -42,6 +42,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -334,6 +335,10 @@ def _url(inst: Instance, registry: Any) -> str:
     if t["type"] == servers.REMOTE:  # a hosted server: its reviewed https URL
         if not str(t.get("url", "")).startswith("https://"):
             raise RenderError([f"{inst.server}: a remote server's URL is https (never plaintext)"])
+        if not credentials.plain_url_path(urlsplit(str(t["url"])).path):
+            raise RenderError(
+                [f"{inst.server}: a remote server's URL path may carry a credential (check)"]
+            )
         return str(t["url"])
     if registry is None:
         raise RenderError([f"{inst.server}: an HTTP server needs the registry for its URL"])

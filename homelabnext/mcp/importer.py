@@ -67,8 +67,6 @@ _SETTING_KEY = re.compile(
     r"|LOCALE|FORMAT|TIMEOUT|LIMIT|ENABLED|DISABLED|READONLY|READ_ONLY|PREFIX|NAMESPACE"
     r"|WORKSPACE|PROJECT|BASE_URL|URL|ENDPOINT)$"
 )
-#: remote paths copied into transport.path; anything else may carry a token and is not copied
-_PLAIN_PATHS = re.compile(r"^/(?:mcp|sse|messages|v[0-9]+/mcp|api/mcp)?/?$")
 _SCHEMES = ("Bearer", "Basic", "Token")
 
 
@@ -98,14 +96,15 @@ def _var(value: str) -> str | None:
 
 def _plain_url(url: str) -> str:
     """A URL as the importer keeps it: scheme, host and port, and the path only when it is a
-    plain MCP path; never userinfo, a query or a fragment."""
+    plain MCP path (:data:`.credentials.MCP_URL_PATH`; check accepts no other path that could
+    carry a credential either); never userinfo, a query or a fragment."""
     try:
         parts = urlsplit(url)
         host = parts.hostname or ""
         port = f":{parts.port}" if parts.port else ""
     except ValueError:
         return ""
-    path = parts.path if _PLAIN_PATHS.fullmatch(parts.path or "/") else ""
+    path = parts.path if credentials.MCP_URL_PATH.fullmatch(parts.path or "/") else ""
     return f"{parts.scheme}://{host}{port}{path}"
 
 
@@ -304,7 +303,7 @@ def draft(
         rec["origin"] = {"kind": "unknown", "hint": "a remote server: name the code it runs"}
         rec["transport"] = {"type": "sse" if kind == "sse" else "streamable-http",
                             "endpoint": f"svc:{_slug(host)}"}  # fmt: skip
-        if _PLAIN_PATHS.fullmatch(parts.path or "/"):
+        if credentials.MCP_URL_PATH.fullmatch(parts.path or "/"):
             rec["transport"]["path"] = parts.path.rstrip("/") or "/mcp"
         else:
             notes.append(

@@ -749,8 +749,9 @@ def remote_problems(rec: Mapping[str, Any], where: str, registry: Any = None) ->
     """A third party's hosted server (``transport.type: remote``): a ``hosted`` origin and
     runtime, egress to the internet, ``data_tier: cloud-allowed``, and an https URL whose host is a public DNS name (not an
     IPv4 address in any notation, :func:`numeric_host`; not a private or test suffix; with a
-    registry, not one of the lab's hosts or its domain).  The URL's shape (https, a lower-case
-    host, no userinfo, query or fragment) is the schema's; its credentials can
+    registry, not one of the lab's hosts or its domain), and a path that cannot carry a credential
+    (:func:`.credentials.plain_url_path`, the importer's rule).  The URL's shape (https, a
+    lower-case host, no userinfo, query or fragment) is the schema's; its credentials can
     only be headers' ``secret:`` names (headers are the only place a remote record has)."""
     t, origin = rec.get("transport") or {}, rec.get("origin") or {}
     remote = t.get("type") == "remote"
@@ -774,6 +775,12 @@ def remote_problems(rec: Mapping[str, Any], where: str, registry: Any = None) ->
     host = (url.hostname or "").lower()
     if url.scheme != "https":
         out.append(f"{where}: a remote server's URL is https (never plaintext)")
+    if not credentials.plain_url_path(url.path):
+        out.append(
+            f"{where}: a remote server's URL path may carry a credential (only an MCP path or "
+            "lower-case words and versions): a key goes in a header as a secret: name, never in "
+            "the URL"
+        )
     if (
         not host
         or "." not in host
@@ -894,6 +901,11 @@ def _literal_problems(rec: Mapping[str, Any], where: str) -> list[str]:
         f"{where}: argument {f.index + 1} " + _FINDING[f.kind].format(flag=f.flag)
         for f in credentials.scan_args(t.get("args") or ())
     ]
+    if isinstance(t.get("path"), str) and not credentials.plain_url_path(t["path"]):
+        out.append(
+            f"{where}: transport.path may carry a credential (only an MCP path or lower-case "
+            "words and versions): a key goes in a header as a secret: name"
+        )
     for k, v in (rec.get("settings") or {}).items():
         why = credentials.setting_problem(str(k), str(v))
         if why == "holds $ or secret:":

@@ -78,6 +78,35 @@ def test_a_hosted_server_is_https_public_internet_and_secret_headers_only(change
     assert any(phrase in p for p in problems), problems
 
 
+#: key-shaped path segments, assembled so the repository holds no token-shaped literal
+_PATH_KEYS = ["sk-" + "ak-" + "9f8e7d6c5b4a3928" + "1706f5e4d3c2b1a0", "gh" + "p_" + "fake0123456789" +
+              "abcdefghijklmnopqrstuv", "Fake" + "Key" + "9x8y7z"]  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "path", [f"/mcp/{_PATH_KEYS[0]}/sse", f"/{_PATH_KEYS[1]}/mcp", f"/v1/{_PATH_KEYS[2]}"]
+)
+def test_a_credential_in_a_hosted_urls_path_is_refused_and_never_rendered(path):
+    """Hosted endpoints often carry the key in the path; a record cannot hold a secret: name
+    there, so check refuses any path but an MCP path or plain words, and render refuses too."""
+    rec = _edit(transport__url="https://mcp.tracker.example.com" + path)
+    assert any("URL path may carry a credential" in p for p in _problems(rec, REGISTRY))
+    with pytest.raises(clients.RenderError, match="URL path may carry a credential"):
+        clients.definition(_inst({**rec, "status": "active"}), "claude-code")
+
+
+@pytest.mark.parametrize("path", ["", "/", "/mcp", "/sse", "/v1/mcp", "/servers/tracker/mcp"])
+def test_a_plain_hosted_url_path_is_accepted(path):
+    assert _problems(_edit(transport__url="https://mcp.tracker.example.com" + path), REGISTRY) == []
+
+
+def test_a_lab_servers_transport_path_carries_no_credential_either():
+    rec = yaml.safe_load((ROOT / "schemas/platform/examples/mcp_server.http.yml").read_text())
+    assert _problems(rec, REGISTRY) == []
+    rec["transport"]["path"] = f"/mcp/{_PATH_KEYS[0]}"
+    assert any("transport.path may carry a credential" in p for p in _problems(rec, REGISTRY))
+
+
 @pytest.mark.parametrize(
     "host",
     [

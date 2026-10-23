@@ -259,6 +259,28 @@ def looks_secret(value: str) -> bool:
     return _entropy(v) >= 3.5
 
 
+#: the MCP paths endpoints use: the only paths the importer copies (anything else may carry a
+#: token), and plain to check
+MCP_URL_PATH = re.compile(r"^/(?:mcp|sse|messages|v[0-9]+/mcp|api/mcp)?/?$")
+#: a path segment that cannot be a credential: a lower-case word (hyphens allowed) or a version
+_PLAIN_SEGMENT = re.compile(r"^(?:[a-z]+(?:-[a-z]+)*|v[0-9]{1,3})$")
+
+
+def plain_url_path(path: str) -> bool:
+    """A URL path that cannot carry a credential, the only kind check accepts in a hosted
+    server's URL: an MCP path (:data:`MCP_URL_PATH`, which the importer copies), or segments that
+    are each a lower-case word or a version (``/servers/tracker/mcp``, written by a reviewer).
+    Hosted endpoints often put the key in the path (``/mcp/<key>/sse``); a record cannot hold a
+    ``secret:`` reference there, so such a URL is reshaped (the key goes in a header)."""
+    if MCP_URL_PATH.fullmatch(path or "/"):
+        return True
+    segments = (path or "/").removeprefix("/").removesuffix("/").split("/")
+    return all(
+        len(seg) <= 32 and _PLAIN_SEGMENT.fullmatch(seg) and not looks_secret(seg)
+        for seg in segments
+    )
+
+
 def url_carries(value: str) -> bool:
     """A URL with a credential in it: userinfo (a password, or a user that is not a plain account
     name), a credential-named query parameter, or a path segment or query value that looks like a
