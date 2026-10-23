@@ -72,7 +72,8 @@ jobs:
   # >= 80% line coverage from its own tests (tools/coverage_floor.py; pytest-cov from the test extra).
   coverage:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # one pytest per group of units, Python subprocesses measured too: slower than the old single run
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

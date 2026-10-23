@@ -31,6 +31,10 @@ def _report(**overrides):
         "homelabnext/mcp/catalog.py": _file(10, 9),
         "homelabnext/status/agents/auth.py": _file(10, 9),
         "homelabnext/status/agents/ingest.py": _file(10, 9),
+        "homelabnext/status/approvals.py": _file(10, 9),
+        "homelabnext/status/serve.py": _file(10, 9),
+        "homelabnext/generators/safe.py": _file(10, 9),
+        "tools/leak_scan.py": _file(10, 9),
         "homelabnext/agent/pack.py": _file(10, 0),  # not a unit: never counted
     }
     files.update(overrides)
@@ -85,7 +89,17 @@ def test_every_unit_names_existing_code_and_tests():
     for unit, tests in coverage_floor.UNITS.items():
         assert (coverage_floor.REPO_ROOT / unit).exists(), unit
         for t in tests:
-            assert (coverage_floor.REPO_ROOT / t).is_dir(), t
+            assert (coverage_floor.REPO_ROOT / t).exists(), t
+
+
+def test_the_units_the_review_found_missing_are_measured():
+    for unit in (
+        "homelabnext/status/approvals.py",
+        "homelabnext/status/serve.py",
+        "homelabnext/generators/safe.py",
+        "tools/leak_scan.py",
+    ):
+        assert unit in coverage_floor.UNITS, unit
 
 
 def _captured_env(tmp_path, monkeypatch):
@@ -96,8 +110,63 @@ def _captured_env(tmp_path, monkeypatch):
         return type("Done", (), {"returncode": 0})()
 
     monkeypatch.setattr(coverage_floor.subprocess, "run", fake_run)
-    coverage_floor.run_tests(tmp_path / "report.json")
+    coverage_floor.run_tests(tmp_path / "report.json", ("tests/scope",), ["homelabnext/scope"])
     return seen
+
+
+def _fake_pytest(monkeypatch, calls):
+    """A pytest stand-in: each unit's files are fully covered only when the run is the unit's own
+    tests, so a unit credited with another group's coverage shows up as 0%."""
+
+    def fake_run(cmd, cwd, check, env):
+        at = next(i for i, a in enumerate(cmd) if a.startswith("--cov-report=json:"))
+        report, tests = cmd[at].split(":", 1)[1], tuple(cmd[at + 1 :])
+        targets = {a.split("=", 1)[1] for a in cmd if a.startswith("--cov=")}
+        calls.append((tests, targets))
+        files = {}
+        for unit, own in coverage_floor.UNITS.items():
+            name = unit if unit.endswith(".py") else f"{unit}/__init__.py"
+            files[name] = _file(10, 10 if tuple(own) == tests else 0)
+        Path(report).write_text(json.dumps({"files": files}))
+        return type("Done", (), {"returncode": 0})()
+
+    monkeypatch.setattr(coverage_floor.subprocess, "run", fake_run)
+
+
+def test_each_unit_is_measured_by_its_own_tests_only(tmp_path, monkeypatch, capsys):
+    calls = []
+    _fake_pytest(monkeypatch, calls)
+    monkeypatch.setattr(coverage_floor, "REPORT_DIR", tmp_path)
+    assert coverage_floor.main([]) == 0, capsys.readouterr().err
+    # one run per distinct test set, each measuring only the units that name it
+    assert sorted(t for t, _ in calls) == sorted(coverage_floor.groups())
+    for tests, targets in calls:
+        units = coverage_floor.groups()[tests]
+        assert targets == {coverage_floor._cov_target(u) for u in units}
+
+
+def test_subprocesses_the_tests_start_are_measured(tmp_path, monkeypatch):
+    # tools/leak_scan.py's tests run it as a program; without this its main() reads as untested
+    cmds = []
+
+    def fake_run(cmd, cwd, check, env):
+        cmds.append(cmd)
+        return type("Done", (), {"returncode": 0})()
+
+    monkeypatch.setattr(coverage_floor.subprocess, "run", fake_run)
+    coverage_floor.run_tests(tmp_path / "g.json", ("tools/tests/x.py",), ["tools/leak_scan.py"])
+    (rc,) = [a.split("=", 1)[1] for a in cmds[0] if a.startswith("--cov-config=")]
+    assert "patch = subprocess" in Path(rc).read_text()
+    assert "--cov=tools" in cmds[0]
+
+
+def test_a_failing_group_is_exit_2(tmp_path, monkeypatch):
+    def fail(cmd, cwd, check, env):
+        return type("Done", (), {"returncode": 1})()
+
+    monkeypatch.setattr(coverage_floor.subprocess, "run", fail)
+    monkeypatch.setattr(coverage_floor, "REPORT_DIR", tmp_path)
+    assert coverage_floor.main([]) == 2
 
 
 def test_the_coverage_run_scales_the_suite_budgets(tmp_path, monkeypatch):
@@ -114,5 +183,5 @@ def test_an_explicit_budget_scale_is_kept(tmp_path, monkeypatch):
 @pytest.mark.slow
 def test_this_repo_meets_the_floor(tmp_path, monkeypatch):
     pytest.importorskip("pytest_cov")
-    monkeypatch.setattr(coverage_floor, "REPORT", tmp_path / "coverage.json")
+    monkeypatch.setattr(coverage_floor, "REPORT_DIR", tmp_path)
     assert coverage_floor.main([]) == 0

@@ -51,7 +51,9 @@ tests on a laptop with no network and no private context.
    clock read in `homelabnext/` that is not the default or fallback of an injectable clock/`now`.
    Every component ships tests (`make component-tests`), and the security-critical units (broker,
    scope guard, records lifecycle, decide cascade, agent grant ceiling, reader rule and handoff,
-   memory, screen, workflows, model budgets) keep >= 80% line coverage (`make coverage`).
+   memory, screen, workflows, model budgets, MCP, context retrieval, the status hub's front door,
+   ingest, approval page and server, the generators' safety backstop and the leak scan) keep >= 80%
+   line coverage, each from its own tests (`make coverage`; `tools/coverage_floor.py` lists them).
    Suites stay trustworthy (`tests/suite_policy.py`, see "Skips, quarantine and time budgets").
 10. Every Python, shell, YAML, TOML and Jinja template file starts with
     `# SPDX-License-Identifier: Apache-2.0` (in a template: `{# SPDX-License-Identifier: Apache-2.0 -#}`,

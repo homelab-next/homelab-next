@@ -214,7 +214,7 @@
       ],
       "kind": "check",
       "language": "python",
-      "outputs": "a per-unit coverage table; --json FILE writes it as JSON",
+      "outputs": "a per-unit coverage table (--json FILE evaluates an existing coverage json report instead)",
       "owner": "maintainers",
       "path": "tools/coverage_floor.py",
       "purpose": "Fail when a security-critical unit drops below its line-coverage floor from its own tests.",
@@ -535,6 +535,7 @@
         "make:secret-scan",
         "pre-commit:leak-scan",
         "pre-commit:secret-scan",
+        "script:coverage-floor",
         "script:private-leak-check"
       ]
     },
