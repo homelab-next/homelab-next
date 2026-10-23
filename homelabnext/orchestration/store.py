@@ -335,6 +335,12 @@ class TelemetryStore:
         for (doc,) in turns:
             yield "turn", json.loads(doc)
 
+    def holds_tag(self, tag: str) -> bool:
+        """Whether a stored job carries gateway tag ``tag`` (its turns join to it)."""
+        with self._db() as db:
+            sql = "SELECT 1 FROM jobs WHERE gateway_tag = ?"
+            return db.execute(sql, (tag,)).fetchone() is not None
+
     def turn(self, turn_id: str) -> dict[str, Any] | None:
         with self._db() as db:
             row = db.execute("SELECT doc FROM turns WHERE turn_id = ?", (turn_id,)).fetchone()

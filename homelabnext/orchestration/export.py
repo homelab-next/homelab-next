@@ -38,6 +38,9 @@ from homelabnext.status.model import iso, parse_iso
 from .store import TelemetryStore
 
 EXPORT_SCHEMA = "homelabnext.orchestration.export/1"
+#: how far ahead of the store's clock an imported time may be: clock skew between hosts, not a
+#: forged time (a turn started in 2099 would outlive retention; a job settled in 2099 is never read)
+FUTURE_S = 86400.0
 #: what an import counts, per kind
 STATUSES = ("processed", "duplicate", "expired")
 
@@ -114,6 +117,8 @@ def _import_job(store: TelemetryStore, event: Any, settled_at: Any) -> str:
             settled = None
         if settled is None:
             raise ImportRefused("turns_settled_at is not a time")
+        if settled > store.clock() + FUTURE_S:
+            raise ImportRefused(f"turns_settled_at is in the future ({settled_at[:40]})")
     status = store.consume(event).status
     if status == "processed" and settled is not None:
         store.settle([event["data"]["run_id"]], settled)
@@ -129,6 +134,13 @@ def _import_turn(store: TelemetryStore, turn: Any) -> str:
         started = None
     if started is not None and started < store.clock() - store.retention_s:
         return "expired"
+    if started is not None and started > store.clock() + FUTURE_S:
+        raise ImportRefused(f"started_at is in the future ({turn['started_at'][:40]})")
+    tag = turn.get("gateway_tag")
+    if isinstance(tag, str) and not store.holds_tag(tag):
+        raise ImportRefused(
+            f"no job holds gateway tag {tag[:80]!r}: a turn is imported after its job"
+        )
     if isinstance(turn.get("turn_id"), str) and store.turn(turn["turn_id"]) == dict(turn):
         return "duplicate"
     try:
@@ -180,6 +192,7 @@ def _source_hint(theirs: list[str], ours: tuple[str, ...]) -> str:
 
 __all__ = [
     "EXPORT_SCHEMA",
+    "FUTURE_S",
     "STATUSES",
     "ImportRefused",
     "export_lines",

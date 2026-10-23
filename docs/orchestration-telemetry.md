@@ -277,8 +277,10 @@ record) and when its turns settled; a turn line carries the neutral turn record.
 oldest finish first, then turns. `hnx orchestration import --db DB FILE|-` loads it through the
 same paths as the live writers: a job goes through the consumer, so the same id and body is a
 `duplicate` and a foreign, invalid, conflicting or non-finite record is refused as poison, and one
-older than retention is `expired`; a turn is refused unless it is exactly the neutral record, and
-the same record again is a `duplicate`. A refused line is reported with its line number (exit 1)
+older than retention is `expired`; a turn is refused unless it is exactly the neutral record and
+its tag joins a job already in the store (jobs come first, so the export's own jobs count), and
+the same record again is a `duplicate`. A turn start or a `turns_settled_at` more than a day
+ahead of the store's clock is refused too. A refused line is reported with its line number (exit 1)
 and does not stop the rest. That makes a store movable (another host, a rebuilt hub) and keeps
 history across a swap of the gateway or the controller, since neither line names a product. A
 job that a store before exports kept without its envelope exports with `event: null`, which an

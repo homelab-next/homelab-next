@@ -15,6 +15,7 @@ from homelabnext.orchestration import cli
 from homelabnext.orchestration.export import EXPORT_SCHEMA, export_lines, import_lines
 from homelabnext.orchestration.gateway import sync_turns
 from homelabnext.orchestration.store import TelemetryStore
+from homelabnext.status.model import iso
 
 
 @pytest.fixture
@@ -222,8 +223,9 @@ def test_an_import_into_a_store_of_other_sources_says_why_every_job_is_refused(s
     lines = list(export_lines(synced))
     other = TelemetryStore(tmp_path / "o.db", clock=lambda: T0, sources=["svc:other-ctl"])
     counts, refused = import_lines(other, lines)
-    assert counts["refused"] == 4 and counts[("turn", "processed")] == 4
-    for _, why in refused:
+    assert counts == {"refused": 8}  # the jobs, then their turns, which join no job
+    assert all("no job holds gateway tag" in why for _, why in refused[4:])
+    for _, why in refused[:4]:
         assert "not the controller's job record" in why
         assert "the export's store took svc:llm-orchestrator; this store takes svc:other-ctl" in why
     misplaced = [lines[1], lines[0]]  # a header is the first line or nothing
@@ -260,3 +262,31 @@ def test_export_of_records_an_import_would_refuse_warns_with_a_count_and_exits_1
         "2 an import would refuse: 1 job(s) without an envelope, 1 turn(s) not a turn record" in err
     )
     assert len(out.read_text().splitlines()) == 4  # header + 3 records, all still written
+
+
+def test_an_import_refuses_future_times_and_turns_of_no_job(synced, tmp_path):
+    """A turn more than a day ahead of the store's clock would outlive retention by its forged
+    start, a forged turns_settled_at keeps a job from ever being read, and a turn whose tag
+    joins no job (stored, or imported before it) is cost added to nothing, or to a job it never
+    belonged to once one takes the tag."""
+    lines = list(export_lines(synced))
+    jobs = [json.loads(x) for x in lines if '"kind": "job"' in x]
+    turn = json.loads(lines[-1])["turn"]
+    other = TelemetryStore(tmp_path / "o.db", clock=lambda: T0)
+    future = _line(kind="job", event=jobs[0]["event"], turns_settled_at="2099-01-01T00:00:00Z")
+    counts, refused = import_lines(other, [future])
+    assert counts == {"refused": 1} and "turns_settled_at is in the future" in refused[0][1]
+    assert other.jobs() == []  # refused before the job was consumed
+    bad = [
+        _line(kind="turn", turn=turn | {"turn_id": "t-fut", "started_at": "2099-01-01T00:00:00Z"}),
+        _line(kind="turn", turn=turn | {"turn_id": "t-orphan", "gateway_tag": "no-such-job"}),
+    ]
+    counts, refused = import_lines(other, bad)
+    assert counts == {"refused": 2}
+    assert "started_at is in the future" in refused[0][1]
+    assert "no job holds gateway tag 'no-such-job'" in refused[1][1]
+    assert other.turns() == {}
+    near = T0 + 3600  # an hour of clock skew between hosts is a record, not a forgery
+    ok = _line(kind="turn", turn=turn | {"turn_id": "t-near", "started_at": iso(near)})
+    counts, refused = import_lines(other, [*lines[1:5], ok])
+    assert refused == [] and counts[("turn", "processed")] == 1
