@@ -20,7 +20,8 @@ settled, with the read-only viewer key named by ``--key`` (default: the secret s
 
 Exit codes: 0 ok, 1 a record was refused (``ingest``, ``consume``), the bus failed during the
 pass (``consume``: what was settled before stays settled) or the gateway could not be read
-(``turns``), 2 usage or configuration error (``consume``: the bus configuration or the connect).
+(``turns``), 2 usage or configuration error (``consume``: the event schemas cannot be loaded, the bus
+configuration or the connect).
 """
 
 from __future__ import annotations
@@ -108,12 +109,15 @@ def _ingest(a, store: TelemetryStore) -> int:
 
 def _consume(a, store: TelemetryStore) -> int:
     from homelabnext.conform.adapters import nats_jetstream
+    from homelabnext.events.envelope import load_validator
 
     from .bus import DURABLE, drain
+    from .model import FINISHED_EVENT
 
     try:
+        load_validator(FINISHED_EVENT)  # a broken environment fails here, before the bus is read
         bus = _connect(nats_jetstream, a)
-    except Exception as exc:  # configuration, the endpoint variable, the connect
+    except Exception as exc:  # the validator, configuration, the endpoint variable, the connect
         print(f"hnx orchestration consume: {exc}", file=sys.stderr)
         return 2
     try:

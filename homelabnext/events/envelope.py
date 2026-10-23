@@ -22,6 +22,7 @@ from typing import Any
 from homelabnext import paths
 
 _VALIDATORS: dict[str, Any] = {}
+_LOADED: set[str] = set()  # the schema files load_validator has built and resolved
 
 
 class EventError(ValueError):
@@ -69,6 +70,33 @@ def _validator(path: Path):
         schema = json.loads(path.read_text(encoding="utf-8"))
         _VALIDATORS[key] = Draft202012Validator(schema, registry=_registry())
     return _VALIDATORS[key]
+
+
+def load_validator(event_type: str) -> None:
+    """Build the validator events of ``event_type`` are checked with, and resolve every ``$ref``
+    it can reach, so an environment fault raises here, once, and not on the first event checked:
+    a missing ``jsonschema``/``referencing`` (:class:`ImportError`), a schema file that is not
+    JSON (:class:`ValueError`), a ``$ref`` that resolves to nothing
+    (:class:`referencing.exceptions.Unresolvable`).  A consumer calls it before its first
+    delivery, so it can tell those from a defect of the event it is checking."""
+    path = schema_for_type(event_type) or (_events_dir() / "envelope.schema.json")
+    if str(path) in _LOADED:
+        return
+    schema = _validator(path).schema
+    seen: set[int] = set()
+    todo = [(schema, _registry().resolver(base_uri=schema.get("$id", "")))]
+    while todo:
+        node, resolver = todo.pop()
+        if isinstance(node, list):
+            todo.extend((n, resolver) for n in node)
+        elif isinstance(node, dict):
+            if isinstance(node.get("$ref"), str):
+                hit = resolver.lookup(node["$ref"])
+                if id(hit.contents) not in seen:
+                    seen.add(id(hit.contents))
+                    todo.append((hit.contents, hit.resolver))
+            todo.extend((v, resolver) for k, v in node.items() if k != "$ref")
+    _LOADED.add(str(path))
 
 
 def event_problems(event: Any) -> list[str]:

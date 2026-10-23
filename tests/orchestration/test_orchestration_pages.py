@@ -239,6 +239,24 @@ def test_cli_consume_maps_a_bus_failure_mid_pass_to_exit_1(tmp_path, monkeypatch
     assert "the bus failed: fetch timed out" in capsys.readouterr().err and DeadBus.closed
 
 
+def test_cli_consume_with_a_broken_environment_is_exit_2_before_the_bus(
+    tmp_path, monkeypatch, capsys
+):
+    """The event schemas cannot be loaded: a configuration error up front, the bus never read."""
+    from homelabnext.events import envelope
+
+    def broken(path):
+        raise ModuleNotFoundError("No module named 'jsonschema'")
+
+    monkeypatch.setattr(envelope, "_VALIDATORS", {})
+    monkeypatch.setattr(envelope, "_LOADED", set())
+    monkeypatch.setattr(envelope, "_validator", broken)
+    monkeypatch.setattr(cli, "_connect", lambda *a: pytest.fail("the bus must not be read"))
+    argv = ["consume", "--db", str(tmp_path / "t.db"), "--stream", "S", "--subject-prefix", "p"]
+    assert cli.main(argv, clock=lambda: T0) == 2
+    assert "No module named 'jsonschema'" in capsys.readouterr().err
+
+
 def test_hnx_status_serve_builds_the_page_from_orchestration(tmp_path):
     """``hnx status serve --orchestration DB`` gives the site and marks the menu entry served."""
     import argparse

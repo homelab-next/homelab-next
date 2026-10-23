@@ -5,11 +5,17 @@ poison is dead-lettered and never retried, a store failure is redelivered."""
 from __future__ import annotations
 
 import copy
+import json
+import shutil
 import sqlite3
 
-from orch_helpers import T0, body, examples
+import pytest
+from orch_helpers import ROOT, T0, body, examples
+from referencing.exceptions import Unresolvable
 
 from conformance.fakes.event_bus import FakeEventBus
+from homelabnext import paths
+from homelabnext.events import envelope
 from homelabnext.orchestration import FINISHED_EVENT
 from homelabnext.orchestration.bus import DURABLE, drain
 from homelabnext.orchestration.store import TelemetryStore
@@ -66,18 +72,82 @@ def test_an_impossible_timestamp_is_poison_and_the_batch_behind_it_is_stored(sto
     assert [d.data for d in bus.consumer(DURABLE, FINISHED_EVENT).dead_letters()] == [body(bad)]
 
 
-def test_a_content_error_the_store_did_not_name_is_poison_not_a_retry(store, monkeypatch):
+def test_a_record_too_deep_to_encode_is_poison_not_a_retry(store, monkeypatch):
+    """RecursionError is what a body nested deeper than the encoder's stack raises from the store
+    (it parses, then its digest cannot be encoded): a defect of that record, so it is poison."""
     bus = _bus_with(*(body(e) for e in examples()))
     real, calls = store.consume, []
 
-    def picky(data):
+    def deep(data):
         calls.append(1)
         if len(calls) == 1:
-            raise KeyError("usage")  # a defect of this record, not of the store
+            raise RecursionError("maximum recursion depth exceeded while encoding a JSON object")
         return real(data)
 
-    monkeypatch.setattr(store, "consume", picky)
+    monkeypatch.setattr(store, "consume", deep)
     assert drain(bus, store, batch=4) == {"quarantined": 1, "processed": 3}
+
+
+def _no_validators(monkeypatch, fault: BaseException) -> None:
+    """Every schema validator not yet built, and building one raises ``fault``."""
+    monkeypatch.setattr(envelope, "_VALIDATORS", {})
+    monkeypatch.setattr(envelope, "_LOADED", set())
+
+    def broken(path):
+        raise fault
+
+    monkeypatch.setattr(envelope, "_validator", broken)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        ModuleNotFoundError("No module named 'jsonschema'"),
+        json.JSONDecodeError("Expecting value", "", 0),  # a schema file half-written by a deploy
+        MemoryError(),
+    ],
+)
+def test_an_environment_fault_mid_pass_is_retried_never_dead_lettered(store, monkeypatch, fault):
+    """An exception that is neither the store's nor a known content error is the environment: the
+    deliveries are nacked and kept, the pass stops, and they are stored once it is fixed."""
+    bus = _bus_with(*(body(e) for e in examples()))
+    with monkeypatch.context() as m:
+        m.setattr("homelabnext.orchestration.bus.load_validator", lambda t: None)
+        _no_validators(m, fault)
+        assert drain(bus, store, batch=4) == {"retried": 4}
+    assert bus.consumer(DURABLE, FINISHED_EVENT).dead_letters() == []
+    assert store.jobs() == []
+    assert drain(bus, store, batch=4) == {"processed": 4}
+
+
+def test_an_environment_fault_fails_the_pass_before_anything_is_fetched(store, monkeypatch):
+    bus = _bus_with(*(body(e) for e in examples()))
+    with monkeypatch.context() as m:
+        _no_validators(m, ModuleNotFoundError("No module named 'referencing'"))
+        with pytest.raises(ModuleNotFoundError):
+            drain(bus, store)
+    assert bus.consumer(DURABLE, FINISHED_EVENT).dead_letters() == []
+    assert drain(bus, store) == {"processed": 4}  # nothing was fetched, so nothing waited
+
+
+@pytest.mark.parametrize("damage", ["truncate", "drop-ref-target"])
+def test_load_validator_raises_on_a_broken_schema_set_not_on_the_first_event(
+    tmp_path, monkeypatch, damage
+):
+    for sub in ("events", "ids"):
+        shutil.copytree(ROOT / "schemas" / sub, tmp_path / sub)
+    finished = tmp_path / "events" / "agent.job.finished.schema.json"
+    if damage == "truncate":
+        finished.write_text(finished.read_text("utf-8")[:500], "utf-8")
+        expected: type[Exception] = ValueError
+    else:
+        (tmp_path / "ids" / "common.schema.json").unlink()  # finished_at's timestamp $ref
+        expected = Unresolvable
+    monkeypatch.setattr(paths, "schemas_dir", lambda: tmp_path)
+    monkeypatch.setattr(envelope, "_VALIDATORS", {})
+    monkeypatch.setattr(envelope, "_LOADED", set())
+    with pytest.raises(expected):
+        envelope.load_validator(FINISHED_EVENT)
 
 
 def test_a_record_past_retention_is_acked_as_expired(tmp_path):

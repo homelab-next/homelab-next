@@ -11,11 +11,18 @@ settled after the store answered, so the semantics are those of the st2 bridge
 * poison (not JSON, invalid, another type or source, an id or run conflict): ``term`` -- the
   bus's dead-letter stream is the quarantine, it is never retried, and only the event id and the
   reason are logged, never the body;
-* the store failed (a locked or full disk: :class:`sqlite3.Error` or :class:`OSError`): ``nack``
-  -- redelivered, and the pass stops, since every later delivery would fail the same way.  Any
-  other exception comes from the record itself (the store refuses every content defect it knows
-  as :class:`EventError`), so it is poison too: retrying it would only fail again, hold back the
-  valid deliveries behind it and finally drop it without a dead letter.
+* a record the store cannot hold for what it contains (:class:`EventError`, or one of
+  :data:`RECORD_ERRORS`: a body nested so deep that its canonical form cannot be encoded, though
+  it parsed): ``term`` as poison too;
+* anything else -- the store failed (a locked or full disk: :data:`.store.STORE_ERRORS`) or the
+  environment did (``jsonschema`` missing, a schema file half-written by a deploy, a ``$ref``
+  that resolves to nothing, out of memory): ``nack`` -- redelivered, and the pass stops, since
+  every later delivery would fail the same way.  An unknown exception is never taken for poison:
+  that would dead-letter every valid record behind an outage.
+
+The validator is built, and its ``$ref``s resolved, before the first fetch
+(:func:`homelabnext.events.envelope.load_validator`), so a broken environment fails the pass up
+front, with nothing fetched.
 
 A pass ends when a fetch returns nothing or after ``max_batches`` fetches, so a timer can run it.
 """
@@ -26,7 +33,7 @@ import logging
 from collections import Counter
 from typing import Any
 
-from homelabnext.events.envelope import EventError
+from homelabnext.events.envelope import EventError, load_validator
 
 from .model import FINISHED_EVENT
 from .store import STORE_ERRORS, TelemetryStore
@@ -34,6 +41,12 @@ from .store import STORE_ERRORS, TelemetryStore
 log = logging.getLogger(__name__)
 DURABLE = "hnx-orchestration-telemetry"
 MAX_EVENT_BYTES = 64 * 1024  # a job record is a few KB; a bigger body is not one
+#: the exceptions besides EventError that the content of one record raises from the store: a body
+#: nested deeper than the encoder's stack (it parses, then body_digest cannot encode it; Python
+#: 3.11).  KeyError, TypeError, OverflowError and UnicodeEncodeError are not here: the schema
+#: requires and types every field the store reads, timestamps are checked, and every string bound
+#: to SQL is ASCII by its pattern, so none of them can come from a record that validated.
+RECORD_ERRORS: tuple[type[BaseException], ...] = (RecursionError,)
 
 
 def drain(
@@ -47,6 +60,7 @@ def drain(
 ) -> Counter:
     """One pass over the durable (see the module docstring); returns counts by outcome
     (``processed``, ``duplicate``, ``expired``, ``quarantined``, ``retried``)."""
+    load_validator(FINISHED_EVENT)  # an environment fault raises here, before anything is fetched
     consumer = bus.consumer(durable, FINISHED_EVENT, max_deliver=max_deliver)
     counts: Counter = Counter()
     for _ in range(max_batches):
@@ -60,14 +74,15 @@ def drain(
                     counts[store.consume(d.data).status] += 1
                 except EventError as exc:
                     reason = str(exc).splitlines()[0]
-                except STORE_ERRORS as exc:  # the store, not the event: retry it later
-                    log.error("orchestration: store failed (%s); retrying", type(exc).__name__)
+                except RECORD_ERRORS as exc:  # the content of this one record: never retried
+                    reason = f"refused by the store ({type(exc).__name__})"
+                except Exception as exc:  # the store or the environment: retry it later
+                    what = "store" if isinstance(exc, STORE_ERRORS) else "environment"
+                    log.error("orchestration: %s failed (%s); retrying", what, type(exc).__name__)
                     for rest in deliveries[i:]:
                         rest.nack()
                     counts["retried"] += len(deliveries) - i
                     return counts
-                except Exception as exc:  # the content of this one record: never retried
-                    reason = f"refused by the store ({type(exc).__name__})"
                 else:
                     d.ack()
                     continue
@@ -85,4 +100,4 @@ def _poison(d: Any) -> str | None:
     return None
 
 
-__all__ = ["DURABLE", "drain"]
+__all__ = ["DURABLE", "RECORD_ERRORS", "drain"]

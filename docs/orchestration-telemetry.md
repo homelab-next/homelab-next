@@ -87,8 +87,12 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
   another body, a second record for a run under another id, a record whose `gateway_tag` another
   run already holds (the tag must name one job, or two jobs' turns would merge), a timestamp the pattern accepts but
   the calendar does not, such as `2026-02-30`): `term`, so the bus's dead-letter stream is the
-  quarantine; only the id and the reason are logged. A store failure (SQLite or the disk): `nack`
-  and the pass stops; any other error is the record's own and is poison too. The consumer's NATS user needs the same pull-consumer grant shape as the
+  quarantine; only the id and the reason are logged. A body nested so deep that it parses but
+  cannot be re-encoded is poison too. Anything else (a store failure, SQLite or the disk, or the
+  environment: `jsonschema` missing, a schema file half-written by a deploy, a `$ref` that
+  resolves to nothing): `nack` and the pass stops, so an outage never dead-letters valid records.
+  The event schemas are loaded and their `$ref`s resolved before the first fetch, so a broken
+  environment fails `consume` up front (exit 2) with nothing fetched. The consumer's NATS user needs the same pull-consumer grant shape as the
   StackStorm bridge's, on `<prefix>.homelabnext.agent.job.finished`; publishing on
   `homelabnext.agent.job.>` stays the controller's alone.
 - **Ingest** (`hnx orchestration ingest FILE|-`): the same consumer over a JSON-lines file, for a
