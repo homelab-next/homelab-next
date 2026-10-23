@@ -61,11 +61,23 @@ In the root run nothing is quarantined: a failing test or package fails, and wit
 have exited 0 and written events, since test2json judges that stream from its text alone.
 ``--list-privileged`` prints ``./<package> <-run regex>`` lines for the CI step that runs them.
 
+What the stream cannot show, so this tool cannot judge it:
+
+* A parent's *silent* failure next to a quarantined subtest.  A parent's "own failure" is its own
+  output: ``t.Error``/``t.Fatal`` write a line, but ``t.Fail()`` (or a message-less
+  ``t.FailNow()``) after a quarantined subtest failed reads exactly like a parent failing only
+  through that subtest, and is tolerated with it.  The other way round fails closed: a parent that
+  wrote anything of its own (a ``t.Log`` too) next to a quarantined subtest is reported, and needs
+  its own entry -- prefer fixing the log line over quarantining the whole parent.
+* A skip's reason given any other way than ``t.Skip("<one line>")`` (see ``skip_reason``):
+  ``--check-sources`` rejects those forms in the sources instead.
+
 Usage::
 
     go test -json ./... > run.json; python tools/go_test_policy.py --policy skips.yml \
         --go-exit $? run.json
     python tools/go_test_policy.py --policy skips.yml --list-privileged
+    python tools/go_test_policy.py --check-sources .
 
 Exit: 0 clean, 1 a policy failure, 2 usage error / unreadable input / malformed policy.
 """
