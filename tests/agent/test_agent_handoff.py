@@ -330,6 +330,13 @@ def test_profiles_must_be_the_declared_ones():
         ("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", True),
         ("^[a-z.]{1,9}$", True),  # a dot in a class is a dot, not "anything"
         ("^(?=x)[a-z]{1,9}$", True),
+        # anchoring and alternation are read on the parsed tree: a comment's "(" does not nest,
+        # so a text scan took the "|" after it for a nested one
+        ("^a$(?#()|b$", False),
+        ("^[a-z0-9][a-z0-9-]{0,62}$(?#()|x$", False),
+        ("^(?#)a$", False),
+        ("^xa$|^xb$", False),  # the parser hoists "^x"; the top level still ends in a branch
+        ("^a\\Z", False),
     ],
 )
 def test_closed_patterns(pattern, closed):
@@ -435,3 +442,27 @@ def test_a_closed_looking_pattern_cannot_carry_a_shell_line_a_flag_or_a_unicode_
         d["output_schema"]["properties"][name] = shape
         with pytest.raises(HandoffError, match="free-text field"):
             Handoff.from_mapping(d)
+
+
+def test_a_pattern_is_not_closed_when_the_regex_parser_cannot_be_imported(monkeypatch):
+    """The check reads patterns with CPython's private ``re`` parser; without it (a future
+    Python), every pattern fails closed instead of raising out of is_constrained."""
+    import re
+    import sys
+
+    assert is_closed_pattern("^[a-z]{1,9}$")
+    monkeypatch.delattr(re, "_constants")
+    monkeypatch.setitem(sys.modules, "re._constants", None)
+    assert not is_closed_pattern("^[a-z]{1,9}$")
+    assert not is_constrained({"type": "string", "pattern": "^[a-z]{1,9}$"})
+
+
+def test_a_comment_cannot_hide_a_free_text_alternative():
+    """The verify's end-to-end probe: the slug-looking pattern is refused at declaration."""
+    d = _with_params(x="$output.slug")
+    d["output_schema"]["properties"]["slug"] = {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]{0,62}$(?#()|x$",
+    }
+    with pytest.raises(HandoffError, match="free-text field"):
+        Handoff.from_mapping(d)

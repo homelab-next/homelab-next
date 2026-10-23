@@ -177,7 +177,7 @@ take, each with params that are literals or `$output.<path>` references (`$$` es
 - **Free text never becomes a parameter.** The actor does not choose params: `build_request`
   computes them from the declaration and the accepted output. A reference may name only a
   *constrained* field (`is_constrained`: `enum`/`const`, number, boolean, a checked `format` -
-  `date`, `ipv4`, `ipv6`, `uuid` - or a closed `pattern`: anchored at both ends, no top-level `|`,
+  `date`, `ipv4`, `ipv6`, `uuid` - or a closed `pattern`, judged on the tree Python's `re` parses it to: anchored at both ends, no top-level `|`, no `(?#` comment,
   and every character it can match - as a literal, an alternative or a class member - an ASCII
   letter, digit or one of `-_.:/@+=,~%` (so no `.`, negated class, `\w`, `\d` or `\s`, which
   Python matches against Unicode, and no whitespace), no inline flag such as `(?i)`, no match

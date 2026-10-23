@@ -68,27 +68,6 @@ class HandoffRefused(AgentError):
 
 
 # ---------------------------------------------------------------- free text vs constrained
-def _top_level_alternation(pattern: str) -> bool:
-    depth, i, in_class = 0, 0, False
-    while i < len(pattern):
-        c = pattern[i]
-        if c == "\\":
-            i += 2
-            continue
-        if in_class:
-            in_class = c != "]"
-        elif c == "[":
-            in_class = True
-        elif c == "(":
-            depth += 1
-        elif c == ")":
-            depth -= 1
-        elif c == "|" and depth == 0:
-            return True
-        i += 1
-    return False
-
-
 # characters a pattern may match besides ASCII letters and digits, as a literal or a class
 # member: enough for names, hosts, paths and versions, never whitespace or shell/markup
 # punctuation
@@ -103,12 +82,14 @@ def _narrow_char(c: str) -> bool:
     return (c.isascii() and c.isalnum()) or c in _CLASS_PUNCT
 
 
-def _parse(pattern: str) -> Any:
-    """The pattern as Python's ``re`` reads it (the validator's own engine), or None."""
+def _parse(pattern: str) -> tuple[Any, Any] | None:
+    """The pattern as Python's ``re`` reads it (the validator's own engine) and the parser's
+    constants, or None when it cannot be read: the private modules missing (a future Python),
+    or a pattern ``re`` refuses.  Either way the pattern is not closed."""
     try:
-        from re import _parser  # type: ignore[attr-defined]  # Python 3.11+
+        from re import _constants, _parser  # type: ignore[attr-defined]  # Python 3.11+
 
-        return _parser.parse(pattern)
+        return _parser.parse(pattern), _constants
     except Exception:  # an unreadable pattern is not closed
         return None
 
@@ -193,38 +174,33 @@ def _can_lead_with(sub: Any, ch: str, c: Any) -> tuple[bool, bool]:
     return False, True
 
 
-def _wide_or_spaced(pattern: str) -> bool:
-    """True when ``pattern`` can match a character outside ASCII letters, digits and a few name
-    punctuation characters (whitespace, ``;``, ``$``, a Unicode letter, ``[ -~]``,
-    ``[\\u0000-\\U0010FFFF]``), wherever it is written, when it sets an inline flag, or when a
-    match can start with ``-`` (a value an argv-fed handler would read as an option).  A pattern
-    Python's ``re`` cannot read counts as wide."""
-    from re import _constants as c  # type: ignore[attr-defined]  # Python 3.11+
-
-    tree = _parse(pattern)
-    if tree is None:
-        return True
-    if tree.state.flags & ~c.SRE_FLAG_UNICODE:
-        return True  # a global inline flag: (?i), (?x), (?s), (?a), ...
-    if not _narrow_tree(tree, c):
-        return True
-    return _can_lead_with(tree, "-", c)[0]
-
-
 def is_closed_pattern(pattern: str) -> bool:
-    """A pattern that cannot match free text: anchored at both ends with no top-level ``|``
-    (``^a$|.*`` is unanchored), and every character it can match, as a literal or in a class,
-    an ASCII letter, digit or one of ``-_.:/@+=,~%`` (so no ``.``, negated class, ``\\w``,
-    ``\\d`` or ``\\s``, nothing that matches whitespace, and no class such as ``[ -~]`` or
-    ``[\\u0000-\\U0010FFFF]`` that lists everything); no inline flag; and no match that starts
-    with ``-``."""
-    return (
-        pattern.startswith("^")
-        and pattern.endswith("$")
-        and not pattern.endswith("\\$")
-        and not _top_level_alternation(pattern)
-        and not _wide_or_spaced(pattern)
-    )
+    """A pattern that cannot match free text, judged on the tree Python's ``re`` parses it to
+    (never on the text: ``(?#()`` is a comment whose ``(`` does not nest, so a text scan reads
+    the ``|`` after it as nested).  The top level starts with ``^`` and ends with ``$`` and is
+    not an alternation (``^a$|.*`` is unanchored); every character it can match, as a literal,
+    an alternative or a class member, is an ASCII letter, digit or one of ``-_.:/@+=,~%`` (so
+    no ``.``, negated class, ``\\w``, ``\\d`` or ``\\s``, which Python matches against
+    Unicode, nothing that matches whitespace, and no class such as ``[ -~]`` that lists
+    everything); no inline flag or comment; and no match can start with ``-`` (a value an
+    argv-fed handler would read as an option).  A pattern ``re`` cannot read is not closed."""
+    if "(?#" in pattern:
+        return False  # a comment: nothing a value needs, and it hides structure from a reader
+    parsed = _parse(pattern)
+    if parsed is None:
+        return False
+    tree, c = parsed
+    if tree.state.flags & ~c.SRE_FLAG_UNICODE:
+        return False  # a global inline flag: (?i), (?x), (?s), (?a), ...
+    top = list(tree)
+    if (
+        len(top) < 2
+        or top[0] != (c.AT, c.AT_BEGINNING)
+        or top[-1] != (c.AT, c.AT_END)
+        or any(op is c.BRANCH for op, _ in top)
+    ):
+        return False
+    return _narrow_tree(tree, c) and not _can_lead_with(tree, "-", c)[0]
 
 
 def _length_bounded(schema: Mapping[str, Any]) -> bool:
