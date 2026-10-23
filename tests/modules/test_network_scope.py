@@ -382,6 +382,8 @@ def test_a_module_with_nothing_executable_is_attended():
     assert not ms.runs_unattended({"contributes": {}})
     assert not ms.runs_unattended({"contributes": {"docs": [{"file": "d.md"}], "services": []}})
     assert ms.runs_unattended({"contributes": "not a mapping"})  # malformed is not "attended"
+    for not_a_list in (None, {}, "x", 0):  # only an explicit [] declares "nothing"
+        assert ms.runs_unattended({"contributes": {"services": not_a_list}}), not_a_list
     agent = {"key": "assess-analyst"}
     assert ms.runs_unattended({"contributes": {"agents": [agent]}})
 

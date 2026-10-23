@@ -443,11 +443,14 @@ def runs_unattended(module: Doc) -> bool:
     service, a workflow pack, an MCP server another module's scheduled agent calls, an hourly
     invariant, an entry point, a preflight hook, a role (which can install its own timer) and
     every agent (each has a calendar or a trigger) all run with no human present.  So a module
-    is attended only when it contributes nothing that can execute."""
+    is attended only when it contributes nothing that can execute: every other kind it names is
+    an explicit empty list.  Anything else under a kind (``None``, a mapping, a string) is not a
+    declaration of "nothing", so it counts as executable (the rules stand alone without the
+    schema)."""
     contributes = module.get("contributes")
     if not isinstance(contributes, dict):
         return contributes is not None  # a malformed contributes is not proof of "attended"
-    return any(v for k, v in contributes.items() if k not in INERT_CONTRIBUTIONS)
+    return any(v != [] for k, v in contributes.items() if k not in INERT_CONTRIBUTIONS)
 
 
 def manifest_scope_problems(module: Doc) -> list[str]:
