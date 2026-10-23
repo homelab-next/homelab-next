@@ -8,6 +8,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 from collections.abc import Callable, Sequence
 
 from conformance.protocols.idp import Claims, Forbidden, InvalidToken
@@ -39,11 +40,16 @@ class FakeIdentityProvider:
     def _sign(self, signing_input: str) -> str:
         return _b64(hmac.new(self._key, signing_input.encode("ascii"), hashlib.sha256).digest())
 
+    @staticmethod
+    def _check_ttl(ttl: float) -> None:
+        # ``nan <= 0`` is False and ``now + inf`` never passes: both would mint an immortal token
+        if not math.isfinite(ttl) or ttl <= 0:
+            raise ValueError("ttl must be a positive, finite number of seconds")
+
     def issue(self, subject: str, scopes: Sequence[str], ttl: float) -> str:
         if not subject:
             raise ValueError("subject is required")
-        if ttl <= 0:
-            raise ValueError("ttl must be positive")
+        self._check_ttl(ttl)
         self._n += 1
         now = self._clock()
         body = {
@@ -174,3 +180,13 @@ class ScopedSkipsRevocationIdentityProvider(FakeIdentityProvider):
         if required_scope not in claims.scopes:
             raise Forbidden(f"missing scope {required_scope!r}")
         return claims
+
+
+class NonFiniteTtlIdentityProvider(FakeIdentityProvider):
+    """Defect: only ``ttl <= 0`` is refused, so ``nan`` (which compares false with everything)
+    and ``inf`` mint a token that never expires."""
+
+    @staticmethod
+    def _check_ttl(ttl: float) -> None:
+        if ttl <= 0:
+            raise ValueError("ttl must be positive")

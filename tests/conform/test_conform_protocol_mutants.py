@@ -29,6 +29,9 @@ CASES = [
     ("secrets", "secret_store", "VersionErrorLeaksSecretStore", "errors-never-contain-values"),
     ("secrets", "secret_store", "DeletesLatestOnlySecretStore", "delete-removes-all-versions"),
     ("secrets", "secret_store", "AliasingSecretStore", "stored-data-is-a-copy"),
+    ("idp", "identity", "SubstringScopeIdentityProvider", "scope-enforced"),
+    ("idp", "identity", "ScopedSkipsRevocationIdentityProvider", "revoked-token-rejected"),
+    ("idp", "identity", "NonFiniteTtlIdentityProvider", "issue-validates-input"),
 ]
 
 
@@ -65,3 +68,14 @@ def test_a_stale_delivery_never_settles_the_live_one_in_the_reference_bus():
     old.ack()
     live.nack()
     assert [d.data for d in c.fetch(5)] == [b"m"]
+
+
+def test_the_reference_idp_refuses_a_ttl_that_never_ends():
+    """The reference fake accepted ``ttl=nan`` (``nan <= 0`` is False): the token still verified
+    after a billion seconds."""
+    from conformance.fakes.identity import FakeIdentityProvider
+
+    p = FakeIdentityProvider()
+    for ttl in (float("nan"), float("inf")):
+        with pytest.raises(ValueError):
+            p.issue("user", ["read"], ttl)

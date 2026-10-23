@@ -12,6 +12,9 @@ from conformance.fakes.identity import (
     DecodedSignatureIdentityProvider,
     FakeIdentityProvider,
     NoExpiryIdentityProvider,
+    NonFiniteTtlIdentityProvider,
+    ScopedSkipsRevocationIdentityProvider,
+    SubstringScopeIdentityProvider,
     UnsignedIdentityProvider,
 )
 from conformance.protocols.idp import Forbidden, InvalidToken
@@ -171,19 +174,30 @@ def _(p):
     assert expires(p, valid, 1), "token still verifies after its ttl"
 
 
-@SUITE.check("scope-enforced", "a valid token without the required scope is Forbidden, not invalid")
+@SUITE.check(
+    "scope-enforced",
+    "a valid token without the required scope is Forbidden, not invalid; scopes match exactly",
+)
 def _(p):
     tok = p.issue(uniq("user"), ["read"], 60)
     assert p.verify(tok, required_scope="read").scopes == ("read",)
     exc = raises(lambda: p.verify(tok, required_scope="admin"), "missing scope", Forbidden)
     assert isinstance(exc, Forbidden)
+    # a scope is a whole name: neither part of a granted scope nor a run across two of them
+    wide = p.issue(uniq("user"), ["readwrite", "admin"], 60)
+    assert p.verify(wide, required_scope="readwrite").subject
+    for part in ("read", "write", "adm", "readwrite admin", "write admin"):
+        raises(lambda s=part: p.verify(wide, required_scope=s), f"scope {part!r}", Forbidden)
 
 
-@SUITE.check("revoked-token-rejected", "a revoked token fails verification")
+@SUITE.check(
+    "revoked-token-rejected", "a revoked token fails verification, with or without a scope"
+)
 def _(p):
     tok = p.issue(uniq("user"), ["read"], 60)
     p.revoke(tok)
     raises(lambda: p.verify(tok), "revoked token", InvalidToken)
+    raises(lambda: p.verify(tok, required_scope="read"), "revoked token, scoped", InvalidToken)
 
 
 @SUITE.check("revoke-is-idempotent-and-total", "revoking twice or revoking garbage is harmless")
@@ -194,11 +208,13 @@ def _(p):
     p.revoke("not-a-token")
 
 
-@SUITE.check("issue-validates-input", "empty subject and non-positive ttl are refused")
+@SUITE.check(
+    "issue-validates-input", "empty subject and a non-positive or non-finite ttl are refused"
+)
 def _(p):
     raises(lambda: p.issue("", ["read"], 60), "empty subject", ValueError)
-    raises(lambda: p.issue(uniq("user"), ["read"], 0), "ttl 0", ValueError)
-    raises(lambda: p.issue(uniq("user"), ["read"], -5), "negative ttl", ValueError)
+    for ttl in (0, -5, float("nan"), float("inf"), float("-inf")):
+        raises(lambda t=ttl: p.issue(uniq("user"), ["read"], t), f"ttl {ttl}", ValueError)
 
 
 def make_fake():
@@ -220,6 +236,21 @@ MUTANTS = {
         DecodedSignatureIdentityProvider,
         "unsigned-token-rejected",
         "the signature is compared only when present",
+    ),
+    "scope-matched-as-substring": Mutant(
+        SubstringScopeIdentityProvider,
+        "scope-enforced",
+        "the required scope is matched as a substring, so readwrite satisfies read",
+    ),
+    "revocation-skipped-when-scoped": Mutant(
+        ScopedSkipsRevocationIdentityProvider,
+        "revoked-token-rejected",
+        "revocation is checked only when no scope is required",
+    ),
+    "non-finite-ttl-accepted": Mutant(
+        NonFiniteTtlIdentityProvider,
+        "issue-validates-input",
+        "a nan or inf ttl mints a token that never expires",
     ),
     "exp-not-enforced": Mutant(
         NoExpiryIdentityProvider, "expired-token-rejected", "exp is issued but never checked"

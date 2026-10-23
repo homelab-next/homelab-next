@@ -22,7 +22,9 @@ Contract for `idp`: issue and verify short-lived bearer tokens.
 
 `issue` returns an opaque string; `verify` returns the claims or raises.  Whatever the
 product (OIDC provider, signed JWTs, opaque introspection), a token that was altered, expired,
-revoked, empty or garbage is *always* `InvalidToken` - never a crash, never accepted.
+revoked, empty or garbage is *always* `InvalidToken` - never a crash, never accepted, whether
+or not a scope is required.  `required_scope` names one scope exactly: it is granted only when it
+is one of the token's scopes, never by matching part of one.
 
 ## How to use it
 
@@ -46,7 +48,8 @@ def issue(subject: str, scopes: Sequence[str], ttl: float) -> str
 
 **Returns:** `str`
 
-Raises ValueError for an empty subject or ttl <= 0.
+Raises ValueError for an empty subject, or a ttl that is not a positive, finite
+number of seconds (`nan` and `inf` included: either would never expire).
 
 **Raises:** `ValueError`
 
@@ -121,10 +124,10 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `alg-none-rejected` | MUST | a JWT with alg 'none' (any spelling) or an empty signature is never accepted |  |
 | `garbage-is-invalid-not-a-crash` | MUST | empty and nonsense strings raise InvalidToken only |  |
 | `expired-token-rejected` | MUST | a token is invalid once its ttl has passed (clock hook if offered, else real time) |  |
-| `scope-enforced` | MUST | a valid token without the required scope is Forbidden, not invalid |  |
-| `revoked-token-rejected` | MUST | a revoked token fails verification |  |
+| `scope-enforced` | MUST | a valid token without the required scope is Forbidden, not invalid; scopes match exactly |  |
+| `revoked-token-rejected` | MUST | a revoked token fails verification, with or without a scope |  |
 | `revoke-is-idempotent-and-total` | MUST | revoking twice or revoking garbage is harmless |  |
-| `issue-validates-input` | MUST | empty subject and non-positive ttl are refused |  |
+| `issue-validates-input` | MUST | empty subject and a non-positive or non-finite ttl are refused |  |
 
 ### Features an adapter may declare
 
@@ -139,6 +142,9 @@ Each is a deliberately broken fake (`hnx conform run idp --target broken:<mutant
 | `alg-none-accepted` | `alg-none-rejected` | the token header is trusted, so alg=none disables the signature check |
 | `empty-signature-accepted` | `unsigned-token-rejected` | the signature is compared only when present |
 | `exp-not-enforced` | `expired-token-rejected` | exp is issued but never checked |
+| `non-finite-ttl-accepted` | `issue-validates-input` | a nan or inf ttl mints a token that never expires |
+| `revocation-skipped-when-scoped` | `revoked-token-rejected` | revocation is checked only when no scope is required |
+| `scope-matched-as-substring` | `scope-enforced` | the required scope is matched as a substring, so readwrite satisfies read |
 | `signature-not-checked` | `payload-splice-rejected` | verify trusts the payload without checking the signature |
 
 ## Implementations

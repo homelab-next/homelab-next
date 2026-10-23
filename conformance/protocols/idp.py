@@ -3,7 +3,9 @@
 
 ``issue`` returns an opaque string; ``verify`` returns the claims or raises.  Whatever the
 product (OIDC provider, signed JWTs, opaque introspection), a token that was altered, expired,
-revoked, empty or garbage is *always* ``InvalidToken`` - never a crash, never accepted.
+revoked, empty or garbage is *always* ``InvalidToken`` - never a crash, never accepted, whether
+or not a scope is required.  ``required_scope`` names one scope exactly: it is granted only when it
+is one of the token's scopes, never by matching part of one.
 """
 
 from __future__ import annotations
@@ -39,7 +41,8 @@ class Claims:
 @runtime_checkable
 class IdentityProvider(Protocol):
     def issue(self, subject: str, scopes: Sequence[str], ttl: float) -> str:
-        """Raises ValueError for an empty subject or ttl <= 0."""
+        """Raises ValueError for an empty subject, or a ttl that is not a positive, finite
+        number of seconds (``nan`` and ``inf`` included: either would never expire)."""
 
     def verify(self, token: str, required_scope: str | None = None) -> Claims: ...
 
