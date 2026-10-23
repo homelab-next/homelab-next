@@ -132,6 +132,49 @@ def test_global_rate_limit_delays_and_does_not_lose_the_problem(tmp_path):
     assert len(sender.sent) == 3
 
 
+def test_a_scope_has_its_own_budget_and_never_spends_the_global_one(tmp_path):
+    """One broker agent looping submit/cancel spent the global budget, and another agent's page
+    was then suppressed and never retried."""
+    sender = FakeSender()
+    n = Notifier(sender, StateStore(tmp_path / "n.json"), Clock(),
+                 rate_limit=RateLimit(max_sends=2, window_s=3600))  # fmt: skip
+    n.register_pair("Disk almost full", "Disk space recovered")
+    for i in range(5):
+        n.report(f"loud:{i}", "full", msg(key=f"loud:{i}"), scope="actor-loud")
+    assert len(sender.sent) == 2, "the scope's own budget"
+    assert n.report("quiet:1", "full", msg(key="quiet:1"), scope="actor-quiet") is True
+    assert n.report("host:1", "full", msg(key="host:1")) is True, "the global budget is untouched"
+
+
+def test_every_scope_together_has_a_loose_backstop(tmp_path):
+    sender = FakeSender()
+    rl = RateLimit(max_sends=2, window_s=3600, max_sends_all_scopes=3)
+    n = Notifier(sender, StateStore(tmp_path / "n.json"), Clock(), rate_limit=rl)
+    n.register_pair("Disk almost full", "Disk space recovered")
+    for scope in ("a", "b", "c"):
+        for i in range(2):
+            n.report(f"{scope}:{i}", "full", msg(key=f"{scope}:{i}"), scope=scope)
+    assert len(sender.sent) == 3, "three scopes, each under its own budget, still stop at 3"
+
+
+def test_forget_drops_a_settled_key_and_keeps_an_open_one(env):
+    n, _, _ = env
+    n.report("disk:app-01", "full", msg())
+    assert n.forget("disk:app-01") is False, "still a problem: kept"
+    n.clear("disk:app-01")
+    assert n.forget("disk:app-01") is True
+    assert n.store.get("notify/disk:app-01") is None
+
+
+def test_clear_marks_a_key_ok_without_a_message(env):
+    n, sender, _ = env
+    n.report("disk:app-01", "full", msg())
+    assert n.clear("disk:app-01") is True and n.state_of("disk:app-01") == "ok"
+    assert sender.titles == ["Disk almost full"], "no recovery message"
+    assert n.clear("disk:app-01") is False
+    assert n.report("disk:app-01", "full", msg()) is True, "a new problem pages again"
+
+
 def test_per_key_min_interval(tmp_path):
     sender, clock = FakeSender(), Clock()
     n = Notifier(

@@ -209,6 +209,35 @@ def test_unexecutable_handler_is_a_spawn_failure(tmp_path):
     assert info.value.reason == "handler-spawn-failed"
 
 
+def test_a_private_copy_that_cannot_be_written_is_an_exec_error(tmp_path, monkeypatch):
+    """ENOSPC (or EMFILE) writing the handler's private copy escaped as a bare OSError, and the
+    approved run it belonged to read running forever."""
+    h = _handler(tmp_path, "echo hi\n")
+    real = os.fdopen
+
+    def full(fd, *a, **k):
+        fh = real(fd, *a, **k)
+        if "w" not in (a[0] if a else k.get("mode", "r")):
+            return fh  # reading the pinned handler: as usual
+
+        class Full:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                fh.close()
+
+            def write(self, data):
+                raise OSError(errno.ENOSPC, "No space left on device")
+
+        return Full()
+
+    monkeypatch.setattr(execute_mod.os, "fdopen", full)
+    with pytest.raises(ExecError) as info:
+        _run(tmp_path, h)
+    assert (info.value.reason, info.value.outcome) == ("handler-io-error", "error")
+
+
 # -- review regressions: the process group, redaction at the cap, close-on-exec ------------
 
 

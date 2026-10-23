@@ -39,15 +39,33 @@ the same file and nothing is ever rewritten in place.  State is *derived* from w
                                  (:meth:`StateDir.prune_outbox`).  Lock, first-start marker.
 ``digest.key``                   the broker-held key (hex) for the keyed hash of secret arguments in a
                                  request digest (created once, exclusively)
+``live/<instance id>``           one per broker process that has claimed a run: held under an
+                                 exclusive ``flock`` while it lives (:meth:`StateDir.instance_id`)
 ``runs/<rid>/``                  a run's private directory (handler copy, stdout, stderr)
+``lanes-ledger/``                the write lanes' bookkeeping: a shared lane's owner index and each
+                                 actor's recent write times (:mod:`homelabnext.broker.lanes`)
 
 A request's state: no claim -> ``pending``; claim ``cancel`` -> ``cancelled``; claim ``deny`` ->
 ``denied``; claim ``run`` -> the result's ``done`` / ``error``, or ``running`` while there is none.
+A run claim with no result is ``interrupted`` instead when nothing will ever write one: the process
+that claimed it is gone, or this process could not write the result
+(:meth:`StateDir.mark_unfinished`: a full disk).  A claim names its process by pid, the pid's
+start time, the boot id, the PID namespace and the host (:func:`process_identity`): a pid that
+came back as another process (a restarted broker is pid 1 again in its container) or a boot since
+the claim reads ``interrupted``.  Above all, a claim names its broker *instance*: every process
+that claims a run holds an exclusive ``flock`` on ``live/<instance id>`` for its whole life
+(:meth:`StateDir.instance_id`), and a reader that can take that lock without blocking knows the
+claimant is gone -- in any PID namespace and under any hostname, on the one host the state
+directory lives on.  A claim without an instance (an older one) falls back to the process
+identity, where another host or PID namespace cannot be judged and reads ``running``.  The audit trail says what happened: the
+run's ``started`` record, and its outcome record when one could be written.  An interrupted
+request never runs again; its approval was consumed with the claim.
 """
 
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import json
 import os
 import re
@@ -64,6 +82,7 @@ __all__ = [
     "StateError",
     "is_id",
     "new_id",
+    "process_identity",
     "write_exclusive",
     "write_temp",
 ]
@@ -83,6 +102,9 @@ _SUBDIRS = (
     "runs",
 )
 _KEY_BYTES = 32
+#: an abandoned ``live/.new-<id>`` (its creator died between create and rename) older than this
+#: is swept, when nobody holds its lock
+STALE_NEW_S = 600.0
 #: how many of the newest audit records every start re-indexes into ``decisions/``
 RECONCILE_AUDIT = 256
 #: written once a full rebuild of ``decisions/`` has finished (an interrupted one runs again)
@@ -174,6 +196,97 @@ def _load(path: Path) -> Any:
         return None
 
 
+def _read(path: str) -> str | None:
+    try:
+        with open(path, encoding="ascii") as fh:
+            return fh.read().strip() or None
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _pid_start(pid: int) -> str | None:
+    """The start time of ``pid`` in clock ticks since boot (``/proc/<pid>/stat`` field 22), or
+    None when there is no such process or no ``/proc``."""
+    stat_line = _read(f"/proc/{pid}/stat")
+    if stat_line is None:
+        return None
+    fields = stat_line.rpartition(")")[2].split()  # the command name may hold spaces or ")"
+    return fields[19] if len(fields) > 19 else None
+
+
+def _pid_ns() -> str | None:
+    try:
+        return str(os.stat("/proc/self/ns/pid").st_ino)
+    except OSError:
+        return None
+
+
+def process_identity() -> dict[str, Any]:
+    """This process as a run claim records it: the pid alone is reused (and is 1 in every
+    container), so with it the pid's start time, the boot id, the PID namespace and the host --
+    what tells a live claimant from a dead one whose pid came back, and a claimant this reader
+    cannot see (another host, another PID namespace) from one that is gone."""
+    import socket
+
+    pid = os.getpid()
+    out: dict[str, Any] = {"pid": pid, "host": socket.gethostname()}
+    for key, value in (
+        ("pid_start", _pid_start(pid)),
+        ("boot_id", _read("/proc/sys/kernel/random/boot_id")),
+        ("pid_ns", _pid_ns()),
+    ):
+        if value is not None:
+            out[key] = value
+    return out
+
+
+def _alive(claim: dict[str, Any]) -> bool:
+    """Whether the process that took a run claim may still be running; when this reader cannot
+    tell (another host, another PID namespace, an unknown pid), it may."""
+    pid = claim.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return True
+    if "pid_start" not in claim:  # a claim from before the identity was recorded: the pid alone
+        if pid == os.getpid():
+            return True
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except OSError:  # EPERM: it exists, as another user
+            return True
+        return True
+    me = process_identity()
+    if claim.get("host") != me["host"] or claim.get("pid_ns") != me.get("pid_ns"):
+        return True  # not a process this reader can see
+    if claim.get("boot_id") and me.get("boot_id") and claim["boot_id"] != me["boot_id"]:
+        return False  # the host has rebooted since: nothing from then still runs
+    start = _pid_start(pid)
+    if start is None:
+        return "pid_start" not in me  # gone (with /proc to ask), or no /proc: cannot tell
+    return start == claim["pid_start"]  # else the pid was reused: the claimant is gone
+
+
+def _instance_held(path: Path) -> bool | None:
+    """Whether some process holds the broker-instance lock ``path``: False when the lock can be
+    taken (its process is gone) or the file is missing, None when it cannot be told."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    except OSError:
+        return None
+    finally:
+        os.close(fd)  # closing drops a lock this probe took
+    return False
+
+
 def _is_decision(record: dict[str, Any]) -> bool:
     return (record.get("operation"), record.get("outcome")) in DECISION_KINDS
 
@@ -203,6 +316,9 @@ class StateDir:
         self._audit_lock = threading.Lock()  # a threaded server shares one instance
         self._key: bytes | None = None
         self._pruned = float("-inf")
+        self._unfinished: set[str] = set()  # runs this process claimed and could not finish
+        self._instance: tuple[str, int] | None = None  # (id, fd holding its live/ lock)
+        self._instance_lock = threading.Lock()
         if index_missing:  # a state directory from before the index: build it once
             for rid in self.request_ids():
                 if self.get_claim(rid) is None:
@@ -288,6 +404,71 @@ class StateDir:
     def get_result(self, rid: str) -> dict[str, Any] | None:
         return _load(self._dir("results") / f"{rid}.json") if is_id(rid) else None
 
+    def mark_unfinished(self, rid: str) -> None:
+        """Record that this process claimed ``rid``'s run and could not write its result, so it
+        reads ``interrupted``, not ``running`` (in memory: there is no disk to write it to)."""
+        self._unfinished.add(rid)
+
+    def instance_id(self) -> str:
+        """This process's broker instance: ``live/<id>``, created and held under an exclusive
+        ``flock`` for as long as the process lives (the kernel drops it when the process dies,
+        however it dies).  A run claim records the id, so any reader on this host -- in any PID
+        namespace, under any hostname -- can tell a live claimant from a gone one by trying the
+        lock without blocking."""
+        with self._instance_lock:
+            if self._instance is None:
+                live = self._dir("live")
+                live.mkdir(mode=0o700, exist_ok=True)
+                self._sweep_live(live)
+                iid = new_id("brk")
+                # locked under a hidden name the sweep never touches, then renamed into place: a
+                # sweep by another broker can never see live/<id> unlocked and unlink it
+                tmp = live / f".new-{iid}"
+                fd = os.open(tmp, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX)
+                    os.rename(tmp, live / iid)
+                except BaseException:
+                    os.close(fd)
+                    with contextlib.suppress(FileNotFoundError):
+                        tmp.unlink()
+                    raise
+                self._instance = (iid, fd)
+            return self._instance[0]
+
+    @staticmethod
+    def _sweep_live(live: Path, now: float | None = None) -> None:
+        """Remove the lock files of instances that are gone (their lock can be taken), keeping
+        any whose claims still name them readable: a missing file also reads as gone.  A hidden
+        ``.new-<id>`` is an instance being created (locked, then renamed): swept only once it is
+        :data:`STALE_NEW_S` old and unlocked (its creator died between create and rename).
+        ``now`` (epoch seconds) defaults to the real time: a file's age is against it."""
+        now = time.time() if now is None else now
+        for p in live.iterdir():
+            if p.name.startswith(".new-"):
+                try:
+                    stale = now - p.stat().st_mtime > STALE_NEW_S
+                except FileNotFoundError:
+                    continue
+                if stale and _instance_held(p) is False:
+                    with contextlib.suppress(FileNotFoundError):
+                        p.unlink()
+                continue
+            if p.name.startswith("."):
+                continue
+            if _instance_held(p) is False:
+                with contextlib.suppress(FileNotFoundError):
+                    p.unlink()
+
+    def _claimant_alive(self, claim: dict[str, Any]) -> bool:
+        iid = claim.get("instance")
+        if isinstance(iid, str) and is_id(iid):
+            if self._instance is not None and self._instance[0] == iid:
+                return True
+            held = _instance_held(self._dir("live") / iid)
+            return True if held is None else held
+        return _alive(claim)
+
     def state_of(self, rid: str) -> str:
         claim = self.get_claim(rid)
         if claim is None:
@@ -298,7 +479,11 @@ class StateDir:
         if op == "deny":
             return "denied"
         result = self.get_result(rid)
-        return "running" if result is None else str(result.get("state", "error"))
+        if result is not None:
+            return str(result.get("state", "error"))
+        if rid in self._unfinished or not self._claimant_alive(claim):
+            return "interrupted"
+        return "running"
 
     # ---------------------------------------------------------------- approvals
     def put_approval(self, approval: dict[str, Any]) -> bool:

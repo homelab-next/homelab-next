@@ -1,0 +1,17 @@
+{
+  "action": "memory.write",
+  "args": {
+    "content": "Seen twice this week: the queue drains slowly after a restart.\n",
+    "name": "queue-notes.md"
+  },
+  "at": "2026-01-15T10:01:59.987654Z",
+  "audit_id": "aud-0000",
+  "caller": "profile:triage",
+  "manifest_id": "example-lab-broker",
+  "operation": "call",
+  "outcome": "started",
+  "reason": "",
+  "request_digest": "sha256:abababababababababababababababababababababababababababababababab",
+  "request_id": "req-0002",
+  "via": "uid:2001"
+}

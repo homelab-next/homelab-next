@@ -115,6 +115,9 @@ def below_floor(coverage: dict[str, float | None], floor: float = FLOOR) -> list
     return problems
 
 
+COVERAGE_BUDGET_SCALE = "2"
+
+
 def run_tests(report: Path) -> int:
     report.parent.mkdir(parents=True, exist_ok=True)
     paths = sorted({t for tests in UNITS.values() for t in tests})
@@ -123,6 +126,9 @@ def run_tests(report: Path) -> int:
     cmd += ["--cov-report=", f"--cov-report=json:{report}", *paths]
     # the data file goes under build/ with the report, not into the working tree
     env = {**os.environ, "COVERAGE_FILE": str(report.parent / ".coverage-security")}
+    # tracing slows every test, so the per-suite time budgets are scaled as tests/suite_policy.py
+    # intends for a coverage run; an explicit HNX_SUITE_BUDGET_SCALE still wins
+    env.setdefault("HNX_SUITE_BUDGET_SCALE", COVERAGE_BUDGET_SCALE)
     return subprocess.run(cmd, cwd=REPO_ROOT, check=False, env=env).returncode
 
 

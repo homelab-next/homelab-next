@@ -2,10 +2,16 @@
 """``hnx broker``: validate a manifest, serve the broker, and talk to it from a shell.
 
 ``validate MANIFEST`` checks the manifest schema, every handler document and its pinned digest,
-the lane configuration and the transport peers.
+the lane configuration and the transport peers.  With ``--data-root DIR`` (or
+``$HNX_BROKER_DATA_ROOT``) it also prints what each lane directory holds against its quota and
+warns at 80% (:func:`homelabnext.broker.lanes.usage`); ``serve`` logs the same at start.  A
+warning does not fail validation: an agent writing there is about to be refused
+``lane-quota-exceeded``, and this is how the operator hears it first.
 
 ``serve --socket PATH`` runs the broker on a Unix socket whose callers are authenticated by their
-peer credentials (:mod:`homelabnext.broker.server`); ``mcp --socket PATH`` runs the agent-facing
+peer credentials (:mod:`homelabnext.broker.server`); with ``--notify-topic T`` (its access
+token given by secret reference, ``--notify-token``) it pages approval requests and lane-quota
+notices through ntfy (:func:`notifier_from_args`); ``mcp --socket PATH`` runs the agent-facing
 MCP tool server (stdio) against it (:mod:`homelabnext.broker.mcp_tools`).
 
 ``relay --state DIR --events-target FILE --stream S --subject-prefix P`` publishes the state
@@ -48,6 +54,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import threading
@@ -95,6 +102,17 @@ def _parser() -> argparse.ArgumentParser:
     v = sub.add_parser("validate", help="check a manifest, its handler digests, lanes and peers")
     v.add_argument("path")
     v.add_argument("--json", action="store_true")
+    v.add_argument(
+        "--data-root",
+        default=os.environ.get("HNX_BROKER_DATA_ROOT"),
+        help="also show each lane directory's usage against its quota (warn at 80%%)",
+    )
+    v.add_argument(
+        "--state",
+        default=os.environ.get("HNX_BROKER_STATE"),
+        help="with --data-root: the broker's state directory, read for a shared files lane's "
+        "owner index (each actor's share); never written",
+    )
     srv = sub.add_parser("serve", help="serve the broker on a Unix socket (peer-authenticated)")
     _service_opts(srv)
     srv.add_argument(
@@ -106,6 +124,22 @@ def _parser() -> argparse.ArgumentParser:
     srv.add_argument("--socket-group", help="group owning the socket (the agents' group)")
     srv.add_argument("--max-request-bytes", type=int, default=None)
     srv.add_argument("--timeout", type=float, default=None, help="seconds to read one request")
+    srv.add_argument(
+        "--notify-topic",
+        help="page the approver (approval requests) and the operator (lane quotas) on this ntfy "
+        "topic (visible in ps: prefer $HNX_BROKER_NOTIFY_TOPIC or --notify-topic-file); the "
+        "endpoint is the notify capability (--registry, else HNX_ENDPOINT_NOTIFY)",
+    )
+    srv.add_argument("--notify-topic-file", help="read the ntfy topic from this file's first line")
+    srv.add_argument(
+        "--notify-token",
+        default=os.environ.get("HNX_BROKER_NOTIFY_TOKEN"),
+        metavar="secret:NAME",
+        help="the ntfy access token, as a secret reference: its value is read at send time "
+        "from the environment variable it names (secret:broker/ntfy-token -> "
+        "HNX_SECRET_BROKER_NTFY_TOKEN), never from the command line",
+    )
+    srv.add_argument("--registry", help="services.yml: resolve the notify capability through it")
     rel = sub.add_parser("relay", help="publish the outbox to the event bus (at least once)")
     rel.add_argument("--state", default=os.environ.get("HNX_BROKER_STATE"))
     rel.add_argument(
@@ -198,16 +232,131 @@ def _validate(args) -> int:
         problems = [f"{path}: not a mapping"]
     else:
         _, problems = validate_manifest(manifest, path.parent)
+    rows = []
+    if args.data_root and not problems:
+        ledger = Path(args.state) / "lanes-ledger" if args.state else None
+        rows = lane_usage(manifest, args.data_root, ledger=ledger)
     if args.json:
-        print(
-            json.dumps({"manifest": str(path), "ok": not problems, "problems": problems}, indent=2)
-        )
+        doc = {"manifest": str(path), "ok": not problems, "problems": problems}
+        if args.data_root:
+            doc["lane_usage"] = rows
+        print(json.dumps(doc, indent=2))
     elif problems:
         print("\n".join(f"{path}: {p}" for p in problems))
     else:
         actions = len(manifest["actions"])
         print(f"{path}: ok ({actions} actions, {len(manifest.get('lanes', []))} lanes)")
+        for row in rows:
+            print(_usage_line(row))
     return 1 if problems else 0
+
+
+def lane_usage(
+    manifest: dict[str, Any], data_root: str | os.PathLike[str], *, ledger: Any = None
+) -> list[dict]:
+    """Every lane directory's usage row (:func:`homelabnext.broker.lanes.usage`); a shared
+    inbox's files are attributed to the manifest's granted profiles by name (the broker's own
+    ``serve`` verifies each name's tag)."""
+    from . import lanes
+
+    actors = tuple(sorted({g["profile"] for g in manifest.get("grants", [])}))
+    return [
+        r
+        for ld in manifest.get("lanes", [])
+        for r in lanes.usage(lanes.Lane.from_doc(ld), data_root, actors=actors, ledger=ledger)
+    ]
+
+
+def _usage_line(row: dict[str, Any]) -> str:
+    files = (
+        f"{row['files']}/{row['max_files']}" if row["max_files"] is not None else str(row["files"])
+    )
+    line = (
+        f"lane {row['lane']} {row['dir']}: {files} files, "
+        f"{row['bytes']}/{row['max_total_bytes']} bytes ({row['used']:.0%} of its quota)"
+    )
+    lines = [line + ("  WARNING: over 80% of its quota" if row["warn"] else "")]
+    for actor, share in (row.get("actors") or {}).items():
+        files = f"{share['files']}/{row['max_files_per_actor']}"
+        lines.append(
+            f"  {actor}: {files} files, {share['bytes']}/{row['max_bytes_per_actor']} bytes "
+            f"({share['used']:.0%} of its share)"
+            + ("  WARNING: over 80% of its share" if share["warn"] else "")
+        )
+    return "\n".join(lines)
+
+
+#: what serve's notifier may send: per agent, and over all agents together (a loose backstop)
+NOTIFY_PER_AGENT_PER_HOUR = 20
+NOTIFY_ALL_AGENTS_PER_HOUR = 60
+
+
+def _notify_topic(args) -> str | None:
+    """The topic from ``--notify-topic`` (visible in ``ps``), else ``$HNX_BROKER_NOTIFY_TOPIC``,
+    else the first line of ``--notify-topic-file`` (or ``$HNX_BROKER_NOTIFY_TOPIC_FILE``): the
+    file keeps a topic that anonymous readers could subscribe to out of the process list."""
+    topic = getattr(args, "notify_topic", None) or os.environ.get("HNX_BROKER_NOTIFY_TOPIC")
+    path = getattr(args, "notify_topic_file", None) or os.environ.get(
+        "HNX_BROKER_NOTIFY_TOPIC_FILE"
+    )
+    if not topic and path:
+        try:
+            topic = Path(path).read_text(encoding="utf-8").strip().splitlines()[0].strip()
+        except (OSError, IndexError, UnicodeDecodeError):
+            raise ValueError(f"--notify-topic-file {path}: no topic can be read") from None
+    return topic or None
+
+
+def notifier_from_args(args) -> Any:
+    """The ntfy notifier ``serve`` pages through, or None without a topic: state-diffed
+    (``<state>/notify.json``), :data:`NOTIFY_PER_AGENT_PER_HOUR` sends an hour per agent and
+    :data:`NOTIFY_ALL_AGENTS_PER_HOUR` over all of them.  The token is a ``secret:`` reference
+    resolved at send time; a literal is refused, so no token ever sits in a unit file, a shell
+    history or ``ps``.  The endpoint is resolved now, and a plaintext one refused when a token
+    would cross it, so a misconfigured notifier stops ``serve`` instead of failing every send."""
+    topic = _notify_topic(args)
+    if not topic:
+        return None
+    from homelabnext._http import check_plaintext
+    from homelabnext.notify import Notifier, NtfySender, RateLimit
+    from homelabnext.registry.model import secret_env_name
+    from homelabnext.state import StateStore
+
+    ref = getattr(args, "notify_token", None)
+    auth = None
+    if ref:
+        if not ref.startswith("secret:") or len(ref) <= len("secret:"):
+            raise ValueError("--notify-token takes a secret reference (secret:NAME), not a token")
+        var = secret_env_name(ref)
+        if not os.environ.get(var, "").strip():
+            raise ValueError(f"--notify-token {ref}: {var} is not set")
+
+        def auth() -> str | None:
+            value = os.environ.get(var, "").strip()
+            return f"Bearer {value}" if value else None
+
+    resolver = None
+    if getattr(args, "registry", None):
+        from homelabnext.registry import load
+        from homelabnext.registry.resolver import Resolver
+
+        resolver = Resolver(load(args.registry))
+    sender = NtfySender(default_topic=topic, auth=auth, resolver=resolver)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", topic):
+        raise ValueError("the ntfy topic is 1 to 64 letters, digits, '_' or '-'")
+    try:
+        base = sender.base_url()
+    except Exception as exc:
+        raise ValueError(f"notify endpoint: {exc}") from None
+    if auth is not None:
+        check_plaintext(base, credentials=True, allow_plaintext=False)
+    store = StateStore(Path(args.state) / "notify.json")
+    limit = RateLimit(
+        max_sends=NOTIFY_PER_AGENT_PER_HOUR,
+        window_s=3600.0,
+        max_sends_all_scopes=NOTIFY_ALL_AGENTS_PER_HOUR,
+    )
+    return Notifier(sender, store, rate_limit=limit)
 
 
 def _service(args) -> BrokerService:
@@ -224,6 +373,9 @@ def _service(args) -> BrokerService:
         base_dir=Path(args.manifest).parent,
         data_root=data_root,
         approvals_url=args.approvals_url,
+        # only the long-running server pages: a local CLI command (pending, approve, audit, ...)
+        # with the topic exported beside HNX_BROKER_STATE must neither page nor fail on it
+        notifier=notifier_from_args(args) if getattr(args, "cmd", None) == "serve" else None,
     )
 
 
@@ -440,8 +592,12 @@ def _serve(args) -> int:
         mode = int(args.socket_mode, 8)
     except ValueError:
         raise ValueError("--socket-mode is an octal mode such as 660") from None
+    svc = _service(args)
+    log = logging.getLogger("homelabnext.broker.cli")
+    for row in svc.lane_usage():
+        (log.warning if row["warn"] else log.info)("%s", _usage_line(row))
     server = BrokerServer(
-        _service(args),
+        svc,
         args.socket,
         mode=mode,
         group=args.socket_group,

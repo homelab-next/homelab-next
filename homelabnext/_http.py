@@ -12,12 +12,14 @@
   buffering whatever a server chooses to send.
 * :func:`send_json` writes a JSON reply from a stdlib ``BaseHTTPRequestHandler`` (the fake and
   callback servers adapters run in-process).
+* :func:`content_length` reads a request's ``Content-Length`` as ASCII digits only.
 """
 
 from __future__ import annotations
 
 import ipaddress
 import json
+import re
 import ssl
 import urllib.error
 import urllib.parse
@@ -25,6 +27,18 @@ import urllib.request
 from typing import Any
 
 DEFAULT_MAX_BYTES = 1 << 20  # 1 MiB
+_LENGTH_RE = re.compile(r"[0-9]{1,18}")
+
+
+def content_length(value: str | None) -> int | None:
+    """A ``Content-Length`` header's value (surrounding whitespace ignored) when it is ASCII
+    digits only, else None.  ``str.isdigit`` is true for ``"\u00b2"``, on which ``int`` then
+    raises, and ``int`` itself reads full-width or Arabic-Indic digits, ``_`` and a sign: a
+    handler that trusted either answered nothing and logged nothing."""
+    if value is None:
+        return None
+    text = value.strip()
+    return int(text) if _LENGTH_RE.fullmatch(text) else None
 
 
 class ResponseTooLarge(ValueError):

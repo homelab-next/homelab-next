@@ -18,16 +18,21 @@ written, purged by age.
 
 So a secret in a command never reaches the disk, not even in the WAL.  **Retention**: rows older
 than ``retention_days`` -- by event time or by arrival, whichever is older -- are deleted when the
-store opens and on every write batch (:meth:`ActivityStore.purge`, with the injected clock).
+store opens, on every write batch, by every read when the last purge is ``purge_interval_s``
+(default 60 s) old (skipped, never waited for, while a writer holds the lock: the next read tries
+again), so a long-running console that only reads never serves a row much past retention, and by :meth:`ActivityStore.retention_timer`, which the long-running ``hnx status
+serve`` and ``hnx status ingest`` start so an idle store is purged on disk too
+(:meth:`ActivityStore.purge`, with the injected clock).
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
-from collections.abc import Callable, Iterable, Mapping
-from contextlib import AbstractContextManager
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -44,6 +49,8 @@ from .model import (
     summary_problems,
 )
 
+#: how long a write waits for another writer's lock (sqlite's busy timeout)
+_BUSY_TIMEOUT_MS = 10_000
 SECRET_TYPES = ("private-key", "jwt", "token", "secret")
 PERSONAL_TYPES = ("card", "email", "national-id", "ip", "phone")
 DEFAULT_CAPS = {
@@ -151,8 +158,11 @@ class ActivityStore:
         redactor: Redactor | None = None,
         keep_detail: bool = True,
         thresholds: Thresholds | None = None,
+        purge_interval_s: float = 60.0,
     ):
         self.path = Path(path)
+        self.purge_interval_s = float(purge_interval_s)
+        self._purged_at = float("-inf")
         self.clock = clock
         self.retention_s = float(retention_days) * 86400
         self.redactor = redactor or Redactor()
@@ -173,7 +183,46 @@ class ActivityStore:
         with self._db() as db:
             return self._purge(db, self.clock() if now is None else now)
 
+    @contextmanager
+    def _reading(self) -> Iterator[sqlite3.Connection]:
+        """A connection for a read, purging first when the last purge is ``purge_interval_s``
+        old: a reader that never writes or reopens still never serves past retention.  The purge
+        is a write: when a writer holds the database it is skipped at once (no busy wait) and
+        tried again by the next read, so a page that only reads never fails on the lock."""
+        with self._db() as db:
+            now = self.clock()
+            if now - self._purged_at >= self.purge_interval_s:
+                last = self._purged_at
+                db.execute("PRAGMA busy_timeout = 0")
+                try:
+                    self._purge(db, now)
+                except sqlite3.OperationalError:  # locked: the next read, write or timer purges
+                    db.rollback()
+                    self._purged_at = last
+                finally:
+                    db.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+            yield db
+
+    def retention_timer(
+        self, stop: threading.Event, *, interval_s: float | None = None
+    ) -> threading.Thread:
+        """Start a daemon thread that purges every ``interval_s`` (default
+        ``purge_interval_s``) until ``stop`` is set; a failed purge is retried next time."""
+        every = self.purge_interval_s if interval_s is None else float(interval_s)
+
+        def loop() -> None:
+            while not stop.wait(every):
+                try:
+                    self.purge()
+                except sqlite3.Error:
+                    continue
+
+        thread = threading.Thread(target=loop, name="activity-retention", daemon=True)
+        thread.start()
+        return thread
+
     def _purge(self, db: sqlite3.Connection, now: float) -> int:
+        self._purged_at = now
         cutoff = now - self.retention_s  # both columns are indexed: no full scan per batch
         n = db.execute("DELETE FROM summary WHERE time < ? OR received < ?", (cutoff, cutoff))
         m = db.execute("DELETE FROM detail WHERE time < ? OR received < ?", (cutoff, cutoff))
@@ -280,11 +329,11 @@ class ActivityStore:
         sql += " ORDER BY time " + ("ASC" if oldest_first else "DESC") + ", event_id"
         if limit:
             sql += f" LIMIT {int(limit)}"
-        with self._db() as db:
+        with self._reading() as db:
             return [json.loads(r[0]) for r in db.execute(sql, args)]
 
     def event(self, event_id: str) -> dict[str, Any] | None:
-        with self._db() as db:
+        with self._reading() as db:
             row = db.execute("SELECT doc FROM summary WHERE event_id = ?", (event_id,)).fetchone()
             return json.loads(row[0]) if row else None
 
@@ -294,7 +343,7 @@ class ActivityStore:
         if not ids:
             return {}
         marks = ",".join("?" * len(ids))
-        with self._db() as db:
+        with self._reading() as db:
             rows = db.execute(
                 f"SELECT session_id, via FROM summary WHERE session_id IN ({marks})", ids
             ).fetchall()
@@ -310,7 +359,7 @@ class ActivityStore:
         if not ids:
             return {}
         marks = ",".join("?" * len(ids))
-        with self._db() as db:
+        with self._reading() as db:
             rows = db.execute(
                 f"SELECT event_id, session_id, via FROM summary WHERE event_id IN ({marks})", ids
             ).fetchall()
@@ -327,7 +376,7 @@ class ActivityStore:
     # ---------------------------------------------------------------- reads (detail tier)
     def detail(self, event_id: str) -> dict[str, Any] | None:
         """The private detail of one event (callers: the authorized private view only)."""
-        with self._db() as db:
+        with self._reading() as db:
             row = db.execute("SELECT doc FROM detail WHERE event_id = ?", (event_id,)).fetchone()
             return json.loads(row[0]) if row else None
 
@@ -337,12 +386,12 @@ class ActivityStore:
         if not ids:
             return {}
         marks = ",".join("?" * len(ids))
-        with self._db() as db:
+        with self._reading() as db:
             rows = db.execute(f"SELECT event_id, doc FROM detail WHERE event_id IN ({marks})", ids)
             return {r[0]: json.loads(r[1]) for r in rows}
 
     def details(self, session: str) -> dict[str, dict[str, Any]]:
         """event_id -> detail for one session (callers: the authorized private view only)."""
-        with self._db() as db:
+        with self._reading() as db:
             rows = db.execute("SELECT event_id, doc FROM detail WHERE session_id = ?", (session,))
             return {r[0]: json.loads(r[1]) for r in rows}

@@ -12,7 +12,12 @@ Rules the Notifier enforces (each exists because the opposite shipped once and h
   that title's registered recovery message once.
 * **Rate limited.**  A global budget (``max_sends`` per ``window_s``) and a per-key minimum interval.
   A rate-limited report does not record the new state, so it is retried on the next call and a
-  burst is delayed rather than silently lost.
+  burst is delayed rather than silently lost.  A report with a ``scope`` (a broker passes the
+  agent the message is about) draws on that scope's own budget of the same size instead of the
+  global one, so one noisy scope can never spend everyone else's pages; ``max_sends_all_scopes``
+  is a loose backstop over all scopes together.  :meth:`Notifier.forget` drops a settled key.
+* **Quiet clear.**  :meth:`Notifier.clear` marks a key ``ok`` without sending its recovery (a
+  problem its own reporter withdrew, which nobody needs paged about).
 * **A failed send is not recorded** (the exception propagates), so the next call retries.
 """
 
@@ -83,6 +88,9 @@ class RateLimit:
     max_sends: int = 20
     window_s: float = 3600.0
     min_interval_per_key_s: float = 0.0
+    #: a loose backstop over every scope's sends together (None: none): each scope keeps its own
+    #: ``max_sends``, and all of them at once still cannot exceed this
+    max_sends_all_scopes: int | None = None
 
 
 @dataclass
@@ -107,8 +115,9 @@ class Notifier:
         return problem_title in self._pairs
 
     # ---------------------------------------------------------------- reporting
-    def report(self, key: str, state: str, message: Message) -> bool:
-        """Report ``key`` is in ``state``.  Returns True if a message was sent."""
+    def report(self, key: str, state: str, message: Message, *, scope: str | None = None) -> bool:
+        """Report ``key`` is in ``state``.  Returns True if a message was sent.  ``scope`` (a
+        short id: whose message this is) counts the send against that scope's own budget."""
         if not key or not state:
             raise ValueError("key and state are required")
         if message.key != key:
@@ -118,7 +127,7 @@ class Notifier:
         if state == OK:
             if prev_state == OK:
                 return False
-            return self._recover(key, rec, message)
+            return self._recover(key, rec, message, scope)
         if message.title not in self._pairs:
             raise UnregisteredProblem(
                 f"problem title {message.title!r} has no registered recovery; "
@@ -126,11 +135,11 @@ class Notifier:
             )
         if state == prev_state:
             return False
-        if not self._allow(key):
+        if not self._allow(key, scope):
             return False
         self.sender.send(message)
         now = self.clock()
-        self._note_send(key, now)
+        self._note_send(key, now, scope)
         self.store.put(
             f"{self.namespace}/{key}",
             {
@@ -144,13 +153,15 @@ class Notifier:
         )
         return True
 
-    def _recover(self, key: str, rec: dict[str, Any], message: Message) -> bool:
+    def _recover(
+        self, key: str, rec: dict[str, Any], message: Message, scope: str | None = None
+    ) -> bool:
         title = rec["title"]
         recovery_title = self._pairs.get(title)
         if recovery_title is None:
             # The registry changed since the problem was sent; never leave the key red forever.
             recovery_title = f"Recovered: {title}"
-        if not self._allow(key):
+        if not self._allow(key, scope):
             return False
         msg = Message(
             key=key,
@@ -163,10 +174,21 @@ class Notifier:
         )
         self.sender.send(msg)
         now = self.clock()
-        self._note_send(key, now)
+        self._note_send(key, now, scope)
         self.store.put(
             f"{self.namespace}/{key}",
             {"state": OK, "title": None, "since": now, "recovered_from": title},
+        )
+        return True
+
+    def clear(self, key: str) -> bool:
+        """Mark ``key`` ``ok`` without sending anything; True when it was in a problem state."""
+        rec = self.store.get(f"{self.namespace}/{key}")
+        if not rec or rec.get("state", OK) == OK:
+            return False
+        self.store.put(
+            f"{self.namespace}/{key}",
+            {"state": OK, "title": None, "since": self.clock(), "cleared_from": rec.get("title")},
         )
         return True
 
@@ -175,25 +197,48 @@ class Notifier:
         return rec["state"] if rec else OK
 
     # ---------------------------------------------------------------- rate limiting
-    def _allow(self, key: str) -> bool:
+    def _sends_key(self, scope: str | None) -> str:
+        return f"{self.namespace}/_sends" + (f"/{scope}" if scope else "")
+
+    def _allow(self, key: str, scope: str | None = None) -> bool:
         rl = self.rate_limit
         if rl is None:
             return True
         now = self.clock()
-        sends = [t for t in self.store.get(f"{self.namespace}/_sends", []) if now - t < rl.window_s]
+        sends = [t for t in self.store.get(self._sends_key(scope), []) if now - t < rl.window_s]
         last_for_key = self.store.get(f"{self.namespace}/_last/{key}")
         ok = len(sends) < rl.max_sends and (
             last_for_key is None or now - last_for_key >= rl.min_interval_per_key_s
         )
+        if ok and scope and rl.max_sends_all_scopes is not None:
+            every = self.store.get(f"{self.namespace}/_sends_scoped", [])
+            ok = len([t for t in every if now - t < rl.window_s]) < rl.max_sends_all_scopes
         if not ok:
             self.suppressed_by_rate_limit += 1
         return ok
 
-    def _note_send(self, key: str, now: float) -> None:
+    def _note_send(self, key: str, now: float, scope: str | None = None) -> None:
         rl = self.rate_limit
         if rl is None:
             return
-        sends = [t for t in self.store.get(f"{self.namespace}/_sends", []) if now - t < rl.window_s]
+        where = self._sends_key(scope)
+        sends = [t for t in self.store.get(where, []) if now - t < rl.window_s]
         sends.append(now)
-        self.store.put(f"{self.namespace}/_sends", sends)
+        self.store.put(where, sends)
+        if scope:
+            every = f"{self.namespace}/_sends_scoped"
+            kept = [t for t in self.store.get(every, []) if now - t < rl.window_s]
+            self.store.put(every, [*kept, now])
         self.store.put(f"{self.namespace}/_last/{key}", now)
+
+    def forget(self, key: str) -> bool:
+        """Drop what the store keeps for ``key`` once it is ``ok`` (a settled one-off key, such as
+        one request's page), so the store does not grow with every key ever reported; a key in
+        a problem state is kept.  Needs a store with ``delete``."""
+        rec = self.store.get(f"{self.namespace}/{key}")
+        delete = getattr(self.store, "delete", None)
+        if delete is None or (rec and rec.get("state", OK) != OK):
+            return False
+        delete(f"{self.namespace}/{key}")
+        delete(f"{self.namespace}/_last/{key}")
+        return True

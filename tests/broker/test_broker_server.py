@@ -292,12 +292,38 @@ def test_one_line_per_connection_and_a_newline_terminates(broker):
     assert resp["ok"] is True
 
 
+class _Slots(threading.BoundedSemaphore):
+    """A server's slot pool that says when a slot is taken and when one is given back, so a test
+    waits for the server's state instead of sleeping and hoping the thread got there."""
+
+    def __init__(self, n: int) -> None:
+        super().__init__(n)
+        self.taken = threading.Event()
+        self.freed = threading.Event()
+
+    def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:
+        got = super().acquire(blocking, timeout)
+        if got:
+            self.taken.set()
+        return got
+
+    def release(self, n: int = 1) -> None:
+        super().release(n)
+        self.freed.set()
+
+
+def _watched(srv: BrokerServer, n: int = 1) -> _Slots:
+    srv.slots = _Slots(n)
+    return srv.slots
+
+
 def test_a_full_server_answers_busy(tmp_path):
     svc = _service(tmp_path)
     srv = BrokerServer(svc, tmp_path / "run" / "b.sock", max_connections=1, timeout_s=3)
+    slots = _watched(srv)
     with srv, socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as hold:
         hold.connect(str(srv.path))  # occupies the only slot until it times out
-        time.sleep(0.2)
+        assert slots.taken.wait(5), "the server never took the holding connection's slot"
         assert _raw(srv.path, b'{"op": "actions"}')["error"] == "busy"
 
 
@@ -369,21 +395,24 @@ def test_a_slow_sender_cannot_hold_a_connection_past_the_deadline(tmp_path):
 
 def test_an_unknown_peer_is_answered_without_holding_its_slot(tmp_path):
     srv = _server(tmp_path, max_connections=1, timeout_s=3)
+    slots = _watched(srv)
     with srv, socket.socket(socket.AF_UNIX) as stranger:
         srv.credentials = lambda conn: (0, STRANGER_UID, 0)
         stranger.settimeout(5)
         stranger.connect(str(srv.path))
         assert json.loads(stranger.recv(65536))["error"] == "unknown-caller"
         srv.credentials = peer_credentials  # the stranger keeps its connection open
-        time.sleep(0.2)
+        # its slot comes back well before the 3 s read deadline: it is never held for one
+        assert slots.freed.wait(2), "the answered stranger kept its slot"
         assert _raw(srv.path, b'{"op": "actions"}\n')["ok"] is True
 
 
 def test_agents_cannot_starve_the_approval_relay(tmp_path):
     srv = _server(tmp_path, max_connections=1, timeout_s=3)
+    slots = _watched(srv)
     with srv, socket.socket(socket.AF_UNIX) as hold:
         hold.connect(str(srv.path))  # an agent's connection holds every agent slot
-        time.sleep(0.2)
+        assert slots.taken.wait(5), "the server never took the holding connection's slot"
         assert _raw(srv.path, b'{"op": "actions"}\n')["error"] == "busy"
         srv.credentials = lambda conn: (0, RELAY_UID, 0)
         assert _raw(srv.path, b'{"op": "pending"}\n')["ok"] is True
@@ -513,6 +542,57 @@ def test_refusals_are_rate_limited_per_peer_and_audited_once_per_window(tmp_path
     for i in range(4):
         _ask(svc, peers, READER_UID, limiter, action=f"again.{i}")
     assert len(_limited_records(svc)) == 2
+
+
+def test_every_refusal_counts_for_the_limit_whatever_its_class(tmp_path):
+    """not-pending is a plain BrokerError, not Denied or InvalidArguments, so an agent looping run
+    or cancel on a finished request wrote one audit record per try and was never limited."""
+    svc = _service(tmp_path)
+    peers = PeerMap(svc.manifest)
+    limiter = RefusalLimiter(3, 60, clock=_Clock())
+    rid = svc.submit("profile:triage", "service.status", {})
+    svc.cancel("profile:triage", rid)
+    before = len(svc.audit_documents())
+    errors = [
+        _ask(svc, peers, ME, limiter, op=op, request_id=rid)["error"]
+        for op in ("run", "cancel") * 10
+    ]
+    assert errors == ["not-pending"] * 3 + ["rate-limited"] * 17
+    assert len(svc.audit_documents()) == before + 4, "three refusals and one rate-limit record"
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "secret-unavailable",
+        "handler-spawn-failed",
+        "handler-timeout",
+        "handler-io-error",
+        "lane-io-error",
+    ],
+)
+def test_the_brokers_own_faults_do_not_count_against_a_healthy_agent(tmp_path, monkeypatch, fault):
+    """During a secret-store outage (or a full disk, or a host too loaded to start a handler)
+    every call of a healthy agent failed with a broker fault, and after the limit's worth of them
+    the agent was rate-limited for a fault that was never its own."""
+    from homelabnext.broker.service import _reasoned
+
+    svc = _service(tmp_path)
+    peers = PeerMap(svc.manifest)
+    limiter = RefusalLimiter(3, 60, clock=_Clock())
+
+    def failing(*a, **k):
+        raise _reasoned("the broker could not do it", fault)
+
+    monkeypatch.setattr(svc, "call", failing)
+    errors = [_ask(svc, peers, ME, limiter, action="service.status")["error"] for _ in range(10)]
+    assert errors == [fault] * 10
+
+
+def test_the_broker_socket_has_a_listen_backlog_for_a_burst():
+    from homelabnext.broker.server import LISTEN_BACKLOG, _UnixServer
+
+    assert _UnixServer.request_queue_size == LISTEN_BACKLOG == 128
 
 
 def test_unknown_peers_are_rate_limited_too(tmp_path):

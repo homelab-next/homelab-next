@@ -351,6 +351,26 @@ def test_malformed_forms_are_refused(served, broker, body, ctype, code):
     assert status == code and broker.calls == []
 
 
+@pytest.mark.parametrize("length", ["\u00b2", "\uff11\uff12", "\u0661", "1_0", "+5", "-1", " ", ""])
+def test_a_content_length_that_is_not_ascii_digits_is_411_and_logged(
+    served, broker, tmp_path, length
+):
+    """str.isdigit() is true for "\u00b2" and int() reads full-width and Arabic-Indic digits:
+    the handler raised ValueError, http.server dropped the connection, and the attempt left no
+    access-log line."""
+    from email.message import Message
+
+    base, site = served()
+    h = Message()
+    for k, v in {**APPROVER, "Host": base.split("//")[1], "Origin": base, "Content-Length": length,
+                 "Content-Type": "application/x-www-form-urlencoded"}.items():  # fmt: skip
+        h[k] = v
+    code = site.decide({}, LOOPBACK, h, lambda n: b"")[0]
+    assert code == 411 and broker.calls == []
+    [entry] = [e for e in _log(tmp_path) if e.get("reason") == "no Content-Length"]
+    assert entry["outcome"] == "refused"
+
+
 def test_a_large_body_is_refused_unread(served, broker):
     base, _ = served()
     assert _post(base, b"note=" + b"x" * 9000)[0] == 413 and broker.calls == []

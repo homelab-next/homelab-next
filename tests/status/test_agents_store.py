@@ -175,6 +175,78 @@ def test_an_event_dated_beyond_retention_is_purged_at_once(store, clock):
     assert store.events() == []
 
 
+def test_a_long_running_reader_never_serves_past_retention(tmp_path, clock):
+    """The console opens its store once; with the ingest quiet and no collect reopening it, the
+    private tier kept serving prompts and tool output long past retention_days."""
+    writer = ActivityStore(tmp_path / "activity.db", clock=clock, retention_days=1)
+    writer.add([summary(1, has_detail=True)], [detail(1, prompt="private prompt")], via="t")
+    reader = ActivityStore(tmp_path / "activity.db", clock=clock, retention_days=1)
+    assert reader.detail("ev-s-1-1") is not None
+    clock.advance(2 * 86400)  # nothing written, nothing reopened
+    assert reader.detail("ev-s-1-1") is None
+    assert reader.details("s-1") == {} and reader.sessions() == [] and reader.events() == []
+    with writer._db() as db:  # purged from disk too, not merely hidden
+        assert db.execute("SELECT COUNT(*) FROM detail").fetchone()[0] == 0
+
+
+def test_reads_purge_at_most_once_per_interval(tmp_path, clock, monkeypatch):
+    store = ActivityStore(tmp_path / "activity.db", clock=clock, retention_days=1)
+    calls = []
+    real = store._purge
+    monkeypatch.setattr(store, "_purge", lambda db, now: calls.append(now) or real(db, now))
+    for _ in range(5):
+        store.events()
+    assert calls == []  # just purged when it opened
+    clock.advance(store.purge_interval_s)
+    for _ in range(5):
+        store.events()
+    assert len(calls) == 1
+
+
+def test_a_read_whose_purge_meets_a_writers_lock_still_answers(tmp_path, clock):
+    """The read-path purge is a write: with another writer holding the database, a page that
+    only reads waited out the busy timeout and then failed with "database is locked"."""
+    import sqlite3
+    import time
+
+    store = ActivityStore(tmp_path / "activity.db", clock=clock, retention_days=1)
+    store.add([summary(1)], via="t")
+    clock.advance(store.purge_interval_s)
+    writer = sqlite3.connect(tmp_path / "activity.db", isolation_level=None)
+    writer.execute("BEGIN IMMEDIATE")  # a writer holds the lock
+    try:
+        started = time.monotonic()
+        assert [e["event_id"] for e in store.events()] == [summary(1)["event_id"]]
+        assert time.monotonic() - started < 5, "the read waited on the writer's lock"
+    finally:
+        writer.execute("ROLLBACK")
+        writer.close()
+    clock.advance(2 * 86400)  # the lock is gone: the next read purges as before
+    assert store.events() == []
+
+
+def test_the_retention_timer_purges_an_idle_store(tmp_path, clock):
+    import threading
+
+    store = ActivityStore(tmp_path / "activity.db", clock=clock, retention_days=1)
+    store.add([summary(1)], via="t")
+    clock.advance(2 * 86400)
+    stop = threading.Event()
+    timer = store.retention_timer(stop, interval_s=0.01)
+    try:
+        for _ in range(500):
+            with store._db() as db:
+                if db.execute("SELECT COUNT(*) FROM summary").fetchone()[0] == 0:
+                    break
+            stop.wait(0.01)
+        else:
+            raise AssertionError("the timer never purged")
+    finally:
+        stop.set()
+        timer.join(5)
+    assert not timer.is_alive()
+
+
 # ---------------------------------------------------------------- sessions
 def test_session_states_and_counts(clock):
     evs = [
@@ -222,3 +294,27 @@ def test_errored_beats_stuck_and_waiting_is_never_stuck():
     assert session_state({"kind": "tool_end", "outcome": "error"}, 10**6, 60) == "errored"
     assert session_state({"kind": "stop"}, 10**6, 60) == "waiting"
     assert session_state({"kind": "session_end"}, 10**6, 60) == "done"
+
+
+def test_the_long_running_listeners_run_the_retention_timer():
+    from homelabnext.status.cli import _serve
+
+    started = []
+
+    class Store:
+        def retention_timer(self, stop):
+            started.append(stop)
+
+    class Server:
+        closed = False
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            self.closed = True
+
+    srv = Server()
+    _serve(srv, Store())
+    assert len(started) == 1 and started[0].is_set() and srv.closed
+    _serve(Server(), None)  # no activity store: nothing to purge

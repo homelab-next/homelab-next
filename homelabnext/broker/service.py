@@ -26,7 +26,13 @@ State lives in one directory (:class:`homelabnext.broker.state.StateDir`): one f
 claim, result, approval, consumed approval and audit record, each created exclusively, so any
 number of processes share it without locks and an approval is single use across all of them.
 Every outcome - ok, denied, invalid, error, shadow - leaves one audit record that validates
-against ``schemas/broker/audit``.  Arguments an ``ArgSpec`` marks ``secret`` are redacted in the
+against ``schemas/broker/audit``.  An action that executes (a ``call``, or an approved ``run``)
+first writes a ``started`` record (audit 1.2), and the broker refuses to execute it
+(``audit-unavailable``) when that record cannot be written: the trail never lacks an action that
+ran.  If the outcome record cannot be written afterwards (``audit-incomplete``), the ``started``
+record is the evidence; a run then ends ``error`` (or reads ``interrupted`` when not even its
+result can be written, :mod:`homelabnext.broker.state`).  The contract view (:meth:`audit`)
+lists outcomes only, one per operation.  Arguments an ``ArgSpec`` marks ``secret`` are redacted in the
 audit trail and never written to disk; in the request (and so in its digest, which is persisted,
 audited and sent with events) each is replaced by ``hmac-sha256:<hex>``, a hash keyed with the
 state directory's ``digest.key``, so a low-entropy secret cannot be recovered from the digest by
@@ -38,17 +44,45 @@ Unix socket and takes the caller from the peer's credentials, mapped through the
 ``callers`` (1.3); approvals arrive from the manifest's ``approval_relays``.  While a socket
 request is being served, :data:`TRANSPORT_PEER` names the peer and every audit record carries it
 as ``via``.
+
+**Quotas on accepted work** (manifest 1.5 ``quotas``): an actor may have at most
+``pending_per_actor`` requests pending at once (default :data:`DEFAULT_PENDING_PER_ACTOR`; a
+``submit`` past it is refused ``too-many-pending`` and audited), and its approval requests page
+the approver only while the actor has **no open page**, and at most once per ``notify_window_s``
+(default :data:`DEFAULT_NOTIFY_WINDOW_S`).  A page is open from the moment the notifier reports it
+sent (never before) until its request settles; it is for the actor's oldest request awaiting
+approval and names every one of them (a request filed while a page is open is named on the next
+page, and is on the Approvals page and in its ``decision.requested`` event at once).  What is
+due is derived from state (:meth:`BrokerService.poll_pages`): every actor with a request
+awaiting approval and no open page is paged as soon as its floor allows -- checked when the
+service starts, by a timer on the monotonic clock, and on every submit, settle and pending
+listing -- and a page whose send failed or whose budget was spent is retried after
+:data:`PAGE_RETRY_S`.  So no waiting request is left without a page, whether it arrived after a
+cancelled decoy, after a denial, after a failed send, before a restart, or after its approval
+expired unused.  An approval or a denial closes the page with a settled
+message saying how many still wait; a cancel by the owner closes it quietly, so a submit/cancel
+loop pages at most once per floor.  Every message about an actor draws on that actor's own
+notifier budget (``scope``), so one agent cannot spend the pages of every other.  The open page
+is read from the notifier's own state (shared by every process using its store); the floor is
+kept in this process (a restart may page once early), and a settled request's page is dropped
+from the notifier's store.  A lane's directory has its own file and byte quota
+(:mod:`homelabnext.broker.lanes`).
 """
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import hashlib
+import heapq
 import hmac
 import json
+import logging
 import os
 import re
 import tempfile
+import threading
+import time
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
@@ -80,9 +114,19 @@ from . import (
 from . import execute as _exec
 from . import lanes as _lanes
 from .relay import BROKER_SOURCE
-from .state import DECISION_KINDS, FileApprovalStore, StateDir, is_id, new_id
+from .state import (
+    DECISION_KINDS,
+    FileApprovalStore,
+    StateDir,
+    StateError,
+    is_id,
+    new_id,
+    process_identity,
+)
 
 __all__ = [
+    "DEFAULT_NOTIFY_WINDOW_S",
+    "DEFAULT_PENDING_PER_ACTOR",
     "NOT_OWNER",
     "TRANSPORT_PEER",
     "BrokerService",
@@ -93,6 +137,24 @@ __all__ = [
 ]
 
 NOT_OWNER = "not-request-owner"
+TOO_MANY_PENDING = "too-many-pending"
+#: an action was not run because its ``started`` record could not be written
+AUDIT_UNAVAILABLE = "audit-unavailable"
+#: an action ran and its outcome record could not be written (its ``started`` record stands)
+AUDIT_INCOMPLETE = "audit-incomplete"
+#: what writing an audit record can raise when the trail cannot take it
+_AUDIT_FAILURES = (OSError, StateError, BrokerError)
+log = logging.getLogger("homelabnext.broker.service")
+#: manifest ``quotas`` defaults: requests one actor may have pending at once, and the least time
+#: between two of its approval pages (s)
+DEFAULT_PENDING_PER_ACTOR = 20
+DEFAULT_NOTIFY_WINDOW_S = 300.0
+#: request ids an approval page names before it says "and N more"
+_PAGE_IDS = 10
+#: how long after a page that could not be sent (a failed send, a spent budget) it is tried again
+PAGE_RETRY_S = 60.0
+#: the least time between two log lines about failed notifications (s)
+NOTIFY_WARN_EVERY_S = 300.0
 CALLABLE_HANDLER = "builtin/callable"
 EMPTY_MANIFEST = {
     "manifest_id": "in-process",
@@ -110,6 +172,11 @@ _APPROVAL_STATES = {
     "approval-denied": "denied",
 }
 APPROVAL_CLEARED = "Broker approval settled"
+#: the operator's notice that an agent's writes into a lane are being refused for its quota
+LANE_QUOTA_TITLE = "Broker lane quota reached"
+LANE_QUOTA_CLEARED = "Broker lane quota cleared"
+#: the least time between two lane-quota notices for one actor and lane (s)
+LANE_NOTICE_INTERVAL_S = 900.0
 _SUMMARY_BYTES = 1024
 _SVC_RE = re.compile(r"^svc:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 #: the authenticated transport peer (``uid:<n>``) of the request being served on this thread, set
@@ -231,6 +298,7 @@ def validate_manifest(
         lane = _lanes.Lane.from_doc(ld)
         lanes[lane.name] = lane
         problems += lane.problems()
+    problems += _overlapping_lanes(list(lanes.values()))
     exec_actions = []
     for a in manifest["actions"]:
         if "lane" in a or a["handler"] == _lanes.LANE_HANDLER:
@@ -247,6 +315,21 @@ def validate_manifest(
     problems += check_manifest_handlers({"actions": exec_actions}, docs)
     problems += _peer_problems(manifest)
     return docs, problems
+
+
+def _overlapping_lanes(lanes: Sequence[_lanes.Lane]) -> list[str]:
+    """Two lanes whose roots are the same directory, or one inside the other, are refused: each
+    would keep its own quota, share and write rate over the same files (an actor writing through
+    both would get two of each), and one lane's actor directories could collide with the
+    other's (a profile slug ``inbox``)."""
+    out = []
+    for i, a in enumerate(lanes):
+        for b in lanes[i + 1 :]:
+            pa, pb = a.root.split("/"), b.root.split("/")
+            n = min(len(pa), len(pb))
+            if pa[:n] == pb[:n]:
+                out.append(f"lanes: {a.name} ({a.root}) and {b.name} ({b.root}) overlap")
+    return out
 
 
 def _peer_problems(manifest: Mapping[str, Any]) -> list[str]:
@@ -288,7 +371,10 @@ class _Action:
 
 
 class BrokerService:
-    """See the module doc.  One instance per process; any number may share ``state_dir``."""
+    """See the module doc.  One instance per process.  Any number may share ``state_dir`` for
+    the exactly-once guarantees (claims, approvals); the pending quota and the open-page state
+    are per process, and the lane quotas' ``flock`` is per host: deploy one broker process, on
+    one host, per data root and state directory (``docs/broker.md``)."""
 
     features = frozenset()
 
@@ -306,6 +392,8 @@ class BrokerService:
         clock: Callable[[], datetime] = _utcnow,
         source: str = BROKER_SOURCE,
         approvals_url: str | None = None,
+        page_timers: bool = True,
+        monotonic: Callable[[], float] | None = None,
     ) -> None:
         self.state = StateDir(state_dir)
         self.approvals_url = check_approvals_url(approvals_url)
@@ -325,8 +413,38 @@ class BrokerService:
         self._callables: dict[str, tuple[Callable[..., Any], dict[str, ArgSpec]]] = {}
         self._allow: dict[str, set[str]] = {}
         self._secret_args: dict[str, dict[str, Any]] = {}
+        quotas = self.manifest.get("quotas") or {}
+        self.pending_per_actor = int(quotas.get("pending_per_actor", DEFAULT_PENDING_PER_ACTOR))
+        self._submit_lock = threading.Lock()  # the pending count and the new request, as one
+        self.notify_window_s = float(quotas.get("notify_window_s", DEFAULT_NOTIFY_WINDOW_S))
+        self.page_timers = page_timers
+        self._paged: dict[str, str] = {}  # actor -> the request its open page is for
+        self._paging: set[str] = set()  # actors a page is being sent for right now
+        # scheduling runs on a monotonic clock (an injected wall clock drives it in tests): a
+        # wall-clock step can neither fire a page early nor strand one with no timer
+        self._mono = (
+            monotonic
+            if monotonic is not None
+            else (time.monotonic if clock is _utcnow else self._clock_seconds)
+        )
+        self._last_page: dict[str, float] = {}  # actor -> when its last page went out
+        self._retry_at: dict[str, float] = {}  # actor -> when a failed page may be tried again
+        self._wakeups: list[float] = []  # a heap of times a page check is due
+        self._timer: tuple[float, threading.Timer] | None = None
+        self._paged_lock = threading.Lock()
+        self._scoped = _takes_scope(notifier)
+        self._lane_full: set[str] = set()  # lane-quota keys this process reported
+        self._lane_notice_at: dict[str, datetime] = {}  # lane-quota key -> its last notice
+        self._lane_logged: set[str] = set()  # lane-quota keys logged (no notifier)
+        self._lane_red: dict[str, tuple[str, str]] = {}  # lane-quota key -> (lane, actor)
+        self._notify_warned = float("-inf")  # when a failed send was last logged
         if notifier is not None:
             notifier.register_pair(APPROVAL_TITLE, APPROVAL_CLEARED)
+            notifier.register_pair(LANE_QUOTA_TITLE, LANE_QUOTA_CLEARED)
+            try:  # what is due is derived from state: a restart loses no page
+                self.poll_pages()
+            except Exception:
+                log.exception("approval pages could not be polled at start")
 
     @classmethod
     def from_manifest(
@@ -387,6 +505,10 @@ class BrokerService:
 
     def _now(self) -> datetime:
         return self.clock()
+
+    def _clock_seconds(self) -> float:
+        """Scheduling time from an injected clock (tests drive both with one clock)."""
+        return self.clock().timestamp()
 
     # ---------------------------------------------------------------- audit
     def _summarize(self, args: Mapping[str, Any], spec: Mapping[str, ArgSpec] | None):
@@ -481,6 +603,7 @@ class BrokerService:
                 reason=r.get("reason", ""),
             )
             for r in self.state.audit_records()
+            if r.get("outcome") != "started"  # an intent; its outcome is the operation's record
         ]
 
     def audit_documents(self, *, limit: int | None = None, **match: Any) -> list[dict[str, Any]]:
@@ -617,16 +740,29 @@ class BrokerService:
                     args,
                     request["created"],
                     key=self._name_key(),
+                    at=self._now().timestamp(),
+                    ledger=self._ledger(),
                 )
             except _lanes.LaneError as exc:
+                if exc.reason == "lane-quota-exceeded":
+                    self._lane_quota(act.handler, request, str(exc))
                 raise _Refused(exc.outcome, exc.reason, str(exc)) from None
             except OSError:
                 raise _Refused("error", "lane-io-error", f"{act.name}: the write failed") from None
+            self._lane_quota(act.handler, request, None)
             if (
                 act.handler.kind == "records-inbox"
                 and args["note"].get("type", "proposal") == "proposal"
             ):
-                self._proposal_created(request, args["note"], written["path"])
+                try:  # the note is filed: its event is a courtesy that must not undo that
+                    self._proposal_created(request, args["note"], written["path"])
+                except Exception as exc:
+                    log.error("%s: proposal.created not emitted (%s)", act.name, type(exc).__name__)
+                    with contextlib.suppress(*_AUDIT_FAILURES):
+                        self._audit(
+                            BROKER_SOURCE, act.name, "notify", "error", reason="outbox-failed",
+                            request_id=request["request_id"],
+                        )  # fmt: skip
             return written
         return self._run_exec(act, request, args)
 
@@ -651,7 +787,10 @@ class BrokerService:
         path = _inside(self.base_dir, doc["handler"])
         if path is None:
             raise _Refused("denied", "handler-path-escape", f"{act.name}: handler outside the base")
-        rd = run_dir(request["request_id"], self.state.root, env={})
+        try:
+            rd = run_dir(request["request_id"], self.state.root, env={})
+        except OSError:
+            raise _Refused("error", "handler-io-error", f"{act.name}: no run directory") from None
         env = {
             "HNX_BROKER_ACTION": act.name,
             "HNX_BROKER_REQUEST_ID": request["request_id"],
@@ -690,14 +829,51 @@ class BrokerService:
             "stderr_bytes": len(res.stderr),
         }
 
-    def _run_audited(self, caller, act, request, args, operation) -> Any:
-        extra = {"request_id": request["request_id"], "request_digest": request["digest"]}
+    def _started(self, caller, act, request, args, operation) -> None:
+        """Write the ``started`` record of an action about to execute, or refuse to execute it:
+        an action never runs without a record of it (``audit-unavailable``)."""
         try:
-            result = self._execute(act, request, args)
-        except _Refused as exc:
             self._audit(
                 caller,
                 act.name,
+                operation,
+                "started",
+                args=args,
+                spec=act.spec,
+                request_id=request["request_id"],
+                request_digest=request["digest"],
+            )
+        except _AUDIT_FAILURES as exc:
+            log.error("%s: not run, the audit trail cannot be written (%s)", act.name, exc)
+            raise _reasoned(
+                f"{act.name}: the audit trail cannot be written; nothing was run",
+                AUDIT_UNAVAILABLE,
+            ) from None
+
+    def _outcome(self, caller, act, operation, outcome, **kw) -> None:
+        """The outcome record of an action that executed; when it cannot be written, the action
+        has still happened (its ``started`` record says so): ``audit-incomplete``."""
+        try:
+            self._audit(caller, act.name, operation, outcome, args=kw.pop("args"), **kw)
+        except _AUDIT_FAILURES as exc:
+            log.error("%s ran; its %s record cannot be written (%s)", act.name, outcome, exc)
+            raise _reasoned(
+                f"{act.name} ran but its outcome could not be audited", AUDIT_INCOMPLETE
+            ) from None
+
+    def _run_audited(self, caller, act, request, args, operation, *, started=False) -> Any:
+        extra = {"request_id": request["request_id"], "request_digest": request["digest"]}
+        if not started:
+            self._started(caller, act, request, args, operation)
+        try:
+            try:
+                result = self._execute(act, request, args)
+            except OSError:  # an environment fault on the way (ENOSPC, EMFILE): still an outcome
+                raise _Refused("error", "handler-io-error", f"{act.name}: an I/O error") from None
+        except _Refused as exc:
+            self._outcome(
+                caller,
+                act,
                 operation,
                 exc.outcome,
                 reason=exc.reason,
@@ -711,8 +887,8 @@ class BrokerService:
             summary = {
                 k: result[k] for k in ("path", "bytes", "digest", "exit_code") if k in result
             }
-        self._audit(
-            caller, act.name, operation, "ok", args=args, spec=act.spec, result=summary, **extra
+        self._outcome(
+            caller, act, operation, "ok", args=args, spec=act.spec, result=summary, **extra
         )
         return result
 
@@ -762,7 +938,25 @@ class BrokerService:
             "verdict": decision["verdict"],
             "decision_reason": decision["reason"],
         }
-        self.state.put_request(rid, record)
+        with self._submit_lock:
+            if len(self._pending_of(request["actor"])) >= self.pending_per_actor:
+                self._audit(
+                    caller,
+                    command,
+                    "submit",
+                    "denied",
+                    reason=TOO_MANY_PENDING,
+                    args=args,
+                    spec=act.spec,
+                    request_id=rid,
+                    request_digest=request["digest"],
+                )
+                raise Denied(
+                    f"{caller!r} has {self.pending_per_actor} requests pending: run, cancel or "
+                    "wait for a decision on one first",
+                    reason=TOO_MANY_PENDING,
+                )
+            self.state.put_request(rid, record)
         if secret:
             self._secret_args[rid] = secret
         self._audit(
@@ -779,6 +973,24 @@ class BrokerService:
         if decision["verdict"] == "needs-approval":
             self._approval_requested(request)
         return rid
+
+    def _pending_of(self, actor: str) -> list[dict[str, Any]]:
+        """The stored records of ``actor``'s pending requests (the open index: O(open))."""
+        out = []
+        for rid in self.state.open_request_ids():
+            rec = self.state.get_request(rid)
+            if rec and rec["request"]["actor"] == actor:
+                out.append(rec)
+        return out
+
+    def _awaiting(self, actor: str) -> list[dict[str, Any]]:
+        """``actor``'s requests waiting for an approver (no valid approval yet), oldest first."""
+        return [
+            rec["request"]
+            for rec in self._pending_of(actor)
+            if rec["verdict"] == "needs-approval"
+            and self.approval_state(rec["request"]["request_id"], rec["request"]) != "valid"
+        ]
 
     def _owned(self, caller, request_id, operation):
         """The stored record when ``caller`` owns ``request_id``; otherwise audit and refuse.
@@ -889,8 +1101,18 @@ class BrokerService:
                 **extra,
             )
             raise _contract_error(exc) from None
+        # the intent is on record before anything changes: when it cannot be written, the request
+        # stays pending and its approval unused, to run once the trail can take it
+        self._started(caller, act, req, args, "run")
         claimed = self.state.claim(
-            request_id, {"op": "run", "by": caller, "at": now, "pid": os.getpid()}
+            request_id,
+            {
+                "op": "run",
+                "by": caller,
+                "at": now,
+                "instance": self.state.instance_id(),
+                **process_identity(),
+            },
         )
         if not claimed:
             self._audit(caller, req["action"], "run", "invalid", reason="not-pending", **extra)
@@ -900,9 +1122,7 @@ class BrokerService:
             # only a run holding the claim consumes, so this means the approval was used
             # outside this request's run: refuse, and end the claimed request as an error
             self._secret_args.pop(request_id, None)
-            self.state.put_result(
-                request_id, {"state": "error", "at": now, "reason": "approval-replayed"}
-            )
+            self._finish(request_id, {"state": "error", "at": now, "reason": "approval-replayed"})
             self._audit(
                 caller,
                 req["action"],
@@ -916,19 +1136,28 @@ class BrokerService:
                 f"request {request_id!r}: approval already used", reason="approval-replayed"
             )
         try:
-            result = self._run_audited(caller, act, req, args, "run")
-        except BrokerError as exc:
-            self.state.put_result(
-                request_id, {"state": "error", "at": now, "reason": getattr(exc, "reason", "")}
-            )
+            result = self._run_audited(caller, act, req, args, "run", started=True)
+        except Exception as exc:  # whatever ends the run, it ends: never "running" forever
+            reason = getattr(exc, "reason", "") or "internal-error"
+            self._finish(request_id, {"state": "error", "at": now, "reason": reason})
             raise
         finally:
             self._secret_args.pop(request_id, None)
         done = {"state": "done", "at": _stamp(self._now())}
         if act.kind != "callable" and isinstance(result, Mapping):
             done["result"] = json.loads(json.dumps(result, default=repr))
-        self.state.put_result(request_id, done)
+        self._finish(request_id, done)
         return result
+
+    def _finish(self, request_id: str, doc: dict[str, Any]) -> None:
+        """Record how a claimed run ended.  When the result cannot be written (a full disk), the
+        request reads ``interrupted`` rather than ``running`` forever; the audit trail holds what
+        happened."""
+        try:
+            self.state.put_result(request_id, doc)
+        except (OSError, StateError) as exc:
+            self.state.mark_unfinished(request_id)
+            log.error("request %s: its result cannot be written (%s)", request_id, exc)
 
     def cancel(self, caller, request_id):
         rec = self._owned(caller, request_id, "cancel")
@@ -943,8 +1172,8 @@ class BrokerService:
             raise _reasoned(f"request {request_id!r} is {state}, not pending", "not-pending")
         self._secret_args.pop(request_id, None)
         self._audit(caller, req["action"], "cancel", "ok", **extra)
-        if rec["verdict"] == "needs-approval":
-            self._notify_settled(request_id, "cancelled by its owner")
+        if rec["verdict"] == "needs-approval":  # withdrawn by its owner: closed without a message
+            self._notify_settled(request_id, "cancelled by its owner", req["actor"], quiet=True)
 
     # ---------------------------------------------------------------- approvals
     def _latest_approval(self, request_id: str) -> dict[str, Any] | None:
@@ -1002,6 +1231,11 @@ class BrokerService:
         """Requests waiting for an approver: needs-approval and still pending.  ``approved`` is
         true while a valid, unconsumed approval is on file (it can run now); ``approval_state``
         says why not otherwise, and an ``expired`` one takes a fresh approval."""
+        if self.notifier is not None:
+            try:  # the hub lists this every few seconds: a deferred page is sent on time
+                self.poll_pages()
+            except Exception:
+                log.exception("approval pages could not be polled")
         fields = (
             "request_id",
             "action",
@@ -1144,7 +1378,12 @@ class BrokerService:
             request_id,
             key=f"returned:{doc['approval_id']}",
         )
-        self._notify_settled(request_id, f"{decision} by {who}")
+        self._notify_settled(request_id, f"{decision} by {who}", req["actor"])
+        if decision == "approved" and self.notifier is not None:
+            # if it is not run before the approval expires, it waits again: page it then
+            expires = datetime.fromisoformat(doc["expires_at"].replace("Z", "+00:00"))
+            left = (expires - self._now()).total_seconds()
+            self._wake_at(self._mono() + max(0.0, left) + 1.0)
         return doc
 
     # ---------------------------------------------------------------- events and notify
@@ -1180,35 +1419,307 @@ class BrokerService:
             data["link"] = link
         self._emit("homelabnext.decision.requested", data, rid, key=f"requested:{rid}")
         if self.notifier is not None:
+            self.poll_pages()  # this actor's page among any other that is due
+
+    @staticmethod
+    def _page_key(rid: str) -> str:
+        return f"broker-approval-{rid}"
+
+    def _open_page(self, actor: str, waiting: Sequence[Mapping[str, Any]]) -> str | None:
+        """The request of ``actor``'s that has an open page: one still awaiting approval whose
+        page the notifier reports sent and not yet settled."""
+        rids = [r["request_id"] for r in waiting]
+        if self._paged.get(actor) in rids:
+            return self._paged[actor]
+        state_of = getattr(self.notifier, "state_of", None)
+        if state_of is not None:
+            return next((r for r in rids if state_of(self._page_key(r)) != "ok"), None)
+        return None
+
+    def _wake_at(self, when: float) -> None:
+        """Make sure a page check runs at ``when`` (monotonic): it is kept in a heap, and one
+        timer is armed for the earliest (best effort: :meth:`poll_pages` also runs at start and
+        on every submit, settle and pending listing, and derives what is due from state)."""
+        with self._paged_lock:
+            if when in self._wakeups:
+                return  # already queued (a retry, a floor): one entry per time
+            heapq.heappush(self._wakeups, when)
+        self._arm()
+
+    def _arm(self) -> None:
+        if not self.page_timers:
+            return
+        with self._paged_lock:
+            now = self._mono()
+            while self._wakeups and self._wakeups[0] <= now - 3600:
+                heapq.heappop(self._wakeups)  # long past and never polled: nothing to arm
+            future = [t for t in self._wakeups if t > now]
+            if not future:
+                return
+            nxt = min(future)
+            if self._timer is not None and self._timer[0] <= nxt and self._timer[1].is_alive():
+                return
+            if self._timer is not None:
+                self._timer[1].cancel()
+            timer = threading.Timer(nxt - now + 0.05, self._timer_fired)
+            timer.args = (timer,)
+            timer.daemon = True
+            self._timer = (nxt, timer)
+            timer.start()
+
+    def _timer_fired(self, timer: threading.Timer | None = None) -> None:
+        with self._paged_lock:
+            if self._timer is not None and self._timer[1] is timer:
+                self._timer = None  # only its own: a timer re-armed since stays armed
+        try:
+            self.poll_pages()
+        except Exception:  # a timer thread: log it, the next poll tries again
+            log.exception("approval pages could not be polled")
+
+    def poll_pages(self) -> int:
+        """Page every actor that has a request awaiting approval and no open page -- a page the
+        floor deferred, a page whose send failed, a request whose approval expired unused, one
+        filed before a restart -- each subject to the floor and the open-page gate, so this is
+        idempotent.  Also retries a lane-quota "cleared" notice that was held back, and re-arms
+        the timer for what is due next.  Returns how many actors were checked."""
+        if self.notifier is None:
+            return 0
+        now = self._mono()
+        with self._paged_lock:
+            while self._wakeups and self._wakeups[0] <= now:
+                heapq.heappop(self._wakeups)
+        actors = []
+        for rid in self.state.open_request_ids():
+            rec = self.state.get_request(rid)
+            if rec and rec["verdict"] == "needs-approval" and rec["request"]["actor"] not in actors:
+                actors.append(rec["request"]["actor"])
+        for actor in actors:
+            try:
+                self._page(actor)
+            except Exception:  # one actor's failure never stops the rest
+                log.exception("approval page for %s failed", actor)
+        for lane_name, actor in list(self._lane_red.values()):
+            lane = self._lanes.get(lane_name)
+            if lane is not None:
+                self._lane_quota(lane, {"actor": actor, "request_id": None}, None)
+        self._arm()
+        return len(actors)
+
+    def _page(self, actor: str) -> None:
+        """Page the approver about ``actor``'s oldest request awaiting approval, unless one of
+        its requests already has an open page, or its last page is less than
+        ``notify_window_s`` old, or its last attempt failed less than
+        :data:`PAGE_RETRY_S` ago (then a check is scheduled for when that passes).  The actor
+        counts as paged only once the notifier says the page went out."""
+        waiting = self._awaiting(actor)
+        if not waiting:
+            return
+        now = self._mono()
+        later = None
+        with self._paged_lock:
+            if actor in self._paging or self._open_page(actor, waiting) is not None:
+                return
+            last = self._last_page.get(actor)
+            retry = self._retry_at.get(actor)
+            if retry is not None and retry > now:
+                later = retry
+            elif last is not None and now - last < self.notify_window_s:
+                later = last + self.notify_window_s
+            else:
+                self._paging.add(actor)  # of racing requests, one pages
+        if later is not None:
+            self._wake_at(later)
+            return
+        request = waiting[0]
+        rid = request["request_id"]
+        key = self._page_key(rid)
+        sent = False
+        try:
             from homelabnext.notify.core import Message
 
-            body = f"{request['actor']} asks to run {request['action']} ({rid})"
+            link = self.approval_link(rid)
+            body = f"{actor} asks to run {request['action']} ({rid})"
+            if len(waiting) > 1:
+                ids = [r["request_id"] for r in waiting]
+                named = ", ".join(ids[:_PAGE_IDS])
+                if len(ids) > _PAGE_IDS:
+                    named += f" and {len(ids) - _PAGE_IDS} more"
+                body += f"; {len(ids)} requests await approval from {actor}: {named}"
             msg = Message(
-                key=f"broker-approval-{rid}",
+                key=key,
                 title=APPROVAL_TITLE,
                 body=body + (f"\nReview: {link}" if link else ""),
                 level="warn",
                 click=link,
             )
-            self._notify(msg.key, "awaiting-approval", msg)
+            sent = self._notify(key, "awaiting-approval", msg, actor=actor)
+        finally:
+            with self._paged_lock:
+                self._paging.discard(actor)
+                if sent:
+                    self._paged[actor] = rid
+                    self._last_page[actor] = now
+                    self._retry_at.pop(actor, None)
+                else:  # a failed send, or the actor's budget spent: try again shortly
+                    self._retry_at[actor] = now + PAGE_RETRY_S
+        if not sent:
+            self._wake_at(now + PAGE_RETRY_S)
+            return
+        if rid not in {r["request_id"] for r in self._awaiting(actor)}:
+            # it settled while the page was in flight: its settling saw no page to close
+            self._close_page(actor, rid, None)
+            self._page(actor)
 
-    def _notify_settled(self, rid: str, how: str) -> None:
+    def _close_page(self, actor: str, rid: str, body: str | None) -> bool:
+        """Close ``rid``'s page if it has one: with a settled message, or quietly (``body``
+        None: the owner withdrew it, which nobody needs paged about).  True when it had one."""
+        key = self._page_key(rid)
+        state_of = getattr(self.notifier, "state_of", None)
+        with self._paged_lock:
+            paged = self._paged.get(actor) == rid
+            if paged:
+                del self._paged[actor]
+        if state_of is not None:
+            paged = paged or state_of(key) != "ok"
+        if not paged:
+            return False
+        if body is None:
+            clear = getattr(self.notifier, "clear", None)
+            if clear is not None:
+                try:
+                    clear(key)
+                except Exception:
+                    log.exception("approval page %s could not be cleared", key)
+        else:
+            from homelabnext.notify.core import Message
+
+            msg = Message(key=key, title=APPROVAL_CLEARED, body=body)
+            self._notify(key, "ok", msg, actor=actor)
+        forget = getattr(self.notifier, "forget", None)
+        if forget is not None:  # a settled request's page is done with: the store stays small
+            with contextlib.suppress(Exception):
+                forget(key)
+        return True
+
+    def _notify_settled(
+        self, rid: str, how: str, actor: str | None = None, *, quiet: bool = False
+    ) -> None:
+        if self.notifier is None or actor is None:
+            return
+        waiting = self._awaiting(actor)
+        body = f"{rid} {how}"
+        if waiting:
+            body += f"; {len(waiting)} more from {actor} await approval"
+        self._close_page(actor, rid, None if quiet else body)
+        self.poll_pages()  # the page moves to the oldest still waiting, after the floor
+
+    def _lane_quota(self, lane: _lanes.Lane, request: Mapping[str, Any], refusal: str | None):
+        """Tell the operator that ``lane`` refuses an actor's writes for its quota (the agent
+        alone hears ``lane-quota-exceeded``, and a finding that is never written looks like a run
+        that never happened), and that it has room again -- but only once the directory is back
+        under :data:`homelabnext.broker.lanes.USAGE_WARN` of its quotas, not on the next small
+        write that fits, and never two notices for one actor and lane within
+        :data:`LANE_NOTICE_INTERVAL_S`.  State-diffed by the notifier, so a looping agent's
+        thousandth refusal sends nothing, and its notices draw on its own budget."""
+        actor = request["actor"]
+        key = f"broker-lane-quota-{lane.name}-{re.sub(r'[^a-z0-9-]+', '-', actor.lower())}"
         if self.notifier is None:
+            if refusal is not None and key not in self._lane_logged:
+                self._lane_logged.add(key)  # no notifier: the log is the operator's signal
+                log.warning("%s: lane %s refuses its writes: %s", actor, lane.name, refusal)
             return
         from homelabnext.notify.core import Message
 
-        key = f"broker-approval-{rid}"
-        self._notify(key, "ok", Message(key=key, title=APPROVAL_CLEARED, body=f"{rid} {how}"))
+        now = self._now()
+        last = self._lane_notice_at.get(key)
+        recent = last is not None and (now - last).total_seconds() < LANE_NOTICE_INTERVAL_S
+        if refusal is None:
+            state_of = getattr(self.notifier, "state_of", None)
+            if key not in self._lane_full and (state_of is None or state_of(key) == "ok"):
+                return  # nothing was reported: nothing to clear (the common case, one read)
+            if recent:
+                return
+            try:
+                used = _lanes.fill(
+                    lane, self.data_root, actor, key=self._name_key(), ledger=self._ledger()
+                )
+            except (OSError, _lanes.LaneError):
+                return
+            if used >= _lanes.USAGE_WARN:
+                return  # still nearly full: the next small write would only be refused again
+            body = f"{actor} writes to lane {lane.name} again; it is {used:.0%} full of its quota"
+            msg = Message(key=key, title=LANE_QUOTA_CLEARED, body=body)
+            if self._notify(key, "ok", msg, request_id=request["request_id"], actor=actor):
+                self._lane_full.discard(key)
+                self._lane_red.pop(key, None)
+                self._lane_notice_at[key] = now
+            return
+        if recent:
+            return
+        body = (
+            f"{actor}'s writes to lane {lane.name} are refused lane-quota-exceeded: {refusal}. "
+            "Raise the lane's quota in the manifest or clear the directory "
+            "(hnx broker validate --data-root shows its usage)."
+        )
+        msg = Message(key=key, title=LANE_QUOTA_TITLE, body=body, level="warn")
+        sent = self._notify(
+            key, "lane-quota-exceeded", msg, request_id=request["request_id"], actor=actor
+        )
+        if sent:
+            self._lane_full.add(key)
+            self._lane_red[key] = (lane.name, actor)  # a held "cleared" is retried on each poll
+            self._lane_notice_at[key] = now
 
-    def _notify(self, key, state, msg) -> None:
-        # a notification is a courtesy: the event and the pending list already carry the request,
-        # so a failed send never fails the broker operation that triggered it
-        try:
-            self.notifier.report(key, state, msg)
-        except Exception:
-            self._audit(
-                BROKER_SOURCE, "", "notify", "error", reason="notify-failed", request_id=key[16:]
+    def _ledger(self) -> Path:
+        return self.state.root / "lanes-ledger"
+
+    def lane_usage(self) -> list[dict[str, Any]]:
+        """Every lane directory's usage against its quotas, each actor's share of a shared lane
+        included (:func:`homelabnext.broker.lanes.usage`, with the broker's own key and ledger)."""
+        actors = tuple(sorted({g["profile"] for g in self._view()["grants"]}))
+        return [
+            row
+            for lane in self._lanes.values()
+            for row in _lanes.usage(
+                lane, self.data_root, actors=actors, key=self._name_key(), ledger=self._ledger()
             )
+        ]
+
+    def _notify(
+        self, key, state, msg, *, request_id: str | None = None, actor: str | None = None
+    ) -> bool:
+        """Whether the notifier sent ``msg``.  A notification is a courtesy: the event and the
+        pending list already carry the request, so a failed send never fails the broker
+        operation that triggered it.  A message about ``actor`` draws on that actor's own
+        notifier budget (``scope``), so one agent cannot spend the pages of every other."""
+        try:
+            if actor is not None and self._scoped:
+                scope = "actor-" + re.sub(r"[^a-z0-9-]+", "-", actor.lower())
+                return bool(self.notifier.report(key, state, msg, scope=scope))
+            return bool(self.notifier.report(key, state, msg))
+        except Exception as exc:
+            now = self._mono()
+            if now - self._notify_warned >= NOTIFY_WARN_EVERY_S:  # logged, never a log flood
+                self._notify_warned = now
+                log.warning("a notification could not be sent: %s", type(exc).__name__)
+            rid = request_id or (
+                key.removeprefix("broker-approval-") if key.startswith("broker-approval-") else None
+            )
+            with contextlib.suppress(*_AUDIT_FAILURES):
+                self._audit(
+                    BROKER_SOURCE, "", "notify", "error", reason="notify-failed", request_id=rid
+                )
+            return False
+
+
+def _takes_scope(notifier: Any) -> bool:
+    """Whether ``notifier.report`` takes a ``scope`` (a per-actor budget)."""
+    import inspect
+
+    try:
+        return "scope" in inspect.signature(notifier.report).parameters
+    except (AttributeError, TypeError, ValueError):
+        return False
 
 
 def check_approvals_url(url: str | None) -> str | None:

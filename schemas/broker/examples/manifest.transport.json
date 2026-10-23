@@ -47,12 +47,18 @@
       "format": "text",
       "kind": "files",
       "max_bytes": 65536,
+      "max_files": 1000,
+      "max_total_bytes": 16777216,
       "name": "memory",
       "root": "memory"
     }
   ],
   "manifest_id": "lab-broker-socket",
   "mode": "enforce",
+  "quotas": {
+    "notify_window_s": 600,
+    "pending_per_actor": 10
+  },
   "refusal_limit": {
     "max": 30,
     "window_s": 60

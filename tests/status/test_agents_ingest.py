@@ -54,6 +54,37 @@ def test_accepts_both_tiers_and_redacts_before_storage(ingest, tmp_path):
     assert post_json(base, {"summary": [summary(has_detail=True)]}, TOKEN)[0] == 200  # duplicate
 
 
+@pytest.mark.parametrize("length", ["\u00b2", "\uff11\uff12", "1_0", "+5"])
+def test_a_content_length_that_is_not_ascii_digits_is_411_and_logged(ingest, length, caplog):
+    import socket
+
+    base, store, *_ = ingest
+    u = urllib.parse.urlsplit(base)
+    head = (
+        f"POST /ingest/agent-activity HTTP/1.1\r\nHost: {u.hostname}\r\n"
+        f"Authorization: Bearer {TOKEN}\r\nContent-Type: application/json\r\n"
+        f"Content-Length: {length}\r\n\r\n"
+    )
+    with (
+        caplog.at_level("WARNING", logger="homelabnext.status.agents.ingest"),
+        socket.create_connection((u.hostname, u.port), timeout=5) as s,
+    ):
+        s.sendall(head.encode("utf-8"))
+        answer = s.recv(65536)
+    assert answer.startswith(b"HTTP/1.0 411 ") or answer.startswith(b"HTTP/1.1 411 "), answer
+    assert store.events() == []
+    assert any("Content-Length" in r.getMessage() for r in caplog.records)
+
+
+def test_content_length_takes_ascii_digits_only():
+    from homelabnext._http import content_length
+
+    assert [content_length(v) for v in ("0", "12", " 7 ", "007")] == [0, 12, 7, 7]
+    assert all(
+        content_length(v) is None for v in (None, "", "\u00b2", "\uff11", "1e3", "-1", "1 2")
+    )
+
+
 @pytest.mark.parametrize("token", [None, "", "fake-wrong-token", TOKEN + "x", TOKEN[:-1]])
 def test_missing_or_invalid_token_is_401(ingest, token):
     base, store, *_ = ingest
@@ -301,3 +332,169 @@ def test_hnx_status_ingest_publish_to_puts_stored_summaries_on_the_bus(tmp_path,
     assert (tmp_path / "activity.db.publish.json").is_file()
     none = argparse.Namespace(publish_to=None)
     assert _publisher(none, cfg) is None
+
+
+# -- the listener's own bounds: idle connections time out, and only so many are served at once ---
+
+
+def _serving(srv):
+    th = threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True)
+    th.start()
+    return srv.server_address[:2]
+
+
+def _closed_within(sock, seconds: float) -> bool:
+    import time
+
+    sock.settimeout(seconds)
+    deadline = time.monotonic() + seconds
+    try:
+        while time.monotonic() < deadline:
+            if not sock.recv(65536):
+                return True
+    except TimeoutError:
+        return False
+    except OSError:
+        return True
+    return False
+
+
+def test_an_idle_or_half_sent_request_times_out(tmp_path, clock):
+    """The ingest is the listener cloud senders reach, and its handler had no timeout: a client
+    that connected and sent nothing (or headers and half a body) held a thread forever, before
+    any token check."""
+    import socket
+
+    store = ActivityStore(tmp_path / "activity.db", clock=clock)
+    srv = make_ingest_server(store, SETTINGS, clock=clock, timeout_s=0.5)
+    host, port = _serving(srv)
+    try:
+        with (
+            socket.create_connection((host, port)) as idle,
+            socket.create_connection((host, port)) as half,
+        ):
+            half.sendall(
+                f"POST /ingest/agent-activity HTTP/1.1\r\nHost: {host}\r\n"
+                f"Authorization: Bearer {TOKEN}\r\nContent-Length: 100\r\n"
+                "Content-Type: application/json\r\n\r\n{".encode()
+            )
+            assert _closed_within(idle, 5) and _closed_within(half, 5)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_the_listener_serves_a_bounded_number_of_connections(tmp_path, clock):
+    import socket
+
+    store = ActivityStore(tmp_path / "activity.db", clock=clock)
+    srv = make_ingest_server(store, SETTINGS, clock=clock, max_connections=2, timeout_s=5)
+    host, port = _serving(srv)
+    try:
+        held = [socket.create_connection((host, port)) for _ in range(2)]
+        with socket.create_connection((host, port)) as extra:
+            extra.settimeout(5)
+            answer = extra.recv(65536)
+        assert answer.startswith(b"HTTP/1.1 503 "), answer
+        for s in held:
+            s.close()
+        base = f"http://{host}:{port}"
+        for _ in range(200):  # the held slots are released once their handlers see the close
+            try:
+                if post_json(base, {"summary": [summary()]}, TOKEN)[0] == 200:
+                    break
+            except OSError:  # answered 503 and closed while the request was still being sent
+                pass
+            threading.Event().wait(0.05)
+        else:
+            raise AssertionError("never served again")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_a_slow_drip_cannot_hold_a_connection_past_the_deadline(tmp_path, clock):
+    """The timeout bounded each read, not the request: a peer sending one header line just
+    inside the timeout kept its connection (and its slot) for as long as it liked."""
+    import socket
+    import time
+
+    store = ActivityStore(tmp_path / "activity.db", clock=clock)
+    srv = make_ingest_server(store, SETTINGS, clock=clock, timeout_s=1.0)
+    host, port = _serving(srv)
+    try:
+        with socket.create_connection((host, port)) as drip:
+            drip.sendall(b"POST /ingest/agent-activity HTTP/1.1\r\n")
+            drip.settimeout(0.2)
+            started, closed = time.monotonic(), False
+            while time.monotonic() - started < 8 and not closed:
+                try:
+                    drip.sendall(b"X-A: b\r\n")  # every 0.6 s: inside the per-read timeout
+                    closed = drip.recv(65536) == b""
+                except TimeoutError:
+                    time.sleep(0.4)
+                except OSError:
+                    closed = True
+            assert closed and time.monotonic() - started < 4, "held past the deadline"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_one_client_address_holds_at_most_so_many_connections(tmp_path, clock):
+    import socket
+
+    store = ActivityStore(tmp_path / "activity.db", clock=clock)
+    srv = make_ingest_server(store, SETTINGS, clock=clock, max_connections=8, max_per_client=2)
+    host, port = _serving(srv)
+    try:
+        held = [socket.create_connection((host, port)) for _ in range(2)]
+        with socket.create_connection((host, port)) as extra:
+            extra.settimeout(5)
+            assert extra.recv(65536).startswith(b"HTTP/1.1 503 ")
+        assert srv.per_client == {host: 2}, "the third was never given a slot"
+        for s in held:
+            s.close()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_the_listeners_have_a_listen_backlog_for_a_burst(tmp_path, clock):
+    """socketserver's backlog is 5: under a burst of connects the kernel dropped connects while
+    the accept loop was still fast, and each sender waited out its SYN retries."""
+    import socket
+
+    store = ActivityStore(tmp_path / "activity.db", clock=clock)
+    srv = make_ingest_server(store, SETTINGS, clock=clock)
+    try:
+        assert srv.request_queue_size == 128
+        # nothing accepts yet: the backlog alone holds a burst well past socketserver's 5
+        burst = [socket.create_connection(srv.server_address[:2], timeout=2) for _ in range(40)]
+        for s in burst:
+            s.close()
+    finally:
+        srv.server_close()
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "four"])
+def test_the_ingest_cli_refuses_a_per_client_cap_below_one(value, capsys):
+    """--max-per-client 0 silently fell back to the default of 4."""
+    from pathlib import Path
+
+    from homelabnext.status.cli import main
+
+    root = Path(__file__).resolve().parents[2]
+    rc = main(["ingest", "--registry", str(root / "examples/services.yml"),
+               "--agents", str(root / "examples/status/agents.yml"),
+               "--max-per-client", value])  # fmt: skip
+    assert rc == 2 and "--max-per-client" in capsys.readouterr().err
+
+
+def test_the_default_bounds():
+    from homelabnext.status.agents.ingest import DEFAULT_INGEST_CONNECTIONS, DEFAULT_TIMEOUT_S
+
+    assert DEFAULT_TIMEOUT_S == 30 and DEFAULT_INGEST_CONNECTIONS >= 1
+    from homelabnext.status.agents.ingest import DEFAULT_INGEST_PER_CLIENT
+
+    assert DEFAULT_INGEST_PER_CLIENT == 4

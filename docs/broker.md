@@ -59,7 +59,8 @@ file `<date>-triage-lead-weekly-report.md` first and leave `triage-lead`'s own p
 `lane-exists`; with it, every agent's names are its own, and the same caller filing the same slug
 the same day gets the same name again (`lane-exists`), so a retry files nothing twice. A caller's
 `slug` is at most 51 characters (the tag takes the rest of the records convention's 60). A filed
-proposal emits `proposal.created`.
+proposal emits `proposal.created`, best effort: the note is filed first, and an event that
+cannot be queued is audited `outbox-failed` (operation `notify`) without failing the call.
 
 What a lane refuses, each with its audit reason: a name that is not one plain segment or does not
 match the pattern (`lane-name-invalid`), a symlinked or non-directory component on the way
@@ -69,6 +70,51 @@ content of the wrong shape or failing its schema (`lane-content-invalid`), a not
 agent (`lane-identity-mismatch`) or its own `created` (`lane-created-set`) and a per-actor lane with a caller that is not `profile:<slug>`
 (`lane-actor-invalid`). Lane roots live under the broker's **data root** (`--data-root`, default
 `<state>/lanes`); point it at the directory the agents' memory, findings and records live in.
+Run **one broker process, on one host, per data root and state directory.** The lane quotas, the
+shares and the write rates are counted under a `flock` on the lane directory, and on NFS or CIFS
+a `flock` is a local lock that other hosts never see (it does not fail; it just is not shared),
+so two brokers on two hosts over one data root can overshoot a quota together. Within one host,
+the pending-quota check and the open-page state are kept per process as well (the page state is
+also read from the notifier's store), so a second process over the same state directory (a `serve`
+plus an in-process CLI) can exceed `pending_per_actor` by one and page twice; it never loses a
+page or runs a request twice, since claims and approvals are exclusive files.
+
+Each lane directory has a quota (manifest 1.5): `max_files` (default 4096) and `max_total_bytes`
+(default 64 MiB, the new file included) for the directory a write lands in, the agent's own for a
+`per_actor` lane and the shared one otherwise. A write past either is refused
+`lane-quota-exceeded` (a replaced file of an `overwrite` lane counts once). The count and the
+write happen under an exclusive `flock` on the directory, so concurrent writers cannot overshoot
+it together. Without the quota an agent could add uniquely named files until the disk, by default
+the audit trail's disk, was full.
+
+A shared lane (`per_actor: false`, such as the proposals inbox every agent files into) also gives
+each actor a share of it (manifest 1.6): `max_files_per_actor` and `max_bytes_per_actor`, default
+an eighth of the lane's quotas. A records-inbox file is an actor's by its name, whose agent segment
+and broker-keyed tag only that actor's writes produce; a shared `files` lane keeps who wrote each
+name in an owner index. And a lane bounds each actor's writes in time: `max_writes_per_hour`
+(default 120 on a shared lane, none on a per-actor one), refused `lane-rate-exceeded`. The owner
+index and the write times live in `<state>/lanes-ledger/`, never in a lane directory, and are
+read and written under the lane directory's `flock`. Two lanes whose roots are one directory, or one inside the other, are
+refused by `hnx broker validate`: each would keep its own quota, share and rate over the same
+files.
+
+**Append-only lanes.** A lane nothing ever deletes from, such as `findings` (one note per run,
+even when clean), outgrows any file cap: 4096 files last about 22 months at 6 runs a day and under
+six for an hourly agent, and then every `finding.write` is refused, which under the Hermes rules
+reads exactly like a failed run. Give such a lane `max_files: null` (no file cap, manifest 1.6), a
+generous `max_total_bytes` and a `max_writes_per_hour`; `examples/broker/manifest.production.yml`
+sets `findings` so. Before pointing `--data-root` at an existing tree, look at what is already
+there: `hnx broker validate MANIFEST --data-root DIR` prints each lane directory's files and bytes
+against its quota and warns at 80%, and `hnx broker serve` logs the same at start. When a write
+is refused `lane-quota-exceeded`, the operator is notified once per actor and lane (through the
+broker's notifier: "Broker lane quota reached"), and "cleared" once that actor's directory is
+back under 80% of its quotas (its share, in a shared lane) -- not on the next small write that
+fits -- with at least 15 minutes between two notices for one actor and lane, so a lane at its
+edge cannot flap. The usage rows of a shared lane also show each actor against its share
+(`validate` attributes an inbox's files by the agent their names carry; `serve` verifies each
+name's tag; `validate --state DIR` reads a shared files lane's owner index). Without
+the share, one looping agent filled the inbox's quota in under a minute and every other agent's
+proposal was refused `lane-quota-exceeded` until someone moved notes out.
 
 ## Exec handlers
 
@@ -88,8 +134,11 @@ from `<state>/runs/<request id>/` as `[handler, *argv]`, with the params as JSON
 environment of only `PATH`, `LANG`, `HOME`/`TMPDIR` (the run directory), `HNX_BROKER_ACTION`,
 `HNX_BROKER_REQUEST_ID`, `HNX_BROKER_ACTOR`, `HNX_BROKER_TARGET` and the declared secrets. The
 timeout kills the handler's process group; stdout and stderr are kept up to the cap in the run
-directory. A non-zero exit is `handler-failed`, a timeout `handler-timeout`; the caller gets the
-reason, never the handler's own error text. JSON on stdout is the action's result.
+directory. A non-zero exit is `handler-failed`, a timeout `handler-timeout`, and an I/O error on
+the way (the run directory, the private copy, the kept output: a full disk, a descriptor limit)
+`handler-io-error`; each is the run's outcome record and its result, so an approved run never
+reads `running` after it has ended. The caller gets the reason, never the handler's own error
+text. JSON on stdout is the action's result.
 
 **Secrets** are named, never passed. The default resolver reads `HNX_BROKER_SECRET_<NAME>` from the
 *broker's* environment and hands the value to that one handler as `<NAME>`; an embedding program
@@ -117,6 +166,25 @@ hnx broker validate examples/broker/manifest.yml
    `HNX_BROKER_APPROVALS_URL`; an `http(s)` page URL without credentials, query or fragment, e.g.
    `https://status.lab.example/approvals`) the event carries `link` = `URL?request=<id>` and the
    notification ends with `Review: <link>` (ntfy also gets it as `Click`).
+
+   Accepted work is bounded per agent (manifest 1.5 `quotas`): an actor may have at most
+   `pending_per_actor` requests pending at once (default 20; a `submit` past it is refused
+   `too-many-pending`, audited, and counts as a refusal for the rate limit), and its approval
+   requests page the approver only while the actor has no open page, and at most once per
+   `notify_window_s` (default 300 s; 0: no floor). A page is open once the notifier has sent it
+   (a failed send opens nothing) and until its request settles; it is for the actor's oldest
+   request awaiting approval and names every one of them, so a request filed while a page is
+   open is named on the next page (it is on the Approvals page and in its event at once). What is
+   due is derived from state, not remembered: every agent with a request awaiting approval and
+   no open page is paged as soon as its floor allows, checked at start (a restart loses no page),
+   by a timer, and on every submit, settle and pending listing. A page whose send failed, or
+   that the agent's budget held back, is tried again a minute later. An approval or a denial closes the page with a settled
+   message saying how many still wait, and the oldest of those is paged next; a cancel by the
+   owner closes it quietly. An approval that expires unused puts its request back to waiting and
+   pages it again. Every message about an agent draws on that agent's own notifier budget, so
+   one agent cannot spend the pages of every other. A looping agent can therefore neither flood
+   the approver's phone (a submit/cancel loop pages once per floor) nor bury one malicious
+   request among hundreds, nor make one page-silent.
 2. An approver listed in the manifest's `approvers` runs `approve` or `deny`. The approval document
    (`schemas/broker/approval`) names the request digest and expires after `approval_ttl_s`
    (default 900 s). Self-approval, an unlisted approver and an agent approver (unless
@@ -165,6 +233,20 @@ read never walks the refusals; rebuilt once for an older state directory),
 `relay/` (the relay's own: `delivered/`, `undeliverable/`, `quarantine/`, `relay.lock`,
 `initialized`; [Publishing events](#publishing-events-the-outbox-relay)), `runs/<request>/` and
 `digest.key`.
+
+**Audit before execute.** An action that executes (a `call`, an approved `run`) first writes an
+`outcome: started` record (audit 1.2), and the broker refuses to execute it, answering
+`audit-unavailable`, when that record cannot be written (a full disk, an unwritable `audit/`): an
+action never runs without a record of it. For a `run` the record is written before the claim, so
+the request stays `pending` and its approval unused, to run once the trail can take it. The
+operation's own record (`ok`, `denied`, `error`) completes it; when that one cannot be written
+the caller gets `audit-incomplete` and the `started` record is the evidence that the action ran.
+A run then ends `error` (reason `audit-incomplete`); when not even its result can be written it
+reads `interrupted`, as does a run whose claiming process (the claim's `pid`) is gone. An
+interrupted request never runs again (its approval was consumed with the claim): check the target
+and the trail, and submit a new request if the action is still needed. `hnx broker audit
+--outcome started` lists the intents; the contract's `audit()` view lists outcomes only.
+
 Keep it owned by the broker's user, `0700`, or `0710` with the outbox relay's group when the relay
 runs as its own user ([Publishing events](#publishing-events-the-outbox-relay)): then `outbox/` is
 `2750` in that group (its files are `0640`) and `relay/` belongs to the relay; every other
@@ -174,7 +256,7 @@ subdirectory and file stays `0700`/`0600`, the broker's only. Agents get no acce
 
 `hnx broker serve` runs the broker on a Unix-domain socket. Who is calling is the **peer's uid**,
 read from the kernel (`SO_PEERCRED`, Linux), and mapped through the manifest
-(`schemas/broker/manifest` 1.4; example: `examples/broker/manifest.production.yml`):
+(`schemas/broker/manifest` 1.5; example: `examples/broker/manifest.production.yml`):
 
 ```yaml
 dev_identity: false                       # the CLI's asserted --as is refused (absent = false)
@@ -184,7 +266,25 @@ callers:                                  # an agent's system user -> the one pr
 approval_relays:                          # a process that authenticated a person, for one issuer
   - {user: hnx-hub, issuer: sso}
 refusal_limit: {max: 60, window_s: 60}    # refused requests per peer per window (the default)
+quotas: {pending_per_actor: 20, notify_window_s: 300}   # accepted work per agent (the defaults)
 ```
+
+**Notifications from `serve`.** `hnx broker serve` pages approval requests (see
+[Approvals](#approvals)) and the lane-quota notices through ntfy when it has a topic:
+`$HNX_BROKER_NOTIFY_TOPIC`, `--notify-topic-file FILE` (or `$HNX_BROKER_NOTIFY_TOPIC_FILE`), or
+`--notify-topic TOPIC`, which is visible to every user in `ps` (if the ntfy server lets anonymous
+readers subscribe, the topic is a secret: use the file or the environment). The endpoint is the
+`notify` capability (`--registry services.yml`, else `HNX_ENDPOINT_NOTIFY`), never a literal. The
+access token is a secret reference, `--notify-token` (or `HNX_BROKER_NOTIFY_TOKEN`) naming
+`secret:broker/ntfy-token`, whose value is read at send time from the environment variable it
+names (`HNX_SECRET_BROKER_NTFY_TOKEN`, from a systemd credential or env file); a literal token is
+refused. `serve` resolves the endpoint and checks the variable at start, and refuses a plaintext
+`http` endpoint to another host when a token would cross it, so a notifier that could never send
+stops it instead of failing every page; a send that fails later is logged at WARNING (at most
+every five minutes) and audited `notify-failed`. State lives in `<state>/notify.json` (a settled
+request's page is dropped from it); each agent may send 20 messages an hour on its own budget,
+and all agents together 60 an hour. Without a topic there are no notifications, and a lane-quota
+refusal is logged at WARNING once per agent and lane instead.
 
 A peer is listed once, as a caller *or* a relay (`hnx broker validate` refuses a peer in both);
 user names are resolved when the service starts, and an unknown one stops it. Linux only: macOS
@@ -217,8 +317,12 @@ Bounds: one request per connection, at most 1 MiB (`--max-request-bytes`) read w
 kept for approval relays so agents cannot crowd out the hub; more get `busy`.
 
 Refusals are rate limited per peer: a caller or an unknown peer with more than
-`refusal_limit.max` refused requests (`Denied` or `InvalidArguments`: an unknown action, a
-malformed request, `unknown-caller`, ...) within `refusal_limit.window_s` seconds (manifest 1.4;
+`refusal_limit.max` refused requests (any answer but `ok`, whatever its kind: an unknown action,
+a malformed request, `unknown-caller`, `not-pending`, `too-many-pending`, a failed handler, ...;
+only the broker's own faults are not counted: `internal-error`, `busy`, `audit-unavailable`,
+`audit-incomplete`, `secret-unavailable`, `handler-spawn-failed`, `handler-timeout`,
+`handler-io-error` and `lane-io-error`, so a secret-store outage or a full disk never
+rate-limits a healthy agent) within `refusal_limit.window_s` seconds (manifest 1.4;
 default 60 per 60 s) is answered `rate-limited` for the rest of the window, without its request
 being parsed. The limit is audited **once per peer and window** (`operation: connect`,
 `reason: rate-limited`) and the number of requests it suppressed is logged when the window ends,

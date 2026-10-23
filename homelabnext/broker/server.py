@@ -54,10 +54,13 @@ so agents holding every slot cannot keep the hub from approving or denying (more
 exactly-once across threads and processes.
 
 Refusals are rate limited per peer (:class:`RefusalLimiter`): a caller or an unknown peer that
-collects more than ``refusal_limit.max`` refusals (``Denied`` or ``InvalidArguments``: default
-deny, a malformed request, ``unknown-caller``, ...) within ``refusal_limit.window_s`` seconds
-(manifest 1.4; default :data:`DEFAULT_REFUSAL_LIMIT` per :data:`DEFAULT_REFUSAL_WINDOW_S` s) is
-answered ``rate-limited`` for the rest of that window without its request being looked at.  The
+collects more than ``refusal_limit.max`` refusals (every answer that is not ``ok``, whatever its
+kind: default deny, a malformed request, ``unknown-caller``, ``not-pending``, a failed handler,
+...; only the broker's own faults, :data:`NOT_REFUSALS` -- its audit trail, its secret store, a
+handler it could not start or that timed out, a disk error -- are not counted) within
+``refusal_limit.window_s`` seconds (manifest 1.4; default :data:`DEFAULT_REFUSAL_LIMIT` per
+:data:`DEFAULT_REFUSAL_WINDOW_S` s) is answered ``rate-limited`` for the rest of that window
+without its request being looked at.  The
 limit is audited once per peer and window (operation ``connect``, reason ``rate-limited``), not
 once per request, so an agent probing the broker can fill neither the audit trail nor the disk;
 how many requests the window suppressed is logged when it ends.  Approval relays are exempt (a
@@ -112,10 +115,27 @@ DEFAULT_MAX_REQUEST_BYTES = 1 << 20
 DEFAULT_TIMEOUT_S = 10.0
 DEFAULT_MAX_CONNECTIONS = 32
 DEFAULT_RELAY_CONNECTIONS = 4
+#: the socket's listen backlog
+LISTEN_BACKLOG = 128
 MAX_AUDIT_TAIL = 500
 DEFAULT_REFUSAL_LIMIT = 60
 DEFAULT_REFUSAL_WINDOW_S = 60.0
 RATE_LIMITED = "rate-limited"
+#: failures of the broker itself (its trail, its secret store, its host), never counted as the
+#: peer's refusals: an outage of any of them must not rate-limit a healthy agent
+NOT_REFUSALS = frozenset(
+    {
+        "internal-error",
+        "busy",
+        "audit-unavailable",
+        "audit-incomplete",
+        "secret-unavailable",
+        "handler-spawn-failed",
+        "handler-timeout",
+        "handler-io-error",
+        "lane-io-error",
+    }
+)
 #: what an agent's process may ask, and the fields each operation takes (beyond ``v``, ``op``)
 CALLER_OPS: dict[str, frozenset[str]] = {
     "actions": frozenset(),
@@ -360,7 +380,13 @@ def handle_request(
             )
         else:
             response = _handle(svc, who, raw, problem)
-        if limited is not None and response.get("kind") in ("Denied", "InvalidArguments"):
+        # every refusal counts, whatever its class: not-pending is a plain BrokerError, and an
+        # agent looping run on a finished request must not write one audit record per try
+        if (
+            limited is not None
+            and not response.get("ok")
+            and response.get("error") not in NOT_REFUSALS
+        ):
             limited.refused(uid)
         return response
     finally:
@@ -605,6 +631,7 @@ class _Handler(socketserver.BaseRequestHandler):
 class _UnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
     allow_reuse_address = False
+    request_queue_size = LISTEN_BACKLOG  # socketserver's default of 5 refuses a burst of agents
 
     def __init__(self, broker: BrokerServer) -> None:
         self.broker = broker  # before the base binds: server_bind reads the mode and group

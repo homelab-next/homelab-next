@@ -27,6 +27,17 @@ Every request, in order (the first failure answers):
 200  ``{"added", "duplicates", "details", "detail_dropped"}``
 ==== =======================================================================================
 
+The listener's own bounds, all before any token check: each read of a request must complete
+within ``timeout_s`` (default 30 s, as the console's), and the whole connection within
+``timeout_s`` too -- a deadline that shuts the socket down however slowly the peer drips headers
+in, so a peer cannot hold a connection by sending one header line every ``timeout_s`` - 1 s.
+At most ``max_connections`` (default :data:`DEFAULT_INGEST_CONNECTIONS`) are served at once and
+at most ``max_per_client`` (default :data:`DEFAULT_INGEST_PER_CLIENT`) from one client address;
+more are answered ``503`` without a thread (:class:`homelabnext.status.serve.BoundedHTTPServer`),
+so a peer that only connects, or drips, cannot pin the hub's threads or descriptors, nor one host
+every slot.  Behind a proxy every request arrives from the proxy's address: raise
+``max_per_client`` to the proxy's own connection limit, or set it to ``max_connections``.
+
 Accepted records go through :meth:`ActivityStore.add` (redact, cap, store) with
 ``via = push:<sender>``.  A sender configured with ``detail: false`` has its detail records
 dropped (counted) and its summaries' ``has_detail`` cleared.  ``publish`` (optional) receives
@@ -46,13 +57,18 @@ from collections.abc import Callable, Iterable, Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from homelabnext._http import is_loopback
+from homelabnext._http import content_length, is_loopback
 
-from ..serve import LOOPBACK, LOOPBACK_NAMES, host_allowed
+from ..serve import LOOPBACK, LOOPBACK_NAMES, BoundedHTTPServer, host_allowed
 from .config import IngestSettings, Sender
 from .store import ActivityError, ActivityStore
 
 PATH = "/ingest/agent-activity"
+#: seconds a connection may take to deliver its request; connections served at once
+DEFAULT_TIMEOUT_S = 30
+DEFAULT_INGEST_CONNECTIONS = 32
+#: connections one client address may hold at once
+DEFAULT_INGEST_PER_CLIENT = 4
 _log = logging.getLogger(__name__)
 _HEADERS = {
     "Cache-Control": "no-store",
@@ -218,9 +234,16 @@ def make_ingest_server(
     allowed_hosts: Iterable[str] = (),
     clock: Callable[[], float] = time.time,
     publish: Callable[[list[Mapping[str, Any]]], None] | None = None,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+    max_connections: int = DEFAULT_INGEST_CONNECTIONS,
+    max_per_client: int = DEFAULT_INGEST_PER_CLIENT,
 ) -> ThreadingHTTPServer:
     """The ingest listener.  ``port=0`` picks a free port.  Loopback unless ``allow_remote``
-    (which needs ``allowed_hosts``, the names senders use)."""
+    (which needs ``allowed_hosts``, the names senders use).  ``timeout_s`` bounds each read of a
+    request and the whole connection, ``max_connections`` the connections served at once and
+    ``max_per_client`` those of one client address (see the module doc)."""
+    if timeout_s <= 0:
+        raise ValueError("timeout_s is positive")
     extra = frozenset(h.strip().lower().rstrip(".") for h in allowed_hosts if h.strip())
     if allow_remote and not extra:
         raise ValueError("allow_remote needs allowed_hosts: the hostnames senders will use")
@@ -234,6 +257,7 @@ def make_ingest_server(
     class Handler(BaseHTTPRequestHandler):
         server_version = "hnx-status-ingest"
         sys_version = ""
+        timeout = timeout_s  # a peer that sends nothing, or half a request, cannot hold a thread
 
         def _reply(self, code: int, doc: Mapping[str, Any], extra: dict | None = None) -> None:
             body = (json.dumps(doc, sort_keys=True) + "\n").encode("utf-8")
@@ -265,15 +289,20 @@ def make_ingest_server(
                 )  # fmt: skip
             if not limiter.allow(sender.name):
                 return self._deny(429, "rate limited", headers={"Retry-After": "60"})
-            length = self.headers.get("Content-Length")
-            if length is None or not length.isdigit():
+            length = content_length(self.headers.get("Content-Length"))
+            if length is None:
+                if self.headers.get("Content-Length") is not None:
+                    _log.warning(
+                        "agent ingest refused sender %s: Content-Length is not ASCII digits",
+                        sender.name,
+                    )
                 return self._deny(411, "Content-Length is required")
-            if int(length) > settings.max_body_bytes:
+            if length > settings.max_body_bytes:
                 return self._deny(413, f"body larger than {settings.max_body_bytes} bytes")
             ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
             if ctype != "application/json":
                 return self._deny(415, "Content-Type must be application/json")
-            raw = self.rfile.read(int(length))
+            raw = self.rfile.read(length)
             try:
                 body = json.loads(raw.decode("utf-8"))
             except (UnicodeDecodeError, ValueError):
@@ -312,4 +341,10 @@ def make_ingest_server(
         def log_message(self, *a: Any) -> None:
             pass
 
-    return ThreadingHTTPServer((host, port), Handler)
+    return BoundedHTTPServer(
+        (host, port),
+        Handler,
+        max_connections=max_connections,
+        max_per_client=max_per_client,
+        deadline_s=timeout_s,
+    )

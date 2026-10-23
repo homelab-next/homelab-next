@@ -59,6 +59,7 @@ import argparse
 import contextlib
 import json
 import sys
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -251,6 +252,13 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         "--publish-state", help="the publisher's state file (default: STORE.publish.json)"
     )
     p.add_argument("--publish-source", default="svc:status-hub", help="the events' source")
+    p.add_argument(
+        "--max-per-client",
+        type=_positive_int,
+        default=None,
+        help="connections one client address may hold at once (default 4; behind a proxy, "
+        "raise it: every request comes from the proxy)",
+    )
     try:
         args = ap.parse_args(argv)
     except SystemExit as exc:
@@ -365,13 +373,23 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         return 2
     host, port = srv.server_address[:2]
     print(f"status hub (read-only) on http://{host}:{port}/  (Ctrl-C stops)")
+    _serve(srv, store)
+    return 0
+
+
+def _serve(srv, store) -> None:
+    """Serve until interrupted, purging ``store`` past retention on a timer meanwhile (a
+    long-running listener must not keep agent activity past ``retention_days`` on disk)."""
+    stop = threading.Event()
+    if store is not None:
+        store.retention_timer(stop)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        stop.set()
         srv.server_close()
-    return 0
 
 
 def _power_specs(args, specs):
@@ -487,6 +505,17 @@ def _approvals_site(cfg, clock: Callable[[], float]):
     return ApprovalsSite.from_settings(cfg.approvals, cfg.front_door, clock=clock)
 
 
+def _positive_int(text: str) -> int:
+    """An argparse type: a whole number of at least 1 (0 would silently mean the default)."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a whole number") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{value} is not at least 1")
+    return value
+
+
 def _ingest(args, cfg, store, clock: Callable[[], float]) -> int:
     from .agents.ingest import make_ingest_server
     from .serve import LOOPBACK
@@ -504,18 +533,14 @@ def _ingest(args, cfg, store, clock: Callable[[], float]) -> int:
             allowed_hosts=args.allowed_host,
             clock=clock,
             publish=_publisher(args, cfg),
+            **({"max_per_client": args.max_per_client} if args.max_per_client is not None else {}),
         )
     except (ValueError, OSError) as exc:
         print(f"hnx status ingest: {exc}", file=sys.stderr)
         return 2
     host, port = srv.server_address[:2]
     print(f"agent-activity ingest on http://{host}:{port}/ingest/agent-activity  (Ctrl-C stops)")
-    try:
-        srv.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        srv.server_close()
+    _serve(srv, store)
     return 0
 
 

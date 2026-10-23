@@ -88,6 +88,29 @@ def test_every_unit_names_existing_code_and_tests():
             assert (coverage_floor.REPO_ROOT / t).is_dir(), t
 
 
+def _captured_env(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_run(cmd, cwd, check, env):
+        seen.update(env)
+        return type("Done", (), {"returncode": 0})()
+
+    monkeypatch.setattr(coverage_floor.subprocess, "run", fake_run)
+    coverage_floor.run_tests(tmp_path / "report.json")
+    return seen
+
+
+def test_the_coverage_run_scales_the_suite_budgets(tmp_path, monkeypatch):
+    monkeypatch.delenv("HNX_SUITE_BUDGET_SCALE", raising=False)
+    env = _captured_env(tmp_path, monkeypatch)
+    assert float(env["HNX_SUITE_BUDGET_SCALE"]) > 1
+
+
+def test_an_explicit_budget_scale_is_kept(tmp_path, monkeypatch):
+    monkeypatch.setenv("HNX_SUITE_BUDGET_SCALE", "5")
+    assert _captured_env(tmp_path, monkeypatch)["HNX_SUITE_BUDGET_SCALE"] == "5"
+
+
 @pytest.mark.slow
 def test_this_repo_meets_the_floor(tmp_path, monkeypatch):
     pytest.importorskip("pytest_cov")

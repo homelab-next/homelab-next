@@ -203,9 +203,9 @@ def test_audit_documents_tail_reads_newest_first(tmp_path, monkeypatch):
     loads = []
     real = state_mod._load
     monkeypatch.setattr(state_mod, "_load", lambda p: loads.append(p) or real(p))
-    rows = svc.audit_documents(limit=3)
+    rows = svc.audit_documents(limit=3, outcome="ok")
     assert [r["args"]["name"] for r in rows] == ["m27.md", "m28.md", "m29.md"]
-    assert len(loads) == 3
+    assert len(loads) == 5, "each call is a started and an ok record: the tail is five files"
 
 
 def test_a_malformed_handler_document_is_a_problem_not_a_crash(tmp_path):

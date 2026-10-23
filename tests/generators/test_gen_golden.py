@@ -213,6 +213,30 @@ def test_caddy_only_public_hosts_and_forward_auth():
     assert "dashboards.lab.example {" in text and "import hnx_forward_auth" in text
 
 
+def test_forward_auth_strips_every_client_sent_identity_header_first():
+    """Caddy 2.9.0-2.11.1 keep a client-sent header when the IdP's answer omits it: a client
+    could send its own X-Authentik-Username or -Groups and the service would trust it."""
+    from homelabnext.generators.builtin import FORWARD_AUTH_HEADERS, IDENTITY_HEADER_PREFIX
+
+    text = generate(REG, ["caddy"])["caddy"]["caddy/sites.caddy"]
+    snippet = text[text.index("(hnx_forward_auth) {") :].split("\n}\n", 1)[0]
+    lines = [ln.strip() for ln in snippet.splitlines()]
+    [copy] = [ln for ln in lines if ln.startswith("copy_headers ")]
+    copied = copy.split()[1:]
+    assert copied == list(FORWARD_AUTH_HEADERS)
+    assert all(h.startswith(IDENTITY_HEADER_PREFIX) for h in copied), "one prefix covers them"
+    auth_at = next(i for i, ln in enumerate(lines) if ln.startswith("forward_auth "))
+    strips = {ln.split()[1] for ln in lines[:auth_at] if ln.startswith("request_header -")}
+    assert f"-{IDENTITY_HEADER_PREFIX}*" in strips
+    # and its underscore spelling, which Caddy <= 2.11.1 passes and CGI-style upstreams fold
+    assert f"-{IDENTITY_HEADER_PREFIX.replace('-', '_')}*" in strips
+    assert {f"-{h}" for h in copied} <= strips, "every copied header is deleted before auth"
+    # in one route, so they run in the order written (forward_auth sorts before request_header)
+    route_at = lines.index("route {")
+    assert route_at < min(i for i, ln in enumerate(lines) if ln.startswith("request_header"))
+    assert snippet.count("{") == snippet.count("}") + 1  # balanced but for the snippet's own
+
+
 def test_docs_page_lists_dependants():
     md = generate(REG, ["service_docs"])["service_docs"]["docs/services.md"]
     assert "- Used by: `agent-runtime`" in md  # lake-query is used by agent-runtime

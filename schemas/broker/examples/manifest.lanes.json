@@ -49,6 +49,9 @@
     {
       "kind": "records-inbox",
       "max_bytes": 65536,
+      "max_bytes_per_actor": 4194304,
+      "max_files_per_actor": 256,
+      "max_writes_per_hour": 60,
       "name": "proposals",
       "note_types": [
         "proposal"

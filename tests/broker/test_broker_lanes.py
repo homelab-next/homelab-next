@@ -9,7 +9,15 @@ import re
 
 import pytest
 
-from homelabnext.broker.lanes import Lane, LaneError, check_params, name_tag, write
+from homelabnext.broker.lanes import (
+    DEFAULT_MAX_FILES,
+    DEFAULT_MAX_TOTAL_BYTES,
+    Lane,
+    LaneError,
+    check_params,
+    name_tag,
+    write,
+)
 from homelabnext.records.notes import check_filename, parse_note
 
 NOW = "2026-01-15T10:00:00Z"
@@ -317,3 +325,170 @@ def test_written_files_are_owner_only(tmp_path):
     assert len(files) == 2
     for p in files:
         assert p.stat().st_mode & 0o077 == 0, (p, oct(p.stat().st_mode))
+
+
+# -- quotas: a lane directory holds at most max_files files and max_total_bytes bytes -------------
+
+
+def test_a_lane_directory_has_a_file_quota(tmp_path):
+    """An agent with a write lane could add uniquely named files until the disk (the audit trail's
+    disk, by default) was full: each file was capped, the number of them was not."""
+    lane = _lane(max_files=3)
+    for i in range(3):
+        write(lane, tmp_path, ACTOR, {"name": f"n{i}.md", "content": "x"}, NOW)
+    err = _refused(lane, tmp_path, {"name": "n3.md", "content": "x"}, "lane-quota-exceeded")
+    assert err.outcome == "denied" and "3 files" in str(err)
+    assert len(_files(tmp_path)) == 3
+    # per actor: another agent's directory has its own quota
+    write(lane, tmp_path, "profile:other", {"name": "n0.md", "content": "x"}, NOW)
+
+
+def test_a_lane_directory_has_a_byte_quota(tmp_path):
+    lane = _lane(max_total_bytes=100)
+    write(lane, tmp_path, ACTOR, {"name": "a.md", "content": "x" * 60}, NOW)
+    _refused(lane, tmp_path, {"name": "b.md", "content": "x" * 41}, "lane-quota-exceeded")
+    write(lane, tmp_path, ACTOR, {"name": "b.md", "content": "x" * 40}, NOW)  # exactly full
+    _refused(lane, tmp_path, {"name": "c.md", "content": "x"}, "lane-quota-exceeded")
+
+
+def test_an_overwrite_counts_the_file_it_replaces_once(tmp_path):
+    lane = _lane(overwrite=True, max_files=1, max_total_bytes=50)
+    write(lane, tmp_path, ACTOR, {"name": "a.md", "content": "x" * 50}, NOW)
+    write(lane, tmp_path, ACTOR, {"name": "a.md", "content": "y" * 50}, NOW)  # a replacement
+    _refused(lane, tmp_path, {"name": "b.md", "content": "y"}, "lane-quota-exceeded")
+
+
+def test_a_shared_lane_quota_covers_the_whole_lane(tmp_path):
+    lane = _lane(per_actor=False, max_files=1)
+    write(lane, tmp_path, ACTOR, {"name": "a.md", "content": "x"}, NOW)
+    _refused(lane, tmp_path, {"name": "b.md", "content": "x"}, "lane-quota-exceeded", "profile:b")
+
+
+def test_lane_quotas_have_defaults_and_are_checked():
+    lane = _lane()
+    assert (lane.max_files, lane.max_total_bytes) == (DEFAULT_MAX_FILES, DEFAULT_MAX_TOTAL_BYTES)
+    assert _lane(max_total_bytes=10).problems(), "a quota smaller than one file"
+
+
+# -- shared lanes: each actor has a share, and a write rate --------------------------------------
+
+
+def test_one_actor_cannot_fill_a_shared_inbox_for_every_other(tmp_path):
+    """One looping agent filed proposals until the shared inbox's quota was spent, and every other
+    agent's proposal was then refused lane-quota-exceeded: the escalation channel, denied to all."""
+    lane = _inbox(max_files=16, max_writes_per_hour=1000)
+    assert lane.max_files_per_actor == 2, "an eighth of the lane by default"
+    for i in range(2):
+        write(lane, tmp_path, ACTOR, {"note": dict(NOTE), "slug": f"s{i}"}, NOW, key=KEY)
+    params = {"note": dict(NOTE), "slug": "s2"}
+    with pytest.raises(LaneError) as info:
+        write(lane, tmp_path, ACTOR, params, NOW, key=KEY)
+    assert info.value.reason == "lane-quota-exceeded" and "share" in str(info.value)
+    # another agent, even one whose slug the first one's prefixes, still files
+    for other in ("profile:reader", "profile:triage-lead"):
+        write(lane, tmp_path, other, {"note": dict(NOTE), "slug": "s0"}, NOW, key=KEY)
+    # a file that only looks like the actor's (no valid tag) does not count against it
+    (tmp_path / "records" / "inbox" / "2026-01-15-reader-forged-00000000.md").write_text("x")
+    write(lane, tmp_path, "profile:reader", {"note": dict(NOTE), "slug": "s1"}, NOW, key=KEY)
+
+
+def test_a_shared_inbox_has_a_byte_share(tmp_path):
+    lane = _inbox(max_total_bytes=8000, max_bytes_per_actor=4096, max_writes_per_hour=1000)
+    write(
+        lane, tmp_path, ACTOR, {"note": dict(NOTE), "body": "x" * 2500, "slug": "a"}, NOW, key=KEY
+    )
+    with pytest.raises(LaneError) as info:
+        write(lane, tmp_path, ACTOR, {"note": dict(NOTE), "body": "x" * 2500, "slug": "b"},
+              NOW, key=KEY)  # fmt: skip
+    assert info.value.reason == "lane-quota-exceeded"
+    write(lane, tmp_path, "profile:reader", {"note": dict(NOTE), "body": "x" * 2500}, NOW, key=KEY)
+
+
+def test_a_shared_files_lane_counts_each_actors_share_by_its_owner_index(tmp_path):
+    lane = _lane(per_actor=False, max_files=16)
+    for i in range(2):
+        write(lane, tmp_path, ACTOR, {"name": f"a{i}.md", "content": "x"}, NOW)
+    _refused(lane, tmp_path, {"name": "a2.md", "content": "x"}, "lane-quota-exceeded")
+    write(lane, tmp_path, "profile:b", {"name": "b0.md", "content": "x"}, NOW)
+    (tmp_path / "memory" / "a0.md").unlink()  # the decider moved one out: its place is free
+    write(lane, tmp_path, ACTOR, {"name": "a2.md", "content": "x"}, NOW)
+    assert _files(tmp_path / "memory") == ["a1.md", "a2.md", "b0.md"], "no bookkeeping in the lane"
+
+
+def test_an_actor_has_a_write_rate_per_lane(tmp_path):
+    lane = _lane(max_writes_per_hour=3)
+    t0 = 1_768_471_200.0
+    for i in range(3):
+        write(lane, tmp_path, ACTOR, {"name": f"n{i}.md", "content": "x"}, NOW, at=t0 + i)
+    with pytest.raises(LaneError) as info:
+        write(lane, tmp_path, ACTOR, {"name": "n3.md", "content": "x"}, NOW, at=t0 + 10)
+    assert info.value.reason == "lane-rate-exceeded"
+    write(lane, tmp_path, "profile:other", {"name": "n3.md", "content": "x"}, NOW, at=t0 + 10)
+    write(lane, tmp_path, ACTOR, {"name": "n3.md", "content": "x"}, NOW, at=t0 + 3600)
+
+
+def test_shared_lanes_have_a_default_rate_and_share():
+    from homelabnext.broker.lanes import DEFAULT_SHARED_WRITES_PER_HOUR
+
+    shared, own = _inbox(), _lane()
+    assert shared.max_writes_per_hour == DEFAULT_SHARED_WRITES_PER_HOUR
+    assert (shared.max_files_per_actor, shared.max_bytes_per_actor) == (512, 8 * 1024 * 1024)
+    assert (own.max_writes_per_hour, own.max_files_per_actor) == (None, None)
+    assert _lane(max_files_per_actor=3).problems(), "a share on a per-actor lane"
+    assert _inbox(max_files=4, max_files_per_actor=5).problems(), "a share above the lane"
+    assert _inbox().problems() == []
+
+
+# -- append-only lanes: no file cap, usage visible -----------------------------------------------
+
+
+def test_an_append_only_lane_can_have_no_file_cap(tmp_path):
+    """A findings lane (one note per run, never deleted) on the default 4096-file cap stops
+    taking notes after months, silently: the cap is a retention limit in disguise."""
+    lane = _lane(max_files=None, max_total_bytes=1000, max_writes_per_hour=100)
+    assert lane.max_files is None and lane.problems() == []
+    for i in range(10):
+        write(lane, tmp_path, ACTOR, {"name": f"n{i}.md", "content": "x"}, NOW)
+    for i in range(16):
+        write(lane, tmp_path, ACTOR, {"name": f"b{i}.md", "content": "x" * 60}, NOW)
+    # the byte cap still bounds it: 970 bytes held, 60 more would pass 1000
+    _refused(lane, tmp_path, {"name": "b16.md", "content": "x" * 60}, "lane-quota-exceeded")
+    assert len(_files(tmp_path / "memory")) == 26
+
+
+def test_lane_usage_reports_each_directory_and_warns_at_80_percent(tmp_path):
+    from homelabnext.broker.lanes import usage
+
+    lane = _lane(max_files=10, max_total_bytes=1000)
+    for i in range(8):
+        write(lane, tmp_path, ACTOR, {"name": f"n{i}.md", "content": "x"}, NOW)
+    write(lane, tmp_path, "profile:other", {"name": "a.md", "content": "x"}, NOW)
+    rows = {r["dir"]: r for r in usage(lane, tmp_path)}
+    assert rows["memory/triage"]["files"] == 8 and rows["memory/triage"]["warn"] is True
+    assert rows["memory/other"]["warn"] is False and rows["memory/other"]["used"] == 0.1
+    assert usage(_inbox(), tmp_path) == [], "nothing filed yet: no row"
+    no_cap = usage(_lane(max_files=None, max_total_bytes=10), tmp_path)
+    assert {r["dir"]: r["warn"] for r in no_cap} == {"memory/other": False, "memory/triage": True}
+
+
+def test_lane_usage_shows_each_actors_share_of_a_shared_lane(tmp_path):
+    """An actor at its share of a shared lane was invisible: the row showed only the lane."""
+    from homelabnext.broker.lanes import fill, usage
+
+    lane = _inbox(max_files=16, max_writes_per_hour=1000)  # a share of 2 files each
+    for actor, n in (("profile:triage", 2), ("profile:triage-lead", 1)):
+        for i in range(n):
+            write(lane, tmp_path, actor, {"note": dict(NOTE), "slug": f"s{i}"}, NOW, key=KEY)
+    actors = ("profile:triage", "profile:triage-lead")
+    for key in (KEY, None):  # verified by tag, or by the longest slug a name carries
+        [row] = usage(lane, tmp_path, actors=actors, key=key)
+        assert row["warn"] is True and row["max_files_per_actor"] == 2
+        assert row["actors"]["profile:triage"] == {"files": 2, "bytes": row["actors"][
+            "profile:triage"]["bytes"], "used": 1.0, "warn": True}  # fmt: skip
+        assert row["actors"]["profile:triage-lead"]["files"] == 1
+    assert fill(lane, tmp_path, "profile:triage", key=KEY) == 1.0
+    assert fill(lane, tmp_path, "profile:triage-lead", key=KEY) == 0.5
+    files = _lane(per_actor=False, max_files=16)
+    write(files, tmp_path, ACTOR, {"name": "a.md", "content": "x"}, NOW, ledger=tmp_path / "l")
+    [row] = usage(files, tmp_path, ledger=tmp_path / "l")
+    assert row["actors"] == {ACTOR: {"files": 1, "bytes": 1, "used": 0.5, "warn": False}}
