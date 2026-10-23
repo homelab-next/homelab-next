@@ -50,6 +50,12 @@ def test_test_files():
     assert gate.test_files(["orchestrator/internal/mytestdata/x.go"]) == []
 
 
+def test_nested_testdata_is_the_data_of_the_package_holding_the_outermost_testdata():
+    m = gate.GO_TESTDATA.match("orchestrator/internal/api/testdata/sub/testdata/b.txt")
+    assert m.group("pkg") == "orchestrator/internal/api/"
+    assert gate.GO_TESTDATA.match("testdata/golden.txt").group("pkg") == ""
+
+
 def test_check_classifies_commits():
     commits = [
         gate.Commit("a" * 40, "fix: no test", ["homelabnext/x.py"]),
@@ -361,6 +367,16 @@ def test_a_go_fix_that_changes_only_testmain_runs_the_whole_package(tmp_path):
     (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
     assert gate.changed_go_tests(c, GO + "calc_test.go", cwd=r) == []  # a helper: run it all
     assert gate.prove(c, cwd=r) is None
+
+
+def test_the_go_module_probe_prints_no_git_errors(tmp_path, capfd):
+    r, _commit, base = _go_repo(tmp_path)
+    (c,) = gate.commits_in(base, cwd=r)
+    capfd.readouterr()
+    # orchestrator/internal/calc/go.mod and orchestrator/internal/go.mod do not exist: no noise
+    assert gate._go_module_at(c, GO + "calc_test.go", cwd=r) is True
+    assert gate._go_module_at(c, "loose/x_test.go", cwd=r) is False
+    assert capfd.readouterr().err == ""
 
 
 def test_go_fix_without_a_go_toolchain_cannot_be_proved(tmp_path):

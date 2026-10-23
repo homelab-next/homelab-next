@@ -56,7 +56,8 @@ FIXES_TRAILER = re.compile(r"^Fixes:\s*\S", re.M | re.I)
 WAIVER = re.compile(r"^No-regression-test:[ \t]*(?P<why>\S.{7,})$", re.M | re.I)
 TEST_PATH = re.compile(r"(^|/)tests?/|(^|/)testdata/|(^|/)test_[^/]*\.py$|_test\.py$|_test\.go$")
 # Go's testdata directory: fixtures of the package in the directory that holds it
-GO_TESTDATA = re.compile(r"^(?P<pkg>(?:.*/)?)testdata/")
+# (the outermost one: testdata/ below a testdata/ is still the outer package's data)
+GO_TESTDATA = re.compile(r"^(?P<pkg>(?:.*?/)?)testdata/")
 TEST_MODULE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$")
 GO_TEST_FILE = re.compile(r"(^|/)[^/]+_test\.go$")
 # a top-level test or fuzz function: go test's rule, Test/Fuzz then nothing or a non-lowercase
@@ -205,7 +206,8 @@ def _go_module_at(c: Commit, path: str, cwd: Path) -> bool:
     parts = path.split("/")[:-1]
     for n in range(len(parts), -1, -1):
         mod = "/".join([*parts[:n], "go.mod"])
-        if subprocess.run(["git", "cat-file", "-e", f"{c.sha}:{mod}"], cwd=cwd).returncode == 0:
+        probe = ["git", "cat-file", "-e", f"{c.sha}:{mod}"]  # quiet: a missing go.mod is the answer
+        if subprocess.run(probe, cwd=cwd, capture_output=True).returncode == 0:
             return True
     return False
 
