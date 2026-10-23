@@ -1,0 +1,7 @@
+{"Action":"start","Package":"example.com/fixture/internal/race"}
+{"Action":"run","Package":"example.com/fixture/internal/race","Test":"TestOther"}
+{"Action":"pass","Package":"example.com/fixture/internal/race","Test":"TestOther"}
+{"Action":"output","Package":"example.com/fixture/internal/race","Output":"PASS\n"}
+{"Action":"output","Package":"example.com/fixture/internal/race","Output":"WARNING: DATA RACE\n"}
+{"Action":"output","Package":"example.com/fixture/internal/race","Output":"FAIL\n"}
+{"Action":"fail","Package":"example.com/fixture/internal/race"}

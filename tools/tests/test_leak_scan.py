@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -557,3 +558,387 @@ def test_product_defined_secret_names_are_not_findings():
         assert "secret-name" not in {h.pattern for h in leak_scan.scan_text(f"env: {name}", "t")}
     for name in ("LAB_ROUTER_API" + "_KEY", "MY_API" + "_KEY", "vau" + "lt_router_password"):
         assert "secret-name" in {h.pattern for h in leak_scan.scan_text(f"env: {name}", "t")}
+
+
+# --- Go sources and modules (orchestrator/) --------------------------------------------------------
+
+# A base64 SHA-256 shaped like go.sum's ``h1:`` hashes (43 characters and ``=``), built at run time.
+H1 = "Gz9kY7T5VNhEkwH0PVJ" + "gjzfXq1rhBrR7pRT3mDkpeCY="
+assert len(H1) == 44
+
+
+def _secret_hits(text: str, path: str = "t") -> set[str]:
+    hits = leak_scan.scan_text(text, path)
+    return {h.pattern for h in hits if h.pattern in SECRET_PATTERNS}
+
+
+SECRET_PATTERNS = {p.name for p in leak_scan.PATTERNS if p.group == "secret"}
+RANDOM = "Zx9Qw3Rt7Yp2" + "Lk8Vb5Nm1Cd4Fg6Hj0sA"  # a credential-shaped token
+AUTH = '"auth_tok' + 'en": '
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"github.com/example/mod v1.0.1 h1:{H1}",
+        f"github.com/example/mod v1.0.1/go.mod h1:{H1}",
+        f"golang.org/x/sys v0.0.0-20240101000000-abcdef123456 h1:{H1}",
+    ],
+)
+def test_go_sum_lines_are_digests(text: str):
+    assert _secret_hits(text, "orchestrator/go.sum") == set()
+    assert _secret_hits(text, "orchestrator/tools/go.sum") == set()
+    # only in a go.sum: the same line anywhere else is scanned like any other
+    for path in ("conf.yml", "orchestrator/go.mod", "notes/go.sum.txt", "<stdin>", "t"):
+        assert "high-entropy-string" in _secret_hits(text, path), path
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"h1:{H1}",  # the hash alone, not a go.sum line
+        f"token {H1}",  # the same value without the go.sum shape
+        f"github.com/example/mod v1.0.1 h1:{H1} " + RANDOM,
+        f"github.com/example/mod v1.0.1 h1:{H1}\nkey " + RANDOM,
+        "github.com/example/mod v1.0.1 h2:" + H1,  # not the h1 scheme
+    ],
+)
+def test_go_sum_allowance_is_only_the_hash_of_a_go_sum_line(text: str):
+    assert "high-entropy-string" in _secret_hits(text, "orchestrator/go.sum")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "func TestSubmit_IdempotencyKeyReplayForADifferentRunIs422(t *testing.T) {",
+        "// TestInvoke_Exit2WithEmptyStderrIsATurnFailure pins the exit-code mapping",
+        "func TestMatchRunbooks_RealKeywordHitFindsRB001(t *testing.T) {",
+        "go test ./internal/api -run '^BenchmarkQueueAdmissionUnderHeavyLoad4096$'",
+    ],
+)
+def test_go_test_function_names_are_not_secrets(text: str):
+    assert _secret_hits(text) == set()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # random base64 after a Test prefix: short lowercase runs
+        "func Test" + RANDOM + "(t *testing.T) {",
+        # a real-looking value next to a Go test name is still found
+        f'func TestSubmit_IdempotencyKeyReplayIs422(t *testing.T) {{ k := "{RANDOM}" }}',
+        # a lowercase prefix is not a Go test function
+        "test" + RANDOM,
+    ],
+)
+def test_go_test_name_allowance_stays_narrow(text: str):
+    assert "high-entropy-string" in _secret_hits(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '"input_tokens": float64(435783), "cache_read_tokens": float64(0),',
+        '"last_prompt_tokens": float64(61234), "max_tokens": float64(16384)',
+        'map[string]any{"path": "docs/w.md", "max_tokens": math.MaxInt64 / 2}',
+        '[]byte("db_path: /x.db\\ntok'
+        + 'en_weighted_admission: true\\nkv_budget_fraction: 0.7\\n")',
+    ],
+)
+def test_go_numeric_values_and_escaped_newlines_are_not_keyed_secrets(text: str):
+    assert "keyed-secret" not in _secret_hits(text, "orchestrator/internal/x/x_test.go")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # a long number is as good as a numeric secret, cast or not
+        AUTH + "float64(" + "84726193" + "50213)",
+        AUTH + "int64(" + "84726193" + "50213)",
+        # a cast of something that is not a number
+        AUTH + "float64(" + "Zq81kXw" + "Lm2pV9a)",
+        # an escape ends the value, but what precedes it is still scanned
+        '"db_pass' + "word: " + "Tr0ub4dor" + '&3\\nuser: admin"',
+    ],
+)
+def test_go_numeric_and_escape_exemptions_stay_narrow(text: str):
+    assert "keyed-secret" in _secret_hits(text)
+    assert "keyed-secret" in _secret_hits(text, "orchestrator/internal/x/x.go")
+
+
+def test_a_dotted_value_is_a_finding_in_text_and_a_selector_in_go_code():
+    # only the limit constants are exempt as text; in Go code a selector is code after any
+    # separator (verify5.md: one rule for ":", "=" and ":=")
+    text = AUTH + "math." + "Zq81kXw" + "Lm2pV9a"
+    assert "keyed-secret" in _secret_hits(text, "conf.yml")
+    assert "keyed-secret" not in _secret_hits(text, "orchestrator/internal/x/x.go")
+
+
+# fictional credential-shaped values, assembled here so this file does not match itself
+VAL_A = "Wq7Ty2" + "Lm9Xc4Vb!"
+VAL_B = "h3Rd8" + "Kq6Zt1Np5"
+ESCAPED = [
+    # a value right after an escape sequence: on either side of an escape is still a value
+    "db_pass" + 'word: "\\t' + VAL_A + '"',
+    "api_tok" + 'en: "\\r' + VAL_B + '"',
+    'var d = "pass' + "word: \\t" + VAL_A + '"',
+    'var e = "db_pass' + "word=\\n" + VAL_B + '"',
+    # a value before the escape, and one after a harmless first segment
+    'var f = "secret_' + "key: " + VAL_B + '\\nnext: x"',
+    'var g = "pass' + "word: ab\\t" + VAL_A + '"',
+]
+
+
+# verify.md: a word segment then a short tail, and segments each under the 6-character minimum;
+# a .txt copy and the scanner before Go escapes were split both flag them
+ESCAPED += [
+    'var s3 = "pass' + "word: abcdef\\nQ9x" + '!z"',
+    'var s4 = "pass' + "word: Zx9K\\tq2Lm" + '\\n7Wp4"',
+]
+
+
+@pytest.mark.parametrize("text", ESCAPED)
+@pytest.mark.parametrize("path", ["conf.yml", "x.py", "orchestrator/internal/x/x_test.go", "-"])
+def test_an_escape_sequence_never_hides_a_keyed_value(text: str, path: str):
+    assert "keyed-secret" in _secret_hits(text, "<stdin>" if path == "-" else path)
+
+
+@pytest.mark.parametrize("path", ["orchestrator/internal/x/x.go", "notes.md"])
+def test_a_go_short_variable_declaration_is_a_keyed_value(path: str):
+    # Go's most idiomatic form: the separator is ":=", which used to leave the value at "="
+    for text in (
+        "func f() { dbPass" + 'word := "' + VAL_A + '" }',
+        "apiTok" + "en := " + VAL_B,
+        "secret_" + 'key:= "' + VAL_B + '"',
+    ):
+        assert "keyed-secret" in _secret_hits(text, path), text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'token := os.Getenv("X")',
+        "secret := cfg.Secret",
+        'token := r.Header.Get("Authorization")',
+        "apiToken := strings.TrimSpace(string(b))",
+        'password := ""',
+        "tokenizer := x",
+        'secretRef := "secret:llm-gateway/key"',
+        "maxTokens := 4096",
+        # verify3.md (v3/leak/fp4): a Go expression is code, whatever its digits
+        "secret" + "Key = base64.StdEncoding.EncodeToString(buf)",
+        "secret" + "Key := base64.StdEncoding.EncodeToString(buf)",
+        "sessionTok" + "en := base64.RawURLEncoding.EncodeToString(b)",
+        "tok" + "enHash := sha256.Sum256([]byte(tok))",
+        "tok" + "enHash = sha512.New384()",
+        "authToken := tokens[0]",
+        "refreshToken := oauth2Token.RefreshToken",
+    ],
+)
+def test_go_short_declarations_of_code_and_references_are_not_keyed_secrets(text: str):
+    assert "keyed-secret" not in _secret_hits(text, "orchestrator/internal/x/x.go")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'secretKey := "' + RANDOM + '"',  # a quoted literal is still judged
+        'apiToken = "' + VAL_B + '"',
+        "x := `token = " + VAL_B + "`",  # a raw string: config text, not code
+        'cfg := "token=' + VAL_B + '"',  # an interpreted string
+        "apiTok" + "en := " + VAL_B,  # no selector, call or index: not an expression
+    ],
+)
+def test_go_code_is_skipped_only_unquoted_and_outside_a_string(text: str):
+    assert "keyed-secret" in _secret_hits(text, "orchestrator/internal/x/x.go"), text
+
+
+def test_history_reads_go_sum_by_the_path_of_the_diff(tmp_path):
+    git = ["git", "-C", str(tmp_path), "-c", "user.email=t@example.org", "-c", "user.name=t"]
+    subprocess.run([*git, "init", "-q"], check=True)
+    line = f"github.com/example/mod v1.0.1 h1:{H1}\n"
+    for name in ("go.sum", "conf.yml"):
+        (tmp_path / name).write_text(line)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "add"], check=True)
+    hits = leak_scan.scan_history("HEAD", leak_scan.PATTERNS, cwd=tmp_path)
+    assert [h.path.split(":", 1)[1] for h in hits if h.pattern == "high-entropy-string"] == [
+        "conf.yml"
+    ]
+
+
+def test_escape_segments_are_go_string_literals_only():
+    # outside a Go source, the value is the whole run, escapes and all: as on main
+    line = "db_path: /x.db\\ntok" + "en_weighted_admission: true\\nkv_budget_fraction: 0.7"
+    assert "keyed-secret" in _secret_hits(line, "conf.yml")
+    assert "keyed-secret" not in _secret_hits(f'x := "{line}"', "x.go")
+    # in a Go comment or raw string the backslash is not an escape either
+    assert "keyed-secret" in _secret_hits(f"// {line}", "x.go")
+    assert "keyed-secret" in _secret_hits(f"x := `{line}`", "x.go")
+
+
+# verify4.md (v4/leak/raw, raw1): a line inside a multi-line raw string is text, not code, so a
+# dotted or bracketed value there is judged like any other file's, not exempted as an expression
+SEC, TOK, PW = "sec" + "ret", "tok" + "en", "pass" + "word"
+RAW_CONFIG = (
+    "package r\n\nconst conf = `\n[auth]\n"
+    f"client_{SEC} = Zq8vT2.Kp4mW9xR7nB3\n"
+    f"api_{TOK} = Hx7Kq2.Lm9Wp4Zr8Tv6(\n"
+    f"admin_{PW} = Pr0dS3cr3t[V4lue]\n`\n"
+    f"var c = `db_{PW} = Sup3r.S3cr3tValue`\n"
+    f"func f() {{\n\t{SEC}Key := base64.StdEncoding.EncodeToString(buf)\n}}\n"
+)
+
+
+def test_a_raw_string_body_is_judged_as_text_with_the_whole_file_in_view():
+    hits = leak_scan.scan_text(RAW_CONFIG, "orchestrator/internal/x/c_test.go")
+    assert sorted(h.line for h in hits if h.pattern == "keyed-secret") == [5, 6, 7, 9]
+    # the same lines outside a raw string are code, and exempt as before
+    code = RAW_CONFIG.replace("`", "")
+    assert not [h for h in leak_scan.scan_text(code, "x.go") if h.pattern == "keyed-secret"]
+
+
+def test_go_source_tells_code_literals_and_comments_apart():
+    for code, kind in [
+        (
+            'a := "b\\"c" + `d"` + \'"\' + "e',
+            "string",
+        ),  # past an escaped quote, a raw string, a rune
+        ('a := "b" + `"c', "raw"),
+        ('a := "b" // "c', "comment"),
+        ('a := "b" + c', "code"),
+    ]:
+        assert leak_scan.GoSource(code).kind_at(1, len(code) - 1) == kind, code
+    src = leak_scan.GoSource('x := `a\nb = c.d` + "e" // "f"\n')
+    assert src.kind_at(2, 4) == "raw"
+    assert list(src.literals_after(2, 0)) == ["e"]
+
+
+# verify4.md (v4/leak/rhs): a literal elsewhere on the right-hand side of an unquoted Go value
+RHS_LITERALS = [
+    f'db{PW} := strings.TrimSpace("{VAL_A}")',
+    f'api{TOK} := cfg.Prefix + "{VAL_A}"',
+    f'client{SEC} = os.Getenv("X") + "{VAL_A}"',
+    f'auth{TOK} := tokens["{VAL_A}"]',
+    f'admin{PW} := fmt.Sprint("{VAL_A}")',
+    f'webhook{SEC} := map[string]string{{"k": "{VAL_A}"}}',
+    f"api{TOK} := prefix + `{VAL_A}`",
+    f'client{SEC} := fromHex("{"3272a1c9e8b7" + "f6d5c4b3a2f1"}")',
+]
+
+
+@pytest.mark.parametrize("text", RHS_LITERALS)
+def test_a_literal_after_an_unquoted_go_value_is_judged(text: str):
+    assert "keyed-secret" in _secret_hits(text, "orchestrator/internal/x/x.go"), text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f'{TOK} := r.Header.Get("Authorization")',  # letters only: a name, not a value
+        f'{TOK} := r.Header.Get("X-Api-Key")',
+        f'{TOK} := os.Getenv("HNX_API_KEY_FILE")',
+        f'{TOK} := prefix + x // "{VAL_A}" in a comment, not on the right-hand side',
+        f'{PW} := cfg.Get("db.{PW}")',
+    ],
+)
+def test_names_and_expressions_on_the_right_hand_side_are_not_secrets(text: str):
+    assert "keyed-secret" not in _secret_hits(text, "orchestrator/internal/x/x.go"), text
+
+
+# verify5.md (v5/colon): idioms whose right-hand-side literal is text, not a value
+GO_TEXT_LITERALS = [
+    f'{TOK} := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")',
+    f'{TOK} = fmt.Sprintf("Bearer %s", raw)',
+    f'{SEC}Name := fmt.Sprintf("%s-%s-tls", app, env)',
+    f'{SEC} = time.Now().Format("2006-01-02")',
+    f'Bearer{TOK.title()}: fmt.Sprintf("Bearer %s", access{TOK.title()}),',
+    f'{TOK.title()}: os.Getenv("TOKEN") + "-suffix-v2",',
+    f'{PW.title()}: fmt.Sprintf("%s:%d", host, port),',
+    f'{TOK}URL := strings.TrimSuffix(base, "/") + "/oauth/{TOK}"',
+    f'{SEC}File := path.Join(cfgDir, "{SEC}s", "db.yaml")',
+]
+
+
+@pytest.mark.parametrize("text", GO_TEXT_LITERALS)
+def test_text_literals_on_the_right_hand_side_are_not_secrets(text: str):
+    assert "keyed-secret" not in _secret_hits(text, "orchestrator/internal/x/x.go"), text
+
+
+# verify6.md (v6/lit): a verb or a layout year inside a random value, or a passphrase's trailing
+# digits, made the whole literal text
+RHS_RANDOM = [
+    "Correct-Horse-" + "Battery-Staple42",
+    "Zq8vT2Kp%2F" + "4mW9xR7nB3",
+    "Zq8vT2Kp2006" + "mW9xR7nB3",
+]
+
+
+@pytest.mark.parametrize("value", RHS_RANDOM)
+def test_a_random_literal_with_a_verb_or_layout_inside_is_still_judged(value: str):
+    text = f'api{TOK} := prefix + "{value}"'
+    assert "keyed-secret" in _secret_hits(text, "orchestrator/internal/x/x.go"), text
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2006-01-02T15:04:05Z07:00",
+        "Jan _2 15:04:05",
+        "%s:%d",
+        "X-Api-Key",
+        "ipv6-only",
+        # verify7.md (v7/fp): unpadded month, day, hour, minute and second
+        "January 2, 2006",
+        "Jan 2 15:04",
+        "2006-1-2",
+        "2006-1-2 3:4:5",
+        "3:04PM Jan 2",
+        "3:04PM",  # time.Kitchen
+    ],
+)
+def test_layouts_verbs_and_words_stay_text(value: str):
+    assert leak_scan._is_go_text_literal(value)
+
+
+# verify5.md (v5/colon/d.go): one rule for ":", "=" and ":=": an expression is code after each,
+# a cast of a long number stays a finding after each
+@pytest.mark.parametrize("sep", [": ", " = ", " := "])
+def test_go_separators_share_one_rule(sep: str):
+    def hit(value: str) -> bool:
+        return "keyed-secret" in _secret_hits(f"{SEC}{sep}{value}", "orchestrator/internal/x/x.go")
+
+    assert not hit("base64.StdEncoding.EncodeToString(key)")
+    assert not hit('vault.KVv2("' + SEC + '").Get(ctx, "app/api")')
+    assert hit("uint64(" + "82736451" + "09283746512)")
+    assert hit("float64(" + "Zq81kXw" + "Lm2pV9a)")
+
+
+def test_a_line_ending_in_a_form_feed_keeps_its_file_context():
+    # verify5.md (v5/ff): the line ends at \f for splitlines(), the comparison with the file's
+    # line failed, and the raw string's body was judged as code
+    text = f"package c\n\nconst conf = `\nclient_{SEC} = Zq8vT2.Kp4mW9xR7nB3\f\napi_{TOK} = x`\n"
+    hits = leak_scan.scan_text(text, "orchestrator/internal/x/c.go")
+    assert [h.line for h in hits if h.pattern == "keyed-secret"] == [4]
+
+
+def test_go_source_stays_linear_on_a_large_file():
+    # verify5.md (v5/perf): a slice per keyed match made a 20k-line Go file take minutes
+    line = f'\t{TOK}Path := filepath.Join(dir, "{TOK}.json") + "x"\n'
+    text = "package big\n\nfunc f() {\n" + line * 20000 + "}\n"
+    start = time.monotonic()
+    leak_scan.scan_text(text, "big.go")
+    assert time.monotonic() - start < 60  # about 6 s here; the quadratic walk took minutes
+
+
+def test_vault_prefixed_names_are_findings_whatever_product_uses_them():
+    # vault_* is the Ansible-vault secret convention secret-name exists to catch; a product's notes
+    # store keys are no exception (the orchestrator's are renamed notes_* rather than allowed)
+    for line in (
+        "vau" + "lt_root: /srv/notes",
+        "vau" + "lt_scope: [findings]",
+        "tools: [vau" + "lt_write]",
+    ):
+        assert "secret-name" in _secret_hits(line), line
+    for line in ("notes_root: /srv/notes", "notes_scope: [findings]", "tools: [notes_write]"):
+        assert _secret_hits(line) == set(), line

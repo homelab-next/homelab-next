@@ -18,7 +18,7 @@
     "by": {
       "type": "string",
       "pattern": "^[A-Za-z0-9_.-]+:[A-Za-z0-9_.@-]+$",
-      "description": "The writer, issuer-qualified (agent:j8-lead, human:operator)."
+      "description": "The writer, issuer-qualified (agent:assessment-lead, human:operator)."
     },
     "date": {
       "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"

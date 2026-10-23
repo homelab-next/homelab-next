@@ -338,7 +338,7 @@ def test_orchestrator_queue_summary():
     by = {d.item: d for d in drafts}
     assert _items(drafts) == {"queued": "warn", "running": "ok", "history": "ok"}
     assert by["queued"].summary == "3 queued jobs, oldest 1h 30m (over the limit)"
-    assert by["running"].summary == "2 running jobs: actor-analyst 1, j6-lead 1"
+    assert by["running"].summary == "2 running jobs: actor-analyst 1, comms-lead 1"
     assert by["history"].summary == "all time: cancelled 2, done 120, failed 4"
     assert by["queued"].work and by["running"].work and by["running"].value == 2
     idle = _builtin(fixture("orchestrator-queue-summary-idle"), "orchestrator-queue")

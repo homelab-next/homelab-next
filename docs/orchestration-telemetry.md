@@ -99,8 +99,8 @@ as `agent.activity`'s summary tier ([status](status.md) ([[status]]) section 6):
   (`the_prompt_was_...`) pass, up to 512 characters per job and 768 per turn, as they do in
   `run_id`, `gateway_tag` and `tools[].name`; refusing them would refuse real names
   (`together_ai`, `Q4_K_M`, dotted versions). The producers are the pinned controller and the
-  operator's gateway, not an adversary. emits. The tests plant forbidden values (all fictional) and
-  check that neither the store file nor the page holds them.
+  operator's gateway, not an adversary. The tests plant forbidden values (all fictional) and check
+  that neither the store file nor the page holds them.
 
 ## Data flow
 
@@ -220,7 +220,10 @@ the `proxy_admin_viewer` role (sees all spend, cannot create keys, change settin
 and `allowed_routes: ["/spend/logs/v2"]`, named by secret: `secret:llm-gateway/key-telemetry-reader`,
 delivered as `HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER`. The reader refuses the master key (by
 the variable it is delivered in, so no other spelling of its name gets past), a literal value, credentials in the URL, plain http to anything but loopback (unless
-`--allow-plaintext`), redirects and proxies.
+`--allow-plaintext`), redirects and proxies. It also refuses, when it is built, a `timeout` (the
+wait for each page request, `--turn-source-option timeout=<seconds>`, default 15) outside
+0 < t <= 600 seconds, a `page_size` outside 1 to 1000 and a `max_pages` below 1, so a bad value
+exits 2 at startup.
 
 Why not a read-only Postgres role on `LiteLLM_SpendLogs`:
 
