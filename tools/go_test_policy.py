@@ -42,13 +42,14 @@ Reads the event stream of ``go test -json`` (one or more files) and fails on:
 * with ``--expect-packages FILE`` (``go list ./...``): a listed package with no events at all, so
   a stream cut exactly at a package boundary cannot pass on a quarantined failure's exit 1 (a
   package without test files still has events: its ``skip``);
-* with ``--expect-tests FILE`` (``<import path> <dir>`` per package ``go list`` gives test files):
+* with ``--expect-tests FILE`` (per package with test files, its import path, or a ``go list``
+  line that ``--declared-tests`` filters before the tests run, as CI does):
   a package whose test files declare a ``Test`` or ``Fuzz`` function, or an ``Example`` with an
   ``// Output:`` comment, that did not fail yet reported no test at all -- a floor under tests
   hidden from the run by an ``os.Exit(0)`` before ``m.Run``, which is not a skip.  Test files with
   only benchmarks, helpers or examples without output run nothing and are not expected to.  It is
   a floor, not a guard: hiding some tests (``flag.Set("test.skip", ...)``), or a ``TestMain`` that
-  forges the events, still passes.
+  forges the events or rewrites its test files when the list is read after the run, still passes.
 
 The policy file (``skips.yml`` in the module's root)::
 
@@ -185,7 +186,12 @@ def verify_vendor(directory: Path) -> None:
         rows = list(csv.reader((directory / "RECORD").read_text(encoding="utf-8").splitlines()))
     except OSError as exc:
         raise PolicyError(f"{directory}: cannot read the vendored PyYAML's RECORD: {exc}") from exc
-    hashes = {row[0]: row[1] for row in rows if len(row) >= 2 and "=" in row[1]}
+    # sha256 only, as pip writes it: a row with another algorithm counts as no hash at all
+    hashes = {
+        row[0]: row[1].removeprefix("sha256=")
+        for row in rows
+        if len(row) >= 2 and row[1].startswith("sha256=")
+    }
     for f in sorted(directory.rglob("*")):
         rel = f.relative_to(directory).as_posix()
         if rel == "RECORD":
@@ -194,13 +200,10 @@ def verify_vendor(directory: Path) -> None:
             raise PolicyError(f"vendored PyYAML: {rel} is a symbolic link or a bytecode cache")
         if f.is_dir():
             continue
-        algo, _, want = hashes.get(rel, "=").partition("=")
-        if not algo:
-            raise PolicyError(f"vendored PyYAML: {rel} is not in its RECORD")
-        try:
-            digest = hashlib.new(algo, f.read_bytes()).digest()
-        except ValueError as exc:
-            raise PolicyError(f"vendored PyYAML: {rel}: unknown hash {algo!r}") from exc
+        want = hashes.get(rel)
+        if want is None:
+            raise PolicyError(f"vendored PyYAML: {rel} is not in its RECORD with a sha256 hash")
+        digest = hashlib.sha256(f.read_bytes()).digest()
         if base64.urlsafe_b64encode(digest).rstrip(b"=").decode() != want:
             raise PolicyError(f"vendored PyYAML: {rel} does not match its RECORD hash")
 
@@ -724,35 +727,57 @@ def read_exits(path: str) -> dict[str, int]:
     return exits
 
 
-# a top-level function the test binary runs: TestXxx and FuzzXxx (Xxx not lowercase), or
-# ExampleXxx, which runs only when its body has an output comment
-_RUNS = re.compile(r"(?:Test|Fuzz)(?![a-z])\w*")
+# a top-level function the test binary runs: TestXxx and FuzzXxx (Xxx not lowercase; TestMain is
+# the harness, not a test), or ExampleXxx, which runs only when its body has an output comment
+_RUNS = re.compile(r"(?!TestMain$)(?:Test|Fuzz)(?![a-z])\w*")
 _EXAMPLE = re.compile(r"Example\w*")
 _OUTPUT = re.compile(r"(?i)^//\s*(?:unordered )?output:")
 
 
-def declares_tests(directory: Path) -> bool:
-    """Whether the ``*_test.go`` files in ``directory`` declare a test the binary runs."""
-    examples = output = False
-    for path in sorted(directory.glob("*_test.go")):
+def declares_tests(directory: Path, files: Iterable[str] | None = None) -> bool:
+    """Whether the test files in ``directory`` declare a test the binary runs: ``files`` (go
+    list's TestGoFiles and XTestGoFiles, so build constraints count), or every ``*_test.go``."""
+    paths = [directory / f for f in files] if files is not None else directory.glob("*_test.go")
+    for path in sorted(paths):
         toks = go_tokens(path.read_text(encoding="utf-8", errors="replace"))
-        output = output or any(t.kind == "comment" and _OUTPUT.match(t.text) for t in toks)
-        code = [t for t in toks if t.kind != "comment"]
-        for i in range(len(code) - 2):
-            if code[i].text != "func" or code[i + 1].kind != "ident" or code[i + 2].text != "(":
+        for i in range(len(toks) - 2):
+            if toks[i].text != "func" or toks[i + 1].kind != "ident" or toks[i + 2].text != "(":
                 continue
-            name = code[i + 1].text
-            if _RUNS.fullmatch(name):
+            name = toks[i + 1].text
+            if _RUNS.fullmatch(name) or (_EXAMPLE.fullmatch(name) and _has_output(toks, i + 2)):
                 return True
-            examples = examples or bool(_EXAMPLE.fullmatch(name))
-    return examples and output
+    return False
+
+
+def _has_output(toks: list[GoToken], start: int) -> bool:
+    """Whether the body of the function whose signature starts at ``start`` holds an output
+    comment."""
+    depth, i = 0, start
+    while i < len(toks) and toks[i].text != "{":  # an Example takes no parameters
+        i += 1
+    for tok in toks[i:]:
+        if tok.kind == "op" and tok.text in "{}":
+            depth += 1 if tok.text == "{" else -1
+            if depth == 0:
+                return False
+        elif tok.kind == "comment" and _OUTPUT.match(tok.text):
+            return True
+    return False
 
 
 def runnable(lines: list[str]) -> list[str]:
-    """The import paths of ``--expect-tests`` whose packages declare tests; a line without a
-    directory is taken as declaring them."""
+    """The import paths whose packages declare tests.  A line is ``<import path>``, taken as
+    declaring them; ``<import path> <dir>``, every ``*_test.go`` there; or go list's
+    ``<import path> <dir> <TestGoFiles> <XTestGoFiles>``, tab-separated, the file lists
+    comma-separated (the CI step's ``go list`` template)."""
     out = []
     for line in lines:
+        if "\t" in line:
+            pkg, directory, *lists = line.split("\t")
+            files = [f for group in lists for f in group.split(",") if f]
+            if declares_tests(Path(directory), files):
+                out.append(pkg)
+            continue
         pkg, _, directory = line.partition(" ")
         if not directory or declares_tests(Path(directory)):
             out.append(pkg)
@@ -820,6 +845,11 @@ def main(argv: list[str] | None = None) -> int:
         help="'<import path> <dir>' per package with test files: one that declares tests needs a "
         "test event",
     )
+    ap.add_argument(
+        "--declared-tests",
+        metavar="FILE",
+        help="print the import paths of --expect-tests lines whose packages declare tests",
+    )
     ap.add_argument("--list-privileged", action="store_true")
     ap.add_argument(
         "--check-sources",
@@ -832,6 +862,9 @@ def main(argv: list[str] | None = None) -> int:
         policy = load_policy(args.policy, args.module)
         if args.list_privileged:
             print("\n".join(list_privileged(policy)))
+            return EXIT_OK
+        if args.declared_tests:
+            print("\n".join(runnable(_read_lines(args.declared_tests))))
             return EXIT_OK
         if args.check_sources:
             if not args.check_sources.is_dir():

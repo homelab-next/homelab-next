@@ -338,12 +338,19 @@ jobs:
           while read -r pkg rx; do
             [ -n "$pkg" ] || continue
             bin="$res/privileged-$(echo "$pkg" | tr '/.' '__').test"
+            # go test -c on a package without test files writes nothing and exits 0: never run
+            # the previous package's binary in its place
+            rm -f "$RUNNER_TEMP/privileged.test"
             go test -c -race -o "$RUNNER_TEMP/privileged.test" "$pkg"
+            if [ ! -f "$RUNNER_TEMP/privileged.test" ]; then
+              echo "::error::$pkg: no test binary built (no test files?) for skips.yml privileged"
+              exit 1
+            fi
             /usr/bin/sudo install -m 0755 "$RUNNER_TEMP/privileged.test" "$bin"  # root's copy is the one run
             imp=$(go list "$pkg")
             # the verdict is go_test_policy.py's (next step): the stream, and this exit status,
             # which test2json does not see (a TestMain panic after PASS still reads as a pass)
-            # only root writes the results (/usr/bin/sudo tee); --no-new-privs, though root holds every
+            # only root writes the results (sudo tee); --no-new-privs, though root holds every
             # privilege already, keeps both runs from gaining any through an exec
             (cd "$pkg" && status=0 && { /usr/bin/sudo unshare --net -- \
               sh -c 'ip link set lo up && exec setpriv --no-new-privs -- "$@"' \
@@ -367,10 +374,13 @@ jobs:
           # hides)
           go list ./... | /usr/bin/sudo tee "$res/go-packages.txt" > /dev/null
           /usr/bin/sudo test -s "$res/go-packages.txt"
-          go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}} {{.Dir}}{{end}}' ./... \
-            | /usr/bin/sudo tee "$res/go-tested.txt" > /dev/null
+          # (read before the tests run, so a test that rewrites its own files cannot change it)
+          go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{"\t"}}{{.Dir}}{{"\t"}}{{join .TestGoFiles ","}}{{"\t"}}{{join .XTestGoFiles ","}}{{end}}' ./... \
+            | /usr/bin/sudo tee "$res/go-test-files.txt" > /dev/null
+          /usr/bin/sudo /usr/bin/python3 -I "$pol/go_test_policy.py" \
+            --declared-tests "$res/go-test-files.txt" | /usr/bin/sudo tee "$res/go-tested.txt" > /dev/null
           status=0
-          # root opens the stream file, then drops to the runner user, which cannot /usr/bin/sudo from there
+          # root opens the stream file, then drops to the runner user, which cannot sudo from there
           /usr/bin/sudo env "PATH=$PATH" "HOME=$HOME" \
             "GOFLAGS=$GOFLAGS" "GOTOOLCHAIN=$GOTOOLCHAIN" "GOWORK=$GOWORK" \
             unshare --net -- \
@@ -399,7 +409,7 @@ jobs:
       - name: build every package and binary
         run: setpriv --no-new-privs -- go build ./...
       # Linters as Go tool dependencies: version and checksum pinned by tools/go.mod and go.sum.
-      # They run code the module pins, so like the tests they cannot /usr/bin/sudo (no_new_privs).
+      # They run code the module pins, so like the tests they cannot sudo (no_new_privs).
       - name: staticcheck and govulncheck (pinned in tools/go.mod)
         if: matrix.module.tools
         run: |

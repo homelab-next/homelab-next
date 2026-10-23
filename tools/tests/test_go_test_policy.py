@@ -492,6 +492,7 @@ FAKE_TOOLS = {
   test)
     [ -z "$FAKE_TAMPER" ] || [ "$2" = -c ] || sh -c "$FAKE_TAMPER"
     if [ "$2" = -c ]; then
+      [ -z "$FAKE_PRIV_NOBIN" ] || exit 0  # a package without test files: nothing written
       while [ "$1" != -o ]; do shift; done
       printf '#!/bin/sh\\ncat "$FAKE_PRIV_STREAM"; exit "$FAKE_PRIV_EXIT"\\n' > "$2"
       chmod +x "$2"; exit 0
@@ -523,6 +524,7 @@ def run_test_step(
     tested: list[str] = (),
     tamper: str = "",
     module_files: dict[str, str] | None = None,
+    no_binary: bool = False,
 ) -> subprocess.CompletedProcess:
     """The go job's root-only and test steps, in a scratch checkout, with go replaced by streams:
     ``lines`` and ``go_exit`` for go test, ``privileged`` = (stream, exit status) for the root
@@ -533,7 +535,7 @@ def run_test_step(
     result of the first step that fails."""
     bin_dir, mod, rt = tmp_path / "bin", tmp_path / "orchestrator", tmp_path / "runner-temp"
     for d in (bin_dir, mod, rt):
-        d.mkdir(parents=True)
+        d.mkdir(parents=True, exist_ok=True)
     for name, body in FAKE_TOOLS.items():
         (bin_dir / name).write_text("#!/bin/sh\n" + body)
         (bin_dir / name).chmod(0o755)
@@ -576,6 +578,7 @@ def run_test_step(
         "FAKE_PACKAGES": str(tmp_path / "packages.txt"),
         "FAKE_TESTED": str(tmp_path / "tested.txt"),
         "FAKE_TAMPER": tamper,
+        "FAKE_PRIV_NOBIN": "1" if no_binary else "",
         "GITHUB_ENV": str(github_env),
     }
     for name in ("a root-owned results directory", "root-only tests", "tests (race"):
@@ -819,6 +822,8 @@ def test_the_results_are_root_owned_and_the_tests_cannot_sudo():
     # verify4.md (v4/ren): a root-owned directory in the runner's RUNNER_TEMP could be renamed
     # away and replaced; a fresh mktemp name in root-owned /run cannot
     assert "res=$(/usr/bin/sudo mktemp -d /run/go-results.XXXXXX)" in copy
+    # the absolute path is for commands, not prose (verify6.md)
+    assert "cannot /usr/bin/sudo" not in json.dumps(job) and "(/usr/bin/sudo tee)" not in str(job)
     assert '"$GITHUB_WORKSPACE/tools/go_test_policy.py"' in copy and "pyproject.toml" in copy
     assert "/usr/bin/sudo install -m 0644 skips.yml go.mod" in copy
     # verify5.md (v5/shadow): PyYAML by its metadata, from /, isolated, with its RECORD
@@ -836,7 +841,8 @@ def test_the_results_are_root_owned_and_the_tests_cannot_sudo():
         assert calls and set(calls) == {"/usr/bin/sudo /usr/bin/python3 -I"}, calls
     # verify5.md (v5/genv): sudo by its path, never by $PATH, in every step of the job
     for step in steps:
-        assert not re.search(r"(?<![\w/])sudo ", step.get("run", "")), step.get("name")
+        code = [x for x in step.get("run", "").splitlines() if not x.lstrip().startswith("#")]
+        assert not re.search(r"(?<![\w/])sudo ", "\n".join(code)), step.get("name")
     assert "exec setpriv --no-new-privs --reuid=" in main
     assert "exec setpriv --no-new-privs -- " in root
     # every write into the results directory is root's: sudo tee, or a file root opened
@@ -849,6 +855,11 @@ def test_the_results_are_root_owned_and_the_tests_cannot_sudo():
     assert '| /usr/bin/sudo tee "$res/go-packages.txt" > /dev/null' in main
     assert '/usr/bin/sudo test -s "$res/go-packages.txt"' in main
     assert '--expect-tests "$res/go-tested.txt"' in main
+    # verify6.md (v6/et/ws): the list of packages that declare tests is read before the tests run
+    assert main.index("--declared-tests") < main.index("go test -race -shuffle=on")
+    assert "join .TestGoFiles" in main and "join .XTestGoFiles" in main
+    # verify6.md (v6/priv/stale-m): no stale binary runs for a package that built none
+    assert 'rm -f "$RUNNER_TEMP/privileged.test"' in root and "no test binary built" in root
     for run in (root, main):
         assert not re.search(r'>>? *"\$(out|exits|res)', run.replace("> /dev/null", ""))
     # verify4.md (v4/pre): bash -e alone let a failing go list | tee pass
@@ -903,6 +914,22 @@ def test_the_policy_copy_finds_pyyaml_beside_it_under_an_isolated_interpreter(tm
     assert r.returncode != 0 and "No module named 'yaml'" in r.stderr
 
 
+def _rehash(pol: Path, algo: str) -> None:
+    """Rewrite __init__.py and its RECORD row consistently, with another hash algorithm."""
+    import base64
+    import hashlib
+
+    init = pol / "vendor" / "yaml" / "__init__.py"
+    init.write_text("print('rewritten')\n")
+    h = hashlib.new(algo, init.read_bytes())
+    digest = h.hexdigest(16) if algo.startswith("shake") else h.digest()
+    if isinstance(digest, bytes):
+        digest = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    record = pol / "vendor" / "RECORD"
+    rows = [r for r in record.read_text().splitlines() if not r.startswith("yaml/__init__.py,")]
+    record.write_text("\n".join([*rows, f"yaml/__init__.py,{algo}={digest},1"]) + "\n")
+
+
 def test_the_vendored_pyyaml_must_match_its_record(tmp_path):
     # verify5.md (v5/shadow): the copy was taken on trust, and could be the module's own yaml
     pol = tmp_path / "policy"
@@ -915,6 +942,9 @@ def test_the_vendored_pyyaml_must_match_its_record(tmp_path):
         (lambda: (init.parent / "__pycache__").mkdir(), "bytecode cache"),
         (lambda: (init.parent / "link.py").symlink_to(init), "symbolic link"),
         (lambda: (pol / "vendor" / "RECORD").unlink(), "cannot read"),
+        # verify6.md (v6/rec): sha256 only, so a rewritten md5 row is no hash at all
+        (lambda: _rehash(pol, "md5"), "not in its RECORD with a sha256 hash"),
+        (lambda: _rehash(pol, "shake_128"), "not in its RECORD with a sha256 hash"),
     ]:
         shutil.rmtree(pol / "vendor")
         _vendor(pol)
@@ -932,6 +962,16 @@ def test_the_results_step_copies_pyyaml_not_a_yaml_of_the_module(tmp_path):
     (res,) = (tmp_path / "run").glob("go-results.*")
     policy.verify_vendor(res / "policy" / "vendor")
     assert (res / "policy" / "vendor" / "yaml" / "__init__.py").read_text() != shadow
+
+
+@needs_bash
+def test_a_privileged_entry_without_a_test_binary_fails_instead_of_running_a_stale_one(tmp_path):
+    # verify6.md (v6/priv/stale-m): go test -c on a package without test files exits 0 and
+    # leaves the previous package's binary in place, which then ran for it
+    (tmp_path / "runner-temp").mkdir(parents=True)
+    (tmp_path / "runner-temp" / "privileged.test").write_text("#!/bin/sh\nexit 0\n")
+    r = run_test_step(tmp_path, HARD_SKIP, 0, skips=HARD, no_binary=True)
+    assert r.returncode == 1 and "no test binary built" in r.stdout, r.stdout + r.stderr
 
 
 @needs_bash
@@ -989,6 +1029,12 @@ DECLARED = {
     "helpers only": ("func Testable(t *testing.T) {}\nfunc helper() {}\n", False),
     "example without output": ('func Example() { fmt.Println("hi") }\n', False),
     "a method named Test": ("func (s *suite) TestX(t *testing.T) {}\n", False),
+    # verify6.md (v6/et): TestMain is the harness, and an output comment counts only in an Example
+    "TestMain only": ("func TestMain(m *testing.M) { os.Exit(m.Run()) }\n", False),
+    "output outside the example": (
+        "func Example() {}\n\nfunc helper() {\n\t// Output: hi\n}\n",
+        False,
+    ),
     "in a comment": ("// func TestX(t *testing.T) {}\n", False),
 }
 
@@ -998,6 +1044,25 @@ def test_which_test_files_declare_tests(tmp_path, body, runs):
     (tmp_path / "x_test.go").write_text("package x\n\n" + body)
     (tmp_path / "x.go").write_text("package x\n\nfunc TestNotInATestFile() {}\n")
     assert policy.declares_tests(tmp_path) is runs
+
+
+def test_only_the_test_files_go_list_selected_are_read(tmp_path):
+    # verify6.md (v6/et winonly, tmonly): a build-constrained file holds the tests
+    (tmp_path / "helpers_test.go").write_text("package x\n\nfunc helper() {}\n")
+    (tmp_path / "x_windows_test.go").write_text("package x\n\nfunc TestWin(t *testing.T) {}\n")
+    assert policy.declares_tests(tmp_path)  # the glob reads every file
+    assert not policy.declares_tests(tmp_path, ["helpers_test.go"])
+    line = f"{MOD}/w\t{tmp_path}\thelpers_test.go\t"
+    assert policy.runnable([line]) == []
+    assert policy.runnable([f"{MOD}/w\t{tmp_path}\t\tx_windows_test.go"]) == [f"{MOD}/w"]
+
+
+def test_declared_tests_prints_the_list_the_judge_expects(tmp_path, capsys):
+    (tmp_path / "x_test.go").write_text("package x\n\nfunc TestX(t *testing.T) {}\n")
+    lines = tmp_path / "files.txt"
+    lines.write_text(f"{MOD}/a\t{tmp_path}\tx_test.go\t\n{MOD}/b\t{tmp_path}\t\t\n")
+    assert policy.main(["--declared-tests", str(lines)]) == 0
+    assert capsys.readouterr().out == f"{MOD}/a\n"
 
 
 def test_the_floor_expects_tests_only_where_they_are_declared(tmp_path, capsys):
