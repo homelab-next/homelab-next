@@ -267,7 +267,8 @@ def test_serve_checks_its_notify_endpoint_at_start(tmp_path, monkeypatch, caplog
 def test_the_notify_topic_can_stay_out_of_the_process_list(tmp_path, monkeypatch):
     from homelabnext.broker.cli import notifier_from_args
 
-    monkeypatch.setenv("HNX_ENDPOINT_NOTIFY", "https://n.svc.example.internal:8443")
+    secure = "https://n.svc.example.internal:8443"  # no-raw-endpoint: allow override syntax
+    monkeypatch.setenv("HNX_ENDPOINT_NOTIFY", secure)
     (tmp_path / "topic").write_text("hnx-ops-7f3\n")
     n = notifier_from_args(_notify_args(tmp_path, notify_topic=None, notify_token=None,
                                         notify_topic_file=str(tmp_path / "topic")))  # fmt: skip
