@@ -19,8 +19,9 @@ MIN_CHECKS, MAX_CHECKS = 6, 24
 
 def test_the_documented_bound_is_the_one_tested():
     text = (ROOT / "docs" / "conformance.md").read_text(encoding="utf-8")
-    bounds = re.findall(r"(\d+) to (\d+) checks", text)
-    assert bounds and set(bounds) == {(str(MIN_CHECKS), str(MAX_CHECKS))}, bounds
+    # whitespace, not a space: a reflow that wraps "6 to\n24 checks" must not hide one
+    bounds = re.findall(r"(\d+)\s+to\s+(\d+)\s+checks", text)
+    assert bounds == [(str(MIN_CHECKS), str(MAX_CHECKS))] * 2, bounds
 
 
 def test_capability_list_is_the_one_in_interfaces_md():
