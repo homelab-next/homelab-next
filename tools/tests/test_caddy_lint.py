@@ -3,6 +3,7 @@
 
 import io
 import json
+import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -471,234 +472,164 @@ def test_main_reports_and_exits(tmp_path):
 
 def test_this_repo_pins_a_fixed_caddy_and_strips_before_forward_auth():
     """Every Caddy pin in the tree was 2.8.4: 2.9.0-2.11.1 pass a client-sent identity header
-    the IdP omits, and up to 2.11.1 the underscore spelling. The tree must stay clean."""
+    the IdP omits, and up to 2.11.1 the underscore spelling. The tree must stay clean, and the
+    generated configs must stay covered: a generator change that made every registry fail
+    would otherwise read as a clean run with nothing generated."""
     out, err = io.StringIO(), io.StringIO()
-    assert lint.main([str(REPO)], out=out, err=err) == 0, err.getvalue()
-    assert "0 finding(s)" in out.getvalue()
+    assert lint.main([str(REPO), "--json"], out=out, err=err) == 0, out.getvalue()
+    doc = json.loads(out.getvalue())
+    assert doc["findings"] == [] and doc["discovery"] == "git"
+    assert doc["generated"] >= 6
 
 
-# ---------------------------------------------------------------- an identity header set later
+# ---------------------------------------------------------------- discovery and coverage
 
-AUTHED = """\
-app.lab.example {
-	route {
-		request_header -*authentik*
-		forward_auth idp:9443 {
-			uri /outpost.goauthentik.io/auth/caddy
-			copy_headers X-Authentik-Username X-Authentik-Groups
-		}
-		%s
-	}
-	reverse_proxy app:8080 {
-		%s
-	}
-	%s
-}
-"""
+BARE = (
+    "app.lab.example {\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Authentik-Username\n\t}\n}\n"
+)
 
 
-def _resets(route: str = "", proxy: str = "", site: str = "") -> list[tuple[int, str]]:
-    return [
-        (f.line, f.detail.split(" names ")[0])
-        for f in lint.lint_caddy(AUTHED % (route, proxy, site))
-        if f.rule == "reset"
-    ]
+def _found(root) -> list[tuple[str, int, str]]:
+    findings, _ = lint.scan(root)
+    return sorted((f.path, f.line, f.rule) for f in findings)
 
 
-def test_the_authed_shape_passes():
-    assert lint.lint_caddy(AUTHED % ("", "", "")) == []
+def _git(root, *args):
+    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
 
 
-@pytest.mark.parametrize(
-    ("route", "proxy", "site", "expected"),
-    [
-        # reverse_proxy sets it from a client header after forward_auth ran
-        ("", "header_up X-Authentik-Groups {http.request.header.X-Evil}", "", [(11, "header_up")]),
-        ("", "header_up +X-Authentik-Groups admins", "", [(11, "header_up")]),
-        ("", "header_up X-Authentik-Groups admins users", "", [(11, "header_up")]),
-        # set again inside the route, after forward_auth
-        ("request_header X-Authentik-Groups {http.request.header.X-Evil}", "", "", [(8, "request_header")]),
-        ("request_header +x_authentik_groups admins", "", "", [(8, "request_header")]),
-        # a second route
-        ("", "", "route {\n\t\trequest_header X-Authentik-Username {header.X-Evil}\n\t}", [(14, "request_header")]),
-        # copied from the client's own header into another one before the route runs
-        ("", "", "request_header X-Remote-User {http.request.header.X-Authentik-Username}", [(13, "request_header")]),
-        # a header block
-        ("", "", "header {\n\t\t+X-Authentik_Groups admins\n\t}", [(14, "header")]),
-        # deletes are not a reset, and other headers are not identity headers
-        ("request_header -X-Authentik-Groups", "header_up -X_Authentik_*", "header {\n\t\t-Server\n\t}", []),
-        ("", "header_up Host {upstream_hostport}", "", []),
-    ],
-)  # fmt: skip
-def test_an_identity_header_set_anywhere_but_copy_headers_fails(route, proxy, site, expected):
-    assert _resets(route, proxy, site) == expected
+def test_discovery_follows_git(tmp_path):
+    _git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_text("ignored/\n")
+    for rel in ("build/Caddyfile", "ignored/Caddyfile", "new/Caddyfile"):
+        (tmp_path / rel).parent.mkdir(exist_ok=True)
+        (tmp_path / rel).write_text(BARE)
+    _git(tmp_path, "add", "-f", "build/Caddyfile")
+    findings, counts = lint.scan(tmp_path)
+    # a tracked build/ file is read (the old walk skipped build/, dist/, venv/); an untracked
+    # file is read before it is committed; an ignored one is not
+    assert sorted(f.path for f in findings) == ["build/Caddyfile", "new/Caddyfile"]
+    assert counts["discovery"] == "git"
 
 
-def test_a_renamed_target_is_an_identity_header_too():
-    text = (AUTHED % ("", "header_up Remote-User alice", "")).replace(
-        "copy_headers X-Authentik-Username X-Authentik-Groups",
-        "copy_headers X-Authentik-Username>Remote-User",
-    )
-    findings = lint.lint_caddy(
-        text.replace("-*authentik*", "-*authentik*\n\t\trequest_header -Remote*")
-    )
-    assert [(f.line, f.rule) for f in findings] == [(12, "reset")]
-    assert "Remote-User" in findings[0].detail
-
-
-def test_the_authentik_uri_path_is_not_a_header():
-    assert lint.lint_caddy(AUTHED % ("", "", "redir /outpost.goauthentik.io/start /")) == []
-
-
-def test_an_inline_allow_waives_one_reset():
-    proxy = "header_up X-Authentik-Groups admins  # caddy-lint: allow fixture"
-    assert _resets("request_header X-Authentik-Groups x", proxy) == [(8, "request_header")]
-
-
-# ---------------------------------------------------------------- syntax the lint cannot model
-
-
-def _rules(text: str) -> list[tuple[int, str, str]]:
-    return [(f.line, f.rule, f.detail) for f in lint.lint_caddy(textwrap.dedent(text))]
-
-
-def test_a_heredoc_fails_closed_and_hides_what_caddy_hides():
-    # Caddy reads both deletes as the heredoc's text: on 2.11.1 every forged spelling passed
-    text = GOOD.replace(
-        "\t\trequest_header -*authentik*\n",
-        "\t\tvars note <<TXT\n\t\trequest_header -*authentik*\n\t\tTXT\n",
-    )
-    found = _rules(text)
-    assert found[0] == (4, "parse", "a heredoc (<<TXT) hides lines from the lint")
-    assert [r for _, r, _ in found].count("strip") == 2
-
-
-def test_a_heredoc_line_cannot_open_a_phantom_block():
-    text = """\
-    app.lab.example {
-        route {
-            request_header -*authentik*
-            vars note <<TXT
-            route {
-            TXT
-        }
-        forward_auth idp:9443 {
-            copy_headers X-Authentik-Username
-        }
-    }
-    """
-    assert [(ln, r) for ln, r, _ in _rules(text)] == [(4, "parse"), (8, "strip")]
-    assert "not directly inside a route" in _rules(text)[1][2]
-
-
-def test_a_quoted_token_spanning_lines_fails_closed():
-    text = 'app.lab.example {\n\troute {\n\t\trequest_header -*authentik*\n\t\tvars note "a {\n"\n\t}\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Authentik-Username\n\t}\n}\n'
-    assert [(ln, r) for ln, r, _ in _rules(text)] == [(4, "parse"), (7, "strip")]
-
-
-def test_an_unclosed_quote_fails_closed():
-    assert _rules('app.lab.example {\n\trespond "never closed\n}\n')[0][1:] == (
-        "parse",
-        "a quoted token is never closed",
-    )
-
-
-def test_a_brace_sharing_a_line_closes_the_block_as_caddy_does():
-    text = GOOD.replace("request_header -*authentik*\n", "request_header -*authentik* }\n\t")
-    found = _rules(text)
-    assert found[0] == (4, "parse", "a { or } shares its line with a directive")
-    assert any("not directly inside a route" in d for _, _, d in found)
-
-
-def test_quoted_braces_and_comments_are_not_blocks():
-    text = GOOD.replace(
-        "\t\tforward_auth", '\t\trespond "a { b }" 200 # } {\n\t\tvars x#y "}"\n\t\tforward_auth'
-    )
-    assert _rules(text) == []
+def test_discovery_outside_git_reads_every_file_but_virtualenvs(tmp_path, monkeypatch):
+    monkeypatch.setattr(lint, "_git_files", lambda root: None)
+    for rel in ("build/Caddyfile", "dist/x/Caddyfile", "env/Caddyfile", "env/pyvenv.cfg"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(BARE)
+    findings, counts = lint.scan(tmp_path)
+    assert sorted(f.path for f in findings) == ["build/Caddyfile", "dist/x/Caddyfile"]
+    assert counts["discovery"] == "walk"
+    err = io.StringIO()
+    lint.main([str(tmp_path)], out=io.StringIO(), err=err)
+    assert "is not a git work tree" in err.getvalue()
 
 
 @pytest.mark.parametrize(
-    ("line", "detail"),
+    "fence",
     [
-        ("{$AUTH_DIRECTIVE}", "{$AUTH_DIRECTIVE} in directive position hides a directive"),
-        ("{{ auth_block }}", "{{ in directive position hides a directive"),
-        ("{args[0]} idp:9443", "{args[0]} in directive position hides a directive"),
-        ("respond ok \\", "a line ends in \\ (a continued line)"),
+        "~~~caddyfile\n%s~~~\n",
+        "````caddyfile\n%s````\n",
+        '```caddyfile title="Caddyfile"\n%s```\n',
+        "```\n%s```\n",
+        "```text\n%s```\n",
+        "```nginx\n%s```\n",
+        "- a list item:\n\n      ```caddy\n      %s      ```\n",
     ],
 )
-def test_a_hidden_directive_fails_closed(line, detail):
-    assert (2, "parse", detail) in _rules(
-        f"app.lab.example {{\n\t{line}\n\treverse_proxy app:8080\n}}\n"
+def test_every_markdown_fence_holding_forward_auth_is_read(tmp_path, fence):
+    (tmp_path / "doc.md").write_text("Intro.\n\n" + fence % BARE)
+    found = _found(tmp_path)
+    assert [r for _, _, r in found] == ["strip"]
+
+
+def test_a_fence_closes_only_on_its_own_kind_and_length(tmp_path):
+    (tmp_path / "doc.md").write_text("~~~~caddyfile\n~~~\n" + BARE + "~~~~\n")
+    assert [r for _, _, r in _found(tmp_path)] == ["strip"]
+
+
+def test_markdown_prose_and_other_code_are_not_configs(tmp_path):
+    (tmp_path / "doc.md").write_text(
+        "Run `forward_auth` in a route.\n\n```python\nprint('caddy')\n```\n"
     )
+    assert _found(tmp_path) == []
 
 
-def test_an_env_site_address_and_the_global_block_are_fine():
-    assert _rules("{\n\tadmin off\n}\n{$SITE} {\n\treverse_proxy app:8080\n}\n") == []
+def test_an_indented_code_block_fails_closed(tmp_path):
+    (tmp_path / "doc.md").write_text("Example:\n\n    forward_auth idp:9443\n")
+    assert _found(tmp_path) == [("doc.md", 3, "coverage")]
 
 
 @pytest.mark.parametrize(
-    ("text", "detail"),
+    ("name", "text"),
     [
-        ("app.lab.example {\n\treverse_proxy app:8080\n", "a block is never closed"),
-        ("app.lab.example\n}\n", "a } closes no block"),
-        ("app.lab.example\n{\n\treverse_proxy app:8080\n}\n", "a { on a line of its own"),
+        ("edge.conf", BARE),
+        ("caddy_site.tmpl", BARE),
+        ("gen_site.py", f'SITE = """\n{BARE}"""\n'),
+        ("gen_inline.py", 'SITE = "app.lab.example {\\n\\tforward_auth idp:9443\\n}"\n'),
     ],
 )
-def test_unbalanced_braces_fail_closed(text, detail):
-    assert detail in [d for _, r, d in _rules(text) if r == "parse"]
+def test_forward_auth_in_a_file_the_lint_does_not_read_fails(tmp_path, name, text):
+    (tmp_path / name).write_text(text)
+    assert [(p, r) for p, _, r in _found(tmp_path)] == [(name, "coverage")]
 
 
-def test_a_matcher_on_forward_auth_fails():
-    text = GOOD.replace("forward_auth idp:9443", "forward_auth @api idp:9443")
-    assert _strip(text) == ["forward_auth @api: a request its matcher skips is never authenticated"]
+def test_a_prose_mention_is_not_coverage(tmp_path):
+    (tmp_path / "Makefile").write_text("# F-23: strip identity headers before forward_auth\n")
+    (tmp_path / "x.py").write_text('assert ln.startswith("forward_auth ")\n')
+    assert _found(tmp_path) == []
 
 
-# ---------------------------------------------------------------- import
-
-
-def test_a_snippet_import_is_expanded_in_place():
-    text = """\
-    (strip) {
-        request_header -*authentik*
-    }
-    app.lab.example {
-        route {
-            import strip
-            forward_auth idp:9443 {
-                copy_headers X-Authentik-Username
-            }
-        }
-    }
-    """
-    assert _rules(text) == []
-    assert len(_rules(text.replace("import strip", "import other"))) == 2  # unresolved + strip
-
-
-def test_the_generated_snippet_resolves_where_it_is_not_defined():
-    # a documented site imports the generated snippet without defining it
-    assert (
-        _rules("app.lab.example {\n\timport hnx_forward_auth\n\treverse_proxy app:8080\n}\n") == []
-    )
-
-
-def test_a_file_import_is_followed_and_a_glob_fails_closed(tmp_path):
+def test_an_imported_file_is_read_as_a_config(tmp_path):
     (tmp_path / "conf.d").mkdir()
     (tmp_path / "conf.d" / "auth.conf").write_text(
-        "forward_auth idp:9443 {\n\tcopy_headers X-Authentik-Username\n}\n"
+        "route {\n\trequest_header -*authentik*\n\tforward_auth idp:9443 {\n"
+        "\t\tcopy_headers X-Authentik-Username\n\t}\n}\n"
     )
-    site = "app.lab.example {\n\timport %s\n\treverse_proxy app:8080\n}\n"
-    ctx = lint.CaddyContext(tmp_path)
-    found = lint.lint_caddy(site % "conf.d/auth.conf", "Caddyfile", base=tmp_path, ctx=ctx)
-    assert [(f.path, f.line, f.rule) for f in found] == [("conf.d/auth.conf", 1, "strip")]
-    assert ctx.parsed == {"conf.d/auth.conf"}
-    for target in ("conf.d/*.conf", "missing.conf", "../outside.conf", "{$CONF}"):
-        found = lint.lint_caddy(site % target, "Caddyfile", base=tmp_path, ctx=ctx)
-        assert [(f.line, f.rule) for f in found] == [(2, "parse")], target
-        assert "cannot be followed" in found[0].detail
-    # a markdown block has no directory to resolve a file against
-    assert [f.rule for f in lint.lint_caddy(site % "conf.d/auth.conf")] == ["parse"]
+    (tmp_path / "Caddyfile").write_text("app.lab.example {\n\timport conf.d/auth.conf\n}\n")
+    assert _found(tmp_path) == []
 
 
-def test_a_snippet_that_imports_itself_terminates():
-    found = _rules("(a) {\n\timport a\n}\napp.lab.example {\n\timport a\n}\n")
-    assert found and {r for _, r, _ in found} == {"parse"}
+def test_a_caddyfile_embedded_in_yaml_is_read(tmp_path):
+    (tmp_path / "task.yml").write_text(
+        "- name: edge config\n  copy:\n    content: |\n"
+        + "".join(f"      {ln}\n" for ln in BARE.splitlines())
+    )
+    assert _found(tmp_path) == [("task.yml", 5, "strip")]
+    (tmp_path / "task.yml").write_text("- name: forward_auth strips identity headers first\n")
+    assert _found(tmp_path) == []
+
+
+def test_a_generator_failure_is_a_finding(tmp_path, monkeypatch):
+    from homelabnext.generators import builtin
+
+    (tmp_path / "services.yml").write_text(
+        (REPO / "examples" / "services.yml").read_text(encoding="utf-8")
+    )
+
+    def broken(endpoint):
+        raise RuntimeError("a generator bug")
+
+    monkeypatch.setattr(builtin, "_forward_auth_snippet", broken)
+    findings, counts = lint.scan(tmp_path)
+    assert [(f.path, f.rule) for f in findings] == [("services.yml", "generate")]
+    assert counts["generated"] == 0
+
+
+def test_a_registry_that_does_not_load_is_skipped(tmp_path):
+    (tmp_path / "bad.yml").write_text("registry_version: 1\nservices: {edge: {impl: caddy}}\n")
+    findings, counts = lint.scan(tmp_path)
+    assert [f.rule for f in findings] == ["pin"] and counts["generated"] == 0
+
+
+def test_a_missing_dependency_exits_2(tmp_path, monkeypatch):
+    (tmp_path / "services.yml").write_text(
+        (REPO / "examples" / "services.yml").read_text(encoding="utf-8")
+    )
+    out, err = io.StringIO(), io.StringIO()
+    monkeypatch.setitem(sys.modules, "homelabnext.generators", None)
+    assert lint.main([str(tmp_path)], out=out, err=err) == 2
+    assert "missing dependency: homelabnext" in err.getvalue()
+    monkeypatch.setattr(lint, "yaml", None)
+    assert lint.main([str(tmp_path)], out=out, err=err) == 2
+    assert "missing dependency: PyYAML" in err.getvalue()

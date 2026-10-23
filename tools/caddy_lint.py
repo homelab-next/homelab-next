@@ -8,11 +8,11 @@
 #   trigger: [ci:ci/schemas, make:caddy-lint]
 #   invariant: [F-23]
 #   inputs: the tracked tree (Caddyfiles, templates, markdown caddyfile blocks, registries, Dockerfiles, other pins), the caddy generator and tools/caddy_lint.allow.yml
-#   outputs: one line per unprotected forward_auth or vulnerable Caddy pin
+#   outputs: one line per unprotected forward_auth, identity header set outside copy_headers, construct the lint cannot read, unread config, vulnerable Caddy pin or stale allowlist entry
 #   exit:
 #     "0": clean
-#     "1": an unprotected forward_auth or a Caddy pin below 2.11.2
-#     "2": usage error or a missing dependency
+#     "1": a finding (strip, reset, parse, coverage, generate, pin or a stale allowlist entry)
+#     "2": usage error, a bad allowlist or a missing dependency
 """Gate: the edge never lets a client name its own identity to a service behind forward-auth.
 
 ``forward_auth`` copies the identity provider's answer (``copy_headers``) onto the request, and the
@@ -64,16 +64,28 @@ must hold, everywhere:
              ``${VAR:-default}`` resolves to its default; a variable with none, or a template
              expression, cannot be checked and fails closed.
 
-Caddy configs checked: every tracked ``Caddyfile*``, ``*.caddy``, ``*.caddyfile`` and their
-``.j2``/``.tmpl`` templates; every ```` ```caddy ```` / ```` ```caddyfile ```` block in markdown;
-and the output of the ``caddy`` generator for every registry in the tree that loads (a registry
-that does not load, such as a schema negative, is skipped; its pins are still checked). A
-reviewed exception is an inline ``caddy-lint: allow <reason>`` comment on the offending line, or
+Which files: inside a git work tree, every file ``git ls-files`` reports (tracked, plus untracked
+files that are not ignored); outside one, every file under ROOT but VCS metadata, caches and
+virtualenvs, and the run says so. Caddy configs read: every ``Caddyfile*``, ``*.caddyfile*``,
+``*.caddy`` and their ``.j2``/``.jinja``/``.tmpl``/``.tpl`` templates; every file one of them
+imports; every markdown fence (```, ~~~, any length, any info string) tagged ``caddy`` or
+``caddyfile`` or holding a ``forward_auth``; a Caddyfile embedded in a YAML/JSON string; and the
+output of the ``caddy`` generator for every registry in the tree that loads (a registry that
+does not load, such as a schema negative, is skipped, its pins still checked; a registry that
+loads but the generator fails on is a ``generate`` finding).
+
+  coverage   a file with a ``forward_auth`` in directive position (first on a line, in a string
+             literal, after an escaped newline or a ``{``) that the lint did not read as a Caddy
+             config (a ``.conf`` nothing imports, a ``.tmpl``, a Python string, an indented
+             markdown code block) is a finding: the lint cannot vouch for what it does not read.
+
+A reviewed exception is an inline ``caddy-lint: allow <reason>`` comment on the offending line, or
 an entry in ``tools/caddy_lint.allow.yml`` (a ``path`` glob and a ``reason``) for a whole file;
 an entry that excuses nothing is a finding.
 
 Usage: python tools/caddy_lint.py [ROOT] [--allowlist FILE] [--json]
-Exit: 0 clean, 1 a finding, 2 usage error.
+Exit: 0 clean, 1 a finding, 2 usage error, a bad allowlist or a missing dependency (PyYAML, or the
+homelabnext package the generated configs need): could not measure.
 """
 
 from __future__ import annotations
@@ -83,12 +95,16 @@ import ast
 import fnmatch
 import json
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
 
-import yaml
+try:
+    import yaml
+except ImportError:  # reported by main() as exit 2, could not measure
+    yaml = None  # type: ignore[assignment]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -99,19 +115,21 @@ MIN_CADDY = (2, 11, 2)
 MIN_CADDY_TEXT = ".".join(map(str, MIN_CADDY))
 DEFAULT_ALLOWLIST = "tools/caddy_lint.allow.yml"
 INLINE_ALLOW = re.compile(r"caddy-lint:\s*allow\s+\S")
-SKIP_DIRS = {
-    ".git",
-    "node_modules",
-    "__pycache__",
-    ".venv",
-    "venv",
-    "build",
-    "dist",
-    ".pytest_cache",
-    ".ruff_cache",
-}
-CADDY_NAME = re.compile(r"(^Caddyfile([.-].*)?$)|(\.(caddy|caddyfile)(\.(j2|tmpl))?$)", re.I)
-MD_FENCE = re.compile(r"^[ \t]*```(?:caddy|caddyfile)[ \t]*\n(.*?)^[ \t]*```", re.M | re.S | re.I)
+GIT_LS_FILES = ("ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ".")
+#: outside git: directories that never hold a config of the tree's own
+WALK_SKIP = {".git", "node_modules", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache"}
+#: a Caddyfile by name: Caddyfile*, *.caddyfile*, *.caddy and its templates
+CADDY_NAME = re.compile(r"(?i)((^|\.)caddyfile([.-]|$))|(\.caddy(\.(j2|jinja2?|tmpl|tpl))?$)")
+FENCE_OPEN = re.compile(r"^(?P<indent>[ \t]*)(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
+FORWARD_AUTH = re.compile(r"(?<![\w-])forward_auth(?![\w-])")
+#: ``forward_auth`` where a Caddyfile directive starts: first on its line, also inside a string
+#: literal (``"\tforward_auth``, ``f"forward_auth``), after an escaped newline or after a ``{``
+FORWARD_AUTH_LINE = re.compile(
+    r"""(?m)(?:^[ \t]*(?:[rbfuRBFU]{0,2}["'`])?(?:\\[tn]|[ \t])*|\\n(?:\\t|[ \t])*|\{[ \t]*)"""
+    r"forward_auth(?![\w-])"
+)
+#: a markdown line outside every fence that starts with the directive (an indented code block)
+FORWARD_AUTH_BARE = re.compile(r"[ \t]*forward_auth(?![\w-])")
 VERSION = re.compile(r"^v?(\d+)\.(\d+)(?:\.(\d+))?(?P<pre>-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 TEMPLATED = re.compile(r"\{\{|\{%|\$\{")
 
@@ -332,7 +350,10 @@ def _external_snippet(name: str) -> Node | None:
     documented example importing ``hnx_forward_auth``)."""
     if name != "hnx_forward_auth":
         return None
-    from homelabnext.generators.builtin import _forward_auth_snippet
+    try:
+        from homelabnext.generators.builtin import _forward_auth_snippet
+    except ImportError as exc:
+        raise MissingDependency(f"homelabnext ({exc})") from None
 
     root, _ = parse_caddyfile(_forward_auth_snippet("idp:9443"), "<generated hnx_forward_auth>")
     return root.children[0]
@@ -881,18 +902,33 @@ def lint_python(text: str, path: str = "<text>") -> list[Finding]:
 # ---------------------------------------------------------------- the tree
 
 
-def _generated(text: str) -> str | None:
-    """The caddy generator's output for a registry document, or None when it is not one that
-    loads (a schema negative, an injection fixture)."""
-    from homelabnext.generators import generate
-    from homelabnext.generators.safe import UnsafeValueError
-    from homelabnext.registry.model import RegistryError, loads
+class MissingDependency(Exception):
+    """PyYAML or the homelabnext package cannot be imported (exit 2: could not measure)."""
 
+
+def _generated(text: str, rel: str) -> tuple[str | None, list[Finding]]:
+    """The caddy generator's output for a registry document. A registry that does not load (a
+    schema negative, an injection fixture) is skipped; a registry that loads but the generator
+    fails on, or that yields no Caddy sites file, is a ``generate`` finding, never a quiet
+    loss of coverage."""
     try:
-        out = generate(loads(text), ["caddy"])["caddy"]
-    except (RegistryError, UnsafeValueError, KeyError, TypeError, ValueError, AttributeError):
-        return None
-    return out.get("caddy/sites.caddy")
+        from homelabnext.generators import generate
+        from homelabnext.registry.model import RegistryError, loads
+    except ImportError as exc:
+        raise MissingDependency(f"homelabnext ({exc})") from None
+    try:
+        reg = loads(text)
+    except RegistryError:
+        return None, []
+    try:
+        site = generate(reg, ["caddy"])["caddy"].get("caddy/sites.caddy")
+    except Exception as exc:  # any failure of the generator is reported, not skipped
+        return None, [
+            Finding(rel, 0, "generate", f"the caddy generator failed: {exc.__class__.__name__}")
+        ]
+    if site is None:
+        return None, [Finding(rel, 0, "generate", "the caddy generator wrote no sites.caddy")]
+    return site, []
 
 
 def _is_registry(text: str) -> bool:
@@ -904,13 +940,181 @@ def _is_registry(text: str) -> bool:
     return {"registry_version", "services"} <= keys
 
 
-def _files(root: Path):
+def _git_files(root: Path) -> list[str] | None:
+    """The files under ``root`` git tracks or would track (``.gitignore`` respected), relative
+    to ``root``; None outside a work tree or without git."""
+    try:
+        inside = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
+            capture_output=True,
+            check=False,
+        )
+        if inside.returncode != 0 or inside.stdout.strip() != b"true":
+            return None
+        out = subprocess.run(
+            ["git", "-C", str(root), *GIT_LS_FILES],
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if out.returncode != 0:
+        return None
+    return sorted({n for n in out.stdout.decode("utf-8", "surrogateescape").split("\0") if n})
+
+
+def _walk_files(root: Path) -> list[str]:
+    """Outside git: every file under ``root`` but VCS metadata, caches and virtualenvs."""
+    out = []
     for p in sorted(root.rglob("*")):
-        rel = p.relative_to(root).as_posix()
-        if any(part in SKIP_DIRS or part.endswith(".egg-info") for part in rel.split("/")):
+        rel = p.relative_to(root)
+        parents = [root / Path(*rel.parts[: i + 1]) for i in range(len(rel.parts) - 1)]
+        if any(part in WALK_SKIP for part in rel.parts) or any(
+            (d / "pyvenv.cfg").is_file() for d in parents
+        ):
             continue
+        out.append(rel.as_posix())
+    return out
+
+
+def files(root: Path) -> tuple[list[tuple[Path, str]], str]:
+    """The files to check and how they were found: ``git`` (tracked plus untracked-but-not-
+    ignored) inside a work tree, else ``walk`` (every file; no ``.gitignore`` to honour)."""
+    names = _git_files(root)
+    how = "git"
+    if names is None:
+        names, how = _walk_files(root), "walk"
+    out = []
+    for rel in names:
+        p = root / rel
         if p.is_file() and not p.is_symlink():
-            yield p, rel
+            out.append((p, rel))
+    return out, how
+
+
+def md_blocks(text: str) -> tuple[list[tuple[str, str, int]], list[tuple[int, str]]]:
+    """Fenced blocks of a markdown file as ``(info, body, line offset)`` (``` and ~~~ fences of
+    any length and indent, any info string), and the lines outside every fence."""
+    lines = text.split("\n")
+    blocks: list[tuple[str, str, int]] = []
+    outside: list[tuple[int, str]] = []
+    i = 0
+    while i < len(lines):
+        m = FENCE_OPEN.match(lines[i])
+        if m and not (m.group("fence")[0] == "`" and "`" in m.group("info")):
+            fence, indent = m.group("fence"), len(m.group("indent"))
+            close = re.compile(rf"^[ \t]*{re.escape(fence[0])}{{{len(fence)},}}[ \t]*$")
+            j = i + 1
+            while j < len(lines) and not close.match(lines[j]):
+                j += 1
+            body = [re.sub(rf"^[ \t]{{0,{indent}}}", "", ln) for ln in lines[i + 1 : j]]
+            blocks.append((m.group("info").strip(), "\n".join(body) + "\n", i + 1))
+            i = j + 1
+            continue
+        outside.append((i + 1, lines[i]))
+        i += 1
+    return blocks, outside
+
+
+def _yaml_caddy(text: str, rel: str, ctx: CaddyContext) -> tuple[list[Finding], int]:
+    """A Caddyfile embedded in a YAML/JSON string (an Ansible ``copy: content:``): any string
+    with a ``forward_auth`` that reads as a directive is linted as one."""
+    findings: list[Finding] = []
+    n = 0
+    stack = list(yaml.compose_all(text, Loader=yaml.SafeLoader))
+    while stack:
+        node = stack.pop()
+        if isinstance(node, yaml.MappingNode):
+            stack += [v for _, v in node.value]
+        elif isinstance(node, yaml.SequenceNode):
+            stack += node.value
+        elif isinstance(node, yaml.ScalarNode) and isinstance(node.value, str):
+            v = node.value
+            if FORWARD_AUTH_LINE.search(v) and ("{" in v or "\n" in v.strip()):
+                n += 1
+                offset = node.start_mark.line + (1 if node.style in ("|", ">") else 0)
+                findings += lint_caddy(v, rel, offset, ctx=ctx)
+    return findings, n
+
+
+def scan(
+    root: Path, allow: list[tuple[str, str]] | None = None
+) -> tuple[list[Finding], dict[str, int | str]]:
+    findings: list[Finding] = []
+    counts: dict[str, int | str] = {"files": 0, "caddy_configs": 0, "generated": 0}
+    ctx = CaddyContext(root)
+    unread: list[tuple[str, int]] = []  # files with a forward_auth the lint did not read
+    listed, counts["discovery"] = files(root)
+    for p, rel in listed:
+        name = p.name
+        try:
+            if CADDY_NAME.search(name):
+                text = p.read_text(encoding="utf-8")
+                counts["files"] += 1
+                counts["caddy_configs"] += 1
+                ctx.parsed.add(rel)
+                findings += lint_caddy(text, rel, base=p.parent, ctx=ctx)
+                continue
+            if name == "Dockerfile" or name.startswith("Dockerfile.") or p.suffix == ".dockerfile":
+                counts["files"] += 1
+                findings += lint_dockerfile(p.read_text(encoding="utf-8"), rel)
+                continue
+            text = p.read_text(encoding="utf-8")
+            low = text.lower()
+            if "caddy" not in low and "forward_auth" not in low:
+                continue
+            counts["files"] += 1
+            if p.suffix == ".md":
+                blocks, outside = md_blocks(text)
+                for info, body, offset in blocks:
+                    lang = (info.split() or [""])[0].lower()
+                    if lang in ("caddy", "caddyfile") or FORWARD_AUTH.search(body):
+                        counts["caddy_configs"] += 1
+                        findings += lint_caddy(body, rel, offset, ctx=ctx)
+                unread += [(rel, no) for no, ln in outside if FORWARD_AUTH_BARE.match(ln)]
+                pins = _Pins(rel, text)
+                pins.text()
+                findings += pins.findings
+            elif p.suffix in (".yml", ".yaml", ".json"):
+                findings += lint_pins(text, rel)
+                found, n = _yaml_caddy(text, rel, ctx)
+                findings += found
+                counts["caddy_configs"] += n
+                if _is_registry(text):
+                    site, problems = _generated(text, rel)
+                    findings += problems
+                    if site is not None:
+                        counts["generated"] += 1
+                        counts["caddy_configs"] += 1
+                        findings += lint_caddy(site, f"{rel} (caddy generator)", ctx=ctx)
+            else:
+                if p.suffix == ".py":
+                    findings += lint_python(text, rel)
+                else:
+                    pins = _Pins(rel, text)
+                    pins.text()
+                    findings += pins.findings
+                directive = FORWARD_AUTH_LINE.search(text)
+                if directive:
+                    unread.append((rel, text.count("\n", 0, directive.start()) + 1))
+        except UnicodeDecodeError:
+            if CADDY_NAME.search(name):
+                findings.append(Finding(rel, 0, "parse", "cannot parse: UnicodeDecodeError"))
+        except yaml.YAMLError as exc:
+            findings.append(Finding(rel, 0, "parse", f"cannot parse: {exc.__class__.__name__}"))
+    for rel, line in unread:
+        if rel not in ctx.parsed:
+            findings.append(
+                Finding(
+                    rel,
+                    line,
+                    "coverage",
+                    "forward_auth in a file the lint does not read as a Caddy config: name it "
+                    "Caddyfile or *.caddy, fence it in markdown, import it from a linted "
+                    f"Caddyfile, or list it in {DEFAULT_ALLOWLIST} with the reason it is covered",
+                )
+            )
+    return apply_allowlist(findings, allow or []), counts
 
 
 class AllowlistError(Exception):
@@ -930,11 +1134,12 @@ def load_allowlist(path: Path | None) -> list[tuple[str, str]]:
         raise AllowlistError(f"{path}: 'allow' must be a list")
     out = []
     for i, e in enumerate(entries):
-        if not isinstance(e, dict) or not str(e.get("path", "")).strip():
-            raise AllowlistError(f"{path}: entry {i} needs a 'path' glob")
-        if not str(e.get("reason", "")).strip():
-            raise AllowlistError(f"{path}: entry {i} ({e['path']}) has no 'reason'")
-        out.append((str(e["path"]), str(e["reason"]).strip()))
+        fields = e if isinstance(e, dict) else {}
+        glob, why = (str(fields.get(k) or "").strip() for k in ("path", "reason"))
+        problem = "needs a 'path' glob" if not glob else "has no 'reason'" if not why else ""
+        if problem:
+            raise AllowlistError(f"{path}: entry {i} {problem}")
+        out.append((glob, why))
     return out
 
 
@@ -955,61 +1160,6 @@ def apply_allowlist(findings: list[Finding], allow: list[tuple[str, str]]) -> li
     return kept
 
 
-def scan(
-    root: Path, allow: list[tuple[str, str]] | None = None
-) -> tuple[list[Finding], dict[str, int]]:
-    findings: list[Finding] = []
-    counts = {"files": 0, "caddy_configs": 0, "generated": 0}
-    ctx = CaddyContext(root)
-    for p, rel in _files(root):
-        name = p.name
-        try:
-            if CADDY_NAME.search(name):
-                text = p.read_text(encoding="utf-8")
-                counts["files"] += 1
-                counts["caddy_configs"] += 1
-                findings += lint_caddy(text, rel, base=p.parent, ctx=ctx)
-            elif p.suffix == ".md":
-                text = p.read_text(encoding="utf-8")
-                blocks = list(MD_FENCE.finditer(text))
-                if blocks:
-                    counts["files"] += 1
-                for m in blocks:
-                    counts["caddy_configs"] += 1
-                    offset = text.count("\n", 0, m.start(1))
-                    findings += lint_caddy(m.group(1), rel, offset, ctx=ctx)
-            elif (
-                name == "Dockerfile" or name.startswith("Dockerfile.") or p.suffix == ".dockerfile"
-            ):
-                counts["files"] += 1
-                findings += lint_dockerfile(p.read_text(encoding="utf-8"), rel)
-            else:
-                text = p.read_text(encoding="utf-8")
-                if "caddy" not in text.lower():
-                    continue
-                counts["files"] += 1
-                if p.suffix in (".yml", ".yaml", ".json"):
-                    findings += lint_pins(text, rel)
-                    if _is_registry(text):
-                        site = _generated(text)
-                        if site is not None:
-                            counts["generated"] += 1
-                            counts["caddy_configs"] += 1
-                            findings += lint_caddy(site, f"{rel} (caddy generator)", ctx=ctx)
-                elif p.suffix == ".py":
-                    findings += lint_python(text, rel)
-                else:
-                    pins = _Pins(rel, text)
-                    pins.text()
-                    findings += pins.findings
-        except UnicodeDecodeError:
-            if CADDY_NAME.search(name) or p.suffix in (".yml", ".yaml", ".json", ".md"):
-                findings.append(Finding(rel, 0, "parse", "cannot parse: UnicodeDecodeError"))
-        except yaml.YAMLError as exc:
-            findings.append(Finding(rel, 0, "parse", f"cannot parse: {exc.__class__.__name__}"))
-    return apply_allowlist(findings, allow or []), counts
-
-
 def main(argv: list[str] | None = None, out=None, err=None) -> int:
     out, err = out or sys.stdout, err or sys.stderr
     parser = argparse.ArgumentParser(prog="caddy_lint", description=__doc__.splitlines()[0])
@@ -1024,6 +1174,9 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     if not root.is_dir():
         print(f"caddy_lint: {root} is not a directory", file=err)
         return 2
+    if yaml is None:
+        print("caddy_lint: missing dependency: PyYAML", file=err)
+        return 2
     allow_path = Path(opts.allowlist) if opts.allowlist else root / DEFAULT_ALLOWLIST
     if opts.allowlist and not allow_path.is_file():
         print(f"caddy_lint: allowlist {allow_path} not found", file=err)
@@ -1033,7 +1186,17 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     except AllowlistError as exc:
         print(f"caddy_lint: bad allowlist: {exc}", file=err)
         return 2
-    findings, counts = scan(root, allow)
+    try:
+        findings, counts = scan(root, allow)
+    except MissingDependency as exc:
+        print(f"caddy_lint: missing dependency: {exc}", file=err)
+        return 2
+    if counts["discovery"] == "walk":
+        print(
+            f"caddy_lint: {root} is not a git work tree: reading every file under it "
+            "(no .gitignore)",
+            file=err,
+        )
     if opts.json:
         doc = {**counts, "findings": [f._asdict() for f in findings]}
         print(json.dumps(doc, indent=2), file=out)

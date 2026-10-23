@@ -7,3 +7,5 @@ allow:
     reason: the lint's own patterns, messages and docstrings name the pins and directives it looks for
   - path: tools/tests/test_caddy_lint.py
     reason: the lint's fixtures plant vulnerable pins and unprotected configs on purpose
+  - path: homelabnext/generators/builtin.py
+    reason: the caddy generator builds the hnx_forward_auth snippet from string pieces; its output for every registry in the tree is linted as a Caddy config

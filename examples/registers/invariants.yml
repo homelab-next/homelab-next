@@ -280,10 +280,13 @@ criteria:
   evidence: auto
   observable: >-
     python3 -c 'import yaml' 2>/dev/null || exit 100;
-    python3 tools/caddy_lint.py && echo edge strips identity headers
+    python3 tools/caddy_lint.py; rc=$?; [ "$rc" -eq 2 ] && exit 100;
+    [ "$rc" -eq 0 ] && echo edge strips identity headers; exit "$rc"
   expected: >-
     exit 0 (every forward_auth deletes its copy_headers, every - and _ spelling, first in its
-    route; every Caddy pin 2.11.2 or later)
+    route; no other directive sets an identity header; nothing the lint cannot read; every Caddy
+    pin 2.11.2 or later); exit 100 when the lint cannot run (a missing dependency or a bad
+    allowlist), which is could-not-measure
   expect_regex: edge strips identity headers
   remediation: >-
     Put forward_auth in a route that first runs request_header -*authentik* (or deletes each

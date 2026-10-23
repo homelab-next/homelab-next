@@ -57,8 +57,8 @@
     {
       "exit": {
         "0": "clean",
-        "1": "an unprotected forward_auth or a Caddy pin below 2.11.2",
-        "2": "usage error or a missing dependency"
+        "1": "a finding (strip, reset, parse, coverage, generate, pin or a stale allowlist entry)",
+        "2": "usage error, a bad allowlist or a missing dependency"
       },
       "id": "caddy-lint",
       "inputs": "the tracked tree (Caddyfiles, templates, markdown caddyfile blocks, registries, Dockerfiles, other pins), the caddy generator and tools/caddy_lint.allow.yml",
@@ -67,7 +67,7 @@
       ],
       "kind": "check",
       "language": "python",
-      "outputs": "one line per unprotected forward_auth or vulnerable Caddy pin",
+      "outputs": "one line per unprotected forward_auth, identity header set outside copy_headers, construct the lint cannot read, unread config, vulnerable Caddy pin or stale allowlist entry",
       "owner": "maintainers",
       "path": "tools/caddy_lint.py",
       "purpose": "Fail when a Caddy config lets a client-sent identity header past forward_auth, or a Caddy pin is below 2.11.2.",
