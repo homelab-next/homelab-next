@@ -4,7 +4,7 @@
 **Read path: LiteLLM's paginated spend-log API (``GET /spend/logs/v2``) with a read-only viewer
 key, named by secret** (default: the secret store's ``llm-gateway/key-telemetry-reader``,
 :data:`DEFAULT_KEY`, delivered in ``HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER``).  Not the master key, which this reader refuses
-by name, and not a Postgres role on ``LiteLLM_SpendLogs``:
+by the variable it is delivered in (however the reference is spelled), and not a Postgres role on ``LiteLLM_SpendLogs``:
 
 * the API is LiteLLM's supported interface; the table is the internals of its ORM, migrated by
   every release (and the gateway is pinned to a fast-moving patch line, ``docs/llm-gateway.md``);
@@ -90,7 +90,9 @@ class SpendLogReader:
             raise GatewayError("the gateway URL carries no credentials, query or fragment")
         if not _SECRET_REF.fullmatch(key):
             raise GatewayError("the gateway key is a secret name (secret:<name>), never a value")
-        if key == MASTER_KEY:
+        # by the variable the secret is delivered in, not the spelling: master_key, master.key
+        # and llm_gateway/master-key all read HNX_SECRET_LLM_GATEWAY_MASTER_KEY
+        if secret_env_name(key) == secret_env_name(MASTER_KEY):
             raise GatewayError(
                 f"{MASTER_KEY} is the gateway's master key: give the reader a viewer key "
                 "(docs/orchestration-telemetry.md)"

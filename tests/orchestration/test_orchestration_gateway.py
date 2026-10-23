@@ -100,6 +100,21 @@ def test_the_reader_refuses_an_unsafe_configuration_before_any_connection(url, k
         SpendLogReader(url, key)
 
 
+@pytest.mark.parametrize(
+    "key",
+    [
+        "secret:llm-gateway/master_key",
+        "secret:llm-gateway/master.key",
+        "secret:llm_gateway/master-key",
+        "secret:llm.gateway/master/key",
+    ],
+)
+def test_every_spelling_of_the_master_key_is_refused(key):
+    """Each of these is delivered in the master key's own variable, so each is the master key."""
+    with pytest.raises(GatewayError, match="master key"):
+        SpendLogReader("https://gateway.example.com", key)
+
+
 def test_sync_joins_turns_by_tag_and_settles_only_finished_jobs(filled):
     just_after = parse_iso("2026-01-01T03:01:00Z")  # run-0004 finished a minute ago
     with FakeSpendLogs() as gw:

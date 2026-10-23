@@ -104,8 +104,8 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
 `GET /spend/logs/v2` (LiteLLM's paginated spend-log API), with a LiteLLM virtual key whose user has
 the `proxy_admin_viewer` role (sees all spend, cannot create keys, change settings or call models)
 and `allowed_routes: ["/spend/logs/v2"]`, named by secret: `secret:llm-gateway/key-telemetry-reader`,
-delivered as `HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER`. The reader refuses the master key by
-name, a literal value, credentials in the URL, plain http to anything but loopback (unless
+delivered as `HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER`. The reader refuses the master key (by
+the variable it is delivered in, so no other spelling of its name gets past), a literal value, credentials in the URL, plain http to anything but loopback (unless
 `--allow-plaintext`), redirects and proxies.
 
 Why not a read-only Postgres role on `LiteLLM_SpendLogs`:
