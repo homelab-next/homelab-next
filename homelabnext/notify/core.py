@@ -14,7 +14,8 @@ Rules the Notifier enforces (each exists because the opposite shipped once and h
   A rate-limited report does not record the new state, so it is retried on the next call and a
   burst is delayed rather than silently lost.  A report with a ``scope`` (a broker passes the
   agent the message is about) draws on that scope's own budget of the same size instead of the
-  global one, so one noisy scope can never spend everyone else's pages.
+  global one, so one noisy scope can never spend everyone else's pages; ``max_sends_all_scopes``
+  is a loose backstop over all scopes together.  :meth:`Notifier.forget` drops a settled key.
 * **Quiet clear.**  :meth:`Notifier.clear` marks a key ``ok`` without sending its recovery (a
   problem its own reporter withdrew, which nobody needs paged about).
 * **A failed send is not recorded** (the exception propagates), so the next call retries.
@@ -87,6 +88,9 @@ class RateLimit:
     max_sends: int = 20
     window_s: float = 3600.0
     min_interval_per_key_s: float = 0.0
+    #: a loose backstop over every scope's sends together (None: none): each scope keeps its own
+    #: ``max_sends``, and all of them at once still cannot exceed this
+    max_sends_all_scopes: int | None = None
 
 
 @dataclass
@@ -206,6 +210,9 @@ class Notifier:
         ok = len(sends) < rl.max_sends and (
             last_for_key is None or now - last_for_key >= rl.min_interval_per_key_s
         )
+        if ok and scope and rl.max_sends_all_scopes is not None:
+            every = self.store.get(f"{self.namespace}/_sends_scoped", [])
+            ok = len([t for t in every if now - t < rl.window_s]) < rl.max_sends_all_scopes
         if not ok:
             self.suppressed_by_rate_limit += 1
         return ok
@@ -218,4 +225,20 @@ class Notifier:
         sends = [t for t in self.store.get(where, []) if now - t < rl.window_s]
         sends.append(now)
         self.store.put(where, sends)
+        if scope:
+            every = f"{self.namespace}/_sends_scoped"
+            kept = [t for t in self.store.get(every, []) if now - t < rl.window_s]
+            self.store.put(every, [*kept, now])
         self.store.put(f"{self.namespace}/_last/{key}", now)
+
+    def forget(self, key: str) -> bool:
+        """Drop what the store keeps for ``key`` once it is ``ok`` (a settled one-off key, such as
+        one request's page), so the store does not grow with every key ever reported; a key in
+        a problem state is kept.  Needs a store with ``delete``."""
+        rec = self.store.get(f"{self.namespace}/{key}")
+        delete = getattr(self.store, "delete", None)
+        if delete is None or (rec and rec.get("state", OK) != OK):
+            return False
+        delete(f"{self.namespace}/{key}")
+        delete(f"{self.namespace}/_last/{key}")
+        return True

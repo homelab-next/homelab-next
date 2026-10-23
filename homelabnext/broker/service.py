@@ -52,16 +52,20 @@ the approver only while the actor has **no open page**, and at most once per ``n
 (default :data:`DEFAULT_NOTIFY_WINDOW_S`).  A page is open from the moment the notifier reports it
 sent (never before) until its request settles; it is for the actor's oldest request awaiting
 approval and names every one of them (a request filed while a page is open is named on the next
-page, and is on the Approvals page and in its ``decision.requested`` event at once).  A page the
-floor holds back is recorded *due* and sent when the floor passes (a timer, and every submit,
-settle and pending listing check what is due), so no waiting request is ever left without a page,
-whether it arrived after a cancelled decoy, after a denial, after a page whose send failed, or
-after its approval expired unused.  An approval or a denial closes the page with a settled
+page, and is on the Approvals page and in its ``decision.requested`` event at once).  What is
+due is derived from state (:meth:`BrokerService.poll_pages`): every actor with a request
+awaiting approval and no open page is paged as soon as its floor allows -- checked when the
+service starts, by a timer on the monotonic clock, and on every submit, settle and pending
+listing -- and a page whose send failed or whose budget was spent is retried after
+:data:`PAGE_RETRY_S`.  So no waiting request is left without a page, whether it arrived after a
+cancelled decoy, after a denial, after a failed send, before a restart, or after its approval
+expired unused.  An approval or a denial closes the page with a settled
 message saying how many still wait; a cancel by the owner closes it quietly, so a submit/cancel
 loop pages at most once per floor.  Every message about an actor draws on that actor's own
 notifier budget (``scope``), so one agent cannot spend the pages of every other.  The open page
-is read from the notifier's own state (shared by every process using its store); the floor and
-what is due are kept in this process.  A lane's directory has its own file and byte quota
+is read from the notifier's own state (shared by every process using its store); the floor is
+kept in this process (a restart may page once early), and a settled request's page is dropped
+from the notifier's store.  A lane's directory has its own file and byte quota
 (:mod:`homelabnext.broker.lanes`).
 """
 
@@ -70,6 +74,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import hashlib
+import heapq
 import hmac
 import json
 import logging
@@ -77,6 +82,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
@@ -145,6 +151,8 @@ DEFAULT_PENDING_PER_ACTOR = 20
 DEFAULT_NOTIFY_WINDOW_S = 300.0
 #: request ids an approval page names before it says "and N more"
 _PAGE_IDS = 10
+#: how long after a page that could not be sent (a failed send, a spent budget) it is tried again
+PAGE_RETRY_S = 60.0
 CALLABLE_HANDLER = "builtin/callable"
 EMPTY_MANIFEST = {
     "manifest_id": "in-process",
@@ -383,6 +391,7 @@ class BrokerService:
         source: str = BROKER_SOURCE,
         approvals_url: str | None = None,
         page_timers: bool = True,
+        monotonic: Callable[[], float] | None = None,
     ) -> None:
         self.state = StateDir(state_dir)
         self.approvals_url = check_approvals_url(approvals_url)
@@ -409,17 +418,28 @@ class BrokerService:
         self.page_timers = page_timers
         self._paged: dict[str, str] = {}  # actor -> the request its open page is for
         self._paging: set[str] = set()  # actors a page is being sent for right now
-        self._last_page: dict[str, datetime] = {}  # actor -> when its last page went out
-        self._due: dict[str, datetime] = {}  # actor -> when its next page check is due
-        self._timers: dict[str, threading.Timer] = {}
+        # scheduling runs on a monotonic clock (an injected wall clock drives it in tests): a
+        # wall-clock step can neither fire a page early nor strand one with no timer
+        if monotonic is None:
+            monotonic = time.monotonic if clock is _utcnow else (lambda: self.clock().timestamp())
+        self._mono = monotonic
+        self._last_page: dict[str, float] = {}  # actor -> when its last page went out
+        self._retry_at: dict[str, float] = {}  # actor -> when a failed page may be tried again
+        self._wakeups: list[float] = []  # a heap of times a page check is due
+        self._timer: tuple[float, threading.Timer] | None = None
         self._paged_lock = threading.Lock()
         self._scoped = _takes_scope(notifier)
         self._lane_full: set[str] = set()  # lane-quota keys this process reported
         self._lane_notice_at: dict[str, datetime] = {}  # lane-quota key -> its last notice
         self._lane_logged: set[str] = set()  # lane-quota keys logged (no notifier)
+        self._lane_red: dict[str, tuple[str, str]] = {}  # lane-quota key -> (lane, actor)
         if notifier is not None:
             notifier.register_pair(APPROVAL_TITLE, APPROVAL_CLEARED)
             notifier.register_pair(LANE_QUOTA_TITLE, LANE_QUOTA_CLEARED)
+            try:  # what is due is derived from state: a restart loses no page
+                self.poll_pages()
+            except Exception:
+                log.exception("approval pages could not be polled at start")
 
     @classmethod
     def from_manifest(
@@ -1353,7 +1373,8 @@ class BrokerService:
         if decision == "approved" and self.notifier is not None:
             # if it is not run before the approval expires, it waits again: page it then
             expires = datetime.fromisoformat(doc["expires_at"].replace("Z", "+00:00"))
-            self._due_at(req["actor"], expires + timedelta(seconds=1))
+            left = (expires - self._now()).total_seconds()
+            self._wake_at(self._mono() + max(0.0, left) + 1.0)
         return doc
 
     # ---------------------------------------------------------------- events and notify
@@ -1389,8 +1410,7 @@ class BrokerService:
             data["link"] = link
         self._emit("homelabnext.decision.requested", data, rid, key=f"requested:{rid}")
         if self.notifier is not None:
-            self.poll_pages()
-            self._page(request["actor"])
+            self.poll_pages()  # this actor's page among any other that is due
 
     @staticmethod
     def _page_key(rid: str) -> str:
@@ -1407,62 +1427,95 @@ class BrokerService:
             return next((r for r in rids if state_of(self._page_key(r)) != "ok"), None)
         return None
 
-    def _due_at(self, actor: str, when: datetime) -> None:
-        """Record that ``actor``'s page check is due at ``when`` and arm a timer for it (best
-        effort: :meth:`poll_pages` also runs on every submit, settle and pending listing)."""
+    def _wake_at(self, when: float) -> None:
+        """Make sure a page check runs at ``when`` (monotonic): it is kept in a heap, and one
+        timer is armed for the earliest (best effort: :meth:`poll_pages` also runs at start and
+        on every submit, settle and pending listing, and derives what is due from state)."""
         with self._paged_lock:
-            current = self._due.get(actor)
-            if current is not None and current <= when:
+            heapq.heappush(self._wakeups, when)
+        self._arm()
+
+    def _arm(self) -> None:
+        if not self.page_timers:
+            return
+        with self._paged_lock:
+            now = self._mono()
+            while self._wakeups and self._wakeups[0] <= now - 3600:
+                heapq.heappop(self._wakeups)  # long past and never polled: nothing to arm
+            future = [t for t in self._wakeups if t > now]
+            if not future:
                 return
-            self._due[actor] = when
-            old = self._timers.pop(actor, None)
-            if old is not None:
-                old.cancel()
-            if self.page_timers:
-                delay = max(0.0, (when - self._now()).total_seconds()) + 0.05
-                timer = threading.Timer(delay, self.poll_pages)
-                timer.daemon = True
-                self._timers[actor] = timer
-                timer.start()
+            nxt = min(future)
+            if self._timer is not None and self._timer[0] <= nxt and self._timer[1].is_alive():
+                return
+            if self._timer is not None:
+                self._timer[1].cancel()
+            timer = threading.Timer(nxt - now + 0.05, self._timer_fired)
+            timer.daemon = True
+            self._timer = (nxt, timer)
+            timer.start()
+
+    def _timer_fired(self) -> None:
+        with self._paged_lock:
+            self._timer = None
+        try:
+            self.poll_pages()
+        except Exception:  # a timer thread: log it, the next poll tries again
+            log.exception("approval pages could not be polled")
 
     def poll_pages(self) -> int:
-        """Send every page that has come due (a page the per-actor floor deferred, or a request
-        whose approval expired); returns how many actors were checked."""
+        """Page every actor that has a request awaiting approval and no open page -- a page the
+        floor deferred, a page whose send failed, a request whose approval expired unused, one
+        filed before a restart -- each subject to the floor and the open-page gate, so this is
+        idempotent.  Also retries a lane-quota "cleared" notice that was held back, and re-arms
+        the timer for what is due next.  Returns how many actors were checked."""
         if self.notifier is None:
             return 0
-        now = self._now()
+        now = self._mono()
         with self._paged_lock:
-            due = [a for a, t in self._due.items() if t <= now]
-            for a in due:
-                del self._due[a]
-                self._timers.pop(a, None)
-        for actor in due:
+            while self._wakeups and self._wakeups[0] <= now:
+                heapq.heappop(self._wakeups)
+        actors = []
+        for rid in self.state.open_request_ids():
+            rec = self.state.get_request(rid)
+            if rec and rec["verdict"] == "needs-approval" and rec["request"]["actor"] not in actors:
+                actors.append(rec["request"]["actor"])
+        for actor in actors:
             try:
                 self._page(actor)
-            except Exception:  # a timer thread: never let one actor's failure stop the rest
+            except Exception:  # one actor's failure never stops the rest
                 log.exception("approval page for %s failed", actor)
-        return len(due)
+        for lane_name, actor in list(self._lane_red.values()):
+            lane = self._lanes.get(lane_name)
+            if lane is not None:
+                self._lane_quota(lane, {"actor": actor, "request_id": None}, None)
+        self._arm()
+        return len(actors)
 
     def _page(self, actor: str) -> None:
         """Page the approver about ``actor``'s oldest request awaiting approval, unless one of
         its requests already has an open page, or its last page is less than
-        ``notify_window_s`` old (then the page is recorded due when the floor passes).  The actor
+        ``notify_window_s`` old, or its last attempt failed less than
+        :data:`PAGE_RETRY_S` ago (then a check is scheduled for when that passes).  The actor
         counts as paged only once the notifier says the page went out."""
         waiting = self._awaiting(actor)
         if not waiting:
             return
-        now = self._now()
+        now = self._mono()
+        later = None
         with self._paged_lock:
             if actor in self._paging or self._open_page(actor, waiting) is not None:
                 return
             last = self._last_page.get(actor)
-            floor = None
-            if last is not None and (now - last).total_seconds() < self.notify_window_s:
-                floor = last + timedelta(seconds=self.notify_window_s)
+            retry = self._retry_at.get(actor)
+            if retry is not None and retry > now:
+                later = retry
+            elif last is not None and now - last < self.notify_window_s:
+                later = last + self.notify_window_s
             else:
                 self._paging.add(actor)  # of racing requests, one pages
-        if floor is not None:
-            self._due_at(actor, floor)
+        if later is not None:
+            self._wake_at(later)
             return
         request = waiting[0]
         rid = request["request_id"]
@@ -1493,7 +1546,13 @@ class BrokerService:
                 if sent:
                     self._paged[actor] = rid
                     self._last_page[actor] = now
-        if sent and rid not in {r["request_id"] for r in self._awaiting(actor)}:
+                    self._retry_at.pop(actor, None)
+                else:  # a failed send, or the actor's budget spent: try again shortly
+                    self._retry_at[actor] = now + PAGE_RETRY_S
+        if not sent:
+            self._wake_at(now + PAGE_RETRY_S)
+            return
+        if rid not in {r["request_id"] for r in self._awaiting(actor)}:
             # it settled while the page was in flight: its settling saw no page to close
             self._close_page(actor, rid, None)
             self._page(actor)
@@ -1518,10 +1577,15 @@ class BrokerService:
                     clear(key)
                 except Exception:
                     log.exception("approval page %s could not be cleared", key)
-            return True
-        from homelabnext.notify.core import Message
+        else:
+            from homelabnext.notify.core import Message
 
-        self._notify(key, "ok", Message(key=key, title=APPROVAL_CLEARED, body=body), actor=actor)
+            msg = Message(key=key, title=APPROVAL_CLEARED, body=body)
+            self._notify(key, "ok", msg, actor=actor)
+        forget = getattr(self.notifier, "forget", None)
+        if forget is not None:  # a settled request's page is done with: the store stays small
+            with contextlib.suppress(Exception):
+                forget(key)
         return True
 
     def _notify_settled(
@@ -1529,13 +1593,12 @@ class BrokerService:
     ) -> None:
         if self.notifier is None or actor is None:
             return
-        self.poll_pages()
         waiting = self._awaiting(actor)
         body = f"{rid} {how}"
         if waiting:
             body += f"; {len(waiting)} more from {actor} await approval"
         self._close_page(actor, rid, None if quiet else body)
-        self._page(actor)  # the page moves to the oldest still waiting, after the floor
+        self.poll_pages()  # the page moves to the oldest still waiting, after the floor
 
     def _lane_quota(self, lane: _lanes.Lane, request: Mapping[str, Any], refusal: str | None):
         """Tell the operator that ``lane`` refuses an actor's writes for its quota (the agent
@@ -1575,6 +1638,7 @@ class BrokerService:
             msg = Message(key=key, title=LANE_QUOTA_CLEARED, body=body)
             if self._notify(key, "ok", msg, request_id=request["request_id"], actor=actor):
                 self._lane_full.discard(key)
+                self._lane_red.pop(key, None)
                 self._lane_notice_at[key] = now
             return
         if recent:
@@ -1590,6 +1654,7 @@ class BrokerService:
         )
         if sent:
             self._lane_full.add(key)
+            self._lane_red[key] = (lane.name, actor)  # a held "cleared" is retried on each poll
             self._lane_notice_at[key] = now
 
     def _ledger(self) -> Path:
@@ -1620,7 +1685,9 @@ class BrokerService:
                 return bool(self.notifier.report(key, state, msg, scope=scope))
             return bool(self.notifier.report(key, state, msg))
         except Exception:
-            rid = request_id or key.removeprefix("broker-approval-")
+            rid = request_id or (
+                key.removeprefix("broker-approval-") if key.startswith("broker-approval-") else None
+            )
             with contextlib.suppress(*_AUDIT_FAILURES):
                 self._audit(
                     BROKER_SOURCE, "", "notify", "error", reason="notify-failed", request_id=rid

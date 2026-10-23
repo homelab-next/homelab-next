@@ -174,9 +174,11 @@ hnx broker validate examples/broker/manifest.yml
    `notify_window_s` (default 300 s; 0: no floor). A page is open once the notifier has sent it
    (a failed send opens nothing) and until its request settles; it is for the actor's oldest
    request awaiting approval and names every one of them, so a request filed while a page is
-   open is named on the next page (it is on the Approvals page and in its event at once). A page
-   the floor holds back is recorded due and sent when the floor passes, by a timer and on every
-   submit, settle and pending listing. An approval or a denial closes the page with a settled
+   open is named on the next page (it is on the Approvals page and in its event at once). What is
+   due is derived from state, not remembered: every agent with a request awaiting approval and
+   no open page is paged as soon as its floor allows, checked at start (a restart loses no page),
+   by a timer, and on every submit, settle and pending listing. A page whose send failed, or
+   that the agent's budget held back, is tried again a minute later. An approval or a denial closes the page with a settled
    message saying how many still wait, and the oldest of those is paged next; a cancel by the
    owner closes it quietly. An approval that expires unused puts its request back to waiting and
    pages it again. Every message about an agent draws on that agent's own notifier budget, so

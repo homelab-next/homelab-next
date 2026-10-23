@@ -416,6 +416,9 @@ def _notifier(sent):
         def put(self, k, v):
             self[k] = v
 
+        def delete(self, k):
+            return self.pop(k, None) is not None
+
     return Notifier(sender=Sender(), store=Store(), clock=lambda: 0.0)
 
 
@@ -569,6 +572,28 @@ def test_a_lane_quota_notice_does_not_flap_between_reached_and_cleared(tmp_path)
     assert len(sent) == 2
 
 
+def test_a_held_cleared_notice_is_sent_without_another_write(tmp_path):
+    """A "cleared" held back by the interval was retried only on the actor's next landed write:
+    a drained lane the actor never wrote to again stayed red."""
+    sent = []
+    clock = Clock()
+    manifest, docs = load_manifest(EXAMPLE)
+    manifest["lanes"][0]["max_files"] = 5
+    svc = BrokerService(
+        tmp_path / "state", manifest, handler_docs=docs, base_dir=EXAMPLE.parent,
+        data_root=tmp_path / "data", clock=clock, notifier=_notifier(sent),
+    )  # fmt: skip
+    for i in range(5):
+        svc.call(AGENT, "memory.write", {"name": f"a{i}.md", "content": "x"})
+    with pytest.raises(Denied):
+        svc.call(AGENT, "memory.write", {"name": "b.md", "content": "x"})
+    for i in range(5):
+        (tmp_path / "data" / "memory" / "triage" / f"a{i}.md").unlink()  # the decider drains it
+    clock.advance(1000)
+    svc.poll_pages()
+    assert [m.title for m in sent] == ["Broker lane quota reached", "Broker lane quota cleared"]
+
+
 @pytest.mark.parametrize("root", ["memory", "memory/deeper", "findings/../x"])
 def test_lanes_over_one_directory_are_refused(root):
     """Two lanes over one directory each kept their own ledger: an actor writing through both had
@@ -708,6 +733,86 @@ def test_a_deferred_page_is_sent_by_its_timer(tmp_path):
     assert len(sent) == 2 and waiting in sent[1].body
 
 
+def test_a_page_due_before_a_restart_is_sent_after_it(tmp_path):
+    """What was due lived in memory: after a restart, a request whose page the floor had
+    deferred was never paged, whatever else happened."""
+    sent = []
+    clock = Clock()
+    notifier = _notifier(sent)
+    svc = _quota_svc(tmp_path, clock, notifier=notifier)
+    svc.cancel(AGENT, _restart(svc))
+    clock.advance(10)
+    waiting = _restart(svc)
+    assert len(sent) == 1
+    clock.advance(600)
+    _quota_svc(tmp_path, clock, notifier=notifier)  # the broker restarts on the same state
+    assert waiting in sent[-1].body and sent[-1].title == "Broker approval needed"
+
+
+def test_a_page_whose_send_failed_is_retried(tmp_path):
+    sent = []
+    clock = Clock()
+    svc = _quota_svc(tmp_path, clock, notifier=_notifier(sent))
+    real, calls = svc.notifier.sender.send, []
+
+    def flaky(message):
+        calls.append(message)
+        if len(calls) == 1:
+            raise RuntimeError("ntfy down")
+        real(message)
+
+    svc.notifier.sender.send = flaky
+    rid = _restart(svc)
+    svc.pending()
+    assert sent == [] and len(calls) == 1, "not retried on every listing"
+    clock.advance(61)
+    svc.pending()
+    assert [m.title for m in sent] == ["Broker approval needed"] and rid in sent[0].body
+
+
+def test_an_expiry_is_not_lost_behind_an_earlier_due(tmp_path):
+    """One due slot per actor: approving r1 deferred r2's page, and r1's expiry, later, was
+    dropped; r1's approval expired unused and it was never paged again."""
+    sent = []
+    clock = Clock()
+    svc = _quota_svc(tmp_path, clock, notifier=_notifier(sent))
+    r1 = _restart(svc)
+    clock.advance(1)
+    r2 = _restart(svc)
+    clock.advance(60)
+    svc.approve(r1, APPROVER)
+    clock.advance(300)
+    svc.poll_pages()
+    assert r2 in sent[-1].body
+    svc.deny(r2, APPROVER)
+    n = len(sent)
+    clock.advance(4000)
+    svc.poll_pages()
+    assert any(r1 in m.body and m.title == "Broker approval needed" for m in sent[n:])
+
+
+def test_the_timer_is_armed_for_the_next_due_check(tmp_path):
+    sent = []
+    clock = Clock()
+    svc = _quota_svc(tmp_path, clock, notifier=_notifier(sent))
+    svc.cancel(AGENT, _restart(svc))
+    _restart(svc)  # deferred by the floor: a check is due when it passes
+    try:
+        at, timer = svc._timer
+        assert timer.is_alive() and at == svc._last_page[AGENT] + svc.notify_window_s
+    finally:
+        svc._timer[1].cancel()
+
+
+def test_a_settled_requests_page_is_dropped_from_the_notifier_store(tmp_path):
+    sent = []
+    svc = _quota_svc(tmp_path, Clock(), notifier=_notifier(sent))
+    rid = _restart(svc)
+    assert svc.notifier.store.get(f"notify/broker-approval-{rid}") is not None
+    svc.deny(rid, APPROVER)
+    assert svc.notifier.store.get(f"notify/broker-approval-{rid}") is None
+
+
 def test_a_failed_page_does_not_silence_the_actors_next_requests(tmp_path):
     """The window was taken before the send: one failed send (an ntfy blip) silenced every page
     of that actor for the whole window."""
@@ -726,6 +831,9 @@ def test_a_failed_page_does_not_silence_the_actors_next_requests(tmp_path):
     a = _restart(svc)
     clock.advance(10)
     b = _restart(svc)
+    assert sent == [], "a failed send is retried after PAGE_RETRY_S, not on every request"
+    clock.advance(60)
+    svc.pending()
     [page] = sent
     assert b in page.body and a in page.body, "the page names every request still waiting"
 
