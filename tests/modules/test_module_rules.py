@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from homelabnext.modules import rules as mr
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -29,9 +31,23 @@ def test_lane_writes_are_bound_to_their_lane():
     assert not mr._own_write_prefix("findings/", "m")
 
 
-def test_the_default_in_tree_root_is_the_public_modules_tree_only():
-    assert mr.PUBLIC_MODULE_ROOTS == (ROOT / "modules",)
-    assert mr.EXAMPLE_ROOTS == (ROOT / "examples" / "modules",)
+def test_the_default_in_tree_root_is_the_checkouts_public_modules_tree_only():
+    assert mr.public_module_roots() == (ROOT / "modules",)
+    assert not hasattr(mr, "EXAMPLE_ROOTS"), "the examples' root is the tests' fixture"
+
+
+def test_outside_a_checkout_there_is_no_default_root(monkeypatch, tmp_path):
+    """Negative: an installed package has no public tree to trust, so the default refuses
+    (NotACheckout) instead of guessing site-packages/modules."""
+    monkeypatch.setattr(mr.paths, "checkout_root", lambda: None)
+    with pytest.raises(mr.paths.NotACheckout):
+        mr.public_module_roots()
+    doc = {"id": "m", "kind": "feature", "origin": {"kind": "in-tree"}, "requires": {}}
+    with pytest.raises(mr.paths.NotACheckout):
+        mr.module_problems(doc, tmp_path / "m", {}, lambda p: {})
+    assert "origin in-tree: the module is not in the public modules/ tree" in mr.module_problems(
+        doc, tmp_path / "m", {}, lambda p: {}, (tmp_path / "modules",)
+    )
 
 
 def test_a_name_belongs_to_the_longest_module_id():

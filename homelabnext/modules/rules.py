@@ -13,15 +13,28 @@ import re
 from pathlib import Path
 from typing import Any
 
+from homelabnext import paths
+
 Doc = dict[str, Any]
 
 RECORD_ROOTS = ("findings", "state", "proposals", "memory")
-REPO = Path(__file__).resolve().parents[2]
-#: where an in-tree module lives: the public modules/ tree only.  An overlay's lab/modules/ is
-#: never in-tree, and neither is examples/modules/ (the fictional examples are never available to
-#: a site; the contract tests pass EXAMPLE_ROOTS explicitly).
-PUBLIC_MODULE_ROOTS = (REPO / "modules",)
-EXAMPLE_ROOTS = (REPO / "examples" / "modules",)
+
+
+def public_module_roots() -> tuple[Path, ...]:
+    """Where an in-tree module lives: the public ``modules/`` tree of this source checkout.
+
+    An overlay's ``lab/modules/`` is never in-tree, and neither is ``examples/modules/`` (the
+    fictional examples are never available to a site; the contract tests pass that root
+    explicitly).  Outside a checkout (an installed wheel) there is no public tree to trust, so
+    this raises :class:`homelabnext.paths.NotACheckout` rather than guess a path."""
+    root = paths.checkout_root()
+    if root is None:
+        raise paths.NotACheckout(
+            "the module rules' in-tree root is the checkout's modules/ (pass public_roots)"
+        )
+    return (root / "modules",)
+
+
 #: slots whose service a module reaches only with an overlay grant (besides privileged slots)
 AUTHORITY_SLOTS = ("broker", "secrets", "idp", "edge", "remote-admin", "mcp-catalog")
 #: the site section that binds a module's agents and config, by kind
@@ -93,11 +106,14 @@ def module_problems(
     mod_dir: Path,
     slots: dict[str, Doc],
     load,
-    public_roots: tuple[Path, ...] = PUBLIC_MODULE_ROOTS,
+    public_roots: tuple[Path, ...] | None = None,
 ) -> list[str]:
     """Rules one manifest must meet on its own (``load(path)`` reads a contributed YAML file).
 
-    ``public_roots`` are the directories an in-tree module lives directly under."""
+    ``public_roots`` are the directories an in-tree module lives directly under (default:
+    :func:`public_module_roots`, the checkout's ``modules/``)."""
+    if public_roots is None:
+        public_roots = public_module_roots()
     mid, out = doc["id"], []
     if doc["id"] != mod_dir.name:
         out.append(f"id {mid} is not the directory name {mod_dir.name}")

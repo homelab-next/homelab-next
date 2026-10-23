@@ -3,7 +3,7 @@
 
 Contract tests only; there is no loader yet. They prove the schema's own rules (each negative in
 ``schemas/platform/negative/module.*`` fails where its name says), that every example module in
-``examples/modules/`` validates and meets the loader rules (``module_rules``: names bound to the
+``examples/modules/`` validates and meets the loader rules (``homelabnext.modules.rules``: names bound to the
 module, code and secrets in its own namespace, the slot registry's flags, owned interfaces), that
 the records each contributes are files of existing record types and validate as such (MCP records,
 service rows, prompt templates, lake tables, fleet_units specs, invariant criteria, agent specs
@@ -44,7 +44,7 @@ SITES = {p.stem: load(p) for p in sorted((MODULES_DIR / "sites").glob("*.yml"))}
 DIRS = {n: MODULES_DIR / n for n in MODULES}
 #: the fictional examples count as in-tree only because the tests say so: the rules' default
 #: public root is modules/ alone, so a loader copying the default never makes them available
-ROOTS = mr.EXAMPLE_ROOTS
+ROOTS = (MODULES_DIR,)
 ROWS = {n: mr._rows(m, DIRS[n], load) for n, m in MODULES.items()}
 SELECTION = json.loads((ROOT / "schemas/platform/module_selection.schema.json").read_text())
 
@@ -754,7 +754,7 @@ def test_origin_and_kind_core_are_bound_to_where_the_module_lives(tmp_path):
 def test_the_examples_are_not_in_tree_by_default():
     """Negative: with the default public root (modules/ only) the fictional examples are not
     in-tree, and core-staff is not a core module a site could select."""
-    assert mr.PUBLIC_MODULE_ROOTS == (ROOT / "modules",)
+    assert mr.public_module_roots() == (ROOT / "modules",)
     probs = mr.module_problems(MODULES["core-staff"], MODULES_DIR / "core-staff", SLOTS, load)
     assert "kind core: a core module lives in the public modules/ tree" in probs
     assert "origin in-tree: the module is not in the public modules/ tree" in probs
