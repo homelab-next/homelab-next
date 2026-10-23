@@ -238,8 +238,8 @@ projects:
 # Every fast criterion of the example register through the invariants runner, never paging; the
 # plugin-only rows (X-04, X-06, X-09, X-10) run nowhere else.  Slow criteria (leak scans, schema
 # check, coverage floor, pytest selections) are gates of their own.  Not a prerequisite of `check`:
-# `test` already runs the fast CLI gates through the register and the rest would repeat ~30 s of
-# gates `check` has just run; CI runs it as its own job (INVARIANTS_ARGS="--skip X-NN" skips one).
+# its CLI gates are gates of `check` already and the rest would repeat ~60 s of what `check` has
+# just run; CI runs it as its own job (INVARIANTS_ARGS="--skip X-NN" skips one).
 INVARIANTS_OUT := build/invariants/results.json
 .PHONY: invariants
 invariants:

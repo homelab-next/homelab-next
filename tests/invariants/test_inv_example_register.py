@@ -138,10 +138,23 @@ def _run(root, only):
     return run_criteria(register()["criteria"], Context(root), only=set(only))["results"]
 
 
-def test_fast_cli_gates_pass_on_the_repository():
-    res = _run(REPO, FAST_GATES)
-    bad = {i: r["evidence"] for i, r in res.items() if r["status"] != "pass"}
-    assert not bad and set(res) == set(FAST_GATES)
+def test_fast_cli_gates_pass_on_the_repository_in_ci_s_invariants_job():
+    """Each fast gate passing on this repository is decided by CI's `invariants` job, which runs
+    every fast criterion of this register through the runner (`make invariants`, exit 1 on a fail,
+    exit 100 on could-not-measure); `make check` runs the same commands as its own gates.  Running
+    them here again cost about 55 s of a 60 s suite budget, so this test holds the wiring instead:
+    every fast gate is a criterion `--fast` selects, and the job and the target really run it."""
+    crit = by_id()
+    for i in FAST_GATES:
+        assert not crit[i].get("slow") and not crit[i].get("deferred"), i
+    make = (REPO / "Makefile").read_text()
+    target = re.search(r"^invariants:\n\t(.+)$", make, re.M)
+    assert target, "the Makefile has no invariants target"
+    assert "invariants run examples/registers/invariants.yml --fast" in target[1]
+    jobs = yaml.safe_load((REPO / ".github/workflows/ci.yml").read_text())["jobs"]
+    runs = [s.get("run", "") for s in jobs["invariants"]["steps"]]
+    assert any(r.strip().startswith("make invariants") for r in runs), runs
+    assert "if" not in jobs["invariants"]
 
 
 def test_fast_cli_gates_are_red_on_an_empty_checkout(tmp_path, monkeypatch):
