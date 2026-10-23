@@ -426,8 +426,9 @@ criteria:
   evidence: auto
   observable: >-
     python3 -c 'import ruff, pip_audit' 2>/dev/null || exit 100;
-    python3 -c 'import requests; requests.head("https://pypi.org/simple/", timeout=10)' 2>/dev/null
-    || { echo pypi.org is unreachable, so pip-audit cannot measure; exit 100; };
+    python3 -c 'import requests, urllib.parse as u;
+    requests.head(u.urlunsplit(("https", "pypi.org", "/simple/", "", "")), timeout=10)'
+    2>/dev/null || { echo pypi.org is unreachable, so pip-audit cannot measure; exit 100; };
     python3 -m ruff check . && python3 tools/leak_scan.py --groups secret . &&
     python3 -m pip_audit --strict --progress-spinner off --disable-pip --require-hashes
     -r constraints/ci.txt && echo security checks passed
@@ -1065,7 +1066,7 @@ criteria:
   observable: >-
     python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
     python3 -m pytest -q -p no:cacheprovider tests/models/test_model_store.py
-    tests/roles/test_serving_roles.py -k "model_store or store_check or check_disk"
+    tests/roles/test_serving_roles.py -k "model_store and (revision or sha256)"
   expected: >-
     exit 0 with every selected test passed and none skipped (missing, resized, changed or unlisted
     files fail the store check, and the model_store role fetches by commit and refuses a
@@ -1073,7 +1074,7 @@ criteria:
     could-not-measure
   expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
   slow: true
-  timeout: 1800
+  timeout: 660  # about 3x the 222 s it took on a shared 4-CPU box (A-13 runs the rest)
   remediation: >-
     Fix the store check or the model_store role where the failing test names; a model file that
     differs from the manifest is an unreviewed model.
@@ -1098,14 +1099,15 @@ criteria:
   evidence: auto
   observable: >-
     python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
-    python3 -m pytest -q -p no:cacheprovider tests/roles/test_serving_roles.py -k "open_webui"
+    python3 -m pytest -q -p no:cacheprovider tests/roles/test_serving_roles.py
+    -k "open_webui and (gateway or registry)"
   expected: >-
     exit 0 with every selected test passed and none skipped (Open WebUI's only backend is the
     gateway, resolved through the registry, with its own key by secret name; anything else is
     refused); exit 100 when a test dependency is not installed, which is could-not-measure
   expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
   slow: true
-  timeout: 1800
+  timeout: 360  # about 3x the 66-117 s it took on a shared 4-CPU box (A-13 runs the rest)
   remediation: >-
     Fix the open_webui role where the failing test names; a chat UI pointed past the gateway skips
     its keys, limits and the local-only rules.
@@ -1120,7 +1122,7 @@ criteria:
     not installed, which is could-not-measure
   expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
   slow: true
-  timeout: 3000
+  timeout: 1500  # about 2x the 692 s (234 tests) it took on a shared 4-CPU box at load 13
   remediation: >-
     Fix the store, serving plan or role the failing test names; a served model whose bytes are
     not verified before every start can be swapped on disk unseen.
