@@ -4,7 +4,8 @@
 homelab-next is public: code, schemas, fictional examples and CI. A real lab is not: its site,
 guests, registry, registers, strategy and deploy live in a **private overlay**, a second repository
 the operator owns. Credentials live in neither: git holds their *names*, OpenBao holds their
-values, and the keys that open everything stay offline. This page is the whole guide: the layout,
+values, and the keys that open everything stay offline. The public contracts and the overlay
+together are **Veritas**, the single source of truth ([ADR-0028](adr/0028-veritas-single-source-of-truth.md)). This page is the whole guide: the layout,
 how hnx reads the private data, how a new server is bootstrapped, how a deploy runs without the
 workstation, how each key is rotated, and what an attacker gets from each piece (including what
 the deploy still holds as standing credentials). The decision is

@@ -23,6 +23,13 @@ test, shadow run, parity window, cutover by registry change, rollback window, de
 turn it into DNS records, proxy sites, monitors, scrape targets and documents. It is data, never a
 running service (ADR-0002).
 
+**Veritas.** The project's single source of truth ([ADR-0028](adr/0028-veritas-single-source-of-truth.md)):
+the public contracts in this repository (schemas with the frozen baselines in `schemas/_frozen/`,
+profiles, capability contracts, conformance suites, gates, fictional examples) plus one site's
+private overlay (registry, site facts, records, module selection, secret names; the values stay
+in the secret store). Every other copy is generated from it or checked against it; a hand-edited
+copy is drift. It is not yet compared with what actually runs.
+
 **Capability alias.** `<capability>.svc.example.internal`; the only address a consumer uses.
 
 **Logical id.** A stable name, `<kind>:<slug>`, that does not change when the thing behind it is
