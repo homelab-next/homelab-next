@@ -131,10 +131,13 @@ CADDY_NAME = re.compile(r"(?i)((^|\.)caddyfile([.-]|$))|(\.caddy(\.(j2|jinja2?|t
 FENCE_OPEN = re.compile(r"^(?P<indent>[ \t]*)(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
 FORWARD_AUTH = re.compile(r"(?<![\w-])forward_auth(?![\w-])")
 #: ``forward_auth`` where a Caddyfile directive starts: first on its line, also inside a string
-#: literal (``"\tforward_auth``, ``f"forward_auth``), after an escaped newline or after a ``{``
+#: literal (``"\tforward_auth``, ``f"forward_auth``), a string that is an item of a list or an
+#: argument with the directive's own argument (``[..., "forward_auth idp:9443 {"``, not a
+#: ``startswith("forward_auth ")``), after an escaped newline or after a ``{``
 FORWARD_AUTH_LINE = re.compile(
-    r"""(?m)(?:^[ \t]*(?:[rbfuRBFU]{0,2}["'`])?(?:\\[tn]|[ \t])*|\\n(?:\\t|[ \t])*|\{[ \t]*)"""
-    r"forward_auth(?![\w-])"
+    r"""(?m)(?:(?:^[ \t]*(?:[rbfuRBFU]{0,2}["'`])?(?:\\[tn]|[ \t])*|\\n(?:\\t|[ \t])*|\{[ \t]*)"""
+    r"forward_auth(?![\w-]))"
+    r"""|(?:[,(\[][ \t]*[rbfuRBFU]{0,2}["'`](?:\\[tn]|[ \t])*forward_auth[ \t]+[^\s"'`])"""
 )
 #: a markdown line outside every fence that starts with the directive (an indented code block)
 FORWARD_AUTH_BARE = re.compile(r"[ \t]*forward_auth(?![\w-])")

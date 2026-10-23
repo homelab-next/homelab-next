@@ -451,25 +451,32 @@ def test_dockerfile_pins(text, lines):
     assert [f.line for f in lint.lint_dockerfile(text)] == lines
 
 
+def _scan_one(tmp_path: Path, name: str, text: str) -> list[int]:
+    """The pin lines a whole-tree scan reports for one file: through scan, as CI runs it, so the
+    test fails on what the scan does (fe839e7 read none of these files), not on an API."""
+    (tmp_path / name).write_text(text)
+    findings, _ = lint.scan(tmp_path)
+    assert {f.rule for f in findings} <= {"pin"}, findings
+    return [f.line for f in findings if f.path == name]
+
+
 @pytest.mark.parametrize(
-    ("text", "lines"),
+    ("name", "text", "lines"),
     [
-        ("CADDY_VERSION=2.8.4\nCADDY_IMAGE=caddy:2.8.4\n", [1, 2]),  # .env
-        ("export CADDY_VERSION=v2.11.7\n", []),
-        ("module x\n\nrequire github.com/caddyserver/caddy/v2 v2.8.4\n", [3]),  # go.mod
-        ("go get github.com/caddyserver/caddy/v2@v2.10.2\n", [1]),
-        ("curl -LO .../caddy_2.8.4_linux_amd64.tar.gz\n", [1]),
-        ("services:\n  edge:\n    image: {{ caddy_image }}:2.8.4\n", [3]),  # a compose template
-        ("Caddy is the edge; tools/caddy_lint.py:40 reads caddy configs.\n", []),  # prose
-        ("pin `caddy:2.11.7` or later\n", []),
-        ("Dockerfile `FROM` and `xcaddy build` with ARG defaults\n", []),  # markdown prose
-        ("RUN xcaddy build\n", [1]),
+        ("caddy.env", "CADDY_VERSION=2.8.4\nCADDY_IMAGE=caddy:2.8.4\n", [1, 2]),
+        ("profile.sh", "export CADDY_VERSION=v2.11.7\n", []),
+        ("go.mod", "module x\n\nrequire github.com/caddyserver/caddy/v2 v2.8.4\n", [3]),
+        ("Makefile", "plugin:\n\tgo get github.com/caddyserver/caddy/v2@v2.10.2\n", [2]),
+        ("fetch.sh", "curl -LO .../caddy_2.8.4_linux_amd64.tar.gz\n", [1]),
+        ("compose.yml.j2", "services:\n  edge:\n    image: {{ caddy_image }}:2.8.4\n", [3]),
+        ("NOTES.txt", "Caddy is the edge; tools/caddy_lint.py:40 reads caddy configs.\n", []),
+        ("pin.md", "pin `caddy:2.11.7` or later\n", []),
+        ("prose.md", "Dockerfile `FROM` and `xcaddy build` with ARG defaults\n", []),
+        ("build.sh", "xcaddy build\n", [1]),
     ],
-)
-def test_text_pins(text, lines):
-    pins = lint._Pins("f", text)
-    pins.text()
-    assert [f.line for f in pins.findings] == lines
+)  # fmt: skip
+def test_text_pins(tmp_path, name, text, lines):
+    assert _scan_one(tmp_path, name, text) == lines
 
 
 @pytest.mark.parametrize(
@@ -483,8 +490,8 @@ def test_text_pins(text, lines):
         ('CMD = "xcaddy build v2.8.4"\n', [1]),
     ],
 )
-def test_python_pins(text, lines):
-    assert [f.line for f in lint.lint_python(text)] == lines
+def test_python_pins(tmp_path, text, lines):
+    assert _scan_one(tmp_path, "registry.py", text) == lines
 
 
 def test_the_allowlist(tmp_path):
@@ -1270,6 +1277,11 @@ def test_an_indented_code_block_fails_closed(tmp_path):
         ("caddy_site.tmpl", BARE),
         ("gen_site.py", f'SITE = """\n{BARE}"""\n'),
         ("gen_inline.py", 'SITE = "app.lab.example {\\n\\tforward_auth idp:9443\\n}"\n'),
+        # review N3: a site built from a list of lines
+        (
+            "gen_lines.py",
+            'SITE = "\\n".join(["app.lab.example {", "forward_auth idp:9443 {", "}", "}"])\n',
+        ),
     ],
 )
 def test_forward_auth_in_a_file_the_lint_does_not_read_fails(tmp_path, name, text):
@@ -1279,7 +1291,9 @@ def test_forward_auth_in_a_file_the_lint_does_not_read_fails(tmp_path, name, tex
 
 def test_a_prose_mention_is_not_coverage(tmp_path):
     (tmp_path / "Makefile").write_text("# F-23: strip identity headers before forward_auth\n")
-    (tmp_path / "x.py").write_text('assert ln.startswith("forward_auth ")\n')
+    (tmp_path / "x.py").write_text(
+        'assert ln.startswith("forward_auth ")\nok = any(x in ("forward_auth", "route") for x in y)\n'
+    )
     assert _found(tmp_path) == []
 
 
